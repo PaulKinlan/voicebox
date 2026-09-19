@@ -97,6 +97,16 @@ OPFS is origin-private and reopened without a file-picker permission dance. User
 5. Return after changing views: existing objects remain; there is no fictitious replay of their creation. Reconnect restores the work summary but leaves the simulated microphone off.
 6. Drive keyboard and pointer at desktop, phone and short landscape sizes. A confirmation must remain reachable and never hide the only way to interrupt voice.
 
+## Extensions: discover, inspect, then decide (N17)
+
+Extensions live behind Settings, not in the asset field's primary chrome. Tools created during the conversation can still arrive as assets. The study adds a flat extension inspector with three jobs:
+
+- **Inventory:** installed version, origin, publisher verification state and destination environment. An authored tool proposal is not silently counted as an installed third-party extension.
+- **Discovery:** explicitly no catalogue connected in this study. Publisher identity, curation and the source of catalogue entries are open decisions, not a fictitious marketplace.
+- **Sideload preview:** choose one of two labelled example packages, read its complete illustrative source and compare requested capabilities with what the example environment can grant. The shell-dependent package cannot be installed, even after switching to the machine sample: the study has no contained execution environment. The browser-compatible sample requires an explicit decision before it enters the example inventory. Declining leaves inventory unchanged.
+
+A real sideload is a privileged host decision, bound to verified package bytes, version, destination project/environment and exact granted capabilities. Changing any of those invalidates the answer. A display name, author claim, pasted URL or model-generated descriptor cannot provide that binding. The host owns installation and reload; previewing source grants nothing. The prototype does not upload, fetch, verify, install or execute a package. It tests whether the distinction is visible and whether both refusal and acceptance have coherent UI outcomes.
+
 ## Boundaries and next iteration
 
 The environment design was consumed at `4fac59c5c777f3ca75e0403a8038a68a91f68162`, with the coordinator's later correction that OPFS reopens without a permission gesture. Its inherited machine-only statements are not carried into this design. The prototype has no model, actual microphone capture, host transport, tool execution, sandbox, remote instances, filesystem or durability guarantee. It only demonstrates their proposed presentation and transitions.
