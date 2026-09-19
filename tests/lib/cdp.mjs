@@ -23,11 +23,14 @@ const BROWSERS = [
   "/usr/bin/google-chrome",
 ].filter(Boolean);
 
-export async function launch({ width = 1000, height = 800 } = {}) {
+export async function launch({ width = 1000, height = 800, profile = null } = {}) {
   const binary = BROWSERS.find((b) => existsSync(b));
   if (!binary) throw new Error("no Chromium/Chrome binary found; set VOICEBOX_CHROME");
 
-  const profile = mkdtempSync(path.join(os.tmpdir(), "voicebox-cdp-"));
+  // A caller may hand in a prepared profile — the only way to give the page a REAL platform
+  // answer (a blocked permission) rather than a constructed one.
+  const ownProfile = !profile;
+  profile = profile ?? mkdtempSync(path.join(os.tmpdir(), "voicebox-cdp-"));
   const child = spawn(
     binary,
     [
@@ -105,7 +108,7 @@ export async function launch({ width = 1000, height = 800 } = {}) {
         child.kill("SIGKILL");
       } catch {}
       try {
-        rmSync(profile, { recursive: true, force: true });
+        if (ownProfile) rmSync(profile, { recursive: true, force: true });
       } catch {}
     },
   };

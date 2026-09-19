@@ -301,3 +301,53 @@ test("9. Two roots write: one audit file per root, merged by (instance, seq)", {
     "the merged read lost one of the roots",
   );
 });
+
+// 8a -----------------------------------------------------------------------------------------
+test("8a. The root is an injected interface: the same checks pass on a second adapter", { timeout: 90000 }, async () => {
+  // The second adapter is the handle root — the shape a picked directory has — driven here through
+  // a handle with implicit permission, because headless Chrome cannot grant write on a real folder
+  // (the receipt states that limit). What is under test is the INJECTION: the tier table, the
+  // resolver, the audit and the tool run are the same code for both roots (N18's "one core, two
+  // roots"), so every root-injection check above must pass unchanged.
+  const adopted = await page.evaluate(async () => {
+    const origin = await navigator.storage.getDirectory();
+    const dir = await origin.getDirectoryHandle("second-adapter", { create: true });
+    return await window.e1m0.adopt(dir);
+  });
+  assert.equal(adopted.ok, true, `adopting the second adapter failed: ${JSON.stringify(adopted)}`);
+  assert.equal(adopted.project.rootKind, "handle");
+  assert.equal(adopted.project.root, "picked:second-adapter", "the second adapter has no virtual root");
+
+  // check 2, on the second root: a write inside is allowed and audited as allow
+  const inside = await send({ type: "createAsset", args: { name: "inside-8a.txt", kind: "text", body: "second root" } });
+  assert.equal(inside.ok, true, `the inside write was not allowed: ${JSON.stringify(inside)}`);
+  assert.equal(inside.observed.exists, true, "the world does not agree the file exists");
+
+  // check 2, the other way: a write outside is refused, and refused by rule
+  const outside = await send({ type: "createAsset", args: { name: "../escape-8a.txt", kind: "text", body: "x" } });
+  assert.equal(outside.refused, true);
+  assert.equal(outside.rule, "outside-root");
+
+  // check 4, on the second root: '..' as a NAME refused, a sibling accepted
+  const dotdot = await send({ type: "createAsset", args: { name: "..", kind: "text", body: "x" } });
+  assert.equal(dotdot.refused, true);
+  assert.equal(dotdot.rule, "outside-root");
+  const sibling = await send({ type: "createAsset", args: { name: "sibling-8a.txt", kind: "text", body: "ok" } });
+  assert.equal(sibling.ok, true, "the sibling name was not accepted on the second root");
+
+  // check 7, on the second root: bad input is an error and an audit entry, and the host survives
+  const bad = await send({ type: "createAsset", args: { name: "x.txt", kind: "exe", body: "x" } });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.rule, "unknown-kind");
+  const after = await send({ type: "createAsset", args: { name: "after-8a.txt", kind: "text", body: "still here" } });
+  assert.equal(after.ok, true, "the host did not survive bad input on the second root");
+
+  // The audit is one implementation: the same rows, recorded against the second root's virtual root.
+  const audit = await send({ type: "audit" });
+  const allow = audit.entries.filter((e) => e.act.target.endsWith("inside-8a.txt")).pop();
+  const refuse = audit.entries.filter((e) => e.rule === "outside-root").pop();
+  assert.equal(allow.rule, "writes-inside");
+  assert.equal(allow.decision, "allow");
+  assert.equal(allow.root, "picked:second-adapter");
+  assert.equal(refuse.decision, "refuse");
+});

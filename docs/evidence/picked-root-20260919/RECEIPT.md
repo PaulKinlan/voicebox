@@ -4,9 +4,15 @@ E1-M0 (the browser environment's existence proof) plus **N20** (persistent direc
 the **three-root explorer** (bead `voicebox-beads-7cd`). Built on `main@309e43c`, branch
 `e1m0/browser-environment`.
 
-Every claim below was driven, not read: 25 acceptance checks in `npm run test:e1m0`, in a real
+Every claim below was driven, not read: **27 acceptance checks** in `npm run test:e1m0`, in a real
 headless Chromium, over the page the browser actually loads. Where a check could not be driven, it
 says so and says why — that is the point of this file.
+
+**Correction, after review.** An earlier version of this receipt said the spec's §8 had "eight
+(nine)" checks. The spec at the base commit — `309e43c`, whose diff from this branch is empty, so
+it is unmodified and therefore authoritative — has **ten**: 8a and 8b share the eighth slot. The
+brief's "eight" was the miscount and this receipt repeated a second one; the document is right.
+The table below is the mapping a reader should quote.
 
 ---
 
@@ -70,11 +76,35 @@ A browser whose grant *is* available (a person clicking "Allow") takes the same 
 
 ## 3. Where the build follows the spec, and where it had to say something
 
-The eight (nine) acceptance checks of `docs/04-e1-m0-build-spec.md` §8 are the acceptance criteria,
-and each is a test. The spec's §8 list has **nine** entries; the coordinator's brief says "eight".
-Both numbers are satisfied — all nine are implemented, in `tests/e1m0-core.test.mjs` (8, plus the
-pure halves of 2/3/4/6/9) and `tests/e1m0-browser.test.mjs` (1–7, 9). *The discrepancy is reported
-rather than resolved silently.*
+The acceptance criteria are `docs/04-e1-m0-build-spec.md` §8 — **ten** entries — and every one is a
+test:
+
+| §8 | Check | Where it is driven |
+|---|---|---|
+| 1 | Reopen after a reload, no gesture | `e1m0-browser.test.mjs` — create through the page's own form, `Page.reload`, read back, `userActivation.isActive === false` |
+| 2 | Tier table both ways, both audited | `e1m0-browser.test.mjs` (+ the pure decision in `e1m0-core.test.mjs`) |
+| 3 | Refusals named, allowed case in the same test | both files |
+| 4 | `..` as a NAME refused, sibling accepted | both files |
+| 5 | Import boundary: the asset module links, a `fetch`-importing module does not | `e1m0-browser.test.mjs` — the platform's own words, and the host's import surface asserted as exactly `{writeFile, note}` |
+| 6 | Nothing renders as markup | `e1m0-browser.test.mjs` — DOM assertions on the real gallery |
+| 7 | Bad input does not kill the host | `e1m0-browser.test.mjs` — schema, huge body, unknown kind, trapping module, unknown message |
+| **8a** | **Root injection**: with a second storage adapter, every root-injection check above still passes | `e1m0-browser.test.mjs` — the whole list re-driven on a **handle** root (tier table both ways + audit rows, `..` vs sibling, bad input, the world agreeing the bytes exist) |
+| **8b** | **Picked-root permission**, driven by a **person**, recorded here including whether a gesture was required | see §1's last row and the note below: measured (a gesture **is** required after a reload; the handle needs no re-pick), but no human has yet clicked Allow in this build |
+| 9 | `core/` imports nothing outside itself (static, incl. type-only) | `e1m0-core.test.mjs` — comments stripped first, so the check does not read its own prose as code |
+| 10 | Two roots write; merged by `(instance, seq)`; no claimed global order | `e1m0-browser.test.mjs` (two roots, two files, distinct sequence numbers) + `e1m0-core.test.mjs` (the merge ignores `at`) |
+
+**8a exercised a real property.** The second adapter is not a mock: it is a `FileSystemDirectoryHandle`
+root — the same shape a picked folder has — driven through a handle with implicit permission because
+headless Chrome cannot grant write on a real folder. What it proves is what N18 asks for: *one core,
+two roots*, the same tier table, resolver, audit and tool run for both.
+
+**8b is the check a machine cannot finish.** `showDirectoryPicker()` opens a native dialog and
+`requestPermission()` blocks with no UI, so the person's click is the one act this build cannot
+perform. What is recorded instead, measured on a real folder adopted by drop:
+`queryPermission({mode:"read"})` = `granted` → a read succeeds with no gesture; after `Page.reload`
+the handle comes back from IndexedDB (**no re-pick**) and `queryPermission` = `prompt`, so a
+gesture **is** required before anything is read or written. The missing half — a person clicking
+Allow and then watching a write land in their own folder — is stated as missing rather than implied.
 
 Places where the build had to decide something the spec left open — each is a hole the spec asked to
 be told about (§7):
@@ -122,9 +152,18 @@ be told about (§7):
 
 ## 6. What was verified, and by what evidence
 
-- **`npm run test:e1m0`** — 25 checks, all driven, all green: 7 core/CLI (check 8 static; the tier
+- **`npm run test:e1m0`** — 27 checks, all driven, all green: 7 core/CLI (check 9 static; the tier
   table both ways; `..` as a name; schema by name; the audit merge; the committed `.wasm` against its
-  `.wat`), 8 in the browser (checks 1–7 and 9), 6 for N20, 4 for the explorer.
+  `.wat`), 9 in the browser (checks 1–7, 9 and 8a), 7 for N20, 4 for the explorer.
+- **The fourth permission state is pinned.** `denied` was distinct by inspection and untested until
+  review said so: it is now driven with a **real platform answer** — a Chromium profile with File
+  System Access blocked for the origin, which makes `queryPermission` answer `denied` exactly as a
+  person's "Block" does (`tests/n20-permission-denied.test.mjs`). No object is constructed to fake
+  the branch; the host branches on the platform's answer and nothing else.
+- **An empty project and an absent project are distinguishable** — asserted as a pair in one test
+  (`7cd.2`): a view with nothing behind it refuses by name (`not-a-project`), while a genuinely
+  empty picked folder succeeds with **zero** entries and `truncated: false`. A change that collapsed
+  the two would now fail.
 - **`npm test`** — the repository's existing 11 checks still pass, including "page load with files
   produces zero POST /api/turn calls": the new page adds no turns.
 - **Independent vision review** (gemini lane, on `/tmp/e1m0-opfs.png` and `/tmp/e1m0-picked.png`,

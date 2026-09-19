@@ -32,6 +32,7 @@ let server;
 let page;
 let folder;
 let folderName;
+let emptyFolder;
 
 const send = (message) => page.evaluate((m) => window.e1m0.send(m), message);
 const stats = () => send({ type: "stats" });
@@ -45,6 +46,7 @@ test.before(async () => {
     writeFileSync(path.join(folder, `file-${String(i).padStart(3, "0")}.txt`), `${i}`);
   }
   folderName = path.basename(folder);
+  emptyFolder = path.join(path.dirname(folder), "empty-root");
 
   server = spawn(process.execPath, [path.join(ROOT, "server.mjs")], {
     cwd: ROOT,
@@ -79,7 +81,7 @@ test.after(async () => {
       process.kill(-server.pid, "SIGKILL");
     } catch {}
   }
-  rmSync(path.dirname(folder), { recursive: true, force: true });
+  rmSync(path.dirname(folder), { recursive: true, force: true }); // takes empty-root with it
 });
 
 // 1 ------------------------------------------------------------------------------------------
@@ -123,18 +125,37 @@ test("7cd.1 Three views, three authorities, and each one says which root it is s
 });
 
 // 2 ------------------------------------------------------------------------------------------
-test("7cd.2 A view with nothing behind it refuses by name, never with an empty list", { timeout: 90000 }, async () => {
+test("7cd.2 'You are not pointing at a project' and 'your project is empty' are different answers", { timeout: 90000 }, async () => {
+  // (a) nothing behind the view: a named refusal, because an empty list here would look exactly
+  // like an empty folder and the person could not tell which one they are in.
   await send({ type: "openProject", name: "atlas" }); // an OPFS project: there is no picked folder
-  const reply = await send({ type: "listView", view: "picked" });
-  assert.equal(reply.ok, false, "a picked view was offered for a project that has no picked root");
-  assert.equal(reply.code, "not-a-project", `expected not-a-project, saw ${JSON.stringify(reply)}`);
-  assert.match(reply.why, /OPFS project/, "the refusal does not say what this project actually is");
+  const refused = await send({ type: "listView", view: "picked" });
+  assert.equal(refused.ok, false, "a picked view was offered for a project that has no picked root");
+  assert.equal(refused.code, "not-a-project", `expected not-a-project, saw ${JSON.stringify(refused)}`);
+  assert.match(refused.why, /OPFS project/, "the refusal does not say what this project actually is");
 
   // The page shows the refusal, not an empty list that looks like an empty folder.
   await page.evaluate(() => window.e1m0.renderView("picked"));
   const panel = await page.evaluate(() => document.getElementById("view-picked").textContent);
   assert.match(panel, /not-a-project/);
   assert.match(panel, /OPFS project/);
+
+  // (b) a genuinely empty project: a SUCCESS with zero entries — the other side of the pair, and
+  // the side that would otherwise collapse into (a) without anything failing.
+  mkdirSync(emptyFolder);
+  await page.dropFolder("#dropzone", emptyFolder);
+  await page.waitFor(
+    async (expected) => {
+      const reply = await window.e1m0.send({ type: "listProjects" });
+      return (reply.projects ?? []).some((p) => p.name === expected && p.rootKind === "handle");
+    },
+    { args: ["empty-root"], label: "the empty folder to be adopted" },
+  );
+  const empty = await send({ type: "listView", view: "picked" });
+  assert.equal(empty.ok, true, `an empty root must list successfully, saw ${JSON.stringify(empty)}`);
+  assert.deepEqual(empty.entries, [], "an empty folder returned entries");
+  assert.equal(empty.truncated, false, "an empty folder claimed to be truncated");
+  assert.notEqual(empty.ok, refused.ok, "'no project' and 'empty project' answered the same way");
 });
 
 // 3 ------------------------------------------------------------------------------------------
