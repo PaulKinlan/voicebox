@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "vite",
     "serve": "node server.mjs",
-    "start": "node server.mjs"
+    "start": "node server.mjs",
+    "test": "node tests/voicebox.test.mjs"
   },
   "devDependencies": {
     "vite": "^7.1.7"

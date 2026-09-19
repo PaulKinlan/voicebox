@@ -15,9 +15,15 @@
 //
 // host: true — Vite advertises the LAN and Tailscale addresses itself, which
 // replaces the hand-rolled /tmp LAN-forwarder chain the reboot wiped.
+//
+// PORT IS THE ONE NAME (review finding A, 2026-09-19): server.mjs:20 reads
+// process.env.PORT for its listen port, and this config reads the SAME variable
+// for the proxy target. One variable moves both sides together, so a dev UI
+// can never silently point at another lane's instance on 8787 — the review
+// demonstrated that mis-point as a cross-instance write with no error.
 import { defineConfig } from "vite";
 
-const API_TARGET = `http://127.0.0.1:${process.env.VOICEBOX_API_PORT ?? 8787}`;
+const API_TARGET = `http://127.0.0.1:${process.env.PORT ?? 8787}`;
 
 export default defineConfig({
   root: "public",
