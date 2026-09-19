@@ -47,13 +47,13 @@
 
       <section class="voice" aria-labelledby="talk-heading">
         <h2 class="sr-only" id="talk-heading">Talk to it</h2>
-        <div class="ring-stage" id="voice-ring-wrap" data-voice="off">
-          <svg class="rings" viewBox="0 0 720 720" aria-hidden="true">
-            <circle cx="360" cy="360" r="352"/><circle cx="360" cy="360" r="258"/><circle cx="360" cy="360" r="178"/>
-          </svg>
+        <div class="mic-stage" id="voice-ring-wrap" data-voice="off">
+          <!-- the agent's voice: one radius per sample around the circle -->
+          <svg class="output-ring" viewBox="0 0 240 240" aria-hidden="true"><path id="output-path"></path></svg>
           <button class="mic" id="mic" type="button" aria-label="Speak a turn" aria-pressed="false" aria-describedby="voice-state">
             <svg class="mic-glyph icon" aria-hidden="true"><use href="#i-mic"/></svg>
-            <span class="sound-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+            <!-- your voice: recent input energy at the microphone itself -->
+            <svg class="input-wave" viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true"><path id="input-path"></path></svg>
           </button>
         </div>
         <p class="voice-state" id="voice-state" role="status">Microphone off — press the circle to speak</p>

@@ -157,30 +157,29 @@ function showSkeleton() {
 
 async function health() {
   try {
-    await request("/api/health");
+    const answer = await request("/api/health");
     if (els.dot) els.dot.dataset.ok = "true";
     if (els.where) els.where.textContent = "local server ready";
+    stampBuild(answer.build ?? null);
   } catch {
     if (els.dot) els.dot.dataset.ok = "false";
     if (els.where) els.where.textContent = "no answer from the local server";
+    stampBuild(null);
   }
 }
 
 async function load() {
   if (entries.length === 0) showSkeleton();
   try {
-    const { files: names } = await request("/api/files");
-    entries = await Promise.all(names.map(async (name) => {
-      try {
-        const answer = await request(`/api/file?name=${encodeURIComponent(name)}`);
-        if (answer.ok) {
-          const content = answer.content ?? "";
-          return { name, meta: size(content), preview: content.slice(0, 360) + (content.length > 360 ? "…" : "") };
-        }
-        return { name, meta: "on disk", why: answer.error ?? "the server would not read it back" };
-      } catch (error) {
-        return { name, meta: "on disk", why: error.message };
-      }
+    // One request for names AND sizes. Before the server had a read route this
+    // read every file back through `POST /api/turn`, so a loaded page quietly
+    // POSTed turns nobody typed — an independent verifier saw eight of them and
+    // a `read alpha.txt` that was never spoken. Reading is not a turn.
+    const { files: names, entries: listed } = await request("/api/files");
+    const sizes = new Map((listed ?? []).map((entry) => [entry.name, entry.bytes]));
+    entries = names.map((name) => ({
+      name,
+      meta: `${sizes.get(name) ?? 0} ${(sizes.get(name) ?? 0) === 1 ? "byte" : "bytes"}`,
     }));
     render();
   } catch (error) {
@@ -269,7 +268,14 @@ async function send(said) {
     const result = answer.result ?? {};
     if (!result.ok) return finish(transcript, result.error ?? "the turn was refused", "bad");
     finish(transcript, result.action ?? "done", "good");
-    if (answer.action?.verb === "read") showFile(result.action);
+    if (answer.action?.verb === "read" && typeof result.content === "string") {
+      els.readerTitle.textContent = result.action;
+      els.readerFacts.textContent = `${size(result.content)} · read from workspace/${result.action} just now`;
+      els.readerBody.textContent = result.content;
+      els.reader.dataset.state = "ready";
+      els.copy.disabled = result.content.length === 0;
+      showFileSelection(result.action);
+    }
     await load();
   } catch (error) {
     finish(transcript, `the turn did not reach the server: ${error.message}`, "bad");
@@ -350,21 +356,115 @@ on(els.form, "submit", (event) => {
   send(said);
 });
 
+// ── the two meters: your voice, and the agent's ───────────────────────────
+// Driven by the real PCM the client already has (audio-client.js `level()`):
+// input energy at the microphone, and one radius per output sample around the
+// circle. No audio, no picture — a meter that animates while nothing is being
+// heard is the same lie as a "listening" label with the mic off.
+const OUTPUT_SAMPLES = 64;
+const OUTPUT_CENTRE = 120;
+const OUTPUT_BASE = 96;
+const OUTPUT_AMPLITUDE = 16;
+
+// Mean-absolute energy from real speech is small (a quiet room reads ~0.01, a
+// talking voice ~0.03-0.1), so a linear meter sits at zero and never moves.
+// The square root spreads the quiet end and saturates at the loud end — a meter
+// you can read, still driven entirely by the real signal.
+function meterLevel(value) {
+  const energy = Number(value);
+  if (!Number.isFinite(energy) || energy <= 0) return 0;
+  return Math.min(1, Math.sqrt(energy) * 1.9);
+}
+
+function drawOutputRing(samples) {
+  const path = document.getElementById("output-path");
+  if (!path || !samples) return;
+  let d = "";
+  for (let i = 0; i < OUTPUT_SAMPLES; i++) {
+    const angle = (i / OUTPUT_SAMPLES) * Math.PI * 2 - Math.PI / 2;
+    const radius = OUTPUT_BASE + meterLevel(samples[i]) * OUTPUT_AMPLITUDE;
+    d += `${i ? "L" : "M"}${(OUTPUT_CENTRE + Math.cos(angle) * radius).toFixed(2)},${(OUTPUT_CENTRE + Math.sin(angle) * radius).toFixed(2)}`;
+  }
+  path.setAttribute("d", `${d}Z`);
+}
+
+function drawInputWave(samples) {
+  const path = document.getElementById("input-path");
+  if (!path || !samples) return;
+  const n = samples.length;
+  const middle = 20;
+  const height = 15;
+  let top = "";
+  let bottom = "";
+  for (let i = 0; i < n; i++) {
+    const x = ((i / (n - 1)) * 100).toFixed(2);
+    const half = Math.max(1, meterLevel(samples[i]) * height);
+    top += `${i ? "L" : "M"}${x},${(middle - half).toFixed(2)}`;
+    bottom = `L${x},${(middle + half).toFixed(2)}` + bottom;
+  }
+  path.setAttribute("d", `${top}${bottom}Z`);
+}
+
+let meterFrame = 0;
+function meters() {
+  const client = window.__voiceboxLiveClient;
+  const voice = els.stage?.dataset.voice;
+  if (client?.level && (voice === "listening" || voice === "speaking")) {
+    const reading = client.level();
+    if (voice === "listening") drawInputWave(reading.input);
+    drawOutputRing(reading.output);
+    meterFrame = requestAnimationFrame(meters);
+    return;
+  }
+  meterFrame = 0;
+}
+
+function startMeters() {
+  if (!meterFrame) meterFrame = requestAnimationFrame(meters);
+}
+
+// A seam for driving the two meters without a microphone: a headless browser
+// has no device, so the visual can only be checked here by handing the drawing
+// the same arrays the client produces. The live path above is unchanged and
+// still reads real PCM from the client; this is how the verifier proves the
+// picture responds to data rather than being decoration.
+window.__voiceboxMeters = { drawInputWave, drawOutputRing, startMeters };
+
 // ── which revision is this? ───────────────────────────────────────────────
 // The dev server bakes the identity of its own checkout into this document at
 // serve time (vite.config.js, transformIndexHtml). A server that did not stamp
 // the page leaves the marker empty and this line stays blank: naming a revision
 // the server never sent is the lie this whole line exists to prevent.
-function stampBuild() {
-  const line = document.getElementById("build");
-  if (!line) return;
+function pageBuild() {
   const content = document.querySelector('meta[name="voicebox-build"]')?.getAttribute("content") ?? "";
-  if (!content || content.includes("__VOICEBOX_BUILD_STAMP__")) return;
-  line.textContent = content;
-  line.dataset.dirty = String(content.includes("uncommitted"));
+  if (!content || content.includes("__VOICEBOX_BUILD_STAMP__")) return "";
+  return content;
 }
 
-stampBuild();
+function stampBuild(server) {
+  const line = document.getElementById("build");
+  if (!line) return;
+  const page = pageBuild();
+  if (!page) return;
+  // BOTH HALVES, because they go stale independently: Vite reloads the page on
+  // every edit and the node process behind it never does. On 2026-09-19 Paul
+  // spent an hour on "the voice does not work with the API keys" while the page
+  // happily reported its own revision and said nothing about a server started
+  // before /live existed.
+  const parts = [`page ${page}`];
+  if (server?.commit) {
+    parts.push(`server ${server.branch} @ ${server.commit}${server.dirty ? " · uncommitted changes" : ""}`);
+  } else if (server === null) {
+    parts.push("server revision unknown");
+  }
+  const mismatch = Boolean(server?.commit) && page.includes("@") && server.commit !== page.split("@").pop().trim().split(" ")[0];
+  if (mismatch) parts.push("the server is a different revision — restart it");
+  line.textContent = parts.join(" · ");
+  line.dataset.dirty = String(mismatch || Boolean(server?.dirty) || page.includes("uncommitted"));
+}
+
+stampBuild(undefined);
+if (els.stage) new MutationObserver(startMeters).observe(els.stage, { attributes: true, attributeFilter: ["data-voice"] });
 
 // The empty state teaches the loop with turns the resolver really answers.
 const SAMPLES = [

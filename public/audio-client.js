@@ -14,10 +14,18 @@
 //     agent speaks and the microphone is still on, it says so ("you can
 //     interrupt") rather than printing "microphone is off" for a track that
 //     is live. Two true statements beat one convenient false one.
-import { floatToPcm16, pcm16ToFloat, isPcm16 } from "./pcm.js";
+import { floatToPcm16, pcm16ToFloat, isPcm16, energy } from "./pcm.js";
 
 const PLAYBACK_RATE = 24000; // provider output, PCM16 (Gemini Live)
 const CAPTURE_RATE = 16000; // what we send; the browser resamples the device
+
+// The two meters the page draws — the person's own voice, and the agent's.
+// 28 bars of recent input energy, 64 samples around the circle for the output,
+// both taken from the PCM already in hand rather than an AnalyserNode, so the
+// visual tracks what was actually captured and what is actually playing.
+const INPUT_BARS = 28;
+const OUTPUT_BARS = 64;
+const LEVEL_HOLD_MS = 120; // after this, a meter with no new data starts falling
 
 export function createAudioClient({
   socket = null,
@@ -29,6 +37,7 @@ export function createAudioClient({
   onText = () => {},
   onError = () => {},
   onDiagnostic = () => {},
+  onLevel = () => {},
   logger = console,
 } = {}) {
   const state = {
@@ -53,6 +62,57 @@ export function createAudioClient({
   let playCtx = null;
   let nextStart = 0;
   const sources = new Set();
+  // Meter state. `capture` is the newest input energy; `output` is one energy
+  // per sample around the circle. Both are smoothed before they are read, so a
+  // level reads as a level and not as a flicker.
+  const meter = {
+    input: new Float32Array(INPUT_BARS),
+    output: new Float32Array(OUTPUT_BARS),
+    smoothInput: new Float32Array(INPUT_BARS),
+    smoothOutput: new Float32Array(OUTPUT_BARS),
+    capture: 0,
+    lastAt: 0,
+    lastEmit: 0,
+  };
+
+  function shiftInto(ring, value) {
+    ring.copyWithin(0, 1);
+    ring[ring.length - 1] = value;
+  }
+
+  function smooth(ring, display, blend) {
+    for (let i = 0; i < ring.length; i++) display[i] += (ring[i] - display[i]) * blend;
+  }
+
+  /** Called when new audio arrives, from either direction. */
+  function noteAudio(kind, value) {
+    const now = Date.now();
+    if (kind === "input") {
+      shiftInto(meter.input, value);
+      smooth(meter.input, meter.smoothInput, 0.35);
+      meter.capture = Math.max(value, meter.capture * 0.7);
+    } else {
+      shiftInto(meter.output, value);
+      smooth(meter.output, meter.smoothOutput, 0.3);
+    }
+    meter.lastAt = now;
+    if (now - meter.lastEmit > 33) {
+      meter.lastEmit = now;
+      onLevel(level());
+    }
+  }
+
+  /** The current meter reading. Decays on read, so silence falls away. */
+  function level() {
+    const idle = Date.now() - meter.lastAt > LEVEL_HOLD_MS;
+    if (idle) {
+      const fall = 0.86;
+      for (let i = 0; i < meter.smoothInput.length; i++) meter.smoothInput[i] *= fall;
+      for (let i = 0; i < meter.smoothOutput.length; i++) meter.smoothOutput[i] *= fall;
+      meter.capture *= fall;
+    }
+    return { capture: meter.capture, input: meter.smoothInput, output: meter.smoothOutput };
+  }
   let ws = socket;
 
   const snapshot = () => ({ ...state, label: label() });
@@ -136,6 +196,7 @@ export function createAudioClient({
     state.framesReceived += 1;
     playCtx ??= new AudioContextCtor({ sampleRate: PLAYBACK_RATE });
     const floats = pcm16ToFloat(bytes);
+    noteAudio("output", energy(floats));
     const buffer = playCtx.createBuffer(1, floats.length, PLAYBACK_RATE);
     buffer.copyToChannel(floats, 0);
     const source = playCtx.createBufferSource();
@@ -251,6 +312,7 @@ export function createAudioClient({
         const frame = event.data;
         if (!(frame instanceof Float32Array) || frame.length === 0) return;
         try {
+          noteAudio("input", energy(frame));
           ws?.send(floatToPcm16(frame));
           state.framesSent += 1;
         } catch (error) {
@@ -298,6 +360,7 @@ export function createAudioClient({
     attachSocket,
     handleMessage,
     startCapture,
+    level,
     stopCapture,
     stopReply,
     snapshot,

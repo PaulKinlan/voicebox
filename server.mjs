@@ -4,6 +4,8 @@
 // Zero dependencies: node:http for the server, node:fs for the workspace.
 // The resolver is a provider seam (lib/resolver.mjs) — swap it, don't rewrite the server.
 import { createServer } from "node:http";
+import { createServer } from "node:http";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +26,29 @@ const PORT = Number(process.env.PORT ?? 8787);
 const json = (res, code, body) => {
   res.writeHead(code, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
+};
+
+// WHICH REVISION IS THIS SERVER?
+//
+// 2026-09-19: Paul lost an hour to "the voice does not work with the API keys".
+// The API server had been started at 19:19, before /live existed at 19:45, so
+// it answered `{"error":"not found"}` — and the page's build stamp said
+// `main @ fbaf0ca` the whole time, because it reported the PAGE's revision and
+// nothing about the server's. Vite reloads the page on every edit; this process
+// never does. So the server is the half that goes stale, and it is the half that
+// was invisible. It now names itself, at startup, in its own health response.
+const git = (args, fallback) => {
+  try {
+    return execFileSync("git", args, { cwd: ROOT, encoding: "utf8" }).trim() || fallback;
+  } catch {
+    return fallback;
+  }
+};
+const BUILD = {
+  branch: git(["branch", "--show-current"], "(detached)"),
+  commit: git(["rev-parse", "--short", "HEAD"], "unknown"),
+  dirty: git(["status", "--porcelain", "--untracked-files=no"], "") !== "",
+  startedAt: new Date().toISOString(),
 };
 
 // Normalising is not checking: `resolve` collapses `..`, then the answer is
@@ -102,7 +127,7 @@ function execute(action) {
 }
 
 const routes = {
-  "GET /api/health": (req, res, url) => json(res, 200, { ok: true, provider: PROVIDER, workspace: "workspace/" }),
+  "GET /api/health": (req, res, url) => json(res, 200, { ok: true, provider: PROVIDER, workspace: "workspace/", build: BUILD }),
   "GET /": (req, res, url) => {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end(readFileSync(path.join(PUBLIC, "index.html")));

@@ -79,24 +79,24 @@ input { caret-color: var(--accent); }
 
 /* ── the voice stage: concentric hairlines, one soft accent ──────────── */
 .voice { display: flex; flex-direction: column; align-items: center; }
-.ring-stage { position: relative; display: grid; place-items: center; width: min(78vw, 430px); aspect-ratio: 1; }
-.rings { position: absolute; inset: 0; width: 100%; height: 100%; fill: none; stroke: color-mix(in srgb, var(--ink) 22%, var(--ground)); stroke-width: 1; transition: stroke 300ms ease-out; }
+.mic-stage { position: relative; display: grid; place-items: center; width: 268px; aspect-ratio: 1; }
+/* The circle is the output meter, not decoration: each sample around the ring
+   sets that radius. It is invisible until the agent actually speaks. */
+.output-ring { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.output-ring path { fill: none; stroke: var(--good); stroke-width: 1.5; stroke-linejoin: round; opacity: 0; transition: opacity 240ms ease-out; }
+[data-voice="speaking"] .output-ring path { opacity: .9; }
 .mic { position: relative; display: grid; place-items: center; width: 116px; height: 116px; border: 1px solid color-mix(in srgb, var(--ink) 10%, var(--line)); border-radius: 50%; color: var(--accent); background: radial-gradient(ellipse at 36% 24%, color-mix(in srgb, var(--card) 92%, var(--ground)), var(--ground) 76%); box-shadow: 0 20px 60px -22px color-mix(in srgb, var(--ink) 45%, transparent); transition: transform 200ms ease-out, color 200ms ease-out, border-color 200ms ease-out; }
 .mic:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
 .mic:active { transform: scale(.98); }
 .mic-glyph { width: 38px; height: 38px; }
-.sound-bars { display: none; height: 30px; align-items: center; gap: 4px; }
-.sound-bars i { width: 2px; height: 12px; background: currentColor; border-radius: 2px; }
-.sound-bars i:nth-child(2n) { height: 22px; }
-.sound-bars i:nth-child(3n) { height: 30px; }
-.ring-stage:hover .rings { stroke: color-mix(in srgb, var(--accent) 32%, var(--ground)); }
+/* Your own voice, at the microphone: the input meter. Same rule — no audio,
+   no picture — so it never claims to hear something it is not hearing. */
+.input-wave { display: none; width: 64px; height: 26px; }
+.input-wave path { fill: currentColor; opacity: .85; }
+[data-voice="listening"] .input-wave { display: block; }
 [data-voice="listening"] .mic { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, var(--line)); }
 [data-voice="listening"] .mic-glyph { display: none; }
-[data-voice="listening"] .sound-bars { display: flex; }
-[data-voice="listening"] .rings { stroke: color-mix(in srgb, var(--good) 30%, var(--ground)); }
-[data-voice="listening"] .rings circle:nth-child(3) { animation: breathe 2.4s ease-in-out infinite; }
-[data-voice="speaking"] .mic { color: var(--good); }
-[data-voice="speaking"] .rings { stroke: color-mix(in srgb, var(--good) 26%, var(--ground)); }
+[data-voice="speaking"] .mic { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, var(--line)); }
 @keyframes breathe { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
 .voice-state { margin: 4px 0 0; font-size: .9375rem; color: color-mix(in srgb, var(--muted) 88%, var(--ink)); text-align: center; max-width: 40ch; }
 .voice-state[data-tone="warn"] { font-size: .875rem; }
@@ -142,13 +142,13 @@ input { caret-color: var(--accent); }
 @media (max-width: 720px) {
   .room { padding: 12px 18px 10px; }
   .stage { gap: 28px; padding: 12px 0; }
-  .ring-stage { width: min(92vw, 380px); }
+  .mic-stage { width: 228px; }
   .mic { width: 104px; height: 104px; }
   .files { max-width: 100%; }
   #file-body { max-height: none; }
 }
 @media (max-height: 620px) {
-  .ring-stage { width: min(60vw, 260px); }
+  .mic-stage { width: 180px; }
   .mic { width: 88px; height: 88px; }
   .mic-glyph { width: 30px; height: 30px; }
   .stage { gap: 20px; }
@@ -162,7 +162,7 @@ input { caret-color: var(--accent); }
 /* Opening a file makes room for it: the rings give up their scale rather than
    pushing the reader below the fold, so what you asked to read is on screen. */
 body:has(#reader[data-state="ready"]) .stage, body:has(.session:not([hidden])) .stage { gap: 20px; padding: 10px 0; }
-body:has(#reader[data-state="ready"]) .ring-stage, body:has(.session:not([hidden])) .ring-stage { width: min(64vw, 320px); }
+body:has(#reader[data-state="ready"]) .mic-stage { width: 220px; }
 body:has(#reader[data-state="ready"]) .mic { width: 92px; height: 92px; }
 body:has(#reader[data-state="ready"]) .mic-glyph { width: 30px; height: 30px; }
 body:has(#reader[data-state="ready"]) #file-body { max-height: 26svh; }

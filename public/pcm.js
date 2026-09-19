@@ -30,6 +30,19 @@ export function pcm16ToFloat(bytes) {
   return out;
 }
 
+/**
+ * Mean absolute sample value in [0, 1] — a METER, not a calibrated dB scale.
+ * Recent-energy meters are for reading "am I being heard" at a glance, and
+ * calling it what it is stops the next person treating it as a measurement.
+ * (isocan's voice agent draws its input waveform from the same idea.)
+ */
+export function energy(samples) {
+  if (!samples?.length) return 0;
+  let sum = 0;
+  for (let i = 0; i < samples.length; i++) sum += Math.abs(samples[i]);
+  return sum / samples.length;
+}
+
 /** True when the payload is a non-empty, even-length PCM16 buffer. */
 export function isPcm16(bytes) {
   return (bytes instanceof ArrayBuffer || ArrayBuffer.isView(bytes)) && bytes.byteLength > 0 && bytes.byteLength % 2 === 0;
