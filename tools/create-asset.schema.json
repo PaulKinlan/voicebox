@@ -1,0 +1,11 @@
+{
+  "title": "create-asset",
+  "capabilities": ["read", "write"],
+  "maxBytes": 1048576,
+  "properties": {
+    "name": { "type": "string", "maxLength": 255, "description": "file name, resolved under root/assets/" },
+    "kind": { "type": "enum", "enum": ["svg", "text", "html"], "description": "how the gallery renders it, never how it is executed" },
+    "body": { "type": "string", "description": "the asset's content; never interpreted as markup by the host" }
+  },
+  "required": ["name", "kind", "body"]
+}
