@@ -421,15 +421,56 @@ model authors an extension  →  registration: a DECLARATION  →  admission by 
   admitted is not a capability, and **fails closed** — the rule that came back from the harvest,
   where a store held nine descriptors all `admitted: false` and executed nothing. The same
   discipline stops a freshly written tool from being usable merely because it exists.
-- **A tool's authority is its declaration, bounded by the environment.** A tool that declares
-  `network` is a Tier 2 act every time it reaches out; a tool that declares `exec` simply cannot
-  be admitted in the browser environment, where there are no processes to execute.
+- **A tool's authority is what the environment enforces, never what the tool declares.** See
+  below: the declaration is a *request and a record*, and every capability it names must have a
+  named mechanism behind it before the tool runs at all.
 - **Tools accumulate, and they travel only as far as their capabilities do.** A `wasm` tool runs
   in the browser and on a machine; an `exec` tool is *not available* in the browser — not broken,
   absent — and the UI says which is which rather than letting a verb fail at the moment it is used.
 - **Nouns and verbs come from the conversation (N10).** New objects and new verbs land in a
   registry that is **data**, like the tier table and for the same reason: it is the thing a
   reader, an auditor or a later model can inspect instead of inferring from prose.
+
+#### Who declares, and what makes it true
+
+Asked of this pipeline: are capabilities **declared by the author**, **derived by the
+environment**, or **enforced regardless of declaration**? The answer is the third, with the first
+two as conveniences — and the distinction matters because the alternative is the day's recurring
+mistake in a new costume:
+
+> **A declaration treated as a fact is a rewrite, not a check** — the same shape as
+> `path.basename` being called containment. A tool whose descriptor says `network: none` can still
+> call `fetch`. If the declaration is what makes it true, the boundary is a report.
+
+So a **capability is not a permission the tool claims; it is the interface the tool is given.**
+Tools are not handed ambient authority (`fetch`, `fs`, a shell) and trusted to behave; they are
+handed the specific host-provided functions they are allowed to use, and nothing else — which is
+§1.1a's **mediated mode, applied one level down**, from the harness to the tool.
+
+**Admission therefore requires a named enforcement mechanism per capability.** If the environment
+cannot say *how* it enforces a declared capability, it does not admit the tool — the same
+fails-closed rule, applied to the mechanism rather than the descriptor:
+
+| Capability | Enforced in the browser (E1) by | Enforced on a machine (E2) by |
+|---|---|---|
+| `read` / `write` | handle-scoped access: a tool gets the OPFS handles it may touch, not a filesystem | realpath containment against the execution root on every path the host resolves |
+| `wasm` | **the import boundary**: a module can call only what the host exports to it | the same, plus process isolation if it runs out-of-process |
+| `network` | the realm's egress policy — CSP `connect-src`, default `'none'` (§3.5a) | **the environment decides**: a container with no route may admit it; a plain host cannot enforce it, so there it is not admitted — or the tool is refused |
+| `exec` | **impossible: there is no process to spawn**, so the capability is *absent*, not promised | the toolchain the environment provides, with argv classification and the root as cwd |
+
+Three consequences, each of which closes a hole the declaration alone would leave open:
+
+1. **The declaration is an audit record and a request.** It is what the environment checks itself
+   against, what the user sees, and what a reviewer reads later — never the thing that makes an
+   act safe.
+2. **Under-declaring is caught by enforcement, not by trust.** A tool that declares no network and
+   reaches the network is stopped by the policy, and the attempt is a **finding** rather than an
+   incident. This is a §3.6 test, and it needs a positive control: a tool that declares an
+   allow-listed host and reaches it must **succeed**, or the test proves only that refusals work.
+3. **Unenforceable means absent.** On a plain local machine, a capability the environment cannot
+   enforce is not granted and the tool is not admitted there — so the honest answer to *"can this
+   tool run here?"* is a property of the environment, not of the tool's optimism. A capability the
+   platform cannot enforce is **absent, not promised**.
 
 
 ---
@@ -849,6 +890,12 @@ request succeeds. So both directions:
 - **Host-survives tests**: malformed JSON, an unknown message type, a frame with a missing field
   and a handler that throws — each yielding an error and an audit entry with the host (or the
   browser worker) still serving the next request.
+- **Capability enforcement tests (§1.7), both directions**: a tool that **under-declares** —
+  descriptor says no network, the code calls `fetch` — is stopped by the policy and recorded as a
+  finding; and a tool that declares an allow-listed host and reaches it **succeeds**, because a
+  suite of refusals proves nothing until one request is allowed. Plus the admission check itself:
+  a tool declaring a capability the environment has **no mechanism** for is refused rather than
+  run.
 - **The reuse test**: the cwd the harness receives is the project's realpath, and no default
   is invented when a project lacks one (a rule we learned the hard way this week).
 
@@ -989,7 +1036,9 @@ fields: `capabilities`, `replayClass`, `bounds`) and the fails-closed convention
 budgeting by **cold-start milliseconds**, not megabytes. And the extension seam of §1.6a is the
 place where N10 and N11 meet: **a registration is a declaration and admission belongs to the
 environment**, so the registry has to exist early — a tool that cannot say what it needs cannot be
-safely admitted, and a model-authored tool that is not declared is not a capability.
+safely admitted, and a model-authored tool that is not declared is not a capability. **For every
+capability, name the mechanism that enforces it, or the tool is refused** (§1.7): "enforced" is the
+only answer that makes the extension system a platform rather than a permissions form.
 
 **From Paul:** the decisions in §5 (now five) — plus one thing he named as unresolved that this
 document deliberately does **not** answer.
