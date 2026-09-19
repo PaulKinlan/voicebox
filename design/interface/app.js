@@ -10,12 +10,30 @@ const captions = [
   '“The page and your note are ready. The sorter still needs a decision.”',
 ];
 function sample(machine = false) {
-  return { count: 3, seen: 3, work: 'ready', connected: true, mic: false, speaking: true,
+  const state = { count: 3, seen: 3, work: 'ready', connected: true, mic: false, speaking: true,
     caption: captions[3], selected: 'page', admission: 'pending', merge: 'pending',
     undo: machine ? 'worktree' : 'written-file-list', extension: false, extensionResult: '', timer: null,
+    shared: [], sharedSeen: 0,
     events: ['Example conversation: “Make a little place for things I notice on a walk.”',
       'Fieldnotes page created (sample).', 'On noticing note created (sample).',
       'Little sorter written. Admission pending (sample).'] };
+  if (machine) {
+    appendShared(state, 'voice', 'Page and first note ready.', 'brief r1');
+    appendShared(state, 'chat', 'Preparing a sorter for those notes.', 'note r1');
+    appendShared(state, 'voice', 'Keeping the page ready while Chat works.', 'note r1');
+  }
+  return state;
+}
+// A bounded, in-memory illustration of per-session entries, never a transport.
+function appendShared(state, session, activity, read = 'note r1') {
+  const other = session === 'voice' ? 'chat' : 'voice';
+  state.shared.push({ session, root: session === 'voice' ? 'walk' : 'sorter',
+    seq: state.shared.filter((e) => e.session === session).length + 1,
+    activity, read, seen: { [other]: state.shared.findLast((e) => e.session === other)?.seq ?? 0 } });
+}
+function seenWords(entry) {
+  const [other, seq] = Object.entries(entry.seen)[0];
+  return `Read ${entry.read} · seen ${other === 'voice' ? 'Voice' : 'Chat'} #${seq}`;
 }
 const projects = { browser: sample(), machine: sample(true) };
 let project = 'browser';
@@ -57,8 +75,47 @@ function renderRequest() {
   $('answered-elsewhere').hidden = project !== 'machine';
   $('answered-elsewhere').disabled = closed;
 }
+function renderCollaboration() {
+  const s = current();
+  $('collaboration').hidden = project !== 'machine';
+  $('shared-history').hidden = project !== 'machine';
+  if (project !== 'machine') return;
+  if (s.connected) s.sharedSeen = s.shared.length;
+  const entries = s.shared.slice(0, s.sharedSeen);
+  $('live-status').textContent = s.connected ? 'Live · sample' : 'Disconnected · last seen';
+  $('live-advance').disabled = !s.connected;
+  for (const session of ['voice', 'chat']) {
+    const latest = entries.findLast((e) => e.session === session);
+    $(`${session}-activity`).textContent = latest?.activity ?? 'No activity received.';
+    $(`${session}-seen`).textContent = latest ? seenWords(latest) : 'Read state unknown.';
+  }
+  $('shared-log').replaceChildren(...entries.map((entry) => {
+    const li = document.createElement('li');
+    li.dataset.entry = `${entry.session}:${entry.seq}`;
+    const label = document.createElement('small');
+    label.textContent = `${entry.session} #${entry.seq} · ${entry.root} · ${seenWords(entry)}`;
+    li.append(label, document.createTextNode(entry.activity));
+    return li;
+  }));
+  const waiting = s.merge === 'pending';
+  const ready = s.connected && s.count === 3;
+  $('landing-heading').textContent = ({ pending: 'Waiting to land', accepted: 'Landed in walk', refused: 'Kept separate' })[s.merge];
+  $('landing-status').textContent = !s.connected ? 'Last known work · reconnect before deciding'
+    : s.count < 3 ? 'Still being made in sorter'
+    : ({ pending: 'Ready to review · files still separate', accepted: 'You accepted this landing · sample', refused: 'You declined this landing · both roots remain' })[s.merge];
+  $('landing-recovery').textContent = `Recovery: ${undoWords[s.undo][0]}.`;
+  $('landing-review').disabled = !ready;
+  $('landing-refuse').disabled = !ready || !waiting;
+  $('merge-result').textContent = ({ pending: 'Proposed · not merged', accepted: 'Merged in the study. No files changed.', refused: 'Kept separate. Neither root was deleted.' })[s.merge];
+  $('merge-recovery').textContent = s.undo === 'none' ? 'No automatic undo. This landing needs your explicit decision.'
+    : 'Recovery: retain the destination’s pre-merge commit. This does not undo network calls or already published changes.';
+  $('keep-separate').disabled = !ready || !waiting;
+  $('merge-accept').disabled = !ready || !waiting;
+}
 function render() {
   const s = current();
+  document.body.dataset.project = project;
+  document.body.dataset.connected = String(s.connected);
   if (s.connected) s.seen = s.count;
   const count = s.connected ? s.count : s.seen;
   document.body.dataset.work = s.work;
@@ -102,7 +159,7 @@ function render() {
   $('environment-title').textContent = project === 'browser' ? 'This browser' : 'A window onto your machine';
   $('environment-detail').textContent = project === 'browser'
     ? 'Example OPFS project. Files belong to this origin and browser profile. They do not live on the machine the chat agent can reach.'
-    : 'Example machine project. The phone and chat sessions work in separate roots. Their work is not merged automatically.';
+    : 'Example machine project. Sessions share live activity and read marks. Each root has one writer; files meet only in an explicit landing merge.';
   $('storage-detail').textContent = project === 'browser'
     ? 'Example: not protected from automatic browser cleanup. Even protected storage is not a backup; clearing site data or deleting the profile can remove it.'
     : 'Example: files live on the machine, not in this browser. A lost connection does not establish that work stopped. Backups are a separate concern.';
@@ -115,6 +172,7 @@ function render() {
   renderRequest();
   renderLog();
   renderExtensions();
+  renderCollaboration();
 }
 function schedule(state, key) {
   clearTimeout(state.timer);
@@ -124,6 +182,9 @@ function schedule(state, key) {
     if (state.work !== 'running') return;
     state.count += 1;
     if (state.speaking) state.caption = captions[state.count];
+    if (key === 'machine') appendShared(state, state.count === 3 ? 'chat' : 'voice',
+      state.count === 3 ? 'Sorter ready; waiting to land.' : `${titles[names[state.count - 1]]} ready in walk.`,
+      state.count < 2 ? 'brief r1' : 'note r1');
     event(`${titles[names[state.count - 1]]} arrived (sample).`, state);
     if (state.count === 3) state.work = 'ready';
     if (project === key && state.connected) {
@@ -140,10 +201,8 @@ function play() {
   if (!s.connected || s.undo === 'none') return;
   clearTimeout(s.timer);
   Object.assign(s, { count: 0, seen: 0, work: 'running', speaking: true, admission: 'pending', merge: 'pending', selected: 'page', caption: captions[0] });
+  if (project === 'machine') appendShared(s, 'voice', 'Started another example; earlier shared entries remain.', 'brief r1');
   event('Started the synthetic creation sequence.');
-  $('merge-result').textContent = 'Proposed · not merged';
-  $('keep-separate').disabled = false;
-  $('merge-accept').disabled = false;
   render();
   schedule(s, project);
 }
@@ -215,22 +274,27 @@ objects.forEach((el) => el.querySelector('button').addEventListener('click', () 
   $('artifact-review').hidden = kind !== 'tool';
   open('artifact-dialog');
 }));
-$('merge-open').addEventListener('click', () => {
-  closeAll();
-  const state = current().merge;
-  $('merge-result').textContent = ({ pending: 'Proposed · not merged', accepted: 'Merged in the study. No files changed.', refused: 'Kept separate. Neither root was deleted.' })[state];
-  $('keep-separate').disabled = state !== 'pending' || !current().connected;
-  $('merge-accept').disabled = state !== 'pending' || !current().connected;
-  open('merge-dialog');
+for (const id of ['merge-open', 'landing-review']) $(id).addEventListener('click', () => {
+  if (project !== 'machine' || !current().connected || current().count < 3) return;
+  closeAll(); renderCollaboration(); open('merge-dialog');
 });
-for (const [id, value, message] of [['keep-separate', 'refused', 'Kept separate. Neither root was deleted.'], ['merge-accept', 'accepted', 'Merged in the study. No files changed.']]) {
+for (const [id, value, message] of [['keep-separate', 'refused', 'Kept separate. Neither root was deleted.'], ['landing-refuse', 'refused', 'Kept separate. Neither root was deleted.'], ['merge-accept', 'accepted', 'Merged in the study. No files changed.']]) {
   $(id).addEventListener('click', () => {
-    if (project !== 'machine' || !current().connected || current().merge !== 'pending') return;
-    current().merge = value; event(`${message} (sample)`);
-    $('merge-result').textContent = message;
-    $('keep-separate').disabled = true; $('merge-accept').disabled = true;
+    const s = current();
+    if (project !== 'machine' || !s.connected || s.count < 3 || s.merge !== 'pending') return;
+    s.merge = value;
+    appendShared(s, 'voice', value === 'accepted' ? 'Landed sorter r1 in walk after your decision.' : 'Landing declined; both roots kept.');
+    event(`${message} (sample)`); render(); announce(message);
   });
 }
+$('live-advance').addEventListener('click', () => {
+  const s = current();
+  if (project !== 'machine' || !s.connected) return;
+  const session = s.shared.at(-1).session === 'voice' ? 'chat' : 'voice';
+  appendShared(s, session, session === 'chat' ? 'Read the latest Voice entry; keeping work in sorter.' : 'Read the latest Chat entry; keeping work in walk.');
+  event('Another shared activity entry arrived (sample); no files were merged.');
+  render(); announce(`${session === 'voice' ? 'Voice' : 'Chat'} activity and seen-mark updated.`);
+});
 document.querySelectorAll('input[name="theme"]').forEach((r) => r.addEventListener('change', () => {
   if (r.value === 'system') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = r.value;

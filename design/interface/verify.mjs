@@ -11,6 +11,8 @@ import { once } from 'node:events';
 const root = fileURLToPath(new URL('.', import.meta.url));
 if (!process.argv[2]) throw new Error('Supply a NEW evidence directory.');
 const out = resolve(process.argv[2]);
+const counterfactual = process.argv[3] ?? '';
+assert.ok(['', '--hide-asset', '--offscreen-seen', '--blank-page'].includes(counterfactual), 'Unknown counterfactual');
 await mkdir(out); // Deliberately refuses to overwrite a prior run.
 const profile = await mkdtemp(join(tmpdir(), 'voicebox-study-'));
 const checks = [];
@@ -21,7 +23,7 @@ let browser, server, cdp;
 const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
 const revision = git('rev-parse', 'HEAD');
 const sourceStatus = git('status', '--porcelain');
-const check = (name, value) => { checks.push({ name, passed: !!value }); assert.ok(value, name); };
+const check = (name, value, evidence) => { checks.push({ name, passed: !!value, ...(evidence ? { evidence } : {}) }); assert.ok(value, name); };
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 function lineFrom(stream, regex) {
   return new Promise((resolve, reject) => {
@@ -58,6 +60,17 @@ async function evaluate(expression) {
   const r = await cdp.call('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
   if (r.exceptionDetails) throw new Error(JSON.stringify(r.exceptionDetails));
   return r.result.value;
+}
+async function visibility(selector) {
+  return evaluate(`(() => {
+    const e = document.querySelector(${JSON.stringify(selector)});
+    if (!e) return {visible:false, reason:'missing element'};
+    const r = e.getBoundingClientRect();
+    const left=Math.max(0,r.left), right=Math.min(innerWidth,r.right), top=Math.max(0,r.top), bottom=Math.min(innerHeight,r.bottom);
+    const intersects=right>left && bottom>top;
+    const hit=intersects ? document.elementFromPoint((left+right)/2,(top+bottom)/2) : null;
+    return {visible:r.width>0 && r.height>0 && intersects && e.checkVisibility({opacityProperty:true,visibilityProperty:true}) && !!hit && (e===hit || e.contains(hit)), rect:{x:r.x,y:r.y,width:r.width,height:r.height}, viewport:{width:innerWidth,height:innerHeight}, text:e.textContent.trim()};
+  })()`);
 }
 async function until(expression, limit = 10000) {
   const start = Date.now();
@@ -99,9 +112,7 @@ async function finishChild(child) {
 try {
   server = spawn(process.execPath, [join(root, 'serve.mjs'), '0'], { cwd: tmpdir(), stdio: ['ignore', 'pipe', 'pipe'] });
   const url = await lineFrom(server.stdout, /(http:\/\/127\.0\.0\.1:\d+\/)/);
-  check('server works from an unrelated cwd', (await fetch(url)).status === 200);
-  check('malformed URL is a bounded 404', (await fetch(url + '%ZZ')).status === 404);
-  check('server still serves after malformed URL', (await fetch(url)).status === 200);
+  assert.equal((await fetch(url)).status, 200, 'server startup from unrelated cwd');
   const chrome = process.env.CHROME || '/usr/bin/chromium';
   browser = spawn(chrome, ['--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${profile}`, '--remote-debugging-port=0', 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
   const endpoint = await lineFrom(browser.stderr, /DevTools listening on (ws:\/\/[^\s]+)/);
@@ -116,6 +127,50 @@ try {
   await cdp.call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }, { name: 'prefers-reduced-motion', value: 'reduce' }] });
   await cdp.call('Page.navigate', { url });
   await until(`document.getElementById('build-stamp')?.textContent.includes(${JSON.stringify(revision.slice(0,12))}) && document.getElementById('extension-inventory')?.textContent.length > 0`);
+  // Fail-fast visual positives come before all absence-based UI/security checks.
+  await click('#play');
+  await until(`document.querySelectorAll('[data-artifact]:not([hidden])').length === 1`);
+  await evaluate('window.scrollTo(0,0)');
+  if (counterfactual === '--blank-page') await evaluate('document.body.replaceChildren()');
+  if (counterfactual === '--hide-asset') await evaluate(`document.querySelector('.page-preview').style.visibility = 'hidden'`);
+  const asset = await visibility('[data-artifact="page"] .page-preview');
+  check('an asset arrives and is visible', asset.visible, asset);
+  await click('#pause');
+  await click('#project-open'); await click('[data-project="machine"]');
+  await evaluate('window.scrollTo(0,0)');
+  if (counterfactual === '--offscreen-seen') await evaluate(`document.getElementById('chat-seen').style.transform = 'translateX(-10000px)'`);
+  const activity = await visibility('#chat-activity');
+  const seen = await visibility('#chat-seen');
+  check('a live session’s activity appears with its seen-mark', activity.visible && seen.visible && activity.text.includes('Preparing a sorter') && seen.text.includes('Read note r1 · seen Voice #1'), {activity, seen});
+  const landing = await visibility('#landing-review');
+  const voiceSeen = await visibility('#voice-seen');
+  check('live work and a refusable landing occupy the same visible surface', landing.visible && voiceSeen.visible && voiceSeen.text.includes('seen Chat #1') && await evaluate(`!document.querySelector('dialog[open]') && !document.getElementById('landing-refuse').disabled`), {landing, voiceSeen});
+  await screenshot('machine-shared-and-landing.png');
+  const sharedBefore = await evaluate(`[...document.querySelectorAll('#shared-log li')].map(e => e.textContent)`);
+  await click('#live-advance');
+  check('shared activity advances the seen-mark without landing files', await evaluate(`document.getElementById('chat-activity').textContent.includes('Read the latest Voice entry') && document.getElementById('chat-seen').textContent.includes('seen Voice #2') && document.getElementById('landing-heading').textContent === 'Waiting to land'`));
+  await click('#logs-open');
+  const sharedAfter = await evaluate(`[...document.querySelectorAll('#shared-log li')].map(e => e.textContent)`);
+  check('shared log appends an entry and preserves every earlier entry', sharedAfter.length === sharedBefore.length + 1 && JSON.stringify(sharedAfter.slice(0, sharedBefore.length)) === JSON.stringify(sharedBefore));
+  await screenshot('shared-log.png'); await key('Escape');
+  await click('nav [data-view="beside"]'); await screenshot('machine-beside.png');
+  await click('nav [data-view="return"]'); await screenshot('machine-return.png');
+  await click('nav [data-view="studio"]');
+  await viewport(390, 844);
+  await evaluate(`document.getElementById('live-heading').scrollIntoView({block:'start',behavior:'instant'})`);
+  const phoneActivity = await visibility('#chat-activity');
+  const phoneLanding = await visibility('#landing-refuse');
+  check('phone shows live activity beside the reachable landing decision', phoneActivity.visible && phoneLanding.visible, {phoneActivity, phoneLanding});
+  await screenshot('machine-mobile.png');
+  check('machine phone surface has no horizontal page overflow', await evaluate('document.documentElement.scrollWidth <= innerWidth'));
+  await click('#landing-refuse');
+  check('main-surface refusal is visible and retains both sessions', await evaluate(`document.getElementById('landing-heading').textContent === 'Kept separate' && document.querySelectorAll('.live-sessions li').length === 2`));
+  await viewport(1440, 900);
+  await click('#project-open'); await click('[data-project="browser"]');
+  await click('#play'); await until(`document.body.dataset.work === 'ready'`);
+  check('server works from an unrelated cwd', (await fetch(url)).status === 200);
+  check('malformed URL is a bounded 404', (await fetch(url + '%ZZ')).status === 404);
+  check('server still serves after malformed URL', (await fetch(url)).status === 200);
   check('honest study label present', await evaluate(`document.getElementById('demo-note').textContent.includes('no audio or real work')`));
   check('default project is browser-only', await evaluate(`document.getElementById('project-name').textContent === 'fieldnotes@this-browser'`));
   await screenshot('desktop-studio.png');
@@ -170,9 +225,11 @@ try {
   check('refusing the merge keeps both roots', await evaluate(`document.getElementById('merge-result').textContent.includes('Neither root was deleted') && document.getElementById('merge-accept').disabled`));
   await screenshot('merge-refused.png'); await key('Escape');
   await click('#play'); await until(`document.body.dataset.work === 'ready'`);
-  await click('#people-open'); await click('#merge-open'); await click('#merge-accept');
+  await click('#landing-review'); await click('#merge-accept');
   check('merge requires its own explicit decision', await evaluate(`document.getElementById('merge-result').textContent === 'Merged in the study. No files changed.'`));
   await key('Escape');
+  check('landing is a visible event rather than background reconciliation', await evaluate(`document.getElementById('landing-heading').textContent === 'Landed in walk' && document.getElementById('voice-activity').textContent === 'Landed sorter r1 in walk after your decision.' && document.getElementById('shared-log').textContent.includes('Landed sorter r1')`));
+  await screenshot('machine-landed.png');
   await click('#project-open'); await click('[data-project="browser"]');
   check('switching environments did not copy the machine admission', await evaluate(`document.getElementById('tool-state').textContent === 'Made · not enabled'`));
   await click('#settings-open');
@@ -235,6 +292,6 @@ try {
   if (cdp) { try { await cdp.call('Browser.close', {}, null); } catch {} cdp.ws.close(); }
   await finishChild(browser); await finishChild(server);
   await rm(profile, { recursive: true, force: true });
-  await writeFile(join(out, 'receipt.json'), JSON.stringify({ revision, sourceStatus, checks, captures, errors, requests, teardown: { browserPid: browser?.pid, browserExit: browser?.exitCode, browserSignal: browser?.signalCode, serverPid: server?.pid, serverExit: server?.exitCode, serverSignal: server?.signalCode, profileRemoved: true }, scope: 'Synthetic UI transitions and native interaction only; no audio, OPFS, real admission, host authority, multi-instance transport or package execution.' }, null, 2));
+  await writeFile(join(out, 'receipt.json'), JSON.stringify({ revision, sourceStatus, counterfactual, checks, captures, errors, requests, teardown: { browserPid: browser?.pid, browserExit: browser?.exitCode, browserSignal: browser?.signalCode, serverPid: server?.pid, serverExit: server?.exitCode, serverSignal: server?.signalCode, profileRemoved: true }, scope: 'Synthetic UI transitions and native interaction only; no audio, OPFS, real admission, host authority, multi-instance transport or package execution.' }, null, 2));
   console.log(`${checks.filter((c) => c.passed).length}/${checks.length} checks; evidence: ${out}`);
 }

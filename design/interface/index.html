@@ -83,6 +83,25 @@
       <div class="voice-actions"><button class="quiet" id="interrupt" type="button">Stop speaking</button><button class="quiet" id="pause" type="button" disabled>Pause work</button><button class="quiet" id="type-open" type="button" aria-haspopup="dialog" aria-controls="type-dialog">Type instead</button></div>
       <p class="work-status" id="work-status">Ready when you are.</p>
     </section>
+
+    <div class="collaboration" id="collaboration" hidden>
+      <section class="live-work">
+        <h2 id="live-heading">Here, together <span id="live-status">Live · sample</span></h2>
+        <ul class="live-sessions" role="list">
+          <li data-session="voice"><h3>Voice <span>walk · Live harness</span></h3><p id="voice-activity"></p><p class="seen-mark" id="voice-seen"></p></li>
+          <li data-session="chat"><h3>Chat <span>sorter · pi harness</span></h3><p id="chat-activity"></p><p class="seen-mark" id="chat-seen"></p></li>
+        </ul>
+        <button class="quiet" id="live-advance" type="button">Try another shared event</button>
+      </section>
+      <section class="landing-work">
+        <h2 id="landing-heading">Waiting to land</h2>
+        <p class="landing-path"><code>sorter</code><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg><code>walk</code></p>
+        <p class="landing-file"><code>tools/group-notes.js</code></p>
+        <p id="landing-status">Ready to review · files still separate</p>
+        <p id="landing-recovery" class="muted"></p>
+        <div class="landing-actions"><button class="small-button" id="landing-review" type="button" aria-haspopup="dialog" aria-controls="merge-dialog">Review merge</button><button class="quiet" id="landing-refuse" type="button">Keep separate</button></div>
+      </section>
+    </div>
   </main>
 
   <aside class="decision" id="decision" aria-labelledby="decision-title">
@@ -102,7 +121,7 @@
     <header class="dialog-head"><h2 id="project-title">Where are we making this?</h2><button class="icon-button" data-close type="button" aria-label="Close projects"><svg class="icon"><use href="#i-close"/></svg></button></header>
     <p class="dialog-intro">Two example projects with the same name. They do not share files.</p>
     <button class="project-choice" data-project="browser" type="button"><strong>fieldnotes@this-browser</strong><span>Browser peer · only in this profile</span><span>Recorded file changes · storage may be cleared</span></button>
-    <button class="project-choice" data-project="machine" type="button"><strong>fieldnotes@box</strong><span>Window onto a machine · two live instances</span><span>Separate worktrees · changes meet in an explicit merge</span></button>
+    <button class="project-choice" data-project="machine" type="button"><strong>fieldnotes@box</strong><span>Window onto a machine · two live instances</span><span>Live shared log · separate files until an explicit merge</span></button>
     <p class="muted">Changing project here switches example data. It does not copy files or connect to a machine.</p>
   </dialog>
 
@@ -129,7 +148,7 @@
 
   <dialog id="merge-dialog" aria-labelledby="merge-title" closedby="any">
     <header class="dialog-head"><h2 id="merge-title">Bring the sorter into your work?</h2><button class="icon-button" data-close type="button" aria-label="Close merge"><svg class="icon"><use href="#i-close"/></svg></button></header>
-    <p class="dialog-intro">Chat agent's <code>sorter</code> → your <code>walk</code> root</p><p>Add <code>tools/group-notes.js</code>. The sample reports no conflicts. Existing notes stay untouched.</p><p>Recovery: retain the destination's pre-merge commit. This does not undo network calls or already published changes.</p><p class="muted">Only within fieldnotes@box. This does not move anything out of the browser-only project.</p><p id="merge-result" role="status">Proposed · not merged</p><div class="dialog-actions"><button class="small-button" id="keep-separate" type="button">Keep separate</button><button class="primary" id="merge-accept" type="button">Merge these changes</button></div>
+    <p class="dialog-intro">Chat agent's <code>sorter</code> → your <code>walk</code> root</p><p>Add <code>tools/group-notes.js</code>. The sample reports no conflicts. Existing notes stay untouched.</p><p id="merge-recovery">Recovery: retain the destination's pre-merge commit. This does not undo network calls or already published changes.</p><p class="muted">Only within fieldnotes@box. This does not move anything out of the browser-only project.</p><p id="merge-result" role="status">Proposed · not merged</p><div class="dialog-actions"><button class="small-button" id="keep-separate" type="button">Keep separate</button><button class="primary" id="merge-accept" type="button">Merge these changes</button></div>
   </dialog>
 
   <dialog id="artifact-dialog" aria-labelledby="artifact-title" closedby="any">
@@ -139,7 +158,8 @@
 
   <dialog id="logs-dialog" aria-labelledby="logs-title" closedby="any">
     <header class="dialog-head"><h2 id="logs-title">What happened</h2><button class="icon-button" data-close type="button" aria-label="Close logs"><svg class="icon"><use href="#i-close"/></svg></button></header>
-    <p class="muted">This study's events, in local order. A product needs per-instance sequence and root identity, not a fabricated global clock.</p><ol id="event-log"></ol>
+    <div id="shared-history" hidden><h3>Shared activity · sample</h3><p class="muted">Append-only entries with each session's own sequence, read revisions and seen-mark. Arrival order is not a global clock. This is one tab simulating two harnesses.</p><ol id="shared-log"></ol></div>
+    <h3>This tab's study events</h3><p class="muted">Local interface actions, separate from the shared project log.</p><ol id="event-log"></ol>
   </dialog>
 
   <dialog id="settings-dialog" aria-labelledby="settings-title" closedby="any">

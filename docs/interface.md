@@ -1,6 +1,6 @@
 # An open studio, with a voice in it
 
-Interface exploration by Astra, 2026-09-19. This is a proposal and an interactive study, not a working agent. [The brief](00-brief.md), especially N10–N13, takes precedence over the older open questions.
+Interface exploration by Astra, 2026-09-19. This is a proposal and an interactive study, not a working agent. [The brief](00-brief.md), especially N10–N13, takes precedence over the older open questions. This study also incorporates the coordinator's N17 extensions and N19 shared-log/landing requirements of 2026-09-19.
 
 **Recommendation:** keep isocan's voice surface and let made things occupy the space around it. A canvas is useful for a page, a note, a dataset, an image or a newly made tool. Putting every command on it would bury those things. Commands, intermediate errors and execution history belong in Logs; a concrete plan comes forward when it needs a decision.
 
@@ -55,7 +55,7 @@ The top level is deliberately short:
 - **Project + environment:** a single selector with placement-bearing identity. `fieldnotes@this-browser` and `fieldnotes@box` are different projects, even if their display names match.
 - **Made things:** the primary collection. Pages, notes and tools are examples, not a closed type taxonomy. A tool has content, revision and provenance like other artefacts, plus an admission state.
 - **Conversation:** current caption, microphone, interruption and work pause. Typed interaction is an alternative input, not a permanent chat column.
-- **Here with you:** presence, root ownership, queued writes and waiting decisions. A quiet count opens the details. Browser-only mode explicitly has no remote collaborators; the machine-backed sample demonstrates multiple instances.
+- **Here, together + waiting to land:** the machine project's live activity, read revisions and seen-marks share the main surface with a separately refusable landing. Root ownership and queued-write details remain behind the quiet presence count. Browser-only mode explicitly has no remote collaborators.
 - **Logs:** utterances and process events linked to artefacts and turns. Arrival order is not asserted to be a cross-machine total order.
 - **Settings:** theme, environment reach, storage durability, recovery/undo kind and capability facts. A brief storage/undo line remains visible without opening Settings.
 
@@ -70,6 +70,16 @@ A newly authored tool appears as **Made · not enabled**. Its review names reque
 A short inline request says the effect and the originating instance. “Review” opens the exact plan, with named root, paths, effects, permitted input method and undo boundary. Reject is always available. Outside clicks or Escape close the inspector without granting anything. The last decision remains readable as answered/expired; a second instance answering first disables the stale action. Silence is never consent.
 
 A merge is its own proposal: source root → destination root, changed paths, conflict result and the recovery available after it. **Keep separate** refuses without deleting either root. **Merge these changes** is a separate explicit choice, not a side effect of closing the review. In browser-only mode this machine/worktree example is absent.
+
+### Shared now, landed by decision (N19)
+
+Paul chose **shared log + per-root work that still merges**, so the machine surface has two visible halves. They flank the voice control in desktop Studio and Return; Beside puts them below the selected object, and the phone keeps them side by side in a scroll-reachable band. The user does not have to open Presence to discover either half.
+
+**Here, together** shows two synthetic sessions with different harnesses, each owning a root. The current activity includes both what the session read (`note r1`) and what it had seen from its peer (`seen Voice #2`). These are different facts: a read revision identifies source material, while the seen-mark identifies shared-log knowledge. “Try another shared event” appends an entry, advances that session's seen-mark and leaves the landing untouched. Logs exposes the earlier entries; it does not replace them with the latest state. This is a local demonstration of the shape, not a claim that two real harnesses exchanged messages.
+
+**Waiting to land** names the source and destination, the proposed file and the recovery kind. **Review merge** shows the exact proposed effect; **Keep separate** refuses without deleting either root or stopping shared activity. Accepting changes this main-surface status to **Landed in walk** and appends a landing entry. The merge is a user-visible event, not background reconciliation. Admission of the tool remains a separate decision from landing its file.
+
+This adds live knowledge to the asset-led surface, not a status dashboard. Activity is two compact current entries rather than a permanent transcript. A disconnected view says **last seen** and disables decisions; it does not keep claiming live presence. No network, conflict resolution, append-only storage guarantee or cross-instance delivery is implemented here.
 
 ### Undo is a named mechanism
 
@@ -93,7 +103,7 @@ OPFS is origin-private and reopened without a file-picker permission dance. User
 1. Play the synthetic creation: a page, note and tool arrive. Interrupt the caption and the objects continue to arrive. Pause work instead and subsequent arrivals stop; Resume continues without duplicating objects.
 2. Open an object while something else arrives: reading position and keyboard focus remain stable. Beside keeps the selected object when a new one appears.
 3. Answer a tool request: it changes from not enabled to enabled only after the explicit answer. Rejection is visible. Browser-incompatible capability stays unavailable.
-4. Switch to the machine sample: the project identity, presence and recovery change together. Review a request originating from the chat instance, and separately accept or refuse its proposed merge.
+4. Switch to the machine sample: the project identity, live activity, seen-marks and recovery change together. A new shared event leaves the landing pending and preserves earlier entries. Review a request originating from the chat instance, and separately accept or refuse its proposed merge. Both live knowledge and the landing must remain visible without opening Presence.
 5. Return after changing views: existing objects remain; there is no fictitious replay of their creation. Reconnect restores the work summary but leaves the simulated microphone off.
 6. Drive keyboard and pointer at desktop, phone and short landscape sizes. A confirmation must remain reachable and never hide the only way to interrupt voice.
 
