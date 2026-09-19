@@ -61,7 +61,7 @@ The zero-dependency server (`server.mjs`, `node:http`) binds **127.0.0.1** and s
 | `GET` | `/api/files` | 200 |
 | `POST` | `/api/turn` | 200 |
 
-Anything else that exists under `public/` is served from there (`GET /static` and a fall-through), which is how the page, its scripts and the styles arrive. `/api/health` answers `provider: "script"`, `workspace: "/home/paulkinlan/worktrees/vb-docs/workspace"`.
+Anything else that exists under `public/` is served from there (`GET /static` and a fall-through), which is how the page, its scripts and the styles arrive. `/api/health` answers `provider: "script"`, `workspace: "workspace/"`.
 
 A WEBSOCKET UPGRADE ON /live CLOSED WITHOUT AN HTTP RESPONSE — the server destroys it (also a form of owning the route).
 <!-- END GENERATED: routes -->
@@ -78,6 +78,7 @@ Audio worklets loaded by that code: `pcm-worklet.js`.
 ## The audio path, tonight
 
 <!-- BEGIN GENERATED: live-session -->
+`lib/live-session.mjs` is present, using model `gemini-3.8-live`.
 <!-- END GENERATED: live-session -->
 
 ## Where each file's authority lies

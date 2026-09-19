@@ -27,7 +27,7 @@ import http from "node:http";
 import net from "node:net";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { registeredResolvers, resolveTurn } from "../lib/resolver.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -161,6 +161,11 @@ async function blocks() {
   const { tags, worklets } = pageScripts();
   const live = liveSession();
   const liveUpgradeLine = await probeLiveUpgrade(port);
+  // A COMMITTED DOCUMENT CANNOT CONTAIN AN ABSOLUTE PATH. server.mjs reports its workspace absolutely, so the
+  // generated block used to hardcode this worktree's path and the check passed only on the machine that made
+  // it. Same lesson as the harness's workspace anchoring: a path that is true in one checkout is not a fact
+  // about the system.
+  const relWorkspace = `${relative(ROOT, health.workspace) || "."}/`;
 
   const sample = resolveTurn("create a file called hello.txt with hi");
   const unresolved = resolveTurn("book me a flight to Lisbon");
@@ -184,7 +189,7 @@ async function blocks() {
       "|---|---|---|",
       ...routes.map((r) => `| \`${r.method}\` | \`${r.path}\` | ${r.status}${r.matches_documented_expectation ? "" : " ⚠️ differs from what this table expects"} |`),
       "",
-      `Anything else that exists under \`public/\` is served from there (\`GET /static\` and a fall-through), which is how the page, its scripts and the styles arrive. \`/api/health\` answers \`provider: "${health.provider}"\`, \`workspace: "${health.workspace}"\`.`,
+      `Anything else that exists under \`public/\` is served from there (\`GET /static\` and a fall-through), which is how the page, its scripts and the styles arrive. \`/api/health\` answers \`provider: "${health.provider}"\`, \`workspace: "${relWorkspace}"\`.`,
       "",
       liveUpgradeLine,   // DERIVED by probeLiveUpgrade() — this line used to be a typed sentence about state
     ].join("\n")),
@@ -218,7 +223,10 @@ const DOCS = [
 const generated = await blocks();
 
 function replaceBlock(text, name, body) {
-  const re = new RegExp(`<!-- BEGIN GENERATED: ${name} -->[\\s\\S]*?<!-- END GENERATED: ${name} -->`);
+  // GLOBAL: a document may carry the same block twice (07 does — the audio path appears under two headings),
+  // and a non-global replace leaves the second one empty. "The block is present" and "the block says
+  // something" are two different assertions, and the first one passed while the second failed.
+  const re = new RegExp(`<!-- BEGIN GENERATED: ${name} -->[\\s\\S]*?<!-- END GENERATED: ${name} -->`, "g");
   if (!re.test(text)) return { text, found: false };
   return { text: text.replace(re, body), found: true };
 }
@@ -242,6 +250,15 @@ for (const { rel, blocks: wanted } of DOCS) {
       process.exit(1);
     }
     if (process.env.DOCS_DEBUG) console.error(`DEBUG ${rel} block=${name} found=${r.found} changed=${r.text !== text} bodyLen=${String(body).length}`);
+    // THE FILE'S block, after the replacement — not the generated body, which is never empty. My first
+    // version of this guard watched the wrong side and passed while the document carried a blank block.
+    const after = text.slice(text.indexOf(`<!-- BEGIN GENERATED: ${name} -->`));
+    const inner = after.slice(after.indexOf("-->") + 3, after.indexOf(`<!-- END GENERATED: ${name} -->`));
+    if (inner.trim() === "") {
+      console.error(`docs-check: the generated block '${name}' in ${rel} is EMPTY after the replace —`);
+      console.error("  a block that says nothing is not a block that says something, and this one is blank.");
+      process.exit(1);
+    }
     if (String(body).includes("undefined")) {
       console.error(`docs-check: the generated block '${name}' for ${rel} contains the word 'undefined' —`);
       console.error("  that is a template that did not interpolate, and it reached a document once already (07-architecture.md:80).");
