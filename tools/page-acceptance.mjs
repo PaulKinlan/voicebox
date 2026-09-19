@@ -26,7 +26,7 @@
 //   7. the font actually loads          — through Vite AND through server.mjs
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
-import { existsSync, readFileSync, readlinkSync, rmSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -167,9 +167,21 @@ while (servedRefs.length) {
       servedRefs.push(path.posix.join(path.posix.dirname(ref), m[1] ?? m[2]));
   }
 }
+// sweep our own past: a crashed run's proof file would fail THIS run's list
+// comparison — the gate jamming itself (2026-09-19). The lock guarantees no
+// concurrent run owns these.
+let swept = 0;
+try {
+  for (const f of readdirSync(WORKSPACE)) {
+    if (/^acceptance-proof-.*\.txt$/.test(f)) { rmSync(path.join(WORKSPACE, f)); swept++; }
+  }
+} catch { /* workspace unreadable: the list check will name it */ }
+if (swept) console.log(`note: swept ${swept} leftover harness artefact(s) from an earlier failed run`);
+
 report("environment is current (served modules carry current markers)", staleModules.length === 0,
   staleModules.length ? `STALE: ${staleModules.join(", ")} — touch the file or restart vite` : `${compared.size} modules compared`);
 
+try {
 await send("Page.navigate", { url: UI }, sessionId);
 await sleep(4000); // let load() finish whatever it does — including phantom turns
 
@@ -290,10 +302,15 @@ const fontResp = await fetch(`${API}/fonts/inter-latin.woff2`);
 report("font serves through the real server", fontResp.status === 200,
   `GET /fonts/inter-latin.woff2 -> ${fontResp.status} ${fontResp.headers.get("content-type") ?? ""}`);
 
-// ── leave no residue: remove exactly the file this run created ────────────
-try { rmSync(path.join(WORKSPACE, NAME)); } catch { /* already gone */ }
-
-chromium.kill();
-const failed = results.filter((ok) => !ok).length;
-console.log(failed === 0 ? "\nALL CLEAR" : `\n${failed} CHECK(S) FAILED — named above`);
-process.exit(failed === 0 ? 0 : 1);
+  } catch (e) {
+    report("harness ran to completion", false, String(e?.message ?? e).slice(0, 140));
+  } finally {
+    // the proof file is OURS — remove it whether the run passed, failed or
+    // was interrupted. A leftover fails the NEXT run's list comparison, which
+    // is the gate jamming itself (2026-09-19).
+    try { if (WORKSPACE) rmSync(path.join(WORKSPACE, NAME), { force: true }); } catch { /* gone */ }
+    chromium.kill();
+  }
+  const failed = results.filter((ok) => !ok).length;
+  console.log(failed === 0 ? "\nALL CLEAR" : `\n${failed} CHECK(S) FAILED — named above`);
+  process.exit(failed === 0 ? 0 : 1);
