@@ -47,7 +47,10 @@ const git = (args, fallback) => {
     return fallback;
   }
 };
-const buildIdentity = {
+// Read per HTML request, not once at startup: a stamp that keeps naming the
+// revision the server started on goes stale the moment anything lands, which is
+// exactly the confusion this line exists to prevent.
+const buildIdentity = () => ({
   branch: git(["branch", "--show-current"], "(detached)"),
   commit: git(["rev-parse", "--short", "HEAD"], "unknown"),
   // Tracked changes only: an ignored node_modules or a scratch file is not an
@@ -55,7 +58,7 @@ const buildIdentity = {
   // page nobody believes.
   dirty: git(["status", "--porcelain", "--untracked-files=no"], "") !== "",
   servedAt: new Date().toISOString(),
-};
+});
 
 // A MISSING ASSET MUST BE LOUD, without removing index.html from the server.
 //
@@ -109,7 +112,8 @@ function buildStamp() {
   return {
     name: "voicebox-build-stamp",
     transformIndexHtml(html) {
-      const content = `${buildIdentity.branch} @ ${buildIdentity.commit}${buildIdentity.dirty ? " · uncommitted changes" : ""}`;
+      const build = buildIdentity();
+      const content = `${build.branch} @ ${build.commit}${build.dirty ? " · uncommitted changes" : ""}`;
       return html.replace("__VOICEBOX_BUILD_STAMP__", content);
     },
   };
