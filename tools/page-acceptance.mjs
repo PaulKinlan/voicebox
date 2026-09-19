@@ -36,6 +36,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // directories, and stat'ing the wrong one is a false FAIL (2026-09-19,
 // voicebox-ui blocked twice). /api/health names the server's own workspace.
 let WORKSPACE = null; // resolved from /api/health, below
+const NAME = `acceptance-proof-${process.pid}.txt`; // hoisted: the finally must see it
 const UI = process.env.VOICEBOX_UI_URL ?? "http://127.0.0.1:5173";
 const API = process.env.VOICEBOX_API_URL ?? "http://127.0.0.1:8787";
 // per-run browser: two concurrent runs must never share one (2026-09-19,
@@ -44,6 +45,15 @@ const API = process.env.VOICEBOX_API_URL ?? "http://127.0.0.1:8787";
 const CDP_PORT = 9500 + (process.pid % 500);
 
 const results = [];
+// Cleanup on every exit path — finally does not run on signals or direct
+// process.exit, and a SIGTERM'd run (timeout, ctrl-C) used to leave its proof
+// file in Paul's workspace. Re-asserted at the end by the artefact-free check.
+const cleanupArtefacts = () => {
+  try { if (WORKSPACE) for (const f of readdirSync(WORKSPACE)) if (/^acceptance-proof-.*\.txt$/.test(f)) rmSync(path.join(WORKSPACE, f)); } catch {}
+};
+process.on("SIGTERM", () => { cleanupArtefacts(); process.exit(143); });
+process.on("SIGINT", () => { cleanupArtefacts(); process.exit(130); });
+process.on("uncaughtException", (e) => { cleanupArtefacts(); try { chromium?.kill(); } catch {} console.log(`FAIL  uncaught: ${String(e?.message ?? e).slice(0, 140)}`); process.exit(1); });
 // One page, one driver: concurrent runs interleave typed turns into the same
 // workspace and the list checks fail on each other's files. Serialise whole
 // runs on a lockfile — wait up to 2 minutes, then refuse rather than overlap.
@@ -221,7 +231,6 @@ report("page byte counts match disk", apiFiles.length === 0 || sizeMismatches.le
   sizeMismatches.join("; "));
 
 // ── 4 + 7. a typed turn writes a real file (the positive control) ─────────
-const NAME = `acceptance-proof-${process.pid}.txt`;
 const CONTENT = `acceptance ${Date.now()}`;
 const turnsBeforeTyped = turnPosts.length;
 phase = "typed";
@@ -308,9 +317,12 @@ report("font serves through the real server", fontResp.status === 200,
     // the proof file is OURS — remove it whether the run passed, failed or
     // was interrupted. A leftover fails the NEXT run's list comparison, which
     // is the gate jamming itself (2026-09-19).
-    try { if (WORKSPACE) rmSync(path.join(WORKSPACE, NAME), { force: true }); } catch { /* gone */ }
+    cleanupArtefacts();
     chromium.kill();
   }
+  let postLeftovers = [];
+  try { postLeftovers = readdirSync(WORKSPACE).filter((f) => /^acceptance-proof-.*\.txt$/.test(f)); } catch {}
+  report("workspace left artefact-free", postLeftovers.length === 0, postLeftovers.join(", "));
   const failed = results.filter((ok) => !ok).length;
   console.log(failed === 0 ? "\nALL CLEAR" : `\n${failed} CHECK(S) FAILED — named above`);
   process.exit(failed === 0 ? 0 : 1);
