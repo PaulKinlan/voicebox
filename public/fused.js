@@ -10,13 +10,13 @@ const SVG = "http://www.w3.org/2000/svg";
 
 const els = {
   files: $("files"), made: $("made"), samples: $("samples"), count: $("file-count"),
-  where: $("where-note"), dot: $("server-dot"), refresh: $("refresh"), report: $("turn-report"),
+  where: $("where-note"), dot: $("server-dot"), refresh: $("refresh"), report: $("turn-report"), newFile: $("new-file"),
   stage: $("voice-ring-wrap"), mic: $("mic"), state: $("voice-state"),
   session: $("session"), log: $("session-log"), form: $("text-form"), utterance: $("utterance"), send: $("send"),
-  dialog: $("file-dialog"), dialogTitle: $("file-title"), dialogFacts: $("file-facts"), dialogBody: $("file-body"), copy: $("file-copy"),
+  reader: $("reader"), readerTitle: $("reader-title"), readerFacts: $("file-facts"), readerBody: $("file-body"), copy: $("file-copy"),
 };
 
-let shownFile = null; // the file currently in the reader, when it is open
+let shownFile = null; // the file currently in the reader panel
 
 let entries = [];
 
@@ -82,11 +82,12 @@ function card(entry) {
   name.textContent = entry.name;
   const head = document.createElement("span");
   head.className = "file-head";
-  head.append(name, icon("i-arrow"));
+  head.append(name, icon("i-doc"));
   const meta = document.createElement("span");
   meta.className = "file-meta";
   meta.textContent = entry.meta;
   open.append(head, meta);
+  open.dataset.file = entry.name;
 
   if (entry.preview) {
     const peek = document.createElement("span");
@@ -111,6 +112,14 @@ function render() {
   els.made.dataset.state = count === 0 ? "empty" : "ready";
   els.files.setAttribute("aria-busy", "false");
   els.count.textContent = count === 0 ? "0 files" : `${count} ${count === 1 ? "file" : "files"}`;
+  if (shownFile && !entries.some((entry) => entry.name === shownFile)) shownFile = null;
+  if (shownFile) showFileSelection(shownFile);
+}
+
+function showFileSelection(name) {
+  for (const card of document.querySelectorAll(".file-open")) {
+    card.setAttribute("aria-current", String(card.dataset.file === name));
+  }
 }
 
 // The first paint is a skeleton of the real card — never a finished-looking list
@@ -176,32 +185,36 @@ async function load() {
 async function showFile(name) {
   shownFile = name;
   els.copy.disabled = true;
-  els.dialogTitle.textContent = name;
-  els.dialogFacts.textContent = "Reading…";
-  els.dialogBody.textContent = "";
-  if (!els.dialog.open) els.dialog.showModal();
+  els.reader.dataset.state = "empty";
+  els.readerTitle.textContent = name;
+  els.readerFacts.textContent = "Reading…";
+  els.readerBody.textContent = "";
+  for (const card of document.querySelectorAll(".file-open")) {
+    card.setAttribute("aria-current", String(card.dataset.file === name));
+  }
   try {
     const answer = await turn(`read ${name}`);
     const result = answer.result ?? {};
     if (result.ok) {
       const content = result.content ?? "";
-      els.dialogFacts.textContent = `${size(content)} · read from workspace/${name} just now`;
-      els.dialogBody.textContent = content;
+      els.readerFacts.textContent = `${size(content)} · read from workspace/${name} just now`;
+      els.readerBody.textContent = content;
+      els.reader.dataset.state = "ready";
       els.copy.disabled = content.length === 0;
     } else {
-      els.dialogFacts.textContent = result.error ?? answer.note ?? "the server would not read this file";
+      els.readerFacts.textContent = result.error ?? answer.note ?? "the server would not read this file";
     }
   } catch (error) {
-    els.dialogFacts.textContent = `Could not read workspace/${name}: ${error.message}`;
+    els.readerFacts.textContent = `Could not read workspace/${name}: ${error.message}`;
   }
 }
 
 els.copy.addEventListener("click", async () => {
   try {
-    await navigator.clipboard.writeText(els.dialogBody.textContent ?? "");
-    els.dialogFacts.textContent = `Copied ${shownFile} to the clipboard.`;
+    await navigator.clipboard.writeText(els.readerBody.textContent ?? "");
+    els.readerFacts.textContent = `Copied ${shownFile} to the clipboard.`;
   } catch (error) {
-    els.dialogFacts.textContent = `The clipboard refused: ${error.message}`;
+    els.readerFacts.textContent = `The clipboard refused: ${error.message}`;
   }
 });
 
@@ -301,6 +314,12 @@ function startListening() {
 
 els.mic.addEventListener("click", startListening);
 els.refresh.addEventListener("click", load);
+els.newFile.addEventListener("click", () => {
+  els.utterance.value = "create a file called ";
+  els.utterance.focus();
+  els.utterance.setSelectionRange(els.utterance.value.length, els.utterance.value.length);
+  els.utterance.dispatchEvent(new Event("input"));
+});
 els.utterance.addEventListener("input", () => { els.send.disabled = !els.utterance.value.trim(); });
 
 els.form.addEventListener("submit", (event) => {
@@ -310,10 +329,6 @@ els.form.addEventListener("submit", (event) => {
   els.utterance.value = "";
   send(said);
 });
-
-for (const closer of document.querySelectorAll("[data-close]")) {
-  closer.addEventListener("click", () => closer.closest("dialog")?.close());
-}
 
 // The empty state teaches the loop with turns the resolver really answers.
 const SAMPLES = [
