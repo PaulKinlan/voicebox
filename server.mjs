@@ -71,6 +71,10 @@ const routes = {
     res.writeHead(200, { "content-type": "text/javascript" });
     res.end(readFileSync(path.join(PUBLIC, "app.js")));
   },
+  "GET /fused.js": (req, res, url) => {
+    res.writeHead(200, { "content-type": "text/javascript" });
+    res.end(readFileSync(path.join(PUBLIC, "fused.js")));
+  },
   "GET /styles.css": (req, res, url) => {
     res.writeHead(200, { "content-type": "text/css" });
     res.end(readFileSync(path.join(PUBLIC, "styles.css")));

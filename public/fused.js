@@ -51,7 +51,7 @@ const form = document.getElementById("text-form") ?? document.querySelector("for
 if (form) {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const input = form.querySelector("input[type=text]") ?? form.querySelector("input");
+    const input = form.querySelector("textarea, input[type=text], input");
     if (!input?.value?.trim()) return;
     await doTurn(input.value.trim());
     input.value = "";
