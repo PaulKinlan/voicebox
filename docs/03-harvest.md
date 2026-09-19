@@ -15,6 +15,17 @@ one.
 PR #1) and the interface is astra's. This document does not propose an architecture.
 It prices the parts.
 
+> **Read this before the lift list.** A constraint arrived *after* this document was written:
+> Paul, 2026-09-19 — *"I want to make sure that we're **not using isocan**… Use isocan as the
+> **inspiration**."* So isocan is prior art, not a dependency: nothing may be imported from it,
+> vendored from it, or coupled to `@isocan/core` or `@isocan/api`. **§8 is re-marked and
+> re-costed against that line**, item by item, as *pattern* / *technique* /
+> *would-require-the-dependency*. Every **finding** in this document is unaffected, and two get
+> more valuable rather than less (§8.2) — a constraint that removes code but leaves findings is
+> cheap, because the findings were always the more transferable half. The estimate is not
+> unaffected: it moved from two–three weeks to **three–four**, and the whole increase sits in the
+> three items that were cheap *because* they were code that already ran.
+
 ---
 
 ## 0. Method, so the numbers are checkable
@@ -79,7 +90,7 @@ against a paraphrase is how a harvest ends up answering a question nobody asked.
 
 ## 2. isocan — the voice UI and system, and the only working precedent for N3
 
-Isocan is the largest single source and the only project here that already runs **one
+Isocan is the richest **prior art** here and the only project that already runs **one
 harness shape in two placements**, which is N3 and the thing Paul is unsure generalises.
 It is also where the voice work is youngest and best tested, so the cost of lifting is
 mostly *separating* it from isocan's vocabulary rather than rewriting it.
@@ -112,7 +123,13 @@ mostly *separating* it from isocan's vocabulary rather than rewriting it.
 Roughly **12,700 lines of source and 8,600 lines of test**. That is the size of the
 thing, and it is the reason the lift list below is selective rather than wholesale.
 
-### 2.2 The crown jewel: `live.ts`, and why it answers N8 and N3 at once
+### 2.2 The most valuable thing isocan has: `live.ts`, and why it answers N8 and N3 at once
+
+> **Under the line Paul drew after this was written — *"use isocan as the inspiration"* — nothing
+> below may be imported or vendored.** `live.ts` imports nine names from `@isocan/core` and a type
+> from `@isocan/api`, so it is precisely the case the constraint bites on. What survives is the
+> *shape*, and the fact that isocan had to perform a deliberate extraction to get it is the
+> evidence that the shape is worth the effort. See §8 item 1 for the re-costed version.
 
 `packages/voice-agent/src/live.ts` is the one file here that was **extracted on purpose
 to be shared**, and its own header states the reason:
@@ -132,7 +149,8 @@ setup is a value (`LIVE_MODEL = "models/gemini-3.8-live"` at `live.ts:118` — t
 model the brief names), and the tool surface and call planner are data, so a second
 provider is a second spelling of the same data rather than a second harness.
 
-**Cost to lift: low, and measurable.** Its entire external dependency surface is nine
+**Its dependency surface is small, and that is the finding — but it is not zero, which under the
+line is what matters.** Its entire external surface is nine
 named imports from `@isocan/core` plus one type:
 
 ```
@@ -142,9 +160,19 @@ drawingSvg, inkBounds, normalizeSiteUrl, siteLabel, type InkStroke
 
 Every one of those is a *canvas* concern (drawing strokes, site labels, the command
 catalogue) — i.e. the part of `live.ts` that is isocan-specific is its **tool list**, not
-its provider plumbing. Strip the canvas tools and the provider face is close to
-dependency-free. **Estimate: 1,173 lines in, a few hundred out, one to two days including
-the OpenAI Realtime spelling that isocan never built.**
+its provider plumbing.
+
+**That split is the durable finding, and it survives the constraint even though the lift does
+not.** It says what a from-scratch provider face is made of: the setup message, the tool
+declarations and the call planner are provider concerns and carry nothing isocan-specific, while
+the tool *list* is where a product's vocabulary lives. So reimplementation is not 1,173 lines of
+unknown shape — it is a known shape whose only product-specific part is the list you would be
+writing anyway.
+
+~~Estimate: 1,173 lines in, a few hundred out, one to two days including the OpenAI Realtime
+spelling that isocan never built.~~ **Superseded by the line Paul drew after this was written:**
+nothing may be imported or vendored, so this is a reimplementation — **3–5 days**, per §8 item 1.
+The OpenAI Realtime spelling is new work under any reading, since isocan never built it.
 
 ### 2.3 `voiceAudio.ts` — lift it, do not rewrite it, and the reason is a bug history
 
@@ -569,33 +597,101 @@ that is the mistake the doubt is pointing at.
 
 ---
 
-## 8. The lift list, ordered by value per unit of cost
+## 8. The lift list, re-marked against the line Paul drew
 
-Everything above, reduced to what I would actually do, in order. Costs are one person's
-rough estimate and assume the destination repo exists with a build and a test runner.
+> **A constraint arrived after this document was written, and it changes this section rather
+> than the findings.** Paul, 2026-09-19: *"I want to make sure that we're **not using
+> isocan**… that's not the project we're using for the server interaction, right? I just want
+> the UI to **look like it** now… **Use isocan as the inspiration**."*
+>
+> So: **isocan is inspiration and prior art, not a dependency.** Nothing may be imported from
+> it, vendored from it, or coupled to `@isocan/core` or `@isocan/api`. That invalidates the
+> framing this section originally had — several items were costed as *separation work on code
+> that already runs*, which is only cheap if importing it is allowed. **Every finding elsewhere
+> in this document is unaffected**, and two of them get more valuable (§8.2).
 
-| # | Lift | From | Cost | Serves |
-| --- | --- | --- | --- | --- |
-| 1 | **`live.ts` provider face**, stripped of canvas tools | `isocan/packages/voice-agent/src/live.ts` (1,173 L; 9 core imports to replace) | **1–2 days** | N8, N3 |
-| 2 | **`voiceAudio.ts` + its tests** — capture, playback, resampler | `isocan/.../src/voiceAudio.ts` (560 L), `test/voiceresample.test.ts` | **hours**, mostly de-importing | N1 |
-| 3 | **The readiness gate** as one implementation with two placements sharing it | `voice-harness.ts` `send()` + `talk/src/web.tsx:483`, commit `d421632b` | **half a day**, and cheaper now than after the fact | N1 |
-| 4 | **One binary, two modes** (standing server / `--acp`) | `isocan/.../src/cli.ts` (230 L) — the *pattern*, not the file | **hours** | N3, N9 |
-| 5 | **ACP client** | `isocan/packages/cli/src/acp.ts` (493 L) + `rc.ts` (202 L) + `rc-rows.ts` (97 L) | **1–2 days** to de-isocan | N3, N4, N6 |
-| 6 | **OPFS store pattern**: `persist()` requested and shown, visible and deletable, tab-memory fallback that says so | `isocan/.../src/main.ts:2350-2412`, `:2502` | **1 day** | N4 |
-| 7 | **Three descriptor fields** — `capabilities`, `replayClass`, `bounds` — as data on each tool | CAP `extension/lib/jwt-decode-tools.js` shape | **hours** | N6, N7 |
-| 8 | **Fails-closed convention + injection seam** | CAP `extension/lib/python-tool.js` (52 L) | **hours** | N6, N9 |
-| 9 | **Budget-gate practice**, applied to a *cold-start ms* budget rather than bytes | CAP `tests/bundle-budget.test.ts` (232 L) as template | **1 day**, once there is something to measure | N2, N6 |
-| 10 | **Audit → fix → re-audit → delta**, validated against ground truth that is not its own output | `web-resilience/skills/*`, `eval/` | **2–3 days** | N6 |
-| 11 | *Maybe* the interception-and-preview pattern | `fauxmium/browser.js`, `lib/` | unclear; scope first | N5 |
+Each item is now marked with what it actually is under that line:
+
+- **PATTERN** — an architecture or shape to reimplement. Reading isocan's version is the point;
+  copying it is not allowed.
+- **TECHNIQUE** — a convention, a discipline, a web-platform API, or a vocabulary. Nothing to
+  copy; it was never isocan's property.
+- **WOULD REQUIRE THE DEPENDENCY** — cannot be taken at all under the line. Only its pattern
+  survives, and the cost column reflects reimplementing it.
+
+| # | Item | Kind | From (as prior art) | Cost under the line | Serves |
+| --- | --- | --- | --- | --- | --- |
+| 1 | **Provider face**: model setup, tool surface and call planner as pure data and functions, browser-safe, shared verbatim by both placements | **WOULD REQUIRE THE DEPENDENCY** → its **PATTERN** | `isocan/packages/voice-agent/src/live.ts`, 1,173 L, imports 9 names from `@isocan/core` + a type from `@isocan/api` | **3–5 days**, was 1–2. Reimplement, not strip. The provider *facts* are still free: `docs/projects/voice-agent/design.md` §1 is a dated audit of the Gemini Live API that can be **read**, which is inspiration and saves the research | N8, N3 |
+| 2 | **Capture, playback and the resampler** | **PATTERN** (and see §8.1) | `isocan/.../src/voiceAudio.ts`, 560 L — **zero imports of any kind**, plus `test/voiceresample.test.ts` | **2–4 days**, was "hours". The DSP is not the cost; re-finding the boundary conditions is, and those are documented in two beads (`isocan-xsh.9`, `isocan-xsh.10`) which are findings and travel freely | N1 |
+| 3 | **The readiness gate** — audio gated on the provider's own `setupComplete`, refused frames counted, `send` counted only after it returns | **TECHNIQUE** | `voice-harness.ts` `send()` + `talk/src/web.tsx:483`, commit `d421632b` | **half a day**, unchanged — and *more* valuable now (§8.2) | N1 |
+| 4 | **One binary, two modes** (standing server / `--acp` adapter) | **PATTERN** | `isocan/.../src/cli.ts`, 230 L, and the argument in its header comment | **hours**, unchanged. Was already marked "the pattern, not the file" | N3, N9 |
+| 5 | **ACP client** — browser↔machine, real harness children, session continuity, permission round-trip | **WOULD REQUIRE THE DEPENDENCY** → **PATTERN over a public protocol** | `isocan/packages/cli/src/acp.ts` (493 L, imports `@isocan/api` + two local modules), `rc.ts` (202 L, imports `@isocan/api` + `@isocan/rc`), `rc-rows.ts` (97 L) | **3–5 days**, was 1–2. The protocol is **not isocan's** — ACP is an open standard with `@agentclientprotocol/sdk` — so this is implementing a client against a spec, with isocan's as prior art for the four hard parts. Cost rises, but not to "invent a protocol" | N3, N4, N6 |
+| 6 | **OPFS store discipline**: `persist()` requested *and the answer shown*, store visible and deletable with its per-origin limit stated, tab-memory fallback that says so | **TECHNIQUE** (web-platform APIs) | `isocan/.../src/main.ts:2350-2412`, `:2502` | **1 day**, unchanged | N4 |
+| 7 | **Three descriptor fields** — `capabilities`, `replayClass`, `bounds` — as data on each tool | **TECHNIQUE** (vocabulary; CAP's, not isocan's) | CAP `extension/lib/jwt-decode-tools.js` | **hours**, unchanged | N6, N7 |
+| 8 | **Fails-closed convention + injection seam** | **TECHNIQUE** | CAP `extension/lib/python-tool.js`, 52 L | **hours**, unchanged | N6, N9 |
+| 9 | **Budget-gate practice**, applied to a *cold-start ms* budget rather than bytes | **TECHNIQUE** | CAP `tests/bundle-budget.test.ts`, 232 L, as template | **1 day**, unchanged | N2, N6 |
+| 10 | **Audit → fix → re-audit → delta**, validated against ground truth that is not its own output | **PATTERN** | `web-resilience/skills/*`, `eval/` | **2–3 days**, unchanged | N6 |
+| 11 | *Maybe* the interception-and-preview surface | **PATTERN** | `fauxmium/browser.js`, `lib/` | unclear; scope first | N5 |
 
 **Not in the list, deliberately:** the Wasm CAS, the admission pipeline, isocan's
 harness and operation model, the `talk` duplicate, and any byte budget copied as a number.
 
-Rough total for items 1–10: **two to three weeks of one person**, to a harness that speaks to
-two providers, runs in a browser and on a machine, stores on the client and acts on the server,
-has bounded tools that fail closed, and can prove whether it got faster. That is a *light*
-number, and it is light because almost all of it is separation work on code that already runs
-rather than new code.
+### 8.1 The constraint bites on three of eleven items — and they are the three I called cheapest
+
+Items **1, 2 and 5** are the only ones that were costed as lifts. Everything else was already a
+pattern or a technique, and their costs do not move. So the correction is concentrated, and it is
+worth saying plainly because it inverts the shape of the original list: **the items that looked
+like the best value per unit of cost were the best value precisely because they were code that
+already ran.** Under the line, they are the expensive ones.
+
+**Revised total for items 1–10: three to four weeks of one person**, against the two to three
+originally stated. The increase is entirely in items 1, 2 and 5. What the harness becomes at the
+end of it is unchanged — two providers, browser and machine, client storage and server action,
+bounded tools that fail closed, and a way to prove whether it got faster — but it is *written*
+rather than *separated*, and the estimate should not inherit the earlier optimism.
+
+**One distinction worth putting to Paul rather than deciding for him**, because it is a large cost
+lever and only he can pull it. "Not using isocan" could mean either:
+
+- **(i) no architectural dependency** — voicebox must not be coupled to isocan as a platform, but
+  isocan's Apache-2.0 code may be copied with attribution where it is genuinely self-contained;
+  or
+- **(ii) no isocan code at all** — everything is reimplemented from the pattern.
+
+This document assumes **(ii)**, which is the stronger reading and the one coord stated. The case
+that makes the choice concrete is item 2: `voiceAudio.ts` has **zero imports** — not one
+`@isocan/*` reference, 560 self-contained lines — and isocan carries an **Apache-2.0 `LICENSE`**,
+so under (i) it is an attributed copy costing hours, and under (ii) it is a rewrite costing days
+whose main risk is re-discovering boundary conditions that two beads already paid for. Neither
+reading is wrong; they cost differently, and the difference is largest exactly where the prior art
+is most expensive to have learned.
+
+### 8.2 Two findings that get *more* valuable under the line, not less
+
+The constraint removes code and leaves findings, and findings were always the more transferable
+half.
+
+**The readiness gate (§2.4) is prior art at its best: a defect somebody else already paid for.**
+A from-scratch implementation will gate audio on the socket being open, because that is the
+obvious thing to write, and will not notice — the symptom is a turn silently missing its first
+word, which reads as a model problem or a microphone problem rather than a readiness problem. The
+retained 2026-09-12 measurements (192 of 208 frames before `setupComplete` on a keyless
+500 ms delayed-ack control; 128 before acknowledgement and 48 page frames dropped on a real-key
+control) are the reason to write the gate correctly the first time. **Reading them costs nothing
+and is exactly what "use isocan as the inspiration" means.**
+
+**The deliberate 1,179-line duplicate (§6) is a lesson that only applies to a from-scratch
+build.** Its header says *"reconcile the two by hand"*, and yesterday's readiness-gate fix had to
+be applied to **both** call sites — a harness-only fix would have left the browser path sending
+audio into the provider's setup window. Under the line, voicebox writes both placements anyway,
+so the instruction is free to follow: **one provider face, imported by both**, which is what
+`live.ts` was extracted to enable in isocan and what the copy then undid.
+
+The same applies to the smaller traps recorded in this document and in
+[`04-dynamic-tools.md`](04-dynamic-tools.md): the `promptGuidelines` bullets appended flat with no
+tool-name prefix, `prepareArguments` running before schema validation, and the trust gate sitting
+on discovery rather than on runtime registration. None of those is code. All of them are things
+somebody already found.
 
 ---
 
