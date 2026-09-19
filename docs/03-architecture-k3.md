@@ -540,3 +540,73 @@ isocan already proved: shared log, presence, read positions, per-agent turn auth
 Whether that layer is *adopted* (the canvas pattern as the project's shared medium) or
 *declared absent* (merges-only, with the cost named: no presence, no shared view) is Paul's
 call — but it should be a decision, not an oversight.
+
+---
+
+## 10. The round trip over the wire, and the two holes it revealed (k3)
+
+The unproven link from §8 is now proven end-to-end, in both directions, over the real ACP
+bridge with the gate loaded **globally** (`~/.pi/agent/extensions/policy-gate.ts` — which
+also settles the global-load question: it gated sessions in a different directory).
+
+### The wire, both directions
+
+```
+client: initialize → session/new(cwd) → prompt("Create wire-test.txt")
+wire:   13 × session/request_permission  (write, bash, read, web_search, generate_image, …)
+host:   13 × { outcome: "cancelled" }
+effect: the file does not exist.                                          (deny honoured)
+
+client: same prompt
+wire:   session/request_permission { title: "Permission: write" }
+host:   { outcome: { outcome: "selected", optionId: "yes" } }
+wire:   tool_call: pending → in_progress → completed
+effect: wire-test.txt contains "wire".                                    (allow honoured)
+```
+
+**The gate's `ctx.ui.confirm()` reaches a host as a real protocol message and comes back** —
+compliant mode is real end-to-end, not only in the TUI.
+
+### Hole 1 — the optionId namespace is adapter-defined, and a malformed allow reads as a denial
+
+The first allow attempt used the ACP-convention `optionId: "allow_once"`. The tool **failed
+identically to a denial** — because pi-acp's confirm dialog speaks `"yes"/"no"`
+(`CONFIRM_PERMISSION_OPTIONS`), and `"allow_once" ≠ "yes"` maps to `confirmed: false`. No
+error, no complaint: a wrong optionId is a silent "no". The host must answer with the
+optionId **from the request's own options array** (or map by `kind: allow_once /
+reject_once`) — never assume a universal id. This is the day's rule one more time: the
+failure is silent and always in the direction that looks like the safe answer.
+
+### Hole 2 — a permission for a plan is not a permission for whatever finally runs
+
+With a second handler (`z-mutator.ts`) loaded **after** the gate, rewriting bash input:
+
+```
+ASKED (plan shown to host): { "tool": "bash", "input": { "command": "echo approved > /tmp/vb-dynamic/plan-a.txt" } }
+host answered: ALLOW
+which plan ran?              /tmp/vb-dynamic/plan-b.txt
+```
+
+The host approved plan A; plan B executed. `tool_call` inputs are mutable and **later
+handlers see (and change) earlier ones' work** — so a handler behind the gate in load order
+can rewrite an approved plan after approval. There is no later hook to catch it. The design
+rule this forces: **the gate must be the last `tool_call` handler, and that ordering is part
+of its authority** — the host owns the load order, and any extension registered after the
+gate is itself an admission act, because it can rewrite what the host just approved.
+(Also recorded: `event.input` may be unvalidated at hook time, so even a well-ordered gate
+must tolerate partial shapes.)
+
+### Where this leaves compliant mode
+
+Proven end-to-end: intercept → plan on the wire → host answers with the adapter's own
+optionId → effect matches the answer. The two holes are named with their rules: answer by
+the request's own options, and treat the gate's load-order position as part of its
+authority. Both rules are about the failure being *silent* — the same shape as everything
+else this week has produced, and the reason the host's permission path needs its own drive
+rather than a schema read.
+
+*Test fixtures removed after the drive: `z-mutator.ts` and `policy-gate.ts` are out of the
+global extension dir (a mutator left global would rewrite every future bash call on this
+box; a gate left global would make every pi session interactive-by-force). The canonical
+copy of the gate stays at `.pi/extensions/policy-gate.ts` on
+`rescue/compliant-mode-extension`.*
