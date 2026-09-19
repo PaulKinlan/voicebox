@@ -25,6 +25,7 @@ So: the agent acts on a **real machine**, and **a project on disk is the unit of
 | **A project is a declared directory**, never a discovered one | Yesterday's fleet lesson: anything assumed about the machine's layout is wrong on somebody's machine | The first open of a project is an explicit act |
 | **Work happens in the project's own git state; unapproved work is kept recoverable** (a branch or worktree) | A build environment that can act is only safe if its acting is cheap to undo | Slightly more machinery per project; the host owns it |
 | **Three tiers, enforced in the host as data**: never / unprompted / confirm | A boundary written as prose is a wish; the same lesson as putting the harness registry in data rather than comments | Tier tables need maintaining and testing (§3.6) |
+| **One host role, three placements** (machine, browser/OPFS, remote) — authority always co-located with the files | Paul's requirement: the harness runs on the client *and* the server, with a website and OPFS. Putting authority in the renderer would dilute the boundary to reach the same features | Capability parity is not assumed, so `do` needs a declared capability list per placement, shown in the UI |
 
 ---
 
@@ -89,6 +90,41 @@ built by us can expose its tools through the host, which is far easier than audi
 zoo. A harness that cannot be mediated is still usable, but the UI carries the downgrade
 explicitly, in the same spirit as the provider badge: **the guarantee is a property of the mode,
 and the user is told which one is running.** §3.2 and §3.7 are written in terms of both.
+
+### 1.1b Three placements, one host role
+
+> *"The harness should be on the client and also running on the server... I want to access this
+> through a website, I do want to be able to use OPFS... but also we're on the server as well."*
+> — Paul, 2026-09-19
+
+A requirement, not a different design, and it is satisfiable by one rule:
+
+> **The host is wherever the files are. The browser is always a client.** Authority — the tier
+> table, the confirmations, the audit — is **co-located with the data it governs**, never in the
+> renderer.
+
+| Placement | Where the files are | Where the host runs | Root | What `do` can mean |
+|---|---|---|---|---|
+| **machine** (M0) | a checkout on a real machine | a local process on that machine | a realpath (or its worktree) | whatever the project's toolchain can: spawn processes, run tests, git |
+| **browser** (M2) | **OPFS** in the page's origin | a dedicated **worker** in that page — same tier table, same audit code | an OPFS directory handle | what a browser can do: wasm tools, file reads and writes, no processes |
+| **remote** (M3) | a checkout on a machine that is *not* where the browser is | a process on **that** machine | a realpath on that machine | as machine, minus nothing — this is today's Telegram-to-agent shape |
+
+Three consequences worth stating plainly:
+
+1. **"Client and server" are two placements of the host, not two halves of every session.** In
+   the remote case the browser is far away and the host holds the files; in the browser case
+   there is no server at all. Neither changes who decides.
+2. **Capability parity is not assumed.** `ask` and `stop` mean the same thing everywhere; `do`
+   means whatever the placement declares, and the declaration travels with the project
+   (`capabilities` in §2.1) and is shown in the UI. A browser cannot run `npm test`, and a design
+   that pretended otherwise would discover that mid-sentence. Isocan is the precedent Paul points
+   at: the *shape* generalises (thin client, real work behind an interface), the *tool parity*
+   does not.
+3. **The remote placement changes transport, not authority.** Loopback plus a token is right when
+   client and files share a machine; a browser on a phone talking to a server needs an
+   authenticated remote channel (TLS, a paired credential, an explicit pairing flow) — and the
+   tier table, the confirmations and the audit stay **on the machine that holds the files**,
+   because that is where they mean anything.
 
 ### 1.2 What holds state
 
@@ -289,8 +325,17 @@ Three contract rules that the schema alone does not convey:
 - Several projects registered with instant switching and per-project sessions.
 - Tier 2 confirmations spoken *and* clicked, with resolved-plan readback.
 
-**Deliberately not in either:** cloud relay or any inbound connection; unattended autonomy
-(§3.7); a second transport; a plugin system; multi-user; a database (the filesystem and
+**M2 — a project in the browser.** The same tier table running in a worker, over an OPFS
+directory handle, with a declared capability list and the egress policy of §3.5a. The first
+placement where the boundary's mechanisms differ, so it lands after the machine placement is
+trustworthy — and it is where Paul's *"use OPFS"* requirement is actually met.
+
+**M3 — a host on another machine.** The same host, reached over an authenticated remote channel
+rather than loopback: the shape this fleet already runs in when Paul talks to it from a phone.
+Changes transport, not authority.
+
+**Deliberately not in any of them:** cloud relay or any inbound connection; unattended autonomy
+(§3.7); a second transport; a plugin system; multi-user; a database (the filesystem, OPFS and
 append-only logs are the state).
 
 **What is reused rather than rebuilt:** the ACP bridge's transport, session continuity, and
@@ -486,6 +531,28 @@ is enforced as data in the host and every one has a test (§3.6).
 The line between Tiers 1 and 2 is **reversibility and reach**: inside the project and cheap to
 undo → go; outside the project, or expensive to undo, or someone else can see it → ask.
 
+### 3.2a The same tiers, in a browser
+
+The tier table is **placement-invariant**: the same three tiers govern an OPFS project and a
+checkout. What changes is the mechanism that enforces each one — and which direction it moves.
+
+| Tier 0 rule | On a machine | In a browser (OPFS) |
+|---|---|---|
+| Nothing outside the root | realpath containment, checked and re-asserted | **structural**: OPFS handles are relative, `..` does not resolve, and OPFS has no symlinks — the API cannot express an escape |
+| No credential material, no system commands, no `sudo` | deny-list + argv classification | **structural**: there is no `~/.ssh`, no process to spawn and no privilege to escalate inside the origin |
+| No fetch-and-execute | argv classification | **structural**: there is no process to exec |
+| No exfiltration by the host | the host makes no outbound requests | **weaker, and this is the real gap** — a page can `fetch`; project code runs under a declared egress policy (§3.5a) and any network access by it is Tier 2 |
+
+| Tier | On a machine | In a browser (OPFS) |
+|---|---|---|
+| 1 — unprompted | read/write files, run the toolchain, loopback dev server | read/write OPFS files, run **wasm/JS tools in a worker**; no processes, so "dev server" becomes "start the preview worker" |
+| 2 — confirm | irreversible acts, leaving the machine, reaching a human, spending | the same list; "leaving the machine" becomes "leaving the browser" (uploads, remote APIs, form posts) |
+| Audit | an append-only file | **IndexedDB in the same worker**, mirrored to a paired machine host when there is one — "you can find out what happened" must not depend on which placement ran |
+
+So the boundary survives translation, and two of its mechanisms get **stronger** rather than
+weaker — but not all of it, and the exception is egress. Better to know that now than to discover
+it in a demo.
+
 ### 3.3 How a spoken instruction maps onto the tiers
 
 This is the part with no off-the-shelf answer, so it is stated as a pipeline:
@@ -556,6 +623,24 @@ mechanism:
 | "Work is undoable" | branch/worktree or a written-file revert list per project |
 | "Switching projects is safe" | per-project session and cwd; nothing shared but the host |
 
+### 3.5a The one place the browser placement is weaker: egress
+
+Containment and privilege are *structurally* better in a browser; this is the counterweight —
+**a page can reach the network.** Five ambient APIs alone can do it (`fetch`, `XMLHttpRequest`,
+`WebSocket`, `EventSource`, `sendBeacon`), a content security policy has **no `connect-src` by
+default**, and a `no-cors` POST can send data without ever being readable back. That surface was
+measured on this fleet yesterday, which is exactly why it must not be assumed here:
+
+- project code in the browser runs in a worker under a **declared egress policy** — an explicit
+  `connect-src` allow-list, defaulting to `'none'`;
+- **any** network access by project code is a **Tier 2 act**, because it is the one thing the
+  sandbox does not decide for us;
+- and the policy is **tested** in the same shape as yesterday's sandbox-egress KAT: a positive
+  control (an approved host is reachable) beside the refusals, because a suite of refusals proves
+  nothing until one request succeeds.
+
+On a machine, "the host makes no outbound requests" is a property we implement; in a browser it
+is a property we *configure and verify*. Both are claims — only one of them is free.
 ### 3.6 The tests that make the boundary real
 
 A boundary that is only asserted is a wish, and a suite of refusals proves nothing until a
@@ -607,7 +692,10 @@ when `source: "content"`. Everything else in §1.5 is yours to shape.
 streaming `session/update`; and a real `session/request_permission` for acts outside the
 project so the host can gate them. If the harness cannot emit permission requests, the host's
 Tier 2 must be implemented as a wrapper around the tools it offers instead — worth knowing
-early, because it changes where the gate lives.
+early, because it changes where the gate lives. Two additions from §1.1b: the harness should
+**declare the capabilities it has in a given placement** (`exec`, `wasm`, `network`), and it
+should run in **at least the machine placement and the browser placement** — if those cannot
+share one adapter, say so early, because that is a second harness rather than a second setting.
 
 **From Paul:** three decisions, in §5.
 
@@ -638,3 +726,14 @@ left it and "undo everything the agent did" is one deletion — at the cost of d
 ports needing their own copy, and the work landing one merge later than it otherwise would.
 The alternative we already have evidence for is the agent and him editing one working tree at
 once, which is the failure this fleet spent a day recovering from.
+
+**4. A browser-only mode, with no host process at all?**
+Options: (A) a host is always required (§1.1b's rule — authority outside the renderer);
+**(B) browser-only is allowed, with the tier table and audit running in the page's worker and
+its limits disclosed** (a page-local audit, storage a browser may evict, guarantees that hold
+only inside that origin).
+**Recommend B, and proceed on B**: allowing it costs one honest badge, and forbidding it would
+rule out the thing Paul actually asked for — *"I want to access this through a website"*. The
+leaning is that when a host *is* paired, its audit is the record of truth and the page's copy is
+a cache rather than a second ledger. Trade-off: a page-local audit is evidence about a tab, not
+about a machine, and eviction can take the project with it.
