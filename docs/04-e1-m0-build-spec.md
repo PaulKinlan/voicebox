@@ -215,7 +215,9 @@ whole design (design §1.7: a model can emit a schema, not an `execute` body).
 **The run, in order — and the enforcement path is also the UX:**
 
 1. **Schema validation.** Unknown fields refuse (`unknown-field`); the model's output is data.
-2. **Resolve.** `name` → `root/assets/<name>` via `resolveInsideRoot` (§5). `../../evil.sh` and `..`
+2. **Resolve.** `name` → `root/assets/<name>` via `resolveInsideRoot` (§5), **which is tested by
+   `tests/containment-paths.test.mjs` — the case named there is `../../evil.sh`, refused with the rule
+   in its own words, beside a positive control**. `../../evil.sh` and `..`
    are **refused with the rule id**, and the refusal is the transcript line the user sees.
 3. **Instantiate the Wasm module with exactly two imports**: `writeFile(path, bytes)` and `note(msg)`.
    The module has **no `fetch`, no `import`, no `eval`** — not because they are denied, but because

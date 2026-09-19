@@ -235,8 +235,12 @@ Three consequences worth stating plainly:
      location** a project has, not merely whether it persisted.
 
    **Containment carries over unchanged** — a picked directory is still a **root**, and
-   `resolveInsideRoot` refuses `..` exactly as before; the write path does not change, only where it is
-   rooted. **(One thing to measure rather than assume: OPFS cannot express a symlink and a real folder
+   `resolveInsideRoot` refuses `..` — now **tested rather than asserted** (§1.7's rule, and the line
+   the reviewer caught: the helper as first written refused only `.`/`..` *exactly* and let
+   `../../evil.sh` through the prefix check, while this document and its own comment called it the
+   boundary). The test names that case, asserts the **rule** in the refusal's own words, and carries a
+   positive control: `tests/containment-paths.test.mjs`. The write path does not change, only where it
+   is rooted. **(One thing to measure rather than assume: OPFS cannot express a symlink and a real folder
    can, so the symlink case must be tested against the File System API before this shape is called
    equivalent — it is an open item in the build spec §7.)**
 
