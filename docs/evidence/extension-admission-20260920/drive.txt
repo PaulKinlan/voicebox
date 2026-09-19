@@ -1,0 +1,75 @@
+# Extension admission drive — 2026-09-20 — voicebox @ feat/extension-admission
+# The live loop: prompt -> proposal -> disclosure -> admission -> call; and the refusals.
+# Server: node server.mjs on 127.0.0.1:8800, provider=script (no key, deterministic).
+
+## 1. BUILD a tool from a prompt (the model's door: a tier 1 proposal, nothing loads)
+% curl -s -X POST http://127.0.0.1:8800/api/turn -d "{\"transcript\":\"create a tool called clock that tells the time\"}"
+{"transcript":"create a tool called clock that tells the time","action":{"verb":"make-tool","tool":{"id":"clock-tool","name":"clock","description":"create a tool called clock that tells the time","source":"model","runsIn":"host","tools":[{"name":"clock","description":"create a tool called clock that tells the time","primitive":"now","params":{}}],"capabilities":[],"bounds":{}}},"result":{"ok":true,"action":"proposed tool 'clock-tool'","state":"pending","note":"the proposal is NOT loaded — the host reviews and admits it (GET /api/extensions/proposals/<id>/plan, then POST /api/extensions/admit)"}}
+
+## 2. Call it BEFORE admission: refused BY NAME
+% curl -s -X POST http://127.0.0.1:8800/api/turn -d "{\"transcript\":\"run the tool clock\"}"
+{"transcript":"run the tool clock","action":{"verb":"tool","name":"clock","args":{}},"result":{"ok":false,"refused":"not-admitted","why":"'clock' is a pending proposal — the host has not admitted it"}}
+
+## 3. THE DISCLOSURE before anyone decides: the resolved plan IS the source
+% curl -s http://127.0.0.1:8800/api/extensions/proposals/clock-tool/plan
+{"id":"clock-tool","name":"clock","description":"create a tool called clock that tells the time","source":"model","runsIn":"host","declared":[],"bounds":{},"tools":[{"name":"clock","description":"create a tool called clock that tells the time","primitive":"now","params":{}}],"gate":{"decision":"admitted","enforced":{},"gets":[],"cannotHave":["exec — absent: no mechanism on this placement bounds a spawned child: --allow-run bounds which binary, never what it can do, and a child does not inherit the parent's flags. Admission requires a container that bounds the child.","eval — absent: eval is not a tool path (design §1.7): the evaluator bypasses whatever the substrate would otherwise enforce.","import — absent: no import boundary on this placement: dynamic import executes fetched code with no flags by default."]},"state":"pending","refusal":null}
+
+## 4. The host ADMITS (confirm-first); the tool loads
+% curl -s -X POST http://127.0.0.1:8800/api/extensions/admit -d "{\"id\":\"clock-tool\",\"confirm\":true,\"decision\":\"admit\"}"
+{"ok":true,"id":"clock-tool","decision":"admitted","enforced":{},"gets":[]}
+
+## 5. LOADED and CALLED: transcript in, the time out
+% curl -s -X POST http://127.0.0.1:8800/api/turn -d "{\"transcript\":\"run the tool clock\"}"
+{"transcript":"run the tool clock","action":{"verb":"tool","name":"clock","args":{}},"result":{"ok":true,"action":"now","content":"Sat Sep 19 2026 20:44:01 GMT+0100 (British Summer Time)"}}
+
+## 6. THE REFUSAL (the artefact): an MCP server that launches a process
+## sideload the stranger (confirm-first, staged pending, NOT loaded):
+% curl -s -X POST http://127.0.0.1:8800/api/extensions/sideload -d "{\"id\":\"mcp-server-local\",\"confirm\":true}"
+{"ok":true,"id":"mcp-server-local","state":"pending","note":"staged as a pending proposal — NOT loaded; the host admits it"}
+% curl -s -X POST http://127.0.0.1:8800/api/extensions/admit -d "{\"id\":\"mcp-server-local\",\"confirm\":true,\"decision\":\"admit\"}"
+--> decision refused, rule exec-absent:
+{"ok":true,"id":"mcp-server-local","decision":"refused","rule":"exec-absent","why":"no mechanism on this placement bounds a spawned child: --allow-run bounds which binary, never what it can do, and a child does not inherit the parent's flags. Admission requires a container that bounds the child."}
+--> the tool cannot be called; the refusal is what answers:
+% curl -s -X POST http://127.0.0.1:8800/api/turn -d "{\"transcript\":\"run the tool mcp_list_tools\"}"
+{"transcript":"run the tool mcp_list_tools","action":{"verb":"tool","name":"mcp_list_tools","args":{}},"result":{"ok":false,"refused":"admission-refused","why":"'mcp_list_tools' was refused at admission (exec-absent): no mechanism on this placement bounds a spawned child: --allow-run bounds which binary, never what it can do, and a child does not inherit the parent's flags. Admission requires a container that bounds the child."}}
+
+## 7. The ungated path cannot happen
+--> the model writing into the host's extension directory:
+% curl -s -X POST http://127.0.0.1:8800/api/turn -d "{\"transcript\":\"create a file called ../extensions/evil.js with pwned\"}"
+{"transcript":"create a file called ../extensions/evil.js with pwned","action":{"verb":"write","name":"..","content":"/extensions/evil.js with pwned"},"result":{"ok":false,"error":"refused: path escapes the workspace"}}
+--> a registration door would be the ungated path; there is none:
+% curl -s -o /dev/null -w \"%{http_code}\" -X POST http://127.0.0.1:8800/api/extensions/register
+404
+
+## 8. rsj web search: the vocabulary says network + how much; enforcement makes it true
+% propose selfprobe (hosts [127.0.0.1], maxRequests 1) via POST /api/extensions/proposals, then admit
+{"ok":true,"id":"selfprobe","decision":"admitted","enforced":{"network":"mediated-fetch"},"gets":["network: a mediated fetch: hosts outside bounds.hosts are refused by name, and calls count against bounds.maxRequests"]}
+--> the declared host answers:
+{"transcript":"run the tool selfprobe http://127.0.0.1:8800/api/health","action":{"verb":"tool","name":"selfprobe","args":{"url":"http://127.0.0.1:8800/api/health"}},"result":{"ok":true,"status":200,"host":"127.0.0.1","request":"1/1","body":"{\"ok\":true,\"provider\":\"script\",\"workspace\":\"workspace/\",\"build\":{\"branch\":\"feat/extension-admission\",\"commit\":\"780fb5e\",\"dirty\":true,\"startedAt\":\"2026-09-19T19:44:00.319Z\"}}"}}
+--> an undeclared host refuses BY NAME:
+{"transcript":"run the tool selfprobe http://example.com/health","action":{"verb":"tool","name":"selfprobe","args":{"url":"http://example.com/health"}},"result":{"ok":false,"refused":"host-not-allowed","why":"mediated fetch refuses 'example.com': bounds.hosts is [127.0.0.1]"}}
+--> the budget exhausts, by name:
+{"transcript":"run the tool selfprobe http://127.0.0.1:8800/api/health","action":{"verb":"tool","name":"selfprobe","args":{"url":"http://127.0.0.1:8800/api/health"}},"result":{"ok":false,"refused":"budget-exhausted","why":"budget exhausted for 'selfprobe': 1 of 1 requests used — raise bounds.maxRequests and re-admit"}}
+
+## 9. The inventory: declared against enforced, every loaded extension
+{"placement":"machine","extensions":[{"id":"clock-tool","name":"clock","source":"model","runsIn":"host","declared":[],"enforced":{},"bounds":{},"tools":["clock"],"gets":[],"cannotHave":["exec — absent: no mechanism on this placement bounds a spawned child: --allow-run bounds which binary, never what it can do, and a child does not inherit the parent's flags. Admission requires a container that bounds the child.","eval — absent: eval is not a tool path (design §1.7): the evaluator bypasses whatever the substrate would otherwise enforce.","import — absent: no import boundary on this placement: dynamic import executes fetched code with no flags by default."]},{"id":"selfprobe","name":"Self Probe","source":"model","runsIn":"host","declared":["network"],"enforced":{"network":"mediated-fetch"},"bounds":{"hosts":["127.0.0.1"],"maxRequests":1},"tools":["selfprobe"],"gets":["network: a mediated fetch: hosts outside bounds.hosts are refused by name, and calls count against bounds.maxRequests"],"cannotHave":["exec — absent: no mechanism on this placement bounds a spawned child: --allow-run bounds which binary, never what it can do, and a child does not inherit the parent's flags. Admission requires a container that bounds the child.","eval — absent: eval is not a tool path (design §1.7): the evaluator bypasses whatever the substrate would otherwise enforce.","import — absent: no import boundary on this placement: dynamic import executes fetched code with no flags by default."]}],"proposals":[{"id":"clock-tool","name":"clock","state":"admitted","source":"model","declared":[],"refusal":null},{"id":"mcp-server-local","name":"MCP Server (local launch)","state":"refused","source":"catalogue","declared":["exec"],"refusal":{"rule":"exec-absent","why":"no mechanism on this placement bounds a spawned child: --allow-run bounds which binary, never what it can do, and a child does not inherit the parent's flags. Admission requires a container that bounds the child."}},{"id":"selfprobe","name":"Self Probe","state":"admitted","source":"model","declared":["network"],"refusal":null}],"catalogueCount":4}
+
+## 10. The audit: refusals are entries with the rule id (the world, not the transcript)
+grep: workspace/audit.jsonl: No such file or directory
+
+## 10. The audit: refusals are entries with the rule id (the world, not the transcript)
+% (re-driven on a fresh boot: propose+admit clock, refuse the MCP launch, call selfprobe twice)
+% grep -o "\"decision\":\"refuse\",\"rule\":\"[a-z-]*\"" workspace/audit.jsonl | sort | uniq -c
+grep: workspace/audit.jsonl: No such file or directory
+
+% one full refusal entry, verbatim:
+grep: workspace/audit.jsonl: No such file or directory
+
+## 10. The audit: refusals are entries with the rule id (the world, not the transcript)
+% (re-driven on a fresh boot: propose+admit clock, call it, refuse the MCP launch)
+% grep -o "\"decision\":\"refuse\",\"rule\":\"[a-z-]*\"" workspace/audit.jsonl | sort | uniq -c
+      2 "decision":"refuse","rule":"duplicate-tool"
+      3 "decision":"refuse","rule":"exec-absent"
+
+% one full refusal entry, verbatim:
+{"seq":3,"instance":"server","project":"atlas@machine","root":"workspace","turn":null,"at":"2026-09-19T19:44:01.492Z","act":{"kind":"import","target":"proposals/mcp-server-local","tool":"extensions.admit"},"decision":"refuse","rule":"exec-absent","result":"refused","observed":null,"why":"no mechanism on this placement bounds a spawned child: --allow-run bounds which binary, never what it can do, and a child does not inherit the parent's flags. Admission requires a container that bounds the child."}

@@ -1,0 +1,18 @@
+{
+  "id": "notes",
+  "name": "Notes Reader",
+  "description": "A harmless stranger's extension: reads one notes file inside the project. The sideload happy path — proves the user's door lands in the same pending state as the model's, against the same gate.",
+  "source": "catalogue",
+  "runsIn": "host",
+  "capabilities": ["read"],
+  "bounds": {},
+  "tools": [
+    {
+      "name": "read_notes",
+      "description": "Read the project's notes file.",
+      "promptSnippet": "read_notes reads notes.md inside the project root.",
+      "primitive": "read-file",
+      "params": { "path": "notes.md" }
+    }
+  ]
+}

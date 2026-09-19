@@ -1,0 +1,18 @@
+{
+  "id": "mcp-server-local",
+  "name": "MCP Server (local launch)",
+  "description": "A stranger's MCP server extension that LAUNCHES a local stdio server process. The architecture test (rsj): the model (or catalogue) is authoring a LAUNCH, not a function — a strictly larger authority question than tool registration. On this placement there is no mechanism that bounds a spawned child, so admission must refuse it by name.",
+  "source": "catalogue",
+  "runsIn": "process",
+  "capabilities": ["exec"],
+  "bounds": { "command": "npx -y @modelcontextprotocol/server-filesystem /tmp" },
+  "tools": [
+    {
+      "name": "mcp_list_tools",
+      "description": "List the tools the MCP server exposes (requires launching it).",
+      "promptSnippet": "mcp_list_tools launches the MCP server and lists its tools.",
+      "primitive": "process",
+      "params": {}
+    }
+  ]
+}

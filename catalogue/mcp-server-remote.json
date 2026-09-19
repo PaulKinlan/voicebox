@@ -1,0 +1,18 @@
+{
+  "id": "mcp-server-remote",
+  "name": "MCP Server (remote, HTTP transport)",
+  "description": "The same MCP server reached over HTTP instead of a local launch: runsIn 'remote', so no process is spawned and the only authority the tool holds is a mediated fetch to the declared host, counted against the budget. Placement and authority are now EXPRESSIBLE (rsj): local launch is refused on this placement, remote connection is admissible with bounds.",
+  "source": "catalogue",
+  "runsIn": "remote",
+  "capabilities": ["network"],
+  "bounds": { "hosts": ["mcp.example.com"], "maxRequests": 20 },
+  "tools": [
+    {
+      "name": "mcp_remote_list_tools",
+      "description": "List the tools the remote MCP server exposes. Mediated: only mcp.example.com, 20 requests per session.",
+      "promptSnippet": "mcp_remote_list_tools lists the tools of the remote MCP server.",
+      "primitive": "http-get",
+      "params": { "url": "https://mcp.example.com/tools" }
+    }
+  ]
+}

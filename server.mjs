@@ -10,6 +10,7 @@ import { stripTypeScriptTypes } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveTurn } from "./lib/resolver.mjs";
+import * as extensions from "./lib/extensions.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
 import { createLiveSession, LIVE_MODEL } from "./lib/live-session.mjs";
 
@@ -137,7 +138,19 @@ function resolvePublicFile(pathname) {
 
 // The executor: the one place that touches the build environment. It grows;
 // the resolver stays the same shape.
-function execute(action) {
+async function execute(action) {
+  // make-tool: the model's authoring act (N10). It PROPOSES — a tier 1 write
+  // into workspace/proposals/ — and nothing else. Registration is the host's
+  // route (POST /api/extensions/admit), which the model does not reach.
+  if (action.verb === "make-tool") {
+    const r = extensions.propose(action.tool, "model");
+    if (!r.ok) return r;
+    return { ok: true, action: `proposed tool '${r.id}'`, state: r.state, note: "the proposal is NOT loaded — the host reviews and admits it (GET /api/extensions/proposals/<id>/plan, then POST /api/extensions/admit)" };
+  }
+  // tool: the ONLY way a tool runs — and only ADMITTED tools are here.
+  if (action.verb === "tool") {
+    return extensions.callTool(action.name, action.args ?? {});
+  }
   if (action.verb === "list") return { ok: true, action: "listed workspace", files: readdirSync(WORKSPACE) };
   const name = String(action.name ?? "");
   if (!name) return { ok: false, error: "action has no name" };
@@ -253,7 +266,7 @@ async function handle(req, res) {
   if (req.method === "POST" && url.pathname === "/api/turn") {
     let body = "";
     req.on("data", (c) => (body += c));
-    req.on("end", () => {
+    req.on("end", async () => {
       let transcript = "";
       try {
         transcript = String(JSON.parse(body).transcript ?? "").trim();
@@ -265,9 +278,63 @@ async function handle(req, res) {
       if (action.unresolved) {
         return json(res, 200, { transcript, action: null, note: action.unresolved });
       }
-      return json(res, 200, { transcript, action, result: execute(action) });
+      return json(res, 200, { transcript, action, result: await execute(action) });
     });
     return;
+  }
+
+  // ── the extension surface (N17): discover, inventory, sideload ──────────
+  // The disclosure sits between the verbs: every confirm-first act returns
+  // the RESOLVED PLAN — the extension's source, what it declares, what will
+  // be enforced and by which mechanism, what it cannot have — before the act
+  // runs. The page (astra's bead) renders this; the API is the surface.
+  const readJson = () => new Promise((resolve) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => { try { resolve(JSON.parse(body || "{}")); } catch { resolve(null); } });
+  });
+
+  if (req.method === "GET" && url.pathname === "/api/extensions") {
+    return json(res, 200, extensions.inventory());
+  }
+  if (req.method === "GET" && url.pathname === "/api/extensions/catalogue") {
+    return json(res, 200, { catalogue: extensions.catalogue() });
+  }
+  if (req.method === "POST" && url.pathname === "/api/extensions/proposals") {
+    // The model's door over HTTP (what a model resolver calls): the same
+    // destination as the transcript path — a PENDING proposal, nothing loaded.
+    const body = await readJson();
+    const r = extensions.propose(body?.descriptor, body?.descriptor?.source ?? "model");
+    return r.ok ? json(res, 200, { ...r, note: "staged as a pending proposal — NOT loaded; the host admits it" }) : json(res, 400, r);
+  }
+  const planMatch = url.pathname.match(/^\/api\/extensions\/(proposals|catalogue)\/([a-z0-9_-]+)\/plan$/);
+  if (req.method === "GET" && planMatch) {
+    const plan = planMatch[1] === "proposals" ? extensions.proposalPlan(planMatch[2]) : extensions.cataloguePlan(planMatch[2]);
+    return plan ? json(res, 200, plan) : json(res, 404, { error: `no ${planMatch[1].replace(/s$/, "")} '${planMatch[2]}'` });
+  }
+  if (req.method === "POST" && url.pathname === "/api/extensions/sideload") {
+    const body = await readJson();
+    if (!body?.id) return json(res, 400, { error: "body must be JSON with an id" });
+    const plan = extensions.cataloguePlan(body.id);
+    if (!plan) return json(res, 404, { error: `no catalogue entry '${body.id}'` });
+    if (body.confirm !== true) {
+      // Confirm-first: show the plan, stage nothing.
+      return json(res, 200, { confirmFirst: true, plan, note: "nothing staged — repeat with confirm:true to stage the sideload as a PENDING proposal (it does not load; admission is still the host's)" });
+    }
+    const r = extensions.sideload(body.id);
+    return r.ok ? json(res, 200, { ...r, note: "staged as a pending proposal — NOT loaded; the host admits it" }) : json(res, 400, r);
+  }
+  if (req.method === "POST" && url.pathname === "/api/extensions/admit") {
+    const body = await readJson();
+    if (!body?.id) return json(res, 400, { error: "body must be JSON with an id" });
+    const plan = extensions.proposalPlan(body.id);
+    if (!plan) return json(res, 404, { error: `no proposal '${body.id}'` });
+    if (body.confirm !== true) {
+      // Confirm-first: the Tier 2 review act whose resolved plan is the source.
+      return json(res, 200, { confirmFirst: true, plan, note: "nothing decided — repeat with confirm:true and decision 'admit'|'deny' to decide" });
+    }
+    const r = extensions.admitProposal(body.id, body.decision === "deny" ? "deny" : "admit");
+    return json(res, 200, r);
   }
   json(res, 404, { error: "not found" });
 }
