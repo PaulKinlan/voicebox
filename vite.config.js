@@ -50,8 +50,23 @@ const git = (args, fallback) => {
 // Read per HTML request, not once at startup: a stamp that keeps naming the
 // revision the server started on goes stale the moment anything lands, which is
 // exactly the confusion this line exists to prevent.
+// THE TWO LINES THIS FEATURE EXISTS TO PRODUCE. Both were seen on the real page
+// on 2026-09-19, before and after restarting the server, unasked — which is the
+// only validation that matters for a stamp:
+//
+//   page main @ 5e805cc · 2 commits ahead of origin/main (not landed)
+//     · server main @ 3da3268 · the server is a different revision — restart it
+//
+//   page main @ 5e805cc · 2 commits ahead of origin/main (not landed)
+//     · server main @ 5e805cc
+//
+// That first line carries every fact that cost an hour the same evening: which
+// half is which, that the page is ahead of its remote and NOT LANDED, and that
+// the server is a different revision — named, instead of discovered by a voice
+// path that fails for reasons nobody can see.
+//
 // A stamp that can be wrong in the direction of "looks like main" is worse than
-// no stamp. 2026-09-19: the served page said `main @ 41b9045` while origin/main
+// no stamp. The served page said `main @ 41b9045` while origin/main
 // was 674aa66 — the tree really was on the branch *main*, and that local main
 // was a commit ahead of the remote one, with a dirty file. Every human reading
 // the footer concluded the page was main at a revision main does not have. So
