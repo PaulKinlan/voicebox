@@ -11,6 +11,8 @@
 // merge claims no GLOBAL order — two instances' sequences cannot be interleaved by anything but
 // arrival, so the honest answer is a per-instance order plus a deterministic tie-break.
 
+import type { Actor, LogEntryBase } from "./shared-log.ts";
+
 export interface AuditAct {
   kind: string;
   target: string;
@@ -23,20 +25,28 @@ export interface Observed {
   mtime?: string;
 }
 
-export interface AuditEntry {
-  seq: number;          // per-instance monotonic, from 1
-  instance: string;     // "phone" — one instance in M0
-  project: string;      // "atlas@phone"
-  root: string;         // "v1/projects/atlas"
-  turn: string | null;
-  at: string;           // ISO wall clock — a HINT, never an ordering key
-  act: AuditAct;
-  decision: "allow" | "confirm" | "refuse";
-  rule: string | null;
-  result: "ok" | "error" | "refused";
-  observed: Observed | null; // from the filesystem, never from the model
+/**
+ * THE ENTRY SHAPE, extended for the shared side (N19 / §9) BEFORE anything wrote a shared entry.
+ *
+ * The log is one medium: an `act` entry is the tier decision and the observed result, and a
+ * `presence` / `activity` / `see` entry is a shared fact (core/shared-log.ts). Keeping them in one
+ * file per root is what makes "the global state is the log" true rather than aspirational — two logs
+ * would be two things to read and two things to reconcile.
+ *
+ * The act fields are optional because the other three kinds do not have them; for `kind: "act"` they
+ * are always present, and `makeEntry` is the only constructor that decides that.
+ */
+export interface LogEntry extends LogEntryBase {
+  act?: AuditAct;
+  decision?: "allow" | "confirm" | "refuse";
+  rule?: string | null;
+  result?: "ok" | "error" | "refused";
+  observed?: Observed | null; // from the filesystem, never from the model
   read?: { path: string; bytes: number }[];
 }
+
+/** An act entry is the audit entry: the alias is kept because that is what it is. */
+export type AuditEntry = LogEntry;
 
 /** The one instance M0 runs. §2.3's several live instances are E2. */
 export const M0_INSTANCE = "phone";
@@ -111,10 +121,12 @@ export function mergeAudit(entries: AuditEntry[]): AuditEntry[] {
   );
 }
 
+/** The only constructor that produces an `act` entry — so the absent fields cannot drift kind by kind. */
 export function makeEntry(
   project: string,
   root: string,
   instance: string,
+  actor: Actor | undefined,
   act: AuditAct,
   decision: AuditEntry["decision"],
   rule: string | null,
@@ -124,8 +136,11 @@ export function makeEntry(
   read?: { path: string; bytes: number }[],
 ): AuditEntry {
   return {
+    kind: "act" as const,
     seq: nextSeq(),
     instance,
+    ...(actor ? { actor } : {}),
+    ...(actor ? { actor } : {}),
     project,
     root,
     turn,

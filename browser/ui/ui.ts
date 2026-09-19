@@ -266,6 +266,76 @@ async function renderViewAt(view: ViewName, path: string): Promise<void> {
   panel.appendChild(list);
 }
 
+// ---------------------------------------------------------------- the shared view
+
+/**
+ * WHO IS HERE, from the log — the live answer N19 asks for, rather than something learned at a merge.
+ *
+ * Two things this panel refuses to blur. Presence is MEASURED at read time (`state` is the last beat
+ * aged against the host's windows), so a stale "ready" cannot read as current; and "has not read
+ * this yet" is distinguished from "has not run yet" — an agent with no marks says so in words
+ * instead of showing an empty list, which would claim it knew nothing.
+ */
+async function renderAgents(mark = false): Promise<void> {
+  const reply = await send({ type: "look", mark });
+  const panel = $("agents");
+  panel.textContent = "";
+  if (!reply.ok) {
+    const failureLine = document.createElement("p");
+    failureLine.className = "failure";
+    failureLine.textContent = failure(reply);
+    panel.appendChild(failureLine);
+    return;
+  }
+
+  const mine = document.createElement("p");
+  mine.className = "authority";
+  mine.textContent = `you are '${reply.viewer}'. ${reply.claimed?.length ? `caught up on ${reply.claimed.map((c) => `${c.of}→${c.upto}`).join(", ")}.` : "nothing new to claim."}`;
+  panel.appendChild(mine);
+
+  const list = document.createElement("ul");
+  list.className = "entries";
+  for (const agent of reply.agents ?? []) {
+    const doing = (reply.doing ?? []).find((d) => d.instance === agent.instance);
+    const knew = (reply.knew ?? []).find((k) => k.instance === agent.instance);
+    const item = document.createElement("li");
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = `${agent.instance} — ${agent.state}${doing ? `, ${doing.doing}${doing.current ? "" : " (stale)"}` : ""}`;
+    const seen = document.createElement("span");
+    seen.className = "size";
+    seen.textContent = knew?.mark === null
+      ? "has not read anything yet — it has not run"
+      : Object.entries(knew?.mark ?? {}).map(([of, upto]) => `read ${of}→${upto}`).join(" ");
+    item.append(name, seen);
+    list.appendChild(item);
+  }
+  if (!(reply.agents ?? []).length) {
+    const none = document.createElement("li");
+    none.className = "empty";
+    none.textContent = "no other agent has written here yet";
+    list.appendChild(none);
+  }
+  for (const group of reply.unseen ?? []) {
+    const item = document.createElement("li");
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = `new from ${group.writer}`;
+    const count = document.createElement("span");
+    count.className = "size";
+    count.textContent = `${group.entries.length} entr${group.entries.length === 1 ? "y" : "ies"}`;
+    item.append(name, count);
+    list.appendChild(item);
+  }
+  if (reply.unseen === null) {
+    const unknown = document.createElement("li");
+    unknown.className = "empty";
+    unknown.textContent = "you have not read the log yet — press Catch up";
+    list.appendChild(unknown);
+  }
+  panel.appendChild(list);
+}
+
 // ---------------------------------------------------------------- the controls
 
 async function open(name: string): Promise<Reply> {
@@ -281,7 +351,7 @@ async function open(name: string): Promise<Reply> {
     const read = await send({ type: "readFile", path: `assets/${asset}` });
     renderAsset({ name: asset, kind: asset.endsWith(".svg") ? "svg" : asset.endsWith(".html") ? "html" : "text", body: read.text ?? "" });
   }
-  await Promise.all([renderView("opfs"), renderView("picked"), renderView("server")]);
+  await Promise.all([renderView("opfs"), renderView("picked"), renderView("server"), renderAgents(false)]);
   return reply;
 }
 
@@ -390,7 +460,9 @@ dropzone.addEventListener("drop", async (event) => {
 });
 
 // The programmatic surface the acceptance checks drive — the same worker the controls call.
-const api = { ready: send({ type: "hello" }), send, open, create, adopt, renderView, header, line };
+$("catch-up").addEventListener("click", () => void renderAgents(true));
+
+const api = { ready: send({ type: "hello" }), send, open, create, adopt, renderView, renderAgents, header, line };
 (window as unknown as Record<string, unknown>).e1m0 = api;
 document.documentElement.dataset.e1m0 = "ready";
 api.ready.then((reply: Reply) =>

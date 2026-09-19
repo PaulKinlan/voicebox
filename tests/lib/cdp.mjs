@@ -166,10 +166,19 @@ export async function launch({ width = 1000, height = 800, profile = null } = {}
     return result.result.value;
   };
 
+  /**
+   * The centre of an element, AFTER scrolling it into view.
+   *
+   * The scroll matters: a real mouse event is dispatched at viewport coordinates, and an element
+   * below the fold gets a click at coordinates where it is not — the page simply does nothing, and
+   * the failure looks like a broken handler rather than a misplaced pointer. (Found exactly that
+   * way: adding one panel to the page pushed the form out of the viewport.)
+   */
   const rect = (selector) =>
     page.evaluate((sel) => {
       const node = document.querySelector(sel);
       if (!node) return null;
+      node.scrollIntoView({ block: "center", inline: "center" });
       const box = node.getBoundingClientRect();
       return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
     }, selector);

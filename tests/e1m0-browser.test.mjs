@@ -115,8 +115,8 @@ test("2. Tier table both ways: a write inside is allowed, a write outside is ref
   assert.equal(outside.rule, "outside-root");
 
   const audit = await send({ type: "audit" });
-  const allowed = audit.entries.find((e) => e.act.target.endsWith("assets/check2-inside.svg"));
-  const refused = audit.entries.find((e) => e.decision === "refuse" && e.act.target.includes("evil.svg"));
+  const allowed = audit.entries.find((e) => e.act?.target.endsWith("assets/check2-inside.svg"));
+  const refused = audit.entries.find((e) => e.decision === "refuse" && e.act?.target.includes("evil.svg"));
   assert.ok(allowed, "the allowed write has no audit entry");
   assert.equal(allowed.decision, "allow");
   assert.equal(allowed.rule, "writes-inside");
@@ -145,7 +145,7 @@ test("3. Refusals are named: the rule id and the why, with the allowed case in t
 
   const audit = await send({ type: "audit" });
   const refusal = audit.entries.filter((e) => e.decision === "refuse" && e.rule === "outside-root").pop();
-  const allow = audit.entries.find((e) => e.act.target.endsWith("assets/check3.txt"));
+  const allow = audit.entries.find((e) => e.act?.target.endsWith("assets/check3.txt"));
   assert.equal(refusal.rule, "outside-root");
   assert.equal(allow.decision, "allow");
   assert.equal(allow.rule, "writes-inside");
@@ -254,7 +254,7 @@ test("7. Bad input does not kill the host", { timeout: 90000 }, async () => {
   for (const [label] of cases) {
     if (label === "an unknown message") continue; // there is no act to record
     assert.ok(
-      audit.entries.some((e) => e.act.tool === "create-asset" || e.act.tool === "fixture-trap"),
+      audit.entries.some((e) => e.act?.tool === "create-asset" || e.act?.tool === "fixture-trap"),
       `no audit entry for ${label}`,
     );
   }
@@ -344,7 +344,7 @@ test("8a. The root is an injected interface: the same checks pass on a second ad
 
   // The audit is one implementation: the same rows, recorded against the second root's virtual root.
   const audit = await send({ type: "audit" });
-  const allow = audit.entries.filter((e) => e.act.target.endsWith("inside-8a.txt")).pop();
+  const allow = audit.entries.filter((e) => e.act?.target.endsWith("inside-8a.txt")).pop();
   const refuse = audit.entries.filter((e) => e.rule === "outside-root").pop();
   assert.equal(allow.rule, "writes-inside");
   assert.equal(allow.decision, "allow");

@@ -269,7 +269,7 @@ test("N20.6 A handle root can be written through, when the grant exists", { time
   assert.equal(written.observed.exists, true);
 
   const audit = await send({ type: "audit" });
-  const entry = audit.entries.filter((e) => e.act.target.endsWith("through-a-handle.txt")).pop();
+  const entry = audit.entries.filter((e) => e.act?.target.endsWith("through-a-handle.txt")).pop();
   assert.equal(entry.decision, "allow");
   assert.equal(entry.rule, "writes-inside");
   assert.equal(entry.root, "picked:n20-handle-root", "the audit does not record the virtual root of the handle");
