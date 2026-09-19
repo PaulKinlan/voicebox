@@ -262,7 +262,8 @@ child's process group directly; either way it stops the processes the host start
 project (the process journal has the pids). A stop that only works when the other side is
 well-behaved is not a stop.
 
-After k3's drives this is not a nicety, it is **the only hard lever the host always has** —
+**Unconditional, and the only such guarantee in this section.** After k3's drives this is not a
+nicety: it is **the only hard lever the host always has** —
 everything else in this section depends on the harness choosing to ask or to answer. `session/cancel`,
 the process-group signal, and the refusal to continue are **unconditional**; treat any guarantee that
 rests on the harness's cooperation as conditional on the mode (§1.1a).
@@ -574,8 +575,13 @@ is text, and k3's design is not a dependency of this environment existing); seve
 **Three things the interface must say out loud, rather than letting the user infer them** — each
 is an honest answer to something the platform does not promise:
 
-- **"Grant access to continue"** when a reopened project needs a click to re-acquire its directory
-  handle. A gesture is not a design failure; a gesture that is not *explained* reads as a bug.
+- **"Grant access to continue" — but only for a *picked* directory.** Two different things were
+  conflated here until astra caught it: an **OPFS** project (`navigator.storage.getDirectory()`) is
+  **origin-private and needs no gesture at all** — measured at page load with
+  `userActivation.isActive === false`: create, write and read back all succeeded — while a
+  **picked** directory (File System Access, which is how a *window onto local files* is opened) is
+  user-visible and its permission may need re-granting. So the peer project has **no** permissions
+  dance; the picked-folder case has one, and *an unexplained gesture reads as a bug*.
 - **The durability state of the project** — held persistently, or held until the browser decides
   otherwise. The browser may decline the request to persist, so the state is not decoration, it is
   the truthful answer to a question whose answer varies.
@@ -600,11 +606,17 @@ implementation can look finished and not be:
 5. **A peer project whose world is invisible by accident.** *"This project lives in this browser
    only"* is a label, not a discovery the user makes after losing work; §1.1b.
 
-**Three things that would make it indefinable, and how they stand:** handle re-acquisition after a
-reload depends on a user gesture in some browsers (acceptable: a click is not a design failure);
-persistent storage is a *request* the browser may decline, so a peer project must show its
-durability state (§3.2a); and whatever the server side turns out to be (§5), it is not needed for
-this — E1 stands alone, which is the point of it being first.
+**E1-M0 has no dependencies, and this is the list an implementer will read as one:** it needs
+**neither the harness** (§1.1b's transport fact — no bridge, no pi, no k3 extension) **nor any
+compliant-mode work** (§1.1a) **nor the server side** (§5). Its tools run in the page; the tier
+table, the audit and the project records run in the same worker; that is the whole of it.
+
+**Two things that could make it indefinable, and how they stand:** persistent storage is a
+**request the browser may decline** — measured: `persisted()` is false by default and `persist()`
+returned false on a plain origin — so the durability state is required rather than decorative; and
+quota, which measured 10.7 GB here, is generous but not infinite. (The OPFS handle itself needs no
+gesture, per the measurement above; only a picked directory does.) Whatever the server side turns
+out to be (§5) is not needed for this — E1 stands alone, which is the point of it being first.
 
 ## 2. The local-project unit
 
@@ -614,7 +626,8 @@ A project is a **declared directory** plus a session, and nothing more:
 
 ```jsonc
 { "id": "isocan",                      // short name, unique among registered projects
-  "path": "/home/paulkinlan/isocan",   // the DECLARED checkout (realpath-resolved at open)
+  "path": "/home/paulkinlan/isocan",   // a DECLARED location: a realpath on a machine, or the
+                                       // name of an OPFS directory in an origin (§1.1b)
   "executionRoot": "/home/paulkinlan/isocan",  // the root THIS instance works in (§2.3/§2.4)
   "roots": [ "/home/paulkinlan/isocan",        // every root open on this project, one writer each
              "/home/paulkinlan/worktrees/isocan-walk" ],   // e.g. the phone session's worktree
@@ -627,8 +640,13 @@ A project is a **declared directory** plus a session, and nothing more:
   "worktree": null }                    // set when the host keeps work recoverable (§2.4)
 ```
 
-- **Identity**: the realpath, so two paths to the same checkout are one project.
-- **`executionRoot` is the containment root**, and it is not always the checkout: when the host
+- **Identity is placement + location.** On a machine that means the realpath, so two paths to one
+  checkout are one project. In a browser it means the origin plus the OPFS directory name — there is
+  no realpath to compare, and no way for another placement to reach it, which is why `placement`
+  is part of the identity rather than metadata about it (`isocan@phone` ≠ `isocan@box`, §1.1b).
+- **`executionRoot` is the containment root**, and it is whatever the placement says it is — an
+  OPFS directory handle in E1, a realpath on a machine — and it is not always the checkout: when the
+  host
   works in a worktree (§2.4) that directory *is* the root for every containment check, every
   diff and every state message. Containment is always **relative to one root — the active
   project's execution root** — never the union of registered projects, or a nested or
@@ -657,7 +675,7 @@ A project is a **declared directory** plus a session, and nothing more:
 
 | Act | What happens | What does not happen |
 |---|---|---|
-| **open** | verify the path exists and is a directory; resolve realpath; register; create a session lazily on first use | nothing is cloned, scaffolded or modified |
+| **open** | on a machine: verify the path exists and is a directory, resolve realpath. In a browser: take the OPFS directory (origin-private, no gesture) or a picked handle. Register, then create a session lazily on first use | nothing is cloned, scaffolded or modified |
 | **activate** | the active project changes; the UI is told the new state | other projects' sessions are untouched |
 | **detach** (implicit, on switching away) | the session stays alive and resumable | **no process is killed** for switching |
 | **close** | the session is ended explicitly; processes the host started for it are stopped | files are untouched by closing |
@@ -723,7 +741,8 @@ hiding it would not be.
 
 ### 2.4 Separability, and keeping work cheap to undo
 
-- **cwd**: every turn runs with the project's realpath as its declared cwd. The harness cannot
+- **cwd**: on a machine, every turn runs with the project's realpath as its declared cwd; in a
+  browser, the turn is scoped to the OPFS handle. Either way the harness cannot
   wander into another project because it is never told about one.
 - **Session isolation**: one harness session per **(instance, root)** — two instances must not
   resume each other's conversation, and context must not bleed between roots or projects.
