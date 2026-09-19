@@ -206,3 +206,35 @@ is the assertion, with the wrong behaviour visible in the message:
 The last row is the useful one: collapsing the two roots into one path is invisible to every check
 that only ever touches the OPFS root, which is exactly what "the same checks pass on a second
 adapter" is there to catch.
+
+## 9. For the reviewer: how to confirm each closure in two minutes
+
+Branch `e1m0/browser-environment`, worktree `/home/paulkinlan/voicebox-e1m0`. Nothing here needs a
+browser to be installed by hand — `launch()` finds Chromium itself, and every suite starts its own
+server on its own port.
+
+```sh
+cd /home/paulkinlan/voicebox-e1m0
+git log --oneline -3          # d3d0afb (the build), cd6cdc2 + 87fc280 (the review follow-up)
+npm run test:e1m0             # 27 checks; ~3s
+npm test                      # the repository's existing 11; unchanged
+```
+
+| Closure | What to look at, and what "closed" looks like |
+|---|---|
+| **F1, `permission-denied`** | `tests/n20-permission-denied.test.mjs`. `blockedProfile()` writes the content-setting exception *before* the browser starts, so the platform answers `denied` for a real dropped folder. Closed means: `handleState` reports `denied` **from the platform**, and read + write both answer `permission-denied` with a why that says *declined*, distinct from `needs-gesture` and `handle-gone`, with the refusal in the audit and the code on the page. Nothing is constructed: search the file for a fake handle and there is none |
+| **F2, the pair** | `tests/explorer.test.mjs` → `7cd.2`. Closed means both halves asserted in the one test: `not-a-project` for the absent root **and** `ok: true` with `entries: []`, `truncated: false` for the empty one, plus the `assert.notEqual` that fails if they ever collapse |
+| **8a, root injection** | `tests/e1m0-browser.test.mjs` → the last test. Closed means the full list re-driven on a handle root, with `allow.root === "picked:second-adapter"` on the audit entry |
+| **The ten-check mapping** | §3's table above; the spec is `docs/04-e1-m0-build-spec.md` §8 at base `309e43c` |
+| **8b, still open** | Not a code question: `/environment.html` → drop a folder → **Restore write access** → create an asset. When a person does that, the receipt's 8b row gets the witness and the check is done |
+
+**Mutation evidence, reproducible** (§8): copy the tree to a throwaway worktree, revert one line, run
+one suite.
+- `reachable()`'s `denied` branch → `fail("needs-gesture", …)`: `n20-permission-denied` must go red **at the code assertion**, not at load.
+- `listView`'s `picked` branch answering an empty success for a non-handle project: `7cd.2` must go red **on the pair**.
+- `virtualRoot()` returning `v1/projects/${name}` for both kinds: **only 8a may go red** — 1–7 and 9 staying green is the property, not a gap.
+
+The last of those is the one worth quoting back at me if I ever claim a check is load-bearing without
+having run it: a defect visible only to a second implementation is invisible to every check that
+touches one root, which is why 8a exists and why the first OPFS-root bug in this build survived
+until the two-root check.
