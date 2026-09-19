@@ -132,9 +132,12 @@ test("seam: THE BOUNDARY — the page holds no vendor handle, so the gate cannot
   }
   assert.deepEqual(
     exposed,
-    ["close", "gatedFrames", "interrupt", "provider", "ready", "sendAudio", "sendText"],
+    ["close", "gatedFrames", "interrupt", "provider", "ready", "refusedByTransport", "sendAudio", "sendText"],
     `the page's surface must be exactly the contract: ${exposed.join(", ")}`,
   );
+  // `refusedByTransport` was added in the REVISE so "the gate is host-side" is a NUMBER rather than a
+  // claim — and this test is why that addition was a deliberate act rather than a quiet widening. It
+  // failed the moment the member appeared, which is the behaviour its comment promised.
   session.close();
 });
 
@@ -150,4 +153,116 @@ test("seam: what the boundary proves, and what it does NOT — the honest half",
   assert.equal(typeof session.sendAudio, "function");
   assert.equal(session.provider, "stub-recording", "the session names its provider, so a log can say which");
   session.close();
+});
+
+// ── astra's review (voicebox-beads-xin), each finding as a test ──────────────────────────────────────
+
+test("REVISE-1: a provider's OWN audio before ready is refused by the transport (the gate is a mechanism)", () => {
+  // The refutation: with the real adapter and an inert socket, the provider sent `AQACAA==` straight to
+  // the vendor, because it dialled ambiently. The fix hands the provider a TRANSPORT, so its audio goes
+  // through the same gate as the page's — and this test uses a recording socket to see what got out.
+  const sent = [];
+  const realWS = globalThis.WebSocket;
+  globalThis.WebSocket = class {
+    constructor(url) { this.url = url; sent.push({ kind: "construct", url: String(url).slice(0, 24) }); }
+    send(frame) { sent.push({ kind: "frame", frame: String(frame) }); }
+    close() {}
+  };
+  try {
+    registerLiveProvider("early-audio", ({ transport, emit }) => ({
+      start() {
+        emit({ type: "transport-open" });
+        // Connect first, like a real provider — a send with no socket is refused for a different reason.
+        transport.connect("wss://stub.invalid/vendor", {});
+        // Then try to push audio before the handshake finished. Pre-REVISE this reached the vendor.
+        transport.send("audio", "AQACAA==");
+        transport.send("handshake", JSON.stringify({ setup: "pretend" }));
+      },
+      sendAudio() {}, close() {},
+    }));
+    const states = [];
+    const session = createLiveSession({ provider: "early-audio", onState: (n) => states.push(n), log: () => {} });
+    assert.equal(session.ready, false, "no ready was emitted — the handshake never completed");
+    assert.equal(session.refusedByTransport.audioBeforeReady, 1, "the transport must refuse provider audio while not ready");
+    const frames = sent.filter((s) => s.kind === "frame").map((s) => s.frame);
+    assert.ok(!frames.includes("AQACAA=="), `provider audio must NOT reach the vendor: ${JSON.stringify(sent)}`);
+    assert.ok(frames.some((f) => f.includes("pretend")), "the handshake itself must still pass through");
+    session.close();
+  } finally {
+    globalThis.WebSocket = realWS;
+  }
+});
+
+test("REVISE-2: a rejected start() is a cause — it emits closed, and a late ready is refused", async () => {
+  registerLiveProvider("fails-to-start", ({ emit }) => ({
+    async start() { throw new Error("handshake refused"); },
+    sendAudio() {}, close() { emit({ type: "closed", code: 1000, reason: "closed" }); },
+  }));
+  const states = [];
+  const session = createLiveSession({ provider: "fails-to-start", onState: (n, m) => states.push({ n, ...m }), log: () => {} });
+  await new Promise((r) => setTimeout(r, 20));
+  const terminal = states.find((s) => s.n === "upstream-closed");
+  assert.ok(terminal, `a failed start must produce a terminal event: ${JSON.stringify(states)}`);
+  assert.equal(terminal.code, 1011, "the terminal event must say the provider failed to start");
+  assert.equal(session.ready, false, "and the session must not be alive");
+});
+
+test("REVISE-3: prototype keys are refused by name, like every other unknown provider", () => {
+  for (const name of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+    assert.throws(
+      () => createLiveSession({ provider: name, log: () => {} }),
+      (err) => err instanceof Error && /no live provider registered for/.test(err.message) && /gemini/.test(err.message),
+      `'${name}' must be refused by name with the list, not fall through to a prototype member`,
+    );
+  }
+});
+
+test("REVISE-4: a null event and a bad event cost an event, not the conversation", () => {
+  registerLiveProvider("shape-abusing", ({ emit }) => ({
+    start() {
+      emit(null);                       // not an object
+      emit("nonsense");                 // a string
+      emit({ type: "totally-made-up" }); // unknown but well-shaped
+      emit({ type: "ready" });          // and then a real one
+    },
+    sendAudio() {}, close() { emit({ type: "closed", code: 1000, reason: "done" }); },
+  }));
+  const lines = [];
+  const session = createLiveSession({ provider: "shape-abusing", log: (l) => lines.push(l) });
+  assert.equal(session.ready, true, "the session must survive all three malformed events and reach ready");
+  assert.ok(lines.some((l) => /malformed provider event/.test(l)), `null/string must be reported: ${lines.join(" | ")}`);
+  assert.ok(lines.some((l) => /unknown provider event/.test(l)), `unknown types must be reported: ${lines.join(" | ")}`);
+  session.close();
+});
+
+test("REVISE-4b: a vendor frame of JSON `null` costs a frame (the Gemini provider's half)", async () => {
+  const realWS = globalThis.WebSocket;
+  let onMessage = null;
+  globalThis.WebSocket = class {
+    constructor() { queueMicrotask(() => this.onopen?.()); }
+    send() {}
+    close() {}
+    set onmessage(fn) { onMessage = fn; }
+    get onmessage() { return onMessage; }
+  };
+  try {
+    const { createGeminiProvider } = await import("../lib/live-providers/gemini.mjs");
+    process.env.GEMINI_API_KEY = "test-key";
+    const events = [];
+    const transport = {
+      connect: (_url, handlers) => { onMessage = handlers.onMessage; return {}; },
+      send: () => true, close: () => {},
+    };
+    const p = createGeminiProvider({ emit: (e) => events.push(e), log: () => {}, transport });
+    assert.ok(p, "the provider must construct with the injected transport");
+    if (onMessage) {
+      await onMessage({ data: "null" });       // parses to null — must not throw
+      await onMessage({ data: "{bad" });       // unparseable — must not throw
+      await onMessage({ data: '{"setupComplete":{}}' });
+    }
+    assert.ok(events.some((e) => e.type === "ready"), `the session must still reach ready: ${JSON.stringify(events)}`);
+  } finally {
+    globalThis.WebSocket = realWS;
+    delete process.env.GEMINI_API_KEY;
+  }
 });

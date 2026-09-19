@@ -15,6 +15,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { tmpdir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
@@ -230,16 +231,30 @@ test("page load with files produces zero POST /api/turn calls (no phantom turns)
   writeFileSync(f1, "hello alpha", "utf8");
   writeFileSync(f2, "hello beta", "utf8");
 
-  const cdpPort = 19996;
+  // A DYNAMIC port, not 19996. A fixed CDP port is the same defect as a fixed service port: it makes the
+  // suite un-runnable beside any other lane (found by astra, voicebox-beads-xin: a live lane's chromium
+  // held 19996 and this test refused to steal or kill it — correctly). `--remote-debugging-port=0` asks
+  // Chromium to choose, and it writes the choice to DevToolsActivePort in the user-data-dir.
+  const profile = mkdtempSync(path.join(tmpdir(), "voicebox-cdp-"));
   const chrome = spawn("/usr/bin/chromium", [
     "--headless=new",
     "--no-sandbox",
     "--disable-gpu",
-    `--remote-debugging-port=${cdpPort}`,
+    "--remote-debugging-port=0",
+    `--user-data-dir=${profile}`,
     "about:blank",
   ], { stdio: ["ignore", "ignore", "pipe"] });
 
   try {
+    let cdpPort = "";
+    for (let i = 0; i < 60 && !cdpPort; i++) {
+      try {
+        const line = readFileSync(path.join(profile, "DevToolsActivePort"), "utf8").split("\n")[0].trim();
+        if (line) cdpPort = line;
+      } catch { /* not written yet */ }
+      if (!cdpPort) await sleep(100);
+    }
+    assert(cdpPort, "chromium did not publish a DevTools port in DevToolsActivePort");
     let wsUrl = "";
     for (let i = 0; i < 40; i++) {
       try {
