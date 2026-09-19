@@ -378,7 +378,8 @@ function meterLevel(value) {
 
 function drawOutputRing(samples) {
   const path = document.getElementById("output-path");
-  if (!path || !samples) return;
+  if (!path) return;
+  if (!samples) { path.removeAttribute("d"); return; }
   let d = "";
   for (let i = 0; i < OUTPUT_SAMPLES; i++) {
     const angle = (i / OUTPUT_SAMPLES) * Math.PI * 2 - Math.PI / 2;
@@ -386,11 +387,13 @@ function drawOutputRing(samples) {
     d += `${i ? "L" : "M"}${(OUTPUT_CENTRE + Math.cos(angle) * radius).toFixed(2)},${(OUTPUT_CENTRE + Math.sin(angle) * radius).toFixed(2)}`;
   }
   path.setAttribute("d", `${d}Z`);
+  path.dataset.rev = `r4 first=${String(samples[0])} level=${meterLevel(samples[0]).toFixed(3)}`;
 }
 
 function drawInputWave(samples) {
   const path = document.getElementById("input-path");
-  if (!path || !samples) return;
+  if (!path) return;
+  if (!samples) { path.removeAttribute("d"); return; }
   const n = samples.length;
   const middle = 20;
   const height = 15;
@@ -405,7 +408,16 @@ function drawInputWave(samples) {
   path.setAttribute("d", `${top}${bottom}Z`);
 }
 
-let meterFrame = 0;
+// The animation handle lives on the window, not in a module variable: after a
+// hot update two module instances can both hold a loop, and two loops writing
+// one path is how a meter ends up drawing a stale revision over a live one.
+function stopMeters() {
+  if (window.__voiceboxMeterFrame) {
+    cancelAnimationFrame(window.__voiceboxMeterFrame);
+    window.__voiceboxMeterFrame = 0;
+  }
+}
+
 function meters() {
   const client = window.__voiceboxLiveClient;
   const voice = els.stage?.dataset.voice;
@@ -413,15 +425,21 @@ function meters() {
     const reading = client.level();
     if (voice === "listening") drawInputWave(reading.input);
     drawOutputRing(reading.output);
-    meterFrame = requestAnimationFrame(meters);
+    window.__voiceboxMeterFrame = requestAnimationFrame(meters);
     return;
   }
-  meterFrame = 0;
+  // Nothing is being heard or played: clear both meters rather than leave the
+  // last frame frozen on screen pretending to be live.
+  window.__voiceboxMeterFrame = 0;
+  drawInputWave(null);
+  drawOutputRing(null);
 }
 
 function startMeters() {
-  if (!meterFrame) meterFrame = requestAnimationFrame(meters);
+  if (!window.__voiceboxMeterFrame) window.__voiceboxMeterFrame = requestAnimationFrame(meters);
 }
+
+stopMeters();
 
 // A seam for driving the two meters without a microphone: a headless browser
 // has no device, so the visual can only be checked here by handing the drawing
