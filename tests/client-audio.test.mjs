@@ -1,0 +1,289 @@
+// tests/client-audio.test.mjs — the client audio path, everything that does
+// NOT need a microphone. The device half (does the real AudioContext resample
+// the mic to 16 kHz, is the model audible) is a press-the-button check and is
+// stated as unverified in the bead, not implied here.
+//
+// The failure classes this file exists for, all of which survive review:
+//   * Float32 -> PCM16: rounding, clipping, endianness, odd/empty payloads.
+//   * Malformed frames: a truncated frame, a JSON frame in the binary slot, an
+//     empty frame, bad JSON, an unknown control type — each must ERROR and the
+//     connection must SURVIVE, never a silent drop and never a dead socket.
+//   * "Stop reply" must FLUSH the queue (sources stopped, state back to
+//     listening), not just clear a flag while sound continues.
+//   * The no-coupling negative: with playback active, CAPTURE MUST NOT STOP.
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createAudioClient } from "../public/audio-client.js";
+import { floatToInt16Sample, floatToPcm16, pcm16ToFloat, isPcm16 } from "../public/pcm.js";
+
+// ── fakes ───────────────────────────────────────────────────────────────────
+function fakeSocket() {
+  const sent = [];
+  return {
+    sent,
+    binaryType: "",
+    send(data) { sent.push(data); },
+    close() { this.closed = true; },
+  };
+}
+
+function fakeMedia() {
+  const track = { stopped: false, stop() { this.stopped = true; } };
+  const stream = { getTracks: () => [track] };
+  return { stream, track, mediaDevices: { getUserMedia: async () => stream } };
+}
+
+/** A minimal AudioContext: real enough to schedule and to drain deterministically. */
+class FakeAudioContext {
+  constructor({ sampleRate }) {
+    this.sampleRate = sampleRate;
+    this.currentTime = 0;
+    this.destination = { name: "destination" };
+    this.started = [];
+    this.closed = false;
+    this.audioWorklet = { addModule: async (url) => { this.workletUrl = url; } };
+  }
+  createBuffer(_channels, length, rate) {
+    return { length, rate, duration: length / rate, copyToChannel() {} };
+  }
+  createBufferSource() {
+    const source = {
+      buffer: null,
+      startedAt: null,
+      stopped: false,
+      connected: null,
+      onended: null,
+      connect(node) { this.connected = node; },
+      start(when) { this.startedAt = when; this.context.started.push(this); },
+      stop() { this.stopped = true; },
+    };
+    source.context = this;
+    return source;
+  }
+  createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+  async close() { this.closed = true; }
+}
+
+class FakeWorkletNode {
+  constructor() { this.port = { onmessage: null }; }
+  disconnect() {}
+}
+
+function makeClient(overrides = {}) {
+  const events = { states: [], texts: [], errors: [], diagnostics: [] };
+  const media = fakeMedia();
+  const contexts = [];
+  class Ctx extends FakeAudioContext { constructor(opts) { super(opts); contexts.push(this); } }
+  const socket = fakeSocket();
+  const client = createAudioClient({
+    socket,
+    mediaDevices: media.mediaDevices,
+    AudioContextCtor: Ctx,
+    AudioWorkletNodeCtor: FakeWorkletNode,
+    onState: (phase, snap, detail) => events.states.push({ phase, snap, detail }),
+    onText: (text, kind) => events.texts.push({ text, kind }),
+    onError: (error, info) => events.errors.push({ message: error.message, ...info }),
+    onDiagnostic: (d) => events.diagnostics.push(d),
+    logger: { warn() {} },
+    ...overrides,
+  });
+  return { client, media, contexts, events, socket };
+}
+
+// ── 1. PCM conversion: rounding, clipping, endianness, validation ───────────
+test("pcm: float to int16 rounds, clips, and maps the extremes exactly", () => {
+  assert.equal(floatToInt16Sample(0), 0);
+  assert.equal(floatToInt16Sample(1), 32767, "+1 must not wrap to -32768");
+  assert.equal(floatToInt16Sample(-1), -32768);
+  assert.equal(floatToInt16Sample(0.5), 16384);
+  assert.equal(floatToInt16Sample(-0.5), -16384);
+  assert.equal(floatToInt16Sample(2), 32767, "clipped above");
+  assert.equal(floatToInt16Sample(-2), -32768, "clipped below");
+  assert.equal(floatToInt16Sample(NaN), 0, "NaN is silence, not a crash");
+  assert.equal(floatToInt16Sample(Infinity), 0, "non-finite is silence — never full-scale noise");
+});
+
+test("pcm: the wire is little-endian, and the round trip preserves the signal", () => {
+  const bytes = floatToPcm16(Float32Array.from([0.5]));
+  assert.equal(bytes.byteLength, 2);
+  assert.deepEqual([...new Uint8Array(bytes)], [0x00, 0x40], "16384 little-endian");
+  const back = pcm16ToFloat(bytes);
+  assert.equal(back.length, 1);
+  assert.ok(Math.abs(back[0] - 16384 / 32768) < 1e-6);
+  const many = Float32Array.from([0, 0.25, -0.25, 1, -1]);
+  const rt = pcm16ToFloat(floatToPcm16(many));
+  for (let i = 0; i < many.length; i++) assert.ok(Math.abs(rt[i] - many[i]) < 1e-3, `sample ${i}: ${rt[i]} vs ${many[i]}`);
+});
+
+test("pcm: odd-length and empty payloads are refused by the validator", () => {
+  assert.equal(isPcm16(new ArrayBuffer(0)), false);
+  assert.equal(isPcm16(new ArrayBuffer(3)), false);
+  assert.equal(isPcm16(new ArrayBuffer(2)), true);
+  assert.throws(() => pcm16ToFloat(new ArrayBuffer(3)), /even byte length/);
+});
+
+// ── 2. Malformed frames: error + surviving connection ───────────────────────
+test("frames: truncated, empty, JSON-in-binary-slot, bad JSON and unknown types all error without killing the socket", () => {
+  const { client, events } = makeClient();
+  const before = client.snapshot().framesRejected;
+
+  client.handleMessage(new ArrayBuffer(3)); // truncated
+  client.handleMessage(new ArrayBuffer(0)); // empty
+  client.handleMessage(floatToPcm16(Float32Array.from([0.1]))); // valid PCM, must play
+  const jsonBytes = new TextEncoder().encode('{"type":"state","state":"ready"}');
+  client.handleMessage(jsonBytes.buffer); // control frame in the binary slot
+  client.handleMessage("{not json"); // bad control JSON
+  client.handleMessage(JSON.stringify({ type: "wat" })); // unknown control type
+  client.handleMessage(undefined); // unsupported type
+
+  assert.equal(client.snapshot().framesRejected, before + 6, `expected 6 refusals, got ${client.snapshot().framesRejected}`);
+  assert.equal(client.snapshot().framesReceived, 1, "only the valid frame reached playback");
+  assert.equal(events.errors.length, 6);
+  assert.ok(events.errors.every((e) => e.fatal === false), "none of these are fatal");
+
+  // The connection survives: well-formed frames after all of them still work.
+  client.handleMessage(JSON.stringify({ type: "state", state: "ready", model: "models/gemini-3.8-live", detail: { gatedFrames: 2 } }));
+  assert.equal(client.snapshot().ready, true);
+  assert.equal(client.snapshot().model, "models/gemini-3.8-live");
+  assert.equal(client.snapshot().gatedFrames, 2);
+  client.handleMessage(floatToPcm16(Float32Array.from([0.1])));
+  assert.equal(client.snapshot().framesReceived, 2);
+});
+
+test("frames: a text control frame is delivered to onText, not played", () => {
+  const { client, events } = makeClient();
+  client.handleMessage(JSON.stringify({ type: "text", text: "hello there", kind: "model-transcript" }));
+  assert.deepEqual(events.texts, [{ text: "hello there", kind: "model-transcript" }]);
+  assert.equal(client.snapshot().framesReceived, 0);
+});
+
+// ── 3. Playback queue, scheduling, and the flush that "Stop reply" promises ──
+test("playback: frames queue in order, then Stop reply flushes the sources and returns to listening", async () => {
+  const { client, media, contexts } = makeClient();
+  await client.startCapture(); // the user pressed the mic: capture is live
+  assert.equal(client.snapshot().capture, true);
+
+  const frame = floatToPcm16(Float32Array.from(Array(240).fill(0.1))); // 10 ms at 24 kHz
+  client.handleMessage(frame);
+  client.handleMessage(frame);
+  client.handleMessage(frame);
+
+  const playing = client.snapshot();
+  assert.equal(playing.playbackActive, true);
+  assert.equal(playing.framesReceived, 3);
+  assert.equal(playing.phase, "agent-speaking");
+  const playCtx = contexts.find((c) => c.sampleRate === 24000);
+  assert.equal(playCtx.started.length, 3, "three sources were scheduled");
+  assert.ok(playCtx.started[1].startedAt >= playCtx.started[0].startedAt, "frames schedule in order");
+  assert.ok(playCtx.started[2].startedAt >= playCtx.started[1].startedAt, "frames schedule in order");
+
+  const result = client.stopReply();
+  assert.equal(result.flushed, true);
+  assert.equal(result.captureRunning, true, "Stop reply must not stop capture");
+  assert.ok(playCtx.started.every((s) => s.stopped), "every queued source was stopped, not just forgotten");
+
+  const after = client.snapshot();
+  assert.equal(after.playbackActive, false);
+  assert.equal(after.phase, "listening", "the state returns to listening after a flush");
+  assert.equal(after.capture, true);
+  assert.equal(media.track.stopped, false, "the microphone track is untouched by Stop reply");
+});
+
+test("playback: a drained queue returns to listening without any Stop reply", async () => {
+  const { client, contexts } = makeClient();
+  await client.startCapture();
+  client.handleMessage(floatToPcm16(Float32Array.from([0.1])));
+  const playCtx = contexts.find((c) => c.sampleRate === 24000);
+  assert.ok(playCtx, "a 24 kHz playback context was created");
+  assert.equal(playCtx.started.length, 1);
+  playCtx.started[0].onended(); // the provider's audio finished
+  assert.equal(client.snapshot().phase, "listening");
+  assert.equal(client.snapshot().playbackActive, false);
+});
+
+// ── 4. State machine and truthful labels ────────────────────────────────────
+test("state: labels derive from the real capture/playback state, and the readiness wait is visible", async () => {
+  const { client } = makeClient();
+  assert.match(client.label(), /Mic off/);
+
+  await client.startCapture();
+  assert.match(client.label(), /Waiting for the model · 0 frame\(s\) held/, "before setupComplete the wait is stated, not hidden");
+
+  client.handleMessage(JSON.stringify({ type: "state", state: "ready", model: "models/gemini-3.8-live", detail: { gatedFrames: 1 } }));
+  assert.equal(client.label(), "Listening — speak now");
+
+  client.handleMessage(floatToPcm16(Float32Array.from([0.2])));
+  assert.equal(client.label(), "Agent speaking · your microphone is on (interrupt any time)");
+  assert.equal(client.snapshot().capture, true, "capture stays live while the agent speaks — the two are decoupled");
+
+  await client.stopCapture();
+  assert.equal(client.snapshot().capture, false);
+  client.handleMessage(floatToPcm16(Float32Array.from([0.2])));
+  assert.equal(client.label(), "Agent speaking · your microphone is off", "the off-label appears only when the track really is off");
+});
+
+// ── 5. Capture path: worklet -> Float32 -> PCM16 -> socket ──────────────────
+test("capture: the worklet's Float32 chunks become PCM16 frames on the socket", async () => {
+  let wired = null;
+  class Worklet extends FakeWorkletNode {
+    constructor() { super(); wired = this; }
+  }
+  const { client, contexts, socket } = makeClient({ AudioWorkletNodeCtor: Worklet });
+  await client.startCapture();
+
+  const captureCtx = contexts.find((c) => c.sampleRate === 16000);
+  assert.ok(captureCtx, "capture uses a 16 kHz AudioContext — the browser resamples, we never do");
+  assert.equal(captureCtx.workletUrl, "pcm-worklet.js");
+  assert.ok(wired?.port, "the client wired the worklet node's port");
+
+  wired.port.onmessage({ data: Float32Array.from([0.5, -0.5]) });
+  assert.equal(socket.sent.length, 1, "one captured chunk became one frame");
+  assert.equal(socket.sent[0].byteLength, 4, "two samples -> two int16 values");
+  assert.deepEqual([...new Uint8Array(socket.sent[0])], [0x00, 0x40, 0x00, 0xc0], "LE, +16384 then -16384");
+  assert.equal(client.snapshot().framesSent, 1);
+
+  // An empty chunk is not a frame.
+  wired.port.onmessage({ data: new Float32Array(0) });
+  assert.equal(socket.sent.length, 1);
+
+  await client.stopCapture();
+  assert.equal(client.snapshot().capture, false);
+  assert.equal(client.snapshot().phase, "idle");
+});
+
+// ── 6. The session can die; the page must not keep saying "connected" ────────
+test("state: an upstream-closed event ends the session truthfully, and capture stays independent", async () => {
+  const { client, contexts } = makeClient();
+  await client.startCapture();
+  client.handleMessage(JSON.stringify({ type: "state", state: "ready", model: "models/gemini-3.8-live", detail: { gatedFrames: 0 } }));
+  client.handleMessage(floatToPcm16(Float32Array.from([0.1])));
+  assert.equal(client.snapshot().phase, "agent-speaking");
+
+  client.handleMessage(JSON.stringify({ type: "state", state: "upstream-closed", detail: { code: 1007, reason: "Request contains an invalid argument." } }));
+  const s = client.snapshot();
+  assert.equal(s.ready, false);
+  assert.equal(s.phase, "error");
+  assert.match(s.label, /Live session ended/);
+  assert.match(s.label, /invalid argument/);
+  assert.equal(s.capture, true, "the session ending must not stop the microphone track");
+  assert.equal(s.playbackActive, false, "queued audio is flushed when the session dies");
+  const playCtx = contexts.find((c) => c.sampleRate === 24000);
+  assert.ok(playCtx.started.every((x) => x.stopped), "every queued source was stopped");
+
+  const received = s.framesReceived;
+  client.handleMessage(floatToPcm16(Float32Array.from([0.3])));
+  assert.equal(client.snapshot().framesReceived, received, "stale audio from a dead session is ignored");
+  assert.equal(client.snapshot().framesIgnoredAfterEnd, 1);
+});
+
+test("state: a socket close is ended, not 'listening'", async () => {
+  const { client, socket } = makeClient();
+  await client.startCapture();
+  client.handleMessage(JSON.stringify({ type: "state", state: "ready", detail: {} }));
+  client.attachSocket(socket); // re-attach so the fake carries the handlers
+  socket.onclose({ code: 1006 });
+  const s = client.snapshot();
+  assert.equal(s.phase, "error");
+  assert.match(s.label, /Live session ended/);
+  assert.match(s.label, /1006/);
+});

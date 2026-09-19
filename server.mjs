@@ -181,6 +181,22 @@ server.on("upgrade", (req, socket) => {
       return;
     }
     // A binary frame is a PCM16 audio frame from the page's microphone.
+    // VALIDATE before forwarding — this is not defensive padding. Measured
+    // (ds-flash-1b, 2026-09-19): a single 3-byte frame reaches the model and
+    // the upstream closes 1007 "Request contains an invalid argument" — the
+    // SESSION dies while the page's socket stays open, so the user keeps
+    // talking into nothing. One malformed frame must cost a frame, never the
+    // conversation. PCM16 is always a non-empty EVEN number of bytes, and a
+    // frame past a bounded size is a fault, not audio.
+    const frameError =
+      data.length === 0 ? "empty audio frame" :
+      data.length % 2 !== 0 ? `odd-length audio frame (${data.length} bytes — PCM16 is even-length)` :
+      data.length > 1_048_576 ? `audio frame too large (${data.length} bytes)` :
+      null;
+    if (frameError) {
+      ws.send(JSON.stringify({ type: "error", error: `dropped malformed audio frame — ${frameError} (the session is fine)` }));
+      return; // rejected WITHOUT forwarding: one bad frame costs a frame.
+    }
     session.sendAudio(data.toString("base64"));
   });
   ws.on("close", () => session.close());
