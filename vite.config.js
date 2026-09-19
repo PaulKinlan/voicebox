@@ -49,6 +49,12 @@ function loudStaticMiss() {
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         const url = (req.url || "/").split("?")[0];
+        // Vite's own namespaces are never ours to judge: /@fs/ paths carry
+        // extensions and live outside root BY DESIGN (root is public/), so the
+        // on-disk check below would 404 Vite's dev client itself — env.mjs
+        // died exactly this way (2026-09-19, found by ds-flash-1b, browser
+        // console: "Failed to load resource 404" for /@fs/.../env.mjs).
+        if (/^\/@(vite|fs)\//.test(url) || url.startsWith("/node_modules/")) return next();
         const looksLikeFile = /\.[a-z0-9]+$/i.test(url) && !/\.html$/i.test(url);
         if (!looksLikeFile) return next();
         let onDisk;
