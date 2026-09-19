@@ -182,16 +182,14 @@ export function createAudioClient({
       reject(`binary frame is not even-length PCM16 (${bytes.byteLength} bytes)`, { frameKind: "binary", bytes: bytes.byteLength });
       return;
     }
-    // A control frame that arrived in the BINARY slot would otherwise be played
-    // as noise: a JSON object's first byte is "{". Name it; keep the socket.
-    if (new Uint8Array(bytes)[0] === 0x7b) {
-      let text = "";
-      try { text = new TextDecoder().decode(bytes); } catch { /* not text after all */ }
-      if (text.trimStart().startsWith("{")) {
-        reject(`control frame arrived in the binary slot (${text.slice(0, 60)})`, { frameKind: "binary-as-json", bytes: bytes.byteLength });
-        return;
-      }
-    }
+    // NO payload-byte heuristic here. A previous version refused any binary frame
+    // whose first byte was "{" (0x7B) as a control frame in the wrong slot — but
+    // that byte is the low byte of the first sample, so ~1 frame in 256 is
+    // legitimate audio, and `TextDecoder` is lossy by default (U+FFFD), so the
+    // "decode and look" guess could never be checked. The WebSocket opcode
+    // already distinguishes text from binary and the dispatch above branches on
+    // it; a control frame in the binary slot is a server bug, not something the
+    // client should guess about by discarding good audio. (Paul, 2026-09-19.)
     enqueuePcm16(bytes);
   }
 

@@ -130,15 +130,13 @@ test("frames: truncated, empty, JSON-in-binary-slot, bad JSON and unknown types 
   client.handleMessage(new ArrayBuffer(3)); // truncated
   client.handleMessage(new ArrayBuffer(0)); // empty
   client.handleMessage(floatToPcm16(Float32Array.from([0.1]))); // valid PCM, must play
-  const jsonBytes = new TextEncoder().encode('{"type":"state","state":"ready"}');
-  client.handleMessage(jsonBytes.buffer); // control frame in the binary slot
   client.handleMessage("{not json"); // bad control JSON
   client.handleMessage(JSON.stringify({ type: "wat" })); // unknown control type
   client.handleMessage(undefined); // unsupported type
 
-  assert.equal(client.snapshot().framesRejected, before + 6, `expected 6 refusals, got ${client.snapshot().framesRejected}`);
+  assert.equal(client.snapshot().framesRejected, before + 5, `expected 5 refusals, got ${client.snapshot().framesRejected}`);
   assert.equal(client.snapshot().framesReceived, 1, "only the valid frame reached playback");
-  assert.equal(events.errors.length, 6);
+  assert.equal(events.errors.length, 5);
   assert.ok(events.errors.every((e) => e.fatal === false), "none of these are fatal");
 
   // The connection survives: well-formed frames after all of them still work.
@@ -148,6 +146,19 @@ test("frames: truncated, empty, JSON-in-binary-slot, bad JSON and unknown types 
   assert.equal(client.snapshot().gatedFrames, 2);
   client.handleMessage(floatToPcm16(Float32Array.from([0.1])));
   assert.equal(client.snapshot().framesReceived, 2);
+});
+
+test("frames: a PCM16 frame whose FIRST byte is 0x7B is audio, not a control frame", () => {
+  // The counterfactual this guard was missing: 0x7B is the low byte of the first
+  // sample ~1 frame in 256, so refusing it silently drops good audio. The opcode
+  // already says binary; nothing about the payload may override that.
+  const { client, contexts } = makeClient();
+  const frame = new Uint8Array([0x7b, 0x00]); // +123 little-endian PCM16
+  client.handleMessage(frame.buffer);
+  assert.equal(client.snapshot().framesRejected, 0, "valid audio starting with '{' must be played, not refused");
+  assert.equal(client.snapshot().framesReceived, 1);
+  const playCtx = contexts.find((c) => c.sampleRate === 24000);
+  assert.equal(playCtx?.started.length, 1, "the frame was scheduled for playback");
 });
 
 test("frames: a text control frame is delivered to onText, not played", () => {
