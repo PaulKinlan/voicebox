@@ -1,0 +1,15 @@
+{
+  "name": "voicebox",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "voicebox — spoken turns become real files. Zero-dependency runtime; Vite is the dev server only.",
+  "scripts": {
+    "dev": "vite",
+    "serve": "node server.mjs",
+    "start": "node server.mjs"
+  },
+  "devDependencies": {
+    "vite": "^7.1.7"
+  }
+}
