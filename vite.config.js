@@ -130,6 +130,14 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     host: true, // listen on all interfaces: LAN 192.168.x.x + Tailscale 100.x
+    // POLLING WATCHER, 2026-09-19. A `git merge --ff-only` replaced
+    // public/audio-client.js and Vite's watcher never fired, so the server kept
+    // serving its cached transform of the OLD module: the disk had the new
+    // `level()` and :5173 served a file with no `level()` in it at all. A build
+    // stamp cannot catch that — page and server both reported the new sha while
+    // the JavaScript was old. Polling costs a little CPU and is immune to a
+    // missed inotify event.
+    watch: { usePolling: true, interval: 300 },
     proxy: {
       "/api": { target: API_TARGET },
       // The audio socket (k3's live session, landing separately). ws: true so
