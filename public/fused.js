@@ -1,169 +1,336 @@
-// voicebox fused page — astra's designed surface driving the real loop.
-// Real: files on disk, the turn submission, the containment refusals.
-// Simulated (labelled on the page): the N19 shared view, seen-marks, admission.
+// Voicebox — the working surface.
+//
+// Everything this page shows comes from the local server: the file list is
+// read from workspace/, a turn is posted to /api/turn, and a file is opened by
+// reading its bytes back. There is no seeded content, no timer that fakes a
+// state, and no claim the server has not made. Strings are rendered with
+// textContent only.
 const $ = (id) => document.getElementById(id);
+const SVG = "http://www.w3.org/2000/svg";
 
-async function loadFiles() {
-  const r = await fetch("/api/files");
-  const { files } = await r.json();
-  const list = document.querySelector(".objects");
-  if (!list) return;
-  list.replaceChildren(...files.map((name) => {
-    const li = document.createElement("li");
-    li.className = "object";
-    const btn = document.createElement("span");
-    btn.className = "artifact-caption";
-    const strong = document.createElement("strong");
-    strong.textContent = name;
-    btn.append(strong);
-    li.append(btn);
-    return li;
-  }));
-  const count = files.length;
-  const arrival = document.getElementById("arrival-count");
-  if (arrival) arrival.textContent = `${count} file${count === 1 ? "" : "s"} on disk`;
-  const empty = document.getElementById("empty");
-  if (empty) empty.hidden = count > 0;
-  if (list) list.hidden = count === 0;
-}
+const els = {
+  files: $("files"), made: $("made"), samples: $("samples"), count: $("file-count"),
+  where: $("where-note"), dot: $("server-dot"), refresh: $("refresh"), report: $("turn-report"),
+  stage: $("voice-ring-wrap"), mic: $("mic"), state: $("voice-state"),
+  session: $("session"), log: $("session-log"), form: $("text-form"), utterance: $("utterance"), send: $("send"),
+  dialog: $("file-dialog"), dialogTitle: $("file-title"), dialogFacts: $("file-facts"), dialogBody: $("file-body"), copy: $("file-copy"),
+};
 
-async function doTurn(transcript) {
-  if (!transcript.trim()) return;
-  const r = await fetch("/api/turn", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ transcript }),
-  });
-  const j = await r.json();
-  if (j.result?.ok) {
-    await loadFiles(); // the workspace changed — re-render the real files
-  } else if (j.error || j.note) {
-    const err = document.createElement("div");
-    err.className = "object";
-    err.textContent = j.error ?? j.note ?? "the turn was not executed";
-    document.querySelector(".objects")?.prepend(err);
+let shownFile = null; // the file currently in the reader, when it is open
+
+let entries = [];
+
+// ── small helpers ──────────────────────────────────────────────────────────
+const bytes = (text) => new TextEncoder().encode(text).length;
+const size = (text) => {
+  const n = typeof text === "string" ? bytes(text) : text;
+  return `${n} ${n === 1 ? "byte" : "bytes"}`;
+};
+
+function setReport(outcome, tone, said) {
+  els.report.replaceChildren();
+  if (said) {
+    const quote = document.createElement("span");
+    quote.textContent = `“${said}” `;
+    els.report.append(quote);
   }
-  return j;
+  const result = document.createElement("span");
+  result.className = "report-outcome";
+  result.textContent = outcome;
+  els.report.append(result);
+  els.report.dataset.tone = tone ?? "";
 }
 
-// ── text form ──────────────────────────────────────────────────────────────
-const form = document.getElementById("text-form") ?? document.querySelector("form");
-if (form) {
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const input = form.querySelector("textarea, input[type=text], input");
-    if (!input?.value?.trim()) return;
-    await doTurn(input.value.trim());
-    input.value = "";
-  });
+function setState(text, tone) {
+  els.state.textContent = text;
+  els.state.dataset.tone = tone ?? "";
 }
 
-// ── mic: SpeechRecognition → POST /api/turn ───────────────────────────────
-const micButton = document.getElementById("mic");
-micButton?.addEventListener("click", () => {
-  const SR = window.SpeechRecognition ?? window.webkitSpeechRecognition;
-  if (!SR) { micButton.textContent = "Speech recognition unavailable"; return; }
-  const rec = new SR();
-  rec.lang = "en-GB";
-  rec.interimResults = false;
-  rec.maxAlternatives = 1;
-  rec.onresult = (e) => { doTurn(e.results[0][0].transcript); };
-  rec.onerror = (e) => { micButton.textContent = `mic error: ${e.error}`; };
-  rec.onend = () => { micButton.textContent = "\u25cf hold a turn"; };
-  micButton.textContent = "listening\u2026";
-  rec.start();
+function icon(id) {
+  const svg = document.createElementNS(SVG, "svg");
+  svg.setAttribute("class", "icon");
+  const use = document.createElementNS(SVG, "use");
+  use.setAttribute("href", `#${id}`);
+  svg.append(use);
+  return svg;
+}
+
+async function request(path, options) {
+  const response = await fetch(path, options);
+  const body = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(body?.error ?? `the server answered ${response.status}`);
+  if (!body) throw new Error("the server sent something that was not JSON");
+  return body;
+}
+
+const turn = (transcript) => request("/api/turn", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ transcript }),
 });
 
-// ── live voice: mic ⇄ /live ⇄ Gemini Live ────────────────────────────────
-// Dictation above is one-way (you speak, it transcribes, a turn happens).
-// This is the conversation: the mic streams PCM16 (16 kHz, captured in a
-// 16 kHz AudioContext so the BROWSER resamples — no hand-rolled resampler),
-// and the model's PCM16 (24 kHz) streams back and plays. The page says which
-// of the two is live, because a page that says "voice" while doing dictation
-// is a label waiting to bite.
-const liveButton = document.getElementById("live-mic");
-const liveLabel = document.getElementById("live-label");
-let liveSocket = null;
-let liveCtx = null;
+// ── the files ──────────────────────────────────────────────────────────────
+function card(entry) {
+  const li = document.createElement("li");
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "file-open";
+  open.setAttribute("aria-label", `Read ${entry.name}`);
 
-function setLiveLabel(text) { if (liveLabel) liveLabel.textContent = text; }
+  const name = document.createElement("span");
+  name.className = "file-name";
+  name.textContent = entry.name;
+  const head = document.createElement("span");
+  head.className = "file-head";
+  head.append(name, icon("i-arrow"));
+  const meta = document.createElement("span");
+  meta.className = "file-meta";
+  meta.textContent = entry.meta;
+  open.append(head, meta);
 
-function floatTo16(f32) {
-  const pcm = new Int16Array(f32.length);
-  for (let i = 0; i < f32.length; i++) {
-    const s = Math.max(-1, Math.min(1, f32[i]));
-    pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  if (entry.preview) {
+    const peek = document.createElement("span");
+    peek.className = "file-peek";
+    peek.textContent = entry.preview;
+    open.append(peek);
+  } else if (entry.why) {
+    const peek = document.createElement("span");
+    peek.className = "file-peek";
+    peek.textContent = `Not read back: ${entry.why}`;
+    open.append(peek);
   }
-  return pcm;
+
+  open.addEventListener("click", () => showFile(entry.name));
+  li.append(open);
+  return li;
 }
 
-async function startLive() {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  liveCtx = new AudioContext({ sampleRate: 16000 }); // Chrome resamples natively.
-  const src = liveCtx.createMediaStreamSource(stream);
-  await liveCtx.audioWorklet.addModule("/pcm-worklet.js");
-  const node = new AudioWorkletNode(liveCtx, "pcm-capture");
-  src.connect(node);
+function render() {
+  const count = entries.length;
+  els.files.replaceChildren(...entries.map(card));
+  els.made.dataset.state = count === 0 ? "empty" : "ready";
+  els.files.setAttribute("aria-busy", "false");
+  els.count.textContent = count === 0 ? "0 files" : `${count} ${count === 1 ? "file" : "files"}`;
+}
 
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  liveSocket = new WebSocket(`${proto}://${location.host}/live`);
-  liveSocket.binaryType = "arraybuffer";
+// The first paint is a skeleton of the real card — never a finished-looking list
+// that a later swap replaces. The shape is fixed; only the contents arrive.
+function showSkeleton() {
+  els.made.dataset.state = "loading";
+  els.files.setAttribute("aria-busy", "true");
+  els.count.textContent = "reading workspace/…";
+  const row = document.createElement("li");
+  row.className = "file skeleton";
+  row.setAttribute("aria-hidden", "true");
+  const shell = document.createElement("div");
+  shell.className = "file-open";
+  for (const width of ["56%", "22%", "94%", "78%"]) {
+    const bar = document.createElement("span");
+    bar.className = "bar";
+    bar.style.width = width;
+    shell.append(bar);
+  }
+  row.append(shell);
+  els.files.replaceChildren(row);
+}
 
-  const playCtx = new AudioContext({ sampleRate: 24000 }); // Gemini's output rate.
-  let playHead = playCtx.currentTime + 0.05;
-  const playPcm = (buf) => {
-    const pcm = new Int16Array(buf);
-    const f32 = new Float32Array(pcm.length);
-    for (let i = 0; i < pcm.length; i++) f32[i] = pcm[i] / 0x8000;
-    const audio = playCtx.createBuffer(1, f32.length, 24000);
-    audio.getChannelData(0).set(f32);
-    const src = playCtx.createBufferSource();
-    src.buffer = audio;
-    src.connect(playCtx.destination);
-    if (playHead < playCtx.currentTime) playHead = playCtx.currentTime + 0.02;
-    src.start(playHead);
-    playHead += audio.duration;
-  };
+async function health() {
+  try {
+    await request("/api/health");
+    els.dot.dataset.ok = "true";
+    els.where.textContent = "local server ready";
+  } catch {
+    els.dot.dataset.ok = "false";
+    els.where.textContent = "no answer from the local server";
+  }
+}
 
-  liveSocket.onmessage = (e) => {
-    if (typeof e.data === "string") {
-      const msg = JSON.parse(e.data);
-      if (msg.type === "state" && msg.state === "ready") {
-        setLiveLabel(`live: ${msg.model ?? "the live model"} — talk`);
-        if (msg.detail?.gatedFrames > 0) setLiveLabel(`live: ${msg.model} — ${msg.detail.gatedFrames} early frame(s) held at the readiness gate`);
-      } else if (msg.type === "state") {
-        setLiveLabel(`live: ${msg.state}`);
-      } else if (msg.type === "text") {
-        setLiveLabel(`live: ${msg.role === "model-transcript" ? msg.text : liveLabel?.textContent}`);
-      } else if (msg.type === "error") {
-        setLiveLabel(`live error: ${msg.error}`);
+async function load() {
+  if (entries.length === 0) showSkeleton();
+  try {
+    const { files: names } = await request("/api/files");
+    entries = await Promise.all(names.map(async (name) => {
+      try {
+        const answer = await turn(`read ${name}`);
+        const result = answer.result ?? {};
+        if (result.ok) {
+          const content = result.content ?? "";
+          return { name, meta: size(content), preview: content.slice(0, 360) + (content.length > 360 ? "…" : "") };
+        }
+        return { name, meta: "on disk", why: result.error ?? answer.note ?? "the server would not read it back" };
+      } catch (error) {
+        return { name, meta: "on disk", why: error.message };
       }
-      return;
-    }
-    playPcm(e.data); // a binary frame is model audio, 24 kHz PCM16
-  };
-  liveSocket.onclose = () => setLiveLabel("live: closed");
-  liveSocket.onerror = () => setLiveLabel("live: socket error — the text path still works");
-
-  node.port.onmessage = (e) => {
-    if (liveSocket?.readyState === WebSocket.OPEN) {
-      liveSocket.send(floatTo16(e.data).buffer);
-    }
-  };
+    }));
+    render();
+  } catch (error) {
+    entries = [];
+    els.made.dataset.state = "failed";
+    els.files.replaceChildren();
+    els.files.setAttribute("aria-busy", "false");
+    els.count.textContent = "could not read the folder";
+    setReport(`Could not read workspace/: ${error.message}`, "bad");
+  }
 }
 
-liveButton?.addEventListener("click", () => {
-  if (liveSocket?.readyState === WebSocket.OPEN) {
-    liveSocket.send(JSON.stringify({ type: "stop" }));
-    liveSocket.close();
-    liveCtx?.close();
-    liveSocket = null;
-    setLiveLabel("live: off");
+async function showFile(name) {
+  shownFile = name;
+  els.copy.disabled = true;
+  els.dialogTitle.textContent = name;
+  els.dialogFacts.textContent = "Reading…";
+  els.dialogBody.textContent = "";
+  if (!els.dialog.open) els.dialog.showModal();
+  try {
+    const answer = await turn(`read ${name}`);
+    const result = answer.result ?? {};
+    if (result.ok) {
+      const content = result.content ?? "";
+      els.dialogFacts.textContent = `${size(content)} · read from workspace/${name} just now`;
+      els.dialogBody.textContent = content;
+      els.copy.disabled = content.length === 0;
+    } else {
+      els.dialogFacts.textContent = result.error ?? answer.note ?? "the server would not read this file";
+    }
+  } catch (error) {
+    els.dialogFacts.textContent = `Could not read workspace/${name}: ${error.message}`;
+  }
+}
+
+els.copy.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(els.dialogBody.textContent ?? "");
+    els.dialogFacts.textContent = `Copied ${shownFile} to the clipboard.`;
+  } catch (error) {
+    els.dialogFacts.textContent = `The clipboard refused: ${error.message}`;
+  }
+});
+
+// ── the turns ──────────────────────────────────────────────────────────────
+function logTurn(said, outcome) {
+  const li = document.createElement("li");
+  const quote = document.createElement("span");
+  quote.className = "said";
+  quote.textContent = `“${said}”`;
+  const did = document.createElement("span");
+  did.className = "did";
+  did.textContent = outcome;
+  li.append(quote, did);
+  els.log.prepend(li);
+  els.session.hidden = false;
+  while (els.log.children.length > 8) els.log.lastElementChild.remove();
+}
+
+function finish(said, outcome, tone) {
+  setReport(outcome, tone, said);
+  logTurn(said, outcome);
+}
+
+async function send(said) {
+  const transcript = said.trim();
+  if (!transcript) return;
+  els.send.disabled = true;
+  els.send.textContent = "Sending…";
+  setReport("Sending…");
+  try {
+    const answer = await turn(transcript);
+    if (answer.error) return finish(transcript, answer.error, "bad");
+    if (answer.note) return finish(transcript, answer.note, "bad");
+    const result = answer.result ?? {};
+    if (!result.ok) return finish(transcript, result.error ?? "the turn was refused", "bad");
+    finish(transcript, result.action ?? "done", "good");
+    if (answer.action?.verb === "read") showFile(result.action);
+    await load();
+  } catch (error) {
+    finish(transcript, `the turn did not reach the server: ${error.message}`, "bad");
+  } finally {
+    els.send.textContent = "Send";
+    els.send.disabled = !els.utterance.value.trim();
+    health();
+  }
+}
+
+// ── the microphone: the browser's dictation, and nothing more ─────────────
+let recognition = null;
+
+function listening(on) {
+  els.stage.dataset.voice = on ? "listening" : "off";
+  els.mic.setAttribute("aria-pressed", String(on));
+}
+
+function startListening() {
+  // live-voice.js owns the microphone when it is on the page: dictation and a
+  // live session must never both answer one click (module order is not a
+  // guarantee, so this is checked at click time, not at attach time).
+  if (window.__voiceboxLive) return;
+  const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
+  if (!Recognition) {
+    setState("No speech recognition in this browser — type your turn below.", "warn");
     return;
   }
-  setLiveLabel("live: connecting…");
-  startLive().catch((e) => setLiveLabel(`live: ${e.message ?? e}`));
+  if (recognition) { recognition.stop(); return; }
+  const rec = new Recognition();
+  let stopped = "";
+  recognition = rec;
+  rec.lang = document.documentElement.lang || "en-GB";
+  rec.interimResults = false;
+  rec.maxAlternatives = 1;
+  rec.onresult = (event) => {
+    const said = event.results[0][0].transcript;
+    setState("Heard it — sending your turn…");
+    send(said);
+  };
+  rec.onerror = (event) => {
+    stopped = `Speech recognition stopped: ${event.error}.`;
+    setState(stopped, "warn");
+  };
+  rec.onend = () => {
+    recognition = null;
+    listening(false);
+    if (!stopped) setState("Microphone off — press the circle to speak");
+  };
+  try {
+    rec.start();
+    listening(true);
+    setState("Listening — speak your turn, then pause.");
+  } catch (error) {
+    recognition = null;
+    listening(false);
+    setState(`Could not start the microphone: ${error.message}`, "warn");
+  }
+}
+
+els.mic.addEventListener("click", startListening);
+els.refresh.addEventListener("click", load);
+els.utterance.addEventListener("input", () => { els.send.disabled = !els.utterance.value.trim(); });
+
+els.form.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const said = els.utterance.value.trim();
+  if (!said) return;
+  els.utterance.value = "";
+  send(said);
 });
 
-// ── init ──────────────────────────────────────────────────────────────────
-loadFiles();
+for (const closer of document.querySelectorAll("[data-close]")) {
+  closer.addEventListener("click", () => closer.closest("dialog")?.close());
+}
+
+// The empty state teaches the loop with turns the resolver really answers.
+const SAMPLES = [
+  "create a file called notes.md with the first thing I noticed today",
+  "create a file called ideas.txt with a sorter for walks and reading",
+  "list files",
+];
+for (const said of SAMPLES) {
+  const li = document.createElement("li");
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = said;
+  button.addEventListener("click", () => send(said));
+  li.append(button);
+  els.samples.append(li);
+}
+els.where.textContent = "checking the local server…";
+
+health();
+load();

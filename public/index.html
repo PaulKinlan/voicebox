@@ -5,191 +5,85 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
-  <title>Voicebox — interface study</title>
+  <title>Voicebox</title>
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
   <script type="module" src="fused.js"></script>
   <script type="module" src="live-voice.js"></script>
 </head>
-<body data-view="studio" data-work="ready">
-  <a class="skip-link" href="#made">Skip to made things</a>
+<body>
+  <a class="skip-link" href="#made">Skip to the files</a>
   <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <defs>
       <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4"/></symbol>
-      <symbol id="i-log" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/></symbol>
-      <symbol id="i-settings" viewBox="0 0 24 24"><path d="m10 3-1 3-3 1-2 3 2 2v3l3 1 1 3h4l1-3 3-1v-3l2-2-2-3-3-1-1-3Z"/><circle cx="12" cy="11" r="3"/></symbol>
-      <symbol id="i-people" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2M17 5a3 3 0 0 1 0 6M18 14a4 4 0 0 1 3 4v2"/></symbol>
-      <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></symbol>
-      <symbol id="i-play" viewBox="0 0 24 24"><path d="m9 5 10 7-10 7Z"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-13.7-5.6L4 8M4 5v4h4M4 13a8 8 0 0 0 13.7 5.6L20 16M20 19v-4h-4"/></symbol>
       <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5"/></symbol>
       <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
-      <symbol id="i-tool" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="8" cy="7" r="3"/><circle cx="16" cy="17" r="3"/></symbol>
     </defs>
   </svg>
-  <div class="atmosphere" aria-hidden="true"><span></span><span></span><span></span></div>
+
   <header class="head">
-    <a class="wordmark" href="./">voicebox<span class="wordmark-dot" aria-hidden="true"></span></a>
-    <button class="project-button" id="project-open" type="button" aria-haspopup="dialog" aria-controls="project-dialog"><span id="project-name">fieldnotes@this-browser</span><svg class="icon"><use href="#i-chevron"/></svg></button>
-    <div class="head-actions">
-      <button class="quiet presence" id="people-open" type="button" aria-haspopup="dialog" aria-controls="people-dialog"><svg class="icon"><use href="#i-people"/></svg><span id="people-count">Just you</span></button>
-      <button class="icon-button" id="logs-open" type="button" aria-label="Logs" aria-haspopup="dialog" aria-controls="logs-dialog"><svg class="icon"><use href="#i-log"/></svg></button>
-      <button class="icon-button" id="settings-open" type="button" aria-label="Settings" aria-haspopup="dialog" aria-controls="settings-dialog"><svg class="icon"><use href="#i-settings"/></svg></button>
-    </div>
+    <h1 class="wordmark"><a href="./">voicebox</a></h1>
+    <p class="where"><span class="dot" id="server-dot" data-ok="pending" aria-hidden="true"></span><span class="where-path">workspace/</span><span id="where-note">checking the local server…</span></p>
+    <button class="quiet" id="refresh" type="button"><svg class="icon"><use href="#i-refresh"/></svg>Read again</button>
   </header>
-  <div class="project-context"><span class="context-dot" aria-hidden="true"></span><span id="project-context">Only in this browser · may be cleared · recorded file changes</span><span class="sample-label" id="fused-status" hidden>Fused: files are LIVE · N19 shared view is SIMULATED · admission is SIMULATED</span></div>
 
-  <main id="workspace">
-    <div class="return-intro" hidden>
-      <h1>A place to pick up.</h1>
-      <p id="return-summary">A page and a note are ready. The sorter still needs a decision.</p>
-      <button class="quiet" id="continue-studio" type="button">Back to the studio <svg class="icon"><use href="#i-arrow"/></svg></button>
-    </div>
-    <section class="made" id="made" tabindex="-1" aria-labelledby="made-heading">
-      <div class="made-heading"><h1 id="made-heading">Made while we talk</h1><span id="arrival-count">3 things</span></div>
-      <div class="empty" id="empty" hidden><p>Room for what comes next.</p><span>The conversation will leave things here.</span></div>
-      <ul class="objects" role="list">
-        <li class="object page-object" data-artifact="page">
-          <button class="artifact-open" data-open="page" type="button" aria-label="Open Fieldnotes page">
-            <div class="page-preview" aria-hidden="true">
-              <div class="page-brand"><span>fieldnotes</span><span class="page-edition">A little collection</span></div>
-              <div class="page-title">Small things,<br><em>worth keeping.</em></div>
-              <p>A thought on a walk. A line from a book.<br>Something you don't want to lose.</p>
-              <div class="page-bottom"><span class="preview-input">What did you notice?</span><span class="preview-add">+</span></div>
-            </div>
-            <span class="artifact-caption"><span><strong>Fieldnotes</strong><span>A small home for your notes</span></span><svg class="icon"><use href="#i-arrow"/></svg></span>
-          </button>
-        </li>
-        <li class="object note-object" data-artifact="note">
-          <button class="artifact-open" data-open="note" type="button" aria-label="Open On noticing note">
-            <div class="note-preview" aria-hidden="true"><span class="note-date">Saturday, on a walk</span><h2>On noticing</h2><p>Leave a little room for the things you weren't looking for.</p><div class="note-rule"></div><p class="note-afterthought">A thought, before it goes.</p></div>
-            <span class="artifact-caption"><span><strong>On noticing</strong><span>A note, kept as a file</span></span><svg class="icon"><use href="#i-arrow"/></svg></span>
-          </button>
-        </li>
-        <li class="object tool-object" data-artifact="tool">
-          <button class="artifact-open" data-open="tool" type="button" aria-label="Open Little sorter tool">
-            <div class="tool-preview" aria-hidden="true"><svg class="tool-icon icon"><use href="#i-tool"/></svg><h2>A little sorter</h2><p>Put related thoughts together.</p><div class="tool-example"><span>walks</span><span>reading</span><span>ideas</span></div><span class="tool-state" id="tool-state">Made · not enabled</span></div>
-            <span class="artifact-caption"><span><strong>group_notes</strong><span>A tool made for this conversation</span></span><svg class="icon"><use href="#i-arrow"/></svg></span>
-          </button>
-        </li>
-      </ul>
-    </section>
-
-    <section class="voice" aria-label="Conversation study">
-      <div class="caption-space"><p class="caption" id="caption">“I made a home for your notes.<br>The little sorter is ready to review.”</p></div>
-      <div class="voice-ring-wrap" data-voice="off" id="voice-ring-wrap">
-        <span class="voice-orbit" aria-hidden="true"></span>
-        <button class="mic" id="mic" type="button" aria-label="Simulate listening" aria-pressed="false" aria-describedby="demo-note"><svg class="mic-glyph icon"><use href="#i-mic"/></svg><span class="sound-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></button>
+  <main class="app">
+    <section class="made" id="made" data-state="loading" tabindex="-1" aria-labelledby="made-heading">
+      <div class="pane-head">
+        <h2 id="made-heading">Workspace</h2>
+        <p class="pane-note" id="file-count">reading…</p>
       </div>
-      <p class="voice-state" id="voice-state">Mic off · still here</p>
-      <div class="voice-actions"><button class="quiet" id="live-mic" type="button">Talk live</button><span class="voice-state" id="live-label">live: off — the text path is always here</span></div>
-      <div class="voice-actions"><button class="quiet" id="interrupt" type="button">Stop speaking</button><button class="quiet" id="pause" type="button" disabled>Pause work</button><button class="quiet" id="type-open" type="button" aria-haspopup="dialog" aria-controls="type-dialog">Type instead</button></div>
-      <p class="work-status" id="work-status">Ready when you are.</p>
+      <ul class="files" id="files" role="list" aria-busy="true"></ul>
+      <div class="empty" id="empty">
+        <h3>Nothing here yet</h3>        <p>Say or type something that names a file and it lands here. Try one:</p>
+        <ul class="samples" id="samples" role="list"></ul>
+      </div>
+      <section class="session" id="session" hidden aria-labelledby="session-heading">
+        <h2 id="session-heading">Recent turns</h2>
+        <ol id="session-log"></ol>
+      </section>
     </section>
 
-    <div class="collaboration" id="collaboration" hidden>
-      <section class="live-work">
-        <h2 id="live-heading">Here, together <span id="live-status">Live · sample</span></h2>
-        <ul class="live-sessions" role="list">
-          <li data-session="voice"><h3>Voice <span>walk · Live harness</span></h3><p id="voice-activity"></p><p class="seen-mark" id="voice-seen"></p></li>
-          <li data-session="chat"><h3>Chat <span>sorter · pi harness</span></h3><p id="chat-activity"></p><p class="seen-mark" id="chat-seen"></p></li>
-        </ul>
-        <button class="quiet" id="live-advance" type="button">Try another shared event</button>
-      </section>
-      <section class="landing-work">
-        <h2 id="landing-heading">Waiting to land</h2>
-        <p class="landing-path"><code>sorter</code><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg><code>walk</code></p>
-        <p class="landing-file"><code>tools/group-notes.js</code></p>
-        <p id="landing-status">Ready to review · files still separate</p>
-        <p id="landing-recovery" class="muted"></p>
-        <div class="landing-actions"><button class="small-button" id="landing-review" type="button" aria-haspopup="dialog" aria-controls="merge-dialog">Review merge</button><button class="quiet" id="landing-refuse" type="button">Keep separate</button></div>
-      </section>
-    </div>
+    <section class="talk" aria-labelledby="talk-heading">
+      <div class="pane-head">
+        <h2 id="talk-heading">Talk to it</h2>
+        <p class="pane-note">Browser dictation</p>
+      </div>
+      <div class="talk-body">
+      <div class="ring-stage" id="voice-ring-wrap" data-voice="off">
+        <svg class="rings" viewBox="0 0 240 240" aria-hidden="true">
+          <circle cx="120" cy="120" r="118"/><circle cx="120" cy="120" r="90"/><circle cx="120" cy="120" r="64"/>
+        </svg>
+        <button class="mic" id="mic" type="button" aria-label="Speak a turn" aria-pressed="false" aria-describedby="voice-state">
+          <svg class="mic-glyph icon"><use href="#i-mic"/></svg>
+          <span class="sound-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+        </button>
+      </div>
+      <p class="voice-state" id="voice-state" role="status">Microphone off — press the circle to speak</p>
+      <div class="voice-actions"><button class="quiet interrupt" id="interrupt" type="button" disabled>Stop reply</button></div>
+      <form class="composer" id="text-form">
+        <label class="sr-only" for="utterance">Your turn</label>
+        <input id="utterance" name="utterance" type="text" autocomplete="off" spellcheck="false" required placeholder="create draft.md with hello">
+        <button class="primary" id="send" type="submit" disabled>Send</button>
+      </form>
+      <p class="turn-report" id="turn-report" role="status" data-tone=""></p>
+      </div>
+    </section>
   </main>
 
-  <aside class="decision" id="decision" aria-labelledby="decision-title">
-    <span class="decision-dot" aria-hidden="true"></span>
-    <div><h2 id="decision-title">Use the little sorter here?</h2><p id="decision-description">Reads notes. Writes collections. No network.</p></div>
-    <button id="decision-review" class="small-button" type="button" aria-haspopup="dialog" aria-controls="review-dialog">Review</button>
-  </aside>
-  <footer class="study-bar">
-    <nav aria-label="Interaction models"><button data-view="studio" type="button" aria-pressed="true">Studio</button><button data-view="beside" type="button" aria-pressed="false">Beside</button><button data-view="return" type="button" aria-pressed="false">Return</button></nav>
-    <button class="play-story" id="play" type="button"><svg class="icon"><use href="#i-play"/></svg>Watch things appear</button>
-    <div class="study-label"><span id="demo-note">Files on disk · turns are real · containment is enforced</span></div>
+  <footer class="foot">
+    <p class="foot-fact">Turns go to the local server, and these cards are the real bytes in <span class="foot-path">workspace/</span>.</p>
+    <p class="foot-fact">Dictation uses your browser's speech recognition. A live model voice is not connected yet.</p>
   </footer>
-  <p class="sr-only" id="announcement" role="status"></p>
 
-  <dialog id="project-dialog" aria-labelledby="project-title" closedby="any">
-    <header class="dialog-head"><h2 id="project-title">Where are we making this?</h2><button class="icon-button" data-close type="button" aria-label="Close projects"><svg class="icon"><use href="#i-close"/></svg></button></header>
-    <p class="dialog-intro">Two example projects with the same name. They do not share files.</p>
-    <button class="project-choice" data-project="browser" type="button"><strong>fieldnotes@this-browser</strong><span>Browser peer · only in this profile</span><span>Recorded file changes · storage may be cleared</span></button>
-    <button class="project-choice" data-project="machine" type="button"><strong>fieldnotes@box</strong><span>Window onto a machine · two live instances</span><span>Live shared log · separate files until an explicit merge</span></button>
-    <p class="muted">Changing project here switches example data. It does not copy files or connect to a machine.</p>
+  <dialog id="file-dialog" aria-labelledby="file-title" closedby="any">
+    <header class="dialog-head"><h2 id="file-title">File</h2><button class="icon-button" data-close type="button" aria-label="Close file"><svg class="icon"><use href="#i-close"/></svg></button></header>
+    <p class="file-facts" id="file-facts"></p>
+    <pre id="file-body"></pre>
+    <div class="dialog-actions"><button class="small-button" id="file-copy" type="button">Copy contents</button></div>
   </dialog>
 
-  <dialog id="people-dialog" aria-labelledby="people-title" closedby="any">
-    <header class="dialog-head"><h2 id="people-title">Here with you</h2><button class="icon-button" data-close type="button" aria-label="Close presence"><svg class="icon"><use href="#i-close"/></svg></button></header>
-    <div id="browser-people"><p>This browser is the whole project.</p><p class="muted">A chat agent on another machine cannot see these files. Sharing would be a separate, confirmed transfer.</p></div>
-    <div id="machine-people" hidden>
-      <ul class="people-list"><li><span class="avatar">P</span><div><strong>You · phone instance</strong><p>Root <code>walk</code> · reading and proposing</p><small>Its next write waits behind this root's current writer.</small></div></li><li><span class="avatar agent-avatar">V</span><div><strong>Voice · writer in walk</strong><p id="presence-work">Page and note ready</p><small>Owns only <code>roots/walk</code>.</small></div></li><li><span class="avatar">C</span><div><strong>Chat agent · root sorter</strong><p id="chat-waiting">Waiting for a tool decision</p><small>You can answer its request from this instance.</small></div></li></ul>
-      <button class="primary" id="people-review" type="button">Review chat agent's request</button>
-      <h3>Bring the work together</h3><p>The chat agent proposes adding <code>tools/group-notes.js</code> from <code>sorter</code> to <code>walk</code>.</p><button class="small-button" id="merge-open" type="button">Review proposed merge</button>
-    </div>
-  </dialog>
-
-  <dialog id="review-dialog" aria-labelledby="review-title" closedby="any">
-    <header class="dialog-head"><h2 id="review-title">Enable the little sorter?</h2><button class="icon-button" data-close type="button" aria-label="Close tool review"><svg class="icon"><use href="#i-close"/></svg></button></header>
-    <p id="request-origin" class="dialog-intro">Voice · fieldnotes@this-browser · root notes</p>
-    <p>Group notes by subject. This is a request for the tool to become available, not permission to run arbitrary code.</p>
-    <dl class="plan"><div><dt>Read</dt><dd><code>notes/*.md</code></dd></div><div><dt>Write</dt><dd><code>collections/*.json</code></dd></div><div><dt>Network / shell</dt><dd>Neither requested. Shell is absent in the browser.</dd></div><div><dt>Recovery</dt><dd id="review-recovery">Recorded previous bytes and newly created files, if execution is admitted.</dd></div><div><dt>Answer</dt><dd>Click or type. Speech alone cannot approve this request.</dd></div></dl>
-    <p class="muted">Study: this changes an example admission state. No tool is executed and no authority is granted.</p>
-    <p id="review-result" role="status"></p>
-    <div class="dialog-actions"><button id="deny" class="small-button" type="button">Don't enable</button><button id="allow" class="primary" type="button">Enable this version</button></div>
-    <button class="quiet scenario-control" id="answered-elsewhere" type="button">Try: answered in the other instance</button>
-  </dialog>
-
-  <dialog id="merge-dialog" aria-labelledby="merge-title" closedby="any">
-    <header class="dialog-head"><h2 id="merge-title">Bring the sorter into your work?</h2><button class="icon-button" data-close type="button" aria-label="Close merge"><svg class="icon"><use href="#i-close"/></svg></button></header>
-    <p class="dialog-intro">Chat agent's <code>sorter</code> → your <code>walk</code> root</p><p>Add <code>tools/group-notes.js</code>. The sample reports no conflicts. Existing notes stay untouched.</p><p id="merge-recovery">Recovery: retain the destination's pre-merge commit. This does not undo network calls or already published changes.</p><p class="muted">Only within fieldnotes@box. This does not move anything out of the browser-only project.</p><p id="merge-result" role="status">Proposed · not merged</p><div class="dialog-actions"><button class="small-button" id="keep-separate" type="button">Keep separate</button><button class="primary" id="merge-accept" type="button">Merge these changes</button></div>
-  </dialog>
-
-  <dialog id="artifact-dialog" aria-labelledby="artifact-title" closedby="any">
-    <header class="dialog-head"><h2 id="artifact-title">Made thing</h2><button class="icon-button" data-close type="button" aria-label="Close artefact"><svg class="icon"><use href="#i-close"/></svg></button></header>
-    <div id="artifact-content"></div><p id="artifact-provenance" class="muted"></p><p class="muted">Synthetic content for this study. The page preview is not a running app.</p><button id="artifact-review" class="primary" type="button" hidden>Review tool admission</button>
-  </dialog>
-
-  <dialog id="logs-dialog" aria-labelledby="logs-title" closedby="any">
-    <header class="dialog-head"><h2 id="logs-title">What happened</h2><button class="icon-button" data-close type="button" aria-label="Close logs"><svg class="icon"><use href="#i-close"/></svg></button></header>
-    <div id="shared-history" hidden><h3>Shared activity · sample</h3><p class="muted">Append-only entries with each session's own sequence, read revisions and seen-mark. Arrival order is not a global clock. This is one tab simulating two harnesses.</p><ol id="shared-log"></ol></div>
-    <h3>This tab's study events</h3><p class="muted">Local interface actions, separate from the shared project log.</p><ol id="event-log"></ol>
-  </dialog>
-
-  <dialog id="settings-dialog" aria-labelledby="settings-title" closedby="any">
-    <header class="dialog-head"><h2 id="settings-title">Settings</h2><button class="icon-button" data-close type="button" aria-label="Close settings"><svg class="icon"><use href="#i-close"/></svg></button></header>
-    <fieldset class="theme-choices"><legend>Appearance</legend><label><input type="radio" name="theme" value="system" checked> System</label><label><input type="radio" name="theme" value="light"> Light</label><label><input type="radio" name="theme" value="dark"> Dark</label></fieldset>
-    <h3>Tools and extensions</h3><p>See what is available here, where it came from, and what an extension would be allowed to reach.</p><button class="small-button" id="extensions-open" type="button" aria-haspopup="dialog" aria-controls="extensions-dialog">Extensions</button>
-    <h3 id="environment-title">This browser</h3><p id="environment-detail">Example OPFS project. Files belong to this origin and browser profile. They do not live on the machine the chat agent can reach.</p>
-    <h3>Storage and recovery</h3><p id="storage-detail">Example: not protected from automatic browser cleanup. Even protected storage is not a backup; clearing site data or deleting the profile can remove it.</p>
-    <label class="select-label" for="undo-kind">Explore an undo kind</label><select id="undo-kind"><option value="written-file-list">Recorded file changes</option><option value="worktree">Separate worktree</option><option value="git-branch">Git branch</option><option value="none">No automatic undo</option></select><p id="undo-detail">Restore recorded previous bytes and remove files that were previously absent. Filenames alone are not enough.</p>
-    <h3>What can run here</h3><p id="capability-detail">File and admitted Wasm tools. No shell tool in this environment. A shell-dependent tool needs a machine project; it is not a failed browser command.</p>
-    <h3>Try a dropped connection</h3><p>The work summary can return without switching the microphone on. The browser-only example loses its live worker with its page; a host-backed project has a different lifetime.</p><button class="small-button" id="disconnect" type="button">Simulate disconnect</button>
-  </dialog>
-
-  <dialog id="extensions-dialog" aria-labelledby="extensions-title" closedby="any">
-    <header class="dialog-head"><h2 id="extensions-title">Extensions</h2><button class="icon-button" data-close type="button" aria-label="Close extensions"><svg class="icon"><use href="#i-close"/></svg></button></header>
-    <h3>Installed here</h3><p id="extension-inventory"></p>
-    <h3>Find extensions</h3><p class="muted">No catalogue is connected to this study. Who can publish and how a publisher earns trust are open decisions. These are local examples, not recommendations.</p>
-    <h3>Preview a sideload</h3><label class="select-label" for="package-example">Example package</label><select id="package-example"><option value="browser">Notebook helper · browser-compatible</option><option value="shell">Build helper · requires a shell</option></select>
-    <p id="package-origin" class="muted"></p>
-    <dl class="plan"><div><dt>Requests read</dt><dd id="package-read"></dd></div><div><dt>Requests write</dt><dd id="package-write"></dd></div><div><dt>Requests execution</dt><dd id="package-exec"></dd></div><div><dt>Environment grants</dt><dd id="package-enforced"></dd></div></dl>
-    <details><summary>Inspect the complete example source</summary><pre id="package-source"></pre></details>
-    <p id="package-warning"></p><p class="muted">Simulation only. There is no file upload, signature verification, download, installation or execution. A real sideload must bind approval to verified package bytes and the destination environment, not to this label.</p>
-    <p id="extension-result" role="status"></p><div class="dialog-actions"><button class="small-button" id="reject-example" type="button">Don't install</button><button class="primary" id="install-example" type="button">Install this example version</button></div>
-  </dialog>
-
-  <dialog id="type-dialog" aria-labelledby="type-title" closedby="any">
-    <header class="dialog-head"><h2 id="type-title">Keep talking, in text</h2><button class="icon-button" data-close type="button" aria-label="Close text input"><svg class="icon"><use href="#i-close"/></svg></button></header>
-    <p class="muted" id="type-hint">No model is connected. “Make something” plays the study. Other text is kept literally in this tab's log.</p><form id="text-form"><label for="utterance">Your words</label><textarea id="utterance" rows="3" maxlength="800" aria-describedby="type-hint" required></textarea><button class="primary" type="submit">Send to the study</button></form>
-  </dialog>
-  <noscript><p class="no-script">JavaScript is needed for this interactive study. The three example objects above are static; no controls are running.</p></noscript>
+  <noscript><p class="no-script">Voicebox needs JavaScript: the file list, the turns and the microphone are all driven by the page. Nothing here is a static picture of them.</p></noscript>
 </body>
 </html>
