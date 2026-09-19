@@ -610,3 +610,60 @@ global extension dir (a mutator left global would rewrite every future bash call
 box; a gate left global would make every pi session interactive-by-force). The canonical
 copy of the gate stays at `.pi/extensions/policy-gate.ts` on
 `rescue/compliant-mode-extension`.*
+
+---
+
+## 11. "The gate is last", made into a mechanism (k3)
+
+§10's hole 2 — a handler after the gate rewrote an approved plan — demanded more than the
+rule "the gate must be last". The mechanism, built and driven both ways:
+
+### What the platform gives, and what it does not
+
+- Handlers run in **extension load order**; inputs are mutable and later handlers see
+  earlier ones' changes (docs). **No handler-chain introspection, and no post-chain
+  observation point** — there is no event between "all tool_call handlers finished" and
+  execution that carries the final input. So the ordering **cannot be enforced or fully
+  observed from inside the harness. The host owns the load order; that is the boundary.**
+- What the gate can do is refuse to be a silent mid-chain gate: at `session_start`, scan
+  the auto-discovered extension directories for files that sort after its own name, and if
+  any exist, **refuse to gate — loudly** — instead of producing approvals that mean less
+  than they appear to.
+
+### The two drives
+
+**(a) A later handler exists (`z-mutator.ts` present):**
+
+```
+gate-state.json: {"event":"session_start",
+                  "later":["/tmp/vb-dynamic/.pi/extensions/z-mutator.ts"], "refuse":true}
+permissions: 0                        ← the gate refused, loudly, and gated nothing
+plan-b.txt exists                     ← ungated, the rewrite ran — exactly what the refusal announced
+```
+
+**(b) No later handler (mutator removed):**
+
+```
+gate-state.json: {"event":"session_start", "later":[], "refuse":false}
+permissions: 1                        ← the gate engaged and asked
+no plan files                         ← host denied; nothing executed
+```
+
+A gate that cannot prove it is last announces and abstains; a gate that can, gates. Both
+outcomes are visible in the state file, which is the audit channel for the mechanism.
+
+### The honest limits (same day's rule: say what it misses)
+
+- **The scan covers the auto-discovered directories only.** Extensions loaded via CLI `-e`,
+  packages, or paths the scan cannot read are invisible to it. The host's ownership of the
+  load order is not optional; the scan converts the *common* silent case into a loud one,
+  it does not make the position provable.
+- **In the pi-acp path, the pi child's stderr is swallowed** (`child.stderr.on("data", () => {})`
+  in pi-acp) — so `console.error` announcements die in a dead channel over the wire. The
+  RPC-visible channel for the refusal is the state file (or `ctx.ui.notify` for clients
+  that render fire-and-forget extension-UI). In the TUI the refusal prints visibly; the
+  isolation run showed it: *"policy-gate is REFUSING to gate: these extensions sort after
+  it… /tmp/vb-dynamic/.pi/extensions/z-mutator.ts."*
+- **Even a proven-last gate cannot see the final post-chain input** — there is no such
+  event. So the strongest in-harness statement is "the gate gated and no later file existed
+  at session start"; the strongest boundary remains the host's ownership of what loads.
