@@ -323,7 +323,9 @@ legitimate product decision but should be made knowingly.
 Three amendments to `03-harvest.md`, listed rather than folded in so the earlier document stays
 readable as what it was:
 
-1. **§3.1's "pi is discovery, CAP is admission" needs one clause added.** pi's discovery model is
+1. **The harvest's §3.1 — "pi is discovery, CAP is admission" — needs one clause added.** Named
+   explicitly because *this* document has its own §3.1, and a bare section number spanning two files
+   is exactly the ambiguity a reader should not have to resolve. pi's discovery model is
    the right *runtime* for N7 and it already supports runtime registration without a reload or a
    file. Its gap for Voicebox is narrow and specific: **it assumes the author of the extension is
    the person at the keyboard.** What to add is a registration-time authority decision — a

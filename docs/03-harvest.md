@@ -26,6 +26,30 @@ It prices the parts.
 > unaffected: it moved from two–three weeks to **three–four**, and the whole increase sits in the
 > three items that were cheap *because* they were code that already ran.
 
+> **How to read the list in §8: as evidence, not as a shopping list.** Paul named four further
+> capabilities this evening — *"we might need **MCP servers**, we might need **web search**… a whole
+> bunch of other advanced features — but **maybe they're a stress test for how the extensions can
+> work** and how we can build them."* That posture is the right one and it belongs here, at the
+> entry point, because it changes what an item in §8 is for. Concretely, the two he named stress
+> **different** parts of this harvest, and knowing which is the useful part:
+>
+> - **Web search** tests the **capability and bounds vocabulary** (§8 item 7 — `capabilities`,
+>   `replayClass`, `bounds`). A tool with network egress needs `capabilities` to be able to say
+>   *network* and `bounds` to be able to say *how much*, and neither field is exercised by anything
+>   in the list today. If the vocabulary cannot express it, that is a small and early failure.
+> - **An MCP server** tests **placement and authority**, which is
+>   [`04-dynamic-tools.md`](04-dynamic-tools.md) §3 — the part explicitly left **unresolved**. A tool
+>   whose implementation is another *process* means the model would be authoring a **launch**, not a
+>   function, which is a strictly larger authority question than the registration gap in that
+>   document's §1.4(1). It also forces an answer to §3.2(1), *authority when execution is remote from
+>   the decision*, because an MCP server is by definition somewhere else.
+>
+> So the ordering is worth stating: **web search will tell you whether the vocabulary is rich enough;
+> an MCP server will tell you whether the architecture is.** The first is a field-level question with
+> a cheap answer. The second lands squarely on the one question this harvest could not settle, which
+> is why §3 of the companion document is written as options and not as a recommendation — if a reader
+> is looking for what to resolve first, it is that.
+
 ---
 
 ## 0. Method, so the numbers are checkable
