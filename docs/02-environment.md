@@ -112,11 +112,11 @@ is the failure mode this whole section is written against:**
   what path goes around the guard") demonstrated live by the model, and the reason a gate scoped to
   tool **names** would have been routed around in one turn.
 
-**Historical note, kept because it explains the design: before this extension existed**, two drives
-against the bridge produced **zero `session/request_permission`** Two drives against the real bridge produced **zero `session/request_permission`**
-for ordinary tool calls — the protocol path is wired end to end and **pi never uses it**. pi's only
-built-in gate is *project trust*, which guards **input loading**, not what the model asks tools to
-do afterwards, and in non-interactive modes it does not appear at all. So the honest statement has
+**Historical note, kept because it explains the design: before that extension existed**, two drives
+against the real bridge produced **zero `session/request_permission`** for ordinary tool calls — the
+protocol path was wired end to end and **pi never used it**. pi's only built-in gate is *project
+trust*, which guards **input loading**, not what the model asks tools to do afterwards, and in
+non-interactive modes it does not appear at all. So the honest statement has
 **four** shapes, and the fourth is what a reader should assume until told otherwise:
 
 | Shape | What enforces | Available when |
@@ -126,10 +126,12 @@ do afterwards, and in non-interactive modes it does not appear at all. So the ho
 | **Environmental** | a container with only the files and credentials the task needs | whenever the environment is disposable — and it depends on **nobody's compliance** |
 | **Disclosure** | nothing: the tier table describes what the agent *should* do | **everything else** — and the UI must say so per session, not imply otherwise |
 
-**The design's position: mediated is the target for the default harness; compliant mode requires the
-extension above and is not claimed until it exists; and until one of the first three is in force the
-tier table is presented as a disclosure.** The brief's minimalism makes this feasible — *one* harness
-built by us can expose its tools through the host, which is far easier than auditing an adapter
+**The design's position: mediated is the target for the default harness; compliant mode is available
+and claimed *with the three limits above*, which is what "claimed" has to mean; and wherever none of
+the first three is in force, the tier table is presented as a disclosure.**
+
+**The brief's minimalism makes mediation feasible** — *one* harness built by us can expose its tools
+through the host, which is far easier than auditing an adapter
 zoo. A harness that cannot be mediated is still usable, but the UI carries the downgrade
 explicitly, in the same spirit as the provider badge: **the guarantee is a property of the mode,
 and the user is told which one is running.** §3.2 and §3.7 are written in terms of both.
@@ -927,6 +929,10 @@ Two habits follow, and they are the reason this section is written the way it is
 
 - **Ask what enforces it, not what states it.** If the answer is a comment, a descriptor, a
   variable name or a helper that tidies input, there is no guard yet.
+- **When a claim changes, sweep every place it is repeated.** A caveat removed at the top of a
+  section survived in that section's closing sentence, and the sentence went on stating the opposite
+  of the upgrade. Applied three times in one document on one day: a correction that is *applied* is
+  one edit, and a correction that is *swept* is a grep.
 - **Ask what path goes *around* the guard.** Every mechanism in this document has a sibling that
   skips it: the module loader beside the permission model, the evaluator beside the flag set, the
   regex beside the AST. Finding them is part of writing the guard, not a later audit — and in one
