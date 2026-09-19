@@ -43,6 +43,7 @@ export function createAudioClient({
     framesReceived: 0,
     framesRejected: 0,
     framesIgnoredAfterEnd: 0,
+    captureError: "", // sticky refusal: survives later state emits until the next user action
     lastError: "",
   };
   let captureCtx = null;
@@ -57,6 +58,10 @@ export function createAudioClient({
   const snapshot = () => ({ ...state, label: label() });
 
   function label() {
+    // A refused microphone STAYS on screen until the next user action. A later
+    // state emit (ready/listening) must not overwrite the explanation a moment
+    // after the user was told the truth (found by voicebox-ui, 2026-09-19).
+    if (state.captureError) return state.captureError;
     if (state.phase === "error") return state.lastError || "Audio error";
     if (state.phase === "starting") return state.capture ? "Connecting…" : "Press to speak";
     if (state.phase === "agent-speaking") {
@@ -232,30 +237,37 @@ export function createAudioClient({
   /** Gesture-driven: the caller invokes this from a real user action. */
   async function startCapture() {
     if (state.capture) return;
+    state.captureError = ""; // a new user action clears the sticky refusal
     emit("starting");
-    if (!mediaDevices?.getUserMedia || !AudioContextCtor || !AudioWorkletNodeCtor) {
-      state.lastError = "This browser has no microphone capture (getUserMedia/AudioContext/AudioWorklet unavailable).";
-      emit("error");
-      return;
-    }
-    stream = await mediaDevices.getUserMedia({ audio: true });
-    captureCtx = new AudioContextCtor({ sampleRate: CAPTURE_RATE });
-    await captureCtx.audioWorklet.addModule(workletUrl);
-    captureNode = new AudioWorkletNodeCtor(captureCtx, "pcm-capture");
-    captureSource = captureCtx.createMediaStreamSource(stream);
-    captureSource.connect(captureNode);
-    captureNode.port.onmessage = (event) => {
-      const frame = event.data;
-      if (!(frame instanceof Float32Array) || frame.length === 0) return;
-      try {
-        ws?.send(floatToPcm16(frame));
-        state.framesSent += 1;
-      } catch (error) {
-        reject(`could not send a captured frame: ${error?.message ?? error}`, { frameKind: "capture" });
+    try {
+      if (!mediaDevices?.getUserMedia || !AudioContextCtor || !AudioWorkletNodeCtor) {
+        throw new Error("this browser has no microphone capture (getUserMedia/AudioContext/AudioWorklet unavailable)");
       }
-    };
-    state.capture = true;
-    emit(state.playbackActive ? "agent-speaking" : "listening");
+      stream = await mediaDevices.getUserMedia({ audio: true });
+      captureCtx = new AudioContextCtor({ sampleRate: CAPTURE_RATE });
+      await captureCtx.audioWorklet.addModule(workletUrl);
+      captureNode = new AudioWorkletNodeCtor(captureCtx, "pcm-capture");
+      captureSource = captureCtx.createMediaStreamSource(stream);
+      captureSource.connect(captureNode);
+      captureNode.port.onmessage = (event) => {
+        const frame = event.data;
+        if (!(frame instanceof Float32Array) || frame.length === 0) return;
+        try {
+          ws?.send(floatToPcm16(frame));
+          state.framesSent += 1;
+        } catch (error) {
+          reject(`could not send a captured frame: ${error?.message ?? error}`, { frameKind: "capture" });
+        }
+      };
+      state.capture = true;
+      emit(state.playbackActive ? "agent-speaking" : "listening");
+    } catch (error) {
+      // Report it here, not as an unhandled rejection: the same sentence is
+      // written by the page adapter's catch, so both paths agree.
+      state.captureError = `The microphone is not available: ${error?.message ?? error}. The text path still works.`;
+      state.lastError = state.captureError;
+      emit("error", { captureFailed: true });
+    }
   }
 
   /** The user turns the microphone off (or the page unloads). */

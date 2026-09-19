@@ -287,3 +287,22 @@ test("state: a socket close is ended, not 'listening'", async () => {
   assert.match(s.label, /Live session ended/);
   assert.match(s.label, /1006/);
 });
+
+test("state: a refused microphone is sticky — a later ready emit must not overwrite it", async () => {
+  const media = fakeMedia();
+  media.mediaDevices.getUserMedia = async () => { throw new Error("Permission denied"); };
+  const { client } = makeClient({ mediaDevices: media.mediaDevices });
+  await client.startCapture(); // caught internally: no unhandled rejection
+  assert.match(client.label(), /microphone is not available/i);
+  assert.match(client.label(), /Permission denied/);
+  assert.equal(client.snapshot().capture, false);
+  // the clobber case voicebox-ui drove: a ready state arrives a moment later
+  client.handleMessage(JSON.stringify({ type: "state", state: "ready", detail: { gatedFrames: 0 } }));
+  assert.match(client.label(), /microphone is not available/i, "the refusal must survive the ready emit");
+  assert.equal(client.snapshot().ready, true, "the session is still ready underneath");
+  // the next user action clears it
+  media.mediaDevices.getUserMedia = async () => media.stream;
+  await client.startCapture();
+  assert.doesNotMatch(client.label(), /microphone is not available/i);
+  assert.equal(client.snapshot().capture, true);
+});
