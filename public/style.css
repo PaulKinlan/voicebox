@@ -78,7 +78,7 @@ input { caret-color: var(--accent); }
 
 /* ── the voice stage: concentric hairlines, one soft accent ──────────── */
 .voice { display: flex; flex-direction: column; align-items: center; }
-.ring-stage { position: relative; display: grid; place-items: center; width: min(78vw, 480px); aspect-ratio: 1; }
+.ring-stage { position: relative; display: grid; place-items: center; width: min(78vw, 430px); aspect-ratio: 1; }
 .rings { position: absolute; inset: 0; width: 100%; height: 100%; fill: none; stroke: color-mix(in srgb, var(--ink) 22%, var(--ground)); stroke-width: 1; transition: stroke 300ms ease-out; }
 .mic { position: relative; display: grid; place-items: center; width: 116px; height: 116px; border: 1px solid color-mix(in srgb, var(--ink) 10%, var(--line)); border-radius: 50%; color: var(--accent); background: radial-gradient(ellipse at 36% 24%, color-mix(in srgb, var(--card) 92%, var(--ground)), var(--ground) 76%); box-shadow: 0 20px 60px -22px color-mix(in srgb, var(--ink) 45%, transparent); transition: transform 200ms ease-out, color 200ms ease-out, border-color 200ms ease-out; }
 .mic:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
