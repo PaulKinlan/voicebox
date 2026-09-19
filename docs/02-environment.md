@@ -957,7 +957,9 @@ three times in one day, in three different costumes, it is the thing to check ev
 All three of these are in this document:
 
 **And the reason it matters is narrower than it sounds: the failures that survive are the ones where
-the only thing that would have told you is the thing that is missing.** A normalising helper that
+the only thing that would have told you is the thing that is missing** — and the fifth row below is the
+sharpest instance, because a post-gate handler leaves **no trace at all**. `basename` at least produced
+a wrong path; an approval for an act that was not the act produces nothing to notice. A normalising helper that
 looks like a check; a policy that restricts reach and not execution; a declaration that is taken as
 the enforcement. Each of them keeps working, keeps passing its own tests, and produces no signal —
 because the signal *is* the mechanism that was never built. That is the same shape as an audit built
@@ -971,6 +973,7 @@ announce the problem is absent, and its absence is invisible.**
 | "Nothing outside can run in the page" | `connect-src`, which restricts what a page may **reach** | `script-src` without `'unsafe-inline'`, which restricts what it may **execute** — different jobs, and only one stops the attack (§3.5a) |
 | "This tool cannot reach the network" | the tool's own declaration, `network: none` | the interface the tool is **given**, plus the realm's egress policy — the declaration is a record, never the enforcement (§1.7) |
 | "Nothing dangerous is imported or evaluated" | a **regex** over source text — CAP's first evaluator gate was text-only and **missed eight live alias sites** | an **AST**: the thing that sees what the text *means*, not what it spells |
+| "The approved thing is the thing that runs" | a handler registered **after** the gate — it rewrites the input between the approval and the execution, so the approval is **correct-looking and about a different act** | the gate is the **last** handler and the gap between "yes" and "do it" is empty; any extension whose load order is not the gate's own is an **admission act**, not a configuration detail |
 
 Two habits follow, and they are the reason this section is written the way it is:
 
