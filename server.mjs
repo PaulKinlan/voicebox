@@ -4,7 +4,6 @@
 // Zero dependencies: node:http for the server, node:fs for the workspace.
 // The resolver is a provider seam (lib/resolver.mjs) — swap it, don't rewrite the server.
 import { createServer } from "node:http";
-import { createServer } from "node:http";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
