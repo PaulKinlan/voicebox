@@ -342,3 +342,43 @@ log never needs merging, and *"how do we share the files?"* has no answer becaus
 merging is for.
 
 The global state is **the log**; the global state is **not** the files.
+
+---
+
+## Added 2026-09-20, 06:00 — N20: persistent directory handles, not only OPFS
+
+> "Remember it's not just OPFS, but also **directory handles that are persistent**."
+
+**Two storage shapes, and they are not the same mechanism:**
+
+| | **OPFS** | **a picked directory handle** |
+|---|---|---|
+| where the files are | inside the browser, per-origin, invisible to the OS | **a real folder on the user's machine** |
+| how access is granted | implicitly, to the origin | **the user picks it once** — `showDirectoryPicker()` |
+| does it survive a reload | yes, with no gesture | **only if the handle is persisted and re-permissioned** |
+| who else can see it | nothing outside the origin | **anything on the machine, and the user's own tools** |
+
+**So the requirement is that a project can live in a real directory and the page can still reach it tomorrow.**
+That is the *window* shape rather than the *peer* shape: the files are the user's, in a place they chose,
+and the page holds a **persisted handle** rather than a copy.
+
+### What "persistent" has to mean, concretely
+
+- **The handle is persisted, not re-picked** — an `IndexedDB` record, not a variable. A reload must not ask
+  the user to find their folder again.
+- **Re-acquisition may need a gesture** — and this is measured rather than assumed: **OPFS needs none**,
+  because it is origin-private, while a picked directory may require the user to click before access is
+  restored. **The two shapes have different permission stories and the UI must not blur them.**
+- **Permission is queryable, so the state is displayable** — `queryPermission` before use, `requestPermission`
+  when it is needed, and an honest line on the page about which of the two states the project is in.
+- **And there is a fallback that is not a failure**: a browser without the API, or a user who declines, gets
+  **OPFS** — which is a real project in a real place, just not the user's own folder.
+
+### Why this matters beyond storage
+
+**It is the difference between a project the browser owns and a project the user owns.** With OPFS alone,
+the artefacts live somewhere the user cannot open in their own editor — which is fine for a prototype and
+wrong for a tool that is supposed to build real things. **A directory handle makes the machine's filesystem
+the project's home, with the browser as a window onto it** — which is exactly the shape the environment
+design calls *window*, and exactly what Paul asked for when he said *"local project files are the unit of
+work."*
