@@ -189,3 +189,56 @@ A sandbox per project, distinct, with the agent aware of the others and of what 
 
 Stated as unresolved rather than delegated. It should stay unresolved in the document rather than
 be quietly closed by a design that assumes an answer.
+
+---
+
+## Added 2026-09-19, 20:55 — the success criterion, and where this goes next
+
+### N14 — Voicebox builds voicebox
+
+> "It's actually one success criteria that we'll have with this is if I can use the voice agent itself
+> — voicebox essentially — **to build itself**, and kind of to make edits and stuff."
+
+**This is a criterion rather than a feature**, and it should be treated as one: a build that cannot be
+driven to change its own source has not reached the thing he is asking for, however well it handles a
+demo project. It also settles a design question by putting a floor under it — the environment's work
+has to be *good enough to be used on real code*, not merely safe on synthetic assets.
+
+### The client cannot do this, and the remote placement can
+
+He asked the question himself: *"I know that we're not going to be able to do that from the user
+interface side, potentially in the client — and maybe we can?"*
+
+**In the browser placement: no.** There is no shell, no git, and no path outside the origin's private
+filesystem, so a browser-only session cannot edit voicebox's own repository. That is not a limitation
+to work around; it is what makes the browser the *safest* first environment.
+
+**In the remote placement: yes — and it is the shape he already works in.** The harness runs on the
+machine that holds the checkout, and the browser is a client onto it. Which means **bootstrapping from
+a walk is the remote placement doing exactly what it was designed for**, and the milestone order
+matters less than it looked: E1 is first because it is safest, not because it is the only way to be
+useful.
+
+### And what it extends into
+
+> "I could imagine there's a world where if we get this right then we **extend this into the Chrome
+> Agent Platform project** — and then that has access to all the tools that control the browser. If
+> we're building more and more tools as we go, there's a lot of opportunities for us."
+
+**This reframes CAP's role without changing today's decision.** The analysis concluded: take three
+descriptor fields, a fails-closed convention and a budget-gate habit; leave the admission pipeline.
+That remains right **for a dependency**. What is new is that CAP is a **destination** — the platform
+whose tools control a browser — and voicebox is the voice front end that could drive it. So the
+relationship is *convergence later*, not *dependency now*, and the greppable test that keeps
+voicebox's documents free of isocan's packages applies to CAP's packages in exactly the same way.
+
+### And the way he wants to work on it
+
+> "I actually do like this back and forth between us where it's like, you know, if you get something
+> wrong that's fine because we can iterate quickly. We are basically venturing forth on a project that
+> no one else has really done before. So we're going to make mistakes and we're going to have to learn
+> about the UI and the UX and the server interaction and the browser interaction."
+
+Worth recording because it sets the standard for what a good session looks like: **wrong artefacts,
+corrected quickly, beat right artefacts, delivered slowly.** Today produced three wrong artefacts and
+nine rules.
