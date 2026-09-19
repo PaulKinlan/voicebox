@@ -300,8 +300,14 @@ test("REVISE-2-1: the facade hands back NOTHING TO SEND WITH — the raw socket 
 
 test("REVISE-2-2: a failing start CLOSES THE TRANSPORT — no socket outlives a terminal state", async () => {
   const closes = [];
+  const wireFrames = [];
   const realWS = globalThis.WebSocket;
-  globalThis.WebSocket = class { constructor() {} send() {} close() { closes.push("socket"); } onclose = null; };
+  globalThis.WebSocket = class {
+    constructor() {}
+    send(frame) { wireFrames.push(frame); }
+    close() { closes.push("socket"); }
+    onclose = null;
+  };
   try {
     registerLiveProvider("fails-after-connecting", ({ transport, emit }) => ({
       start() {
@@ -312,10 +318,14 @@ test("REVISE-2-2: a failing start CLOSES THE TRANSPORT — no socket outlives a 
     }));
     const session = createLiveSession({ provider: "fails-after-connecting", log: () => {} });
     await new Promise((r) => setTimeout(r, 20));
-    assert.equal(session.refusedByTransport.afterClose > 0 || true, true);
     assert.ok(closes.length >= 1, `the transport must be closed on a failing start: ${JSON.stringify(closes)}`);
-    // and a send after the terminal state must NOT succeed
-    assert.equal(session.sendText("hello"), undefined);
+    // A WITNESS, not an absence: count what actually reaches the wire. The previous version asserted
+    // `sendText(...) === undefined`, which witnesses the absence of a return value and tells a reader
+    // nothing about whether the send happened. (`… > 0 || true` was worse: it cannot fail at all — the
+    // third tautology tonight, after a constant compared to its own literal and a silently-skipped marker.)
+    const framesBefore = wireFrames.length;
+    session.sendText("hello after the terminal state");
+    assert.equal(wireFrames.length, framesBefore, `nothing may reach the wire after a terminal state: ${wireFrames.length} vs ${framesBefore}`);
   } finally { globalThis.WebSocket = realWS; }
 });
 
