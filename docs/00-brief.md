@@ -120,3 +120,72 @@ A voice agent that can build needs somewhere the building is **visible**. He nam
 canvas, notes it is oriented to UI work rather than building, and questions whether it is the
 right answer. **The doubt is carried deliberately** — engaging with it is worth more than
 drawing a better canvas.
+
+---
+
+## Added 2026-09-19, 12:40 — dynamic tools, environments, and what it should look like
+
+A second addition, kept separate for the same reason as the first. His framing: *"this is one of
+the bits we're going to have to design and maybe do multiple iterations on — I really just want
+them all right."* So this is a brief for **iteration**, not a specification to close.
+
+### N10 — The agent builds its own tools, and they work locally
+
+> "We have to think about how we can do **dynamic tool creation**, because you start off without
+> anything... like, I want to look at how my journal works — the agent prompt could create, from
+> previous history, a new **now** with you. **What tools there should be? We will create the tools
+> and we will create the objects, the nouns — and the verbs are based off us somehow.** I don't
+> know how to do this. I want to build those extensions and have them work locally somehow. And
+> we end up building all these new tools up that we can start to use, then it can be extended
+> out. Something like OpenClaw [transcribed: "open claw"] but we can build it on the fly, dynamic.
+> **I think there's something really powerful there.**"
+
+The strongest statement of intent in the brief. **Nouns and verbs derived from the conversation
+itself**, tools created because a need appeared in the talking, accumulated, and working
+**locally** first. The journal is his own precedent for an agent extending its own surface from
+history rather than from a fixed tool list.
+
+### N11 — Environments, and the browser is the first one
+
+> "There are real constraints and design challenges about how we think about **tools on the
+> server, tools that run locally** — and maybe that's what we think about, that we have
+> **environment configuration** and **by default the first environment is the browser**... think
+> about the things and assets and tools we might want to create and just enable them to happen.
+> **You obviously build extensions like we can with pi and then just have the model register
+> them. That would actually be pretty cool.** Your **local safe environment**, and then maybe a
+> **hosted cloud server environment** as well."
+
+So the axis is **environments**, not placements-as-implementations: **the browser first**, then a
+**local safe environment**, then a **hosted cloud server environment**. And the mechanism is
+named: **extensions written the way pi extensions are written, and then registered by the model**
+— extensible platform and dynamic tools arriving as the same idea.
+
+Note this **changes a milestone order**: the browser was M2, after the machine placement. As
+*"the first environment"* it is no longer a later mode.
+
+### N12 — It should look like isocan's voice agent, and assets should appear
+
+> "The screenshot you just sent looks terrible. **I want it to look like the voice agent in
+> isocan.** I don't want to be too explicit — you'll see some **assets getting created in front
+> of you**, like these types of things. I really want to explore that kind of model."
+
+The screenshot was the skeleton's bare unstyled page, sent as XSS evidence. It is now an
+**anti-reference**: the interface should not look like a debug view. And the positive model is
+specific — **assets appearing as they are created**, which is the artefact surface, *"not too
+explicit"*.
+
+### N13 — "Create a project" is a spoken verb
+
+> "I might say something like **'you create a project'** and then that creates a project **that is
+> sandboxed** — a project that is distinct from other projects. But **it knows about them** and
+> has a full understanding of things that are local."
+
+A sandbox per project, distinct, with the agent aware of the others and of what is local.
+
+### Open problem he named twice
+
+> "**I don't know how to deal with the server side of things.** ... We also have access to an
+> environment that is on the server — I don't know how to deal with that at the moment."
+
+Stated as unresolved rather than delegated. It should stay unresolved in the document rather than
+be quietly closed by a design that assumes an answer.
