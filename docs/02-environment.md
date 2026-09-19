@@ -25,6 +25,8 @@ So: the agent acts on a **real machine**, and **a project on disk is the unit of
 | **A project is a declared directory**, never a discovered one | Yesterday's fleet lesson: anything assumed about the machine's layout is wrong on somebody's machine | The first open of a project is an explicit act |
 | **Work happens in the project's own git state; unapproved work is kept recoverable** (a branch or worktree) | A build environment that can act is only safe if its acting is cheap to undo | Slightly more machinery per project; the host owns it |
 | **Three tiers, enforced in the host as data**: never / unprompted / confirm | A boundary written as prose is a wish; the same lesson as putting the harness registry in data rather than comments | Tier tables need maintaining and testing (§3.6) |
+| **One writer per root, several roots per project** — the root serialises, not the project | Paul's scenario is two live agents on one project (his phone on a walk, the chat session); "serial within a project" rested on a premise he falsified — one conversation | Sessions multiply (per instance and root), and the audit needs per-instance sequencing because two machines have no shared clock |
+| **`undoKind` is declared per project, and the tiers scale with it** | *"We got worlds where you may never have git available"* — and "cheap to undo" is a false promise where nothing can be undone | A project with no undo has a narrower unprompted scope, which has to be visible rather than surprising |
 | **One host role, three placements** (machine, browser/OPFS, remote) — authority always co-located with the files | Paul's requirement: the harness runs on the client *and* the server, with a website and OPFS. Putting authority in the renderer would dilute the boundary to reach the same features | Capability parity is not assumed, so `do` needs a declared capability list per placement, shown in the UI |
 
 ---
@@ -43,7 +45,7 @@ So: the agent acts on a **real machine**, and **a project on disk is the unit of
 ┌───────────────────────▼──────────────────────────────────┐
 │  voicebox-host  — ONE long-lived process on this machine  │
 │  · project registry      · tier table (data)              │
-│  · sessions per project  · confirmation gate              │
+│  · sessions per (instance, root)   · confirmation gate    │
 │  · audit log (append-only)· process journal (what it ran) │
 │  · resolves realpaths, enforces containment, decides tiers │
 └───────────────────────┬──────────────────────────────────┘
@@ -137,9 +139,10 @@ Three consequences worth stating plainly:
 |---|---|---|---|
 | The project (files, git) | disk, in the project | yes | yes |
 | Project registry (`id`, `path`, `lastUsed`) | host, `~/.voicebox/projects.json` | yes | yes |
-| Conversation transcript (per project) | host | **yes** | yes (append-only file) |
-| Harness session id (per project) | host | **yes** | yes — resumed with `session/load` |
-| Pending confirmation | host | **yes** | no (a restart clears it — deliberately) |
+| Conversation transcript (per (instance, root)) | host | **yes** | yes (append-only file) |
+| Harness session id (per (instance, root)) | host | **yes** | yes — resumed with `session/load` |
+| Pending confirmation (bound to instance, project, root, plan) | host | **yes** | no (a restart clears it — deliberately) |
+| Other live instances of a project | host | yes | no (they re-announce on reconnect) |
 | Running turn / spawned processes | host + children | yes | no (reported as "interrupted") |
 | Audit log | host, `~/.voicebox/audit.log` | yes | yes |
 
@@ -181,7 +184,7 @@ enforced somewhere, not merely displayed.
 
 ### 1.4 The host ↔ harness contract (k3 builds against this)
 
-One adapter. The host spawns it per project session with a **declared working directory** and
+One adapter. The host spawns it per **(instance, root)** session with a **declared working directory** and
 speaks ACP-shaped JSON-RPC over stdio — the bridge's proven shape, not a new protocol.
 
 ```jsonc
@@ -276,6 +279,8 @@ So the connection itself is authenticated before any message is trusted:
 { "type": "hello",    "host": "voicebox", "version": 1, "projects": [ … ], "active": "isocan",
                       "pending": [ { "id": "cfm_17", … } ] }
 { "type": "state",    "project": "isocan", "data": { "path": "…", "root": "/home/paul/…/isocan-wt",
+                                                     "instances": [ { "id": "phone", "root": "…/isocan-walk" },
+                                                                    { "id": "chat",  "root": "…/isocan-wt" } ],
                                                      "branch": "main", "dirty": 3,
                                                      "harness": "pi", "providerBadge": "local",
                                                      "mediated": true, "session": "ses_…",
@@ -460,8 +465,8 @@ hiding it would not be.
 
 - **cwd**: every turn runs with the project's realpath as its declared cwd. The harness cannot
   wander into another project because it is never told about one.
-- **Session isolation**: one harness session per project, so context does not bleed between
-  checkouts.
+- **Session isolation**: one harness session per **(instance, root)** — two instances must not
+  resume each other's conversation, and context must not bleed between roots or projects.
 - **Recoverability**: work the agent does unprompted (Tier 1) is **kept reversible** — for a
   git project the host may work in a branch or a worktree, so "undo everything the agent did
   this evening" is one command and never a conversation. Where the project is not a git
@@ -645,7 +650,9 @@ A spoken "yes" counts **only** when all of these hold:
 
 - a question was asked, by the host, and it is the most recent thing asked;
 - exactly one confirmation is pending;
-- it refers to the active project and arrived **after** the question (≤ 30 s window);
+- it refers to a project this instance is bound to, and arrived **after** the question (≤ 30 s window);
+- the answering instance is recorded on the audit entry (§2.3) — any live instance of the same
+  project may answer, because walking home the phone is what he has;
 - the answer is unambiguous ("yes" / "go ahead" / "do it" — not a continuation of an
   unrelated sentence).
 
