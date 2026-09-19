@@ -90,7 +90,10 @@ async function startLive() {
   }).then(
     () => {
       audioClient.attachSocket(socket);
-      return audioClient.startCapture();
+      // The preferred microphone is read at press time, not at load: choosing a
+      // device must not start capture, and a chosen device that has gone is a
+      // refusal the page names rather than a silent switch to another one.
+      return audioClient.startCapture({ deviceId: window.__voiceboxDevices?.micId() ?? null });
     },
     async (error) => {
       // The socket is dead; do not leave it half-open.

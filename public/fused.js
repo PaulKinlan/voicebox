@@ -360,6 +360,175 @@ on(els.form, "submit", (event) => {
   send(said);
 });
 
+// ── devices: what was chosen, what is available, what is happening ────────
+//
+// Three separate facts per row, because conflating them is how a page ends up
+// naming a device it is not using. The preference is stored as an id AND a
+// name: the id is what getUserMedia and setSinkId take, the name is the only
+// thing that can still name a device that has left the machine (isocan's
+// lesson, kept). Device choice is a preference, never a grant.
+const DEVICE_KEY = "voicebox.devices";
+
+const devices = {
+  prefs: { mic: { id: "", name: "" }, out: { id: "", name: "" } },
+  inputs: [],
+  outputs: [],
+  canChooseOutput: true,
+  // The routing decision, made explicitly rather than inherited: when the
+  // chosen output disappears mid-reply this page STOPS playback and says so. It
+  // does not silently move a private reply to the system speakers, because a
+  // name change that implies a stop while sound keeps coming out somewhere else
+  // is the audible version of a lying label.
+  policy: "stop",
+};
+
+function loadPrefs() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(DEVICE_KEY) ?? "null");
+    if (saved?.mic) devices.prefs.mic = { id: String(saved.mic.id ?? ""), name: String(saved.mic.name ?? "") };
+    if (saved?.out) devices.prefs.out = { id: String(saved.out.id ?? ""), name: String(saved.out.name ?? "") };
+  } catch { /* no storage, or someone else's shape: start from the default */ }
+}
+
+function savePrefs() {
+  try { localStorage.setItem(DEVICE_KEY, JSON.stringify(devices.prefs)); } catch { /* private mode */ }
+}
+
+async function listDevices() {
+  if (!navigator.mediaDevices?.enumerateDevices) return { inputs: [], outputs: [], names: false };
+  const all = await navigator.mediaDevices.enumerateDevices();
+  const named = all.some((d) => d.label);
+  return {
+    inputs: all.filter((d) => d.kind === "audioinput").map((d) => ({ id: d.deviceId, name: d.label })),
+    outputs: all.filter((d) => d.kind === "audiooutput").map((d) => ({ id: d.deviceId, name: d.label })),
+    names: named,
+  };
+}
+
+function fillPicker(select, list, pref, what) {
+  if (!select) return;
+  const options = [{ id: "", name: "System default" }, ...list.filter((d) => d.id !== "")];
+  // An absent choice stays visible by its saved name rather than being replaced
+  // by "System default": the preference is what the person set.
+  if (pref.id && !options.some((option) => option.id === pref.id)) {
+    options.push({ id: pref.id, name: `${pref.name || "chosen device"} · not connected` });
+  }
+  const wanted = options.map((option) => `${option.id}\u0000${option.name}`).join("|");
+  if (select.dataset.shape === wanted) return; // no rebuild of an unchanged picker
+  select.dataset.shape = wanted;
+  select.replaceChildren(...options.map((option) => {
+    const el = document.createElement("option");
+    el.value = option.id;
+    el.textContent = option.name || `unnamed ${what}`;
+    return el;
+  }));
+  select.value = pref.id ?? "";
+}
+
+function renderDevices() {
+  const { prefs, inputs, outputs, canChooseOutput } = devices;
+  fillPicker(els.micSelect, inputs, prefs.mic, "microphone");
+  fillPicker(els.outSelect, outputs, prefs.out, "output");
+
+  const micNamesHidden = inputs.length > 0 && inputs.every((d) => !d.name);
+  const micPresent = inputs.some((d) => d.id === prefs.mic.id);
+  const outPresent = outputs.some((d) => d.id === prefs.out.id);
+
+  const listening = els.stage?.dataset.voice === "listening";
+  const speaking = els.stage?.dataset.voice === "speaking";
+
+  const micName = prefs.mic.name || "System default";
+  let mic = "";
+  if (!prefs.mic.id) mic = listening ? "Listening through System default" : "Mic off";
+  else if (micNamesHidden && !micPresent) mic = `${micName} · not checked yet — device names can be hidden until microphone access is allowed`;
+  else if (listening) mic = `Listening through ${micName}`;
+  else if (micPresent) mic = `${micName} · mic off`;
+  else mic = `${micName} is not connected. Mic off.`;
+  if (els.micDeviceState) els.micDeviceState.textContent = mic;
+
+  let out = "";
+  if (!canChooseOutput) out = "This browser uses system output. Change the output in your device's sound settings.";
+  else if (!prefs.out.id) out = speaking ? "Reply playing through System default" : "No reply playing";
+  else if (speaking && outPresent) out = `Reply playing through ${prefs.out.name || "the chosen output"}`;
+  else if (!outPresent) {
+    out = `${prefs.out.name || "The chosen output"} is not connected. `;
+    out += speaking ? "Reply playback stopped." : "No reply playing.";
+  } else out = "No reply playing";
+
+  if (els.outDeviceState) els.outDeviceState.textContent = out;
+  if (els.outSelect) els.outSelect.disabled = !canChooseOutput;
+
+  // The two ends disagree out loud rather than one being derived from the other.
+  const input = !prefs.mic.id
+    ? (listening ? "Listening" : "Mic off")
+    : listening ? "Listening" : micPresent ? "Mic muted" : `${micName} not connected`;
+  const output = speaking ? "agent speaking" : "no reply playing";
+  if (els.voiceState && (listening || speaking)) els.voiceState.textContent = `${input} · ${output}`;
+}
+
+async function refreshDevices() {
+  const before = { mic: devices.prefs.mic.id, out: devices.prefs.out.id };
+  const listed = await listDevices();
+  devices.inputs = listed.inputs;
+  devices.outputs = listed.outputs;
+  devices.canChooseOutput = window.__voiceboxLiveClient?.canChooseOutput?.() ?? false;
+
+  // INPUT: a chosen microphone that has left is named; capture is never moved to
+  // another device silently, and the output row is untouched.
+  if (before.mic && !listed.inputs.some((d) => d.id === before.mic)) {
+    if (els.stage?.dataset.voice === "listening" || window.__voiceboxLiveClient?.state?.capture) {
+      await window.__voiceboxLiveClient?.stopCapture?.();
+    }
+  }
+
+  // OUTPUT: the decided policy is to STOP rather than fall back. Name where the
+  // audio actually is, and keep Stop reply working.
+  if (before.out && !listed.outputs.some((d) => d.id === before.out)) {
+    if (devices.policy === "stop" && window.__voiceboxLiveClient?.state?.playbackActive) {
+      window.__voiceboxLiveClient.stopPlayback?.();
+    }
+  }
+  renderDevices();
+}
+
+on(els.micSelect, "change", async () => {
+  const choice = devices.inputs.find((d) => d.id === els.micSelect.value);
+  devices.prefs.mic = { id: els.micSelect.value, name: choice?.name ?? "" };
+  savePrefs();
+  renderDevices();
+});
+
+on(els.outSelect, "change", async () => {
+  const choice = devices.outputs.find((d) => d.id === els.outSelect.value);
+  const previous = { ...devices.prefs.out };
+  devices.prefs.out = { id: els.outSelect.value, name: choice?.name ?? "" };
+  savePrefs();
+  if (els.outDeviceState) els.outDeviceState.textContent = `Switching output to ${devices.prefs.out.name || "System default"}…`;
+  const applied = await window.__voiceboxLiveClient?.setOutputDevice?.(devices.prefs.out.id || "");
+  if (applied && !applied.ok) {
+    devices.prefs.out = previous;
+    savePrefs();
+    if (els.outDeviceState) els.outDeviceState.textContent = `Could not use ${choice?.name || "that output"}. ${applied.reason}.`;
+    renderDevices();
+    return;
+  }
+  renderDevices();
+});
+
+on(els.settingsOpen, "click", () => {
+  if (!els.settings) return;
+  // Opening settings does not start capture, stop playback or end the session.
+  els.settings.hidden = !els.settings.hidden;
+  els.settingsOpen.setAttribute("aria-expanded", String(!els.settings.hidden));
+  if (!els.settings.hidden) refreshDevices();
+});
+on(els.settingsClose, "click", () => {
+  if (!els.settings) return;
+  els.settings.hidden = true;
+  els.settingsOpen.setAttribute("aria-expanded", "false");
+  els.settingsOpen.focus();
+});
+
 // ── the two meters: your voice, and the agent's ───────────────────────────
 // Driven by the real PCM the client already has (audio-client.js `level()`):
 // input energy at the microphone, and one radius per output sample around the
@@ -444,6 +613,15 @@ function startMeters() {
 }
 
 stopMeters();
+
+loadPrefs();
+window.__voiceboxDevices = {
+  micId: () => devices.prefs.mic.id || null,
+  outputId: () => devices.prefs.out.id || null,
+  state: () => ({ ...devices.prefs, policy: devices.policy }),
+};
+if (navigator.mediaDevices?.addEventListener) navigator.mediaDevices.addEventListener("devicechange", refreshDevices);
+refreshDevices();
 
 // A seam for driving the two meters without a microphone: a headless browser
 // has no device, so the visual can only be checked here by handing the drawing

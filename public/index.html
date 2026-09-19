@@ -21,6 +21,7 @@
       <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4"/></symbol>
       <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
       <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v2M12 19v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M3 12h2M19 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
     </defs>
   </svg>
 
@@ -48,11 +49,14 @@
       <section class="reader" id="reader" data-state="empty" aria-labelledby="reader-title">
         <div class="reader-head">
           <h2 id="reader-title">Nothing open</h2>
-          <p class="reader-facts" id="file-facts"></p>
           <button class="quiet" id="file-copy" type="button" disabled>Copy</button>
           <button class="icon-button" id="reader-close" type="button" aria-label="Close the file"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
         </div>
         <pre id="file-body"></pre>
+        <details class="reader-details" id="reader-details">
+          <summary>Details</summary>
+          <p id="file-facts"></p>
+        </details>
       </section>
 
       <section class="voice" aria-labelledby="talk-heading">
@@ -67,7 +71,27 @@
           </button>
         </div>
         <p class="voice-state" id="voice-state" role="status">Microphone off — press the circle to speak</p>
-        <div class="voice-actions"><button class="quiet interrupt" id="interrupt" type="button" disabled>Stop reply</button></div>
+        <div class="voice-actions">
+          <button class="quiet interrupt" id="interrupt" type="button" disabled>Stop reply</button>
+          <button class="quiet" id="settings-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="settings"><svg class="icon" aria-hidden="true"><use href="#i-gear"/></svg>Settings</button>
+        </div>
+        <div class="settings" id="settings" role="dialog" aria-modal="false" aria-labelledby="settings-title" hidden>
+          <div class="settings-head">
+            <h2 id="settings-title">Settings</h2>
+            <button class="icon-button" id="settings-close" type="button" aria-label="Close settings"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+          </div>
+          <div class="device-row">
+            <h3 id="mic-label">Microphone</h3>
+            <select id="mic-select" aria-labelledby="mic-label"></select>
+            <p class="device-state" id="mic-device-state">Mic off</p>
+          </div>
+          <div class="device-row">
+            <h3 id="out-label">Reply output</h3>
+            <select id="out-select" aria-labelledby="out-label"></select>
+            <p class="device-state" id="out-device-state">No reply playing</p>
+          </div>
+          <details class="about"><summary>About this room</summary><p id="about-facts"></p></details>
+        </div>
         <form class="composer" id="text-form">
           <label class="sr-only" for="utterance">Your turn</label>
           <input id="utterance" name="utterance" type="text" autocomplete="off" spellcheck="false" required placeholder="Try: create a file called notes.md">

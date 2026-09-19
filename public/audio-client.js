@@ -48,6 +48,7 @@ export function createAudioClient({
     gatedFrames: 0, // how many frames the server held before the gate opened
     capture: false,
     playbackActive: false,
+    sinkId: "", // the output actually in use, once a route has been applied
     framesSent: 0,
     framesReceived: 0,
     framesRejected: 0,
@@ -322,8 +323,13 @@ export function createAudioClient({
     };
   }
 
-  /** Gesture-driven: the caller invokes this from a real user action. */
-  async function startCapture() {
+  /**
+   * Gesture-driven: the caller invokes this from a real user action. A
+   * preferred device id is a CONSTRAINT, never a silent fallback: if the chosen
+   * microphone is gone, `deviceId: { exact }` makes getUserMedia refuse, and the
+   * page names the missing device instead of quietly capturing from another one.
+   */
+  async function startCapture({ deviceId = null } = {}) {
     if (state.capture) return;
     state.captureError = ""; // a new user action clears the sticky refusal
     emit("starting");
@@ -331,7 +337,7 @@ export function createAudioClient({
       if (!mediaDevices?.getUserMedia || !AudioContextCtor || !AudioWorkletNodeCtor) {
         throw new Error("this browser has no microphone capture (getUserMedia/AudioContext/AudioWorklet unavailable)");
       }
-      stream = await mediaDevices.getUserMedia({ audio: true });
+      stream = await mediaDevices.getUserMedia({ audio: deviceId ? { deviceId: { exact: deviceId } } : true });
       captureCtx = new AudioContextCtor({ sampleRate: CAPTURE_RATE });
       await captureCtx.audioWorklet.addModule(workletUrl);
       captureNode = new AudioWorkletNodeCtor(captureCtx, "pcm-capture");
@@ -357,6 +363,36 @@ export function createAudioClient({
       state.lastError = state.captureError;
       emit("error", { captureFailed: true });
     }
+  }
+
+  /** True when this browser can route output at all. */
+  function canChooseOutput() {
+    return Boolean(AudioContextCtor?.prototype?.setSinkId);
+  }
+
+  /**
+   * Route playback to a chosen output, or report that it could not be done.
+   * Returns { ok, sinkId } — the CALLER decides what to say when it fails; this
+   * never falls back to another device on its own, because a private reply
+   * moving to the speakers without being asked is the audible version of a
+   * label that lies.
+   */
+  async function setOutputDevice(deviceId) {
+    if (!canChooseOutput()) return { ok: false, reason: "this browser cannot choose an output" };
+    try {
+      playCtx ??= new AudioContextCtor({ sampleRate: PLAYBACK_RATE });
+      await playCtx.setSinkId(deviceId ?? "");
+      state.sinkId = playCtx.sinkId ?? deviceId ?? "";
+      emit(state.playbackActive ? "agent-speaking" : state.capture ? "listening" : "idle");
+      return { ok: true, sinkId: state.sinkId };
+    } catch (error) {
+      return { ok: false, reason: `${error?.name ?? "Error"}: ${error?.message ?? error}` };
+    }
+  }
+
+  /** Stop playback without touching capture (used when a chosen output leaves). */
+  function stopPlayback() {
+    return stopReply();
   }
 
   /** The user turns the microphone off (or the page unloads). */
@@ -390,6 +426,9 @@ export function createAudioClient({
     attachSocket,
     handleMessage,
     startCapture,
+    canChooseOutput,
+    setOutputDevice,
+    stopPlayback,
     level,
     stopCapture,
     stopReply,
