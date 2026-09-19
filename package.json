@@ -3,12 +3,13 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "voicebox — spoken turns become real files. Zero-dependency runtime; Vite is the dev server only.",
+  "description": "voicebox \u2014 spoken turns become real files. Zero-dependency runtime; Vite is the dev server only.",
   "scripts": {
     "dev": "vite",
     "serve": "node server.mjs",
     "start": "node server.mjs",
-    "test": "node tests/voicebox.test.mjs"
+    "test": "node tests/voicebox.test.mjs",
+    "accept": "node tools/page-acceptance.mjs"
   },
   "devDependencies": {
     "vite": "^7.1.7"
