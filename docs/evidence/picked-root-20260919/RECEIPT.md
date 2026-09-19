@@ -190,3 +190,19 @@ be told about (§7):
 4. **An empty list is not an empty folder.** `listChildren` swallowed "cannot open this directory"
    into `[]`, so the explorer showed an empty panel for a directory that does not exist. Strict
    listing exists for the directories a person asked for.
+
+## 8. The new checks, mutation-tested (red for the right reason)
+
+A check that fails because a module will not load is not evidence about the guard. Each new check
+was run against a throwaway worktree carrying one deliberate defect, and in every case the failure
+is the assertion, with the wrong behaviour visible in the message:
+
+| Mutation | Expected | Observed |
+|---|---|---|
+| `reachable()`'s `denied` branch answers like a missing gesture | `n20-permission-denied` red | red — *expected permission-denied, saw `{"code":"needs-gesture","why":"'blocked-folder' needs a click to restore access"}`* |
+| a project with no picked root answers like an empty one | `explorer 7cd.2` red | red — on the pair, with the refusal assertion failing first |
+| both root kinds share one virtual root | `e1m0-browser 8a` red | red — and **only** 8a: checks 1–7 and 9 stay green, which is the point of 8a existing |
+
+The last row is the useful one: collapsing the two roots into one path is invisible to every check
+that only ever touches the OPFS root, which is exactly what "the same checks pass on a second
+adapter" is there to catch.
