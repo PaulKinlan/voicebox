@@ -204,7 +204,10 @@ async function showFile(name) {
     const answer = await request(`/api/file?name=${encodeURIComponent(name)}`);
     if (answer.ok) {
       const content = answer.content ?? "";
-      els.readerFacts.textContent = `${size(content)} · read from workspace/${name} just now`;
+      // One short line: on a phone the old facts wrapped to five lines above a
+      // two-line note (astra's landing review). The path is the title.
+      els.readerFacts.textContent = `${size(content)} · read from disk`;
+      els.readerFacts.title = `workspace/${name}, read just now`;
       els.readerBody.textContent = content;
       els.reader.dataset.state = "ready";
       els.copy.disabled = content.length === 0;
