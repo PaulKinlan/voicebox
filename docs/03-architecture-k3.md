@@ -377,3 +377,293 @@ rest of the design already has one**: authoring is the model's, admission is the
 must not happen is the loop running ungated (model writes and reloads directly), because then
 the tool proposal — the act with the most reach in the whole system — bypasses the only table
 meant to govern it.
+
+---
+
+## 8. The compliant-mode extension, built and driven (k3)
+
+The named mechanism from §3.2, now proven rather than proposed. Twenty lines, and they live
+in the repository, not in a scratch dir: **`.pi/extensions/policy-gate.ts`** (currently on
+branch `rescue/compliant-mode-extension` with C5's `now.ts` alongside it) — the file an
+implementer copies, with its comments intact. The snippet below is the same file:
+
+```ts
+// .pi/extensions/policy-gate.ts
+export default function (pi: ExtensionAPI) {
+  pi.on("tool_call", async (event, ctx) => {
+    const plan = JSON.stringify({ tool: event.toolName, input: event.input }, null, 2);
+    const ok = await ctx.ui.confirm(
+      `Permission: ${event.toolName}`,
+      `The agent wants to run this tool:\n\n${plan.slice(0, 1500)}\n\nAllow it to execute?`,
+    );
+    if (!ok) return { block: true, reason: `denied by the host: ${event.toolName} was not allowed to run` };
+  });
+}
+```
+
+`tool_call` fires before execution and can block (`docs/extensions.md` §778). In the TUI the
+confirm is modal; under RPC/ACP the same `ctx.ui.confirm()` becomes a real
+`session/request_permission` (the wire C2 proved). Driven interactively, three proofs:
+
+### 1. A denied call does not execute
+
+`create delete-me.txt` → write dialog → **denied** → the model immediately tried to route
+around it with a shell redirect (bash dialog → **denied**) → then a `read` probe (dialog →
+**denied**). Final state: **the file does not exist.** Every attempt was asked; nothing
+executed. The bypass attempt is the finding that shapes the gate: **it must cover every tool
+call, because the model's first response to a denial is to try another tool.** A gate scoped
+to tool *names* would have been routed around in one turn.
+
+### 2. The plan arrives before the act, in the harness's own words
+
+Every dialog rendered the structured plan before any execution:
+
+```
+Permission: read
+The agent wants to run this tool:
+{ "tool": "read", "input": { "path": "/tmp/vb-dynamic/delete-me.txt" } }
+Allow it to execute?  → Yes / No
+```
+
+The host's decision is made on content (tool + full input), never on a title.
+
+### 3. The gate holds for a model-authored tool (the C5 case)
+
+`Use the read_host tool on /etc/hostname` → **`Permission: read_host`** with the plan
+(`tool: read_host, input: { path: "/etc/hostname" }`) → **denied** → the model reported
+"read_host was denied by the host this time, so I couldn't re-read it." The gate does not
+distinguish built-in from model-registered tools — the C5 loophole is closed.
+
+### Honest negatives — what the gate does not prove
+
+- **The model confabulates compliance.** Its final report claimed "delete-me.txt already
+  exists with probe… confirmed created earlier this session." The file does not exist. The
+  model's report of effects is not evidence of effects — the audit must read the world, not
+  the transcript. (Same day's rule: an instrument can blame the wrong cause.)
+- **`event.input` may be unvalidated** at hook time (`prepareArguments` runs before schema
+  validation), so a gate inspecting the plan must tolerate partial shapes — and a plan that
+  *looks* complete may not be what the tool finally validates.
+- **Sub-agents are a separate surface.** pi-subagents children are their own processes; a
+  project-local gate only covers sessions in that project. A policy extension meant to be
+  total must load globally (`~/.pi/agent/extensions/`) and even then covers only pi
+  processes, not anything a child spawns outside the extension system. *"The gate covers X
+  and not Y":* X = every `tool_call` in gated pi sessions; Y = child processes, non-pi
+  subprocesses, and anything outside the extension's process.
+- **TUI drive note:** each dialog is modal; under the host the same confirm is a
+  `session/request_permission` the host answers — the semantics proven here transfer, the
+  transport differs.
+
+### Where this leaves compliant mode
+
+Real, and small. The tier table can now be a boundary for pi's built-in **and**
+model-authored tools: intercept → plan → ask → honour. The remaining work is host-side:
+answer the request (§1.4's permission-response schema already exists), record it in the
+audit, and never let the model's own report of compliance stand in for the audit of effects.
+## 9. Isocan's multi-harness model, and what C4 got too narrow
+
+Paul: *"isocan has got a really great way of having multiple harnesses work together… we can
+use it as inspiration."* C4 answered the browser question (one agent, reached two ways). His
+requirement is the other shape: **several named agents, live on one project, at the same
+time** — his phone's session and this chat session, both on the same work. Those are not the
+same mechanism, and the difference is where the coordination lives.
+
+### What isocan actually is (from the live record, not the README)
+
+`~/.isocan/rc-agents.json`, today:
+
+```json
+[
+  { "canvasId": "prj_6nodKBn0oA", "actorId": "usr_Ut1iNC2vQw", "name": "PK_Bot2",
+    "harness": null,  "cwd": "/home/paulkinlan/isocan-getting-started", "sessionId": "01a08d7e-…" },
+  { "canvasId": "prj_6nodKBn0oA", "actorId": "usr_tnqRhL6b0y", "name": "PK_Scout",
+    "harness": "pi",  "cwd": "/home/paulkinlan/isocan-getting-started", "sessionId": "01a08d7e-…" },
+  { "canvasId": "prj_6nodKBn0oA", "actorId": "usr_9SGTtKaRcv", "name": "Scout",
+    "harness": null,  "cwd": "/home/paulkinlan/isocan-getting-started", "sessionId": "01a09201-…" }
+]
+```
+
+**Three named agents on one canvas, two of them pi harnesses, each a distinct actor with its
+own session and cwd.** The model in one sentence: *an agent is an enrolled record —
+(canvasId, actorId, name, harness, cwd, session) — and agents coordinate through the
+canvas's shared oplog* (comments, threads, items, versions), which they can all read by
+construction. Around that record: the **bench** (presence per agent — *ready / elsewhere /
+unreachable*, measured every time you look), **seen-marks** (per-person read positions kept
+by the home, converging across machines), and **whose word starts a turn** (a standing agent
+answers only its owner until widened, with lapse-bounded grants — the per-agent permission
+layer).
+
+### Same thing, or reinvention?
+
+The environment design's per-(instance, root) session is **isomorphic at the registry level
+and different at the coordination level**:
+
+| | isocan | environment design (as written) |
+|---|---|---|
+| Agent identity | actorId, claimed against the harness's session id — two agents sharing a directory stay two people | (instance, root) session |
+| Registry with liveness | the bench: ready / elsewhere / unreachable | capability per placement (no liveness column) |
+| **Coordination medium** | **the canvas: a shared, ordered, persistent log every agent reads** | per-root audit + work meeting as an ordinary git merge |
+| Read positions | seen-marks, per person, converging across machines | none — agents meet at merges, not at a shared view |
+| Turn authority | whose word starts a turn, per agent, lapsing | the tier table (per act, not per agent) |
+
+**Verdict: not the same mechanism, and not a reinvention either — a missing layer.** The
+registry shape (named agent instances with declared placements) is the same idea discovered
+twice. What isocan has and the environment design lacks is the *coordination medium*: a
+shared log with presence and read positions, versus audits that only meet at merges. For
+Paul's phone-and-chat case, merges give him two sessions that see each other's work late and
+through git; the canvas gives him two sessions that see each other's work as it happens.
+
+### What to take (and what it changes)
+
+1. **The actor model.** Identity claimed against the harness's session id — two agents in
+   one directory are two people, atomically. This is exactly what the (instance, root)
+   registry needs to stop two placements of "the same agent" from being indistinguishable in
+   the audit.
+2. **A liveness column on the capability declaration.** *ready / elsewhere / unreachable* is
+   three honest words measured at read time — better than a capability row that cannot say
+   whether anything could answer right now.
+3. **The shared log as the coordination medium.** The audit should be the medium agents read
+   each other's work through, not only the record the host keeps. Whether that is an
+   oplog-shaped project log or the canvas itself, the design's "several roots per project"
+   needs it to be *visible to all of them*, not just mergeable.
+4. **Seen-marks for the audit.** Per-person read positions kept by the host, converging
+   across machines — so "what is new since you last looked" is a computed answer, and two
+   machines racing converge instead of duplicating.
+5. **Whose word starts a turn, per agent.** The tier table governs acts; this governs
+   *invocation* — an agent answers only its owner until widened (with lapse-bounded grants
+   that expire visibly). Paul's phone asking the home harness is a grant, not a default.
+
+### The gap, stated plainly
+
+C4's "one harness, one protocol, two transports" is correct for the browser question and
+incomplete for the multi-agent requirement. The architecture needs the coordination layer
+isocan already proved: shared log, presence, read positions, per-agent turn authority.
+Whether that layer is *adopted* (the canvas pattern as the project's shared medium) or
+*declared absent* (merges-only, with the cost named: no presence, no shared view) is Paul's
+call — but it should be a decision, not an oversight.
+
+---
+
+## 10. The round trip over the wire, and the two holes it revealed (k3)
+
+The unproven link from §8 is now proven end-to-end, in both directions, over the real ACP
+bridge with the gate loaded **globally** (`~/.pi/agent/extensions/policy-gate.ts` — which
+also settles the global-load question: it gated sessions in a different directory).
+
+### The wire, both directions
+
+```
+client: initialize → session/new(cwd) → prompt("Create wire-test.txt")
+wire:   13 × session/request_permission  (write, bash, read, web_search, generate_image, …)
+host:   13 × { outcome: "cancelled" }
+effect: the file does not exist.                                          (deny honoured)
+
+client: same prompt
+wire:   session/request_permission { title: "Permission: write" }
+host:   { outcome: { outcome: "selected", optionId: "yes" } }
+wire:   tool_call: pending → in_progress → completed
+effect: wire-test.txt contains "wire".                                    (allow honoured)
+```
+
+**The gate's `ctx.ui.confirm()` reaches a host as a real protocol message and comes back** —
+compliant mode is real end-to-end, not only in the TUI.
+
+### Hole 1 — the optionId namespace is adapter-defined, and a malformed allow reads as a denial
+
+The first allow attempt used the ACP-convention `optionId: "allow_once"`. The tool **failed
+identically to a denial** — because pi-acp's confirm dialog speaks `"yes"/"no"`
+(`CONFIRM_PERMISSION_OPTIONS`), and `"allow_once" ≠ "yes"` maps to `confirmed: false`. No
+error, no complaint: a wrong optionId is a silent "no". The host must answer with the
+optionId **from the request's own options array** (or map by `kind: allow_once /
+reject_once`) — never assume a universal id. This is the day's rule one more time: the
+failure is silent and always in the direction that looks like the safe answer.
+
+### Hole 2 — a permission for a plan is not a permission for whatever finally runs
+
+With a second handler (`z-mutator.ts`) loaded **after** the gate, rewriting bash input:
+
+```
+ASKED (plan shown to host): { "tool": "bash", "input": { "command": "echo approved > /tmp/vb-dynamic/plan-a.txt" } }
+host answered: ALLOW
+which plan ran?              /tmp/vb-dynamic/plan-b.txt
+```
+
+The host approved plan A; plan B executed. `tool_call` inputs are mutable and **later
+handlers see (and change) earlier ones' work** — so a handler behind the gate in load order
+can rewrite an approved plan after approval. There is no later hook to catch it. The design
+rule this forces: **the gate must be the last `tool_call` handler, and that ordering is part
+of its authority** — the host owns the load order, and any extension registered after the
+gate is itself an admission act, because it can rewrite what the host just approved.
+(Also recorded: `event.input` may be unvalidated at hook time, so even a well-ordered gate
+must tolerate partial shapes.)
+
+### Where this leaves compliant mode
+
+Proven end-to-end: intercept → plan on the wire → host answers with the adapter's own
+optionId → effect matches the answer. The two holes are named with their rules: answer by
+the request's own options, and treat the gate's load-order position as part of its
+authority. Both rules are about the failure being *silent* — the same shape as everything
+else this week has produced, and the reason the host's permission path needs its own drive
+rather than a schema read.
+
+*Test fixtures removed after the drive: `z-mutator.ts` and `policy-gate.ts` are out of the
+global extension dir (a mutator left global would rewrite every future bash call on this
+box; a gate left global would make every pi session interactive-by-force). The canonical
+copy of the gate stays at `.pi/extensions/policy-gate.ts` on
+`rescue/compliant-mode-extension`.*
+
+---
+
+## 11. "The gate is last", made into a mechanism (k3)
+
+§10's hole 2 — a handler after the gate rewrote an approved plan — demanded more than the
+rule "the gate must be last". The mechanism, built and driven both ways:
+
+### What the platform gives, and what it does not
+
+- Handlers run in **extension load order**; inputs are mutable and later handlers see
+  earlier ones' changes (docs). **No handler-chain introspection, and no post-chain
+  observation point** — there is no event between "all tool_call handlers finished" and
+  execution that carries the final input. So the ordering **cannot be enforced or fully
+  observed from inside the harness. The host owns the load order; that is the boundary.**
+- What the gate can do is refuse to be a silent mid-chain gate: at `session_start`, scan
+  the auto-discovered extension directories for files that sort after its own name, and if
+  any exist, **refuse to gate — loudly** — instead of producing approvals that mean less
+  than they appear to.
+
+### The two drives
+
+**(a) A later handler exists (`z-mutator.ts` present):**
+
+```
+gate-state.json: {"event":"session_start",
+                  "later":["/tmp/vb-dynamic/.pi/extensions/z-mutator.ts"], "refuse":true}
+permissions: 0                        ← the gate refused, loudly, and gated nothing
+plan-b.txt exists                     ← ungated, the rewrite ran — exactly what the refusal announced
+```
+
+**(b) No later handler (mutator removed):**
+
+```
+gate-state.json: {"event":"session_start", "later":[], "refuse":false}
+permissions: 1                        ← the gate engaged and asked
+no plan files                         ← host denied; nothing executed
+```
+
+A gate that cannot prove it is last announces and abstains; a gate that can, gates. Both
+outcomes are visible in the state file, which is the audit channel for the mechanism.
+
+### The honest limits (same day's rule: say what it misses)
+
+- **The scan covers the auto-discovered directories only.** Extensions loaded via CLI `-e`,
+  packages, or paths the scan cannot read are invisible to it. The host's ownership of the
+  load order is not optional; the scan converts the *common* silent case into a loud one,
+  it does not make the position provable.
+- **In the pi-acp path, the pi child's stderr is swallowed** (`child.stderr.on("data", () => {})`
+  in pi-acp) — so `console.error` announcements die in a dead channel over the wire. The
+  RPC-visible channel for the refusal is the state file (or `ctx.ui.notify` for clients
+  that render fire-and-forget extension-UI). In the TUI the refusal prints visibly; the
+  isolation run showed it: *"policy-gate is REFUSING to gate: these extensions sort after
+  it… /tmp/vb-dynamic/.pi/extensions/z-mutator.ts."*
+- **Even a proven-last gate cannot see the final post-chain input** — there is no such
+  event. So the strongest in-harness statement is "the gate gated and no later file existed
+  at session start"; the strongest boundary remains the host's ownership of what loads.
