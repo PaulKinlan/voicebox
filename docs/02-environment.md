@@ -814,7 +814,10 @@ A project is a **declared directory** plus a session, and nothing more:
 - **Identity is placement + location.** On a machine that means the realpath, so two paths to one
   checkout are one project. In a browser it means the origin plus the OPFS directory name — there is
   no realpath to compare, and no way for another placement to reach it, which is why `placement`
-  is part of the identity rather than metadata about it (`atlas@phone` ≠ `atlas@box`, §1.1b).
+  is part of the identity rather than metadata about it (`atlas@phone` ≠ `atlas@box`, §1.1b) — and
+  **for a picked handle there is no path to compare at all**: the origin remembers the handle and the
+  label the user gave it, so two origins holding handles to the *same* folder are two projects, because
+  neither can tell. That is the identity rule holding at the level below `@phone`. 
 - **`executionRoot` is the containment root**, and it is whatever the placement says it is — an
   OPFS directory handle in E1, a realpath on a machine — and it is not always the checkout: when the
   host
@@ -846,7 +849,7 @@ A project is a **declared directory** plus a session, and nothing more:
 
 | Act | What happens | What does not happen |
 |---|---|---|
-| **open** | on a machine: verify the path exists and is a directory, resolve realpath. In a browser: take the OPFS directory (origin-private, no gesture) or a picked handle. Register, then create a session lazily on first use | nothing is cloned, scaffolded or modified |
+| **open** | on a machine: verify the path exists and is a directory, resolve realpath. In a browser: take the OPFS directory (origin-private, **no gesture**) or a **picked directory** (`showDirectoryPicker()`, which needs a gesture now and may need one again on a later visit) and persist the handle. Register, then create a session lazily on first use | nothing is cloned, scaffolded or modified |
 | **activate** | the active project changes; the UI is told the new state | other projects' sessions are untouched |
 | **detach** (implicit, on switching away) | the session stays alive and resumable | **no process is killed** for switching |
 | **close** | the session is ended explicitly; processes the host started for it are stopped | files are untouched by closing |
@@ -1147,7 +1150,7 @@ checkout. What changes is the mechanism that enforces each one — and which dir
 
 | Tier 0 rule | On a machine | In a browser (OPFS) |
 |---|---|---|
-| Nothing outside the root | realpath containment, checked and re-asserted | **structural**: OPFS handles are relative, `..` does not resolve, and OPFS has no symlinks — the API cannot express an escape |
+| Nothing outside the root | realpath containment, checked and re-asserted | **structural**: handles are relative and `..` does not resolve. For **OPFS** the API cannot express an escape at all; for a **picked directory** the folder is real, so the symlink case must be measured rather than assumed (build spec §7) |
 | No credential material, no system commands, no `sudo` | deny-list + argv classification | **structural**: there is no `~/.ssh`, no process to spawn and no privilege to escalate inside the origin |
 | No fetch-and-execute | argv classification | **structural**: there is no process to exec |
 | No exfiltration by the host | the host makes no outbound requests | **weaker, and this is the real gap** — a page can `fetch`; project code runs under a declared egress policy (§3.5a) and any network access by it is Tier 2 |

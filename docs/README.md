@@ -68,6 +68,7 @@ to prevent collision with `03-architecture-k3.md` and `04-e1-m0-build-spec.md`.
 | **An unknown verb is not a Tier 2 act** | design §0 | a prompt exists only where a mechanism does; a refusal names the missing thing |
 | **`stop` is the only unconditional lever** | design §1.4 | everything else depends on the harness choosing to ask or answer |
 | **Concurrency: one writer per root** | design §2.3 | several roots per project; sessions per (instance, root) |
+| **A browser root is OPFS *or* a picked handle** (N20) | design §1.1b, build spec §2 | the write path is unchanged — a picked folder is just another root — but identity has a third case (**the origin cannot describe a handle's target**), the permission stories differ, and the symlink case is an **open item** for a real folder |
 | **Shared state, merged artefacts** (N19) | design §2.3 | the append-only log carries presence and seen-marks and **never needs merging**; files still merge, and that merge is the **landing step** — *the global state is the log, not the files* |
 | **Other projects are prior art, never dependencies** | design §0 | techniques in, artefact out — and theirs to change, not ours |
 | **How the document has been tested** | design §6 | which sections are driven and which are **design, unproven** |
