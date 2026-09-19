@@ -53,8 +53,12 @@ the result is written into `workspace/` — a real directory on disk.
 
 What works today:
 
-- **Speech capture** — the browser's own `SpeechRecognition` (Chrome), no key,
-  no library. One press per turn.
+- **Speech capture** — a live `AudioContext` at 16 kHz (the browser resamples
+  natively; nothing hand-rolled) streamed as PCM16 over `/live` to
+  **models/gemini-3.8-live** via the Gemini Live API, **with thinking**. The
+  model's 24 kHz audio streams back and plays. Browser `SpeechRecognition`
+  dictation remains only as a no-key fallback for one-shot turns — it is not
+  the product path.
 - **Turn resolution** — a deterministic script resolver (`lib/resolver.mjs`)
   that knows create/read/list. It is a placeholder brain, deliberately: the
   resolver is a provider seam (`registerResolver(name, fn)`), and the model
