@@ -1,43 +1,138 @@
-<!doctype html><meta charset="utf-8"><title>Does a handle walk follow a symlink out of a picked folder?</title>
-<body style="font:15px/1.5 system-ui;max-width:46rem;margin:2rem auto;padding:0 1rem">
+<!doctype html><meta charset="utf-8"><title>Does a handle operation follow a symlink out of a picked folder?</title>
+<body style="font:15px/1.5 system-ui;max-width:52rem;margin:2rem auto;padding:0 1rem">
 <h1>Does a handle walk follow a symlink?</h1>
-<p><b>This page reads only what you pick. It writes nothing, sends nothing, and has no network calls.</b></p>
+
+<p><b>What this page does and does not do.</b> It reads only what you pick. It makes <b>no network
+calls</b> and sends nothing anywhere. The optional write probe creates one file <b>through the link</b>
+and removes it — off by default, because a write probe that always ran would change the folder it is
+measuring.</p>
+
+<p><b>What it measures, precisely</b> (the first version of this instrument measured less than it
+claimed — a reviewer was right to say so): a <b>directory</b> symlink, a <b>file</b> symlink, and — if
+you enable it — the <b>write path</b>. It does not establish anything about other handle operations, and
+each probe says so in its own line rather than being rounded into one verdict.</p>
+
 <ol>
-  <li>In a terminal: <code>mkdir -p /tmp/vb-symlink-probe/inside && cd /tmp/vb-symlink-probe && ln -s /etc outside-link && echo secret > inside/real.txt</code></li>
+  <li>In a terminal:
+    <pre>mkdir -p /tmp/vb-symlink-probe/inside &amp;&amp; cd /tmp/vb-symlink-probe
+ln -s /etc outside-dir          # a DIRECTORY symlink pointing out
+ln -s /etc/hostname outside-file # a FILE symlink pointing out
+echo secret &gt; inside/real.txt</pre>
+  </li>
   <li>Click <b>Pick that folder</b> and choose <code>/tmp/vb-symlink-probe</code>.</li>
-  <li>The result below is the answer. Nothing is uploaded anywhere.</li>
+  <li>Paste the result into <code>RECEIPT.md</code>. Nothing is uploaded anywhere.</li>
 </ol>
-<p><button id="pick">Pick that folder</button></p>
+
+<p>
+  <button id="pick">Pick that folder</button>
+  <label style="margin-left:1rem"><input type="checkbox" id="write" /> also probe the write path
+  (creates and removes one file through the link)</label>
+</p>
 <pre id="out" style="background:#f4f4f4;padding:1rem;white-space:pre-wrap">waiting…</pre>
+
 <script>
 const out = document.getElementById("out");
 const log = (s) => { out.textContent += "\n" + s; };
+
+// Cause classification, so a refusal and an inability-to-measure are never the same result.
+// The first version collapsed EVERY getDirectoryHandle exception to `followed = false`, which made
+// permission denial, an unsupported operation and a transient failure all read as "the link was not
+// followed" — the instrument reported a cause it had not established.
+function causeOf(e) {
+  const n = e?.name || String(e);
+  if (n === "NotFoundError") return "not-found (the name is not there for this API)";
+  if (n === "TypeMismatchError") return "type-mismatch (exposed as the other kind — a file, not a directory)";
+  if (n === "NotAllowedError") return "permission — INCONCLUSIVE, not a negative";
+  if (n === "SecurityError") return "security/gesture — INCONCLUSIVE, not a negative";
+  if (n === "NotSupportedError") return "unsupported by this browser — INCONCLUSIVE";
+  return `unclassified (${n}) — INCONCLUSIVE`;
+}
+const inconclusive = (c) => /INCONCLUSIVE|unsupported|unclassified/.test(c);
+
+async function probeDirLink(dir) {
+  try {
+    const h = await dir.getDirectoryHandle("outside-dir");
+    let n = 0; const names = [];
+    for await (const [name] of h.entries()) { n++; if (names.length < 3) names.push(name); }
+    return { followed: true, detail: `walked as a directory; entries=${n} first=${JSON.stringify(names)}` };
+  } catch (e) {
+    const c = causeOf(e);
+    return { followed: inconclusive(c) ? null : false, detail: c };
+  }
+}
+
+async function probeFileLink(dir) {
+  try {
+    const fh = await dir.getFileHandle("outside-file");
+    const text = (await (await fh.getFile()).text()).trim().slice(0, 40);
+    return { followed: true, detail: `read a FILE through the link: ${JSON.stringify(text)}` };
+  } catch (e) {
+    const c = causeOf(e);
+    return { followed: inconclusive(c) ? null : false, detail: c };
+  }
+}
+
+async function probeWriteThroughLink(dir) {
+  // The containment question for a picked root: if the walk follows, can a WRITE land outside?
+  try {
+    let handle;
+    try { handle = await dir.getDirectoryHandle("outside-dir"); }
+    catch (e) { return { followed: null, detail: `could not enter the link at all (${causeOf(e)}) — write path NOT measured` }; }
+    const name = "voicebox-write-probe.tmp";
+    const fh = await handle.getFileHandle(name, { create: true });
+    const w = await fh.createWritable();
+    await w.write("written through a symlink out of the picked folder");
+    await w.close();
+    let removed = false;
+    try { await handle.removeEntry(name); removed = true; } catch { /* leave it, and say so */ }
+    return { followed: true, detail: `WROTE through the link and ${removed ? "removed it" : "could NOT remove it — check the target folder"}` };
+  } catch (e) {
+    const c = causeOf(e);
+    return { followed: inconclusive(c) ? null : false, detail: c };
+  }
+}
+
 document.getElementById("pick").onclick = async () => {
   out.textContent = "RESULT";
-  try {
-    const dir = await window.showDirectoryPicker({ mode: "read" });
-    for await (const [name, handle] of dir.entries()) {
-      log(`  entry ${JSON.stringify(name)} kind=${handle.kind}`);
-    }
-    let followed = null, via = null;
-    try {
-      const h = await dir.getDirectoryHandle("outside-link");
-      followed = h.kind === "directory";
-      via = "getDirectoryHandle succeeded and reported kind=directory";
-      let n = 0; const names = [];
-      for await (const [name] of h.entries()) { n++; if (names.length < 3) names.push(name); }
-      log(`  walk into outside-link: entries=${n} first=${JSON.stringify(names)}`);
-    } catch (e) {
-      followed = false;
-      via = `getDirectoryHandle threw ${e.name}`;
-    }
-    log("");
-    log(followed === true
-      ? "VERDICT: A HANDLE WALK FOLLOWS A SYMLINK OUT OF THE PICKED FOLDER → resolveInsideRoot NEEDS A RESOLVE PASS for this shape, exactly as the Deno substrate did."
-      : `VERDICT: the walk does NOT follow the link (${via}) → containment for a picked folder keeps the structural property §3.2a claims.`);
-    log("Paste this block into the receipt.");
-  } catch (e) {
-    log(`  picker failed: ${e.name} — a picker needs a real user gesture; a synthetic click will not do.`);
+  const wantWrite = document.getElementById("write").checked;
+
+  if (typeof window.showDirectoryPicker !== "function") {
+    // The old catch-all reported an undefined picker as a synthetic-gesture failure: a wrong cause.
+    log("PICKER: UNSUPPORTED — `showDirectoryPicker` is not a function in this browser. Nothing measured.");
+    return;
   }
+  let dir;
+  try {
+    dir = await window.showDirectoryPicker({ mode: wantWrite ? "readwrite" : "read" });
+  } catch (e) {
+    const n = e?.name || String(e);
+    if (n === "AbortError") log("PICKER: CANCELLED by the user — nothing measured (this is not a gesture failure).");
+    else if (n === "NotAllowedError" || n === "SecurityError") log(`PICKER: refused (${n}) — a picker needs a real user gesture; a synthetic click will not do. Nothing measured.`);
+    else log(`PICKER: FAILED (${n}) — unclassified, so INCONCLUSIVE. Nothing measured.`);
+    return;
+  }
+
+  for await (const [name, handle] of dir.entries()) {
+    log(`  entry ${JSON.stringify(name)} kind=${handle.kind}`);
+  }
+  const results = {
+    "directory link (read)": await probeDirLink(dir),
+    "file link (read)": await probeFileLink(dir),
+  };
+  if (wantWrite) results["write through the link"] = await probeWriteThroughLink(dir);
+  else results["write through the link"] = { followed: null, detail: "not measured (enable the write probe)" };
+
+  log("");
+  for (const [label, r] of Object.entries(results)) {
+    const verdict = r.followed === true ? "FOLLOWED" : r.followed === false ? "not followed" : "INCONCLUSIVE";
+    log(`  ${label}: ${verdict} — ${r.detail}`);
+  }
+  log("");
+  log("SCOPE — what this result does and does not establish:");
+  log("  · it covers the probes above, on THIS browser and THIS folder. It does not cover other handle operations.");
+  log("  · if the directory link FOLLOWED, `resolveInsideRoot` needs a resolve pass for a picked root, exactly as the Deno substrate did when its path scope proved lexical.");
+  log("  · if it did not follow, that is evidence for the probes run — NOT a general containment guarantee, and the file/write probes above are the ones that would extend it.");
+  log("  · any INCONCLUSIVE line means the question is unanswered, not answered negatively.");
+  log("Paste this whole block into RECEIPT.md, including the SCOPE lines.");
 };
 </script>
