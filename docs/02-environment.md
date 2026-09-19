@@ -512,6 +512,35 @@ strongest of the four), which is also why the Wasm path is worth building first 
 is text, and k3's design is not a dependency of this environment existing); several live instances
 (§2.3 is E2 and later); autonomy (§3.8 is a road, not a step).
 
+**Three things the interface must say out loud, rather than letting the user infer them** — each
+is an honest answer to something the platform does not promise:
+
+- **"Grant access to continue"** when a reopened project needs a click to re-acquire its directory
+  handle. A gesture is not a design failure; a gesture that is not *explained* reads as a bug.
+- **The durability state of the project** — held persistently, or held until the browser decides
+  otherwise. The browser may decline the request to persist, so the state is not decoration, it is
+  the truthful answer to a question whose answer varies.
+- **Which kind of undo this project has.** For an E1 project that is **`written-file-list`, not
+  git** — a browser project is not a checkout, and yesterday's lesson applies directly: a project
+  that may never have git must *know* which undo it has. The agent revising its own writes must be
+  revertible by replaying the list, which is a different mechanism from a worktree and has to be
+  said in those words.
+
+**What not to ship, from today's evidence rather than from taste** — five ways the first
+implementation can look finished and not be:
+
+1. **Any outside string interpolated into HTML.** The skeleton executed `<img src=x onerror=…>`
+   through three `innerHTML` sinks, one of them stored. Text nodes, or escaped; §3.5a.
+2. **Containment by normalising.** `basename('..')` is `'..'`, so a "cleaned" name escaped the
+   workspace. Resolve, compare, refuse — never tidy and proceed; §3.2.
+3. **A bad frame that kills the worker.** Malformed JSON, an unknown type or a throwing handler
+   must produce an error and an audit entry, with the worker still serving; §3.5a's second half.
+4. **A capability admitted on its declaration.** A tool declaring `network: none` that calls
+   `fetch` is stopped by the policy *and filed as a finding* — and the positive control must show
+   an allow-listed host succeeding; §1.7, §3.6.
+5. **A peer project whose world is invisible by accident.** *"This project lives in this browser
+   only"* is a label, not a discovery the user makes after losing work; §1.1b.
+
 **Three things that would make it indefinable, and how they stand:** handle re-acquisition after a
 reload depends on a user gesture in some browsers (acceptable: a click is not a design failure);
 persistent storage is a *request* the browser may decline, so a peer project must show its
