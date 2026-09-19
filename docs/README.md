@@ -127,6 +127,7 @@ part that was worth having.
 |---|---|
 | [`evidence/substrate-20260919/`](evidence/substrate-20260919/RECEIPT.md) | what a capability substrate actually enforces: the flag set, the lexical path scope that follows a symlink out, the loader hole and why it is live, the evaluator bypass, and why `exec` is absent rather than scoped |
 | [`evidence/opfs-20260919/`](evidence/opfs-20260919/RECEIPT.md) | OPFS needs **no user gesture** (measured at page load, `userActivation` false) and persistence **can be declined** — which is why the durability state is required |
+| [`evidence/picked-dir-symlink/`](evidence/picked-dir-symlink/RECEIPT.md) | **OPEN** — does a handle operation follow a symlink out of a *picked* folder? The instrument probes a directory link, a file link and (opt-in) the write path, and reports `INCONCLUSIVE` rather than rounding a failure into a verdict. It cannot be run headlessly (the picker needs a real gesture), so **its result is a question mark, not a pass** |
 
 Both receipts name their method **and their traps** — including the first attempt that was invalid
 because an in-console evaluation carries activation, and the cached module that hid an import.

@@ -223,16 +223,24 @@ Three consequences worth stating plainly:
    | the files are | inside the origin | a real folder the user chose |
    | survives a reload | yes, **no gesture** — measured | **only if the handle is persisted**; re-acquisition may need a gesture |
    | who else sees it | nothing outside the origin | **the user's own editor and tools** |
-   | what the origin can describe | a path it owns | **nothing it can compare** |
+   | what the origin can describe | a path it owns | **nothing it can describe** — though it can *compare* two handles it already holds, with `FileSystemHandle.isSameEntry()` |
 
    Two consequences, and both are the identity rule arriving one level down:
 
    - **Identity has a third case.** `location` has **kinds**, and a handle's target is something the
-     origin **cannot describe or compare** — so two origins holding handles to the *same* folder are two
-     projects, because neither can tell. The design must not imply a handle has a path it can check.
+     origin **cannot describe** — so two *origins* holding handles to the same folder are two projects,
+     because neither can tell. The design must not imply a handle has a path it can check. **Within one
+     origin the story is better than the first version of this paragraph said**: a handle the page
+     already holds can be compared with `FileSystemHandle.isSameEntry()`, so a registry can avoid
+     registering the same folder twice, and `core/project.ts` records `{ kind: "handle", id, label }`
+     rather than pretending to have a path.
    - **The permission stories differ, so the UI copy cannot be shared.** OPFS needs no gesture; a picked
      directory may need one on re-acquisition. The durability state therefore has to say **which kind of
-     location** a project has, not merely whether it persisted.
+     location** a project has, not merely whether it persisted — and it is a **tagged** value now, not a
+     boolean: `{ kind: "opfs", persisted, checkedAt }` or `{ kind: "handle", persisted, permission:
+     "granted" | "prompt" | "denied" | "unknown", checkedAt }` (`core/project.ts`). One boolean could
+     not tell origin-storage persistence from a handle's persistence *and* permission, which are two
+     different facts about two different mechanisms.
 
    **Containment carries over unchanged** — a picked directory is still a **root**, and
    `resolveInsideRoot` refuses `..` — now **tested rather than asserted** (§1.7's rule, and the line
@@ -1183,14 +1191,14 @@ undo → go; outside the project, or expensive to undo, or someone else can see 
 The tier table is **placement-invariant**: the same three tiers govern an OPFS project and a
 checkout. What changes is the mechanism that enforces each one — and which direction it moves.
 
-| Tier 0 rule | On a machine | In a browser (OPFS) |
+| Tier 0 rule | On a machine | In a browser (OPFS **or a picked handle**) |
 |---|---|---|
 | Nothing outside the root | realpath containment, checked and re-asserted | **structural**: handles are relative and `..` does not resolve. For **OPFS** the API cannot express an escape at all; for a **picked directory** the folder is real, so the symlink case must be measured rather than assumed (build spec §7) |
 | No credential material, no system commands, no `sudo` | deny-list + argv classification | **structural**: there is no `~/.ssh`, no process to spawn and no privilege to escalate inside the origin |
 | No fetch-and-execute | argv classification | **structural**: there is no process to exec |
 | No exfiltration by the host | the host makes no outbound requests | **weaker, and this is the real gap** — a page can `fetch`; project code runs under a declared egress policy (§3.5a) and any network access by it is Tier 2 |
 
-| Tier | On a machine | In a browser (OPFS) |
+| Tier | On a machine | In a browser (OPFS **or a picked handle**) |
 |---|---|---|
 | 1 — unprompted | read/write files, run the toolchain, loopback dev server | read/write OPFS files, run **wasm/JS tools in a worker**; no processes, so "dev server" becomes "start the preview worker" |
 | 2 — confirm | irreversible acts, leaving the machine, reaching a human, spending | the same list; "leaving the machine" becomes "leaving the browser" (uploads, remote APIs, form posts) |
