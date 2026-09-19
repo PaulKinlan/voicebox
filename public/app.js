@@ -1,23 +1,38 @@
 // The loop: capture a turn (mic or text) -> POST /api/turn -> render the
 // action and its result. Speech recognition is the browser's own
 // (webkitSpeechRecognition, Chrome) — no key, no library.
+//
+// Rendering rule (voicebox design, five-things list item 1): nothing from
+// outside is ever rendered as markup. Every string lands via textContent —
+// the transcript, the server's error/note strings, and file names included.
 const mic = document.getElementById("mic");
 const turns = document.getElementById("turns");
+
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
 
 function addTurn(transcript, payload) {
   const el = document.createElement("div");
   el.className = "turn";
-  const heard = `<div class="heard">“${transcript}”</div>`;
+  el.append(el("div", "heard", `“${transcript}”`));
   if (payload.action) {
     const what = payload.action.verb === "list"
       ? `list → ${(payload.result?.files ?? []).join(", ") || "(empty)"}`
       : `${payload.action.verb} ${payload.action.name || ""}`;
-    el.innerHTML = `${heard}<div class="action">${what}</div>` +
-      `<div class="result">${payload.result?.ok ? payload.result.action ?? "" : ""}</div>`;
+    el.append(el("div", "action", what));
+    if (payload.result?.ok && payload.result.content) {
+      el.append(el("div", "result", payload.result.content));
+    } else if (payload.result?.ok && payload.result.action) {
+      el.append(el("div", "result", payload.result.action));
+    }
   } else if (payload.error) {
-    el.innerHTML = `${heard}<div class="result err">${payload.error}</div>`;
+    el.append(el("div", "result err", payload.error));
   } else {
-    el.innerHTML = `${heard}<div class="result err">${payload.note ?? ""}</div>`;
+    el.append(el("div", "result err", payload.note ?? ""));
   }
   turns.prepend(el);
 }
