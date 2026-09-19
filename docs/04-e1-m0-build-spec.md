@@ -153,6 +153,8 @@ export type AuditEntry = {
   result: "ok" | "error" | "refused";
   observed: { exists: boolean; bytes?: number; mtime?: string } | null;  // FROM THE WORLD, never
                                                                         // from the model's account
+  read?: { path: string; bytes: number }[];   // what it LOOKED at, for read acts — a writes-only
+                                              // log cannot answer "what did it know"
 };
 ```
 

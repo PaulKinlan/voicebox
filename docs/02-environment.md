@@ -105,9 +105,15 @@ is the failure mode this whole section is written against:**
   total has to load **globally** *and* still claims only pi processes.
 - **`event.input` may be unvalidated when the hook sees it** — `prepareArguments` runs before schema
   validation — so the gate must tolerate partial shapes, and **a plan it approves may not be what the
-  tool finally validates.** Therefore: validate the plan *before* asking, or ask and **refuse if the
-  validated plan differs from the one that was approved. A permission for a plan is not a permission
-  for whatever the tool finally runs.**
+  tool finally validates.** And *"validate before asking"* was not enough as a rule: k3 approved
+  `echo approved > plan-a.txt` and watched **`plan-b.txt`** get written, because another handler
+  registered *after* the gate rewrote the input in between.
+- **So the rule is about the gap, not about validation order: nothing may run between the approval and
+  the execution.** In this harness that means the gate must be the **last** `tool_call` handler, and
+  **an extension registered after the gate is not merely a new capability — it is a new authority over
+  the gate's decisions.** A handler nobody audited, sitting between "yes" and "do it", is an authority
+  with two homes (§3.0); any extension whose load order is not the gate's own is an **admission act**,
+  not a configuration detail.
 - **The model's first response to a denial is to try another tool** — which is §3.0's habit ("ask
   what path goes around the guard") demonstrated live by the model, and the reason a gate scoped to
   tool **names** would have been routed around in one turn.
@@ -122,7 +128,7 @@ non-interactive modes it does not appear at all. So the honest statement has
 | Shape | What enforces | Available when |
 |---|---|---|
 | **Mediated** | the host owns the tool surface, so it has the plan **by construction** | the harness is built that way |
-| **Compliant** | the harness asks, and the host answers | **now available** — k3's twenty-line pi extension (`design/k3-compliant-mode`), with the three limits above |
+| **Compliant** | the harness asks, and the host answers | **available, and driven end-to-end over the wire** rather than in a TUI only: the same run produced **13 `session/request_permission`** calls — write, bash, read, `web_search`, `generate_image`, all asked, all refused, **nothing executed** — and an allow run that went `pending → in_progress → completed` with the file holding what it should. With the three limits above |
 | **Environmental** | a container with only the files and credentials the task needs | whenever the environment is disposable — and it depends on **nobody's compliance** |
 | **Disclosure** | nothing: the tier table describes what the agent *should* do | **everything else** — and the UI must say so per session, not imply otherwise |
 
@@ -326,8 +332,15 @@ outside what it may do, it asks, and the **host** answers:
                            { "optionId": "reject_once", "name": "Reject", "kind": "reject_once" } ] } }
 
 // host → harness (the answer, which §1.5 used to leave undefined)
-{ "id": 41, "result": { "optionId": "allow_once" } }      // or "reject_once"
+{ "id": 41, "result": { "optionId": <one of the optionIds THE REQUEST SENT> } }
 ```
+
+**An `optionId` is the adapter's vocabulary, not ours, and a wrong one is a silent refusal.** k3
+measured this the hard way: answering `allow_once` to pi-acp's confirm — which speaks `yes`/`no` —
+**failed identically to a denial**, because the harness takes an unrecognised option as "no". So the
+host's answer is constructed **from the request's own `options` array** (matching on `kind`, and
+echoing the `optionId` it finds there), and **an option the request did not offer is never sent**.
+A "yes" that acts like a "no" is worse than a refusal: it is a refusal nobody can see.
 
 **`resolved` is the structured plan, and it is what the host gates on** — in mediated mode the
 host *produces* it (it is the tool boundary, so it has the argv and the paths before anything
@@ -552,7 +565,10 @@ skills, and Paul's ruling on it is explicit: *"you have to install an extension,
 follow that same model"* (N16). So **skills are not first-class**: a capability the user wants and a
 capability the model writes both arrive as extensions and pass **the same admission point**. Two
 paths would mean two policies, and the weaker one would decide what the system can do — which is the
-same failure as an authority with two homes (§3.0).
+same failure as an authority with two homes (§3.0). **And the mechanism reached for what does not
+exist yet, unprompted**: during that deny run the gate asked for **`web_search` by name** — a
+capability nobody has implemented — which is N16's stress test happening on its own rather than being
+arranged.
 
 #### The loop that must never run ungated
 
@@ -868,6 +884,21 @@ hiding it would not be.
   sequence and treat the wall clock as a hint.
 - **State must say who else is here.** Any instance showing a project shows the other live
   instances and which root each holds — the UI half of a rule that exists for safety reasons.
+
+#### The coordination medium is an open decision, and its trade-off is two words long
+
+Two roots of one project meet at a **git merge** today: each has its own audit, session and writer, and
+the merge is where their work meets. isocan solved the same shape with a **shared log** — presence,
+read positions, a live view of who is where — and the comparison is exact, because the registry shape
+is the same idea twice and only the **medium** differs.
+
+So the choice for the phone-and-chat case is **a shared view or a late merge**. A shared log means both
+instances see each other's turns as they happen — more moving parts, a live channel, and a visibility
+question about what one instance may see of the other's work. Merges-only means they work independently
+and meet through git: simpler, already specified, and **it cannot show liveness** — *"what is the phone
+doing right now?"* has no answer until the merge. **This document does not decide it**: merges-only is
+the sequence §2.3 already describes, and a shared log would change the **medium**, not the
+serialisation rule.
 
 #### Still serial, and by design
 
@@ -1294,6 +1325,12 @@ k3's drive produced the cleanest counterexample in the document: after a run, th
 *"delete-me.txt already exists… confirmed created earlier this session"* — **and the file did not
 exist.** The model's account of its own effects is not evidence of its effects, and an audit built
 from those accounts records a story rather than a state.
+
+**And what was read is part of the record, not only what was done.** A writes-only log cannot answer
+*"what did it look at?"*, which is the question that matters when something goes wrong later — and it
+is the same instinct as observing outcomes rather than trusting accounts: state, not narrative, in both
+directions. So a read is an entry too, carrying the path and the size the host saw, and the log can
+answer both *"what did it do"* and *"what did it know"*.
 
 So an audit entry's outcome is **observed, not reported**: the host stats what it acted on
 (existence, size, mtime — and for a write, that the bytes are where it says), and **the transcript's
