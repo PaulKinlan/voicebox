@@ -30,6 +30,14 @@ export default defineConfig({
   plugins: [cspSafeViteClient()],
   root: "public",
   publicDir: false, // public/ IS the root; there is no second static dir
+  // appType "custom": NO SPA history fallback. Vite's default ("spa") rewrites
+  // every unmatched GET to index.html with a 200 — a missing .woff2 arrived as
+  // HTML, the browser's font parser choked on "<!do", and nothing at the HTTP
+  // layer reported wrong (review finding, 2026-09-19). This app is one page
+  // with no client-side routes, so there are no deep links to preserve: an
+  // unknown path is a loud 404, here and in server.mjs, whose route table
+  // already behaves exactly this way.
+  appType: "custom",
   server: {
     port: 5173,
     strictPort: true,

@@ -137,3 +137,29 @@ test("list reports the workspace contents", async () => {
   assert.equal(j.result?.ok, true);
   assert(Array.isArray(j.result?.files));
 });
+
+// ── the loud-miss rule: a static miss is a 404, never a 200 of the wrong type
+// (2026-09-19: vite's SPA fallback served index.html for /fonts/inter-latin.woff2
+// with a 200; the font parser choked on "<!do" and nothing reported wrong.)
+test("a missing asset is a loud 404 from the server, never a 200 of the wrong type", async () => {
+  // /fonts/inter-latin.woff2 and /icon.svg EXIST now (see the class guard) —
+  // the paths pinned here are the permanently-missing ones.
+  for (const p of ["/no-such-thing.js", "/a/deep/link", "/missing.woff2"]) {
+    const r = await get(p);
+    assert.equal(r.status, 404, `${p} must 404, not pretend to exist`);
+  }
+});
+
+// ── the class guard: every local file the page references must exist ──────
+test("the page references only files that exist in public/", () => {
+  const page = readFileSync(path.join(ROOT, "public", "index.html"), "utf8");
+  const css = readFileSync(path.join(ROOT, "public", "style.css"), "utf8");
+  const refs = new Set();
+  for (const m of page.matchAll(/(?:src|href)="([^"#][^"]*)"/g)) refs.add(m[1]);
+  for (const m of css.matchAll(/url\("([^"]+)"\)/g)) refs.add(m[1]);
+  for (const ref of refs) {
+    if (/^https?:/.test(ref)) continue;
+    const file = path.join(ROOT, "public", ref);
+    assert(existsSync(file), `the page references ${ref} and it does not exist — a silent miss`);
+  }
+});
