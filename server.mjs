@@ -43,12 +43,18 @@ const git = (args, fallback) => {
     return fallback;
   }
 };
-const BUILD = {
-  branch: git(["branch", "--show-current"], "(detached)"),
-  commit: git(["rev-parse", "--short", "HEAD"], "unknown"),
-  dirty: git(["status", "--porcelain", "--untracked-files=no"], "") !== "",
-  startedAt: new Date().toISOString(),
-};
+const BUILD = (() => {
+  const branch = git(["branch", "--show-current"], "(detached)");
+  const remote = git(["rev-parse", "--short", `origin/${branch}`], "");
+  return {
+    branch,
+    commit: git(["rev-parse", "--short", "HEAD"], "unknown"),
+    remote: remote || null,
+    ahead: remote ? Number(git(["rev-list", "--count", `origin/${branch}..HEAD`], "0")) : null,
+    dirty: git(["status", "--porcelain", "--untracked-files=no"], "") !== "",
+    startedAt: new Date().toISOString(),
+  };
+})();
 
 // Normalising is not checking: `resolve` collapses `..`, then the answer is
 // yes-or-no — is the candidate inside the workspace? (chrome-agent-platform-0j1a

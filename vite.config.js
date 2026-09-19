@@ -50,15 +50,26 @@ const git = (args, fallback) => {
 // Read per HTML request, not once at startup: a stamp that keeps naming the
 // revision the server started on goes stale the moment anything lands, which is
 // exactly the confusion this line exists to prevent.
-const buildIdentity = () => ({
-  branch: git(["branch", "--show-current"], "(detached)"),
-  commit: git(["rev-parse", "--short", "HEAD"], "unknown"),
-  // Tracked changes only: an ignored node_modules or a scratch file is not an
-  // edited revision, and a page that cries dirty when nothing is edited is a
-  // page nobody believes.
-  dirty: git(["status", "--porcelain", "--untracked-files=no"], "") !== "",
-  servedAt: new Date().toISOString(),
-});
+// A stamp that can be wrong in the direction of "looks like main" is worse than
+// no stamp. 2026-09-19: the served page said `main @ 41b9045` while origin/main
+// was 674aa66 — the tree really was on the branch *main*, and that local main
+// was a commit ahead of the remote one, with a dirty file. Every human reading
+// the footer concluded the page was main at a revision main does not have. So
+// the stamp now says how far ahead of its remote it is, and the dirty flag.
+const buildIdentity = () => {
+  const branch = git(["branch", "--show-current"], "(detached)");
+  const commit = git(["rev-parse", "--short", "HEAD"], "unknown");
+  const remote = git(["rev-parse", "--short", `origin/${branch}`], "");
+  const ahead = remote ? Number(git(["rev-list", "--count", `origin/${branch}..HEAD`], "0")) : null;
+  return {
+    branch,
+    commit,
+    remote: remote || null,
+    ahead,
+    dirty: git(["status", "--porcelain", "--untracked-files=no"], "") !== "",
+    servedAt: new Date().toISOString(),
+  };
+};
 
 // A MISSING ASSET MUST BE LOUD, without removing index.html from the server.
 //
@@ -113,7 +124,12 @@ function buildStamp() {
     name: "voicebox-build-stamp",
     transformIndexHtml(html) {
       const build = buildIdentity();
-      const content = `${build.branch} @ ${build.commit}${build.dirty ? " · uncommitted changes" : ""}`;
+      const where = build.ahead === null
+        ? `no origin/${build.branch}`
+        : build.ahead === 0
+        ? ""
+        : ` · ${build.ahead} commit${build.ahead === 1 ? "" : "s"} ahead of origin/${build.branch} (not landed)`;
+      const content = `${build.branch} @ ${build.commit}${where}${build.dirty ? " · uncommitted changes" : ""}`;
       return html.replace("__VOICEBOX_BUILD_STAMP__", content);
     },
   };

@@ -479,7 +479,10 @@ function stampBuild(server) {
   } else if (server === null) {
     parts.push("server revision unknown");
   }
-  const mismatch = Boolean(server?.commit) && page.includes("@") && server.commit !== page.split("@").pop().trim().split(" ")[0];
+  // The comparison is on the sha alone: both halves carry branch, distance from
+  // their remote and a dirty flag, and those are allowed to differ legitimately.
+  const sha = (text) => (text.match(/@\s*([0-9a-f]{7,40})/) ?? [])[1] ?? null;
+  const mismatch = Boolean(server?.commit) && sha(page) !== null && server.commit !== sha(page);
   if (mismatch) parts.push("the server is a different revision — restart it");
   line.textContent = parts.join(" · ");
   line.dataset.dirty = String(mismatch || Boolean(server?.dirty) || page.includes("uncommitted"));
