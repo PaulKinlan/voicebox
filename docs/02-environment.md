@@ -27,6 +27,7 @@ So: the agent acts on a **real machine**, and **a project on disk is the unit of
 | **Three tiers, enforced in the host as data**: never / unprompted / confirm | A boundary written as prose is a wish; the same lesson as putting the harness registry in data rather than comments | Tier tables need maintaining and testing (§3.6) |
 | **One writer per root, several roots per project** — the root serialises, not the project | Paul's scenario is two live agents on one project (his phone on a walk, the chat session); "serial within a project" rested on a premise he falsified — one conversation | Sessions multiply (per instance and root), and the audit needs per-instance sequencing because two machines have no shared clock |
 | **`undoKind` is declared per project, and the tiers scale with it** | *"We got worlds where you may never have git available"* — and "cheap to undo" is a false promise where nothing can be undone | A project with no undo has a narrower unprompted scope, which has to be visible rather than surprising |
+| **isocan is prior art, never a dependency** | Paul: *"I want to make sure that we're not using isocan... I just want the UI to look like it."* Its **techniques** are the most valuable thing here — and so are its **defects**: its readiness gate dropped 192 of 208 frames before `setupComplete`, which a from-scratch build would reproduce and never notice | Its **packages are out of bounds**: a lift that imports `@isocan/core` makes voicebox depend on the thing it is learning from |
 | **One host role, three placements** (machine, browser/OPFS, remote) — authority always co-located with the files | Paul's requirement: the harness runs on the client *and* the server, with a website and OPFS. Putting authority in the renderer would dilute the boundary to reach the same features | Capability parity is not assumed, so `do` needs a declared capability list per placement, shown in the UI |
 
 ---
@@ -164,15 +165,19 @@ Three consequences worth stating plainly:
    window is the recommendation wherever a host is reachable (§5 decision 4), the peer is a real
    mode for offline, throwaway or deliberately device-local work — and **every project says which
    one it is, in the UI**, because a user who assumes the wrong one loses work. Two browsers each
-   holding a project called `isocan` are **two projects**: identity carries the placement
-   (`isocan@phone`, `isocan@box`), not just the name.
+   holding a project called `atlas` are **two projects**: identity carries the placement
+   (`atlas@phone`, `atlas@box`), not just the name. (The name here is deliberately not `isocan`:
+   isocan is inspiration and prior art, never this product's vocabulary.)
 4. **The browser cannot host the harness — a transport fact, not a capability gap.** The adapter is
    a **stdio process spawner**, so a page cannot run it (k3 drove the topology:
    `browser ⇄ WebSocket ⇄ bridge on a machine ⇄ stdio ⇄ pi child`). It is **one harness, one ACP
    protocol, two transports**, and the capability declaration must record it that way — otherwise
    the browser environment quietly grows capabilities that do not exist. For E1 that means its
    *tools* run in the page (Wasm, §1.8) while *harness* work arrives through a bridge on a machine
-   when one is reachable — and E1-M0 deliberately needs neither.
+   when one is reachable — and E1-M0 deliberately needs neither. **The technique for a capability
+   that cannot be lifted out is already shipped twice in isocan** (`createMemoryBroker`, the file
+   broker): the harness asks the *page* over a socket rather than reaching around it. Prior art, and
+   the right kind — a mechanism to imitate, not a package to import.
 5. **The remote placement changes transport, not authority.** Loopback plus a token is right when
    client and files share a machine; a browser on a phone talking to a server needs an
    authenticated remote channel (TLS, a paired credential, an explicit pairing flow) — and the
@@ -675,7 +680,7 @@ A project is a **declared directory** plus a session, and nothing more:
 - **Identity is placement + location.** On a machine that means the realpath, so two paths to one
   checkout are one project. In a browser it means the origin plus the OPFS directory name — there is
   no realpath to compare, and no way for another placement to reach it, which is why `placement`
-  is part of the identity rather than metadata about it (`isocan@phone` ≠ `isocan@box`, §1.1b).
+  is part of the identity rather than metadata about it (`atlas@phone` ≠ `atlas@box`, §1.1b).
 - **`executionRoot` is the containment root**, and it is whatever the placement says it is — an
   OPFS directory handle in E1, a realpath on a machine — and it is not always the checkout: when the
   host
@@ -1205,11 +1210,12 @@ disposable box, or in the browser over OPFS, where the sandbox is the platform's
 
 ## 4. What I need from the other lanes
 
-**From astra (interface):** the reference is isocan's voice agent, not a debug view (N12) — his
-words about the bare skeleton were that it looks *"terrible"*, and he wants **assets appearing as
-they are created**, *"not too explicit"*. That is a direction rather than a spec: the environment's
-job is to make things **materialise** (progress → artefacts in front of him), and the interface's
-job is the same one isocan solved. Everything below still holds. Plus: every project must show
+**From astra (interface):** the reference is isocan's voice agent **as inspiration — a look to
+match, never a component to depend on** (Paul's line, and N12's own words). It is explicitly *not* a
+debug view: his words about the bare skeleton were that it looks *"terrible"*, and he wants **assets
+appearing as they are created**, *"not too explicit"*. That is a direction rather than a spec: the
+environment's job is to make things **materialise** (progress → artefacts in front of him), and the
+interface's job is the one isocan solved — **as a look**. Everything below still holds. Plus: every project must show
 **which world it is in** — *"this project
 lives in this browser only"* versus *"this project lives on <machine>; all your sessions can see
 it"* — because that is the sentence that stops work being lost, and it is the peer/window
@@ -1245,9 +1251,11 @@ unknown in this document.
 the audit writer, path resolution — must be **pure data and small functions with a narrow
 dependency surface**, because the same code has to run in a machine process *and* in a page
 worker, and a core that can only run in one of them becomes two implementations that drift.
-qwen2's harvest found a precedent worth reusing rather than rewriting: isocan's
-`packages/voice-agent/src/live.ts` is 1,173 lines of pure data and functions shared between the
-browser module and the harness, with nine dependencies doing the work. And a capability rule from
+qwen2's harvest found a precedent worth **copying the shape of**: isocan's
+`packages/voice-agent/src/live.ts` is 1,173 lines of pure data and functions shared between a
+browser module and a harness, with nine dependencies doing the work. **Do not lift the file** — it
+imports from `@isocan/core`, and isocan's packages are out of bounds (below); what transfers is the
+*design*: one core of pure data and small functions, narrow enough to run in both places. And a capability rule from
 the same harvest: a Wasm tool is a capability only when its descriptor is **admitted** — CAP's own
 store currently holds 9 descriptors that are all `admitted: false`, so taking the *format* (three
 fields: `capabilities`, `replayClass`, `bounds`) and the fails-closed convention is the lift;
