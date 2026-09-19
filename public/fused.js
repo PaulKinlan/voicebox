@@ -115,10 +115,19 @@ function card(entry) {
   return li;
 }
 
+// An empty room still shows where the first file will land, so the promise has
+// a place on screen instead of resting on copy alone.
+function placeholder() {
+  const li = document.createElement("li");
+  li.className = "file-placeholder";
+  li.textContent = "the first file appears here";
+  return li;
+}
+
 function render() {
   const count = entries.length;
   if (!els.files || !els.made || !els.count) return;
-  els.files.replaceChildren(...entries.map(card));
+  els.files.replaceChildren(...(count === 0 ? [placeholder()] : entries.map(card)));
   els.made.dataset.state = count === 0 ? "empty" : "ready";
   els.files.setAttribute("aria-busy", "false");
   els.count.textContent = count === 0 ? "nothing yet" : `${count} ${count === 1 ? "file" : "files"}`;
