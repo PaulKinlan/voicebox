@@ -693,6 +693,58 @@ quota, which measured 10.7 GB here, is generous but not infinite. (The OPFS hand
 gesture, per the measurement above; only a picked directory does.) Whatever the server side turns
 out to be (§5) is not needed for this — E1 stands alone, which is the point of it being first.
 
+### 1.9 M1 — what it adds, and when it exists
+
+M0 is buildable (§1.8), so the next question is what the *voice* milestone actually adds to the
+**environment** — which is less than the name suggests, because most of the machinery is already
+here: several projects with their own sessions and audit trails (§2.1–§2.3), confirmations with
+`via` and `accepts` (§1.5, §3.4), and `stop` as the unconditional lever (§1.4).
+
+**Three additions, and only three:**
+
+1. **A contract for the voice model (§1.3 made concrete).** It is handed: the transcript, the
+   registry (names, placement, branch, durability, what is running) and **the diffs the host chooses
+   to show** — never project contents. It emits: speech, and **intents** — never acts. It never
+   answers a confirmation, never supplies a `via`, and never receives a file. If it is a cloud model,
+   what leaves the machine is audio and conversation, which is why §1.3's two footprints exist and
+   why the badge is per project.
+2. **Project resolution from speech.** "Work on the thing from yesterday" is a real instruction and
+   must not be a guess: the model proposes a **resolution**, the host resolves it against the
+   registry **and reads it back** — *"isocan at `/home/paul/isocan`, branch `main`, 3 files dirty;
+   go ahead?"* — which is §3.3's resolve-then-judge applied to *which project*, not just *which act*.
+   **Ambiguity asks rather than picks**, and a project the user has not registered is offered as a
+   registration, not assumed.
+3. **Spoken confirmations, wired rather than designed.** §3.4's conditions already exist in the
+   schema (`accepts`, `via`, single-use ids, expiry-is-refusal) and in the validity rules; M1 is the
+   milestone where a mouth is on one end of them.
+
+**And one addition that is a subtraction: an unknown verb is not a Tier 2 act.** When the voice model
+proposes something the tier table cannot express, the answer is *"I cannot do that here"* **naming
+what is missing** — never a confirmation prompt. Asking "shall I?" about an act the environment has
+no mechanism for turns a missing capability into the user's decision, which is how a system acquires
+verbs nobody implemented.
+
+**When M1 exists (the §1.8-style definition):**
+
+1. **A spoken instruction creates something.** *"Create an asset called…"* produces a file, an audit
+   entry with `observed` state, and an artefact on screen — and a Tier 2 variant of the same
+   sentence is **read back in its resolved form before it happens**.
+2. **A spoken instruction about another project switches and acts there**, and the readback names
+   the project and its root — never left implicit.
+3. **A spoken "yes" answers a Tier 2 question only under §3.4's conditions**, and a "yes" arriving
+   *before* the question, or while two are pending, is refused rather than matched to the nearest
+   one.
+4. **`stop` cancels mid-turn and stops what the host started it for**, from speech, first try,
+   including mid-sentence barge-in.
+5. **The audit shows the `via` on every confirmation**, and a `source: "content"` act has **no path
+   from a transcript to a yes** — asserted, not assumed.
+
+**Three expectations, stated so they can be falsified rather than discovered:** the voice model will
+propose intents the table cannot express (hence the subtraction above); live audio plus a tool call
+will have latency the interaction must tolerate (astra's problem, but the host must not make it
+worse by asking twice); and a mis-heard *name* is more likely than a mis-heard *verb*, which is why
+the resolution in (2) reads back the path rather than the word.
+
 ## 2. The local-project unit
 
 ### 2.1 What a project is
