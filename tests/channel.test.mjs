@@ -204,6 +204,27 @@ test("runtime refusals flow over the wire BY NAME, and the budget charges routed
   assert.match(again.why, /1 of 1 requests used/);
 });
 
+test("an in-process caller may hand the door an OBJECT — the framing this commit's claim runs in", async () => {
+  const { channel, sent } = harness();
+  const pending = channel.ask({ tool: "clock", descriptorId: "clock-tool", boundsEcho: {} });
+  // The peer parsed the wire, so what it holds is an OBJECT, not a string:
+  const objectForm = JSON.parse(sent[0]);
+  const answer = await door.receive(objectForm);
+  assert(typeof answer === "string", "an object call produced no answer — parseCall refused it");
+  assert.equal(channel.deliver(answer).delivered, true);
+  const r = await pending;
+  assert.equal(r.ok, true, `the object path refused a good call: ${JSON.stringify(r)}`);
+  assert.match(r.observed.content ?? '', /GMT|UTC/);
+  // The reviewer's driven pair, identical data both ways: the object parses,
+  // the same data with an unknown field lands on unknown-field — NOT malformed.
+  const pure = await import("../core/wire.ts");
+  const asObject = pure.parseCall({ v: 1, callId: "rt_o", tool: "clock", descriptorId: "clock-tool", boundsEcho: {} }, extensions.lookupAdmitted);
+  assert.equal(asObject.ok, true, "parseCall still refuses objects after the fix");
+  const withExtra = pure.parseCall({ v: 1, callId: "rt_o", tool: "clock", descriptorId: "clock-tool", boundsEcho: {}, decision: "allow" }, extensions.lookupAdmitted);
+  assert.equal(withExtra.ok, false);
+  assert.equal(withExtra.refused, "unknown-field");
+});
+
 test("absence is a vocabulary: which half is missing is IN the refusal name", async () => {
   // page absent:
   const pageDown = harness({ connected: () => false, peer: "page" });

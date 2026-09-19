@@ -98,7 +98,7 @@ export function parseCall(
     } catch {
       return { ok: false, refused: "malformed-call", why: "the call did not parse as JSON" };
     }
-  } else if (obj && typeof raw === "object") {
+  } else if (raw && typeof raw === "object") {
     obj = raw as Record<string, unknown>;
   } else {
     return { ok: false, refused: "malformed-call", why: "the call is not an object" };
