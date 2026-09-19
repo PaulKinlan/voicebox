@@ -23,6 +23,8 @@
 // turns it red.
 
 import { spawn } from "node:child_process";
+import http from "node:http";
+import net from "node:net";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -55,7 +57,18 @@ function pageScripts() {
 
 /** Start the real server on a scratch port and ask it what it is. */
 async function probeServer() {
-  const port = 8700 + Math.floor(Math.random() * 200);
+  // A FREE PORT, PROPERLY: bind one, read the number, release it, hand it to the server. The previous
+  // version picked 8700+random(200) — a narrow fixed range, in my own instrument, which collided with other
+  // test files running in parallel (three failures in parallel, 71/71 serialized). PORT=0 does not work
+  // here because server.mjs logs the env value rather than the port it bound, so the probe socket it is.
+  let port = await new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.on("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const p = probe.address().port;
+      probe.close(() => resolve(p));
+    });
+  });
   const child = spawn(process.execPath, ["server.mjs"], {
     cwd: ROOT,
     env: { ...process.env, PORT: String(port) },
@@ -99,6 +112,34 @@ async function probeServer() {
   }
 }
 
+/**
+ * What happens when something tries to UPGRADE /live — measured, not typed.
+ *
+ * false by the time merger read it (server.mjs handles the upgrade for /live), which makes it a hardcoded
+ * claim about state inside the check that exists to catch hardcoded claims about state. It is a PROBE now:
+ * send an upgrade request, report what came back. The typed version of this line was true when written and
+ * false by the time a reviewer read it, which is the whole reason the line is a probe now.
+ */
+async function probeLiveUpgrade(port) {
+  return await new Promise((resolve) => {
+    const req = http.request({
+      host: "127.0.0.1", port, path: "/live", method: "GET",
+      headers: {
+        Connection: "Upgrade", Upgrade: "websocket",
+        "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==", "Sec-WebSocket-Version": "13",
+      },
+    });
+    let settled = false;
+    const done = (line) => { if (!settled) { settled = true; try { req.destroy(); } catch { /* gone */ } resolve(line); } };
+    req.on("upgrade", (res) => done(`A WEBSOCKET UPGRADE ON /live IS ACCEPTED (${res.statusCode}) — the zero-dependency server owns it.`));
+    req.on("response", (res) => done(`A WEBSOCKET UPGRADE ON /live GOT HTTP ${res.statusCode} — it is not an upgrade route on this tree.`));
+    req.on("error", () => done("A WEBSOCKET UPGRADE ON /live CLOSED WITHOUT AN HTTP RESPONSE — the server destroys it (also a form of owning the route)."));
+    req.end();
+    const t = setTimeout(() => done("THE /live UPGRADE PROBE DID NOT SETTLE."), 2000);
+    if (t.unref) t.unref();
+  });
+}
+
 /** The live-session file, if it has landed. Its absence is itself a fact the docs must state. */
 function liveSession() {
   const p = join(ROOT, "lib/live-session.mjs");
@@ -115,10 +156,11 @@ function block(name, body) {
 }
 
 async function blocks() {
-  const { health, routes } = await probeServer();
+  const { health, routes, port } = await probeServer();
   const providers = registeredResolvers();
   const { tags, worklets } = pageScripts();
   const live = liveSession();
+  const liveUpgradeLine = await probeLiveUpgrade(port);
 
   const sample = resolveTurn("create a file called hello.txt with hi");
   const unresolved = resolveTurn("book me a flight to Lisbon");
@@ -144,7 +186,7 @@ async function blocks() {
       "",
       `Anything else that exists under \`public/\` is served from there (\`GET /static\` and a fall-through), which is how the page, its scripts and the styles arrive. \`/api/health\` answers \`provider: "${health.provider}"\`, \`workspace: "${health.workspace}"\`.`,
       "",
-      "**No \`/live\` route exists on this tree.** The dev server's Vite config proxies \`/live\` with `ws: true` for the in-flight audio work; the zero-dependency server has no such route, so the proxy entry currently points at nothing.",
+      liveUpgradeLine,   // DERIVED by probeLiveUpgrade() — this line used to be a typed sentence about state
     ].join("\n")),
 
     page: block("page", [
@@ -200,6 +242,11 @@ for (const { rel, blocks: wanted } of DOCS) {
       process.exit(1);
     }
     if (process.env.DOCS_DEBUG) console.error(`DEBUG ${rel} block=${name} found=${r.found} changed=${r.text !== text} bodyLen=${String(body).length}`);
+    if (String(body).includes("undefined")) {
+      console.error(`docs-check: the generated block '${name}' for ${rel} contains the word 'undefined' —`);
+      console.error("  that is a template that did not interpolate, and it reached a document once already (07-architecture.md:80).");
+      process.exit(1);
+    }
     if (r.text !== text) { changed = true; text = r.text; }
   }
   if (!changed) continue;
