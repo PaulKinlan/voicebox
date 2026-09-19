@@ -16,6 +16,23 @@ cold, read this, then read only the document this sends you to.
 | 5 | [`03-architecture-k3.md`](03-architecture-k3.md) | the harness: what pi actually does, the permission path, the transport | §5 (what it changes in the design) |
 | 6 | [`01-questions.md`](01-questions.md) | what is deliberately unresolved | the three questions |
 
+## 1a. Two constraints that cross every document
+
+These are not sections anywhere, so they are easy to lose: they constrain **every** document, and a
+change that violates one is wrong wherever it is written.
+
+- **N18 — the agent loop and the harness are a library, not a feature of one placement.** Paul's
+  words: *"abstracted into a library in the project that can be imported and reused across client,
+  server, and a bunch of other places... consistency at that level."* Stated as a **consistency
+  requirement** rather than a portability technique, because it names the failure it prevents: **a
+  core that runs in one placement becomes two implementations that drift.** The design's §1.7 and
+  §4 say the same thing from the build side (pure data, small functions, narrow dependency surface);
+  when they disagree with a convenient shortcut, N18 wins.
+- **N16 — there is no second path for capabilities.** Skills are **not** first-class: *"pi doesn't
+  have a concept of skills... you have to install an extension, and so I'm okay to follow that same
+  model."* So the **user's tools and the model's tools go through the same admission point**
+  (design §1.7) — which is the point, and why no separate skill loader should ever appear.
+
 ## 2. Which document wins
 
 **The brief wins on *what*. The environment design wins on *how*. k3's architecture wins on the
@@ -91,7 +108,12 @@ than merging two `03`s.
 - **§3.8's autonomy path** entirely, for now — it is reasoning, not evidence, and it says so.
 - **The prior-art sections** as *background*, never as a source of code (design §0).
 
-**And read the harvest documents as evidence, not as a shopping list.** Since Paul's constraint
+**And read the harvest documents as evidence, not as a shopping list — and their future-capability
+items as *tests*, not features.** *"We might need MCP servers, we might need web search... maybe
+they're a stress test for how the extensions can work"* (N16). So an MCP server or a web search tool
+is the **next stress test of the extension mechanism**, not the next thing to build: if the mechanism
+cannot express one, that is worth knowing **before** anyone needs it — and it is the reason the
+harvest's items are listed as findings rather than queued as work. Since Paul's constraint
 removed the code, their value is now mostly in the **defects and traps**: the readiness gate that
 dropped 192 of 208 frames before `setupComplete`; the store with nine descriptors all
 `admitted: false` executing nothing; the regex gate that missed eight live alias sites and had to

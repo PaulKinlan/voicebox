@@ -547,6 +547,13 @@ Three consequences, each of which closes a hole the declaration alone would leav
    tool run here?"* is a property of the environment, not of the tool's optimism. A capability the
    platform cannot enforce is **absent, not promised**.
 
+**There is no second path, and that is a decision rather than an omission.** pi has no concept of
+skills, and Paul's ruling on it is explicit: *"you have to install an extension, and so I'm okay to
+follow that same model"* (N16). So **skills are not first-class**: a capability the user wants and a
+capability the model writes both arrive as extensions and pass **the same admission point**. Two
+paths would mean two policies, and the weaker one would decide what the system can do — which is the
+same failure as an authority with two homes (§3.0).
+
 #### The loop that must never run ungated
 
 k3 measured the inside of the harness: **a tool's self-declaration is the last word — there is no
@@ -1362,10 +1369,13 @@ privileged process, then mediated mode (§1.1a) cannot be built on top of it, an
 needs the tool boundary rather than the harness boundary. That is now the most load-bearing
 unknown in this document.
 
-**From whoever builds the first environment (browser) and the local one:** the core — project records, the tier table, capability lists,
-the audit writer, path resolution — must be **pure data and small functions with a narrow
-dependency surface**, because the same code has to run in a machine process *and* in a page
-worker, and a core that can only run in one of them becomes two implementations that drift.
+**From whoever builds the first environment (browser) and the local one:** the core — project
+records, the tier table, capability lists, the audit writer, path resolution — must be **a library**:
+**pure data and small functions with a narrow dependency surface**, importable and reused across
+client, server and anything later (N18). This is a **consistency requirement, not a portability
+technique** — Paul's words are *"consistency at that level"* — because a core that runs in one
+placement becomes **two implementations that drift**, and the drift is silent: both keep working,
+and they disagree.
 qwen2's harvest found a precedent worth **copying the shape of**: isocan's
 `packages/voice-agent/src/live.ts` is 1,173 lines of pure data and functions shared between a
 browser module and a harness, with nine dependencies doing the work. **Do not lift the file** — it
