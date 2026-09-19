@@ -67,3 +67,56 @@ something else**, which is the requirement most likely to shape the UI.
 
 Fan out: interface and experience first (astra), architecture and harness design alongside
 (k3 and the deepseek lanes), with the UI modelled rather than described.
+
+---
+
+## Added after the first pass (2026-09-19, 12:20) — from Paul's reply
+
+His spoken answer confirmed the name and added four requirements. Kept separate from the
+original brief so the first pass stays readable as what it was.
+
+### The name
+
+> "Yeah, voicebox. The name is fine. It's actually pretty cool."
+
+**Confirmed.** No longer a working name.
+
+### Does it use Chrome Agent Platform?
+
+> "Does it use CAP? Runtime no — but you do the analysis of CAP to see if it kind of helps me
+> meet my needs... the thing with CAP is it's got a lot of like agent-d project, that might be
+> too heavyweight, it's not an extensible platform like pi is. So maybe think about that a
+> little bit more."
+
+**Runtime: no.** An explicit analysis is owed, and his two axes of scepticism are **weight**
+and **extensibility** — so the question is which parts meet the needs below and which are
+weight we would inherit, not whether CAP is good.
+
+### The harness runs on the client *and* on the server
+
+> "The harness should be on the client and also running on the server. Isocan as a project does
+> that really well — but with isocan, I'm not sure."
+
+**One harness shape, two placements**: in a browser and on a machine. Isocan is the precedent
+and he is uncertain whether it generalises. This is a requirement arriving after PR #1, which
+assumed a local host.
+
+### The browser needs OPFS; the server holds the real filesystem
+
+> "I'm going to probably access this through a website. I do want to be able to use OPFS, right?
+> But then also, we're on the server as well. We need to think about how do I access all the
+> files from the server — securely, talking to it."
+
+So: **OPFS on the client**, **the real filesystem on the server**, and **secure reachability
+from elsewhere** — his example being to talk to it over Telegram while it has access to the
+machine, which is the shape this session already runs in.
+
+### The canvas, and his doubt about it
+
+> "I kind of need the canvas part of this thing. It's very much focused on the UI versus the
+> build — but maybe that's where I'm kind of making some mistakes."
+
+A voice agent that can build needs somewhere the building is **visible**. He names isocan's
+canvas, notes it is oriented to UI work rather than building, and questions whether it is the
+right answer. **The doubt is carried deliberately** — engaging with it is worth more than
+drawing a better canvas.
