@@ -29,7 +29,7 @@ So: the agent acts on a **real machine**, and **a project on disk is the unit of
 | **`undoKind` is declared per project, and the tiers scale with it** | *"We got worlds where you may never have git available"* — and "cheap to undo" is a false promise where nothing can be undone | A project with no undo has a narrower unprompted scope, which has to be visible rather than surprising |
 | **An unknown verb is not a Tier 2 act** — a prompt exists only where a mechanism does | Asking *"shall I?"* about an act the environment cannot perform **turns a missing capability into the user's decision**, and every yes is then a commitment made against something that does not exist. The resulting bug looks like a permissions problem rather than a missing feature | A refusal must **name the missing thing**, and the model's proposals are where this will first appear (§1.9) |
 | **Other projects are prior art, never dependencies — and theirs to change, not ours** | Paul, on isocan: *"I want to make sure that we're not using isocan... I just want the UI to look like it."* Sharpened since, for every sibling: **"inspired, yes; dependent, no; and don't change the other project to serve this one."** Their **techniques** are the most valuable thing here — and so are their **defects**: isocan's readiness gate dropped 192 of 208 frames before `setupComplete`, which a from-scratch build would reproduce and never notice | **Their artefacts are out of bounds**: CAP's bridge, isocan's packages (`@isocan/core`), pi's extensions. A sentence that says *reuse*, *lift*, *import* or *copy* about another project's code is the class to watch — and when the answer is *"the shape"*, **write the shape out here** so nobody has to go and find it |
-| **One host role, three placements** (machine, browser/OPFS, remote) — authority always co-located with the files | Paul's requirement: the harness runs on the client *and* the server, with a website and OPFS. Putting authority in the renderer would dilute the boundary to reach the same features | Capability parity is not assumed, so `do` needs a declared capability list per placement, shown in the UI |
+| **One host role, three placements** (machine, browser — OPFS *or* a picked handle (N20) — remote) — authority always co-located with the files | Paul's requirement: the harness runs on the client *and* the server, with a website and OPFS. Putting authority in the renderer would dilute the boundary to reach the same features | Capability parity is not assumed, so `do` needs a declared capability list per placement, shown in the UI |
 
 ---
 
@@ -183,7 +183,7 @@ A requirement, not a different design, and it is satisfiable by one rule:
 
 | Placement | Where the files are | Where the host runs | Root | What `do` can mean |
 |---|---|---|---|---|
-| **browser — "the first environment"** (E1) | **OPFS** in the page's origin | a dedicated **worker** in that page — same tier table, same audit code | an OPFS directory handle | wasm and JS tools, file reads and writes, generated assets; no processes, and **no harness** (see the transport fact below) |
+| **browser — "the first environment"** (E1) | **OPFS** in the page's origin, **or a picked directory the user chose** (N20) | a dedicated **worker** in that page — same tier table, same audit code | an OPFS directory handle, **or a persisted handle to that folder** | wasm and JS tools, file reads and writes, generated assets; no processes, and **no harness** (see the transport fact below) |
 | **local safe** (E2) | a checkout on his machine | a local process on that machine | a realpath (or its worktree) | whatever the project's toolchain can: spawn processes, run tests, git |
 | **remote** (E3) | a checkout on a machine that is *not* where the browser is | a process on **that** machine | a realpath on that machine | as local, minus nothing — today's Telegram-to-agent shape |
 | **hosted cloud** (E4, later) | a checkout on **somebody else's** machine | a process there | a realpath there | as local, with everything below attached |
@@ -211,6 +211,34 @@ Three consequences worth stating plainly:
    | Visible to his other sessions (chat, Telegram, another device) | **never** — unless he exports or syncs, which is an ordinary Tier 2 egress act | **always** |
    | Works with no host reachable | **yes** — the page *is* the host | no |
    | Whose history it is | the tab's | his |
+
+   **And there is a third shape, which N20 adds and which is neither of those**: a browser holding a
+   **picked, persisted directory handle** — *"it's not just OPFS, but also directory handles that are
+   persistent"* (Paul). The files are **the user's own**, in a folder they chose, and the page holds a
+   **handle rather than a copy**. That is *"local project files are the unit of work"* satisfied **from
+   the browser**, with no machine process anywhere.
+
+   | | **OPFS** | **a picked directory handle** |
+   |---|---|---|
+   | the files are | inside the origin | a real folder the user chose |
+   | survives a reload | yes, **no gesture** — measured | **only if the handle is persisted**; re-acquisition may need a gesture |
+   | who else sees it | nothing outside the origin | **the user's own editor and tools** |
+   | what the origin can describe | a path it owns | **nothing it can compare** |
+
+   Two consequences, and both are the identity rule arriving one level down:
+
+   - **Identity has a third case.** `location` has **kinds**, and a handle's target is something the
+     origin **cannot describe or compare** — so two origins holding handles to the *same* folder are two
+     projects, because neither can tell. The design must not imply a handle has a path it can check.
+   - **The permission stories differ, so the UI copy cannot be shared.** OPFS needs no gesture; a picked
+     directory may need one on re-acquisition. The durability state therefore has to say **which kind of
+     location** a project has, not merely whether it persisted.
+
+   **Containment carries over unchanged** — a picked directory is still a **root**, and
+   `resolveInsideRoot` refuses `..` exactly as before; the write path does not change, only where it is
+   rooted. **(One thing to measure rather than assume: OPFS cannot express a symlink and a real folder
+   can, so the symlink case must be tested against the File System API before this shape is called
+   equivalent — it is an open item in the build spec §7.)**
 
    Both make the walk work; what differs is **whether the history is his or the tab's**. So the
    window is the recommendation wherever a host is reachable (§5 decision 4), the peer is a real
@@ -797,8 +825,11 @@ A project is a **declared directory** plus a session, and nothing more:
 
 ```jsonc
 { "id": "isocan",                      // short name, unique among registered projects
-  "path": "/home/paulkinlan/isocan",   // a DECLARED location: a realpath on a machine, or the
-                                       // name of an OPFS directory in an origin (§1.1b)
+  "path": "/home/paulkinlan/isocan",   // a DECLARED location. THREE kinds (N20): a realpath on a
+                                       // machine; an origin-private OPFS path; or a picked directory
+                                       // remembered as { "kind": "handle", "id": "h_7f2",
+                                       // "label": "~/notes" } — where the origin cannot describe
+                                       // the target, only remember the handle and the user's label
   "executionRoot": "/home/paulkinlan/isocan",  // the root THIS instance works in (§2.3/§2.4)
   "roots": [ "/home/paulkinlan/isocan",        // every root open on this project, one writer each
              "/home/paulkinlan/worktrees/isocan-walk" ],   // e.g. the phone session's worktree
