@@ -63,10 +63,32 @@ Three things follow from this picture and are worth saying plainly:
 
 1. **The browser never executes anything.** It is a renderer and a microphone. Every act is
    a message to the host.
-2. **The host is the security boundary**, because it is the only component that knows the
-   project roots, the tier table and the pending confirmations at the moment of acting.
+2. **The host is the authority** — the only component that knows the execution roots, the
+   tier table and the pending confirmations at the moment of acting. Whether it is also the
+   *enforcement point* depends on where the tools live, which is a decision rather than a
+   property: see §1.1a, because the difference decides whether §3 is a boundary or a report.
 3. **The harness is a child process, not a service.** Its authority is exactly the authority
    the host gives it: a working directory, an environment, and the tools that harness ships.
+
+### 1.1a Mediated or compliant: where the tools live
+
+A CLI harness ships its own tools and runs them in its own process. So the host sees an act
+**only if the harness asks** — which means a tier table can be enforced two very different ways,
+and a design that does not choose is claiming the stronger one by accident.
+
+| | **Mediated (the target)** | **Compliant (the fallback)** |
+|---|---|---|
+| Where tools come from | the host injects the tool set (MCP/ACP definitions) into the harness, so **every invocation routes through the host** before it runs | the harness ships its own tools and runs them directly |
+| What the host enforces | **all** of it: containment, credentials, argv classification, tiers — on every call, because every call is its own | only what it can see: its own commands, path resolution for what it is asked to resolve, and whatever the harness chooses to ask permission for |
+| The guarantee | *"it cannot leave the project"* | *"it will not leave the project unless the harness misbehaves"* |
+| Cost | the host must describe tools and stay in the loop for each call | none — and no real containment of the harness's own actions |
+
+**The design's position: mediated is the target for the default harness, and compliant mode is
+disclosed rather than assumed.** The brief's minimalism makes this feasible — *one* harness
+built by us can expose its tools through the host, which is far easier than auditing an adapter
+zoo. A harness that cannot be mediated is still usable, but the UI carries the downgrade
+explicitly, in the same spirit as the provider badge: **the guarantee is a property of the mode,
+and the user is told which one is running.** §3.2 and §3.7 are written in terms of both.
 
 ### 1.2 What holds state
 
@@ -141,17 +163,30 @@ directory.
 outside what it may do, it asks, and the **host** answers:
 
 ```jsonc
-// harness → host
+// harness → host.  The human-readable title is NOT the payload: a host cannot enforce
+// containment, credential or argv rules from "Bash: rm -rf build/" alone.
 { "id": 41, "method": "session/request_permission",
   "params": { "sessionId": "ses_…",
               "toolCall": { "title": "Bash: rm -rf build/", "kind": "execute" },
+              "resolved": { "argv": ["rm", "-rf", "/home/paul/…/isocan/build"],
+                            "cwd": "/home/paul/…/isocan",
+                            "paths": { "read": [], "write": ["/home/paul/…/isocan/build"] },
+                            "effects": ["412 files removed", "not tracked by git"] },
               "options": [ { "optionId": "allow_once", "name": "Allow once", "kind": "allow_once" },
                            { "optionId": "reject_once", "name": "Reject", "kind": "reject_once" } ] } }
+
+// host → harness (the answer, which §1.5 used to leave undefined)
+{ "id": 41, "result": { "optionId": "allow_once" } }      // or "reject_once"
 ```
 
-The host's reply is *not* a rubber stamp: it consults the tier table (§3.2), and for a Tier 2
-act it relays a **typed question** to the UI and waits for a human. The model never answers
-its own permission request.
+**`resolved` is the structured plan, and it is what the host gates on** — in mediated mode the
+host *produces* it (it is the tool boundary, so it has the argv and the paths before anything
+runs); in compliant mode it is what the harness must supply if it wants a decision rather than a
+refusal. The `title` is for humans and is never parsed.
+
+The host's reply is *not* a rubber stamp: it consults the tier table (§3.2) against the **resolved
+plan**, and for a Tier 2 act it relays the question to the UI and waits for a person (§3.4). The
+model never answers its own permission request.
 
 ### 1.5 The host ↔ UI contract (astra builds against this)
 
@@ -339,7 +374,8 @@ is enforced as data in the host and every one has a test (§3.6).
 
 | Rule | Mechanism |
 |---|---|
-| Write or read outside declared project roots and the host's own state dir | realpath containment check on every resolved path |
+| Write or read outside the **active project's execution root** (§2.1) and the host's own state dir | realpath containment against the active root only — never the union of registered roots, or a nested project would hand the harness another project's files |
+| Creating a symlink whose **target** resolves outside the execution root | containment checks the link target as well as the link's location, before creation |
 | Touch credential material (`~/.ssh`, `~/.config/**credentials**`, keychains, browser profiles, `.env*`, service-account files) | path + pattern deny-list, applied to reads as well; matches are reported, never echoed |
 | `sudo`, `su`, machine-wide config changes, global package installs | command classification before execution |
 | Kill processes the host did not start | the process journal is the only source of pids it may signal |
@@ -354,9 +390,10 @@ is enforced as data in the host and every one has a test (§3.6).
   is kept recoverable (§2.4).
 - Run the project's own toolchain: build, test, lint, format. These are the project's own
   code, which is the point of a build environment; they are reported, not gated.
-- Install dependencies, with the report naming packages that are **new** to the lockfile
-  (supply-chain reach is the risk worth surfacing).
-- Start a dev server the host records in the process journal, named and stoppable.
+- Start a dev server the host records in the process journal, **bound to loopback**
+  (`127.0.0.1`), in a **single slot per project** that replaces the previous instance. A
+  project whose own configuration binds `0.0.0.0` is exposing the checkout to the local
+  network — that is a Tier 2 act, because the host cannot honour Tier 1's promise for it.
 
 **Tier 2 — confirm first, per act, in the conversation.**
 
@@ -367,6 +404,13 @@ is enforced as data in the host and every one has a test (§3.6).
   calling a remote API that receives project content.
 - **Reaching a human or the public**: sending a message, email, post or comment — always,
   even to Paul himself.
+- **Adding or changing dependencies.** `npm install`, `pip install`, `cargo add` and friends
+  **execute arbitrary code** (preinstall/postinstall/setup.py/build.rs lifecycle hooks) *and*
+  reach external registries, so unprompted they are unprompted code execution plus unprompted
+  egress — the supply-chain vector sitting inside what was the safe tier. The confirmation names
+  the packages, including which are new to the lockfile. **A restore is Tier 1 only when it
+  cannot run code**: `npm ci --ignore-scripts` against a committed, unchanged lockfile, or the
+  equivalent. Without `--ignore-scripts`, a restore is still an install.
 - **Spending**: token spend on a cloud harness is expected (it is the tool), but provisioning,
   purchases and anything with a price tag are Tier 2.
 - **Secrets**: using a declared secret to run something, and any act that would put a secret
@@ -423,7 +467,9 @@ the voice model on Paul's behalf.
 
 | Claim | Mechanism |
 |---|---|
-| "It cannot leave the project" | realpath containment computed at execution time for every path and cwd |
+| "It cannot leave the project" | realpath containment against the active execution root, computed at execution time for every path and cwd **and re-asserted immediately before use** — the 30-second confirmation window is a real window, and a path or symlink can change inside it. Resolve, then re-resolve, then execute |
+| "It cannot be walked out of the project by a symlink" | link *targets* are checked, not just link locations, and the host opens with `O_NOFOLLOW` semantics where it performs the operation itself |
+| "And the guarantee holds for the harness's own tools too" | **only in mediated mode (§1.1a)**. This is the row that decides whether the table above is enforcement or disclosure |
 | "It cannot touch credentials" | deny-list applied to resolved paths *and* to reads; values never returned to the transcript |
 | "It cannot run the wrong thing" | commands are classified from the resolved argv, and Tier 0 matches refuse before spawn |
 | "It cannot act unattended" | Tier 2 always blocks on a human; no new plan begins without an instruction |
