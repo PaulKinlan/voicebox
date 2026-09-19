@@ -12,7 +12,7 @@ const captions = [
 function sample(machine = false) {
   return { count: 3, seen: 3, work: 'ready', connected: true, mic: false, speaking: true,
     caption: captions[3], selected: 'page', admission: 'pending', merge: 'pending',
-    undo: machine ? 'worktree' : 'written-file-list', extension: false, timer: null,
+    undo: machine ? 'worktree' : 'written-file-list', extension: false, extensionResult: '', timer: null,
     events: ['Example conversation: “Make a little place for things I notice on a walk.”',
       'Fieldnotes page created (sample).', 'On noticing note created (sample).',
       'Little sorter written. Admission pending (sample).'] };
@@ -257,10 +257,10 @@ $('text-form').addEventListener('submit', (e) => {
 });
 // The package preview is fixed illustrative source, never evaluated or imported.
 const extensionSource = '(module\n  (import "notes" "read" (func $read))\n  (import "collections" "write" (func $write))\n  (func (export "group_notes")\n    call $read\n    call $write))';
-const extensionVersion = 'notebook-helper 1.0 · illustrative package';
 function renderExtensions() {
   const s = current();
   const shell = $('package-example').value === 'shell';
+  const extensionVersion = `${shell ? 'build-helper' : 'notebook-helper'} 1.0 · illustrative package`;
   $('extension-inventory').textContent = s.extension
     ? `Notebook helper 1.0 · local example package · publisher unverified · enabled for ${projectId()} only (simulation).`
     : 'No third-party extensions installed in this example. The little sorter was made in the conversation; it is a separate proposal.';
@@ -274,23 +274,27 @@ function renderExtensions() {
   $('package-enforced').textContent = shell
     ? 'Not grantable here. Browser has no shell; this study has no contained machine runner either. Choosing a machine project does not turn this into an admitted tool.'
     : 'Proposed handles: notes (read), collections (write). Wasm imports only; no network or shell. These are example grants, not enforcement measured by this study.';
-  $('package-warning').textContent = s.extension ? 'This example version is already installed. A changed package would need a new review.'
-    : shell ? 'Cannot install this package in the example environment. Missing execution capability is an environment fact, not a command failure.'
+  $('package-warning').textContent = shell ? 'Cannot install this package in the example environment. Missing execution capability is an environment fact, not a command failure.'
+    : s.extension ? 'This example version is already installed. A changed package would need a new review.'
     : 'Installation makes this exact example version available only here. A declaration is not a guarantee. A real host must verify the package and enforce these grants before admission.';
   $('install-example').disabled = shell || s.extension || !s.connected || s.undo === 'none';
+  $('reject-example').disabled = !shell && s.extension;
+  $('extension-result').textContent = s.extensionResult;
 }
 $('extensions-open').addEventListener('click', () => { closeAll(); renderExtensions(); open('extensions-dialog'); });
-$('package-example').addEventListener('change', renderExtensions);
+$('package-example').addEventListener('change', () => { current().extensionResult = ''; renderExtensions(); });
 $('install-example').addEventListener('click', () => {
   if ($('package-example').value !== 'browser' || current().extension || !current().connected || current().undo === 'none') return;
   current().extension = true;
+  current().extensionResult = 'Installed in the study only. No files changed; no code ran.';
   event('Explicitly installed notebook-helper 1.0 in the study. No package loaded or executed.');
   renderExtensions();
-  $('extension-result').textContent = 'Installed in the study only. No files changed; no code ran.';
 });
 $('reject-example').addEventListener('click', () => {
-  $('extension-result').textContent = 'Not installed. The preview granted no authority.';
+  if ($('package-example').value === 'browser' && current().extension) return;
+  current().extensionResult = 'Selected package not installed. Existing inventory unchanged.';
   event('Declined the example sideload; inventory unchanged.');
+  renderExtensions();
 });
 // No automatic audio start, no persistence claim, no background provider work.
 render();

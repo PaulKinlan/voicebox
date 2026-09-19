@@ -90,7 +90,7 @@ async function screenshot(name) {
 }
 async function selectValue(selector, position) { await click(selector); await key(position); await key('Enter'); }
 async function finishChild(child) {
-  if (!child || child.exitCode !== null) return;
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
   const exited = once(child, 'exit');
   child.kill('SIGTERM');
   const finished = await Promise.race([exited.then(() => true), delay(2000).then(() => false)]);
@@ -183,6 +183,7 @@ try {
   await click('#extensions-open');
   await selectValue('#package-example', 'End');
   check('shell-dependent package cannot be installed', await evaluate(`document.getElementById('install-example').disabled && document.getElementById('package-enforced').textContent.includes('Not grantable')`));
+  check('source identity follows the selected package', await evaluate(`document.getElementById('package-origin').textContent.startsWith('build-helper 1.0')`));
   await screenshot('extension-unavailable.png');
   await click('#reject-example');
   check('declining a sideload leaves inventory empty', await evaluate(`document.getElementById('extension-inventory').textContent.startsWith('No third-party')`));
@@ -192,6 +193,7 @@ try {
   await screenshot('extension-review.png');
   await click('#install-example');
   check('explicit compatible sideload enters the example inventory', await evaluate(`document.getElementById('extension-inventory').textContent.includes('publisher unverified') && document.getElementById('extension-result').textContent.includes('No files changed') && document.getElementById('install-example').disabled`));
+  check('installed package cannot later be labelled not installed by decline', await evaluate(`document.getElementById('reject-example').disabled`));
   await key('Escape');
   await click('#type-open'); await click('#utterance');
   const payload = '<img src=x onerror="document.title=\'INJECTED\'">';
@@ -208,6 +210,7 @@ try {
   await click('#play'); await until(`document.body.dataset.work === 'ready'`);
   await viewport(390, 844); await screenshot('mobile-studio.png');
   check('phone has no horizontal page overflow', await evaluate('document.documentElement.scrollWidth <= innerWidth'));
+  check('phone asset content remains inside its preview', await evaluate(`[...document.querySelectorAll('.artifact-open > div')].every(e => [...e.children].every(c => c.getBoundingClientRect().bottom <= e.getBoundingClientRect().bottom))`));
   await click('#decision-review'); await click('#deny'); await key('Escape');
   check('phone decision can be reached and answered natively', await evaluate(`document.getElementById('tool-state').textContent === 'Made · not enabled'`));
   await viewport(844, 390); await click('#settings-open');
@@ -215,6 +218,9 @@ try {
   check('short-landscape inspector close is reachable', await evaluate(`!document.querySelector('dialog[open]')`));
   await screenshot('landscape-studio.png');
   check('landscape has no horizontal page overflow', await evaluate('document.documentElement.scrollWidth <= innerWidth'));
+  check('short landscape keeps the microphone in the first viewport', await evaluate(`(() => {const r=document.getElementById('mic').getBoundingClientRect();return r.top>=0 && r.bottom<=innerHeight;})()`));
+  await key('Tab');
+  check('native Tab reaches a visible interactive control', await evaluate(`document.activeElement.matches('button,a,input,select,textarea') && document.activeElement.getBoundingClientRect().height > 0`));
   await viewport(1440, 900); await click('#settings-open'); await click('input[name="theme"][value="light"]'); await key('Escape');
   await screenshot('desktop-light.png');
   check('explicit light appearance overrides system dark', await evaluate(`getComputedStyle(document.documentElement).colorScheme === 'light'`));
@@ -229,6 +235,6 @@ try {
   if (cdp) { try { await cdp.call('Browser.close', {}, null); } catch {} cdp.ws.close(); }
   await finishChild(browser); await finishChild(server);
   await rm(profile, { recursive: true, force: true });
-  await writeFile(join(out, 'receipt.json'), JSON.stringify({ revision, sourceStatus, checks, captures, errors, requests, teardown: { browserExit: browser?.exitCode, serverExit: server?.exitCode, profileRemoved: true }, scope: 'Synthetic UI transitions and native interaction only; no audio, OPFS, real admission, host authority, multi-instance transport or package execution.' }, null, 2));
+  await writeFile(join(out, 'receipt.json'), JSON.stringify({ revision, sourceStatus, checks, captures, errors, requests, teardown: { browserPid: browser?.pid, browserExit: browser?.exitCode, browserSignal: browser?.signalCode, serverPid: server?.pid, serverExit: server?.exitCode, serverSignal: server?.signalCode, profileRemoved: true }, scope: 'Synthetic UI transitions and native interaction only; no audio, OPFS, real admission, host authority, multi-instance transport or package execution.' }, null, 2));
   console.log(`${checks.filter((c) => c.passed).length}/${checks.length} checks; evidence: ${out}`);
 }
