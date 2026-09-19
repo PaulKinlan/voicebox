@@ -292,3 +292,88 @@ Nothing in the shape — it is the right contract. Three clarifications, all evi
 
 *Written by k3, 2026-09-19. Every capability claim above carries its drive or its citation;
 anything phrased as "works" was run, and anything phrased as "does not work" was run twice.*
+
+---
+
+## 7. C5 — dynamic tool creation: the model writes, the model registers (driven)
+
+Paul's requirement, his mechanism: *"You obviously build extensions like we can with pi and
+then just have the model register them."* **It works today, end to end, in one session.**
+
+The drive (tmux-hosted interactive pi, `/tmp/vb-dynamic`, `--approve`):
+
+```
+prompt: "Create .pi/extensions/now.ts … that registers a tool named now"
+  → the model WROTE the file itself, mid-session:
+    import type { ExtensionAPI } …
+    export default function (pi: ExtensionAPI) {
+      pi.registerTool({ name: "now", …, async execute() {
+        return { content: [{ type: "text", text: new Date().toString() }] };
+      }});
+    }
+
+/reload
+  → "Reloaded keybindings, extensions, skills, prompts, themes, and context files"
+
+prompt: "Use the now tool to tell me the current date and time."
+  → tool called IN THE SAME SESSION, result into context:
+    now → "Sat Sep 19 2026 12:37:42 GMT+0100 (British Summer Time)"
+```
+
+The full loop — **author (model) → register (/reload) → visible → callable → result** —
+runs without a restart. So the harness side of dynamic tool creation is not a hole; it is a
+working capability, and the design questions are all on the *authority* side:
+
+### What a tool needs to be
+
+- **A file in an auto-discovered directory**: `~/.pi/agent/extensions/` (global) or
+  `.pi/extensions/` (project-local — loaded only when the project is trusted). Hot-reloaded
+  mid-session by `/reload`. `pi -e ./path.ts` for one-off loads.
+- **Or an in-process registration** (`pi.registerTool()` inside any loaded extension).
+- The model's own context learns the new tool without a restart: the reload rebinds the tool
+  list, and the very next prompt sees and calls it (the drive above).
+
+### "Absent, not broken" — the harness can withhold a capability
+
+Second drive: `pi -xt bash` (denylist), then "Run the shell command: ls":
+
+```
+model: "No shell tool in this harness. I can't run ls."
+model: "This environment has no shell/exec tool — only file read/edit/write…"
+```
+
+The tool was **not in the list the model sees** — it reported the absence instead of trying
+and failing. `-t`/`--tools` (allowlist) and `-xt`/`--exclude-tools` (denylist) are set at
+spawn, so **the host decides per placement and per session which capabilities exist**, and
+the model's own report of the boundary is accurate. An `exec` tool absent in the browser
+placement is exactly this, declared at launch.
+
+### Can anything contradict a tool's self-declaration?
+
+Inside the pi process: **the declaration is the last word.** A tool's `execute()` runs with
+the pi process's permissions; there is no sandbox (pi's security doc says so explicitly). The
+contradiction mechanisms that do exist, in order of strength:
+
+1. **The host owns the admission point.** The extension directory and the `/reload` trigger
+   are the gate: the model *proposes* tool source; the host reviews (a Tier 2 act whose
+   `resolved` is the file content and the registration it performs); the host reloads. The
+   model does not get to reload its own proposals past the host — that is precisely where the
+   tier table does work. In my drive the loop ran ungated; in the built system the directory
+   and the reload belong to the host.
+2. **Extension event interception.** pi's extension API can block or modify tool calls
+   (the docs name "permission gates — confirm before `rm -rf`" as an example use case). A
+   policy extension is the in-harness veto — and the same mechanism C2's compliant mode needs.
+3. **Project trust.** An untrusted project's `.pi/extensions/` never loads at all — the
+   load-time boundary, already proven.
+4. **Environmental containment.** The only boundary that does not depend on anyone's
+   compliance: the harness runs in a container or policy sandbox with only the files and
+   credentials the task needs (pi's security doc's own prescription for unattended work).
+
+### Where this leaves the design
+
+Dynamic tool creation is **possible today** and the gate is **locatable exactly where the
+rest of the design already has one**: authoring is the model's, admission is the host's Tier
+2 decision over the file content, registration is the host's `/reload`. The one thing that
+must not happen is the loop running ungated (model writes and reloads directly), because then
+the tool proposal — the act with the most reach in the whole system — bypasses the only table
+meant to govern it.
