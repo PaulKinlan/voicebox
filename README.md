@@ -34,3 +34,39 @@ is still undecided.
 ## Status
 
 Seeded 2026-09-19 from a spoken brief. Design in progress.
+
+
+## Running (the skeleton loop)
+
+```sh
+node server.mjs            # serves the page on http://127.0.0.1:8787
+```
+
+Open the page in Chrome, press the mic, and speak — e.g. *"create a file called
+hello.txt with hello world"*, *"read hello.txt"*, *"list files"*. A text field
+does the same without a mic. Every turn is captured, resolved to an action, and
+the result is written into `workspace/` — a real directory on disk.
+
+What works today:
+
+- **Speech capture** — the browser's own `SpeechRecognition` (Chrome), no key,
+  no library. One press per turn.
+- **Turn resolution** — a deterministic script resolver (`lib/resolver.mjs`)
+  that knows create/read/list. It is a placeholder brain, deliberately: the
+  resolver is a provider seam (`registerResolver(name, fn)`), and the model
+  resolvers plug into exactly that contract.
+- **The action executor** — writes/reads/lists files in `workspace/` on disk.
+  This is the honest version of "it makes things": it makes files.
+
+What does not work yet:
+
+- **No live model.** The resolver is scripted; nothing calls Gemini Live or
+  OpenAI Realtime. The seam is `lib/resolver.mjs` — wire a resolver that calls
+  the model and returns the same `{ verb, name, content }` shape and the rest
+  of the loop is unchanged.
+- **No streaming conversation.** One turn per press; the always-on conversation
+  from the brief comes with the live model.
+- **The workspace is a flat directory** — no project scaffolding, no shell.
+
+Next step: wire the first live model resolver behind the seam (Gemini Live),
+then grow the action set toward the build environment.
