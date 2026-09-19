@@ -216,6 +216,11 @@ child's process group directly; either way it stops the processes the host start
 project (the process journal has the pids). A stop that only works when the other side is
 well-behaved is not a stop.
 
+The same applies to failure in the other direction: **a harness that exits mid-turn is an error
+turn, not a dead session.** The host reports it, records it, and can start a fresh session for
+that (instance, root) — because a harness dying is a thing that happens under load, and a design
+that treats it as fatal turns a retry into a lost conversation.
+
 **`cwd` is always declared** — never defaulted, never inferred from the machine's layout.
 The host computes it from the project record and refuses a turn whose project has no usable
 directory.
@@ -556,6 +561,15 @@ is enforced as data in the host and every one has a test (§3.6).
 | Send anything to the network from the host itself (exfiltration surface) | the host makes no outbound requests; the harness does what its own tools do, inside a project |
 | Publish, deploy, spend money, message a human | these are **Tier 2** — but a Tier 0 blanket ban applies when the instruction arrives from *content* rather than from Paul (§3.3) |
 
+**Resolving is not rewriting, and normalising is not checking.** The skeleton demonstrated the
+failure mode in forty lines: its containment was `path.basename(action.name)`, which is not a
+check but a *side effect* — `path.basename('..') === '..'`, so `path.join(workspace, '..')` is the
+parent directory and a transcript of *"create a file called ../../../tmp/evil.sh"* resolved
+somewhere else entirely. A containment rule is only a rule when it **resolves the real path and
+refuses** — it must never "clean up" an input and then proceed, because the cleanup is what
+produced the escape. `basename`, `join`, `normalize` and `replace('../', '')` are rewrites; the
+check is `realpath(candidate)` compared against the root, and its answer is yes or no.
+
 **Tier 1 — allowed unprompted, inside a project, reversible, and reported.**
 
 - Read anything inside the project.
@@ -704,6 +718,33 @@ measured on this fleet yesterday, which is exactly why it must not be assumed he
 
 On a machine, "the host makes no outbound requests" is a property we implement; in a browser it
 is a property we *configure and verify*. Both are claims — only one of them is free.
+
+#### The renderer is a sink, and that is the other half of the same policy
+
+Driving the skeleton (2026-09-19) proved this one rather than arguing it: **`<img src=x
+onerror=...>` typed into the page's own text field executed**, through three separate `innerHTML`
+sinks — the transcript echo, the server's own error and note strings, and an action's file name,
+which makes that one **stored** as well as reflected. Two things follow.
+
+- **The policy has to cover scripts, not only connections.** A CSP that restricts `connect-src`
+  does nothing about `onerror=`; the browser placement needs **`script-src` without
+  `'unsafe-inline'`** (and no `unsafe-eval`), alongside the egress allow-list. Restricting what a
+  page may reach and what it may execute are two different jobs, and the second is the one this
+  surface is actually attacked through.
+- **Nothing that arrives from outside is ever rendered as markup.** The transcript (voice is
+  untrusted by §3.1, so this is not a surprise — it is the same rule applied one layer up), the
+  host's own error and note strings, file names, repository content, and the harness's output all
+  reach the renderer from outside it. They are text: inserted as text nodes, escaped if they must
+  become markup, never interpolated into HTML.
+
+#### The host survives a bad turn
+
+The same drive found the request path had no error handling, so a malformed input was a **remote
+kill** rather than an error. On a machine that is a dead host; in the browser placement it is a
+dead **worker holding the project**. So it is a named property, checked in §3.6 rather than
+assumed: any frame — malformed JSON, unknown type, a handler that throws — produces an error
+message and an audit entry, and the worker restarts with its OPFS project intact. A turn that can
+end the session is not a turn, it is a crash with a chat interface.
 ### 3.6 The tests that make the boundary real
 
 A boundary that is only asserted is a wish, and a suite of refusals proves nothing until a
@@ -717,8 +758,13 @@ request succeeds. So both directions:
   mistaken for safety.
 - **Tier 2 tests**: an act that must block pending confirmation; a confirmation that arrives
   late, ambiguous or twice; a `source: "content"` act that requires typed confirmation.
-- **Path tests**: `..` escapes, symlinks pointing out of the root, and absolute paths
-  elsewhere — each refused on the resolved path.
+- **Path tests**: `..` escapes, symlinks pointing out of the root, and absolute paths elsewhere —
+  each refused on the resolved path. **Including `..` as a *name*** rather than a path segment
+  (`path.basename('..')` is `'..'`, the case that walked out of the skeleton's workspace), because
+  that is the shape a normalising implementation gets wrong while looking correct.
+- **Host-survives tests**: malformed JSON, an unknown message type, a frame with a missing field
+  and a handler that throws — each yielding an error and an audit entry with the host (or the
+  browser worker) still serving the next request.
 - **The reuse test**: the cwd the harness receives is the project's realpath, and no default
   is invented when a project lacks one (a rule we learned the hard way this week).
 
@@ -817,7 +863,10 @@ disposable box, or in the browser over OPFS, where the sandbox is the platform's
 
 **From astra (interface):** the confirmation UI must render `confirm_request.resolved` (paths,
 counts, effects) rather than the spoken words, and must be able to answer **typed/clicked**
-when `source: "content"`. Three additions from the concurrency model (§2.3): show **who else is
+when `source: "content"`. **And treat every string from outside the page as text, never markup** —
+the transcript, the host's error and note strings, file names, repository content and harness
+output: this is the sink that the skeleton's own drive proved (§3.5a), and it is your lane's
+half of the browser placement's security. Three additions from the concurrency model (§2.3): show **who else is
 working on this project** and which root each instance holds; show the project's **`undoKind`**
 (and the narrower behaviour when it is `none`); and show **placement + capabilities + mediated
 flag**, because those are part of what the user is being promised. Everything else in §1.5 is
