@@ -120,7 +120,12 @@ Three consequences worth stating plainly:
    that pretended otherwise would discover that mid-sentence. Isocan is the precedent Paul points
    at: the *shape* generalises (thin client, real work behind an interface), the *tool parity*
    does not.
-3. **The remote placement changes transport, not authority.** Loopback plus a token is right when
+3. **Browser-only (§5 decision 4) is what makes a walk work.** Not merely a convenience: if the
+   page can host the tier table and the audit in its own worker, then leaving the desk does not
+   end the session — the phone becomes the host for the project it holds in OPFS. If it cannot,
+   walking away ends the conversation until a host is reachable. That is the argument for
+   allowing it, and the price is the disclosure: a page-local audit is evidence about a tab.
+4. **The remote placement changes transport, not authority.** Loopback plus a token is right when
    client and files share a machine; a browser on a phone talking to a server needs an
    authenticated remote channel (TLS, a paired credential, an explicit pairing flow) — and the
    tier table, the confirmations and the audit stay **on the machine that holds the files**,
@@ -353,7 +358,10 @@ A project is a **declared directory** plus a session, and nothing more:
 ```jsonc
 { "id": "isocan",                      // short name, unique among registered projects
   "path": "/home/paulkinlan/isocan",   // the DECLARED checkout (realpath-resolved at open)
-  "executionRoot": "/home/paulkinlan/isocan",  // where work actually happens (§2.4)
+  "executionRoot": "/home/paulkinlan/isocan",  // the root THIS instance works in (§2.3/§2.4)
+  "roots": [ "/home/paulkinlan/isocan",        // every root open on this project, one writer each
+             "/home/paulkinlan/worktrees/isocan-walk" ],   // e.g. the phone session's worktree
+  "undoKind": "worktree",              // git-branch | worktree | written-file-list | none (§2.4)
   "placement": "machine",              // machine | browser | remote  (§1.1b)
   "capabilities": ["read", "write", "exec", "wasm"],   // what `do` can mean here (§1.1b)
   "lastUsed": "2026-09-19T11:40:00Z",
@@ -368,9 +376,13 @@ A project is a **declared directory** plus a session, and nothing more:
   diff and every state message. Containment is always **relative to one root — the active
   project's execution root** — never the union of registered projects, or a nested or
   side-by-side project would hand the harness another project's files.
-- **One active execution root per project.** Two writers on one tree is the failure this fleet
-  already has evidence for, so a project is never simultaneously open for work in two places;
-  moving work between roots is an explicit act.
+- **One writer per root; several roots per project.** Two writers on one tree is the failure this
+  fleet already has evidence for — so the *root* is what serialises (§2.3), not the project. A
+  project may have several roots open at once (his phone session's worktree and this chat
+  session's), each with exactly one writer, and merging them is an explicit act.
+- **`undoKind` is declared, not assumed.** A git project can hand the agent a worktree to break;
+  a project with no git gets a written-file revert list; a project with neither says `none`, and
+  the tiers narrow accordingly (§2.4).
 - **No discovery.** The host never scans the filesystem for repositories; a directory becomes
   a project when it is declared. (This is the same rule as the cwd fix: the machine's layout
   is never assumed.)
@@ -389,26 +401,60 @@ A project is a **declared directory** plus a session, and nothing more:
 cloning) is a later milestone and a **confirmed** act, because it writes outside an existing
 root by definition.
 
-### 2.3 Several at once: what is parallel, what is serial
+### 2.3 Several at once: the unit of serialisation is the execution root
 
-The brief's requirement — *working on isocan while talking to the agent* — is satisfied by
-**sessions persisting per project while the conversation moves**, not by running two agents
-at once:
+> *"If I'm on my walk, an instance of the web page, and your instance in the chat session"*
+> — Paul, 2026-09-19
 
-- **Parallel across projects**: sessions, transcripts, state and audit trails. Switching is
-  instant, and nothing is torn down. If isocan has a turn running, switching to another
-  project does not interrupt it; its progress is buffered and shown when it is active again.
-- **Serial within a project**: one turn at a time. A second instruction while a turn runs is
-  either queued or refused, explicitly, in the UI.
-- **One voice channel**: you can only be talking about one project at a time, and the active
-  project is what a spoken instruction means. "Which project is this about?" is never guessed
-  from content — it comes from the active project, or from an explicit name in the sentence.
-  An ambiguous instruction asks rather than picks.
+Two live agents on **one project** at the same time. The earlier version of this section said
+*serial within a project, parallel across projects*, reasoned from the voice channel being
+serial — and that premise is now false: there are **several conversations**, so the serialisation
+cannot be the project.
 
-A second turn *globally* (two projects running at once) is deliberately out of M1: two agents
-editing two checkouts is safe, but two agents acting on one machine's resources is a
-resource-contention problem we have no reason to take on before the interaction model is
-settled.
+**What actually must not interleave is a change to the same working tree.** So:
+
+| Unit | Rule |
+|---|---|
+| **Execution root** (§2.1) | **Exactly one writer at a time.** This is the only thing that serialises, because it is the only thing that can be corrupted by interleaving |
+| **Project** | A container of roots, sessions and history. Several roots may be active concurrently — that is what makes the walk work |
+| **Session** | One per **(instance, root)**. A session is a conversation, and two instances are two conversations; they must not resume each other's harness session |
+| **Reads (`ask`)** | Never serialised anywhere. Any number of instances may read the same project |
+| **A resolved plan** | Not serialised, but **ordered**: plans in different roots run concurrently; plans in one root queue behind the root's writer |
+
+So Paul's scenario works by construction: **his phone session and this chat session each get
+their own execution root** (their own worktree, §2.4) inside the same project. They work at the
+same time, on the same project, without touching each other's files — and the way their work
+meets is an ordinary merge he can see and refuse.
+
+**Where a second root is impossible** — a non-git project, where the only root *is* the checkout
+— the rule degrades honestly rather than silently: the second instance may **read and propose**,
+and its writes **queue** behind the current writer, with the UI saying which of the two it is.
+Two writers, one tree, is the failure this fleet already has evidence for; a queue is cheap, and
+hiding it would not be.
+
+#### What two writers change about the machinery
+
+- **Confirmations.** A question is bound to an (instance, project, root, plan). It may be
+  answered from **any live instance of the same project** — walking home, the phone is what he
+  has — but the *answering instance* is recorded, and the `via` provenance rule (§3.4) is
+  unchanged. A confirmation is never answerable from a *different* project, and never from the
+  voice model.
+- **Undo scopes are per root.** "Undo everything the agent did" means everything in *one*
+  worktree; combining two roots is an act (a merge) rather than an undo.
+- **The audit log has more than one writer, and this is where append-only earns its keep.** Every
+  entry carries `(instance, project, root, turn)` and a **per-instance monotonic sequence** as
+  well as a wall clock — because there is no global total order across two machines and pretending
+  otherwise would produce a log that looks authoritative and is wrong. Readers order by instance
+  sequence and treat the wall clock as a hint.
+- **State must say who else is here.** Any instance showing a project shows the other live
+  instances and which root each holds — the UI half of a rule that exists for safety reasons.
+
+#### Still serial, and by design
+
+- **One voice channel per instance.** You can only be talking to one agent at a time, and an
+  instruction means the instance's active project unless it names another. Ambiguity asks rather
+  than picks.
+- **Two writers on one root**: never.
 
 ### 2.4 Separability, and keeping work cheap to undo
 
@@ -420,6 +466,13 @@ settled.
   git project the host may work in a branch or a worktree, so "undo everything the agent did
   this evening" is one command and never a conversation. Where the project is not a git
   repo, the host records the files it wrote so a revert list exists.
+- **Every project declares its undo kind, and the UI says which one it has.** *"We got worlds where
+  you may never have git available"* — so this is a requirement rather than a hedge:
+  `git-branch` (work on a branch), `worktree` (the agent gets its own checkout, the default for
+  git projects), `written-file-list` (no git: the host records every file it wrote, and undo
+  replays that list), or `none`. **The tiers scale with it**: with no undo at all, the unprompted
+  scope narrows to acts that are reversible *by their nature* (running tests, reading, drafting
+  changes for review), because Tier 1's promise — "cheap to undo" — would otherwise be false.
 - **A worktree is the execution root, not an exception to containment.** If the host works in
   `/home/paul/isocan-worktrees/agent-3`, then *that* path is what every check is measured
   against and what the UI shows; the checkout the developer is typing in is outside the root
@@ -473,6 +526,9 @@ model — no confirmation gate can exist, so its boundary would have to be built
 resource limits and classifications of irreversible acts instead — and the guarantees stated
 here would not carry over to it. Anyone later tempted to add an "unattended" switch is adding a
 second design, not flipping a flag, and this paragraph is the reason to say so out loud.
+**It is also the destination Paul wants** (*"in the long run I want to get to full autonomy YOLO
+mode... I hate having to have permissions"*) — so it is a design that gets built, not a corner:
+§3.8 is the path to it, and it is a path rather than a switch on purpose.
 
 **The line that keeps this consistent with long-running work — and it is the line someone will
 come here looking for: an approved plan continuing is not an unattended agent deciding.** A turn
@@ -680,13 +736,85 @@ that states a smaller guarantee:
   design; long actions continue while the *conversation* moves on, which is a different thing,
   and Tier 2 always waits for a person.
 
+### 3.8 The road to autonomy
+
+> *"In the long run I want to get to full autonomy YOLO mode, cuz that's how I work. I hate having
+> to have permissions."* — Paul, 2026-09-19
+
+§3.2's principle stands — it is a second design, not a setting — and this is that design, written
+as a **path** rather than a switch, because every precondition below is a property of the
+*environment* rather than of the model's trustworthiness.
+
+**Autonomy is not "Tier 2 becomes Tier 1".** It is: **the confirmation gate is replaced by
+reversibility and blast-radius controls.** Nobody is there to say no, so the safety has to come
+from the act being undoable, or from its consequences being contained. That reframing is what
+makes the preconditions listable.
+
+#### Preconditions — all four, before a project can be autonomous anywhere
+
+1. **A disposable environment.** The agent's root lives somewhere with nothing else in it: no
+   credentials present to steal, no other projects, no LAN, no personal files. The browser
+   placement (§1.1b) is intrinsically closer to this; on a machine it means a container or VM with
+   the project mounted and little else. **Tier 0 does not vanish — it becomes structurally
+   satisfied**, which is precisely why the sandbox is the precondition rather than a nicety.
+2. **Every in-scope act is reversible.** Work in a worktree or branch, a commit per step, a trash
+   instead of `rm`, and no history rewrites inside the scope. `undoKind: none` (§2.4) means the
+   project is not a candidate, because reversibility is the thing replacing consent.
+3. **Caps, with automatic stops.** Tokens per window, wall clock per turn and per day, disk
+   growth, process count. A runaway that is reversible is still a runaway.
+4. **An outer stop.** The host can stop the agent — and **Paul can stop the host**, from outside
+   anything the agent can reach. A kill switch that the thing being killed can decline is not one.
+
+#### What changes when it is on
+
+- **No confirmations.** The audit becomes the *only* record, so it has to be one worth trusting:
+  append-only, every entry carrying `(instance, project, root, turn)`, and **hash-chained** so a
+  later reader can tell it was not rewritten. That is cheap, and without it "what did it do while I
+  was out?" has no answer.
+- **The undo rules take the gate's place.** Work is committed, revertible, and never destructive
+  by construction — the same three properties that made Tier 1 safe, now covering Tier 2's acts.
+
+#### What is irreversibly different
+
+A mistake is discovered **after** it happened. Prevention is gone; the design's job becomes damage
+control — and that is fine for most acts, but **not for the ones with no undo at all**: pushing to
+a shared remote, sending a message to a person, spending money, deleting something outside the
+reversible scope. So autonomy carries a **deferred-approval queue** rather than an exception: the
+agent proposes those acts, records them, and **carries on with other work** — which is how autonomy
+actually functions in practice, and it means "no permissions" does not have to mean "no judgement
+about consequences".
+
+#### How a project arrives there
+
+1. **Standard mode.** Everything asks. The host records what it asked about, and what the answer
+   was.
+2. **Dry-run autonomy.** The host reports the pattern — *"in the last two weeks, 94% of
+   confirmations were yes, all of four kinds, all inside the worktree"*. Evidence, not vibes, and
+   it costs nothing but a report.
+3. **A named scope, granted deliberately.** Not a toggle: which kinds of act, which paths, which
+   spend ceiling, which window — **expiring by default**, renewed by a decision rather than
+   assumed.
+4. **Reviewed, and self-narrowing.** The scope narrows automatically on any attempt to leave it:
+   a Tier 0 refusal attempt inside an autonomous run is evidence the scope is wrong, not noise to
+   be filtered.
+
+#### The anti-pattern, stated plainly
+
+**Autonomy on a machine that is not disposable is not autonomy — it is the same risk with the
+alarm disconnected.** The placement table in §1.1b already gives the answer: run it on a
+disposable box, or in the browser over OPFS, where the sandbox is the platform's rather than ours.
+
 ---
 
 ## 4. What I need from the other lanes
 
 **From astra (interface):** the confirmation UI must render `confirm_request.resolved` (paths,
 counts, effects) rather than the spoken words, and must be able to answer **typed/clicked**
-when `source: "content"`. Everything else in §1.5 is yours to shape.
+when `source: "content"`. Three additions from the concurrency model (§2.3): show **who else is
+working on this project** and which root each instance holds; show the project's **`undoKind`**
+(and the narrower behaviour when it is `none`); and show **placement + capabilities + mediated
+flag**, because those are part of what the user is being promised. Everything else in §1.5 is
+yours to shape.
 
 **From k3 (harness):** one adapter; `session/new|load|prompt` with a **declared cwd**;
 streaming `session/update`; and a real `session/request_permission` for acts outside the
@@ -696,6 +824,9 @@ early, because it changes where the gate lives. Two additions from §1.1b: the h
 **declare the capabilities it has in a given placement** (`exec`, `wasm`, `network`), and it
 should run in **at least the machine placement and the browser placement** — if those cannot
 share one adapter, say so early, because that is a second harness rather than a second setting.
+Third: §2.3 requires **several concurrent sessions in one project, each with a different cwd**
+(the phone's worktree and the chat's) — if the harness is one-session-per-process, the first
+question I need answered is how concurrency is expressed, because the environment depends on it.
 
 **From Paul:** three decisions, in §5.
 
@@ -732,8 +863,18 @@ Options: (A) a host is always required (§1.1b's rule — authority outside the 
 **(B) browser-only is allowed, with the tier table and audit running in the page's worker and
 its limits disclosed** (a page-local audit, storage a browser may evict, guarantees that hold
 only inside that origin).
-**Recommend B, and proceed on B**: allowing it costs one honest badge, and forbidding it would
-rule out the thing Paul actually asked for — *"I want to access this through a website"*. The
+**Recommend B, and proceed on B**: it is what makes *"if I'm on my walk"* work — with the tier
+table and audit in the page's worker, a phone with no host reachable is still a functioning
+agent, and forbidding it would end the session whenever he leaves the desk. The
 leaning is that when a host *is* paired, its audit is the record of truth and the page's copy is
 a cache rather than a second ledger. Trade-off: a page-local audit is evidence about a tab, not
 about a machine, and eviction can take the project with it.
+
+**5. Autonomy's first stage: dry-run, or straight to a named scope?**
+Options: (A) grant a scope when he asks for it; **(B) run dry-run autonomy first — everything still
+asks, the host records the pattern, and the first scope is proposed from that evidence**;
+(C) something else he has in mind.
+**Recommend B, and proceed on B**: it costs a report rather than a permission and it turns the
+first scope from a guess into a reading, which matters precisely because the act it unlocks has no
+gate behind it. Trade-off: it delays the thing he actually wants by the length of one honest
+report. Options A and C are one word each, and §3.8 is the rest of the path either way.
