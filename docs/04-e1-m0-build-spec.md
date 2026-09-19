@@ -34,10 +34,24 @@ tools/
 tests/             the acceptance checks (§8)
 ```
 
-**The rule that shapes it:** `core/` must run **unchanged** in a browser worker *and* in a
-machine-side process later, so it takes its storage and its tool execution as **injected
-interfaces**. This is the "one core, narrow surface" requirement from the design's §4 — copy the
-*shape* of isocan's `voice-agent/src/live.ts`, **do not lift that file** (it imports
+**The rule that shapes it — N18, and it is a constraint rather than a preference.** `core/` is **a
+library**: pure data and small functions, importable and reused across client, server and anything
+later (*"consistency at that level"*, Paul). `core/` must run **unchanged** in a browser worker *and*
+in a machine-side process later, so it takes its storage and its tool execution as **injected
+interfaces** and imports nothing from `browser/` or `tools/`.
+
+**Why it is a constraint**: a core that runs in one placement becomes **two implementations that
+drift**, and the drift is **silent** — both copies keep passing their own tests while disagreeing, and
+the split surfaces later as behaviour that differs by placement. By then the fix is a merge rather
+than an edit. This is the same shape as an audit that reads the transcript instead of the world: the
+thing that would announce the problem is the thing that is missing.
+
+**And the rule has a mechanism, because a rule without one is a description (§3.0 of the design):**
+a test asserts that **no file under `core/` imports anything outside `core/`** — a static import
+check, run in the acceptance set below. A shortcut that makes the browser worker easier by importing
+a DOM helper into `core/` fails that test rather than becoming the second implementation later.
+
+Copy the *shape* of isocan's `voice-agent/src/live.ts`, **do not lift that file** (it imports
 `@isocan/core`, and isocan's packages are out of bounds).
 
 ---
@@ -246,6 +260,9 @@ Each is a test, not an inspection. The positive control is part of every one.
    it.
 7. **Bad input does not kill the host.** Malformed schema, huge body, unknown kind, a module that
    traps — each yields an error and an audit entry, and the worker serves the next request.
-8. **Two roots write.** Two projects (two roots) each append to their own audit file; the merged
+8. **`core/` imports nothing outside itself** — the N18 check, static and cheap: parse the `core/`
+   sources and fail on any import that leaves `core/`, including a type-only one. This is the test
+   that keeps "a library" from becoming "two implementations that drift silently".
+9. **Two roots write.** Two projects (two roots) each append to their own audit file; the merged
    read is ordered by `(instance, seq)` and the test asserts no interleaving and no claimed global
    order.
