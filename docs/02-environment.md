@@ -632,6 +632,27 @@ settled two general rules that apply directly: authority must be *declared* rath
 assumed, and ambient state is where things go wrong quietly. Voice is the ambient-est input
 there is.
 
+### 3.0 The rule the rest of this section is built on
+
+**A guard must be a mechanism, not a description.** Written once it sounds like a slogan; written
+three times in one day, in three different costumes, it is the thing to check every claim against.
+All three of these are in this document:
+
+| The claim | What looks like a guard | What is actually a guard |
+|---|---|---|
+| "It cannot leave the project root" | `path.basename(name)`, `join`, `normalize` — rewrites that happen to look correct, and `basename('..')` is `'..'` | `realpath(candidate)` resolved and **compared** against the root, refusing on any answer but yes (§3.2) |
+| "Nothing outside can run in the page" | `connect-src`, which restricts what a page may **reach** | `script-src` without `'unsafe-inline'`, which restricts what it may **execute** — different jobs, and only one stops the attack (§3.5a) |
+| "This tool cannot reach the network" | the tool's own declaration, `network: none` | the interface the tool is **given**, plus the realm's egress policy — the declaration is a record, never the enforcement (§1.7) |
+
+Two habits follow, and they are the reason this section is written the way it is:
+
+- **Ask what enforces it, not what states it.** If the answer is a comment, a descriptor, a
+  variable name or a helper that tidies input, there is no guard yet.
+- **Test in both directions.** A suite of refusals proves nothing until one request *succeeds* —
+  the containment test needs `..` as a **name** as well as a path segment, and the capability test
+  needs an allow-listed host actually reached. Otherwise the test proves that refusals work, which
+  is not the property anyone wanted.
+
 ### 3.1 The threat model
 
 | Input | Trusted for | Not trusted for |
