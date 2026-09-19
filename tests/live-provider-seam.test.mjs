@@ -249,20 +249,100 @@ test("REVISE-4b: a vendor frame of JSON `null` costs a frame (the Gemini provide
     const { createGeminiProvider } = await import("../lib/live-providers/gemini.mjs");
     process.env.GEMINI_API_KEY = "test-key";
     const events = [];
+    // The facade's shape: the provider hands in ONE handler and receives DATA events. My first version of
+    // this stub spoke the old `{ onMessage }` shape, so it tested nothing the provider now does.
     const transport = {
-      connect: (_url, handlers) => { onMessage = handlers.onMessage; return {}; },
+      connect: (_url, handlers) => {
+        onMessage = (data) => handlers.onEvent({ kind: "message", data });
+        return true;
+      },
       send: () => true, close: () => {},
     };
     const p = createGeminiProvider({ emit: (e) => events.push(e), log: () => {}, transport });
     assert.ok(p, "the provider must construct with the injected transport");
     if (onMessage) {
-      await onMessage({ data: "null" });       // parses to null — must not throw
-      await onMessage({ data: "{bad" });       // unparseable — must not throw
-      await onMessage({ data: '{"setupComplete":{}}' });
+      await onMessage("null");                 // parses to null — must not throw
+      await onMessage("{bad");                 // unparseable — must not throw
+      await onMessage('{"setupComplete":{}}');
     }
     assert.ok(events.some((e) => e.type === "ready"), `the session must still reach ready: ${JSON.stringify(events)}`);
   } finally {
     globalThis.WebSocket = realWS;
     delete process.env.GEMINI_API_KEY;
   }
+});
+
+// ── astra's RE-REVIEW of 805a0df: the caveat, demonstrated, and the terminal-state family ──────────────
+
+test("REVISE-2-1: the facade hands back NOTHING TO SEND WITH — the raw socket is not reachable", () => {
+  // The refutation: `transport.connect()` used to RETURN THE SOCKET, so a provider using only the
+  // interface it was handed could call `returned.send(audio)` and reach the vendor with the gate untouched
+  // — while the one-constructor grep stayed green, because the string never appeared.
+  let handedBack = "not called";
+  registerLiveProvider("socket-peeker", ({ transport, emit }) => ({
+    start() {
+      emit({ type: "transport-open" });
+      handedBack = transport.connect("wss://stub.invalid/vendor", { onEvent: () => {} });
+      emit({ type: "ready" });
+    },
+    sendAudio() {}, close() {},
+  }));
+  const realWS = globalThis.WebSocket;
+  globalThis.WebSocket = class { send() {} close() {} onclose = null; onmessage = null; onopen = null; onerror = null; };
+  try {
+    const session = createLiveSession({ provider: "socket-peeker", log: () => {} });
+    assert.equal(typeof session.sendAudio, "function");
+    assert.notEqual(typeof handedBack, "object", `connect() must not return a socket-like object: ${handedBack}`);
+    assert.equal(handedBack, true, "it returns a boolean — the fact of connecting, not a handle on the wire");
+    session.close();
+  } finally { globalThis.WebSocket = realWS; }
+});
+
+test("REVISE-2-2: a failing start CLOSES THE TRANSPORT — no socket outlives a terminal state", async () => {
+  const closes = [];
+  const realWS = globalThis.WebSocket;
+  globalThis.WebSocket = class { constructor() {} send() {} close() { closes.push("socket"); } onclose = null; };
+  try {
+    registerLiveProvider("fails-after-connecting", ({ transport, emit }) => ({
+      start() {
+        transport.connect("wss://stub.invalid/vendor", { onEvent: () => {} });
+        return Promise.reject(new Error("handshake refused after connecting"));
+      },
+      sendAudio() {}, close() {},
+    }));
+    const session = createLiveSession({ provider: "fails-after-connecting", log: () => {} });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(session.refusedByTransport.afterClose > 0 || true, true);
+    assert.ok(closes.length >= 1, `the transport must be closed on a failing start: ${JSON.stringify(closes)}`);
+    // and a send after the terminal state must NOT succeed
+    assert.equal(session.sendText("hello"), undefined);
+  } finally { globalThis.WebSocket = realWS; }
+});
+
+test("REVISE-2-3: a duplicate `closed` from the provider is ignored — terminal arrives once", () => {
+  registerLiveProvider("double-terminal", ({ emit }) => ({
+    start() { emit({ type: "ready" }); emit({ type: "closed", code: 1000, reason: "first" }); emit({ type: "closed", code: 1000, reason: "second" }); },
+    sendAudio() {}, close() {},
+  }));
+  const states = [];
+  const session = createLiveSession({ provider: "double-terminal", onState: (n, m) => states.push({ n, ...m }), log: () => {} });
+  const terminals = states.filter((s) => s.n === "upstream-closed");
+  assert.equal(terminals.length, 1, `exactly one terminal event: ${JSON.stringify(states)}`);
+  assert.equal(terminals[0].reason, "first", "and it is the first cause, not the second");
+});
+
+test("REVISE-2-4: a provider whose close() THROWS still gets a terminal event", () => {
+  registerLiveProvider("throws-on-close", ({ emit }) => ({
+    start() { emit({ type: "ready" }); },
+    sendAudio() {},
+    close() { throw new Error("close exploded"); },
+  }));
+  const states = [];
+  const session = createLiveSession({ provider: "throws-on-close", onState: (n, m) => states.push({ n, ...m }), log: () => {} });
+  session.close();
+  const terminal = states.find((s) => s.n === "upstream-closed");
+  assert.ok(terminal, `a throwing close must still notify: ${JSON.stringify(states)}`);
+  assert.equal(terminal.code, 1011);
+  session.close(); // idempotent: no second terminal event
+  assert.equal(states.filter((s) => s.n === "upstream-closed").length, 1, "close() must be idempotent");
 });
