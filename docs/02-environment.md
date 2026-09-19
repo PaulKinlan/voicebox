@@ -991,9 +991,16 @@ three times in one day, in three different costumes, it is the thing to check ev
 All three of these are in this document:
 
 **And the reason it matters is narrower than it sounds: the failures that survive are the ones where
-the only thing that would have told you is the thing that is missing** — and the fifth row below is the
-sharpest instance, because a post-gate handler leaves **no trace at all**. `basename` at least produced
-a wrong path; an approval for an act that was not the act produces nothing to notice. A normalising helper that
+the only thing that would have told you is the thing that is missing — or was thrown away before anyone
+could read it.** Two doors into the same room. The first is the absent mechanism: a check that was
+never built, a policy that restricts the wrong thing. The second is the **discarded report**: k3's gate
+announced its refusal with `console.error`, and the adapter **swallows the child's stderr**, so the
+announcement never reached the wire — *a check that appears to pass because the report of failure was
+discarded.* The first is invisible because nothing speaks; the second because nobody could hear it.
+
+The sharpest of the rows below is the post-gate handler, because it leaves **no trace at all**:
+`basename` at least produced a wrong path; an approval for an act that was not the act produces nothing
+to notice. A normalising helper that
 looks like a check; a policy that restricts reach and not execution; a declaration that is taken as
 the enforcement. Each of them keeps working, keeps passing its own tests, and produces no signal —
 because the signal *is* the mechanism that was never built. That is the same shape as an audit built
