@@ -45,6 +45,16 @@
         </div>
       </section>
 
+      <section class="reader" id="reader" data-state="empty" aria-labelledby="reader-title">
+        <div class="reader-head">
+          <h2 id="reader-title">Nothing open</h2>
+          <p class="reader-facts" id="file-facts"></p>
+          <button class="quiet" id="file-copy" type="button" disabled>Copy</button>
+          <button class="icon-button" id="reader-close" type="button" aria-label="Close the file"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+        </div>
+        <pre id="file-body"></pre>
+      </section>
+
       <section class="voice" aria-labelledby="talk-heading">
         <h2 class="sr-only" id="talk-heading">Talk to it</h2>
         <div class="mic-stage" id="voice-ring-wrap" data-voice="off">
@@ -64,16 +74,6 @@
           <button class="quiet send" id="send" type="submit" disabled>Send</button>
         </form>
         <p class="turn-report" id="turn-report" role="status" data-tone=""></p>
-      </section>
-
-      <section class="reader" id="reader" data-state="empty" aria-labelledby="reader-title">
-        <div class="reader-head">
-          <h2 id="reader-title">Nothing open</h2>
-          <p class="reader-facts" id="file-facts"></p>
-          <button class="quiet" id="file-copy" type="button" disabled>Copy</button>
-          <button class="icon-button" id="reader-close" type="button" aria-label="Close the file"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
-        </div>
-        <pre id="file-body"></pre>
       </section>
 
       <section class="session" id="session" hidden aria-labelledby="session-heading">

@@ -73,6 +73,12 @@ export function createAudioClient({
     capture: 0,
     lastAt: 0,
     lastEmit: 0,
+    // Playback timeline: [{ start, end, value }] in playCtx time. The output
+    // meter follows what is PLAYING, never the queue — a buffered chunk the
+    // person has not heard yet must not move the picture (astra's review,
+    // 2026-09-19: "never driven by future buffered chunks").
+    playing: [],
+    lastPlayed: null,
   };
 
   function shiftInto(ring, value) {
@@ -85,16 +91,11 @@ export function createAudioClient({
   }
 
   /** Called when new audio arrives, from either direction. */
-  function noteAudio(kind, value) {
+  function noteInput(value) {
     const now = Date.now();
-    if (kind === "input") {
-      shiftInto(meter.input, value);
-      smooth(meter.input, meter.smoothInput, 0.35);
-      meter.capture = Math.max(value, meter.capture * 0.7);
-    } else {
-      shiftInto(meter.output, value);
-      smooth(meter.output, meter.smoothOutput, 0.3);
-    }
+    shiftInto(meter.input, value);
+    smooth(meter.input, meter.smoothInput, 0.35);
+    meter.capture = Math.max(value, meter.capture * 0.7);
     meter.lastAt = now;
     if (now - meter.lastEmit > 33) {
       meter.lastEmit = now;
@@ -102,8 +103,35 @@ export function createAudioClient({
     }
   }
 
+  /** A buffer the person WILL hear, recorded against when it is due. */
+  function scheduleOutput(start, duration, value) {
+    meter.playing.push({ start, end: start + duration, value });
+    if (meter.playing.length > 24) meter.playing.shift();
+  }
+
+  /** Move the output ring only for audio that has actually started playing. */
+  function followPlayback() {
+    const now = playCtx ? playCtx.currentTime : 0;
+    while (meter.playing.length && meter.playing[0].end <= now) meter.playing.shift();
+    const current = meter.playing[0];
+    if (!current || current.start > now) return;
+    if (current === meter.lastPlayed) return;
+    meter.lastPlayed = current;
+    shiftInto(meter.output, current.value);
+    smooth(meter.output, meter.smoothOutput, 0.3);
+    meter.lastAt = Date.now();
+    onLevel(level());
+  }
+
+  /** Playback was flushed or died: the ring stops with it. */
+  function forgetPlayback() {
+    meter.playing.length = 0;
+    meter.lastPlayed = null;
+  }
+
   /** The current meter reading. Decays on read, so silence falls away. */
   function level() {
+    followPlayback();
     const idle = Date.now() - meter.lastAt > LEVEL_HOLD_MS;
     if (idle) {
       const fall = 0.86;
@@ -196,7 +224,6 @@ export function createAudioClient({
     state.framesReceived += 1;
     playCtx ??= new AudioContextCtor({ sampleRate: PLAYBACK_RATE });
     const floats = pcm16ToFloat(bytes);
-    noteAudio("output", energy(floats));
     const buffer = playCtx.createBuffer(1, floats.length, PLAYBACK_RATE);
     buffer.copyToChannel(floats, 0);
     const source = playCtx.createBufferSource();
@@ -205,6 +232,7 @@ export function createAudioClient({
     const when = Math.max(playCtx.currentTime + 0.02, nextStart);
     source.start(when);
     nextStart = when + buffer.duration;
+    scheduleOutput(when, buffer.duration, energy(floats));
     sources.add(source);
     source.onended = () => {
       sources.delete(source);
@@ -269,6 +297,7 @@ export function createAudioClient({
     }
     sources.clear();
     nextStart = 0;
+    forgetPlayback();
     state.playbackActive = false;
     emit("error", { sessionEnded: true, kind, detail });
     onDiagnostic({ kind: "session-ended", state: kind, detail });
@@ -312,7 +341,7 @@ export function createAudioClient({
         const frame = event.data;
         if (!(frame instanceof Float32Array) || frame.length === 0) return;
         try {
-          noteAudio("input", energy(frame));
+          noteInput(energy(frame));
           ws?.send(floatToPcm16(frame));
           state.framesSent += 1;
         } catch (error) {
@@ -351,6 +380,7 @@ export function createAudioClient({
     }
     sources.clear();
     nextStart = 0;
+    forgetPlayback();
     state.playbackActive = false;
     emit(state.capture ? "listening" : "idle", { flushed: true });
     return { flushed: true, captureRunning: state.capture };

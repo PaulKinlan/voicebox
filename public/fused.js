@@ -270,7 +270,8 @@ async function send(said) {
     finish(transcript, result.action ?? "done", "good");
     if (answer.action?.verb === "read" && typeof result.content === "string") {
       els.readerTitle.textContent = result.action;
-      els.readerFacts.textContent = `${size(result.content)} · read from workspace/${result.action} just now`;
+      els.readerFacts.textContent = `${size(result.content)} · read from disk`;
+      els.readerFacts.title = `workspace/${result.action}, read just now`;
       els.readerBody.textContent = result.content;
       els.reader.dataset.state = "ready";
       els.copy.disabled = result.content.length === 0;
@@ -363,8 +364,8 @@ on(els.form, "submit", (event) => {
 // heard is the same lie as a "listening" label with the mic off.
 const OUTPUT_SAMPLES = 64;
 const OUTPUT_CENTRE = 120;
-const OUTPUT_BASE = 96;
-const OUTPUT_AMPLITUDE = 16;
+const OUTPUT_BASE = 70; // hugs the 116px button rather than orbiting it
+const OUTPUT_AMPLITUDE = 22;
 
 // Mean-absolute energy from real speech is small (a quiet room reads ~0.01, a
 // talking voice ~0.03-0.1), so a linear meter sits at zero and never moves.
@@ -396,7 +397,7 @@ function drawInputWave(samples) {
   if (!samples) { path.removeAttribute("d"); return; }
   const n = samples.length;
   const middle = 20;
-  const height = 15;
+  const height = 11; // stays inside the button: expressiveness grows, size does not
   let top = "";
   let bottom = "";
   for (let i = 0; i < n; i++) {
