@@ -93,7 +93,16 @@ zoo. A harness that cannot be mediated is still usable, but the UI carries the d
 explicitly, in the same spirit as the provider badge: **the guarantee is a property of the mode,
 and the user is told which one is running.** §3.2 and §3.7 are written in terms of both.
 
-### 1.1b Three placements, one host role
+> *"We have **environment configuration** and **by default the first environment is the browser**...
+> your **local safe environment**, and then maybe a **hosted cloud server environment** as well."*
+> — Paul, 2026-09-19 (N11)
+
+### 1.1b Three environments, one host role
+
+Paul's axis is **environments**; the placements below are how each one is *implemented*. The
+order is his, and it is not arbitrary: **the browser is first because it is the safest** — the
+mechanisms in §3.2a are structural there, enforced by the platform rather than by us. Building
+the riskiest environment first would have been the wrong way round.
 
 > *"The harness should be on the client and also running on the server... I want to access this
 > through a website, I do want to be able to use OPFS... but also we're on the server as well."*
@@ -107,9 +116,10 @@ A requirement, not a different design, and it is satisfiable by one rule:
 
 | Placement | Where the files are | Where the host runs | Root | What `do` can mean |
 |---|---|---|---|---|
-| **machine** (M0) | a checkout on a real machine | a local process on that machine | a realpath (or its worktree) | whatever the project's toolchain can: spawn processes, run tests, git |
-| **browser** (M2) | **OPFS** in the page's origin | a dedicated **worker** in that page — same tier table, same audit code | an OPFS directory handle | what a browser can do: wasm tools, file reads and writes, no processes |
-| **remote** (M3) | a checkout on a machine that is *not* where the browser is | a process on **that** machine | a realpath on that machine | as machine, minus nothing — this is today's Telegram-to-agent shape |
+| **browser — "the first environment"** (E1) | **OPFS** in the page's origin | a dedicated **worker** in that page — same tier table, same audit code | an OPFS directory handle | what a browser can do: wasm and JS tools, file reads and writes, generated assets; no processes |
+| **local safe** (E2) | a checkout on his machine | a local process on that machine | a realpath (or its worktree) | whatever the project's toolchain can: spawn processes, run tests, git |
+| **remote** (E3) | a checkout on a machine that is *not* where the browser is | a process on **that** machine | a realpath on that machine | as local, minus nothing — today's Telegram-to-agent shape |
+| **hosted cloud** (E4, later) | a checkout on **somebody else's** machine | a process there | a realpath there | as local, with everything below attached |
 
 Three consequences worth stating plainly:
 
@@ -339,6 +349,21 @@ Three contract rules that the schema alone does not convey:
 
 ### 1.6 The thinnest working version
 
+**The environment order is Paul's (N11): browser first, then local safe, then — later, and with
+the trust questions below answered — hosted cloud.** The capability milestones below still
+describe *what can be done* at each step; they no longer imply *where* it happens first.
+
+**A note for honesty's sake:** the machine placement already exists as a skeleton, because it is
+the cheapest thing to drive and the easiest to break while testing (§3.5a's findings came from
+exactly that). That makes it a **development convenience**, not the product's first environment —
+the first environment he opens is the browser.
+
+**One trust question the hosted-cloud environment adds, and it is not a detail:** *his files on
+somebody else's machine.* A project there needs the provider named, the operator's access
+disclosed the way a cloud harness's is (§1.3), and a per-project setting that can forbid it (§5
+decision 2) — the same disclosure discipline, one level further out. §5 keeps the server side an
+open question on purpose, because Paul named it as the part he cannot yet reason about.
+
 **M0 — the skeleton that is genuinely useful (about a day).**
 
 - `voicebox-host`: registry (open/activate/list), one active turn at a time, tier table with
@@ -370,6 +395,42 @@ append-only logs are the state).
 **What is reused rather than rebuilt:** the ACP bridge's transport, session continuity, and
 permission round-trip. If that bridge is the bottom half already, this design is mostly the
 *top* half — projects, tiers, audit, and the contracts the other two lanes need.
+
+### 1.7 How a tool becomes available
+
+> *"You obviously build extensions like we can with pi and then just have the model register
+> them."* ... *"We will create the tools and we will create the objects, the nouns — and the verbs
+> are based off us somehow."* — Paul, 2026-09-19 (N10/N11)
+
+Two ideas that are one design: an environment is **what can run here**, and an extension is **a
+new thing that could**. The seam between them is the capability declaration, and it runs in one
+direction only:
+
+```
+model authors an extension  →  registration: a DECLARATION  →  admission by the ENVIRONMENT  →  `do` may use it
+   (pi-style, in the conversation)      name · capabilities · bounds · replayClass        (fails closed)
+```
+
+- **Authoring is the model's.** Writing a tool in the conversation is ordinary Tier 1 work inside
+  a project: it is a file, it is reported, it is revertible.
+- **Registration is a declaration, not a permission.** A tool declares what it needs —
+  `capabilities` (read, write, exec, wasm, network), `bounds`, and a `replayClass` — in the same
+  spirit as the harness declaring its capabilities, and for the same reason: an undeclared need
+  cannot be granted.
+- **Admission belongs to the environment, never to the model.** A tool whose descriptor is not
+  admitted is not a capability, and **fails closed** — the rule that came back from the harvest,
+  where a store held nine descriptors all `admitted: false` and executed nothing. The same
+  discipline stops a freshly written tool from being usable merely because it exists.
+- **A tool's authority is its declaration, bounded by the environment.** A tool that declares
+  `network` is a Tier 2 act every time it reaches out; a tool that declares `exec` simply cannot
+  be admitted in the browser environment, where there are no processes to execute.
+- **Tools accumulate, and they travel only as far as their capabilities do.** A `wasm` tool runs
+  in the browser and on a machine; an `exec` tool is *not available* in the browser — not broken,
+  absent — and the UI says which is which rather than letting a verb fail at the moment it is used.
+- **Nouns and verbs come from the conversation (N10).** New objects and new verbs land in a
+  registry that is **data**, like the tier table and for the same reason: it is the thing a
+  reader, an auditor or a later model can inspect instead of inferring from prose.
+
 
 ---
 
@@ -407,6 +468,14 @@ A project is a **declared directory** plus a session, and nothing more:
 - **`undoKind` is declared, not assumed.** A git project can hand the agent a worktree to break;
   a project with no git gets a written-file revert list; a project with neither says `none`, and
   the tiers narrow accordingly (§2.4).
+- **"Create a project" is a verb (N13).** It makes a **new sandboxed root** in the current
+  environment — a fresh OPFS directory, or a new directory on the machine — distinct from every
+  other project, with its own session, audit and undo scope.
+- **Awareness is registry metadata, not filesystem access.** A new project *knows the others
+  exist*: the registry is readable, so it can reason about what is local and can ask. Reading
+  another project's **files** is still contained (§3.2, Tier 0 relative to its own root) unless he
+  confirms an explicit act — because "it knows about them" is a feature and "it can read them" is
+  a hole.
 - **No discovery.** The host never scans the filesystem for repositories; a directory becomes
   a project when it is declared. (This is the same rule as the cwd fix: the machine's layout
   is never assumed.)
@@ -876,7 +945,12 @@ disposable box, or in the browser over OPFS, where the sandbox is the platform's
 
 ## 4. What I need from the other lanes
 
-**From astra (interface):** every project must show **which world it is in** — *"this project
+**From astra (interface):** the reference is isocan's voice agent, not a debug view (N12) — his
+words about the bare skeleton were that it looks *"terrible"*, and he wants **assets appearing as
+they are created**, *"not too explicit"*. That is a direction rather than a spec: the environment's
+job is to make things **materialise** (progress → artefacts in front of him), and the interface's
+job is the same one isocan solved. Everything below still holds. Plus: every project must show
+**which world it is in** — *"this project
 lives in this browser only"* versus *"this project lives on <machine>; all your sessions can see
 it"* — because that is the sentence that stops work being lost, and it is the peer/window
 distinction from §1.1b rendered where the user meets it. Plus: the confirmation UI must render
@@ -902,7 +976,7 @@ Third: §2.3 requires **several concurrent sessions in one project, each with a 
 (the phone's worktree and the chat's) — if the harness is one-session-per-process, the first
 question I need answered is how concurrency is expressed, because the environment depends on it.
 
-**From whoever builds M0 and M2:** the core — project records, the tier table, capability lists,
+**From whoever builds the first environment (browser) and the local one:** the core — project records, the tier table, capability lists,
 the audit writer, path resolution — must be **pure data and small functions with a narrow
 dependency surface**, because the same code has to run in a machine process *and* in a page
 worker, and a core that can only run in one of them becomes two implementations that drift.
@@ -912,9 +986,21 @@ browser module and the harness, with nine dependencies doing the work. And a cap
 the same harvest: a Wasm tool is a capability only when its descriptor is **admitted** — CAP's own
 store currently holds 9 descriptors that are all `admitted: false`, so taking the *format* (three
 fields: `capabilities`, `replayClass`, `bounds`) and the fails-closed convention is the lift;
-budgeting by **cold-start milliseconds**, not megabytes.
+budgeting by **cold-start milliseconds**, not megabytes. And the extension seam of §1.6a is the
+place where N10 and N11 meet: **a registration is a declaration and admission belongs to the
+environment**, so the registry has to exist early — a tool that cannot say what it needs cannot be
+safely admitted, and a model-authored tool that is not declared is not a capability.
 
-**From Paul:** the decisions in §5 (now five).
+**From Paul:** the decisions in §5 (now five) — plus one thing he named as unresolved that this
+document deliberately does **not** answer.
+
+**Open, and kept open: the server side.** *"I don't know how to deal with the server side of
+things... we also have access to an environment that is on the server."* What is unresolved is not
+the transport (E3/E4 above describe that) but the **trust and ownership questions**: whose machine
+it is, who else can see the files, what the agent may do there that it may not do locally, and how
+a project on a server relates to the same project on his laptop. A design that quietly answered
+those by assuming a shape would answer them wrong — so they are recorded as questions with a
+placeholder, and E3/E4 are marked later rather than assumed.
 
 ## 5. Decisions, and the defaults we are proceeding on
 
