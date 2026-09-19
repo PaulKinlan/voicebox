@@ -165,7 +165,13 @@ report("zero POST /api/turn on page load", loadTurns.length === 0,
   loadTurns.length ? `${loadTurns.length} phantom turn(s), e.g. ${loadTurns[0].body.slice(0, 60)}` : "");
 
 // ── 3. the file list is the workspace ──────────────────────────────────────
-const apiFiles = (await (await fetch(`${API}/api/files`)).json()).files.sort();
+const safeJson = async (url, options) => {
+  try { return await (await fetch(url, options)).json(); } catch (e) {
+    report(`server reachable (${url.replace("http://127.0.0.1:", "")})`, false, String(e.cause ?? e).slice(0, 80));
+    throw new Error("API_UNREACHABLE");
+  }
+};
+const apiFiles = (await safeJson(`${API}/api/files`)).files.sort();
 const pageNames = ((await ev(`[...document.querySelectorAll('.file-name')].map(e => e.textContent)`)) ?? []).sort();
 const countText = await ev(`document.getElementById('file-count')?.textContent`);
 const expectedCount = apiFiles.length === 0 ? "nothing yet" : `${apiFiles.length} ${apiFiles.length === 1 ? "file" : "files"}`;
@@ -201,7 +207,7 @@ await ev(`
 `);
 let appeared = false;
 for (let i = 0; i < 20 && !appeared; i++) {
-  appeared = (await (await fetch(`${API}/api/files`)).json()).files.includes(NAME);
+  appeared = (await safeJson(`${API}/api/files`)).files.includes(NAME);
   if (!appeared) await sleep(400);
 }
 const disk = existsSync(path.join(WORKSPACE, NAME)) ? readFileSync(path.join(WORKSPACE, NAME), "utf8") : null;
@@ -229,7 +235,7 @@ await ev(`
 `);
 await sleep(1500);
 const evilOutside = existsSync(path.join(WORKSPACE, "..", "evil.sh"));
-const stillListed = (await (await fetch(`${API}/api/files`)).json()).files.includes("../evil.sh");
+const stillListed = (await safeJson(`${API}/api/files`)).files.includes("../evil.sh");
 report("../evil.sh is refused and nothing lands outside workspace/",
   !evilOutside && !stillListed,
   `outside=${evilOutside} listed=${stillListed}`);
