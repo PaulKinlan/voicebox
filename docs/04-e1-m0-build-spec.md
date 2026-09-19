@@ -137,6 +137,8 @@ export type AuditEntry = {
   decision: "allow" | "confirm" | "refuse";
   rule: string | null;
   result: "ok" | "error" | "refused";
+  observed: { exists: boolean; bytes?: number; mtime?: string } | null;  // FROM THE WORLD, never
+                                                                        // from the model's account
 };
 ```
 
@@ -146,6 +148,10 @@ export type AuditEntry = {
   and never claim a global order**, because two machines have no shared clock.
 - **Refusals are entries**, with `decision: "refuse"` and the rule id. A log that only records
   successes cannot answer "what did it try to do".
+- **`observed` is written by the host after the act, from the filesystem** — never from the
+  harness's report. A model in the field claimed a file existed that did not (design §3.8's evidence,
+  k3's drive), and an audit that records accounts rather than state cannot answer "did it do what it
+  said".
 - **It survives a reload** because it lives in OPFS. Assert that in a test, not by inspection.
 - No hash chain in M0 — that is an autonomy-stage requirement (design §3.8), not an existence one.
 

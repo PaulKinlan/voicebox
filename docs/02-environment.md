@@ -87,8 +87,32 @@ and a design that does not choose is claiming the stronger one by accident.
 | The guarantee | *"it cannot leave the project"* | *"it will not leave the project unless the harness misbehaves"* |
 | Cost | the host must describe tools and stay in the loop for each call | none — and no real containment of the harness's own actions |
 
-**Driven against pi as it actually is (k3, `docs/03-architecture-k3.md`): compliant mode does not
-exist today.** Two drives against the real bridge produced **zero `session/request_permission`**
+**Compliant mode exists as of 2026-09-19** — a twenty-line pi extension (`design/k3-compliant-mode`,
+`eb1d5fd`) that hooks `tool_call` and asks through the host's confirm path. Three things were
+**driven** rather than argued: a denied call **does not execute** (write denied, then a read probe
+denied, and **the file does not exist**); the **plan arrives before the act in the harness's own
+words** (`{ "tool": "read", "input": { "path": "…" } }`), so the decision is made on content rather
+than a title; and **the gate holds for a model-authored tool** — `read_host` asked and was denied,
+which closes the loophole the design named in §1.7. The same extension serves both transports: modal
+in a TUI, a real `session/request_permission` over ACP, which is the wire §1.4 specifies.
+
+**And it must be claimed with its limits, because a gate that is described as total when it is not
+is the failure mode this whole section is written against:**
+
+- **It covers pi's tool calls, not the machine.** Child processes, non-pi subprocesses and anything
+  outside the extension's process are *not* gated (k3's own X/Y split). So an extension meant to be
+  total has to load **globally** *and* still claims only pi processes.
+- **`event.input` may be unvalidated when the hook sees it** — `prepareArguments` runs before schema
+  validation — so the gate must tolerate partial shapes, and **a plan it approves may not be what the
+  tool finally validates.** Therefore: validate the plan *before* asking, or ask and **refuse if the
+  validated plan differs from the one that was approved. A permission for a plan is not a permission
+  for whatever the tool finally runs.**
+- **The model's first response to a denial is to try another tool** — which is §3.0's habit ("ask
+  what path goes around the guard") demonstrated live by the model, and the reason a gate scoped to
+  tool **names** would have been routed around in one turn.
+
+**Historical note, kept because it explains the design: before this extension existed**, two drives
+against the bridge produced **zero `session/request_permission`** Two drives against the real bridge produced **zero `session/request_permission`**
 for ordinary tool calls — the protocol path is wired end to end and **pi never uses it**. pi's only
 built-in gate is *project trust*, which guards **input loading**, not what the model asks tools to
 do afterwards, and in non-interactive modes it does not appear at all. So the honest statement has
@@ -97,7 +121,7 @@ do afterwards, and in non-interactive modes it does not appear at all. So the ho
 | Shape | What enforces | Available when |
 |---|---|---|
 | **Mediated** | the host owns the tool surface, so it has the plan **by construction** | the harness is built that way |
-| **Compliant** | the harness asks, and the host answers | **after** an extension exists that hooks tool calls and asks — k3 names it: a pi extension calling `ctx.ui.confirm()`, *"a small, named piece of work, not a discovery"* |
+| **Compliant** | the harness asks, and the host answers | **now available** — k3's twenty-line pi extension (`design/k3-compliant-mode`), with the three limits above |
 | **Environmental** | a container with only the files and credentials the task needs | whenever the environment is disposable — and it depends on **nobody's compliance** |
 | **Disclosure** | nothing: the tier table describes what the agent *should* do | **everything else** — and the UI must say so per session, not imply otherwise |
 
@@ -1118,6 +1142,12 @@ request succeeds. So both directions:
   each refused on the resolved path. **Including `..` as a *name*** rather than a path segment
   (`path.basename('..')` is `'..'`, the case that walked out of the skeleton's workspace), because
   that is the shape a normalising implementation gets wrong while looking correct.
+- **World-not-transcript tests**: a denied write is followed by a **filesystem assertion that the
+  file does not exist** (k3's drive is the model for it), and a run whose model reports an effect it
+  did not have produces an audit entry that says **observed: absent**, whatever the transcript says.
+- **Plan-drift test**: approve a plan whose validated form differs from the one shown, and assert the
+  act is **refused** rather than executed — a permission for a plan is not a permission for whatever
+  the tool finally runs.
 - **Host-survives tests**: malformed JSON, an unknown message type, a frame with a missing field
   and a handler that throws — each yielding an error and an audit entry with the host (or the
   browser worker) still serving the next request.
@@ -1182,6 +1212,18 @@ makes the preconditions listable.
    anything the agent can reach. A kill switch that the thing being killed can decline is not one.
 
 #### What changes when it is on
+
+#### The audit reads the world, not the transcript
+
+k3's drive produced the cleanest counterexample in the document: after a run, the model reported
+*"delete-me.txt already exists… confirmed created earlier this session"* — **and the file did not
+exist.** The model's account of its own effects is not evidence of its effects, and an audit built
+from those accounts records a story rather than a state.
+
+So an audit entry's outcome is **observed, not reported**: the host stats what it acted on
+(existence, size, mtime — and for a write, that the bytes are where it says), and **the transcript's
+claim is never an entry.** *"Did it do what it said?"* has to be answerable from the log alone, and
+the only way to make that true is for the log to be written by the part of the system that looked.
 
 - **No confirmations.** The audit becomes the *only* record, so it has to be one worth trusting:
   append-only, every entry carrying `(instance, project, root, turn)`, and **hash-chained** so a
