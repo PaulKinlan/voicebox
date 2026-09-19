@@ -122,11 +122,25 @@ Three consequences worth stating plainly:
    that pretended otherwise would discover that mid-sentence. Isocan is the precedent Paul points
    at: the *shape* generalises (thin client, real work behind an interface), the *tool parity*
    does not.
-3. **Browser-only (§5 decision 4) is what makes a walk work.** Not merely a convenience: if the
-   page can host the tier table and the audit in its own worker, then leaving the desk does not
-   end the session — the phone becomes the host for the project it holds in OPFS. If it cannot,
-   walking away ends the conversation until a host is reachable. That is the argument for
-   allowing it, and the price is the disclosure: a page-local audit is evidence about a tab.
+3. **The browser placement is a peer world, not a cache — and there are two ways to use it.**
+   OPFS is **per-origin and per-browser-profile**: the files a page holds are invisible to every
+   other placement, including the session Paul talks to over Telegram. So a browser project is not
+   a copy of anything; it is **a separate project with a separate history**, and the two shapes
+   below are different products, not one with a footnote:
+
+   | | **Peer** | **Window** |
+   |---|---|---|
+   | Files live in | this browser's OPFS | a machine, reached over an authenticated channel |
+   | Visible to his other sessions (chat, Telegram, another device) | **never** — unless he exports or syncs, which is an ordinary Tier 2 egress act | **always** |
+   | Works with no host reachable | **yes** — the page *is* the host | no |
+   | Whose history it is | the tab's | his |
+
+   Both make the walk work; what differs is **whether the history is his or the tab's**. So the
+   window is the recommendation wherever a host is reachable (§5 decision 4), the peer is a real
+   mode for offline, throwaway or deliberately device-local work — and **every project says which
+   one it is, in the UI**, because a user who assumes the wrong one loses work. Two browsers each
+   holding a project called `isocan` are **two projects**: identity carries the placement
+   (`isocan@phone`, `isocan@box`), not just the name.
 4. **The remote placement changes transport, not authority.** Loopback plus a token is right when
    client and files share a machine; a browser on a phone talking to a server needs an
    authenticated remote channel (TLS, a paired credential, an explicit pairing flow) — and the
@@ -622,7 +636,8 @@ checkout. What changes is the mechanism that enforces each one — and which dir
 |---|---|---|
 | 1 — unprompted | read/write files, run the toolchain, loopback dev server | read/write OPFS files, run **wasm/JS tools in a worker**; no processes, so "dev server" becomes "start the preview worker" |
 | 2 — confirm | irreversible acts, leaving the machine, reaching a human, spending | the same list; "leaving the machine" becomes "leaving the browser" (uploads, remote APIs, form posts) |
-| Audit | an append-only file | **IndexedDB in the same worker**, mirrored to a paired machine host when there is one — "you can find out what happened" must not depend on which placement ran |
+| Audit | an append-only file | **IndexedDB in the same worker**. Mirroring it to a machine host is **not free and not automatic**: it is the page sending data out, which is a Tier 2 egress act (§3.5a) — so a peer world's audit is the record *for that world*, and a paired host's audit the record for its own |
+| Durability | the filesystem he can look at | OPFS, which a browser may evict. A peer project therefore requests persistent storage (`navigator.storage.persist()`), **shows its durability state**, and can be **exported as an archive in one act** — the mitigation that makes peer mode acceptable rather than a hostage situation |
 
 So the boundary survives translation, and two of its mechanisms get **stronger** rather than
 weaker — but not all of it, and the exception is egress. Better to know that now than to discover
@@ -861,8 +876,11 @@ disposable box, or in the browser over OPFS, where the sandbox is the platform's
 
 ## 4. What I need from the other lanes
 
-**From astra (interface):** the confirmation UI must render `confirm_request.resolved` (paths,
-counts, effects) rather than the spoken words, and must be able to answer **typed/clicked**
+**From astra (interface):** every project must show **which world it is in** — *"this project
+lives in this browser only"* versus *"this project lives on <machine>; all your sessions can see
+it"* — because that is the sentence that stops work being lost, and it is the peer/window
+distinction from §1.1b rendered where the user meets it. Plus: the confirmation UI must render
+`confirm_request.resolved` (paths, counts, effects) rather than the spoken words, and must be able to answer **typed/clicked**
 when `source: "content"`. **And treat every string from outside the page as text, never markup** —
 the transcript, the host's error and note strings, file names, repository content and harness
 output: this is the sink that the skeleton's own drive proved (§3.5a), and it is your lane's
@@ -884,7 +902,19 @@ Third: §2.3 requires **several concurrent sessions in one project, each with a 
 (the phone's worktree and the chat's) — if the harness is one-session-per-process, the first
 question I need answered is how concurrency is expressed, because the environment depends on it.
 
-**From Paul:** three decisions, in §5.
+**From whoever builds M0 and M2:** the core — project records, the tier table, capability lists,
+the audit writer, path resolution — must be **pure data and small functions with a narrow
+dependency surface**, because the same code has to run in a machine process *and* in a page
+worker, and a core that can only run in one of them becomes two implementations that drift.
+qwen2's harvest found a precedent worth reusing rather than rewriting: isocan's
+`packages/voice-agent/src/live.ts` is 1,173 lines of pure data and functions shared between the
+browser module and the harness, with nine dependencies doing the work. And a capability rule from
+the same harvest: a Wasm tool is a capability only when its descriptor is **admitted** — CAP's own
+store currently holds 9 descriptors that are all `admitted: false`, so taking the *format* (three
+fields: `capabilities`, `replayClass`, `bounds`) and the fails-closed convention is the lift;
+budgeting by **cold-start milliseconds**, not megabytes.
+
+**From Paul:** the decisions in §5 (now five).
 
 ## 5. Decisions, and the defaults we are proceeding on
 
@@ -914,17 +944,23 @@ ports needing their own copy, and the work landing one merge later than it other
 The alternative we already have evidence for is the agent and him editing one working tree at
 once, which is the failure this fleet spent a day recovering from.
 
-**4. A browser-only mode, with no host process at all?**
-Options: (A) a host is always required (§1.1b's rule — authority outside the renderer);
-**(B) browser-only is allowed, with the tier table and audit running in the page's worker and
-its limits disclosed** (a page-local audit, storage a browser may evict, guarantees that hold
-only inside that origin).
-**Recommend B, and proceed on B**: it is what makes *"if I'm on my walk"* work — with the tier
-table and audit in the page's worker, a phone with no host reachable is still a functioning
-agent, and forbidding it would end the session whenever he leaves the desk. The
-leaning is that when a host *is* paired, its audit is the record of truth and the page's copy is
-a cache rather than a second ledger. Trade-off: a page-local audit is evidence about a tab, not
-about a machine, and eviction can take the project with it.
+**4. The walk: a peer project in the browser, or a window onto a host?**
+OPFS is per-origin and per-browser-profile, so a browser project is **not visible to any other
+session** — including the one he talks to over Telegram. That makes this two products, not one
+setting:
+- **(A) always through a host** — the browser is a client, and everything he makes is his;
+- **(B) a peer world in the page** — self-contained and offline-capable, **and invisible
+  everywhere else**;
+- **(C) both**: whichever reaches what he is doing, chosen per project and labelled.
+
+**Recommend C, and proceed on C** — because his walk works in both, and the difference is not
+convenience but **whose history it is**: the window shape keeps every session looking at the same
+project, the peer shape keeps working when nothing is reachable but the history lives in one
+browser profile. So: **window by default wherever a host is reachable, peer where he asks for it**,
+with the UI saying which one a project is, and a one-act export for a peer so eviction cannot
+strand it. Trade-off: the peer shape is the only one where *"the agent you talk to from your walk
+cannot see it at all"* is the intended behaviour rather than a fault — which is exactly why it
+must be labelled rather than inferred.
 
 **5. Autonomy's first stage: dry-run, or straight to a named scope?**
 Options: (A) grant a scope when he asks for it; **(B) run dry-run autonomy first — everything still
