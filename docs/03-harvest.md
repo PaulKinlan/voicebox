@@ -42,6 +42,20 @@ a census of `test/deep.ts` that matched every `file: "…"` string returned 70 w
 module actually exports 46, because the file exports *two* lists. Where a number below
 comes from a text scan rather than from running the code, it says so.
 
+### These numbers were independently re-counted by a lane that did not write them
+
+**Receipt: `cap-evidence/harvest-verification-20260919/RECOUNT.md`** (ds-flash-1b, 2026-09-19),
+counted from the artefacts at CAP `8b44c769` and isocan `5e7f7bbc` — *later* commits than the
+ones measured here, so the figures held across a moving tree as well as across a second counter.
+**Five of the seven were exact.** The store service-worker bundle was additionally **rebuilt from
+scratch** — real `npm ci` + `deno install` + `build:production`, no symlinked `node_modules` —
+and came out at **exactly 2,998,629 bytes again**, with `dist.complete` recording the same size
+and sha256. The two that needed tightening were the CAS layering (manifests, licences and SBOM
+are *siblings* of `cas/`, not inside it) and the provenance of the readiness-gate frame counts (a
+retained 2026-09-12 measurement, not one taken for this document); both are corrected in place
+above, and **no recommendation changed**. Recorded here because a number that only its author ever
+checked is testimony, and the point of this document is to be evidence.
+
 ---
 
 ## 1. The needs, as the brief states them
@@ -154,10 +168,16 @@ rather than dropped in silence; `audioUpFrames` increments *after* `socket.send`
 it means accepted rather than handed over; and the periodic stats line reports
 `gatedBeforeSetup` and `lostAtSocket` beside it.
 
-The measured defect behind it: **192 of 208 frames went up before `setupComplete`** on a
-keyless run, 128 before acknowledgement on a real key, 48 page frames dropped while the
-transport was opening. A voice harness written from scratch will reproduce this bug, and
-will not notice, because the symptom is a turn that is silently missing its first word.
+**The measured defect behind it — and the qualifier is load-bearing, so it travels with the
+number.** These are **retained measurements, not re-taken for this harvest**: astra's
+`readiness-defect.json` and `REPORT.md` for `isocan-xsh.8.5`, dated **2026-09-12**, record that a
+local **500 ms delayed-ack keyless control sent 192 of 208 audio frames before `setupComplete`**,
+and that a **real-key control sent 128 before acknowledgement and dropped 48 page frames** while
+the provider transport was opening. The real control *answered*, so the bead is explicit that this
+is a **readiness-contract defect, not a demonstrated historical silence** — the frames were lost,
+and separately proved that a turn can come back missing its beginning. A voice harness written from
+scratch will reproduce the defect, and will not notice, because the symptom is a turn that is
+silently missing its first word.
 
 There were **two** call sites — the node harness and `packages/modules/talk/src/web.tsx:483`
 — which is the N3 duality showing up as a duplicated failure. Voicebox should have one.
@@ -205,15 +225,44 @@ wired at `:2445` — is the harness *asking the page* over a socket rather than 
 copy. Same shape as the file tools. **That is N4's client half, and the seam is the part
 worth copying**, not the code.
 
-**A tension to name, not resolve here.** ds-flash-2's environment design puts state in a
-long-lived host process; isocan's ruling puts the agent's own state in the page's OPFS.
-Both are defensible and they are not the same decision. The reconciling observation is that
-isocan's OPFS state is *per-origin and per-browser* — which is fine for one person at one
-desk and wrong for N4's "reachable securely from elsewhere", because a Telegram-driven
-session has no origin. **OPFS is the client's cache and the offline store; the server's
-filesystem is the record.** Whichever lane owns that seam should decide it explicitly,
-because isocan's comment reads as though it settles the question and it settles a narrower
-one.
+**A tension to name — and it is sharper than a tension, because one side is unreachable
+from the other.** ds-flash-2's environment design puts state in a long-lived host process;
+isocan's ruling puts the agent's own state in the page's OPFS. Those are not two answers to
+one question, because **there is no path between them**. OPFS is per-origin and per-browser,
+readable only by pages and workers of that origin in that profile. A host process has no
+origin. A Telegram-driven session has no browser. Isocan's own source states the consequence
+plainly, at `main.ts:2361-2364`:
+
+> *"**The store is visible and deletable in the UI**, because it is per-origin and
+> per-browser: **the terminal cannot read it**, and a different profile sees a different
+> store. That is inherent — so the person gets the list and the delete, here, rather than a
+> store they cannot inspect."*
+
+*Inherent* is the operative word: this is not a missing feature that a bridge would fix. It
+is what the storage primitive is.
+
+**So the reconciling reading is not "OPFS is the cache and the server is the record"** — that
+framing implies one authoritative copy reachable two ways, and here there are two disjoint
+stores with no authoritative copy either can see. Anything written to OPFS is invisible to
+every other door, permanently, until something explicitly moves it.
+
+**And isocan already chose this, deliberately, in the opposite direction from what N4 needs.**
+The migration it built runs *host → page*: `readLegacyMemories(home)`
+(`voice-harness.ts:514`) offers the old harness file once, the page imports it into OPFS, and
+`retireLegacyMemories(home)` (`:539`, used at `:3196` and `:3686`) retires the file
+afterwards. State was moved **out of the terminal's reach** on purpose, under Paul's own
+2026-09-13 ruling, and the transcript was left behind on the host (`voiceLogFile`, `:117-118`)
+precisely because other surfaces consume it. That split is coherent for isocan, whose voice
+agent is driven from its own page and has one door.
+
+Voicebox wants several doors — a browser, a machine, and *"talking to it over Telegram while
+it has access to the machine"*. **The ruling is right for a page-driven agent and wrong for a
+multi-door one**, so it needs narrowing rather than inheriting: OPFS is the right home for
+what only this client needs (device and UI preferences, the offline draft, a render cache),
+and the wrong home for anything another door must read (memory, session state, the audit
+log). Note that isocan has **no precedent for the reverse migration** — page → host — because
+it never needed one. That direction is new work, and it is the piece that makes browser-only
+mode and paired mode two views of one world instead of two worlds.
 
 ### 2.7 ACP — N4's secure reachability, already proven twice
 
@@ -291,10 +340,11 @@ The numbers that make "too heavyweight" concrete:
 
 | artefact | measured |
 | --- | --- |
-| `extension/wasm/cas` | **11 MB, 38 objects** — a content-addressed store of Wasm binaries |
+| `extension/wasm/cas` | **11 MB (10,744,087 bytes), 38 `.wasm` files** — a content-addressed store of the binaries themselves |
+| `extension/wasm/manifests`, `licenses/`, `sbom/` | **38 manifests, 16 licences, 19 SBOM entries — *siblings* of `cas/` under `extension/wasm/`, not inside it.** Named separately because the layering is the point: the governance metadata is a parallel tree keyed to the store, which is what makes it a supply-chain system rather than a folder of binaries |
 | `extension/wasm/manifests` | per-tool manifests (`cap.bundled.avif-1.0.0.manifest.json`, `awk`, `base64`, …) plus `licenses/` and `sbom/` |
 | `wasm-tools/descriptors/foundation-descriptors.json` | **9 tool descriptors — all 9 `admitted: false`, all 9 `availability: "disabled"`, all 9 `dispatcherKind: "none"`, all 9 `availabilityReason: "package-execution-unwired"`** |
-| store service-worker bundle | **2,998,629 bytes against `STORE_SW_BUDGET_BYTES = 3_000_000`** — 1,371 bytes of headroom (measured 2026-09-18; two source comments still say "~10 bytes under", which was true when written) |
+| store service-worker bundle | **2,998,629 bytes against `STORE_SW_BUDGET_BYTES = 3_000_000`** (`scripts/bundle-budget.mjs:16`, asserted equal to 3,000,000 by `tests/bundle-budget.test.ts`) — **1,371 bytes of headroom** (measured 2026-09-18, and reproduced from a clean `npm ci` + `deno install` + `build:production` by the independent recount; two source comments still say "~10 bytes under", which was true when written) |
 | the budget gate | `tests/bundle-budget.test.ts`, 232 lines, with the constitution number pinned by a test that asserts it equals 3,000,000 |
 
 **The single most important line in this harvest:** the Wasm tool catalogue is *described*
@@ -317,7 +367,7 @@ that is Node's V8 compiling an ES module, not Chrome starting a service worker, 
 | --- | --- | --- | --- | --- |
 | **Tool descriptor *vocabulary***: `capabilities`, `replayClass`, `bounds` | `extension/lib/jwt-decode-tools.js`; `wasm-tools/descriptors/foundation-descriptors.json` (schemaVersion 2) | N7, N6 — a tool that declares whether it is read-only and what its limits are is what makes a tier table data instead of prose | **Low.** Three fields, no machinery. `bounds` in particular (`tokenUtf8Bytes`, `outputUtf8BytesIncludingLf`, `workerWallMilliseconds`) is the shape every bounded tool wants | **TAKE the three fields** |
 | **Admission machinery**: `admitted`, `canExecute`, `canGrant`, `availability`, `availabilityReason`, `canonicalNameClaim`, `spdxLicense`, `licenceStatus`, `packageId`, `sourceKind`, `dispatcherKind` | same files, plus `extension/lib/bundled-tool-packages.js` | **none of N1–N9** | High, and it is the weight Paul named | **LEAVE.** Voicebox has one user and one machine; there is no third-party supply chain to admit against. If it ever ships bundled tools to strangers, revisit |
-| **Wasm CAS + manifests + SBOM** | `extension/wasm/{cas,manifests,sbom,licenses}` — 11 MB / 38 objects | none, given zero dispatchers | 11 MB of artefacts plus a loader that does not exist | **LEAVE** |
+| **Wasm CAS + manifests + SBOM** | `extension/wasm/cas` (11 MB / 10,744,087 bytes / 38 `.wasm` files) with `manifests/` (38), `licenses/` (16) and `sbom/` (19) as **siblings** under `extension/wasm/` | none, given zero dispatchers | 11 MB of artefacts, a 73-entry parallel governance tree, and a loader that does not exist | **LEAVE** |
 | **Bounded Python tool** | `extension/lib/python-tool.js` (**52 lines**), `python-execution.js` (`PYTHON_EXEC_BOUNDS`, `runPython`) | **N6** — a build environment needs a compute tool | **Low and instructive.** 52 lines, fails closed with an honest "unavailable" rather than fabricating a result, and the runtime is an *injection seam* (`getPythonRuntime`) supplied by the build lane | **TAKE the shape**, not the runtime: fails-closed + injection seam + explicit bounds. Note it is deliberately **not** a WASI binary — separate Emscripten/JS-glue dispatcher, and the WASI import allowlist is not widened. For Voicebox, a local Python on the server is simpler and needs no admission at all |
 | **ACP harness integration** | `docs/ACP-INTEGRATION-RESEARCH.md` (2026-09-12, status *Approved Architecture & Implementation Plan*, epic `chrome-agent-platform-qlho`); target harnesses **`pi` (primary / verified fixture), `claude-code`, `codex`, `antigravity`, `voice`** | **N3, N4, N6** — and `voice` is already a named target harness | **Medium, but the research is the valuable part.** JSON-RPC 2.0, `protocolVersion: 1`, newline-delimited over stdio, one JSON-RPC message per WebSocket text frame. The implementation is inside the extension's SW/Agent-Worker loop, which Voicebox is not reusing | **TAKE the document and the protocol facts**; take isocan's 792-line ACP *client* (§2.7) rather than CAP's |
 | **Census-and-gate discipline** | `scripts/capability-lifecycle.ts` (259 lines), `tests/capability-gates.test.ts` (65), `tests/bundle-budget.test.ts` (232), `docs/admissions/` | none directly — but it is *how* CAP keeps a 3 MB bundle from drifting | Low as a practice, high as code | **TAKE the practice, leave the code.** Specifically: a budget that is a number in one place, asserted by a test that names the top contributors when it fails, with a recorded falsification (set the gate to 1 MB and watch it fail). Voicebox will want a cold-start budget, not a byte budget, and this is the template |
@@ -553,11 +603,31 @@ rather than new code.
 
 Named rather than smoothed over, since three of these are decisions and not research:
 
-1. **Where the agent's own state lives** — the page's OPFS (isocan's ruling, per-origin,
-   unreadable from a terminal) or the host process (ds-flash-2's design, reachable from
-   Telegram). §2.6 argues the two are answering different questions and that OPFS is the
-   client's cache while the server's filesystem is the record, but that is a reading, not a
-   decision, and N4 cannot be built until somebody makes it.
+1. **Where the agent's own state lives — and this one is not symmetric, so it should not be
+   framed as a choice between two equivalents.** The page's OPFS (isocan's ruling) is
+   **unreachable from every other door by construction**, not by omission: `main.ts:2361-2364`
+   says *"the terminal cannot read it… That is inherent."* The host process (ds-flash-2's
+   design) is reachable from all of them. §2.6 sets out the consequence and the narrowing it
+   implies.
+
+   **The bearing on a decision in flight:** describing a browser-only session's page-local
+   state as *a cache of a paired host's record of truth* is too generous in one specific
+   direction. A cache implies one authoritative copy reachable two ways; here nothing written
+   in browser-only mode is reachable from the host at all, so pairing does not retroactively
+   make it visible — it has to be **migrated**, explicitly, once, in a direction isocan has no
+   precedent for. Browser-only mode is therefore not a degraded view of the same world but **a
+   separate world**, and which world the agent is in is decided by which door was used. That
+   is still a perfectly good mode to ship — it is the no-install first run — but it should be
+   described as *a separate world with an explicit one-time export on pairing*, and the
+   design should decide now what is exportable, because memory written before pairing is
+   otherwise stranded in it.
+
+   The narrow version of the recommendation, if it is useful: **OPFS holds what only this
+   client needs; the host holds everything another door must read; and the export runs page →
+   host once, on pairing, with the page's copy demoted to a cache only after the host has
+   acknowledged it.** Isocan's `readLegacyMemories`/`retireLegacyMemories` pair is the shape to
+   copy, reversed — including its two good properties, that the offer is made once and that
+   the old copy is retired rather than left to drift.
 2. **Whether the canvas is spatial** — §7 recommends narrowing "canvas" to the artefact surface
    and keeping process in a log and diff. That is a UI question for astra's lane with evidence
    attached, not an answer.
