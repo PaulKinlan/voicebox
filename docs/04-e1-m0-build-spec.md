@@ -67,7 +67,7 @@ Copy the *shape* of isocan's `voice-agent/src/live.ts`, **do not lift that file*
   "location": { "kind": "opfs", "path": "v1/projects/atlas" },  // OPFS-relative, never a realpath
              // { "kind": "handle", "id": "h_7f2", "label": "~/notes" }   // N20: a picked folder,
              // remembered as a handle plus the user's label — the origin cannot describe its target
-  "root": "v1/projects/atlas",      // the execution root: the containment boundary
+  "root": { "kind": "opfs", "path": "v1/projects/atlas" },      // the execution root: the containment boundary
   "capabilities": ["read", "write", "wasm"],
   "undoKind": "written-file-list",
   "createdAt": "2026-09-19T15:00:00Z",
@@ -278,9 +278,15 @@ Each is a test, not an inspection. The positive control is part of every one.
    it.
 7. **Bad input does not kill the host.** Malformed schema, huge body, unknown kind, a module that
    traps — each yields an error and an audit entry, and the worker serves the next request.
-8. **The root is an injected interface, not OPFS.** With a second storage adapter in tests (a fake
-   root, or a picked-handle adapter), every acceptance check above still passes — which is what makes
-   N20 an increment rather than a rewrite, and it is the same principle as N18: one core, two roots.
+8. **The root is an injected interface, not OPFS** — and **this check is separate from the picked
+   root's permission behaviour**, because a picked handle may need a gesture on re-acquisition and a
+   test cannot press a button:
+   - **8a, root injection**: with a second storage adapter in tests (a fake root, or a picked-handle
+     adapter), every ROOT-INJECTION check above still passes. That is what makes N20 an increment
+     rather than a rewrite — one core, two roots (N18).
+   - **8b, picked-root permission**: driven by a **person**, not a test — the folder is picked, the
+     handle persisted, and the page reopened; the result is recorded in the evidence receipt, including
+     whether a gesture was required. Checks 1-7 do not claim this, because they cannot.
 9. **`core/` imports nothing outside itself** — the N18 check, static and cheap: parse the `core/`
    sources and fail on any import that leaves `core/`, including a type-only one. This is the test
    that keeps "a library" from becoming "two implementations that drift silently".
