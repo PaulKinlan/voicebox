@@ -126,3 +126,19 @@ bd prime                # Refresh Beads context
 
 **Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
 <!-- END BEADS CODEX SETUP -->
+
+## Before you land (2026-09-19)
+
+A landing to `main` runs the gates BEFORE pushing — the push itself is the gate:
+
+- `npm test` — the unit suite (must be 0 fail)
+- `npm run accept` — the page acceptance harness (drives the real page; must be ALL CLEAR)
+
+Both run automatically on `git push` via the installed pre-push hook. The harness
+needs the environment up: `voicebox-serve` first (it also restarts a stale API
+server — if `server.mjs` changed since the process started, the old process is
+serving old routes). To acceptance-test a CANDIDATE branch, run its own server
+pair and point the harness at it with `VOICEBOX_UI_URL` / `VOICEBOX_API_URL`.
+
+If the harness fails, fix or extend the harness — never weaken a check to get
+green. Every check in it traces to a defect somebody actually hit.

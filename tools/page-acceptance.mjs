@@ -26,8 +26,11 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const WORKSPACE = path.join(ROOT, "workspace");
-const UI = "http://127.0.0.1:5173";
-const API = "http://127.0.0.1:8787";
+// Override to acceptance-test a CANDIDATE branch's own server pair, e.g.:
+//   PORT=8802 node server.mjs &  PORT=8802 ./node_modules/.bin/vite --port 5174 &
+//   VOICEBOX_UI_URL=http://127.0.0.1:5174 VOICEBOX_API_URL=http://127.0.0.1:8802 npm run accept
+const UI = process.env.VOICEBOX_UI_URL ?? "http://127.0.0.1:5173";
+const API = process.env.VOICEBOX_API_URL ?? "http://127.0.0.1:8787";
 const CDP_PORT = 9521;
 
 const results = [];
@@ -162,10 +165,30 @@ report("../evil.sh is refused and nothing lands outside workspace/",
   !evilOutside && !evilInside && !stillListed,
   `outside=${evilOutside} listed=${stillListed}`);
 
-// ── 6. the mic state is honest ─────────────────────────────────────────────
+// ── 6. the mic state is honest ─────────────────────────────────────────────────────
 const micState = (await ev(`document.getElementById('voice-state')?.textContent`)) ?? "";
 report("mic state never claims listening without a gesture", !/listening/i.test(micState),
   `state reads "${micState.trim().slice(0, 60)}"`);
+
+// ── 6b. the waveform may not lie either ── visual activity is gated by voice
+// state (2026-09-19, as voicebox-ui's waveform lands: the invariant is that
+// nothing renders input energy when capture is off). The input-wave is
+// display:none unless [data-voice="listening"] and its path is only drawn
+// from real samples — assert the off case from the live page so a new
+// visualisation inherits the gate rather than inventing its own.
+const visual = await ev(`(() => {
+  const stage = document.getElementById('voice-ring-wrap');
+  const state = stage?.dataset.voice ?? "?";
+  const wave = document.querySelector('.input-wave');
+  const waveShown = wave ? getComputedStyle(wave).display !== "none" : null;
+  const wavePath = document.getElementById('input-path')?.getAttribute('d') ?? "";
+  return { state, waveShown, pathEmpty: wavePath.trim() === "" };
+})()`);
+const claimedListening = visual?.state === "listening" || visual?.state === "speaking";
+report("waveform visual activity is gated by voice state",
+  claimedListening ? true
+    : (visual?.waveShown === false && (visual?.pathEmpty === true || visual?.waveShown === null)),
+  `data-voice=${visual?.state} waveShown=${visual?.waveShown} pathEmpty=${visual?.pathEmpty}`);
 
 // ── 7. the font actually loads — through Vite AND through server.mjs ──────
 const fontInPage = await ev(`document.fonts.check('14px Inter')`);
