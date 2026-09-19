@@ -223,8 +223,10 @@ test("read API endpoints: GET /api/file reads file without turn, and GET /api/fi
   rmSync(testFile, { force: true });
 });
 
-// ── the phantom turns guard: loading page with N files does zero POST /api/turn ─
-test("page load with files produces zero POST /api/turn calls (no phantom turns)", async () => {
+// ── the phantom turns guard: loading page with N files does zero turn calls ─
+// A "turn call" is any stage of the cycle: /api/turn (the composed path) or
+// /api/resolve + /api/execute (the stages the page drives through lib/loop.mjs).
+test("page load with files produces zero turn-cycle calls (no phantom turns)", async () => {
   const f1 = path.join(WORKSPACE, "alpha.txt");
   const f2 = path.join(WORKSPACE, "beta.txt");
   writeFileSync(f1, "hello alpha", "utf8");
@@ -286,15 +288,16 @@ test("page load with files produces zero POST /api/turn calls (no phantom turns)
     await call("Page.enable");
     await call("Runtime.enable");
 
+    const isTurnCall = (r) =>
+      r.method === "POST" && ["/api/turn", "/api/resolve", "/api/execute"].some((p) => r.url.includes(p));
+
     // Navigate to page with files already present
     await call("Page.navigate", { url: BASE });
     await sleep(1500);
 
-    const postTurnsBefore = networkRequests.filter(
-      (r) => r.method === "POST" && r.url.includes("/api/turn")
-    );
-    // ABSENCE ASSERTION: loading the page made ZERO POST /api/turn calls
-    assert.equal(postTurnsBefore.length, 0, `Page load produced ${postTurnsBefore.length} phantom POST /api/turn requests!`);
+    const callsBefore = networkRequests.filter(isTurnCall);
+    // ABSENCE ASSERTION: loading the page made ZERO turn-cycle calls
+    assert.equal(callsBefore.length, 0, `Page load produced ${callsBefore.length} phantom turn-cycle requests!`);
 
     // POSITIVE CONTROL: a typed user turn DOES make a POST /api/turn call
     await call("Runtime.evaluate", {
@@ -310,10 +313,15 @@ test("page load with files produces zero POST /api/turn calls (no phantom turns)
 
     await sleep(1000);
 
-    const postTurnsAfter = networkRequests.filter(
-      (r) => r.method === "POST" && r.url.includes("/api/turn")
-    );
-    assert.equal(postTurnsAfter.length, 1, `Expected exactly 1 POST /api/turn after user action, got ${postTurnsAfter.length}`);
+    const callsAfter = networkRequests.filter(isTurnCall);
+    const resolves = callsAfter.filter((r) => r.url.includes("/api/resolve")).length;
+    const executes = callsAfter.filter((r) => r.url.includes("/api/execute")).length;
+    const composed = callsAfter.filter((r) => r.url.includes("/api/turn")).length;
+    // Exactly ONE cycle, driven as decide + dispatch through the shared loop —
+    // never twice, never the composed path from the page.
+    assert.equal(resolves, 1, `expected exactly 1 POST /api/resolve after a user turn, got ${resolves}`);
+    assert.equal(executes, 1, `expected exactly 1 POST /api/execute after a user turn, got ${executes}`);
+    assert.equal(composed, 0, `the page used the composed /api/turn path ${composed} times — it drives the loop stages`);
 
     ws.close();
   } finally {

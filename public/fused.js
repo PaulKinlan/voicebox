@@ -1,10 +1,12 @@
 // Voicebox — the working surface.
 //
 // Everything this page shows comes from the local server: the file list is
-// read from workspace/, a turn is posted to /api/turn, and a file is opened by
-// reading its bytes back. There is no seeded content, no timer that fakes a
-// state, and no claim the server has not made. Strings are rendered with
-// textContent only.
+// read from workspace/, a turn is run through the agent loop (lib/loop.mjs),
+// and a file is opened by reading its bytes back. There is no seeded content,
+// no timer that fakes a state, and no claim the server has not made. Strings
+// are rendered with textContent only.
+import { createLoop } from "/lib/loop.mjs";
+
 const $ = (id) => document.getElementById(id);
 const SVG = "http://www.w3.org/2000/svg";
 
@@ -87,11 +89,26 @@ async function request(path, options) {
   return body;
 }
 
-const turn = (transcript) => request("/api/turn", {
+// The page drives the SAME cycle the server runs (brief N18): lib/loop.mjs is
+// served byte-for-byte from the server's own copy, so there is no client-side
+// reimplementation of the loop to drift. The decide and dispatch stages reach
+// the server over HTTP — the model and the filesystem live behind it — but
+// the cycle itself (turn → decide → dispatch → result → record) runs here.
+const post = (path, payload) => request(path, {
   method: "POST",
   headers: { "content-type": "application/json" },
-  body: JSON.stringify({ transcript }),
+  body: JSON.stringify(payload),
 });
+
+const loop = createLoop({
+  execute: (action) => post("/api/execute", action).then((r) => r.result),
+});
+loop.registerResolver("remote", async (transcript) => {
+  const r = await post("/api/resolve", { transcript });
+  return r.action ?? { unresolved: r.note ?? "the server did not resolve the turn" };
+});
+
+const turn = (transcript) => loop.runTurn(transcript, { provider: "remote" });
 
 // ── what was made: a quiet name and its real size, nothing else ───────────
 function card(entry) {

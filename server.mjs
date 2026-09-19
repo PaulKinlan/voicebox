@@ -8,7 +8,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveTurn } from "./lib/resolver.mjs";
+import { createLoop } from "./lib/loop.mjs";
+import { resolverPack } from "./lib/resolver.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
 import { createLiveSession, LIVE_MODEL } from "./lib/live-session.mjs";
 
@@ -125,6 +126,17 @@ function execute(action) {
   return { ok: false, error: `unknown verb: ${action.verb}` };
 }
 
+// The agent loop (lib/loop.mjs, brief N18): this server is one placement of
+// it. In-process seams — the fs executor above, the resolver pack — run the
+// whole cycle locally for /api/turn, and /api/resolve + /api/execute expose
+// the decide and dispatch stages over HTTP so OTHER placements (the page,
+// a worker, another harness) drive the same module with their own transport.
+const loop = createLoop({
+  execute,
+  record: (e) => console.error(`[loop] ${e.at} provider=${e.provider} "${String(e.transcript).slice(0, 72)}" -> ${e.action ? e.action.verb : "unresolved"}`),
+});
+loop.use(resolverPack);
+
 const routes = {
   "GET /api/health": (req, res, url) => json(res, 200, { ok: true, provider: PROVIDER, workspace: "workspace/", build: BUILD }),
   "GET /": (req, res, url) => {
@@ -174,6 +186,28 @@ async function handle(req, res) {
       } catch {}
     }
   }
+  // The loop library, served byte-for-byte so the page imports the SAME file
+  // the server runs — there is no client copy of the cycle to drift (N18).
+  if (req.method === "GET" && url.pathname.startsWith("/lib/")) {
+    let name;
+    try {
+      name = decodeURIComponent(url.pathname.slice("/lib/".length));
+    } catch {
+      return json(res, 404, { error: "not found" });
+    }
+    const candidate = path.resolve(ROOT, "lib", name);
+    if (!name.endsWith(".mjs") || !containedIn(path.join(ROOT, "lib"), candidate)) {
+      return json(res, 404, { error: "not found" });
+    }
+    try {
+      const real = realpathSync(candidate);
+      if (!containedIn(path.join(ROOT, "lib"), real)) return json(res, 404, { error: "not found" });
+      res.writeHead(200, { "content-type": "text/javascript" });
+      return res.end(readFileSync(real));
+    } catch {
+      return json(res, 404, { error: "not found" });
+    }
+  }
   const route = routes[key];
   if (route) return route(req, res, url);
 
@@ -212,7 +246,7 @@ async function handle(req, res) {
   if (req.method === "POST" && url.pathname === "/api/turn") {
     let body = "";
     req.on("data", (c) => (body += c));
-    req.on("end", () => {
+    req.on("end", async () => {
       let transcript = "";
       try {
         transcript = String(JSON.parse(body).transcript ?? "").trim();
@@ -220,11 +254,51 @@ async function handle(req, res) {
         return json(res, 400, { error: "body must be JSON with a transcript" });
       }
       if (!transcript) return json(res, 400, { error: "empty transcript" });
-      const action = resolveTurn(transcript, PROVIDER);
-      if (action.unresolved) {
-        return json(res, 200, { transcript, action: null, note: action.unresolved });
+      return json(res, 200, await loop.runTurn(transcript, { provider: PROVIDER }));
+    });
+    return;
+  }
+
+  // ── the loop's seams, over HTTP ──────────────────────────────────────────
+  // decide: resolve a transcript WITHOUT dispatching it. A remote placement
+  // (the page, via lib/loop.mjs) runs the cycle itself and calls the stages.
+  if (req.method === "POST" && url.pathname === "/api/resolve") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", async () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        return json(res, 400, { error: "body must be JSON with a transcript" });
       }
-      return json(res, 200, { transcript, action, result: execute(action) });
+      const transcript = String(parsed.transcript ?? "").trim();
+      if (!transcript) return json(res, 400, { error: "empty transcript" });
+      const provider = typeof parsed.provider === "string" && parsed.provider ? parsed.provider : PROVIDER;
+      const action = await loop.resolveTurn(transcript, provider);
+      if (action.unresolved) return json(res, 200, { transcript, action: null, note: action.unresolved });
+      return json(res, 200, { transcript, action });
+    });
+    return;
+  }
+
+  // dispatch: execute an already-resolved action. The executor is the guard —
+  // the verb allow-list and workspace containment apply exactly as they do to
+  // a turn the server resolved itself.
+  if (req.method === "POST" && url.pathname === "/api/execute") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      let action;
+      try {
+        action = JSON.parse(body);
+      } catch {
+        return json(res, 400, { error: "body must be a JSON action" });
+      }
+      if (!action || typeof action.verb !== "string") {
+        return json(res, 400, { error: "an action needs a verb" });
+      }
+      return json(res, 200, { result: execute(action) });
     });
     return;
   }

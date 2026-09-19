@@ -140,6 +140,9 @@ export default defineConfig({
     watch: { usePolling: true, interval: 300 },
     proxy: {
       "/api": { target: API_TARGET },
+      // The loop library (brief N18): the page imports /lib/loop.mjs from the
+      // backend's own copy so the cycle can never drift into two files.
+      "/lib": { target: API_TARGET },
       // The audio socket (k3's live session, landing separately). ws: true so
       // the WebSocket upgrade is forwarded and survives HMR reloads.
       "/live": { target: API_TARGET, ws: true },
