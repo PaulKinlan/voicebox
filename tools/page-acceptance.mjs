@@ -26,7 +26,7 @@
 //   7. the font actually loads          — through Vite AND through server.mjs
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
-import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readlinkSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -107,6 +107,18 @@ const ev = async (expr) =>
 // from /api/health.
 const health = await (await fetch(`${API}/api/health`)).json().catch(() => null);
 WORKSPACE = health?.workspace ?? null;
+// Some server revisions report a RELATIVE workspace ("workspace/") — anchor
+// it to the server process's own cwd (same-box instrument: the port names the
+// process), or every stat below becomes cwd-relative and fails from any other
+// worktree (2026-09-19, voicebox-ui blocked on exactly this).
+if (WORKSPACE && !path.isAbsolute(WORKSPACE)) {
+  try {
+    const port = new URL(API).port;
+    const out = execFileSync("ss", ["-ltnp"]).toString();
+    const pid = (out.match(new RegExp(`:${port}\\b[^\\n]*pid=(\\d+)`)) ?? [])[1];
+    if (pid) WORKSPACE = path.join(readlinkSync(`/proc/${pid}/cwd`), WORKSPACE);
+  } catch { /* fall through: the TREE check below reports it */ }
+}
 const TREE = WORKSPACE ? path.dirname(WORKSPACE) : null;
 if (!TREE || !existsSync(TREE)) {
   console.log(`FAIL  cannot locate the server's tree — /api/health said ${JSON.stringify(health?.workspace ?? null)}`);
