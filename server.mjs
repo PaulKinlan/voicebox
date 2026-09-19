@@ -83,6 +83,11 @@ async function handle(req, res) {
   const route = routes[key];
   if (route) return route(req, res, url);
 
+  if (req.method === "GET" && url.pathname === "/api/files") {
+    const files = readdirSync(WORKSPACE).filter(f => !f.startsWith("."));
+    return json(res, 200, { files });
+  }
+
   if (req.method === "POST" && url.pathname === "/api/turn") {
     let body = "";
     req.on("data", (c) => (body += c));
