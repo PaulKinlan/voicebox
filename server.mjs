@@ -8,6 +8,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFi
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveTurn } from "./lib/resolver.mjs";
+import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
+import { createLiveSession, LIVE_MODEL } from "./lib/live-session.mjs";
 
 // Module-relative, decoded: `new URL(...).pathname` percent-encodes spaces and
 // silently points every read at a directory that does not exist.
@@ -146,6 +148,44 @@ const server = createServer(async (req, res) => {
 });
 process.on("uncaughtException", (e) => console.error(`[uncaught] ${e?.stack ?? e}`));
 process.on("unhandledRejection", (e) => console.error(`[unhandledRejection] ${e?.reason ?? e}`));
+
+// ── the live voice socket ─────────────────────────────────────────────────
+// Page ⇄ /live ⇄ Gemini Live. Binary frames are PCM16 audio (16 kHz up,
+// 24 kHz down); text frames are JSON control ({"type":"text"} turns,
+// {"type":"stop"}). The session owns the readiness gate and the model label.
+server.on("upgrade", (req, socket) => {
+  const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
+  if (url.pathname !== "/live") { socket.destroy(); return; }
+  const ws = wsUpgrade(req, socket);
+  if (!ws) { socket.destroy(); return; }
+
+  let session = null;
+  try {
+    session = createLiveSession({
+      onAudioOut: (pcm, mime) => { if (pcm.length > 4) ws.send(pcm); },
+      onText: (text, role) => ws.send(JSON.stringify({ type: "text", role, text })),
+      onState: (state, detail) => ws.send(JSON.stringify({ type: "state", state, detail, model: LIVE_MODEL })),
+    });
+  } catch (e) {
+    ws.send(JSON.stringify({ type: "error", error: e?.message ?? String(e) }));
+    ws.close(1011, "live session failed to start");
+    return;
+  }
+
+  ws.on("message", (data) => {
+    if (typeof data === "string") {
+      let msg = null;
+      try { msg = JSON.parse(data); } catch { /* not JSON — ignore */ }
+      if (msg?.type === "text" && typeof msg.text === "string") session.sendText(msg.text);
+      if (msg?.type === "stop") { session.close(); ws.close(); }
+      return;
+    }
+    // A binary frame is a PCM16 audio frame from the page's microphone.
+    session.sendAudio(data.toString("base64"));
+  });
+  ws.on("close", () => session.close());
+  ws.on("error", () => session.close());
+});
 
 server.listen(PORT, "127.0.0.1", () =>
   console.log(`voicebox on http://127.0.0.1:${PORT} — provider: ${PROVIDER}, workspace: ${WORKSPACE}`));
