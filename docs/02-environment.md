@@ -86,8 +86,23 @@ and a design that does not choose is claiming the stronger one by accident.
 | The guarantee | *"it cannot leave the project"* | *"it will not leave the project unless the harness misbehaves"* |
 | Cost | the host must describe tools and stay in the loop for each call | none — and no real containment of the harness's own actions |
 
-**The design's position: mediated is the target for the default harness, and compliant mode is
-disclosed rather than assumed.** The brief's minimalism makes this feasible — *one* harness
+**Driven against pi as it actually is (k3, `docs/03-architecture-k3.md`): compliant mode does not
+exist today.** Two drives against the real bridge produced **zero `session/request_permission`**
+for ordinary tool calls — the protocol path is wired end to end and **pi never uses it**. pi's only
+built-in gate is *project trust*, which guards **input loading**, not what the model asks tools to
+do afterwards, and in non-interactive modes it does not appear at all. So the honest statement has
+**four** shapes, and the fourth is what a reader should assume until told otherwise:
+
+| Shape | What enforces | Available when |
+|---|---|---|
+| **Mediated** | the host owns the tool surface, so it has the plan **by construction** | the harness is built that way |
+| **Compliant** | the harness asks, and the host answers | **after** an extension exists that hooks tool calls and asks — k3 names it: a pi extension calling `ctx.ui.confirm()`, *"a small, named piece of work, not a discovery"* |
+| **Environmental** | a container with only the files and credentials the task needs | whenever the environment is disposable — and it depends on **nobody's compliance** |
+| **Disclosure** | nothing: the tier table describes what the agent *should* do | **everything else** — and the UI must say so per session, not imply otherwise |
+
+**The design's position: mediated is the target for the default harness; compliant mode requires the
+extension above and is not claimed until it exists; and until one of the first three is in force the
+tier table is presented as a disclosure.** The brief's minimalism makes this feasible — *one* harness
 built by us can expose its tools through the host, which is far easier than auditing an adapter
 zoo. A harness that cannot be mediated is still usable, but the UI carries the downgrade
 explicitly, in the same spirit as the provider badge: **the guarantee is a property of the mode,
@@ -116,7 +131,7 @@ A requirement, not a different design, and it is satisfiable by one rule:
 
 | Placement | Where the files are | Where the host runs | Root | What `do` can mean |
 |---|---|---|---|---|
-| **browser — "the first environment"** (E1) | **OPFS** in the page's origin | a dedicated **worker** in that page — same tier table, same audit code | an OPFS directory handle | what a browser can do: wasm and JS tools, file reads and writes, generated assets; no processes |
+| **browser — "the first environment"** (E1) | **OPFS** in the page's origin | a dedicated **worker** in that page — same tier table, same audit code | an OPFS directory handle | wasm and JS tools, file reads and writes, generated assets; no processes, and **no harness** (see the transport fact below) |
 | **local safe** (E2) | a checkout on his machine | a local process on that machine | a realpath (or its worktree) | whatever the project's toolchain can: spawn processes, run tests, git |
 | **remote** (E3) | a checkout on a machine that is *not* where the browser is | a process on **that** machine | a realpath on that machine | as local, minus nothing — today's Telegram-to-agent shape |
 | **hosted cloud** (E4, later) | a checkout on **somebody else's** machine | a process there | a realpath there | as local, with everything below attached |
@@ -151,7 +166,14 @@ Three consequences worth stating plainly:
    one it is, in the UI**, because a user who assumes the wrong one loses work. Two browsers each
    holding a project called `isocan` are **two projects**: identity carries the placement
    (`isocan@phone`, `isocan@box`), not just the name.
-4. **The remote placement changes transport, not authority.** Loopback plus a token is right when
+4. **The browser cannot host the harness — a transport fact, not a capability gap.** The adapter is
+   a **stdio process spawner**, so a page cannot run it (k3 drove the topology:
+   `browser ⇄ WebSocket ⇄ bridge on a machine ⇄ stdio ⇄ pi child`). It is **one harness, one ACP
+   protocol, two transports**, and the capability declaration must record it that way — otherwise
+   the browser environment quietly grows capabilities that do not exist. For E1 that means its
+   *tools* run in the page (Wasm, §1.8) while *harness* work arrives through a bridge on a machine
+   when one is reachable — and E1-M0 deliberately needs neither.
+5. **The remote placement changes transport, not authority.** Loopback plus a token is right when
    client and files share a machine; a browser on a phone talking to a server needs an
    authenticated remote channel (TLS, a paired credential, an explicit pairing flow) — and the
    tier table, the confirmations and the audit stay **on the machine that holds the files**,
@@ -239,6 +261,11 @@ sends `session/cancel`, and if the harness has not acknowledged within ~2 s it s
 child's process group directly; either way it stops the processes the host started for that
 project (the process journal has the pids). A stop that only works when the other side is
 well-behaved is not a stop.
+
+After k3's drives this is not a nicety, it is **the only hard lever the host always has** —
+everything else in this section depends on the harness choosing to ask or to answer. `session/cancel`,
+the process-group signal, and the refusal to continue are **unconditional**; treat any guarantee that
+rests on the harness's cooperation as conditional on the mode (§1.1a).
 
 The same applies to failure in the other direction: **a harness that exits mid-turn is an error
 turn, not a dead session.** The host reports it, records it, and can start a fresh session for
@@ -472,6 +499,20 @@ Three consequences, each of which closes a hole the declaration alone would leav
    enforce is not granted and the tool is not admitted there — so the honest answer to *"can this
    tool run here?"* is a property of the environment, not of the tool's optimism. A capability the
    platform cannot enforce is **absent, not promised**.
+
+#### The loop that must never run ungated
+
+k3 measured the inside of the harness: **a tool's self-declaration is the last word — there is no
+sandbox there.** So the enforcement seam is not inside the harness at all; it is **who owns the
+extension directory and who triggers `/reload`**. Therefore:
+
+> **The model proposes tool source; the host reviews it, and the host reloads.** That is a Tier 2 act
+> whose `resolved` is **the file content** — the resolved-plan rule applied to the highest-reach act
+> in the system.
+
+And the failure to name plainly, in k3's words: *"the one thing that must not happen is the loop
+running ungated, because then the tool proposal — the act with the most reach in the whole system —
+bypasses the only table meant to govern it."*
 
 #### The substrate is a named thing, not "the toolchain"
 
@@ -733,11 +774,16 @@ All three of these are in this document:
 | "It cannot leave the project root" | `path.basename(name)`, `join`, `normalize` — rewrites that happen to look correct, and `basename('..')` is `'..'` | `realpath(candidate)` resolved and **compared** against the root, refusing on any answer but yes (§3.2) |
 | "Nothing outside can run in the page" | `connect-src`, which restricts what a page may **reach** | `script-src` without `'unsafe-inline'`, which restricts what it may **execute** — different jobs, and only one stops the attack (§3.5a) |
 | "This tool cannot reach the network" | the tool's own declaration, `network: none` | the interface the tool is **given**, plus the realm's egress policy — the declaration is a record, never the enforcement (§1.7) |
+| "Nothing dangerous is imported or evaluated" | a **regex** over source text — CAP's first evaluator gate was text-only and **missed eight live alias sites** | an **AST**: the thing that sees what the text *means*, not what it spells |
 
 Two habits follow, and they are the reason this section is written the way it is:
 
 - **Ask what enforces it, not what states it.** If the answer is a comment, a descriptor, a
   variable name or a helper that tidies input, there is no guard yet.
+- **Give every authority one home, or record why it has none.** CAP grew **three digest verifiers in
+  three places** before anyone noticed, found by mutation rather than by review. An authority with
+  several homes has none: if two places can decide the same thing, the property is whatever the
+  weaker one allows and nobody owns the difference. A day-one rule, not a cleanup.
 - **Test in both directions.** A suite of refusals proves nothing until one request *succeeds* —
   the containment test needs `..` as a **name** as well as a path segment, and the capability test
   needs an allow-listed host actually reached. Otherwise the test proves that refusals work, which
