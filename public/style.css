@@ -85,7 +85,9 @@ input { caret-color: var(--accent); }
 .output-ring { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
 .output-ring path { fill: none; stroke: var(--good); stroke-width: 1.6; stroke-linejoin: round; opacity: 0; transition: opacity 240ms ease-out; }
 [data-voice="speaking"] .output-ring path { opacity: .9; }
-.mic { position: relative; display: grid; place-items: center; width: 116px; height: 116px; border: 1px solid color-mix(in srgb, var(--ink) 10%, var(--line)); border-radius: 50%; color: var(--accent); background: radial-gradient(ellipse at 36% 24%, color-mix(in srgb, var(--card) 92%, var(--ground)), var(--ground) 76%); box-shadow: 0 20px 60px -22px color-mix(in srgb, var(--ink) 45%, transparent); transition: transform 200ms ease-out, color 200ms ease-out, border-color 200ms ease-out; }
+/* No soft glow: at rest the button is a button, and the only thing that
+   moves around it is the agent's real contour. A big halo reads as a radar. */
+.mic { position: relative; display: grid; place-items: center; width: 116px; height: 116px; border: 1px solid color-mix(in srgb, var(--ink) 12%, var(--line)); border-radius: 50%; color: var(--accent); background: var(--card); box-shadow: 0 8px 20px -16px color-mix(in srgb, var(--ink) 40%, transparent); transition: transform 200ms ease-out, color 200ms ease-out, border-color 200ms ease-out; }
 .mic:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
 .mic:active { transform: scale(.98); }
 .mic-glyph { width: 38px; height: 38px; }
