@@ -1,0 +1,478 @@
+# The environment behind the voice
+
+Design note by **ds-flash-2** (2026-09-19). My lane is the *environment*: the thing the
+conversation drives. The **interface** is astra's and the **harness** is k3's; the contracts
+in §1.4 and §1.5 are what those two lanes build against, so they are written as schemas
+rather than prose.
+
+The brief's two load-bearing lines:
+
+> *"Your box obviously got access to my machine."*
+> *"We think about local project files now... this actually might be like the answer to this."*
+
+So: the agent acts on a **real machine**, and **a project on disk is the unit of work**.
+
+---
+
+## 0. The decisions, up front
+
+| Decision | Why | What it costs |
+|---|---|---|
+| **The host is one long-lived local process** (`voicebox-host`) that owns projects, sessions, confirmations and the audit log — not the page | Paul wants to keep talking while working on something else; a page reload must not kill the work or lose the thread | A process to install and keep running (systemd --user / launchd, the same shape as the ACP bridge service already proven) |
+| **Reuse the ACP bridge** rather than invent a second transport | It already does browser↔real-machine, real harness CLI children, session continuity and **a permission round-trip** — the four hard parts | We inherit its constraints (loopback, one child per connection) and must keep its cwd handling declared |
+| **Two models, two footprints**: a *voice* model (Gemini Live / OpenAI realtime) and an *execution* harness (pi/ACP) | The brief wants Gemini first *and* provider-extensibility, without an adapter zoo | Two privacy surfaces to disclose, not one (§1.3) |
+| **Voice proposes; the host disposes** | Voice is untrusted input — ASR errors, ambient speech, a video playing — so authority cannot come from "he said it" | Every guarded act needs a host-side decision path (§3.3) |
+| **A project is a declared directory**, never a discovered one | Yesterday's fleet lesson: anything assumed about the machine's layout is wrong on somebody's machine | The first open of a project is an explicit act |
+| **Work happens in the project's own git state; unapproved work is kept recoverable** (a branch or worktree) | A build environment that can act is only safe if its acting is cheap to undo | Slightly more machinery per project; the host owns it |
+| **Three tiers, enforced in the host as data**: never / unprompted / confirm | A boundary written as prose is a wish; the same lesson as putting the harness registry in data rather than comments | Tier tables need maintaining and testing (§3.6) |
+
+---
+
+## 1. The execution model
+
+### 1.1 What runs where
+
+```
+┌─ browser ────────────────────────────────────────────────┐
+│  voice UI (astra's lane)                                 │
+│  mic/speaker · live model session · transcript · renders  │
+│  project state, progress, diffs, confirmation questions   │
+└───────────────────────┬──────────────────────────────────┘
+                        │  ws://127.0.0.1:<port>   (§1.5 schema)
+┌───────────────────────▼──────────────────────────────────┐
+│  voicebox-host  — ONE long-lived process on this machine  │
+│  · project registry      · tier table (data)              │
+│  · sessions per project  · confirmation gate              │
+│  · audit log (append-only)· process journal (what it ran) │
+│  · resolves realpaths, enforces containment, decides tiers │
+└───────────────────────┬──────────────────────────────────┘
+                        │  ACP over stdio (the existing bridge)  (§1.4)
+┌───────────────────────▼──────────────────────────────────┐
+│  execution harness (k3's lane) — one adapter, one child   │
+│  pi / claude-code / codex … with its own tools            │
+│  runs with cwd = the ACTIVE PROJECT (declared, never guessed) │
+└───────────────────────┬──────────────────────────────────┘
+                        │  real files, real commands
+┌───────────────────────▼──────────────────────────────────┐
+│  the machine: the project's checkout, its toolchain, its  │
+│  dev servers, its git remotes                             │
+└──────────────────────────────────────────────────────────┘
+```
+
+Three things follow from this picture and are worth saying plainly:
+
+1. **The browser never executes anything.** It is a renderer and a microphone. Every act is
+   a message to the host.
+2. **The host is the security boundary**, because it is the only component that knows the
+   project roots, the tier table and the pending confirmations at the moment of acting.
+3. **The harness is a child process, not a service.** Its authority is exactly the authority
+   the host gives it: a working directory, an environment, and the tools that harness ships.
+
+### 1.2 What holds state
+
+| State | Lives in | Survives page reload | Survives host restart |
+|---|---|---|---|
+| The project (files, git) | disk, in the project | yes | yes |
+| Project registry (`id`, `path`, `lastUsed`) | host, `~/.voicebox/projects.json` | yes | yes |
+| Conversation transcript (per project) | host | **yes** | yes (append-only file) |
+| Harness session id (per project) | host | **yes** | yes — resumed with `session/load` |
+| Pending confirmation | host | **yes** | no (a restart clears it — deliberately) |
+| Running turn / spawned processes | host + children | yes | no (reported as "interrupted") |
+| Audit log | host, `~/.voicebox/audit.log` | yes | yes |
+
+The rule underneath the table: **the page is disposable, the host is durable, the project is
+the truth.** A reload mid-turn keeps the turn running and replays its progress. This is the
+requirement the brief actually names — *"me and you keep talking... while I also do want to
+work on some isocan projects at the same time"* — and it is the reason nothing important may
+live in browser memory.
+
+### 1.3 The two-model split, and its two footprints
+
+The brief asks for Gemini Live first, OpenAI as an alternative, and Fable-through-pi as a
+destination. Those are two different roles, and they should not be one component:
+
+- **The voice model** holds the conversation: it hears, speaks, and decides *what to ask the
+  host to do*. It sees the transcript and the state summaries the host sends it.
+- **The execution harness** holds the work: it reads code, edits files, runs commands. It
+  sees the project.
+
+They have **different privacy footprints**, and a design that blurs them cannot tell the
+truth about either:
+
+| | Voice model | Execution harness |
+|---|---|---|
+| Sees | audio, transcript, project *metadata* (name, branch, status), diffs the host chooses to show | the project's files and command output |
+| Where it runs | likely a cloud API (Gemini Live / OpenAI) | whatever the harness is: a local model, or a cloud CLI (claude-code, codex) |
+| What leaves the machine | **audio + transcript** | **source code + command output**, to that provider |
+| Per project, visible in the UI | — | a badge naming the provider, set when the project is opened |
+
+So: **project file contents are never sent to the voice model**, and **a project's code only
+goes wherever its declared harness sends it** — a per-project, visible choice rather than an
+invisible consequence of picking a model at install time.
+
+### 1.4 The host ↔ harness contract (k3 builds against this)
+
+One adapter. The host spawns it per project session with a **declared working directory** and
+speaks ACP-shaped JSON-RPC over stdio — the bridge's proven shape, not a new protocol.
+
+```jsonc
+// host → harness
+{ "method": "session/new",  "params": { "cwd": "/home/paul/…/isocan", "mcpServers": [] } }
+{ "method": "session/load", "params": { "cwd": "/home/paul/…/isocan", "sessionId": "ses_…" } }
+{ "method": "session/prompt","params": { "sessionId": "ses_…", "prompt": "run the tests and fix what fails" } }
+
+// harness → host (streaming)
+{ "method": "session/update", "params": { "sessionId": "ses_…", "update": { "sessionUpdate": "agent_message_chunk", "content": "…" } } }
+{ "method": "session/update", "params": { "update": { "sessionUpdate": "tool_call", "title": "Bash: npm test", "status": "in_progress" } } }
+{ "method": "session/update", "params": { "update": { "sessionUpdate": "tool_call_update", "status": "completed", "content": [ … ] } } }
+```
+
+**`cwd` is always declared** — never defaulted, never inferred from the machine's layout.
+The host computes it from the project record and refuses a turn whose project has no usable
+directory.
+
+**The permission round-trip is the confirmation channel.** When the harness wants to act
+outside what it may do, it asks, and the **host** answers:
+
+```jsonc
+// harness → host
+{ "id": 41, "method": "session/request_permission",
+  "params": { "sessionId": "ses_…",
+              "toolCall": { "title": "Bash: rm -rf build/", "kind": "execute" },
+              "options": [ { "optionId": "allow_once", "name": "Allow once", "kind": "allow_once" },
+                           { "optionId": "reject_once", "name": "Reject", "kind": "reject_once" } ] } }
+```
+
+The host's reply is *not* a rubber stamp: it consults the tier table (§3.2), and for a Tier 2
+act it relays a **typed question** to the UI and waits for a human. The model never answers
+its own permission request.
+
+### 1.5 The host ↔ UI contract (astra builds against this)
+
+One loopback WebSocket, JSON messages, small schema. All host→UI messages carry `project` so
+a UI showing several projects can route them.
+
+```jsonc
+// UI → host
+{ "type": "open_project",   "path": "/home/paul/…/isocan" }      // explicit act; host registers it
+{ "type": "activate",       "project": "isocan" }                 // switch the active project
+{ "type": "say",            "project": "isocan", "text": "run the tests and fix what fails" }
+{ "type": "confirm",        "id": "cfm_17", "answer": "yes" }      // or "no"
+{ "type": "stop",           "project": "isocan" }                  // honoured immediately, always
+
+// host → UI
+{ "type": "state",    "project": "isocan", "data": { "path": "…", "branch": "main", "dirty": 3,
+                                                     "harness": "pi", "providerBadge": "local",
+                                                     "session": "ses_…", "running": false } }
+{ "type": "progress", "project": "isocan", "turn": "turn_9", "update": { … } }   // ACP update, relabelled
+{ "type": "diff",     "project": "isocan", "files": [ { "path": "…", "additions": 12, "deletions": 3 } ] }
+{ "type": "confirm_request", "id": "cfm_17", "project": "isocan", "tier": 2,
+   "question": "Delete `build/` (412 files) in isocan?",
+   "resolved": { "command": "rm -rf /home/paul/…/isocan/build",
+                 "paths": ["/home/paul/…/isocan/build"],
+                 "effects": [ "412 files removed", "recoverable: not tracked by git" ] },
+   "source": "agent" }        // or "content" — see §3.3
+{ "type": "audit",    "project": "isocan", "entry": { … } }
+{ "type": "refused",  "project": "isocan", "rule": "outside-project", "detail": "…" }
+{ "type": "error",    "project": "isocan", "detail": "…" }
+```
+
+`confirm_request` carries the **resolved** plan (real paths, real counts) rather than the
+spoken words — that is what makes a mis-transcription visible (§3.3), and it is what the
+confirmation UI renders.
+
+### 1.6 The thinnest working version
+
+**M0 — the skeleton that is genuinely useful (about a day).**
+
+- `voicebox-host`: registry (open/activate/list), one active turn at a time, tier table with
+  Tier 0/1 enforced, audit log, process journal.
+- **Text** input, not voice: a minimal page that opens a project, sends a line, streams
+  progress, shows diffs, answers confirmations.
+- One harness: the pi/ACP adapter, one project, cwd declared.
+- Three verbs work: **ask**, **do**, **stop**.
+
+**M1 — voice and several projects.**
+
+- astra's voice UI replaces the text box; Gemini Live first, OpenAI as a second voice model.
+- Several projects registered with instant switching and per-project sessions.
+- Tier 2 confirmations spoken *and* clicked, with resolved-plan readback.
+
+**Deliberately not in either:** cloud relay or any inbound connection; unattended autonomy
+(§3.7); a second transport; a plugin system; multi-user; a database (the filesystem and
+append-only logs are the state).
+
+**What is reused rather than rebuilt:** the ACP bridge's transport, session continuity, and
+permission round-trip. If that bridge is the bottom half already, this design is mostly the
+*top* half — projects, tiers, audit, and the contracts the other two lanes need.
+
+---
+
+## 2. The local-project unit
+
+### 2.1 What a project is
+
+A project is a **declared directory** plus a session, and nothing more:
+
+```jsonc
+{ "id": "isocan",                      // short name, unique among registered projects
+  "path": "/home/paulkinlan/isocan",   // the DECLARED root (realpath-resolved at open)
+  "lastUsed": "2026-09-19T11:40:00Z",
+  "harness": "pi",
+  "sessionId": "ses_…",                // the harness session for THIS project
+  "worktree": null }                    // set when the host keeps work recoverable (§2.4)
+```
+
+- **Identity**: the realpath, so two paths to the same checkout are one project.
+- **No discovery.** The host never scans the filesystem for repositories; a directory becomes
+  a project when it is declared. (This is the same rule as the cwd fix: the machine's layout
+  is never assumed.)
+- **Removal is dropping a record**, never touching the directory.
+
+### 2.2 Open, activate, detach, close
+
+| Act | What happens | What does not happen |
+|---|---|---|
+| **open** | verify the path exists and is a directory; resolve realpath; register; create a session lazily on first use | nothing is cloned, scaffolded or modified |
+| **activate** | the active project changes; the UI is told the new state | other projects' sessions are untouched |
+| **detach** (implicit, on switching away) | the session stays alive and resumable | **no process is killed** for switching |
+| **close** | the session is ended explicitly; processes the host started for it are stopped | files are untouched by closing |
+
+"Open" attaches to what the developer already has. Creating a new project (scaffolding,
+cloning) is a later milestone and a **confirmed** act, because it writes outside an existing
+root by definition.
+
+### 2.3 Several at once: what is parallel, what is serial
+
+The brief's requirement — *working on isocan while talking to the agent* — is satisfied by
+**sessions persisting per project while the conversation moves**, not by running two agents
+at once:
+
+- **Parallel across projects**: sessions, transcripts, state and audit trails. Switching is
+  instant, and nothing is torn down. If isocan has a turn running, switching to another
+  project does not interrupt it; its progress is buffered and shown when it is active again.
+- **Serial within a project**: one turn at a time. A second instruction while a turn runs is
+  either queued or refused, explicitly, in the UI.
+- **One voice channel**: you can only be talking about one project at a time, and the active
+  project is what a spoken instruction means. "Which project is this about?" is never guessed
+  from content — it comes from the active project, or from an explicit name in the sentence.
+  An ambiguous instruction asks rather than picks.
+
+A second turn *globally* (two projects running at once) is deliberately out of M1: two agents
+editing two checkouts is safe, but two agents acting on one machine's resources is a
+resource-contention problem we have no reason to take on before the interaction model is
+settled.
+
+### 2.4 Separability, and keeping work cheap to undo
+
+- **cwd**: every turn runs with the project's realpath as its declared cwd. The harness cannot
+  wander into another project because it is never told about one.
+- **Session isolation**: one harness session per project, so context does not bleed between
+  checkouts.
+- **Recoverability**: work the agent does unprompted (Tier 1) is **kept reversible** — for a
+  git project the host may work in a branch or a worktree, so "undo everything the agent did
+  this evening" is one command and never a conversation. Where the project is not a git
+  repo, the host records the files it wrote so a revert list exists.
+- **Audit separability**: the audit log is one append-only file with a `project` field on
+  every entry, so "what happened in isocan today?" is a filter.
+
+### 2.5 What the host may read without asking
+
+Read-only facts about a project — branch, dirty count, recent commits, whether a server it
+started is still running. Reading a project's own files is Tier 1 (§3.2). Reading *outside* a
+project is Tier 0 unless it is the host's own state directory.
+
+---
+
+## 3. The security boundary
+
+This section exists before any code, because the thing being designed is a **language model
+with execution access to a developer machine, driven by speech**. Yesterday's fleet work
+settled two general rules that apply directly: authority must be *declared* rather than
+assumed, and ambient state is where things go wrong quietly. Voice is the ambient-est input
+there is.
+
+### 3.1 The threat model
+
+| Input | Trusted for | Not trusted for |
+|---|---|---|
+| Paul's speech | expressing intent about his own projects | being correctly transcribed; being the only thing on the microphone; being current (an utterance from twenty minutes ago) |
+| The transcript | a record of what was heard | authority to act |
+| Project content (files, issues, READMEs, web pages the agent reads) | information | **instructions** — content never confers authority |
+| The harness model | proposing actions inside a project | deciding what it may do |
+| The voice model | proposing intents, holding the conversation | executing anything, answering a confirmation |
+
+Three concrete attacks this table is defending against:
+
+1. **A transcription that changes the act** — "delete the *build* folder" heard as something
+   else, or a passing conversation heard as an instruction.
+2. **Injection through content** — a repository's README, an issue, or a fetched page
+   containing instructions aimed at the agent.
+3. **The helpful-drift failure** — a chain of individually reasonable actions that adds up to
+   something irreversible (deleting a directory to "clean up", force-pushing to "resolve" a
+   conflict).
+
+### 3.2 The tiers
+
+**Tier 0 — never. Refused by the host, before execution, whatever anyone says.** Every rule
+is enforced as data in the host and every one has a test (§3.6).
+
+| Rule | Mechanism |
+|---|---|
+| Write or read outside declared project roots and the host's own state dir | realpath containment check on every resolved path |
+| Touch credential material (`~/.ssh`, `~/.config/**credentials**`, keychains, browser profiles, `.env*`, service-account files) | path + pattern deny-list, applied to reads as well; matches are reported, never echoed |
+| `sudo`, `su`, machine-wide config changes, global package installs | command classification before execution |
+| Kill processes the host did not start | the process journal is the only source of pids it may signal |
+| `curl … \| sh`, or any fetch-and-execute of remote code | command classification (fetch + interpreter in one pipeline) |
+| Send anything to the network from the host itself (exfiltration surface) | the host makes no outbound requests; the harness does what its own tools do, inside a project |
+| Publish, deploy, spend money, message a human | these are **Tier 2** — but a Tier 0 blanket ban applies when the instruction arrives from *content* rather than from Paul (§3.3) |
+
+**Tier 1 — allowed unprompted, inside a project, reversible, and reported.**
+
+- Read anything inside the project.
+- Write or edit files inside the project. Every write is reported with a diff, and the work
+  is kept recoverable (§2.4).
+- Run the project's own toolchain: build, test, lint, format. These are the project's own
+  code, which is the point of a build environment; they are reported, not gated.
+- Install dependencies, with the report naming packages that are **new** to the lockfile
+  (supply-chain reach is the risk worth surfacing).
+- Start a dev server the host records in the process journal, named and stoppable.
+
+**Tier 2 — confirm first, per act, in the conversation.**
+
+- **Irreversible or hard to reverse**: deleting files or directories; `git reset --hard`,
+  `git clean -fd`, force-push, history rewrites; dropping or migrating a database;
+  overwriting uncommitted work.
+- **Leaving this machine**: `git push`, opening or commenting on a PR, deploying anywhere,
+  calling a remote API that receives project content.
+- **Reaching a human or the public**: sending a message, email, post or comment — always,
+  even to Paul himself.
+- **Spending**: token spend on a cloud harness is expected (it is the tool), but provisioning,
+  purchases and anything with a price tag are Tier 2.
+- **Secrets**: using a declared secret to run something, and any act that would put a secret
+  value into the transcript.
+
+The line between Tiers 1 and 2 is **reversibility and reach**: inside the project and cheap to
+undo → go; outside the project, or expensive to undo, or someone else can see it → ask.
+
+### 3.3 How a spoken instruction maps onto the tiers
+
+This is the part with no off-the-shelf answer, so it is stated as a pipeline:
+
+```
+speech ──▶ transcript ──▶ intent {project, action, args} ──▶ RESOLUTION ──▶ tier ──▶ act
+                │                     │                          │
+         (untrusted)          (voice model proposes)     (host resolves real paths,
+                                                          real counts, real effect)
+```
+
+1. **The voice model proposes a typed intent. It never executes.** The host is the only
+   component with authority, and the only one that knows the tier table.
+2. **The host resolves before it judges.** An intent becomes a *resolved plan*: absolute
+   realpaths, file counts, the actual command line, what is tracked by git, what would be
+   lost. Two different spoken sentences that resolve to the same plan are the same act — and
+   one sentence that resolves somewhere unexpected is visible as such.
+3. **Tier is decided on the resolved plan, not the words.** "Clean up the build folder" is
+   Tier 2 because the resolved plan deletes 412 files; the words themselves settle nothing.
+4. **Guarded acts are read back in their resolved form** — *"Delete `build/` (412 files) in
+   isocan?"* — so a mis-transcription shows up as a different plan, not a different sentence.
+5. **`stop` is always live.** It cancels the running turn and stops the processes the host
+   started, immediately, whatever else is pending, and it is honoured mid-sentence.
+
+**Where an instruction came from is part of the decision.** If the intent originated from
+content the agent read (a file, an issue, a page) rather than from Paul's speech, the host marks
+it `source: "content"`, and Tier 2 acts originating that way require **typed or clicked**
+confirmation, never a spoken "yes". The confirmation UI says so in words: *"this request came
+from a file the agent read, not from you."*
+
+### 3.4 What makes a confirmation valid
+
+A spoken "yes" counts **only** when all of these hold:
+
+- a question was asked, by the host, and it is the most recent thing asked;
+- exactly one confirmation is pending;
+- it refers to the active project and arrived **after** the question (≤ 30 s window);
+- the answer is unambiguous ("yes" / "go ahead" / "do it" — not a continuation of an
+  unrelated sentence).
+
+Otherwise the host asks again, or offers the UI control. Never valid: silence; "ok" *before*
+the question; a general "yes" while two questions could be pending; a confirmation given by
+the voice model on Paul's behalf.
+
+### 3.5 Mechanisms, not intentions
+
+| Claim | Mechanism |
+|---|---|
+| "It cannot leave the project" | realpath containment computed at execution time for every path and cwd |
+| "It cannot touch credentials" | deny-list applied to resolved paths *and* to reads; values never returned to the transcript |
+| "It cannot run the wrong thing" | commands are classified from the resolved argv, and Tier 0 matches refuse before spawn |
+| "It cannot act unattended" | Tier 2 always blocks on a human; no new plan begins without an instruction |
+| "Paul can find out what happened" | append-only audit log, one entry per act: time, project, tier, decision, resolved command, exit status, plus a diff summary for writes |
+| "Work is undoable" | branch/worktree or a written-file revert list per project |
+| "Switching projects is safe" | per-project session and cwd; nothing shared but the host |
+
+### 3.6 The tests that make the boundary real
+
+A boundary that is only asserted is a wish, and a suite of refusals proves nothing until a
+request succeeds. So both directions:
+
+- **Negative controls**: for each Tier 0 rule, an attempt that must be refused *by the host*
+  — with the refusal's own words checked (naming the rule and the path), not just a non-zero
+  exit.
+- **Positive controls**: in the same session, a Tier 1 act that must succeed — a write inside
+  the project, a test run — so a refusing-everything bug is caught as a failure rather than
+  mistaken for safety.
+- **Tier 2 tests**: an act that must block pending confirmation; a confirmation that arrives
+  late, ambiguous or twice; a `source: "content"` act that requires typed confirmation.
+- **Path tests**: `..` escapes, symlinks pointing out of the root, and absolute paths
+  elsewhere — each refused on the resolved path.
+- **The reuse test**: the cwd the harness receives is the project's realpath, and no default
+  is invented when a project lacks one (a rule we learned the hard way this week).
+
+### 3.7 What this boundary does not do
+
+Being explicit about the limits, because a design that overstates its safety is worse than one
+that states a smaller guarantee:
+
+- **It does not sandbox the harness's own tools.** The harness is a real CLI agent with real
+  authority inside the project; Tier 0 rules are enforced where the host can see an act (its
+  permission round-trip, its own commands, its path resolution), not inside a harness that
+  ignores asks. A harness that never asks cannot be contained by this design — it can only be
+  chosen, or not used.
+- **It does not make the machine disposable.** Corrupting a build cache or a database inside a
+  project is recoverable-ish; that is why Tier 2 exists rather than "the agent can do anything
+  in a project".
+- **It does not protect the transcript.** Audio and transcript go to the voice provider; project
+  code goes to whatever the harness provider is. Both are *disclosed* (§1.3), not prevented.
+- **It is not a defence against a compromised machine** — only against a well-meaning agent
+  driven by an unreliable channel.
+- **It does not run unattended.** There is no "act while nobody is listening" mode in this
+  design; long actions continue while the *conversation* moves on, which is a different thing,
+  and Tier 2 always waits for a person.
+
+---
+
+## 4. What I need from the other lanes
+
+**From astra (interface):** the confirmation UI must render `confirm_request.resolved` (paths,
+counts, effects) rather than the spoken words, and must be able to answer **typed/clicked**
+when `source: "content"`. Everything else in §1.5 is yours to shape.
+
+**From k3 (harness):** one adapter; `session/new|load|prompt` with a **declared cwd**;
+streaming `session/update`; and a real `session/request_permission` for acts outside the
+project so the host can gate them. If the harness cannot emit permission requests, the host's
+Tier 2 must be implemented as a wrapper around the tools it offers instead — worth knowing
+early, because it changes where the gate lives.
+
+**From Paul:** three decisions, in §5.
+
+## 5. Open questions for Paul
+
+1. **Whose authority when he is away from the keyboard?** My reading of the brief is that
+   ongoing approved work continues, but no *new* plan starts and Tier 2 always waits. If he
+   wants "keep going overnight", that is a different design and needs its own boundary.
+2. **Per-project provider disclosure** — is a badge in the UI enough, or does he want a
+   per-project setting that can *forbid* sending code to a cloud harness (local models only)?
+3. **Worktrees by default?** The cheapest way to make unprompted work undoable is to have the
+   agent work in its own branch/worktree per project. It costs a little friction in his own
+   view of the checkout — worth it, or does he prefer working in-place with git as the undo?
