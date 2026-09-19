@@ -47,13 +47,12 @@ finding — say it rather than resolving it silently.
 | `03-architecture-k3.md` | **the harness** — what pi does, what it does not, and the transport | on main |
 | `01-questions.md` | **open questions**, including question 2 (reuse CAP's runtime) which the design answers for the environment and nobody has closed for the rest | on main |
 | `docs/interface.md` *(astra)* | **the interface** — the look, the model, the artefact surface | **on `design/astra-interface`**, not main yet |
-| `docs/03-harvest.md`, `docs/04-dynamic-tools.md` *(qwen2)* | **prior-art findings** — read §5 of this page first, they are not a lift list | **on `research/qwen2-harvest`**, not main yet |
+| `docs/05-harvest.md`, `docs/06-dynamic-tools.md` *(qwen2)* | **prior-art findings** — read §5 of this page first, they are not a lift list | on main |
 | `docs/evidence/*/RECEIPT.md` | **measurements**, with the probe beside them. Cited claims point here | on main |
 
-**One collision to fix before it bites**: qwen2's branch carries `docs/03-harvest.md` and
-`docs/04-dynamic-tools.md`, which collide with the numbers now canonical on main
-(`03-architecture-k3.md`, `04-e1-m0-build-spec.md`). Renumber them on merge (`05-`, `06-`) rather
-than merging two `03`s.
+**Collision resolved on merge**: qwen2's branch carried `docs/03-harvest.md` and
+`docs/04-dynamic-tools.md`, which were renumbered on merge to `05-harvest.md` and `06-dynamic-tools.md`
+to prevent collision with `03-architecture-k3.md` and `04-e1-m0-build-spec.md`.
 
 ## 3. Where the load-bearing rules live (the fast path)
 
