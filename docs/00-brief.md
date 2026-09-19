@@ -242,3 +242,56 @@ voicebox's documents free of isocan's packages applies to CAP's packages in exac
 Worth recording because it sets the standard for what a good session looks like: **wrong artefacts,
 corrected quickly, beat right artefacts, delivered slowly.** Today produced three wrong artefacts and
 nine rules.
+
+---
+
+## Added 2026-09-19, 23:20 — the harness gets capabilities, and becomes a library
+
+Four requirements noted as **project-level work to do at some point**, in his words, plus one that is
+already a constraint in the environment design.
+
+### N15 — The harness can delegate to other harnesses
+
+> "This is going to be a harness, right, that can maybe **delegate out to other harnesses** as well? I
+> don't quite know at the moment."
+
+Related to the multi-harness observation he made earlier about isocan. Unresolved by design.
+
+### N16 — Capabilities arrive as extensions, and they are the stress test
+
+> "We are going to want to be able to **load skills** in — I do that in the Chrome Agent Platform
+> project... **pi doesn't have a concept of skills. I think you have to install an extension, and so I'm
+> okay to follow that same model** — where out by default, the agent loop that we have on the client
+> and the server needs **custom-built extensions** to do these things."
+
+And the part that makes it a programme rather than a backlog:
+
+> "We might need **MCP servers** at some point, we might need **web search**... a whole bunch of other
+> advanced features and capabilities — but **maybe they're a stress test for how the extensions can
+> work** and how we can build them."
+
+**A decision is embedded here**: skills are **not** a first-class concept. Capabilities are
+**extensions**, out by default, and the named future ones exist to prove the extension system.
+
+### N17 — A surface for extensions
+
+> "We probably also need some **user interface** to kind of tell the user **what extensions exist, what
+> extensions are installed, how to maybe sideload extensions** that someone else has made."
+
+Three verbs: **discover**, **inventory**, **sideload** — and sideloading is the one with a security
+story attached, so it is not merely a list view.
+
+### N18 — The agent loop and harness are a library
+
+> "Make sure that the **agent loop and the harness that we have is abstracted into a library in the
+> project that can be imported and reused** across client, server, and a bunch of other places as well.
+> I think we're going to want **consistency at that level**. **It's going to be an important part of the
+> project.**"
+
+**This is already the environment design's constraint, arriving from the other direction.** §1.7
+requires the core — project records, tier table, capabilities, audit, path resolution — to be **"pure
+data and small functions with a narrow dependency surface, because the same code has to run in a machine
+process *and* a page worker"**, with isocan's extracted provider layer cited as the precedent for
+*shape* rather than as code to lift. He is now stating it as a **product** requirement rather than a
+portability technique, and calling it important — which is the correct weighting, because a core that
+runs in one placement becomes two implementations that drift.
