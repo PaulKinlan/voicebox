@@ -4,7 +4,7 @@
 // Zero dependencies: node:http for the server, node:fs for the workspace.
 // The resolver is a provider seam (lib/resolver.mjs) — swap it, don't rewrite the server.
 import { createServer } from "node:http";
-import { mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveTurn } from "./lib/resolver.mjs";
@@ -79,11 +79,31 @@ const routes = {
     res.writeHead(200, { "content-type": "text/css" });
     res.end(readFileSync(path.join(PUBLIC, "styles.css")));
   },
+  // Static fallthrough: anything else the page asks for that lives in public/.
+  // Added because the route table had /styles.css while the page asked for style.css,
+  // and neither build-stamp.js nor icon.svg was routed at all - so the page silently
+  // lost its stylesheet and its stamp. A page asking for a file the server does not
+  // serve is a failure with no error in it.
+  "GET /static": (req, res, url) => {
+    const name = path.basename(url.pathname);
+    const file = path.join(PUBLIC, name);
+    if (!file.startsWith(PUBLIC) || !existsSync(file)) { res.writeHead(404); return res.end("not found"); }
+    const type = { ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".woff2": "font/woff2", ".png": "image/png" }[path.extname(file)] ?? "application/octet-stream";
+    res.writeHead(200, { "content-type": type });
+    res.end(readFileSync(file));
+  },
 };
 
 async function handle(req, res) {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   const key = `${req.method} ${url.pathname}`;
+  // Fall through to public/ for any other path the page requests.
+  if (req.method === "GET" && !routes[key]) {
+    const candidate = path.join(PUBLIC, path.basename(url.pathname));
+    if (url.pathname !== "/" && existsSync(candidate)) {
+      return routes["GET /static"](req, res, url);
+    }
+  }
   const route = routes[key];
   if (route) return route(req, res, url);
 
