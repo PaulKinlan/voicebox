@@ -10,7 +10,8 @@
     "start": "node server.mjs",
     "test": "node tests/voicebox.test.mjs",
     "accept": "node tools/page-acceptance.mjs",
-    "test:e1m0": "node --test tests/e1m0-core.test.mjs tests/e1m0-browser.test.mjs tests/n20-picked-root.test.mjs tests/n20-permission-denied.test.mjs tests/explorer.test.mjs",
+    "test:e1m0": "node --test tests/e1m0-core.test.mjs tests/e1m0-browser.test.mjs tests/n20-picked-root.test.mjs tests/n20-permission-denied.test.mjs tests/explorer.test.mjs tests/shared-log.test.mjs tests/two-agents.test.mjs",
+    "test:shared-log": "node --test tests/shared-log.test.mjs tests/two-agents.test.mjs",
     "build:wasm": "node tools/build-wasm.mjs"
   },
   "devDependencies": {

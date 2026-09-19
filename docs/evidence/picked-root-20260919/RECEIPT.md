@@ -209,9 +209,18 @@ adapter" is there to catch.
 
 ## 9. For the reviewer: how to confirm each closure in two minutes
 
-Branch `e1m0/browser-environment`, worktree `/home/paulkinlan/voicebox-e1m0`. Nothing here needs a
-browser to be installed by hand — `launch()` finds Chromium itself, and every suite starts its own
-server on its own port.
+**Two branches, in this order** — the second is stacked on the first, because the shared log extends
+that log rather than replacing any of it:
+
+| # | Branch | Commit | What it is |
+|---|---|---|---|
+| 1 | `e1m0/browser-environment` | `7b8ed80` | E1-M0 (§8's ten checks), N20's picked roots, the three-root explorer |
+| 2 | `e1m0/shared-log` | `da14555` | presence, activity and seen-marks on the same log (N19 / §9) |
+
+Both are pushed. The worktree `/home/paulkinlan/voicebox-e1m0` is on branch 2; `git log --oneline -5`
+shows the stack, and `git checkout 7b8ed80` gives branch 1's tree exactly. Nothing here needs a browser
+installed by hand — `launch()` finds Chromium itself, and every suite starts its own server on its own
+port.
 
 ```sh
 cd /home/paulkinlan/voicebox-e1m0
@@ -238,3 +247,94 @@ The last of those is the one worth quoting back at me if I ever claim a check is
 having run it: a defect visible only to a second implementation is invisible to every check that
 touches one root, which is why 8a exists and why the first OPFS-root bug in this build survived
 until the two-root check.
+
+---
+
+# Addendum — the shared log: presence, activity, seen-marks (bead `voicebox-beads-jpt`)
+
+N19 settled the model and k3's §9 specified it: several named agents on one project, sharing STATE
+(presence, what each is doing, what each has **read**) while ARTEFACTS still merge. The per-root audit
+already had `(instance, seq)`, no claimed global order, and one file per root. What was missing was
+the shared side, and the bead gave the ordering: **decide the entry shape first**, prove the seen-mark
+seam on it, and only then let anything write.
+
+## 1. The shape, decided before a writer existed
+
+`core/shared-log.ts` + one field on the log entry. **One log per (root, writer), four kinds:**
+
+| kind | what it is | fields |
+|---|---|---|
+| `act` | the tier decision and the observed result — unchanged | `act`, `decision`, `rule`, `result`, `observed`, `read` |
+| `presence` | an agent saying it is here | `presence: {state: ready\|elsewhere\|unreachable, note?}` |
+| `activity` | what it says it is doing | `activity: {doing, target?}` |
+| `see` | a **read position** | `see: {of, upto}` |
+
+One file per root was always shorthand for **one file per (root, writer)**: the design serialises one
+writer per root, so a file per writer needs no lock, and a reader merges them by `(instance, seq)`.
+Shared facts live in that same file — a second log would make "the global state is the log" false.
+
+**The constraint that shaped every derived view:** a seen-mark may not be "I read up to entry 412 of
+the merged log", because the merge has no such sequence and inventing one reintroduces exactly the
+total order the design refuses. A mark is therefore a **position per writer** — the version-vector
+shape two machines with no shared clock can converge on — and nothing in `core/shared-log.ts` returns
+a flat, interleaved, globally-ordered list. `unseenBy` returns one group per writer, each ordered by
+that writer's own sequence; a check asserts it, including that no group mixes writers.
+
+**Marks are claimed on read** (`look`), appended, never overwritten, and folded by taking the furthest
+position per writer — so two machines racing converge and a stale mark can never move a reader
+backwards. Reading is not passive in this design: "what did it know?" is answerable only because
+readers leave marks.
+
+## 2. The pairs that would collapse, both sides asserted
+
+| The pair | Side A | Side B | Where |
+|---|---|---|---|
+| **"it has not run yet" vs "it ran and read nothing"** | no `see` entry at all → `markOf` returns `null` → `unseenBy` returns `null` (we have **no knowledge** of what it knew) | a `see` entry with `upto: 0` → an empty Map; `unseenBy` returns `[]` (**knowledge**: it looked, nothing was there) | `shared-log.test.mjs`, and driven live in `two-agents.test.mjs` before/after the first agent looks |
+| **"never seen" vs "was here and went quiet"** | an agent with no presence entry is **absent from the map** | a beat older than the window is `unreachable`, with `reported` kept beside it (*"it said ready and then vanished"* is a fact) | `shared-log.test.mjs`, same bytes read with three different clocks |
+| **current work vs a stale claim** | `current: true` inside the window | `current: false` after it — the claim is kept, but it is no longer offered as what is happening now | `shared-log.test.mjs` |
+
+Liveness windows are data (`LIVENESS`), not comments, because they are a policy — and a policy in a
+comment is a policy nobody can test. Presence entry vs activity entry also stay distinct: knowing what
+someone *says* they are doing is not knowing they are here (asserted: an agent with activity and no
+presence appears in `doing` and not in `agents`).
+
+## 3. What is driven, and what is not
+
+`tests/two-agents.test.mjs`: **two agents, two workers, one project**, and each sees the other's
+presence, activity and read positions after nothing has been merged —
+
+- agent B sees agent A's presence (`ready`) and what A is doing (`creating text asset`) *without A
+  having been read by anyone*;
+- **the collapse pair, live**: before A ever looks, B's view reports A's mark as `null` (unknown); after
+  A looks, B sees an actual mark, per writer;
+- A's next look shows B's new work as `unseen`, **grouped per writer**, with A's own work never handed
+  back to it;
+- both agents have their own file in the same root, and `auditAll` reports them as separate logs;
+- the page renders it (the "Who is here" panel: who, doing what, and *what each has read*), and the
+  shared view survives a page reload because it is storage rather than memory.
+
+**The honest limit, named rather than implied:** two workers in one origin share OPFS by
+construction, so this proves the **log's semantics** — append-only, instance-tagged, marks converging,
+liveness measured at read time — and **not** a transport between two machines. That transport is E2's
+and is not built. Nothing in the shape changes when the second writer is on another machine: it
+appends to different storage and the same merge reads it.
+
+## 4. Two defects the drive found (this is why the drive exists)
+
+1. **A look claimed its marks before reporting them**, so `unseen` was empty on every single look —
+   "what you just caught up on" was invisible, which is the one thing the reader was looking for. The
+   view is now computed from the log as it was *before* the claim, and `claimed` is reported alongside.
+2. **`auditAll` read only this instance's file per root**, so a second agent's log was invisible to the
+   merge — the exact defect the shape exists to prevent, and it was invisible while only one agent
+   existed. It now lists every `*.jsonl` in the root (and the origin-side fallback, matched by the
+   entry's own `root`).
+
+**And a reader consequence worth keeping:** the shape change broke three existing checks that filtered
+entries with `e.act.target` — they assumed every entry is an act. An *additive* shape change still
+changes what readers may assume, which is the concrete reason the bead asked for the shape to be
+decided before the first shared entry was written.
+
+**Verification:** 37 checks (`npm run test:e1m0`, +10 for the shared log), the repository's existing 11
+unchanged (`npm test`), and the second-agent page assertion included. Verification of the *aging*
+windows is in the pure checks with an injected clock — a browser test would otherwise have to wait
+five minutes to see `unreachable`, and a waiting test is a test nobody runs.

@@ -30,17 +30,36 @@ import {
   auditFileName,
   makeEntry,
   mergeAudit,
+  nextSeq,
   parseEntry,
   resumeSeq,
   serializeEntry,
   type AuditEntry,
 } from "../core/audit.ts";
 import { makeProjectRecord, type ProjectRecord } from "../core/project.ts";
+import {
+  LIVENESS,
+  activityEntry,
+  land,
+  marksToClaim,
+  presenceEntry,
+  seeEntry,
+  type Actor,
+  type LogEntryBase,
+  type PresenceState,
+} from "../core/shared-log.ts";
 import { validate, type ToolSchema } from "../core/schema.ts";
 import * as idb from "./idb.ts";
 import { handleStorage, opfsStorage, type Entry, type Storage } from "./storage.ts";
 
-const INSTANCE = M0_INSTANCE;
+/**
+ * WHO THIS AGENT IS. One worker is one agent instance — §9's actor model in one line: an agent is a
+ * named instance, not a directory, so two agents working in one project are two people and their
+ * entries are two files a reader merges. The default keeps M0's single agent working unchanged;
+ * `identify` names a second one, which is how the two-agent checks drive it.
+ */
+let instance = M0_INSTANCE;
+let actor: Actor = { name: M0_INSTANCE, harness: null, session: null, cwd: null };
 const ASSET_DIR = "assets";
 const AUDIT_DIR = ".audit";
 const UNDO_FILE = ".undo.json";
@@ -75,7 +94,7 @@ type Failure = { ok: false; code: FailureCode; why: string; detail?: string };
 
 const fail = (code: FailureCode, why: string, detail?: string): Failure => ({ ok: false, code, why, detail });
 
-let instance: WebAssembly.Instance | null = null;
+let wasmInstance: WebAssembly.Instance | null = null;
 let schema: ToolSchema | null = null;
 let current: ProjectRecord | null = null;
 let storage: Storage | null = null;
@@ -188,17 +207,120 @@ function root(): string {
 
 /** Host-owned path, never tool input, so it is built rather than resolved. */
 function auditPath(): string {
-  return `${root()}/${AUDIT_DIR}/${auditFileName(INSTANCE, root())}`;
+  return `${root()}/${AUDIT_DIR}/${auditFileName(instance, root())}`;
 }
 
 async function fallbackAuditPath(): Promise<string> {
-  return `v1/audit-fallback/${auditFileName(INSTANCE, root())}`;
+  return `v1/audit-fallback/${auditFileName(instance, root())}`;
 }
 
+/** This instance's own file — what its sequence resumes from. */
 async function readAudit(): Promise<AuditEntry[]> {
-  const lines = await storage!.readLines(auditPath());
+  // A root we may read but not write has no audit file of its own (the fallback carries it), and
+  // asking for a directory that will never exist there is one of the calls that BLOCKS on a `prompt`
+  // handle rather than failing — so the flag decides before we knock.
+  const lines = auditFallback ? [] : await storage!.readLines(auditPath());
   const fallback = auditFallback ? await (await opfsStorage("v1/audit-fallback")).readLines(await fallbackAuditPath()) : [];
   return [...lines, ...fallback].map(parseEntry).filter((e): e is AuditEntry => e !== null);
+}
+
+/**
+ * EVERY WRITER'S FILE FOR ONE ROOT — the shared read, and the reason "one file per root" was always
+ * shorthand for "one file per (root, writer)": the design serialises one writer per root, so a file
+ * per writer needs no lock, and a reader merges them by `(instance, seq)`.
+ *
+ * A root this instance may read but not write keeps its log in origin storage (the auditLocation
+ * fact), and asking a `prompt` handle for a folder that will never exist there is one of the calls
+ * that BLOCKS rather than failing — so the permission decides before we knock.
+ */
+async function logFilesFor(project: ProjectRecord): Promise<{ name: string; root: string; entries: AuditEntry[]; unreachable?: string }[]> {
+  const boundary = virtualRoot(project);
+  const files: { name: string; root: string; entries: AuditEntry[]; unreachable?: string }[] = [];
+
+  const store = await storageFor(project);
+  if ("ok" in store && store.ok === false) {
+    return [{ name: auditFileName(instance, boundary), root: boundary, entries: [], unreachable: (store as Failure).code }];
+  }
+  const readable = project.root.kind === "opfs" || (await permission(project, "read")) === "granted";
+  if (readable) {
+    const listing = await (store as Storage).listChildren(`${boundary}/${AUDIT_DIR}`, 500).catch(() => ({ entries: [] }));
+    for (const file of listing.entries) {
+      if (file.kind !== "file" || !file.name.endsWith(".jsonl")) continue;
+      const lines = await (store as Storage).readLines(`${boundary}/${AUDIT_DIR}/${file.name}`);
+      files.push({ name: file.name, root: boundary, entries: lines.map(parseEntry).filter((e): e is AuditEntry => e !== null) });
+    }
+  }
+
+  // The origin-side fallback is keyed by root hash, so a file is only this root's if its entries say
+  // so — which is why each entry's own `root` is checked rather than trusting a file name.
+  const fallback = await opfsStorage("v1/audit-fallback");
+  const fallbackNames = (await fallback.listChildren("v1/audit-fallback", 500).catch(() => ({ entries: [] }))).entries.map((e) => e.name);
+  for (const name of fallbackNames) {
+    if (!name.endsWith(".jsonl")) continue;
+    const lines = await fallback.readLines(`v1/audit-fallback/${name}`);
+    const entries = lines.map(parseEntry).filter((e): e is AuditEntry => e !== null && e.root === boundary);
+    if (entries.length) files.push({ name: `${name} (origin-side)`, root: boundary, entries });
+  }
+
+  return files;
+}
+
+/** The shared read for the open project: every writer's entries, merged by `(instance, seq)`. */
+async function readLog(): Promise<AuditEntry[]> {
+  const files = await logFilesFor(requireCurrent());
+  return files.flatMap((f) => f.entries);
+}
+
+/** Append a shared fact. Shared facts go in the same log as the acts — one medium, not two. */
+async function appendShared(build: (base: Omit<LogEntryBase, "kind">) => LogEntryBase): Promise<LogEntryBase> {
+  const project = requireCurrent();
+  const entry = build({
+    seq: nextSeq(),
+    instance,
+    actor,
+    project: project.id,
+    root: root(),
+    turn: null,
+    at: new Date().toISOString(),
+  });
+  await appendAudit(entry as AuditEntry);
+  return entry;
+}
+
+/**
+ * A LOOK: read the log, answer "who is here, what are they doing, what have they read", and claim
+ * the positions it folded — appended, never overwritten, so two machines racing converge.
+ *
+ * Marking on read is the seam: the log can answer "what did it know?" only if readers leave marks,
+ * and a mark that is not appended is knowledge nobody can ask about later.
+ */
+async function look(mark: boolean): Promise<Record<string, unknown>> {
+  const entries = await readLog();
+  const now = new Date();
+
+  // THE VIEW IS COMPUTED BEFORE THE CLAIM, and that ordering is the difference between an answer
+  // and nothing at all: claiming first would fold this look's own marks into `unseen` and report an
+  // empty backlog every single time — "what you just caught up on" would be invisible, which is
+  // exactly the work the reader was looking for.
+  const view = land(entries, instance, now);
+
+  const claimed: { of: string; upto: number }[] = [];
+  if (mark) {
+    for (const position of marksToClaim(entries, instance)) {
+      await appendShared((base) => seeEntry(base, position.of, position.upto));
+      claimed.push(position);
+    }
+  }
+  return {
+    ok: true as const,
+    ...view,
+    // Serialisable forms for the wire: a Map does not survive a structured clone as a Map a page can
+    // compare, so the shape sent is the shape rendered.
+    knew: view.knew.map((k) => ({ instance: k.instance, mark: k.mark === null ? null : Object.fromEntries(k.mark) })),
+    unseen: view.unseen === null ? null : view.unseen.map((g) => ({ writer: g.writer, entries: g.entries })),
+    claimed,
+    liveness: LIVENESS,
+  };
 }
 
 /**
@@ -230,7 +352,7 @@ async function record(
   read?: { path: string; bytes: number }[],
 ): Promise<AuditEntry> {
   const project = requireCurrent();
-  const entry = makeEntry(project.id, root(), INSTANCE, act, decision, rule, result, observed, turn, read);
+  const entry = makeEntry(project.id, root(), instance, actor, act, decision, rule, result, observed, turn, read);
   await appendAudit(entry);
   return entry;
 }
@@ -269,7 +391,7 @@ async function resumeFromEveryRoot(): Promise<void> {
       const store = await storageFor(record);
       if ("ok" in store && store.ok === false) continue;
       const lines = await (store as Storage).readLines(
-        `${virtualRoot(record)}/${AUDIT_DIR}/${auditFileName(INSTANCE, virtualRoot(record))}`,
+        `${virtualRoot(record)}/${AUDIT_DIR}/${auditFileName(instance, virtualRoot(record))}`,
       );
       all.push(...lines.map(parseEntry).filter((e): e is AuditEntry => e !== null));
     } catch {
@@ -277,7 +399,7 @@ async function resumeFromEveryRoot(): Promise<void> {
       // matters: on the act that tries to use it.
     }
   }
-  resumeSeq(all, INSTANCE);
+  resumeSeq(all, instance);
 }
 
 async function saveRegistry(record: ProjectRecord): Promise<void> {
@@ -344,6 +466,9 @@ async function openProject(name: string): Promise<Record<string, unknown> | Fail
   // difference nobody can see.
   await saveRegistry(fresh);
   await resumeFromEveryRoot();
+  // A join is a presence beat: the log is how the other agent learns this one is here, and a beat is
+  // the only thing that can age into "it stopped answering".
+  await appendShared((base) => presenceEntry(base, "ready", `opened ${fresh.id}`));
 
   const { entries } = await storage.listChildren(`${root()}/${ASSET_DIR}`, LIST_LIMIT);
   const files = await storage.listChildren(root(), LIST_LIMIT);
@@ -501,6 +626,10 @@ async function createAsset(args: Record<string, unknown>, turn: string | null, t
   view.setUint32(RECORD + 4, pathBytes.length, true);
   view.setUint32(RECORD + 8, bodyAt, true);
   view.setUint32(RECORD + 12, body.length, true);
+
+  // What this agent is DOING, appended before the act so another agent sees it while it happens —
+  // the difference between live state and a post-hoc log line.
+  await appendShared((base) => activityEntry(base, `creating ${checked.value.kind} asset`, relative));
 
   notes = [];
   pendingWrite = null;
@@ -841,7 +970,8 @@ async function handle(message: Message) {
       await loadRegistry();
       return {
         ok: true as const,
-        instance: INSTANCE,
+        instance,
+        actor,
         schema: (await loadSchema()).title,
         durability: { persisted: await navigator.storage.persisted().catch(() => false) },
         projects: [...records.values()].map((p) => ({
@@ -918,27 +1048,34 @@ async function handle(message: Message) {
       return { ok: true as const, entries };
     }
     case "auditAll": {
-      // One file per root, read as one view. The files are the storage; the merged read claims
-      // only a (instance, seq) order, because two roots have no shared clock.
+      // One file per (root, writer), read as one view. The files are the storage; the merged read
+      // claims only a (instance, seq) order, because two roots and two writers have no shared clock.
       await loadRegistry();
       const files = [];
-      for (const project of records.values()) {
-        const store = await storageFor(project);
-        if ("ok" in store && store.ok === false) {
-          files.push({ name: auditFileName(INSTANCE, virtualRoot(project)), root: virtualRoot(project), entries: [], unreachable: (store as Failure).code });
-          continue;
-        }
-        const lines = await (store as Storage).readLines(`${virtualRoot(project)}/${AUDIT_DIR}/${auditFileName(INSTANCE, virtualRoot(project))}`);
-        files.push({
-          name: auditFileName(INSTANCE, virtualRoot(project)),
-          root: virtualRoot(project),
-          entries: lines.map(parseEntry).filter((e): e is AuditEntry => e !== null),
-        });
-      }
+      for (const project of records.values()) files.push(...(await logFilesFor(project)));
       return { ok: true as const, files, merged: mergeAudit(files.flatMap((f) => f.entries)) };
     }
     case "listView":
       return await listView(message);
+    case "identify": {
+      // §9's actor model: identity is nameable, and two agents in one project are two people. The
+      // session travels because identity is claimed against it.
+      instance = String(message.instance ?? "").trim() || instance;
+      actor = {
+        name: String((message.actor as Actor)?.name ?? instance),
+        harness: (message.actor as Actor)?.harness ?? null,
+        session: (message.actor as Actor)?.session ?? null,
+        cwd: (message.actor as Actor)?.cwd ?? null,
+      };
+      await resumeFromEveryRoot();
+      return { ok: true as const, instance, actor };
+    }
+    case "beat":
+      return { ok: true as const, entry: await appendShared((base) => presenceEntry(base, (message.state as PresenceState) ?? "ready", message.note as string | undefined)) };
+    case "activity":
+      return { ok: true as const, entry: await appendShared((base) => activityEntry(base, String(message.doing ?? ""), message.target as string | undefined)) };
+    case "look":
+      return await look(message.mark !== false);
     case "stats":
       return { ok: true as const, ...stats };
     case "instantiateProbe": {
@@ -986,4 +1123,4 @@ self.onmessage = async (event: MessageEvent) => {
   }
 };
 
-export { instance };
+export { wasmInstance };
