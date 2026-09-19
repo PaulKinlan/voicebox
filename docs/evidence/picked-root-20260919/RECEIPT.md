@@ -209,9 +209,18 @@ adapter" is there to catch.
 
 ## 9. For the reviewer: how to confirm each closure in two minutes
 
-Branch `e1m0/browser-environment`, worktree `/home/paulkinlan/voicebox-e1m0`. Nothing here needs a
-browser to be installed by hand — `launch()` finds Chromium itself, and every suite starts its own
-server on its own port.
+**Two branches, in this order** — the second is stacked on the first, because the shared log extends
+that log rather than replacing any of it:
+
+| # | Branch | Commit | What it is |
+|---|---|---|---|
+| 1 | `e1m0/browser-environment` | `7b8ed80` | E1-M0 (§8's ten checks), N20's picked roots, the three-root explorer |
+| 2 | `e1m0/shared-log` | `da14555` | presence, activity and seen-marks on the same log (N19 / §9) |
+
+Both are pushed. The worktree `/home/paulkinlan/voicebox-e1m0` is on branch 2; `git log --oneline -5`
+shows the stack, and `git checkout 7b8ed80` gives branch 1's tree exactly. Nothing here needs a browser
+installed by hand — `launch()` finds Chromium itself, and every suite starts its own server on its own
+port.
 
 ```sh
 cd /home/paulkinlan/voicebox-e1m0
