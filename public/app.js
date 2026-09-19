@@ -1,0 +1,84 @@
+// The loop: capture a turn (mic or text) -> POST /api/turn -> render the
+// action and its result. Speech recognition is the browser's own
+// (webkitSpeechRecognition, Chrome) — no key, no library.
+//
+// Rendering rule (voicebox design, five-things list item 1): nothing from
+// outside is ever rendered as markup. Every string lands via textContent —
+// the transcript, the server's error/note strings, and file names included.
+const mic = document.getElementById("mic");
+const turns = document.getElementById("turns");
+
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function addTurn(transcript, payload) {
+  const turn = document.createElement("div");
+  turn.className = "turn";
+  turn.append(el("div", "heard", `“${transcript}”`));
+  if (payload.action) {
+    const what = payload.action.verb === "list"
+      ? `list → ${(payload.result?.files ?? []).join(", ") || "(empty)"}`
+      : `${payload.action.verb} ${payload.action.name || ""}`;
+    turn.append(el("div", "action", what));
+    if (payload.result?.ok && payload.result.content) {
+      turn.append(el("div", "result", payload.result.content));
+    } else if (payload.result?.ok && payload.result.action) {
+      turn.append(el("div", "result", payload.result.action));
+    }
+  } else if (payload.error) {
+    turn.append(el("div", "result err", payload.error));
+  } else {
+    turn.append(el("div", "result err", payload.note ?? ""));
+  }
+  turns.prepend(turn);
+}
+
+async function sendTurn(transcript) {
+  if (!transcript.trim()) return;
+  const res = await fetch("/api/turn", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ transcript }),
+  });
+  addTurn(transcript, await res.json());
+}
+
+// ── speech: the platform's own recognition, one press per turn ────────────
+const SR = window.SpeechRecognition ?? window.webkitSpeechRecognition;
+let rec = null;
+
+mic.addEventListener("click", () => {
+  if (rec) { rec.stop(); rec = null; mic.textContent = "● hold a turn"; return; }
+  if (!SR) {
+    mic.textContent = "speech recognition unavailable — use the text field";
+    return;
+  }
+  rec = new SR();
+  rec.lang = "en-GB";
+  rec.interimResults = false;
+  rec.maxAlternatives = 1;
+  rec.onresult = (e) => {
+    const said = e.results[0][0].transcript;
+    mic.textContent = "● hold a turn";
+    rec = null;
+    sendTurn(said);
+  };
+  rec.onerror = (e) => {
+    mic.textContent = "● hold a turn";
+    if (e.error !== "aborted") mic.textContent = `mic error: ${e.error}`;
+  };
+  rec.onend = () => { if (mic.textContent.startsWith("listening")) mic.textContent = "● hold a turn"; };
+  mic.textContent = "listening… (speak now)";
+  rec.start();
+});
+
+document.getElementById("text-fallback").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const typed = document.getElementById("typed");
+  sendTurn(typed.value);
+  typed.value = "";
+});

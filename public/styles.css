@@ -1,0 +1,14 @@
+:root { color-scheme: dark light; }
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+  #mic { font-size: 1.1rem; padding: .6rem 1.4rem; border-radius: 999px; border: 1px solid currentColor; background: none; cursor: pointer; }
+  #mic.listening { background: #c0392b; color: #fff; border-color: #c0392b; }
+  #turns { margin-top: 1.5rem; display: grid; gap: .8rem; }
+  .turn { border: 1px solid color-mix(in srgb, currentColor 25%, transparent); border-radius: .5rem; padding: .7rem 1rem; }
+  .turn .heard { font-style: italic; opacity: .8; }
+  .turn .action { font-family: ui-monospace, monospace; font-size: .9rem; margin-top: .3rem; }
+  .turn .result { margin-top: .3rem; white-space: pre-wrap; }
+  .turn .err { color: #c0392b; }
+  form { display: flex; gap: .5rem; margin-top: 1rem; }
+  input[type=text] { flex: 1; padding: .5rem; font-size: 1rem; }
+  .hint { opacity: .6; font-size: .85rem; }
+</style>

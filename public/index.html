@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>voicebox</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; form-action 'none'; base-uri 'none'">
+<link rel="stylesheet" href="/styles.css">
+
+</head>
+<body>
+<h1>voicebox</h1>
+<button id="mic">● hold a turn</button>
+<p class="hint">Try: “create a file called hello.txt with hello world” · “read hello.txt” · “list files”</p>
+<form id="text-fallback">
+  <input type="text" id="typed" placeholder="…or type a turn" autocomplete="off">
+  <button>send</button>
+</form>
+<div id="turns"></div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
