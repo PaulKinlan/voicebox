@@ -318,7 +318,10 @@ els.newFile.addEventListener("click", () => {
   els.utterance.value = "create a file called ";
   els.utterance.focus();
   els.utterance.setSelectionRange(els.utterance.value.length, els.utterance.value.length);
-  els.utterance.dispatchEvent(new Event("input"));
+  // The prefill is not a turn: Send stays off until a person adds the name, so
+  // "create a file called " alone can never be sent (the script resolver would
+  // read "called" as the filename and write a file by that name).
+  els.send.disabled = true;
 });
 els.utterance.addEventListener("input", () => { els.send.disabled = !els.utterance.value.trim(); });
 
