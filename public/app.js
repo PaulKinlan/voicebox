@@ -16,25 +16,25 @@ function el(tag, cls, text) {
 }
 
 function addTurn(transcript, payload) {
-  const el = document.createElement("div");
-  el.className = "turn";
-  el.append(el("div", "heard", `“${transcript}”`));
+  const turn = document.createElement("div");
+  turn.className = "turn";
+  turn.append(el("div", "heard", `“${transcript}”`));
   if (payload.action) {
     const what = payload.action.verb === "list"
       ? `list → ${(payload.result?.files ?? []).join(", ") || "(empty)"}`
       : `${payload.action.verb} ${payload.action.name || ""}`;
-    el.append(el("div", "action", what));
+    turn.append(el("div", "action", what));
     if (payload.result?.ok && payload.result.content) {
-      el.append(el("div", "result", payload.result.content));
+      turn.append(el("div", "result", payload.result.content));
     } else if (payload.result?.ok && payload.result.action) {
-      el.append(el("div", "result", payload.result.action));
+      turn.append(el("div", "result", payload.result.action));
     }
   } else if (payload.error) {
-    el.append(el("div", "result err", payload.error));
+    turn.append(el("div", "result err", payload.error));
   } else {
-    el.append(el("div", "result err", payload.note ?? ""));
+    turn.append(el("div", "result err", payload.note ?? ""));
   }
-  turns.prepend(el);
+  turns.prepend(turn);
 }
 
 async function sendTurn(transcript) {
