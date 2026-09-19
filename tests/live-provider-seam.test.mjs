@@ -119,3 +119,35 @@ test("seam: THE TRUTHFUL STATE MACHINE — closed is terminal, and ready never s
   assert.ok(states.some((s) => s.name === "upstream-closed" && s.code === 1000), `close must carry its code: ${JSON.stringify(states)}`);
   session.close(); // idempotent
 });
+
+test("seam: THE BOUNDARY — the page holds no vendor handle, so the gate cannot be walked around from above", () => {
+  const { session } = wire();
+  const exposed = Object.keys(session).sort();
+  for (const method of ["sendAudio", "sendText", "interrupt", "close"]) {
+    assert.equal(typeof session[method], "function", `the page must be able to ${method}`);
+  }
+  // Nothing that talks to a vendor: no socket, no raw send, no frame writer, no inner handle.
+  for (const forbidden of ["ws", "socket", "send", "write", "emit", "inner"]) {
+    assert.ok(!(forbidden in session), `the host must not expose '${forbidden}' to the page: ${exposed.join(", ")}`);
+  }
+  assert.deepEqual(
+    exposed,
+    ["close", "gatedFrames", "interrupt", "provider", "ready", "sendAudio", "sendText"],
+    `the page's surface must be exactly the contract: ${exposed.join(", ")}`,
+  );
+  session.close();
+});
+
+test("seam: what the boundary proves, and what it does NOT — the honest half", () => {
+  // PROVEN: a page cannot reach a vendor except through the host's sendAudio, so the gate is
+  // UNCONDITIONAL AT THE PAGE BOUNDARY — there is no second door from above.
+  //
+  // NOT PROVEN, and not provable from here: a PROVIDER is in-process code. A provider that opened its own
+  // path to its vendor, or called its own sendAudio directly, would not be stopped by this host. The gate
+  // guards the page's frames, not the provider's honesty. That is the same distinction the environment
+  // design draws between MEDIATED and COMPLIANT modes.
+  const { session } = wire();
+  assert.equal(typeof session.sendAudio, "function");
+  assert.equal(session.provider, "stub-recording", "the session names its provider, so a log can say which");
+  session.close();
+});
