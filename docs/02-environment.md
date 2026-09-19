@@ -144,16 +144,33 @@ One adapter. The host spawns it per project session with a **declared working di
 speaks ACP-shaped JSON-RPC over stdio — the bridge's proven shape, not a new protocol.
 
 ```jsonc
-// host → harness
-{ "method": "session/new",  "params": { "cwd": "/home/paul/…/isocan", "mcpServers": [] } }
-{ "method": "session/load", "params": { "cwd": "/home/paul/…/isocan", "sessionId": "ses_…" } }
-{ "method": "session/prompt","params": { "sessionId": "ses_…", "prompt": "run the tests and fix what fails" } }
+// host → harness.  These are requests, so they carry `id` and `jsonrpc`, and they answer.
+{ "jsonrpc": "2.0", "id": 1, "method": "session/new",
+  "params": { "cwd": "/home/paul/…/isocan", "mcpServers": [] } }
+{ "jsonrpc": "2.0", "id": 2, "method": "session/load",
+  "params": { "cwd": "/home/paul/…/isocan", "sessionId": "ses_…" } }
+{ "jsonrpc": "2.0", "id": 3, "method": "session/prompt",
+  "params": { "sessionId": "ses_…", "prompt": "run the tests and fix what fails" } }
+{ "jsonrpc": "2.0", "id": 4, "method": "session/cancel",     // the `stop` verb, defined
+  "params": { "sessionId": "ses_…", "reason": "operator" } }
 
-// harness → host (streaming)
+// harness → host (responses)
+{ "jsonrpc": "2.0", "id": 1, "result": { "sessionId": "ses_…", "cwd": "/home/paul/…/isocan" } }
+{ "jsonrpc": "2.0", "id": 2, "result": { "sessionId": "ses_…", "resumed": true } }
+{ "jsonrpc": "2.0", "id": 3, "result": { "stopReason": "end_turn" } }
+{ "jsonrpc": "2.0", "id": 4, "result": { "cancelled": true } }
+
+// harness → host (streaming notifications; sessionId is on EVERY update, not just the first)
 { "method": "session/update", "params": { "sessionId": "ses_…", "update": { "sessionUpdate": "agent_message_chunk", "content": "…" } } }
-{ "method": "session/update", "params": { "update": { "sessionUpdate": "tool_call", "title": "Bash: npm test", "status": "in_progress" } } }
-{ "method": "session/update", "params": { "update": { "sessionUpdate": "tool_call_update", "status": "completed", "content": [ … ] } } }
+{ "method": "session/update", "params": { "sessionId": "ses_…", "update": { "sessionUpdate": "tool_call", "title": "Bash: npm test", "status": "in_progress" } } }
+{ "method": "session/update", "params": { "sessionId": "ses_…", "update": { "sessionUpdate": "tool_call_update", "status": "completed", "content": [ … ] } } }
 ```
+
+**`stop` is the one instruction that may not depend on the harness's cooperation.** The host
+sends `session/cancel`, and if the harness has not acknowledged within ~2 s it signals the
+child's process group directly; either way it stops the processes the host started for that
+project (the process journal has the pids). A stop that only works when the other side is
+well-behaved is not a stop.
 
 **`cwd` is always declared** — never defaulted, never inferred from the machine's layout.
 The host computes it from the project record and refuses a turn whose project has no usable
@@ -193,26 +210,47 @@ model never answers its own permission request.
 One loopback WebSocket, JSON messages, small schema. All host→UI messages carry `project` so
 a UI showing several projects can route them.
 
+**A loopback socket is not authentication, and it is reachable by every page the browser
+visits.** Any local process, and any website open in the same browser, can dial
+`ws://127.0.0.1:<port>`; browsers do not apply the same-origin policy to WebSockets, so without
+a check a drive-by tab could `open_project`, `say`, or — worse — answer a pending confirmation.
+So the connection itself is authenticated before any message is trusted:
+
+- an **ephemeral token**, minted at host start, readable only by the user (`~/.voicebox/token`,
+  mode `0600`), passed on the upgrade (`ws://127.0.0.1:<port>/ui?token=…`);
+- **strict `Origin` validation** on the upgrade, rejecting any origin that is not the UI's own;
+- and failures are logged as audit entries, because a rejected upgrade is worth seeing.
+
 ```jsonc
-// UI → host
-{ "type": "open_project",   "path": "/home/paul/…/isocan" }      // explicit act; host registers it
-{ "type": "activate",       "project": "isocan" }                 // switch the active project
-{ "type": "say",            "project": "isocan", "text": "run the tests and fix what fails" }
-{ "type": "confirm",        "id": "cfm_17", "answer": "yes" }      // or "no"
+// UI → host.  Every mutating message carries a per-connection nonce (`n`) and an input method
+// (`via`), because the host must enforce its own provenance rule and cannot infer it (§3.4).
+{ "type": "open_project",   "path": "/home/paul/…/isocan", "via": "typed" }
+{ "type": "activate",       "project": "isocan", "via": "clicked" }
+{ "type": "say",            "project": "isocan", "text": "run the tests and fix what fails",
+                            "via": "speech", "clientId": "c-8f21" }     // replays of clientId are ignored
+{ "type": "confirm",        "id": "cfm_17", "answer": "yes", "via": "speech" }  // or "typed" | "clicked"
 { "type": "stop",           "project": "isocan" }                  // honoured immediately, always
 
-// host → UI
-{ "type": "state",    "project": "isocan", "data": { "path": "…", "branch": "main", "dirty": 3,
+// host → UI, on connect — the handshake, so a fresh or reloaded page is never guessing
+{ "type": "hello",    "host": "voicebox", "version": 1, "projects": [ … ], "active": "isocan",
+                      "pending": [ { "id": "cfm_17", … } ] }
+{ "type": "state",    "project": "isocan", "data": { "path": "…", "root": "/home/paul/…/isocan-wt",
+                                                     "branch": "main", "dirty": 3,
                                                      "harness": "pi", "providerBadge": "local",
-                                                     "session": "ses_…", "running": false } }
+                                                     "mediated": true, "session": "ses_…",
+                                                     "running": false } }
+{ "type": "turn_started", "project": "isocan", "turn": "turn_9", "clientId": "c-8f21" }
 { "type": "progress", "project": "isocan", "turn": "turn_9", "update": { … } }   // ACP update, relabelled
-{ "type": "diff",     "project": "isocan", "files": [ { "path": "…", "additions": 12, "deletions": 3 } ] }
+{ "type": "diff",     "project": "isocan", "turn": "turn_9",
+                      "files": [ { "path": "…", "additions": 12, "deletions": 3 } ] }
 { "type": "confirm_request", "id": "cfm_17", "project": "isocan", "tier": 2,
    "question": "Delete `build/` (412 files) in isocan?",
    "resolved": { "command": "rm -rf /home/paul/…/isocan/build",
                  "paths": ["/home/paul/…/isocan/build"],
                  "effects": [ "412 files removed", "recoverable: not tracked by git" ] },
-   "source": "agent" }        // or "content" — see §3.3
+   "source": "agent",            // or "content" — see §3.3
+   "accepts": [ "clicked", "typed" ] }   // "content"-sourced acts never list "speech"
+{ "type": "confirm_expired", "id": "cfm_17", "project": "isocan" }   // so the UI can clear the prompt
 { "type": "audit",    "project": "isocan", "entry": { … } }
 { "type": "refused",  "project": "isocan", "rule": "outside-project", "detail": "…" }
 { "type": "error",    "project": "isocan", "detail": "…" }
@@ -221,6 +259,18 @@ a UI showing several projects can route them.
 `confirm_request` carries the **resolved** plan (real paths, real counts) rather than the
 spoken words — that is what makes a mis-transcription visible (§3.3), and it is what the
 confirmation UI renders.
+
+Three contract rules that the schema alone does not convey:
+
+- **`via` is a claim the host validates, not a label it trusts.** A `confirm` whose `via` is not
+  in that request's `accepts` is refused; a `via` of `speech` on a `content`-sourced act is
+  refused. This is the mechanism behind the rule in §3.3 — without the field there was nothing
+  to enforce it against.
+- **Ids are single-use.** A `confirm` id is spent by the first answer, and a second answer is
+  refused rather than re-applied. Combined with the per-connection nonce and `say.clientId`,
+  replaying a recorded message cannot re-drive an action.
+- **Every `progress` and `diff` carries its `turn`**, and the `say` that started it is echoed in
+  `turn_started.clientId`, so the UI can attribute output to the sentence that caused it.
 
 ### 1.6 The thinnest working version
 
@@ -462,6 +512,18 @@ A spoken "yes" counts **only** when all of these hold:
 Otherwise the host asks again, or offers the UI control. Never valid: silence; "ok" *before*
 the question; a general "yes" while two questions could be pending; a confirmation given by
 the voice model on Paul's behalf.
+
+Two consequences that need stating because they are the difference between a rule and a
+mechanism:
+
+- **An expired confirmation is a refusal, not a pending question.** When the 30 s window closes
+  the host emits `confirm_expired`, spends the id, and reports the act as rejected; a "yes"
+  arriving afterwards has nothing to attach to and starts a fresh plan (with a fresh readback)
+  if it is meant.
+- **A spoken yes is only accepted where the request says so.** Each `confirm_request` lists the
+  input methods it accepts, and the host validates the `via` field against that list — so a
+  `content`-sourced act simply has no path from a transcript to a yes, whichever voice is
+  speaking.
 
 ### 3.5 Mechanisms, not intentions
 
