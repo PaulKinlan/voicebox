@@ -453,10 +453,11 @@ fails-closed rule, applied to the mechanism rather than the descriptor:
 
 | Capability | Enforced in the browser (E1) by | Enforced on a machine (E2) by |
 |---|---|---|
-| `read` / `write` | handle-scoped access: a tool gets the OPFS handles it may touch, not a filesystem | realpath containment against the execution root on every path the host resolves |
+| `read` / `write` | handle-scoped access: a tool gets the OPFS handles it may touch, not a filesystem | the substrate's path scope (`--allow-read/-write=<root>`) **plus a host-side resolve pass**, because the substrate's scope is lexical and a symlink inside the root defeats it (measured: `root/link-outside` read `/etc/hostname`) |
 | `wasm` | **the import boundary**: a module can call only what the host exports to it | the same, plus process isolation if it runs out-of-process |
-| `network` | the realm's egress policy — CSP `connect-src`, default `'none'` (§3.5a) | **the environment decides**: a container with no route may admit it; a plain host cannot enforce it, so there it is not admitted — or the tool is refused |
-| `exec` | **impossible: there is no process to spawn**, so the capability is *absent*, not promised | the toolchain the environment provides, with argv classification and the root as cwd |
+| `network` | the realm's egress policy — CSP `connect-src`, default `'none'` (§3.5a) | **the substrate's `--allow-net=<hosts>`**: measured, an allow-listed host answers and another is `NotCapable`. A plain Node host has no equivalent at all — `fetch` succeeds under `--permission` — so the substrate is the mechanism here, not the policy |
+| `import` (remote code) | CSP `script-src` (no inline) | **`--no-remote` is mandatory**: measured, a dynamic remote import fetched and executed **with no flags at all**, because the module loader sits outside the permission model. Unset, the row above is false from inside the runtime |
+| `exec` | **impossible: there is no process to spawn**, so the capability is *absent*, not promised | **absent for dynamic tools too.** Measured: with `--allow-run`, a spawned `/bin/sh` read a file outside the root — printed `MACHINE-SECRET`. `--allow-run` is not "exec scope", it is the machine, so it is **never granted to model-authored code**; a tool needing `exec` needs a container that bounds the child |
 
 Three consequences, each of which closes a hole the declaration alone would leave open:
 
@@ -471,6 +472,23 @@ Three consequences, each of which closes a hole the declaration alone would leav
    enforce is not granted and the tool is not admitted there — so the honest answer to *"can this
    tool run here?"* is a property of the environment, not of the tool's optimism. A capability the
    platform cannot enforce is **absent, not promised**.
+
+#### The substrate is a named thing, not "the toolchain"
+
+The question gemini's review put to this section — *if a model writes a dynamic tool file, **what
+executes it?*** — is the difference between an extension system and `eval` with a file browser. The
+answer is now a named substrate with a declared flag set, and it is not a detail: on E1 the
+substrate is **Wasm's import boundary** (free, and the strongest); on E2 it is **a capability-based
+runtime that is invoked with an explicit permission set**, measured against the cases that matter
+(`docs/evidence/substrate-20260919/RECEIPT.md`, with the probe alongside it):
+
+- `--no-prompt` and `--no-remote` always; `--allow-read/-write` scoped to the execution root,
+  **plus the host's resolve pass** because the substrate's path scope follows a symlink out;
+- `--allow-net=<hosts>` only where the environment can back it, host-scoped (verified: one host
+  answers, another is `NotCapable`);
+- **`--allow-run`, `--allow-ffi` and `--allow-env` are never granted to model-authored code**;
+- and a runtime whose permission model does not cover the network cannot be the substrate at all —
+  Node's covers files and child processes, and lets `fetch` through.
 
 
 ---
@@ -770,7 +788,7 @@ is enforced as data in the host and every one has a test (§3.6).
 | Rule | Mechanism |
 |---|---|
 | Write or read outside the **active project's execution root** (§2.1) and the host's own state dir | realpath containment against the active root only — never the union of registered roots, or a nested project would hand the harness another project's files |
-| Creating a symlink whose **target** resolves outside the execution root | containment checks the link target as well as the link's location, before creation |
+| Creating a symlink whose **target** resolves outside the execution root | containment checks the link target as well as the link's location, before creation — **and, because a dynamic tool can create such a link inside its own writable root, the host re-resolves the root and refuses the run when one points out** (measured: a substrate path scope alone is defeated by exactly this) |
 | Touch credential material (`~/.ssh`, `~/.config/**credentials**`, keychains, browser profiles, `.env*`, service-account files) | path + pattern deny-list, applied to reads as well; matches are reported, never echoed |
 | `sudo`, `su`, machine-wide config changes, global package installs | command classification before execution |
 | Kill processes the host did not start | the process journal is the only source of pids it may signal |
@@ -983,6 +1001,7 @@ request succeeds. So both directions:
 - **Host-survives tests**: malformed JSON, an unknown message type, a frame with a missing field
   and a handler that throws — each yielding an error and an audit entry with the host (or the
   browser worker) still serving the next request.
+- **Substrate tests (§1.7)**: read inside the root **succeeds**; read outside, a symlink pointing out, `Deno.env`, `dlopen` and a remote dynamic import are each **refused by the substrate's own word**; `--allow-net=<host>` reaches that host and another is refused; and with no flag set, everything is `NotCapable` — the default-deny posture is itself the positive control's counterpart.
 - **Capability enforcement tests (§1.7), both directions**: a tool that **under-declares** —
   descriptor says no network, the code calls `fetch` — is stopped by the policy and recorded as a
   finding; and a tool that declares an allow-listed host and reaches it **succeeds**, because a
@@ -1115,6 +1134,11 @@ share one adapter, say so early, because that is a second harness rather than a 
 Third: §2.3 requires **several concurrent sessions in one project, each with a different cwd**
 (the phone's worktree and the chat's) — if the harness is one-session-per-process, the first
 question I need answered is how concurrency is expressed, because the environment depends on it.
+And fourth, which the substrate finding makes urgent: **does the harness run its tools in-process
+or through a substrate it can scope?** If a harness executes model-authored tools inside its own
+privileged process, then mediated mode (§1.1a) cannot be built on top of it, and the environment
+needs the tool boundary rather than the harness boundary. That is now the most load-bearing
+unknown in this document.
 
 **From whoever builds the first environment (browser) and the local one:** the core — project records, the tier table, capability lists,
 the audit writer, path resolution — must be **pure data and small functions with a narrow
