@@ -110,6 +110,12 @@ So: **project file contents are never sent to the voice model**, and **a project
 goes wherever its declared harness sends it** — a per-project, visible choice rather than an
 invisible consequence of picking a model at install time.
 
+**A badge discloses; a lock guarantees — and only the second is a control.** The badge above is
+the minimum; §5 recommends that a project can also *forbid* a cloud harness, because a control
+that only tells you what already happened is a report, not a boundary. This is the same shape
+as "the tool must not carry somebody's directory convention": secrecy of consequence has to be
+enforced somewhere, not merely displayed.
+
 ### 1.4 The host ↔ harness contract (k3 builds against this)
 
 One adapter. The host spawns it per project session with a **declared working directory** and
@@ -466,13 +472,30 @@ early, because it changes where the gate lives.
 
 **From Paul:** three decisions, in §5.
 
-## 5. Open questions for Paul
+## 5. Decisions, and the defaults we are proceeding on
 
-1. **Whose authority when he is away from the keyboard?** My reading of the brief is that
-   ongoing approved work continues, but no *new* plan starts and Tier 2 always waits. If he
-   wants "keep going overnight", that is a different design and needs its own boundary.
-2. **Per-project provider disclosure** — is a badge in the UI enough, or does he want a
-   per-project setting that can *forbid* sending code to a cloud harness (local models only)?
-3. **Worktrees by default?** The cheapest way to make unprompted work undoable is to have the
-   agent work in its own branch/worktree per project. It costs a little friction in his own
-   view of the checkout — worth it, or does he prefer working in-place with git as the undo?
+Each of these has a recommendation and a default, so **building is not blocked on an answer** —
+any word from Paul changes one line, and the default is itself a line in the design.
+
+**1. Authority while no one is at the keyboard.**
+Options: (A) nothing continues while nobody is listening; **(B) approved plans continue, no new
+plan starts, Tier 2 always waits**; (C) full autonomy.
+**Recommend B, and proceed on B.** Trade-off: he can walk away mid-task and return to progress,
+but an approved plan can still reach somewhere he would have stopped in person — bounded by
+Tier 2 always waiting and by the work being recoverable. Option C is a different design with
+its own boundary, not a setting.
+
+**2. A project's power to forbid a cloud harness.**
+Options: (A) the badge in §1.3 alone; **(B) badge plus a per-project lock that forbids one.**
+**Recommend B, and proceed on B with every project unmarked until he marks one.** Trade-off: a
+repo marked local-only can never be worked by a cloud harness even when he later wants it — one
+flag to flip, and the only version that is a **guarantee rather than a disclosure**.
+
+**3. Worktrees versus working in place.**
+Options: (A) always in place with git as the undo; (B) a branch in place; **(C) a worktree per
+agent session, with in-place plus a written-file revert list for non-git projects.**
+**Recommend C for git projects, and proceed on C.** Trade-off: his checkout stays exactly as he
+left it and "undo everything the agent did" is one deletion — at the cost of dependencies and
+ports needing their own copy, and the work landing one merge later than it otherwise would.
+The alternative we already have evidence for is the agent and him editing one working tree at
+once, which is the failure this fleet spent a day recovering from.
