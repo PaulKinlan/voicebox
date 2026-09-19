@@ -1287,3 +1287,29 @@ asks, the host records the pattern, and the first scope is proposed from that ev
 first scope from a guess into a reading, which matters precisely because the act it unlocks has no
 gate behind it. Trade-off: it delays the thing he actually wants by the length of one honest
 report. Options A and C are one word each, and §3.8 is the rest of the path either way.
+
+## 6. How this document has been tested, and what has not
+
+Written for whoever reads it next, because the sections above are not equally trustworthy and the
+difference is not visible from the prose.
+
+**Three instruments have been used, and each caught a different class of error:**
+
+| Instrument | Checks the document against | What it caught here |
+|---|---|---|
+| **Review** (gemini, Copilot) | **itself** — coherence, gaps, claims without mechanisms | eleven findings: installs belonged in Tier 2; compliant mode was claimed without a mechanism; the permission payload carried a title instead of a resolved plan; a worktree is not an exception to containment |
+| **Driving** (coord's skeleton, my substrate probe `docs/evidence/`) | **the world** | three `innerHTML` sinks executing `onerror`; `basename('..')` escaping the workspace; the substrate's `--allow-read` following a symlink out of the root; the module loader fetching and executing remote code with no flags; Node's permission model letting `fetch` through |
+| **A consumer** (astra, building the interface) | **what can actually be promised to a user** | the OPFS-versus-picked-directory conflation (a gesture I told the UI to ask for, which OPFS does not need) and five machine-only sentences threaded through the project record |
+
+**The third is the one that catches a document which is coherent and wrong about the platform** —
+which is what the false gesture promise was. A review reads the document against itself; driving
+reads it against the world; only a consumer reads it against what it can promise a person.
+
+**What has not been tested, and should be read as design rather than as fact:** nothing has been
+built from §1.8 yet; no user has held any of it; the tier table has been driven **only through the
+substrate rows** in §1.7, never end to end; and **§3.8's road to autonomy has no evidence at all** —
+it is a design for a destination nobody has reached, and it should be read in that voice.
+
+So: **trust the rows that have been driven; treat the rest as design that is internally consistent
+and unproven.** That is the same distinction this document asks of everything else — a claim is
+worth what enforces it, and so is a section.
