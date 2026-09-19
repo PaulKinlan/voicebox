@@ -925,6 +925,15 @@ there is.
 three times in one day, in three different costumes, it is the thing to check every claim against.
 All three of these are in this document:
 
+**And the reason it matters is narrower than it sounds: the failures that survive are the ones where
+the only thing that would have told you is the thing that is missing.** A normalising helper that
+looks like a check; a policy that restricts reach and not execution; a declaration that is taken as
+the enforcement. Each of them keeps working, keeps passing its own tests, and produces no signal —
+because the signal *is* the mechanism that was never built. That is the same shape as an audit built
+from the model's account of its effects rather than from the world, and as a permission granted for a
+plan that the tool then re-validates into something else: in all four, **the thing that would
+announce the problem is absent, and its absence is invisible.**
+
 | The claim | What looks like a guard | What is actually a guard |
 |---|---|---|
 | "It cannot leave the project root" | `path.basename(name)`, `join`, `normalize` — rewrites that happen to look correct, and `basename('..')` is `'..'` | `realpath(candidate)` resolved and **compared** against the root, refusing on any answer but yes (§3.2) |
