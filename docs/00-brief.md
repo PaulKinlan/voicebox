@@ -295,3 +295,50 @@ process *and* a page worker"**, with isocan's extracted provider layer cited as 
 *shape* rather than as code to lift. He is now stating it as a **product** requirement rather than a
 portability technique, and calling it important — which is the correct weighting, because a core that
 runs in one placement becomes two implementations that drift.
+
+---
+
+## Added 2026-09-20, 01:30 — N19: shared state, and why it is not an alternative to merging
+
+> "I feel like I want the **shared model**... I think we do want some understanding and concept of like
+> **global state**, maybe, and all at the same time, because **multiple agents and multiple harnesses
+> can be working together**."
+
+**Decision: shared.** And the question he asked underneath it is the important part:
+
+> "I just don't know how **sharing works without having a merge concept**. Actually this is one of the
+> issues I struggle with in isocan."
+
+### They are not alternatives — they apply to different things
+
+The confusion is real and it dissolves once the two are separated by **what they reconcile**:
+
+| | **what is shared** | **what is merged** |
+|---|---|---|
+| **the data** | state: presence, what each agent is doing, what it has **read** | artefacts: files, code |
+| **the shape** | an **append-only log** — no reconciliation needed, because nothing is overwritten | a **diff** — reconciliation required, because one file has one writer |
+| **the channel** | live: you see it as it happens | late: you see it when the work lands |
+
+So it is not *shared instead of merged*. It is **`shared log + per-root work that still merges`** — the
+merge never goes away, it stops being the *only* way two sessions learn about each other.
+
+### What that means for the walk
+
+- **Both sessions append to the shared log** — *"I'm editing the parser"*, *"I'm reading the tier
+  table"*, *"holding the microphone"*. **Append-only, so no merge is needed**, and no write conflicts
+  are possible by construction.
+- **Both act on their own execution root** — one writer per root, as the design already requires.
+- **Their files meet as an ordinary merge when they land** — and that merge is a *user-visible event*,
+  not a background reconciliation.
+
+**You see each other live; you merge the artefacts.** The liveness comes from the log; the safety comes
+from the root boundary; and neither needs the other's mechanism.
+
+### Why this is worth stating plainly in the design
+
+Because the same confusion is what makes isocan's model hard to hold in the head, and it is a
+**category error rather than a hard problem**: *"how do we merge the log?"* has no answer because the
+log never needs merging, and *"how do we share the files?"* has no answer because files are what
+merging is for.
+
+The global state is **the log**; the global state is **not** the files.
