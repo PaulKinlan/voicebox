@@ -475,6 +475,49 @@ Three consequences, each of which closes a hole the declaration alone would leav
 
 ---
 
+### 1.8 E1-M0: when the browser environment can be said to exist
+
+Not a build plan — a definition. The browser is the first environment (N11), so this is the first
+thing that has to be real, and the enforcement table in §1.7 decides what is in it and what is
+simply absent.
+
+**It exists when all five of these are true:**
+
+1. **A project can be created in OPFS and reopened after a reload** — a directory the user granted
+   (handle persisted, re-acquired on return, which may need a click), registered with `placement:
+   browser`, `capabilities`, `undoKind: written-file-list` (§2.1). "Create a project" works as a
+   spoken or typed verb (N13).
+2. **The tier table is data the code reads, and it is enforced in both directions** — a Tier 2 act
+   refuses without an answer and proceeds with one.
+3. **The audit is append-only and survives the reload** — an entry for every act *including the
+   refusals*, carrying `(instance, project, root, turn)`. (Hash-chaining is an autonomy-stage
+   requirement, §3.8, not an M0 one.)
+4. **One tool runs end to end inside the root, and cannot reach the network** — with tests that
+   show the refusals *and* a positive control that succeeds (§3.0's second habit).
+5. **The page is the host.** Close the tab and the project is intact; reopen and it continues. If
+   closing a tab loses the project, the environment does not exist yet.
+
+**The one tool, and why it is that tool.** *Create an asset*: a name and content in, a file in the
+project, the artefact rendered in front of him (N12). It is the smallest tool that exercises every
+enforcement row — it writes inside a handle-scoped root and it must not reach the network — and it
+is also the product's feel, so the first thing built is the thing he described.
+
+**The row that decides the shape:** `network` is enforced by the realm's egress policy, and a
+plain worker inherits the document's policy without losing ambient `fetch`. So the M0 tool runs as
+a **Wasm module whose imports are the only interface it has** (§1.7: the import boundary, the
+strongest of the four), which is also why the Wasm path is worth building first rather than last.
+
+**Absent at E1-M0, and deliberately:** `exec` (no processes to spawn, §1.7); project-code egress
+(no rule is admitted until the policy exists and is tested); the harness and the voice model (M0
+is text, and k3's design is not a dependency of this environment existing); several live instances
+(§2.3 is E2 and later); autonomy (§3.8 is a road, not a step).
+
+**Three things that would make it indefinable, and how they stand:** handle re-acquisition after a
+reload depends on a user gesture in some browsers (acceptable: a click is not a design failure);
+persistent storage is a *request* the browser may decline, so a peer project must show its
+durability state (§3.2a); and whatever the server side turns out to be (§5), it is not needed for
+this — E1 stands alone, which is the point of it being first.
+
 ## 2. The local-project unit
 
 ### 2.1 What a project is
