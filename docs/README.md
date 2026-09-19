@@ -44,6 +44,7 @@ finding — say it rather than resolving it silently.
 | `00-brief.md` | **what** — Paul's intent, in his words. Never silently reinterpreted; interpretations are marked as interpretations | on main |
 | `02-environment.md` | **how** — the execution model, projects, concurrency, tiers, placements, the security boundary | on main |
 | `04-e1-m0-build-spec.md` | **how to build the first environment**, down to the acceptance checks. Derived from §1.8 of the design; where they differ, the design wins and the spec is corrected | on main |
+| [`07-architecture.md`](07-architecture.md), [`08-how-it-runs.md`](08-how-it-runs.md) | **what the system is tonight** — components, routes, the operating model. **Snapshots**, checked by `scripts/docs-check.mjs`; a claim there that the code contradicts is a bug in the document | on main (new) |
 | `03-architecture-k3.md` | **the harness** — what pi does, what it does not, and the transport | on main |
 | `01-questions.md` | **open questions**, including question 2 (reuse CAP's runtime) which the design answers for the environment and nobody has closed for the rest | on main |
 | `docs/interface.md` *(astra)* | **the interface** — the look, the model, the artefact surface | **on `design/astra-interface`**, not main yet |
