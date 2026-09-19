@@ -56,6 +56,24 @@ const audioClient = createAudioClient({
 
 client = audioClient;
 
+/**
+ * WHY did the upgrade fail? Three causes, and one message for all of them named
+ * the wrong one: on 2026-09-19 the API server was mid-restart, the page said
+ * "the server's /live route is not available", and Paul reasonably read that as
+ * keys or models. The health route is what tells the cases apart — if the server
+ * answers it, the server is up and the upgrade itself was refused; if it does
+ * not, the server is down or restarting and the honest advice is "try again".
+ */
+async function explainFailedUpgrade() {
+  try {
+    const response = await fetch("/api/health", { cache: "no-store" });
+    if (!response.ok) return { text: `the server answered ${response.status} for /api/health, so its /live route is not available`, transient: false };
+    return { text: "the server is running but refused the /live upgrade", transient: false };
+  } catch {
+    return { text: "the local server is not answering — it may be restarting", transient: true };
+  }
+}
+
 async function startLive() {
   const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/live`;
   if (voiceState) voiceState.textContent = "Connecting to the live session…";
@@ -66,16 +84,23 @@ async function startLive() {
     return;
   }
   await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("no response from the server's /live route")), 4000);
+    const timer = setTimeout(() => reject(new Error("no response to the /live upgrade within 4s")), 4000);
     socket.onopen = () => { clearTimeout(timer); resolve(); };
-    socket.onerror = () => { clearTimeout(timer); reject(new Error("the server's /live route is not available")); };
+    socket.onerror = () => { clearTimeout(timer); reject(new Error("the /live upgrade failed")); };
   }).then(
     () => {
       audioClient.attachSocket(socket);
       return audioClient.startCapture();
     },
-    (error) => {
-      if (voiceState) voiceState.textContent = `Live voice unavailable: ${error.message}. The mic stays off.`;
+    async (error) => {
+      // The socket is dead; do not leave it half-open.
+      try { socket?.close(); } catch { /* already closed */ }
+      const why = await explainFailedUpgrade();
+      if (voiceState) {
+        voiceState.textContent = why.transient
+          ? `Live voice is not connected: ${why.text}. Try the mic again in a moment; the text path still works.`
+          : `Live voice unavailable: ${why.text}. The mic stays off.`;
+      }
       setVoice("off");
       renderMic(audioClient.snapshot());
     },
