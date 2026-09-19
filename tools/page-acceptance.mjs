@@ -10,13 +10,19 @@
 // :8787, and a headless Chromium. No new dependencies — CDP over the global
 // WebSocket.
 //
+// To acceptance-test a CANDIDATE branch, run its own server pair and point
+// this at it: VOICEBOX_UI_URL / VOICEBOX_API_URL.
+//
 // Checks (each one traces to a defect somebody actually hit):
+//   0. the environment is current       — served bytes == disk bytes, FIRST,
+//                                         because every other check depends on it
 //   1. console clean on load            — the partial-update aborts class
 //   2. zero POST /api/turn on load      — the phantom-turn defect
 //   3. file list matches the workspace  — names, count, and byte counts
 //   4. a typed turn writes a real file  — page ≡ disk ≡ content, exactly one POST
 //   5. ../evil.sh is refused            — nothing outside workspace/
-//   6. the mic state is honest          — never "listening" without a gesture
+//   6. the mic state is honest          — never "listening" without a gesture;
+//                                         the waveform may not lie either
 //   7. the font actually loads          — through Vite AND through server.mjs
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -25,13 +31,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const WORKSPACE = path.join(ROOT, "workspace");
-// Override to acceptance-test a CANDIDATE branch's own server pair, e.g.:
-//   PORT=8802 node server.mjs &  PORT=8802 ./node_modules/.bin/vite --port 5174 &
-//   VOICEBOX_UI_URL=http://127.0.0.1:5174 VOICEBOX_API_URL=http://127.0.0.1:8802 npm run accept
+// The workspace under test belongs to the SERVER we talk to, not to the tree
+// this script runs from — a lane worktree and the served tree are different
+// directories, and stat'ing the wrong one is a false FAIL (2026-09-19,
+// voicebox-ui blocked twice). /api/health names the server's own workspace.
+let WORKSPACE = null; // resolved from /api/health, below
 const UI = process.env.VOICEBOX_UI_URL ?? "http://127.0.0.1:5173";
 const API = process.env.VOICEBOX_API_URL ?? "http://127.0.0.1:8787";
-const CDP_PORT = 9521;
+// per-run browser: two concurrent runs must never share one (2026-09-19,
+// voicebox-ui's run and another lane's overlapped on a fixed port + profile
+// and the typed-turn check failed with the OTHER run's timestamp)
+const CDP_PORT = 9500 + (process.pid % 500);
 
 const results = [];
 const report = (name, ok, detail) => {
@@ -42,7 +52,7 @@ const report = (name, ok, detail) => {
 // ── bring up a headless browser and open the page ──────────────────────────
 const chromium = spawn("/usr/bin/chromium", [
   "--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
-  `--remote-debugging-port=${CDP_PORT}`, "--user-data-dir=/tmp/vb-accept-profile", "about:blank",
+  `--remote-debugging-port=${CDP_PORT}`, `--user-data-dir=/tmp/vb-accept-profile-${process.pid}`, "about:blank",
 ], { stdio: ["ignore", "ignore", "ignore"] });
 
 let wsUrl = "";
@@ -82,6 +92,66 @@ for (const d of ["Runtime", "Log", "Page", "Network"]) await send(`${d}.enable`,
 const ev = async (expr) =>
   (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId))?.result?.value;
 
+// ── 0. the environment is current: served bytes == disk bytes ─────────────
+// The class this catches: an ff-merge replaced public/audio-client.js, Vite's
+// watcher never fired, and the server kept serving its cached transform while
+// every file-level stamp reported the new sha. "The environment is current"
+// is a claim someone has to make — this check makes it, FIRST, because every
+// other check depends on it. The tree under test is the SERVER's tree, taken
+// from /api/health.
+const health = await (await fetch(`${API}/api/health`)).json().catch(() => null);
+WORKSPACE = health?.workspace ?? null;
+const TREE = WORKSPACE ? path.dirname(WORKSPACE) : null;
+if (!TREE || !existsSync(TREE)) {
+  console.log(`FAIL  cannot locate the server's tree — /api/health said ${JSON.stringify(health?.workspace ?? null)}`);
+  chromium.kill(); process.exit(1);
+}
+// THE RULE (coord, 2026-09-19): compare a MARKER, not bytes. Vite transforms
+// everything it serves — CSS arrives as a JS wrapper, JS arrives with
+// rewritten imports, HMR lines and a source map — so byte-equality against a
+// transforming server can only pass by accident. The marker is the longest
+// line of the current disk file: it survives every transform above while
+// still being absent from a STALE served copy (the audio-client defect).
+// Virtual, query-suffixed and directory-shaped refs are skipped before they
+// are ever treated as a comparison.
+const servedRefs = [];
+const indexHtml = await (await fetch(`${UI}/`)).text();
+for (const m of indexHtml.matchAll(/(?:src|href)="([^"#][^"]*)"/g)) {
+  const raw = m[1].split("?")[0];
+  if (raw === "" || !/\.[a-z0-9]+$/i.test(raw)) continue;
+  if (raw.startsWith("@") || raw.startsWith("/")) continue;
+  servedRefs.push(raw);
+}
+const staleModules = [];
+const compared = new Set();
+while (servedRefs.length) {
+  const ref = servedRefs.shift();
+  if (compared.has(ref) || /^https?:/.test(ref)) continue;
+  compared.add(ref);
+  let served, disk;
+  try {
+    served = await (await fetch(`${UI}/${ref}`)).text();
+    disk = readFileSync(path.join(TREE, "public", ref), "utf8");
+  } catch (e) {
+    staleModules.push(`${ref} (${e.message})`);
+    continue;
+  }
+  const lines = disk.split("\n").filter((l) => l.trim() !== "");
+  const marker = lines.reduce((a, b) => (b.length > a.length ? b : a), "");
+  if (marker.length < 8) continue; // nothing distinctive to look for
+  // CSS is served as a JS wrapper: unwrap the __vite__css literal (a quoted
+  // JS string) so the marker search runs against real CSS, not escaped bytes.
+  const cssMatch = served.match(/const __vite__css = ("(?:[^"\\]|\\.)*");/s);
+  const core = cssMatch ? JSON.parse(cssMatch[1]) : served;
+  if (!core.includes(marker)) { staleModules.push(ref); continue; }
+  if (ref.endsWith(".js")) {
+    for (const m of served.matchAll(/from\s*"\.\/([^"]+)"|import\s*"\.\/([^"]+)"/g))
+      servedRefs.push(path.posix.join(path.posix.dirname(ref), m[1] ?? m[2]));
+  }
+}
+report("environment is current (served modules carry current markers)", staleModules.length === 0,
+  staleModules.length ? `STALE: ${staleModules.join(", ")} — touch the file or restart vite` : `${compared.size} modules compared`);
+
 await send("Page.navigate", { url: UI }, sessionId);
 await sleep(4000); // let load() finish whatever it does — including phantom turns
 
@@ -115,7 +185,7 @@ report("page byte counts match disk", apiFiles.length === 0 || sizeMismatches.le
   sizeMismatches.join("; "));
 
 // ── 4 + 7. a typed turn writes a real file (the positive control) ─────────
-const NAME = "acceptance-proof.txt";
+const NAME = `acceptance-proof-${process.pid}.txt`;
 const CONTENT = `acceptance ${Date.now()}`;
 const turnsBeforeTyped = turnPosts.length;
 phase = "typed";
@@ -158,24 +228,23 @@ await ev(`
   true;
 `);
 await sleep(1500);
-const evilOutside = existsSync(path.join(ROOT, "evil.sh"));
-const evilInside = existsSync(path.join(WORKSPACE, "..", "evil.sh"));
+const evilOutside = existsSync(path.join(WORKSPACE, "..", "evil.sh"));
 const stillListed = (await (await fetch(`${API}/api/files`)).json()).files.includes("../evil.sh");
 report("../evil.sh is refused and nothing lands outside workspace/",
-  !evilOutside && !evilInside && !stillListed,
+  !evilOutside && !stillListed,
   `outside=${evilOutside} listed=${stillListed}`);
 
-// ── 6. the mic state is honest ─────────────────────────────────────────────────────
+// ── 6. the mic state is honest ─────────────────────────────────────────────
 const micState = (await ev(`document.getElementById('voice-state')?.textContent`)) ?? "";
 report("mic state never claims listening without a gesture", !/listening/i.test(micState),
   `state reads "${micState.trim().slice(0, 60)}"`);
 
 // ── 6b. the waveform may not lie either ── visual activity is gated by voice
-// state (2026-09-19, as voicebox-ui's waveform lands: the invariant is that
-// nothing renders input energy when capture is off). The input-wave is
-// display:none unless [data-voice="listening"] and its path is only drawn
-// from real samples — assert the off case from the live page so a new
-// visualisation inherits the gate rather than inventing its own.
+// state (as voicebox-ui's waveform lands: the invariant is that nothing
+// renders input energy when capture is off). The input-wave is display:none
+// unless [data-voice="listening"] and its path is only drawn from real
+// samples — assert the off case from the live page so a new visualisation
+// inherits the gate rather than inventing its own.
 const visual = await ev(`(() => {
   const stage = document.getElementById('voice-ring-wrap');
   const state = stage?.dataset.voice ?? "?";
@@ -194,7 +263,7 @@ report("waveform visual activity is gated by voice state",
 const fontInPage = await ev(`document.fonts.check('14px Inter')`);
 report("font loads in the page (dev front)", fontInPage === true, `document.fonts.check says ${fontInPage}`);
 const fontResp = await fetch(`${API}/fonts/inter-latin.woff2`);
-report("font serves through the real server (:8787)", fontResp.status === 200,
+report("font serves through the real server", fontResp.status === 200,
   `GET /fonts/inter-latin.woff2 -> ${fontResp.status} ${fontResp.headers.get("content-type") ?? ""}`);
 
 // ── leave no residue: remove exactly the file this run created ────────────
