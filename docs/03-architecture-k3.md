@@ -459,3 +459,84 @@ Real, and small. The tier table can now be a boundary for pi's built-in **and**
 model-authored tools: intercept → plan → ask → honour. The remaining work is host-side:
 answer the request (§1.4's permission-response schema already exists), record it in the
 audit, and never let the model's own report of compliance stand in for the audit of effects.
+## 9. Isocan's multi-harness model, and what C4 got too narrow
+
+Paul: *"isocan has got a really great way of having multiple harnesses work together… we can
+use it as inspiration."* C4 answered the browser question (one agent, reached two ways). His
+requirement is the other shape: **several named agents, live on one project, at the same
+time** — his phone's session and this chat session, both on the same work. Those are not the
+same mechanism, and the difference is where the coordination lives.
+
+### What isocan actually is (from the live record, not the README)
+
+`~/.isocan/rc-agents.json`, today:
+
+```json
+[
+  { "canvasId": "prj_6nodKBn0oA", "actorId": "usr_Ut1iNC2vQw", "name": "PK_Bot2",
+    "harness": null,  "cwd": "/home/paulkinlan/isocan-getting-started", "sessionId": "01a08d7e-…" },
+  { "canvasId": "prj_6nodKBn0oA", "actorId": "usr_tnqRhL6b0y", "name": "PK_Scout",
+    "harness": "pi",  "cwd": "/home/paulkinlan/isocan-getting-started", "sessionId": "01a08d7e-…" },
+  { "canvasId": "prj_6nodKBn0oA", "actorId": "usr_9SGTtKaRcv", "name": "Scout",
+    "harness": null,  "cwd": "/home/paulkinlan/isocan-getting-started", "sessionId": "01a09201-…" }
+]
+```
+
+**Three named agents on one canvas, two of them pi harnesses, each a distinct actor with its
+own session and cwd.** The model in one sentence: *an agent is an enrolled record —
+(canvasId, actorId, name, harness, cwd, session) — and agents coordinate through the
+canvas's shared oplog* (comments, threads, items, versions), which they can all read by
+construction. Around that record: the **bench** (presence per agent — *ready / elsewhere /
+unreachable*, measured every time you look), **seen-marks** (per-person read positions kept
+by the home, converging across machines), and **whose word starts a turn** (a standing agent
+answers only its owner until widened, with lapse-bounded grants — the per-agent permission
+layer).
+
+### Same thing, or reinvention?
+
+The environment design's per-(instance, root) session is **isomorphic at the registry level
+and different at the coordination level**:
+
+| | isocan | environment design (as written) |
+|---|---|---|
+| Agent identity | actorId, claimed against the harness's session id — two agents sharing a directory stay two people | (instance, root) session |
+| Registry with liveness | the bench: ready / elsewhere / unreachable | capability per placement (no liveness column) |
+| **Coordination medium** | **the canvas: a shared, ordered, persistent log every agent reads** | per-root audit + work meeting as an ordinary git merge |
+| Read positions | seen-marks, per person, converging across machines | none — agents meet at merges, not at a shared view |
+| Turn authority | whose word starts a turn, per agent, lapsing | the tier table (per act, not per agent) |
+
+**Verdict: not the same mechanism, and not a reinvention either — a missing layer.** The
+registry shape (named agent instances with declared placements) is the same idea discovered
+twice. What isocan has and the environment design lacks is the *coordination medium*: a
+shared log with presence and read positions, versus audits that only meet at merges. For
+Paul's phone-and-chat case, merges give him two sessions that see each other's work late and
+through git; the canvas gives him two sessions that see each other's work as it happens.
+
+### What to take (and what it changes)
+
+1. **The actor model.** Identity claimed against the harness's session id — two agents in
+   one directory are two people, atomically. This is exactly what the (instance, root)
+   registry needs to stop two placements of "the same agent" from being indistinguishable in
+   the audit.
+2. **A liveness column on the capability declaration.** *ready / elsewhere / unreachable* is
+   three honest words measured at read time — better than a capability row that cannot say
+   whether anything could answer right now.
+3. **The shared log as the coordination medium.** The audit should be the medium agents read
+   each other's work through, not only the record the host keeps. Whether that is an
+   oplog-shaped project log or the canvas itself, the design's "several roots per project"
+   needs it to be *visible to all of them*, not just mergeable.
+4. **Seen-marks for the audit.** Per-person read positions kept by the host, converging
+   across machines — so "what is new since you last looked" is a computed answer, and two
+   machines racing converge instead of duplicating.
+5. **Whose word starts a turn, per agent.** The tier table governs acts; this governs
+   *invocation* — an agent answers only its owner until widened (with lapse-bounded grants
+   that expire visibly). Paul's phone asking the home harness is a grant, not a default.
+
+### The gap, stated plainly
+
+C4's "one harness, one protocol, two transports" is correct for the browser question and
+incomplete for the multi-agent requirement. The architecture needs the coordination layer
+isocan already proved: shared log, presence, read positions, per-agent turn authority.
+Whether that layer is *adopted* (the canvas pattern as the project's shared medium) or
+*declared absent* (merges-only, with the cost named: no presence, no shared view) is Paul's
+call — but it should be a decision, not an oversight.
