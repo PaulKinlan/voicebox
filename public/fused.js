@@ -8,13 +8,35 @@
 const $ = (id) => document.getElementById(id);
 const SVG = "http://www.w3.org/2000/svg";
 
-const els = {
-  files: $("files"), made: $("made"), samples: $("samples"), count: $("file-count"),
-  where: $("where-note"), dot: $("server-dot"), refresh: $("refresh"), report: $("turn-report"), newFile: $("new-file"),
-  stage: $("voice-ring-wrap"), mic: $("mic"), state: $("voice-state"),
-  session: $("session"), log: $("session-log"), form: $("text-form"), utterance: $("utterance"), send: $("send"),
-  reader: $("reader"), readerTitle: $("reader-title"), readerFacts: $("file-facts"), readerBody: $("file-body"), copy: $("file-copy"),
+// An uncaught error at module load aborts the REST of this file, so a page and
+// a script from different revisions used to leave a half-dead page and a stack
+// trace. A missing element is named instead, and the parts that need it stay
+// inert while everything else keeps working (Paul hit this on 2026-09-19 by
+// reloading across a live edit).
+const WANTED = {
+  files: "files", made: "made-list", samples: "samples", count: "file-count",
+  where: "where-note", dot: "server-dot", refresh: "refresh", report: "turn-report", newFile: "new-file",
+  stage: "voice-ring-wrap", mic: "mic", state: "voice-state",
+  session: "session", log: "session-log", form: "text-form", utterance: "utterance", send: "send",
+  reader: "reader", readerTitle: "reader-title", readerFacts: "file-facts", readerBody: "file-body",
+  copy: "file-copy", close: "reader-close",
 };
+const els = {};
+const missing = [];
+for (const [key, id] of Object.entries(WANTED)) {
+  const el = document.getElementById(id);
+  els[key] = el;
+  if (!el) missing.push(id);
+}
+if (missing.length) {
+  console.warn(`[voicebox] this document has no ${missing.map((id) => `#${id}`).join(", ")} — the page and fused.js are not the same revision, so the features that need them stay inert. Reload the page.`);
+}
+
+/** Wire an event, or say which element is missing rather than throwing. */
+function on(el, type, handler) {
+  if (el) return el.addEventListener(type, handler);
+  return null;
+}
 
 let shownFile = null; // the file currently in the reader panel
 
@@ -28,6 +50,7 @@ const size = (text) => {
 };
 
 function setReport(outcome, tone, said) {
+  if (!els.report) return;
   els.report.replaceChildren();
   if (said) {
     const quote = document.createElement("span");
@@ -42,6 +65,7 @@ function setReport(outcome, tone, said) {
 }
 
 function setState(text, tone) {
+  if (!els.state) return;
   els.state.textContent = text;
   els.state.dataset.tone = tone ?? "";
 }
@@ -69,37 +93,22 @@ const turn = (transcript) => request("/api/turn", {
   body: JSON.stringify({ transcript }),
 });
 
-// ── the files ──────────────────────────────────────────────────────────────
+// ── what was made: a quiet name and its real size, nothing else ───────────
 function card(entry) {
   const li = document.createElement("li");
   const open = document.createElement("button");
   open.type = "button";
   open.className = "file-open";
+  open.dataset.file = entry.name;
   open.setAttribute("aria-label", `Read ${entry.name}`);
 
   const name = document.createElement("span");
   name.className = "file-name";
   name.textContent = entry.name;
-  const head = document.createElement("span");
-  head.className = "file-head";
-  head.append(name, icon("i-doc"));
   const meta = document.createElement("span");
   meta.className = "file-meta";
   meta.textContent = entry.meta;
-  open.append(head, meta);
-  open.dataset.file = entry.name;
-
-  if (entry.preview) {
-    const peek = document.createElement("span");
-    peek.className = "file-peek";
-    peek.textContent = entry.preview;
-    open.append(peek);
-  } else if (entry.why) {
-    const peek = document.createElement("span");
-    peek.className = "file-peek";
-    peek.textContent = `Not read back: ${entry.why}`;
-    open.append(peek);
-  }
+  open.append(name, meta);
 
   open.addEventListener("click", () => showFile(entry.name));
   li.append(open);
@@ -108,10 +117,11 @@ function card(entry) {
 
 function render() {
   const count = entries.length;
+  if (!els.files || !els.made || !els.count) return;
   els.files.replaceChildren(...entries.map(card));
   els.made.dataset.state = count === 0 ? "empty" : "ready";
   els.files.setAttribute("aria-busy", "false");
-  els.count.textContent = count === 0 ? "0 files" : `${count} ${count === 1 ? "file" : "files"}`;
+  els.count.textContent = count === 0 ? "nothing yet" : `${count} ${count === 1 ? "file" : "files"}`;
   if (shownFile && !entries.some((entry) => entry.name === shownFile)) shownFile = null;
   if (shownFile) showFileSelection(shownFile);
 }
@@ -122,35 +132,28 @@ function showFileSelection(name) {
   }
 }
 
-// The first paint is a skeleton of the real card — never a finished-looking list
-// that a later swap replaces. The shape is fixed; only the contents arrive.
+// The first paint is a skeleton of the real thing — a quiet name, arriving.
 function showSkeleton() {
   els.made.dataset.state = "loading";
   els.files.setAttribute("aria-busy", "true");
-  els.count.textContent = "reading workspace/…";
-  const row = document.createElement("li");
-  row.className = "file skeleton";
-  row.setAttribute("aria-hidden", "true");
-  const shell = document.createElement("div");
-  shell.className = "file-open";
-  for (const width of ["56%", "22%", "94%", "78%"]) {
-    const bar = document.createElement("span");
-    bar.className = "bar";
-    bar.style.width = width;
-    shell.append(bar);
-  }
-  row.append(shell);
-  els.files.replaceChildren(row);
+  els.count.textContent = "reading…";
+  const item = document.createElement("li");
+  item.className = "skeleton skeleton-visible";
+  item.setAttribute("aria-hidden", "true");
+  const bar = document.createElement("span");
+  bar.className = "bar";
+  item.append(bar);
+  els.files.replaceChildren(item);
 }
 
 async function health() {
   try {
     await request("/api/health");
-    els.dot.dataset.ok = "true";
-    els.where.textContent = "local server ready";
+    if (els.dot) els.dot.dataset.ok = "true";
+    if (els.where) els.where.textContent = "local server ready";
   } catch {
-    els.dot.dataset.ok = "false";
-    els.where.textContent = "no answer from the local server";
+    if (els.dot) els.dot.dataset.ok = "false";
+    if (els.where) els.where.textContent = "no answer from the local server";
   }
 }
 
@@ -178,7 +181,6 @@ async function load() {
     els.files.replaceChildren();
     els.files.setAttribute("aria-busy", "false");
     els.count.textContent = "could not read the folder";
-    setReport(`Could not read workspace/: ${error.message}`, "bad");
   }
 }
 
@@ -189,9 +191,8 @@ async function showFile(name) {
   els.readerTitle.textContent = name;
   els.readerFacts.textContent = "Reading…";
   els.readerBody.textContent = "";
-  for (const card of document.querySelectorAll(".file-open")) {
-    card.setAttribute("aria-current", String(card.dataset.file === name));
-  }
+  els.reader.dataset.state = "empty";
+  showFileSelection(name);
   try {
     const answer = await turn(`read ${name}`);
     const result = answer.result ?? {};
@@ -203,19 +204,29 @@ async function showFile(name) {
       els.copy.disabled = content.length === 0;
     } else {
       els.readerFacts.textContent = result.error ?? answer.note ?? "the server would not read this file";
+      els.reader.dataset.state = "empty";
     }
   } catch (error) {
     els.readerFacts.textContent = `Could not read workspace/${name}: ${error.message}`;
   }
 }
 
-els.copy.addEventListener("click", async () => {
+on(els.copy, "click", async () => {
   try {
     await navigator.clipboard.writeText(els.readerBody.textContent ?? "");
     els.readerFacts.textContent = `Copied ${shownFile} to the clipboard.`;
   } catch (error) {
     els.readerFacts.textContent = `The clipboard refused: ${error.message}`;
   }
+});
+
+on(els.close, "click", () => {
+  shownFile = null;
+  els.reader.dataset.state = "empty";
+  els.readerBody.textContent = "";
+  els.readerFacts.textContent = "";
+  showFileSelection(null);
+  document.querySelector(".file-open")?.focus();
 });
 
 // ── the turns ──────────────────────────────────────────────────────────────
@@ -228,6 +239,7 @@ function logTurn(said, outcome) {
   did.className = "did";
   did.textContent = outcome;
   li.append(quote, did);
+  if (!els.log || !els.session) return;
   els.log.prepend(li);
   els.session.hidden = false;
   while (els.log.children.length > 8) els.log.lastElementChild.remove();
@@ -241,8 +253,7 @@ function finish(said, outcome, tone) {
 async function send(said) {
   const transcript = said.trim();
   if (!transcript) return;
-  els.send.disabled = true;
-  els.send.textContent = "Sending…";
+  if (els.send) { els.send.disabled = true; els.send.textContent = "Sending…"; }
   setReport("Sending…");
   try {
     const answer = await turn(transcript);
@@ -256,8 +267,7 @@ async function send(said) {
   } catch (error) {
     finish(transcript, `the turn did not reach the server: ${error.message}`, "bad");
   } finally {
-    els.send.textContent = "Send";
-    els.send.disabled = !els.utterance.value.trim();
+    if (els.send) { els.send.textContent = "Send"; els.send.disabled = !els.utterance.value.trim(); }
     health();
   }
 }
@@ -266,8 +276,8 @@ async function send(said) {
 let recognition = null;
 
 function listening(on) {
-  els.stage.dataset.voice = on ? "listening" : "off";
-  els.mic.setAttribute("aria-pressed", String(on));
+  if (els.stage) els.stage.dataset.voice = on ? "listening" : "off";
+  els.mic?.setAttribute("aria-pressed", String(on));
 }
 
 function startListening() {
@@ -312,9 +322,9 @@ function startListening() {
   }
 }
 
-els.mic.addEventListener("click", startListening);
-els.refresh.addEventListener("click", load);
-els.newFile.addEventListener("click", () => {
+on(els.mic, "click", startListening);
+on(els.refresh, "click", load);
+on(els.newFile, "click", () => {
   els.utterance.value = "create a file called ";
   els.utterance.focus();
   els.utterance.setSelectionRange(els.utterance.value.length, els.utterance.value.length);
@@ -323,15 +333,31 @@ els.newFile.addEventListener("click", () => {
   // read "called" as the filename and write a file by that name).
   els.send.disabled = true;
 });
-els.utterance.addEventListener("input", () => { els.send.disabled = !els.utterance.value.trim(); });
+on(els.utterance, "input", () => { if (els.send) els.send.disabled = !els.utterance.value.trim(); });
 
-els.form.addEventListener("submit", (event) => {
+on(els.form, "submit", (event) => {
   event.preventDefault();
   const said = els.utterance.value.trim();
   if (!said) return;
   els.utterance.value = "";
   send(said);
 });
+
+// ── which revision is this? ───────────────────────────────────────────────
+// The dev server bakes the identity of its own checkout into this document at
+// serve time (vite.config.js, transformIndexHtml). A server that did not stamp
+// the page leaves the marker empty and this line stays blank: naming a revision
+// the server never sent is the lie this whole line exists to prevent.
+function stampBuild() {
+  const line = document.getElementById("build");
+  if (!line) return;
+  const content = document.querySelector('meta[name="voicebox-build"]')?.getAttribute("content") ?? "";
+  if (!content || content.includes("__VOICEBOX_BUILD_STAMP__")) return;
+  line.textContent = content;
+  line.dataset.dirty = String(content.includes("uncommitted"));
+}
+
+stampBuild();
 
 // The empty state teaches the loop with turns the resolver really answers.
 const SAMPLES = [
@@ -348,7 +374,7 @@ for (const said of SAMPLES) {
   li.append(button);
   els.samples.append(li);
 }
-els.where.textContent = "checking the local server…";
+if (els.where) els.where.textContent = "checking the local server…";
 
 health();
 load();

@@ -6,89 +6,87 @@
   <meta name="color-scheme" content="light dark">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>Voicebox</title>
+  <!-- the revision this page was served from; Vite fills it in (vite.config.js).
+       Empty when a plain server serves this file, which is the honest answer. -->
+  <meta name="voicebox-build" content="__VOICEBOX_BUILD_STAMP__">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
   <script type="module" src="fused.js"></script>
   <script type="module" src="live-voice.js"></script>
 </head>
 <body>
-  <a class="skip-link" href="#made">Skip to the files</a>
-  <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">    <defs>
+  <a class="skip-link" href="#made">Skip to what was made</a>
+  <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
       <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4"/></symbol>
-      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-13.7-5.6L4 8M4 5v4h4M4 13a8 8 0 0 0 13.7 5.6L20 16M20 19v-4h-4"/></symbol>
       <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
-      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5"/></symbol>
       <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
-      <symbol id="i-doc" viewBox="0 0 24 24"><path d="M14 3H7v18h10V8z"/><path d="M14 3v5h5"/></symbol>
     </defs>
   </svg>
 
-  <header class="head">
-    <h1 class="wordmark"><a href="./">voicebox</a></h1>
-    <p class="where"><span class="where-path">workspace/</span><span class="where-sep" aria-hidden="true">·</span><span class="dot" id="server-dot" data-ok="pending" aria-hidden="true"></span><span id="where-note">checking the local server…</span></p>
-    <button class="quiet" id="refresh" type="button"><svg class="icon"><use href="#i-refresh"/></svg>Refresh</button>
-  </header>
+  <div class="room">
+    <header class="head">
+      <h1 class="wordmark"><a href="./">voicebox</a></h1>
+      <p class="where"><span class="dot" id="server-dot" data-ok="pending" aria-hidden="true"></span><span id="where-note">checking the local server…</span></p>
+    </header>
 
-  <main class="app">
-    <section class="made" id="made" data-state="loading" tabindex="-1" aria-labelledby="made-heading">
-      <div class="pane-head">
-        <h2 id="made-heading">Workspace</h2>
-        <p class="pane-note" id="file-count">reading…</p>
-        <button class="quiet" id="new-file" type="button"><svg class="icon"><use href="#i-plus"/></svg>New file</button>
-      </div>
-      <ul class="files" id="files" role="list" aria-busy="true"></ul>
-      <div class="empty" id="empty">
-        <h3>Nothing here yet</h3>
-        <p>Say or type something that names a file and it lands here. Try one:</p>
-        <ul class="samples" id="samples" role="list"></ul>
-      </div>
+    <main class="stage" id="made" tabindex="-1">
+      <section class="made" id="made-list" data-state="loading" aria-labelledby="made-heading">
+        <h2 id="made-heading">Made while we talk</h2>
+        <p class="made-note" id="file-count">reading…</p>
+        <ul class="files" id="files" role="list" aria-busy="true"></ul>
+        <div class="empty" id="empty">
+          <p>Nothing yet. Say or type something that names a file and it lands here.</p>
+          <ul class="samples" id="samples" role="list"></ul>
+        </div>
+        <div class="made-actions">
+          <button class="quiet" id="new-file" type="button"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>New file</button>
+          <button class="quiet" id="refresh" type="button">Refresh</button>
+        </div>
+      </section>
+
+      <section class="voice" aria-labelledby="talk-heading">
+        <h2 class="sr-only" id="talk-heading">Talk to it</h2>
+        <div class="ring-stage" id="voice-ring-wrap" data-voice="off">
+          <svg class="rings" viewBox="0 0 720 720" aria-hidden="true">
+            <circle cx="360" cy="360" r="352"/><circle cx="360" cy="360" r="258"/><circle cx="360" cy="360" r="178"/>
+          </svg>
+          <button class="mic" id="mic" type="button" aria-label="Speak a turn" aria-pressed="false" aria-describedby="voice-state">
+            <svg class="mic-glyph icon" aria-hidden="true"><use href="#i-mic"/></svg>
+            <span class="sound-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+          </button>
+        </div>
+        <p class="voice-state" id="voice-state" role="status">Microphone off — press the circle to speak</p>
+        <div class="voice-actions"><button class="quiet interrupt" id="interrupt" type="button" disabled>Stop reply</button></div>
+        <form class="composer" id="text-form">
+          <label class="sr-only" for="utterance">Your turn</label>
+          <input id="utterance" name="utterance" type="text" autocomplete="off" spellcheck="false" required placeholder="Or type a turn…">
+          <button class="quiet send" id="send" type="submit" disabled>Send</button>
+        </form>
+        <p class="turn-report" id="turn-report" role="status" data-tone=""></p>
+      </section>
+
       <section class="reader" id="reader" data-state="empty" aria-labelledby="reader-title">
         <div class="reader-head">
-          <h3 id="reader-title">Nothing open</h3>
-          <p class="reader-facts" id="file-facts">Choose a file above to read its bytes back.</p>
-          <button class="small-button" id="file-copy" type="button" disabled>Copy</button>
+          <h2 id="reader-title">Nothing open</h2>
+          <p class="reader-facts" id="file-facts"></p>
+          <button class="quiet" id="file-copy" type="button" disabled>Copy</button>
+          <button class="icon-button" id="reader-close" type="button" aria-label="Close the file"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
         </div>
         <pre id="file-body"></pre>
       </section>
-    </section>
 
-    <section class="talk" aria-labelledby="talk-heading">
-      <div class="pane-head">
-        <h2 id="talk-heading">Talk to it</h2>
-        <p class="pane-note">Live voice</p>
-      </div>
-      <div class="talk-body">
-      <div class="ring-block">
-      <div class="ring-stage" id="voice-ring-wrap" data-voice="off">
-        <svg class="rings" viewBox="0 0 240 240" aria-hidden="true">
-          <circle cx="120" cy="120" r="114"/><circle cx="120" cy="120" r="86"/>
-        </svg>
-        <button class="mic" id="mic" type="button" aria-label="Speak a turn" aria-pressed="false" aria-describedby="voice-state">
-          <svg class="mic-glyph icon"><use href="#i-mic"/></svg>
-          <span class="sound-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
-        </button>
-      </div>
-      <p class="voice-state" id="voice-state" role="status">Microphone off — press the circle to speak</p>
-      </div>
-      <div class="voice-actions"><button class="quiet interrupt" id="interrupt" type="button" disabled>Stop reply</button></div>
-      <form class="composer" id="text-form">
-        <label class="sr-only" for="utterance">Your turn</label>
-        <input id="utterance" name="utterance" type="text" autocomplete="off" spellcheck="false" required placeholder="Type a turn…">
-        <button class="primary" id="send" type="submit" disabled>Send</button>
-      </form>
-      <p class="turn-report" id="turn-report" role="status" data-tone=""></p>
       <section class="session" id="session" hidden aria-labelledby="session-heading">
         <h2 id="session-heading">Recent turns</h2>
         <ol id="session-log"></ol>
       </section>
-      </div>
-    </section>
-  </main>
+    </main>
 
-  <footer class="foot">
-    <p class="foot-fact">Files are read from disk; turns are sent to the local server.</p>
-    <p class="foot-fact">The microphone streams to the same server. Typing never needs the microphone.</p>
-  </footer>
+    <footer class="foot">
+      <p class="foot-fact">Files are read from disk; turns go to the local server.</p>
+      <p class="foot-fact build" id="build"></p>
+    </footer>
+  </div>
 
   <noscript><p class="no-script">Voicebox needs JavaScript: the file list, the turns and the microphone are all driven by the page. Nothing here is a static picture of them.</p></noscript>
 </body>

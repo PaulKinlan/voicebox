@@ -23,10 +23,39 @@
 // demonstrated that mis-point as a cross-instance write with no error.
 import { defineConfig } from "vite";
 import { existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { cspSafeViteClient } from "./tools/vite-plugin-csp-safe-client.mjs";
 
 const API_TARGET = `http://127.0.0.1:${process.env.PORT ?? 8787}`;
+
+// WHICH REVISION AM I LOOKING AT?
+//
+// 2026-09-19: three URLs served three revisions and a stale copy silently beat a
+// fixed one twice. The page states its own identity, baked at serve time rather
+// than fetched at runtime — a runtime fetch would report the identity of
+// whatever answers, which is the lie we were chasing.
+//
+// `cwd` is resolved from THIS config, not from the shell that launched Vite, so
+// a dev server started from another directory still stamps its own checkout.
+// Every call is wrapped: a config that cannot run git must still start.
+const gitOptions = { cwd: path.dirname(new URL(import.meta.url).pathname), encoding: "utf8" };
+const git = (args, fallback) => {
+  try {
+    return execFileSync("git", args, gitOptions).trim() || fallback;
+  } catch {
+    return fallback;
+  }
+};
+const buildIdentity = {
+  branch: git(["branch", "--show-current"], "(detached)"),
+  commit: git(["rev-parse", "--short", "HEAD"], "unknown"),
+  // Tracked changes only: an ignored node_modules or a scratch file is not an
+  // edited revision, and a page that cries dirty when nothing is edited is a
+  // page nobody believes.
+  dirty: git(["status", "--porcelain", "--untracked-files=no"], "") !== "",
+  servedAt: new Date().toISOString(),
+};
 
 // A MISSING ASSET MUST BE LOUD, without removing index.html from the server.
 //
@@ -72,8 +101,22 @@ function loudStaticMiss() {
   };
 }
 
+// The identity is baked into the served HTML, not fetched at runtime and not
+// injected into the page's JS: Vite serves public/ root files straight to the
+// browser, so an `define` would never reach them, and index.html is the one
+// document every server in this repo has to produce.
+function buildStamp() {
+  return {
+    name: "voicebox-build-stamp",
+    transformIndexHtml(html) {
+      const content = `${buildIdentity.branch} @ ${buildIdentity.commit}${buildIdentity.dirty ? " · uncommitted changes" : ""}`;
+      return html.replace("__VOICEBOX_BUILD_STAMP__", content);
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [cspSafeViteClient(), loudStaticMiss()],
+  plugins: [buildStamp(), cspSafeViteClient(), loudStaticMiss()],
   root: "public",
   publicDir: false, // public/ IS the root; there is no second static dir
   // appType stays default ("spa") so "/" serves index.html. The loud 404 for a
