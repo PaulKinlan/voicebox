@@ -367,8 +367,8 @@ on(els.form, "submit", (event) => {
 // heard is the same lie as a "listening" label with the mic off.
 const OUTPUT_SAMPLES = 64;
 const OUTPUT_CENTRE = 120;
-const OUTPUT_BASE = 70; // hugs the 116px button rather than orbiting it
-const OUTPUT_AMPLITUDE = 22;
+const OUTPUT_BASE = 62; // hugs the button (radius ~55 in these units)
+const OUTPUT_AMPLITUDE = 13; // a contour hugging the button, lightly textured by real audio
 
 // Mean-absolute energy from real speech is small (a quiet room reads ~0.01, a
 // talking voice ~0.03-0.1), so a linear meter sits at zero and never moves.
