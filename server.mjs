@@ -132,7 +132,7 @@ function execute(action) {
 }
 
 const routes = {
-  "GET /api/health": (req, res, url) => json(res, 200, { ok: true, provider: PROVIDER, workspace: "workspace/", build: BUILD }),
+  "GET /api/health": (req, res, url) => json(res, 200, { ok: true, provider: PROVIDER, workspace: WORKSPACE, build: BUILD }),
   "GET /": (req, res, url) => {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end(readFileSync(path.join(PUBLIC, "index.html")));
