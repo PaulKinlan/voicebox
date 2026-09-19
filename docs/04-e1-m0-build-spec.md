@@ -6,7 +6,9 @@ checks that decide it. It is deliberately small — one environment, text input,
 written for an implementer who has not read the design end to end.
 
 **What it is not.** Not the interface (astra's, §4 of the design), not the harness (k3's), not E2
-and beyond. **Nothing here depends on pi, the bridge, a server, or a model provider.**
+and beyond. **Nothing here depends on pi, on any harness bridge, on a server, or on a model
+provider** — and E1-M0 needs no bridge at all, which is why it can be built while the harness work
+continues beside it.
 
 **And it is honest about its holes** — §7 lists what is *not* designed yet. If something below is
 ambiguous while building, the fix belongs in this file rather than in the code, and that is the
@@ -32,10 +34,24 @@ tools/
 tests/             the acceptance checks (§8)
 ```
 
-**The rule that shapes it:** `core/` must run **unchanged** in a browser worker *and* in a
-machine-side process later, so it takes its storage and its tool execution as **injected
-interfaces**. This is the "one core, narrow surface" requirement from the design's §4 — copy the
-*shape* of isocan's `voice-agent/src/live.ts`, **do not lift that file** (it imports
+**The rule that shapes it — N18, and it is a constraint rather than a preference.** `core/` is **a
+library**: pure data and small functions, importable and reused across client, server and anything
+later (*"consistency at that level"*, Paul). `core/` must run **unchanged** in a browser worker *and*
+in a machine-side process later, so it takes its storage and its tool execution as **injected
+interfaces** and imports nothing from `browser/` or `tools/`.
+
+**Why it is a constraint**: a core that runs in one placement becomes **two implementations that
+drift**, and the drift is **silent** — both copies keep passing their own tests while disagreeing, and
+the split surfaces later as behaviour that differs by placement. By then the fix is a merge rather
+than an edit. This is the same shape as an audit that reads the transcript instead of the world: the
+thing that would announce the problem is the thing that is missing.
+
+**And the rule has a mechanism, because a rule without one is a description (§3.0 of the design):**
+a test asserts that **no file under `core/` imports anything outside `core/`** — a static import
+check, run in the acceptance set below. A shortcut that makes the browser worker easier by importing
+a DOM helper into `core/` fails that test rather than becoming the second implementation later.
+
+Copy the *shape* of isocan's `voice-agent/src/live.ts`, **do not lift that file** (it imports
 `@isocan/core`, and isocan's packages are out of bounds).
 
 ---
@@ -135,6 +151,10 @@ export type AuditEntry = {
   decision: "allow" | "confirm" | "refuse";
   rule: string | null;
   result: "ok" | "error" | "refused";
+  observed: { exists: boolean; bytes?: number; mtime?: string } | null;  // FROM THE WORLD, never
+                                                                        // from the model's account
+  read?: { path: string; bytes: number }[];   // what it LOOKED at, for read acts — a writes-only
+                                              // log cannot answer "what did it know"
 };
 ```
 
@@ -144,8 +164,16 @@ export type AuditEntry = {
   and never claim a global order**, because two machines have no shared clock.
 - **Refusals are entries**, with `decision: "refuse"` and the rule id. A log that only records
   successes cannot answer "what did it try to do".
+- **`observed` is written by the host after the act, from the filesystem** — never from the
+  harness's report. A model in the field claimed a file existed that did not (design §3.8's evidence,
+  k3's drive), and an audit that records accounts rather than state cannot answer "did it do what it
+  said".
 - **It survives a reload** because it lives in OPFS. Assert that in a test, not by inspection.
 - No hash chain in M0 — that is an autonomy-stage requirement (design §3.8), not an existence one.
+- **The shared view is this same read, not new storage** (N19). Presence and activity are appends;
+  appends cannot conflict, which is why the log never needs merging and why *"what did it know"* can be
+  answered live once two instances read the union ordered by `(instance, seq)`. Acceptance check 9 is
+  that read; M0 has one instance, so it exercises the ordering rather than the sharing.
 
 ---
 
@@ -238,6 +266,9 @@ Each is a test, not an inspection. The positive control is part of every one.
    it.
 7. **Bad input does not kill the host.** Malformed schema, huge body, unknown kind, a module that
    traps — each yields an error and an audit entry, and the worker serves the next request.
-8. **Two roots write.** Two projects (two roots) each append to their own audit file; the merged
+8. **`core/` imports nothing outside itself** — the N18 check, static and cheap: parse the `core/`
+   sources and fail on any import that leaves `core/`, including a type-only one. This is the test
+   that keeps "a library" from becoming "two implementations that drift silently".
+9. **Two roots write.** Two projects (two roots) each append to their own audit file; the merged
    read is ordered by `(instance, seq)` and the test asserts no interleaving and no claimed global
    order.

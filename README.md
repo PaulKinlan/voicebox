@@ -2,6 +2,10 @@
 
 **A voice-first web front end to a build environment.** You talk to it; it makes things.
 
+**Start with [docs/README.md](docs/README.md)** — the map: what to read first, which document is
+authority for what, and what you can safely ignore. Then [docs/00-brief.md](docs/00-brief.md), which
+is Paul's own words.
+
 > Working name. Rename is cheap — see [docs/00-brief.md](docs/00-brief.md).
 
 ## The idea

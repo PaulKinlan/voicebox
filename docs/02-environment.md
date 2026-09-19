@@ -18,8 +18,8 @@ So: the agent acts on a **real machine**, and **a project on disk is the unit of
 
 | Decision | Why | What it costs |
 |---|---|---|
-| **The host is one long-lived local process** (`voicebox-host`) that owns projects, sessions, confirmations and the audit log — not the page | Paul wants to keep talking while working on something else; a page reload must not kill the work or lose the thread | A process to install and keep running (systemd --user / launchd, the same shape as the ACP bridge service already proven) |
-| **Reuse the ACP bridge** rather than invent a second transport | It already does browser↔real-machine, real harness CLI children, session continuity and **a permission round-trip** — the four hard parts | We inherit its constraints (loopback, one child per connection) and must keep its cwd handling declared |
+| **The host is one long-lived local process** (`voicebox-host`) that owns projects, sessions, confirmations and the audit log — not the page | Paul wants to keep talking while working on something else; a page reload must not kill the work and lose the thread | A process to install and keep running (systemd --user / launchd — the *shape* of a background agent service, which this fleet has run before) |
+| **Imitate the bridge's *shape*; import none of its code** | The shape solves the four hard parts (browser↔real-machine, real harness children, session continuity, **a permission round-trip**) without making voicebox a consumer of another project's transport | **The shape, in two lines, is §1.6** — an implementer should not have to open another repository to find it |
 | **Two models, two footprints**: a *voice* model (Gemini Live / OpenAI realtime) and an *execution* harness (pi/ACP) | The brief wants Gemini first *and* provider-extensibility, without an adapter zoo | Two privacy surfaces to disclose, not one (§1.3) |
 | **Voice proposes; the host disposes** | Voice is untrusted input — ASR errors, ambient speech, a video playing — so authority cannot come from "he said it" | Every guarded act needs a host-side decision path (§3.3) |
 | **A project is a declared directory**, never a discovered one | Yesterday's fleet lesson: anything assumed about the machine's layout is wrong on somebody's machine | The first open of a project is an explicit act |
@@ -27,7 +27,8 @@ So: the agent acts on a **real machine**, and **a project on disk is the unit of
 | **Three tiers, enforced in the host as data**: never / unprompted / confirm | A boundary written as prose is a wish; the same lesson as putting the harness registry in data rather than comments | Tier tables need maintaining and testing (§3.6) |
 | **One writer per root, several roots per project** — the root serialises, not the project | Paul's scenario is two live agents on one project (his phone on a walk, the chat session); "serial within a project" rested on a premise he falsified — one conversation | Sessions multiply (per instance and root), and the audit needs per-instance sequencing because two machines have no shared clock |
 | **`undoKind` is declared per project, and the tiers scale with it** | *"We got worlds where you may never have git available"* — and "cheap to undo" is a false promise where nothing can be undone | A project with no undo has a narrower unprompted scope, which has to be visible rather than surprising |
-| **isocan is prior art, never a dependency** | Paul: *"I want to make sure that we're not using isocan... I just want the UI to look like it."* Its **techniques** are the most valuable thing here — and so are its **defects**: its readiness gate dropped 192 of 208 frames before `setupComplete`, which a from-scratch build would reproduce and never notice | Its **packages are out of bounds**: a lift that imports `@isocan/core` makes voicebox depend on the thing it is learning from |
+| **An unknown verb is not a Tier 2 act** — a prompt exists only where a mechanism does | Asking *"shall I?"* about an act the environment cannot perform **turns a missing capability into the user's decision**, and every yes is then a commitment made against something that does not exist. The resulting bug looks like a permissions problem rather than a missing feature | A refusal must **name the missing thing**, and the model's proposals are where this will first appear (§1.9) |
+| **Other projects are prior art, never dependencies — and theirs to change, not ours** | Paul, on isocan: *"I want to make sure that we're not using isocan... I just want the UI to look like it."* Sharpened since, for every sibling: **"inspired, yes; dependent, no; and don't change the other project to serve this one."** Their **techniques** are the most valuable thing here — and so are their **defects**: isocan's readiness gate dropped 192 of 208 frames before `setupComplete`, which a from-scratch build would reproduce and never notice | **Their artefacts are out of bounds**: CAP's bridge, isocan's packages (`@isocan/core`), pi's extensions. A sentence that says *reuse*, *lift*, *import* or *copy* about another project's code is the class to watch — and when the answer is *"the shape"*, **write the shape out here** so nobody has to go and find it |
 | **One host role, three placements** (machine, browser/OPFS, remote) — authority always co-located with the files | Paul's requirement: the harness runs on the client *and* the server, with a website and OPFS. Putting authority in the renderer would dilute the boundary to reach the same features | Capability parity is not assumed, so `do` needs a declared capability list per placement, shown in the UI |
 
 ---
@@ -87,24 +88,74 @@ and a design that does not choose is claiming the stronger one by accident.
 | The guarantee | *"it cannot leave the project"* | *"it will not leave the project unless the harness misbehaves"* |
 | Cost | the host must describe tools and stay in the loop for each call | none — and no real containment of the harness's own actions |
 
-**Driven against pi as it actually is (k3, `docs/03-architecture-k3.md`): compliant mode does not
-exist today.** Two drives against the real bridge produced **zero `session/request_permission`**
-for ordinary tool calls — the protocol path is wired end to end and **pi never uses it**. pi's only
-built-in gate is *project trust*, which guards **input loading**, not what the model asks tools to
-do afterwards, and in non-interactive modes it does not appear at all. So the honest statement has
+**Compliant mode exists as of 2026-09-19** — a twenty-line pi extension (`design/k3-compliant-mode`,
+`eb1d5fd`) that hooks `tool_call` and asks through the host's confirm path. Three things were
+**driven** rather than argued: a denied call **does not execute** (write denied, then a read probe
+denied, and **the file does not exist**); the **plan arrives before the act in the harness's own
+words** (`{ "tool": "read", "input": { "path": "…" } }`), so the decision is made on content rather
+than a title; and **the gate holds for a model-authored tool** — `read_host` asked and was denied,
+which closes the loophole the design named in §1.7. The same extension serves both transports: modal
+in a TUI, a real `session/request_permission` over ACP, which is the wire §1.4 specifies.
+
+**And it must be claimed with its limits, because a gate that is described as total when it is not
+is the failure mode this whole section is written against:**
+
+- **It covers pi's tool calls, not the machine.** Child processes, non-pi subprocesses and anything
+  outside the extension's process are *not* gated (k3's own X/Y split). So an extension meant to be
+  total has to load **globally** *and* still claims only pi processes.
+- **`event.input` may be unvalidated when the hook sees it** — `prepareArguments` runs before schema
+  validation — so the gate must tolerate partial shapes, and **a plan it approves may not be what the
+  tool finally validates.** And *"validate before asking"* was not enough as a rule: k3 approved
+  `echo approved > plan-a.txt` and watched **`plan-b.txt`** get written, because another handler
+  registered *after* the gate rewrote the input in between.
+- **So the rule is about the gap, not about validation order: nothing may run between the approval and
+  the execution.** That is the **intent**; **the host owns the load order**, and that is the only place
+  it can be enforced. k3 drove the platform answer: there is **no handler-chain introspection and no
+  post-chain observation point** in this harness — nothing between "all `tool_call` handlers have run"
+  and execution that carries the final input — so *"the gate is last"* **cannot be proven from inside**.
+  And **an extension registered after the gate is not merely a new capability — it is a new authority
+  over the gate's decisions**: a handler nobody audited, sitting between "yes" and "do it", is an
+  authority with two homes (§3.0). Any extension whose load order is not the gate's own is an
+  **admission act**, not a configuration detail.
+- **So the gate refuses rather than approximating.** At `session_start` it scans the **discovered
+  extension directories** for files sorting after its own name, and if any exist it **refuses to gate,
+  loudly** — writing `{"later": […], "refuse": true}` to a state file. Both branches are driven: with a
+  later file present it made **0 permission requests** and (as announced) the ungated rewrite ran, so
+  `plan-b.txt` existed; without one it engaged, asked once, and on denial executed nothing. The
+  sentence worth keeping is k3's: **a silent mid-chain gate would have approved `plan-a` while
+  `plan-b` ran, and called it security.** The general principle: **a mechanism that cannot do its job
+  should say so rather than doing a weaker version of it.**
+- **And the mechanism has three limits, each driven**: the scan covers **discovered directories only**
+  (CLI `-e` and packaged extensions are invisible, so host ownership is not optional); **`pi-acp`
+  swallows the child's stderr**, so a `console.error` announcement never reaches the wire — the
+  RPC-visible channel is the **state file** or `ctx.ui.notify`, which means **the announcement channel
+  differs by transport and a test that passes in a TUI has not tested the wire**; and even a
+  proven-last gate **cannot see the final post-chain input**, so the strongest in-harness claim is
+  *"no later file existed at session start"*.
+- **The model's first response to a denial is to try another tool** — which is §3.0's habit ("ask
+  what path goes around the guard") demonstrated live by the model, and the reason a gate scoped to
+  tool **names** would have been routed around in one turn.
+
+**Historical note, kept because it explains the design: before that extension existed**, two drives
+against the real bridge produced **zero `session/request_permission`** for ordinary tool calls — the
+protocol path was wired end to end and **pi never used it**. pi's only built-in gate is *project
+trust*, which guards **input loading**, not what the model asks tools to do afterwards, and in
+non-interactive modes it does not appear at all. So the honest statement has
 **four** shapes, and the fourth is what a reader should assume until told otherwise:
 
 | Shape | What enforces | Available when |
 |---|---|---|
 | **Mediated** | the host owns the tool surface, so it has the plan **by construction** | the harness is built that way |
-| **Compliant** | the harness asks, and the host answers | **after** an extension exists that hooks tool calls and asks — k3 names it: a pi extension calling `ctx.ui.confirm()`, *"a small, named piece of work, not a discovery"* |
+| **Compliant** | the harness asks, and the host answers | **available, and driven end-to-end over the wire** rather than in a TUI only: the same run produced **13 `session/request_permission`** calls — write, bash, read, `web_search`, `generate_image`, all asked, all refused, **nothing executed** — and an allow run that went `pending → in_progress → completed` with the file holding what it should. With the three limits above |
 | **Environmental** | a container with only the files and credentials the task needs | whenever the environment is disposable — and it depends on **nobody's compliance** |
 | **Disclosure** | nothing: the tier table describes what the agent *should* do | **everything else** — and the UI must say so per session, not imply otherwise |
 
-**The design's position: mediated is the target for the default harness; compliant mode requires the
-extension above and is not claimed until it exists; and until one of the first three is in force the
-tier table is presented as a disclosure.** The brief's minimalism makes this feasible — *one* harness
-built by us can expose its tools through the host, which is far easier than auditing an adapter
+**The design's position: mediated is the target for the default harness; compliant mode is available
+and claimed *with the three limits above*, which is what "claimed" has to mean; and wherever none of
+the first three is in force, the tier table is presented as a disclosure.**
+
+**The brief's minimalism makes mediation feasible** — *one* harness built by us can expose its tools
+through the host, which is far easier than auditing an adapter
 zoo. A harness that cannot be mediated is still usable, but the UI carries the downgrade
 explicitly, in the same spirit as the provider badge: **the guarantee is a property of the mode,
 and the user is told which one is running.** §3.2 and §3.7 are written in terms of both.
@@ -299,8 +350,15 @@ outside what it may do, it asks, and the **host** answers:
                            { "optionId": "reject_once", "name": "Reject", "kind": "reject_once" } ] } }
 
 // host → harness (the answer, which §1.5 used to leave undefined)
-{ "id": 41, "result": { "optionId": "allow_once" } }      // or "reject_once"
+{ "id": 41, "result": { "optionId": <one of the optionIds THE REQUEST SENT> } }
 ```
+
+**An `optionId` is the adapter's vocabulary, not ours, and a wrong one is a silent refusal.** k3
+measured this the hard way: answering `allow_once` to pi-acp's confirm — which speaks `yes`/`no` —
+**failed identically to a denial**, because the harness takes an unrecognised option as "no". So the
+host's answer is constructed **from the request's own `options` array** (matching on `kind`, and
+echoing the `optionId` it finds there), and **an option the request did not offer is never sent**.
+A "yes" that acts like a "no" is worse than a refusal: it is a refusal nobody can see.
 
 **`resolved` is the structured plan, and it is what the host gates on** — in mediated mode the
 host *produces* it (it is the tool boundary, so it has the argv and the paths before anything
@@ -425,9 +483,22 @@ Changes transport, not authority.
 (§3.7); a second transport; a plugin system; multi-user; a database (the filesystem, OPFS and
 append-only logs are the state).
 
-**What is reused rather than rebuilt:** the ACP bridge's transport, session continuity, and
-permission round-trip. If that bridge is the bottom half already, this design is mostly the
-*top* half — projects, tiers, audit, and the contracts the other two lanes need.
+**What is imitated rather than imported, and the shape written out** — so no implementer has to
+open another repository, and voicebox depends on no other project's code:
+
+1. **A loopback WebSocket to a local process, which speaks JSON-RPC over the stdio of one harness
+   child.** One child per connection; the working directory is **declared**, never inferred.
+2. **The message set is small**: `session/new`, `session/load`, `session/prompt`, streaming
+   `session/update`, `session/request_permission`, `session/cancel`. Session ids survive restarts
+   (`load` resumes), and every update carries its `sessionId` and its turn.
+
+That is `ACP` — the **Agent Client Protocol** (`agentclientprotocol.com`, with a published adapter
+registry: the adapters are `@agentclientprotocol/*` packages). **It is a standard, not CAP's
+protocol**; CAP's bridge is one implementation of the client side and `pi-acp` is an adapter, and
+voicebox implements the client side of this shape itself. What voicebox takes from CAP is a
+**measurement**, not a code path: k3 drove CAP's bridge against pi and found the permission path
+wired end to end and **unused** by pi (§1.1a) — a fact about pi, established with someone else's
+instrument, and worth exactly as much as the drive.
 
 ### 1.7 How a tool becomes available
 
@@ -506,6 +577,16 @@ Three consequences, each of which closes a hole the declaration alone would leav
    enforce is not granted and the tool is not admitted there — so the honest answer to *"can this
    tool run here?"* is a property of the environment, not of the tool's optimism. A capability the
    platform cannot enforce is **absent, not promised**.
+
+**There is no second path, and that is a decision rather than an omission.** pi has no concept of
+skills, and Paul's ruling on it is explicit: *"you have to install an extension, and so I'm okay to
+follow that same model"* (N16). So **skills are not first-class**: a capability the user wants and a
+capability the model writes both arrive as extensions and pass **the same admission point**. Two
+paths would mean two policies, and the weaker one would decide what the system can do — which is the
+same failure as an authority with two homes (§3.0). **And the mechanism reached for what does not
+exist yet, unprompted**: during that deny run the gate asked for **`web_search` by name** — a
+capability nobody has implemented — which is N16's stress test happening on its own rather than being
+arranged.
 
 #### The loop that must never run ungated
 
@@ -656,6 +737,58 @@ quota, which measured 10.7 GB here, is generous but not infinite. (The OPFS hand
 gesture, per the measurement above; only a picked directory does.) Whatever the server side turns
 out to be (§5) is not needed for this — E1 stands alone, which is the point of it being first.
 
+### 1.9 M1 — what it adds, and when it exists
+
+M0 is buildable (§1.8), so the next question is what the *voice* milestone actually adds to the
+**environment** — which is less than the name suggests, because most of the machinery is already
+here: several projects with their own sessions and audit trails (§2.1–§2.3), confirmations with
+`via` and `accepts` (§1.5, §3.4), and `stop` as the unconditional lever (§1.4).
+
+**Three additions, and only three:**
+
+1. **A contract for the voice model (§1.3 made concrete).** It is handed: the transcript, the
+   registry (names, placement, branch, durability, what is running) and **the diffs the host chooses
+   to show** — never project contents. It emits: speech, and **intents** — never acts. It never
+   answers a confirmation, never supplies a `via`, and never receives a file. If it is a cloud model,
+   what leaves the machine is audio and conversation, which is why §1.3's two footprints exist and
+   why the badge is per project.
+2. **Project resolution from speech.** "Work on the thing from yesterday" is a real instruction and
+   must not be a guess: the model proposes a **resolution**, the host resolves it against the
+   registry **and reads it back** — *"isocan at `/home/paul/isocan`, branch `main`, 3 files dirty;
+   go ahead?"* — which is §3.3's resolve-then-judge applied to *which project*, not just *which act*.
+   **Ambiguity asks rather than picks**, and a project the user has not registered is offered as a
+   registration, not assumed.
+3. **Spoken confirmations, wired rather than designed.** §3.4's conditions already exist in the
+   schema (`accepts`, `via`, single-use ids, expiry-is-refusal) and in the validity rules; M1 is the
+   milestone where a mouth is on one end of them.
+
+**And one addition that is a subtraction: an unknown verb is not a Tier 2 act.** When the voice model
+proposes something the tier table cannot express, the answer is *"I cannot do that here"* **naming
+what is missing** — never a confirmation prompt. Asking "shall I?" about an act the environment has
+no mechanism for turns a missing capability into the user's decision, which is how a system acquires
+verbs nobody implemented.
+
+**When M1 exists (the §1.8-style definition):**
+
+1. **A spoken instruction creates something.** *"Create an asset called…"* produces a file, an audit
+   entry with `observed` state, and an artefact on screen — and a Tier 2 variant of the same
+   sentence is **read back in its resolved form before it happens**.
+2. **A spoken instruction about another project switches and acts there**, and the readback names
+   the project and its root — never left implicit.
+3. **A spoken "yes" answers a Tier 2 question only under §3.4's conditions**, and a "yes" arriving
+   *before* the question, or while two are pending, is refused rather than matched to the nearest
+   one.
+4. **`stop` cancels mid-turn and stops what the host started it for**, from speech, first try,
+   including mid-sentence barge-in.
+5. **The audit shows the `via` on every confirmation**, and a `source: "content"` act has **no path
+   from a transcript to a yes** — asserted, not assumed.
+
+**Three expectations, stated so they can be falsified rather than discovered:** the voice model will
+propose intents the table cannot express (hence the subtraction above); live audio plus a tool call
+will have latency the interaction must tolerate (astra's problem, but the host must not make it
+worse by asking twice); and a mis-heard *name* is more likely than a mis-heard *verb*, which is why
+the resolution in (2) reads back the path rather than the word.
+
 ## 2. The local-project unit
 
 ### 2.1 What a project is
@@ -770,6 +903,37 @@ hiding it would not be.
 - **State must say who else is here.** Any instance showing a project shows the other live
   instances and which root each holds — the UI half of a rule that exists for safety reasons.
 
+#### Shared state and merged artefacts: two things, two reconcilers (N19)
+
+Paul chose **shared**, and then asked the question underneath it: *"I just don't know how sharing
+works without having a merge concept."* That question has no answer because it joins two things that
+are not alternatives — **they reconcile different things**:
+
+| | **shared** | **merged** |
+|---|---|---|
+| the data | **state** — presence, what each agent is doing, **what it has read** | **artefacts** — files, code |
+| the shape | an **append-only log**: nothing is overwritten, so nothing needs reconciling | a **diff**: one file, one writer, so reconciliation is required |
+| the channel | **live** — it is visible as it happens | **late** — it is visible when the work lands |
+
+So the rule is `shared log + per-root work that still merges`, and both halves get simpler for being
+separated:
+
+- **The log carries state and needs no merge.** Presence, activity and seen-marks are appends; appends
+  cannot conflict, so *"how do we merge the log?"* is not a hard question, it is a **category error** —
+  the log never needs merging.
+- **The files still merge, and that is what merging is for.** One writer per root, audits per root,
+  files meeting as an ordinary merge — unchanged from the rest of this section. *"How do we share the
+  files?"* has no answer for the same reason: sharing files *is* merging.
+- **What changes is what the merge is *for*.** It stops being the coordination channel and becomes the
+  **landing step**: the files meet when they land, and **that merge is a user-visible event** rather
+  than a background reconciliation.
+
+**The global state is the log; it is not the files.** And because the log is append-only, the shared
+view is not new storage — it is the same per-root logs read together (ordered by `(instance, seq)`,
+§2.3's rule) plus presence, which is what makes **seen-marks load-bearing rather than nice**: *"what
+did it know"* is a question only a shared log can answer **live**, and a late merge can only answer it
+after the fact.
+
 #### Still serial, and by design
 
 - **One voice channel per instance.** You can only be talking to one agent at a time, and an
@@ -826,17 +990,38 @@ there is.
 three times in one day, in three different costumes, it is the thing to check every claim against.
 All three of these are in this document:
 
+**And the reason it matters is narrower than it sounds: the failures that survive are the ones where
+the only thing that would have told you is the thing that is missing** — and the fifth row below is the
+sharpest instance, because a post-gate handler leaves **no trace at all**. `basename` at least produced
+a wrong path; an approval for an act that was not the act produces nothing to notice. A normalising helper that
+looks like a check; a policy that restricts reach and not execution; a declaration that is taken as
+the enforcement. Each of them keeps working, keeps passing its own tests, and produces no signal —
+because the signal *is* the mechanism that was never built. That is the same shape as an audit built
+from the model's account of its effects rather than from the world, and as a permission granted for a
+plan that the tool then re-validates into something else: in all four, **the thing that would
+announce the problem is absent, and its absence is invisible.**
+
 | The claim | What looks like a guard | What is actually a guard |
 |---|---|---|
 | "It cannot leave the project root" | `path.basename(name)`, `join`, `normalize` — rewrites that happen to look correct, and `basename('..')` is `'..'` | `realpath(candidate)` resolved and **compared** against the root, refusing on any answer but yes (§3.2) |
 | "Nothing outside can run in the page" | `connect-src`, which restricts what a page may **reach** | `script-src` without `'unsafe-inline'`, which restricts what it may **execute** — different jobs, and only one stops the attack (§3.5a) |
 | "This tool cannot reach the network" | the tool's own declaration, `network: none` | the interface the tool is **given**, plus the realm's egress policy — the declaration is a record, never the enforcement (§1.7) |
 | "Nothing dangerous is imported or evaluated" | a **regex** over source text — CAP's first evaluator gate was text-only and **missed eight live alias sites** | an **AST**: the thing that sees what the text *means*, not what it spells |
+| "The approved thing is the thing that runs" | a handler registered **after** the gate — it rewrites the input between the approval and the execution, so the approval is **correct-looking and about a different act** | the gate is the **last** handler and the gap between "yes" and "do it" is empty; any extension whose load order is not the gate's own is an **admission act**, not a configuration detail |
 
 Two habits follow, and they are the reason this section is written the way it is:
 
 - **Ask what enforces it, not what states it.** If the answer is a comment, a descriptor, a
   variable name or a helper that tidies input, there is no guard yet.
+- **When a claim changes, sweep every place it is repeated.** A caveat removed at the top of a
+  section survived in that section's closing sentence, and the sentence went on stating the opposite
+  of the upgrade. Applied three times in one document on one day: a correction that is *applied* is
+  one edit, and a correction that is *swept* is a grep.
+- **A mechanism that cannot do its job should refuse rather than approximate.** The gate cannot prove
+  it runs last, so it declines to gate at all when a later file exists — loudly, with the reason — and
+  the alternative is worse than not gating: *a silent mid-chain gate would have approved one act while
+  another ran, and called it security.* The weaker version of a guard is more dangerous than its
+  absence, because its absence is visible.
 - **Ask what path goes *around* the guard.** Every mechanism in this document has a sibling that
   skips it: the module loader beside the permission model, the evaluator beside the flag set, the
   regex beside the AST. Finding them is part of writing the guard, not a later audit — and in one
@@ -1055,9 +1240,9 @@ measured on this fleet yesterday, which is exactly why it must not be assumed he
   `connect-src` allow-list, defaulting to `'none'`;
 - **any** network access by project code is a **Tier 2 act**, because it is the one thing the
   sandbox does not decide for us;
-- and the policy is **tested** in the same shape as yesterday's sandbox-egress KAT: a positive
-  control (an approved host is reachable) beside the refusals, because a suite of refusals proves
-  nothing until one request succeeds.
+- and the policy is **tested** the same way a sandbox-egress test was written yesterday: a **known
+  answer test** — one approved host **actually reached** (the positive control) beside the refusals,
+  because a suite of refusals proves nothing until one request succeeds.
 
 On a machine, "the host makes no outbound requests" is a property we implement; in a browser it
 is a property we *configure and verify*. Both are claims — only one of them is free.
@@ -1105,6 +1290,12 @@ request succeeds. So both directions:
   each refused on the resolved path. **Including `..` as a *name*** rather than a path segment
   (`path.basename('..')` is `'..'`, the case that walked out of the skeleton's workspace), because
   that is the shape a normalising implementation gets wrong while looking correct.
+- **World-not-transcript tests**: a denied write is followed by a **filesystem assertion that the
+  file does not exist** (k3's drive is the model for it), and a run whose model reports an effect it
+  did not have produces an audit entry that says **observed: absent**, whatever the transcript says.
+- **Plan-drift test**: approve a plan whose validated form differs from the one shown, and assert the
+  act is **refused** rather than executed — a permission for a plan is not a permission for whatever
+  the tool finally runs.
 - **Host-survives tests**: malformed JSON, an unknown message type, a frame with a missing field
   and a handler that throws — each yielding an error and an audit entry with the host (or the
   browser worker) still serving the next request.
@@ -1169,6 +1360,29 @@ makes the preconditions listable.
    anything the agent can reach. A kill switch that the thing being killed can decline is not one.
 
 #### What changes when it is on
+
+#### The audit reads the world, not the transcript
+
+k3's drive produced the cleanest counterexample in the document: after a run, the model reported
+*"delete-me.txt already exists… confirmed created earlier this session"* — **and the file did not
+exist.** The model's account of its own effects is not evidence of its effects, and an audit built
+from those accounts records a story rather than a state.
+
+**And seen-marks come first, not last, now that the log is shared (N19).** *"What did it know?"* is a
+question two agents have to be able to answer **about each other**, and it is the reason the read
+record is a seam rather than a nicety: an entry carries what was **looked at**, not only what was
+done, so a second instance reading the union can see what the first had in front of it.
+
+**And what was read is part of the record, not only what was done.** A writes-only log cannot answer
+*"what did it look at?"*, which is the question that matters when something goes wrong later — and it
+is the same instinct as observing outcomes rather than trusting accounts: state, not narrative, in both
+directions. So a read is an entry too, carrying the path and the size the host saw, and the log can
+answer both *"what did it do"* and *"what did it know"*.
+
+So an audit entry's outcome is **observed, not reported**: the host stats what it acted on
+(existence, size, mtime — and for a write, that the bytes are where it says), and **the transcript's
+claim is never an entry.** *"Did it do what it said?"* has to be answerable from the log alone, and
+the only way to make that true is for the log to be written by the part of the system that looked.
 
 - **No confirmations.** The audit becomes the *only* record, so it has to be one worth trusting:
   append-only, every entry carrying `(instance, project, root, turn)`, and **hash-chained** so a
@@ -1248,10 +1462,13 @@ privileged process, then mediated mode (§1.1a) cannot be built on top of it, an
 needs the tool boundary rather than the harness boundary. That is now the most load-bearing
 unknown in this document.
 
-**From whoever builds the first environment (browser) and the local one:** the core — project records, the tier table, capability lists,
-the audit writer, path resolution — must be **pure data and small functions with a narrow
-dependency surface**, because the same code has to run in a machine process *and* in a page
-worker, and a core that can only run in one of them becomes two implementations that drift.
+**From whoever builds the first environment (browser) and the local one:** the core — project
+records, the tier table, capability lists, the audit writer, path resolution — must be **a library**:
+**pure data and small functions with a narrow dependency surface**, importable and reused across
+client, server and anything later (N18). This is a **consistency requirement, not a portability
+technique** — Paul's words are *"consistency at that level"* — because a core that runs in one
+placement becomes **two implementations that drift**, and the drift is silent: both keep working,
+and they disagree.
 qwen2's harvest found a precedent worth **copying the shape of**: isocan's
 `packages/voice-agent/src/live.ts` is 1,173 lines of pure data and functions shared between a
 browser module and a harness, with nine dependencies doing the work. **Do not lift the file** — it
