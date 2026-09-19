@@ -327,6 +327,13 @@ resource limits and classifications of irreversible acts instead — and the gua
 here would not carry over to it. Anyone later tempted to add an "unattended" switch is adding a
 second design, not flipping a flag, and this paragraph is the reason to say so out loud.
 
+**The line that keeps this consistent with long-running work — and it is the line someone will
+come here looking for: an approved plan continuing is not an unattended agent deciding.** A turn
+Paul asked for may keep running while he does something else, and its progress may wait for him;
+but nothing *new* begins without an instruction, and Tier 2 always blocks on a person. What is
+refused is the second thing, never the first. (§3.7 states the same limit operationally, which is
+why the two read as a contradiction until they are read together.)
+
 **Tier 0 — never. Refused by the host, before execution, whatever anyone says.** Every rule
 is enforced as data in the host and every one has a test (§3.6).
 
