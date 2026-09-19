@@ -382,7 +382,10 @@ meant to govern it.
 
 ## 8. The compliant-mode extension, built and driven (k3)
 
-The named mechanism from §3.2, now proven rather than proposed. Twenty lines:
+The named mechanism from §3.2, now proven rather than proposed. Twenty lines, and they live
+in the repository, not in a scratch dir: **`.pi/extensions/policy-gate.ts`** (currently on
+branch `rescue/compliant-mode-extension` with C5's `now.ts` alongside it) — the file an
+implementer copies, with its comments intact. The snippet below is the same file:
 
 ```ts
 // .pi/extensions/policy-gate.ts
