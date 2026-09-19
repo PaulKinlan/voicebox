@@ -87,7 +87,19 @@ if (voiceState) voiceState.textContent = audioClient.label();
 
 mic?.addEventListener("click", async () => {
   if (!capturing) {
-    await startLive();
+    try {
+      await startLive();
+    } catch (error) {
+      // A refused microphone is a real state, not a silent one: reported here
+      // rather than escaping as an unhandled rejection (voicebox-ui's fix,
+      // kept). The client also holds a sticky label with the same sentence, so
+      // the next state emit re-renders the refusal instead of clobbering it.
+      if (voiceState) voiceState.textContent = `The microphone is not available: ${error?.message ?? error}. The text path still works.`;
+      setVoice("off");
+      renderMic(audioClient.snapshot());
+      capturing = false;
+      return;
+    }
     capturing = audioClient.snapshot().capture;
     return;
   }
