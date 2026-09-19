@@ -18,8 +18,8 @@ So: the agent acts on a **real machine**, and **a project on disk is the unit of
 
 | Decision | Why | What it costs |
 |---|---|---|
-| **The host is one long-lived local process** (`voicebox-host`) that owns projects, sessions, confirmations and the audit log — not the page | Paul wants to keep talking while working on something else; a page reload must not kill the work or lose the thread | A process to install and keep running (systemd --user / launchd, the same shape as the ACP bridge service already proven) |
-| **Reuse the ACP bridge** rather than invent a second transport | It already does browser↔real-machine, real harness CLI children, session continuity and **a permission round-trip** — the four hard parts | We inherit its constraints (loopback, one child per connection) and must keep its cwd handling declared |
+| **The host is one long-lived local process** (`voicebox-host`) that owns projects, sessions, confirmations and the audit log — not the page | Paul wants to keep talking while working on something else; a page reload must not kill the work and lose the thread | A process to install and keep running (systemd --user / launchd — the *shape* of a background agent service, which this fleet has run before) |
+| **Imitate the bridge's *shape*; import none of its code** | The shape solves the four hard parts (browser↔real-machine, real harness children, session continuity, **a permission round-trip**) without making voicebox a consumer of another project's transport | **The shape, in two lines, is §1.6** — an implementer should not have to open another repository to find it |
 | **Two models, two footprints**: a *voice* model (Gemini Live / OpenAI realtime) and an *execution* harness (pi/ACP) | The brief wants Gemini first *and* provider-extensibility, without an adapter zoo | Two privacy surfaces to disclose, not one (§1.3) |
 | **Voice proposes; the host disposes** | Voice is untrusted input — ASR errors, ambient speech, a video playing — so authority cannot come from "he said it" | Every guarded act needs a host-side decision path (§3.3) |
 | **A project is a declared directory**, never a discovered one | Yesterday's fleet lesson: anything assumed about the machine's layout is wrong on somebody's machine | The first open of a project is an explicit act |
@@ -27,7 +27,7 @@ So: the agent acts on a **real machine**, and **a project on disk is the unit of
 | **Three tiers, enforced in the host as data**: never / unprompted / confirm | A boundary written as prose is a wish; the same lesson as putting the harness registry in data rather than comments | Tier tables need maintaining and testing (§3.6) |
 | **One writer per root, several roots per project** — the root serialises, not the project | Paul's scenario is two live agents on one project (his phone on a walk, the chat session); "serial within a project" rested on a premise he falsified — one conversation | Sessions multiply (per instance and root), and the audit needs per-instance sequencing because two machines have no shared clock |
 | **`undoKind` is declared per project, and the tiers scale with it** | *"We got worlds where you may never have git available"* — and "cheap to undo" is a false promise where nothing can be undone | A project with no undo has a narrower unprompted scope, which has to be visible rather than surprising |
-| **isocan is prior art, never a dependency** | Paul: *"I want to make sure that we're not using isocan... I just want the UI to look like it."* Its **techniques** are the most valuable thing here — and so are its **defects**: its readiness gate dropped 192 of 208 frames before `setupComplete`, which a from-scratch build would reproduce and never notice | Its **packages are out of bounds**: a lift that imports `@isocan/core` makes voicebox depend on the thing it is learning from |
+| **Other projects are prior art, never dependencies — and theirs to change, not ours** | Paul, on isocan: *"I want to make sure that we're not using isocan... I just want the UI to look like it."* Sharpened since, for every sibling: **"inspired, yes; dependent, no; and don't change the other project to serve this one."** Their **techniques** are the most valuable thing here — and so are their **defects**: isocan's readiness gate dropped 192 of 208 frames before `setupComplete`, which a from-scratch build would reproduce and never notice | **Their artefacts are out of bounds**: CAP's bridge, isocan's packages (`@isocan/core`), pi's extensions. A sentence that says *reuse*, *lift*, *import* or *copy* about another project's code is the class to watch — and when the answer is *"the shape"*, **write the shape out here** so nobody has to go and find it |
 | **One host role, three placements** (machine, browser/OPFS, remote) — authority always co-located with the files | Paul's requirement: the harness runs on the client *and* the server, with a website and OPFS. Putting authority in the renderer would dilute the boundary to reach the same features | Capability parity is not assumed, so `do` needs a declared capability list per placement, shown in the UI |
 
 ---
@@ -425,9 +425,22 @@ Changes transport, not authority.
 (§3.7); a second transport; a plugin system; multi-user; a database (the filesystem, OPFS and
 append-only logs are the state).
 
-**What is reused rather than rebuilt:** the ACP bridge's transport, session continuity, and
-permission round-trip. If that bridge is the bottom half already, this design is mostly the
-*top* half — projects, tiers, audit, and the contracts the other two lanes need.
+**What is imitated rather than imported, and the shape written out** — so no implementer has to
+open another repository, and voicebox depends on no other project's code:
+
+1. **A loopback WebSocket to a local process, which speaks JSON-RPC over the stdio of one harness
+   child.** One child per connection; the working directory is **declared**, never inferred.
+2. **The message set is small**: `session/new`, `session/load`, `session/prompt`, streaming
+   `session/update`, `session/request_permission`, `session/cancel`. Session ids survive restarts
+   (`load` resumes), and every update carries its `sessionId` and its turn.
+
+That is `ACP` — the **Agent Client Protocol** (`agentclientprotocol.com`, with a published adapter
+registry: the adapters are `@agentclientprotocol/*` packages). **It is a standard, not CAP's
+protocol**; CAP's bridge is one implementation of the client side and `pi-acp` is an adapter, and
+voicebox implements the client side of this shape itself. What voicebox takes from CAP is a
+**measurement**, not a code path: k3 drove CAP's bridge against pi and found the permission path
+wired end to end and **unused** by pi (§1.1a) — a fact about pi, established with someone else's
+instrument, and worth exactly as much as the drive.
 
 ### 1.7 How a tool becomes available
 
@@ -1055,9 +1068,9 @@ measured on this fleet yesterday, which is exactly why it must not be assumed he
   `connect-src` allow-list, defaulting to `'none'`;
 - **any** network access by project code is a **Tier 2 act**, because it is the one thing the
   sandbox does not decide for us;
-- and the policy is **tested** in the same shape as yesterday's sandbox-egress KAT: a positive
-  control (an approved host is reachable) beside the refusals, because a suite of refusals proves
-  nothing until one request succeeds.
+- and the policy is **tested** the same way a sandbox-egress test was written yesterday: a **known
+  answer test** — one approved host **actually reached** (the positive control) beside the refusals,
+  because a suite of refusals proves nothing until one request succeeds.
 
 On a machine, "the host makes no outbound requests" is a property we implement; in a browser it
 is a property we *configure and verify*. Both are claims — only one of them is free.

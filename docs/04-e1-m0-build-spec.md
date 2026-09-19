@@ -6,7 +6,9 @@ checks that decide it. It is deliberately small — one environment, text input,
 written for an implementer who has not read the design end to end.
 
 **What it is not.** Not the interface (astra's, §4 of the design), not the harness (k3's), not E2
-and beyond. **Nothing here depends on pi, the bridge, a server, or a model provider.**
+and beyond. **Nothing here depends on pi, on any harness bridge, on a server, or on a model
+provider** — and E1-M0 needs no bridge at all, which is why it can be built while the harness work
+continues beside it.
 
 **And it is honest about its holes** — §7 lists what is *not* designed yet. If something below is
 ambiguous while building, the fix belongs in this file rather than in the code, and that is the
