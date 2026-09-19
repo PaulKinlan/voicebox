@@ -27,7 +27,8 @@ core/            pure data + functions. No DOM. No Deno. No Node. No fetch.
   audit.ts         entry construction + append ordering (§4)
 browser/
   worker.ts        THE HOST: owns the tier table, the audit, the projects, and the tool run
-  opfs.ts          storage adapter (OPFS only, in M0)
+  opfs.ts          storage adapter — OPFS in M0; a picked-handle adapter (N20) is the NEXT
+                   increment and must not require a core change: same write path, different root
   ui/ui.ts         renderer: text transcript, asset gallery, confirmation prompt
 tools/
   create-asset.wat the one tool's logic (§6), and tools/create-asset.schema.json
@@ -64,6 +65,8 @@ Copy the *shape* of isocan's `voice-agent/src/live.ts`, **do not lift that file*
   "name": "atlas",
   "placement": "browser",
   "location": { "kind": "opfs", "path": "v1/projects/atlas" },  // OPFS-relative, never a realpath
+             // { "kind": "handle", "id": "h_7f2", "label": "~/notes" }   // N20: a picked folder,
+             // remembered as a handle plus the user's label — the origin cannot describe its target
   "root": "v1/projects/atlas",      // the execution root: the containment boundary
   "capabilities": ["read", "write", "wasm"],
   "undoKind": "written-file-list",
@@ -240,6 +243,12 @@ exist yet.
 - **The complete rule set.** §3 above is the M0 subset. The design's §3.2 has tiers the browser does
   not need yet (credentials, system commands) because it cannot reach them.
 - **Persistence and eviction policy** beyond recording and showing the durability state.
+- **The symlink case for a picked directory (N20).** OPFS cannot express a symlink; a **real folder
+  can**, and the File System Access API's treatment of one is not something this design has measured —
+  and it cannot be measured headlessly, because `showDirectoryPicker()` needs a gesture. So it is an
+  **open item with a named test**: pick a folder containing a symlink that points outside it, and check
+  whether a handle walk can follow it. Until that is run, the picked-handle shape is *designed* rather
+  than *proven*, and §3.2a says so.
 - **Tier 2 confirmations end to end.** The *decision* path must exist (a `delete` assets action is
   the smallest way to drive it), but the spoken-confirmation rules (§3.4) are M1: M0 can require a
   click, which is strictly stronger.
@@ -266,9 +275,12 @@ Each is a test, not an inspection. The positive control is part of every one.
    it.
 7. **Bad input does not kill the host.** Malformed schema, huge body, unknown kind, a module that
    traps — each yields an error and an audit entry, and the worker serves the next request.
-8. **`core/` imports nothing outside itself** — the N18 check, static and cheap: parse the `core/`
+8. **The root is an injected interface, not OPFS.** With a second storage adapter in tests (a fake
+   root, or a picked-handle adapter), every acceptance check above still passes — which is what makes
+   N20 an increment rather than a rewrite, and it is the same principle as N18: one core, two roots.
+9. **`core/` imports nothing outside itself** — the N18 check, static and cheap: parse the `core/`
    sources and fail on any import that leaves `core/`, including a type-only one. This is the test
    that keeps "a library" from becoming "two implementations that drift silently".
-9. **Two roots write.** Two projects (two roots) each append to their own audit file; the merged
+10. **Two roots write.** Two projects (two roots) each append to their own audit file; the merged
    read is ordered by `(instance, seq)` and the test asserts no interleaving and no claimed global
    order.
