@@ -10,7 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -18,10 +18,16 @@ import { setTimeout as sleep } from "node:timers/promises";
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const SERVER = path.join(ROOT, "server.mjs");
 const PORT = 8798;
+const REDIRECTOR_PORT = 8799; // a tiny in-test redirector — no external network
 const BASE = `http://127.0.0.1:${PORT}`;
-const WORKSPACE = path.join(ROOT, "workspace");
+// ALL mutable state lives in a scratch directory. The suite never touches a
+// file the repository or a real deployment owns — the before-hook used to
+// rm -rf the host extension directory and rebuild it, which is the
+// untracked-work class (review finding, isocan-flash 2026-09-19).
+const SCRATCH = mkdtempSync(path.join(os.tmpdir(), "voicebox-ext-test-"));
+const WORKSPACE = path.join(SCRATCH, "workspace");
 const PROPOSALS = path.join(WORKSPACE, "proposals");
-const HOST_EXTENSIONS = path.join(ROOT, "extensions");
+const HOST_EXTENSIONS = path.join(SCRATCH, "extensions");
 const AUDIT = path.join(WORKSPACE, "audit.jsonl");
 
 let child;
@@ -38,14 +44,18 @@ async function up() {
 }
 
 test.before(async () => {
-  // A clean slate: the extension state (proposals, the host directory, the
-  // audit) persists in the tree by design — the tests start from zero so a
-  // rerun is the same drive, not a sequel.
-  rmSync(PROPOSALS, { recursive: true, force: true });
-  rmSync(HOST_EXTENSIONS, { recursive: true, force: true });
-  rmSync(AUDIT, { force: true });
   process.env.PORT = String(PORT);
-  child = spawn(process.execPath, [SERVER], { cwd: ROOT, env: process.env, stdio: "ignore", detached: true });
+  child = spawn(process.execPath, [SERVER], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      PORT: String(PORT),
+      VOICEBOX_WORKSPACE: WORKSPACE,
+      VOICEBOX_EXTENSIONS_DIR: HOST_EXTENSIONS,
+    },
+    stdio: "ignore",
+    detached: true,
+  });
   assert(await up(), `the server did not come up on ${PORT}`);
 });
 
@@ -53,7 +63,7 @@ test.after(() => {
   if (child?.pid) {
     try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch { /* gone */ } }
   }
-  rmSync(path.join(HOST_EXTENSIONS, ".hand-dropped.tmp"), { force: true });
+  rmSync(SCRATCH, { recursive: true, force: true });
 });
 
 const get = async (p) => fetch(`${BASE}${p}`);
@@ -162,7 +172,7 @@ test("there is no registration door: no endpoint loads a tool directly", async (
 
 test("a hand-dropped file in the host directory does NOT hot-load — the reload trigger is the host's", async () => {
   mkdirSync(HOST_EXTENSIONS, { recursive: true });
-  writeFileSync(path.join(HOST_EXTENSIONS, ".hand-dropped.tmp.json"), JSON.stringify({
+  writeFileSync(path.join(HOST_EXTENSIONS, "hand-dropped.json"), JSON.stringify({
     id: "hand-dropped", name: "Hand Dropped", description: "dropped by a test, not by admission",
     source: "model", runsIn: "host", capabilities: [], bounds: {},
     tools: [{ name: "hand_dropped_tool", description: "x", primitive: "now", params: {} }],
@@ -230,6 +240,74 @@ test("an unbounded network declaration is refused at the gate", async () => {
   assert.equal(r.rule, "network-unbounded");
   assert.match(r.why, /where \(bounds\.hosts\)/);
   assert.match(r.why, /how much \(bounds\.maxRequests\)/);
+});
+
+// ── 5b. the redirect finding: the bound holds ACROSS the chain ───────────
+// (isocan-flash, 2026-09-19: plain fetch followed redirects, so a declared
+// host answering 302 reached an undeclared origin while the report named the
+// declared host. RED first on that code, GREEN here.)
+import { createServer as spinRedirector } from "node:http";
+
+test("a redirect to an undeclared host refuses BY NAME; a declared one is followed, charged, and audited by where the bytes came from", async () => {
+  const redirector = spinRedirector((req, res) => {
+    if (req.url === "/out") { res.writeHead(302, { location: `http://localhost:${PORT}/api/extensions` }); return res.end(); } // localhost ∉ bounds.hosts
+    if (req.url === "/in") { res.writeHead(302, { location: "/health" }); return res.end(); } // RELATIVE Location → resolves against this same declared host
+    if (req.url === "/health") { res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ served: "by the declared redirector host" })); }
+    res.writeHead(404); res.end();
+  });
+  await new Promise((r) => redirector.listen(REDIRECTOR_PORT, "127.0.0.1", r));
+  try {
+    await postJson("/api/extensions/proposals", {
+      descriptor: {
+        id: "rdprobe", name: "RD Probe", description: "redirect probe",
+        source: "model", runsIn: "host",
+        capabilities: ["network"], bounds: { hosts: ["127.0.0.1"], maxRequests: 4 },
+        tools: [{ name: "rdprobe", description: "GET", primitive: "http-get", params: {} }],
+      },
+    });
+    const r = await postJson("/api/extensions/admit", { id: "rdprobe", confirm: true, decision: "admit" });
+    assert.equal(r.decision, "admitted");
+
+    // The undeclared redirect target refuses BY NAME, with the chain named.
+    const out = await turn(`run the tool rdprobe http://127.0.0.1:${REDIRECTOR_PORT}/out`);
+    assert.equal(out.result?.ok, false, "bytes crossed from an undeclared origin");
+    assert.equal(out.result?.refused, "redirect-host-not-allowed");
+    assert.match(out.result?.why ?? '', /localhost/);
+    assert.match(out.result?.why ?? '', /not in bounds\.hosts \[127\.0\.0\.1\]/);
+    assert.match(out.result?.why ?? '', /→/, "the refusal names the chain");
+    // The budget spent one hop on the 302 itself; it did NOT fetch the target.
+
+    // A declared target (relative Location) is followed: charged PER HOP, and
+    // the report names where the bytes actually came from.
+    const inb = await turn(`run the tool rdprobe http://127.0.0.1:${REDIRECTOR_PORT}/in`);
+    assert.equal(inb.result?.ok, true, `the declared redirect failed: ${JSON.stringify(inb.result)}`);
+    assert.equal(inb.result.servedBy, `http://127.0.0.1:${REDIRECTOR_PORT}/health`);
+    assert.match(inb.result.body ?? '', /by the declared redirector host/);
+    assert.deepEqual(inb.result.via?.length, 2);
+    assert.equal(inb.result.request, "3/4", "hops are charged, not calls (1 for the refused chain's 302, 2 for this chain)");
+
+    // Budget arithmetic: 1 (the refused chain's 302) + 2 (the followed chain)
+    // = 3 used; one more call exhausts 4/4 — HOPS, not calls.
+    const third = await turn(`run the tool rdprobe http://127.0.0.1:${PORT}/api/health`);
+    assert.equal(third.result?.request, "4/4");
+    assert.equal(third.result?.servedBy, `http://127.0.0.1:${PORT}/api/health`);
+    const fourth = await turn(`run the tool rdprobe http://127.0.0.1:${PORT}/api/health`);
+    assert.equal(fourth.result?.refused, "budget-exhausted");
+    assert.match(fourth.result?.why, /4 of 4 requests used/);
+
+    // The audit records the OUTCOME: servedBy is where the bytes came from.
+    const lines = readFileSync(AUDIT, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const allow = lines.filter((e) => e.decision === "allow" && e.act?.tool === "rdprobe").at(-1);
+    assert.equal(allow.observed.servedBy, `http://127.0.0.1:${PORT}/api/health`); // the last allow = the direct call
+    const followed = lines.filter((e) => e.decision === "allow" && e.act?.tool === "rdprobe").at(-2);
+    assert.equal(followed.observed.servedBy, `http://127.0.0.1:${REDIRECTOR_PORT}/health`); // the followed redirect
+    assert.equal(followed.observed.via[0], `http://127.0.0.1:${REDIRECTOR_PORT}/in`);
+    const refused = lines.find((e) => e.decision === "refuse" && e.rule === "redirect-host-not-allowed");
+    assert(refused, "the redirect refusal is not in the audit");
+    assert.match(refused.why, /localhost/);
+  } finally {
+    await new Promise((r) => redirector.close(r));
+  }
 });
 
 // ── 6. rsj: MCP — placement and authority are expressible ─────────────────

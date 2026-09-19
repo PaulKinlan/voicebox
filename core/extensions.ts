@@ -106,7 +106,7 @@ export const GETS: Partial<Record<Capability, string>> = {
   read: "a root-scoped read function: paths resolve inside the project root or refuse",
   write: "a root-scoped write function: paths resolve inside the project root, writes are reported and revertible",
   delete: "a root-scoped delete function (tier 2 — asks first)",
-  network: "a mediated fetch: hosts outside bounds.hosts are refused by name, and calls count against bounds.maxRequests",
+  network: "a mediated fetch: hosts outside bounds.hosts are refused by name — INCLUDING across redirects, every hop charged to bounds.maxRequests — and the audit records the URL that actually served the bytes",
 };
 
 // ── the gate ───────────────────────────────────────────────────────────────

@@ -69,6 +69,16 @@ budget 1, no external network in tests): the declared host answers (status 200,
 refused at the gate (`network-unbounded`). The bound is the declaration made
 true.
 
+**The bound holds ACROSS redirects** (review finding, isocan-flash 2026-09-19,
+fixed and re-driven — drive §11): the mediated fetch runs `redirect: "manual"`,
+so a declared host answering 302 cannot walk the call to an undeclared origin.
+A redirect to an undeclared host refuses **by name**
+(`redirect-host-not-allowed`, the full chain quoted in the `why`); a redirect
+within the declaration is followed hop-by-hop with **each hop charged to the
+budget** (the budget counts requests, not calls), and the result and the audit
+record **`servedBy`** — the URL that actually served the bytes — alongside
+`via`, the whole chain. Over-eager chains stop at `too-many-redirects` (5).
+
 **MCP — the architecture is rich enough to refuse.** A local stdio MCP server
 (`runsIn: "process"`, declares `exec`) is REFUSED at admission with rule
 `exec-absent` and a reason that names the upgrade path (a container that bounds
@@ -88,3 +98,7 @@ decides on, not vibes.
 - The surface is API-only by design — the page rendering (astra's bead) is a
   separate lane; `public/` is untouched.
 - The audit is JSONL per root with core/audit.ts entry shape; no reader/UI yet.
+- Test harnesses point `VOICEBOX_WORKSPACE` / `VOICEBOX_EXTENSIONS_DIR` at
+  scratch directories — a test must never delete a directory the repository or
+  a deployment owns (the hazard isocan-flash flagged in its notes; the suite
+  no longer touches repo-owned files at all).

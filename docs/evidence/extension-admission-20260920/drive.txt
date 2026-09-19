@@ -73,3 +73,18 @@ grep: workspace/audit.jsonl: No such file or directory
 
 % one full refusal entry, verbatim:
 {"seq":3,"instance":"server","project":"atlas@machine","root":"workspace","turn":null,"at":"2026-09-19T19:44:01.492Z","act":{"kind":"import","target":"proposals/mcp-server-local","tool":"extensions.admit"},"decision":"refuse","rule":"exec-absent","result":"refused","observed":null,"why":"no mechanism on this placement bounds a spawned child: --allow-run bounds which binary, never what it can do, and a child does not inherit the parent's flags. Admission requires a container that bounds the child."}
+
+## 11. The redirect finding, fixed and re-driven (isocan-flash review, 2026-09-19)
+# Redirector on 127.0.0.1:8803 (declared host): /out 302→ http://localhost:8802 (UNDECLARED),
+# /in 302→ /health (relative, same declared host, which serves the bytes).
+% propose rdprobe (hosts [127.0.0.1], maxRequests 4), admit
+{"ok":true,"id":"rdprobe","decision":"admitted","enforced":{"network":"mediated-fetch"},"gets":["network: a mediated fetch: hosts outside bounds.hosts are refused by name — INCLUDING across redirects, every hop charged to bounds.maxRequests — and the audit records the URL that actually served the bytes"]}
+--> the undeclared redirect target refuses BY NAME, chain named:
+% run the tool rdprobe http://127.0.0.1:8803/out
+{"transcript":"run the tool rdprobe http://127.0.0.1:8803/out","action":{"verb":"tool","name":"rdprobe","args":{"url":"http://127.0.0.1:8803/out"}},"result":{"ok":false,"refused":"redirect-host-not-allowed","why":"redirect to 'localhost' refuses: not in bounds.hosts [127.0.0.1] (chain: http://127.0.0.1:8803/out → http://localhost:8802/api/extensions)","chain":["http://127.0.0.1:8803/out","http://localhost:8802/api/extensions"]}}
+--> the declared (relative) redirect is followed, charged per hop, and reported by where the bytes came from:
+% run the tool rdprobe http://127.0.0.1:8803/in
+{"transcript":"run the tool rdprobe http://127.0.0.1:8803/in","action":{"verb":"tool","name":"rdprobe","args":{"url":"http://127.0.0.1:8803/in"}},"result":{"ok":true,"status":200,"host":"127.0.0.1","servedBy":"http://127.0.0.1:8803/health","via":["http://127.0.0.1:8803/in","http://127.0.0.1:8803/health"],"request":"3/4","body":"{\"served\":\"by the declared redirector host\"}"}}
+--> the audit records the OUTCOME (servedBy), not the ask:
+% last allow entry for rdprobe:
+{"seq":3,"instance":"server","project":"atlas@machine","root":"workspace","turn":null,"at":"2026-09-19T20:04:18.964Z","act":{"kind":"network","target":"rdprobe","tool":"rdprobe"},"decision":"allow","rule":"rdprobe","result":"ok","observed":{"bytes":44,"servedBy":"http://127.0.0.1:8803/health","via":["http://127.0.0.1:8803/in","http://127.0.0.1:8803/health"]}}

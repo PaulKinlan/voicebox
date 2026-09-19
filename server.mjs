@@ -17,7 +17,8 @@ import { createLiveSession, LIVE_MODEL } from "./lib/live-session.mjs";
 // Module-relative, decoded: `new URL(...).pathname` percent-encodes spaces and
 // silently points every read at a directory that does not exist.
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE = path.join(ROOT, "workspace");
+// Movable workspace (tests point it at scratch; see lib/extensions.mjs).
+const WORKSPACE = process.env.VOICEBOX_WORKSPACE ?? path.join(ROOT, "workspace");
 const PUBLIC = path.join(ROOT, "public");
 mkdirSync(WORKSPACE, { recursive: true });
 
