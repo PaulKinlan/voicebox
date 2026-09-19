@@ -246,9 +246,10 @@ exist yet.
 - **The symlink case for a picked directory (N20).** OPFS cannot express a symlink; a **real folder
   can**, and the File System Access API's treatment of one is not something this design has measured —
   and it cannot be measured headlessly, because `showDirectoryPicker()` needs a gesture. So it is an
-  **open item with a named test**: pick a folder containing a symlink that points outside it, and check
-  whether a handle walk can follow it. Until that is run, the picked-handle shape is *designed* rather
-  than *proven*, and §3.2a says so.
+  **open item with a ready-to-run instrument**: `docs/evidence/picked-dir-symlink/index.html` builds
+  the fixture, asks for the folder, and reports the verdict in one click — the receipt beside it says
+  what each outcome means for `resolveInsideRoot`. Until someone runs it, the picked-handle shape is
+  *designed* rather than *proven*, and §3.2a says so.
 - **Tier 2 confirmations end to end.** The *decision* path must exist (a `delete` assets action is
   the smallest way to drive it), but the spoken-confirmation rules (§3.4) are M1: M0 can require a
   click, which is strictly stronger.

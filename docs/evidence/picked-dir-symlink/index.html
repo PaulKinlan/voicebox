@@ -1,0 +1,43 @@
+<!doctype html><meta charset="utf-8"><title>Does a handle walk follow a symlink out of a picked folder?</title>
+<body style="font:15px/1.5 system-ui;max-width:46rem;margin:2rem auto;padding:0 1rem">
+<h1>Does a handle walk follow a symlink?</h1>
+<p><b>This page reads only what you pick. It writes nothing, sends nothing, and has no network calls.</b></p>
+<ol>
+  <li>In a terminal: <code>mkdir -p /tmp/vb-symlink-probe/inside && cd /tmp/vb-symlink-probe && ln -s /etc outside-link && echo secret > inside/real.txt</code></li>
+  <li>Click <b>Pick that folder</b> and choose <code>/tmp/vb-symlink-probe</code>.</li>
+  <li>The result below is the answer. Nothing is uploaded anywhere.</li>
+</ol>
+<p><button id="pick">Pick that folder</button></p>
+<pre id="out" style="background:#f4f4f4;padding:1rem;white-space:pre-wrap">waiting…</pre>
+<script>
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+document.getElementById("pick").onclick = async () => {
+  out.textContent = "RESULT";
+  try {
+    const dir = await window.showDirectoryPicker({ mode: "read" });
+    for await (const [name, handle] of dir.entries()) {
+      log(`  entry ${JSON.stringify(name)} kind=${handle.kind}`);
+    }
+    let followed = null, via = null;
+    try {
+      const h = await dir.getDirectoryHandle("outside-link");
+      followed = h.kind === "directory";
+      via = "getDirectoryHandle succeeded and reported kind=directory";
+      let n = 0; const names = [];
+      for await (const [name] of h.entries()) { n++; if (names.length < 3) names.push(name); }
+      log(`  walk into outside-link: entries=${n} first=${JSON.stringify(names)}`);
+    } catch (e) {
+      followed = false;
+      via = `getDirectoryHandle threw ${e.name}`;
+    }
+    log("");
+    log(followed === true
+      ? "VERDICT: A HANDLE WALK FOLLOWS A SYMLINK OUT OF THE PICKED FOLDER → resolveInsideRoot NEEDS A RESOLVE PASS for this shape, exactly as the Deno substrate did."
+      : `VERDICT: the walk does NOT follow the link (${via}) → containment for a picked folder keeps the structural property §3.2a claims.`);
+    log("Paste this block into the receipt.");
+  } catch (e) {
+    log(`  picker failed: ${e.name} — a picker needs a real user gesture; a synthetic click will not do.`);
+  }
+};
+</script>
