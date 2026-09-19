@@ -22,10 +22,12 @@
 // can never silently point at another lane's instance on 8787 — the review
 // demonstrated that mis-point as a cross-instance write with no error.
 import { defineConfig } from "vite";
+import { cspSafeViteClient } from "./tools/vite-plugin-csp-safe-client.mjs";
 
 const API_TARGET = `http://127.0.0.1:${process.env.PORT ?? 8787}`;
 
 export default defineConfig({
+  plugins: [cspSafeViteClient()],
   root: "public",
   publicDir: false, // public/ IS the root; there is no second static dir
   server: {
