@@ -534,8 +534,9 @@ call to a capability living somewhere else; the registration answers **what may 
 its call goes**, or it does not answer.
 
 **And the light option is smaller than it looks, because `execute` is code and a model can only
-emit its *schema* as data.** A closed set of **parameterised primitives** — the `python-tool.js`
-shape — means the model picks **nouns and verbs from a fixed set** rather than writing bodies, which
+emit its *schema* as data.** A closed set of **parameterised primitives** — the shape of CAP's
+`python-tool.js` (52 lines, seam `getPythonRuntime`; both figures from qwen2's harvest, not my own
+reading) — means the model picks **nouns and verbs from a fixed set** rather than writing bodies, which
 is a different and much smaller problem than sandboxing generated code. Paul's own split may already
 be pointing there: *"we will create the tools and we will create the objects, the nouns — and the
 verbs are based off us somehow."* A model writing an `execute` body is the heavier path, and it is
