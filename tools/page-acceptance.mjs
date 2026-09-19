@@ -44,6 +44,12 @@ const API = process.env.VOICEBOX_API_URL ?? "http://127.0.0.1:8787";
 const CDP_PORT = 9500 + (process.pid % 500);
 
 const results = [];
+// One page, one driver: concurrent runs interleave typed turns into the same
+// workspace and the list checks fail on each other's files. Serialise whole
+// runs on a lockfile — wait up to 2 minutes, then refuse rather than overlap.
+import { execFileSync } from "node:child_process";
+try { execFileSync("flock", ["-w", "120", "/tmp/vb-accept.lock", "-c", "true"]); }
+catch { console.log("FAIL  another acceptance run holds the lock (>120s) — retry when it finishes"); process.exit(1); }
 const report = (name, ok, detail) => {
   results.push(ok);
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`);
