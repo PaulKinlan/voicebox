@@ -19,7 +19,10 @@ const WANTED = {
   stage: "voice-ring-wrap", mic: "mic", state: "voice-state",
   session: "session", log: "session-log", form: "text-form", utterance: "utterance", send: "send",
   reader: "reader", readerTitle: "reader-title", readerFacts: "file-facts", readerBody: "file-body",
-  copy: "file-copy", close: "reader-close",
+  copy: "file-copy", close: "reader-close", about: "about-facts", details: "reader-details",
+  settingsOpen: "settings-open", settings: "settings", settingsClose: "settings-close",
+  micSelect: "mic-select", outSelect: "out-select",
+  micDeviceState: "mic-device-state", outDeviceState: "out-device-state", deviceNote: "device-note",
 };
 const els = {};
 const missing = [];
@@ -373,6 +376,7 @@ const devices = {
   prefs: { mic: { id: "", name: "" }, out: { id: "", name: "" } },
   inputs: [],
   outputs: [],
+  namesVisible: false,
   canChooseOutput: true,
   // The routing decision, made explicitly rather than inherited: when the
   // chosen output disappears mid-reply this page STOPS playback and says so. It
@@ -405,13 +409,16 @@ async function listDevices() {
   };
 }
 
-function fillPicker(select, list, pref, what) {
+function fillPicker(select, list, pref, what, namesVisible) {
   if (!select) return;
   const options = [{ id: "", name: "System default" }, ...list.filter((d) => d.id !== "")];
   // An absent choice stays visible by its saved name rather than being replaced
   // by "System default": the preference is what the person set.
   if (pref.id && !options.some((option) => option.id === pref.id)) {
-    options.push({ id: pref.id, name: `${pref.name || "chosen device"} · not connected` });
+    // "not connected" is a CLAIM, and it is only sayable when the device list
+    // can actually name devices. With names hidden the honest suffix is that
+    // this is the name the person saved.
+    options.push({ id: pref.id, name: `${pref.name || "chosen device"} · ${namesVisible ? "not connected" : "saved"}` });
   }
   const wanted = options.map((option) => `${option.id}\u0000${option.name}`).join("|");
   if (select.dataset.shape === wanted) return; // no rebuild of an unchanged picker
@@ -426,16 +433,17 @@ function fillPicker(select, list, pref, what) {
 }
 
 function renderDevices() {
-  const { prefs, inputs, outputs, canChooseOutput } = devices;
-  fillPicker(els.micSelect, inputs, prefs.mic, "microphone");
-  fillPicker(els.outSelect, outputs, prefs.out, "output");
+  const { prefs, inputs, outputs, canChooseOutput, namesVisible } = devices;
+  fillPicker(els.micSelect, inputs, prefs.mic, "microphone", namesVisible);
+  fillPicker(els.outSelect, outputs, prefs.out, "output", namesVisible);
 
-  const micNamesHidden = inputs.length > 0 && inputs.every((d) => !d.name);
+  const micNamesHidden = !namesVisible;
   const micPresent = inputs.some((d) => d.id === prefs.mic.id);
   const outPresent = outputs.some((d) => d.id === prefs.out.id);
 
   const listening = els.stage?.dataset.voice === "listening";
   const speaking = els.stage?.dataset.voice === "speaking";
+  const capture = Boolean(window.__voiceboxLiveClient?.state?.capture);
 
   const micName = prefs.mic.name || "System default";
   let mic = "";
@@ -458,12 +466,29 @@ function renderDevices() {
   if (els.outDeviceState) els.outDeviceState.textContent = out;
   if (els.outSelect) els.outSelect.disabled = !canChooseOutput;
 
-  // The two ends disagree out loud rather than one being derived from the other.
-  const input = !prefs.mic.id
-    ? (listening ? "Listening" : "Mic off")
-    : listening ? "Listening" : micPresent ? "Mic muted" : `${micName} not connected`;
-  const output = speaking ? "agent speaking" : "no reply playing";
-  if (els.voiceState && (listening || speaking)) els.voiceState.textContent = `${input} · ${output}`;
+  // The client owns the voice-state line (it is derived from real capture and
+  // playback); this page owns DEVICE facts, which the client cannot know. The
+  // note below the line says only what the client's label cannot: a chosen
+  // device missing, an output that cannot be chosen, names hidden. Two writers
+  // fighting over one line is how a page ends up contradicting itself.
+  const notes = [];
+  const playing = Boolean(window.__voiceboxLiveClient?.state?.playbackActive);
+  if (prefs.mic.id && !micPresent && !micNamesHidden) notes.push(`${micName} is not connected — connect it or choose another microphone`);
+  if (prefs.mic.id && micNamesHidden && !micPresent) notes.push("Device names are hidden until microphone access is allowed — the names here are the ones you saved");
+  if (!canChooseOutput) {
+    // This browser cannot route output at all: the fact to say is that one, and
+    // nothing about a stop it never performed.
+    if (prefs.out.id) notes.push("This browser uses system output; the remembered output is not the route in use");
+  } else if (prefs.out.id && !outPresent) {
+    // The explicit policy: name the missing device AND say where the audio
+    // actually is, because "not connected" alone can hide a fallback playing
+    // out of the speakers.
+    notes.push(`${prefs.out.name || "The chosen output"} is not connected — ${playing ? "reply playback stopped" : "no reply playing"}`);
+  }
+  if (els.deviceNote) {
+    els.deviceNote.textContent = notes.join(" · ");
+    els.deviceNote.hidden = notes.length === 0;
+  }
 }
 
 async function refreshDevices() {
@@ -472,6 +497,7 @@ async function refreshDevices() {
   devices.inputs = listed.inputs;
   devices.outputs = listed.outputs;
   devices.canChooseOutput = window.__voiceboxLiveClient?.canChooseOutput?.() ?? false;
+  devices.namesVisible = listed.names === true;
 
   // INPUT: a chosen microphone that has left is named; capture is never moved to
   // another device silently, and the output row is untouched.
