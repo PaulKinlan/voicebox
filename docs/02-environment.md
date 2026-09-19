@@ -505,16 +505,41 @@ Three consequences, each of which closes a hole the declaration alone would leav
 #### The loop that must never run ungated
 
 k3 measured the inside of the harness: **a tool's self-declaration is the last word — there is no
-sandbox there.** So the enforcement seam is not inside the harness at all; it is **who owns the
-extension directory and who triggers `/reload`**. Therefore:
+sandbox there.** And qwen2 read pi's source and found **where its one gate actually is**:
 
-> **The model proposes tool source; the host reviews it, and the host reloads.** That is a Tier 2 act
-> whose `resolved` is **the file content** — the resolved-plan rule applied to the highest-reach act
-> in the system.
+> **Trust is on *discovery*.** `.pi/extensions` loads only after the project is trusted — pi's own
+> line is *"Extensions run with your full system permissions and can execute arbitrary code."*
+> **Runtime `registerTool()` has no equivalent gate**, and an in-process registration **inherits the
+> harness's full authority immediately, because it never passed through a discovered location.**
 
-And the failure to name plainly, in k3's words: *"the one thing that must not happen is the loop
-running ungated, because then the tool proposal — the act with the most reach in the whole system —
-bypasses the only table meant to govern it."*
+So *"the host owns the extension directory and the reload trigger"* is **necessary and not
+sufficient** — it covers the file path into the system and not the registration path. Two further
+corrections from the same reading: **`/reload` is not the gate at all** (registered tools are live
+in the same session, callable immediately — pi ships `examples/extensions/dynamic-tools.ts` doing
+exactly this), and **registration is not persistence** (an in-process tool dies with the session;
+making it *survive* means writing into a discovery location, which is the arbitrary-code case).
+*"Build those extensions and have them work locally" is two requirements, and conflating them is how
+a light harness acquires an admission pipeline it did not want.*
+
+**What closes the seam is therefore a registration-time authority decision, and it is small**: allow
+or deny, plus **a reason string** — not a descriptor pipeline. The decision must cover **two**
+things, because of a composition worth naming: *dynamic registration and remote execution compose
+into a call nobody authorised.* A tool registered for this project must not be able to route its
+call to a capability living somewhere else; the registration answers **what may run** and **where
+its call goes**, or it does not answer.
+
+**And the light option is smaller than it looks, because `execute` is code and a model can only
+emit its *schema* as data.** A closed set of **parameterised primitives** — the `python-tool.js`
+shape — means the model picks **nouns and verbs from a fixed set** rather than writing bodies, which
+is a different and much smaller problem than sandboxing generated code. Paul's own split may already
+be pointing there: *"we will create the tools and we will create the objects, the nouns — and the
+verbs are based off us somehow."* A model writing an `execute` body is the heavier path, and it is
+the one that needs everything above.
+
+For the record, and it reframes the project usefully: **OpenClaw exists** (Gateway, Telegram,
+harnesses-as-runtimes, a live canvas, Markdown memory — six of the brief's nine items already), and
+the delta is **this mechanism**: its tools are authored and configured, not created by the model
+mid-conversation. **The interesting gap is not a platform.** 
 
 #### The substrate is a named thing, not "the toolchain"
 
@@ -549,10 +574,11 @@ simply absent.
 
 **It exists when all five of these are true:**
 
-1. **A project can be created in OPFS and reopened after a reload** — a directory the user granted
-   (handle persisted, re-acquired on return, which may need a click), registered with `placement:
-   browser`, `capabilities`, `undoKind: written-file-list` (§2.1). "Create a project" works as a
-   spoken or typed verb (N13).
+1. **A project can be created in OPFS and reopened after a reload** — an origin-private directory
+   (`navigator.storage.getDirectory()`, **no gesture needed**, measured §1.8 below), registered with
+   `placement: browser`, `capabilities`, `undoKind: written-file-list` (§2.1). A project may also be
+   a **picked** directory, which is a different thing with a permission prompt; and "create a
+   project" works as a spoken or typed verb (N13).
 2. **The tier table is data the code reads, and it is enforced in both directions** — a Tier 2 act
    refuses without an answer and proceeds with one.
 3. **The audit is append-only and survives the reload** — an entry for every act *including the
