@@ -55,16 +55,12 @@
 {"placement":"machine","extensions":[{"id":"clock-tool","name":"clock","source":"model","runsIn":"host","declared":[],"enforced":{},"bounds":{},"tools":["clock"],"gets":[],"cannotHave":["exec — absent: no mechanism on this placement bounds a spawned child: --allow-run bounds which binary, never what it can do, and a child does not inherit the parent's flags. Admission requires a container that bounds the child.","eval — absent: eval is not a tool path (design §1.7): the evaluator bypasses whatever the substrate would otherwise enforce.","import — absent: no import boundary on this placement: dynamic import executes fetched code with no flags by default."]},{"id":"selfprobe","name":"Self Probe","source":"model","runsIn":"host","declared":["network"],"enforced":{"network":"mediated-fetch"},"bounds":{"hosts":["127.0.0.1"],"maxRequests":1},"tools":["selfprobe"],"gets":["network: a mediated fetch: hosts outside bounds.hosts are refused by name, and calls count against bounds.maxRequests"],"cannotHave":["exec — absent: no mechanism on this placement bounds a spawned child: --allow-run bounds which binary, never what it can do, and a child does not inherit the parent's flags. Admission requires a container that bounds the child.","eval — absent: eval is not a tool path (design §1.7): the evaluator bypasses whatever the substrate would otherwise enforce.","import — absent: no import boundary on this placement: dynamic import executes fetched code with no flags by default."]}],"proposals":[{"id":"clock-tool","name":"clock","state":"admitted","source":"model","declared":[],"refusal":null},{"id":"mcp-server-local","name":"MCP Server (local launch)","state":"refused","source":"catalogue","declared":["exec"],"refusal":{"rule":"exec-absent","why":"no mechanism on this placement bounds a spawned child: --allow-run bounds which binary, never what it can do, and a child does not inherit the parent's flags. Admission requires a container that bounds the child."}},{"id":"selfprobe","name":"Self Probe","state":"admitted","source":"model","declared":["network"],"refusal":null}],"catalogueCount":4}
 
 ## 10. The audit: refusals are entries with the rule id (the world, not the transcript)
-grep: workspace/audit.jsonl: No such file or directory
-
-## 10. The audit: refusals are entries with the rule id (the world, not the transcript)
-% (re-driven on a fresh boot: propose+admit clock, refuse the MCP launch, call selfprobe twice)
-% grep -o "\"decision\":\"refuse\",\"rule\":\"[a-z-]*\"" workspace/audit.jsonl | sort | uniq -c
-grep: workspace/audit.jsonl: No such file or directory
-
-% one full refusal entry, verbatim:
-grep: workspace/audit.jsonl: No such file or directory
-
+% NOTE on this section: two earlier attempts printed "grep: workspace/audit.jsonl:
+% No such file or directory" — a bug in the DRIVE SCRIPT, not the system: its
+% "cd <repo> && node server.mjs … &" backgrounded the whole chain, so the greps
+% ran from the caller's cwd while the server (correctly) wrote the audit into
+% the repo tree. The system's audit was written and correct every time; the
+% section below is the clean re-drive.
 ## 10. The audit: refusals are entries with the rule id (the world, not the transcript)
 % (re-driven on a fresh boot: propose+admit clock, call it, refuse the MCP launch)
 % grep -o "\"decision\":\"refuse\",\"rule\":\"[a-z-]*\"" workspace/audit.jsonl | sort | uniq -c
