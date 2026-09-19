@@ -1,0 +1,16 @@
+<!doctype html><meta charset="utf-8"><title>opfs at load</title><body><pre id="out">running…</pre>
+<script>
+// The point of this page: getDirectory() runs at PARSE TIME on a fresh navigation, before any
+// click, key or devtools evaluation. If it needs activation, this is where that shows.
+(async () => {
+  const act = { isActive: navigator.userActivation?.isActive, hasBeenActive: navigator.userActivation?.hasBeenActive };
+  let out;
+  try {
+    const root = await navigator.storage.getDirectory();
+    const fh = await root.getFileHandle("load.txt", { create: true });
+    const w = await fh.createWritable(); await w.write("load-ok"); await w.close();
+    out = { getDirectory: "ok", readBack: await (await fh.getFile()).text(), activationAtCall: act };
+  } catch (e) { out = { getDirectory: "FAILED", err: String(e), activationAtCall: act }; }
+  document.getElementById("out").textContent = "RESULT:" + JSON.stringify(out);
+})();
+</script>
