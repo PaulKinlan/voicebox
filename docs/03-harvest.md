@@ -668,8 +668,11 @@ is most expensive to have learned.
 
 ### 8.2 Two findings that get *more* valuable under the line, not less
 
-The constraint removes code and leaves findings, and findings were always the more transferable
-half.
+**The constraint removes code and leaves findings — and findings were always the more transferable
+half.** That is why this document got more useful at the same moment its estimate got worse: the
+line takes away the three items that were cheap to lift, and cannot touch a single observation about
+what goes wrong when you write them instead. A cost increase measured in days, against findings that
+cost somebody else weeks and now travel for free.
 
 **The readiness gate (§2.4) is prior art at its best: a defect somebody else already paid for.**
 A from-scratch implementation will gate audio on the socket being open, because that is the
