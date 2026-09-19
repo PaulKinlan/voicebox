@@ -6,6 +6,7 @@
 import { createServer } from "node:http";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveTurn } from "./lib/resolver.mjs";
@@ -74,6 +75,7 @@ const MIME_TYPES = {
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".mjs": "text/javascript; charset=utf-8",
+  ".ts": "text/javascript; charset=utf-8",
   ".svg": "image/svg+xml",
   ".woff2": "font/woff2",
   ".woff": "font/woff",
@@ -81,7 +83,36 @@ const MIME_TYPES = {
   ".json": "application/json; charset=utf-8",
   ".txt": "text/plain; charset=utf-8",
   ".ico": "image/x-icon",
+  ".wasm": "application/wasm",
+  ".wat": "text/plain; charset=utf-8",
 };
+
+// Source served as source: the E1-M0 page imports core/ and browser/ directly, so the browser
+// runs the SAME files the tests run and there is no build step and no second copy to drift from
+// (N18, one level up). Node's own type-stripping is the transform — not a compiler, not a dep.
+const SOURCE_DIRS = new Set(["core", "browser", "tools", "tests"]);
+
+function serveSource(res, url) {
+  const rel = url.pathname.replace(/^\/+/, "");
+  const dir = rel.split("/")[0];
+  const file = path.resolve(ROOT, rel);
+  const allowed = path.join(ROOT, dir) + path.sep;
+  if (!SOURCE_DIRS.has(dir) || !file.startsWith(allowed) || !existsSync(file)) {
+    res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+    return res.end("not found");
+  }
+  const ext = path.extname(file);
+  const type = MIME_TYPES[ext];
+  if (!type) {
+    res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+    return res.end("not found");
+  }
+  const body = ext === ".ts"
+    ? stripTypeScriptTypes(readFileSync(file, "utf8"), { mode: "strip" })
+    : readFileSync(file);
+  res.writeHead(200, { "content-type": type });
+  res.end(body);
+}
 
 // Resolves a request path under PUBLIC, preserving subdirectories (e.g. /fonts/...)
 // while strictly enforcing that the target cannot escape PUBLIC (no .. or symlink escapes).
@@ -182,6 +213,10 @@ async function handle(req, res) {
   }
   const route = routes[key];
   if (route) return route(req, res, url);
+
+  if (req.method === "GET" && SOURCE_DIRS.has((url.pathname.split("/")[1] ?? ""))) {
+    return serveSource(res, url);
+  }
 
   if (req.method === "GET" && url.pathname === "/api/files") {
     const fileNames = readdirSync(WORKSPACE).filter(f => !f.startsWith("."));

@@ -70,7 +70,33 @@ What does not work yet:
   of the loop is unchanged.
 - **No streaming conversation.** One turn per press; the always-on conversation
   from the brief comes with the live model.
-- **The workspace is a flat directory** — no project scaffolding, no shell.
+- **The workspace is a flat directory** — no project scaffolding, no shell. (The
+  environment page below is where projects exist; the skeleton loop above still writes
+  loose files into `workspace/`.)
+
+## The browser environment (E1-M0 + N20)
+
+```sh
+node server.mjs            # then open http://127.0.0.1:8787/environment.html
+```
+
+A page with a **working environment** behind it rather than a chat box: an environment
+page at `/environment.html` where a project is a real root — either this origin's private
+OPFS storage, or **a folder you pick or drop** — held by a persisted directory handle, with
+an append-only audit beside the files, a tier table as data, and one tool (`create an asset`)
+running as a **Wasm module whose only two imports are the ones the host hands it**, which is
+what makes "it cannot reach the network" structural instead of promised.
+
+- The page always says **which kind of root** it is showing, whether it is held
+  persistently, which undo it has, and where its audit lives.
+- An **explorer over three roots** — origin storage, the picked folder, the server's
+  `workspace/` — each labelled with its own authority, each a single bounded listing.
+- Failures have names: `needs-gesture`, `permission-denied`, `handle-gone`,
+  `root-unreachable`, `not-found`, `not-a-project`.
+
+Checks: `npm run test:e1m0` (25 acceptance checks, driven in a real headless Chromium).
+Evidence, including what the platform actually does with a dropped folder and the two
+behaviours that cannot be driven headlessly: [docs/evidence/picked-root-20260919/RECEIPT.md](docs/evidence/picked-root-20260919/RECEIPT.md).
 
 Next step: wire the first live model resolver behind the seam (Gemini Live),
 then grow the action set toward the build environment.

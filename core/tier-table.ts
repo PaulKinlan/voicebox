@@ -1,20 +1,30 @@
 // core/tier-table.ts — the enforcement rows as DATA.
 // First matching rule wins; tier 0 refuses; tier 2 asks.
+//
+// CHANGED for E1-M0: the `outside-root` row hard-coded `v1/projects/atlas`, so the table only
+// ever spoke for one project — a second project's writes were "outside the root" by construction
+// and the row that decides containment was a constant. A rule that cannot see the root cannot
+// decide about it. The root now arrives as the rule context, and `Act.target` is the RESOLVED
+// path (root-prefixed, produced by core/paths.resolveInsideRoot), which is what makes the prefix
+// comparison in `insideRoot` a comparison rather than a guess.
 
 export type Tier = 0 | 1 | 2;
 
 export type Act = {
   kind: "read" | "write" | "delete" | "exec" | "network" | "import" | "eval" | "external";
-  target: string;             // resolved, relative to the project root
+  target: string;             // RESOLVED: root-prefixed, the output of resolveInsideRoot
   bytes?: number;
   tool?: string;
 };
+
+/** What a rule is allowed to know besides the act: the project it is judging it for. */
+export type RuleContext = { root: string };
 
 export type Rule = {
   id: string;
   tier: Tier;
   why: string;
-  matches: (a: Act) => boolean;
+  matches: (a: Act, ctx: RuleContext) => boolean;
 };
 
 /**
@@ -37,7 +47,7 @@ function isSymlinkOut(_target: string): boolean {
 
 export const RULES: Rule[] = [
   { id: "outside-root",   tier: 0, why: "the execution root is the only place a tool may touch",
-    matches: (a) => a.target !== "" && !insideRoot("v1/projects/atlas", a.target) },
+    matches: (a, ctx) => a.target !== "" && !insideRoot(ctx.root, a.target) },
   { id: "symlink-out",    tier: 0, why: "a link whose target resolves outside the root",
     matches: (a) => a.kind === "write" && isSymlinkOut(a.target) },
   { id: "eval-path",      tier: 0, why: "eval is not a tool path (design §1.7)",

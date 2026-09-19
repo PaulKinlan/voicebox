@@ -1,16 +1,19 @@
-// core/policy.ts — decide(resolvedAct) -> allow | confirm | refuse(ruleId, why).
+// core/policy.ts — decide(resolvedAct, root) -> allow | confirm | refuse(ruleId, why).
 // First matching rule wins; tier 0 refuses; tier 2 asks.
+//
+// CHANGED for E1-M0: the decision takes the project root, because the table's first row is the
+// containment comparison and that comparison needs the boundary it is comparing against.
 
-import { RULES, ENFORCEABLE, type Act, type Tier, type Rule } from "./tier-table.ts";
+import { RULES, ENFORCEABLE, type Act, type Rule, type RuleContext } from "./tier-table.ts";
 
 export type Decision =
   | { decision: "allow"; rule: string }
-  | { decision: "confirm"; rule: string }
+  | { decision: "confirm"; rule: string; why: string }
   | { decision: "refuse"; rule: string; why: string };
 
-export function decide(act: Act): Decision {
+export function decide(act: Act, ctx: RuleContext): Decision {
   for (const rule of RULES) {
-    if (!rule.matches(act)) continue;
+    if (!rule.matches(act, ctx)) continue;
     if (rule.tier === 0) {
       return { decision: "refuse", rule: rule.id, why: rule.why };
     }

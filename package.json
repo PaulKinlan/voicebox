@@ -9,9 +9,12 @@
     "serve": "node server.mjs",
     "start": "node server.mjs",
     "test": "node tests/voicebox.test.mjs",
-    "accept": "node tools/page-acceptance.mjs"
+    "accept": "node tools/page-acceptance.mjs",
+    "test:e1m0": "node --test tests/e1m0-core.test.mjs tests/e1m0-browser.test.mjs tests/n20-picked-root.test.mjs tests/n20-permission-denied.test.mjs tests/explorer.test.mjs",
+    "build:wasm": "node tools/build-wasm.mjs"
   },
   "devDependencies": {
-    "vite": "^7.1.7"
+    "vite": "^7.1.7",
+    "wabt": "^1.0.39"
   }
 }

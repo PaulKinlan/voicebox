@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>voicebox — the browser environment</title>
+<!--
+  The E1-M0 page. It is a NEW page rather than a change to the room UI: the room is astra's
+  surface and the live-voice wiring is landed and verified, so the environment's existence proof
+  gets its own page and neither is disturbed.
+
+  What this page shows, and why each line is here rather than implied: the root KIND (OPFS or a
+  picked folder — they have different authority, so they are never presented as one list), the
+  durability state, the undo kind, and a permission state with a recovery action. Those are the
+  three honest answers §1.8 requires and the recovery story N20 requires.
+-->
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 24px; background: #101014; color: #e8e8ee;
+         font: 15px/1.5 ui-sans-serif, system-ui, sans-serif; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: #9a9aab; margin: 24px 0 8px; }
+  .sub { color: #9a9aab; margin: 0 0 20px; font-size: 13px; max-width: 70ch; }
+  #project { display: grid; gap: 2px; font: 13px/1.6 ui-monospace, monospace; }
+  #project .key { display: inline-block; min-width: 110px; color: #8b8b9c; }
+  form { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-start; margin: 0 0 16px; }
+  input, select, textarea, button { font: inherit; padding: 6px 8px; border-radius: 6px;
+    border: 1px solid #33333f; background: #17171d; color: inherit; }
+  textarea { width: 100%; min-height: 68px; }
+  button { cursor: pointer; background: #23232c; }
+  button:hover { background: #2d2d38; }
+  ul#transcript { list-style: none; margin: 0; padding: 0; font: 13px/1.7 ui-monospace, monospace; }
+  li.line { padding: 2px 0; }
+  li.ok { color: #8ee39a; }
+  li.refused { color: #f0a6a0; }
+  #gallery { display: flex; flex-wrap: wrap; gap: 12px; }
+  figure.asset { margin: 0; padding: 10px; border: 1px solid #2a2a34; border-radius: 8px;
+    background: #15151b; max-width: 320px; }
+  figure.asset img { max-width: 100%; background: #fff; border-radius: 4px; }
+  figure.asset pre { white-space: pre-wrap; word-break: break-word; margin: 0 0 8px; font-size: 12px; }
+  figcaption { font: 12px/1.4 ui-monospace, monospace; color: #b9b9c8; word-break: break-all; margin-bottom: 6px; }
+  #confirm { border: 1px solid #4b4b5a; border-radius: 8px; padding: 12px; background: #1b1b23; }
+  #confirm p { margin: 0 0 10px; font: 13px/1.5 ui-monospace, monospace; word-break: break-all; }
+  #confirm button { margin-right: 8px; }
+  #dropzone { border: 1px dashed #3b3b48; border-radius: 8px; padding: 12px; color: #9a9aab; font-size: 13px; }
+  #dropzone.over { border-color: #69f; color: #dcdcf5; }
+  .views { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+  .view { border: 1px solid #2a2a34; border-radius: 8px; padding: 12px; background: #15151b; min-height: 120px; }
+  .view h3 { margin: 0 0 6px; font-size: 13px; letter-spacing: .04em; }
+  .authority { color: #8b8b9c; font-size: 12px; line-height: 1.5; margin: 0 0 8px; }
+  .failure { color: #f0a6a0; font: 12px/1.6 ui-monospace, monospace; margin: 0; word-break: break-word; }
+  ul.entries { list-style: none; margin: 0; padding: 0; font: 12px/1.7 ui-monospace, monospace; }
+  ul.entries li { display: flex; justify-content: space-between; gap: 8px; cursor: default; }
+  ul.entries li[data-kind="directory"] { cursor: pointer; color: #c8d8ff; }
+  ul.entries .size, ul.entries .empty, ul.entries .truncated { color: #6f6f80; }
+</style>
+</head>
+<body>
+  <h1>voicebox — the browser environment</h1>
+  <p class="sub">E1-M0 plus N20. The worker is the host; a project's root is either this origin's
+    private storage or a folder you picked, and the page always says which. Identity is placement +
+    location, so this project is this browser's and nothing tries to match it anywhere else.</p>
+
+  <div id="project"></div>
+
+  <h2>Open a project</h2>
+  <form id="open-form">
+    <input id="project-name" value="atlas" aria-label="project name">
+    <button type="submit">Open</button>
+    <button type="button" id="pick">Pick a folder…</button>
+    <button type="button" id="regrant" hidden>Restore write access</button>
+  </form>
+  <div id="dropzone">or drop a folder here to make it a project root — the files stay where they are and this page becomes a window onto them</div>
+
+  <h2>Roots</h2>
+  <div class="views">
+    <div class="view" id="view-opfs"><h3>origin storage (OPFS)</h3></div>
+    <div class="view" id="view-picked"><h3>the picked folder</h3></div>
+    <div class="view" id="view-server"><h3>the server</h3></div>
+  </div>
+
+  <h2>Create an asset</h2>
+  <form id="asset-form">
+    <input id="asset-name" value="atlas.svg" aria-label="asset name">
+    <select id="asset-kind" aria-label="asset kind">
+      <option value="svg">svg</option>
+      <option value="text">text</option>
+      <option value="html">html</option>
+    </select>
+    <textarea id="asset-body" aria-label="asset body">&lt;svg xmlns="http://www.w3.org/2000/svg" width="120" height="60"&gt;&lt;rect width="120" height="60" fill="#69f"/&gt;&lt;/svg&gt;</textarea>
+    <button type="submit">Create asset</button>
+  </form>
+
+  <h2>Assets</h2>
+  <div id="gallery"></div>
+
+  <h2>Waiting on you</h2>
+  <div id="confirm" hidden></div>
+
+  <h2>Transcript</h2>
+  <ul id="transcript"></ul>
+
+  <script type="module" src="/browser/ui/ui.ts"></script>
+</body>
+</html>

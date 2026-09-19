@@ -41,6 +41,21 @@ export interface ProjectRecord {
   durability: Durability;
 }
 
+/**
+ * The root as the string the containment check measures against.
+ *
+ * A record can name two kinds of root, and only one of them is a path the origin can describe.
+ * Refusing here rather than stringifying a handle id is the point: `resolveInsideRoot` compares
+ * strings, and a handle id is not a path — comparing against it would be a check that always
+ * passes, which is worse than no check at all.
+ */
+export function opfsRootPath(record: ProjectRecord): string {
+  if (record.root.kind !== "opfs") {
+    throw new Error(`project ${record.id} has no OPFS root to resolve against`);
+  }
+  return record.root.path;
+}
+
 export function makeProjectRecord(name: string, placement: string): ProjectRecord {
   const now = new Date().toISOString();
   const path = `v1/projects/${name}`;
