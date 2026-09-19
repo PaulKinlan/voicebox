@@ -484,8 +484,9 @@ fails-closed rule, applied to the mechanism rather than the descriptor:
 | `read` / `write` | handle-scoped access: a tool gets the OPFS handles it may touch, not a filesystem | the substrate's path scope (`--allow-read/-write=<root>`) **plus a host-side resolve pass**, because the substrate's scope is lexical and a symlink inside the root defeats it (measured: `root/link-outside` read `/etc/hostname`) |
 | `wasm` | **the import boundary**: a module can call only what the host exports to it | the same, plus process isolation if it runs out-of-process |
 | `network` | the realm's egress policy — CSP `connect-src`, default `'none'` (§3.5a) | **the substrate's `--allow-net=<hosts>`**: measured, an allow-listed host answers and another is `NotCapable`. A plain Node host has no equivalent at all — `fetch` succeeds under `--permission` — so the substrate is the mechanism here, not the policy |
-| `import` (remote code) | CSP `script-src` (no inline) | **`--no-remote` is mandatory**: measured, a dynamic remote import fetched and executed **with no flags at all**, because the module loader sits outside the permission model. Unset, the row above is false from inside the runtime |
-| `exec` | **impossible: there is no process to spawn**, so the capability is *absent*, not promised | **absent for dynamic tools too.** Measured: with `--allow-run`, a spawned `/bin/sh` read a file outside the root — printed `MACHINE-SECRET`. `--allow-run` is not "exec scope", it is the machine, so it is **never granted to model-authored code**; a tool needing `exec` needs a container that bounds the child |
+| `import` (remote code) | CSP `script-src` (no inline) | **import access is a separate gate**, and the hole is *live by default*: a dynamic import fetched and executed with no flags at all, because the registry host sits in the **default allowlist** while a `localhost` import is refused with *"Requires import access to 127.0.0.1"* **before any fetch happens** (re-driven independently). So **`--no-remote` detects the attempt and a narrow explicit `--allow-import` scopes it — neither is optional for model-authored code** |
+| the **evaluator path** (`eval`-style) | not applicable | **absolute: `eval` is not a tool path.** Measured — with **no flags**, an eval ran with every permission and read a secret outside the root. The evaluator bypasses whatever the substrate would otherwise enforce, which is the same shape as the loader above and as CAP's regex gate: three instances, one substrate |
+| `exec` | **impossible: there is no process to spawn**, so the capability is *absent*, not promised | **absent for dynamic tools too, and scoping it was attempted rather than assumed.** Four avenues were tried to falsify this and none worked: with `--allow-run`, a spawned `/bin/sh` printed a secret from outside the root; a **narrow** `--allow-run=/bin/cat` with no read permission *still* printed it, because the binary carries its own privileges; and a spawned child **does not inherit the parent's flags**, so it is bounded only when given a flag set of its own. Hence the rule: **`--allow-run` bounds which binary, never what it can do** — a tool needing `exec` needs a container that bounds the child |
 
 Three consequences, each of which closes a hole the declaration alone would leave open:
 
@@ -524,8 +525,13 @@ substrate is **Wasm's import boundary** (free, and the strongest); on E2 it is *
 runtime that is invoked with an explicit permission set**, measured against the cases that matter
 (`docs/evidence/substrate-20260919/RECEIPT.md`, with the probe alongside it):
 
-- `--no-prompt` and `--no-remote` always; `--allow-read/-write` scoped to the execution root,
-  **plus the host's resolve pass** because the substrate's path scope follows a symlink out;
+- `--no-prompt` always; **`--no-remote` **and** a narrow explicit `--allow-import`** — the first
+  detects the attempt, the second scopes it, and the default allowlist is what makes the loader hole
+  live rather than theoretical;
+- `--allow-read/-write` scoped to the execution root, **plus the host's resolve pass**, because the
+  substrate's path scope is lexical and follows a symlink out;
+- **no evaluator path**: `eval`-style execution is not how a tool runs, because the evaluator
+  bypasses every flag the rest of this list depends on;
 - `--allow-net=<hosts>` only where the environment can back it, host-scoped (verified: one host
   answers, another is `NotCapable`);
 - **`--allow-run`, `--allow-ffi` and `--allow-env` are never granted to model-authored code**;
@@ -799,6 +805,10 @@ Two habits follow, and they are the reason this section is written the way it is
 
 - **Ask what enforces it, not what states it.** If the answer is a comment, a descriptor, a
   variable name or a helper that tidies input, there is no guard yet.
+- **Ask what path goes *around* the guard.** Every mechanism in this document has a sibling that
+  skips it: the module loader beside the permission model, the evaluator beside the flag set, the
+  regex beside the AST. Finding them is part of writing the guard, not a later audit — and in one
+  substrate there were three.
 - **Give every authority one home, or record why it has none.** CAP grew **three digest verifiers in
   three places** before anyone noticed, found by mutation rather than by review. An authority with
   several homes has none: if two places can decide the same thing, the property is whatever the

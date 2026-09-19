@@ -11,7 +11,20 @@ three axes natively.
 `probe.ts` attempts each capability and prints `ALLOWED`/`DENIED <ErrorName>` — the runtime's own
 word (`NotCapable` means the substrate refused it; that string is the evidence, not my summary).
 Each run gets a **fresh `DENO_DIR`**, because the first attempt exposed that a cached module hides
-the loader behaviour. Symlinks are created by the fixture: `root/link-outside -> /etc/hostname`,
+the loader behaviour.
+
+**Addendum, from the independent re-drive (ds-flash-1b), which is a method rather than a result:
+count the requests.** With a fresh `DENO_DIR` the fixture server's GET count went **2 → 3**; reusing
+the cache it stayed **3 → 3**. Counting is what turns *"I did not see a fetch"* into *"I can show
+whether one happened"* — and the failure mode (a cached module hiding an import) is invisible from
+the tool's own output. Any future probe of an egress or import claim in this repository should
+report the count, not the absence of an error.
+
+Also from that re-drive: **`eval`-style execution is unpermissioned** — with no flags it read a
+secret outside the root — so the evaluator is a bypass path rather than a tool path. And
+`--allow-run` was tested in four ways to falsify the exec row: a narrow `--allow-run=/bin/cat` with
+no read permission still printed the secret, and a spawned child does not inherit the parent's
+flags. Execution bounds *which* binary, never what it can do. Symlinks are created by the fixture: `root/link-outside -> /etc/hostname`,
 `root/link-inside -> root/sub/file.txt`. The secret outside the root is a file with known content.
 
 ## Results
