@@ -885,20 +885,36 @@ hiding it would not be.
 - **State must say who else is here.** Any instance showing a project shows the other live
   instances and which root each holds — the UI half of a rule that exists for safety reasons.
 
-#### The coordination medium is an open decision, and its trade-off is two words long
+#### Shared state and merged artefacts: two things, two reconcilers (N19)
 
-Two roots of one project meet at a **git merge** today: each has its own audit, session and writer, and
-the merge is where their work meets. isocan solved the same shape with a **shared log** — presence,
-read positions, a live view of who is where — and the comparison is exact, because the registry shape
-is the same idea twice and only the **medium** differs.
+Paul chose **shared**, and then asked the question underneath it: *"I just don't know how sharing
+works without having a merge concept."* That question has no answer because it joins two things that
+are not alternatives — **they reconcile different things**:
 
-So the choice for the phone-and-chat case is **a shared view or a late merge**. A shared log means both
-instances see each other's turns as they happen — more moving parts, a live channel, and a visibility
-question about what one instance may see of the other's work. Merges-only means they work independently
-and meet through git: simpler, already specified, and **it cannot show liveness** — *"what is the phone
-doing right now?"* has no answer until the merge. **This document does not decide it**: merges-only is
-the sequence §2.3 already describes, and a shared log would change the **medium**, not the
-serialisation rule.
+| | **shared** | **merged** |
+|---|---|---|
+| the data | **state** — presence, what each agent is doing, **what it has read** | **artefacts** — files, code |
+| the shape | an **append-only log**: nothing is overwritten, so nothing needs reconciling | a **diff**: one file, one writer, so reconciliation is required |
+| the channel | **live** — it is visible as it happens | **late** — it is visible when the work lands |
+
+So the rule is `shared log + per-root work that still merges`, and both halves get simpler for being
+separated:
+
+- **The log carries state and needs no merge.** Presence, activity and seen-marks are appends; appends
+  cannot conflict, so *"how do we merge the log?"* is not a hard question, it is a **category error** —
+  the log never needs merging.
+- **The files still merge, and that is what merging is for.** One writer per root, audits per root,
+  files meeting as an ordinary merge — unchanged from the rest of this section. *"How do we share the
+  files?"* has no answer for the same reason: sharing files *is* merging.
+- **What changes is what the merge is *for*.** It stops being the coordination channel and becomes the
+  **landing step**: the files meet when they land, and **that merge is a user-visible event** rather
+  than a background reconciliation.
+
+**The global state is the log; it is not the files.** And because the log is append-only, the shared
+view is not new storage — it is the same per-root logs read together (ordered by `(instance, seq)`,
+§2.3's rule) plus presence, which is what makes **seen-marks load-bearing rather than nice**: *"what
+did it know"* is a question only a shared log can answer **live**, and a late merge can only answer it
+after the fact.
 
 #### Still serial, and by design
 

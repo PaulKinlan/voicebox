@@ -69,6 +69,7 @@ than merging two `03`s.
 | **An unknown verb is not a Tier 2 act** | design §0 | a prompt exists only where a mechanism does; a refusal names the missing thing |
 | **`stop` is the only unconditional lever** | design §1.4 | everything else depends on the harness choosing to ask or answer |
 | **Concurrency: one writer per root** | design §2.3 | several roots per project; sessions per (instance, root) |
+| **Shared state, merged artefacts** (N19) | design §2.3 | the append-only log carries presence and seen-marks and **never needs merging**; files still merge, and that merge is the **landing step** — *the global state is the log, not the files* |
 | **Other projects are prior art, never dependencies** | design §0 | techniques in, artefact out — and theirs to change, not ours |
 | **How the document has been tested** | design §6 | which sections are driven and which are **design, unproven** |
 

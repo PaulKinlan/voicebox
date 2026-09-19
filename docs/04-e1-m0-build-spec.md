@@ -170,6 +170,10 @@ export type AuditEntry = {
   said".
 - **It survives a reload** because it lives in OPFS. Assert that in a test, not by inspection.
 - No hash chain in M0 — that is an autonomy-stage requirement (design §3.8), not an existence one.
+- **The shared view is this same read, not new storage** (N19). Presence and activity are appends;
+  appends cannot conflict, which is why the log never needs merging and why *"what did it know"* can be
+  answered live once two instances read the union ordered by `(instance, seq)`. Acceptance check 9 is
+  that read; M0 has one instance, so it exercises the ordering rather than the sharing.
 
 ---
 
