@@ -109,11 +109,29 @@ is the failure mode this whole section is written against:**
   `echo approved > plan-a.txt` and watched **`plan-b.txt`** get written, because another handler
   registered *after* the gate rewrote the input in between.
 - **So the rule is about the gap, not about validation order: nothing may run between the approval and
-  the execution.** In this harness that means the gate must be the **last** `tool_call` handler, and
-  **an extension registered after the gate is not merely a new capability — it is a new authority over
-  the gate's decisions.** A handler nobody audited, sitting between "yes" and "do it", is an authority
-  with two homes (§3.0); any extension whose load order is not the gate's own is an **admission act**,
-  not a configuration detail.
+  the execution.** That is the **intent**; **the host owns the load order**, and that is the only place
+  it can be enforced. k3 drove the platform answer: there is **no handler-chain introspection and no
+  post-chain observation point** in this harness — nothing between "all `tool_call` handlers have run"
+  and execution that carries the final input — so *"the gate is last"* **cannot be proven from inside**.
+  And **an extension registered after the gate is not merely a new capability — it is a new authority
+  over the gate's decisions**: a handler nobody audited, sitting between "yes" and "do it", is an
+  authority with two homes (§3.0). Any extension whose load order is not the gate's own is an
+  **admission act**, not a configuration detail.
+- **So the gate refuses rather than approximating.** At `session_start` it scans the **discovered
+  extension directories** for files sorting after its own name, and if any exist it **refuses to gate,
+  loudly** — writing `{"later": […], "refuse": true}` to a state file. Both branches are driven: with a
+  later file present it made **0 permission requests** and (as announced) the ungated rewrite ran, so
+  `plan-b.txt` existed; without one it engaged, asked once, and on denial executed nothing. The
+  sentence worth keeping is k3's: **a silent mid-chain gate would have approved `plan-a` while
+  `plan-b` ran, and called it security.** The general principle: **a mechanism that cannot do its job
+  should say so rather than doing a weaker version of it.**
+- **And the mechanism has three limits, each driven**: the scan covers **discovered directories only**
+  (CLI `-e` and packaged extensions are invisible, so host ownership is not optional); **`pi-acp`
+  swallows the child's stderr**, so a `console.error` announcement never reaches the wire — the
+  RPC-visible channel is the **state file** or `ctx.ui.notify`, which means **the announcement channel
+  differs by transport and a test that passes in a TUI has not tested the wire**; and even a
+  proven-last gate **cannot see the final post-chain input**, so the strongest in-harness claim is
+  *"no later file existed at session start"*.
 - **The model's first response to a denial is to try another tool** — which is §3.0's habit ("ask
   what path goes around the guard") demonstrated live by the model, and the reason a gate scoped to
   tool **names** would have been routed around in one turn.
@@ -999,6 +1017,11 @@ Two habits follow, and they are the reason this section is written the way it is
   section survived in that section's closing sentence, and the sentence went on stating the opposite
   of the upgrade. Applied three times in one document on one day: a correction that is *applied* is
   one edit, and a correction that is *swept* is a grep.
+- **A mechanism that cannot do its job should refuse rather than approximate.** The gate cannot prove
+  it runs last, so it declines to gate at all when a later file exists — loudly, with the reason — and
+  the alternative is worse than not gating: *a silent mid-chain gate would have approved one act while
+  another ran, and called it security.* The weaker version of a guard is more dangerous than its
+  absence, because its absence is visible.
 - **Ask what path goes *around* the guard.** Every mechanism in this document has a sibling that
   skips it: the module loader beside the permission model, the evaluator beside the flag set, the
   regex beside the AST. Finding them is part of writing the guard, not a later audit — and in one
@@ -1344,6 +1367,11 @@ k3's drive produced the cleanest counterexample in the document: after a run, th
 *"delete-me.txt already exists… confirmed created earlier this session"* — **and the file did not
 exist.** The model's account of its own effects is not evidence of its effects, and an audit built
 from those accounts records a story rather than a state.
+
+**And seen-marks come first, not last, now that the log is shared (N19).** *"What did it know?"* is a
+question two agents have to be able to answer **about each other**, and it is the reason the read
+record is a seam rather than a nicety: an entry carries what was **looked at**, not only what was
+done, so a second instance reading the union can see what the first had in front of it.
 
 **And what was read is part of the record, not only what was done.** A writes-only log cannot answer
 *"what did it look at?"*, which is the question that matters when something goes wrong later — and it
