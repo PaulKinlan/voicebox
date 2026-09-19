@@ -307,7 +307,10 @@ A project is a **declared directory** plus a session, and nothing more:
 
 ```jsonc
 { "id": "isocan",                      // short name, unique among registered projects
-  "path": "/home/paulkinlan/isocan",   // the DECLARED root (realpath-resolved at open)
+  "path": "/home/paulkinlan/isocan",   // the DECLARED checkout (realpath-resolved at open)
+  "executionRoot": "/home/paulkinlan/isocan",  // where work actually happens (§2.4)
+  "placement": "machine",              // machine | browser | remote  (§1.1b)
+  "capabilities": ["read", "write", "exec", "wasm"],   // what `do` can mean here (§1.1b)
   "lastUsed": "2026-09-19T11:40:00Z",
   "harness": "pi",
   "sessionId": "ses_…",                // the harness session for THIS project
@@ -315,6 +318,14 @@ A project is a **declared directory** plus a session, and nothing more:
 ```
 
 - **Identity**: the realpath, so two paths to the same checkout are one project.
+- **`executionRoot` is the containment root**, and it is not always the checkout: when the host
+  works in a worktree (§2.4) that directory *is* the root for every containment check, every
+  diff and every state message. Containment is always **relative to one root — the active
+  project's execution root** — never the union of registered projects, or a nested or
+  side-by-side project would hand the harness another project's files.
+- **One active execution root per project.** Two writers on one tree is the failure this fleet
+  already has evidence for, so a project is never simultaneously open for work in two places;
+  moving work between roots is an explicit act.
 - **No discovery.** The host never scans the filesystem for repositories; a directory becomes
   a project when it is declared. (This is the same rule as the cwd fix: the machine's layout
   is never assumed.)
@@ -364,6 +375,12 @@ settled.
   git project the host may work in a branch or a worktree, so "undo everything the agent did
   this evening" is one command and never a conversation. Where the project is not a git
   repo, the host records the files it wrote so a revert list exists.
+- **A worktree is the execution root, not an exception to containment.** If the host works in
+  `/home/paul/isocan-worktrees/agent-3`, then *that* path is what every check is measured
+  against and what the UI shows; the checkout the developer is typing in is outside the root
+  and therefore Tier 0, which is the point — the agent cannot wander into the files he is
+  editing. Diffs are computed in the execution root, and "land the work" is an ordinary merge
+  he can see and refuse.
 - **Audit separability**: the audit log is one append-only file with a `project` field on
   every entry, so "what happened in isocan today?" is a filter.
 
