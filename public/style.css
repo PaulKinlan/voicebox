@@ -161,7 +161,7 @@ input { caret-color: var(--accent); }
 /* Opening a file makes room for it: the rings give up their scale rather than
    pushing the reader below the fold, so what you asked to read is on screen. */
 body:has(#reader[data-state="ready"]) .stage, body:has(.session:not([hidden])) .stage { gap: 20px; padding: 10px 0; }
-body:has(#reader[data-state="ready"]) .ring-stage { width: min(64vw, 320px); }
+body:has(#reader[data-state="ready"]) .ring-stage, body:has(.session:not([hidden])) .ring-stage { width: min(64vw, 320px); }
 body:has(#reader[data-state="ready"]) .mic { width: 92px; height: 92px; }
 body:has(#reader[data-state="ready"]) .mic-glyph { width: 30px; height: 30px; }
 body:has(#reader[data-state="ready"]) #file-body { max-height: 26svh; }
