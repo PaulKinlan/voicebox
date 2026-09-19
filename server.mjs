@@ -4,7 +4,7 @@
 // Zero dependencies: node:http for the server, node:fs for the workspace.
 // The resolver is a provider seam (lib/resolver.mjs) — swap it, don't rewrite the server.
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveTurn } from "./lib/resolver.mjs";
@@ -30,9 +30,48 @@ const json = (res, code, body) => {
 // yes-or-no — is the candidate inside the workspace? (chrome-agent-platform-0j1a
 // class: `basename("..")` is `".."`, so join+basename silently rewrote the
 // escape instead of refusing it.)
-function contained(p) {
-  const rel = path.relative(WORKSPACE, p);
+function containedIn(baseDir, p) {
+  const rel = path.relative(baseDir, p);
   return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+function contained(p) {
+  return containedIn(WORKSPACE, p);
+}
+
+const MIME_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".woff2": "font/woff2",
+  ".woff": "font/woff",
+  ".png": "image/png",
+  ".json": "application/json; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+  ".ico": "image/x-icon",
+};
+
+// Resolves a request path under PUBLIC, preserving subdirectories (e.g. /fonts/...)
+// while strictly enforcing that the target cannot escape PUBLIC (no .. or symlink escapes).
+function resolvePublicFile(pathname) {
+  let decoded;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    return null;
+  }
+  const candidate = path.resolve(PUBLIC, "." + decoded);
+  if (!containedIn(PUBLIC, candidate)) return null;
+  try {
+    const real = realpathSync(candidate);
+    if (!containedIn(PUBLIC, real)) return null;
+    return real;
+  } catch (e) {
+    if (e.code === "ENOENT") return null;
+    throw e;
+  }
 }
 
 // The executor: the one place that touches the build environment. It grows;
@@ -82,15 +121,14 @@ const routes = {
     res.end(readFileSync(path.join(PUBLIC, "styles.css")));
   },
   // Static fallthrough: anything else the page asks for that lives in public/.
-  // Added because the route table had /styles.css while the page asked for style.css,
-  // and neither build-stamp.js nor icon.svg was routed at all - so the page silently
-  // lost its stylesheet and its stamp. A page asking for a file the server does not
-  // serve is a failure with no error in it.
+  // Preserves subdirectories (e.g. /fonts/x.woff2) with traversal guards.
   "GET /static": (req, res, url) => {
-    const name = path.basename(url.pathname);
-    const file = path.join(PUBLIC, name);
-    if (!file.startsWith(PUBLIC) || !existsSync(file)) { res.writeHead(404); return res.end("not found"); }
-    const type = { ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".woff2": "font/woff2", ".png": "image/png" }[path.extname(file)] ?? "application/octet-stream";
+    const file = resolvePublicFile(url.pathname);
+    if (!file || !existsSync(file)) {
+      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+      return res.end("not found");
+    }
+    const type = MIME_TYPES[path.extname(file)] ?? "application/octet-stream";
     res.writeHead(200, { "content-type": type });
     res.end(readFileSync(file));
   },
@@ -100,18 +138,51 @@ async function handle(req, res) {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   const key = `${req.method} ${url.pathname}`;
   // Fall through to public/ for any other path the page requests.
-  if (req.method === "GET" && !routes[key]) {
-    const candidate = path.join(PUBLIC, path.basename(url.pathname));
-    if (url.pathname !== "/" && existsSync(candidate)) {
-      return routes["GET /static"](req, res, url);
+  if (req.method === "GET" && !routes[key] && !url.pathname.startsWith("/api/")) {
+    const file = resolvePublicFile(url.pathname);
+    if (file && existsSync(file)) {
+      try {
+        if (statSync(file).isFile()) {
+          const type = MIME_TYPES[path.extname(file)] ?? "application/octet-stream";
+          res.writeHead(200, { "content-type": type });
+          return res.end(readFileSync(file));
+        }
+      } catch {}
     }
   }
   const route = routes[key];
   if (route) return route(req, res, url);
 
   if (req.method === "GET" && url.pathname === "/api/files") {
-    const files = readdirSync(WORKSPACE).filter(f => !f.startsWith("."));
-    return json(res, 200, { files });
+    const fileNames = readdirSync(WORKSPACE).filter(f => !f.startsWith("."));
+    const entries = fileNames.map(name => {
+      try {
+        const full = path.join(WORKSPACE, name);
+        const stat = statSync(full);
+        return { name, bytes: stat.size };
+      } catch {
+        return { name, bytes: 0 };
+      }
+    });
+    return json(res, 200, { files: fileNames, entries });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/file") {
+    const name = url.searchParams.get("name") ?? "";
+    if (!name) return json(res, 400, { error: "action has no name" });
+    const candidate = path.resolve(WORKSPACE, name);
+    if (!contained(candidate)) return json(res, 403, { error: "refused: path escapes the workspace" });
+    try {
+      const real = realpathSync(candidate);
+      if (!contained(real)) return json(res, 403, { error: "refused: path escapes the workspace" });
+      const stat = statSync(real);
+      if (stat.isDirectory()) return json(res, 400, { error: "cannot read directory" });
+      const content = readFileSync(real, "utf8");
+      return json(res, 200, { ok: true, name, content, bytes: stat.size });
+    } catch (e) {
+      if (e.code === "ENOENT") return json(res, 404, { error: "file not found" });
+      throw e;
+    }
   }
 
   if (req.method === "POST" && url.pathname === "/api/turn") {

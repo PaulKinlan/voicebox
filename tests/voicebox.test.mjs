@@ -12,7 +12,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -163,3 +163,163 @@ test("the page references only files that exist in public/", () => {
     assert(existsSync(file), `the page references ${ref} and it does not exist — a silent miss`);
   }
 });
+
+// ── nested static assets and traversal guards on static paths ─────────────
+test("nested static assets serve with correct content-type and traversal is refused", async () => {
+  // Nested asset serves 200 with font/woff2
+  const fontRes = await get("/fonts/inter-latin.woff2");
+  assert.equal(fontRes.status, 200, "nested font file should return 200");
+  assert.equal(fontRes.headers.get("content-type"), "font/woff2");
+  const body = await fontRes.arrayBuffer();
+  assert.ok(body.byteLength > 0, "font body should not be empty");
+
+  // Traversal attempts must 404
+  for (const p of [
+    "/../server.mjs",
+    "/../../etc/passwd",
+    "/fonts/../../server.mjs",
+    "/%2e%2e/server.mjs",
+    "/%2e%2e/%2e%2e/etc/passwd",
+  ]) {
+    const r = await get(p);
+    assert.equal(r.status, 404, `traversal path ${p} must be refused with 404`);
+  }
+});
+
+// ── read API endpoint: GET /api/file and GET /api/files ───────────────────
+test("read API endpoints: GET /api/file reads file without turn, and GET /api/files returns entries", async () => {
+  // Create a test file
+  const testFile = path.join(WORKSPACE, "api-read-test.txt");
+  writeFileSync(testFile, "test file content for api read", "utf8");
+
+  // GET /api/files should return both files array and entries with bytes
+  const filesRes = await get("/api/files");
+  assert.equal(filesRes.status, 200);
+  const filesJson = await filesRes.json();
+  assert.ok(filesJson.files.includes("api-read-test.txt"));
+  const entry = filesJson.entries.find((e) => e.name === "api-read-test.txt");
+  assert.ok(entry, "entry should exist in entries array");
+  assert.equal(entry.bytes, 30);
+
+  // GET /api/file?name=
+  const fileRes = await get("/api/file?name=api-read-test.txt");
+  assert.equal(fileRes.status, 200);
+  const fileJson = await fileRes.json();
+  assert.equal(fileJson.ok, true);
+  assert.equal(fileJson.name, "api-read-test.txt");
+  assert.equal(fileJson.content, "test file content for api read");
+  assert.equal(fileJson.bytes, 30);
+
+  // Error cases
+  const noName = await get("/api/file");
+  assert.equal(noName.status, 400);
+
+  const missing = await get("/api/file?name=does-not-exist.txt");
+  assert.equal(missing.status, 404);
+
+  const traversal = await get("/api/file?name=../../server.mjs");
+  assert.equal(traversal.status, 403);
+
+  rmSync(testFile, { force: true });
+});
+
+// ── the phantom turns guard: loading page with N files does zero POST /api/turn ─
+test("page load with files produces zero POST /api/turn calls (no phantom turns)", async () => {
+  const f1 = path.join(WORKSPACE, "alpha.txt");
+  const f2 = path.join(WORKSPACE, "beta.txt");
+  writeFileSync(f1, "hello alpha", "utf8");
+  writeFileSync(f2, "hello beta", "utf8");
+
+  const cdpPort = 19996;
+  const chrome = spawn("/usr/bin/chromium", [
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-gpu",
+    `--remote-debugging-port=${cdpPort}`,
+    "about:blank",
+  ], { stdio: ["ignore", "ignore", "pipe"] });
+
+  try {
+    let wsUrl = "";
+    for (let i = 0; i < 40; i++) {
+      try {
+        const res = await fetch(`http://127.0.0.1:${cdpPort}/json`);
+        const list = await res.json();
+        const page = list.find((p) => p.type === "page");
+        if (page?.webSocketDebuggerUrl) {
+          wsUrl = page.webSocketDebuggerUrl;
+          break;
+        }
+      } catch {}
+      await sleep(100);
+    }
+    assert(wsUrl, "could not find page target");
+
+    const ws = new WebSocket(wsUrl);
+    await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
+
+    let id = 1;
+    const pending = new Map();
+    const networkRequests = [];
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.id && pending.has(msg.id)) {
+        const { resolve } = pending.get(msg.id);
+        pending.delete(msg.id);
+        resolve(msg.result);
+      }
+      if (msg.method === "Network.requestWillBeSent") {
+        networkRequests.push({
+          url: msg.params.request.url,
+          method: msg.params.request.method,
+        });
+      }
+    };
+
+    const call = (method, params = {}) => new Promise((resolve) => {
+      const reqId = id++;
+      pending.set(reqId, { resolve });
+      ws.send(JSON.stringify({ id: reqId, method, params }));
+    });
+
+    await call("Network.enable");
+    await call("Page.enable");
+    await call("Runtime.enable");
+
+    // Navigate to page with files already present
+    await call("Page.navigate", { url: BASE });
+    await sleep(1500);
+
+    const postTurnsBefore = networkRequests.filter(
+      (r) => r.method === "POST" && r.url.includes("/api/turn")
+    );
+    // ABSENCE ASSERTION: loading the page made ZERO POST /api/turn calls
+    assert.equal(postTurnsBefore.length, 0, `Page load produced ${postTurnsBefore.length} phantom POST /api/turn requests!`);
+
+    // POSITIVE CONTROL: a typed user turn DOES make a POST /api/turn call
+    await call("Runtime.evaluate", {
+      expression: `
+        const input = document.getElementById("utterance");
+        const form = document.getElementById("text-form");
+        if (input && form) {
+          input.value = "list files";
+          form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+        }
+      `,
+    });
+
+    await sleep(1000);
+
+    const postTurnsAfter = networkRequests.filter(
+      (r) => r.method === "POST" && r.url.includes("/api/turn")
+    );
+    assert.equal(postTurnsAfter.length, 1, `Expected exactly 1 POST /api/turn after user action, got ${postTurnsAfter.length}`);
+
+    ws.close();
+  } finally {
+    chrome.kill("SIGKILL");
+    rmSync(f1, { force: true });
+    rmSync(f2, { force: true });
+  }
+});
+

@@ -172,13 +172,12 @@ async function load() {
     const { files: names } = await request("/api/files");
     entries = await Promise.all(names.map(async (name) => {
       try {
-        const answer = await turn(`read ${name}`);
-        const result = answer.result ?? {};
-        if (result.ok) {
-          const content = result.content ?? "";
+        const answer = await request(`/api/file?name=${encodeURIComponent(name)}`);
+        if (answer.ok) {
+          const content = answer.content ?? "";
           return { name, meta: size(content), preview: content.slice(0, 360) + (content.length > 360 ? "…" : "") };
         }
-        return { name, meta: "on disk", why: result.error ?? answer.note ?? "the server would not read it back" };
+        return { name, meta: "on disk", why: answer.error ?? "the server would not read it back" };
       } catch (error) {
         return { name, meta: "on disk", why: error.message };
       }
@@ -203,16 +202,15 @@ async function showFile(name) {
   els.reader.dataset.state = "empty";
   showFileSelection(name);
   try {
-    const answer = await turn(`read ${name}`);
-    const result = answer.result ?? {};
-    if (result.ok) {
-      const content = result.content ?? "";
+    const answer = await request(`/api/file?name=${encodeURIComponent(name)}`);
+    if (answer.ok) {
+      const content = answer.content ?? "";
       els.readerFacts.textContent = `${size(content)} · read from workspace/${name} just now`;
       els.readerBody.textContent = content;
       els.reader.dataset.state = "ready";
       els.copy.disabled = content.length === 0;
     } else {
-      els.readerFacts.textContent = result.error ?? answer.note ?? "the server would not read this file";
+      els.readerFacts.textContent = answer.error ?? "the server would not read this file";
       els.reader.dataset.state = "empty";
     }
   } catch (error) {
