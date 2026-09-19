@@ -346,3 +346,55 @@ test("REVISE-2-4: a provider whose close() THROWS still gets a terminal event", 
   session.close(); // idempotent: no second terminal event
   assert.equal(states.filter((s) => s.n === "upstream-closed").length, 1, "close() must be idempotent");
 });
+
+// ── astra's third pass: the TDZ regression, the stranded transport, and cleanup idempotence ────────────
+
+test("REVISE-3-1: a factory-time `closed` reports ONE terminal event and does not throw (the 805a0df pair)", () => {
+  // The regression: as a `const`, `terminate` did not exist when `create()` ran, so a provider emitting
+  // `closed` from its FACTORY threw "Cannot access 'terminate' before initialization". Parent 805a0df gave
+  // exactly one 1008 event; the cut after it gave none and an exception. This is the pair.
+  registerLiveProvider("terminal-in-factory", ({ emit }) => {
+    emit({ type: "closed", code: 1008, reason: "refused in the factory" });
+    return { start() { emit({ type: "ready" }); }, sendAudio() {}, close() { emit({ type: "closed", code: 1000, reason: "later" }); } };
+  });
+  const states = [];
+  let threw = null;
+  let session = null;
+  try {
+    session = createLiveSession({ provider: "terminal-in-factory", onState: (n, m) => states.push({ n, ...m }), log: () => {} });
+  } catch (err) { threw = err; }
+  assert.equal(threw, null, `a factory-time terminal must not throw: ${threw?.message}`);
+  const terminals = states.filter((s) => s.n === "upstream-closed");
+  assert.equal(terminals.length, 1, `exactly one terminal event, as the parent produced: ${JSON.stringify(states)}`);
+  assert.equal(terminals[0].code, 1008, "and it carries the factory's cause");
+  assert.equal(session.ready, false, "and a later `ready` from the same provider is refused (already terminal)");
+  session.close();
+});
+
+test("REVISE-3-2: a factory that throws AFTER connecting closes the transport (nothing strands a socket)", () => {
+  const closes = [];
+  const realWS = globalThis.WebSocket;
+  globalThis.WebSocket = class { send() {} close() { closes.push(1); } onclose = null; onmessage = null; onopen = null; onerror = null; };
+  try {
+    registerLiveProvider("throws-in-factory", ({ transport }) => {
+      transport.connect("wss://stub.invalid/vendor", { onEvent: () => {} });
+      throw new Error("factory exploded after connecting");
+    });
+    assert.throws(() => createLiveSession({ provider: "throws-in-factory", log: () => {} }));
+    assert.ok(closes.length >= 1, `the acquired transport must be closed: closes=${closes.length}`);
+  } finally { globalThis.WebSocket = realWS; }
+});
+
+test("REVISE-3-3: repeated public close() calls provider.close ONCE (cleanup is idempotent too)", () => {
+  let closeCalls = 0;
+  registerLiveProvider("counts-closes", ({ emit }) => ({
+    start() { emit({ type: "ready" }); },
+    sendAudio() {},
+    close() { closeCalls += 1; emit({ type: "closed", code: 1000, reason: "closed" }); },
+  }));
+  const session = createLiveSession({ provider: "counts-closes", log: () => {} });
+  session.close();
+  session.close();
+  session.close();
+  assert.equal(closeCalls, 1, `cleanup must be idempotent as well as the notification: closeCalls=${closeCalls}`);
+});
