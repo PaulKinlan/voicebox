@@ -320,6 +320,13 @@ Three concrete attacks this table is defending against:
 
 ### 3.2 The tiers
 
+The tiers below describe a system where a person is **present, or nearby**. **Autonomy is not a
+setting on this table.** An agent that acts with nobody listening has a different threat
+model — no confirmation gate can exist, so its boundary would have to be built from sandboxing,
+resource limits and classifications of irreversible acts instead — and the guarantees stated
+here would not carry over to it. Anyone later tempted to add an "unattended" switch is adding a
+second design, not flipping a flag, and this paragraph is the reason to say so out loud.
+
 **Tier 0 — never. Refused by the host, before execution, whatever anyone says.** Every rule
 is enforced as data in the host and every one has a test (§3.6).
 
