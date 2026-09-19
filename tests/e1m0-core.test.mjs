@@ -9,7 +9,10 @@
 // behaviour is a drift nobody sees until the two placements disagree.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { stripTypeScriptTypes } from "node:module";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { decide } from "../core/policy.ts";
@@ -161,6 +164,36 @@ test("the audit merges by (instance, seq) and never claims a global order", () =
   // reload from producing two entries numbered 1.
   assert.equal(resumeSeq([entry("phone", 7, "x", "r")], "phone"), 7);
   assert.equal(resumeSeq([entry("laptop", 9, "x", "r")], "phone"), 0);
+});
+
+// the served sources -------------------------------------------------------------------------
+test("every source the browser loads parses after type-stripping", () => {
+  // WHY THIS EXISTS, from tonight: the worker is served as JavaScript produced by Node's
+  // type-stripping, and a worker module that fails to PARSE does not report a syntax error to the
+  // page — it simply never posts a message, so every request to it times out and the failure looks
+  // like a hung handler. That cost two debugging cycles (twice: a duplicate `let instance`, then a
+  // duplicate import) and both were a one-line static check away. This is that check.
+  const dirs = ["core", "browser"];
+  const checked = [];
+  for (const dir of dirs) {
+    for (const file of readdirSync(path.join(ROOT, dir))) {
+      if (!file.endsWith(".ts")) continue;
+      const source = readFileSync(path.join(ROOT, dir, file), "utf8");
+      const stripped = stripTypeScriptTypes(source, { mode: "strip" });
+      const scratch = path.join(mkdtempSync(path.join(tmpdir(), "voicebox-parse-")), "module.mjs");
+      writeFileSync(scratch, stripped);
+      // --check parses without executing: these modules read `self` and `navigator` at load time.
+      const result = spawnSync(process.execPath, ["--check", scratch], { encoding: "utf8" });
+      assert.equal(
+        result.status,
+        0,
+        `${dir}/${file} does not parse after type-stripping:\n${result.stderr}\n— the browser would load a worker that never answers`,
+      );
+      checked.push(`${dir}/${file}`);
+      rmSync(path.dirname(scratch), { recursive: true, force: true });
+    }
+  }
+  assert.ok(checked.length >= 10, `expected the whole served surface, checked only ${JSON.stringify(checked)}`);
 });
 
 // the wasm artefact --------------------------------------------------------------------------
