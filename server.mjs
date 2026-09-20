@@ -100,6 +100,65 @@ function writeEnvironments(environments) {
 const PROBE_FILE = path.join(WORKSPACE, "probe.json");
 const PROBE_SCRIPT = path.join(ROOT, "tools", "sandbox-probe.mjs");
 
+// ── PAIRING CUSTODY: the bearer, held host-side, never by the page ────────────────────────────
+// One file, 0600, in the server's own workspace (outside every project root, served by no route).
+// Maps an environment's KEY to the bearer that environment issued at pairing. The page never reads
+// it; the host attaches it when it originates a call. Revocation is deleting the entry.
+const PAIRINGS_FILE = path.join(WORKSPACE, "pairings.json");
+
+function readPairings() {
+  try {
+    const parsed = JSON.parse(readFileSync(PAIRINGS_FILE, "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writePairings(map) {
+  mkdirSync(WORKSPACE, { recursive: true });
+  writeFileSync(PAIRINGS_FILE, `${JSON.stringify(map, null, 2)}\n`, { mode: 0o600 });
+}
+
+/** The bearer THIS host holds for calling the named environment (local side of a pairing). */
+function bearerFor(envKey) {
+  return readPairings()[envKey]?.callBearer ?? null;
+}
+
+/** Store the bearer this host will ACCEPT for itself (the remote side of a pairing). */
+function storeBearer(envKey, bearer) {
+  const map = readPairings();
+  map[envKey] = { ...(map[envKey] ?? {}), acceptBearer: bearer };
+  writePairings(map);
+}
+
+/** Check a bearer presented to THIS host against the one it issued for that environment key. */
+function bearerOk(envKey, bearer) {
+  const held = readPairings()[envKey]?.acceptBearer;
+  return typeof held === "string" && held.length > 0 && typeof bearer === "string" && bearer === held;
+}
+
+/** Record the bearer the LOCAL host uses when calling a paired environment. */
+function recordCallBearer(envKey, bearer) {
+  const map = readPairings();
+  map[envKey] = { ...(map[envKey] ?? {}), callBearer: bearer };
+  writePairings(map);
+}
+
+/** Resolve an environment key to its origin, from the registry. A key nobody declared is a refusal. */
+async function resolveEnvironment(envKey) {
+  if (envKey === "local") {
+    return { ok: true, label: "this machine", origin: null, local: true };
+  }
+  const stored = readEnvironments();
+  if (!stored.ok) return stored;
+  const env = stored.environments.find((e) => e.key === envKey);
+  if (!env) {
+    return { ok: false, refused: "unknown-environment", why: `no environment with key '${envKey}' is in the registry — declare it (the "+" button) before calling it` };
+  }
+  return { ok: true, label: env.label, origin: env.origin };
+}
+
 function readProbeCache() {
   try {
     const parsed = JSON.parse(readFileSync(PROBE_FILE, "utf8"));
@@ -1071,6 +1130,85 @@ async function handle(req, res) {
     const r = extensions.admitProposal(body.id, body.decision === "deny" ? "deny" : "admit");
     return json(res, 200, r);
   }
+  // ── PAIRING + PROXIED CALL (docs/09-proxied-custody.md; journal-wdq decisions 3+4) ─────────────
+  // Custody: the page holds NO remote credential. It names an environment by KEY and the local host
+  // originates the call, attaching the bearer it holds. Pairing is the explicit act that creates the
+  // bearer on BOTH sides (0600, outside any project root, served by no route). A call to an unpaired
+  // or unreachable environment is refused BY NAME. THE DRIVEN CASE IS THE REMOTE ONE — two real
+  // servers — because local success is what hid the firewall failure all evening.
+  if (req.method === "POST" && url.pathname === "/api/pair") {
+    // The REMOTE side: accept a pairing request and issue a bearer bound to THIS environment's key.
+    const body = await readJson();
+    const envKey = body?.envKey;
+    if (typeof envKey !== "string" || !envKey) {
+      return json(res, 400, { ok: false, refused: "bad-request", why: "pairing names the environment key it asks to pair with" });
+    }
+    const bearer = `vbx_${randomBytes(24).toString("hex")}`;
+    storeBearer(envKey, bearer); // this host's side: the bearer it will accept
+    return json(res, 200, { ok: true, envKey, bearer });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/pair/complete") {
+    // The LOCAL side of pairing: the person confirmed, the remote issued a bearer, and this host
+    // records the bearer it will use when calling that environment. The page is never given it.
+    const body = await readJson();
+    const envKey = typeof body?.envKey === "string" ? body.envKey : null;
+    const bearer = typeof body?.bearer === "string" ? body.bearer : null;
+    if (!envKey || !bearer) return json(res, 400, { ok: false, refused: "bad-request", why: "pairing completion carries the environment key and the bearer it issued" });
+    const target = await resolveEnvironment(envKey);
+    if (!target.ok) return json(res, 404, target);
+    recordCallBearer(envKey, bearer);
+    return json(res, 200, { ok: true, envKey, paired: true });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/call") {
+    // The LOCAL side (the proxy): the page names an environment by key; the host looks up the bearer
+    // it holds for that key, attaches it, and forwards the call. The page never sees the bearer.
+    const body = await readJson();
+    const envKey = typeof body?.envKey === "string" ? body.envKey : null;
+    const tool = typeof body?.tool === "string" ? body.tool : null;
+    const args = body?.args && typeof body.args === "object" ? body.args : {};
+    if (!envKey || !tool) {
+      return json(res, 400, { ok: false, refused: "bad-request", why: "a proxied call names the environment key and the tool" });
+    }
+    const target = await resolveEnvironment(envKey);
+    if (!target.ok) return json(res, target.refused === "environment-unreachable" ? 502 : 404, target);
+    const bearer = bearerFor(envKey);
+    if (!bearer) {
+      return json(res, 403, { ok: false, refused: "environment-not-paired", why: `"${target.label ?? envKey}" is listed but not paired — pair it (an explicit act) before the host will carry a call to it` });
+    }
+    try {
+      const answer = await fetch(`${target.origin}/api/execute`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },
+        body: JSON.stringify({ envKey, tool, args }),
+      });
+      const out = await answer.json().catch(() => null);
+      return json(res, answer.status, out ?? { ok: false, refused: "bad-answer", why: "the remote answered something that was not JSON" });
+    } catch (err) {
+      const no = unreachable(target.label ?? envKey, target.origin);
+      return json(res, 502, { ok: false, refused: no.refused, why: no.why });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/execute") {
+    // The REMOTE side: authenticate the bearer BEFORE anything is created (the /live hello-auth rule,
+    // on the call path), then execute inside this host's own root. An unauthenticated call is refused
+    // before any tool runs — the credential is checked, never trusted from the request.
+    const auth = String(req.headers["authorization"] ?? "");
+    const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    const body = await readJson();
+    const envKey = typeof body?.envKey === "string" ? body.envKey : null;
+    if (!envKey || !bearerOk(envKey, bearer)) {
+      return json(res, 403, { ok: false, refused: "unauthenticated-call", why: "a proxied call must carry the bearer this environment issued at pairing — it is checked before any tool runs" });
+    }
+    const tool = typeof body?.tool === "string" ? body.tool : null;
+    const args = body?.args && typeof body.args === "object" ? body.args : {};
+    if (!tool) return json(res, 400, { ok: false, refused: "bad-request", why: "an execute names the tool" });
+    const result = await extensions.callTool(tool, args);
+    return json(res, result.ok === false ? 403 : 200, result);
+  }
+
   json(res, 404, { error: "not found" });
 }
 
