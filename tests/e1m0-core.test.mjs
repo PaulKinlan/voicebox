@@ -197,21 +197,23 @@ test("every source the browser loads parses after type-stripping", () => {
 });
 
 // the wasm artefact --------------------------------------------------------------------------
-test("the committed .wasm matches its .wat source and imports exactly two things", async () => {
+test("the committed .wasm imports exactly two things", () => {
   const bytes = readFileSync(path.join(ROOT, "tools/create-asset.wasm"));
   const imports = WebAssembly.Module.imports(new WebAssembly.Module(bytes)).map((i) => `${i.module}.${i.name}`);
   assert.deepEqual(imports.sort(), ["env.note", "env.writeFile"], "the tool gained or lost an import");
 
   const fetchFixture = new WebAssembly.Module(readFileSync(path.join(ROOT, "tests/fixtures/fetch-import.wasm")));
   assert.ok(WebAssembly.Module.imports(fetchFixture).some((i) => i.name === "fetch"), "the negative control does not import fetch");
+});
 
+test("the committed .wasm matches its .wat source (wabt parity)", async (t) => {
   // The artefact is build output, so it must not drift from the source. wabt is a devDependency;
-  // without it this half is skipped with a reason rather than passing quietly.
+  // without it this check is explicitly skipped so the runner counts the omission.
   let wabt = null;
   try {
     wabt = await import("wabt");
   } catch {
-    console.warn("wabt is not installed — the .wat/.wasm parity half of this check was skipped");
+    t.skip("wabt is not installed — .wat/.wasm parity check skipped (install wabt to verify)");
     return;
   }
   const module = await wabt.default();
