@@ -70,7 +70,10 @@ input { caret-color: var(--accent); }
 .skeleton .bar { display: block; width: 96px; height: 13px; border-radius: 4px; background: color-mix(in srgb, var(--ink) 10%, transparent); animation: settle 1.6s ease-in-out infinite; }
 .skeleton-visible { display: block; }
 @keyframes settle { 0%, 100% { opacity: .4; } 50% { opacity: 1; } }
-.empty { display: flex; flex-direction: column; align-items: center; gap: 12px; max-width: 52ch; }
+.empty { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; max-width: 62ch; text-align: left; }
+.empty-why { margin: 0; font-size: .8125rem; color: var(--warn); }
+.empty-action { margin: 0; }
+.empty-action .small-button { display: inline-flex; align-items: center; text-decoration: none; }
 .empty p { margin: 0; font-size: .875rem; color: var(--muted); }
 .samples { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 18px; list-style: none; margin: 0; padding: 0; }
 .samples button { padding: 2px 0; border: 0; background: none; color: color-mix(in srgb, var(--muted) 70%, var(--ink)); font-size: .8125rem; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: .25em; }

@@ -54,6 +54,11 @@
   html:has(dialog#confirm[open]) { overflow: hidden; }
   #dropzone { border: 1px dashed #3b3b48; border-radius: 8px; padding: 12px; color: #9a9aab; font-size: 13px; }
   #dropzone.over { border-color: #69f; color: #dcdcf5; }
+  .chooser { max-width: 78ch; font-size: 13px; line-height: 1.6; color: #b9b9c8; margin: 0 0 14px; }
+  .chooser strong { color: #e8e8ee; font-weight: 600; }
+  .tag { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 4px; font-size: 11px;
+         color: #b9b9c8; background: #23232c; border: 1px solid #33333f; }
+  .tag-good { color: #8ee39a; border-color: #2f5c3a; }
   .views { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
   .view { border: 1px solid #2a2a34; border-radius: 8px; padding: 12px; background: #15151b; min-height: 120px; }
   .view h3 { margin: 0 0 6px; font-size: 13px; letter-spacing: .04em; }
@@ -75,17 +80,21 @@
   <div id="project"></div>
 
   <h2>Open a project</h2>
+  <!-- WHICH ROOT DO I WANT? The two choices differ in who can act on them, and
+       that difference used to be discoverable only by being refused. Turns run
+       in the server, so today it can write only into a folder it can name. -->
+  <p class="chooser">A folder on <strong>this machine</strong> is the kind <strong>turns can write into</strong> today. A folder you <strong>pick in the browser</strong>, or this origin's private storage, is <strong>readable but not writable</strong> by turns: the root belongs to the page, and the server cannot address it yet.</p>
   <form id="open-form">
     <input id="project-name" value="atlas" aria-label="project name">
     <button type="submit">Open</button>
-    <button type="button" id="pick">Pick a folder…</button>
+    <button type="button" id="pick">Pick a folder… <span class="tag">read-only for turns</span></button>
     <button type="button" id="regrant" hidden>Restore write access</button>
   </form>
   <form id="machine-form">
     <input id="machine-path" placeholder="/a/folder/on/this/machine" aria-label="machine folder path" style="min-width:22rem">
-    <button type="submit">Use this folder for the loop</button>
+    <button type="submit">Use this folder for the loop <span class="tag tag-good">turns can write here</span></button>
   </form>
-  <div id="dropzone">or drop a folder here to make it a project root — the files stay where they are and this page becomes a window onto them</div>
+  <div id="dropzone">or drop a folder here to make it a project root — the files stay where they are and this page becomes a window onto them. <span class="tag">read-only for turns</span></div>
 
   <h2>Roots</h2>
   <div class="views">

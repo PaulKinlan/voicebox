@@ -171,6 +171,9 @@ test("frames: a text control frame is delivered to onText, not played", () => {
 // ── 3. Playback queue, scheduling, and the flush that "Stop reply" promises ──
 test("playback: frames queue in order, then Stop reply flushes the sources and returns to listening", async () => {
   const { client, media, contexts } = makeClient();
+  // The server's FIRST frame on /live is the rate — a test driving this client must produce the same wire
+  // order, now that capture REFUSES to run without one (journal-6g0).
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
   await client.startCapture(); // the user pressed the mic: capture is live
   assert.equal(client.snapshot().capture, true);
 
@@ -202,6 +205,9 @@ test("playback: frames queue in order, then Stop reply flushes the sources and r
 
 test("playback: a drained queue returns to listening without any Stop reply", async () => {
   const { client, contexts } = makeClient();
+  // The server's FIRST frame on /live is the rate — a test driving this client must produce the same wire
+  // order, now that capture REFUSES to run without one (journal-6g0).
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
   await client.startCapture();
   client.handleMessage(floatToPcm16(Float32Array.from([0.1])));
   const playCtx = contexts.find((c) => c.sampleRate === 24000);
@@ -217,6 +223,9 @@ test("state: labels derive from the real capture/playback state, and the readine
   const { client } = makeClient();
   assert.match(client.label(), /Mic off/);
 
+  // The server's FIRST frame on /live is the rate — a test driving this client must produce the same wire
+  // order, now that capture REFUSES to run without one (journal-6g0).
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
   await client.startCapture();
   assert.match(client.label(), /Waiting for the model · 0 frame\(s\) held/, "before setupComplete the wait is stated, not hidden");
 
@@ -240,6 +249,9 @@ test("capture: the worklet's Float32 chunks become PCM16 frames on the socket", 
     constructor() { super(); wired = this; }
   }
   const { client, contexts, socket } = makeClient({ AudioWorkletNodeCtor: Worklet });
+  // The server's FIRST frame on /live is the rate — a test driving this client must produce the same wire
+  // order, now that capture REFUSES to run without one (journal-6g0).
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
   await client.startCapture();
 
   const captureCtx = contexts.find((c) => c.sampleRate === 16000);
@@ -265,6 +277,9 @@ test("capture: the worklet's Float32 chunks become PCM16 frames on the socket", 
 // ── 6. The session can die; the page must not keep saying "connected" ────────
 test("state: an upstream-closed event ends the session truthfully, and capture stays independent", async () => {
   const { client, contexts } = makeClient();
+  // The server's FIRST frame on /live is the rate — a test driving this client must produce the same wire
+  // order, now that capture REFUSES to run without one (journal-6g0).
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
   await client.startCapture();
   client.handleMessage(JSON.stringify({ type: "state", state: "ready", model: "models/gemini-3.8-live", detail: { gatedFrames: 0 } }));
   client.handleMessage(floatToPcm16(Float32Array.from([0.1])));
@@ -289,6 +304,9 @@ test("state: an upstream-closed event ends the session truthfully, and capture s
 
 test("state: a socket close is ended, not 'listening'", async () => {
   const { client, socket } = makeClient();
+  // The server's FIRST frame on /live is the rate — a test driving this client must produce the same wire
+  // order, now that capture REFUSES to run without one (journal-6g0).
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
   await client.startCapture();
   client.handleMessage(JSON.stringify({ type: "state", state: "ready", detail: {} }));
   client.attachSocket(socket); // re-attach so the fake carries the handlers
@@ -297,6 +315,49 @@ test("state: a socket close is ended, not 'listening'", async () => {
   assert.equal(s.phase, "error");
   assert.match(s.label, /Live session ended/);
   assert.match(s.label, /1006/);
+});
+
+// ── the rate refusal, with the witness the rate work could not write ────────
+// journal-6g0: capture REFUSES to start when the server has not declared the
+// input rate, because a default here silently reintroduces the defect it closes
+// (the page declaring one rate and sending another). The author tried twice for
+// a witness and removed both attempts rather than assert something untrue —
+// because the refusal shared the device catch and therefore said "The
+// microphone is not available", which is not what happened. Fixed first, then
+// witnessed: the four facts below are each observable, and none of them needs a
+// microphone, a socket or a real device.
+test("capture refuses without a declared rate, and names the RATE rather than the microphone", async () => {
+  const { client, contexts, media } = makeClient();
+  let getUserMediaCalls = 0;
+  const nativeGetUserMedia = media.mediaDevices.getUserMedia;
+  media.mediaDevices.getUserMedia = (...args) => { getUserMediaCalls += 1; return nativeGetUserMedia(...args); };
+
+  await client.startCapture();
+  const s = client.snapshot();
+
+  assert.equal(s.capture, false, "no capture without a declared rate");
+  assert.equal(s.captureErrorReason, "rate-not-declared", "the reason is named as a kind, not inferred from prose");
+  assert.equal(s.ready, false, "nothing was negotiated, so nothing is ready");
+  assert.equal(getUserMediaCalls, 0, "the microphone is never opened for a capture that cannot be sent");
+  assert.equal(contexts.length, 0, "no AudioContext is built at an unknown rate");
+  assert.match(s.label, /input rate/i, "the sentence names the rate");
+  assert.doesNotMatch(s.label, /microphone is not available/i, "the microphone is fine and must not be blamed");
+  assert.doesNotMatch(s.label, /nothing is listening/i, "and it must not be dressed up as a session ending");
+
+  // The POSITIVE CONTROL: once the server declares a rate, the same call works
+  // and the context opens AT THAT RATE — the browser's pipeline does the
+  // conversion, which is the whole point of learning the number at runtime.
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 24000, provider: "openai-realtime" }));
+  await client.startCapture();
+  assert.equal(client.snapshot().capture, true);
+  assert.equal(client.snapshot().captureErrorReason, "", "the refusal is cleared by the user action that follows a declaration");
+  assert.equal(contexts.at(-1).sampleRate, 24000, "capture opens at the declared rate, not a remembered one");
+
+  // And a nonsense declaration is refused loudly rather than coerced.
+  const other = makeClient();
+  other.client.handleMessage(JSON.stringify({ type: "rate", inputRate: "sixteen thousand", provider: "bad" }));
+  assert.equal(other.client.snapshot().inputRate, null, "an unusable declaration leaves the session with no rate at all");
+  assert.ok(other.events.diagnostics.some((d) => d.kind === "refused" && /unusable input rate/.test(d.message)));
 });
 
 // ── the nonterminal error, pinned ───────────────────────────────────────────
@@ -309,6 +370,9 @@ test("state: a socket close is ended, not 'listening'", async () => {
 // terminal event" — so the page must agree with the host rather than guess.
 test("state: a provider error does NOT end the session, and the page says the audio is still being sent", async () => {
   const { client } = makeClient();
+  // The server's FIRST frame on /live is the rate — a test driving this client must produce the same wire
+  // order, now that capture REFUSES to run without one (journal-6g0).
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
   await client.startCapture();
   client.handleMessage(JSON.stringify({ type: "state", state: "ready", model: "models/gemini-3.8-live", detail: { gatedFrames: 0 } }));
 
@@ -340,6 +404,9 @@ test("state: a refused microphone is sticky — a later ready emit must not over
   const media = fakeMedia();
   media.mediaDevices.getUserMedia = async () => { throw new Error("Permission denied"); };
   const { client } = makeClient({ mediaDevices: media.mediaDevices });
+  // The server's FIRST frame on /live is the rate — a test driving this client must produce the same wire
+  // order, now that capture REFUSES to run without one (journal-6g0).
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
   await client.startCapture(); // caught internally: no unhandled rejection
   assert.match(client.label(), /microphone is not available/i);
   assert.match(client.label(), /Permission denied/);
@@ -350,6 +417,9 @@ test("state: a refused microphone is sticky — a later ready emit must not over
   assert.equal(client.snapshot().ready, true, "the session is still ready underneath");
   // the next user action clears it
   media.mediaDevices.getUserMedia = async () => media.stream;
+  // The server's FIRST frame on /live is the rate — a test driving this client must produce the same wire
+  // order, now that capture REFUSES to run without one (journal-6g0).
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
   await client.startCapture();
   assert.doesNotMatch(client.label(), /microphone is not available/i);
   assert.equal(client.snapshot().capture, true);

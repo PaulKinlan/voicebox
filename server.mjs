@@ -14,7 +14,7 @@ import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableF
 import { auditFileName, makeEntry, mergeAudit, nextSeq, parseEntry, resumeSeq, serializeEntry } from "./core/audit.ts";
 import * as extensions from "./lib/extensions.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
-import { createLiveSession, LIVE_MODEL } from "./lib/live-session.mjs";
+import { createLiveSession, LIVE_MODEL, inputRateRequiredBy, resolvedLiveProviderName } from "./lib/live-session.mjs";
 
 // Module-relative, decoded: `new URL(...).pathname` percent-encodes spaces and
 // silently points every read at a directory that does not exist.
@@ -761,6 +761,24 @@ server.on("upgrade", (req, socket) => {
   const ws = wsUpgrade(req, socket);
   if (!ws) { socket.destroy(); return; }
 
+  // STEP 2 OF THE RATE WORK: the page is told what rate to capture at BEFORE any audio is sent, ever.
+  //
+  // The defect this closes (journal-6g0): the browser captured at 16 kHz, the OpenAI provider declared
+  // 24 kHz to its vendor, and the PCM was forwarded unchanged — the provider told OpenAI one thing and sent
+  // another, and nothing in the path could notice. It hid because Gemini also takes 16 kHz: with one
+  // implementation nobody had to negotiate. So the FIRST frame on this socket is the requirement, it comes
+  // from the provider that will receive the audio, and a provider that has not declared one is REFUSED —
+  // guessing a provider's rate is the defect, so the host will not guess.
+  let inputRate = null;
+  try {
+    inputRate = inputRateRequiredBy(resolvedLiveProviderName());
+  } catch (e) {
+    ws.send(JSON.stringify({ type: "error", error: e?.message ?? String(e) }));
+    ws.close(1011, "provider has not declared the input rate its protocol requires");
+    return;
+  }
+  ws.send(JSON.stringify({ type: "rate", inputRate, provider: resolvedLiveProviderName() }));
+
   let session = null;
   try {
     session = createLiveSession({
@@ -806,18 +824,25 @@ server.on("upgrade", (req, socket) => {
 });
 
 /**
- * BINDING IS RETRIED, NOT FATAL.
+ * BINDING IS RETRIED, NOT FATAL — and this is the union of two fixes to the same defect, so say
+ * which half came from where.
  *
- * What this fixes, measured rather than guessed: with the port already taken, the old code died with
- * an uncaught `EADDRINUSE` — and under `node --watch` NOTHING restarts it until the next file change,
- * so the product sat there serving a front with no API behind it. Three actors hit that in one
- * evening, and this afternoon it was the reason Paul's page looked broken.
+ * The defect (five sightings in one day — Paul's console, coord's curls, the acceptance gate, and an
+ * eight-hour stretch where the front served while the API was dead): a `node --watch` supervisor
+ * restarts the child on every landing, the fresh child lost the bind race to the dying old one, and
+ * then NOTHING restarted it until the next file change. A port serving nothing, with the page none
+ * the wiser. What produces the taken port is usually ANOTHER SUPERVISOR (measured: the manager swept
+ * two strays in one recovery), so:
  *
- * The condition that produces it is "the port is taken at boot": a supervisor restarting faster than
- * the socket is released, a second supervisor, a lane that started its own copy, a stale process
- * nobody noticed. A server that exits on a transient bind failure during its own supervisor's
- * restart takes the product down every time somebody merges, so the retry lives HERE rather than only
- * in whatever script happens to start it — not every actor starts it through the manager.
+ *   · THE RETRY IS THE SAFETY NET, sized for that evidence: 30s, with a NAMED line at each attempt,
+ *     because a retry nobody can see is a hang that happens to succeed. When the deadline passes the
+ *     process exits with a sentence naming the port and how to find the holder — a dead port has to be
+ *     announced, not left as a stack trace nobody reads.
+ *   · THE GRACEFUL RELEASE IS THE FIX: a supervisor restarts by signalling its child, and that child
+ *     letting go immediately is what stops the next start from ever seeing a taken port. SIGINT too,
+ *     since half the actors here start it by hand.
+ *   · AND ERRORS AFTER BINDING ARE NOT SILENCE: a single steady-state handler, so a later socket
+ *     error says what happened instead of taking the process down with a stack trace.
  */
 const BIND_RETRY_MS = Number(process.env.VOICEBOX_BIND_RETRY_MS ?? 250);
 const BIND_DEADLINE_MS = Number(process.env.VOICEBOX_BIND_DEADLINE_MS ?? 30000);
@@ -828,9 +853,6 @@ function bindWithRetry(port, startedAt = Date.now()) {
       server.off("listening", onListening);
       const waited = Date.now() - startedAt;
       if (error?.code === "EADDRINUSE" && waited < BIND_DEADLINE_MS) {
-        // The window is sized from evidence, not politeness: what holds this port is usually ANOTHER
-        // SUPERVISOR still shutting down (measured tonight — the manager swept two strays in one
-        // recovery, and carries a sweep routine at all because duplicate supervisors keep happening).
         console.error(
           `[bind] waiting for 127.0.0.1:${port} to be released — held by another process (EADDRINUSE), ` +
             `${waited}ms so far; retrying every ${BIND_RETRY_MS}ms for up to ${BIND_DEADLINE_MS}ms. ` +
@@ -851,8 +873,6 @@ function bindWithRetry(port, startedAt = Date.now()) {
   });
 }
 
-// A DEAD PORT IS ANNOUNCED, not left as a stack trace nobody reads. Whoever started this process —
-// a manager script, a supervisor, a lane's shell — gets one sentence naming the port and the reason.
 try {
   const bound = await bindWithRetry(PORT);
   // The REAL port, not the requested one: PORT=0 asks the OS for a free port, and a test suite that
@@ -877,6 +897,12 @@ try {
 for (const signal of ["SIGTERM", "SIGINT"]) {
   process.on(signal, () => {
     server.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 1000).unref();
+    setTimeout(() => process.exit(0), 1000).unref(); // sockets must not outlive the exit
   });
 }
+
+// Once bound, an error is still not silence: a socket-level failure says what it was rather than
+// ending the process with a stack trace nobody reads.
+server.on("error", (e) => {
+  console.error(`[server] socket error on 127.0.0.1:${PORT} (${e?.code ?? e})`);
+});

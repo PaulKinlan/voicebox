@@ -14,9 +14,10 @@ const SVG = "http://www.w3.org/2000/svg";
 // inert while everything else keeps working (Paul hit this on 2026-09-19 by
 // reloading across a live edit).
 const WANTED = {
-  files: "files", made: "made-list", samples: "samples", count: "file-count",
+  files: "files", made: "made-list", samples: "samples", count: "file-count", empty: "empty",
+  emptyHeadline: "empty-headline", emptyNext: "empty-next", emptyWhy: "empty-why", emptyAction: "empty-action",
   where: "where-note", dot: "server-dot", refresh: "refresh", report: "turn-report", newFile: "new-file",
-  rootKind: "root-kind", rootNote: "root-note", madeHeading: "made-heading",
+  rootKind: "root-kind", madeHeading: "made-heading", emptyLink: "empty-link",
   stage: "voice-ring-wrap", mic: "mic", state: "voice-state",
   session: "session", log: "session-log", form: "text-form", utterance: "utterance", send: "send",
   reader: "reader", readerTitle: "reader-title", readerFacts: "file-facts", readerBody: "file-body",
@@ -128,13 +129,115 @@ function placeholder() {
   return li;
 }
 
+// ── the empty room: the first sentence has to be what to DO next ───────────
+//
+// A first-time reader used to meet a wall of caveats plus three sample turns —
+// and with a picked-folder or OPFS root the samples could not land at all: the
+// room writes through the local server, and the server cannot act on a
+// root the page owns. Measured on the served page with a picked folder open:
+// the page invited "create a file called …" and the turn came back
+// refused: root-not-reachable-from-here. A promise the system refuses is worse
+// than a caveat, so the promise is now gated on the same fact the server uses,
+// and every refusal keeps its named cause.
+function renderEmptyState() {
+  const headline = els.emptyHeadline;
+  const next = els.emptyNext;
+  if (!headline || !next) return;
+
+  const sampleList = els.samples;
+  const showSamples = (allowed) => { if (sampleList) sampleList.hidden = !allowed; };
+
+  // 1. no answer from the server: nothing can be written, and saying so is the
+  //    useful sentence.
+  if (els.dot?.dataset.ok === "false") {
+    headline.textContent = "Start the local server.";
+    next.textContent = "It is not answering, so nothing can be written yet — start it, then press Refresh.";
+    if (els.emptyWhy) { els.emptyWhy.hidden = true; }
+    if (els.emptyAction) els.emptyAction.hidden = true;
+    if (els.emptyLink) els.emptyLink.textContent = "Open the environment page";
+    showSamples(false);
+    setComposerEnabled(false, "the local server is not answering, so a turn cannot be written");
+    return;
+  }
+
+  // 2. no root declared: the next action is to open a project, and that is a
+  //    different page, so the page points at it.
+  if (activeRoot === null) {
+    // A remedy with no route is worse than a bare refusal: it reads as though
+    // the way exists and you simply cannot find it. Paul asked "How do I set the
+    // project root? I don't see any configuration" while looking at a sentence
+    // that named the remedy and offered no way to reach it (2026-09-20), so the
+    // route is the first thing after the sentence — a real link, labelled with
+    // where it goes.
+    headline.textContent = "Open a project.";
+    // The chip already said the state. This line says only the route.
+    next.textContent = "The environment page is where the root this room writes into is chosen.";
+    if (els.emptyAction) els.emptyAction.hidden = false;
+    if (els.emptyLink) els.emptyLink.textContent = "Open the environment page";
+    if (els.emptyWhy) { els.emptyWhy.hidden = true; }
+    showSamples(false);
+    setComposerEnabled(false, "no project root is declared, so a turn has nothing to write into");
+    return;
+  }
+
+  // 3. a root this server cannot act on (a picked folder, this origin's
+  //    storage): name the kind FIRST, then the reachability, then what to do.
+  if (activeRoot !== undefined && !activeRoot.reachableFromThisProcess) {
+    const where = activeRoot.facts?.where ?? "this project's root";
+    // The ACTION is the headline; the limitation is the sentence under it. A
+    // first-time reader should meet the next step first, not a list of what is
+    // missing (coord, 2026-09-20).
+    // The state's cause, once, then the remedy. The kinds themselves are taught
+    // where the choice is made (the environment page), not repeated here.
+    headline.textContent = "This project's root is read-only for turns.";
+    next.textContent = `Turns run in the local server and this root belongs to the page, so a typed turn is refused: ${where} is not a root the server can act on. Choose a different root in the environment page, or work in the page that owns this one.`;
+    if (els.emptyWhy) { els.emptyWhy.textContent = activeRoot.why ?? ""; els.emptyWhy.hidden = !activeRoot.why; }
+    if (els.emptyAction) els.emptyAction.hidden = false;
+    if (els.emptyLink) els.emptyLink.textContent = "Open the environment page";
+    showSamples(false);
+    setComposerEnabled(false, activeRoot.why ?? "the open root is one only the page can act on");
+    return;
+  }
+
+  // 4. a writable root and nothing made: NOW the promise is true, and the
+  //    samples are the shortcut to keeping it.
+  const root = activeRoot?.root;
+  const base = root?.path ?? root?.name ?? root?.label ?? "";
+  headline.textContent = "Say or type something that names a file.";
+  next.textContent = base
+    ? `It lands in ${base.replace(/\/$/, "")}/ — or try one:`
+    : "It lands here — or try one:";
+  if (els.emptyWhy) els.emptyWhy.hidden = true;
+  if (els.emptyAction) els.emptyAction.hidden = true;
+  showSamples(true);
+  setComposerEnabled(true);
+}
+
+// The input is where a person actually types, so it carries the same truth as
+// the empty state: it must not say "Try: create a file…" while the page says
+// nothing typed can land. (The cold read of the first version of this empty
+// state caught exactly that: samples hidden, placeholder still inviting.)
+function setComposerEnabled(canLand, why = "") {
+  const input = els.utterance;
+  if (!input) return;
+  if (canLand) {
+    input.placeholder = "Or type a turn…";
+    input.removeAttribute("title");
+    return;
+  }
+  input.placeholder = "Or type a turn…";
+  if (why) input.title = `a turn would be refused here: ${why}`;
+}
+
 function render() {
   const count = entries.length;
   if (!els.files || !els.made || !els.count) return;
-  els.files.replaceChildren(...(count === 0 ? [placeholder()] : entries.map(card)));
+  const writable = activeRoot === undefined || activeRoot?.reachableFromThisProcess === true;
+  els.files.replaceChildren(...(count === 0 ? (writable ? [placeholder()] : []) : entries.map(card)));
   els.made.dataset.state = count === 0 ? "empty" : "ready";
   els.files.setAttribute("aria-busy", "false");
-  els.count.textContent = count === 0 ? "nothing yet" : `${count} ${count === 1 ? "file" : "files"}`;
+  els.count.textContent = count === 0 ? "" : `${count} ${count === 1 ? "file" : "files"}`;
+  renderEmptyState();
   if (shownFile && !entries.some((entry) => entry.name === shownFile)) shownFile = null;
   if (shownFile) showFileSelection(shownFile);
 }
@@ -176,44 +279,35 @@ async function loadRoot() {
     activeRoot = undefined; // an older server with no root seam: say so, do not invent one
   }
   renderRoot();
+  // The list's placeholder chip is a promise too ("the first file appears
+  // here"), so it is decided with the root facts in hand rather than before
+  // they arrive.
+  render();
 }
 
+// THE HEADER STATES THE STATE, ONCE, and explains nothing. "no root declared"
+// is a status; the explanation and the remedy live in the empty state, where a
+// person is about to act. The server's full description stays in the chip's
+// title for anyone who asks for it, because a tooltip is not a second voice on
+// the screen (coord, 2026-09-20: one fact was on screen three times).
 function renderRoot() {
   const kindEl = els.rootKind;
-  const noteEl = els.rootNote;
-  if (!kindEl || !noteEl) return;
-  const clear = () => { noteEl.hidden = true; noteEl.textContent = ""; noteEl.dataset.tone = ""; };
+  if (!kindEl) return;
 
   if (activeRoot === undefined) {
     kindEl.textContent = "root not reported";
-    noteEl.textContent = "This server does not say which root the loop writes into, so this page cannot name it.";
-    noteEl.dataset.tone = "warn";
-    noteEl.hidden = false;
+    kindEl.title = "this server does not say which root the loop writes into";
     return;
   }
   if (activeRoot === null) {
     kindEl.textContent = "no root declared";
-    noteEl.textContent = "No project root is declared, so there is nothing for a turn to write into — the environment declares one when it opens a project.";
-    noteEl.dataset.tone = "warn";
-    noteEl.hidden = false;
+    kindEl.removeAttribute("title");
     return;
   }
-
   const where = activeRoot.facts?.where ?? activeRoot.root?.kind ?? "a root";
   const name = activeRoot.root?.path ?? activeRoot.root?.name ?? activeRoot.root?.label ?? "";
   kindEl.textContent = name ? `${where} · ${name}` : where;
   kindEl.title = activeRoot.description ?? "";
-
-  if (!activeRoot.reachableFromThisProcess) {
-    // Kind first (in the chip), then reachability in the server's own words —
-    // which distinguish "no root yet" from "a root this placement cannot act
-    // on". Never "permission denied" for a kind that has no permission story.
-    noteEl.textContent = activeRoot.why ?? activeRoot.refused ?? "this server cannot act on that root";
-    noteEl.dataset.tone = "warn";
-    noteEl.hidden = false;
-    return;
-  }
-  clear();
 }
 
 async function health() {
@@ -233,6 +327,8 @@ async function health() {
     if (els.where) { els.where.textContent = "no answer from the local server"; els.where.title = ""; }
     stampBuild(null);
     if (els.rootKind) els.rootKind.textContent = "root unknown";
+    if (els.dot) els.dot.dataset.ok = "false";
+    renderEmptyState();
     if (els.rootNote) { els.rootNote.textContent = "The local server is not answering, so which root it writes into cannot be checked."; els.rootNote.dataset.tone = "warn"; els.rootNote.hidden = false; }
   }
 }

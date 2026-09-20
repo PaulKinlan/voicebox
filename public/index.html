@@ -12,6 +12,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
   <script type="module" src="fused.js"></script>
+  <script type="module" src="pip-mic.mjs"></script>
   <script type="module" src="live-voice.js"></script>
 </head>
 <body>
@@ -30,10 +31,12 @@
       <h1 class="wordmark"><a href="./">voicebox</a></h1>
       <p class="where"><span class="dot" id="server-dot" data-ok="pending" aria-hidden="true"></span><span id="where-note">checking the local server…</span><span class="where-sep" aria-hidden="true">·</span><span id="root-kind">checking which root…</span></p>
     </header>
-    <!-- Which root the loop writes into, and who acts on it: the page shows the
-         kind before anything about reachability, because "there is no picked
-         folder here" is not "permission denied". -->
-    <p class="root-note" id="root-note" role="status" hidden></p>
+    <!-- The header states the state ONCE, in the chip beside the server dot, and
+         says nothing else about it: "no root declared" is a status, not an
+         explanation. The explanation and the remedy live in the empty state,
+         which is where a person is about to act (coord, 2026-09-20: the same
+         fact was on screen three times). The chip's title still carries the
+         server's full description for anyone who asks for it. -->
 
     <main class="stage" id="made" tabindex="-1">
       <section class="made" id="made-list" data-state="loading" aria-labelledby="made-heading">
@@ -41,7 +44,10 @@
         <p class="made-note" id="file-count">reading…</p>
         <ul class="files" id="files" role="list" aria-busy="true"></ul>
         <div class="empty" id="empty">
-          <p>Say or type something that names a file and it lands here — or try one:</p>
+          <h3 id="empty-headline">Nothing made yet.</h3>
+          <p id="empty-next">Say or type something that names a file and it lands here.</p>
+          <p class="empty-why" id="empty-why" hidden></p>
+          <p class="empty-action" id="empty-action" hidden><a class="small-button" id="empty-link" href="/environment.html">Open a project</a></p>
           <ul class="samples" id="samples" role="list"></ul>
         </div>
         <div class="made-actions">

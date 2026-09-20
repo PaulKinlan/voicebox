@@ -35,18 +35,17 @@
 // the local front, not about the product.
 import { spawn, execFileSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
-import { closeSync, existsSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { startServer } from "../tests/lib/server.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TREE = process.env.VOICEBOX_TREE ?? ROOT;
 const SHARED_UI = process.env.VOICEBOX_UI_URL ?? "http://127.0.0.1:5173";
 const SHARED_API = process.env.VOICEBOX_API_URL ?? "http://127.0.0.1:8787";
-const PRIVATE_PORT = 9900 + (process.pid % 50); // 9900-9948 — disjoint from CDP above (F4)
-const PRIVATE_ORIGIN = `http://127.0.0.1:${PRIVATE_PORT}`;
-const CDP_PORT = 9500 + (process.pid % 400); // 9500-9899 — disjoint from the private range below (F4)
+let PRIVATE_ORIGIN = "(private instance: port read at spawn)"; // ephemeral: PORT=0, read from the startup banner
 const NAME = `acceptance-proof-${process.pid}.txt`; // hoisted: the finally must see it
 
 const results = [];
@@ -60,7 +59,8 @@ const cleanupArtefacts = () => {
   try { if (scratchRoot) for (const f of readdirSync(scratchRoot)) if (/^acceptance-proof-.*\.txt$/.test(f)) rmSync(path.join(scratchRoot, f)); } catch {}
 };
 let privateServer = null;
-const killPrivate = () => { try { privateServer?.kill(); } catch {} };
+let privateStop = null;
+const killPrivate = () => { try { privateStop?.(); } catch { try { privateServer?.kill(); } catch {} } };
 process.on("SIGTERM", () => { cleanupArtefacts(); killPrivate(); process.exit(143); });
 process.on("SIGINT", () => { cleanupArtefacts(); killPrivate(); process.exit(130); });
 process.on("uncaughtException", (e) => { cleanupArtefacts(); killPrivate(); try { chromium?.kill(); } catch {} console.log(`FAIL  uncaught: ${String(e?.message ?? e).slice(0, 140)}`); process.exit(1); });
@@ -71,15 +71,16 @@ process.on("uncaughtException", (e) => { cleanupArtefacts(); killPrivate(); try 
 // the private half owns its own server.
 const chromium = spawn("/usr/bin/chromium", [
   "--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
-  `--remote-debugging-port=${CDP_PORT}`, `--user-data-dir=/tmp/vb-accept-profile-${process.pid}`, "about:blank",
-], { stdio: ["ignore", "ignore", "ignore"] });
+  "--remote-debugging-port=0", `--user-data-dir=/tmp/vb-accept-profile-${process.pid}`, "about:blank",
+], { stdio: ["ignore", "pipe", "pipe"] });
 
 let wsUrl = "";
+chromium.stderr.on("data", (d) => {
+  const m = String(d).match(/ws:\/\/[^\s]+\/devtools\/browser\/[^\s]+/);
+  if (m && !wsUrl) wsUrl = m[0];
+});
 const t0 = Date.now();
-while (!wsUrl && Date.now() - t0 < 10000) {
-  try { wsUrl = (await (await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`)).json()).webSocketDebuggerUrl; }
-  catch { await sleep(200); }
-}
+while (!wsUrl && Date.now() - t0 < 10000) await sleep(200);
 if (!wsUrl) { console.log("FAIL  harness could not start a browser — is chromium present?"); chromium.kill(); process.exit(1); }
 
 const ws = new WebSocket(wsUrl);
@@ -118,13 +119,18 @@ try {
   console.log(`── phase A: shared front ${SHARED_UI} (GET-only; witness below) · measuring tree: ${TREE}${TREE === ROOT ? " (default: this repo)" : ""}`);
 
   const servedRefs = [];
-  const indexHtml = await (await fetch(`${SHARED_UI}/`)).text();
-  for (const m of indexHtml.matchAll(/(?:src|href)="([^"#][^"]*)"/g)) {
+// EVERY page in public/, not just index — environment.html loaded a module
+// that 404'd through the dev front while its HTML returned 200, and a walk of
+// index.html alone could never see it (Paul's console, 2026-09-20).
+for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWith(".html"))) {
+  const html = await (await fetch(`${SHARED_UI}/${page}`)).text();
+  for (const m of html.matchAll(/(?:src|href)="([^"#][^"]*)"/g)) {
     const raw = m[1].split("?")[0];
     if (raw === "" || !/\.[a-z0-9]+$/i.test(raw)) continue;
-    if (raw.startsWith("@") || raw.startsWith("/")) continue;
-    servedRefs.push(raw);
+    if (raw.startsWith("/@") || raw.startsWith("/@fs")) continue; // vite's virtual namespaces
+    servedRefs.push(raw.startsWith("/") ? raw.slice(1) : path.posix.join(path.posix.dirname(page), raw));
   }
+}
   const staleModules = [];
   const compared = new Set();
   while (servedRefs.length) {
@@ -134,7 +140,10 @@ try {
     let served, disk;
     try {
       served = await (await fetch(`${SHARED_UI}/${ref}`)).text();
-      disk = readFileSync(path.join(TREE, "public", ref), "utf8");
+      const diskCandidates = [path.join(TREE, "public", ref), path.join(TREE, ref)];
+    const diskPath = diskCandidates.find((c) => existsSync(c));
+    if (!diskPath) { staleModules.push(`${ref} (not on disk under the measured tree)`); continue; }
+    disk = readFileSync(diskPath, "utf8");
     } catch (e) {
       staleModules.push(`${ref} (${e.message})`);
       continue;
@@ -208,27 +217,14 @@ try {
 
   // ════ PHASE B — [private]: every mutating check, own server ══════════════
   console.log(`── phase B: private instance ${PRIVATE_ORIGIN} (spawned by this run; killed at exit)`);
-  // F3: the child's stderr goes to a file — stdio:ignore once hid an
-  // EADDRINUSE death behind a misleading "did not come up".
-  const privateLog = `/tmp/vb-accept-private-${process.pid}.log`;
-  const privateLogFd = openSync(privateLog, "w");
-  privateServer = spawn("node", ["server.mjs"], {
-    cwd: TREE, env: { ...process.env, PORT: String(PRIVATE_PORT) },
-    stdio: ["ignore", "ignore", privateLogFd],
-  });
-  privateServer.on("error", (e) => console.log(`note: private server spawn error: ${e.message}`));
-  let privateUp = false;
-  const t1 = Date.now();
-  while (!privateUp && Date.now() - t1 < 10000) {
-    try { privateUp = (await (await fetch(`${PRIVATE_ORIGIN}/api/health`)).json()).ok === true; } catch { await sleep(200); }
-  }
-  if (!privateUp) {
-    let logTail = "(no log)";
-    try { logTail = readFileSync(privateLog, "utf8").trim().split("\n").slice(-3).join(" | ") || "(empty)"; } catch {}
-    closeSync(privateLogFd);
-    throw new Error(`the private server instance did not come up — its log (${privateLog}) ends: ${logTail}`);
-  }
-  closeSync(privateLogFd);
+  // F3/F4 resolved by REUSE: tests/lib/server.mjs (vb-e1m0's helper, taken
+  // verbatim into this landing) binds PORT=0, reads the real port off the
+  // server's own startup line, health-waits, and its stop() kills the whole
+  // process group — an EADDRINUSE can no longer hide, and nothing self-collides.
+  const started = await startServer({ cwd: TREE });
+  privateServer = started.child;
+  privateStop = started.stop;
+  PRIVATE_ORIGIN = started.base;
 
   // on a FRESH instance the refusal is guaranteed, so it is asserted EVERY run
   const refusal = await (await fetch(`${PRIVATE_ORIGIN}/api/root`)).json();

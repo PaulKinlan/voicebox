@@ -17,7 +17,22 @@
 import { floatToPcm16, pcm16ToFloat, isPcm16, energy } from "./pcm.js";
 
 const PLAYBACK_RATE = 24000; // provider output, PCM16 (Gemini Live)
-const CAPTURE_RATE = 16000; // what we send; the browser resamples the device
+
+// THE RATE THE PROVIDER REQUIRES, TOLD TO US BY THE SERVER on the first frame of the /live socket
+// ({"type":"rate","inputRate":…,"provider":…}). There is deliberately NO DEFAULT: Gemini takes 16 kHz and
+// OpenAI takes 24 kHz, and the browser captured at 16 kHz while the OpenAI provider declared 24 kHz to its
+// vendor — so the provider told OpenAI one thing and sent another, and nothing in the path could notice
+// (journal-6g0). It hid because with one implementation nobody had to negotiate. So the page now captures at
+// the rate it was TOLD, and refuses to capture at all when it has not been told — the same posture as the
+// host, which refuses to guess a provider's rate rather than defaulting it. The browser's own pipeline does
+// the conversion, so there is still no hand-rolled resampler anywhere in this path.
+// The declared input rate lives in `state`, NOT in a module variable. It is a
+// per-session fact — the host sends it as the first frame on ITS socket — so a
+// module-level copy leaks one session's rate into the next client, and that leak
+// is what made the refusal unwitnessable: any test written after another capture
+// test saw a rate that this client was never told, so "capture refuses without a
+// declared rate" was simply false. (journal-6g0 named the missing witness; this
+// leak is why two attempts could not be made true.)
 
 // The two meters the page draws — the person's own voice, and the agent's.
 // 28 bars of recent input energy, 64 samples around the circle for the output,
@@ -55,7 +70,10 @@ export function createAudioClient({
     framesRejected: 0,
     framesIgnoredAfterEnd: 0,
     captureError: "", // sticky refusal: survives later state emits until the next user action
+    captureErrorReason: "", // WHY it refused: "rate-not-declared" is not a device failure
     lastError: "",
+    inputRate: null, // declared by the server on this socket; there is no default
+    provider: "",
   };
   let captureCtx = null;
   let captureNode = null;
@@ -194,6 +212,18 @@ export function createAudioClient({
       msg = JSON.parse(text);
     } catch {
       reject(`control frame is not JSON (${text.slice(0, 60)})`, { frameKind: "text" });
+      return;
+    }
+    if (msg?.type === "rate") {
+      // The first frame on the socket, by the host's contract: what to capture at, and who is asking. An
+      // unusable number is refused loudly rather than coerced into something plausible.
+      const rate = Number(msg.inputRate);
+      if (!Number.isFinite(rate) || rate <= 0) {
+        reject(`the server declared an unusable input rate (${JSON.stringify(msg.inputRate)})`, { frameKind: "control" });
+        return;
+      }
+      state.inputRate = rate;
+      state.provider = typeof msg.provider === "string" ? msg.provider : state.provider;
       return;
     }
     if (msg?.type === "state") {
@@ -369,13 +399,32 @@ export function createAudioClient({
   async function startCapture({ deviceId = null } = {}) {
     if (state.capture) return;
     state.captureError = ""; // a new user action clears the sticky refusal
+    state.captureErrorReason = "";
     emit("starting");
     try {
       if (!mediaDevices?.getUserMedia || !AudioContextCtor || !AudioWorkletNodeCtor) {
         throw new Error("this browser has no microphone capture (getUserMedia/AudioContext/AudioWorklet unavailable)");
       }
+      if (!Number.isFinite(state.inputRate)) {
+        // NOT a default and not a guess: the provider's protocol decides this number, and sending audio at a
+        // rate the provider does not accept is exactly the defect this closes. The page says so instead.
+        //
+        // And it says so as a RATE refusal, not as a device failure. Both paths used to share the catch
+        // below, so this came out as "The microphone is not available: …" — naming the wrong cause, the
+        // same mistake as blaming the /live route for a server that was restarting. The cause is a missing
+        // declaration from the server; the microphone is fine and untouched.
+        state.captureErrorReason = "rate-not-declared";
+        state.captureError =
+          "The server has not declared the input rate its provider needs, so capture was not started. " +
+          "Sending audio at a guessed rate is the defect this refuses (journal-6g0). The text path still works.";
+        state.lastError = state.captureError;
+        onDiagnostic({ kind: "refused", message: state.captureError, reason: "rate-not-declared" });
+        emit("idle", { rateNotDeclared: true });
+        return;
+      }
       stream = await mediaDevices.getUserMedia({ audio: deviceId ? { deviceId: { exact: deviceId } } : true });
-      captureCtx = new AudioContextCtor({ sampleRate: CAPTURE_RATE });
+      // The browser's own pipeline converts the device's audio to this rate — no resampler of ours.
+      captureCtx = new AudioContextCtor({ sampleRate: state.inputRate });
       await captureCtx.audioWorklet.addModule(workletUrl);
       captureNode = new AudioWorkletNodeCtor(captureCtx, "pcm-capture");
       captureSource = captureCtx.createMediaStreamSource(stream);
@@ -396,6 +445,7 @@ export function createAudioClient({
     } catch (error) {
       // Report it here, not as an unhandled rejection: the same sentence is
       // written by the page adapter's catch, so both paths agree.
+      state.captureErrorReason = state.captureErrorReason || "device";
       state.captureError = `The microphone is not available: ${error?.message ?? error}. The text path still works.`;
       state.lastError = state.captureError;
       emit("error", { captureFailed: true });
