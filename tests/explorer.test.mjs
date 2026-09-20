@@ -52,7 +52,7 @@ test.before(async () => {
   mkdirSync(machineRoot);
   server = await startServer({
     cwd: ROOT,
-    env: { ...process.env, VOICEBOX_INSTANCE: "explorer" },
+    env: { VOICEBOX_WORKSPACE: undefined, VOICEBOX_INSTANCE: "explorer" },
   });
   BASE = server.base;
   page = await launch();

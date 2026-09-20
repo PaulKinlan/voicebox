@@ -196,7 +196,7 @@ test("with NO root declared the loop refuses by name and writes nothing anywhere
   // A second server, no declaration at all: no default to fall back to, and no act performed.
   const bareCwd = path.join(scratch, "bare-cwd");
   mkdirSync(bareCwd);
-  const bare = await startServer({ cwd: bareCwd, env: { VOICEBOX_INSTANCE: "machine-bare" } });
+  const bare = await startServer({ cwd: bareCwd, env: { VOICEBOX_WORKSPACE: undefined, VOICEBOX_INSTANCE: "machine-bare" } });
   const base = bare.base;
   try {
 

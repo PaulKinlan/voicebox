@@ -38,7 +38,7 @@ const agent = (message) => page.evaluate((m) => window.__agent.send(m), message)
 test.before(async () => {
   server = await startServer({
     cwd: ROOT,
-    env: { ...process.env, VOICEBOX_INSTANCE: "two-agents" },
+    env: { VOICEBOX_WORKSPACE: undefined, VOICEBOX_INSTANCE: "two-agents" },
   });
   BASE = server.base;
   page = await launch();

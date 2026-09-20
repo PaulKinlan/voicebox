@@ -65,7 +65,7 @@ test.before(async () => {
   folderName = path.basename(folder);
   server = await startServer({
     cwd: ROOT,
-    env: { ...process.env, VOICEBOX_INSTANCE: "n20-denied" },
+    env: { VOICEBOX_WORKSPACE: undefined, VOICEBOX_INSTANCE: "n20-denied" },
   });
   BASE = server.base;
   page = await launch({ profile: blockedProfile(server.port) });

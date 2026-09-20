@@ -53,7 +53,7 @@ const openSettings = async () => {
 test.before(async () => {
   server = await startServer({
     cwd: ROOT,
-    env: { VOICEBOX_INSTANCE: "settings-test" },
+    env: { VOICEBOX_WORKSPACE: undefined, VOICEBOX_INSTANCE: "settings-test" },
   });
   BASE = server.base;
   page = await launch();

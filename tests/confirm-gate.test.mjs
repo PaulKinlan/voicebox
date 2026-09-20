@@ -72,7 +72,7 @@ const lastAnswer = () =>
 test.before(async () => {
   server = await startServer({
     cwd: ROOT,
-    env: { VOICEBOX_INSTANCE: "gate-test" },
+    env: { VOICEBOX_WORKSPACE: undefined, VOICEBOX_INSTANCE: "gate-test" },
   });
   BASE = server.base;
   page = await launch();

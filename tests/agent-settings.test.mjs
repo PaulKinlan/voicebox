@@ -37,7 +37,7 @@ let BASE;
 test.before(async () => {
   // A private instance on an ephemeral port: this suite changes settings, so it must not touch
   // anybody's running server.
-  server = await startServer({ cwd: ROOT, env: { VOICEBOX_INSTANCE: "agent-settings-test" } });
+  server = await startServer({ cwd: ROOT, env: { VOICEBOX_WORKSPACE: undefined, VOICEBOX_INSTANCE: "agent-settings-test" } });
   BASE = server.base;
 });
 

@@ -66,7 +66,7 @@ test.before(async () => {
   writeFileSync(path.join(folder, "notes", "deep.txt"), "nested\n");
   server = await startServer({
     cwd: ROOT,
-    env: { ...process.env, VOICEBOX_INSTANCE: "n20-picked" },
+    env: { VOICEBOX_WORKSPACE: undefined, VOICEBOX_INSTANCE: "n20-picked" },
   });
   BASE = server.base;
   page = await launch();

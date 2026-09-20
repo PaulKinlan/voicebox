@@ -33,7 +33,7 @@ const send = (message) => page.evaluate((m) => window.e1m0.send(m), message);
 test.before(async () => {
   server = await startServer({
     cwd: ROOT,
-    env: { ...process.env, VOICEBOX_INSTANCE: "e1m0-browser" },
+    env: { VOICEBOX_WORKSPACE: undefined, VOICEBOX_INSTANCE: "e1m0-browser" },
   });
   BASE = server.base;
   browser = await launch();
