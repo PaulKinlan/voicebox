@@ -223,6 +223,7 @@ export function createAudioClient({
         return;
       }
       state.inputRate = rate;
+      refreshRateContradiction();
       state.provider = typeof msg.provider === "string" ? msg.provider : state.provider;
       return;
     }
@@ -274,7 +275,18 @@ export function createAudioClient({
       reject(String(msg.message ?? "server error"), { frameKind: "control-error" });
       return;
     }
-    reject(`unrecognised control frame type ${JSON.stringify(msg?.type ?? null)}`, { frameKind: "control-unknown" });
+    // AN UNKNOWN CONTROL TYPE IS NOT A MALFORMED FRAME. It parsed as JSON and it
+    // has a shape; it is a type this client does not handle YET — the protocol
+    // is additive (`{type:"tool"}` arrived with the live-tools work while this
+    // client was still the old one). Calling it malformed printed
+    // "Ignored a malformed frame: unrecognised control frame type \"tool\""
+    // on the real page after a SUCCESSFUL tool write: the client complaining
+    // about a perfectly good event, in the file whose job is to tell the truth
+    // about frames (coord, 2026-09-20).
+    //
+    // So: ignore it, say so as a DIAGNOSTIC, and leave the malformed frames
+    // loud. Truncated, empty, odd-length and non-JSON frames are still refusals.
+    onDiagnostic({ kind: "ignored-control", type: msg?.type ?? null, message: "a control frame type this client does not handle yet" });
   }
 
   function enqueuePcm16(bytes) {
@@ -370,11 +382,33 @@ export function createAudioClient({
     onDiagnostic({ kind: "session-ended", state: kind, detail });
   }
 
+  /**
+   * THE CONTRADICTION IS A FUNCTION OF TWO VALUES, so it is evaluated wherever either of them is written —
+   * not once when the object is built. Computing it only at construction was the defect the regression found:
+   * a LATE accepted declaration left {captureRate: 16000, rateContradiction: null}, so the one state whose
+   * entire purpose is to name a disagreement missed the disagreement. The declaration is a request; the
+   * context's own rate is the fact.
+   */
+  function refreshRateContradiction() {
+    state.rateContradiction =
+      Number.isFinite(state.captureRate) && Number.isFinite(state.inputRate) && state.captureRate !== state.inputRate
+        ? { declared: state.inputRate, running: state.captureRate }
+        : null;
+    if (state.rateContradiction) onDiagnostic({ kind: "rate-contradiction", ...state.rateContradiction });
+  }
+
   function attachSocket(next) {
     // A new socket is a new session: clear the ended state from the last one.
     state.sessionEnded = false;
     state.providerError = null;
     state.lastError = "";
+    // THE RATE BELONGS TO THE CONNECTION, and this line is the defect astra found by driving the real page
+    // with a native mic: the value was RETAINED across sockets, so the FIRST press refused with
+    // rate-not-declared and the SECOND press "worked" by reading a leftover number rather than one received on
+    // this connection. A retry that succeeds on stale state is the thing hiding the failure it retries.
+    state.inputRate = null;
+    state.captureRate = null;
+    state.rateContradiction = null;
     ws = next;
     if (!ws) return;
     ws.binaryType = "arraybuffer";
@@ -406,6 +440,23 @@ export function createAudioClient({
         throw new Error("this browser has no microphone capture (getUserMedia/AudioContext/AudioWorklet unavailable)");
       }
       if (!Number.isFinite(state.inputRate)) {
+        // THE RATE ARRIVES FIRST ON THE WIRE, SO THE CLIENT MUST NOT OUTRUN IT. live-voice starts capture in
+        // the open continuation; the queued rate frame has not been dispatched yet at that moment, so this
+        // path was reached on every FIRST press — astra drove the real page with a native mic and saw 0
+        // getUserMedia calls, then success on the second press from the retained value. Waiting is the correct
+        // behaviour here, not refusing: the frame is already in flight on this socket, and the design's whole
+        // point is that the rate arrives before the audio it describes. Bounded, so a server that never
+        // declares one still gets the refusal below rather than a hang.
+        const rateWaitStarted = Date.now();
+        const rateWaitBoundMs = 5000;
+        while (!Number.isFinite(state.inputRate) && Date.now() - rateWaitStarted < rateWaitBoundMs) {
+          await new Promise((r) => setTimeout(r, 25));
+        }
+        if (Number.isFinite(state.inputRate)) {
+          onDiagnostic({ kind: "rate-arrived", waitedMs: Date.now() - rateWaitStarted, rate: state.inputRate });
+        }
+      }
+      if (!Number.isFinite(state.inputRate)) {
         // NOT a default and not a guess: the provider's protocol decides this number, and sending audio at a
         // rate the provider does not accept is exactly the defect this closes. The page says so instead.
         //
@@ -425,6 +476,19 @@ export function createAudioClient({
       stream = await mediaDevices.getUserMedia({ audio: deviceId ? { deviceId: { exact: deviceId } } : true });
       // The browser's own pipeline converts the device's audio to this rate — no resampler of ours.
       captureCtx = new AudioContextCtor({ sampleRate: state.inputRate });
+      // THE DECLARATION IS A REQUEST; THE CONTEXT'S OWN RATE IS THE FACT. astra measured a reattached client
+      // whose snapshot said 24000 while PCM kept flowing at 16000 and nothing noticed — a number on screen
+      // that had stopped describing the thing it names, which is this evening's whole theme. So the reported
+      // rate is read back from the context, and a disagreement between what was declared and what is running
+      // is a NAMED contradiction rather than a smoothed-over agreement with the frame.
+      state.captureRate = Number.isFinite(captureCtx.sampleRate) ? captureCtx.sampleRate : null;
+      state.rateContradiction =
+        state.captureRate !== null && state.captureRate !== state.inputRate
+          ? { declared: state.inputRate, running: state.captureRate }
+          : null;
+      if (state.rateContradiction) {
+        onDiagnostic({ kind: "rate-contradiction", ...state.rateContradiction });
+      }
       await captureCtx.audioWorklet.addModule(workletUrl);
       captureNode = new AudioWorkletNodeCtor(captureCtx, "pcm-capture");
       captureSource = captureCtx.createMediaStreamSource(stream);

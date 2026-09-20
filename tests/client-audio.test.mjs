@@ -123,7 +123,7 @@ test("pcm: odd-length and empty payloads are refused by the validator", () => {
 });
 
 // ── 2. Malformed frames: error + surviving connection ───────────────────────
-test("frames: truncated, empty, JSON-in-binary-slot, bad JSON and unknown types all error without killing the socket", () => {
+test("frames: malformed frames are refused loudly, and an ADDITIVE control type is ignored quietly", () => {
   const { client, events } = makeClient();
   const before = client.snapshot().framesRejected;
 
@@ -131,13 +131,22 @@ test("frames: truncated, empty, JSON-in-binary-slot, bad JSON and unknown types 
   client.handleMessage(new ArrayBuffer(0)); // empty
   client.handleMessage(floatToPcm16(Float32Array.from([0.1]))); // valid PCM, must play
   client.handleMessage("{not json"); // bad control JSON
-  client.handleMessage(JSON.stringify({ type: "wat" })); // unknown control type
+  client.handleMessage(JSON.stringify({ type: "wat" })); // unknown control type: additive, NOT malformed
   client.handleMessage(undefined); // unsupported type
 
-  assert.equal(client.snapshot().framesRejected, before + 5, `expected 5 refusals, got ${client.snapshot().framesRejected}`);
+  // Four refusals, not five: the additive type is not damage. This is the defect
+  // a live-tools press found on the real page — a successful tool write printed
+  // "Ignored a malformed frame: unrecognised control frame type \"tool\"".
+  assert.equal(client.snapshot().framesRejected, before + 4, `expected 4 refusals, got ${client.snapshot().framesRejected}`);
   assert.equal(client.snapshot().framesReceived, 1, "only the valid frame reached playback");
-  assert.equal(events.errors.length, 5);
+  assert.equal(events.errors.length, 4, "an unknown control type must not be reported as an error");
   assert.ok(events.errors.every((e) => e.fatal === false), "none of these are fatal");
+  assert.ok(
+    events.diagnostics.some((d) => d.kind === "ignored-control" && d.type === "wat"),
+    "the unknown control type was not recorded as an ignored diagnostic",
+  );
+  assert.equal(events.errors.some((e) => /unrecognised control frame type/.test(e.message)), false,
+    "the client is still calling a good frame malformed");
 
   // The connection survives: well-formed frames after all of them still work.
   client.handleMessage(JSON.stringify({ type: "state", state: "ready", model: "models/gemini-3.8-live", detail: { gatedFrames: 2 } }));

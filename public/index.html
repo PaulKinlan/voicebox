@@ -30,6 +30,20 @@
     <header class="head">
       <h1 class="wordmark"><a href="./">voicebox</a></h1>
       <p class="where"><span class="dot" id="server-dot" data-ok="pending" aria-hidden="true"></span><span id="where-note">checking the local server…</span><span class="where-sep" aria-hidden="true">·</span><span id="root-kind">checking which root…</span></p>
+      <!-- The environments this page can act in: the browser by default, the local server, then any
+           server the person has declared. The list is SERVER-OWNED so it is the same from every
+           browser, and a host that is listed but not running says so by name rather than reading as
+           ready. The "+" declares a descriptor; it never starts a service. -->
+      <details class="envs" id="envs">
+        <summary id="envs-summary"><span id="envs-count">Environments</span></summary>
+        <ul class="env-list" id="env-list"></ul>
+        <form class="env-add" id="env-add">
+          <input id="env-add-label" type="text" placeholder="Name (e.g. atlas box)" aria-label="environment name" autocomplete="off" />
+          <input id="env-add-origin" type="text" placeholder="http://127.0.0.1:8787" aria-label="environment origin" autocomplete="off" />
+          <button id="env-add-btn" type="submit" aria-label="add environment">+</button>
+        </form>
+        <p class="env-note" id="env-note" role="status"></p>
+      </details>
     </header>
     <!-- The header states the state ONCE, in the chip beside the server dot, and
          says nothing else about it: "no root declared" is a status, not an
