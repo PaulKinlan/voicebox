@@ -21,6 +21,12 @@
   h1 { font-size: 18px; margin: 0 0 4px; }
   h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: #9a9aab; margin: 24px 0 8px; }
   .sub { color: #9a9aab; margin: 0 0 20px; font-size: 13px; max-width: 70ch; }
+  .chooser-note { color: #9a9aab; margin: -10px 0 14px; font-size: 12px; max-width: 70ch; }
+  .views-note { color: #9a9aab; margin: -4px 0 8px; font-size: 12px; max-width: 70ch; }
+  .protocol { color: #9a9aab; font-size: 12px; max-width: 70ch; margin: 8px 0 0; }
+  .protocol summary { cursor: pointer; color: #b9b9c9; }
+  .protocol p { margin: 6px 0 0; }
+  .sr-only { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); overflow: hidden; white-space: nowrap; }
   #project { display: grid; gap: 2px; font: 13px/1.6 ui-monospace, monospace; }
   #project .key { display: inline-block; min-width: 148px; color: #8b8b9c; }
   form { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-start; margin: 0 0 16px; }
@@ -85,36 +91,46 @@
        in the server, so today it can write only into a folder it can name. -->
   <p class="chooser">Choose a folder on <strong>this machine</strong> and <strong>turns can save into it</strong> today. A folder you <strong>pick in the browser</strong> stays <strong>read-only for turns</strong> for now — the browser hands that folder to this page and not to the server, so the server cannot save there yet.</p>
   <form id="open-form">
-    <input id="project-name" value="atlas" aria-label="project name">
-    <button type="submit">Open</button>
+    <!-- No default name: a placeholder would show a project that does not exist as if it were a
+         real choice. The label says what Open DOES. -->
+    <label for="project-name" class="sr-only">Project name</label>
+    <input id="project-name" placeholder="a name for the browser-stored project" aria-label="project name">
+    <button type="submit" title="Opens the project stored in this browser's own storage (OPFS), creating it if it is new, and makes it the one this page acts on. It is not a folder on your disk.">Open</button>
     <button type="button" id="pick">Pick a folder… <span class="tag">read-only for turns</span></button>
     <button type="button" id="regrant" hidden>Restore write access</button>
   </form>
+  <p class="chooser-note"><strong>Open</strong> opens a project kept in <strong>this browser's own storage</strong> (origin storage, OPFS) — not a folder on your disk. It makes that project the one this page acts on, creating it empty if the name is new.</p>
   <form id="machine-form">
     <input id="machine-path" placeholder="/a/folder/on/this/machine" aria-label="machine folder path" style="min-width:22rem">
     <button type="submit">Save turns into this folder <span class="tag tag-good">turns can write here</span></button>
   </form>
+  <p class="chooser-note">The path is a folder <strong>on this machine</strong> — type or paste its absolute path. The server (which runs turns) writes there, so this is the choice that lets turns save files you can open in your own editor.</p>
   <div id="dropzone">or drop a folder here to make it a project root — the files stay where they are and this page becomes a window onto them. <span class="tag">read-only for turns</span></div>
 
   <h2>Where the files are</h2>
+  <p class="views-note">One panel per place a project's files can live. Each says which place it is showing and who can change the files there; a place with no project yet says so rather than drawing an empty box.</p>
   <div class="views">
     <div class="view" id="view-opfs"><h3>origin storage (OPFS)</h3></div>
     <div class="view" id="view-picked"><h3>the picked folder</h3></div>
     <div class="view" id="view-server"><h3>the server</h3></div>
   </div>
+  <details class="protocol">
+    <summary>How this page talks to those environments</summary>
+    <p>The browser environment is a worker inside this page — it answers over a message channel, no network. The local server is an HTTP API on this machine (loopback): the page asks, the server acts inside its own root and answers with what it observed or a named refusal. A remote environment is the same API on another machine, reached through a paired credential — the page never holds the remote's key. The one rule across all three: a decision never crosses the wire — an answer carries observed facts or a named refusal, never a grant.</p>
+  </details>
 
   <h2>Who is here <button type="button" id="catch-up">Catch up</button></h2>
   <div class="view" id="agents"></div>
 
   <h2>Create an asset</h2>
   <form id="asset-form">
-    <input id="asset-name" value="atlas.svg" aria-label="asset name">
+    <input id="asset-name" placeholder="a name for the asset, e.g. notes.md" aria-label="asset name" style="min-width:16rem">
     <select id="asset-kind" aria-label="asset kind">
       <option value="svg">svg</option>
       <option value="text">text</option>
       <option value="html">html</option>
     </select>
-    <textarea id="asset-body" aria-label="asset body">&lt;svg xmlns="http://www.w3.org/2000/svg" width="120" height="60"&gt;&lt;rect width="120" height="60" fill="#69f"/&gt;&lt;/svg&gt;</textarea>
+    <textarea id="asset-body" aria-label="asset body" placeholder="the asset's contents"></textarea>
     <button type="submit">Create asset</button>
   </form>
 

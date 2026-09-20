@@ -243,6 +243,9 @@ async function renderView(view: ViewName): Promise<Reply> {
   panel.textContent = "";
 
   if (!reply.ok) {
+    // A view that cannot answer says WHY, in words — it never draws the shape of an answer it does
+    // not have. An empty panel is the worst version of the defect: it looks like "there are no files"
+    // when the truth is "there is no project here yet" or "the server is not answering".
     const failureLine = document.createElement("p");
     failureLine.className = "failure";
     failureLine.textContent = failure(reply); // the code, and the reason, in words
@@ -625,3 +628,8 @@ document.documentElement.dataset.e1m0 = "ready";
 api.ready.then((reply: Reply) =>
   line(`host ready — instance ${reply.instance}, durability ${reply.durability?.persisted ? "persisted" : "not persisted"}`),
 );
+
+// On load, every "Where the files are" panel says SOMETHING TRUE rather than drawing a blank box:
+// a view with no project answers its no-project refusal (in words), and the server view says whether
+// the loop can reach its root. This is the fix for the blank boxes Paul saw.
+void Promise.all([renderView("opfs"), renderView("picked"), renderView("server")]);
