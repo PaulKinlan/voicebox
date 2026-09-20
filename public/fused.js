@@ -89,7 +89,14 @@ function icon(id) {
 async function request(path, options) {
   const response = await fetch(path, options);
   const body = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(body?.error ?? `the server answered ${response.status}`);
+  // A named refusal carries refused+why, not error — carry them onto the throw so the catch renders
+  // the reason and the remedy, not "the server answered 500".
+  if (!response.ok) {
+    const err = new Error(body?.error ?? body?.why ?? `the server answered ${response.status}`);
+    if (body?.refused) err.refused = body.refused;
+    if (body?.why) err.why = body.why;
+    throw err;
+  }
   if (!body) throw new Error("the server sent something that was not JSON");
   return body;
 }

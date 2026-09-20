@@ -185,8 +185,12 @@ async function environmentsWithStatus() {
   };
   const rows = [local];
   for (const env of stored.environments) {
+    // boundary/capability are OBSERVED, never inherited from the file: the probe is the ONLY writer
+    // of those fields, so a hand-edited or stale descriptor cannot echo a claim as a measurement.
+    // A stored row arrives here with both re-nulled; only a live probe fills them.
+    const declared = { ...env, boundary: null, capability: null };
     if (env.kind !== "server" || !env.origin) {
-      rows.push({ ...env, reachable: null, refused: null, why: "the browser environment is always present" });
+      rows.push({ ...declared, reachable: null, refused: null, why: "the browser environment is always present" });
       continue;
     }
     try {
@@ -194,10 +198,10 @@ async function environmentsWithStatus() {
       const timer = setTimeout(() => controller.abort(), 2500);
       const answer = await fetch(`${env.origin}/api/health`, { signal: controller.signal }).finally(() => clearTimeout(timer));
       const no = unreachable(env.label, env.origin);
-      rows.push({ ...env, reachable: answer.ok, refused: answer.ok ? null : no.refused, why: answer.ok ? null : no.why });
+      rows.push({ ...declared, reachable: answer.ok, refused: answer.ok ? null : no.refused, why: answer.ok ? null : no.why });
     } catch {
       const no = unreachable(env.label, env.origin);
-      rows.push({ ...env, reachable: false, refused: no.refused, why: no.why });
+      rows.push({ ...declared, reachable: false, refused: no.refused, why: no.why });
     }
   }
   return { ok: true, environments: rows, declared: true };

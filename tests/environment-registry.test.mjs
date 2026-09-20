@@ -99,3 +99,22 @@ test("an unreadable registry file is its own refusal, distinct from an empty lis
   // Restore a good file so the suite's afterEach and any later case is clean.
   writeFileSync(file, JSON.stringify({ environments: [] }));
 });
+
+test("a hand-edited descriptor's boundary/capability claims are NOT inherited — the probe is their only writer", async () => {
+  // A file that CLAIMS a measured boundary it never measured must not reach the page as one. The
+  // probe is the only legitimate writer of boundary/capability, so a stored row arrives nulled.
+  const file = path.join(scratch, "workspace", "environments.json");
+  writeFileSync(file, JSON.stringify({
+    environments: [{
+      key: "env_fake", label: "a claim, not a measurement", kind: "server", origin: "http://127.0.0.1:9",
+      boundary: { network: "fenced" }, capability: { tools: { node: { value: true } } },
+      reach: "ambient", declaredAt: new Date().toISOString(),
+    }],
+  }));
+  const { environments } = await listEnvs();
+  const fake = environments.find((e) => e.key === "env_fake");
+  assert.ok(fake, "the stored row is listed");
+  assert.equal(fake.boundary, null, "a stored boundary claim is re-nulled, not echoed as a measurement");
+  assert.equal(fake.capability, null, "a stored capability claim is re-nulled, not echoed as a measurement");
+  writeFileSync(file, JSON.stringify({ environments: [] }));
+});
