@@ -184,6 +184,9 @@ export default defineConfig({
     // The .ts.net suffix is the tailnet's own domain (tailnet membership is the access control);
     // localhost stays for the local case. A second tailnet machine fronting THIS dev server is the
     // only case that would justify widening further.
+    // AND THE FIREWALL HALF, which lives outside this repo: if a peer sees ERR_CONNECTION_ABORTED
+    // on the tailnet URL while every local check passes, ufw is refusing incoming on tailscale0 —
+    // fix: sudo ufw allow in on tailscale0. A local test never crosses that interface.
     allowedHosts: [".ts.net", "localhost"],
     // POLLING WATCHER, 2026-09-19. A `git merge --ff-only` replaced
     // public/audio-client.js and Vite's watcher never fired, so the server kept

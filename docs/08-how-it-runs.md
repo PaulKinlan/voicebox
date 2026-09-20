@@ -43,7 +43,14 @@ npm run dev        # Vite in front: :5173, proxies /api, HMR as you edit
 npm run docs:check # the docs drift check (see below)
 ```
 
-Two things about the dev loop that are easy to get wrong and are therefore written here:
+Three things about the dev loop that are easy to get wrong and are therefore written here:
+
+- **The tailnet door has a firewall half.** The dev front is also served over Tailscale Serve at
+  `https://<node>.<tailnet>.ts.net/` (vite.config.js allows the `.ts.net` Host). If a peer sees
+  `ERR_CONNECTION_ABORTED` on that URL **while every local check passes**, the cause is `ufw`
+  refusing incoming on `tailscale0` — a local test to the machine's own tailnet address never
+  crosses the interface the firewall is refusing, so "it works here" proves nothing. Fix:
+  `sudo ufw allow in on tailscale0`.
 
 - **Vite is dev-only.** `server.mjs` stays zero-dependency and remains the production path; nothing in it
   imports Vite, and it runs with no `node_modules` at all. That is verified by serving the page on a machine
