@@ -10,8 +10,19 @@ neither could see the other.
 **What is built.** The root became data both sides read (`core/root.ts`), with one containment entry
 and a named refusal for the case where the acting placement cannot reach the root at all.
 
-Branch `e1m0/one-root`. **47 checks green** (`npm run test:e1m0`, +9 for this), the repository's
-existing 11 unchanged (`npm test`).
+Branch `e1m0/one-root`. **`npm test` — the repository's whole gate — is 126/126 green** (the full
+`tests/*.mjs` glob, which is what the gate actually runs), and `npm run test:e1m0` is 47 of those
+(+9 for this work).
+
+**A correction, because the first version of this receipt was wrong in a way worth recording.** It
+said *"the repository's existing 11 unchanged"* — a stale count from when `npm test` ran one file —
+and it reported my own suite's 47 as the evidence for a tree of 126. The review found what that hid:
+a **fourth reader** of the retired refusal message was red (`tests/extensions.test.mjs`: *"the model
+cannot write into the host's extension directory"* still matched `/escapes the workspace/`). Every
+check in my branch's receipt was true about the file I ran and false about the tree it described —
+*the instrument measured the wrong scope and reported green*, twice over (a stale count and a suite
+that was not the gate). The fix is in §4; the rule is the one the fleet protocol now carries: **your
+own suite passing is not the tree passing.**
 
 ---
 
@@ -78,9 +89,13 @@ Three existing readers needed changing, and each one is a small lesson:
 
 1. **The loop's refusal message changed** from *"path escapes the workspace"* to *"path escapes the
    active project root"* with `refused: "outside-root"` and the mechanism's own `why`. A hard-coded
-   word becomes a lie the first time somebody declares a different folder. The repository's test was
-   updated to assert the **rule id** and the mechanism's words, which is stronger than the substring
-   it replaced.
+   word becomes a lie the first time somebody declares a different folder. **FOUR readers of that
+   string existed, and this receipt originally listed three** — the fourth, `extensions.test.mjs`
+   (*"the model cannot write into the host's extension directory"*), was found by the reviewer's full
+   `npm test` run and red at 125/126 while my own 47-check suite was green.
+   Both tests now assert the **rule id** and the mechanism's words rather than a message we wrote, so
+   two tests cannot disagree about one string again — and the finding is kept here rather than
+   tidied away, because *"three readers"* was itself a claim I had not checked by running the tree.
 2. **The explorer's machine panel had to learn to refuse.** With the listing following the active
    root, a picked-root project makes the machine panel answer `root-not-reachable-from-here` — the
    bead-7cd rule (never show a listing that cannot say what it is) arriving from a direction nobody
