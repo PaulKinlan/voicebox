@@ -82,7 +82,7 @@ test("the page declares a machine root, the loop writes there, and the page says
 
   // The header names the kind and WHO acts on it — a fact, not something the user discovers by failing.
   const header = await page.evaluate(() => document.getElementById("project").textContent);
-  assert.match(header, /a folder on the machine running the process/, "the page does not name the machine root kind");
+  assert.match(header, /a folder on this machine/, "the page does not name the machine folder kind");
   assert.match(header, /acts come from/, "the page does not say who acts on this root");
   assert.match(header, /the loop \(a machine process\)/, "the page does not name the loop as the actor");
 

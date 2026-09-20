@@ -167,8 +167,8 @@ function render() {
   $('undo-kind').value = s.undo;
   $('undo-detail').textContent = undoWords[s.undo][1];
   $('capability-detail').textContent = project === 'browser'
-    ? 'File and admitted Wasm tools. No shell tool in this environment. A shell-dependent tool needs a machine project; it is not a failed browser command.'
-    : 'The example host can run its admitted tools. A newly written tool does not inherit shell or network authority just because it lives on a machine.';
+    ? 'Files and Wasm tools the host has approved. There is no shell here, so a tool that needs one must run on a machine project — that is not a failed browser command.'
+    : 'The example host can run the tools it has approved. A newly written tool does not get shell or network access just because it lives on a machine.';
   renderRequest();
   renderLog();
   renderExtensions();
@@ -336,7 +336,7 @@ function renderExtensions() {
   $('package-write').textContent = shell ? 'Unbounded process effects' : 'collections/*.json';
   $('package-exec').textContent = shell ? 'Required: shell execution' : 'None requested';
   $('package-enforced').textContent = shell
-    ? 'Not grantable here. Browser has no shell; this study has no contained machine runner either. Choosing a machine project does not turn this into an admitted tool.'
+    ? 'Not available here. The browser has no shell, and this example has no machine runner either. Choosing a machine project does not by itself approve this tool to run.'
     : 'Proposed handles: notes (read), collections (write). Wasm imports only; no network or shell. These are example grants, not enforcement measured by this study.';
   $('package-warning').textContent = shell ? 'Cannot install this package in the example environment. Missing execution capability is an environment fact, not a command failure.'
     : s.extension ? 'This example version is already installed. A changed package would need a new review.'

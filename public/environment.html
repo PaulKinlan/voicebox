@@ -3,16 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>voicebox — the browser environment</title>
+<title>voicebox — projects and folders</title>
 <!--
-  The E1-M0 page. It is a NEW page rather than a change to the room UI: the room is astra's
-  surface and the live-voice wiring is landed and verified, so the environment's existence proof
-  gets its own page and neither is disturbed.
+  This is its own page rather than a change to the voice surface, because the two answer
+  different questions: one is the conversation, this one is where the files live.
 
-  What this page shows, and why each line is here rather than implied: the root KIND (OPFS or a
-  picked folder — they have different authority, so they are never presented as one list), the
-  durability state, the undo kind, and a permission state with a recovery action. Those are the
-  three honest answers §1.8 requires and the recovery story N20 requires.
+  Every line here is stated rather than implied, because each is a fact a person cannot
+  discover by trying: WHICH PLACE the files are in (a folder on this machine, a folder you
+  picked, or the browser's own storage — they differ in who can change them, so they are never
+  shown as one list), whether that storage survives closing the tab, how an undo works, and
+  what to do when access has to be granted again.
 -->
 <style>
   :root { color-scheme: dark; }
@@ -71,11 +71,11 @@
 </style>
 </head>
 <body>
-  <h1>voicebox — the browser environment</h1>
-  <p class="sub">E1-M0 plus N20 plus one root. The worker is the host; a project's root is one of
-    three kinds — this origin's private storage, a folder you picked, or a folder on the machine
-    running the loop — and the page always says which, and who acts on it. Identity is placement +
-    location, so this project is this browser's and nothing tries to match it anywhere else.</p>
+  <h1>voicebox — projects and folders</h1>
+  <p class="sub">A project's files live in one of three places: the browser's own storage for this
+    site, a folder you pick, or a folder on this machine. This page always says which one, and says
+    who can change the files there. The same project name in a different browser is a different
+    project — nothing here tries to match them up.</p>
 
   <div id="project"></div>
 
@@ -83,7 +83,7 @@
   <!-- WHICH ROOT DO I WANT? The two choices differ in who can act on them, and
        that difference used to be discoverable only by being refused. Turns run
        in the server, so today it can write only into a folder it can name. -->
-  <p class="chooser">A folder on <strong>this machine</strong> is the kind <strong>turns can write into</strong> today. A folder you <strong>pick in the browser</strong>, or this origin's private storage, is <strong>readable but not writable</strong> by turns: the root belongs to the page, and the server cannot address it yet.</p>
+  <p class="chooser">Choose a folder on <strong>this machine</strong> and <strong>turns can save into it</strong> today. A folder you <strong>pick in the browser</strong> stays <strong>read-only for turns</strong> for now — the browser hands that folder to this page and not to the server, so the server cannot save there yet.</p>
   <form id="open-form">
     <input id="project-name" value="atlas" aria-label="project name">
     <button type="submit">Open</button>
@@ -92,11 +92,11 @@
   </form>
   <form id="machine-form">
     <input id="machine-path" placeholder="/a/folder/on/this/machine" aria-label="machine folder path" style="min-width:22rem">
-    <button type="submit">Use this folder for the loop <span class="tag tag-good">turns can write here</span></button>
+    <button type="submit">Save turns into this folder <span class="tag tag-good">turns can write here</span></button>
   </form>
   <div id="dropzone">or drop a folder here to make it a project root — the files stay where they are and this page becomes a window onto them. <span class="tag">read-only for turns</span></div>
 
-  <h2>Roots</h2>
+  <h2>Where the files are</h2>
   <div class="views">
     <div class="view" id="view-opfs"><h3>origin storage (OPFS)</h3></div>
     <div class="view" id="view-picked"><h3>the picked folder</h3></div>

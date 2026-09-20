@@ -105,7 +105,7 @@ test("7cd.1 Three views, three authorities, and each one names the root it is sh
   const pickedAfter = await send({ type: "listView", view: "picked", limit: LIMIT });
   assert.equal(machine.ok, true, `the machine view failed after declaring its root: ${JSON.stringify(machine)}`);
   assert.equal(machine.root, machineRoot, "the machine view does not name the root it is showing");
-  assert.match(machine.authority.where, /machine running the process/);
+  assert.match(machine.authority.where, /a folder on this machine/);
   assert.match(machine.authority.whoCanSee, /anything on that machine/);
   assert.equal(pickedAfter.ok, false, "the picked view answered for a machine root");
   assert.equal(pickedAfter.code, "not-a-project");

@@ -84,7 +84,6 @@
           </button>
         </div>
         <p class="voice-state" id="voice-state" role="status">Microphone off — press the circle to speak</p>
-        <p class="device-note" id="device-note" role="status" hidden></p>
         <div class="voice-actions">
           <button class="quiet interrupt" id="interrupt" type="button" disabled>Stop reply</button>
           <button class="quiet" id="settings-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="settings"><svg class="icon" aria-hidden="true"><use href="#i-gear"/></svg>Settings</button>
@@ -110,7 +109,14 @@
             <select id="out-select" aria-labelledby="out-label"></select>
             <p class="device-state" id="out-device-state">No reply playing</p>
           </div>
-          <details class="about"><summary>About this room</summary><p id="about-facts"></p></details>
+          <!-- "This window", not "this room": the system has no rooms — no room
+               object, no room state — and a word that names a concept the
+               software does not have makes a person doubt what they are looking
+               at. The drawer also used to open onto NOTHING (the paragraph was
+               never written), so it now carries the two facts that exist and
+               are worth having here: where turns write, and which revisions are
+               on each side. -->
+          <details class="about"><summary>This window</summary><p id="about-facts"></p></details>
           </form>
         </dialog>
         <form class="composer" id="text-form">
