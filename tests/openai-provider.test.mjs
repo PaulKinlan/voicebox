@@ -97,20 +97,38 @@ test("openai: a null frame and a bad frame cost a frame, not the conversation", 
   } finally { delete process.env.OPENAI_API_KEY; }
 });
 
-test("PINCHE: the facade could not authenticate this provider, and it now fails at the cause, not three layers away", () => {
-  // The finding, pinned. Before this round, `connect(url, { onEvent })` carried no headers at all — so this
-  // provider could not authenticate, and Node's global WebSocket cannot carry them either. The transport
-  // refuses at the cause with a sentence naming the fix, rather than connecting unauthenticated and letting
-  // a 401 arrive from a vendor three layers away.
+test("PINCHE: the facade CARRIES this provider's headers to the socket it dials (corrected)", () => {
+  // THE FINDING, still pinned — but the other way round from how it was first written.
+  //
+  // Before this round, `connect(url, { onEvent })` carried no headers at all, so this provider could not
+  // authenticate: the facade handed over a URL and nothing to authenticate with, and one provider hid it
+  // because Gemini's key rides in the query string. `connect(url, { headers })` closed that.
+  //
+  // And the old version of THIS TEST asserted the WRONG HALF: it expected a refusal on the grounds that the
+  // runtime could not carry headers — a belief this file's own comment stated as fact, from
+  // `typeof Deno !== "undefined"`. astra drove the unmodified global on the Node the fleet runs and the header
+  // ARRIVED at an owned loopback server, so the refusal was refusing for a reason that was not true. A suite
+  // that carries the wrong assumption as an assertion is how a wrong assumption survives.
+  //
+  // WHAT THIS TEST WITNESSES: the headers reach the constructor the facade dials with. WHAT IT DOES NOT: that
+  // the runtime carries them on the wire — a stub constructor would accept anything. That half is astra's
+  // loopback drive, and it is cited rather than re-asserted here.
   process.env.OPENAI_API_KEY = "test-key";
   const realWS = globalThis.WebSocket;
-  globalThis.WebSocket = class { constructor() {} send() {} close() {} };
+  const dialled = [];
+  globalThis.WebSocket = class { constructor(url, opts) { dialled.push({ url, opts }); } send() {} close() {} };
   try {
     const states = [];
-    assert.throws(
-      () => createLiveSession({ provider: "openai", onState: (n) => states.push(n), log: () => {} }),
-      /cannot carry them.*node:http's upgrade/s,
-      "the host must refuse at the cause, naming what would fix it",
+    const session = createLiveSession({ provider: "openai", onState: (n) => states.push(n), log: () => {} });
+    assert.ok(session, "the session must be created — the runtime guess that refused it is gone");
+    assert.ok(dialled.length > 0, "the provider must have dialled");
+    assert.equal(
+      dialled[0].opts?.headers?.Authorization,
+      "Bearer test-key",
+      `the Authorization header must reach the constructor the facade dials with; got ${JSON.stringify(dialled[0].opts)}`,
     );
+    assert.match(dialled[0].url, /^wss:\/\/api\.openai\.com\/v1\/realtime/, "and to the vendor's endpoint");
+    session.close();
   } finally { globalThis.WebSocket = realWS; delete process.env.OPENAI_API_KEY; }
 });
+
