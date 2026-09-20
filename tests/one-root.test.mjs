@@ -263,8 +263,13 @@ test("a file the process may not read is refused by name — not as an internal 
   assert.match(String(body.why), /EACCES|EPERM|permission denied/, "the platform's own words are not carried");
   assert.doesNotMatch(String(body.why), /internal error|the turn was not executed/,
     "the sentence is about turns, and this is a file read");
-  assert.equal(body.error, undefined,
-    "an `error` label here would shadow the why in any reader that takes the label first");
+  // The refusal may carry a short label in `error`; what matters is that `why`
+  // holds the useful half and that the reader prefers it (voicebox-ui's
+  // why → error → note rule, proven by driving the page). An earlier version of
+  // this test demanded NO `error` field — that was the author's workaround while
+  // the reader took the label first, not the property, and it went red the moment
+  // the label was put back for consistency with every other refusal.
+  assert.notEqual(body.why, body.error, "the label and the reason are the same string, so nothing is gained");
 
   chmodSync(unreadable, 0o600); // so the scratch directory can be removed
 });
