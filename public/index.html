@@ -28,8 +28,12 @@
   <div class="room">
     <header class="head">
       <h1 class="wordmark"><a href="./">voicebox</a></h1>
-      <p class="where"><span class="dot" id="server-dot" data-ok="pending" aria-hidden="true"></span><span id="where-note">checking the local server…</span></p>
+      <p class="where"><span class="dot" id="server-dot" data-ok="pending" aria-hidden="true"></span><span id="where-note">checking the local server…</span><span class="where-sep" aria-hidden="true">·</span><span id="root-kind">checking which root…</span></p>
     </header>
+    <!-- Which root the loop writes into, and who acts on it: the page shows the
+         kind before anything about reachability, because "there is no picked
+         folder here" is not "permission denied". -->
+    <p class="root-note" id="root-note" role="status" hidden></p>
 
     <main class="stage" id="made" tabindex="-1">
       <section class="made" id="made-list" data-state="loading" aria-labelledby="made-heading">
@@ -67,7 +71,10 @@
           <button class="mic" id="mic" type="button" aria-label="Speak a turn" aria-pressed="false" aria-describedby="voice-state">
             <svg class="mic-glyph icon" aria-hidden="true"><use href="#i-mic"/></svg>
             <!-- your voice: recent input energy at the microphone itself -->
-            <svg class="input-wave" viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true"><path id="input-path"></path></svg>
+            <svg class="input-wave" viewBox="0 0 100 100" aria-hidden="true">
+              <defs><clipPath id="mic-inner"><circle cx="50" cy="50" r="46"/></clipPath></defs>
+              <path id="input-path" clip-path="url(#mic-inner)"></path>
+            </svg>
           </button>
         </div>
         <p class="voice-state" id="voice-state" role="status">Microphone off — press the circle to speak</p>
@@ -108,7 +115,8 @@
     </main>
 
     <footer class="foot">
-      <p class="foot-fact">Files are read from disk; turns go to the local server.</p>
+      <p class="foot-fact">Files are read from disk; typed turns go to the local server and what they write lands there.</p>
+      <p class="foot-fact">Live voice runs through the same server and takes no tools yet, so it cannot write files.</p>
       <p class="foot-fact build" id="build"></p>
     </footer>
   </div>
