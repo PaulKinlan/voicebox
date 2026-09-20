@@ -19,6 +19,7 @@ const WANTED = {
   where: "where-note", dot: "server-dot", refresh: "refresh", report: "turn-report", newFile: "new-file",
   rootKind: "root-kind", madeHeading: "made-heading", emptyLink: "empty-link", listingRoot: "listing-root",
   listTools: "list-tools", fileFilter: "file-filter", showAll: "show-all", listBound: "list-bound",
+  openFolder: "open-folder", closeFolder: "close-folder", roomFolderHint: "room-folder-hint",
   stage: "voice-ring-wrap", mic: "mic", state: "voice-state",
   session: "session", log: "session-log", form: "text-form", utterance: "utterance", send: "send",
   reader: "reader", readerTitle: "reader-title", readerFacts: "file-facts", readerBody: "file-body",
@@ -58,6 +59,83 @@ let fileFilter = "";
 let showAllFiles = false;
 
 const matchesFilter = (entry) => !fileFilter || entry.name.toLowerCase().includes(fileFilter.toLowerCase());
+
+// ── a folder you opened in THIS TAB, read-only, for this session ───────────
+//
+// The environment page owns the writable handle and its persistence. The room
+// only LOOKS, so it asks for read and keeps the handle in memory: a narrower
+// permission for a narrower purpose, and no second copy of a persisted handle to
+// drift from the environment page's. The walk and the bounds match that page's
+// shape (entries() with a limit and an explicit truncation flag) because two
+// listers of the same kind should not disagree about how they lie.
+const ROOM_FOLDER_MAX = 200;
+const ROOM_FILE_MAX_BYTES = 256 * 1024;
+let roomFolder = null; // { handle, name } — session only, read-only, never persisted
+let roomTruncated = false;
+
+async function walkRoomFolder() {
+  const names = [];
+  roomTruncated = false;
+  for await (const [name, node] of roomFolder.handle.entries()) {
+    if (names.length >= ROOM_FOLDER_MAX) { roomTruncated = true; break; }
+    names.push({ name, isDir: node.kind === "directory" });
+  }
+  names.sort((a, b) => a.name.localeCompare(b.name));
+  return names;
+}
+
+async function openRoomFolder() {
+  const picker = globalThis.showDirectoryPicker;
+  if (typeof picker !== "function") {
+    setReport("This browser cannot open a folder — there is no folder picker here. Dropping one still works.", "bad");
+    return;
+  }
+  try {
+    adoptRoomFolder(await picker({ mode: "read" }));
+  } catch (error) {
+    // Cancelling a picker is not a failure: say nothing rather than complain.
+    if (error?.name !== "AbortError") setReport(`Could not open that folder: ${error?.message ?? error}`, "bad");
+  }
+}
+
+async function adoptRoomFolder(handle) {
+  if (!handle || handle.kind !== "directory") return;
+  roomFolder = { handle, name: handle.name || "the folder you opened" };
+  fileFilter = "";
+  if (els.fileFilter) els.fileFilter.value = "";
+  await loadRoomFolder();
+}
+
+async function loadRoomFolder() {
+  if (!roomFolder) return load();
+  showSkeleton();
+  try {
+    const listed = await walkRoomFolder();
+    listedRoot = null;
+    listingRefusal = null;
+    entries = listed.map(({ name, isDir }) => ({ name, isDir, meta: isDir ? "folder" : "file" }));
+    render();
+  } catch (error) {
+    // A handle that has gone (folder deleted, or permission withdrawn) is a
+    // named state, not an empty list.
+    listingRefusal = { refused: "folder-unreadable", why: `could not read '${roomFolder.name}': ${error?.message ?? error}` };
+    entries = [];
+    render();
+  }
+}
+
+function closeRoomFolder() {
+  roomFolder = null;
+  listedRoot = null;
+  load();
+}
+
+async function readRoomFile(name) {
+  const file = await (await roomFolder.handle.getFileHandle(name)).getFile();
+  const truncated = file.size > ROOM_FILE_MAX_BYTES;
+  const text = await (truncated ? file.slice(0, ROOM_FILE_MAX_BYTES) : file).text();
+  return { text, bytes: file.size, truncated };
+}
 
 let entries = [];
 
@@ -291,6 +369,12 @@ function renderListingRoot() {
   // differ in kind (a picked folder this process cannot act on / a vanished root)
   // and the person needs the one that applies. "No root declared" is left to the
   // empty state, which already says what to do about it.
+  if (roomFolder) {
+    line.hidden = false;
+    line.dataset.tone = "";
+    line.textContent = `listed from '${roomFolder.name}' — a folder you opened in this tab, read-only, for this session${roomTruncated ? ` (first ${ROOM_FOLDER_MAX} entries)` : ""}. Turns still write into the folder named in the header.`;
+    return;
+  }
   if (listingRefusal) {
     if (listingRefusal.refused === "root-not-declared") { line.hidden = true; return; }
     line.hidden = false;
@@ -345,6 +429,10 @@ function render() {
   els.made.dataset.state = listingRefusal && count === 0 ? "failed" : count === 0 ? "empty" : "ready";
   if (nothingMatched && els.listBound) { els.listBound.hidden = false; }
   if (els.newFile) els.newFile.hidden = Boolean(listingRefusal);
+  if (els.closeFolder) els.closeFolder.hidden = !roomFolder;
+  if (els.openFolder) els.openFolder.hidden = Boolean(roomFolder);
+  if (els.roomFolderHint) els.roomFolderHint.hidden = Boolean(roomFolder);
+  if (els.openFolder) els.openFolder.hidden = Boolean(roomFolder) || typeof globalThis.showDirectoryPicker !== "function";
   renderListingRoot();
   renderEmptyState();
   if (shownFile && !entries.some((entry) => entry.name === shownFile)) shownFile = null;
@@ -624,6 +712,33 @@ async function load() {
 }
 
 /** How to name a file's home in one string, whatever kind of root it is. */
+// The same reader, reading from the folder this tab opened: the facts say which
+// source and that it is read-only, because "read from disk" was already a lie
+// once for a source that was not the server's.
+async function showRoomFile(name) {
+  els.copy.disabled = true;
+  els.reader.dataset.state = "empty";
+  els.readerTitle.textContent = name;
+  els.readerFacts.textContent = "Reading…";
+  els.readerBody.textContent = "";
+  showFileSelection(name);
+  try {
+    const { text, bytes, truncated } = await readRoomFile(name);
+    els.readerFacts.textContent = `${bytes} ${bytes === 1 ? "byte" : "bytes"}${truncated ? ` (showing the first ${Math.round(ROOM_FILE_MAX_BYTES / 1024)} KB)` : ""} · read from '${roomFolder.name}' in this tab, read-only`;
+    els.readerFacts.title = "";
+    els.readerBody.textContent = text;
+    els.reader.dataset.state = "ready";
+    els.copy.disabled = text.length === 0;
+    if (els.readerDetails) els.readerDetails.open = true;
+  } catch (error) {
+    const sentence = `Could not read '${name}' in '${roomFolder.name}': ${error?.message ?? error}`;
+    els.readerFacts.textContent = sentence;
+    els.readerBody.textContent = sentence;
+    els.reader.dataset.state = "ready";
+    if (els.readerDetails) els.readerDetails.open = true;
+  }
+}
+
 function rootLabel() {
   const root = activeRoot?.root;
   if (!root) return "";
@@ -634,6 +749,7 @@ function rootLabel() {
 
 async function showFile(name) {
   shownFile = name;
+  if (roomFolder) return showRoomFile(name);
   els.copy.disabled = true;
   els.reader.dataset.state = "empty";
   els.readerTitle.textContent = name;
@@ -802,6 +918,25 @@ function startListening() {
 on(els.mic, "click", startListening);
 on(els.refresh, "click", load);
 on(els.fileFilter, "input", () => { fileFilter = els.fileFilter.value.trim(); showAllFiles = false; render(); });
+on(els.openFolder, "click", openRoomFolder);
+on(els.closeFolder, "click", closeRoomFolder);
+
+// DROP TO READ: the same handle a picker would give, and the path a headless
+// browser can drive (tests/lib/cdp.mjs dispatches a real drag event with a
+// directory). Nothing here writes, so a dropped folder is read-only in fact.
+if (els.made) {
+  const stop = (event) => { event.preventDefault(); };
+  els.made.addEventListener("dragover", (event) => { stop(event); els.made.classList.add("dropping"); });
+  els.made.addEventListener("dragleave", () => els.made.classList.remove("dropping"));
+  els.made.addEventListener("drop", async (event) => {
+    stop(event);
+    els.made.classList.remove("dropping");
+    const item = [...(event.dataTransfer?.items ?? [])].find((i) => i.kind === "file");
+    const handle = await item?.getAsFileSystemHandle?.();
+    if (handle?.kind === "directory") adoptRoomFolder(handle);
+    else setReport("That was not a folder — drop a folder to read it.", "bad");
+  });
+}
 on(els.showAll, "click", () => { showAllFiles = true; render(); });
 on(els.newFile, "click", () => {
   els.utterance.value = "create a file called ";

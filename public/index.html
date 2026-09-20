@@ -85,6 +85,16 @@
           <input id="file-filter" type="search" autocomplete="off" placeholder="Filter by name…">
           <button class="quiet" id="show-all" type="button" hidden>Show all</button>
         </div>
+        <!-- READ-ONLY FOLDER VIEW. The environment page owns the writable
+             handle; the room only looks, so it asks for read and keeps the
+             handle for this session. Drop is the drivable half (a headless
+             browser cannot click an OS picker); the picker is what a person
+             uses, and both produce the same handle. -->
+        <div class="room-folder" id="room-folder-row">
+          <button class="quiet" id="open-folder" type="button">Open a folder to read…</button>
+          <button class="quiet" id="close-folder" type="button" hidden>Back to the server's folder</button>
+          <span class="room-folder-hint" id="room-folder-hint" hidden>or drop a folder here to read it — nothing is written, and it lasts this session</span>
+        </div>
         <p class="list-bound" id="list-bound" role="status" hidden></p>
         <ul class="files" id="files" role="list" aria-busy="true"></ul>
         <div class="empty" id="empty">
