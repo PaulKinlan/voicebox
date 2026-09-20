@@ -171,6 +171,9 @@ test("frames: a text control frame is delivered to onText, not played", () => {
 // ── 3. Playback queue, scheduling, and the flush that "Stop reply" promises ──
 test("playback: frames queue in order, then Stop reply flushes the sources and returns to listening", async () => {
   const { client, media, contexts } = makeClient();
+  // The server's FIRST frame on /live is the rate — a test driving this client must produce the same wire
+  // order, now that capture REFUSES to run without one (journal-6g0).
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
   await client.startCapture(); // the user pressed the mic: capture is live
   assert.equal(client.snapshot().capture, true);
 
@@ -202,6 +205,9 @@ test("playback: frames queue in order, then Stop reply flushes the sources and r
 
 test("playback: a drained queue returns to listening without any Stop reply", async () => {
   const { client, contexts } = makeClient();
+  // The server's FIRST frame on /live is the rate — a test driving this client must produce the same wire
+  // order, now that capture REFUSES to run without one (journal-6g0).
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
   await client.startCapture();
   client.handleMessage(floatToPcm16(Float32Array.from([0.1])));
   const playCtx = contexts.find((c) => c.sampleRate === 24000);
@@ -217,6 +223,9 @@ test("state: labels derive from the real capture/playback state, and the readine
   const { client } = makeClient();
   assert.match(client.label(), /Mic off/);
 
+  // The server's FIRST frame on /live is the rate — a test driving this client must produce the same wire
+  // order, now that capture REFUSES to run without one (journal-6g0).
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
   await client.startCapture();
   assert.match(client.label(), /Waiting for the model · 0 frame\(s\) held/, "before setupComplete the wait is stated, not hidden");
 
@@ -240,6 +249,9 @@ test("capture: the worklet's Float32 chunks become PCM16 frames on the socket", 
     constructor() { super(); wired = this; }
   }
   const { client, contexts, socket } = makeClient({ AudioWorkletNodeCtor: Worklet });
+  // The server's FIRST frame on /live is the rate — a test driving this client must produce the same wire
+  // order, now that capture REFUSES to run without one (journal-6g0).
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
   await client.startCapture();
 
   const captureCtx = contexts.find((c) => c.sampleRate === 16000);
@@ -265,6 +277,9 @@ test("capture: the worklet's Float32 chunks become PCM16 frames on the socket", 
 // ── 6. The session can die; the page must not keep saying "connected" ────────
 test("state: an upstream-closed event ends the session truthfully, and capture stays independent", async () => {
   const { client, contexts } = makeClient();
+  // The server's FIRST frame on /live is the rate — a test driving this client must produce the same wire
+  // order, now that capture REFUSES to run without one (journal-6g0).
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
   await client.startCapture();
   client.handleMessage(JSON.stringify({ type: "state", state: "ready", model: "models/gemini-3.8-live", detail: { gatedFrames: 0 } }));
   client.handleMessage(floatToPcm16(Float32Array.from([0.1])));
@@ -289,6 +304,9 @@ test("state: an upstream-closed event ends the session truthfully, and capture s
 
 test("state: a socket close is ended, not 'listening'", async () => {
   const { client, socket } = makeClient();
+  // The server's FIRST frame on /live is the rate — a test driving this client must produce the same wire
+  // order, now that capture REFUSES to run without one (journal-6g0).
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
   await client.startCapture();
   client.handleMessage(JSON.stringify({ type: "state", state: "ready", detail: {} }));
   client.attachSocket(socket); // re-attach so the fake carries the handlers
@@ -309,6 +327,9 @@ test("state: a socket close is ended, not 'listening'", async () => {
 // terminal event" — so the page must agree with the host rather than guess.
 test("state: a provider error does NOT end the session, and the page says the audio is still being sent", async () => {
   const { client } = makeClient();
+  // The server's FIRST frame on /live is the rate — a test driving this client must produce the same wire
+  // order, now that capture REFUSES to run without one (journal-6g0).
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
   await client.startCapture();
   client.handleMessage(JSON.stringify({ type: "state", state: "ready", model: "models/gemini-3.8-live", detail: { gatedFrames: 0 } }));
 
@@ -340,6 +361,9 @@ test("state: a refused microphone is sticky — a later ready emit must not over
   const media = fakeMedia();
   media.mediaDevices.getUserMedia = async () => { throw new Error("Permission denied"); };
   const { client } = makeClient({ mediaDevices: media.mediaDevices });
+  // The server's FIRST frame on /live is the rate — a test driving this client must produce the same wire
+  // order, now that capture REFUSES to run without one (journal-6g0).
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
   await client.startCapture(); // caught internally: no unhandled rejection
   assert.match(client.label(), /microphone is not available/i);
   assert.match(client.label(), /Permission denied/);
@@ -350,6 +374,9 @@ test("state: a refused microphone is sticky — a later ready emit must not over
   assert.equal(client.snapshot().ready, true, "the session is still ready underneath");
   // the next user action clears it
   media.mediaDevices.getUserMedia = async () => media.stream;
+  // The server's FIRST frame on /live is the rate — a test driving this client must produce the same wire
+  // order, now that capture REFUSES to run without one (journal-6g0).
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
   await client.startCapture();
   assert.doesNotMatch(client.label(), /microphone is not available/i);
   assert.equal(client.snapshot().capture, true);

@@ -17,7 +17,16 @@
 import { floatToPcm16, pcm16ToFloat, isPcm16, energy } from "./pcm.js";
 
 const PLAYBACK_RATE = 24000; // provider output, PCM16 (Gemini Live)
-const CAPTURE_RATE = 16000; // what we send; the browser resamples the device
+
+// THE RATE THE PROVIDER REQUIRES, TOLD TO US BY THE SERVER on the first frame of the /live socket
+// ({"type":"rate","inputRate":…,"provider":…}). There is deliberately NO DEFAULT: Gemini takes 16 kHz and
+// OpenAI takes 24 kHz, and the browser captured at 16 kHz while the OpenAI provider declared 24 kHz to its
+// vendor — so the provider told OpenAI one thing and sent another, and nothing in the path could notice
+// (journal-6g0). It hid because with one implementation nobody had to negotiate. So the page now captures at
+// the rate it was TOLD, and refuses to capture at all when it has not been told — the same posture as the
+// host, which refuses to guess a provider's rate rather than defaulting it. The browser's own pipeline does
+// the conversion, so there is still no hand-rolled resampler anywhere in this path.
+let requiredCaptureRate = null;
 
 // The two meters the page draws — the person's own voice, and the agent's.
 // 28 bars of recent input energy, 64 samples around the circle for the output,
@@ -194,6 +203,19 @@ export function createAudioClient({
       msg = JSON.parse(text);
     } catch {
       reject(`control frame is not JSON (${text.slice(0, 60)})`, { frameKind: "text" });
+      return;
+    }
+    if (msg?.type === "rate") {
+      // The first frame on the socket, by the host's contract: what to capture at, and who is asking. An
+      // unusable number is refused loudly rather than coerced into something plausible.
+      const rate = Number(msg.inputRate);
+      if (!Number.isFinite(rate) || rate <= 0) {
+        reject(`the server declared an unusable input rate (${JSON.stringify(msg.inputRate)})`, { frameKind: "control" });
+        return;
+      }
+      requiredCaptureRate = rate;
+      state.inputRate = rate;
+      state.provider = typeof msg.provider === "string" ? msg.provider : state.provider;
       return;
     }
     if (msg?.type === "state") {
@@ -374,8 +396,17 @@ export function createAudioClient({
       if (!mediaDevices?.getUserMedia || !AudioContextCtor || !AudioWorkletNodeCtor) {
         throw new Error("this browser has no microphone capture (getUserMedia/AudioContext/AudioWorklet unavailable)");
       }
+      if (!Number.isFinite(requiredCaptureRate)) {
+        // NOT a default and not a guess: the provider's protocol decides this number, and sending audio at a
+        // rate the provider does not accept is exactly the defect this closes. The page says so instead.
+        throw new Error(
+          "the server has not declared the input rate its provider requires, so the page will not capture: " +
+            "sending audio at an assumed rate is what told OpenAI one thing and sent another (journal-6g0)",
+        );
+      }
       stream = await mediaDevices.getUserMedia({ audio: deviceId ? { deviceId: { exact: deviceId } } : true });
-      captureCtx = new AudioContextCtor({ sampleRate: CAPTURE_RATE });
+      // The browser's own pipeline converts the device's audio to this rate — no resampler of ours.
+      captureCtx = new AudioContextCtor({ sampleRate: requiredCaptureRate });
       await captureCtx.audioWorklet.addModule(workletUrl);
       captureNode = new AudioWorkletNodeCtor(captureCtx, "pcm-capture");
       captureSource = captureCtx.createMediaStreamSource(stream);
