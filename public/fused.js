@@ -17,7 +17,7 @@ const WANTED = {
   files: "files", made: "made-list", samples: "samples", count: "file-count", empty: "empty",
   emptyHeadline: "empty-headline", emptyNext: "empty-next", emptyWhy: "empty-why", emptyAction: "empty-action",
   where: "where-note", dot: "server-dot", refresh: "refresh", report: "turn-report", newFile: "new-file",
-  rootKind: "root-kind", rootNote: "root-note", rootRoute: "root-route", madeHeading: "made-heading", emptyLink: "empty-link",
+  rootKind: "root-kind", madeHeading: "made-heading", emptyLink: "empty-link",
   stage: "voice-ring-wrap", mic: "mic", state: "voice-state",
   session: "session", log: "session-log", form: "text-form", utterance: "utterance", send: "send",
   reader: "reader", readerTitle: "reader-title", readerFacts: "file-facts", readerBody: "file-body",
@@ -170,7 +170,8 @@ function renderEmptyState() {
     // route is the first thing after the sentence — a real link, labelled with
     // where it goes.
     headline.textContent = "Open a project.";
-    next.textContent = "Nothing is open, so there is nothing for a turn to write into yet. Pick a folder on this machine in the environment page and turns will land there — that is the only kind of root the server itself can write into today.";
+    // The chip already said the state. This line says only the route.
+    next.textContent = "The environment page is where the root this room writes into is chosen.";
     if (els.emptyAction) els.emptyAction.hidden = false;
     if (els.emptyLink) els.emptyLink.textContent = "Open the environment page";
     if (els.emptyWhy) { els.emptyWhy.hidden = true; }
@@ -186,11 +187,13 @@ function renderEmptyState() {
     // The ACTION is the headline; the limitation is the sentence under it. A
     // first-time reader should meet the next step first, not a list of what is
     // missing (coord, 2026-09-20).
-    headline.textContent = "Open a project whose root is a folder on this machine.";
-    next.textContent = `This project's root is ${where}, and turns here go through the local server — so nothing typed can land in it yet. That is not a permission problem: the root belongs to the page, and only the page can act on it.`;
+    // The state's cause, once, then the remedy. The kinds themselves are taught
+    // where the choice is made (the environment page), not repeated here.
+    headline.textContent = "This project's root is read-only for turns.";
+    next.textContent = `Turns run in the local server and this root belongs to the page, so a typed turn is refused: ${where} is not a root the server can act on. Choose a different root in the environment page, or work in the page that owns this one.`;
     if (els.emptyWhy) { els.emptyWhy.textContent = activeRoot.why ?? ""; els.emptyWhy.hidden = !activeRoot.why; }
     if (els.emptyAction) els.emptyAction.hidden = false;
-    if (els.emptyLink) els.emptyLink.textContent = "Open a project that turns can write into";
+    if (els.emptyLink) els.emptyLink.textContent = "Open the environment page";
     showSamples(false);
     setComposerEnabled(false, activeRoot.why ?? "the open root is one only the page can act on");
     return;
@@ -222,8 +225,8 @@ function setComposerEnabled(canLand, why = "") {
     input.removeAttribute("title");
     return;
   }
-  input.placeholder = "Turns cannot land yet — no writable project root";
-  if (why) input.title = why;
+  input.placeholder = "Or type a turn…";
+  if (why) input.title = `a turn would be refused here: ${why}`;
 }
 
 function render() {
@@ -233,7 +236,7 @@ function render() {
   els.files.replaceChildren(...(count === 0 ? (writable ? [placeholder()] : []) : entries.map(card)));
   els.made.dataset.state = count === 0 ? "empty" : "ready";
   els.files.setAttribute("aria-busy", "false");
-  els.count.textContent = count === 0 ? "nothing yet" : `${count} ${count === 1 ? "file" : "files"}`;
+  els.count.textContent = count === 0 ? "" : `${count} ${count === 1 ? "file" : "files"}`;
   renderEmptyState();
   if (shownFile && !entries.some((entry) => entry.name === shownFile)) shownFile = null;
   if (shownFile) showFileSelection(shownFile);
@@ -282,45 +285,29 @@ async function loadRoot() {
   render();
 }
 
+// THE HEADER STATES THE STATE, ONCE, and explains nothing. "no root declared"
+// is a status; the explanation and the remedy live in the empty state, where a
+// person is about to act. The server's full description stays in the chip's
+// title for anyone who asks for it, because a tooltip is not a second voice on
+// the screen (coord, 2026-09-20: one fact was on screen three times).
 function renderRoot() {
   const kindEl = els.rootKind;
-  const noteEl = els.rootNote;
-  if (!kindEl || !noteEl) return;
-  const clear = () => { noteEl.hidden = true; noteEl.textContent = ""; noteEl.dataset.tone = ""; };
+  if (!kindEl) return;
 
   if (activeRoot === undefined) {
     kindEl.textContent = "root not reported";
-    noteEl.textContent = "This server does not say which root the loop writes into, so this page cannot name it.";
-    noteEl.dataset.tone = "warn";
-    noteEl.hidden = false;
+    kindEl.title = "this server does not say which root the loop writes into";
     return;
   }
   if (activeRoot === null) {
     kindEl.textContent = "no root declared";
-    if (els.rootRoute) els.rootRoute.hidden = false;
-    noteEl.textContent = "No project root is declared, so there is nothing for a turn to write into — the environment declares one when it opens a project.";
-    noteEl.dataset.tone = "warn";
-    noteEl.hidden = false;
+    kindEl.removeAttribute("title");
     return;
   }
-
-  if (els.rootRoute) els.rootRoute.hidden = false;
   const where = activeRoot.facts?.where ?? activeRoot.root?.kind ?? "a root";
   const name = activeRoot.root?.path ?? activeRoot.root?.name ?? activeRoot.root?.label ?? "";
   kindEl.textContent = name ? `${where} · ${name}` : where;
   kindEl.title = activeRoot.description ?? "";
-
-  renderEmptyState();
-  if (!activeRoot.reachableFromThisProcess) {
-    // Kind first (in the chip), then reachability in the server's own words —
-    // which distinguish "no root yet" from "a root this placement cannot act
-    // on". Never "permission denied" for a kind that has no permission story.
-    noteEl.textContent = activeRoot.why ?? activeRoot.refused ?? "this server cannot act on that root";
-    noteEl.dataset.tone = "warn";
-    noteEl.hidden = false;
-    return;
-  }
-  clear();
 }
 
 async function health() {

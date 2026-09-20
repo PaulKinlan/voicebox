@@ -256,6 +256,39 @@ async function renderView(view: ViewName): Promise<Reply> {
   }.`;
   panel.appendChild(where);
 
+  // WHAT DO I HAVE? On the picked-folder row, and only there. The line above
+  // already names the folder and prints the raw permission; this adds only what
+  // it does not say — the LEVEL of access, the fact that it was asked rather
+  // than remembered, and what to do when it goes stale. Paul granted edit
+  // access through the OS dialog and the page said nothing afterwards, so the
+  // only evidence was a dialog he had already dismissed (2026-09-20).
+  if (view === "picked" && reply.ok && reply.permission !== undefined) {
+    const held = reply.permission === "granted";
+    const access = document.createElement("p");
+    access.className = held ? "authority" : "failure";
+    access.textContent = held
+      ? "This page holds read-write access to that folder."
+      : reply.permission === "prompt"
+        ? "This page can read that folder but not write to it."
+        : "This page cannot reach that folder at all.";
+    panel.appendChild(access);
+
+    const asked = document.createElement("p");
+    asked.className = "authority";
+    asked.textContent =
+      "That answer comes from the folder itself each time this view is drawn, not from a memory of the last grant — permission can be " +
+      "revoked or expire (a browser restart, a reset, or the folder being deleted), and Restore write access is the button for that moment.";
+    panel.appendChild(asked);
+
+    if (!held) {
+      const restore = document.createElement("button");
+      restore.type = "button";
+      restore.textContent = "Restore write access";
+      restore.addEventListener("click", () => $("regrant").click());
+      panel.appendChild(restore);
+    }
+  }
+
   const list = document.createElement("ul");
   list.className = "entries";
   for (const entry of reply.entries ?? []) {
