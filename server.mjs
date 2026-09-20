@@ -805,13 +805,78 @@ server.on("upgrade", (req, socket) => {
   ws.on("error", () => session.close());
 });
 
-server.listen(PORT, "127.0.0.1", () => {
+/**
+ * BINDING IS RETRIED, NOT FATAL.
+ *
+ * What this fixes, measured rather than guessed: with the port already taken, the old code died with
+ * an uncaught `EADDRINUSE` — and under `node --watch` NOTHING restarts it until the next file change,
+ * so the product sat there serving a front with no API behind it. Three actors hit that in one
+ * evening, and this afternoon it was the reason Paul's page looked broken.
+ *
+ * The condition that produces it is "the port is taken at boot": a supervisor restarting faster than
+ * the socket is released, a second supervisor, a lane that started its own copy, a stale process
+ * nobody noticed. A server that exits on a transient bind failure during its own supervisor's
+ * restart takes the product down every time somebody merges, so the retry lives HERE rather than only
+ * in whatever script happens to start it — not every actor starts it through the manager.
+ */
+const BIND_RETRY_MS = Number(process.env.VOICEBOX_BIND_RETRY_MS ?? 250);
+const BIND_DEADLINE_MS = Number(process.env.VOICEBOX_BIND_DEADLINE_MS ?? 30000);
+
+function bindWithRetry(port, startedAt = Date.now()) {
+  return new Promise((resolve, reject) => {
+    const onError = (error) => {
+      server.off("listening", onListening);
+      const waited = Date.now() - startedAt;
+      if (error?.code === "EADDRINUSE" && waited < BIND_DEADLINE_MS) {
+        // The window is sized from evidence, not politeness: what holds this port is usually ANOTHER
+        // SUPERVISOR still shutting down (measured tonight — the manager swept two strays in one
+        // recovery, and carries a sweep routine at all because duplicate supervisors keep happening).
+        console.error(
+          `[bind] waiting for 127.0.0.1:${port} to be released — held by another process (EADDRINUSE), ` +
+            `${waited}ms so far; retrying every ${BIND_RETRY_MS}ms for up to ${BIND_DEADLINE_MS}ms. ` +
+            `A supervisor shutting down holds it briefly; a second supervisor holds it until it is stopped.`,
+        );
+        setTimeout(() => resolve(bindWithRetry(port, startedAt)), BIND_RETRY_MS);
+        return;
+      }
+      reject(error);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolve(server.address().port);
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, "127.0.0.1");
+  });
+}
+
+// A DEAD PORT IS ANNOUNCED, not left as a stack trace nobody reads. Whoever started this process —
+// a manager script, a supervisor, a lane's shell — gets one sentence naming the port and the reason.
+try {
+  const bound = await bindWithRetry(PORT);
   // The REAL port, not the requested one: PORT=0 asks the OS for a free port, and a test suite that
   // binds an ephemeral port has to be able to read back which one it got. A suite that pins a fixed
   // port cannot run beside another, and the failure appears in someone else's lane as an unexplained
   // block — the most expensive kind, because they cannot tell it is your test.
-  const bound = server.address().port;
   console.log(
     `voicebox on http://127.0.0.1:${bound} — provider: ${PROVIDER}, root: ${active ? active.root.path : "(none declared)"}`,
   );
-});
+} catch (error) {
+  console.error(
+    `[bind] giving up after waiting ${BIND_DEADLINE_MS}ms for 127.0.0.1:${PORT} (${error?.code ?? error?.message}). ` +
+      `Something else is serving that port — find it (ss -ltnp | grep ${PORT}) and stop it, or start this on another port.`,
+  );
+  process.exit(1);
+}
+
+// AND THE OUTGOING PROCESS LETS GO. A supervisor restarts by signalling the child; exiting on the
+// signal releases the socket immediately, instead of leaving the next process to collide with a
+// socket this one still holds. The force-exit is for open sockets (the live-voice WebSocket keeps
+// `close()` waiting), so a clean stop never becomes a hang.
+for (const signal of ["SIGTERM", "SIGINT"]) {
+  process.on(signal, () => {
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 1000).unref();
+  });
+}
