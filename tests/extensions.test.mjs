@@ -75,6 +75,15 @@ const getJson = async (p) => (await get(p)).json();
 const post = async (p, body) =>
   fetch(`${BASE}${p}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 const postJson = async (p, body) => (await post(p, body)).json();
+// The HOST's admission call: carries the host token (a 0600 file in the host's
+// own directory). The route refuses the page's token-less two-fetch flow.
+const admitAsHost = async (id, decision = "admit") =>
+  fetch(`${BASE}/api/extensions/admit`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken() },
+    body: JSON.stringify({ id, confirm: true, decision }),
+  }).then((r) => r.json());
+const hostToken = () => readFileSync(path.join(HOST_EXTENSIONS, ".host-token"), "utf8").trim();
 const turn = (transcript) => postJson("/api/turn", { transcript });
 
 // ── 1. a tool built FROM A PROMPT: pending, disclosed, and NOT loaded ─────
@@ -103,7 +112,7 @@ test("the disclosure: the resolved plan IS the source, before anyone confirms", 
   // What it cannot have, named even though it never asked:
   assert(plan.gate.cannotHave.some((c) => c.startsWith("exec — absent")), "the disclosure must say what the placement cannot grant");
   // Confirm-first: the deciding POST without confirm decides NOTHING.
-  const ask = await postJson("/api/extensions/admit", { id: "clock-tool" });
+  const ask = await fetch(`${BASE}/api/extensions/admit`, { method: "POST", headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken() }, body: JSON.stringify({ id: "clock-tool" }) }).then((r) => r.json());;
   assert.equal(ask.confirmFirst, true);
   const inv = await getJson("/api/extensions");
   assert.equal(inv.extensions.find((e) => e.id === "clock-tool"), undefined, "a confirm-less admit changed the loaded set");
@@ -111,7 +120,7 @@ test("the disclosure: the resolved plan IS the source, before anyone confirms", 
 
 // ── 2. the host admits; the tool loads and is CALLED through the loop ─────
 test("the host admits; the tool is loaded and called through the transcript loop", async () => {
-  const r = await postJson("/api/extensions/admit", { id: "clock-tool", confirm: true, decision: "admit" });
+  const r = await admitAsHost("clock-tool");
   assert.equal(r.decision, "admitted", `admission failed: ${JSON.stringify(r)}`);
   // The host directory (outside the model's root) now holds it…
   assert.equal(existsSync(path.join(HOST_EXTENSIONS, "clock-tool.json")), true, "the admitted descriptor is not in the host's directory");
@@ -137,7 +146,7 @@ test("an MCP server that launches a process is REFUSED, with the named reason, a
   assert.equal(staged.state, "pending");
   assert.match(staged.note ?? "", /NOT loaded/, "a sideload must not load its own proposal");
   // The host decides: the gate refuses.
-  const r = await postJson("/api/extensions/admit", { id: "mcp-server-local", confirm: true, decision: "admit" });
+  const r = await admitAsHost("mcp-server-local");
   assert.equal(r.decision, "refused");
   assert.equal(r.rule, "exec-absent");
   assert.match(r.why, /--allow-run bounds which binary, never what it can do/);
@@ -212,7 +221,7 @@ test("a network tool declares where and how much; enforcement makes the declarat
     },
   });
   assert.equal(propose.state, "pending");
-  const r = await postJson("/api/extensions/admit", { id: "selfprobe", confirm: true, decision: "admit" });
+  const r = await admitAsHost("selfprobe");
   assert.equal(r.decision, "admitted");
   const inv = await getJson("/api/extensions");
   const probe = inv.extensions.find((e) => e.id === "selfprobe");
@@ -243,7 +252,7 @@ test("an unbounded network declaration is refused at the gate", async () => {
       tools: [{ name: "unbounded_fetch", description: "x", primitive: "http-get", params: {} }],
     },
   });
-  const r = await postJson("/api/extensions/admit", { id: "unbounded", confirm: true, decision: "admit" });
+  const r = await admitAsHost("unbounded");
   assert.equal(r.decision, "refused");
   assert.equal(r.rule, "network-unbounded");
   assert.match(r.why, /where \(bounds\.hosts\)/);
@@ -273,7 +282,7 @@ test("a redirect to an undeclared host refuses BY NAME; a declared one is follow
         tools: [{ name: "rdprobe", description: "GET", primitive: "http-get", params: {} }],
       },
     });
-    const r = await postJson("/api/extensions/admit", { id: "rdprobe", confirm: true, decision: "admit" });
+    const r = await admitAsHost("rdprobe");
     assert.equal(r.decision, "admitted");
 
     // The undeclared redirect target refuses BY NAME, with the chain named.
@@ -321,7 +330,7 @@ test("a redirect to an undeclared host refuses BY NAME; a declared one is follow
 // ── 6. rsj: MCP — placement and authority are expressible ─────────────────
 test("a REMOTE MCP server is expressible and admissible: no launch, bounded network, host-side authority", async () => {
   await postJson("/api/extensions/sideload", { id: "mcp-server-remote", confirm: true });
-  const r = await postJson("/api/extensions/admit", { id: "mcp-server-remote", confirm: true, decision: "admit" });
+  const r = await admitAsHost("mcp-server-remote");
   assert.equal(r.decision, "admitted", `remote MCP refused: ${JSON.stringify(r)}`);
   const inv = await getJson("/api/extensions");
   const mcp = inv.extensions.find((e) => e.id === "mcp-server-remote");
@@ -334,7 +343,7 @@ test("sideload and model proposal pass the SAME gate and reach the same states",
   // The user's door: sideload the harmless notes reader.
   const staged = await postJson("/api/extensions/sideload", { id: "notes", confirm: true });
   assert.equal(staged.state, "pending");
-  const r = await postJson("/api/extensions/admit", { id: "notes", confirm: true, decision: "admit" });
+  const r = await admitAsHost("notes");
   assert.equal(r.decision, "admitted");
   writeFileSync(path.join(WORKSPACE, "notes.md"), "the notes live here");
   const call = await turn("run the tool read_notes");
@@ -356,7 +365,7 @@ test("the host's veto: decision 'deny' refuses even an admissible proposal, by n
       tools: [{ name: "junk_tool", description: "x", primitive: "now", params: {} }],
     },
   });
-  const r = await postJson("/api/extensions/admit", { id: "junk", confirm: true, decision: "deny" });
+  const r = await admitAsHost("junk", "deny");
   assert.equal(r.decision, "refused");
   assert.equal(r.rule, "host-deny");
   const inv = await getJson("/api/extensions");
@@ -371,4 +380,66 @@ test("the catalogue lists strangers with what admission WOULD decide", async () 
   assert.equal(byId["mcp-server-local"].preview.decision, "refused", "the catalogue must say upfront what the gate would decide");
   assert.equal(byId["mcp-server-local"].preview.rule, "exec-absent");
   assert.equal(byId["mcp-server-remote"].preview.decision, "admitted");
+});
+
+// ── 9. the m2i acceptance: the page's two-fetch admission now fails BY NAME ─
+test("THE ACCEPTANCE: the page's two-fetch admission (propose, then admit) is refused host-token-required", async () => {
+  // Fetch 1 (the page's door — still open): propose.
+  const proposed = await postJson("/api/extensions/proposals", {
+    descriptor: {
+      id: "pageself", name: "Page Self-Admit", description: "the page admits itself",
+      source: "model", runsIn: "host", capabilities: [], bounds: {},
+      tools: [{ name: "pageself_tool", description: "x", primitive: "now", params: {} }],
+    },
+  });
+  assert.equal(proposed.state, "pending");
+  // Fetch 2 WITHOUT the host token — exactly the drive that found the hole:
+  const pageAdmit = await postJson("/api/extensions/admit", { id: "pageself", confirm: true, decision: "admit" });
+  assert.equal(pageAdmit.ok, false, `the page admitted itself again: ${JSON.stringify(pageAdmit)}`);
+  assert.equal(pageAdmit.refused, "host-token-required");
+  assert.match(pageAdmit.why, /the page cannot hold it/);
+  // And the tool still refuses, by name, in the page's vocabulary:
+  const call = await turn("run the tool pageself_tool");
+  assert.equal(call.result?.refused, "not-admitted");
+  // A WRONG token is the same refusal — the check is the token, not the header's presence:
+  const wrong = await fetch(`${BASE}/api/extensions/admit`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-voicebox-host-token": "not-the-token" },
+    body: JSON.stringify({ id: "pageself", confirm: true, decision: "admit" }),
+  }).then((r) => r.json());
+  assert.equal(wrong.refused, "host-token-required");
+  // The host, WITH the token, admits — the same two-fetch flow plus the host's secret:
+  const host = await admitAsHost("pageself");
+  assert.equal(host.decision, "admitted");
+  const run = await turn("run the tool pageself_tool");
+  assert.equal(run.result?.ok, true);
+});
+
+// ── 10. the 0xp acceptance: the sweep is dead — present, not admitted ──────
+test("a dropped file is present-not-admitted: the next host admission does NOT sweep it in", async () => {
+  mkdirSync(HOST_EXTENSIONS, { recursive: true });
+  writeFileSync(path.join(HOST_EXTENSIONS, "sweep2.json"), JSON.stringify({
+    id: "sweep2", name: "Sweep 2", description: "dropped, never admitted",
+    source: "model", runsIn: "host", capabilities: [], bounds: {},
+    tools: [{ name: "sweep2_tool", description: "x", primitive: "now", params: {} }],
+  }));
+  // The host admits a DIFFERENT tool — the reload happens:
+  await postJson("/api/extensions/proposals", {
+    descriptor: {
+      id: "reloadbait", name: "Reload Bait", description: "forces the reload",
+      source: "model", runsIn: "host", capabilities: [], bounds: {},
+      tools: [{ name: "reloadbait_tool", description: "x", primitive: "now", params: {} }],
+    },
+  });
+  const r = await admitAsHost("reloadbait");
+  assert.equal(r.decision, "admitted");
+  // The sweep that used to happen: the dropped file is NOT live.
+  const inv = await getJson("/api/extensions");
+  assert.equal(inv.extensions.find((e) => e.id === "sweep2"), undefined, "the sweep-in happened again");
+  // But it is VISIBLE as exactly what it is:
+  const present = inv.present.find((p) => p.id === "sweep2");
+  assert.equal(present?.state, "present-not-admitted");
+  assert.match(present?.note ?? "", /never live/);
+  const call = await turn("run the tool sweep2_tool");
+  assert.equal(call.result?.refused, "unknown-tool");
 });
