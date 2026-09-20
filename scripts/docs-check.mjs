@@ -199,7 +199,7 @@ async function blocks() {
         ? `Audio worklets loaded by that code: ${worklets.map((w) => "`" + w + "`").join(", ")}.`
         : "**No audio worklet is loaded** — `addModule(…)` appears nowhere in the page's scripts, so the audio path is not wired on this tree.",
       "",
-      "`app.js` and `verify.mjs` sit in `public/` but are **not** loaded by `index.html`; they are support files, not part of the page's load set.",
+      "`verify.mjs` sits in `public/` but is **not** loaded by `index.html`; it is a support script, not part of the page's load set.",
     ].join("\n")),
 
     "live-session": block("live-session", (live.present

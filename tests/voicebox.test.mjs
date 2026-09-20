@@ -84,9 +84,20 @@ test("the XSS payload crosses the API as data and is never turned into elements 
   // strings with textContent, never innerHTML (pinned below), so the payload
   // arrives as text on screen.
   assert.equal(j.result?.ok, true, "the write itself is refused only by containment — see the next test");
-  // The served app must not carry a single innerHTML sink:
-  const app = readFileSync(path.join(ROOT, "public", "app.js"), "utf8");
-  assert.equal(app.includes("innerHTML"), false, "the served app.js still renders strings as markup");
+  // The served app must not carry a single innerHTML sink. This reads EVERY
+  // script the page declares rather than one named file: app.js was deleted on
+  // 2026-09-20 (no page loaded it) and a guard that dies with the file it
+  // watched is how a security property is quietly removed. Whatever the page
+  // loads is what this checks.
+  const servedPage = readFileSync(path.join(ROOT, "public", "index.html"), "utf8");
+  const scripts = [...servedPage.matchAll(/<script[^>]*src="([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(scripts.length > 0, "the page declares no scripts, so this guard would be vacuous");
+  for (const src of scripts) {
+    const onDisk = path.join(ROOT, "public", src.replace(/^\//, ""));
+    if (!existsSync(onDisk)) continue; // a module served from elsewhere (the environment page)
+    const body = readFileSync(onDisk, "utf8");
+    assert.equal(body.includes("innerHTML"), false, `${src} still renders strings as markup`);
+  }
   // And the page's CSP forbids inline handlers even if markup slipped through:
   const page = readFileSync(path.join(ROOT, "public", "index.html"), "utf8");
   assert.match(page, /script-src 'self'/);

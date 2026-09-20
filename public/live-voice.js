@@ -7,7 +7,7 @@
 //
 // It sets window.__voiceboxLive before the page's other scripts run, so the
 // old SpeechRecognition dictation handler (public/fused.js) does not attach,
-// and app.js's scripted captions stop while live.
+// and the page's scripted captions stop while live.
 import { createAudioClient } from "./audio-client.js";
 
 window.__voiceboxLive = true;
