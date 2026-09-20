@@ -17,7 +17,7 @@ const WANTED = {
   files: "files", made: "made-list", samples: "samples", count: "file-count", empty: "empty",
   emptyHeadline: "empty-headline", emptyNext: "empty-next", emptyWhy: "empty-why", emptyAction: "empty-action",
   where: "where-note", dot: "server-dot", refresh: "refresh", report: "turn-report", newFile: "new-file",
-  rootKind: "root-kind", rootNote: "root-note", madeHeading: "made-heading",
+  rootKind: "root-kind", rootNote: "root-note", rootRoute: "root-route", madeHeading: "made-heading", emptyLink: "empty-link",
   stage: "voice-ring-wrap", mic: "mic", state: "voice-state",
   session: "session", log: "session-log", form: "text-form", utterance: "utterance", send: "send",
   reader: "reader", readerTitle: "reader-title", readerFacts: "file-facts", readerBody: "file-body",
@@ -154,6 +154,7 @@ function renderEmptyState() {
     next.textContent = "It is not answering, so nothing can be written yet — start it, then press Refresh.";
     if (els.emptyWhy) { els.emptyWhy.hidden = true; }
     if (els.emptyAction) els.emptyAction.hidden = true;
+    if (els.emptyLink) els.emptyLink.textContent = "Open the environment page";
     showSamples(false);
     setComposerEnabled(false, "the local server is not answering, so a turn cannot be written");
     return;
@@ -162,9 +163,16 @@ function renderEmptyState() {
   // 2. no root declared: the next action is to open a project, and that is a
   //    different page, so the page points at it.
   if (activeRoot === null) {
+    // A remedy with no route is worse than a bare refusal: it reads as though
+    // the way exists and you simply cannot find it. Paul asked "How do I set the
+    // project root? I don't see any configuration" while looking at a sentence
+    // that named the remedy and offered no way to reach it (2026-09-20), so the
+    // route is the first thing after the sentence — a real link, labelled with
+    // where it goes.
     headline.textContent = "Open a project.";
-    next.textContent = "Nothing is open, so there is nothing for a turn to write into yet. The environment page declares the root this room writes into.";
+    next.textContent = "Nothing is open, so there is nothing for a turn to write into yet. Pick a folder on this machine in the environment page and turns will land there — that is the only kind of root the server itself can write into today.";
     if (els.emptyAction) els.emptyAction.hidden = false;
+    if (els.emptyLink) els.emptyLink.textContent = "Open the environment page";
     if (els.emptyWhy) { els.emptyWhy.hidden = true; }
     showSamples(false);
     setComposerEnabled(false, "no project root is declared, so a turn has nothing to write into");
@@ -182,6 +190,7 @@ function renderEmptyState() {
     next.textContent = `This project's root is ${where}, and turns here go through the local server — so nothing typed can land in it yet. That is not a permission problem: the root belongs to the page, and only the page can act on it.`;
     if (els.emptyWhy) { els.emptyWhy.textContent = activeRoot.why ?? ""; els.emptyWhy.hidden = !activeRoot.why; }
     if (els.emptyAction) els.emptyAction.hidden = false;
+    if (els.emptyLink) els.emptyLink.textContent = "Open a project that turns can write into";
     showSamples(false);
     setComposerEnabled(false, activeRoot.why ?? "the open root is one only the page can act on");
     return;
@@ -288,12 +297,14 @@ function renderRoot() {
   }
   if (activeRoot === null) {
     kindEl.textContent = "no root declared";
+    if (els.rootRoute) els.rootRoute.hidden = false;
     noteEl.textContent = "No project root is declared, so there is nothing for a turn to write into — the environment declares one when it opens a project.";
     noteEl.dataset.tone = "warn";
     noteEl.hidden = false;
     return;
   }
 
+  if (els.rootRoute) els.rootRoute.hidden = false;
   const where = activeRoot.facts?.where ?? activeRoot.root?.kind ?? "a root";
   const name = activeRoot.root?.path ?? activeRoot.root?.name ?? activeRoot.root?.label ?? "";
   kindEl.textContent = name ? `${where} · ${name}` : where;
