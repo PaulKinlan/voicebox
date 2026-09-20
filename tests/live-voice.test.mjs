@@ -44,6 +44,32 @@ function tone16k(seconds = 0.4, freq = 440) {
   return Buffer.from(pcm.buffer);
 }
 
+/**
+ * WAIT FOR THE CONDITION AND SAY HOW LONG IT TOOK.
+ *
+ * This file got the shape wrong TWICE: a fixed sleep followed by an assertion about what arrived. The first
+ * slept 12 s and failed under parallel load; the second slept 10 s and failed at 11.97 s with "the session
+ * must still return audio after a dropped malformed frame" — reporting a slow network as a broken session
+ * (coord, 2026-09-20, twice with the gate owner's log to prove it).
+ *
+ * A live-network leg must wait for the thing it needs, print the latency, and keep a bound — so a degrading
+ * network shows up as a RISING NUMBER rather than an intermittent red, and a genuinely broken session still
+ * fails. No retry: a retried pass reported as a clean pass is the same lie as a green check that measured
+ * nothing.
+ */
+async function waitFor(predicate, { what, boundMs = 45000, everyMs = 250 }) {
+  const started = Date.now();
+  while (!predicate() && Date.now() - started < boundMs) await new Promise((r) => setTimeout(r, everyMs));
+  const ms = Date.now() - started;
+  const ok = predicate();
+  console.log(
+    ok
+      ? `[live-voice] ${what}: arrived after ${ms}ms (waited for it, did not assume it)`
+      : `[live-voice] ${what}: NOT within ${boundMs}ms`,
+  );
+  return ok;
+}
+
 test("live voice [live-network]: WS codec, readiness gate, and a real Gemini round trip", { skip: !HAVE_KEY && "GEMINI_API_KEY not set", timeout: 90000 }, async () => {
   const server = await startServer();
   try {
@@ -114,7 +140,7 @@ test("live voice [live-network]: WS codec, readiness gate, and a real Gemini rou
   }
 });
 
-test("live voice: a malformed binary frame costs a frame, not the conversation", { skip: !HAVE_KEY && "GEMINI_API_KEY not set", timeout: 90000 }, async () => {
+test("live voice [live-network]: a malformed binary frame costs a frame, not the conversation", { skip: !HAVE_KEY && "GEMINI_API_KEY not set", timeout: 90000 }, async () => {
   const server = await startServer();
   try {
     await waitForServer(server);
@@ -144,18 +170,22 @@ test("live voice: a malformed binary frame costs a frame, not the conversation",
 
     // The measured kill (ds-flash-1b): one 3-byte (odd-length) frame.
     ws.send(Buffer.from([0x01, 0x02, 0x03]));
-    await new Promise((res) => setTimeout(res, 1500));
-    assert.ok(
-      errors.some((m) => /odd-length audio frame/.test(m.error ?? "")),
-      `the malformed frame must be named, got ${JSON.stringify(errors)}`,
-    );
+    const named = await waitFor(() => errors.some((m) => /odd-length audio frame/.test(m.error ?? "")), {
+      what: "the malformed-frame report",
+      boundMs: 15000, // the report is local to this server, so this bound is generous rather than optimistic
+    });
+    assert.ok(named, `the malformed frame must be named, got ${JSON.stringify(errors)}`);
 
     // THE PROPERTY: the conversation survives. A valid frame after the bad one
     // still flows and audio still comes back — one bad frame cost a frame.
     ws.send(tone16k(0.8));
     ws.send(JSON.stringify({ type: "text", text: "Say hello briefly." }));
-    await new Promise((res) => setTimeout(res, 10000));
-    assert.ok(audioFrames > 0, "the session must still return audio after a dropped malformed frame");
+    const survived = await waitFor(() => audioFrames > 0, { what: "audio after the dropped frame" });
+    assert.ok(
+      survived,
+      `the session must still return audio after a dropped malformed frame (frames=${audioFrames}, ` +
+        `errors=${JSON.stringify(errors)}, states=${JSON.stringify(states.slice(-2))})`,
+    );
     assert.ok(
       !states.some((s) => s.state === "upstream-closed"),
       `the session must NOT die on one bad frame; got ${JSON.stringify(states.slice(-2))}`,
