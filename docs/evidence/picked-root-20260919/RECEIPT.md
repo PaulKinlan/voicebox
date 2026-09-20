@@ -164,8 +164,10 @@ be told about (§7):
   (`7cd.2`): a view with nothing behind it refuses by name (`not-a-project`), while a genuinely
   empty picked folder succeeds with **zero** entries and `truncated: false`. A change that collapsed
   the two would now fail.
-- **`npm test`** — the repository's existing 11 checks still pass, including "page load with files
-  produces zero POST /api/turn calls": the new page adds no turns.
+- **`npm test`** — the repository's WHOLE gate: **126/126**. (This line said "the existing 11" when
+  it was written; `npm test` was `node tests/voicebox.test.mjs` then and the glob has grown with the
+  merged work. The number is corrected rather than left as a claim that was true of a file and false
+  of the tree — see the one-root receipt's note on exactly that failure.)
 - **Independent vision review** (gemini lane, on `/tmp/e1m0-opfs.png` and `/tmp/e1m0-picked.png`,
   with no code in front of it): confirmed the header, the three panels, the gallery and the
   transcript render; that the picked project's header reads "root kind: a picked folder —
@@ -226,7 +228,8 @@ port.
 cd /home/paulkinlan/voicebox-e1m0
 git log --oneline -3          # d3d0afb (the build), cd6cdc2 + 87fc280 (the review follow-up)
 npm run test:e1m0             # 27 checks; ~3s
-npm test                      # the repository's existing 11; unchanged
+npm test                      # the repository's WHOLE gate: 126 tests (not "the existing 11" —
+                              # the glob grew as other lanes merged; run it before believing a green)
 ```
 
 | Closure | What to look at, and what "closed" looks like |
@@ -334,7 +337,8 @@ entries with `e.act.target` — they assumed every entry is an act. An *additive
 changes what readers may assume, which is the concrete reason the bead asked for the shape to be
 decided before the first shared entry was written.
 
-**Verification:** 37 checks (`npm run test:e1m0`, +10 for the shared log), the repository's existing 11
-unchanged (`npm test`), and the second-agent page assertion included. Verification of the *aging*
+**Verification:** 37 checks (`npm run test:e1m0`, +10 for the shared log) plus the repository's whole
+gate at the time of writing, and the second-agent page assertion included. The count that matters is
+the gate's own: run `npm test`, not the suite you wrote. Verification of the *aging*
 windows is in the pure checks with an injected clock — a browser test would otherwise have to wait
 five minutes to see `unreachable`, and a waiting test is a test nobody runs.

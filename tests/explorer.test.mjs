@@ -33,6 +33,7 @@ let page;
 let folder;
 let folderName;
 let emptyFolder;
+let machineRoot;
 
 const send = (message) => page.evaluate((m) => window.e1m0.send(m), message);
 const stats = () => send({ type: "stats" });
@@ -47,6 +48,8 @@ test.before(async () => {
   }
   folderName = path.basename(folder);
   emptyFolder = path.join(path.dirname(folder), "empty-root");
+  machineRoot = path.join(path.dirname(folder), "machine-root");
+  mkdirSync(machineRoot);
 
   server = spawn(process.execPath, [path.join(ROOT, "server.mjs")], {
     cwd: ROOT,
@@ -85,42 +88,59 @@ test.after(async () => {
 });
 
 // 1 ------------------------------------------------------------------------------------------
-test("7cd.1 Three views, three authorities, and each one says which root it is showing", { timeout: 90000 }, async () => {
+test("7cd.1 Three views, three authorities, and each one names the root it is showing — or refuses by name", { timeout: 90000 }, async () => {
+  // (a) a project whose root the PAGE owns: the origin view and the picked view are real, and the
+  // machine view refuses by name rather than listing some other folder under a machine heading.
   await send({ type: "openProject", name: folderName });
   const opfs = await send({ type: "listView", view: "opfs", limit: LIMIT });
   const picked = await send({ type: "listView", view: "picked", limit: LIMIT });
-  const server = await send({ type: "listView", view: "server", limit: LIMIT });
-
-  for (const [name, reply] of [["opfs", opfs], ["picked", picked], ["server", server]]) {
+  for (const [name, reply] of [["opfs", opfs], ["picked", picked]]) {
     assert.equal(reply.ok, true, `the ${name} view failed: ${JSON.stringify(reply)}`);
     assert.ok(reply.authority?.where, `the ${name} view does not say where its files are`);
     assert.ok(reply.authority?.whoCanSee, `the ${name} view does not say who can see its files`);
-    assert.equal(typeof reply.root, "string");
     assert.ok(reply.root.length > 0, `the ${name} view does not name its root`);
   }
-
-  // Different roots, different authorities, and different answers to "does this need a gesture".
-  assert.equal(new Set([opfs.root, picked.root, server.root]).size, 3, "two views claim the same root");
   assert.equal(opfs.authority.needsGesture, false, "OPFS needs no gesture and must say so");
   assert.equal(picked.authority.needsGesture, true, "a picked folder may need a gesture and must say so");
-  assert.equal(server.authority.survivesTabClose, true, "the server view is the one that outlives the tab");
   assert.match(opfs.authority.whoCanSee, /nothing outside this origin/);
   assert.match(picked.authority.whoCanSee, /anything on this machine/);
 
-  // And the page renders all three with those words, from three separate panels.
-  await page.evaluate(async () => {
+  const machineBefore = await send({ type: "listView", view: "server" });
+  assert.equal(machineBefore.ok, false, `the machine view served a page-owned root: ${JSON.stringify(machineBefore)}`);
+  assert.equal(machineBefore.code, "root-not-reachable-from-here");
+  assert.match(machineBefore.why, /page/, "the refusal does not name who can act on this root");
+
+  // (b) the same project declares a root on the machine: now the machine view is the real one, it
+  // names the folder, and the picked view refuses by name — the pair, from both sides.
+  await page.evaluate(async (dir) => { await window.e1m0.useMachineRoot(dir, "explorer"); }, machineRoot);
+  const machine = await send({ type: "listView", view: "server", limit: LIMIT });
+  const pickedAfter = await send({ type: "listView", view: "picked", limit: LIMIT });
+  assert.equal(machine.ok, true, `the machine view failed after declaring its root: ${JSON.stringify(machine)}`);
+  assert.equal(machine.root, machineRoot, "the machine view does not name the root it is showing");
+  assert.match(machine.authority.where, /machine running the process/);
+  assert.match(machine.authority.whoCanSee, /anything on that machine/);
+  assert.equal(pickedAfter.ok, false, "the picked view answered for a machine root");
+  assert.equal(pickedAfter.code, "not-a-project");
+  assert.match(pickedAfter.why, /a folder on the machine/, "the refusal does not say what this root actually is");
+
+  // Three roots, three authorities, and no two of them the same thing.
+  assert.equal(new Set([opfs.root, picked.root, machine.root]).size, 3, "two views claim the same root");
+
+  // And the page renders all three: the two that answer name their root, the third shows its refusal.
+  await page.evaluate(async (name) => {
+    await window.e1m0.open(name); // the project the page owns, so the picked panel has something real to show
     await window.e1m0.renderView("opfs");
     await window.e1m0.renderView("picked");
     await window.e1m0.renderView("server");
-  });
+  }, folderName);
   const panels = await page.evaluate(() => ({
     opfs: document.getElementById("view-opfs").textContent,
     picked: document.getElementById("view-picked").textContent,
     server: document.getElementById("view-server").textContent,
   }));
-  assert.match(panels.opfs, /origin storage|origin/i);
-  assert.match(panels.picked, new RegExp(folderName), "the picked panel does not name the folder it shows");
-  assert.match(panels.server, /workspace/);
+  assert.match(panels.opfs, /v1/, "the origin panel does not name its root");
+  assert.match(panels.picked, /a real folder on this machine/, "the picked panel does not name its authority");
+  assert.match(panels.server, /root-not-reachable-from-here/, "the machine panel does not show its refusal");
   assert.notEqual(panels.opfs, panels.picked, "two panels render the same thing");
 });
 
@@ -156,6 +176,17 @@ test("7cd.2 'You are not pointing at a project' and 'your project is empty' are 
   assert.deepEqual(empty.entries, [], "an empty folder returned entries");
   assert.equal(empty.truncated, false, "an empty folder claimed to be truncated");
   assert.notEqual(empty.ok, refused.ok, "'no project' and 'empty project' answered the same way");
+
+  // (c) the machine's root is not this root: the explorer's server panel refuses BY NAME when the
+  // active root belongs to the page, instead of listing some other folder under a machine heading.
+  await send({ type: "openProject", name: "atlas" });
+  const server = await send({ type: "listView", view: "server" });
+  assert.equal(server.ok, false, `the machine panel served a page-owned root: ${JSON.stringify(server)}`);
+  assert.equal(server.code, "root-not-reachable-from-here");
+  assert.match(server.why, /page/, "the refusal does not name who can act on this root");
+  await page.evaluate(() => window.e1m0.renderView("server"));
+  const refusedPanel = await page.evaluate(() => document.getElementById("view-server").textContent);
+  assert.match(refusedPanel, /root-not-reachable-from-here/, "the panel does not show the refusal");
 });
 
 // 3 ------------------------------------------------------------------------------------------

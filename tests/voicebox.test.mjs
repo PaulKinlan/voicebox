@@ -12,7 +12,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { tmpdir } from "node:os";
@@ -22,7 +22,11 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
 const SERVER = path.join(ROOT, "server.mjs");
 const PORT = 8797;
 const BASE = `http://127.0.0.1:${PORT}`;
-const WORKSPACE = path.join(ROOT, "workspace");
+// A SCRATCH root, declared to the server rather than assumed: the loop has no default root any more,
+// and a suite that wrote into the repository would be an instrument changing the thing it measures.
+const SCRATCH = mkdtempSync(path.join(os.tmpdir(), "voicebox-suite-"));
+const WORKSPACE = path.join(SCRATCH, "workspace");
+mkdirSync(WORKSPACE, { recursive: true });
 
 let child;
 
@@ -39,6 +43,9 @@ async function up() {
 
 test.before(async () => {
   process.env.PORT = String(PORT);
+  // VOICEBOX_WORKSPACE is a DECLARATION of the active root (an operator's, at boot) — it is not a
+  // default the server falls back to. With it unset the loop refuses every act by name.
+  process.env.VOICEBOX_WORKSPACE = WORKSPACE;
   child = spawn(process.execPath, [SERVER], {
     cwd: ROOT,
     env: process.env,
@@ -97,7 +104,12 @@ test("`..` as an item name is refused, not rewritten into the parent directory",
   rmSync(parentProbe, { force: true });
   const j = await post("/api/turn", `create a file called ../evil.sh with pwned`);
   assert.equal(j.result?.ok, false, "the escape was executed, not refused");
-  assert.match(j.result?.error ?? "", /escapes the workspace/);
+  // The message names the ACTIVE PROJECT ROOT rather than "the workspace", because the loop now
+  // writes into whichever root the environment declared (core/root.ts) and a hard-coded word would
+  // become a lie the first time somebody declared a different folder.
+  assert.match(j.result?.error ?? "", /escapes the active project root/);
+  assert.equal(j.result?.refused, "outside-root", "the refusal does not name the rule");
+  assert.match(j.result?.why ?? "", /'\.\.' segment/, "the refusal does not use the mechanism's own words");
   assert.equal(existsSync(parentProbe), false, "nothing may land in the parent directory");
   // The positive control: a name INSIDE the workspace still writes.
   const inside = await post("/api/turn", `create a file called inside.txt with kept`);

@@ -161,11 +161,10 @@ async function blocks() {
   const { tags, worklets } = pageScripts();
   const live = liveSession();
   const liveUpgradeLine = await probeLiveUpgrade(port);
-  // A COMMITTED DOCUMENT CANNOT CONTAIN AN ABSOLUTE PATH. server.mjs reports its workspace absolutely, so the
-  // generated block used to hardcode this worktree's path and the check passed only on the machine that made
-  // it. Same lesson as the harness's workspace anchoring: a path that is true in one checkout is not a fact
-  // about the system.
-  const relWorkspace = `${relative(ROOT, health.workspace) || "."}/`;
+  // A COMMITTED DOCUMENT CANNOT CONTAIN AN ABSOLUTE PATH — and the loop no longer HAS a default root to
+  // report either: the active root is declared by the environment, so what belongs in the document is the
+  // SHAPE of that declaration (\`declared\` and the root object), not a path that is true in one checkout.
+  const declared = health.declared === true ? "true" : "false";
 
   const sample = resolveTurn("create a file called hello.txt with hi");
   const unresolved = resolveTurn("book me a flight to Lisbon");
@@ -189,7 +188,7 @@ async function blocks() {
       "|---|---|---|",
       ...routes.map((r) => `| \`${r.method}\` | \`${r.path}\` | ${r.status}${r.matches_documented_expectation ? "" : " ⚠️ differs from what this table expects"} |`),
       "",
-      `Anything else that exists under \`public/\` is served from there (\`GET /static\` and a fall-through), which is how the page, its scripts and the styles arrive. \`/api/health\` answers \`provider: "${health.provider}"\`, \`workspace: "${relWorkspace}"\`.`,
+      `Anything else that exists under \`public/\` is served from there (\`GET /static\` and a fall-through), which is how the page, its scripts and the styles arrive. \`/api/health\` answers \`provider: "${health.provider}"\`, \`declared: ${declared}\` and \`root: { kind, path }\` for the ACTIVE project root — which the environment declares (\`POST /api/root\`); the loop has no root of its own, and refuses by name (\`root-not-declared\`) until one is declared.`,
       "",
       liveUpgradeLine,   // DERIVED by probeLiveUpgrade() — this line used to be a typed sentence about state
     ].join("\n")),

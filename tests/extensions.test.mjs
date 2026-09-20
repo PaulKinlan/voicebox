@@ -44,12 +44,16 @@ async function up() {
 }
 
 test.before(async () => {
+  // A declared root must EXIST: the server validates a declaration rather than creating the folder
+  // (a typo should be `path-missing`, not a new directory somewhere the user did not ask for).
+  mkdirSync(WORKSPACE, { recursive: true });
   process.env.PORT = String(PORT);
   child = spawn(process.execPath, [SERVER], {
     cwd: ROOT,
     env: {
       ...process.env,
       PORT: String(PORT),
+      // A DECLARATION of the active root, not a default: the loop refuses by name without one.
       VOICEBOX_WORKSPACE: WORKSPACE,
       VOICEBOX_EXTENSIONS_DIR: HOST_EXTENSIONS,
     },
@@ -157,7 +161,11 @@ test("the model cannot write into the host's extension directory", async () => {
   rmSync(evil, { force: true });
   const j = await turn("create a file called ../extensions/evil.js with pwned");
   assert.equal(j.result?.ok, false, "the model wrote outside its root");
-  assert.match(j.result?.error ?? "", /escapes the workspace/);
+  // THE RULE ID AND THE MECHANISM'S OWN WORDS, not a message we wrote: the loop's root is now the
+  // ACTIVE PROJECT ROOT (core/root.ts), so "the workspace" became a retired wording — and two tests
+  // disagreeing about one string is how that went unnoticed. Assert the fact, not the phrasing.
+  assert.equal(j.result?.refused, "outside-root", "the refusal does not name the rule");
+  assert.match(j.result?.why ?? "", /'\.\.' segment/, "the refusal does not use the mechanism's own words");
   assert.equal(existsSync(evil), false, "something landed in the host's directory");
 });
 

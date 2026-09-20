@@ -37,6 +37,7 @@ import {
   type AuditEntry,
 } from "../core/audit.ts";
 import { makeProjectRecord, type ProjectRecord } from "../core/project.ts";
+import { ROOT_FACTS, descriptorOf, describeRoot, reachableFrom } from "../core/root.ts";
 import {
   LIVENESS,
   activityEntry,
@@ -151,6 +152,62 @@ async function permission(
 }
 
 /**
+ * THE ROOT SEAM, page side: declare a root on the machine's filesystem as this project's root.
+ *
+ * The page cannot act on a machine root — it has no handle and no path of its own — so the point of
+ * declaring one is that the LOOP (a machine process, reached over the same origin) writes into THIS
+ * project's root instead of a folder of its own invention. That is the difference between one root
+ * and two, and it is why the declaration goes to the server rather than staying in the page.
+ */
+async function useMachineRoot(message: Record<string, unknown>): Promise<unknown> {
+  const requested = String(message.path ?? "").trim();
+  const name = String(message.name ?? "").trim() || "project";
+  if (!requested) return fail("bad-request", "a machine root needs a path — the folder the loop should write into");
+
+  const response = await fetch("/api/root", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ project: name, root: { kind: "machine", path: requested } }),
+  });
+  const declared = (await response.json()) as Record<string, any>;
+  if (!declared.ok) {
+    // The server's own named refusals (path-missing, not-a-directory) travel unchanged: they are the
+    // same facts a person needs, and re-wording them here would be a second vocabulary for one thing.
+    return fail((declared.refused as FailureCode) ?? "root-unreachable", String(declared.why ?? "the declaration was refused"), `HTTP ${response.status}`);
+  }
+
+  const canonical = String(declared.root.path);
+  const record: ProjectRecord = {
+    ...(records.get(name) ?? makeProjectRecord(name, "browser")),
+    id: `${name}@browser`,
+    name,
+    placement: "browser",
+    location: { kind: "machine", path: canonical },
+    root: { kind: "machine", path: canonical },
+    capabilities: ["read", "write", "wasm"],
+    undoKind: "written-file-list",
+    lastUsed: new Date().toISOString(),
+    durability: { kind: "machine", path: canonical, checkedAt: new Date().toISOString() },
+  };
+  current = record;
+  storage = null; // this placement has no adapter for a folder it cannot name; acts are refused by name
+  await saveRegistry(record);
+  await resumeFromEveryRoot();
+
+  return {
+    ok: true as const,
+    project: { ...record, root: canonical, rootKind: "machine", auditLocation: `${canonical}/.audit/` },
+    root: { kind: "machine", path: canonical },
+    facts: ROOT_FACTS.machine,
+    description: describeRoot({ kind: "machine", path: canonical }),
+    // The honest half: declaring it does not give this placement the ability to write there.
+    reachableFromThisProcess: false,
+    refusalForLocalActs: reachableFrom({ kind: "machine", path: canonical }, "page"),
+    canonical: Boolean(declared.canonical),
+  };
+}
+
+/**
  * The preconditions a write has before the tier table is even consulted, reported BY NAME.
  *
  * A write on a `prompt` handle does not fail — it waits for a prompt that no script can answer
@@ -159,6 +216,7 @@ async function permission(
  */
 async function writable(name: string): Promise<Failure | null> {
   const record = requireCurrent();
+  // (root reachability is checked before this, by `pageReachable`)
   const state = await permission(record);
   if (state === "implicit" || state === "granted") return null;
   const label = record.location.kind === "handle" ? record.location.label : record.name;
@@ -174,6 +232,10 @@ async function writable(name: string): Promise<Failure | null> {
 /** Touch the root and let the platform's own error through, because it names the real problem. */
 async function reachable(): Promise<Failure | null> {
   const record = requireCurrent();
+  // Defence in depth: a root this placement cannot act on is refused before anything else is asked,
+  // so nothing downstream can meet a null storage adapter and report it as a missing folder.
+  const unreachableHere = pageReachable();
+  if (unreachableHere) return unreachableHere;
   // The permission is QUERIED, never assumed: reading a folder whose permission has regressed to
   // `prompt` does not fail, it waits for a dialog no script can answer (measured). So this refuses
   // in words first — and the page can then offer the one thing that changes the state, a click.
@@ -202,7 +264,27 @@ async function reachable(): Promise<Failure | null> {
 // ---------------------------------------------------------------- the audit
 
 function root(): string {
-  return storage!.root;
+  const project = current;
+  if (!project) throw new Error("no project is open");
+  // The log's name for the boundary. A machine root is labelled by the machine that owns it, because
+  // this placement has no storage adapter for it — and a label that pretended to be a local path
+  // would make two placements' entries look like one writer's.
+  return project.root.kind === "machine" ? `machine:${project.root.path}` : storage!.root;
+}
+
+/**
+ * THE FIRST QUESTION EVERY ACT ASKS: can this placement act on this root at all?
+ *
+ * It comes before the tier table, the schema and the containment check, because none of those is
+ * interesting if the answer is no — and the refusal must name WHO can, not merely that this side
+ * cannot. For a machine root that is the loop; for this placement's own roots it is the page.
+ */
+function pageReachable(): Failure | null {
+  const project = current;
+  if (!project) return fail("no-project", "no project is open, so there is no root to act on");
+  if (storage) return null;
+  const reach = reachableFrom(descriptorOf(project), "page");
+  return reach.ok ? null : fail((reach.refused as FailureCode) ?? "root-unreachable", reach.why);
 }
 
 /** Host-owned path, never tool input, so it is built rather than resolved. */
@@ -267,7 +349,14 @@ async function logFilesFor(project: ProjectRecord): Promise<{ name: string; root
 
 /** The shared read for the open project: every writer's entries, merged by `(instance, seq)`. */
 async function readLog(): Promise<AuditEntry[]> {
-  const files = await logFilesFor(requireCurrent());
+  const project = requireCurrent();
+  if (project.root.kind === "machine") {
+    // The root's log belongs to the root, and this placement cannot read it from the filesystem — so
+    // it asks the placement that can. One log, one answer, whoever is asking.
+    const body = (await (await fetch("/api/audit")).json()) as { entries?: AuditEntry[] };
+    return body.entries ?? [];
+  }
+  const files = await logFilesFor(project);
   return files.flatMap((f) => f.entries);
 }
 
@@ -295,6 +384,8 @@ async function appendShared(build: (base: Omit<LogEntryBase, "kind">) => LogEntr
  * and a mark that is not appended is knowledge nobody can ask about later.
  */
 async function look(mark: boolean): Promise<Record<string, unknown>> {
+  // A look is a READ of the log, which for a machine root comes from the machine — so this is one of
+  // the few acts that works on every root kind, and `readLog` decides where to ask.
   const entries = await readLog();
   const now = new Date();
 
@@ -561,6 +652,8 @@ async function loadSchema(): Promise<ToolSchema> {
 
 async function createAsset(args: Record<string, unknown>, turn: string | null, tool = "create-asset") {
   requireCurrent();
+  const unreachableHere = pageReachable();
+  if (unreachableHere) return unreachableHere;
   const boundary = root();
   const name = typeof args?.name === "string" ? args.name : String(args?.name ?? "");
   const wouldBe = `${boundary}/${ASSET_DIR}/${name}`;
@@ -739,6 +832,8 @@ function decodeSpan(ptr: number, len: number): string {
 
 async function requestDelete(args: { name?: unknown; turn?: string | null }) {
   requireCurrent();
+  const unreachableHere = pageReachable();
+  if (unreachableHere) return unreachableHere;
   const boundary = root();
   const resolved = resolveInsideRoot(boundary, `${ASSET_DIR}/${String(args?.name ?? "")}`);
   if (!resolved.ok) {
@@ -790,6 +885,8 @@ async function answer(confirmId: string, approved: boolean) {
 
 async function readFile(args: { path?: unknown; turn?: string | null }) {
   requireCurrent();
+  const unreachableHere = pageReachable();
+  if (unreachableHere) return unreachableHere;
   stats.reads++;
   const boundary = root();
   const resolved = resolveInsideRoot(boundary, String(args?.path ?? ""));
@@ -860,20 +957,29 @@ async function listView(message: Record<string, unknown>) {
   const record = current;
 
   if (view === "server") {
-    // The third authority: a real directory on the machine running the server, and the only one
-    // of the three that survives the page closing.
+    // The third authority: the ACTIVE ROOT as the machine sees it — the same root the loop writes
+    // into, not a folder of its own. When the active root is one this process cannot reach, the view
+    // says so by name instead of showing files from somewhere the project is not.
     const response = await fetch(SERVER_FILES_URL);
     if (!response.ok) return fail("root-unreachable", `the server view is unreachable (HTTP ${response.status})`);
-    const body = (await response.json()) as { files?: { name: string; bytes?: number; mtime?: string }[] };
-    const entries: Entry[] = (body.files ?? []).map((f) => ({ name: f.name, kind: "file", bytes: f.bytes, mtime: f.mtime }));
+    const body = (await response.json()) as Record<string, any>;
+    if (body.ok === false) {
+      return fail((body.refused as FailureCode) ?? "root-unreachable", String(body.why ?? "the loop cannot reach this root"), JSON.stringify(body.root ?? {}));
+    }
+    const entries: Entry[] = (body.entries ?? []).map((f: Record<string, any>) => ({
+      name: String(f.name),
+      kind: f.kind === "directory" ? "directory" : "file",
+      bytes: f.bytes,
+      mtime: f.mtime,
+    }));
     return {
       ok: true as const,
       view,
-      label: "the server's workspace",
-      root: "workspace/",
+      label: `the machine's root for '${body.project}'`,
+      root: body.root?.path ?? "unknown",
       authority: {
-        where: "a real directory on the machine running the server",
-        whoCanSee: "anything on that machine — the user's own tools, editors and shells",
+        where: ROOT_FACTS.machine.where,
+        whoCanSee: ROOT_FACTS.machine.whoCanSee,
         needsGesture: false,
         survivesTabClose: true,
       },
@@ -883,16 +989,22 @@ async function listView(message: Record<string, unknown>) {
   }
 
   if (!record) return fail("no-project", "no project is open, so there is no root to list");
-  const unreachable = await reachable();
-  if (unreachable) return unreachable;
 
   if (view === "picked") {
+    // The KIND question first, then reachability: "this project has no picked folder" is a different
+    // fact from "this placement cannot act on this project's root", and answering the second when the
+    // first is true sends the reader looking for a permission problem that does not exist.
     if (record.root.kind !== "handle") {
+      const what = record.root.kind === "machine"
+        ? `a folder on the machine running the process (${record.root.path})`
+        : "an OPFS project, whose root is this origin's private storage";
       return fail(
         "not-a-project",
-        `'${record.name}' is an OPFS project: its root is origin-private and there is no picked folder to show. Open or adopt a picked folder to see this view`,
+        `'${record.name}' is ${what}: there is no picked folder to show. Open or adopt a picked folder to see this view`,
       );
     }
+    const unreachable = await reachable();
+    if (unreachable) return unreachable;
     const resolved = listingTarget(message.path);
     if (!resolved.ok) return { ...fail("bad-request", resolved.why), rule: resolved.rule };
     let listing;
@@ -1057,6 +1169,8 @@ async function handle(message: Message) {
     }
     case "listView":
       return await listView(message);
+    case "useMachineRoot":
+      return await useMachineRoot(message);
     case "identify": {
       // §9's actor model: identity is nameable, and two agents in one project are two people. The
       // session travels because identity is claimed against it.

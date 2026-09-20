@@ -15,6 +15,7 @@ import path from "node:path";
 
 // Scratch state BEFORE the lib loads — the suite never touches repo-owned files.
 const SCRATCH = mkdtempSync(path.join(os.tmpdir(), "voicebox-channel-test-"));
+// A DECLARATION of the active root (not a default): the loop has no root of its own any more.
 process.env.VOICEBOX_WORKSPACE = path.join(SCRATCH, "workspace");
 process.env.VOICEBOX_EXTENSIONS_DIR = path.join(SCRATCH, "extensions");
 

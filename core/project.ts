@@ -9,13 +9,17 @@
 /** Where a project's files live. Two kinds, because N20 added the second. */
 export type ProjectLocation =
   | { kind: "opfs"; path: string } // origin-private, OPFS-relative, never a realpath
-  | { kind: "handle"; id: string; label: string }; // a picked folder: the origin cannot describe its
-// target, only remember the handle and the label the user gave it.
+  | { kind: "handle"; id: string; label: string } // a picked folder: the origin cannot describe its
+  // target, only remember the handle and the label the user gave it.
+  | { kind: "machine"; path: string }; // a folder on the machine running the process — the only kind
+// a turn loop can write into, and the reason the loop no longer invents a root of its own
+// (core/root.ts is the seam; see ROOT_FACTS for who can act on which kind).
 
 /** The execution root — the containment boundary. Tagged, for the same reason as the location. */
 export type RootRef =
   | { kind: "opfs"; path: string }
-  | { kind: "handle"; id: string };
+  | { kind: "handle"; id: string }
+  | { kind: "machine"; path: string };
 
 /** Durability and permission are two different facts, and only one of them is a boolean. */
 export type Durability =
@@ -25,6 +29,13 @@ export type Durability =
       persisted: boolean;
       /** OPFS needs no gesture; a picked folder may need one on re-acquisition. */
       permission: "granted" | "prompt" | "denied" | "unknown";
+      checkedAt: string;
+    }
+  | {
+      kind: "machine";
+      /** A folder on the machine: its survival is the filesystem's, not the browser's — so there is
+       *  no persistence request to make and no gesture to ask for. */
+      path: string;
       checkedAt: string;
     };
 

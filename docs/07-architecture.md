@@ -61,7 +61,7 @@ The zero-dependency server (`server.mjs`, `node:http`) binds **127.0.0.1** and s
 | `GET` | `/api/files` | 200 |
 | `POST` | `/api/turn` | 200 |
 
-Anything else that exists under `public/` is served from there (`GET /static` and a fall-through), which is how the page, its scripts and the styles arrive. `/api/health` answers `provider: "script"`, `workspace: "workspace/"`.
+Anything else that exists under `public/` is served from there (`GET /static` and a fall-through), which is how the page, its scripts and the styles arrive. `/api/health` answers `provider: "script"`, `declared: false` and `root: { kind, path }` for the ACTIVE project root — which the environment declares (`POST /api/root`); the loop has no root of its own, and refuses by name (`root-not-declared`) until one is declared.
 
 A WEBSOCKET UPGRADE ON /live CLOSED WITHOUT AN HTTP RESPONSE — the server destroys it (also a form of owning the route).
 <!-- END GENERATED: routes -->

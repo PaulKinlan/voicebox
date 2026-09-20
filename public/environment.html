@@ -22,7 +22,7 @@
   h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: #9a9aab; margin: 24px 0 8px; }
   .sub { color: #9a9aab; margin: 0 0 20px; font-size: 13px; max-width: 70ch; }
   #project { display: grid; gap: 2px; font: 13px/1.6 ui-monospace, monospace; }
-  #project .key { display: inline-block; min-width: 110px; color: #8b8b9c; }
+  #project .key { display: inline-block; min-width: 148px; color: #8b8b9c; }
   form { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-start; margin: 0 0 16px; }
   input, select, textarea, button { font: inherit; padding: 6px 8px; border-radius: 6px;
     border: 1px solid #33333f; background: #17171d; color: inherit; }
@@ -57,8 +57,9 @@
 </head>
 <body>
   <h1>voicebox — the browser environment</h1>
-  <p class="sub">E1-M0 plus N20. The worker is the host; a project's root is either this origin's
-    private storage or a folder you picked, and the page always says which. Identity is placement +
+  <p class="sub">E1-M0 plus N20 plus one root. The worker is the host; a project's root is one of
+    three kinds — this origin's private storage, a folder you picked, or a folder on the machine
+    running the loop — and the page always says which, and who acts on it. Identity is placement +
     location, so this project is this browser's and nothing tries to match it anywhere else.</p>
 
   <div id="project"></div>
@@ -69,6 +70,10 @@
     <button type="submit">Open</button>
     <button type="button" id="pick">Pick a folder…</button>
     <button type="button" id="regrant" hidden>Restore write access</button>
+  </form>
+  <form id="machine-form">
+    <input id="machine-path" placeholder="/a/folder/on/this/machine" aria-label="machine folder path" style="min-width:22rem">
+    <button type="submit">Use this folder for the loop</button>
   </form>
   <div id="dropzone">or drop a folder here to make it a project root — the files stay where they are and this page becomes a window onto them</div>
 

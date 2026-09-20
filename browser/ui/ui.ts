@@ -70,18 +70,33 @@ function header(project?: Record<string, any>): void {
     box.textContent = "no project open";
     return;
   }
-  const handle = project.location?.kind === "handle";
+  const kind = project.rootKind ?? project.location?.kind ?? "opfs";
   const rows: [string, string][] = [
     ["project", String(project.id)],
     ["placement", String(project.placement)],
-    ["root kind", handle ? `a picked folder — '${project.location.label}'` : "OPFS (origin-private)"],
+    ["root kind", kind === "handle"
+      ? `a picked folder — '${project.location.label}'`
+      : kind === "machine"
+        ? "a folder on the machine running the process"
+        : "OPFS (origin-private)"],
     ["root", String(project.root)],
-    ["recovery", handle
+    // Who acts on this root is a FACT about the kind, and the page says it rather than letting the
+    // user discover it by trying: a machine root's acts come from the loop, a picked folder's from
+    // this page, an OPFS root's from this page.
+    ["acts come from", kind === "machine" ? "the loop (a machine process) — this page can see it and cannot write it" : "this page (the browser host)"],
+    ["recovery", kind === "handle"
       ? `the handle is persisted in IndexedDB, so a reload does not re-pick; permission is ${project.durability?.permission ?? "unknown"}, and restoring it takes a click`
-      : "re-resolved from the origin's storage at every open — no gesture, ever"],
-    ["durability", project.durability?.persisted
-      ? "held persistently"
-      : "held until the browser decides otherwise (persisted() is false)"],
+      : kind === "machine"
+        ? "a folder on that machine's own filesystem: it survives the tab because it never depended on the browser"
+        : "re-resolved from the origin's storage at every open — no gesture, ever"],
+    // Durability is a question the BROWSER asks about its own storage. A folder on the machine is
+    // not the browser's to keep or evict, so answering with `persisted()` here would be a leftover
+    // from the OPFS kind dressed up as a fact — exactly the dishonest recovery story N20 names.
+    ["durability", kind === "machine"
+      ? "the machine's own filesystem — the browser's persistence question does not apply to it"
+      : project.durability?.persisted
+        ? "held persistently"
+        : "held until the browser decides otherwise (persisted() is false)"],
     ["undo", `${project.undoKind} — the written files are listed in ${project.root}/.undo.json`],
     ["audit", String(project.auditLocation ?? "(not reported)")],
   ];
@@ -96,7 +111,7 @@ function header(project?: Record<string, any>): void {
     box.appendChild(row);
   }
   const regrant = $("regrant");
-  regrant.hidden = !(handle && project.durability?.permission !== "granted");
+  regrant.hidden = !(kind === "handle" && project.durability?.permission !== "granted");
   regrant.dataset.name = project.name;
 }
 
@@ -200,9 +215,13 @@ async function renderView(view: ViewName): Promise<Reply> {
 
   const where = document.createElement("p");
   where.className = "authority";
-  where.textContent = `${reply.label ?? ""} — ${reply.authority?.where ?? ""}. Visible to: ${reply.authority?.whoCanSee ?? ""}. ${
-    reply.authority?.needsGesture ? "Re-acquiring access takes a click." : "No gesture needed."
-  } Permission: ${reply.permission ?? "implicit"}.`;
+  // The ROOT is named in the panel, always: a listing that cannot say what it is showing is the
+  // failure this panel exists to prevent (bead 7cd), and "which folder" is the first thing to say.
+  where.textContent = `${reply.label ?? ""} — ${reply.authority?.where ?? ""}. Root: ${reply.root ?? "unnamed"}. Visible to: ${
+    reply.authority?.whoCanSee ?? ""
+  }. ${reply.authority?.needsGesture ? "Re-acquiring access takes a click." : "No gesture needed."} Permission: ${
+    reply.permission ?? "implicit"
+  }.`;
   panel.appendChild(where);
 
   const list = document.createElement("ul");
@@ -346,6 +365,7 @@ async function open(name: string): Promise<Reply> {
   }
   header(reply.project);
   line(`opened ${reply.project.id} — root: ${reply.project.root}`, "ok");
+  await declareToLoop(reply.project);
   $("gallery").textContent = "";
   for (const asset of reply.assets ?? []) {
     const read = await send({ type: "readFile", path: `assets/${asset}` });
@@ -372,6 +392,55 @@ async function create(name: string, kind: string, body: string): Promise<Reply> 
   return reply;
 }
 
+/**
+ * Tell the loop which root this project is on. Whichever kind it is, the loop learns it — and learns
+ * by name if it cannot act there. This is the page's half of the seam: without it the loop keeps
+ * writing into whatever root was declared last, which is how two roots come back.
+ */
+async function declareToLoop(project: Record<string, any>): Promise<void> {
+  const kind = project.rootKind ?? project.location?.kind ?? "opfs";
+  const root =
+    kind === "machine" ? { kind, path: String(project.root) }
+    : kind === "handle" ? { kind, id: String(project.name) }
+    : { kind: "opfs", path: String(project.root) };
+  try {
+    const response = await fetch("/api/root", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ project: project.name, root }),
+    });
+    const body = await response.json();
+    line(
+      body.reachableFromThisProcess
+        ? `the loop will write into ${body.root?.path}`
+        : `the loop cannot write here — ${body.why ?? body.refused ?? "no reason given"}`,
+      body.reachableFromThisProcess ? "ok" : "note",
+    );
+  } catch {
+    line("the loop was not told about this root (no server reachable from the page)", "note");
+  }
+}
+
+/**
+ * Declare a root on the machine's filesystem. The point is not that this page can write there — it
+ * cannot — but that the LOOP writes into THIS project's root instead of a folder of its own, which is
+ * what makes it one root rather than two.
+ */
+async function useMachineRoot(path: string, name = "loop-project"): Promise<Reply> {
+  const reply = await send({ type: "useMachineRoot", path, name });
+  if (!reply.ok) {
+    line(failure(reply), "refused");
+    return reply;
+  }
+  header(reply.project);
+  line(
+    `the loop now writes into ${reply.root.path}${reply.canonical ? " (resolved to its real path)" : ""} — acts on this root come from the machine, not this page`,
+    "ok",
+  );
+  await Promise.all([renderView("opfs"), renderView("picked"), renderView("server"), renderAgents(false)]);
+  return reply;
+}
+
 /** A picked root is adopted through the platform's own gesture, or by dropping a folder. */
 async function adopt(handle: FileSystemDirectoryHandle): Promise<Reply> {
   const name = handle.name.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "picked";
@@ -391,6 +460,7 @@ async function adopt(handle: FileSystemDirectoryHandle): Promise<Reply> {
       "note",
     );
   }
+  await declareToLoop({ ...reply.project, rootKind: "handle", name: reply.project.name });
   await Promise.all([renderView("opfs"), renderView("picked"), renderView("server")]);
   return reply;
 }
@@ -462,7 +532,13 @@ dropzone.addEventListener("drop", async (event) => {
 // The programmatic surface the acceptance checks drive — the same worker the controls call.
 $("catch-up").addEventListener("click", () => void renderAgents(true));
 
-const api = { ready: send({ type: "hello" }), send, open, create, adopt, renderView, renderAgents, header, line };
+$("machine-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const path = ($("machine-path") as HTMLInputElement).value.trim();
+  if (path) void useMachineRoot(path, ($("project-name") as HTMLInputElement).value.trim() || "loop-project");
+});
+
+const api = { ready: send({ type: "hello" }), send, open, create, adopt, useMachineRoot, renderView, renderAgents, header, line };
 (window as unknown as Record<string, unknown>).e1m0 = api;
 document.documentElement.dataset.e1m0 = "ready";
 api.ready.then((reply: Reply) =>
