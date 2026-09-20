@@ -279,8 +279,10 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
 
   const apiFiles = (await (await fetch(`${SHARED_API}/api/files`)).json().catch(() => ({ files: [] }))).files.sort();
   const pageNames = ((await ev(`[...document.querySelectorAll('.file-name')].map(e => e.textContent)`)) ?? []).sort();
+  // Folders render with a trailing slash ('notes/') per ed0dbad
+  const normalizedPageNames = pageNames.map(n => n.replace(/\/$/, ''));
   report("shared-front", "file list rendering matches the served workspace (names)",
-    JSON.stringify(apiFiles) === JSON.stringify(pageNames),
+    JSON.stringify(apiFiles) === JSON.stringify(normalizedPageNames),
     `api=[${apiFiles}] page=[${pageNames}]`);
 
   const micState = (await ev(`document.getElementById('voice-state')?.textContent`)) ?? "";
