@@ -44,7 +44,7 @@ function tone16k(seconds = 0.4, freq = 440) {
   return Buffer.from(pcm.buffer);
 }
 
-test("live voice: WS codec, readiness gate, and a real Gemini round trip", { skip: !HAVE_KEY && "GEMINI_API_KEY not set", timeout: 90000 }, async () => {
+test("live voice [live-network]: WS codec, readiness gate, and a real Gemini round trip", { skip: !HAVE_KEY && "GEMINI_API_KEY not set", timeout: 90000 }, async () => {
   const server = await startServer();
   try {
     await waitForServer(server);
@@ -86,8 +86,25 @@ test("live voice: WS codec, readiness gate, and a real Gemini round trip", { ski
     // 4. And a text turn on the same session.
     ws.send(JSON.stringify({ type: "text", text: "Say hello briefly." }));
 
-    await new Promise((res) => setTimeout(res, 12000));
-    assert.ok(binaryFrames > 0, "model audio must come back down the socket as binary frames");
+    // A LIVE-NETWORK LEG: wait for the condition and REPORT the latency, rather than sleeping a fixed
+    // interval and blaming the model for the network. The bound is generous because the deadline is the
+    // only thing this can fail on — a broken model never sends audio at all, and that is still a failure.
+    const started = Date.now();
+    const deadlineMs = 45000;
+    while (binaryFrames === 0 && Date.now() - started < deadlineMs) {
+      await new Promise((res) => setTimeout(res, 250));
+    }
+    const legMs = Date.now() - started;
+    console.log(
+      binaryFrames > 0
+        ? `[live-voice] the live leg returned model audio after ${legMs}ms (waited for it, did not assume it)`
+        : `[live-voice] NO model audio within ${deadlineMs}ms — frames=${binaryFrames} bytes=${binaryBytes} texts=${texts.length}`,
+    );
+    assert.ok(
+      binaryFrames > 0,
+      `model audio must come back down the socket as binary frames (waited ${legMs}ms of ${deadlineMs}ms; ` +
+        `frames=${binaryFrames} bytes=${binaryBytes} texts=${texts.length})`,
+    );
     assert.ok(binaryBytes > 1000, `audio must be substantive (got ${binaryBytes} bytes across ${binaryFrames} frames)`);
 
     console.log(`[live-voice] gate held ${ready.detail.gatedFrames} frame(s); ${binaryFrames} audio frame(s) back (${binaryBytes} bytes); texts: ${texts.length}`);
