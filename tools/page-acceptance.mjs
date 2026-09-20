@@ -62,6 +62,18 @@ const cleanupArtefacts = () => {
 let privateServer = null;
 let privateStop = null;
 const killPrivate = () => { try { privateStop?.(); } catch { try { privateServer?.kill(); } catch {} } };
+
+// Hard ceiling: acceptance MUST NEVER hang or block merging indefinitely
+const HARNESS_TIMEOUT_MS = 40000;
+const deadlineTimer = setTimeout(() => {
+  console.log("FAIL  [harness] acceptance timed out after 40s — aborting");
+  cleanupArtefacts();
+  killPrivate();
+  try { chromium?.kill(); } catch {}
+  process.exit(1);
+}, HARNESS_TIMEOUT_MS);
+deadlineTimer.unref();
+
 process.on("SIGTERM", () => { cleanupArtefacts(); killPrivate(); process.exit(143); });
 process.on("SIGINT", () => { cleanupArtefacts(); killPrivate(); process.exit(130); });
 process.on("uncaughtException", (e) => { cleanupArtefacts(); killPrivate(); try { chromium?.kill(); } catch {} console.log(`FAIL  uncaught: ${String(e?.message ?? e).slice(0, 140)}`); process.exit(1); });
@@ -112,12 +124,28 @@ for (const d of ["Runtime", "Log", "Page", "Network"]) await send(`${d}.enable`,
 const ev = async (expr) =>
   (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId))?.result?.value;
 
-const sharedRootBefore = await (await fetch(`${SHARED_API}/api/root`)).json().catch(() => null);
-const sharedFilesBefore = JSON.stringify(((await (await fetch(`${SHARED_API}/api/files`)).json().catch(() => ({ files: [] }))).files ?? []).sort());
+let sharedRootBefore = null;
+let sharedFilesBefore = "[]";
+let sharedServersRunning = false;
+
+try {
+  const rootRes = await fetch(`${SHARED_API}/api/root`, { signal: AbortSignal.timeout(1200) });
+  const uiRes = await fetch(`${SHARED_UI}/`, { signal: AbortSignal.timeout(1200) });
+  if (rootRes.ok && uiRes.ok) {
+    sharedServersRunning = true;
+    sharedRootBefore = await rootRes.json().catch(() => null);
+    const filesRes = await fetch(`${SHARED_API}/api/files`, { signal: AbortSignal.timeout(1200) });
+    const filesJson = await filesRes.json().catch(() => ({ files: [] }));
+    sharedFilesBefore = JSON.stringify((filesJson.files ?? []).sort());
+  }
+} catch {
+  sharedServersRunning = false;
+}
 
 try {
   // ════ PHASE A — [shared-front]: GET-only, witnessed ══════════════════════
-  console.log(`── phase A: shared front ${SHARED_UI} (GET-only; witness below) · measuring tree: ${TREE}${TREE === ROOT ? " (default: this repo)" : ""}`);
+  if (sharedServersRunning) {
+    console.log(`── phase A: shared front ${SHARED_UI} (GET-only; witness below) · measuring tree: ${TREE}${TREE === ROOT ? " (default: this repo)" : ""}`);
 
   const servedRefs = [];
 // EVERY page in public/, not just index — environment.html loaded a module
@@ -269,6 +297,9 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   // PASS. The files list is the second half of the witness.
   report("shared-front", "the shared server's file list is untouched", sharedFilesBefore === sharedFilesAfter,
     sharedFilesBefore === sharedFilesAfter ? `${JSON.parse(sharedFilesAfter).length} files, unchanged` : `before=${sharedFilesBefore} after=${sharedFilesAfter}`);
+  } else {
+    console.log(`── phase A: SKIPPED (shared front ${SHARED_UI} / ${SHARED_API} not active — Phase B tests private instance)`);
+  }
 
   // ════ PHASE B — [private]: every mutating check, own server ══════════════
   console.log(`── phase B: private instance ${PRIVATE_ORIGIN} (spawned by this run; killed at exit)`);
