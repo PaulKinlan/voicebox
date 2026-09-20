@@ -34,6 +34,8 @@ every claim below is stated for the remote path first.
 - **The bearer is bound to the key, and the key must still exist.** `/api/execute` resolves `envKey`
   against the *remote's* registry **before** `bearerOk`, so a re-created or re-keyed environment's old
   credential refuses `unknown-environment` rather than silently reaching a different identity.
+  **Ordering for integrators:** declare the environment in the remote's registry *before* pairing —
+  pair-before-declare fails closed as `unknown-environment`, which is the intended order, not a bug.
 
 ## 2. Custody: pairing, the bearer, and who holds it
 
