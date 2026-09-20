@@ -70,6 +70,25 @@ async function waitFor(predicate, { what, boundMs = 45000, everyMs = 250 }) {
   return ok;
 }
 
+/** Same bounded wait, returning the predicate's first truthy VALUE (for tests
+ * that need the arrived thing, not just its arrival). Prints the same latency
+ * line as waitFor so every network leg reports what it observed. */
+async function waitForValue(probe, { what, boundMs = 45000, everyMs = 250 }) {
+  const started = Date.now();
+  let value = probe();
+  while (!value && Date.now() - started < boundMs) {
+    await new Promise((r) => setTimeout(r, everyMs));
+    value = probe();
+  }
+  const ms = Date.now() - started;
+  console.log(
+    value
+      ? `[live-voice] ${what}: arrived after ${ms}ms (waited for it, did not assume it)`
+      : `[live-voice] ${what}: NOT within ${boundMs}ms`,
+  );
+  return value || null;
+}
+
 test("live voice [live-network]: WS codec, readiness gate, and a real Gemini round trip", { skip: !HAVE_KEY && "GEMINI_API_KEY not set", timeout: 90000 }, async () => {
   const server = await startServer();
   try {
@@ -97,13 +116,11 @@ test("live voice [live-network]: WS codec, readiness gate, and a real Gemini rou
     // 1–2. THE READINESS GATE: send a frame immediately — before setupComplete —
     // and require it to be counted, not forwarded silently.
     ws.send(tone16k(0.2));
-    const ready = await new Promise((res, rej) => {
-      const t = setTimeout(() => { clearInterval(iv); rej(new Error("no ready state within 30s")); }, 30000);
-      const iv = setInterval(() => {
-        const r = states.find((s) => s.state === "ready");
-        if (r) { clearInterval(iv); clearTimeout(t); res(r); }
-      }, 100);
+    const ready = await waitForValue(() => states.find((s) => s.state === "ready") ?? null, {
+      what: "the readiness gate opening",
+      boundMs: 30000,
     });
+    assert.ok(ready, "the readiness gate must open (no ready state within 30s)");
     assert.equal(ready.model, "models/gemini-3.8-live", "the page-facing state names the real model, not a vague 'live'");
     assert.ok((ready.detail?.gatedFrames ?? 0) >= 1, `the gate must count the early frame (got ${JSON.stringify(ready.detail)})`);
 
@@ -115,20 +132,14 @@ test("live voice [live-network]: WS codec, readiness gate, and a real Gemini rou
     // A LIVE-NETWORK LEG: wait for the condition and REPORT the latency, rather than sleeping a fixed
     // interval and blaming the model for the network. The bound is generous because the deadline is the
     // only thing this can fail on — a broken model never sends audio at all, and that is still a failure.
-    const started = Date.now();
-    const deadlineMs = 45000;
-    while (binaryFrames === 0 && Date.now() - started < deadlineMs) {
-      await new Promise((res) => setTimeout(res, 250));
-    }
-    const legMs = Date.now() - started;
-    console.log(
-      binaryFrames > 0
-        ? `[live-voice] the live leg returned model audio after ${legMs}ms (waited for it, did not assume it)`
-        : `[live-voice] NO model audio within ${deadlineMs}ms — frames=${binaryFrames} bytes=${binaryBytes} texts=${texts.length}`,
-    );
+    // A LIVE-NETWORK LEG: wait for the condition and REPORT the latency via the
+    // shared helper, rather than sleeping a fixed interval and blaming the model
+    // for the network. The bound is generous because the deadline is the only
+    // thing this can fail on — a broken model never sends audio at all.
+    const gotAudio = await waitFor(() => binaryFrames > 0, { what: "the live leg returning model audio" });
     assert.ok(
-      binaryFrames > 0,
-      `model audio must come back down the socket as binary frames (waited ${legMs}ms of ${deadlineMs}ms; ` +
+      gotAudio,
+      `model audio must come back down the socket as binary frames (the waitFor line above reports the observed latency; ` +
         `frames=${binaryFrames} bytes=${binaryBytes} texts=${texts.length})`,
     );
     assert.ok(binaryBytes > 1000, `audio must be substantive (got ${binaryBytes} bytes across ${binaryFrames} frames)`);
@@ -161,12 +172,11 @@ test("live voice [live-network]: a malformed binary frame costs a frame, not the
     };
     await opened;
     // Wait for the readiness gate to open, then send the malformed frame.
-    await new Promise((res, rej) => {
-      const t = setTimeout(() => rej(new Error("no ready state within 30s")), 30000);
-      const iv = setInterval(() => {
-        if (states.find((s) => s.state === "ready")) { clearInterval(iv); clearTimeout(t); res(); }
-      }, 100);
+    const readyOpened = await waitFor(() => states.some((s) => s.state === "ready"), {
+      what: "the readiness gate opening",
+      boundMs: 30000,
     });
+    assert.ok(readyOpened, "the readiness gate must open (no ready state within 30s)");
 
     // The measured kill (ds-flash-1b): one 3-byte (odd-length) frame.
     ws.send(Buffer.from([0x01, 0x02, 0x03]));
