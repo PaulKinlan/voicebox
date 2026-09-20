@@ -90,3 +90,24 @@ Fresh scratch state, server on the fixed code, the SAME two fetches from page JS
 The re-drive was rendered live on the served page and screenshot-verified in session (the
 transcript above is the page's own rendered log element; the first drive's screenshot is
 `drive-page.png`). Whole gate `npm test` 138/138; `git status --porcelain` empty.
+
+---
+
+## The token-read chain: found, closed, re-driven (2026-09-20, bdb17bb)
+
+The reviewer's dotfile probe, driven one step further on merged main: `POST /api/root` accepts
+the HOST's own extensions directory as the active root (unauthenticated route), and then
+`GET /api/file?name=.host-token` returned **the host token itself** — the m2i gate circumvented
+end to end (declare → read token → admit). The write verb could overwrite the token with a
+known value just as well.
+
+**Closed**: the read and write verbs and `/api/file` refuse dotfiles by name
+(`dotfile-refused`), matching the listing routes' existing filter — one rule: what the listing
+hides, the loop refuses. Containment keeps its own, stronger refusal for `..` and traversal
+(the dotfile check runs after containment, on the resolved basename).
+
+**Re-driven on the fix** (screenshot-verified in session; the rendered log is the transcript):
+declare the host dir as root (succeeds — that route's question is filed separately as
+`voicebox-beads-3uy`) → listing `[]` with no dotfile names → `/api/file?name=.host-token` →
+`dotfile-refused` → read verb → `dotfile-refused` → write verb → `dotfile-refused`.
+**Chain verdict: SHUT — every path to the token refuses by name.**

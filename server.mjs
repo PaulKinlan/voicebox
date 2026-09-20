@@ -326,6 +326,19 @@ async function execute(action) {
       logged: entry ? entry.seq : null,
     };
   }
+  // Dotfiles are behind the same line as the listing: containment first (so `..` and
+  // traversal keep their own, stronger refusal), then a hidden file inside the root is
+  // refused — otherwise a declared root pointed at a sensitive directory (the host's
+  // own extensions dir) hands over its secrets — including the admission token —
+  // through a read, or loses them to a write over it. Driven chain, 2026-09-20:
+  // declare -> read .host-token -> admit.
+  if (action.verb === "read" || action.verb === "write") {
+    const base = path.basename(resolved.path);
+    if (base.startsWith(".")) {
+      const entry = logAct({ kind: action.verb === "write" ? "write" : "read", target: name, tool: "turn" }, "refuse", "dotfile-refused", "refused", null, action.turn ?? null);
+      return { ok: false, refused: "dotfile-refused", logged: entry ? entry.seq : null, error: "refused: dotfile-refused", why: "dotfiles are neither readable nor writable through the loop — the listing hides them and so does this verb; host secrets live behind that line", root: active.root };
+    }
+  }
   const candidate = resolved.path;
   if (action.verb === "write") {
     writeFileSync(candidate, action.content ?? "");
@@ -558,6 +571,11 @@ async function handle(req, res) {
     }
     try {
       const real = resolved.path;
+      if (path.basename(real).startsWith(".")) {
+        // Same line as the verbs: containment first, then a hidden file inside the
+        // root is refused — the listing hides it, so the read does too.
+        return json(res, 403, { ok: false, refused: "dotfile-refused", error: "refused: dotfile-refused", why: "dotfiles are not readable through the loop — the listing hides them and so does this read; host secrets live behind that line", root: active.root });
+      }
       const stat = statSync(real);
       if (stat.isDirectory()) return json(res, 400, { error: "cannot read directory" });
       const content = readFileSync(real, "utf8");
