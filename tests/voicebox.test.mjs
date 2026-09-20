@@ -360,8 +360,17 @@ test("page load with files produces zero POST /api/turn calls (no phantom turns)
 // ── the prose sweep: claims the served pages make about the running system ──
 test("the pages' prose matches the running system (prose sweep, 2026-09-20)", async () => {
   const page = readFileSync(path.join(ROOT, "public", "index.html"), "utf8");
-  // Whose disk: the server's, said plainly — "read from disk" alone implied the page's.
-  assert.match(page, /read from the server's disk/);
+  // Whose disk, and WHEN: the server's, and only for a folder it can reach. The
+  // first version of this pinned the exact phrase "read from the server's disk",
+  // which was true for a machine root and FALSE for a picked folder or origin
+  // storage — where the server cannot read the folder at all. So this pins the
+  // CLAIM (the server is the reader, the project folder is the subject, and it is
+  // conditional on reachability) rather than a sentence, because a test that
+  // demands exact prose fails the moment the prose gets more honest.
+  assert.match(page, /the local server, which reads and writes the project folder/,
+    "the footer no longer says who reads and writes the folder");
+  assert.match(page, /when the folder is one it can reach/,
+    "the footer claims the server reads every project folder, which is false for a picked one");
   // The retired refusal message must not come back through any served page:
   for (const served of ["index.html", "environment.html"]) {
     const text = readFileSync(path.join(ROOT, "public", served), "utf8");

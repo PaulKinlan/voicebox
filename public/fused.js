@@ -47,6 +47,7 @@ function on(el, type, handler) {
 
 let shownFile = null; // the file currently in the reader panel
 let listedRoot = null; // the root the CURRENT entries were read from — not assumed to be the active one
+let listingRefusal = null; // the server's refusal, when it could not list the active root at all
 
 let entries = [];
 
@@ -271,6 +272,23 @@ function setComposerEnabled(canLand, why = "") {
 function renderListingRoot() {
   const line = els.listingRoot;
   if (!line) return;
+  // A refused listing is stated in the server's own words, because the reasons
+  // differ in kind (a picked folder this process cannot act on / a vanished root)
+  // and the person needs the one that applies. "No root declared" is left to the
+  // empty state, which already says what to do about it.
+  if (listingRefusal) {
+    if (listingRefusal.refused === "root-not-declared") { line.hidden = true; return; }
+    line.hidden = false;
+    line.dataset.tone = "warn";
+    line.textContent = `This list could not be read: ${listingRefusal.why || listingRefusal.refused} `;
+    // …and the way out, in the same sentence, because the empty state that
+    // normally carries the route is hidden while the listing is refused.
+    const link = document.createElement("a");
+    link.href = "/environment.html";
+    link.textContent = "Open the environment page";
+    line.append(link, " to choose a folder this list can read.");
+    return;
+  }
   if (!listedRoot) { line.hidden = true; return; }
   const where = listedRoot.path ?? listedRoot.name ?? listedRoot.label ?? "an unnamed root";
   const active = activeRoot?.root;
@@ -293,6 +311,8 @@ function render() {
   els.made.dataset.state = count === 0 ? "empty" : "ready";
   els.files.setAttribute("aria-busy", "false");
   els.count.textContent = count === 0 ? "" : `${count} ${count === 1 ? "file" : "files"}`;
+  els.made.dataset.state = listingRefusal && count === 0 ? "failed" : count === 0 ? "empty" : "ready";
+  if (els.newFile) els.newFile.hidden = Boolean(listingRefusal);
   renderListingRoot();
   renderEmptyState();
   if (shownFile && !entries.some((entry) => entry.name === shownFile)) shownFile = null;
@@ -489,6 +509,17 @@ async function load() {
     // POSTed turns nobody typed — an independent verifier saw eight of them and
     // a `read alpha.txt` that was never spoken. Reading is not a turn.
     const answer = await request("/api/files");
+    // A LISTING CAN BE REFUSED, and then there is no listing to attribute. This
+    // used to fall through and render "listed from an unnamed root" — a claim
+    // about a listing that never happened, in front of an empty list.
+    if (answer.ok === false) {
+      listingRefusal = { refused: answer.refused ?? "listing-refused", why: answer.why ?? "", root: answer.root ?? null };
+      listedRoot = null;
+      entries = [];
+      render();
+      return;
+    }
+    listingRefusal = null;
     // The server says which root it listed, so the page records it rather than
     // assuming it is the active one. When they differ, the cards are a listing of
     // somewhere else and the panel says so (acceptance 7cd.1: an explorer must
