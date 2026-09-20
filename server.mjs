@@ -823,39 +823,86 @@ server.on("upgrade", (req, socket) => {
   ws.on("error", () => session.close());
 });
 
-// BIND-RACE HARDENING (2026-09-20, five sightings in one day — Paul's console,
-// coord's curls, the acceptance gate): a `node --watch` supervisor restarts the
-// child on every landing, and the fresh child used to lose the bind race to the
-// dying old one — EADDRINUSE, "Failed running", and a port serving NOTHING
-// while the supervisor waited for a file change that would never come. Now:
-// EADDRINUSE retries on a 250ms cadence up to a 15s deadline, then exits LOUDLY
-// (a manager script can verify health and take over); and SIGTERM releases the
-// port GRACEFULLY so the watcher's replacement child binds cleanly.
-let bindRetries = 0;
-server.on("error", (e) => {
-  if (e?.code === "EADDRINUSE" && bindRetries < 60) {
-    bindRetries += 1;
-    setTimeout(() => {
-      server.close();
-      server.listen(PORT, "127.0.0.1");
-    }, 250);
-    return;
-  }
-  console.error(`[server] could not bind 127.0.0.1:${PORT} (${e?.code ?? e}) after ${bindRetries} retries — exiting so a manager can take over`);
-  process.exit(1);
-});
-process.on("SIGTERM", () => {
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 500).unref(); // sockets must not outlive the exit
-});
+/**
+ * BINDING IS RETRIED, NOT FATAL — and this is the union of two fixes to the same defect, so say
+ * which half came from where.
+ *
+ * The defect (five sightings in one day — Paul's console, coord's curls, the acceptance gate, and an
+ * eight-hour stretch where the front served while the API was dead): a `node --watch` supervisor
+ * restarts the child on every landing, the fresh child lost the bind race to the dying old one, and
+ * then NOTHING restarted it until the next file change. A port serving nothing, with the page none
+ * the wiser. What produces the taken port is usually ANOTHER SUPERVISOR (measured: the manager swept
+ * two strays in one recovery), so:
+ *
+ *   · THE RETRY IS THE SAFETY NET, sized for that evidence: 30s, with a NAMED line at each attempt,
+ *     because a retry nobody can see is a hang that happens to succeed. When the deadline passes the
+ *     process exits with a sentence naming the port and how to find the holder — a dead port has to be
+ *     announced, not left as a stack trace nobody reads.
+ *   · THE GRACEFUL RELEASE IS THE FIX: a supervisor restarts by signalling its child, and that child
+ *     letting go immediately is what stops the next start from ever seeing a taken port. SIGINT too,
+ *     since half the actors here start it by hand.
+ *   · AND ERRORS AFTER BINDING ARE NOT SILENCE: a single steady-state handler, so a later socket
+ *     error says what happened instead of taking the process down with a stack trace.
+ */
+const BIND_RETRY_MS = Number(process.env.VOICEBOX_BIND_RETRY_MS ?? 250);
+const BIND_DEADLINE_MS = Number(process.env.VOICEBOX_BIND_DEADLINE_MS ?? 30000);
 
-server.listen(PORT, "127.0.0.1", () => {
+function bindWithRetry(port, startedAt = Date.now()) {
+  return new Promise((resolve, reject) => {
+    const onError = (error) => {
+      server.off("listening", onListening);
+      const waited = Date.now() - startedAt;
+      if (error?.code === "EADDRINUSE" && waited < BIND_DEADLINE_MS) {
+        console.error(
+          `[bind] waiting for 127.0.0.1:${port} to be released — held by another process (EADDRINUSE), ` +
+            `${waited}ms so far; retrying every ${BIND_RETRY_MS}ms for up to ${BIND_DEADLINE_MS}ms. ` +
+            `A supervisor shutting down holds it briefly; a second supervisor holds it until it is stopped.`,
+        );
+        setTimeout(() => resolve(bindWithRetry(port, startedAt)), BIND_RETRY_MS);
+        return;
+      }
+      reject(error);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolve(server.address().port);
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, "127.0.0.1");
+  });
+}
+
+try {
+  const bound = await bindWithRetry(PORT);
   // The REAL port, not the requested one: PORT=0 asks the OS for a free port, and a test suite that
   // binds an ephemeral port has to be able to read back which one it got. A suite that pins a fixed
   // port cannot run beside another, and the failure appears in someone else's lane as an unexplained
   // block — the most expensive kind, because they cannot tell it is your test.
-  const bound = server.address().port;
   console.log(
     `voicebox on http://127.0.0.1:${bound} — provider: ${PROVIDER}, root: ${active ? active.root.path : "(none declared)"}`,
   );
+} catch (error) {
+  console.error(
+    `[bind] giving up after waiting ${BIND_DEADLINE_MS}ms for 127.0.0.1:${PORT} (${error?.code ?? error?.message}). ` +
+      `Something else is serving that port — find it (ss -ltnp | grep ${PORT}) and stop it, or start this on another port.`,
+  );
+  process.exit(1);
+}
+
+// AND THE OUTGOING PROCESS LETS GO. A supervisor restarts by signalling the child; exiting on the
+// signal releases the socket immediately, instead of leaving the next process to collide with a
+// socket this one still holds. The force-exit is for open sockets (the live-voice WebSocket keeps
+// `close()` waiting), so a clean stop never becomes a hang.
+for (const signal of ["SIGTERM", "SIGINT"]) {
+  process.on(signal, () => {
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 1000).unref(); // sockets must not outlive the exit
+  });
+}
+
+// Once bound, an error is still not silence: a socket-level failure says what it was rather than
+// ending the process with a stack trace nobody reads.
+server.on("error", (e) => {
+  console.error(`[server] socket error on 127.0.0.1:${PORT} (${e?.code ?? e})`);
 });
