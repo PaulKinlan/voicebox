@@ -49,9 +49,27 @@ workspace's `audit.jsonl`. `lib/extensions.mjs` resolves `WORKSPACE` at import t
 of `server.mjs`'s `active` root. The `loop` block says "two roots, not one" and flips (going red) when
 they become one. Routed to the loop lane.
 
+## The rebase proved the mechanism a second time
+
+Rebased onto `origin/main @ d1316cd` (five landings since the base). The check went **red on the
+unchanged generated blocks** — main had added four refusal names (`bad-answer`,
+`environment-not-paired`, `missing-content`, `not-found`), a second reader of
+`VOICEBOX_EXTENSIONS_DIR`, and `GET /api/probe`. Regenerated; and the hand-written "how to see what
+is available" paragraph, which had said a sandbox-level report was *"neither, here"*, was already
+false — `GET /api/probe` had landed under it. That paragraph is now derived from a real probe call
+(HTTP 200, six sections). **A hand-written region rotted within an hour of being written; the
+generated one went red.** That is the whole argument for generating them.
+
 ## Gate
 
-`npm test` (163 tests incl. the docs-drift check), `git status --porcelain` empty, `node scripts/docs-check.mjs` → `OK — 14 generated blocks across 3 documents`. See the landing report for the SHA.
+`npm test` **193/193** on the rebased tree (incl. the docs-drift check), `git status --porcelain`
+empty, `node scripts/docs-check.mjs` → `OK — 14 generated blocks across 3 documents`.
+
+**One unexplained crash, stated rather than hidden:** the first `--write` after the rebase died with
+a bare Node stack trace; the next fifteen runs (check and write, alternating) and 500 targeted
+iterations of the `/live` upgrade probe interleaved with pooled fetches all passed. Not reproduced,
+not understood. The probe now reads the child's stderr and names the failing step with the server's
+last lines beside it, so the next occurrence is diagnosable instead of a `}`.
 
 ## Limits
 

@@ -99,7 +99,9 @@ async function probeServer() {
   for (const k of ["LIVE_PROVIDER", "VOICEBOX_PROVIDER", "VOICEBOX_INSTANCE"]) delete env[k];
   const child = spawn(process.execPath, ["server.mjs"], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
   let out = "";
+  let errOut = "";
   child.stdout.on("data", (d) => (out += d));
+  child.stderr.on("data", (d) => (errOut += d)); // read it, or a chatty server fills the pipe and stalls
   const until = Date.now() + 8000;
   try {
     let health = null;
@@ -141,6 +143,12 @@ async function probeServer() {
     const surface = await probeExtensionSurface(port);
     const loop = await driveLoop(port, dirs);
     return { health, routes, liveUpgradeLine, surface, loop };
+  } catch (e) {
+    // A probe that dies mid-run must say WHICH step and what the server was saying — one run in sixteen
+    // crashed with a bare stack trace on 2026-09-20 (not reproduced in 500 targeted iterations), and the
+    // trace was all there was to read. Named, with the server's own stderr beside it.
+    e.message = `docs-check: the probe against the scratch server failed — ${e.message}\n  server stderr (tail):\n${errOut.split("\n").filter(Boolean).slice(-8).map((l) => "    " + l).join("\n")}`;
+    throw e;
   } finally {
     child.kill("SIGKILL");
     rmSync(scratch, { recursive: true, force: true });
@@ -190,7 +198,12 @@ async function probeExtensionSurface(port) {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: "anything" }),
   });
   const admitNoToken = { status: admitAttempt.status, ...(await admitAttempt.json()) };
+  // The environment's self-report (GET /api/probe): the process runs tools/sandbox-probe.mjs on itself and
+  // caches the report in ITS workspace — the scratch one here, so a docs check never writes into the repo.
+  const probeRes = await fetch(`${base}/api/probe`);
+  const probe = { status: probeRes.status, ...(await probeRes.json()) };
   return {
+    probe: { status: probe.status, ok: probe.ok, refused: probe.refused ?? null, sections: Object.keys(probe.probe ?? {}).filter((k) => !["probe", "when"].includes(k)) },
     inventoryKeys: Object.keys(inventory),
     placement: inventory.placement,
     catalogueCount: inventory.catalogueCount,
@@ -468,6 +481,10 @@ async function blocks() {
       ...refusalNames().map((r) => `* ${r.label}: ${r.names.map((n) => "`" + n + "`").join(", ")}`),
       "",
       `**Listable at run time** — \`GET /api/extensions\` answers \`{ ${surface.inventoryKeys.join(", ")} }\` (probed: placement \`${surface.placement}\`, catalogueCount ${surface.catalogueCount}); \`GET /api/extensions/catalogue\` previews the gate's verdict on every stranger before anything is staged; \`GET /api/extensions/{proposals|catalogue}/<id>/plan\` is the disclosure — source, declared, enforced-by-which-mechanism, what it gets, what it cannot have — before any decision.`,
+      "",
+      surface.probe.ok
+        ? `**What the process itself can reach** — \`GET /api/probe\` runs \`tools/sandbox-probe.mjs\` on this environment and answers an **observed** report (probed: HTTP ${surface.probe.status}, sections ${surface.probe.sections.map((s) => "`" + s + "`").join(", ")}), cached with its \`when\` and recorded as an activity in the environment's own audit. It reports files, network and limits as facts with the method beside them — a different question from "which tools are admitted", answered by a different instrument.`
+        : `**What the process itself can reach** — \`GET /api/probe\` exists but could not run here: HTTP ${surface.probe.status}, \`${surface.probe.refused}\`.`,
       "",
       `**Admission is the host's act**, probed from where the page stands: \`POST /api/extensions/admit\` with no token → HTTP ${surface.admitNoToken.status}, \`${surface.admitNoToken.refused}\`.`,
     ].join("\n")),

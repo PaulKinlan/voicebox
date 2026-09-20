@@ -72,10 +72,10 @@ Registered resolvers: `script` (one — a placeholder)
 1. `"create a tool called peek that lists files"` → verb `make-tool` → `proposed tool 'peek-tool'`, state `pending` — a **file** under the extension workspace's `proposals/`, not loaded.
 2. `GET /api/extensions/proposals/peek-tool/plan` → the gate would say `admitted`; enforced: read via `host-primitive-scope`.
 3. `POST /api/extensions/admit {id, confirm: true, decision: "admit"}` **with the host token** (the 0600 file in the host's extension directory) → `admitted`. Without the token → HTTP 403 `host-token-required`.
-4. `"run the tool peek"` → verb `tool` → `callTool("peek")` in `lib/extensions.mjs` → `ok: true`, files `["audit.jsonl"]`.
+4. `"run the tool peek"` → verb `tool` → `callTool("peek")` in `lib/extensions.mjs` → `ok: true`, files `["audit.jsonl","probe.json"]`.
 5. `GET /api/extensions` now lists `peek-tool`: declared `read`, enforced `{"read":"host-primitive-scope"}`, tools `peek`.
 
-**Two roots, not one — a fact the drive exposes rather than a claim.** The turn wrote `hello.txt` into the declared root, but the admitted tool listed `["audit.jsonl"]`: it sees the **extension workspace** (`VOICEBOX_WORKSPACE`), not the root declared over `/api/root`. Its act was recorded in that workspace's `audit.jsonl` (2 entries) and **not** in the root's `.audit/` log (still 2 entries). The design says one root; the wiring today is two. When they become one, this paragraph flips and the check goes red.
+**Two roots, not one — a fact the drive exposes rather than a claim.** The turn wrote `hello.txt` into the declared root, but the admitted tool listed `["audit.jsonl","probe.json"]`: it sees the **extension workspace** (`VOICEBOX_WORKSPACE`), not the root declared over `/api/root`. Its act was recorded in that workspace's `audit.jsonl` (2 entries) and **not** in the root's `.audit/` log (still 2 entries). The design says one root; the wiring today is two. When they become one, this paragraph flips and the check goes red.
 <!-- END GENERATED: loop -->
 
 ## The tool path — which words reach a tool
@@ -123,10 +123,12 @@ Verbs the `script` resolver produces, driven: `"create a file called hello.txt w
 
 **What it refuses, by name** — every refusal the code can utter, collected from source:
 * the gate (`core/extensions.ts`): `absent-capability`, `bad-tool-name`, `capability-unmediated`, `duplicate-tool`, `eval-not-a-tool-path`, `exec-absent`, `network-unbounded`, `no-tools`, `under-declared`, `unknown-capability`, `unknown-primitive`
-* the routes and the root seam (`server.mjs`, `core/root.ts`): `bad-request`, `dotfile-refused`, `host-token-required`, `not-a-directory`, `outside-root`, `path-missing`, `server-error`, `unknown-root-kind`
+* the routes and the root seam (`server.mjs`, `core/root.ts`): `bad-answer`, `bad-request`, `dotfile-refused`, `environment-not-paired`, `host-token-required`, `missing-content`, `not-a-directory`, `not-found`, `outside-root`, `path-missing`, `probe-failed`, `provider-not-configured`, `server-error`, `unauthenticated-call`, `unknown-environment`, `unknown-root-kind`, `unreadable`
 * admitted tools at run time (`lib/extensions.mjs`): `admission-refused`, `bad-redirect`, `bad-url`, `budget-exhausted`, `fetch-failed`, `host-not-allowed`, `not-admitted`, `outside-root`, `over-budget`, `redirect-host-not-allowed`, `redirect-without-location`, `too-many-redirects`, `unknown-primitive`, `unknown-tool`
 
 **Listable at run time** — `GET /api/extensions` answers `{ placement, extensions, proposals, present, catalogueCount }` (probed: placement `machine`, catalogueCount 4); `GET /api/extensions/catalogue` previews the gate's verdict on every stranger before anything is staged; `GET /api/extensions/{proposals|catalogue}/<id>/plan` is the disclosure — source, declared, enforced-by-which-mechanism, what it gets, what it cannot have — before any decision.
+
+**What the process itself can reach** — `GET /api/probe` runs `tools/sandbox-probe.mjs` on this environment and answers an **observed** report (probed: HTTP 200, sections `identity`, `sandboxHints`, `filesystem`, `limits`, `tools`, `network`), cached with its `when` and recorded as an activity in the environment's own audit. It reports files, network and limits as facts with the method beside them — a different question from "which tools are admitted", answered by a different instrument.
 
 **Admission is the host's act**, probed from where the page stands: `POST /api/extensions/admit` with no token → HTTP 403, `host-token-required`.
 <!-- END GENERATED: tools -->
@@ -144,7 +146,7 @@ Every environment variable the server and its libraries read, and where:
 | `PORT` | `server.mjs` | the port the server binds (default 8787) |
 | `VOICEBOX_BIND_DEADLINE_MS` | `server.mjs` | how long to keep retrying before giving up by name |
 | `VOICEBOX_BIND_RETRY_MS` | `server.mjs` | how often to retry a bind that lost the port race |
-| `VOICEBOX_EXTENSIONS_DIR` | `lib/extensions.mjs` | the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl` |
+| `VOICEBOX_EXTENSIONS_DIR` | `lib/extensions.mjs`, `server.mjs` | the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl` |
 | `VOICEBOX_INSTANCE` | `server.mjs` | this writer's name in the active root's shared log (default `machine`) |
 | `VOICEBOX_PROVIDER` | `server.mjs` | which TURN resolver answers `POST /api/turn` (default `script`) |
 | `VOICEBOX_WORKSPACE` | `lib/extensions.mjs`, `server.mjs` | declares a machine root at boot — a decision, not a default — and is where the extension system keeps `proposals/` and `audit.jsonl` |
