@@ -391,6 +391,8 @@ export function createAudioClient({
     // rate-not-declared and the SECOND press "worked" by reading a leftover number rather than one received on
     // this connection. A retry that succeeds on stale state is the thing hiding the failure it retries.
     state.inputRate = null;
+    state.captureRate = null;
+    state.rateContradiction = null;
     ws = next;
     if (!ws) return;
     ws.binaryType = "arraybuffer";
@@ -458,6 +460,19 @@ export function createAudioClient({
       stream = await mediaDevices.getUserMedia({ audio: deviceId ? { deviceId: { exact: deviceId } } : true });
       // The browser's own pipeline converts the device's audio to this rate — no resampler of ours.
       captureCtx = new AudioContextCtor({ sampleRate: state.inputRate });
+      // THE DECLARATION IS A REQUEST; THE CONTEXT'S OWN RATE IS THE FACT. astra measured a reattached client
+      // whose snapshot said 24000 while PCM kept flowing at 16000 and nothing noticed — a number on screen
+      // that had stopped describing the thing it names, which is this evening's whole theme. So the reported
+      // rate is read back from the context, and a disagreement between what was declared and what is running
+      // is a NAMED contradiction rather than a smoothed-over agreement with the frame.
+      state.captureRate = Number.isFinite(captureCtx.sampleRate) ? captureCtx.sampleRate : null;
+      state.rateContradiction =
+        state.captureRate !== null && state.captureRate !== state.inputRate
+          ? { declared: state.inputRate, running: state.captureRate }
+          : null;
+      if (state.rateContradiction) {
+        onDiagnostic({ kind: "rate-contradiction", ...state.rateContradiction });
+      }
       await captureCtx.audioWorklet.addModule(workletUrl);
       captureNode = new AudioWorkletNodeCtor(captureCtx, "pcm-capture");
       captureSource = captureCtx.createMediaStreamSource(stream);
