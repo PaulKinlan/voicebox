@@ -50,6 +50,12 @@ let shownFile = null; // the file currently in the reader panel
 let entries = [];
 
 // ── small helpers ──────────────────────────────────────────────────────────
+// A refusal carries a LABEL (refused/error) and a REASON (why). The reason is
+// what a person can act on, so it wins wherever both arrive — the opposite
+// order showed a reader "refused: unreadable (EACCES)" and hid
+// "EACCES: permission denied, open '/path'" (vb-e1m0, 2026-09-20).
+const reasonFrom = (body, fallback) => body?.why ?? body?.error ?? body?.note ?? fallback;
+
 const bytes = (text) => new TextEncoder().encode(text).length;
 const size = (text) => {
   const n = typeof text === "string" ? bytes(text) : text;
@@ -92,7 +98,7 @@ async function request(path, options) {
   // A named refusal carries refused+why, not error — carry them onto the throw so the catch renders
   // the reason and the remedy, not "the server answered 500".
   if (!response.ok) {
-    const err = new Error(body?.error ?? body?.why ?? `the server answered ${response.status}`);
+    const err = new Error(reasonFrom(body, `the server answered ${response.status}`));
     if (body?.refused) err.refused = body.refused;
     if (body?.why) err.why = body.why;
     throw err;
@@ -491,7 +497,7 @@ async function showFile(name) {
       // successful read — the bytes are the content), so a failure that only
       // wrote there was invisible until a person opened a disclosure to find
       // out why the panel was empty. The reason IS the content of a failure.
-      const reason = answer.error ?? "the server would not read this file";
+      const reason = reasonFrom(answer, "the server would not read this file");
       els.readerFacts.textContent = reason;
       els.readerBody.textContent = reason;
       els.reader.dataset.state = "ready";
@@ -558,10 +564,10 @@ async function send(said) {
   setReport("Sending…");
   try {
     const answer = await turn(transcript);
-    if (answer.error) return finish(transcript, answer.error, "bad");
+    if (answer.error) return finish(transcript, reasonFrom(answer, answer.error), "bad");
     if (answer.note) return finish(transcript, answer.note, "bad");
     const result = answer.result ?? {};
-    if (!result.ok) return finish(transcript, result.error ?? "the turn was refused", "bad");
+    if (!result.ok) return finish(transcript, reasonFrom(result, result.error ?? "the turn was refused"), "bad");
     finish(transcript, result.action ?? "done", "good");
     if (answer.action?.verb === "read" && typeof result.content === "string") {
       els.readerTitle.textContent = result.action;
