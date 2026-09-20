@@ -14,7 +14,7 @@ import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableF
 import { auditFileName, makeEntry, mergeAudit, nextSeq, parseEntry, resumeSeq, serializeEntry } from "./core/audit.ts";
 import * as extensions from "./lib/extensions.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
-import { createLiveSession, LIVE_MODEL } from "./lib/live-session.mjs";
+import { createLiveSession, LIVE_MODEL, inputRateRequiredBy, resolvedLiveProviderName } from "./lib/live-session.mjs";
 
 // Module-relative, decoded: `new URL(...).pathname` percent-encodes spaces and
 // silently points every read at a directory that does not exist.
@@ -760,6 +760,24 @@ server.on("upgrade", (req, socket) => {
   if (url.pathname !== "/live") { socket.destroy(); return; }
   const ws = wsUpgrade(req, socket);
   if (!ws) { socket.destroy(); return; }
+
+  // STEP 2 OF THE RATE WORK: the page is told what rate to capture at BEFORE any audio is sent, ever.
+  //
+  // The defect this closes (journal-6g0): the browser captured at 16 kHz, the OpenAI provider declared
+  // 24 kHz to its vendor, and the PCM was forwarded unchanged — the provider told OpenAI one thing and sent
+  // another, and nothing in the path could notice. It hid because Gemini also takes 16 kHz: with one
+  // implementation nobody had to negotiate. So the FIRST frame on this socket is the requirement, it comes
+  // from the provider that will receive the audio, and a provider that has not declared one is REFUSED —
+  // guessing a provider's rate is the defect, so the host will not guess.
+  let inputRate = null;
+  try {
+    inputRate = inputRateRequiredBy(resolvedLiveProviderName());
+  } catch (e) {
+    ws.send(JSON.stringify({ type: "error", error: e?.message ?? String(e) }));
+    ws.close(1011, "provider has not declared the input rate its protocol requires");
+    return;
+  }
+  ws.send(JSON.stringify({ type: "rate", inputRate, provider: resolvedLiveProviderName() }));
 
   let session = null;
   try {
