@@ -386,6 +386,11 @@ export function createAudioClient({
     state.sessionEnded = false;
     state.providerError = null;
     state.lastError = "";
+    // THE RATE BELONGS TO THE CONNECTION, and this line is the defect astra found by driving the real page
+    // with a native mic: the value was RETAINED across sockets, so the FIRST press refused with
+    // rate-not-declared and the SECOND press "worked" by reading a leftover number rather than one received on
+    // this connection. A retry that succeeds on stale state is the thing hiding the failure it retries.
+    state.inputRate = null;
     ws = next;
     if (!ws) return;
     ws.binaryType = "arraybuffer";
@@ -415,6 +420,23 @@ export function createAudioClient({
     try {
       if (!mediaDevices?.getUserMedia || !AudioContextCtor || !AudioWorkletNodeCtor) {
         throw new Error("this browser has no microphone capture (getUserMedia/AudioContext/AudioWorklet unavailable)");
+      }
+      if (!Number.isFinite(state.inputRate)) {
+        // THE RATE ARRIVES FIRST ON THE WIRE, SO THE CLIENT MUST NOT OUTRUN IT. live-voice starts capture in
+        // the open continuation; the queued rate frame has not been dispatched yet at that moment, so this
+        // path was reached on every FIRST press — astra drove the real page with a native mic and saw 0
+        // getUserMedia calls, then success on the second press from the retained value. Waiting is the correct
+        // behaviour here, not refusing: the frame is already in flight on this socket, and the design's whole
+        // point is that the rate arrives before the audio it describes. Bounded, so a server that never
+        // declares one still gets the refusal below rather than a hang.
+        const rateWaitStarted = Date.now();
+        const rateWaitBoundMs = 5000;
+        while (!Number.isFinite(state.inputRate) && Date.now() - rateWaitStarted < rateWaitBoundMs) {
+          await new Promise((r) => setTimeout(r, 25));
+        }
+        if (Number.isFinite(state.inputRate)) {
+          onDiagnostic({ kind: "rate-arrived", waitedMs: Date.now() - rateWaitStarted, rate: state.inputRate });
+        }
       }
       if (!Number.isFinite(state.inputRate)) {
         // NOT a default and not a guess: the provider's protocol decides this number, and sending audio at a
