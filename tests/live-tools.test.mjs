@@ -10,14 +10,29 @@
 import { spawn } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import net from "node:net";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 
-const PORT = 9310 + Math.floor(Math.random() * 400);
 const ROOT = new URL("..", import.meta.url).pathname;
 const HAVE_KEY = Boolean(process.env.GEMINI_API_KEY);
+
+// A FREE PORT PER SERVER, the fleet rule (2026-09-20: fixed ports collide with
+// other lanes' runs, and a suite that reports on its environment is not a
+// gate). Bind 0, read the number, release, hand it over — the same pattern
+// scripts/docs-check.mjs uses, with the same TOCTOU caveat.
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.on("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const p = probe.address().port;
+      probe.close(() => resolve(p));
+    });
+  });
+}
 
 const SCRATCH = mkdtempSync(path.join(os.tmpdir(), "voicebox-live-tools-"));
 // The workspace must EXIST: VOICEBOX_WORKSPACE is a declaration, and declaring
@@ -26,10 +41,10 @@ const SCRATCH = mkdtempSync(path.join(os.tmpdir(), "voicebox-live-tools-"));
 const WORKSPACE = path.join(SCRATCH, "workspace");
 mkdirSync(WORKSPACE, { recursive: true });
 
-function startServer(env = {}) {
+function startServer(port, env = {}) {
   const proc = spawn("node", ["server.mjs"], {
     cwd: ROOT,
-    env: { ...process.env, PORT: String(PORT), VOICEBOX_PROVIDER: "script", ...env },
+    env: { ...process.env, PORT: String(port), VOICEBOX_PROVIDER: "script", ...env },
     stdio: ["ignore", "pipe", "pipe"],
   });
   return proc;
@@ -44,8 +59,8 @@ function waitForServer(proc, ms = 10000) {
   });
 }
 
-async function liveSocket() {
-  const ws = new WebSocket(`ws://127.0.0.1:${PORT}/live`);
+async function liveSocket(port) {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/live`);
   const states = [];
   const texts = [];
   const tools = [];
@@ -72,10 +87,11 @@ async function liveSocket() {
 }
 
 test("live tools: the model writes a file we read byte-for-byte, then reads it back aloud", { skip: !HAVE_KEY && "GEMINI_API_KEY not set", timeout: 120000 }, async () => {
-  const server = startServer({ VOICEBOX_WORKSPACE: WORKSPACE });
+  const port = await freePort();
+  const server = startServer(port, { VOICEBOX_WORKSPACE: WORKSPACE });
   try {
     await waitForServer(server);
-    const { ws, texts, tools, audio } = await liveSocket();
+    const { ws, texts, tools, audio } = await liveSocket(port);
 
     // 1. WRITE — the model must choose write_file and the file must land.
     ws.send(JSON.stringify({ type: "text", text: "Please create a file called live-note.txt with the exact content: the live path wrote this" }));
@@ -109,10 +125,11 @@ test("live tools: the model writes a file we read byte-for-byte, then reads it b
 
 test("live tools: with no root declared the refusal is SPOKEN, not swallowed", { skip: !HAVE_KEY && "GEMINI_API_KEY not set", timeout: 120000 }, async () => {
   // No VOICEBOX_WORKSPACE and no POST /api/root: the executor refuses by name.
-  const server = startServer();
+  const port = await freePort();
+  const server = startServer(port);
   try {
     await waitForServer(server);
-    const { ws, texts, tools } = await liveSocket();
+    const { ws, texts, tools } = await liveSocket(port);
 
     ws.send(JSON.stringify({ type: "text", text: "Create a file called anything.txt with hello" }));
     let said = "";
