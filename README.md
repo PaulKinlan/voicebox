@@ -71,6 +71,32 @@ Registered resolvers: `script` (one — a placeholder)
 <!-- END GENERATED: live-session -->
 
 
+## The agent loop
+
+Separate from both of those paths, and the thing that actually runs when a turn arrives: the loop from
+**speech or typing → a decision → an execution → a result → a record**. It is not the live connection, and the
+live connection cannot do it: the loop is entered on **`POST /api/turn`**, and everything below is what happens
+after that.
+
+- **What decides** is a **resolver seam** — a provider registered by name that turns a transcript into an
+  **action**, or into an explicit *unresolved* sentence. The server never parses language itself; that is what
+  the seam is for. Today exactly **one** resolver is registered (a script provider with a few verbs), and a
+  model-backed one is *planned and not registered*.
+- **Who executes** is **the executor the server calls** — the one place that touches the build environment. It
+  resolves every path *inside the active root* before touching it, records a tool *proposal* without loading
+  it, and invokes tools through the runtime's admission, bounds and budget.
+- **Where the result goes** is back on the turn response, and into the active root for the verbs that write. A
+  tool that declines answers **refused with a reason** — a result, not an exception.
+- **What gets recorded** is the **audit in the active root**, refusals included, numbered by sequence so a
+  resumed process continues rather than restarts.
+- **Where it fails** is named: no root declared, the root vanishing, a path outside the root, nothing to do,
+  a tool declining, and a proposal that is recorded but **not loaded**. Each has its own sentence, because a
+  refusal that names the wrong cause is worse than no refusal.
+
+**The full section — including what is wired today and how to check each claim in a minute — is
+[`docs/09-agent-loop.md`](docs/09-agent-loop.md).** That page is the one to read before changing the resolver,
+the executor or the audit, and it is written to be checked against the running server rather than believed.
+
 ## Running (the skeleton loop)
 
 ```sh

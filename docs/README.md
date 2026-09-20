@@ -49,6 +49,7 @@ finding — say it rather than resolving it silently.
 | `01-questions.md` | **open questions**, including question 2 (reuse CAP's runtime) which the design answers for the environment and nobody has closed for the rest | on main |
 | `docs/interface.md` *(astra)* | **the interface** — the look, the model, the artefact surface | **on `design/astra-interface`**, not main yet |
 | `docs/05-harvest.md`, `docs/06-dynamic-tools.md` *(qwen2)* | **prior-art findings** — read §5 of this page first, they are not a lift list | on main |
+| [`09-agent-loop.md`](09-agent-loop.md) | **the turn loop** — what decides, who executes, where the result goes, what is recorded, and where it fails; with what is **wired today** marked | on main |
 | `docs/evidence/*/RECEIPT.md` | **measurements**, with the probe beside them. Cited claims point here | on main |
 
 **Collision resolved on merge**: qwen2's branch carried `docs/03-harvest.md` and
