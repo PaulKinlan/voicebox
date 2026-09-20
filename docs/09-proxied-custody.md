@@ -23,19 +23,30 @@ every claim below is stated for the remote path first.
   "can a browser WebSocket carry a header" direction entirely: the page→host leg is same-origin
   loopback (ambient), and the host→remote leg is a server-side `fetch`/`WebSocket` that *can* carry a
   header (astra drove it).
-- **Envelope identity**: the remote call is a `core/wire.ts` `CallEnvelope`, and the **environment key**
-  (the stable self-issued id from `core/environment.ts`) rides as the **descriptor the call is
-  attributed to**. `parseCall` already refuses a call that names an authority that does not exist
-  (`unattributed-call`) or whose bounds do not match (`bounds-mismatch`) — so "which environment may
-  this act on" is the same check as "which descriptor authorised this", not a new field to smuggle.
+- **Envelope identity**: the environment **key** (the stable self-issued id from `core/environment.ts`)
+  is carried as its **own validated field** on the call — NOT as the `descriptorId`. The first draft
+  proposed reusing `descriptorId`; review showed that overloads it, because `descriptorId` names an
+  *admission in a tool registry* and an environment key names a *host* — different namespaces, and
+  `unattributed-call` would conflate *"no such tool admission"* with *"no such host"*. So `envKey` is
+  validated against the environment registry, and the tool + bounds are validated against the remote's
+  own admission registry on the far side. Two registries, two checks, no conflation. (Reviewer over the
+  first draft's suggestion, because it is true.)
+- **The bearer is bound to the key, and the key must still exist.** `/api/execute` resolves `envKey`
+  against the *remote's* registry **before** `bearerOk`, so a re-created or re-keyed environment's old
+  credential refuses `unknown-environment` rather than silently reaching a different identity.
 
 ## 2. Custody: pairing, the bearer, and who holds it
 
 - **Pairing** (an explicit act): the person points the local host at a remote origin and confirms.
-  The remote host issues a **per-(user, environment) bearer**, stored on the *issuing* host's side and
-  registered on the *calling* host's side — both 0600, both outside any project root and served by no
-  route (the host-token shape, `lib/extensions.mjs:50`, already the proof). The bearer is bound to the
-  environment's **key**, so a re-pointed origin does not inherit the credential.
+  Pairing **creates a credential**, so it is the same authority class as admission and carries the same
+  gate: the **host token** on both `/api/pair` and `/api/pair/complete` (a page's two token-less fetches
+  cannot self-pair — the shape the host token closed for admission). The remote host issues a
+  **per-(user, environment) bearer**, stored on the *issuing* host's side and registered on the
+  *calling* host's side — both in the host's own directory (the `.host-token` sidecar pattern), 0600,
+  **outside every project root and served by no route**. A store inside a writable root is a credential
+  the page can read, so the location is the defence, not the file mode. The bearer is bound to the
+  environment's **key**, so a re-pointed origin does not inherit the credential. The bearer is the one
+  thing that never appears in a diagnostic — never logged, never in an error, never in a refusal's `why`.
 - **Who holds it**: the **local host**, never the page. The page's `POST /api/call` names the
   environment by **key** and the tool + args; the local host looks up the bearer for that key, attaches
   it, and forwards. The page cannot read the bearer and cannot be asked to.

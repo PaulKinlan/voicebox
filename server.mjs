@@ -100,47 +100,57 @@ function writeEnvironments(environments) {
 const PROBE_FILE = path.join(WORKSPACE, "probe.json");
 const PROBE_SCRIPT = path.join(ROOT, "tools", "sandbox-probe.mjs");
 
-// ── PAIRING CUSTODY: the bearer, held host-side, never by the page ────────────────────────────
-// One file, 0600, in the server's own workspace (outside every project root, served by no route).
-// Maps an environment's KEY to the bearer that environment issued at pairing. The page never reads
-// it; the host attaches it when it originates a call. Revocation is deleting the entry.
-const PAIRINGS_FILE = path.join(WORKSPACE, "pairings.json");
+// ── PAIRING CUSTODY: the bearer, held host-side, OUT OF EVERY ROOT, never by the page ──────────
+// The store lives in the host's OWN directory — the same sidecar pattern as the extension host
+// token — NOT in the workspace, which is a root the page can write (and read). A bearer file inside
+// a writable root is a credential the page can reach; 0600 and no-route are necessary but the
+// LOCATION is the defence. A corrupt store is a NAMED refusal (every credential is not "no
+// credentials"), in the family of environment-list-unreadable.
+const HOST_DIR = process.env.VOICEBOX_EXTENSIONS_DIR ?? path.join(ROOT, "extensions");
+const PAIRINGS_FILE = path.join(HOST_DIR, ".pairings.json");
 
+const PAIRINGS_UNREADABLE = "pairing-list-unreadable";
 function readPairings() {
+  if (!existsSync(PAIRINGS_FILE)) return { ok: true, map: {} };
   try {
     const parsed = JSON.parse(readFileSync(PAIRINGS_FILE, "utf8"));
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
+    return { ok: true, map: parsed && typeof parsed === "object" ? parsed : {} };
+  } catch (err) {
+    return { ok: false, refused: PAIRINGS_UNREADABLE, why: `the pairing store could not be read — ${err?.message ?? "it is not JSON"}. Fix or remove ${PAIRINGS_FILE} rather than assuming nothing is paired` };
   }
 }
 
 function writePairings(map) {
-  mkdirSync(WORKSPACE, { recursive: true });
+  mkdirSync(HOST_DIR, { recursive: true });
   writeFileSync(PAIRINGS_FILE, `${JSON.stringify(map, null, 2)}\n`, { mode: 0o600 });
 }
 
 /** The bearer THIS host holds for calling the named environment (local side of a pairing). */
 function bearerFor(envKey) {
-  return readPairings()[envKey]?.callBearer ?? null;
+  const read = readPairings();
+  return read.ok ? (read.map[envKey]?.callBearer ?? null) : null;
 }
 
 /** Store the bearer this host will ACCEPT for itself (the remote side of a pairing). */
 function storeBearer(envKey, bearer) {
-  const map = readPairings();
+  const read = readPairings();
+  const map = read.ok ? read.map : {};
   map[envKey] = { ...(map[envKey] ?? {}), acceptBearer: bearer };
   writePairings(map);
 }
 
 /** Check a bearer presented to THIS host against the one it issued for that environment key. */
 function bearerOk(envKey, bearer) {
-  const held = readPairings()[envKey]?.acceptBearer;
+  const read = readPairings();
+  if (!read.ok) return false;
+  const held = read.map[envKey]?.acceptBearer;
   return typeof held === "string" && held.length > 0 && typeof bearer === "string" && bearer === held;
 }
 
 /** Record the bearer the LOCAL host uses when calling a paired environment. */
 function recordCallBearer(envKey, bearer) {
-  const map = readPairings();
+  const read = readPairings();
+  const map = read.ok ? read.map : {};
   map[envKey] = { ...(map[envKey] ?? {}), callBearer: bearer };
   writePairings(map);
 }
@@ -1138,6 +1148,11 @@ async function handle(req, res) {
   // servers — because local success is what hid the firewall failure all evening.
   if (req.method === "POST" && url.pathname === "/api/pair") {
     // The REMOTE side: accept a pairing request and issue a bearer bound to THIS environment's key.
+    // PAIRING CREATES A CREDENTIAL — the same authority class as admission, so the same gate: the
+    // host token. The token is checked, never logged, and never echoed in a refusal's `why`.
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "pairing creates a credential — it is the host's act and requires the host token (x-voicebox-host-token); the page cannot hold it" });
+    }
     const body = await readJson();
     const envKey = body?.envKey;
     if (typeof envKey !== "string" || !envKey) {
@@ -1150,7 +1165,11 @@ async function handle(req, res) {
 
   if (req.method === "POST" && url.pathname === "/api/pair/complete") {
     // The LOCAL side of pairing: the person confirmed, the remote issued a bearer, and this host
-    // records the bearer it will use when calling that environment. The page is never given it.
+    // records the bearer it will use when calling that environment. The page is never given it —
+    // and this act is gated too, because it registers a credential on the host.
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "pairing creates a credential — it is the host's act and requires the host token (x-voicebox-host-token); the page cannot hold it" });
+    }
     const body = await readJson();
     const envKey = typeof body?.envKey === "string" ? body.envKey : null;
     const bearer = typeof body?.bearer === "string" ? body.bearer : null;
@@ -1171,11 +1190,19 @@ async function handle(req, res) {
     if (!envKey || !tool) {
       return json(res, 400, { ok: false, refused: "bad-request", why: "a proxied call names the environment key and the tool" });
     }
+    // The local host is always callable and needs no pairing — saying "pair it" for it would name
+    // the wrong remedy.
+    if (envKey === "local") {
+      const result = await extensions.callTool(tool, args);
+      return json(res, result.ok === false ? 403 : 200, result);
+    }
+    const pairings = readPairings();
+    if (!pairings.ok) return json(res, 500, pairings);
     const target = await resolveEnvironment(envKey);
     if (!target.ok) return json(res, target.refused === "environment-unreachable" ? 502 : 404, target);
     const bearer = bearerFor(envKey);
     if (!bearer) {
-      return json(res, 403, { ok: false, refused: "environment-not-paired", why: `"${target.label ?? envKey}" is listed but not paired — pair it (an explicit act) before the host will carry a call to it` });
+      return json(res, 403, { ok: false, refused: "environment-not-paired", why: `"${target.label ?? envKey}" is listed but not paired — pair it (an explicit act, gated by the host token) before the host will carry a call to it` });
     }
     try {
       const answer = await fetch(`${target.origin}/api/execute`, {
@@ -1193,13 +1220,19 @@ async function handle(req, res) {
 
   if (req.method === "POST" && url.pathname === "/api/execute") {
     // The REMOTE side: authenticate the bearer BEFORE anything is created (the /live hello-auth rule,
-    // on the call path), then execute inside this host's own root. An unauthenticated call is refused
-    // before any tool runs — the credential is checked, never trusted from the request.
+    // on the call path), then execute inside this host's own root. The envKey is resolved against THIS
+    // host's registry FIRST — a bearer bound to a key that no longer exists here refuses by name, so a
+    // re-keyed environment cannot be reached through its old credential. An unauthenticated call is
+    // refused before any tool runs — the credential is checked, never trusted from the request, and
+    // never echoed in the refusal.
     const auth = String(req.headers["authorization"] ?? "");
     const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
     const body = await readJson();
     const envKey = typeof body?.envKey === "string" ? body.envKey : null;
-    if (!envKey || !bearerOk(envKey, bearer)) {
+    if (!envKey) return json(res, 400, { ok: false, refused: "bad-request", why: "an execute names the environment key it is for" });
+    const known = await resolveEnvironment(envKey);
+    if (!known.ok) return json(res, 404, { ok: false, refused: "unknown-environment", why: `no environment with key '${envKey}' is in this host's registry — the credential that names it does not reach anything` });
+    if (!bearerOk(envKey, bearer)) {
       return json(res, 403, { ok: false, refused: "unauthenticated-call", why: "a proxied call must carry the bearer this environment issued at pairing — it is checked before any tool runs" });
     }
     const tool = typeof body?.tool === "string" ? body.tool : null;
