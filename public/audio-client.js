@@ -274,7 +274,18 @@ export function createAudioClient({
       reject(String(msg.message ?? "server error"), { frameKind: "control-error" });
       return;
     }
-    reject(`unrecognised control frame type ${JSON.stringify(msg?.type ?? null)}`, { frameKind: "control-unknown" });
+    // AN UNKNOWN CONTROL TYPE IS NOT A MALFORMED FRAME. It parsed as JSON and it
+    // has a shape; it is a type this client does not handle YET — the protocol
+    // is additive (`{type:"tool"}` arrived with the live-tools work while this
+    // client was still the old one). Calling it malformed printed
+    // "Ignored a malformed frame: unrecognised control frame type \"tool\""
+    // on the real page after a SUCCESSFUL tool write: the client complaining
+    // about a perfectly good event, in the file whose job is to tell the truth
+    // about frames (coord, 2026-09-20).
+    //
+    // So: ignore it, say so as a DIAGNOSTIC, and leave the malformed frames
+    // loud. Truncated, empty, odd-length and non-JSON frames are still refusals.
+    onDiagnostic({ kind: "ignored-control", type: msg?.type ?? null, message: "a control frame type this client does not handle yet" });
   }
 
   function enqueuePcm16(bytes) {
