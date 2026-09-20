@@ -1,7 +1,7 @@
 // Voicebox — the working surface.
 //
 // Everything this page shows comes from the local server: the file list is
-// read from workspace/, a turn is posted to /api/turn, and a file is opened by
+// read from the active project folder, a turn is posted to /api/turn, and a file is opened by
 // reading its bytes back. There is no seeded content, no timer that fakes a
 // state, and no claim the server has not made. Strings are rendered with
 // textContent only.
@@ -21,7 +21,7 @@ const WANTED = {
   stage: "voice-ring-wrap", mic: "mic", state: "voice-state",
   session: "session", log: "session-log", form: "text-form", utterance: "utterance", send: "send",
   reader: "reader", readerTitle: "reader-title", readerFacts: "file-facts", readerBody: "file-body",
-  copy: "file-copy", close: "reader-close", about: "about-facts", details: "reader-details",
+  copy: "file-copy", close: "reader-close", about: "about-facts", readerDetails: "reader-details",
   settingsOpen: "settings-open", settings: "settings", settingsClose: "settings-close",
   micSelect: "mic-select", outSelect: "out-select",
   micDeviceState: "mic-device-state", outDeviceState: "out-device-state",
@@ -414,7 +414,7 @@ async function health() {
     // The header answers ONE question — where the files are — so the server's
     // health is the dot, not a second label competing for the same slot. Two
     // labels describing storage in one line is what made the old header
-    // ambiguous ("workspace/" and "local server ready" both looked like the
+    // ambiguous (the folder path and the server's status both looked like the
     // answer to "where are my files?").
     if (els.where) { els.where.textContent = ""; els.where.title = "the local server answered"; }
     window.__voiceboxServerBuild = answer.build ?? null;
@@ -486,11 +486,29 @@ async function showFile(name) {
       els.reader.dataset.state = "ready";
       els.copy.disabled = content.length === 0;
     } else {
-      els.readerFacts.textContent = answer.error ?? "the server would not read this file";
-      els.reader.dataset.state = "empty";
+      // A FAILED read puts the reason where the file's text would have been.
+      // The facts line lives behind the Details disclosure (right for a
+      // successful read — the bytes are the content), so a failure that only
+      // wrote there was invisible until a person opened a disclosure to find
+      // out why the panel was empty. The reason IS the content of a failure.
+      const reason = answer.error ?? "the server would not read this file";
+      els.readerFacts.textContent = reason;
+      els.readerBody.textContent = reason;
+      els.reader.dataset.state = "ready";
+      if (els.readerDetails) els.readerDetails.open = true;
     }
   } catch (error) {
-    els.readerFacts.textContent = `Could not read workspace/${name}: ${error.message}`;
+    // Name the place the file is actually supposed to be. This said
+    // "workspace/" long after the loop stopped having a root of its own —
+    // driven to it by vb-e1m0 on 2026-09-20: with the root at /tmp/prose2 the
+    // reader said "Could not read workspace/gone.txt", which sends a person to
+    // look in a folder the project does not live in.
+    const where = rootLabel();
+    const sentence = `Could not read ${where}${name}${where ? "" : " in the project folder"}: ${error.message}`;
+    els.readerFacts.textContent = sentence;
+    els.readerBody.textContent = sentence;
+    els.reader.dataset.state = "ready";
+    if (els.readerDetails) els.readerDetails.open = true;
   }
 }
 
