@@ -129,3 +129,25 @@ Two driven findings on `prove/n10-admission` closed in the same branch:
   file present without an admission is `present-not-admitted` — visible in the inventory as
   exactly that, never live. The sweep-in (a never-admitted dropped file going live at the
   next host-triggered reload) is closed; driven.
+
+## The ledger's boundary, stated so nobody builds on it (2026-09-20)
+
+**`.ledger.jsonl` is unauthenticated JSONL appended by the host's admit, keyed by id, with no
+signature — it attests AN ID, not bytes, and it is exactly as strong as the host directory's
+ownership.** It is tamper-EVIDENT only in the sense that the directory is: anyone who can write
+the host directory can add a ledger line for a dropped descriptor and the loader will load it
+(by design — that actor is the host). The page and the model cannot write that directory
+(containment refuses traversal and symlinks; driven), so the ledger's guarantee is *against
+them*. A future reader must not treat the ledger as tamper-proof or as a byte-level integrity
+check — "who admitted this" is answered by "who could write this directory", nothing more.
+
+## Dotfiles are behind the loop's line (2026-09-20, driven chain)
+
+The listing routes hide dotfiles; the read and write verbs and `/api/file` now refuse them by
+name (`dotfile-refused`). Why this is one rule and not three: driven chain — `POST /api/root`
+can declare the HOST's own extensions directory as the active root, and then
+`GET /api/file?name=.host-token` returned the host token itself (and the write verb could
+overwrite it), after which the page-held token admits. The listing filter without the read
+refusal was blindness-ware. (The deeper question — `POST /api/root` accepts any existing path
+unauthenticated — is filed as its own bead: it is the environment-declares flow, e1m0's to
+decide.)
