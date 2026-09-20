@@ -29,9 +29,13 @@
 //                  refused · artefact-free · porcelain-clean
 //   PENDING (journal-omr): once the vanished-root hang is fixed, declare a
 //   root, delete its directory, act, and assert a named refusal with a remedy.
+//
+// SCOPE OF THE EYES: this gate measures 127.0.0.1:5173/8787 ONLY. Paul's
+// Tailscale and LAN surfaces are outside it — ALL CLEAR is a statement about
+// the local front, not about the product.
 import { spawn, execFileSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { closeSync, existsSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,9 +44,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TREE = process.env.VOICEBOX_TREE ?? ROOT;
 const SHARED_UI = process.env.VOICEBOX_UI_URL ?? "http://127.0.0.1:5173";
 const SHARED_API = process.env.VOICEBOX_API_URL ?? "http://127.0.0.1:8787";
-const PRIVATE_PORT = 9600 + (process.pid % 400); // per-run: no shared state
+const PRIVATE_PORT = 9900 + (process.pid % 50); // 9900-9948 — disjoint from CDP above (F4)
 const PRIVATE_ORIGIN = `http://127.0.0.1:${PRIVATE_PORT}`;
-const CDP_PORT = 9500 + (process.pid % 500);
+const CDP_PORT = 9500 + (process.pid % 400); // 9500-9899 — disjoint from the private range below (F4)
 const NAME = `acceptance-proof-${process.pid}.txt`; // hoisted: the finally must see it
 
 const results = [];
@@ -107,6 +111,7 @@ const ev = async (expr) =>
   (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId))?.result?.value;
 
 const sharedRootBefore = await (await fetch(`${SHARED_API}/api/root`)).json().catch(() => null);
+const sharedFilesBefore = JSON.stringify(((await (await fetch(`${SHARED_API}/api/files`)).json().catch(() => ({ files: [] }))).files ?? []).sort());
 
 try {
   // ════ PHASE A — [shared-front]: GET-only, witnessed ══════════════════════
@@ -154,9 +159,13 @@ try {
 
   report("shared-front", "console clean on load", consoleMsgs.length === 0,
     consoleMsgs.length ? `first: ${String(consoleMsgs[0]).slice(0, 140)}` : "");
-  const loadTurns = turnPosts.filter((p) => new URL("http://x" + "/").origin === new URL(p.origin).origin && p.origin !== PRIVATE_ORIGIN);
+  // F1: the old filter compared a literal "http://x" origin against the real
+  // one — always false, so the check passed unconditionally. A check that
+  // cannot fail is not a check. Posts from the shared page carry ITS origin.
+  const sharedOrigin = new URL(SHARED_UI).origin;
+  const loadTurns = turnPosts.filter((p) => p.origin === sharedOrigin);
   report("shared-front", "zero POST /api/turn on page load", loadTurns.length === 0,
-    loadTurns.length ? `${loadTurns.length} phantom turn(s)` : "");
+    loadTurns.length ? `${loadTurns.length} phantom turn(s), e.g. ${loadTurns[0].body.slice(0, 60)}` : "");
 
   const apiFiles = (await (await fetch(`${SHARED_API}/api/files`)).json().catch(() => ({ files: [] }))).files.sort();
   const pageNames = ((await ev(`[...document.querySelectorAll('.file-name')].map(e => e.textContent)`)) ?? []).sort();
@@ -187,16 +196,25 @@ try {
   // THE WITNESS: the shared server's root state is identical to what it was
   // before phase A. "Nothing writes to it" is a contract; this is the proof.
   const sharedRootAfter = await (await fetch(`${SHARED_API}/api/root`)).json().catch(() => null);
+  const sharedFilesAfter = JSON.stringify(((await (await fetch(`${SHARED_API}/api/files`)).json().catch(() => ({ files: [] }))).files ?? []).sort());
   const stateOf = (r) => JSON.stringify({ declared: r?.declared ?? null, project: r?.project ?? null, root: r?.root ?? null });
-  report("shared-front", "the shared server's root state is untouched (GET-only witness)",
-    stateOf(sharedRootBefore) === stateOf(sharedRootAfter),
+  report("shared-front", "the shared server's root declaration is untouched", stateOf(sharedRootBefore) === stateOf(sharedRootAfter),
     `before=${stateOf(sharedRootBefore)} after=${stateOf(sharedRootAfter)}`);
+  // F2: the declaration alone was BLIND to the mutation that mattered — a
+  // phantom turn with a declared root writes a file while the witness reads
+  // PASS. The files list is the second half of the witness.
+  report("shared-front", "the shared server's file list is untouched", sharedFilesBefore === sharedFilesAfter,
+    sharedFilesBefore === sharedFilesAfter ? `${JSON.parse(sharedFilesAfter).length} files, unchanged` : `before=${sharedFilesBefore} after=${sharedFilesAfter}`);
 
   // ════ PHASE B — [private]: every mutating check, own server ══════════════
   console.log(`── phase B: private instance ${PRIVATE_ORIGIN} (spawned by this run; killed at exit)`);
+  // F3: the child's stderr goes to a file — stdio:ignore once hid an
+  // EADDRINUSE death behind a misleading "did not come up".
+  const privateLog = `/tmp/vb-accept-private-${process.pid}.log`;
+  const privateLogFd = openSync(privateLog, "w");
   privateServer = spawn("node", ["server.mjs"], {
     cwd: TREE, env: { ...process.env, PORT: String(PRIVATE_PORT) },
-    stdio: ["ignore", "ignore", "ignore"],
+    stdio: ["ignore", "ignore", privateLogFd],
   });
   privateServer.on("error", (e) => console.log(`note: private server spawn error: ${e.message}`));
   let privateUp = false;
@@ -204,7 +222,13 @@ try {
   while (!privateUp && Date.now() - t1 < 10000) {
     try { privateUp = (await (await fetch(`${PRIVATE_ORIGIN}/api/health`)).json()).ok === true; } catch { await sleep(200); }
   }
-  if (!privateUp) throw new Error("the private server instance did not come up — cannot run the mutating checks");
+  if (!privateUp) {
+    let logTail = "(no log)";
+    try { logTail = readFileSync(privateLog, "utf8").trim().split("\n").slice(-3).join(" | ") || "(empty)"; } catch {}
+    closeSync(privateLogFd);
+    throw new Error(`the private server instance did not come up — its log (${privateLog}) ends: ${logTail}`);
+  }
+  closeSync(privateLogFd);
 
   // on a FRESH instance the refusal is guaranteed, so it is asserted EVERY run
   const refusal = await (await fetch(`${PRIVATE_ORIGIN}/api/root`)).json();
@@ -296,14 +320,18 @@ try {
   report("harness", "run completed without crashing", false, String(e?.message ?? e).slice(0, 140));
 } finally {
   cleanupArtefacts();
-  killPrivate();
+  killPrivate(); // first: the declaration is process memory — dead server, no pointer
+  try { if (scratchRoot) rmSync(scratchRoot, { recursive: true, force: true }); } catch {} // F5: the dir too, not only its files
   chromium.kill();
 }
 
 // ── the run leaves no trace ────────────────────────────────────────────────
 let porcelain = "";
 try { porcelain = execFileSync("git", ["-C", TREE, "status", "--porcelain"]).toString().trim(); } catch {}
-report("harness", "run leaves the tree clean (git status --porcelain empty)", porcelain === "",
+// F6: beads' own untracked sync dir is not this run's dirt — filter it before
+// judging, so the check can pass on a tree that carries a healthy .beads/
+porcelain = porcelain.split("\n").filter((l) => !l.includes(".beads/")).join("\n").trim();
+report("harness", "run leaves the tree clean (git status --porcelain empty, .beads/ excluded)", porcelain === "",
   porcelain ? porcelain.split("\n").slice(0, 3).join(" | ") : "");
 
 const failed = results.filter((ok) => !ok).length;
