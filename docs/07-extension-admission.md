@@ -36,11 +36,11 @@ evaluation anywhere in the runtime, which is what makes `mediated-fetch` an
 honest mechanism: the tool's only fetch is the host's mediated one.
 
 **Who owns what** (bxx): the model's only door is a PROPOSAL — a tier 1 write
-into `workspace/proposals/` (inside its root, reported, revertible). The host
-owns the extension directory (`extensions/`, outside the workspace root and
-unreachable through it), the admission route, and the registry rebuild — which
-is the reload. There is no model-reachable register or reload: driven, not
-asserted — `POST /api/extensions/register` and `/reload` are 404s, a
+into `<root>/proposals/` (inside the active project root, reported,
+revertible). The host owns the extension directory (outside every project
+root and unreachable through it), the admission route, and the registry
+rebuild — which is the reload. There is no model-reachable register or reload:
+driven, not asserted — `POST /api/extensions/register` and `/reload` are 404s, a
 `../extensions/evil.js` write is refused by containment, a hand-dropped file in
 the host directory does not hot-load, and pasted source becomes a FILE (data),
 never code.
