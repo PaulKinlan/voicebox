@@ -317,6 +317,49 @@ test("state: a socket close is ended, not 'listening'", async () => {
   assert.match(s.label, /1006/);
 });
 
+// ── the rate refusal, with the witness the rate work could not write ────────
+// journal-6g0: capture REFUSES to start when the server has not declared the
+// input rate, because a default here silently reintroduces the defect it closes
+// (the page declaring one rate and sending another). The author tried twice for
+// a witness and removed both attempts rather than assert something untrue —
+// because the refusal shared the device catch and therefore said "The
+// microphone is not available", which is not what happened. Fixed first, then
+// witnessed: the four facts below are each observable, and none of them needs a
+// microphone, a socket or a real device.
+test("capture refuses without a declared rate, and names the RATE rather than the microphone", async () => {
+  const { client, contexts, media } = makeClient();
+  let getUserMediaCalls = 0;
+  const nativeGetUserMedia = media.mediaDevices.getUserMedia;
+  media.mediaDevices.getUserMedia = (...args) => { getUserMediaCalls += 1; return nativeGetUserMedia(...args); };
+
+  await client.startCapture();
+  const s = client.snapshot();
+
+  assert.equal(s.capture, false, "no capture without a declared rate");
+  assert.equal(s.captureErrorReason, "rate-not-declared", "the reason is named as a kind, not inferred from prose");
+  assert.equal(s.ready, false, "nothing was negotiated, so nothing is ready");
+  assert.equal(getUserMediaCalls, 0, "the microphone is never opened for a capture that cannot be sent");
+  assert.equal(contexts.length, 0, "no AudioContext is built at an unknown rate");
+  assert.match(s.label, /input rate/i, "the sentence names the rate");
+  assert.doesNotMatch(s.label, /microphone is not available/i, "the microphone is fine and must not be blamed");
+  assert.doesNotMatch(s.label, /nothing is listening/i, "and it must not be dressed up as a session ending");
+
+  // The POSITIVE CONTROL: once the server declares a rate, the same call works
+  // and the context opens AT THAT RATE — the browser's pipeline does the
+  // conversion, which is the whole point of learning the number at runtime.
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 24000, provider: "openai-realtime" }));
+  await client.startCapture();
+  assert.equal(client.snapshot().capture, true);
+  assert.equal(client.snapshot().captureErrorReason, "", "the refusal is cleared by the user action that follows a declaration");
+  assert.equal(contexts.at(-1).sampleRate, 24000, "capture opens at the declared rate, not a remembered one");
+
+  // And a nonsense declaration is refused loudly rather than coerced.
+  const other = makeClient();
+  other.client.handleMessage(JSON.stringify({ type: "rate", inputRate: "sixteen thousand", provider: "bad" }));
+  assert.equal(other.client.snapshot().inputRate, null, "an unusable declaration leaves the session with no rate at all");
+  assert.ok(other.events.diagnostics.some((d) => d.kind === "refused" && /unusable input rate/.test(d.message)));
+});
+
 // ── the nonterminal error, pinned ───────────────────────────────────────────
 // RED before 2026-09-20: the client called this ended and printed "Your
 // microphone is still on, but nothing is listening" while the host's ready
