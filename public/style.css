@@ -58,7 +58,9 @@ input { caret-color: var(--accent); }
 .made[data-state="failed"] .files, .made[data-state="empty"] .made-note { display: none; }
 .file-placeholder { padding: 3px 12px; border: 1px dashed var(--line); border-radius: 999px; color: var(--muted); font-size: .8125rem; }
 .made:not([data-state="empty"]) .empty { display: none; }
-.made[data-state="empty"] .made-actions { display: none; }
+.made[data-state="empty"] .listing-root { width: 100%; margin: 0 0 10px; font-size: .75rem; color: var(--muted); }
+.listing-root[data-tone="warn"] { color: var(--warn); }
+.made-actions { display: none; }
 .file-open { display: inline-flex; align-items: baseline; gap: 6px; padding: 4px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font-size: .9375rem; }
 .file-open:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .file-name { overflow-wrap: anywhere; }
@@ -78,6 +80,8 @@ input { caret-color: var(--accent); }
 .samples { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 18px; list-style: none; margin: 0; padding: 0; }
 .samples button { padding: 2px 0; border: 0; background: none; color: color-mix(in srgb, var(--muted) 70%, var(--ink)); font-size: .8125rem; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: .25em; }
 .samples button:hover { color: var(--accent); text-decoration-color: currentColor; }
+.listing-root { width: 100%; margin: 0 0 10px; font-size: .75rem; color: var(--muted); }
+.listing-root[data-tone="warn"] { color: var(--warn); }
 .made-actions { display: flex; gap: 4px; margin-top: 2px; }
 
 /* ── the voice stage: concentric hairlines, one soft accent ──────────── */

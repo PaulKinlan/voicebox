@@ -17,7 +17,7 @@ const WANTED = {
   files: "files", made: "made-list", samples: "samples", count: "file-count", empty: "empty",
   emptyHeadline: "empty-headline", emptyNext: "empty-next", emptyWhy: "empty-why", emptyAction: "empty-action",
   where: "where-note", dot: "server-dot", refresh: "refresh", report: "turn-report", newFile: "new-file",
-  rootKind: "root-kind", madeHeading: "made-heading", emptyLink: "empty-link",
+  rootKind: "root-kind", madeHeading: "made-heading", emptyLink: "empty-link", listingRoot: "listing-root",
   stage: "voice-ring-wrap", mic: "mic", state: "voice-state",
   session: "session", log: "session-log", form: "text-form", utterance: "utterance", send: "send",
   reader: "reader", readerTitle: "reader-title", readerFacts: "file-facts", readerBody: "file-body",
@@ -46,6 +46,7 @@ function on(el, type, handler) {
 }
 
 let shownFile = null; // the file currently in the reader panel
+let listedRoot = null; // the root the CURRENT entries were read from — not assumed to be the active one
 
 let entries = [];
 
@@ -120,17 +121,37 @@ function card(entry) {
   open.type = "button";
   open.className = "file-open";
   open.dataset.file = entry.name;
-  open.setAttribute("aria-label", `Read ${entry.name}`);
+  if (entry.isDir) open.dataset.kind = "directory";
+  // A FOLDER IS NOT A FILE. The listing has carried `kind` all along and the page
+  // threw it away, so a folder rendered as a nameless-size file and clicking it
+  // produced "cannot read directory" — a failure dressed as a bad file.
+  open.setAttribute("aria-label", entry.isDir ? `${entry.name}, folder` : `Read ${entry.name}`);
 
   const name = document.createElement("span");
   name.className = "file-name";
-  name.textContent = entry.name;
+  name.textContent = entry.isDir ? `${entry.name}/` : entry.name;
   const meta = document.createElement("span");
   meta.className = "file-meta";
   meta.textContent = entry.meta;
   open.append(name, meta);
 
-  open.addEventListener("click", () => showFile(entry.name));
+  if (entry.isDir) {
+    open.addEventListener("click", () => {
+      // Not a refusal by the server — a thing this explorer cannot do yet, said
+      // plainly, with the folder named. Acceptance 7cd.4 wants failure modes
+      // distinguishable; "no drill-down yet" is one of them.
+      els.readerTitle.textContent = `${entry.name}/`;
+      const sentence = `'${entry.name}' is a folder. This list shows one level of the root, and opening folders is not available yet.`;
+      els.readerFacts.textContent = sentence;
+      els.readerFacts.title = "";
+      els.readerBody.textContent = sentence;
+      els.reader.dataset.state = "ready";
+      if (els.readerDetails) els.readerDetails.open = true;
+      showFileSelection(entry.name);
+    });
+  } else {
+    open.addEventListener("click", () => showFile(entry.name));
+  }
   li.append(open);
   return li;
 }
@@ -244,6 +265,26 @@ function setComposerEnabled(canLand, why = "") {
   if (why) input.title = `a turn would be refused here: ${why}`;
 }
 
+// WHERE IS THIS LIST FROM? The header chip names the ACTIVE root; this names the
+// root these cards were read from. Usually the same sentence with a different
+// subject; when they differ it is the only place the difference can be seen.
+function renderListingRoot() {
+  const line = els.listingRoot;
+  if (!line) return;
+  if (!listedRoot) { line.hidden = true; return; }
+  const where = listedRoot.path ?? listedRoot.name ?? listedRoot.label ?? "an unnamed root";
+  const active = activeRoot?.root;
+  const activeWhere = active?.path ?? active?.name ?? active?.label ?? "";
+  const stale = Boolean(activeWhere && where && activeWhere !== where);
+  line.hidden = false;
+  line.dataset.tone = stale ? "warn" : "";
+  // Symmetric wording: this says the two disagree, and does not assert which of
+  // them is the one that moved.
+  line.textContent = stale
+    ? `The header says ${activeWhere}, and this listing came from ${where}. Press Refresh to read the folder the header names.`
+    : `listed from ${where}`;
+}
+
 function render() {
   const count = entries.length;
   if (!els.files || !els.made || !els.count) return;
@@ -252,6 +293,7 @@ function render() {
   els.made.dataset.state = count === 0 ? "empty" : "ready";
   els.files.setAttribute("aria-busy", "false");
   els.count.textContent = count === 0 ? "" : `${count} ${count === 1 ? "file" : "files"}`;
+  renderListingRoot();
   renderEmptyState();
   if (shownFile && !entries.some((entry) => entry.name === shownFile)) shownFile = null;
   if (shownFile) showFileSelection(shownFile);
@@ -446,12 +488,29 @@ async function load() {
     // read every file back through `POST /api/turn`, so a loaded page quietly
     // POSTed turns nobody typed — an independent verifier saw eight of them and
     // a `read alpha.txt` that was never spoken. Reading is not a turn.
-    const { files: names, entries: listed } = await request("/api/files");
-    const sizes = new Map((listed ?? []).map((entry) => [entry.name, entry.bytes]));
-    entries = names.map((name) => ({
-      name,
-      meta: `${sizes.get(name) ?? 0} ${(sizes.get(name) ?? 0) === 1 ? "byte" : "bytes"}`,
-    }));
+    const answer = await request("/api/files");
+    // The server says which root it listed, so the page records it rather than
+    // assuming it is the active one. When they differ, the cards are a listing of
+    // somewhere else and the panel says so (acceptance 7cd.1: an explorer must
+    // state WHICH ROOT it is showing).
+    listedRoot = answer.root ?? null;
+    // The server's listing is authoritative about WHICH root it listed, so when
+    // the header has not caught up (the environment page re-declared the project
+    // while this page sat open) the page syncs to the listing rather than showing
+    // a header that disagrees with the cards under it.
+    const activeWhere = activeRoot?.root?.path ?? activeRoot?.root?.name ?? activeRoot?.root?.label ?? "";
+    const listedWhere = listedRoot?.path ?? listedRoot?.name ?? listedRoot?.label ?? "";
+    if (listedWhere && activeWhere !== listedWhere) await loadRoot();
+    const kinds = new Map((answer.entries ?? []).map((entry) => [entry.name, entry]));
+    entries = (answer.files ?? []).map((name) => {
+      const entry = kinds.get(name) ?? {};
+      const isDir = entry.kind === "directory";
+      return {
+        name,
+        isDir,
+        meta: isDir ? "folder" : `${entry.bytes ?? 0} ${(entry.bytes ?? 0) === 1 ? "byte" : "bytes"}`,
+      };
+    });
     render();
   } catch (error) {
     entries = [];
@@ -568,7 +627,8 @@ async function send(said) {
     if (answer.note) return finish(transcript, answer.note, "bad");
     const result = answer.result ?? {};
     if (!result.ok) return finish(transcript, reasonFrom(result, result.error ?? "the turn was refused"), "bad");
-    finish(transcript, result.action ?? "done", "good");
+    const landed = result.root?.path ?? result.root?.name ?? result.root?.label ?? "";
+    finish(transcript, result.action ? `${result.action}${landed ? ` in ${landed}` : ""}` : "done", "good");
     if (answer.action?.verb === "read" && typeof result.content === "string") {
       els.readerTitle.textContent = result.action;
       els.readerFacts.textContent = `${size(result.content)} · read from disk`;

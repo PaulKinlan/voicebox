@@ -56,6 +56,11 @@
       <section class="made" id="made-list" data-state="loading" aria-labelledby="made-heading">
         <h2 id="made-heading">Made while we talk</h2>
         <p class="made-note" id="file-count">reading…</p>
+        <!-- WHICH ROOT THIS LISTING CAME FROM. The chip in the header names the
+             ACTIVE root; this names the root these cards were read from. They are
+             usually the same sentence with a different subject — and when they
+             differ, this is the only place the difference can be seen. -->
+        <p class="listing-root" id="listing-root" hidden></p>
         <ul class="files" id="files" role="list" aria-busy="true"></ul>
         <div class="empty" id="empty">
           <h3 id="empty-headline">Nothing made yet.</h3>
