@@ -86,7 +86,9 @@ function header(project?: Record<string, any>): void {
     // Who acts on this root is a FACT about the kind, and the page says it rather than letting the
     // user discover it by trying: a machine root's acts come from the loop, a picked folder's from
     // this page, an OPFS root's from this page.
-    ["acts come from", kind === "machine" ? "the loop (a machine process) — this page can see it and cannot write it" : "this page (the browser host)"],
+    ["acts come from", kind === "machine"
+      ? "the loop (a machine process) — this page can see it and cannot write it, and turns DO write here"
+      : "this page only — turns cannot write into this kind yet; choose a machine folder for that"],
     ["recovery", kind === "handle"
       ? `the handle is persisted in IndexedDB, so a reload does not re-pick; permission is ${project.durability?.permission ?? "unknown"}, and restoring it takes a click`
       : kind === "machine"
@@ -478,11 +480,22 @@ async function declareToLoop(project: Record<string, any>): Promise<void> {
       body: JSON.stringify({ project: project.name, root }),
     });
     const body = await response.json();
+    if (body.reachableFromThisProcess) {
+      line(`the loop will write into ${body.root?.path} — turns land there`, "ok");
+      return;
+    }
+    // A REFUSAL MUST CARRY THE ROUTE, not just the reason. "The loop cannot write here" is true and
+    // useless on its own: the person has just chosen a root and the page must say what to choose
+    // instead, in the place they are standing. (The same lesson as the room's empty state, which
+    // named a remedy it offered no way to reach.)
+    line(`the loop cannot write here — ${body.why ?? body.refused ?? "no reason given"}`, "note");
     line(
-      body.reachableFromThisProcess
-        ? `the loop will write into ${body.root?.path}`
-        : `the loop cannot write here — ${body.why ?? body.refused ?? "no reason given"}`,
-      body.reachableFromThisProcess ? "ok" : "note",
+      kind === "machine"
+        ? "nothing to do: this is a machine folder, so turns write into it"
+        : "to have turns write, choose a folder on this machine with 'Use this folder for the loop' — " +
+          "a picked folder or this origin's storage is readable here and writable only by the page until " +
+          "page-side writes land (journal-2cf)",
+      "note",
     );
   } catch {
     line("the loop was not told about this root (no server reachable from the page)", "note");

@@ -11,6 +11,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveTurn } from "./lib/resolver.mjs";
 import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, resolveInRoot, rootVanished } from "./core/root.ts";
+import {
+  AGENT_BASE_INSTRUCTION,
+  DEFAULT_AGENT_SETTINGS,
+  PERSONALITIES,
+  PROVIDERS,
+  composeAgentInstruction,
+  validateAgentSettings,
+} from "./core/agent-settings.ts";
 import { auditFileName, makeEntry, mergeAudit, nextSeq, parseEntry, resumeSeq, serializeEntry } from "./core/audit.ts";
 import * as extensions from "./lib/extensions.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
@@ -43,6 +51,17 @@ const WORKSPACE = process.env.VOICEBOX_WORKSPACE ?? path.join(ROOT, "workspace")
 // got — a grep for the old literal is the check, and it should be run before changing this line.
 /** null until somebody declares one — see the note above: no default is consulted when it is null. */
 let active = null;
+
+// ── THE AGENT'S OWN SETTINGS (provider · voice · personality) ─────────────────────────────────
+// Kept in memory, and the payload SAYS SO rather than implying durability: a restart resets the
+// request, and a person can see that instead of discovering it.
+// (No type annotation here: this file is plain JS. The shapes live in core/agent-settings.ts, and
+// the module is imported for its values — a `type` import would be a syntax error in a .mjs file,
+// which is worth knowing because node --check is how you find that out.)
+let agentSettings = { ...DEFAULT_AGENT_SETTINGS };
+
+/** What a LIVE session actually started with — the difference between "stored" and "in use". */
+let runningSession = null;
 
 /** A declaration made by the operator at boot (VOICEBOX_WORKSPACE), which is a decision, not a default. */
 if (process.env.VOICEBOX_WORKSPACE) {
@@ -404,7 +423,91 @@ async function execute(action) {
   return { ok: false, error: `unknown verb: ${action.verb}` };
 }
 
+/**
+ * requested · applied · pending — computed, not stored, so it cannot go stale.
+ *
+ * `applied` reads the live path (the resolved provider and its model) and reports `null` for the two
+ * settings no session reads yet, with the reason. Making `voice` or `personality` say "applied" before
+ * a provider carries them would be the exact lie this payload exists to prevent.
+ */
+function agentSettingsPayload(extra = {}) {
+  const provider = PROVIDERS[agentSettings.provider];
+  const keyPresent = Boolean(process.env[provider.requires.env]);
+  const capabilities = Object.values(PROVIDERS).map((facts) => ({
+    id: facts.id,
+    label: facts.label,
+    model: facts.model,
+    voices: facts.voices,
+    available: Boolean(process.env[facts.requires.env]),
+    ...(process.env[facts.requires.env] ? {} : { refused: "provider-not-configured", why: `${facts.requires.env} is not set — ${facts.requires.why}` }),
+  }));
+
+  return {
+    ok: true,
+    requested: agentSettings,
+    applied: {
+      // What the NEXT session will use (the setting is passed to createLiveSession, so this is a fact
+      // rather than a promise), and `running` says what a live session started with — a person asking
+      // "did my change take effect?" is usually asking about that second one.
+      provider: agentSettings.provider,
+      model: provider.model,
+      // No provider reads a voice or an instruction yet. Stated as null-with-a-reason rather than
+      // echoed back from the request.
+      voice: null,
+      instruction: null,
+    },
+    pending: {
+      voice: provider.voices.length
+        ? "stored, not applied: no provider carries a voice into its session yet (the setting lands with the provider seam)"
+        : "this provider offers no voices",
+      personality: "stored, not applied: no provider receives an instruction yet (the tone layer lands with the live-tools lane)",
+    },
+    base: {
+      // The mandatory half, shown so a person can see what a personality is layered ON. Read-only by
+      // construction: nothing here accepts a base instruction.
+      instruction: AGENT_BASE_INSTRUCTION,
+      editable: false,
+      note: "personality appends a tone layer beneath these rules; it cannot replace them",
+    },
+    personalities: Object.values(PERSONALITIES).map((p) => ({ id: p.id, label: p.label })),
+    // Which providers a person may choose AT ALL, and the ones that cannot run say why — the rule that
+    // stops an option being offered that fails the moment it is chosen.
+    capabilities,
+    runningSession,
+    providerAvailable: keyPresent,
+    ...(keyPresent ? {} : { refused: "provider-not-configured", why: `${provider.requires.env} is not set — ${provider.requires.why}` }),
+    persisted: "memory (until this process restarts)",
+    ...extra,
+  };
+}
+
 const routes = {
+  // THE AGENT'S SETTINGS, and the distinction this whole surface exists to keep:
+  //   requested — what a person asked for, stored whether or not anything can use it yet
+  //   applied   — what the RUNNING session can be shown to use, never what was asked for
+  //   pending   — for each setting that is stored but not yet read by a session, WHY
+  // A setting that silently does nothing is worse than no setting, so the gap is in the payload.
+  "GET /api/agent-settings": (req, res, url) => json(res, 200, agentSettingsPayload()),
+  "PUT /api/agent-settings": (req, res, url) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => answerOnce(res, async () => {
+      let asked;
+      try {
+        asked = JSON.parse(body || "{}");
+      } catch {
+        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON: {provider?, voice?, personality?}" });
+      }
+      const checked = validateAgentSettings(asked, agentSettings);
+      if (!checked.ok) return json(res, 400, { ok: false, refused: checked.refused, why: checked.why });
+      // Changing the provider does NOT start a session: the next one this page opens will use it, and
+      // the payload says the live session is untouched rather than implying the change took effect now.
+      agentSettings = checked.value;
+      return json(res, 200, agentSettingsPayload({ note: "stored — a session already running keeps the provider it started with" }));
+    }));
+    return;
+  },
+
   // UN-DECLARE: back to `root-not-declared`, deliberately and by request. The gate asserts that
   // state positively, and a state you cannot return to is one you can only test once per process —
   // and for a person, "close the project" has to have an expression that is not "restart the server".
@@ -778,10 +881,15 @@ server.on("upgrade", (req, socket) => {
   let session = null;
   try {
     session = createLiveSession({
+      // THE AGENT SETTINGS APPLY HERE, which is what stops them being dead controls: the provider a
+      // person chose is the provider this session dials, and its model comes with it.
+      provider: agentSettings.provider,
+      model: PROVIDERS[agentSettings.provider].model,
       onAudioOut: (pcm, mime) => { if (pcm.length > 4) ws.send(pcm); },
       onText: (text, role) => ws.send(JSON.stringify({ type: "text", role, text })),
-      onState: (state, detail) => ws.send(JSON.stringify({ type: "state", state, detail, model: LIVE_MODEL })),
+      onState: (state, detail) => ws.send(JSON.stringify({ type: "state", state, detail, model: PROVIDERS[agentSettings.provider].model })),
     });
+    runningSession = { provider: session.state?.provider ?? agentSettings.provider, startedAt: new Date().toISOString() };
   } catch (e) {
     ws.send(JSON.stringify({ type: "error", error: e?.message ?? String(e) }));
     ws.close(1011, "live session failed to start");

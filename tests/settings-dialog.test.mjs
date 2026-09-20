@@ -166,7 +166,10 @@ test("focus is trapped while it is open: the room behind cannot take it", { time
     return { wantBehind: target.id, tookFocus: document.activeElement === target, active: document.activeElement?.id || document.activeElement?.tagName };
   });
   assert.equal(behind.tookFocus, false, `an element behind the modal took focus (${behind.wantBehind})`);
-  assert.equal(behind.active, "settings-close", "focus left the dialog after trying to focus the page behind it");
+  // INSIDE the dialog, not on one particular control: the property is "the room behind cannot take
+  // focus", and naming a specific element made this check fail the first time the dialog gained rows.
+  const stillInside = await page.evaluate(() => document.getElementById("settings").contains(document.activeElement));
+  assert.equal(stillInside, true, "focus left the dialog after trying to focus the page behind it");
 
   // And Tab stays among the dialog's own controls. Passing through BODY is the browser's way of
   // saying "focus went to the chrome"; landing on another PAGE element is the bug.
@@ -269,8 +272,9 @@ test("the device rows still tell the truth inside the dialog", { timeout: 90000 
       outState: document.getElementById("out-device-state").textContent,
       micLabel: document.getElementById("mic-label").textContent,
       outLabel: document.getElementById("out-label").textContent,
-      // The three facts per row, still present and still inside the dialog: heading, picker, state.
-      rows: [...dialog.querySelectorAll(".device-row")].map((row) => ({
+      // The three facts per DEVICE row — the dialog also carries the agent rows now (provider, voice,
+      // personality), so this counts the two rows with device pickers rather than every `.device-row`.
+      rows: [mic.closest(".device-row"), out.closest(".device-row")].map((row) => ({
         heading: row.querySelector("h3")?.textContent ?? null,
         picker: Boolean(row.querySelector("select")),
         state: row.querySelector(".device-state")?.textContent ?? null,
@@ -279,7 +283,7 @@ test("the device rows still tell the truth inside the dialog", { timeout: 90000 
   });
 
   assert.equal(rows.dialogContainsRows, true, "the device pickers are outside the dialog");
-  assert.equal(rows.rows.length, 2, `expected two device rows, saw ${rows.rows.length}`);
+  assert.equal(rows.rows.length, 2, "the two device rows are not both inside the dialog");
   for (const row of rows.rows) {
     assert.ok(row.heading, "a device row lost its heading");
     assert.equal(row.picker, true, "a device row lost its picker");

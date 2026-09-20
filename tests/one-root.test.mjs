@@ -212,3 +212,30 @@ test("when the declared root vanishes, the page says so by name — with the rem
   assert.equal(after.timedOut, undefined, "the loop held the request after its root vanished");
   assert.equal(after.result.refused, "root-vanished", JSON.stringify(after.result));
 });
+
+test("a declaration the loop cannot act on carries the ROUTE, not just the reason", { timeout: 120000 }, async () => {
+  // The declaration path itself, end to end: the page TELLS the loop about the project it opened, and
+  // when the kind is one turns cannot write into, the page says what to choose instead — in the place
+  // the person is standing. "The loop cannot write here" on its own is true and useless, and it is the
+  // same defect as the room's empty state that once named a remedy it offered no way to reach.
+  // A project of its own: "atlas" was re-declared as a machine project earlier in this file, and the
+  // registry remembers — which is itself the re-declaration behaviour working.
+  await page.evaluate(async () => { await window.e1m0.open("origin-project"); });
+  const info = await waitForRoot((i) => i.declared && i.root?.kind === "opfs", "the page to declare its OPFS project");
+  assert.equal(info.reachableFromThisProcess, false, "an OPFS root must report itself unreachable from the server");
+
+  const transcript = await page.evaluate(() => document.getElementById("transcript").textContent);
+  assert.match(transcript, /the loop cannot write here/, "the page does not say the loop cannot write there");
+  assert.match(transcript, /Use this folder for the loop/, "the refusal names no route to a root that works");
+  assert.match(transcript, /journal-2cf/, "the sentence does not say where the asymmetry goes away");
+
+  const header = await page.evaluate(() => document.getElementById("project").textContent);
+  assert.match(header, /turns cannot write into this kind yet/, "the header hides which kinds turns can write into");
+
+  // And the machine-folder route really does change it: same project, a kind turns can write into.
+  await page.evaluate(async (dir) => { await window.e1m0.useMachineRoot(dir, "origin-project"); }, machineRoot);
+  const machine = await waitForRoot((i) => i.root?.kind === "machine", "the machine declaration");
+  assert.equal(machine.reachableFromThisProcess, true);
+  const afterHeader = await page.evaluate(() => document.getElementById("project").textContent);
+  assert.match(afterHeader, /turns DO write here/, "the header does not say that turns write into this root");
+});

@@ -109,6 +109,26 @@
             <select id="out-select" aria-labelledby="out-label"></select>
             <p class="device-state" id="out-device-state">No reply playing</p>
           </div>
+          <div class="device-row">
+            <h3 id="agent-provider-label">The agent</h3>
+            <select id="agent-provider" aria-labelledby="agent-provider-label"></select>
+            <p class="device-state" id="agent-provider-state">Not asked yet</p>
+          </div>
+          <div class="device-row">
+            <h3 id="agent-voice-label">Its voice</h3>
+            <select id="agent-voice" aria-labelledby="agent-voice-label"></select>
+            <p class="device-state" id="agent-voice-state">Not asked yet</p>
+          </div>
+          <div class="device-row">
+            <h3 id="agent-personality-label">Its personality</h3>
+            <select id="agent-personality" aria-labelledby="agent-personality-label"></select>
+            <p class="device-state" id="agent-personality-state">Not asked yet</p>
+          </div>
+          <details class="about" id="agent-rules">
+            <summary>What no personality can change</summary>
+            <p id="agent-base"></p>
+            <p class="device-state" id="agent-base-note"></p>
+          </details>
           <!-- "This window", not "this room": the system has no rooms — no room
                object, no room state — and a word that names a concept the
                software does not have makes a person doubt what they are looking
