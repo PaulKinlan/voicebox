@@ -1,0 +1,18 @@
+{
+  "id": "web-search",
+  "name": "Web Search",
+  "description": "A stranger's search extension: queries DuckDuckGo's instant-answer API. The vocabulary test (rsj): it must be able to SAY network, and bounds must be able to say HOW MUCH — hosts says where, maxRequests says how much.",
+  "source": "catalogue",
+  "runsIn": "host",
+  "capabilities": ["network"],
+  "bounds": { "hosts": ["api.duckduckgo.com"], "maxRequests": 5 },
+  "tools": [
+    {
+      "name": "web_search",
+      "description": "Search the web (DuckDuckGo instant answers). Mediated: only api.duckduckgo.com, 5 requests per session.",
+      "promptSnippet": "web_search queries the web via DuckDuckGo's instant-answer API.",
+      "primitive": "http-get",
+      "params": { "url": "https://api.duckduckgo.com/?format=json" }
+    }
+  ]
+}

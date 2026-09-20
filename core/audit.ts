@@ -23,6 +23,9 @@ export interface Observed {
   exists: boolean;
   bytes?: number;
   mtime?: string;
+  servedBy?: string; // network: the URL that ACTUALLY served the bytes (redirects included)
+  via?: string[]; // network: the full redirect chain, first entry = the requested URL
+  requested?: string; // network refusals: what was asked for
 }
 
 /**
