@@ -347,8 +347,12 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
     `get.refused=${refusal.refused} write.result.refused=${writeTry.result?.refused}`);
 
   scratchRoot = mkdtempSync(path.join(os.tmpdir(), "vb-accept-root-"));
+  // the harness SPAWNS the server, so it is the host: the declaration carries
+  // the host token the helper read from this server's own scratch extensions
+  // dir (an unauthenticated declaration is refused — cfn, 2026-09-20)
   const declared = await (await fetch(`${PRIVATE_ORIGIN}/api/root`, {
-    method: "POST", headers: { "content-type": "application/json" },
+    method: "POST",
+    headers: { "content-type": "application/json", "x-voicebox-host-token": started.hostToken },
     body: JSON.stringify({ project: "page-acceptance", root: { kind: "machine", path: scratchRoot } }),
   })).json();
   report("private", "scratch root declared", declared.ok === true,
