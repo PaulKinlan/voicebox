@@ -34,9 +34,8 @@ test.after(async () => {
 
 test("the header lists the local environment, and a declared host appears and reads as unreachable", async () => {
   await page.goto(`${BASE}/`);
-  // The list is collapsed behind a summary; open it and read what it shows.
-  await page.evaluate(() => document.getElementById("envs").setAttribute("open", ""));
-  // Wait for the probe-backed render: the local row is always present and reachable.
+  // The surface is a modal dialog; open it the way a person does, by clicking the trigger.
+  await page.evaluate(() => document.getElementById("envs-open").click());
   await page.evaluate(async () => {
     for (let i = 0; i < 50 && !document.querySelector("#env-list .env-item"); i++) await new Promise((r) => setTimeout(r, 50));
   });
@@ -47,9 +46,18 @@ test("the header lists the local environment, and a declared host appears and re
       ok: li.querySelector(".env-dot")?.dataset.ok,
     })),
   );
-  const local = initial.find((e) => e.label === "this machine");
+  // The browser is a host too, listed first, reachable by construction.
+  const browser = initial[0];
+  assert.equal(browser.label, "this browser", `the browser environment is listed first: ${JSON.stringify(initial)}`);
+  assert.equal(browser.ok, "true");
+  // The local host names WHICH machine it is (the positional ambiguity the design was written about).
+  const local = initial.find((e) => e.label?.startsWith("this machine"));
   assert.ok(local, `the local server is listed: ${JSON.stringify(initial)}`);
   assert.equal(local.ok, "true", "the local environment is reachable by construction");
+  assert.match(local.label, /this machine: \S/, "the local row names the node, not just 'this machine'");
+  // The "+" is a labelled control, not a symbol.
+  const addLabel = await page.evaluate(() => document.getElementById("env-add-btn").textContent);
+  assert.match(addLabel, /add environment/i, "the add control is labelled");
 
   // Declare a server that is not running: it appears, named unreachable, not ready. The click is
   // dispatched in-page (the form's submit fires on the button's click), which is the same path the
@@ -78,7 +86,48 @@ test("the header lists the local environment, and a declared host appears and re
   assert.equal(remote.ok, "false", "a stopped service reads as not-ok, not ready");
   assert.match(remote.state, /unreachable/i, "the row names the refusal, not a blank");
 
-  // The summary counts what is reachable, so a person sees the state at a glance.
+  // The summary counts what is reachable, so a person sees the state at a glance (browser + local +
+  // the declared stopped one = 3, of which browser and local are reachable).
   const summary = await page.evaluate(() => document.getElementById("envs-count").textContent);
-  assert.match(summary, /2 environments · 1 reachable/, `the count reads the reachability: ${summary}`);
+  assert.match(summary, /3 environments · 2 reachable/, `the count reads the reachability: ${summary}`);
+});
+
+test("a long capability report is contained and summarised, and never overwrites the name or the actions", async () => {
+  // Drive the local environment to probe itself, then read the row: the report must be a bounded,
+  // summarised region — a count with the list behind an expansion — not a wall that pushes the
+  // controls down. This is the overflow Paul hit.
+  await page.goto(`${BASE}/`);
+  await page.evaluate(async () => {
+    document.getElementById("envs-open").click();
+    await fetch("/api/probe");
+  });
+  // Re-render after the probe so the capability report is present.
+  await page.evaluate(async () => {
+    for (let i = 0; i < 100; i++) {
+      const row = [...document.querySelectorAll("#env-list .env-item")].find((r) => r.querySelector(".env-label")?.textContent?.startsWith("this machine"));
+      if (row?.querySelector(".env-cap")) return;
+      await new Promise((r) => setTimeout(r, 60));
+      // trigger a re-render by re-reading
+      if (i % 20 === 19) await fetch("/api/environments");
+    }
+  });
+  const report = await page.evaluate(() => {
+    const row = [...document.querySelectorAll("#env-list .env-item")].find((r) => r.querySelector(".env-label")?.textContent?.startsWith("this machine"));
+    const cap = row?.querySelector(".env-cap");
+    const summary = cap?.querySelector("summary")?.textContent ?? "";
+    const listEl = cap?.querySelector(".env-cap-list");
+    return {
+      summary,
+      isDetails: cap?.tagName === "DETAILS",
+      listScrollable: listEl ? getComputedStyle(listEl).overflowY === "auto" : false,
+      listBounded: listEl ? parseInt(getComputedStyle(listEl).maxHeight, 10) > 0 : false,
+      // The name and the add control are still reachable and not pushed off.
+      nameVisible: !!row?.querySelector(".env-label"),
+      addVisible: !!document.getElementById("env-add-btn"),
+    };
+  });
+  assert.ok(report.isDetails, "the report is a <details> (collapsible)");
+  assert.match(report.summary, /^\d+ tools$/, `a long probe summarises to a count: ${report.summary}`);
+  assert.ok(report.listBounded && report.listScrollable, "the full list is bounded and scrolls inside it");
+  assert.ok(report.nameVisible && report.addVisible, "the name and the add control are not overwritten");
 });

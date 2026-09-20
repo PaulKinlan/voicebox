@@ -26,7 +26,7 @@ const WANTED = {
   settingsOpen: "settings-open", settings: "settings", settingsClose: "settings-close",
   micSelect: "mic-select", outSelect: "out-select",
   micDeviceState: "mic-device-state", outDeviceState: "out-device-state",
-  envs: "envs", envList: "env-list", envCount: "envs-count", envNote: "env-note",
+  envs: "envs", envsOpen: "envs-open", envsClose: "envs-close", envList: "env-list", envCount: "envs-count", envNote: "env-note",
   envAdd: "env-add", envAddLabel: "env-add-label", envAddOrigin: "env-add-origin", envAddBtn: "env-add-btn",
 };
 const els = {};
@@ -454,42 +454,80 @@ async function renderEnvironments() {
     const answer = await request("/api/environments");
     const list = answer.environments ?? [];
     els.envList.replaceChildren();
+    // The BROWSER environment is a host too — the page worker — and it is the one you are standing
+    // in: reachable by construction, always listed first. Its tools are a different set from a
+    // machine's, which is exactly what the capability report exists to show.
+    const browserRow = document.createElement("li");
+    browserRow.className = "env-item";
+    const bDot = document.createElement("span");
+    bDot.className = "env-dot";
+    bDot.dataset.ok = "true";
+    browserRow.appendChild(bDot);
+    const bName = document.createElement("span");
+    bName.className = "env-label";
+    bName.textContent = "this browser";
+    browserRow.appendChild(bName);
+    const bState = document.createElement("span");
+    bState.className = "env-state";
+    bState.textContent = "this page";
+    browserRow.appendChild(bState);
+    const bCap = document.createElement("span");
+    bCap.className = "env-cap-none";
+    bCap.textContent = "OPFS + picked folders";
+    browserRow.appendChild(bCap);
+    els.envList.appendChild(browserRow);
     for (const env of list) {
       const li = document.createElement("li");
       li.className = "env-item";
+      // The ROW'S HEAD: name, reachability, and the controls — always visible, never pushed by a report.
+      const head = document.createElement("div");
+      head.className = "env-head";
       const dot = document.createElement("span");
       dot.className = "env-dot";
       dot.dataset.ok = env.reachable === true ? "true" : env.reachable === false ? "false" : "pending";
-      li.appendChild(dot);
+      head.appendChild(dot);
       const name = document.createElement("span");
       name.className = "env-label";
       name.textContent = env.label ?? "an environment";
-      li.appendChild(name);
+      head.appendChild(name);
       const state = document.createElement("span");
       state.className = "env-state";
       if (env.reachable === true) state.textContent = "reachable";
       else if (env.reachable === false) state.textContent = env.refused ?? "not reachable";
       else state.textContent = env.why ?? "always here";
       if (env.why && env.reachable === false) state.title = env.why;
-      li.appendChild(state);
-      // The capability report, when this environment has been probed: tools and runtimes as a line a
-      // person reads, with the report's `when` so a stale one reads as stale. Not probed says so.
-      const cap = document.createElement("span");
-      cap.className = "env-cap";
+      head.appendChild(state);
+      li.appendChild(head);
+      // The capability report is CONTAINED and SCROLLABLE, and it SUMMARISES: a long probe is a count
+      // with the full list behind an expansion, so it never overwrites the name or the actions. Its
+      // honesty is already right; that it fits is the point.
       const tools = env.capability?.tools;
       if (tools && typeof tools === "object") {
         const present = Object.entries(tools).filter(([, v]) => v && v.value).map(([k]) => k);
-        cap.textContent = present.length ? `tools: ${present.join(", ")}` : "no tools found";
+        const cap = document.createElement("details");
+        cap.className = "env-cap";
+        const summary = document.createElement("summary");
+        summary.textContent = present.length ? `${present.length} tools` : "no tools found";
+        cap.appendChild(summary);
+        if (present.length) {
+          const full = document.createElement("div");
+          full.className = "env-cap-list";
+          full.textContent = present.join(", ");
+          cap.appendChild(full);
+        }
         cap.title = `probed ${env.capability.when ?? "at an unknown time"}`;
+        li.appendChild(cap);
       } else {
+        const cap = document.createElement("span");
+        cap.className = "env-cap-none";
         cap.textContent = "not probed";
+        li.appendChild(cap);
       }
-      li.appendChild(cap);
       els.envList.appendChild(li);
     }
     if (els.envCount) {
       const up = list.filter((e) => e.reachable === true).length;
-      els.envCount.textContent = `${list.length} environment${list.length === 1 ? "" : "s"} · ${up} reachable`;
+      els.envCount.textContent = `${list.length + 1} environments · ${up + 1} reachable`;
     }
     if (els.envNote) els.envNote.textContent = "";
     // AUTO-PROBE: a reachable environment that has never been probed is asked to probe itself, on
@@ -954,10 +992,11 @@ on(els.outSelect, "change", async () => {
   renderDevices();
 });
 
-// The "+" declares a server environment. It writes a descriptor to the server-owned list; it never
-// starts a service, and a host that is not running will say so by name on the next read.
-on(els.envAdd, "submit", async (event) => {
-  event.preventDefault();
+// The "Add environment" control declares a server environment. It writes a descriptor to the
+// server-owned list; it never starts a service, and a host that is not running will say so by name
+// on the next read. (A button, not a form submit: the dialog's method="dialog" form would otherwise
+// swallow it and close the dialog.)
+on(els.envAddBtn, "click", async () => {
   const label = (els.envAddLabel?.value ?? "").trim();
   const origin = (els.envAddOrigin?.value ?? "").trim();
   if (!label || !origin) {
@@ -974,9 +1013,31 @@ on(els.envAdd, "submit", async (event) => {
     if (els.envAddOrigin) els.envAddOrigin.value = "";
     await renderEnvironments();
   } catch (err) {
-    if (els.envNote) els.envNote.textContent = String(err?.message ?? "the environment was not added");
+    if (els.envNote) els.envNote.textContent = String(err?.why ?? err?.message ?? "the environment was not added");
   }
 });
+
+// The environments dialog opens like settings: showModal() for modality, focus trapping, an inert
+// background and Esc, with focus returned to the trigger on close. The platform provides all of it.
+on(els.envsOpen, "click", () => {
+  if (!els.envs || els.envs.open) return;
+  els.envs.showModal();
+  els.envsOpen.setAttribute("aria-expanded", "true");
+  void renderEnvironments();
+});
+on(els.envs, "close", () => {
+  els.envsOpen.setAttribute("aria-expanded", "false");
+  els.envsOpen.focus();
+});
+if (els.envs && !("closedBy" in HTMLDialogElement.prototype)) {
+  els.envs.addEventListener("click", (event) => {
+    if (event.target !== els.envs) return;
+    const rect = els.envs.getBoundingClientRect();
+    const inside = rect.top <= event.clientY && event.clientY <= rect.top + rect.height
+      && rect.left <= event.clientX && event.clientX <= rect.left + rect.width;
+    if (!inside) els.envs.close("dismissed");
+  });
+}
 
 on(els.settingsOpen, "click", () => {
   if (!els.settings || els.settings.open) return;

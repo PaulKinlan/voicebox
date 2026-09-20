@@ -124,20 +124,71 @@ input { caret-color: var(--accent); }
 .root-note[data-tone="warn"] { color: var(--warn); }
 .where-sep { color: var(--line); }
 
-/* The environment list: one source, server-owned. A host that is not running reads as a named
-   refusal, never as ready. */
-.envs { position: relative; font-size: .75rem; color: color-mix(in srgb, var(--muted) 82%, var(--ink)); }
-.envs > summary { cursor: pointer; list-style: none; }
-.envs > summary::-webkit-details-marker { display: none; }
-.envs[open] { z-index: 20; }
-.env-list { list-style: none; margin: 6px 0 0; padding: 0; position: absolute; right: 0; min-width: 240px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px rgb(0 0 0 / .12); overflow: hidden; }
-.env-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; }
+/* The environments surface is a REAL dialog (the settings pattern): modality, focus trapping, an
+   inert background and Esc from the platform; a bounded height with its own scroll so a long
+   capability report becomes a scrollbar, never a collision with the name or the actions. */
+dialog.envs {
+  inset: 0;
+  margin: auto;
+  width: min(100% - 2rem, 460px);
+  max-height: 85vh;            /* for browsers without dvh */
+  max-height: 85dvh;           /* mobile browser chrome is exactly why this is dvh, not vh */
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  overflow: hidden;            /* the FORM scrolls, not the dialog: the head stays put */
+}
+.envs-form {
+  max-height: inherit;
+  overflow: auto;              /* a long list scrolls INSIDE the dialog */
+  overscroll-behavior: contain;
+  padding: 14px 16px calc(16px + env(safe-area-inset-bottom)); /* never under the home bar */
+  text-align: left;
+}
+/* The frosting, shared by both dialogs (one rule, so the blur and its solid fallback cannot drift
+   apart). `::backdrop` is the browser's own layer behind a modal, so nothing has to be positioned. */
+dialog.settings::backdrop,
+dialog.envs::backdrop {
+  background: color-mix(in srgb, var(--ground) 55%, transparent);
+  backdrop-filter: blur(10px) saturate(120%);
+}
+/* Where there is no backdrop-filter the frosting would be a lie, so it becomes a solid scrim:
+   dimming still says "the room is behind this", which is the part that matters. */
+@supports not (backdrop-filter: blur(1px)) {
+  dialog.settings::backdrop,
+  dialog.envs::backdrop { background: light-dark(#fbfbf9e6, #0e0f12e6); }
+}
+html:has(dialog.envs[open]) { overflow: hidden; }
+.env-list { list-style: none; margin: 0; padding: 0; }
+.env-item { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; }
 .env-item + .env-item { border-top: 1px solid var(--line); }
+.env-head { display: flex; align-items: center; gap: 8px; }
 .env-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: none; }
 .env-dot[data-ok="true"] { background: var(--good); }
 .env-dot[data-ok="false"] { background: var(--warn); }
 .env-label { font-weight: 500; color: var(--ink); }
-.env-state { margin-left: auto; color: var(--muted); }
+.env-state { margin-left: auto; color: var(--muted); font-size: .75rem; }
+/* The capability report is contained: it summarises to a count, and the full list scrolls inside a
+   bounded box rather than pushing the name and the actions down. */
+.env-cap { margin-left: 14px; color: var(--muted); font-size: .75rem; }
+.env-cap > summary { cursor: pointer; }
+.env-cap-list { max-height: 7em; overflow-y: auto; overflow-wrap: anywhere; }
+.env-cap-none { margin-left: 14px; color: var(--muted); font-size: .75rem; font-style: italic; }
+.env-add-block { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.env-add-title { margin: 0 0 2px; font-size: .8125rem; font-weight: 600; }
+.env-hint { margin: 0 0 8px; color: var(--muted); font-size: .75rem; }
+.env-add { display: flex; flex-wrap: wrap; gap: 6px; }
+.env-add input { flex: 1 1 160px; min-width: 0; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
+.env-add button { flex: 0 0 auto; font: inherit; padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); cursor: pointer; }
+/* On a phone the fields stack rather than truncate: the name, the origin, then the action. */
+@media (max-width: 480px) {
+  .env-add { flex-direction: column; }
+  .env-add input, .env-add button { flex: 1 1 auto; width: 100%; }
+}
+.env-note { margin: 8px 0 0; color: var(--warn); font-size: .75rem; }
 .env-add { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--line); }
 .env-add input { flex: 1; min-width: 0; font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
 .env-add button { flex: none; font: inherit; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); cursor: pointer; }
@@ -176,17 +227,8 @@ input { caret-color: var(--accent); }
   padding: 14px 16px calc(16px + env(safe-area-inset-bottom)); /* never under the home bar */
   text-align: left;
 }
-/* The frosting. `::backdrop` is the browser's own layer behind a modal, so nothing has to be
-   positioned, stacked or remembered. */
-.settings::backdrop {
-  background: color-mix(in srgb, var(--ground) 55%, transparent);
-  backdrop-filter: blur(10px) saturate(120%);
-}
-/* Where there is no backdrop-filter the frosting would be a lie, so it becomes a solid scrim:
-   dimming still says "the room is behind this", which is the part that matters. */
-@supports not (backdrop-filter: blur(1px)) {
-  .settings::backdrop { background: light-dark(#fbfbf9e6, #0e0f12e6); }
-}
+/* The frosting for BOTH dialogs is the single shared rule below (with the environments dialog) —
+   one declaration, so the blur and its fallback cannot drift between the two modals. */
 /* A modal that leaves the page scrollable behind it is a modal you can lose. The platform makes the
    CONTENT inert; this is the scroll half, declaratively, with no listener and nothing to unlock. */
 html:has(dialog.settings[open]) { overflow: hidden; }

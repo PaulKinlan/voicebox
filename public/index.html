@@ -34,16 +34,31 @@
            server the person has declared. The list is SERVER-OWNED so it is the same from every
            browser, and a host that is listed but not running says so by name rather than reading as
            ready. The "+" declares a descriptor; it never starts a service. -->
-      <details class="envs" id="envs">
-        <summary id="envs-summary"><span id="envs-count">Environments</span></summary>
-        <ul class="env-list" id="env-list"></ul>
-        <form class="env-add" id="env-add">
-          <input id="env-add-label" type="text" placeholder="Name (e.g. atlas box)" aria-label="environment name" autocomplete="off" />
-          <input id="env-add-origin" type="text" placeholder="http://127.0.0.1:8787" aria-label="environment origin" autocomplete="off" />
-          <button id="env-add-btn" type="submit" aria-label="add environment">+</button>
+      <button class="quiet" id="envs-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="envs"><span id="envs-count">Environments</span></button>
+      <!-- The environments this page can act in, as a REAL dialog (the settings pattern): modality,
+           focus trapping, an inert background and Esc for free; a bounded height with its own scroll
+           so a long capability report becomes a scrollbar, not a collision with the controls. The list
+           is SERVER-OWNED so it is the same from every browser. "Add" writes a descriptor; it never
+           starts a service. -->
+      <dialog class="envs" id="envs" closedby="any" aria-labelledby="envs-title">
+        <form class="envs-form" method="dialog">
+          <div class="settings-head">
+            <h2 id="envs-title">Environments</h2>
+            <button class="icon-button" id="envs-close" type="submit" aria-label="Close environments"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+          </div>
+          <ul class="env-list" id="env-list"></ul>
+          <div class="env-add-block">
+            <h3 class="env-add-title">Add an environment</h3>
+            <p class="env-hint" id="env-hint">Records where to reach a server — it does not start anything.</p>
+            <div class="env-add" id="env-add">
+              <input id="env-add-label" type="text" placeholder="Name (e.g. atlas box)" aria-label="environment name" autocomplete="off" />
+              <input id="env-add-origin" type="text" placeholder="http://127.0.0.1:8787" aria-label="environment origin" autocomplete="off" />
+              <button id="env-add-btn" type="button">Add environment</button>
+            </div>
+          </div>
+          <p class="env-note" id="env-note" role="status"></p>
         </form>
-        <p class="env-note" id="env-note" role="status"></p>
-      </details>
+      </dialog>
     </header>
     <!-- The header states the state ONCE, in the chip beside the server dot, and
          says nothing else about it: "no root declared" is a status, not an
