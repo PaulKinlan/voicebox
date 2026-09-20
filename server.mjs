@@ -32,6 +32,7 @@ import {
 import * as extensions from "./lib/extensions.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
 import { createLiveSession, LIVE_MODEL, inputRateRequiredBy, resolvedLiveProviderName } from "./lib/live-session.mjs";
+import { commandToAction, functionDeclarations, liveSystemInstruction } from "./lib/commands.mjs";
 
 // Module-relative, decoded: `new URL(...).pathname` percent-encodes spaces and
 // silently points every read at a directory that does not exist.
@@ -1199,7 +1200,7 @@ async function handle(req, res) {
         return json(res, 400, { error: "body must be JSON with a transcript" });
       }
       if (!transcript) return json(res, 400, { error: "empty transcript" });
-      const action = resolveTurn(transcript, PROVIDER);
+      const action = await resolveTurn(transcript, PROVIDER);
       if (action.unresolved) {
         return json(res, 200, { transcript, action: null, note: action.unresolved });
       }
@@ -1433,6 +1434,31 @@ server.on("upgrade", (req, socket) => {
       onAudioOut: (pcm, mime) => { if (pcm.length > 4) ws.send(pcm); },
       onText: (text, role) => ws.send(JSON.stringify({ type: "text", role, text })),
       onState: (state, detail) => ws.send(JSON.stringify({ type: "state", state, detail, model: PROVIDERS[agentSettings.provider].model })),
+      // The voice gets the SAME verbs the text path resolves to, from the ONE
+      // command list (lib/commands.mjs) — and each call runs through the SAME
+      // executor, so containment, refusal names and the audit are identical
+      // whichever path the words arrive on.
+      tools: functionDeclarations(),
+      systemInstruction: liveSystemInstruction(),
+      onToolCall: async (calls) => {
+        const responses = [];
+        const seen = [];
+        for (const call of calls) {
+          const action = commandToAction(call.name, call.args);
+          // An unknown command is answered with a refusal, never dropped: an
+          // unanswered tool call leaves the model waiting on a hang.
+          const result = action
+            ? await execute({ ...action, turn: "live" })
+            : { ok: false, error: `unknown command: '${call.name}' — the only commands are in lib/commands.mjs` };
+          responses.push({ id: call.id, name: call.name, response: { result } });
+          seen.push({ name: call.name, ok: result.ok, action: result.action ?? result.error });
+        }
+        const answered = session.sendToolResponse(responses);
+        console.error(`[live] tool-call ${seen.map((s) => `${s.name}:${s.ok ? "ok" : "refused"}`).join(", ")} — toolResponse ${answered ? "sent" : "NOT SENT"}`);
+        // The page hears about it too (additive: today's client ignores the
+        // type; a UI lane can render it).
+        ws.send(JSON.stringify({ type: "tool", calls: seen }));
+      },
     });
     runningSession = { provider: session.state?.provider ?? agentSettings.provider, startedAt: new Date().toISOString() };
   } catch (e) {

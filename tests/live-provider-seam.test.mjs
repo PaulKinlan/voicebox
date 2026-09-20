@@ -132,12 +132,15 @@ test("seam: THE BOUNDARY — the page holds no vendor handle, so the gate cannot
   }
   assert.deepEqual(
     exposed,
-    ["close", "gatedFrames", "interrupt", "provider", "ready", "refusedByTransport", "sendAudio", "sendText"],
+    ["close", "gatedFrames", "interrupt", "provider", "ready", "refusedByTransport", "sendAudio", "sendText", "sendToolResponse"],
     `the page's surface must be exactly the contract: ${exposed.join(", ")}`,
   );
   // `refusedByTransport` was added in the REVISE so "the gate is host-side" is a NUMBER rather than a
   // claim — and this test is why that addition was a deliberate act rather than a quiet widening. It
   // failed the moment the member appeared, which is the behaviour its comment promised.
+  // `sendToolResponse` was added with the live tools (lib/commands.mjs): the model's tool call must be
+  // ANSWERED through the same gated channel, and the same rule applies — this test failed until the
+  // surface list named it.
   session.close();
 });
 

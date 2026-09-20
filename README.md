@@ -58,7 +58,7 @@ The largest gap in this product was invisible because one word — *live* — co
 the **audio** path and the **turn** path. They are not the same, so they are not written as one:
 
 <!-- BEGIN GENERATED: providers -->
-Registered resolvers: `script` (one — a placeholder)
+Registered resolvers: `gemini`, `script`
 
 * `registerResolver(name, fn)` is the seam; `resolveTurn(transcript, provider = "script")` picks one.
 * The **script** provider handles `write`, `read` and `list`: `"create a file called hello.txt with hi"` → `{"verb":"write","name":"hello.txt","content":"hi"}`.

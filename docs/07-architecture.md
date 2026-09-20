@@ -45,7 +45,7 @@ The server **never parses language itself**: `resolveTurn` returns an action, an
 is the whole seam, and it is why swapping the brain does not touch the page or the server.
 
 <!-- BEGIN GENERATED: providers -->
-Registered resolvers: `script` (one — a placeholder)
+Registered resolvers: `gemini`, `script`
 
 * `registerResolver(name, fn)` is the seam; `resolveTurn(transcript, provider = "script")` picks one.
 * The **script** provider handles `write`, `read` and `list`: `"create a file called hello.txt with hi"` → `{"verb":"write","name":"hello.txt","content":"hi"}`.

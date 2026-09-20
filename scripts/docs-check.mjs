@@ -382,8 +382,12 @@ async function blocks() {
   // SHAPE of that declaration (\`declared\` and the root object), not a path that is true in one checkout.
   const declared = health.declared === true ? "true" : "false";
 
-  const sample = resolveTurn("create a file called hello.txt with hi");
-  const unresolved = resolveTurn("book me a flight to Lisbon");
+  // The sample runs against the deterministic provider and NAMES it: naming
+  // providers[0] would attribute the script resolver's output to whatever
+  // sorts first — a generated lie the moment a second resolver registered.
+  const sampleProvider = providers.includes("script") ? "script" : providers[0];
+  const sample = await resolveTurn("create a file called hello.txt with hi", sampleProvider);
+  const unresolved = await resolveTurn("book me a flight to Lisbon", sampleProvider);
 
   if (process.env.DOCS_DEBUG) console.error("DEBUG live =", JSON.stringify(live), "| ROOT =", ROOT, "| tags =", JSON.stringify(tags));
 
@@ -391,8 +395,8 @@ async function blocks() {
     providers: block("providers", [
       `Registered resolvers: ${providers.map((p) => "`" + p + "`").join(", ")}${providers.length === 1 ? " (one — a placeholder)" : ""}`,
       "",
-      `* \`registerResolver(name, fn)\` is the seam; \`resolveTurn(transcript, provider = "${providers[0] ?? "—"}")\` picks one.`,
-      `* The **${providers[0] ?? "—"}** provider handles \`write\`, \`read\` and \`list\`: \`"create a file called hello.txt with hi"\` → \`${JSON.stringify(sample)}\`.`,
+      `* \`registerResolver(name, fn)\` is the seam; \`resolveTurn(transcript, provider = "${sampleProvider ?? "—"}")\` picks one.`,
+      `* The **${sampleProvider ?? "—"}** provider handles \`write\`, \`read\` and \`list\`: \`"create a file called hello.txt with hi"\` → \`${JSON.stringify(sample)}\`.`,
       `* Anything else is **unresolved**, by design: \`"book me a flight to Lisbon"\` → \`${JSON.stringify(unresolved.unresolved?.slice(0, 42) + "…")}\`.`,
       `* The live voice providers (${availableLiveProviders().map((p) => "`" + p + "`").join(", ")}) live behind a **different** seam, \`registerLiveProvider\` in \`lib/live-session.mjs\`; none of them is a turn resolver — see the tool path below.`,
     ].join("\n")),
