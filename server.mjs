@@ -27,6 +27,13 @@ const WORKSPACE = process.env.VOICEBOX_WORKSPACE ?? path.join(ROOT, "workspace")
 // declares (POST /api/root) and which may be any of the three kinds. Two of them this process
 // cannot reach, and it says so by name rather than quietly writing somewhere else — that refusal is
 // what stops a hard-coded `workspace/` from being a second, silent root.
+// THE DEFAULT ROOT, and the note that belongs with it (isocan-wasm, review of e1m0/one-root):
+// the default stays a machine root at `workspace/`, and THREE test files depend on that literal —
+// channel.test.mjs:18, extensions.test.mjs:28/83 and voicebox.test.mjs:25. They are isolated (each
+// spawns its own server on its own port, so no lane's declaration reaches them) and they exercise
+// the default root, which is correct today. If the default ever stops being `workspace/`, those
+// three are the readers that need the same treatment the retired "escapes the workspace" message
+// got — a grep for the old literal is the check, and it should be run before changing this line.
 let active = {
   project: "workspace",
   root: { kind: "machine", path: WORKSPACE },
