@@ -223,6 +223,7 @@ export function createAudioClient({
         return;
       }
       state.inputRate = rate;
+      refreshRateContradiction();
       state.provider = typeof msg.provider === "string" ? msg.provider : state.provider;
       return;
     }
@@ -379,6 +380,21 @@ export function createAudioClient({
     state.playbackActive = false;
     emit("error", { sessionEnded: true, kind, detail });
     onDiagnostic({ kind: "session-ended", state: kind, detail });
+  }
+
+  /**
+   * THE CONTRADICTION IS A FUNCTION OF TWO VALUES, so it is evaluated wherever either of them is written —
+   * not once when the object is built. Computing it only at construction was the defect the regression found:
+   * a LATE accepted declaration left {captureRate: 16000, rateContradiction: null}, so the one state whose
+   * entire purpose is to name a disagreement missed the disagreement. The declaration is a request; the
+   * context's own rate is the fact.
+   */
+  function refreshRateContradiction() {
+    state.rateContradiction =
+      Number.isFinite(state.captureRate) && Number.isFinite(state.inputRate) && state.captureRate !== state.inputRate
+        ? { declared: state.inputRate, running: state.captureRate }
+        : null;
+    if (state.rateContradiction) onDiagnostic({ kind: "rate-contradiction", ...state.rateContradiction });
   }
 
   function attachSocket(next) {
