@@ -71,7 +71,15 @@ async function probeServer() {
   });
   const child = spawn(process.execPath, ["server.mjs"], {
     cwd: ROOT,
-    env: { ...process.env, PORT: String(port) },
+    // THE PROBE MUST NOT INHERIT A ROOT FROM THE SHELL. With VOICEBOX_WORKSPACE set, this probe spawns the
+    // server with the ambient environment, the generated block computes `declared: true`, and the check fails
+    // on a machine that has a root declared while passing on one that does not — the document's content
+    // depending on the operator's shell. The pin goes INSIDE `env:`, and the value is `undefined`, which
+    // REMOVES the key: an empty string is a different state and kills the server on `mkdir ''`, because the
+    // server reads `env.X ?? join(ROOT, "workspace")`. Absent and empty are not the same thing, and this
+    // check needs absent. (Found by the lane that reported it, the hard way: a pin at the options level looks
+    // right and does nothing.)
+    env: { ...process.env, PORT: String(port), VOICEBOX_WORKSPACE: undefined },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let out = "";
