@@ -11,7 +11,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { startServer } from "./lib/server.mjs";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -238,4 +238,33 @@ test("a declaration the loop cannot act on carries the ROUTE, not just the reaso
   assert.equal(machine.reachableFromThisProcess, true);
   const afterHeader = await page.evaluate(() => document.getElementById("project").textContent);
   assert.match(afterHeader, /turns DO write here/, "the header does not say that turns write into this root");
+});
+
+// ── a read that fails for a permission reason says so ───────────────────────
+// Coordinator, 2026-09-20: "a green gate says nothing about it — no test drives a
+// permission error". That is exactly how the sentence drifted: the reader's
+// failure line was fixed, and the SERVER kept answering a permission error with
+// the generic 500 — "internal error — the turn was not executed", which is
+// untrue about a file read. Drivable by the suite: chmod 000 denies the owner
+// too, so the read fails with EACCES without needing another user.
+test("a file the process may not read is refused by name — not as an internal error", async () => {
+  const unreadable = path.join(machineRoot, "locked.txt");
+  writeFileSync(unreadable, "the process may not read this\n");
+  chmodSync(unreadable, 0o000);
+
+  const listed = await fetch(`${BASE}/api/files`).then((r) => r.json());
+  assert.ok(listed.files.includes("locked.txt"), "the file is not listed, so this test would be vacuous");
+
+  const response = await fetch(`${BASE}/api/file?name=${encodeURIComponent("locked.txt")}`);
+  const body = await response.json();
+
+  assert.equal(response.status, 403, `a permission error answered ${response.status}, not 403`);
+  assert.equal(body.refused, "unreadable", `the refusal is not named: ${JSON.stringify(body)}`);
+  assert.match(String(body.why), /EACCES|EPERM|permission denied/, "the platform's own words are not carried");
+  assert.doesNotMatch(String(body.why), /internal error|the turn was not executed/,
+    "the sentence is about turns, and this is a file read");
+  assert.equal(body.error, undefined,
+    "an `error` label here would shadow the why in any reader that takes the label first");
+
+  chmodSync(unreadable, 0o600); // so the scratch directory can be removed
 });
