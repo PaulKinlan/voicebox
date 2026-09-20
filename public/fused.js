@@ -18,6 +18,7 @@ const WANTED = {
   emptyHeadline: "empty-headline", emptyNext: "empty-next", emptyWhy: "empty-why", emptyAction: "empty-action",
   where: "where-note", dot: "server-dot", refresh: "refresh", report: "turn-report", newFile: "new-file",
   rootKind: "root-kind", madeHeading: "made-heading", emptyLink: "empty-link", listingRoot: "listing-root",
+  listTools: "list-tools", fileFilter: "file-filter", showAll: "show-all", listBound: "list-bound",
   stage: "voice-ring-wrap", mic: "mic", state: "voice-state",
   session: "session", log: "session-log", form: "text-form", utterance: "utterance", send: "send",
   reader: "reader", readerTitle: "reader-title", readerFacts: "file-facts", readerBody: "file-body",
@@ -48,6 +49,15 @@ function on(el, type, handler) {
 let shownFile = null; // the file currently in the reader panel
 let listedRoot = null; // the root the CURRENT entries were read from — not assumed to be the active one
 let listingRefusal = null; // the server's refusal, when it could not list the active root at all
+// A lot of files must stay usable: filter by name, and never render an unbounded
+// list — but the bound is STATED, because an explorer showing the first 60 of 240
+// silently is the same defect as a listing that will not name its root.
+const MAX_CARDS = 60;
+const FILTER_AT = 12;
+let fileFilter = "";
+let showAllFiles = false;
+
+const matchesFilter = (entry) => !fileFilter || entry.name.toLowerCase().includes(fileFilter.toLowerCase());
 
 let entries = [];
 
@@ -130,7 +140,12 @@ function card(entry) {
 
   const name = document.createElement("span");
   name.className = "file-name";
-  name.textContent = entry.isDir ? `${entry.name}/` : entry.name;
+  // The name is the DISK'S name, verbatim — a page that renames things cannot be
+  // reconciled with the folder it is showing, and the acceptance harness checks
+  // exactly that (api=[notes] vs page=[notes/] was the tell). The folder cue is
+  // the meta line plus a style on [data-kind="directory"], neither of which
+  // touches textContent.
+  name.textContent = entry.name;
   const meta = document.createElement("span");
   meta.className = "file-meta";
   meta.textContent = entry.meta;
@@ -307,11 +322,28 @@ function render() {
   const count = entries.length;
   if (!els.files || !els.made || !els.count) return;
   const writable = activeRoot === undefined || activeRoot?.reachableFromThisProcess === true;
-  els.files.replaceChildren(...(count === 0 ? (writable ? [placeholder()] : []) : entries.map(card)));
+  const matched = entries.filter(matchesFilter);
+  const shown = showAllFiles ? matched : matched.slice(0, MAX_CARDS);
+
+  if (els.listTools) els.listTools.hidden = count <= FILTER_AT;
+  if (els.showAll) els.showAll.hidden = matched.length <= MAX_CARDS || showAllFiles;
+  if (els.listBound) {
+    const bounded = matched.length > MAX_CARDS && !showAllFiles;
+    els.listBound.hidden = !(bounded || (fileFilter && matched.length === 0));
+    els.listBound.textContent = fileFilter && matched.length === 0
+      ? `No file here matches “${fileFilter}”.`
+      : bounded
+        ? `Showing the first ${MAX_CARDS} of ${matched.length} matches${fileFilter ? ` for “${fileFilter}”` : ""} — type to narrow, or Show all.`
+        : "";
+  }
+
+  els.files.replaceChildren(...(count === 0 ? (writable ? [placeholder()] : []) : shown.map(card)));
   els.made.dataset.state = count === 0 ? "empty" : "ready";
   els.files.setAttribute("aria-busy", "false");
   els.count.textContent = count === 0 ? "" : `${count} ${count === 1 ? "file" : "files"}`;
+  const nothingMatched = count > 0 && matched.length === 0;
   els.made.dataset.state = listingRefusal && count === 0 ? "failed" : count === 0 ? "empty" : "ready";
+  if (nothingMatched && els.listBound) { els.listBound.hidden = false; }
   if (els.newFile) els.newFile.hidden = Boolean(listingRefusal);
   renderListingRoot();
   renderEmptyState();
@@ -520,6 +552,7 @@ async function load() {
       return;
     }
     listingRefusal = null;
+    showAllFiles = false;
     // The server says which root it listed, so the page records it rather than
     // assuming it is the active one. When they differ, the cards are a listing of
     // somewhere else and the panel says so (acceptance 7cd.1: an explorer must
@@ -730,6 +763,8 @@ function startListening() {
 
 on(els.mic, "click", startListening);
 on(els.refresh, "click", load);
+on(els.fileFilter, "input", () => { fileFilter = els.fileFilter.value.trim(); showAllFiles = false; render(); });
+on(els.showAll, "click", () => { showAllFiles = true; render(); });
 on(els.newFile, "click", () => {
   els.utterance.value = "create a file called ";
   els.utterance.focus();

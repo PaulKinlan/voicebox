@@ -61,6 +61,16 @@
              usually the same sentence with a different subject — and when they
              differ, this is the only place the difference can be seen. -->
         <p class="listing-root" id="listing-root" hidden></p>
+        <!-- With a lot of files the list is a wall of names. A filter and a
+             bound keep it usable, and the bound SAYS what it is hiding — an
+             explorer that silently shows the first N is the same defect as an
+             unnamed root. -->
+        <div class="list-tools" id="list-tools" hidden>
+          <label class="sr-only" for="file-filter">Filter files by name</label>
+          <input id="file-filter" type="search" autocomplete="off" placeholder="Filter by name…">
+          <button class="quiet" id="show-all" type="button" hidden>Show all</button>
+        </div>
+        <p class="list-bound" id="list-bound" role="status" hidden></p>
         <ul class="files" id="files" role="list" aria-busy="true"></ul>
         <div class="empty" id="empty">
           <h3 id="empty-headline">Nothing made yet.</h3>

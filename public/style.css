@@ -63,9 +63,14 @@ input { caret-color: var(--accent); }
 .listing-root { width: 100%; margin: 0 0 10px; font-size: .75rem; color: var(--muted); }
 .listing-root[data-tone="warn"] { color: var(--warn); }
 .made-actions { display: none; }
+.list-tools { display: flex; align-items: center; gap: 8px; width: 100%; margin: 0 0 8px; }
+.list-tools input { flex: 1; min-width: 0; min-height: 36px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font-size: .8125rem; }
+.list-bound { width: 100%; margin: 0 0 8px; font-size: .75rem; color: var(--muted); }
 .file-open { display: inline-flex; align-items: baseline; gap: 6px; padding: 4px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font-size: .9375rem; }
 .file-open:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .file-name { overflow-wrap: anywhere; }
+.file-open[data-kind="directory"] .file-name { font-weight: 600; }
+.file-open[data-kind="directory"] .file-meta { color: color-mix(in srgb, var(--accent) 55%, var(--muted)); }
 .file-meta { font-size: .75rem; color: var(--muted); }
 .file-open[aria-current="true"] { color: var(--accent); }
 .file-open[aria-current="true"] .file-meta { color: color-mix(in srgb, var(--accent) 60%, var(--muted)); }
