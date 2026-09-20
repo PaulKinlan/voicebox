@@ -67,7 +67,7 @@ Registered resolvers: `script` (one — a placeholder)
 <!-- END GENERATED: providers -->
 
 <!-- BEGIN GENERATED: live-session -->
-`lib/live-session.mjs` is present, using model `gemini-3.8-live`.
+`lib/live-session.mjs` is present, using model `(not found — the check could not read it)`.
 <!-- END GENERATED: live-session -->
 
 

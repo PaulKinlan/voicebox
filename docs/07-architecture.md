@@ -27,7 +27,7 @@ through `pcm-worklet.js`. The generated line below says what the model is; the *
 `script` placeholder, and those two facts are what an earlier version of this file managed to conflate.
 
 <!-- BEGIN GENERATED: live-session -->
-`lib/live-session.mjs` is present, using model `gemini-3.8-live`.
+`lib/live-session.mjs` is present, using model `(not found — the check could not read it)`.
 <!-- END GENERATED: live-session -->
 
 ## The turn path, in order
@@ -78,7 +78,7 @@ Audio worklets loaded by that code: `pcm-worklet.js`.
 ## The audio path, tonight
 
 <!-- BEGIN GENERATED: live-session -->
-`lib/live-session.mjs` is present, using model `gemini-3.8-live`.
+`lib/live-session.mjs` is present, using model `(not found — the check could not read it)`.
 <!-- END GENERATED: live-session -->
 
 ## Where each file's authority lies
