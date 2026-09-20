@@ -87,7 +87,13 @@ function icon(id) {
 async function request(path, options) {
   const response = await fetch(path, options);
   const body = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(body?.error ?? `the server answered ${response.status}`);
+  if (!response.ok) {
+    // The body travels WITH the error. A named refusal carries a `why` that says what to do next, and
+    // keeping only `error` dropped the useful half: "refused: root-vanished" without "declare it again".
+    const failure = new Error(body?.error ?? `the server answered ${response.status}`);
+    failure.body = body;
+    throw failure;
+  }
   if (!body) throw new Error("the server sent something that was not JSON");
   return body;
 }
@@ -417,7 +423,16 @@ async function showFile(name) {
       els.reader.dataset.state = "empty";
     }
   } catch (error) {
-    els.readerFacts.textContent = `Could not read workspace/${name}: ${error.message}`;
+    // WHERE, honestly: the retired string "workspace/" named a root that no longer exists (driven:
+    // "Could not read workspace/gone.txt: file not found" while the declared root was /tmp/prose2).
+    // A machine root has a real path a person can go and look in, so it is named. The other kinds do
+    // not — an OPFS path means nothing outside this origin, and a picked folder deliberately exposes
+    // none — so they are described rather than given a path that would be the same lie in a new place.
+    const root = activeRoot?.root;
+    const where = root?.kind === "machine" && root.path ? root.path : "the project's folder";
+    // The refusal's own words when there are any: "file not found" is the whole story for a deleted
+    // file, but for a refused root the reason is the part that tells a person what to do.
+    els.readerFacts.textContent = `Could not read ${name} in ${where}: ${error.body?.why ?? error.message}`;
   }
 }
 

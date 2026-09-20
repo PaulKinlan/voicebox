@@ -749,7 +749,21 @@ async function handle(req, res) {
       return json(res, 200, { ok: true, name, content, bytes: stat.size });
     } catch (e) {
       if (e.code === "ENOENT") return json(res, 404, { error: "file not found" });
-      throw e;
+      // A READ THAT FAILS FOR ANY OTHER REASON IS NAMED TOO. This used to fall through to the generic
+      // 500 ("internal error — the turn was not executed"), which is both unhelpful and untrue about a
+      // file read, and the sentence a person saw was about turns. Found by asking the question of the
+      // reader's failure line from the other side: the `where` had been fixed, and the `why` had not.
+      const code = e?.code ?? "error";
+      return json(res, code === "EACCES" || code === "EPERM" ? 403 : 500, {
+        ok: false,
+        refused: "unreadable",
+        error: `refused: unreadable (${code})`,
+        // The platform's own words, which already begin with the code — prefixing it again produced
+        // "EACCES: EACCES: permission denied…". A message you would not say out loud is not the fix.
+        why: e?.message ?? String(e),
+        path: resolved.path,
+        root: active.root,
+      });
     }
   }
 
