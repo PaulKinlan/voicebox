@@ -18,13 +18,14 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 
 // Serialized into the fixture page: parsed as JS here, not an unchecked script inside a string.
 async function installFixture() {
-  const trace = { mediaCalls: 0, contexts: [], attempts: [], attachments: 0 };
+  const trace = { mediaCalls: 0, attempts: [], attachments: 0 };
+  const contexts = [];
   const sockets = [];
   const NativeContext = window.AudioContext;
   window.AudioContext = new Proxy(NativeContext, {
     construct(target, args) {
       const context = new target(...args);
-      trace.contexts.push({ requested: args[0]?.sampleRate, actual: context.sampleRate });
+      contexts.push({ requested: args[0]?.sampleRate, context });
       return context;
     },
   });
@@ -69,7 +70,12 @@ async function installFixture() {
     trace.attachments++;
   };
   document.querySelector("#start-client").onclick = () => client.startCapture();
-  window.readRateTest = () => ({ ...trace, state: client.snapshot(), label: document.querySelector("#voice-state").textContent });
+  window.readRateTest = () => ({
+    ...trace,
+    contexts: contexts.map(({ requested, context }) => ({ requested, actual: context.sampleRate, status: context.state })),
+    state: client.snapshot(),
+    label: document.querySelector("#voice-state").textContent,
+  });
   setInterval(() => {
     document.querySelector("#receipt").textContent = JSON.stringify(window.readRateTest(), null, 2);
   }, 100);
@@ -214,15 +220,23 @@ test("rate browser: the same client on a new socket cannot capture using the old
   const captured = await f.record("new-socket-24k");
   assert.equal(captured.contexts.at(-1).actual, 24000);
   assert.equal(captured.state.captureRate, 24000);
+  // Paired with the non-null assertion below: removing the conflict case would make this vacuous.
   assert.equal(captured.state.rateContradiction, null);
 });
 
 test("rate browser: a late conflicting declaration names both declared and running rates", options, async (t) => {
   const f = await fixture(t, "conflicting-rate");
   await f.warmUp();
+  const before = f.rows[0].frames;
   f.declare(f.rows[0], 24000);
   await f.page.waitFor(() => window.readRateTest().state.inputRate === 24000, { timeout: 3500 });
+  const received = await f.record("conflicting-declaration-received");
+  const sentAfterDeclaration = received.state.framesSent;
+  assert.ok(sentAfterDeclaration >= before && sentAfterDeclaration > 0, "the first socket's send count has a positive wire witness");
+  // Exceed the page's send count AFTER it handled the declaration, not merely a receiver backlog.
+  await until(() => f.rows[0].frames > sentAfterDeclaration, "fresh PCM after the conflicting declaration was handled");
   const conflicting = await f.record("24k-declared-16k-running");
+  assert.equal(conflicting.contexts.at(-1).status, "running", "this is a live context, not a remembered measurement");
   assert.equal(conflicting.contexts.at(-1).actual, 16000, "the actual context did not change when a message arrived");
   assert.deepEqual(conflicting.state.rateContradiction, { declared: 24000, running: 16000 }, "accepted rate messages must not erase the running-context fact");
   assert.equal(conflicting.state.captureRate, conflicting.contexts.at(-1).actual);
