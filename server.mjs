@@ -385,11 +385,28 @@ async function execute(action) {
   }
   const candidate = resolved.path;
   if (action.verb === "write") {
-    writeFileSync(candidate, action.content ?? "");
+    // THE WORST OUTCOME THIS SYSTEM CAN PRODUCE, refused here: a write with ABSENT content
+    // used to fall into `?? ""` — the existing file was EMPTIED and the result said ok:true,
+    // so nothing downstream could tell the data was gone (astra's live-tools review,
+    // 2026-09-20; shared by the text path, so it is fixed at the shared validation).
+    // Absent ≠ empty: `content: ""` is an intentional empty file and writes fine; a MISSING
+    // argument is a malformed act, refused by name, and the file on disk is UNTOUCHED.
+    if (action.content == null) {
+      const entry = logAct({ kind: "write", target: name, tool: "turn" }, "refuse", "missing-content", "refused", null, action.turn ?? null);
+      return {
+        ok: false,
+        refused: "missing-content",
+        logged: entry ? entry.seq : null,
+        error: "refused: missing-content",
+        why: `the write to '${name}' carried no content — pass content explicitly (an empty string is a valid, intentional empty file). The existing file was NOT touched.`,
+        root: active.root,
+      };
+    }
+    writeFileSync(candidate, action.content);
     const entry = logAct({ kind: "write", target: name, tool: "turn" }, "allow", "writes-inside", "ok", observeUnderRoot(name), action.turn ?? null);
     return {
       ok: true,
-      action: `wrote ${name} (${(action.content ?? "").length} bytes)`,
+      action: `wrote ${name} (${action.content.length} bytes)`,
       file: name,
       root: active.root,
       logged: entry ? entry.seq : null,
@@ -397,7 +414,18 @@ async function execute(action) {
     };
   }
   if (action.verb === "read") {
-    const content = readFileSync(candidate, "utf8");
+    let content;
+    try {
+      content = readFileSync(candidate, "utf8");
+    } catch (e) {
+      // A missing file is a NAMED REFUSAL, not a throw into the route — a throw in a batch
+      // (the live tool-call path) used to swallow every sibling's response with it.
+      if (e.code === "ENOENT") {
+        const entry = logAct({ kind: "read", target: name, tool: "turn" }, "refuse", "not-found", "refused", null, action.turn ?? null);
+        return { ok: false, refused: "not-found", logged: entry ? entry.seq : null, error: "refused: not-found", why: `'${name}' is not in ${active.project}`, root: active.root };
+      }
+      throw e;
+    }
     const entry = logAct({ kind: "read", target: name, tool: "turn" }, "allow", "reads-inside", "ok", observeUnderRoot(name), action.turn ?? null, [{ path: name, bytes: Buffer.byteLength(content) }]);
     return { ok: true, action: name, content, root: active.root, logged: entry ? entry.seq : null };
   }
