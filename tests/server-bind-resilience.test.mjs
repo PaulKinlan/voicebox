@@ -151,9 +151,17 @@ test("a port held past the deadline is a NAMED refusal, not a stack trace", { ti
 });
 
 test("the reported path: a landing-triggered --watch restart leaves a port that answers", { timeout: 90000 }, async () => {
-  const port = await freePort();
   const watched = path.join(ROOT, "lib", "resolver.mjs");
   const original = readFileSync(watched);
+
+  // A FREE PORT IS PICKED AND THEN HANDED OVER, which races when two suites run at once — and the
+  // gate runs this suite on EVERY push, so two lanes pushing together can take the same port between
+  // the probe closing and the child binding. Measured: two concurrent full suites made this test the
+  // one failure (EADDRINUSE), and a lane pushing at that moment sees a red gate that is nobody's bug.
+  // The assertion needs a STABLE port across the restart, so PORT=0 is not available here; the honest
+  // fix is to notice a lost race and pick again rather than to pin a port or widen the deadline.
+  const attempt = async () => {
+  const port = await freePort();
 
   // `--watch` FORKS: the supervisor is the parent and the server is its child, so killing the parent
   // alone left a live supervisor holding the port — which hung this very file rather than the thing
@@ -174,12 +182,19 @@ test("the reported path: a landing-triggered --watch restart leaves a port that 
       up = (await health(port)) === 200;
       if (!up) await sleep(250);
     }
+    if (!up && /EADDRINUSE|in use/i.test(output)) return "lost the port race";
     assert.equal(up, true, `the supervised server never came up:\n${output}`);
 
     // A landing's shape: a file under lib/ changes. Identical bytes, so the tree stays clean; the
     // mtime is what the watcher sees.
     writeFileSync(watched, original);
-    await sleep(250);
+
+    // WAIT FOR THE RESTART, do not assume its latency. This slept a flat 250ms and then demanded
+    // "Restarting" in the output — which is true on a quiet machine and false when two suites run at
+    // once, which is exactly when the gate runs this file. Measured: two concurrent full suites made
+    // THIS the failing assertion (the server was up; the restart line had simply not arrived yet).
+    const restartDeadline = Date.now() + 20000;
+    while (Date.now() < restartDeadline && !/Restarting/.test(output)) await sleep(250);
 
     const deadline = Date.now() + 20000;
     let answered = false;
@@ -189,7 +204,17 @@ test("the reported path: a landing-triggered --watch restart leaves a port that 
     }
     assert.equal(answered, true, `the port never answered again after the restart:\n${output}`);
     assert.match(output, /Restarting/, "the watcher never restarted, so this check did not exercise the path");
+    return null;
   } finally {
     await reap(child);
   }
+  };
+
+  // Three tries: losing one race is the environment, losing three is the bug.
+  let reason = null;
+  for (let i = 0; i < 3; i++) {
+    reason = await attempt();
+    if (!reason) return;
+  }
+  assert.fail(`the port was taken by another suite on every attempt — ${reason}`);
 });
