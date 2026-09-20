@@ -325,34 +325,55 @@ function auditPathFor(root) {
 
 /** Read this writer's file back so `seq` continues instead of restarting on every restart. */
 function resumeLog() {
+  // THE CONTINUITY RULE (found reviewing the attempted-and-lost wiring, 2026-09-20): ENOENT
+  // means "no log yet" and a fresh sequence is correct; ANY OTHER read failure means a log
+  // EXISTS and its continuation is UNKNOWN — resequencing there would hand fresh numbers to
+  // entries that have ancestors, corrupting the (instance, seq) order. So: fresh is silent,
+  // unknown is a NAMED throw (audit-unreadable), and the entry is not written — logged:null
+  // on the response, the audit's absence visible, never a silent fork of the order.
+  const file = auditPathFor(active.root);
+  let entries;
   try {
-    const entries = readFileSync(auditPathFor(active.root), "utf8")
-      .split("\n")
-      .map(parseEntry)
-      .filter(Boolean);
-    resumeSeq(entries, INSTANCE);
-    // THE BOOT SWEEP (voicebox-beads-y69): an ATTEMPT left pending by a previous generation
-    // is attempted-and-lost — completed BY NAME now, because after a crash "whether it landed"
-    // is unknown and must not silently read as either success or refusal. Idempotent: a lost
-    // completion claims the attempt, so the sweep never reports it twice.
-    for (const d of sweepLostAttempts(entries, BOOT)) {
-      const lost = makeEntry(active.project, `machine:${active.root.path}`, INSTANCE,
-        { name: "voicebox-server", harness: "voicebox", session: null, cwd: ROOT },
-        d.act, "lost", "attempted-and-lost", "lost", null);
-      lost.attempt = d.attempt;
-      lost.boot = BOOT;
-      appendFileSync(auditPathFor(active.root), `${serializeEntry(lost)}\n`);
+    entries = readFileSync(file, "utf8").split("\n").map(parseEntry).filter(Boolean);
+  } catch (err) {
+    if (err?.code === "ENOENT") {
+      resumeSeq([], INSTANCE); // genuinely fresh
+      entries = [];
+    } else {
+      throw Object.assign(new Error(`the audit log exists but could not be read: ${err?.message ?? err} — appending with a reset sequence would corrupt the (instance, seq) order`), { refused: "audit-unreadable" });
     }
-  } catch {
-    resumeSeq([], INSTANCE); // no log yet
+  }
+  resumeSeq(entries, INSTANCE);
+  // THE BOOT SWEEP (voicebox-beads-y69): an ATTEMPT left pending by a previous generation
+  // is attempted-and-lost — completed BY NAME now, because after a crash "whether it landed"
+  // is unknown and must not silently read as either success or refusal. Idempotent: a lost
+  // completion claims the attempt, so the sweep never reports it twice.
+  for (const d of sweepLostAttempts(entries, BOOT)) {
+    const lost = makeEntry(active.project, `machine:${active.root.path}`, INSTANCE,
+      { name: "voicebox-server", harness: "voicebox", session: null, cwd: ROOT },
+      d.act, "lost", "attempted-and-lost", "lost", null);
+    lost.attempt = d.attempt;
+    lost.boot = BOOT;
+    appendFileSync(auditPathFor(active.root), `${serializeEntry(lost)}\n`);
   }
 }
 
 /** Append one entry. A refusal is an entry too: a log of successes cannot answer "what did it try". */
+let lastLogRefusal = null; // the named reason the last entry was not written (audit-unreadable), visible to callers
+
 function logAct(act, decision, rule, result, observed, turn = null, attempt = null) {
   if (!loggableRoot()) {
     // Not silently skipped: the caller reports `logged: null` and `logRefused`, so the missing entry
     // is a fact on the response rather than a hole in the record.
+    return null;
+  }
+  try {
+    resumeLog();
+  } catch (err) {
+    // The continuity refusal (audit-unreadable): the entry is NOT written, and the caller's
+    // `logged: null` makes the absence visible on the response. Named, not swallowed.
+    console.error(`[audit] ${err.refused}: ${err.message}`);
+    lastLogRefusal = { refused: err.refused, why: err.message };
     return null;
   }
   try {
@@ -719,6 +740,7 @@ async function execute(action) {
       file: name,
       root: active.root,
       logged: entry ? entry.seq : null,
+      ...(entry ? {} : lastLogRefusal ? { logRefused: lastLogRefusal.refused, logWhy: lastLogRefusal.why } : {}),
       attempt: att?.seq ?? null,
       auditLocation: `${active.root.path}/.audit/`,
     };

@@ -12,7 +12,7 @@
 //   node --test tests/attempted-lost.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { startServer } from "./lib/server.mjs";
@@ -116,4 +116,30 @@ test("a PRE-FLIGHT refusal produces a refusal entry and NO attempt — the act n
   assert.equal(dotAttempt, undefined, "a pre-flight refusal was recorded as an attempt");
   const refusal = entries.find((e) => e.decision === "refuse" && e.rule === "dotfile-refused");
   assert(refusal, "the refusal itself is not in the log");
+});
+
+test("CONTINUITY: an unreadable audit log refuses by name (audit-unreadable) — the sequence is never silently reset", async () => {
+  // First write creates the log. Then the log becomes unreadable (mode 000 — the class of
+  // failure the old catch swallowed and resequenced under fresh numbers):
+  const first = await turn("create a file called cont.txt with one");
+  assert.equal(first.result?.ok, true);
+  const auditDir = path.join(ROOT_DIR(), ".audit");
+  const logFile = path.join(auditDir, readdirSync(auditDir).find((f) => f.endsWith(".jsonl")));
+  const before = JSON.parse(readFileSync(logFile, "utf8").trim().split("\n").pop()).seq;
+  chmodSync(logFile, 0o000);
+  try {
+    const second = await turn("create a file called cont.txt with two");
+    // The act's fate is visible either way, but the RECORD refusal is named:
+    assert.equal(second.result?.logged ?? null, null, "an unreadable log cannot honestly report a seq");
+    assert.equal(second.result?.logRefused, "audit-unreadable");
+  } finally {
+    chmodSync(logFile, 0o600);
+  }
+  // After the mode is restored, continuity resumes FROM the log's own last seq — not from zero:
+  const lastOnDisk = JSON.parse(readFileSync(logFile, "utf8").trim().split("\n").pop()).seq;
+  const third = await turn("create a file called cont.txt with three");
+  assert.ok(third.result?.logged > lastOnDisk, `the sequence continued past the log (${third.result?.logged} > ${lastOnDisk}) — not reset from zero`);
+  const entries = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const seqs = entries.map((e) => e.seq);
+  assert.equal(new Set(seqs).size, seqs.length, "duplicate seqs in one instance's log — the order is corrupted");
 });
