@@ -310,16 +310,6 @@ async function execute(action) {
   }
   const name = String(action.name ?? "");
   if (!name) return { ok: false, error: "action has no name" };
-  // Dotfiles are behind the same line for read AND write: the listing hides them
-  // (see the list verb and /api/files), so the read and the write refuse them —
-  // otherwise the filter is blindness-ware and a declared root pointed at a
-  // sensitive directory (the host's own extensions dir) would hand over its
-  // secrets — including the admission token — through /api/file or a write
-  // over it. Driven chain, 2026-09-20: declare -> read .host-token -> admit.
-  if (name.startsWith(".")) {
-    const entry = logAct({ kind: action.verb === "write" ? "write" : "read", target: name, tool: "turn" }, "refuse", "dotfile-refused", "refused", null, action.turn ?? null);
-    return { ok: false, refused: "dotfile-refused", logged: entry ? entry.seq : null, error: "refused: dotfile-refused", why: "dotfiles are neither readable nor writable through the loop — the listing hides them and so does this verb; host secrets live behind that line", root: active.root };
-  }
   const resolved = resolveActive(name);
   if (!resolved.ok) {
     // A refusal is recorded as well: the log answers "what did it try", not only "what did it do".
@@ -335,6 +325,19 @@ async function execute(action) {
       root: active.root,
       logged: entry ? entry.seq : null,
     };
+  }
+  // Dotfiles are behind the same line as the listing: containment first (so `..` and
+  // traversal keep their own, stronger refusal), then a hidden file inside the root is
+  // refused — otherwise a declared root pointed at a sensitive directory (the host's
+  // own extensions dir) hands over its secrets — including the admission token —
+  // through a read, or loses them to a write over it. Driven chain, 2026-09-20:
+  // declare -> read .host-token -> admit.
+  if (action.verb === "read" || action.verb === "write") {
+    const base = path.basename(resolved.path);
+    if (base.startsWith(".")) {
+      const entry = logAct({ kind: action.verb === "write" ? "write" : "read", target: name, tool: "turn" }, "refuse", "dotfile-refused", "refused", null, action.turn ?? null);
+      return { ok: false, refused: "dotfile-refused", logged: entry ? entry.seq : null, error: "refused: dotfile-refused", why: "dotfiles are neither readable nor writable through the loop — the listing hides them and so does this verb; host secrets live behind that line", root: active.root };
+    }
   }
   const candidate = resolved.path;
   if (action.verb === "write") {
@@ -557,10 +560,6 @@ async function handle(req, res) {
     const name = url.searchParams.get("name") ?? "";
     if (!name) return json(res, 400, { error: "action has no name" });
     if (!active) return json(res, 409, { ...noRootDeclared() });
-    if (name.startsWith(".")) {
-      // Same line as the verbs: the listing hides dotfiles, the read refuses them.
-      return json(res, 403, { ok: false, refused: "dotfile-refused", error: "refused: dotfile-refused", why: "dotfiles are not readable through the loop — the listing hides them and so does this read; host secrets live behind that line", root: active.root });
-    }
     const resolved = resolveActive(name);
     if (!resolved.ok) {
       return json(res, resolved.refused === "root-not-reachable-from-here" ? 409 : 403, {
@@ -572,6 +571,11 @@ async function handle(req, res) {
     }
     try {
       const real = resolved.path;
+      if (path.basename(real).startsWith(".")) {
+        // Same line as the verbs: containment first, then a hidden file inside the
+        // root is refused — the listing hides it, so the read does too.
+        return json(res, 403, { ok: false, refused: "dotfile-refused", error: "refused: dotfile-refused", why: "dotfiles are not readable through the loop — the listing hides them and so does this read; host secrets live behind that line", root: active.root });
+      }
       const stat = statSync(real);
       if (stat.isDirectory()) return json(res, 400, { error: "cannot read directory" });
       const content = readFileSync(real, "utf8");

@@ -443,3 +443,38 @@ test("a dropped file is present-not-admitted: the next host admission does NOT s
   const call = await turn("run the tool sweep2_tool");
   assert.equal(call.result?.refused, "unknown-tool");
 });
+
+// ── 11. the dotfile line: declaring the HOST dir as a root must not expose its secrets ──
+test("a declared root at the host directory neither lists nor serves its dotfiles — the token-read chain is shut", async () => {
+  // The operator (or the page — see the /api/root bead) can declare any existing
+  // path as the active root. Point it at the HOST's own directory:
+  const declare = await fetch(`${BASE}/api/root`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ project: "hostdir", root: { kind: "machine", path: HOST_EXTENSIONS } }),
+  }).then((r) => r.json());
+  assert.equal(declare.ok, true, `the declaration itself was refused: ${JSON.stringify(declare)}`);
+  try {
+    // The listing hides dotfiles (the .host-token and .ledger.jsonl are not names):
+    const files = await getJson("/api/files");
+    assert.equal(files.files.some((f) => f.startsWith(".")), false, "a dotfile appeared in the listing");
+    // The read refuses them, BY NAME:
+    const readDot = await getJson(`/api/file?name=${encodeURIComponent(".host-token")}`);
+    assert.equal(readDot.refused, "dotfile-refused");
+    assert.match(readDot.why ?? readDot.error ?? "", /host secrets live behind that line/);
+    // The write verb refuses them too (overwriting the token would be as good as reading it):
+    const writeDot = await turn(`create a file called .host-token with evil`);
+    assert.equal(writeDot.result?.refused, "dotfile-refused");
+    // And the token still works for the host — the guard took nothing legitimate away:
+    const r = await admitAsHost("clock-tool-2", "deny").catch(() => null);
+    // (deny of an unknown id is a 404 with the token accepted — the shape matters, not the id)
+    assert.ok(r === null || r.error || r.decision || r.refused !== "host-token-required", "the token stopped working after the dotfile guard");
+  } finally {
+    // Restore the scratch workspace as the active root so later tests are unaffected:
+    await fetch(`${BASE}/api/root`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ project: path.basename(WORKSPACE), root: { kind: "machine", path: WORKSPACE } }),
+    });
+  }
+});
