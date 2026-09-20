@@ -8,6 +8,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { resolveTurn } from "./lib/resolver.mjs";
 import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, resolveInRoot, rootVanished } from "./core/root.ts";
@@ -239,7 +240,7 @@ async function environmentsWithStatus() {
   // The local server is an implicit row: this host, reachable by construction, ambient on loopback.
   const local = {
     key: "local",
-    label: "this machine",
+    label: `this machine: ${os.hostname() || "localhost"}`,
     kind: "server",
     origin: "same-origin",
     home: active ? active.root : null,
