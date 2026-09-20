@@ -16,17 +16,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { startServer } from "./lib/server.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 import { launch } from "./lib/cdp.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = 8835;
-const BASE = `http://127.0.0.1:${PORT}`;
 const PROJECT = "atlas";
 
 let server;
+let BASE;
 let page;
 
 /** The page's own agent (the UI worker). */
@@ -36,18 +36,11 @@ const me = (message) => page.evaluate((m) => window.e1m0.send(m), message);
 const agent = (message) => page.evaluate((m) => window.__agent.send(m), message);
 
 test.before(async () => {
-  server = spawn(process.execPath, [path.join(ROOT, "server.mjs")], {
+  server = await startServer({
     cwd: ROOT,
-    env: { ...process.env, PORT: String(PORT) },
-    stdio: "ignore",
-    detached: true,
+    env: { ...process.env, VOICEBOX_INSTANCE: "two-agents" },
   });
-  for (let i = 0; i < 60; i++) {
-    try {
-      if ((await fetch(`${BASE}/api/health`)).ok) break;
-    } catch {}
-    await sleep(100);
-  }
+  BASE = server.base;
   page = await launch();
   await page.goto(`${BASE}/environment.html`);
   await page.waitFor(() => window.e1m0 !== undefined, { label: "the page's host API" });
@@ -55,11 +48,7 @@ test.before(async () => {
 
 test.after(async () => {
   await page?.close();
-  if (server?.pid) {
-    try {
-      process.kill(-server.pid, "SIGKILL");
-    } catch {}
-  }
+  await server?.stop();
 });
 
 test("two agents see each other's presence, work, and read positions — live, before any merge", { timeout: 120000 }, async () => {

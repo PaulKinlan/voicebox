@@ -10,6 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { startServer } from "./lib/server.mjs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,9 +18,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const SERVER = path.join(ROOT, "server.mjs");
-const PORT = 8798;
-const REDIRECTOR_PORT = 8799; // a tiny in-test redirector — no external network
-const BASE = `http://127.0.0.1:${PORT}`;
+let REDIRECTOR_PORT; // a tiny in-test redirector — no external network
 // ALL mutable state lives in a scratch directory. The suite never touches a
 // file the repository or a real deployment owns — the before-hook used to
 // rm -rf the host extension directory and rebuild it, which is the
@@ -30,7 +29,8 @@ const PROPOSALS = path.join(WORKSPACE, "proposals");
 const HOST_EXTENSIONS = path.join(SCRATCH, "extensions");
 const AUDIT = path.join(WORKSPACE, "audit.jsonl");
 
-let child;
+let server;
+let BASE;
 
 async function up() {
   for (let i = 0; i < 40; i++) {
@@ -47,26 +47,18 @@ test.before(async () => {
   // A declared root must EXIST: the server validates a declaration rather than creating the folder
   // (a typo should be `path-missing`, not a new directory somewhere the user did not ask for).
   mkdirSync(WORKSPACE, { recursive: true });
-  process.env.PORT = String(PORT);
-  child = spawn(process.execPath, [SERVER], {
+  server = await startServer({
     cwd: ROOT,
-    env: {
-      ...process.env,
-      PORT: String(PORT),
-      // A DECLARATION of the active root, not a default: the loop refuses by name without one.
-      VOICEBOX_WORKSPACE: WORKSPACE,
-      VOICEBOX_EXTENSIONS_DIR: HOST_EXTENSIONS,
-    },
-    stdio: "ignore",
-    detached: true,
+    env: { VOICEBOX_WORKSPACE: WORKSPACE, VOICEBOX_EXTENSIONS_DIR: HOST_EXTENSIONS },
   });
-  assert(await up(), `the server did not come up on ${PORT}`);
+  BASE = server.base;
+  // The probe points at THIS server, and the redirector takes a port of its own: both were fixed
+  // constants, which is how one suite stops another from running.
+  PROBE_PORT = server.port;
 });
 
-test.after(() => {
-  if (child?.pid) {
-    try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch { /* gone */ } }
-  }
+test.after(async () => {
+  await server?.stop();
   rmSync(SCRATCH, { recursive: true, force: true });
 });
 
@@ -201,7 +193,7 @@ test("pasted source is DATA, never code: it becomes a file, nothing evaluates it
 });
 
 // ── 5. rsj: web search — the vocabulary says network, bounds say HOW MUCH ─
-const PROBE_PORT = PORT; // the probe talks to THIS server: no external network in tests
+let PROBE_PORT; // the probe talks to THIS server: no external network in tests
 test("a network tool declares where and how much; enforcement makes the declaration true", async () => {
   const propose = await postJson("/api/extensions/proposals", {
     descriptor: {
@@ -258,12 +250,13 @@ import { createServer as spinRedirector } from "node:http";
 
 test("a redirect to an undeclared host refuses BY NAME; a declared one is followed, charged, and audited by where the bytes came from", async () => {
   const redirector = spinRedirector((req, res) => {
-    if (req.url === "/out") { res.writeHead(302, { location: `http://localhost:${PORT}/api/extensions` }); return res.end(); } // localhost ∉ bounds.hosts
+    if (req.url === "/out") { res.writeHead(302, { location: `http://localhost:${PROBE_PORT}/api/extensions` }); return res.end(); } // localhost ∉ bounds.hosts
     if (req.url === "/in") { res.writeHead(302, { location: "/health" }); return res.end(); } // RELATIVE Location → resolves against this same declared host
     if (req.url === "/health") { res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ served: "by the declared redirector host" })); }
     res.writeHead(404); res.end();
   });
-  await new Promise((r) => redirector.listen(REDIRECTOR_PORT, "127.0.0.1", r));
+  await new Promise((r) => redirector.listen(0, "127.0.0.1", r));
+  REDIRECTOR_PORT = redirector.address().port;
   try {
     await postJson("/api/extensions/proposals", {
       descriptor: {
@@ -296,17 +289,17 @@ test("a redirect to an undeclared host refuses BY NAME; a declared one is follow
 
     // Budget arithmetic: 1 (the refused chain's 302) + 2 (the followed chain)
     // = 3 used; one more call exhausts 4/4 — HOPS, not calls.
-    const third = await turn(`run the tool rdprobe http://127.0.0.1:${PORT}/api/health`);
+    const third = await turn(`run the tool rdprobe http://127.0.0.1:${PROBE_PORT}/api/health`);
     assert.equal(third.result?.request, "4/4");
-    assert.equal(third.result?.servedBy, `http://127.0.0.1:${PORT}/api/health`);
-    const fourth = await turn(`run the tool rdprobe http://127.0.0.1:${PORT}/api/health`);
+    assert.equal(third.result?.servedBy, `http://127.0.0.1:${PROBE_PORT}/api/health`);
+    const fourth = await turn(`run the tool rdprobe http://127.0.0.1:${PROBE_PORT}/api/health`);
     assert.equal(fourth.result?.refused, "budget-exhausted");
     assert.match(fourth.result?.why, /4 of 4 requests used/);
 
     // The audit records the OUTCOME: servedBy is where the bytes came from.
     const lines = readFileSync(AUDIT, "utf8").trim().split("\n").map((l) => JSON.parse(l));
     const allow = lines.filter((e) => e.decision === "allow" && e.act?.tool === "rdprobe").at(-1);
-    assert.equal(allow.observed.servedBy, `http://127.0.0.1:${PORT}/api/health`); // the last allow = the direct call
+    assert.equal(allow.observed.servedBy, `http://127.0.0.1:${PROBE_PORT}/api/health`); // the last allow = the direct call
     const followed = lines.filter((e) => e.decision === "allow" && e.act?.tool === "rdprobe").at(-2);
     assert.equal(followed.observed.servedBy, `http://127.0.0.1:${REDIRECTOR_PORT}/health`); // the followed redirect
     assert.equal(followed.observed.via[0], `http://127.0.0.1:${REDIRECTOR_PORT}/in`);

@@ -15,6 +15,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { startServer } from "./lib/server.mjs";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -23,12 +24,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { launch } from "./lib/cdp.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = 8833;
-const BASE = `http://127.0.0.1:${PORT}`;
 const CROWDED = 300; // more files than one listing shows, so "bounded" is measurable
 const LIMIT = 200;
 
 let server;
+let BASE;
 let page;
 let folder;
 let folderName;
@@ -50,19 +50,11 @@ test.before(async () => {
   emptyFolder = path.join(path.dirname(folder), "empty-root");
   machineRoot = path.join(path.dirname(folder), "machine-root");
   mkdirSync(machineRoot);
-
-  server = spawn(process.execPath, [path.join(ROOT, "server.mjs")], {
+  server = await startServer({
     cwd: ROOT,
-    env: { ...process.env, PORT: String(PORT) },
-    stdio: "ignore",
-    detached: true,
+    env: { ...process.env, VOICEBOX_INSTANCE: "explorer" },
   });
-  for (let i = 0; i < 60; i++) {
-    try {
-      if ((await fetch(`${BASE}/api/health`)).ok) break;
-    } catch {}
-    await sleep(100);
-  }
+  BASE = server.base;
   page = await launch();
   await page.goto(`${BASE}/environment.html`);
   await page.waitFor(() => window.e1m0 !== undefined, { label: "the page's host API" });
@@ -79,11 +71,7 @@ test.before(async () => {
 
 test.after(async () => {
   await page?.close();
-  if (server?.pid) {
-    try {
-      process.kill(-server.pid, "SIGKILL");
-    } catch {}
-  }
+  await server?.stop();
   rmSync(path.dirname(folder), { recursive: true, force: true }); // takes empty-root with it
 });
 

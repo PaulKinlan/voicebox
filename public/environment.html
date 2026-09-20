@@ -39,9 +39,19 @@
   figure.asset img { max-width: 100%; background: #fff; border-radius: 4px; }
   figure.asset pre { white-space: pre-wrap; word-break: break-word; margin: 0 0 8px; font-size: 12px; }
   figcaption { font: 12px/1.4 ui-monospace, monospace; color: #b9b9c8; word-break: break-all; margin-bottom: 6px; }
-  #confirm { border: 1px solid #4b4b5a; border-radius: 8px; padding: 12px; background: #1b1b23; }
+  /* The tier-2 gate is a MODAL, like settings: a decision that appears off-screen is a decision
+     nobody made. (Measured before this change: the panel appeared 1419px down an 820px viewport,
+     2049px down a phone — 2.5 screens below the fold, with no scroll to it.) */
+  #confirm { inset: 0; margin: auto; width: min(100% - 2rem, 560px); max-height: 85vh; max-height: 85dvh;
+    padding: 16px 18px calc(16px + env(safe-area-inset-bottom)); border: 1px solid #4b4b5a;
+    border-radius: 12px; background: #1b1b23; color: #e8e8ee; overflow: auto; overscroll-behavior: contain; }
+  #confirm h2 { margin: 0 0 10px; font-size: 14px; letter-spacing: .06em; text-transform: uppercase; color: #9a9aab; }
   #confirm p { margin: 0 0 10px; font: 13px/1.5 ui-monospace, monospace; word-break: break-all; }
+  #confirm .gate-note { color: #9a9aab; font-size: 12px; }
   #confirm button { margin-right: 8px; }
+  #confirm::backdrop { background: color-mix(in srgb, #101014 60%, transparent); backdrop-filter: blur(10px) saturate(120%); }
+  @supports not (backdrop-filter: blur(1px)) { #confirm::backdrop { background: #101014e6; } }
+  html:has(dialog#confirm[open]) { overflow: hidden; }
   #dropzone { border: 1px dashed #3b3b48; border-radius: 8px; padding: 12px; color: #9a9aab; font-size: 13px; }
   #dropzone.over { border-color: #69f; color: #dcdcf5; }
   .views { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
@@ -103,7 +113,15 @@
   <div id="gallery"></div>
 
   <h2>Waiting on you</h2>
-  <div id="confirm" hidden></div>
+  <dialog id="confirm" closedby="any" aria-labelledby="confirm-title">
+    <h2 id="confirm-title">Waiting on you</h2>
+    <div id="confirm-plan"></div>
+    <p class="gate-note">Esc or a click outside keeps the file — an unanswered gate is never a yes.</p>
+    <div class="gate-actions">
+      <button id="confirm-yes" type="button">Yes, delete it</button>
+      <button id="confirm-no" type="button">No</button>
+    </div>
+  </dialog>
 
   <h2>Transcript</h2>
   <ul id="transcript"></ul>

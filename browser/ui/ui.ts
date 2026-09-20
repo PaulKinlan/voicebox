@@ -154,22 +154,34 @@ function renderAsset(asset: { name: string; kind: string; body: string }): void 
  * The confirmation prompt: the RESOLVED plan, and a click. M0 can require a click, which is
  * strictly stronger than the spoken confirmation M1 will add (§7).
  */
+/**
+ * The tier-2 gate: a MODAL, opened with `showModal()`.
+ *
+ * It used to be a `<div hidden>` in the document flow, and the measurement is the argument: on a
+ * 820px viewport the gate appeared at y=1419, and on a phone at y=2049 — two and a half screens below
+ * the fold, with nothing scrolling to it. A gate the person cannot see is a gate that was never
+ * answered, while the audit already records that they were asked.
+ *
+ * Closing without an answer is a DECISION here, not an absence of one: Esc and a click outside both
+ * mean "no", the act does not happen, and the audit records the answer as declined. That is the
+ * honest reading of a gate whose whole purpose is to require an answer.
+ */
+let gateAnswered = false;
+
 function askConfirmation(confirm: { id: string; rule: string; why: string; plan: Record<string, any> }): void {
-  const box = $("confirm");
-  box.textContent = "";
-  box.hidden = false;
-  const plan = document.createElement("p");
-  plan.textContent = `${confirm.plan.kind} ${confirm.plan.target} — ${confirm.why} (rule: ${confirm.rule})`;
-  const yes = document.createElement("button");
-  yes.id = "confirm-yes";
-  yes.textContent = "Yes, delete it";
-  const no = document.createElement("button");
-  no.id = "confirm-no";
-  no.textContent = "No";
+  const dialog = $("confirm") as HTMLDialogElement;
+  const plan = $("confirm-plan");
+  plan.textContent = "";
+  gateAnswered = false;
+
+  const text = document.createElement("p");
+  text.textContent = `${confirm.plan.kind} ${confirm.plan.target} — ${confirm.why} (rule: ${confirm.rule})`;
+  plan.appendChild(text);
 
   const settle = async (approved: boolean) => {
-    box.hidden = true;
-    box.textContent = "";
+    if (gateAnswered) return;
+    gateAnswered = true;
+    if (dialog.open) dialog.close();
     const reply = await send({ type: "answer", confirmId: confirm.id, approved });
     if (reply.answered === "approved") {
       const card = document.querySelector(`figure.asset[data-name="${CSS.escape(confirm.plan.name)}"]`);
@@ -181,9 +193,29 @@ function askConfirmation(confirm: { id: string; rule: string; why: string; plan:
     }
   };
 
-  yes.addEventListener("click", () => void settle(true));
-  no.addEventListener("click", () => void settle(false));
-  box.append(plan, yes, no);
+  // One listener per gate: whichever way it closed — a button, Esc, or the backdrop — the answer is
+  // recorded exactly once, and a close nobody answered is a "no".
+  dialog.addEventListener("close", () => void settle(false), { once: true });
+  ($("confirm-yes") as HTMLButtonElement).onclick = () => void settle(true);
+  ($("confirm-no") as HTMLButtonElement).onclick = () => void settle(false);
+
+  if (dialog.open) dialog.close();
+  dialog.showModal();
+}
+
+// Light dismiss for the gate, declaratively, where the platform supports it (`closedby="any"`); the
+// documented geometry fallback otherwise. Either way the close lands in the listener above, which is
+// what turns "closed without an answer" into a recorded NO rather than a gate that will not go away.
+if (!("closedBy" in HTMLDialogElement.prototype)) {
+  const gate = document.getElementById("confirm") as HTMLDialogElement;
+  gate.addEventListener("click", (event) => {
+    if (event.target !== gate) return;
+    const rect = gate.getBoundingClientRect();
+    const inside =
+      rect.top <= (event as MouseEvent).clientY && (event as MouseEvent).clientY <= rect.top + rect.height &&
+      rect.left <= (event as MouseEvent).clientX && (event as MouseEvent).clientX <= rect.left + rect.width;
+    if (!inside) gate.close("dismissed");
+  });
 }
 
 // ---------------------------------------------------------------- the explorer

@@ -14,16 +14,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { startServer } from "./lib/server.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 import { launch } from "./lib/cdp.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = 8844; // no other suite's port (8841/8842 root-seam + one-root, 883x the E1-M0 set)
-const BASE = `http://127.0.0.1:${PORT}`;
 
 let server;
+let BASE;
 let page;
 
 const state = () =>
@@ -51,18 +51,11 @@ const openSettings = async () => {
 };
 
 test.before(async () => {
-  server = spawn(process.execPath, [path.join(ROOT, "server.mjs")], {
+  server = await startServer({
     cwd: ROOT,
-    env: { ...process.env, PORT: String(PORT), VOICEBOX_INSTANCE: "settings-test" },
-    stdio: "ignore",
-    detached: true,
+    env: { VOICEBOX_INSTANCE: "settings-test" },
   });
-  for (let i = 0; i < 60; i++) {
-    try {
-      if ((await fetch(`${BASE}/api/health`)).ok) break;
-    } catch {}
-    await sleep(100);
-  }
+  BASE = server.base;
   page = await launch();
   // Give the page something to scroll, so "the page behind does not scroll" is a real assertion
   // rather than a tautology on a short page.
@@ -77,11 +70,7 @@ test.before(async () => {
 
 test.after(async () => {
   await page?.close();
-  if (server?.pid) {
-    try {
-      process.kill(-server.pid, "SIGKILL");
-    } catch {}
-  }
+  await server?.stop();
 });
 
 test("it is a modal, over the page rather than in it — and opening it does not move the page", { timeout: 90000 }, async () => {

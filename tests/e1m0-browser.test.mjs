@@ -12,6 +12,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { startServer } from "./lib/server.mjs";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,29 +21,21 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { launch } from "./lib/cdp.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = 8831;
-const BASE = `http://127.0.0.1:${PORT}`;
 const XSS_NAME = "<img src=x onerror=alert(1)>";
 
 let server;
+let BASE;
 let browser;
 let page;
 
 const send = (message) => page.evaluate((m) => window.e1m0.send(m), message);
 
 test.before(async () => {
-  server = spawn(process.execPath, [path.join(ROOT, "server.mjs")], {
+  server = await startServer({
     cwd: ROOT,
-    env: { ...process.env, PORT: String(PORT) },
-    stdio: "ignore",
-    detached: true,
+    env: { ...process.env, VOICEBOX_INSTANCE: "e1m0-browser" },
   });
-  for (let i = 0; i < 60; i++) {
-    try {
-      if ((await fetch(`${BASE}/api/health`)).ok) break;
-    } catch {}
-    await sleep(100);
-  }
+  BASE = server.base;
   browser = await launch();
   page = browser;
   await page.goto(`${BASE}/environment.html`);
@@ -52,15 +45,7 @@ test.before(async () => {
 
 test.after(async () => {
   await browser?.close();
-  if (server?.pid) {
-    try {
-      process.kill(-server.pid, "SIGKILL");
-    } catch {
-      try {
-        server.kill("SIGKILL");
-      } catch {}
-    }
-  }
+  await server?.stop();
 });
 
 // 1 ------------------------------------------------------------------------------------------

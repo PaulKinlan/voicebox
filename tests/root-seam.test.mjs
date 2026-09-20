@@ -13,6 +13,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { startServer } from "./lib/server.mjs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,10 +21,9 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = 8841;
-const BASE = `http://127.0.0.1:${PORT}`;
 
 let server;
+let BASE;
 let scratch;
 let serverCwd;
 let defaultRoot;
@@ -60,27 +60,15 @@ test.before(async () => {
   otherRoot = path.join(scratch, "other-root");
   picked = path.join(scratch, "picked-root");
   for (const dir of [defaultRoot, otherRoot, picked]) mkdirSync(dir);
-
-  server = spawn(process.execPath, [path.join(ROOT, "server.mjs")], {
-    cwd: serverCwd,
-    env: { ...process.env, PORT: String(PORT), VOICEBOX_WORKSPACE: defaultRoot, VOICEBOX_INSTANCE: "machine-test" },
-    stdio: "ignore",
-    detached: true,
+  server = await startServer({
+    cwd: ROOT,
+    env: { VOICEBOX_WORKSPACE: defaultRoot, VOICEBOX_INSTANCE: "machine-test" },
   });
-  for (let i = 0; i < 60; i++) {
-    try {
-      if ((await fetch(`${BASE}/api/health`)).ok) break;
-    } catch {}
-    await sleep(100);
-  }
+  BASE = server.base;
 });
 
-test.after(() => {
-  if (server?.pid) {
-    try {
-      process.kill(-server.pid, "SIGKILL");
-    } catch {}
-  }
+test.after(async () => {
+  await server?.stop();
   rmSync(scratch, { recursive: true, force: true });
 });
 
@@ -208,21 +196,9 @@ test("with NO root declared the loop refuses by name and writes nothing anywhere
   // A second server, no declaration at all: no default to fall back to, and no act performed.
   const bareCwd = path.join(scratch, "bare-cwd");
   mkdirSync(bareCwd);
-  const barePort = PORT + 2; // 8842 belongs to tests/one-root.test.mjs; suites must not share a port
-  const child = spawn(process.execPath, [path.join(ROOT, "server.mjs")], {
-    cwd: bareCwd,
-    env: { ...process.env, PORT: String(barePort), VOICEBOX_INSTANCE: "machine-bare" },
-    stdio: "ignore",
-    detached: true,
-  });
+  const bare = await startServer({ cwd: bareCwd, env: { VOICEBOX_INSTANCE: "machine-bare" } });
+  const base = bare.base;
   try {
-    for (let i = 0; i < 60; i++) {
-      try {
-        if ((await fetch(`http://127.0.0.1:${barePort}/api/health`)).ok) break;
-      } catch {}
-      await sleep(100);
-    }
-    const base = `http://127.0.0.1:${barePort}`;
 
     const info = await fetch(`${base}/api/root`).then((r) => r.json());
     assert.equal(info.declared, false, "a root was reported as declared with no declaration");
@@ -243,9 +219,7 @@ test("with NO root declared the loop refuses by name and writes nothing anywhere
 
     assert.deepEqual(readdirSync(bareCwd), [], `an undeclared loop wrote into its working directory: ${JSON.stringify(readdirSync(bareCwd))}`);
   } finally {
-    try {
-      process.kill(-child.pid, "SIGKILL");
-    } catch {}
+    await bare.stop();
   }
 });
 

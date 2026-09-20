@@ -711,5 +711,13 @@ server.on("upgrade", (req, socket) => {
   ws.on("error", () => session.close());
 });
 
-server.listen(PORT, "127.0.0.1", () =>
-  console.log(`voicebox on http://127.0.0.1:${PORT} — provider: ${PROVIDER}, workspace: ${WORKSPACE}`));
+server.listen(PORT, "127.0.0.1", () => {
+  // The REAL port, not the requested one: PORT=0 asks the OS for a free port, and a test suite that
+  // binds an ephemeral port has to be able to read back which one it got. A suite that pins a fixed
+  // port cannot run beside another, and the failure appears in someone else's lane as an unexplained
+  // block — the most expensive kind, because they cannot tell it is your test.
+  const bound = server.address().port;
+  console.log(
+    `voicebox on http://127.0.0.1:${bound} — provider: ${PROVIDER}, root: ${active ? active.root.path : "(none declared)"}`,
+  );
+});

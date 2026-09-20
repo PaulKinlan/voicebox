@@ -14,29 +14,26 @@
 // in the verdict, not glossed.
 
 import { spawn } from "node:child_process";
+import { startServer as startEphemeralServer } from "./lib/server.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const PORT = 8910 + Math.floor(Math.random() * 400);
 const ROOT = new URL("..", import.meta.url).pathname;
+let BASE; // the ephemeral port this suite's server actually bound
 const HAVE_KEY = Boolean(process.env.GEMINI_API_KEY);
 
-function startServer() {
-  const proc = spawn("node", ["server.mjs"], {
-    cwd: ROOT,
-    env: { ...process.env, PORT: String(PORT), VOICEBOX_PROVIDER: "script" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  return proc;
+// An EPHEMERAL port via the shared helper: this file used to pick a random port in a 400-wide band,
+// which is still a gamble on somebody else's listener — and a suite that grabs a port makes another
+// lane's verification fail with no explanation of why.
+async function startServer() {
+  const started = await startEphemeralServer({ env: { VOICEBOX_PROVIDER: "script" } });
+  BASE = started.base;
+  return started;
 }
 
-function waitForServer(proc, ms = 8000) {
-  return new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("server did not start")), ms);
-    proc.stdout.on("data", (d) => {
-      if (String(d).includes("voicebox on")) { clearTimeout(t); resolve(); }
-    });
-  });
+// The helper has already waited for /api/health; kept so the call sites read the same.
+async function waitForServer(started) {
+  if (!started) throw new Error("server did not start");
 }
 
 function tone16k(seconds = 0.4, freq = 440) {
@@ -48,11 +45,11 @@ function tone16k(seconds = 0.4, freq = 440) {
 }
 
 test("live voice: WS codec, readiness gate, and a real Gemini round trip", { skip: !HAVE_KEY && "GEMINI_API_KEY not set", timeout: 90000 }, async () => {
-  const server = startServer();
+  const server = await startServer();
   try {
     await waitForServer(server);
 
-    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/live`);
+    const ws = new WebSocket(BASE.replace(/^http/, "ws") + "/live");
     const states = [];
     const texts = [];
     let binaryFrames = 0;
@@ -96,15 +93,15 @@ test("live voice: WS codec, readiness gate, and a real Gemini round trip", { ski
     console.log(`[live-voice] gate held ${ready.detail.gatedFrames} frame(s); ${binaryFrames} audio frame(s) back (${binaryBytes} bytes); texts: ${texts.length}`);
     ws.close();
   } finally {
-    server.kill();
+    await server.stop();
   }
 });
 
 test("live voice: a malformed binary frame costs a frame, not the conversation", { skip: !HAVE_KEY && "GEMINI_API_KEY not set", timeout: 90000 }, async () => {
-  const server = startServer();
+  const server = await startServer();
   try {
     await waitForServer(server);
-    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/live`);
+    const ws = new WebSocket(BASE.replace(/^http/, "ws") + "/live");
     const errors = [];
     const states = [];
     let audioFrames = 0;
@@ -149,6 +146,6 @@ test("live voice: a malformed binary frame costs a frame, not the conversation",
     console.log(`[malformed-frame] dropped and survived: ${audioFrames} audio frame(s) after the bad one`);
     ws.close();
   } finally {
-    server.kill();
+    await server.stop();
   }
 });
