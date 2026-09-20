@@ -56,7 +56,7 @@ export interface RootFacts {
 
 export const ROOT_FACTS: Record<RootKind, RootFacts> = {
   opfs: {
-    where: "this origin's private file system, inside the browser",
+    where: "the browser's own storage for this site",
     whoCanSee: "nothing outside this origin — not even the user's own editor",
     reachableFrom: ["page"],
     containment: "prefix",
@@ -64,7 +64,7 @@ export const ROOT_FACTS: Record<RootKind, RootFacts> = {
     survivesTabClose: true,
   },
   handle: {
-    where: "a real folder on this machine — the one the user picked",
+    where: "a folder you picked in this browser",
     whoCanSee: "anything on this machine, and the user in their own editor",
     // A handle is a page-only capability: it exposes no path, so no other process can address it.
     reachableFrom: ["page"],
@@ -73,7 +73,7 @@ export const ROOT_FACTS: Record<RootKind, RootFacts> = {
     survivesTabClose: true,
   },
   machine: {
-    where: "a folder on the machine running the process",
+    where: "a folder on this machine",
     whoCanSee: "anything on that machine — the user's own tools, editors and shells",
     reachableFrom: ["machine"],
     containment: "realpath",

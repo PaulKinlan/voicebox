@@ -340,7 +340,10 @@ test("capture refuses without a declared rate, and names the RATE rather than th
   assert.equal(s.ready, false, "nothing was negotiated, so nothing is ready");
   assert.equal(getUserMediaCalls, 0, "the microphone is never opened for a capture that cannot be sent");
   assert.equal(contexts.length, 0, "no AudioContext is built at an unknown rate");
-  assert.match(s.label, /input rate/i, "the sentence names the rate");
+  // Pinned as a property, not as prose: the sentence must name a rate, and must
+  // not blame the microphone. (It said "input rate" until a plain-language pass
+  // rewrote it to "audio rate" — the assertion is not a copy editor.)
+  assert.match(s.label, /rate/i, "the sentence names a rate");
   assert.doesNotMatch(s.label, /microphone is not available/i, "the microphone is fine and must not be blamed");
   assert.doesNotMatch(s.label, /nothing is listening/i, "and it must not be dressed up as a session ending");
 

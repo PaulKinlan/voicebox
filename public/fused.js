@@ -24,7 +24,7 @@ const WANTED = {
   copy: "file-copy", close: "reader-close", about: "about-facts", details: "reader-details",
   settingsOpen: "settings-open", settings: "settings", settingsClose: "settings-close",
   micSelect: "mic-select", outSelect: "out-select",
-  micDeviceState: "mic-device-state", outDeviceState: "out-device-state", deviceNote: "device-note",
+  micDeviceState: "mic-device-state", outDeviceState: "out-device-state",
 };
 const els = {};
 const missing = [];
@@ -171,7 +171,7 @@ function renderEmptyState() {
     // where it goes.
     headline.textContent = "Open a project.";
     // The chip already said the state. This line says only the route.
-    next.textContent = "The environment page is where the root this room writes into is chosen.";
+    next.textContent = "The environment page is where you choose the folder that turns save into.";
     if (els.emptyAction) els.emptyAction.hidden = false;
     if (els.emptyLink) els.emptyLink.textContent = "Open the environment page";
     if (els.emptyWhy) { els.emptyWhy.hidden = true; }
@@ -189,8 +189,8 @@ function renderEmptyState() {
     // missing (coord, 2026-09-20).
     // The state's cause, once, then the remedy. The kinds themselves are taught
     // where the choice is made (the environment page), not repeated here.
-    headline.textContent = "This project's root is read-only for turns.";
-    next.textContent = `Turns run in the local server and this root belongs to the page, so a typed turn is refused: ${where} is not a root the server can act on. Choose a different root in the environment page, or work in the page that owns this one.`;
+    headline.textContent = "Turns cannot save into this folder.";
+    next.textContent = `This folder belongs to this browser tab, and turns run in the local server — so a typed turn is refused: ${where} is not somewhere the server can save. Choose a folder on this machine in the environment page, or do the work in the tab that holds this folder.`;
     if (els.emptyWhy) { els.emptyWhy.textContent = activeRoot.why ?? ""; els.emptyWhy.hidden = !activeRoot.why; }
     if (els.emptyAction) els.emptyAction.hidden = false;
     if (els.emptyLink) els.emptyLink.textContent = "Open the environment page";
@@ -285,6 +285,28 @@ async function loadRoot() {
   render();
 }
 
+// The settings dialog's facts drawer: only facts this page actually holds, and
+// only the ones a person configuring audio or a root would want. Two lines, no
+// adjectives.
+function renderAbout() {
+  const box = els.about;
+  if (!box) return;
+  const lines = [];
+  if (activeRoot === undefined) lines.push("This server does not say which folder it saves into.");
+  else if (activeRoot === null) lines.push("No folder has been chosen yet, so a typed turn has nowhere to save.");
+  else {
+    const root = activeRoot.root ?? {};
+    const where = activeRoot.facts?.where ?? root.kind ?? "a root";
+    const name = root.path ?? root.name ?? root.label ?? "";
+    lines.push(`Turns save into ${where}${name ? ` · ${name}` : ""}.`);
+  }
+  const page = pageBuild();
+  const server = window.__voiceboxServerBuild;
+  if (page && server?.commit) lines.push(`Page ${page} · server ${server.branch} @ ${server.commit}.`);
+  else if (page) lines.push(`Page ${page}.`);
+  box.textContent = lines.join("\n");
+}
+
 // THE HEADER STATES THE STATE, ONCE, and explains nothing. "no root declared"
 // is a status; the explanation and the remedy live in the empty state, where a
 // person is about to act. The server's full description stays in the chip's
@@ -295,19 +317,22 @@ function renderRoot() {
   if (!kindEl) return;
 
   if (activeRoot === undefined) {
-    kindEl.textContent = "root not reported";
-    kindEl.title = "this server does not say which root the loop writes into";
+    kindEl.textContent = "folder not reported";
+    kindEl.title = "this server does not say which folder it saves into";
+    renderAbout();
     return;
   }
   if (activeRoot === null) {
-    kindEl.textContent = "no root declared";
+    kindEl.textContent = "no folder chosen yet";
     kindEl.removeAttribute("title");
+    renderAbout();
     return;
   }
   const where = activeRoot.facts?.where ?? activeRoot.root?.kind ?? "a root";
   const name = activeRoot.root?.path ?? activeRoot.root?.name ?? activeRoot.root?.label ?? "";
   kindEl.textContent = name ? `${where} · ${name}` : where;
   kindEl.title = activeRoot.description ?? "";
+  renderAbout();
 }
 
 async function health() {
@@ -320,16 +345,18 @@ async function health() {
     // ambiguous ("workspace/" and "local server ready" both looked like the
     // answer to "where are my files?").
     if (els.where) { els.where.textContent = ""; els.where.title = "the local server answered"; }
+    window.__voiceboxServerBuild = answer.build ?? null;
     stampBuild(answer.build ?? null);
+    renderAbout();
     await loadRoot();
   } catch {
     if (els.dot) els.dot.dataset.ok = "false";
     if (els.where) { els.where.textContent = "no answer from the local server"; els.where.title = ""; }
     stampBuild(null);
-    if (els.rootKind) els.rootKind.textContent = "root unknown";
+    if (els.rootKind) els.rootKind.textContent = "folder unknown";
     if (els.dot) els.dot.dataset.ok = "false";
     renderEmptyState();
-    if (els.rootNote) { els.rootNote.textContent = "The local server is not answering, so which root it writes into cannot be checked."; els.rootNote.dataset.tone = "warn"; els.rootNote.hidden = false; }
+    if (els.rootNote) { els.rootNote.textContent = "The local server is not answering, so which folder it saves into cannot be checked."; els.rootNote.dataset.tone = "warn"; els.rootNote.hidden = false; }
   }
 }
 
@@ -609,6 +636,12 @@ function renderDevices() {
   fillPicker(els.outSelect, outputs, prefs.out, "output", namesVisible);
 
   const micNamesHidden = !namesVisible;
+  // A picker with one option and no explanation is a picker that looks broken.
+  // Chrome hands out no ids or labels until the origin has microphone access,
+  // so the honest row says WHY the list is short rather than showing a dead
+  // control. Same for outputs, where the browser may not route at all.
+  const inputIdsUsable = inputs.some((d) => d.id);
+  const outputIdsUsable = outputs.some((d) => d.id);
   const micPresent = inputs.some((d) => d.id === prefs.mic.id);
   const outPresent = outputs.some((d) => d.id === prefs.out.id);
 
@@ -618,7 +651,8 @@ function renderDevices() {
 
   const micName = prefs.mic.name || "System default";
   let mic = "";
-  if (!prefs.mic.id) mic = listening ? "Listening through System default" : "Mic off";
+  if (!prefs.mic.id && !inputIdsUsable) mic = listening ? "Listening through System default" : "Mic off · this browser lists no named microphones until you allow access";
+  else if (!prefs.mic.id) mic = listening ? "Listening through System default" : "Mic off";
   else if (micNamesHidden && !micPresent) mic = `${micName} · not checked yet — device names can be hidden until microphone access is allowed`;
   else if (listening) mic = `Listening through ${micName}`;
   else if (micPresent) mic = `${micName} · mic off`;
@@ -626,7 +660,10 @@ function renderDevices() {
   if (els.micDeviceState) els.micDeviceState.textContent = mic;
 
   let out = "";
-  if (!canChooseOutput) out = "This browser uses system output. Change the output in your device's sound settings.";
+  if (canChooseOutput && !outputIdsUsable && !prefs.out.id) out = speaking
+    ? "Reply playing through the system output · this browser lists no named outputs until you allow access"
+    : "No reply playing · this browser lists no named outputs until you allow access";
+  else if (!canChooseOutput) out = "This browser uses system output. Change the output in your device's sound settings.";
   else if (!prefs.out.id) out = speaking ? "Reply playing through System default" : "No reply playing";
   else if (speaking && outPresent) out = `Reply playing through ${prefs.out.name || "the chosen output"}`;
   else if (!outPresent) {
@@ -638,28 +675,10 @@ function renderDevices() {
   if (els.outSelect) els.outSelect.disabled = !canChooseOutput;
 
   // The client owns the voice-state line (it is derived from real capture and
-  // playback); this page owns DEVICE facts, which the client cannot know. The
-  // note below the line says only what the client's label cannot: a chosen
-  // device missing, an output that cannot be chosen, names hidden. Two writers
-  // fighting over one line is how a page ends up contradicting itself.
-  const notes = [];
-  const playing = Boolean(window.__voiceboxLiveClient?.state?.playbackActive);
-  if (prefs.mic.id && !micPresent && !micNamesHidden) notes.push(`${micName} is not connected — connect it or choose another microphone`);
-  if (prefs.mic.id && micNamesHidden && !micPresent) notes.push("Device names are hidden until microphone access is allowed — the names here are the ones you saved");
-  if (!canChooseOutput) {
-    // This browser cannot route output at all: the fact to say is that one, and
-    // nothing about a stop it never performed.
-    if (prefs.out.id) notes.push("This browser uses system output; the remembered output is not the route in use");
-  } else if (prefs.out.id && !outPresent) {
-    // The explicit policy: name the missing device AND say where the audio
-    // actually is, because "not connected" alone can hide a fallback playing
-    // out of the speakers.
-    notes.push(`${prefs.out.name || "The chosen output"} is not connected — ${playing ? "reply playback stopped" : "no reply playing"}`);
-  }
-  if (els.deviceNote) {
-    els.deviceNote.textContent = notes.join(" · ");
-    els.deviceNote.hidden = notes.length === 0;
-  }
+  // playback); this page owns DEVICE facts, which the client cannot know. Each
+  // fact now sits in the row it belongs to, inside the settings dialog, where a
+  // person is when they wonder what they have — not in a second voice under the
+  // microphone repeating what the rows already say (coord, 2026-09-20).
 }
 
 async function refreshDevices() {

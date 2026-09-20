@@ -562,10 +562,6 @@ const routes = {
     res.end(readFileSync(path.join(PUBLIC, "index.html")));
   },
   "GET /index.html": (req, res, url) => routes["GET /"](req, res, url),
-  "GET /app.js": (req, res, url) => {
-    res.writeHead(200, { "content-type": "text/javascript" });
-    res.end(readFileSync(path.join(PUBLIC, "app.js")));
-  },
   "GET /fused.js": (req, res, url) => {
     res.writeHead(200, { "content-type": "text/javascript" });
     res.end(readFileSync(path.join(PUBLIC, "fused.js")));

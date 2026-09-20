@@ -84,9 +84,20 @@ test("the XSS payload crosses the API as data and is never turned into elements 
   // strings with textContent, never innerHTML (pinned below), so the payload
   // arrives as text on screen.
   assert.equal(j.result?.ok, true, "the write itself is refused only by containment — see the next test");
-  // The served app must not carry a single innerHTML sink:
-  const app = readFileSync(path.join(ROOT, "public", "app.js"), "utf8");
-  assert.equal(app.includes("innerHTML"), false, "the served app.js still renders strings as markup");
+  // The served app must not carry a single innerHTML sink. This reads EVERY
+  // script the page declares rather than one named file: app.js was deleted on
+  // 2026-09-20 (no page loaded it) and a guard that dies with the file it
+  // watched is how a security property is quietly removed. Whatever the page
+  // loads is what this checks.
+  const servedPage = readFileSync(path.join(ROOT, "public", "index.html"), "utf8");
+  const scripts = [...servedPage.matchAll(/<script[^>]*src="([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(scripts.length > 0, "the page declares no scripts, so this guard would be vacuous");
+  for (const src of scripts) {
+    const onDisk = path.join(ROOT, "public", src.replace(/^\//, ""));
+    if (!existsSync(onDisk)) continue; // a module served from elsewhere (the environment page)
+    const body = readFileSync(onDisk, "utf8");
+    assert.equal(body.includes("innerHTML"), false, `${src} still renders strings as markup`);
+  }
   // And the page's CSP forbids inline handlers even if markup slipped through:
   const page = readFileSync(path.join(ROOT, "public", "index.html"), "utf8");
   assert.match(page, /script-src 'self'/);
@@ -345,3 +356,18 @@ test("page load with files produces zero POST /api/turn calls (no phantom turns)
   }
 });
 
+
+// ── the prose sweep: claims the served pages make about the running system ──
+test("the pages' prose matches the running system (prose sweep, 2026-09-20)", async () => {
+  const page = readFileSync(path.join(ROOT, "public", "index.html"), "utf8");
+  // Whose disk: the server's, said plainly — "read from disk" alone implied the page's.
+  assert.match(page, /read from the server's disk/);
+  // The retired refusal message must not come back through any served page:
+  for (const served of ["index.html", "environment.html"]) {
+    const text = readFileSync(path.join(ROOT, "public", served), "utf8");
+    assert.doesNotMatch(text, /escapes the workspace/, `${served} still carries the retired "escapes the workspace" message`);
+  }
+  // The live-voice claim is pinned by the code it describes: no tool references.
+  const live = readFileSync(path.join(ROOT, "public", "live-voice.js"), "utf8");
+  assert.doesNotMatch(live, /\btools?\b/, "live-voice.js now mentions tools — the footer's 'takes no tools yet' needs re-checking");
+});

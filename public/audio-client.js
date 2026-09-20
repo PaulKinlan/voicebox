@@ -415,8 +415,8 @@ export function createAudioClient({
         // declaration from the server; the microphone is fine and untouched.
         state.captureErrorReason = "rate-not-declared";
         state.captureError =
-          "The server has not declared the input rate its provider needs, so capture was not started. " +
-          "Sending audio at a guessed rate is the defect this refuses (journal-6g0). The text path still works.";
+          "The server has not said what audio rate its provider needs, so the microphone was not started. " +
+          "Sending audio at a guessed rate would be worse than not sending it. Typing still works.";
         state.lastError = state.captureError;
         onDiagnostic({ kind: "refused", message: state.captureError, reason: "rate-not-declared" });
         emit("idle", { rateNotDeclared: true });
@@ -446,7 +446,7 @@ export function createAudioClient({
       // Report it here, not as an unhandled rejection: the same sentence is
       // written by the page adapter's catch, so both paths agree.
       state.captureErrorReason = state.captureErrorReason || "device";
-      state.captureError = `The microphone is not available: ${error?.message ?? error}. The text path still works.`;
+      state.captureError = `The microphone is not available: ${error?.message ?? error}. Typing still works.`;
       state.lastError = state.captureError;
       emit("error", { captureFailed: true });
     }

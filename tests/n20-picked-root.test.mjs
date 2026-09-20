@@ -191,7 +191,7 @@ test("N20.4 The record can say which kind of root it has", { timeout: 90000 }, a
 
   assert.equal((await reopen(folderName)).ok, true, "the picked project could not be opened through the page");
   const header = await page.evaluate(() => document.getElementById("project").textContent);
-  assert.match(header, /a picked folder/, "the page does not say which kind of root the project has");
+  assert.match(header, /a folder you picked in this browser/, "the page does not say which kind of folder the project has");
   assert.match(header, /picked:/, "the page does not show the root");
   assert.match(header, /handle is persisted in IndexedDB/, "the page does not state the recovery story");
   assert.match(header, /permission is prompt/, "the page does not report the permission it queried");

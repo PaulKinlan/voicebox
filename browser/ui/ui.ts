@@ -74,11 +74,14 @@ function header(project?: Record<string, any>): void {
   const rows: [string, string][] = [
     ["project", String(project.id)],
     ["placement", String(project.placement)],
-    ["root kind", kind === "handle"
-      ? `a picked folder — '${project.location.label}'`
+    // Plain words: the kind is a place a person can point at, and the label says
+    // which place rather than which mechanism ("running the process" told the
+    // reader nothing they could act on).
+    ["where the files are", kind === "handle"
+      ? `a folder you picked in this browser — '${project.location.label}'`
       : kind === "machine"
-        ? "a folder on the machine running the process"
-        : "OPFS (origin-private)"],
+        ? "a folder on this machine"
+        : "the browser's own storage for this site"],
     ["root", String(project.root)],
     // Who acts on this root is a FACT about the kind, and the page says it rather than letting the
     // user discover it by trying: a machine root's acts come from the loop, a picked folder's from

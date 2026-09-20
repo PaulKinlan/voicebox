@@ -162,7 +162,7 @@ export default defineConfig({
       // environment.html's modules live at the project root, outside this
       // root (public/) — alias so Vite RESOLVES and transforms them (a raw
       // .ts through any static server would 200 and then fail to parse).
-      "/browser": path.dirname(fileURLToPath(import.meta.url)),
+      "/browser": path.join(path.dirname(fileURLToPath(import.meta.url)), "browser"),
     },
   },
   plugins: [buildStamp(), cspSafeViteClient(), loudStaticMiss()],

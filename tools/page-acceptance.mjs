@@ -162,6 +162,60 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   report("shared-front", "environment is current (served modules carry current markers)", staleModules.length === 0,
     staleModules.length ? `STALE: ${staleModules.join(", ")} — touch the file or restart vite` : `${compared.size} modules compared`);
 
+  // ── 0b. plain language: internal identifiers and jargon are not user-facing ──
+  // Paul, 2026-09-20: "make it a priority to use plain language in this project
+  // that a human would understand and respect." The boundary is the RENDERED
+  // string — comments and docs may carry ticket ids; what a person can read on
+  // the page may not. Fails by name: file + the string it appeared in.
+  // Every hit carries a REMEDY — a refusal without a remedy is the one thing
+  // this system does not do. The instruction we are following: state the
+  // consequence, not the mechanism; say what a person would call it.
+  const JARGON = [
+    ["reachableFromThisProcess", "name what can reach it: \"only this page\" / \"the server too\""],
+    ["executor", "say what it does: \"the part that runs a tool\" / \"the runner\""],
+    ["admitted", "say what happened: \"allowed\" / \"approved for use here\""],
+    ["placement", "say where: \"where the tool runs\" / \"its home\""],
+    ["envelope", "say what it carries: \"the message\" / \"the request\""],
+  ];
+  const ID_PATTERNS = [
+    [/\bE\d-M\d\b/, "internal ticket id", "describe the change in words — the id belongs in our docs, not on the page"],
+    [/\be1m0\b/i, "internal ticket id", "describe the change in words — the id belongs in our docs, not on the page"],
+    [/\bN\d{1,3}\b/, "internal note number", "say the idea, not the note number"],
+    [/##?\d{2,6}\b/, "issue reference", "say the idea, not the issue number"],
+  ];
+  const stripCommentsHtml = (t) => t
+  // <style> blocks are colours and layout, not user-facing text — without this
+  // a hex colour (#101014) reads as an issue reference (first run, 2026-09-20)
+  .replace(/<style[\s\S]*?<\/style>/gi, " ")
+  .replace(/<!--[\s\S]*?-->/g, " ");
+  const stripCommentsJs = (t) => t.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:"'`\\])\/\/[^\n]*/g, "$1");
+  const stringLiterals = (js) =>
+    [...js.matchAll(/"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|`((?:[^`\\]|\\.)*)`/g)].map((m) => m[1] ?? m[2] ?? m[3]);
+  const langHits = [];
+  try {
+    for (const f of readdirSync(path.join(TREE, "public")).filter((f) => /\.html$|\.js$/.test(f))) {
+      const raw = readFileSync(path.join(TREE, "public", f), "utf8");
+      const isJs = f.endsWith(".js");
+      const body = isJs ? stripCommentsJs(raw) : stripCommentsHtml(raw);
+      const texts = isJs ? stringLiterals(body) : [body];
+      for (const t of texts) {
+        const lineFor = (needle) => (t.split("\n").find((l) => l.includes(needle)) ?? t).trim().slice(0, 90);
+        for (const [re, label, remedy] of ID_PATTERNS) {
+          const m = t.match(re);
+          if (m) langHits.push(`${f}: ${label} "${m[0]}" — …${lineFor(m[0])}… → say: ${remedy}`);
+        }
+        for (const [w, remedy] of JARGON) {
+          const re = new RegExp(`\\b${w}\\b`, "i");
+          if (re.test(t)) langHits.push(`${f}: jargon "${w}" — …${lineFor(w)}… → say: ${remedy}`);
+        }
+      }
+    }
+  } catch (e) {
+    langHits.push(`the scan itself failed: ${String(e?.message ?? e)}`);
+  }
+  report("harness", "user-facing strings are plain language (no internal ids, no project jargon)", langHits.length === 0,
+    langHits.length ? `${langHits.length} hit(s): ${langHits.slice(0, 5).join(" · ")}` : "clean");
+
   consoleMsgs = []; turnPosts = [];
   await send("Page.navigate", { url: SHARED_UI }, sessionId);
   await sleep(4000);
