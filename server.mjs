@@ -5,7 +5,7 @@
 // The resolver is a provider seam (lib/resolver.mjs) — swap it, don't rewrite the server.
 import { createServer } from "node:http";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +20,13 @@ import {
   validateAgentSettings,
 } from "./core/agent-settings.ts";
 import { auditFileName, makeEntry, mergeAudit, nextSeq, parseEntry, resumeSeq, serializeEntry } from "./core/audit.ts";
+import { randomBytes } from "node:crypto";
+import {
+  ENV_UNREACHABLE,
+  listUnreadable,
+  parseEnvironment,
+  unreachable,
+} from "./core/environment.ts";
 import * as extensions from "./lib/extensions.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
 import { createLiveSession, LIVE_MODEL, inputRateRequiredBy, resolvedLiveProviderName } from "./lib/live-session.mjs";
@@ -51,6 +58,81 @@ const WORKSPACE = process.env.VOICEBOX_WORKSPACE ?? path.join(ROOT, "workspace")
 // got — a grep for the old literal is the check, and it should be run before changing this line.
 /** null until somebody declares one — see the note above: no default is consulted when it is null. */
 let active = null;
+
+// ── THE ENVIRONMENT REGISTRY (core/environment.ts is the seam) ───────────────────────────────
+// The list of hosts the page can act in, SERVER-OWNED so it is the same from every browser (Paul:
+// "I might open the web page from many browsers so we lose client-side storage but sync on
+// environments via server"). One file, one writer (this process), atomic. It lives in the server's
+// own workspace so no active root has to exist and the list never depends on a project.
+//
+// THE TWO ABSENCES ARE DISTINCT, one level up from the root seam's pair: an unreadable registry file
+// (`environment-list-unreadable` — fix the file) is not an unreachable host (`environment-unreachable`
+// — start the service), and neither is the empty state (a fresh server, no environments yet — not an
+// error at all). A list that showed a host that is not there without saying so would be the same
+// defect as a footer promising files the live path could not write.
+const ENV_FILE = path.join(WORKSPACE, "environments.json");
+
+/** Read the registry. An absent file is the empty list; an unreadable/corrupt file is the named refusal. */
+function readEnvironments() {
+  if (!existsSync(ENV_FILE)) return { ok: true, environments: [], declared: false };
+  try {
+    const parsed = JSON.parse(readFileSync(ENV_FILE, "utf8"));
+    const list = Array.isArray(parsed?.environments) ? parsed.environments : [];
+    return { ok: true, environments: list, declared: true };
+  } catch (err) {
+    return { ok: false, ...listUnreadable(err?.message ?? "it is not JSON") };
+  }
+}
+
+/** Write the registry atomically (tmp + rename), so a crashed write never leaves a torn list. */
+function writeEnvironments(environments) {
+  mkdirSync(WORKSPACE, { recursive: true });
+  const tmp = `${ENV_FILE}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify({ environments }, null, 2)}\n`, { mode: 0o600 });
+  renameSync(tmp, ENV_FILE);
+}
+
+/**
+ * The registry, with each entry's reachability PROBED LAZILY (on read) rather than at declaration.
+ * The local server this process is on is always a row; remote rows are probed over HTTP. A host that
+ * does not answer is named unreachable, never silently shown as ready.
+ */
+async function environmentsWithStatus() {
+  const stored = readEnvironments();
+  if (!stored.ok) return stored;
+  // The local server is an implicit row: this host, reachable by construction, ambient on loopback.
+  const local = {
+    key: "local",
+    label: "this machine",
+    kind: "server",
+    origin: "same-origin",
+    home: active ? active.root : null,
+    boundary: null,
+    capability: null,
+    reach: "ambient",
+    reachable: true,
+    refused: null,
+    why: null,
+  };
+  const rows = [local];
+  for (const env of stored.environments) {
+    if (env.kind !== "server" || !env.origin) {
+      rows.push({ ...env, reachable: null, refused: null, why: "the browser environment is always present" });
+      continue;
+    }
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 2500);
+      const answer = await fetch(`${env.origin}/api/health`, { signal: controller.signal }).finally(() => clearTimeout(timer));
+      const no = unreachable(env.label, env.origin);
+      rows.push({ ...env, reachable: answer.ok, refused: answer.ok ? null : no.refused, why: answer.ok ? null : no.why });
+    } catch {
+      const no = unreachable(env.label, env.origin);
+      rows.push({ ...env, reachable: false, refused: no.refused, why: no.why });
+    }
+  }
+  return { ok: true, environments: rows, declared: true };
+}
 
 // ── THE AGENT'S OWN SETTINGS (provider · voice · personality) ─────────────────────────────────
 // Kept in memory, and the payload SAYS SO rather than implying durability: a restart resets the
@@ -779,6 +861,38 @@ async function handle(req, res) {
       if (e.code === "ENOENT") return json(res, 404, { error: "file not found" });
       throw e;
     }
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/environments") {
+    // The list, with each host's reachability probed NOW. An unreadable registry is the named
+    // refusal, not an empty list — the two are different problems with different remedies.
+    const result = await environmentsWithStatus();
+    if (!result.ok) return json(res, 500, result);
+    return json(res, 200, { ok: true, environments: result.environments });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/environments") {
+    // The "+" button: declare an environment. It is written to the list, NOT started — a declared
+    // host that is not running will say so by name the next time the list is read. The server
+    // generates the key; the person supplies the label and the origin.
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON: {label, kind, origin, home?}" });
+      }
+      const candidate = parseEnvironment({ ...parsed, key: `env_${randomBytes(8).toString("hex")}` });
+      if (!candidate.ok) return json(res, 400, candidate);
+      const stored = readEnvironments();
+      if (!stored.ok) return json(res, 500, stored);
+      const descriptor = { ...candidate.value, declaredAt: new Date().toISOString() };
+      writeEnvironments([...stored.environments, descriptor]);
+      return json(res, 200, { ok: true, environment: descriptor });
+    });
+    return;
   }
 
   if (req.method === "POST" && url.pathname === "/api/turn") {
