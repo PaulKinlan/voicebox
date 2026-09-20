@@ -5,11 +5,13 @@
 // The resolver is a provider seam (lib/resolver.mjs) — swap it, don't rewrite the server.
 import { createServer } from "node:http";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveTurn } from "./lib/resolver.mjs";
+import { ROOT_FACTS, describeRoot, reachableFrom, resolveInRoot } from "./core/root.ts";
+import { auditFileName, makeEntry, mergeAudit, nextSeq, parseEntry, resumeSeq, serializeEntry } from "./core/audit.ts";
 import * as extensions from "./lib/extensions.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
 import { createLiveSession, LIVE_MODEL } from "./lib/live-session.mjs";
@@ -19,6 +21,78 @@ import { createLiveSession, LIVE_MODEL } from "./lib/live-session.mjs";
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 // Movable workspace (tests point it at scratch; see lib/extensions.mjs).
 const WORKSPACE = process.env.VOICEBOX_WORKSPACE ?? path.join(ROOT, "workspace");
+
+// ── THE ACTIVE ROOT (core/root.ts is the seam) ────────────────────────────────────────────────
+// The loop does not invent a root. It acts on the ACTIVE PROJECT'S root, which the environment
+// declares (POST /api/root) and which may be any of the three kinds. Two of them this process
+// cannot reach, and it says so by name rather than quietly writing somewhere else — that refusal is
+// what stops a hard-coded `workspace/` from being a second, silent root.
+let active = {
+  project: "workspace",
+  root: { kind: "machine", path: WORKSPACE },
+  declaredAt: new Date().toISOString(),
+};
+
+// This process is a WRITER of the root it acts on, so it keeps its own file in that root's log —
+// one file per (root, writer), which is what the log has always meant. Without this the loop would
+// be a stranger writing into somebody's project with no record of what it did, and the machine root
+// would be the one root in the product with no audit at all.
+const INSTANCE = process.env.VOICEBOX_INSTANCE ?? "machine";
+
+function auditPathFor(root) {
+  return path.join(root.path, ".audit", auditFileName(INSTANCE, `machine:${root.path}`));
+}
+
+/** Read this writer's file back so `seq` continues instead of restarting on every restart. */
+function resumeLog() {
+  try {
+    const entries = readFileSync(auditPathFor(active.root), "utf8")
+      .split("\n")
+      .map(parseEntry)
+      .filter(Boolean);
+    resumeSeq(entries, INSTANCE);
+  } catch {
+    resumeSeq([], INSTANCE); // no log yet
+  }
+}
+
+/** Append one entry. A refusal is an entry too: a log of successes cannot answer "what did it try". */
+function logAct(act, decision, rule, result, observed, turn = null) {
+  try {
+    const dir = path.join(active.root.path, ".audit");
+    mkdirSync(dir, { recursive: true });
+    const file = auditPathFor(active.root);
+    resumeLog();
+    const entry = makeEntry(
+      active.project,
+      `machine:${active.root.path}`,
+      INSTANCE,
+      { name: "voicebox-server", harness: "voicebox", session: null, cwd: ROOT },
+      act,
+      decision,
+      rule,
+      result,
+      observed,
+      turn,
+    );
+    appendFileSync(file, `${serializeEntry(entry)}\n`);
+    return entry;
+  } catch {
+    // A log that cannot be written must not take the act with it — but the act's outcome is then
+    // reported without an entry, which the caller's `logged` field makes visible rather than silent.
+    return null;
+  }
+}
+
+/** What the world says happened. The audit reads the world, never the caller's account. */
+function observeUnderRoot(relPath) {
+  try {
+    const stat = statSync(path.join(active.root.path, relPath));
+    return { exists: true, bytes: stat.size, mtime: new Date(stat.mtimeMs).toISOString() };
+  } catch {
+    return { exists: false };
+  }
+}
 const PUBLIC = path.join(ROOT, "public");
 mkdirSync(WORKSPACE, { recursive: true });
 
@@ -70,6 +144,41 @@ function containedIn(baseDir, p) {
 
 function contained(p) {
   return containedIn(WORKSPACE, p);
+}
+
+/**
+ * The machine placement's ADDITION to the shared containment: `core/paths.ts` is lexical, and a
+ * lexical check follows a symlink out. So the lexical pass runs first (one implementation, refusing
+ * `..` at any depth) and this pass resolves the real path — of the file if it exists, of its
+ * directory if it does not — against the root's real path.
+ */
+function machineRootReal() {
+  return realpathSync(active.root.path);
+}
+
+function machineContained(candidate) {
+  const rootReal = machineRootReal();
+  let probe = candidate;
+  try {
+    realpathSync(candidate);
+  } catch (e) {
+    if (e.code !== "ENOENT") throw e;
+    probe = path.dirname(candidate); // a write to a file that does not exist yet: check its directory
+  }
+  const real = realpathSync(probe);
+  return containedIn(rootReal, real) || real === rootReal;
+}
+
+/** Resolve a name through the seam, or the refusal that says why — used by every path below. */
+function resolveActive(name) {
+  const reach = reachableFrom(active.root, "machine");
+  if (!reach.ok) return { ok: false, refused: reach.refused, why: reach.why };
+  const resolved = resolveInRoot(active.root, name);
+  if (!resolved.ok) return { ok: false, refused: resolved.rule, why: resolved.why };
+  if (!machineContained(resolved.path)) {
+    return { ok: false, refused: "outside-root", why: `'${name}' resolves outside '${active.root.path}' by real path` };
+  }
+  return { ok: true, path: resolved.path };
 }
 
 const MIME_TYPES = {
@@ -152,32 +261,65 @@ async function execute(action) {
   if (action.verb === "tool") {
     return extensions.callTool(action.name, action.args ?? {});
   }
-  if (action.verb === "list") return { ok: true, action: "listed workspace", files: readdirSync(WORKSPACE) };
+  if (action.verb === "list") {
+    const reach = reachableFrom(active.root, "machine");
+    if (!reach.ok) return { ok: false, refused: reach.refused, error: `refused: ${reach.refused}`, why: reach.why, root: active.root };
+    return { ok: true, action: `listed ${active.project}`, files: readdirSync(active.root.path).filter((f) => !f.startsWith(".")), root: active.root };
+  }
   const name = String(action.name ?? "");
   if (!name) return { ok: false, error: "action has no name" };
-  const candidate = path.resolve(WORKSPACE, name);
-  if (!contained(candidate)) return { ok: false, error: "refused: path escapes the workspace" };
+  const resolved = resolveActive(name);
+  if (!resolved.ok) {
+    // A refusal is recorded as well: the log answers "what did it try", not only "what did it do".
+    const kind = action.verb === "read" ? "read" : "write";
+    const entry = logAct({ kind, target: name, tool: "turn" }, "refuse", resolved.refused, "refused", null, action.turn ?? null);
+    return {
+      ok: false,
+      refused: resolved.refused,
+      error: `refused: ${resolved.refused === "outside-root" ? "path escapes the active project root" : resolved.refused}`,
+      why: resolved.why,
+      root: active.root,
+      logged: entry ? entry.seq : null,
+    };
+  }
+  const candidate = resolved.path;
   if (action.verb === "write") {
-    // A symlink already sitting at the target must not carry the write outside.
-    try {
-      const real = realpathSync(candidate);
-      if (!contained(real)) return { ok: false, error: "refused: path escapes the workspace" };
-    } catch (e) {
-      if (e.code !== "ENOENT") throw e; // the common case: the file does not exist yet
-    }
     writeFileSync(candidate, action.content ?? "");
-    return { ok: true, action: `wrote ${name} (${(action.content ?? "").length} bytes)`, file: name };
+    const entry = logAct({ kind: "write", target: name, tool: "turn" }, "allow", "writes-inside", "ok", observeUnderRoot(name), action.turn ?? null);
+    return {
+      ok: true,
+      action: `wrote ${name} (${(action.content ?? "").length} bytes)`,
+      file: name,
+      root: active.root,
+      logged: entry ? entry.seq : null,
+      auditLocation: `${active.root.path}/.audit/`,
+    };
   }
   if (action.verb === "read") {
-    const real = realpathSync(candidate); // ENOENT here is the honest "missing"
-    if (!contained(real)) return { ok: false, error: "refused: path escapes the workspace" };
-    return { ok: true, action: name, content: readFileSync(real, "utf8") };
+    const content = readFileSync(candidate, "utf8");
+    const entry = logAct({ kind: "read", target: name, tool: "turn" }, "allow", "reads-inside", "ok", observeUnderRoot(name), action.turn ?? null, [{ path: name, bytes: Buffer.byteLength(content) }]);
+    return { ok: true, action: name, content, root: active.root, logged: entry ? entry.seq : null };
   }
   return { ok: false, error: `unknown verb: ${action.verb}` };
 }
 
 const routes = {
-  "GET /api/health": (req, res, url) => json(res, 200, { ok: true, provider: PROVIDER, workspace: WORKSPACE, build: BUILD }),
+  "GET /api/health": (req, res, url) => json(res, 200, { ok: true, provider: PROVIDER, workspace: WORKSPACE, root: active.root, project: active.project, build: BUILD }),
+  // THE SEAM, read side: which root is the loop writing into, and may this process act on it?
+  "GET /api/root": (req, res, url) => {
+    const reach = reachableFrom(active.root, "machine");
+    return json(res, 200, {
+      ok: true,
+      project: active.project,
+      root: active.root,
+      facts: ROOT_FACTS[active.root.kind],
+      description: describeRoot(active.root),
+      reachableFromThisProcess: reach.ok,
+      refused: reach.ok ? null : reach.refused,
+      why: reach.ok ? null : reach.why,
+      declaredAt: active.declaredAt,
+    });
+  },
   "GET /": (req, res, url) => {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end(readFileSync(path.join(PUBLIC, "index.html")));
@@ -232,28 +374,128 @@ async function handle(req, res) {
     return serveSource(res, url);
   }
 
+  // THE SEAM, declare side: the environment says which project is active and what kind of root it
+  // has. A machine root is validated here (it is this process's own filesystem); the other two kinds
+  // are RECORDED as the active project and reported as unreachable from here — accepted, because the
+  // environment owning them is a fact, and refused, because this process must not pretend to act on
+  // them. That is the whole difference between one root and two.
+  if (req.method === "POST" && url.pathname === "/api/root") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      let declared;
+      try {
+        declared = JSON.parse(body);
+      } catch {
+        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON: {project, root}" });
+      }
+      const project = String(declared?.project ?? "").trim();
+      const root = declared?.root;
+      if (!project || !root || typeof root !== "object") {
+        return json(res, 400, { ok: false, refused: "bad-request", why: "a declaration needs a project name and a root descriptor" });
+      }
+      if (!Object.prototype.hasOwnProperty.call(ROOT_FACTS, root.kind)) {
+        return json(res, 400, { ok: false, refused: "unknown-root-kind", why: `'${root.kind}' is not a root kind this seam knows (${Object.keys(ROOT_FACTS).join(", ")})` });
+      }
+
+      if (root.kind === "machine") {
+        const requested = String(root.path ?? "");
+        if (!requested.trim()) {
+          return json(res, 400, { ok: false, refused: "bad-request", why: "a machine root needs a path" });
+        }
+        const candidate = path.resolve(requested);
+        if (!existsSync(candidate)) {
+          return json(res, 404, { ok: false, refused: "path-missing", why: `'${requested}' does not exist on this machine` });
+        }
+        let real;
+        try {
+          real = realpathSync(candidate);
+        } catch (e) {
+          return json(res, 400, { ok: false, refused: "not-a-directory", why: `'${requested}' could not be resolved: ${e.code}` });
+        }
+        if (!statSync(real).isDirectory()) {
+          return json(res, 400, { ok: false, refused: "not-a-directory", why: `'${requested}' is a file; a project root is a folder` });
+        }
+        active = { project, root: { kind: "machine", path: real }, declaredAt: new Date().toISOString() };
+        return json(res, 200, {
+          ok: true,
+          project: active.project,
+          root: active.root,
+          canonical: real !== candidate,
+          facts: ROOT_FACTS.machine,
+          description: describeRoot(active.root),
+          reachableFromThisProcess: true,
+          declaredAt: active.declaredAt,
+        });
+      }
+
+      // opfs | handle: the page's roots. Recorded as the active project, and this process says
+      // plainly that the act belongs to the page.
+      active = { project, root: { kind: root.kind, ...(root.path ? { path: String(root.path) } : {}), ...(root.id ? { id: String(root.id) } : {}) }, declaredAt: new Date().toISOString() };
+      const reach = reachableFrom(active.root, "machine");
+      return json(res, 200, {
+        ok: true,
+        project: active.project,
+        root: active.root,
+        facts: ROOT_FACTS[active.root.kind],
+        description: describeRoot(active.root),
+        reachableFromThisProcess: false,
+        refused: reach.refused,
+        why: reach.why,
+        declaredAt: active.declaredAt,
+      });
+    });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/audit") {
+    // The root's log, read by whoever can reach the root — the same read the environment does in its
+    // own placement, so "what did it do here" has one answer per root rather than one per placement.
+    const reach = reachableFrom(active.root, "machine");
+    if (!reach.ok) return json(res, 200, { ok: false, refused: reach.refused, why: reach.why, root: active.root, entries: [] });
+    const dir = path.join(active.root.path, ".audit");
+    const files = existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".jsonl")) : [];
+    const entries = files.flatMap((f) =>
+      readFileSync(path.join(dir, f), "utf8").split("\n").map(parseEntry).filter(Boolean),
+    );
+    return json(res, 200, { ok: true, root: active.root, instance: INSTANCE, files, entries: mergeAudit(entries) });
+  }
+
   if (req.method === "GET" && url.pathname === "/api/files") {
-    const fileNames = readdirSync(WORKSPACE).filter(f => !f.startsWith("."));
+    // The listing follows the ACTIVE root: a listing from a root the loop cannot reach would be the
+    // two-root bug in miniature — a panel showing files from somewhere the project is not.
+    const reach = reachableFrom(active.root, "machine");
+    if (!reach.ok) {
+      return json(res, 200, { ok: false, refused: reach.refused, why: reach.why, root: active.root, files: [], entries: [] });
+    }
+    const dir = active.root.path;
+    const fileNames = readdirSync(dir).filter(f => !f.startsWith("."));
     const entries = fileNames.map(name => {
       try {
-        const full = path.join(WORKSPACE, name);
+        const full = path.join(dir, name);
         const stat = statSync(full);
-        return { name, bytes: stat.size };
+        return { name, bytes: stat.size, kind: stat.isDirectory() ? "directory" : "file" };
       } catch {
-        return { name, bytes: 0 };
+        return { name, bytes: 0, kind: "file" };
       }
     });
-    return json(res, 200, { files: fileNames, entries });
+    return json(res, 200, { ok: true, root: active.root, project: active.project, files: fileNames, entries });
   }
 
   if (req.method === "GET" && url.pathname === "/api/file") {
     const name = url.searchParams.get("name") ?? "";
     if (!name) return json(res, 400, { error: "action has no name" });
-    const candidate = path.resolve(WORKSPACE, name);
-    if (!contained(candidate)) return json(res, 403, { error: "refused: path escapes the workspace" });
+    const resolved = resolveActive(name);
+    if (!resolved.ok) {
+      return json(res, resolved.refused === "root-not-reachable-from-here" ? 409 : 403, {
+        refused: resolved.refused,
+        error: `refused: ${resolved.refused}`,
+        why: resolved.why,
+        root: active.root,
+      });
+    }
     try {
-      const real = realpathSync(candidate);
-      if (!contained(real)) return json(res, 403, { error: "refused: path escapes the workspace" });
+      const real = resolved.path;
       const stat = statSync(real);
       if (stat.isDirectory()) return json(res, 400, { error: "cannot read directory" });
       const content = readFileSync(real, "utf8");

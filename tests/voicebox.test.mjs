@@ -97,7 +97,12 @@ test("`..` as an item name is refused, not rewritten into the parent directory",
   rmSync(parentProbe, { force: true });
   const j = await post("/api/turn", `create a file called ../evil.sh with pwned`);
   assert.equal(j.result?.ok, false, "the escape was executed, not refused");
-  assert.match(j.result?.error ?? "", /escapes the workspace/);
+  // The message names the ACTIVE PROJECT ROOT rather than "the workspace", because the loop now
+  // writes into whichever root the environment declared (core/root.ts) and a hard-coded word would
+  // become a lie the first time somebody declared a different folder.
+  assert.match(j.result?.error ?? "", /escapes the active project root/);
+  assert.equal(j.result?.refused, "outside-root", "the refusal does not name the rule");
+  assert.match(j.result?.why ?? "", /'\.\.' segment/, "the refusal does not use the mechanism's own words");
   assert.equal(existsSync(parentProbe), false, "nothing may land in the parent directory");
   // The positive control: a name INSIDE the workspace still writes.
   const inside = await post("/api/turn", `create a file called inside.txt with kept`);
