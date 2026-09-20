@@ -119,13 +119,18 @@ try {
   console.log(`── phase A: shared front ${SHARED_UI} (GET-only; witness below) · measuring tree: ${TREE}${TREE === ROOT ? " (default: this repo)" : ""}`);
 
   const servedRefs = [];
-  const indexHtml = await (await fetch(`${SHARED_UI}/`)).text();
-  for (const m of indexHtml.matchAll(/(?:src|href)="([^"#][^"]*)"/g)) {
+// EVERY page in public/, not just index — environment.html loaded a module
+// that 404'd through the dev front while its HTML returned 200, and a walk of
+// index.html alone could never see it (Paul's console, 2026-09-20).
+for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWith(".html"))) {
+  const html = await (await fetch(`${SHARED_UI}/${page}`)).text();
+  for (const m of html.matchAll(/(?:src|href)="([^"#][^"]*)"/g)) {
     const raw = m[1].split("?")[0];
     if (raw === "" || !/\.[a-z0-9]+$/i.test(raw)) continue;
-    if (raw.startsWith("@") || raw.startsWith("/")) continue;
-    servedRefs.push(raw);
+    if (raw.startsWith("/@") || raw.startsWith("/@fs")) continue; // vite's virtual namespaces
+    servedRefs.push(raw.startsWith("/") ? raw.slice(1) : path.posix.join(path.posix.dirname(page), raw));
   }
+}
   const staleModules = [];
   const compared = new Set();
   while (servedRefs.length) {
@@ -135,7 +140,10 @@ try {
     let served, disk;
     try {
       served = await (await fetch(`${SHARED_UI}/${ref}`)).text();
-      disk = readFileSync(path.join(TREE, "public", ref), "utf8");
+      const diskCandidates = [path.join(TREE, "public", ref), path.join(TREE, ref)];
+    const diskPath = diskCandidates.find((c) => existsSync(c));
+    if (!diskPath) { staleModules.push(`${ref} (not on disk under the measured tree)`); continue; }
+    disk = readFileSync(diskPath, "utf8");
     } catch (e) {
       staleModules.push(`${ref} (${e.message})`);
       continue;

@@ -22,6 +22,7 @@
 // can never silently point at another lane's instance on 8787 — the review
 // demonstrated that mis-point as a cross-instance write with no error.
 import { defineConfig } from "vite";
+import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
@@ -113,6 +114,11 @@ function loudStaticMiss() {
         // died exactly this way (2026-09-19, found by ds-flash-1b, browser
         // console: "Failed to load resource 404" for /@fs/.../env.mjs).
         if (/^\/@(vite|fs)\//.test(url) || url.startsWith("/node_modules/")) return next();
+        // Root-level served trees (browser/ at least) are TRANSFORMED modules —
+        // the alias below maps them outside root and Vite must resolve them;
+        // judging them here would 404 a live module before its transform
+        // (environment.html's ui.ts, Paul's console, 2026-09-20).
+        if (/^\/(browser|core|lib|docs|tests|tools)\//.test(url)) return next();
         const looksLikeFile = /\.[a-z0-9]+$/i.test(url) && !/\.html$/i.test(url);
         if (!looksLikeFile) return next();
         let onDisk;
@@ -151,6 +157,14 @@ function buildStamp() {
 }
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      // environment.html's modules live at the project root, outside this
+      // root (public/) — alias so Vite RESOLVES and transforms them (a raw
+      // .ts through any static server would 200 and then fail to parse).
+      "/browser": path.dirname(fileURLToPath(import.meta.url)),
+    },
+  },
   plugins: [buildStamp(), cspSafeViteClient(), loudStaticMiss()],
   root: "public",
   publicDir: false, // public/ IS the root; there is no second static dir
@@ -160,6 +174,7 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    fs: { allow: [path.dirname(fileURLToPath(import.meta.url))] }, // the alias serves outside root
     host: true, // listen on all interfaces: LAN 192.168.x.x + Tailscale 100.x
     // POLLING WATCHER, 2026-09-19. A `git merge --ff-only` replaced
     // public/audio-client.js and Vite's watcher never fired, so the server kept
@@ -174,6 +189,10 @@ export default defineConfig({
       // The audio socket (k3's live session, landing separately). ws: true so
       // the WebSocket upgrade is forwarded and survives HMR reloads.
       "/live": { target: API_TARGET, ws: true },
+      // environment.html's modules live at the project root (browser/ui/ui.ts),
+      // one level above this root — Paul's console caught the 404 as a
+      // pre-transform error while the page itself returned 200 (2026-09-20).
+      "/browser": { target: API_TARGET },
     },
   },
 });

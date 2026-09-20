@@ -823,6 +823,32 @@ server.on("upgrade", (req, socket) => {
   ws.on("error", () => session.close());
 });
 
+// BIND-RACE HARDENING (2026-09-20, five sightings in one day — Paul's console,
+// coord's curls, the acceptance gate): a `node --watch` supervisor restarts the
+// child on every landing, and the fresh child used to lose the bind race to the
+// dying old one — EADDRINUSE, "Failed running", and a port serving NOTHING
+// while the supervisor waited for a file change that would never come. Now:
+// EADDRINUSE retries on a 250ms cadence up to a 15s deadline, then exits LOUDLY
+// (a manager script can verify health and take over); and SIGTERM releases the
+// port GRACEFULLY so the watcher's replacement child binds cleanly.
+let bindRetries = 0;
+server.on("error", (e) => {
+  if (e?.code === "EADDRINUSE" && bindRetries < 60) {
+    bindRetries += 1;
+    setTimeout(() => {
+      server.close();
+      server.listen(PORT, "127.0.0.1");
+    }, 250);
+    return;
+  }
+  console.error(`[server] could not bind 127.0.0.1:${PORT} (${e?.code ?? e}) after ${bindRetries} retries — exiting so a manager can take over`);
+  process.exit(1);
+});
+process.on("SIGTERM", () => {
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 500).unref(); // sockets must not outlive the exit
+});
+
 server.listen(PORT, "127.0.0.1", () => {
   // The REAL port, not the requested one: PORT=0 asks the OS for a free port, and a test suite that
   // binds an ephemeral port has to be able to read back which one it got. A suite that pins a fixed
