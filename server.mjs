@@ -20,7 +20,7 @@ import {
   composeAgentInstruction,
   validateAgentSettings,
 } from "./core/agent-settings.ts";
-import { auditFileName, makeEntry, mergeAudit, nextSeq, parseEntry, resumeSeq, serializeEntry } from "./core/audit.ts";
+import { auditFileName, makeEntry, mergeAudit, nextSeq, parseEntry, resumeSeq, serializeEntry, sweepLostAttempts } from "./core/audit.ts";
 import { activityEntry } from "./core/shared-log.ts";
 import { randomBytes } from "node:crypto";
 import {
@@ -303,6 +303,9 @@ if (process.env.VOICEBOX_WORKSPACE) {
 // be a stranger writing into somebody's project with no record of what it did, and the machine root
 // would be the one root in the product with no audit at all.
 const INSTANCE = process.env.VOICEBOX_INSTANCE ?? "machine";
+// The process generation: an ATTEMPT entry carries it, so the next boot can tell
+// "pending from a dead process" (attempted-and-lost) from "pending right now" (in flight).
+const BOOT = randomBytes(8).toString("hex");
 
 /**
  * The log lives WITH THE ROOT, and only for a root this process can actually name.
@@ -328,13 +331,25 @@ function resumeLog() {
       .map(parseEntry)
       .filter(Boolean);
     resumeSeq(entries, INSTANCE);
+    // THE BOOT SWEEP (voicebox-beads-y69): an ATTEMPT left pending by a previous generation
+    // is attempted-and-lost — completed BY NAME now, because after a crash "whether it landed"
+    // is unknown and must not silently read as either success or refusal. Idempotent: a lost
+    // completion claims the attempt, so the sweep never reports it twice.
+    for (const d of sweepLostAttempts(entries, BOOT)) {
+      const lost = makeEntry(active.project, `machine:${active.root.path}`, INSTANCE,
+        { name: "voicebox-server", harness: "voicebox", session: null, cwd: ROOT },
+        d.act, "lost", "attempted-and-lost", "lost", null);
+      lost.attempt = d.attempt;
+      lost.boot = BOOT;
+      appendFileSync(auditPathFor(active.root), `${serializeEntry(lost)}\n`);
+    }
   } catch {
     resumeSeq([], INSTANCE); // no log yet
   }
 }
 
 /** Append one entry. A refusal is an entry too: a log of successes cannot answer "what did it try". */
-function logAct(act, decision, rule, result, observed, turn = null) {
+function logAct(act, decision, rule, result, observed, turn = null, attempt = null) {
   if (!loggableRoot()) {
     // Not silently skipped: the caller reports `logged: null` and `logRefused`, so the missing entry
     // is a fact on the response rather than a hole in the record.
@@ -357,12 +372,45 @@ function logAct(act, decision, rule, result, observed, turn = null) {
       observed,
       turn,
     );
+    if (attempt !== null) entry.attempt = attempt;
     appendFileSync(file, `${serializeEntry(entry)}\n`);
     return entry;
   } catch {
     // A log that cannot be written must not take the act with it — but the act's outcome is then
     // reported without an entry, which the caller's `logged` field makes visible rather than silent.
     return null;
+  }
+}
+
+/**
+ * logAttempt — the record that trying happened, written BEFORE the act applies (y69). The
+ * outcome entry carries `attempt` back to it; if no outcome ever arrives (a crash mid-act),
+ * the next boot's sweep completes it as attempted-and-lost. Pre-flight REFUSALS do not get
+ * attempts — they never entered the applying phase, and their refusal entry already names them.
+ */
+function logAttempt(act, turn = null) {
+  if (!loggableRoot()) return null;
+  try {
+    const dir = path.join(active.root.path, ".audit");
+    mkdirSync(dir, { recursive: true });
+    const file = auditPathFor(active.root);
+    resumeLog();
+    const entry = makeEntry(
+      active.project,
+      `machine:${active.root.path}`,
+      INSTANCE,
+      { name: "voicebox-server", harness: "voicebox", session: null, cwd: ROOT },
+      act,
+      "attempt",
+      "attempted",
+      "pending",
+      null,
+    );
+    entry.boot = BOOT;
+    appendFileSync(file, `${serializeEntry(entry)}\n`);
+    return entry;
+  } catch {
+    return null; // no attempt record must take the act down — the outcome entry still lands
   }
 }
 
@@ -646,14 +694,32 @@ async function execute(action) {
         root: active.root,
       };
     }
-    writeFileSync(candidate, action.content);
-    const entry = logAct({ kind: "write", target: name, tool: "turn" }, "allow", "writes-inside", "ok", observeUnderRoot(name), action.turn ?? null);
+    // ATTEMPT-FIRST (voicebox-beads-y69): past pre-flight, the trying is recorded BEFORE the
+    // applying — so a crash between here and the outcome leaves a dangling attempt that the
+    // next boot names "lost", instead of the act silently never having existed.
+    const att = logAttempt({ kind: "write", target: name, tool: "turn" }, action.turn ?? null);
+    let entry;
+    try {
+      writeFileSync(candidate, action.content);
+    } catch (err) {
+      entry = logAct({ kind: "write", target: name, tool: "turn" }, "refuse", "write-error", "error", null, action.turn ?? null, att?.seq ?? null);
+      return {
+        ok: false,
+        refused: "write-error",
+        why: `the write failed while applying: ${err?.message ?? err}`,
+        logged: entry ? entry.seq : null,
+        attempt: att?.seq ?? null,
+        root: active.root,
+      };
+    }
+    entry = logAct({ kind: "write", target: name, tool: "turn" }, "allow", "writes-inside", "ok", observeUnderRoot(name), action.turn ?? null, att?.seq ?? null);
     return {
       ok: true,
       action: `wrote ${name} (${action.content.length} bytes)`,
       file: name,
       root: active.root,
       logged: entry ? entry.seq : null,
+      attempt: att?.seq ?? null,
       auditLocation: `${active.root.path}/.audit/`,
     };
   }
@@ -1245,6 +1311,9 @@ async function handle(req, res) {
     if (!bearer) {
       return json(res, 403, { ok: false, refused: "environment-not-paired", why: `"${target.label ?? envKey}" is listed but not paired — pair it (an explicit act, gated by the host token) before the host will carry a call to it` });
     }
+    // ATTEMPT-FIRST on the crossing act too: "did the call land?" must be answerable when
+    // the process dies mid-flight, not only when the answer comes back.
+    const att = logAttempt({ kind: "network", target: `${target.origin}/api/execute`, tool }, null);
     try {
       const answer = await fetch(`${target.origin}/api/execute`, {
         method: "POST",
@@ -1252,10 +1321,15 @@ async function handle(req, res) {
         body: JSON.stringify({ envKey, tool, args }),
       });
       const out = await answer.json().catch(() => null);
-      return json(res, answer.status, out ?? { ok: false, refused: "bad-answer", why: "the remote answered something that was not JSON" });
+      const attempt = att?.seq ?? null;
+      const refusedAnswer = !out || out.ok === false;
+      const completion = logAct({ kind: "network", target: `${target.origin}/api/execute`, tool }, refusedAnswer ? "refuse" : "allow", refusedAnswer ? (out?.refused ?? "bad-answer") : "proxied", refusedAnswer ? "refused" : "ok", out?.observed ?? null, null, attempt);
+      return json(res, answer.status, out ?? { ok: false, refused: "bad-answer", why: "the remote answered something that was not JSON", logged: completion ? completion.seq : null, attempt });
     } catch (err) {
       const no = unreachable(target.label ?? envKey, target.origin);
-      return json(res, 502, { ok: false, refused: no.refused, why: no.why });
+      const attempt = att?.seq ?? null;
+      const completion = logAct({ kind: "network", target: `${target.origin}/api/execute`, tool }, "refuse", no.refused, "refused", null, null, attempt);
+      return json(res, 502, { ok: false, refused: no.refused, why: no.why, logged: completion ? completion.seq : null, attempt });
     }
   }
 
