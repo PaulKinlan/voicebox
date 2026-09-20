@@ -356,3 +356,18 @@ test("page load with files produces zero POST /api/turn calls (no phantom turns)
   }
 });
 
+
+// ── the prose sweep: claims the served pages make about the running system ──
+test("the pages' prose matches the running system (prose sweep, 2026-09-20)", async () => {
+  const page = readFileSync(path.join(ROOT, "public", "index.html"), "utf8");
+  // Whose disk: the server's, said plainly — "read from disk" alone implied the page's.
+  assert.match(page, /read from the server's disk/);
+  // The retired refusal message must not come back through any served page:
+  for (const served of ["index.html", "environment.html"]) {
+    const text = readFileSync(path.join(ROOT, "public", served), "utf8");
+    assert.doesNotMatch(text, /escapes the workspace/, `${served} still carries the retired "escapes the workspace" message`);
+  }
+  // The live-voice claim is pinned by the code it describes: no tool references.
+  const live = readFileSync(path.join(ROOT, "public", "live-voice.js"), "utf8");
+  assert.doesNotMatch(live, /\btools?\b/, "live-voice.js now mentions tools — the footer's 'takes no tools yet' needs re-checking");
+});
