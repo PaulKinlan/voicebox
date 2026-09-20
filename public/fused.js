@@ -16,6 +16,7 @@ const SVG = "http://www.w3.org/2000/svg";
 const WANTED = {
   files: "files", made: "made-list", samples: "samples", count: "file-count",
   where: "where-note", dot: "server-dot", refresh: "refresh", report: "turn-report", newFile: "new-file",
+  rootKind: "root-kind", rootNote: "root-note", madeHeading: "made-heading",
   stage: "voice-ring-wrap", mic: "mic", state: "voice-state",
   session: "session", log: "session-log", form: "text-form", utterance: "utterance", send: "send",
   reader: "reader", readerTitle: "reader-title", readerFacts: "file-facts", readerBody: "file-body",
@@ -158,16 +159,81 @@ function showSkeleton() {
   els.files.replaceChildren(item);
 }
 
+// ── which root the loop writes into, and who acts on it ────────────────────
+//
+// Two different facts, always in this order: WHAT KIND of root it is (opfs, a
+// picked folder, a folder on the machine) and only then whether anything can
+// act on it from here. "There is no picked folder here" is not "permission
+// denied", and a page that answers the second question with the first one's
+// words is lying about the system it is looking at.
+let activeRoot = undefined; // undefined = not asked yet, null = none declared
+
+async function loadRoot() {
+  try {
+    const answer = await request("/api/root");
+    activeRoot = answer?.declared ? answer : null;
+  } catch {
+    activeRoot = undefined; // an older server with no root seam: say so, do not invent one
+  }
+  renderRoot();
+}
+
+function renderRoot() {
+  const kindEl = els.rootKind;
+  const noteEl = els.rootNote;
+  if (!kindEl || !noteEl) return;
+  const clear = () => { noteEl.hidden = true; noteEl.textContent = ""; noteEl.dataset.tone = ""; };
+
+  if (activeRoot === undefined) {
+    kindEl.textContent = "root not reported";
+    noteEl.textContent = "This server does not say which root the loop writes into, so this page cannot name it.";
+    noteEl.dataset.tone = "warn";
+    noteEl.hidden = false;
+    return;
+  }
+  if (activeRoot === null) {
+    kindEl.textContent = "no root declared";
+    noteEl.textContent = "No project root is declared, so there is nothing for a turn to write into — the environment declares one when it opens a project.";
+    noteEl.dataset.tone = "warn";
+    noteEl.hidden = false;
+    return;
+  }
+
+  const where = activeRoot.facts?.where ?? activeRoot.root?.kind ?? "a root";
+  const name = activeRoot.root?.path ?? activeRoot.root?.name ?? activeRoot.root?.label ?? "";
+  kindEl.textContent = name ? `${where} · ${name}` : where;
+  kindEl.title = activeRoot.description ?? "";
+
+  if (!activeRoot.reachableFromThisProcess) {
+    // Kind first (in the chip), then reachability in the server's own words —
+    // which distinguish "no root yet" from "a root this placement cannot act
+    // on". Never "permission denied" for a kind that has no permission story.
+    noteEl.textContent = activeRoot.why ?? activeRoot.refused ?? "this server cannot act on that root";
+    noteEl.dataset.tone = "warn";
+    noteEl.hidden = false;
+    return;
+  }
+  clear();
+}
+
 async function health() {
   try {
     const answer = await request("/api/health");
     if (els.dot) els.dot.dataset.ok = "true";
-    if (els.where) els.where.textContent = "local server ready";
+    // The header answers ONE question — where the files are — so the server's
+    // health is the dot, not a second label competing for the same slot. Two
+    // labels describing storage in one line is what made the old header
+    // ambiguous ("workspace/" and "local server ready" both looked like the
+    // answer to "where are my files?").
+    if (els.where) { els.where.textContent = ""; els.where.title = "the local server answered"; }
     stampBuild(answer.build ?? null);
+    await loadRoot();
   } catch {
     if (els.dot) els.dot.dataset.ok = "false";
-    if (els.where) els.where.textContent = "no answer from the local server";
+    if (els.where) { els.where.textContent = "no answer from the local server"; els.where.title = ""; }
     stampBuild(null);
+    if (els.rootKind) els.rootKind.textContent = "root unknown";
+    if (els.rootNote) { els.rootNote.textContent = "The local server is not answering, so which root it writes into cannot be checked."; els.rootNote.dataset.tone = "warn"; els.rootNote.hidden = false; }
   }
 }
 
@@ -194,6 +260,15 @@ async function load() {
   }
 }
 
+/** How to name a file's home in one string, whatever kind of root it is. */
+function rootLabel() {
+  const root = activeRoot?.root;
+  if (!root) return "";
+  const base = root.path ?? root.name ?? root.label ?? "";
+  if (!base) return "";
+  return `${base.replace(/\/$/, "")}/`;
+}
+
 async function showFile(name) {
   shownFile = name;
   els.copy.disabled = true;
@@ -210,7 +285,7 @@ async function showFile(name) {
       // One short line: on a phone the old facts wrapped to five lines above a
       // two-line note (astra's landing review). The path is the title.
       els.readerFacts.textContent = `${size(content)} · read from disk`;
-      els.readerFacts.title = `workspace/${name}, read just now`;
+      els.readerFacts.title = `${rootLabel()}${name}, read just now`;
       els.readerBody.textContent = content;
       els.reader.dataset.state = "ready";
       els.copy.disabled = content.length === 0;
@@ -277,7 +352,7 @@ async function send(said) {
     if (answer.action?.verb === "read" && typeof result.content === "string") {
       els.readerTitle.textContent = result.action;
       els.readerFacts.textContent = `${size(result.content)} · read from disk`;
-      els.readerFacts.title = `workspace/${result.action}, read just now`;
+      els.readerFacts.title = `${rootLabel()}${result.action}, read just now`;
       els.readerBody.textContent = result.content;
       els.reader.dataset.state = "ready";
       els.copy.disabled = result.content.length === 0;
@@ -581,6 +656,7 @@ if (els.settings && !("closedBy" in HTMLDialogElement.prototype)) {
 // circle. No audio, no picture — a meter that animates while nothing is being
 // heard is the same lie as a "listening" label with the mic off.
 const OUTPUT_SAMPLES = 64;
+const INPUT_BARS_PAGE = 28;
 const OUTPUT_CENTRE = 120;
 const OUTPUT_BASE = 62; // hugs the button (radius ~55 in these units)
 const OUTPUT_AMPLITUDE = 13; // a contour hugging the button, lightly textured by real audio
@@ -595,32 +671,128 @@ function meterLevel(value) {
   return Math.min(1, Math.sqrt(energy) * 1.9);
 }
 
+// ── the output ring: a smooth closed curve that morphs at frame rate ───────
+//
+// Two separate problems made this look "stilted and jilted" (Paul, 2026-09-20):
+//
+//   1. GEOMETRY. The old path joined 64 sample points with straight `L`
+//      segments, so the ring was a 64-gon and its edges were visible.
+//   2. DATA RATE. Samples arrive with the audio — around 12 a second — while
+//      the loop draws at 60. Redrawing the same numbers 58 times a second is
+//      not animation: what the eye sees is ~12 discrete jumps a second, each
+//      one shifting the whole ring by a whole sample.
+//
+// So the ring keeps a *fractional phase* that eases toward the newest data and
+// samples the ring between its points, and the polyline is turned into a closed
+// Catmull-Rom curve through denser points. The picture then changes every frame
+// (measured 60/s, see the drive note in the commit) while the data underneath
+// still arrives at the audio rate — the honest way to interpolate a coarse
+// signal rather than pretending it is faster than it is.
+const RENDER_POINTS = 160; // drawn points around the ring (was 64, straight-joined)
+let ringPhase = 0;         // where we are rendering, in ring positions
+let ringTarget = 0;        // where the newest data has arrived, in ring positions
+let ringSeen = null;       // the newest sample we have already counted
+
+function ringAt(samples, position) {
+  const n = samples.length;
+  const i = Math.floor(position) % n;
+  const j = (i + 1) % n;
+  const t = position - Math.floor(position);
+  return samples[i] * (1 - t) + samples[j] * t;
+}
+
+/** Closed Catmull-Rom through the points, as cubic Béziers — no visible facets. */
+function closedCurve(points) {
+  const n = points.length;
+  const at = (i) => points[(i % n + n) % n];
+  let d = `M${at(0)[0].toFixed(2)},${at(0)[1].toFixed(2)}`;
+  for (let i = 0; i < n; i++) {
+    const p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
+    const c1x = p1[0] + (p2[0] - p0[0]) / 6;
+    const c1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const c2x = p2[0] - (p3[0] - p1[0]) / 6;
+    const c2y = p2[1] - (p3[1] - p1[1]) / 6;
+    d += `C${c1x.toFixed(2)},${c1y.toFixed(2)} ${c2x.toFixed(2)},${c2y.toFixed(2)} ${p2[0].toFixed(2)},${p2[1].toFixed(2)}`;
+  }
+  return `${d}Z`;
+}
+
 function drawOutputRing(samples) {
   const path = document.getElementById("output-path");
   if (!path) return;
-  if (!samples) { path.removeAttribute("d"); return; }
-  let d = "";
-  for (let i = 0; i < OUTPUT_SAMPLES; i++) {
-    const angle = (i / OUTPUT_SAMPLES) * Math.PI * 2 - Math.PI / 2;
-    const radius = OUTPUT_BASE + meterLevel(samples[i]) * OUTPUT_AMPLITUDE;
-    d += `${i ? "L" : "M"}${(OUTPUT_CENTRE + Math.cos(angle) * radius).toFixed(2)},${(OUTPUT_CENTRE + Math.sin(angle) * radius).toFixed(2)}`;
+  if (!samples) {
+    path.removeAttribute("d");
+    ringSeen = null;
+    ringPhase = 0;
+    ringTarget = 0;
+    return;
   }
-  path.setAttribute("d", `${d}Z`);
-  path.dataset.rev = `r4 first=${String(samples[0])} level=${meterLevel(samples[0]).toFixed(3)}`;
+  // Count a new sample once: the newest value changing is the signal that the
+  // client's ring advanced (it advances on PLAYBACK, not on arrival).
+  const newest = samples[samples.length - 1];
+  if (ringSeen === null || Math.abs(newest - ringSeen) > 1e-6) {
+    ringSeen = newest;
+    ringTarget += 1;
+  }
+  // Ease the render phase toward the data, so a step arrives as a movement.
+  ringPhase += (ringTarget - ringPhase) * 0.18;
+
+  const points = [];
+  for (let i = 0; i < RENDER_POINTS; i++) {
+    const position = ringPhase + (i / RENDER_POINTS) * OUTPUT_SAMPLES;
+    const angle = (i / RENDER_POINTS) * Math.PI * 2 - Math.PI / 2;
+    const radius = OUTPUT_BASE + meterLevel(ringAt(samples, position)) * OUTPUT_AMPLITUDE;
+    points.push([OUTPUT_CENTRE + Math.cos(angle) * radius, OUTPUT_CENTRE + Math.sin(angle) * radius]);
+  }
+  path.setAttribute("d", closedCurve(points));
 }
+
+// ── the input wave: fills the button, clipped by its inner circle ─────────
+//
+// Paul, 2026-09-20: "It just looks like a little blue bar that kind of grows…
+// I'd expect it to be bigger and maybe kind of clipped to the inner circle of
+// the big button." The old version was capped at ±11 units in a 40-tall box on
+// purpose; this one uses the whole 100-unit circle and lets the clip do the
+// framing, with attack/decay so quiet speech still moves instead of sitting on
+// the floor (attack is fast, decay is slow — the eye reads movement, and a
+// meter that snaps back to nothing between syllables reads as broken).
+const inputDisplay = new Float32Array(INPUT_BARS_PAGE);
+let inputInit = false;
+// A running peak, decaying slowly, so the wave uses the space it has at ANY
+// speaking level instead of sitting near the floor for quiet speech. Below a
+// floor it stops amplifying: a silent room must not be drawn as a loud one,
+// which is the difference between a normalised meter and a lie.
+let inputPeak = 0;
+const INPUT_GATE = 0.12;
 
 function drawInputWave(samples) {
   const path = document.getElementById("input-path");
   if (!path) return;
-  if (!samples) { path.removeAttribute("d"); return; }
+  if (!samples) {
+    path.removeAttribute("d");
+    inputInit = false;
+    return;
+  }
   const n = samples.length;
-  const middle = 20;
-  const height = 11; // stays inside the button: expressiveness grows, size does not
+  if (!inputInit || inputDisplay.length !== n) {
+    inputDisplay.fill(0);
+    inputInit = true;
+  }
+  const middle = 50;
+  const maxHalf = 46; // the clip circle's radius: the wave fills it, the circle trims it
+  let peak = 0;
+  for (let i = 0; i < n; i++) peak = Math.max(peak, meterLevel(samples[i]));
+  inputPeak = Math.max(peak, inputPeak * 0.94);
+  const gain = inputPeak >= INPUT_GATE ? 1 / inputPeak : 1;
   let top = "";
   let bottom = "";
   for (let i = 0; i < n; i++) {
-    const x = ((i / (n - 1)) * 100).toFixed(2);
-    const half = Math.max(1, meterLevel(samples[i]) * height);
+    const target = Math.min(maxHalf, meterLevel(samples[i]) * gain * maxHalf * 0.85);
+    // attack fast, decay slow
+    inputDisplay[i] += (target - inputDisplay[i]) * (target > inputDisplay[i] ? 0.6 : 0.12);
+    const half = Math.max(0.8, inputDisplay[i]);
+    // x spans the full width; the ends are cut by the circle rather than padded
+    const x = ((i / (n - 1)) * 108 - 4).toFixed(2);
     top += `${i ? "L" : "M"}${x},${(middle - half).toFixed(2)}`;
     bottom = `L${x},${(middle + half).toFixed(2)}` + bottom;
   }
