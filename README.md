@@ -80,7 +80,13 @@ node server.mjs            # serves the page on http://127.0.0.1:8787
 Open the page in Chrome, press the mic, and speak — e.g. *"create a file called
 hello.txt with hello world"*, *"read hello.txt"*, *"list files"*. A text field
 does the same without a mic. Every turn is captured, resolved to an action, and
-the result is written into `workspace/` — a real directory on disk.
+the result is written into **the active project root** — a real directory on
+disk, declared by the page (`POST /api/root`) rather than assumed.
+
+`VOICEBOX_WORKSPACE=/some/folder node server.mjs` declares one at boot, which is
+how you run the loop against a folder without opening the page. With no
+declaration the loop refuses every act by name — `root-not-declared` — because a
+default is a decision nobody made, and `workspace/` was exactly that.
 
 What works today:
 
@@ -107,9 +113,11 @@ What does not work yet:
   continuously, the model replies, and you can interrupt it — that part landed.
   What is missing is the version with **no press at all** (a wake word or a
   standing session), which is what the brief's "always-on" means.
-- **The workspace is a flat directory** — no project scaffolding, no shell. (The
-  environment page below is where projects exist; the skeleton loop above still writes
-  loose files into `workspace/`.)
+- **The loop has no root of its own.** It writes into the active project root, which the
+  environment declares — OPFS, a folder you picked, or a folder on this machine — and it
+  refuses by name when the root belongs to another placement (see the environment page
+  below, and `docs/evidence/one-root-20260920/RECEIPT.md`). There is no `workspace/`
+  default any more: what used to be two roots is one.
 
 ## The browser environment (E1-M0 + N20)
 
