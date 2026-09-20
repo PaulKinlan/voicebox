@@ -722,6 +722,7 @@ on(els.settingsOpen, "click", () => {
   els.settings.showModal();
   els.settingsOpen.setAttribute("aria-expanded", "true");
   refreshDevices();
+  void loadAgentSettings();
 });
 
 // Every close path — the form's method="dialog" button, Esc, light dismiss, or a programmatic
@@ -744,6 +745,103 @@ if (els.settings && !("closedBy" in HTMLDialogElement.prototype)) {
       && rect.left <= event.clientX && event.clientX <= rect.left + rect.width;
     if (!inside) els.settings.close("dismissed");
   });
+}
+
+// ── the agent you are talking to: provider, voice, personality ────────────
+//
+// THE ONE RULE THIS SECTION KEEPS: a control shows what is APPLIED, and says where the request and
+// the reality differ. A picker bound to a field the session never reads is worse than no picker —
+// the person believes they changed something and the page agrees with them — so `voice` and
+// `personality` say "stored, not applied" in words until a provider carries them.
+let agent = null; // the last payload, kept so a change can be rendered against it
+
+async function loadAgentSettings() {
+  try {
+    agent = await request("/api/agent-settings");
+  } catch {
+    agent = null;
+  }
+  renderAgentSettings();
+}
+
+function fillAgentPicker(picker, options, selected) {
+  if (!picker) return;
+  picker.textContent = "";
+  for (const option of options) {
+    const el = document.createElement("option");
+    el.value = option.value;
+    el.textContent = option.label;
+    if (option.value === selected) el.selected = true;
+    picker.append(el);
+  }
+}
+
+function renderAgentSettings() {
+  const providerState = document.getElementById("agent-provider-state");
+  const voiceState = document.getElementById("agent-voice-state");
+  const personalityState = document.getElementById("agent-personality-state");
+  if (!providerState) return;
+
+  if (!agent) {
+    providerState.textContent = "The server does not report agent settings.";
+    return;
+  }
+
+  // PROVIDER — the one setting that is APPLIED, and the only one whose state names a live session.
+  const chosen = agent.capabilities.find((c) => c.id === agent.requested.provider);
+  fillAgentPicker(
+    document.getElementById("agent-provider"),
+    agent.capabilities.map((c) => ({ value: c.id, label: c.available ? c.label : `${c.label} — not available` })),
+    agent.requested.provider,
+  );
+  const running = agent.runningSession ? ` A live session is using ${agent.runningSession.provider}.` : " No live session is open.";
+  providerState.textContent = chosen && !chosen.available
+    ? `Cannot be used: ${chosen.why}.`
+    : `In use for the next session: ${chosen.label} · ${agent.applied.model}.${running}`;
+
+  // VOICE — per provider, and honest about not being applied yet.
+  const voicePicker = document.getElementById("agent-voice");
+  fillAgentPicker(voicePicker, [
+    { value: "", label: `${chosen.label}'s default` },
+    ...chosen.voices.map((v) => ({ value: v.id, label: v.label })),
+  ], agent.requested.voice ?? "");
+  voiceState.textContent = agent.requested.voice
+    ? `Chosen: ${agent.requested.voice}. ${agent.pending.voice}`
+    : `Using ${chosen.label}'s default voice. ${agent.pending.voice}`;
+
+  // PERSONALITY — stored, layered on the base, and the base is shown so a person can see what a
+  // personality is layered ON.
+  const personalityPicker = document.getElementById("agent-personality");
+  fillAgentPicker(personalityPicker, agent.personalities.map((p) => ({ value: p.id, label: p.label })), agent.requested.personality);
+  personalityState.textContent = `Chosen: ${agent.requested.personality}. ${agent.pending.personality}`;
+
+  const base = document.getElementById("agent-base");
+  if (base) base.textContent = agent.base.instruction;
+  const note = document.getElementById("agent-base-note");
+  if (note) note.textContent = `${agent.base.note} (editable here: ${agent.base.editable ? "yes" : "no"}). Settings are ${agent.persisted}.`;
+}
+
+async function saveAgentSetting(patch) {
+  const answer = await request("/api/agent-settings", { method: "PUT", body: JSON.stringify(patch) });
+  if (!answer || answer.ok === false) {
+    const why = answer?.why ?? "the server did not accept that";
+    for (const id of ["agent-provider-state", "agent-voice-state", "agent-personality-state"]) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = `Refused (${answer?.refused ?? "unknown"}): ${why}`;
+    }
+    return;
+  }
+  agent = answer;
+  renderAgentSettings();
+}
+
+for (const [id, patch] of [
+  ["agent-provider", (value) => ({ provider: value })],
+  ["agent-voice", (value) => ({ voice: value || null })],
+  ["agent-personality", (value) => ({ personality: value })],
+]) {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener("change", () => void saveAgentSetting(patch(el.value)));
 }
 
 // ── the two meters: your voice, and the agent's ───────────────────────────
@@ -1002,3 +1100,4 @@ if (els.where) els.where.textContent = "checking the local server…";
 
 health();
 load();
+loadAgentSettings(); // the dialog has real state before anyone opens it
