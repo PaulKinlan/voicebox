@@ -37,10 +37,12 @@ const turn = (transcript) =>
     body: JSON.stringify({ transcript }),
   }).then((r) => r.json());
 
+// The suite SPAWNS the server, so it is the host: declaring a root takes the host token, exactly as a
+// person's shell does it (voicebox-beads-cfn). A suite that declared without it was modelling the page.
 const declare = (project, root) =>
   fetch(`${BASE}/api/root`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "x-voicebox-host-token": server.hostToken },
     body: JSON.stringify({ project, root }),
   }).then(async (r) => ({ status: r.status, body: await r.json() }));
 
@@ -311,7 +313,7 @@ test("UN-DECLARE returns to root-not-declared, and the state is reachable twice 
   const before = await rootInfo();
   assert.equal(before.declared, true, "this check needs a declared root to un-declare");
 
-  const removed = await fetch(`${BASE}/api/root`, { method: "DELETE" }).then((r) => r.json());
+  const removed = await fetch(`${BASE}/api/root`, { method: "DELETE", headers: { "x-voicebox-host-token": server.hostToken } }).then((r) => r.json());
   assert.equal(removed.ok, true);
   assert.equal(removed.declared, false, "un-declare did not report the state it left");
   assert.equal(removed.refused, "root-not-declared");
@@ -342,7 +344,7 @@ test("the ordering lesson: restore the previous state BEFORE removing your own",
   await declare("ordering", { kind: "machine", path: scratchRoot });
 
   // Remove my own state first, THEN the directory — the correct order.
-  await fetch(`${BASE}/api/root`, { method: "DELETE" });
+  await fetch(`${BASE}/api/root`, { method: "DELETE", headers: { "x-voicebox-host-token": server.hostToken } });
   rmSync(scratchRoot, { recursive: true, force: true });
 
   const after = await Promise.race([

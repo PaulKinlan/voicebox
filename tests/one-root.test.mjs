@@ -28,6 +28,20 @@ let machineRoot;
 let pickedFolder;
 
 const send = (message) => page.evaluate((m) => window.e1m0.send(m), message);
+
+/**
+ * Declare a root THE WAY THE HOST DOES — with the token only the host's own directory carries.
+ *
+ * This suite used to declare as the page; since voicebox-beads-cfn the page cannot (and must not),
+ * because declaring a root re-points every file route. A suite that spawns the server is the host, so
+ * it declares with the token and lets the PAGE part be asserted separately, as a refusal.
+ */
+const declareAsHost = (project, root) =>
+  fetch(`${BASE}/api/root`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-voicebox-host-token": server.hostToken },
+    body: JSON.stringify({ project, root }),
+  }).then((r) => r.json());
 const turn = (transcript) =>
   fetch(`${BASE}/api/turn`, {
     method: "POST",
@@ -69,22 +83,52 @@ test.after(async () => {
   rmSync(scratch, { recursive: true, force: true });
 });
 
-test("the page declares a machine root, the loop writes there, and the page says who acts on it", { timeout: 120000 }, async () => {
-  // Through the page's own controls: type the path, submit the form.
+test("THE PAGE CANNOT DECLARE A ROOT (by name), and the host's declaration drives the loop", { timeout: 120000 }, async () => {
+  // The page's own controls: type the path, submit the form. This is the act that used to succeed
+  // without a credential, and it re-points every file route — voicebox-beads-cfn.
   await page.type("#machine-path", machineRoot);
   await page.click("#machine-form button");
 
-  // The declaration is the page's act, so it is asserted from the SERVER's side rather than from the
-  // page's own report of having sent it.
+  const refusal = await page.evaluate(async (dir) => {
+    const r = await fetch("/api/root", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ project: "page-attempt", root: { kind: "machine", path: dir } }) });
+    return { status: r.status, body: await r.json() };
+  }, machineRoot);
+  assert.equal(refusal.status, 403, `the page's declaration was not refused: ${JSON.stringify(refusal)}`);
+  assert.equal(refusal.body.refused, "host-token-required", JSON.stringify(refusal.body));
+  assert.match(refusal.body.why, /host's act|page cannot hold it/, "the refusal does not say whose act it is");
+
+  // THE CHAIN FROM THE BEAD, closed at its first step: the page declared the host's extension directory
+  // and then read the token out of it. The declaration is refused, so there is no root to read from —
+  // and the read is refused by name either way rather than served.
+  const chainedRead = await page.evaluate(async () => {
+    const r = await fetch("/api/file?name=.host-token");
+    return { status: r.status, body: await r.json() };
+  });
+  assert.ok(chainedRead.body.refused, `the chained read was not refused by name: ${JSON.stringify(chainedRead)}`);
+  assert.equal(chainedRead.body.content, undefined, "the chained read served content");
+  assert.ok(
+    ["root-not-declared", "dotfile-refused"].includes(chainedRead.body.refused),
+    `the chained read was refused, but not with a name this test recognises: ${chainedRead.body.refused}`,
+  );
+
+  // The page's transcript shows that refusal, so a person is told rather than left guessing.
+  const transcript = await page.evaluate(() => document.getElementById("transcript").textContent);
+  assert.match(transcript, /host-token-required|declaring the project root is the host's act/, "the page does not show why its declaration failed");
+
+  // AND THE HOST CAN: the same declaration with the token, then the loop acts there.
+  const declared = await declareAsHost("host-declared", { kind: "machine", path: machineRoot });
+  assert.equal(declared.ok, true, JSON.stringify(declared));
   const info = await waitForRoot((i) => i.root?.path === machineRoot, "the loop to be told about the machine root");
   assert.equal(info.root.kind, "machine", `the loop's root is not the declared one: ${JSON.stringify(info.root)}`);
   assert.equal(info.reachableFromThisProcess, true);
 
-  // The header names the kind and WHO acts on it — a fact, not something the user discovers by failing.
-  const header = await page.evaluate(() => document.getElementById("project").textContent);
-  assert.match(header, /a folder on this machine/, "the page does not name the machine folder kind");
-  assert.match(header, /acts come from/, "the page does not say who acts on this root");
-  assert.match(header, /the loop \(a machine process\)/, "the page does not name the loop as the actor");
+  // The loop's own view names the kind and WHO acts on it. (The page's header used to carry this,
+  // because the page used to be the declarer; now that the host declares, the page's header describes
+  // the page's own project — so the assertion follows the fact to where it now lives.)
+  assert.equal(info.root.kind, "machine");
+  assert.deepEqual(info.facts.reachableFrom, ["machine"], "the facts do not say who acts on a machine root");
+  assert.match(info.description, /machine/, "the loop does not describe the root it acts on");
 
   // The loop writes through its own path (a transcript turn), and it lands in THIS project's root.
   const reply = await turn("create a file called from-the-loop.txt with written by the loop");
@@ -102,12 +146,12 @@ test("the page declares a machine root, the loop writes there, and the page says
   assert.match(panel, /the machine's root for/, "the panel does not name the root it is showing");
   assert.match(panel, new RegExp(machineRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "the panel does not show the machine path");
 
-  // THE REFUSAL THAT MAKES IT ONE ROOT: the page cannot write into a machine root, and it says who can.
-  const localAct = await send({ type: "createAsset", args: { name: "from-the-page.txt", kind: "text", body: "page" } });
-  assert.equal(localAct.ok, false, `the page wrote into a root it does not own: ${JSON.stringify(localAct)}`);
-  assert.equal(localAct.code, "root-not-reachable-from-here", JSON.stringify(localAct));
-  assert.match(localAct.why, /machine/, "the refusal does not name the placement that can act");
-  assert.equal(existsSync(path.join(machineRoot, "from-the-page.txt")), false, "a refused write still wrote");
+  // (No assertion here about the page's own write: the page cannot declare, so its own act lands on
+  // whatever project IT opened locally — which the picked-folder test covers directly. The old
+  // assertion only held while the page could declare a machine root, and which of the two should be
+  // true is the open design question this bead surfaced: if the page may declare roots it needs a
+  // bounded token-free route; if it may not, the environment page's declaration UI has to change,
+  // because a sentence promising a route that now refuses is worse than no sentence.)
 
   // And the containment refusal still bites on the loop's side of this root.
   const escape = await turn("create a file called ../escape.txt with nope");
@@ -125,8 +169,9 @@ test("a picked folder is declared the same way, and the loop refuses it by name"
     },
     { args: ["picked-folder"], label: "the picked folder to be adopted" },
   );
-  // Re-opening it runs the page's declaration path for a handle root.
-  await page.evaluate(async () => { await window.e1m0.open("picked-folder"); });
+  // The HOST declares the picked root (the page cannot), and the loop still refuses to act on it —
+  // a picked folder is the page's to write, which is a different fact from who may declare it.
+  await declareAsHost("picked-folder", { kind: "handle", id: "picked-folder" });
 
   const info = await rootInfo();
   assert.equal(info.root.kind, "handle", `the page did not declare its picked root: ${JSON.stringify(info.root)}`);
@@ -185,7 +230,7 @@ test("when the declared root vanishes, the page says so by name — with the rem
   const doomed = path.join(scratch, "doomed-loop-root");
   mkdirSync(doomed);
   writeFileSync(path.join(doomed, "still-here.txt"), "x");
-  await page.evaluate(async (dir) => { await window.e1m0.useMachineRoot(dir, "doomed"); }, doomed);
+  await declareAsHost("doomed", { kind: "machine", path: doomed });
   await waitForRoot((i) => i.root?.path === doomed, "the loop to be told about the doomed root");
 
   // The loop works, the panel lists the folder, and then the folder goes away underneath it.
@@ -220,8 +265,8 @@ test("a declaration the loop cannot act on carries the ROUTE, not just the reaso
   // same defect as the room's empty state that once named a remedy it offered no way to reach.
   // A project of its own: "atlas" was re-declared as a machine project earlier in this file, and the
   // registry remembers — which is itself the re-declaration behaviour working.
-  await page.evaluate(async () => { await window.e1m0.open("origin-project"); });
-  const info = await waitForRoot((i) => i.declared && i.root?.kind === "opfs", "the page to declare its OPFS project");
+  await declareAsHost("origin-project", { kind: "opfs", path: "v1/projects/origin-project" });
+  const info = await waitForRoot((i) => i.declared && i.root?.kind === "opfs", "the host to declare its OPFS project");
   assert.equal(info.reachableFromThisProcess, false, "an OPFS root must report itself unreachable from the server");
 
   const transcript = await page.evaluate(() => document.getElementById("transcript").textContent);
@@ -232,12 +277,19 @@ test("a declaration the loop cannot act on carries the ROUTE, not just the reaso
   const header = await page.evaluate(() => document.getElementById("project").textContent);
   assert.match(header, /turns cannot write into this kind yet/, "the header hides which kinds turns can write into");
 
-  // And the machine-folder route really does change it: same project, a kind turns can write into.
-  await page.evaluate(async (dir) => { await window.e1m0.useMachineRoot(dir, "origin-project"); }, machineRoot);
+  // And the machine-folder route really does change it — declared BY THE HOST, because the page's own
+  // attempt is refused (asserted in the first test). The page's header keeps describing the page's
+  // project; the LOOP's view is what flips, which is where the fact now lives.
+  await declareAsHost("origin-project", { kind: "machine", path: machineRoot });
   const machine = await waitForRoot((i) => i.root?.kind === "machine", "the machine declaration");
   assert.equal(machine.reachableFromThisProcess, true);
-  const afterHeader = await page.evaluate(() => document.getElementById("project").textContent);
-  assert.match(afterHeader, /turns DO write here/, "the header does not say that turns write into this root");
+
+  // THE COPY CONSEQUENCE, asserted rather than left implicit: the page still tells a person that
+  // choosing a machine folder is the route to a writable root — and with this token requirement that
+  // route now ends in a refusal on the page. Recorded here as the open design question, so a reader
+  // sees the contradiction in the test rather than in production.
+  const declarationNotice = await page.evaluate(() => document.getElementById("transcript").textContent);
+  assert.match(declarationNotice, /host-token-required/, "the page does not show the token refusal for its own declaration attempt");
 });
 
 // ── a read that fails for a permission reason says so ───────────────────────
