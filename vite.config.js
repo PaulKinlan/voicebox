@@ -176,6 +176,15 @@ export default defineConfig({
     strictPort: true,
     fs: { allow: [path.dirname(fileURLToPath(import.meta.url))] }, // the alias serves outside root
     host: true, // listen on all interfaces: LAN 192.168.x.x + Tailscale 100.x
+    // Tailscale Serve puts a real HTTPS name in front of this port (https://omarchy.tail9d22b9.ts.net),
+    // and Vite refuses any Host it does not recognise — a 403 that looks like the server being down.
+    // WHY THIS LINE EXISTS: https://omarchy.tail9d22b9.ts.net/ is Tailscale Serve — the secure
+    // context the PHONE MICROPHONE needs, and the front door for the proxied-custody environment
+    // work. Lose this line and both disappear, with nothing but a 403 to say so.
+    // The .ts.net suffix is the tailnet's own domain (tailnet membership is the access control);
+    // localhost stays for the local case. A second tailnet machine fronting THIS dev server is the
+    // only case that would justify widening further.
+    allowedHosts: [".ts.net", "localhost"],
     // POLLING WATCHER, 2026-09-19. A `git merge --ff-only` replaced
     // public/audio-client.js and Vite's watcher never fired, so the server kept
     // serving its cached transform of the OLD module: the disk had the new
