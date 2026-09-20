@@ -27,8 +27,9 @@
 //   [private]      root-not-declared refusal · scratch declaration · typed
 //                  turn page≡disk≡content (exactly one POST) · ../ traversal
 //                  refused · artefact-free · porcelain-clean
-//   PENDING (journal-omr): once the vanished-root hang is fixed, declare a
-//   root, delete its directory, act, and assert a named refusal with a remedy.
+//   journal-omr's case is LANDED here: the private half declares a root,
+//   deletes its directory out from under the declaration, acts, and asserts
+//   the named `root-vanished` refusal with a remedy, in bounded time.
 //
 // SCOPE OF THE EYES: this gate measures 127.0.0.1:5173/8787 ONLY. Paul's
 // Tailscale and LAN surfaces are outside it — ALL CLEAR is a statement about
@@ -366,6 +367,26 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   const fontPrivate = await fetch(`${PRIVATE_ORIGIN}/fonts/inter-latin.woff2`);
   report("private", "font serves through the production server", fontPrivate.status === 200,
     `GET /fonts/inter-latin.woff2 -> ${fontPrivate.status} ${fontPrivate.headers.get("content-type") ?? ""}`);
+
+  // ── journal-omr, regression-tested where it is testable ──────────────────
+  // A vanished root must refuse BY NAME with a remedy, in bounded time — it
+  // must never hang. Only the private half can run this: it declares, deletes
+  // the directory out from under the declaration, and acts. Wait for the
+  // condition, bound the wait, PRINT the latency — a slow refusal is
+  // information, a hang is an outage.
+  const vStart = Date.now();
+  rmSync(scratchRoot, { recursive: true, force: true });
+  let vResp = null;
+  try { vResp = await (await fetch(`${PRIVATE_ORIGIN}/api/files`)).json(); } catch (e) {
+    report("private", "a vanished root refuses by name with a remedy, fast", false,
+      `the act did not answer at all: ${String(e?.cause ?? e).slice(0, 80)}`);
+  }
+  const vMs = Date.now() - vStart;
+  if (vResp) {
+    report("private", "a vanished root refuses by name with a remedy, fast",
+      vResp?.refused === "root-vanished" && typeof vResp?.why === "string" && vResp.why.length > 0 && vMs < 2000,
+      `refused=${vResp?.refused} in ${vMs}ms — why: ${String(vResp?.why ?? "").slice(0, 90)}`);
+  }
 } catch (e) {
   report("harness", "run completed without crashing", false, String(e?.message ?? e).slice(0, 140));
 } finally {
