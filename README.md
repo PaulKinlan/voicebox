@@ -100,8 +100,10 @@ What works today:
   that knows create/read/list. It is a placeholder brain, deliberately: the
   resolver is a provider seam (`registerResolver(name, fn)`), and the model
   resolvers plug into exactly that contract.
-- **The action executor** — writes/reads/lists files in `workspace/` on disk.
-  This is the honest version of "it makes things": it makes files.
+- **The action executor** — writes/reads/lists files in **the active project root** on disk, which the
+  environment page declares (or `VOICEBOX_WORKSPACE` at boot). It used to say `workspace/`, which
+  stopped being true the moment the default root was retired: the loop has no root of its own, and a
+  sentence naming one was the last piece of the second root left standing in the docs.
 
 What does not work yet:
 
