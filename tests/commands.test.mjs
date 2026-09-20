@@ -33,6 +33,26 @@ test("an unknown command maps to null — the caller refuses, never guesses", ()
   assert.equal(commandToAction("write-file", { name: "x" }), null, "near-miss spellings are not accepted");
 });
 
+test("a missing required argument is a NAMED REFUSAL, never a coercion", () => {
+  // astra's argument-rename mutation: `filename` for `name` used to coerce to name=""
+  // and the supplied value was silently gone.
+  const renamed = commandToAction("write_file", { filename: "notes.txt", content: "hi" });
+  assert.equal(renamed.refused, "missing-argument", JSON.stringify(renamed));
+  assert.match(renamed.why, /name/, "the refusal names the missing argument");
+  const noContent = commandToAction("write_file", { name: "notes.txt" });
+  assert.equal(noContent.refused, "missing-argument");
+  assert.match(noContent.why, /content/);
+  // And a valid call still maps clean:
+  assert.deepEqual(commandToAction("write_file", { name: "a.txt", content: "" }), { verb: "write", name: "a.txt", content: "" });
+});
+
+test("the text resolver's instruction is GENERATED from the same list — no fourth copy", async () => {
+  const { RESOLVER_SYSTEM } = await import("../lib/resolver.mjs");
+  for (const c of COMMANDS) {
+    assert(RESOLVER_SYSTEM.includes(c.instruction), `the resolver instruction is missing ${c.verb}'s own line — a hand-maintained copy crept back`);
+  }
+});
+
 test("the system instruction names the tools AND the spoken refusals", () => {
   const text = liveSystemInstruction();
   for (const c of COMMANDS) assert(text.includes(c.name), `the instruction must name ${c.name}`);

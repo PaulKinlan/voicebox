@@ -1444,17 +1444,36 @@ server.on("upgrade", (req, socket) => {
         const responses = [];
         const seen = [];
         for (const call of calls) {
+          // EVERY command in a batch answers, including the ones that fail — a batch that
+          // sends nothing is indistinguishable from a hang (astra's live-tools review,
+          // 2026-09-20: one failing command swallowed every sibling's response). So the
+          // mapping is validated, the executor is wrapped, and a throw becomes a NAMED
+          // refusal rather than a swallowed outcome.
           const action = commandToAction(call.name, call.args);
-          // An unknown command is answered with a refusal, never dropped: an
-          // unanswered tool call leaves the model waiting on a hang.
-          const result = action
-            ? await execute({ ...action, turn: "live" })
-            : { ok: false, error: `unknown command: '${call.name}' — the only commands are in lib/commands.mjs` };
+          let result;
+          if (!action) {
+            result = { ok: false, refused: "unknown-command", error: `unknown command: '${call.name}' — the only commands are in lib/commands.mjs` };
+          } else if (action.refused) {
+            result = { ok: false, refused: action.refused, error: `refused: ${action.refused}`, why: action.why };
+          } else {
+            try {
+              result = await execute({ ...action, turn: "live" });
+            } catch (e) {
+              result = { ok: false, refused: "exec-threw", error: `refused: exec-threw`, why: `the executor threw instead of answering: ${e?.message ?? e}` };
+            }
+          }
           responses.push({ id: call.id, name: call.name, response: { result } });
           seen.push({ name: call.name, ok: result.ok, action: result.action ?? result.error });
         }
         const answered = session.sendToolResponse(responses);
-        console.error(`[live] tool-call ${seen.map((s) => `${s.name}:${s.ok ? "ok" : "refused"}`).join(", ")} — toolResponse ${answered ? "sent" : "NOT SENT"}`);
+        if (!answered) {
+          // The acts above may have LANDED while the answer could not be sent (the gate
+          // refuses a response before ready). That is the worst silence of the three, so it
+          // is the loudest line: which acts ran, and that the model never heard.
+          console.error(`[live] tool-call ${seen.map((s) => `${s.name}:${s.ok ? "ok" : "refused"}`).join(", ")} — toolResponse NOT SENT (the session was not ready; the host gates tool-call events on ready, so this means the gate was bypassed)`);
+        } else {
+          console.error(`[live] tool-call ${seen.map((s) => `${s.name}:${s.ok ? "ok" : "refused"}`).join(", ")} — toolResponse sent`);
+        }
         // The page hears about it too (additive: today's client ignores the
         // type; a UI lane can render it).
         ws.send(JSON.stringify({ type: "tool", calls: seen }));

@@ -103,3 +103,45 @@ test("a provider WITHOUT sendToolResponse gets a named log, not silence", async 
   assert(logs.some((l) => l.includes("cannot answer a tool call")), "the incapacity is named in the log");
   session.close();
 });
+
+test("a tool-call BEFORE ready is NOT routed — an act that cannot be answered must not start", async () => {
+  const logs = [];
+  const received = [];
+  registerLiveProvider("unit-early", ({ emit }) => ({
+    start() {
+      // The review's case: a call routed pre-ready would run its side effect and the
+      // toolResponse would refuse — the act happened and the model never heard.
+      emit({ type: "tool-call", calls: [{ id: "early", name: "write_file", args: { name: "x", content: "y" } }] });
+      emit({ type: "ready" });
+    },
+  }));
+  const session = createLiveSession({ provider: "unit-early", onToolCall: (calls) => received.push(...calls), log: (l) => logs.push(l) });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(received.length, 0, "a pre-ready tool call was routed — its side effect would have run unanswered");
+  assert(logs.some((l) => l.includes("before ready")), "the gate's refusal is named in the log");
+  session.close();
+});
+
+test("a malformed toolCall frame costs a frame WITH A NAME — never a throw, never silence", () => {
+  const transport = fakeTransport();
+  const events = [];
+  const logs = [];
+  createGeminiProvider({ emit: (e) => events.push(e), log: (l) => logs.push(l), transport, tools: functionDeclarations() });
+  transport.open();
+  transport.frame({ toolCall: { functionCalls: { not: "an array" } } });
+  transport.frame({ toolCall: { functionCalls: [] } });
+  transport.frame({ toolCall: {} });
+  assert.equal(events.filter((e) => e.type === "tool-call").length, 0, "a malformed tool-call was emitted");
+  assert.equal(logs.filter((l) => l.includes("dropped") || l.includes("not an array") || l.includes("no function calls")).length, 3, `each malformed frame was named in the log: ${JSON.stringify(logs)}`);
+});
+
+test("a tool call with non-object args is answered with {}, not a throw downstream", () => {
+  const transport = fakeTransport();
+  const events = [];
+  createGeminiProvider({ emit: (e) => events.push(e), log() {}, transport, tools: functionDeclarations() });
+  transport.open();
+  transport.frame({ toolCall: { functionCalls: [{ id: "fc-9", name: "list_files", args: "oops" }] } });
+  const call = events.find((e) => e.type === "tool-call");
+  assert(call, "a well-formed call with junk args should still arrive — the door refuses by rule, not by crash");
+  assert.deepEqual(call.calls[0].args, {});
+});
