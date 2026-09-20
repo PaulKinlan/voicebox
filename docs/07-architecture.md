@@ -69,7 +69,7 @@ A WEBSOCKET UPGRADE ON /live CLOSED WITHOUT AN HTTP RESPONSE — the server dest
 ## What the page actually loads
 
 <!-- BEGIN GENERATED: page -->
-The page loads `fused.js` and `live-voice.js` from `public/`.
+The page loads `fused.js` and `pip-mic.mjs` and `live-voice.js` from `public/`.
 Audio worklets loaded by that code: `pcm-worklet.js`.
 
 `app.js` and `verify.mjs` sit in `public/` but are **not** loaded by `index.html`; they are support files, not part of the page's load set.
