@@ -49,6 +49,7 @@ export function createAudioClient({
     capture: false,
     playbackActive: false,
     sinkId: "", // the output actually in use, once a route has been applied
+    providerError: null, // a NONTERMINAL provider error: recorded, never treated as an end
     framesSent: 0,
     framesReceived: 0,
     framesRejected: 0,
@@ -151,6 +152,15 @@ export function createAudioClient({
     // state emit (ready/listening) must not overwrite the explanation a moment
     // after the user was told the truth (found by voicebox-ui, 2026-09-19).
     if (state.captureError) return state.captureError;
+    // A provider error does NOT mean the session is over — the host keeps it
+    // live, so the sentence has to say what is still true rather than the
+    // reassuring thing. Which of the two sentences applies is read from the
+    // host-reported state (ready + capture), never assumed.
+    if (state.providerError && state.ready) {
+      return state.capture
+        ? `The model reported an error (${state.providerError.reason}) · your microphone is still on and its audio is still being sent`
+        : `The model reported an error (${state.providerError.reason}) · your microphone is off, so nothing is being sent`;
+    }
     if (state.phase === "error") return state.lastError || "Audio error";
     if (state.phase === "starting") return state.capture ? "Connecting…" : "Press to speak";
     if (state.phase === "agent-speaking") {
@@ -189,13 +199,38 @@ export function createAudioClient({
     if (msg?.type === "state") {
       if (msg.state === "ready") {
         state.ready = true;
+        state.providerError = null; // recovered: the model answered again
         state.model = msg.model ?? "";
         state.gatedFrames = Number(msg.detail?.gatedFrames ?? 0);
         emit(state.playbackActive ? "agent-speaking" : "listening", { ready: true, model: state.model, gatedFrames: state.gatedFrames });
         return;
       }
-      if (msg.state === "upstream-closed" || msg.state === "error") {
+      if (msg.state === "upstream-closed") {
         endSession(msg.state, msg.detail);
+        return;
+      }
+      if (msg.state === "error") {
+        // NONTERMINAL, by the host's own contract. lib/live-session.mjs's event
+        // set says "error — { message } — reported, not fatal" and "closed —
+        // terminal, and the only terminal event".
+        //
+        // This branch used to call endSession() and print "Your microphone is
+        // still on, but nothing is listening" — while the host's ready state
+        // stayed true and the vendor KEPT RECEIVING the microphone's frames
+        // (measured: host ready=true, vendorFrames still climbing, label
+        // claiming otherwise; astra's browser receipt, 2026-09-20). That is a
+        // privacy claim contradicted by the system's own behaviour, shown to
+        // someone at the moment they are deciding whether to trust a live mic.
+        //
+        // The sentence below is derived from the host's state, not guessed:
+        // the error is recorded, the session is left running exactly as the
+        // host leaves it, and label() says which of the two true things applies.
+        const reason = String(msg.detail?.message ?? msg.detail?.reason ?? "the model reported an error");
+        state.providerError = { reason, provider: String(msg.detail?.provider ?? state.model ?? ""), at: Date.now() };
+        state.lastError = reason;
+        onError(new Error(reason), { fatal: false, providerError: true });
+        onDiagnostic({ kind: "provider-error", reason, provider: state.providerError.provider });
+        emit(state.playbackActive ? "agent-speaking" : state.capture ? "listening" : "idle", { providerError: true, reason });
         return;
       }
       onDiagnostic({ kind: "state", state: msg.state, detail: msg.detail });
@@ -287,6 +322,7 @@ export function createAudioClient({
   function endSession(kind, detail) {
     state.sessionEnded = true;
     state.ready = false;
+    state.providerError = null;
     const reason = String(detail?.reason ?? detail?.message ?? kind);
     state.lastError =
       `Live session ended (${reason}). ` +
@@ -307,6 +343,7 @@ export function createAudioClient({
   function attachSocket(next) {
     // A new socket is a new session: clear the ended state from the last one.
     state.sessionEnded = false;
+    state.providerError = null;
     state.lastError = "";
     ws = next;
     if (!ws) return;

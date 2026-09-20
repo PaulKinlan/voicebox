@@ -299,6 +299,43 @@ test("state: a socket close is ended, not 'listening'", async () => {
   assert.match(s.label, /1006/);
 });
 
+// ── the nonterminal error, pinned ───────────────────────────────────────────
+// RED before 2026-09-20: the client called this ended and printed "Your
+// microphone is still on, but nothing is listening" while the host's ready
+// state stayed true and the vendor kept receiving frames. A privacy claim
+// contradicted by the system's own behaviour, shown exactly when a person is
+// deciding whether to trust a live microphone. The host's event set says it
+// plainly — "error — reported, not fatal"; "closed — terminal, and the only
+// terminal event" — so the page must agree with the host rather than guess.
+test("state: a provider error does NOT end the session, and the page says the audio is still being sent", async () => {
+  const { client } = makeClient();
+  await client.startCapture();
+  client.handleMessage(JSON.stringify({ type: "state", state: "ready", model: "models/gemini-3.8-live", detail: { gatedFrames: 0 } }));
+
+  client.handleMessage(JSON.stringify({ type: "state", state: "error", detail: { message: "recoverable upstream error", provider: "gemini" } }));
+  const s = client.snapshot();
+
+  assert.equal(s.sessionEnded, false, "the host keeps the session live; the page must not call it ended");
+  assert.equal(s.ready, true, "the host-reported readiness is preserved, not guessed away");
+  assert.equal(s.capture, true, "an error must not stop the microphone");
+  assert.match(s.label, /still being sent/, "the true sentence: the mic is on and its audio is still going");
+  assert.doesNotMatch(s.label, /nothing is listening/, "the false sentence must be gone from this path");
+  assert.match(s.label, /recoverable upstream error/, "the reason is named, from the host's detail");
+  assert.ok(client.level(), "audio handling stays alive through a nonterminal error");
+
+  // Recovery: a fresh handshake clears the recorded error rather than leaving
+  // the sentence on screen forever.
+  client.handleMessage(JSON.stringify({ type: "state", state: "ready", model: "models/gemini-3.8-live", detail: { gatedFrames: 0 } }));
+  assert.equal(client.snapshot().providerError, null);
+  assert.match(client.label(), /Listening/, "back to the truth: listening");
+
+  // And the TERMINAL path still says the ended sentence, because there it is
+  // true: the host closed the gate and stops forwarding.
+  client.handleMessage(JSON.stringify({ type: "state", state: "upstream-closed", detail: { reason: "terminal" } }));
+  assert.equal(client.snapshot().sessionEnded, true);
+  assert.match(client.snapshot().label, /nothing is listening/, "terminal really does stop the vendor");
+});
+
 test("state: a refused microphone is sticky — a later ready emit must not overwrite it", async () => {
   const media = fakeMedia();
   media.mediaDevices.getUserMedia = async () => { throw new Error("Permission denied"); };
