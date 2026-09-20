@@ -1006,14 +1006,18 @@ async function handle(req, res) {
       // file read, and the sentence a person saw was about turns. Found by asking the question of the
       // reader's failure line from the other side: the `where` had been fixed, and the `why` had not.
       const code = e?.code ?? "error";
-      // NO `error` FIELD HERE, deliberately. The reader prefers `body.error` over `body.why`, so a short
-      // "refused: unreadable (EACCES)" would SHADOW the platform's own sentence and the reader would show
-      // the label instead of the reason. (The vanished-root refusal shows its full remedy for exactly this
-      // reason: it carries a why and no shorter error.) The platform's words already begin with the code —
-      // prefixing it again produced "EACCES: EACCES: permission denied…", so they are used as they are.
+      // THE LABEL AND THE REASON, both — which is safe because the PAGE prefers `why`
+      // (`reasonFrom` in public/fused.js: why, then error, then note). Before that rule existed I had to
+      // drop `error` here, because the reader showed `error` first and a short label shadowed the
+      // platform's sentence; now every refusal in this route carries the same three facts — `refused`,
+      // `error` as the label, `why` as the sentence — and the page chooses the useful one.
+      //
+      // The platform's words already begin with the code — prefixing it again produced
+      // "EACCES: EACCES: permission denied…", so `why` is used exactly as it arrives.
       return json(res, code === "EACCES" || code === "EPERM" ? 403 : 500, {
         ok: false,
         refused: "unreadable",
+        error: `refused: unreadable (${code})`,
         why: e?.message ?? String(e),
         path: resolved.path,
         root: active.root,
