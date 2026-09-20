@@ -25,13 +25,22 @@
 import { spawn } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative } from "node:path";
 import { registeredResolvers, resolveTurn } from "../lib/resolver.mjs";
+import { admit, PRIMITIVES, PRIMITIVE_NEEDS, GETS } from "../core/extensions.ts";
+import { availableLiveProviders, resolvedLiveProviderName } from "../lib/live-session.mjs";
+import { createGeminiProvider } from "../lib/live-providers/gemini.mjs";
+import { createOpenAIProvider } from "../lib/live-providers/openai.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WRITE = process.argv.includes("--write");
+
+// This check describes the TREE, not the shell it runs in: a provider chosen by this machine's
+// environment would print itself into a committed document.
+delete process.env.LIVE_PROVIDER;
 
 // ── derived facts ────────────────────────────────────────────────────────────
 
@@ -69,19 +78,26 @@ async function probeServer() {
       probe.close(() => resolve(p));
     });
   });
-  const child = spawn(process.execPath, ["server.mjs"], {
-    cwd: ROOT,
-    // THE PROBE MUST NOT INHERIT A ROOT FROM THE SHELL. With VOICEBOX_WORKSPACE set, this probe spawns the
-    // server with the ambient environment, the generated block computes `declared: true`, and the check fails
-    // on a machine that has a root declared while passing on one that does not — the document's content
-    // depending on the operator's shell. The pin goes INSIDE `env:`, and the value is `undefined`, which
-    // REMOVES the key: an empty string is a different state and kills the server on `mkdir ''`, because the
-    // server reads `env.X ?? join(ROOT, "workspace")`. Absent and empty are not the same thing, and this
-    // check needs absent. (Found by the lane that reported it, the hard way: a pin at the options level looks
-    // right and does nothing.)
-    env: { ...process.env, PORT: String(port), VOICEBOX_WORKSPACE: undefined },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  // The extension directory is per-machine state (gitignored; whatever THIS box has admitted). The probe
+  // server gets a scratch one so the runtime report below describes the tree, not the machine.
+  // Three scratch directories, deliberately DISTINCT: the extension workspace (where proposals and the
+  // extension audit land), the host's extension directory, and a project root to declare over /api/root.
+  // Keeping the workspace and the declared root apart is what lets the loop drive below SEE whether an
+  // admitted tool acts in the declared root or somewhere else — the same directory would hide the answer.
+  const scratch = mkdtempSync(join(tmpdir(), "voicebox-docs-check-"));
+  const dirs = { workspace: join(scratch, "workspace"), extensions: join(scratch, "extensions"), root: join(scratch, "project") };
+  for (const d of Object.values(dirs)) mkdirSync(d, { recursive: true });
+  // THE PROBE MUST NOT INHERIT A ROOT FROM THE SHELL (248f6c6): with VOICEBOX_WORKSPACE in the operator's
+  // shell the block computed `declared: true` and the document depended on the shell. Here the variable is
+  // pinned to a SCRATCH PATH (never removed and never "" — an empty string kills the server on `mkdir ''`),
+  // and the boot-time declaration it causes is un-declared over DELETE /api/root below, so the routes are
+  // probed in a fresh server's state.
+  // PIN THE CHILD'S ENVIRONMENT (the suite's own lesson, d8af9a0): with a real GEMINI_API_KEY in the shell,
+  // the /live upgrade probe below was opening a REAL vendor session during a docs check. Blank keys make the
+  // provider refuse by name after the 101 — which is the only fact the line reports.
+  const env = { ...process.env, PORT: String(port), VOICEBOX_EXTENSIONS_DIR: dirs.extensions, VOICEBOX_WORKSPACE: dirs.workspace, GEMINI_API_KEY: "", OPENAI_API_KEY: "" };
+  for (const k of ["LIVE_PROVIDER", "VOICEBOX_PROVIDER", "VOICEBOX_INSTANCE"]) delete env[k];
+  const child = spawn(process.execPath, ["server.mjs"], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
   let out = "";
   child.stdout.on("data", (d) => (out += d));
   const until = Date.now() + 8000;
@@ -95,6 +111,9 @@ async function probeServer() {
       await new Promise((r) => setTimeout(r, 100));
     }
     if (!out.includes("voicebox on http")) throw new Error(`server did not start on ${port}: ${out.slice(0, 200)}`);
+    // VOICEBOX_WORKSPACE declared a root at boot; un-declare it so the routes are probed in the state a
+    // fresh server is in, and so the loop drive below can show `root-not-declared` and the declaration.
+    await fetch(`http://127.0.0.1:${port}/api/root`, { method: "DELETE" });
     {
       const r = await fetch(`http://127.0.0.1:${port}/api/health`);
       health = r.ok ? await r.json() : { provider: "(no /api/health answer)", workspace: "?" };
@@ -114,10 +133,70 @@ async function probeServer() {
       });
       routes.push({ method, path, status: r.status, matches_documented_expectation: r.status === expect });
     }
-    return { health, routes, port };
+    // ORDER MATTERS: everything that needs the server runs HERE, before `finally` kills it. The /live line
+    // used to be probed AFTER this function returned — against a port nobody was listening on — and the
+    // document said "closed without an HTTP response" about a server that answers 101. Found by probing
+    // the line's own claim by hand (2026-09-20).
+    const liveUpgradeLine = await probeLiveUpgrade(port);
+    const surface = await probeExtensionSurface(port);
+    const loop = await driveLoop(port, dirs);
+    return { health, routes, liveUpgradeLine, surface, loop };
   } finally {
     child.kill("SIGKILL");
+    rmSync(scratch, { recursive: true, force: true });
   }
+}
+
+/**
+ * THE AGENT LOOP, DRIVEN: one turn end to end, then a tool made and called — on the scratch root, against
+ * the real server, every value read back. Paul (voicebox-beads-8uc): "I don't see in the docs or README any
+ * concept of the agent loop." A hand-written description of a loop is the paragraph that rots first, so the
+ * loop describes itself: what starts a turn, what decides, who acts, what returns, what is recorded, and
+ * where it fails — each with the value the server actually answered.
+ */
+async function driveLoop(port, dirs) {
+  const base = `http://127.0.0.1:${port}`;
+  const post = async (p, body, headers = {}) => {
+    const r = await fetch(base + p, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
+    return { status: r.status, ...(await r.json()) };
+  };
+  const get = async (p) => (await fetch(base + p)).json();
+  const turn = (transcript) => post("/api/turn", { transcript });
+
+  const beforeRoot = await turn("create a file called hello.txt with hi");
+  const declared = await post("/api/root", { project: "docs-check", root: { kind: "machine", path: dirs.root } });
+  const write = await turn("create a file called hello.txt with hi");
+  const escape = await turn("read ..");
+  const audit = await get("/api/audit");
+  const propose = await turn("create a tool called peek that lists files");
+  const plan = await get("/api/extensions/proposals/peek-tool/plan");
+  const token = readFileSync(join(dirs.extensions, ".host-token"), "utf8").trim();
+  const admitted = await post("/api/extensions/admit", { id: "peek-tool", confirm: true, decision: "admit" }, { "x-voicebox-host-token": token });
+  const call = await turn("run the tool peek");
+  const inventory = await get("/api/extensions");
+  const auditAfter = await get("/api/audit");
+  const extAuditFile = join(dirs.workspace, "audit.jsonl");
+  const extAuditLines = existsSync(extAuditFile) ? readFileSync(extAuditFile, "utf8").trim().split("\n").filter(Boolean).length : 0;
+  const rootFiles = readdirSync(dirs.root).filter((f) => !f.startsWith(".")).sort();
+  return { beforeRoot, declared, write, escape, audit, propose, plan, admitted, call, inventory, auditAfter, extAuditLines, rootFiles };
+}
+
+/** The extension surface, asked over HTTP — including the host's act attempted from where the page stands. */
+async function probeExtensionSurface(port) {
+  const base = `http://127.0.0.1:${port}`;
+  const inventory = await (await fetch(`${base}/api/extensions`)).json();
+  const catalogue = await (await fetch(`${base}/api/extensions/catalogue`)).json();
+  const admitAttempt = await fetch(`${base}/api/extensions/admit`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: "anything" }),
+  });
+  const admitNoToken = { status: admitAttempt.status, ...(await admitAttempt.json()) };
+  return {
+    inventoryKeys: Object.keys(inventory),
+    placement: inventory.placement,
+    catalogueCount: inventory.catalogueCount,
+    catalogueIds: (catalogue.catalogue ?? []).map((c) => c.id).sort(),
+    admitNoToken,
+  };
 }
 
 /**
@@ -148,13 +227,128 @@ async function probeLiveUpgrade(port) {
   });
 }
 
-/** The live-session file, if it has landed. Its absence is itself a fact the docs must state. */
-function liveSession() {
-  const p = join(ROOT, "lib/live-session.mjs");
-  if (!existsSync(p)) return { present: false };
-  const src = readFileSync(p, "utf8");
-  const model = src.match(/["'`]models\/([\w.\-]+)["'`]/) || src.match(/model\s*[:=]\s*["'`]([\w.\-]+)["'`]/);
-  return { present: true, model: model ? model[1] : "(not found — the check could not read it)" };
+/**
+ * What each live provider's HANDSHAKE actually declares — captured from a fake transport, never dialed.
+ *
+ * The previous version regex-matched a model name out of lib/live-session.mjs, and when the constant moved
+ * into the provider files the README said `using model (not found — the check could not read it)` for a
+ * day. This asks the provider itself: construct it against a transport that records the handshake, fire
+ * `open`, read what it sent. The model AND the tool declaration come from the same bytes the vendor would.
+ */
+function liveHandshakes() {
+  const factories = { gemini: createGeminiProvider, openai: createOpenAIProvider };
+  const keyVar = { gemini: "GEMINI_API_KEY", openai: "OPENAI_API_KEY" };
+  return availableLiveProviders().map((name) => {
+    const factory = factories[name];
+    if (!factory) return { name, model: "(registered, but this check has no capture for it)", tools: null };
+    let handshake = null;
+    const transport = {
+      refused: { audioBeforeReady: 0, afterClose: 0 },
+      connect(url, next = {}) { next.onEvent?.({ kind: "open" }); return true; },
+      send(kind, payload) { if (kind === "handshake") handshake = JSON.parse(payload); return true; },
+      close() {},
+      get connected() { return true; },
+    };
+    // The factory refuses to exist without a key; this value never leaves the process (the transport is fake).
+    const saved = process.env[keyVar[name]];
+    process.env[keyVar[name]] = "docs-check-placeholder";
+    try {
+      factory({ emit: () => {}, log: () => {}, transport });
+    } finally {
+      if (saved === undefined) delete process.env[keyVar[name]]; else process.env[keyVar[name]] = saved;
+    }
+    const body = handshake?.setup ?? handshake?.session ?? {};
+    // Gemini nests them (`tools: [{ functionDeclarations: [{name}] }]`); OpenAI lists them flat (`{type, name}`).
+    const tools = Array.isArray(body.tools)
+      ? body.tools.flatMap((t) => (Array.isArray(t.functionDeclarations) ? t.functionDeclarations.map((f) => f.name) : [t.name ?? t.type ?? JSON.stringify(t)]))
+      : [];
+    return { name, model: body.model ?? "(no model in the handshake)", tools };
+  });
+}
+
+/** Does the /live handler hand the model's words to the executor? A regex over the handler's source. */
+function liveHandlerReachesExecutor() {
+  // ponytail: regex, because there is no routed call to drive yet. When vb-resolver wires one this
+  // flips, the block changes and the check goes red — which is the moment the README's sentence about
+  // the voice path must change too.
+  const src = readFileSync(join(ROOT, "server.mjs"), "utf8");
+  const at = src.indexOf('server.on("upgrade"');
+  return at < 0 ? null : /\b(resolveTurn|execute|callTool)\(/.test(src.slice(at));
+}
+
+/** The verbs the turn resolver produces — driven, one utterance per verb. */
+function resolverVerbs() {
+  return [
+    "create a file called hello.txt with hi",
+    "read hello.txt",
+    "list files",
+    "create a tool called clock that tells the time",
+    "run the tool clock",
+  ].map((utterance) => ({ utterance, verb: resolveTurn(utterance).verb ?? "(unresolved)" }));
+}
+
+/** The catalogue: every tracked descriptor, and what the REAL gate says about it on this placement. */
+function catalogueVerdicts() {
+  const dir = join(ROOT, "catalogue");
+  return readdirSync(dir).filter((f) => f.endsWith(".json")).sort().map((f) => {
+    const d = JSON.parse(readFileSync(join(dir, f), "utf8"));
+    const gate = admit(d, "machine", new Set());
+    const bounds = Object.entries(d.bounds ?? {}).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`).join("; ");
+    return {
+      id: d.id,
+      tools: (d.tools ?? []).map((t) => `\`${t.name}\` → \`${t.primitive}\``).join(", "),
+      declared: (d.capabilities ?? []).join(", ") || "—",
+      bounds: bounds || "—",
+      verdict: gate.decision === "admitted"
+        ? `admitted — ${Object.entries(gate.enforced).map(([c, m]) => `${c} via \`${m}\``).join(", ") || "no capability needed"}`
+        : `**refused** \`${gate.rule}\``,
+    };
+  });
+}
+
+/** Every named refusal in the code, by file — the vocabulary a caller can be told. */
+function refusalNames() {
+  // ponytail: collected by regex over the files that name refusals. Promote to one table in core/ if a
+  // fourth file grows its own names; until then the regex is the cheapest thing that goes red on a change.
+  const sources = {
+    "the gate (`core/extensions.ts`)": ["core/extensions.ts", /rule:\s*"([a-z][a-z0-9-]*)"/g],
+    "the routes and the root seam (`server.mjs`, `core/root.ts`)": ["server.mjs core/root.ts", /refused:\s*"([a-z][a-z0-9-]*)"/g],
+    "admitted tools at run time (`lib/extensions.mjs`)": ["lib/extensions.mjs", /refused:\s*"([a-z][a-z0-9-]*)"/g],
+  };
+  return Object.entries(sources).map(([label, [files, re]]) => {
+    const names = new Set();
+    for (const f of files.split(" ")) for (const m of readFileSync(join(ROOT, f), "utf8").matchAll(re)) names.add(m[1]);
+    return { label, names: [...names].sort() };
+  });
+}
+
+/** Every environment variable the server and its libraries read, with where. */
+const ENV_MEANING = {
+  PORT: "the port the server binds (default 8787)",
+  VOICEBOX_PROVIDER: "which TURN resolver answers `POST /api/turn` (default `script`)",
+  VOICEBOX_WORKSPACE: "declares a machine root at boot — a decision, not a default — and is where the extension system keeps `proposals/` and `audit.jsonl`",
+  VOICEBOX_EXTENSIONS_DIR: "the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl`",
+  VOICEBOX_INSTANCE: "this writer's name in the active root's shared log (default `machine`)",
+  VOICEBOX_BIND_RETRY_MS: "how often to retry a bind that lost the port race",
+  VOICEBOX_BIND_DEADLINE_MS: "how long to keep retrying before giving up by name",
+  LIVE_PROVIDER: "which live voice provider `/live` uses (default `gemini`)",
+  GEMINI_API_KEY: "the Gemini Live key — without it the live session refuses to start, by name",
+  OPENAI_API_KEY: "the OpenAI Realtime key — without it that provider refuses to start, by name",
+};
+function envVars() {
+  const files = ["server.mjs", ...readdirSync(join(ROOT, "lib"), { recursive: true }).filter((f) => f.endsWith(".mjs")).map((f) => join("lib", f))];
+  const where = new Map();
+  for (const f of files) {
+    for (const m of readFileSync(join(ROOT, f), "utf8").matchAll(/process\.env\.([A-Z][A-Z0-9_]*)/g)) {
+      if (!where.has(m[1])) where.set(m[1], new Set());
+      where.get(m[1]).add(f);
+    }
+  }
+  return [...where.keys()].sort().map((name) => ({
+    name,
+    files: [...where.get(name)].sort(),
+    meaning: ENV_MEANING[name] ?? "(undocumented — add a line to ENV_MEANING in scripts/docs-check.mjs)",
+  }));
 }
 
 // ── the generated blocks ─────────────────────────────────────────────────────
@@ -164,11 +358,12 @@ function block(name, body) {
 }
 
 async function blocks() {
-  const { health, routes, port } = await probeServer();
+  const { health, routes, liveUpgradeLine, surface, loop } = await probeServer();
   const providers = registeredResolvers();
   const { tags, worklets } = pageScripts();
-  const live = liveSession();
-  const liveUpgradeLine = await probeLiveUpgrade(port);
+  const handshakes = liveHandshakes();
+  const liveReachesExecutor = liveHandlerReachesExecutor();
+  const dictation = /SpeechRecognition/.test(readFileSync(join(ROOT, "public/fused.js"), "utf8"));
   // A COMMITTED DOCUMENT CANNOT CONTAIN AN ABSOLUTE PATH — and the loop no longer HAS a default root to
   // report either: the active root is declared by the environment, so what belongs in the document is the
   // SHAPE of that declaration (\`declared\` and the root object), not a path that is true in one checkout.
@@ -186,7 +381,7 @@ async function blocks() {
       `* \`registerResolver(name, fn)\` is the seam; \`resolveTurn(transcript, provider = "${providers[0] ?? "—"}")\` picks one.`,
       `* The **${providers[0] ?? "—"}** provider handles \`write\`, \`read\` and \`list\`: \`"create a file called hello.txt with hi"\` → \`${JSON.stringify(sample)}\`.`,
       `* Anything else is **unresolved**, by design: \`"book me a flight to Lisbon"\` → \`${JSON.stringify(unresolved.unresolved?.slice(0, 42) + "…")}\`.`,
-      `* Planned, and **not registered**: \`gemini-live\`, \`openai-realtime\`.`,
+      `* The live voice providers (${availableLiveProviders().map((p) => "`" + p + "`").join(", ")}) live behind a **different** seam, \`registerLiveProvider\` in \`lib/live-session.mjs\`; none of them is a turn resolver — see the tool path below.`,
     ].join("\n")),
 
     routes: block("routes", [
@@ -210,9 +405,80 @@ async function blocks() {
       "`verify.mjs` sits in `public/` but is **not** loaded by `index.html`; it is a support script, not part of the page's load set.",
     ].join("\n")),
 
-    "live-session": block("live-session", (live.present
-      ? [`\`lib/live-session.mjs\` is present, using model \`${live.model}\`.`]
-      : ["**\`lib/live-session.mjs\` is not present on this tree.** The live audio session is in flight, not landed — so any document claiming PCM16 over `/live` to a live model is describing a tree this one is not."]).join("\n")),
+    "live-session": block("live-session", [
+      `\`lib/live-session.mjs\` is present. Registered live providers, with the model each one's handshake names (captured from the provider against a recording transport — never dialed): ${handshakes.map((h) => "`" + h.name + "` → `" + h.model + "`").join(", ")}. The default is \`${resolvedLiveProviderName()}\`; \`LIVE_PROVIDER\` overrides it.`,
+    ].join("\n")),
+
+    loop: block("loop", [
+      "**One turn, driven end to end on a scratch root while this document was generated.** Every value in the last column was read back from the server, not typed.",
+      "",
+      "| step | what happens | the mechanism | driven |",
+      "|---|---|---|---|",
+      `| **1 · a turn starts** | words arrive | \`POST /api/turn {transcript}\` — from the composer or browser dictation; the live model's words do **not** arrive here yet (see *the tool path*) | \`"${loop.write.transcript}"\` |`,
+      `| **2 · something decides** | the resolver turns words into an action, or says it cannot (\`unresolved\`) | \`resolveTurn(transcript, "${health.provider}")\` in \`lib/resolver.mjs\` — the server never parses language itself | → \`${JSON.stringify(loop.write.action)}\` |`,
+      `| **3 · something acts** | the executor runs the verb in the **active root** — the one declared over \`POST /api/root\`; none is assumed | \`execute(action)\` in \`server.mjs\` | → \`${loop.write.result?.action}\` in a root of kind \`${loop.write.result?.root?.kind}\` |`,
+      `| **4 · the result returns** | the page gets the whole story in one response | \`{transcript, action, result}\` — \`result.ok\`, \`result.action\`, \`result.root\`, \`result.logged\` | → \`ok: ${loop.write.result?.ok}\`, \`logged: ${loop.write.result?.logged}\` |`,
+      `| **5 · the act is recorded** | one entry per act — allowed **or refused** — appended to the root's own log and readable back | \`<root>/.audit/<writer>.jsonl\` (\`core/shared-log.ts\`), \`GET /api/audit\` | → entry seq ${loop.audit.entries?.[0]?.seq}: kind \`${loop.audit.entries?.[0]?.act?.kind}\`, decision \`${loop.audit.entries?.[0]?.decision}\`, rule \`${loop.audit.entries?.[0]?.rule}\` |`,
+      "",
+      `**Where it fails, by name** (driven): the same turn **before any root is declared** → \`refused: ${loop.beforeRoot.result?.refused}\`, \`logged: ${loop.beforeRoot.result?.logged}\` (no root, so nowhere to hold a log — the response says so rather than omitting the field); \`"${loop.escape.transcript}"\` → \`refused: ${loop.escape.result?.refused}\`, and the refusal is itself logged as entry seq ${loop.escape.result?.logged}. Declaring the root answered \`ok: ${loop.declared.ok}\`, \`reachableFromThisProcess: ${loop.declared.reachableFromThisProcess}\`, and the turn that was refused a moment earlier then succeeded.`,
+      "",
+      "**The same loop, making a tool and then calling it** (driven, in this order):",
+      `1. \`"${loop.propose.transcript}"\` → verb \`${loop.propose.action?.verb}\` → \`${loop.propose.result?.action}\`, state \`${loop.propose.result?.state}\` — a **file** under the extension workspace's \`proposals/\`, not loaded.`,
+      `2. \`GET /api/extensions/proposals/${loop.propose.result?.action?.match(/'([^']+)'/)?.[1]}/plan\` → the gate would say \`${loop.plan.gate?.decision}\`; enforced: ${Object.entries(loop.plan.gate?.enforced ?? {}).map(([c, m]) => `${c} via \`${m}\``).join(", ") || "nothing needed"}.`,
+      `3. \`POST /api/extensions/admit {id, confirm: true, decision: "admit"}\` **with the host token** (the 0600 file in the host's extension directory) → \`${loop.admitted.decision}\`. Without the token → HTTP ${surface.admitNoToken.status} \`${surface.admitNoToken.refused}\`.`,
+      `4. \`"${loop.call.transcript}"\` → verb \`${loop.call.action?.verb}\` → \`callTool("${loop.call.action?.name}")\` in \`lib/extensions.mjs\` → \`ok: ${loop.call.result?.ok}\`, files \`${JSON.stringify(loop.call.result?.files)}\`.`,
+      `5. \`GET /api/extensions\` now lists \`${loop.inventory.extensions?.[0]?.id}\`: declared \`${(loop.inventory.extensions?.[0]?.declared ?? []).join(", ")}\`, enforced \`${JSON.stringify(loop.inventory.extensions?.[0]?.enforced)}\`, tools \`${(loop.inventory.extensions?.[0]?.tools ?? []).join(", ")}\`.`,
+      "",
+      (loop.call.result?.files ?? []).includes("hello.txt")
+        ? `**One root**: the admitted tool listed \`${JSON.stringify(loop.call.result?.files)}\` — the same root the turn wrote \`hello.txt\` into.`
+        : `**Two roots, not one — a fact the drive exposes rather than a claim.** The turn wrote \`${loop.rootFiles.join(", ")}\` into the declared root, but the admitted tool listed \`${JSON.stringify(loop.call.result?.files)}\`: it sees the **extension workspace** (\`VOICEBOX_WORKSPACE\`), not the root declared over \`/api/root\`. Its act was recorded in that workspace's \`audit.jsonl\` (${loop.extAuditLines} entries) and **not** in the root's \`.audit/\` log (still ${loop.auditAfter.entries?.length} entries). The design says one root; the wiring today is two. When they become one, this paragraph flips and the check goes red.`,
+    ].join("\n")),
+
+    "tool-path": block("tool-path", [
+      "**Three ways words reach this server. Two of them reach a tool.**",
+      "",
+      "| path | wired today | what carries the words | what runs |",
+      "|---|---|---|---|",
+      `| typed in the composer | ${routes.find((r) => r.path === "/api/turn")?.status === 200 ? "yes" : "**no** (route probe failed)"} | \`public/fused.js\` → \`POST /api/turn\` | \`resolveTurn()\` (\`lib/resolver.mjs\`, provider \`${health.provider}\`) → \`execute()\` (\`server.mjs\`) → for tools, \`callTool()\` (\`lib/extensions.mjs\`) |`,
+      `| dictated (browser \`SpeechRecognition\`, no key) | ${dictation ? "yes — the same route" : "**no** — `SpeechRecognition` is not in `public/fused.js`"} | \`public/fused.js\` → \`POST /api/turn\` | the same |`,
+      `| spoken to the live model | audio yes; tools **${liveReachesExecutor ? "yes" : "no"}** | \`public/live-voice.js\` → \`/live\` → \`lib/live-session.mjs\` → the provider | ${liveReachesExecutor ? "the `/live` handler now calls the executor — update this row's prose" : "the model's words come back to the page as text frames; the `/live` handler calls neither `resolveTurn()` nor `execute()`"} |`,
+      "",
+      `What each live handshake declares, captured from the provider itself: ${handshakes.map((h) => "`" + h.name + "` → tools: " + (h.tools === null ? "(not captured)" : h.tools.length ? h.tools.map((t) => "`" + t + "`").join(", ") : "**none**")).join("; ")}. When a provider starts declaring tools this line changes and the check goes red — that is the moment the row above stops being true.`,
+      "",
+      `Verbs the \`${health.provider}\` resolver produces, driven: ${resolverVerbs().map((v) => "`\"" + v.utterance + "\"` → `" + v.verb + "`").join(", ")}. \`make-tool\` **proposes** (a pending file the host must admit); \`tool\` calls an **admitted** tool and nothing else.`,
+    ].join("\n")),
+
+    tools: block("tools", [
+      `**The default tools are a closed set of ${PRIMITIVES.length} primitives** (\`PRIMITIVES\` in \`core/extensions.ts\`). A model authors a descriptor that *parameterises* one; it never authors a body, so nothing in the runtime evaluates model-written code.`,
+      "",
+      "| primitive | consumes | what the host hands the tool |",
+      "|---|---|---|",
+      ...PRIMITIVES.map((p) => `| \`${p}\` | ${PRIMITIVE_NEEDS[p].join(", ") || "—"} | ${PRIMITIVE_NEEDS[p].map((c) => GETS[c]).join("; ") || "nothing — it answers with the clock"} |`),
+      "",
+      `**What no tool can have on the \`${surface.placement}\` placement**, asked of the gate itself:`,
+      ...admit({ id: "probe", name: "probe", description: "", source: "builtin", runsIn: "host", capabilities: [], bounds: {}, tools: [{ name: "probe", description: "", primitive: "now", params: {} }] }, "machine").cannotHave.map((line) => `* ${line}`),
+      "",
+      `**The catalogue** — \`catalogue/*.json\`, ${surface.catalogueIds.length} tracked descriptors (strangers' extensions you can sideload). **None is loaded until the host admits it**; the last column is what \`admit()\` says today:`,
+      "",
+      "| id | tools | declares | bounds | the gate's verdict |",
+      "|---|---|---|---|---|",
+      ...catalogueVerdicts().map((c) => `| \`${c.id}\` | ${c.tools} | ${c.declared} | ${c.bounds} | ${c.verdict} |`),
+      "",
+      "**What it refuses, by name** — every refusal the code can utter, collected from source:",
+      ...refusalNames().map((r) => `* ${r.label}: ${r.names.map((n) => "`" + n + "`").join(", ")}`),
+      "",
+      `**Listable at run time** — \`GET /api/extensions\` answers \`{ ${surface.inventoryKeys.join(", ")} }\` (probed: placement \`${surface.placement}\`, catalogueCount ${surface.catalogueCount}); \`GET /api/extensions/catalogue\` previews the gate's verdict on every stranger before anything is staged; \`GET /api/extensions/{proposals|catalogue}/<id>/plan\` is the disclosure — source, declared, enforced-by-which-mechanism, what it gets, what it cannot have — before any decision.`,
+      "",
+      `**Admission is the host's act**, probed from where the page stands: \`POST /api/extensions/admit\` with no token → HTTP ${surface.admitNoToken.status}, \`${surface.admitNoToken.refused}\`.`,
+    ].join("\n")),
+
+    config: block("config", [
+      "Every environment variable the server and its libraries read, and where:",
+      "",
+      "| variable | read in | what it does |",
+      "|---|---|---|",
+      ...envVars().map((e) => `| \`${e.name}\` | ${e.files.map((f) => "`" + f + "`").join(", ")} | ${e.meaning} |`),
+    ].join("\n")),
   };
 }
 
@@ -223,11 +489,17 @@ async function blocks() {
 // providers and whether a live session exists), the architecture doc carries all four, and the
 // operating model is prose whose claims the others check.
 const DOCS = [
-  { rel: "README.md", blocks: ["providers", "live-session"] },
-  { rel: join("docs", "07-architecture.md"), blocks: ["providers", "routes", "page", "live-session"] },
+  { rel: "README.md", blocks: ["providers", "live-session", "loop", "tool-path", "tools", "config"] },
+  { rel: join("docs", "07-architecture.md"), blocks: ["providers", "routes", "page", "live-session", "loop", "tool-path", "tools", "config"] },
   { rel: join("docs", "08-how-it-runs.md"), blocks: [] },
 ];
 const generated = await blocks();
+
+/** Every backticked file path a document names must exist — the hand-written regions are the ones that rot. */
+function missingPaths(text) {
+  const named = new Set([...text.matchAll(/`((?:[\w.-]+\/)+[\w-]+\.[a-z]+)`/g)].map((m) => m[1]));
+  return [...named].filter((p) => !existsSync(join(ROOT, p))).sort();
+}
 
 function replaceBlock(text, name, body) {
   // GLOBAL: a document may carry the same block twice (07 does — the audio path appears under two headings),
@@ -261,7 +533,9 @@ for (const { rel, blocks: wanted } of DOCS) {
     // version of this guard watched the wrong side and passed while the document carried a blank block.
     const after = text.slice(text.indexOf(`<!-- BEGIN GENERATED: ${name} -->`));
     const inner = after.slice(after.indexOf("-->") + 3, after.indexOf(`<!-- END GENERATED: ${name} -->`));
-    if (inner.trim() === "") {
+    // In WRITE mode a blank block is the thing being seeded — a new marker pair starts empty by
+    // definition, and refusing to fill it made every new block impossible to add (2026-09-20).
+    if (!WRITE && inner.trim() === "") {
       console.error(`docs-check: the generated block '${name}' in ${rel} is EMPTY after the replace —`);
       console.error("  a block that says nothing is not a block that says something, and this one is blank.");
       process.exit(1);
@@ -271,7 +545,17 @@ for (const { rel, blocks: wanted } of DOCS) {
       console.error("  that is a template that did not interpolate, and it reached a document once already (07-architecture.md:80).");
       process.exit(1);
     }
+    if (/\/(home|tmp|Users)\//.test(String(body))) {
+      console.error(`docs-check: the generated block '${name}' for ${rel} contains an absolute path — a committed document cannot carry one.`);
+      process.exit(1);
+    }
     if (r.text !== text) { changed = true; text = r.text; }
+  }
+  const gone = missingPaths(text);
+  if (gone.length) {
+    console.error(`docs-check: ${rel} names files that do not exist in this tree — a renamed or deleted file left the prose behind:`);
+    for (const g of gone) console.error(`  - ${g}`);
+    process.exit(1);
   }
   if (!changed) continue;
   if (WRITE) { writeFileSync(p, text); console.log(`  wrote ${rel}`); }
