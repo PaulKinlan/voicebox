@@ -12,8 +12,12 @@ static page and three API routes, plus — in development only — a Vite proces
 ```
 developer ──browser──> Vite (dev only, :5173) ──proxy /api──> server.mjs (:8787)
                              │                                   │
-                             └── serves public/ ──────────────────┴── reads/writes workspace/
+                             └── serves public/ ──────────────────┴── reads/writes the active project root
 ```
+
+The active project root is wherever the environment declares it (or the boot-time workspace
+variable, which is a declaration too) — the server's `GET /api/root` answers where, so this
+diagram does not have to.
 
 In production there is no Vite: `node server.mjs` serves the same `public/` directory itself, from disk.
 

@@ -34,8 +34,12 @@ through `pcm-worklet.js`. The generated line below says what the model is; the *
 
 ```
 page  --POST /api/turn {transcript}-->  server.mjs  --resolveTurn(transcript, provider)-->  lib/resolver.mjs
-        <--- {transcript, action, result} ---  server executes the action (write/read/list) in workspace/
+        <--- {transcript, action, result} ---  server executes the action in the active project root
 ```
+
+The active project root is wherever the environment declares it (or the boot-time workspace
+variable, which is a declaration too) — the path is the server's answer to `GET /api/root`, not a
+fixed location this diagram names.
 
 The server **never parses language itself**: `resolveTurn` returns an action, and the server runs it. That
 is the whole seam, and it is why swapping the brain does not touch the page or the server.
