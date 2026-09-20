@@ -365,6 +365,19 @@ async function renderEnvironments() {
       else state.textContent = env.why ?? "always here";
       if (env.why && env.reachable === false) state.title = env.why;
       li.appendChild(state);
+      // The capability report, when this environment has been probed: tools and runtimes as a line a
+      // person reads, with the report's `when` so a stale one reads as stale. Not probed says so.
+      const cap = document.createElement("span");
+      cap.className = "env-cap";
+      const tools = env.capability?.tools;
+      if (tools && typeof tools === "object") {
+        const present = Object.entries(tools).filter(([, v]) => v && v.value).map(([k]) => k);
+        cap.textContent = present.length ? `tools: ${present.join(", ")}` : "no tools found";
+        cap.title = `probed ${env.capability.when ?? "at an unknown time"}`;
+      } else {
+        cap.textContent = "not probed";
+      }
+      li.appendChild(cap);
       els.envList.appendChild(li);
     }
     if (els.envCount) {
@@ -372,6 +385,14 @@ async function renderEnvironments() {
       els.envCount.textContent = `${list.length} environment${list.length === 1 ? "" : "s"} · ${up} reachable`;
     }
     if (els.envNote) els.envNote.textContent = "";
+    // AUTO-PROBE: a reachable environment that has never been probed is asked to probe itself, on
+    // first reach (Paul: automatically, not a button). The act is recorded in the environment's own
+    // audit by the host; here we only re-render once the report exists. This loop is the local
+    // server today; a remote environment's report rides its own /api/probe the same way.
+    const unprobed = list.filter((e) => e.reachable === true && !e.capability);
+    if (unprobed.some((e) => e.key === "local")) {
+      request("/api/probe").then(() => renderEnvironments()).catch(() => {});
+    }
   } catch (err) {
     // The registry could not be read, or the server is not answering: the refusal is named, not blank.
     if (els.envCount) els.envCount.textContent = "Environments";

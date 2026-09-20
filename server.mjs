@@ -4,7 +4,7 @@
 // Zero dependencies: node:http for the server, node:fs for the workspace.
 // The resolver is a provider seam (lib/resolver.mjs) — swap it, don't rewrite the server.
 import { createServer } from "node:http";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import path from "node:path";
@@ -20,6 +20,7 @@ import {
   validateAgentSettings,
 } from "./core/agent-settings.ts";
 import { auditFileName, makeEntry, mergeAudit, nextSeq, parseEntry, resumeSeq, serializeEntry } from "./core/audit.ts";
+import { activityEntry } from "./core/shared-log.ts";
 import { randomBytes } from "node:crypto";
 import {
   ENV_UNREACHABLE,
@@ -92,6 +93,72 @@ function writeEnvironments(environments) {
   renameSync(tmp, ENV_FILE);
 }
 
+// ── AUTO-PROBE: the environment's capability report, observed and recorded ──────────────────────
+// The probe script ships in tools/ so the harness runs the SAME probe the survey measured, not a
+// copy. The report is cached next to the registry so the list can show it without re-running code
+// on every read; the `when` inside it is the freshness marker.
+const PROBE_FILE = path.join(WORKSPACE, "probe.json");
+const PROBE_SCRIPT = path.join(ROOT, "tools", "sandbox-probe.mjs");
+
+function readProbeCache() {
+  try {
+    const parsed = JSON.parse(readFileSync(PROBE_FILE, "utf8"));
+    return parsed && typeof parsed === "object" && parsed.when ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeProbeCache(report) {
+  mkdirSync(WORKSPACE, { recursive: true });
+  writeFileSync(PROBE_FILE, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
+}
+
+/** Run the probe in THIS process's environment. JSON on stdout; a non-zero exit is the boundary
+ *  showing itself, and any stdout it produced is still the report. */
+function runProbe() {
+  return new Promise((resolve, reject) => {
+    execFile(process.execPath, [PROBE_SCRIPT], { timeout: 15000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+      const text = String(stdout ?? "").trim();
+      if (!text) return reject(err ?? new Error("the probe printed nothing"));
+      try {
+        resolve(JSON.parse(text));
+      } catch {
+        reject(err ?? new Error("the probe printed something that was not JSON"));
+      }
+    });
+  });
+}
+
+/**
+ * The probe's act, in the environment's own audit — because it ran unprompted, and the record is
+ * what lets the system say so. An `activity` entry, not an `act`: no tier decision was made. The
+ * write is best-effort (the probe's answer is the route's job; the audit is the record's), and it
+ * is skipped rather than invented when this process has no loggable root.
+ */
+function recordProbeAct(report) {
+  if (!loggableRoot()) return;
+  try {
+    const dir = path.join(active.root.path, ".audit");
+    mkdirSync(dir, { recursive: true });
+    const file = auditPathFor(active.root);
+    resumeLog();
+    const base = {
+      seq: nextSeq(),
+      instance: INSTANCE,
+      actor: { name: "voicebox-server", harness: "voicebox", session: null, cwd: ROOT },
+      project: active.project,
+      root: `machine:${active.root.path}`,
+      turn: null,
+      at: new Date().toISOString(),
+    };
+    const entry = activityEntry(base, "probed itself (auto-probe)", `sandbox-probe @ ${report.when ?? "unknown time"}`);
+    appendFileSync(file, `${serializeEntry(entry)}\n`);
+  } catch {
+    // A record that cannot be written must not fail the probe — but the route's answer stands on its own.
+  }
+}
+
 /**
  * The registry, with each entry's reachability PROBED LAZILY (on read) rather than at declaration.
  * The local server this process is on is always a row; remote rows are probed over HTTP. A host that
@@ -107,8 +174,10 @@ async function environmentsWithStatus() {
     kind: "server",
     origin: "same-origin",
     home: active ? active.root : null,
-    boundary: null,
-    capability: null,
+    // The probe report, if this host has probed itself: the boundary and the capability are the SAME
+    // observed report, split by what they answer (boundary: what is fenced; capability: what is present).
+    boundary: readProbeCache(),
+    capability: readProbeCache(),
     reach: "ambient",
     reachable: true,
     refused: null,
@@ -864,11 +933,33 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/environments") {
-    // The list, with each host's reachability probed NOW. An unreadable registry is the named
-    // refusal, not an empty list — the two are different problems with different remedies.
+    // The list, with each host's reachability probed NOW and its STORED capability report merged in.
+    // An unreadable registry is the named refusal, not an empty list.
     const result = await environmentsWithStatus();
     if (!result.ok) return json(res, 500, result);
     return json(res, 200, { ok: true, environments: result.environments });
+  }
+
+  /**
+   * **`GET /api/probe` — this environment probes ITSELF and says what it found.**
+   *
+   * Paul (2026-09-20): the probe runs AUTOMATICALLY (not a button), and because it runs code inside
+   * the environment unprompted, THE ACT IS RECORDED — an `activity` entry in the environment's own
+   * audit, so the first time something runs somewhere unasked, the system can say it did. The report
+   * is OBSERVED (the probe runs and reads), never a manifest, and it is cached with its `when` so a
+   * stale one reads as stale. A probe that cannot run is a named refusal, not a blank.
+   */
+  if (req.method === "GET" && url.pathname === "/api/probe") {
+    const cached = readProbeCache();
+    if (cached) return json(res, 200, { ok: true, probe: cached, cached: true });
+    try {
+      const report = await runProbe();
+      writeProbeCache(report);
+      recordProbeAct(report);
+      return json(res, 200, { ok: true, probe: report, cached: false });
+    } catch (err) {
+      return json(res, 500, { ok: false, refused: "probe-failed", why: `the environment could not probe itself — ${(err?.message ?? err)}` });
+    }
   }
 
   if (req.method === "POST" && url.pathname === "/api/environments") {
