@@ -23,7 +23,7 @@ const BROWSERS = [
   "/usr/bin/google-chrome",
 ].filter(Boolean);
 
-export async function launch({ width = 1000, height = 800, profile = null } = {}) {
+export async function launch({ width = 1000, height = 800, profile = null, fakeMedia = false } = {}) {
   const binary = BROWSERS.find((b) => existsSync(b));
   if (!binary) throw new Error("no Chromium/Chrome binary found; set VOICEBOX_CHROME");
 
@@ -35,6 +35,7 @@ export async function launch({ width = 1000, height = 800, profile = null } = {}
     binary,
     [
       "--headless=new",
+      ...(fakeMedia ? ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"] : []),
       "--disable-gpu",
       "--no-first-run",
       "--no-default-browser-check",
