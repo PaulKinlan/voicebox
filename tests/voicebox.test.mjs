@@ -12,7 +12,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { tmpdir } from "node:os";
@@ -22,7 +22,11 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
 const SERVER = path.join(ROOT, "server.mjs");
 const PORT = 8797;
 const BASE = `http://127.0.0.1:${PORT}`;
-const WORKSPACE = path.join(ROOT, "workspace");
+// A SCRATCH root, declared to the server rather than assumed: the loop has no default root any more,
+// and a suite that wrote into the repository would be an instrument changing the thing it measures.
+const SCRATCH = mkdtempSync(path.join(os.tmpdir(), "voicebox-suite-"));
+const WORKSPACE = path.join(SCRATCH, "workspace");
+mkdirSync(WORKSPACE, { recursive: true });
 
 let child;
 
@@ -39,6 +43,9 @@ async function up() {
 
 test.before(async () => {
   process.env.PORT = String(PORT);
+  // VOICEBOX_WORKSPACE is a DECLARATION of the active root (an operator's, at boot) — it is not a
+  // default the server falls back to. With it unset the loop refuses every act by name.
+  process.env.VOICEBOX_WORKSPACE = WORKSPACE;
   child = spawn(process.execPath, [SERVER], {
     cwd: ROOT,
     env: process.env,

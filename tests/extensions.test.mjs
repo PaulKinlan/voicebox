@@ -44,12 +44,16 @@ async function up() {
 }
 
 test.before(async () => {
+  // A declared root must EXIST: the server validates a declaration rather than creating the folder
+  // (a typo should be `path-missing`, not a new directory somewhere the user did not ask for).
+  mkdirSync(WORKSPACE, { recursive: true });
   process.env.PORT = String(PORT);
   child = spawn(process.execPath, [SERVER], {
     cwd: ROOT,
     env: {
       ...process.env,
       PORT: String(PORT),
+      // A DECLARATION of the active root, not a default: the loop refuses by name without one.
       VOICEBOX_WORKSPACE: WORKSPACE,
       VOICEBOX_EXTENSIONS_DIR: HOST_EXTENSIONS,
     },

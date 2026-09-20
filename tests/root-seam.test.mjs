@@ -25,6 +25,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 
 let server;
 let scratch;
+let serverCwd;
 let defaultRoot;
 let otherRoot;
 let picked;
@@ -49,13 +50,19 @@ const audit = () => fetch(`${BASE}/api/audit`).then((r) => r.json());
 
 test.before(async () => {
   scratch = mkdtempSync(path.join(os.tmpdir(), "voicebox-seam-"));
+  // The server runs in a scratch cwd, so a path that is wrongly treated as relative lands somewhere
+  // this suite can SEE. That is how the committed-artefact defect was found: the loop wrote a
+  // virtual root string ("v1/projects/atlas") through `path.join`, and it landed in the process's
+  // working directory — which was the repository.
+  serverCwd = path.join(scratch, "server-cwd");
+  mkdirSync(serverCwd);
   defaultRoot = path.join(scratch, "default-root");
   otherRoot = path.join(scratch, "other-root");
   picked = path.join(scratch, "picked-root");
   for (const dir of [defaultRoot, otherRoot, picked]) mkdirSync(dir);
 
   server = spawn(process.execPath, [path.join(ROOT, "server.mjs")], {
-    cwd: ROOT,
+    cwd: serverCwd,
     env: { ...process.env, PORT: String(PORT), VOICEBOX_WORKSPACE: defaultRoot, VOICEBOX_INSTANCE: "machine-test" },
     stdio: "ignore",
     detached: true,
@@ -180,7 +187,71 @@ test("a root this process cannot reach is REFUSED BY NAME, and the listing refus
   }
 });
 
+test("an unreachable root is refused by name, NOT logged, and nothing lands in the process's cwd", async () => {
+  // The declaration is legitimate — the page owns this root — and the act belongs to the page. What
+  // matters here is the other half: the loop must not write an entry for a root it cannot reach,
+  // because the log's path for a virtual root ("v1/projects/atlas") is not a filesystem path, and
+  // `path.join` on it produced a real directory relative to whatever cwd the process had.
+  const declared = await declare("page-project", { kind: "opfs", path: "v1/projects/atlas" });
+  assert.equal(declared.body.ok, true);
+
+  const write = await turn("create a file called nowhere.txt with nope");
+  assert.equal(write.result?.refused, "root-not-reachable-from-here", JSON.stringify(write.result));
+  assert.equal(write.result.logged, null, "the loop claims to have written an entry for a root it cannot reach");
+  assert.equal(write.result.logRefused, "root-not-reachable-from-here", "the missing entry is not reported");
+
+  // And the tree: the cwd the server ran in is still empty — no v1/, no .audit/, nothing.
+  assert.deepEqual(readdirSync(serverCwd), [], `the loop wrote into its own working directory: ${JSON.stringify(readdirSync(serverCwd))}`);
+});
+
+test("with NO root declared the loop refuses by name and writes nothing anywhere", async () => {
+  // A second server, no declaration at all: no default to fall back to, and no act performed.
+  const bareCwd = path.join(scratch, "bare-cwd");
+  mkdirSync(bareCwd);
+  const barePort = PORT + 2; // 8842 belongs to tests/one-root.test.mjs; suites must not share a port
+  const child = spawn(process.execPath, [path.join(ROOT, "server.mjs")], {
+    cwd: bareCwd,
+    env: { ...process.env, PORT: String(barePort), VOICEBOX_INSTANCE: "machine-bare" },
+    stdio: "ignore",
+    detached: true,
+  });
+  try {
+    for (let i = 0; i < 60; i++) {
+      try {
+        if ((await fetch(`http://127.0.0.1:${barePort}/api/health`)).ok) break;
+      } catch {}
+      await sleep(100);
+    }
+    const base = `http://127.0.0.1:${barePort}`;
+
+    const info = await fetch(`${base}/api/root`).then((r) => r.json());
+    assert.equal(info.declared, false, "a root was reported as declared with no declaration");
+    assert.equal(info.refused, "root-not-declared", JSON.stringify(info));
+    assert.match(info.why, /environment declares one/, "the refusal does not say whose job declaring is");
+
+    const write = await fetch(`${base}/api/turn`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ transcript: "create a file called nowhere.txt with nope" }),
+    }).then((r) => r.json());
+    assert.equal(write.result?.ok, false, `the loop wrote with no root declared: ${JSON.stringify(write.result)}`);
+    assert.equal(write.result.refused, "root-not-declared");
+    assert.equal(write.result.logged, null);
+
+    const files = await fetch(`${base}/api/files`).then((r) => r.json());
+    assert.equal(files.refused, "root-not-declared", "the listing answered with no root declared");
+
+    assert.deepEqual(readdirSync(bareCwd), [], `an undeclared loop wrote into its working directory: ${JSON.stringify(readdirSync(bareCwd))}`);
+  } finally {
+    try {
+      process.kill(-child.pid, "SIGKILL");
+    } catch {}
+  }
+});
+
 test("a bad declaration is refused by name, not by silence", async () => {
+  // Whatever the active root is at this point, a refused declaration must leave it exactly that.
+  const before = await rootInfo();
   const missing = await declare("p", { kind: "machine", path: path.join(scratch, "does-not-exist") });
   assert.equal(missing.body.refused, "path-missing");
   assert.match(missing.body.why, /does not exist/);
@@ -199,8 +270,9 @@ test("a bad declaration is refused by name, not by silence", async () => {
   assert.equal(empty.body.refused, "bad-request");
 
   // A refusal leaves the active root alone: the loop keeps writing where it was.
-  const info = await rootInfo();
-  assert.equal(info.root.kind, "handle", "a refused declaration changed the active root");
+  const after = await rootInfo();
+  assert.deepEqual(after.root, before.root, "a refused declaration changed the active root");
+  assert.equal(after.project, before.project, "a refused declaration changed the active project");
 });
 
 test("the old root is not a second root: nothing writes to a folder nobody declared", async () => {

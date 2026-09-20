@@ -108,6 +108,31 @@ export function resolveInRoot(root: RootDescriptor, candidate: unknown): Resolve
 export type Reachability = { ok: true } | { ok: false; refused: string; why: string };
 
 /**
+ * THE TWO NAMED ABSENCES, and they are a pair rather than one code:
+ *
+ *   root-not-declared          — nobody has said where the files are yet
+ *   root-not-reachable-from-here — somebody has, and this placement cannot act on it
+ *
+ * They must not collapse. "There is no root yet" is answered by declaring one (the environment's
+ * job); "that root is not mine to touch" is answered by letting the other side act. A single
+ * "no root" would send the reader looking for a permission problem that does not exist — the same
+ * shape as "has not run yet" versus "has run and read nothing" in the shared log.
+ */
+export const ROOT_NOT_DECLARED = "root-not-declared";
+export const ROOT_NOT_REACHABLE = "root-not-reachable-from-here";
+
+/** No root has been declared: the answer names the side whose job it is. */
+export function noRootDeclared(): { ok: false; refused: string; why: string } {
+  return {
+    ok: false,
+    refused: ROOT_NOT_DECLARED,
+    why:
+      "no project root is declared, so there is nothing to write into: the environment declares one " +
+      "(POST /api/root) when it opens or adopts a project — a loop has no root of its own",
+  };
+}
+
+/**
  * May `peer` act on this root? A refusal NAMES who can — "not allowed" is a description, and the
  * person reading it cannot tell whether to pick a folder, open the page, or give up.
  */
@@ -117,7 +142,7 @@ export function reachableFrom(root: RootDescriptor, peer: Peer): Reachability {
   const who = facts.reachableFrom.join(" and ");
   return {
     ok: false,
-    refused: "root-not-reachable-from-here",
+    refused: ROOT_NOT_REACHABLE,
     why:
       `this project's root is ${facts.where}, and this placement is the ${peer === "page" ? "page" : "machine"}; ` +
       `only the ${who} can act on it — the act belongs to that side, not to this one`,

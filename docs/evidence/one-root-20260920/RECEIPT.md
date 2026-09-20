@@ -117,3 +117,50 @@ All three findings (the durability lie, a label/value collision, and a subtitle 
 root kind) were fixed and the same reviewer re-read the image: **"NONE FOUND… every visible section is
 coherent"**. A DOM assertion would never have caught the first one — the DOM contained exactly what
 the string said; it was the *claim* that was wrong.
+
+## 6. The review's hygiene finding, and the default it forced me to retire
+
+**F-HYGIENE (coord, at the merge step): the tests wrote into the repository and left it dirty.** The
+branch had committed `v1/projects/atlas/.audit/machine-test-*.jsonl` and
+`v1/projects/drive-opfs/.audit/machine-cb91e8de.jsonl`, and running the gate **rewrote** one of them —
+so `git status` was dirty after every `npm test`, and nobody could tell the work from the suite's own
+output. The committed JSON also carried this worktree's absolute path (`"cwd"`), i.e. machine-specific
+data recorded as project data.
+
+**The cause was a real bug, not untidy fixtures.** The loop's log path is
+`path.join(active.root.path, ".audit", …)` — correct for a **machine** root, and a *virtual* string for
+the other two kinds (`v1/projects/atlas`, or a project name). `path.join` on a virtual string produces
+a real, **cwd-relative** directory, so a refusal for an unreachable root wrote its entry into whatever
+directory the process happened to be in. Class: *an instrument writing into the thing it measures* —
+the same shape as the gate that ran one file, and as `workspace/` itself.
+
+**Fixed at the root rather than at the fixture:**
+
+1. The loop logs **only for a root it can name** (`kind === "machine"` and an absolute path). When it
+   cannot, the entry is *not written* — and that absence is a fact on the response
+   (`logged: null`, `logRefused: …`), because a missing entry must be visible rather than silent.
+2. `tests/root-seam.test.mjs` now runs the server in a **scratch cwd** and asserts that directory is
+   **empty** after an unreachable-root refusal and after an undeclared act — the defect is pinned by
+   the suite, not by a manual `git status`.
+3. The committed artefacts are `git rm`'d, and `v1/` is deliberately **not** gitignored: a future
+   repo-relative write must show up loudly in `git status` rather than being hidden by an ignore rule.
+
+**And the follow-on coord asked for: the `workspace/` default is retired.** The loop now has **no
+default root**. With none declared, every act refuses with `root-not-declared` — a named sibling of
+`root-not-reachable-from-here`, because the two must not collapse: *"there is no root yet"* is answered
+by the environment declaring one, *"that root is not mine to touch"* by the other side acting.
+`VOICEBOX_WORKSPACE` still exists, but as an **operator's declaration at boot** — a decision somebody
+made — not a fallback consulted when nobody said anything. Three test files that leaned on the old
+default now **declare** their roots (and two of them always did, via a scratch directory); the third
+was moved off the repository's own `workspace/` onto a scratch root it creates and declares.
+
+**The property, proved rather than asserted:**
+
+```
+npm test                 → 128/128 green
+git status --porcelain   → (empty, after a full gate run)
+```
+
+That last line is the check that was missing on both sides of the review: a run that re-executes the
+whole glob and reads green can still leave the tree dirty, and only looking at the tree afterwards
+sees it.

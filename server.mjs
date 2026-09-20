@@ -10,7 +10,7 @@ import { stripTypeScriptTypes } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveTurn } from "./lib/resolver.mjs";
-import { ROOT_FACTS, describeRoot, reachableFrom, resolveInRoot } from "./core/root.ts";
+import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, resolveInRoot } from "./core/root.ts";
 import { auditFileName, makeEntry, mergeAudit, nextSeq, parseEntry, resumeSeq, serializeEntry } from "./core/audit.ts";
 import * as extensions from "./lib/extensions.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
@@ -23,10 +23,17 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE = process.env.VOICEBOX_WORKSPACE ?? path.join(ROOT, "workspace");
 
 // ── THE ACTIVE ROOT (core/root.ts is the seam) ────────────────────────────────────────────────
-// The loop does not invent a root. It acts on the ACTIVE PROJECT'S root, which the environment
-// declares (POST /api/root) and which may be any of the three kinds. Two of them this process
-// cannot reach, and it says so by name rather than quietly writing somewhere else — that refusal is
-// what stops a hard-coded `workspace/` from being a second, silent root.
+// The loop does not invent a root, and it has NO DEFAULT. It acts on the ACTIVE PROJECT'S root,
+// which the environment declares (POST /api/root) and which may be any of the three kinds. Two of
+// them this process cannot reach, and it says so by name rather than quietly writing somewhere else.
+//
+// WHY THERE IS NO DEFAULT CONSULTED WHEN NOBODY DECLARED ONE: a default is a decision nobody made,
+// and `workspace/` was exactly that — the second root the one-root change was supposed to retire,
+// still sitting there as the thing a fresh placement falls back to. So the absence is an explicit,
+// NAMED state (`root-not-declared`, whose why names the side that declares one) and no act happens.
+//
+// `VOICEBOX_WORKSPACE` still exists, but as a DECLARATION rather than a default: an operator who
+// sets it has said where the files are, which is the same thing the environment says over HTTP.
 // THE DEFAULT ROOT, and the note that belongs with it (isocan-wasm, review of e1m0/one-root):
 // the default stays a machine root at `workspace/`, and THREE test files depend on that literal —
 // channel.test.mjs:18, extensions.test.mjs:28/83 and voicebox.test.mjs:25. They are isolated (each
@@ -34,17 +41,36 @@ const WORKSPACE = process.env.VOICEBOX_WORKSPACE ?? path.join(ROOT, "workspace")
 // the default root, which is correct today. If the default ever stops being `workspace/`, those
 // three are the readers that need the same treatment the retired "escapes the workspace" message
 // got — a grep for the old literal is the check, and it should be run before changing this line.
-let active = {
-  project: "workspace",
-  root: { kind: "machine", path: WORKSPACE },
-  declaredAt: new Date().toISOString(),
-};
+/** null until somebody declares one — see the note above: no default is consulted when it is null. */
+let active = null;
+
+/** A declaration made by the operator at boot (VOICEBOX_WORKSPACE), which is a decision, not a default. */
+if (process.env.VOICEBOX_WORKSPACE) {
+  const declared = path.resolve(process.env.VOICEBOX_WORKSPACE);
+  if (existsSync(declared) && statSync(declared).isDirectory()) {
+    active = { project: path.basename(declared), root: { kind: "machine", path: realpathSync(declared) }, declaredAt: new Date().toISOString(), declaredBy: "VOICEBOX_WORKSPACE" };
+  } else {
+    console.error(`[root] VOICEBOX_WORKSPACE='${process.env.VOICEBOX_WORKSPACE}' is not a directory — no root is declared`);
+  }
+}
 
 // This process is a WRITER of the root it acts on, so it keeps its own file in that root's log —
 // one file per (root, writer), which is what the log has always meant. Without this the loop would
 // be a stranger writing into somebody's project with no record of what it did, and the machine root
 // would be the one root in the product with no audit at all.
 const INSTANCE = process.env.VOICEBOX_INSTANCE ?? "machine";
+
+/**
+ * The log lives WITH THE ROOT, and only for a root this process can actually name.
+ *
+ * The guard is not defensive decoration: a root of kind `opfs` or `handle` carries a VIRTUAL path
+ * (`v1/projects/atlas`, or a project name), and `path.join` on it produced a real directory inside
+ * whatever the process's cwd happened to be. That is how a test run came to commit its own audit
+ * files into the repository — an instrument writing into the thing it measures.
+ */
+function loggableRoot() {
+  return active && active.root.kind === "machine" && path.isAbsolute(active.root.path);
+}
 
 function auditPathFor(root) {
   return path.join(root.path, ".audit", auditFileName(INSTANCE, `machine:${root.path}`));
@@ -65,6 +91,11 @@ function resumeLog() {
 
 /** Append one entry. A refusal is an entry too: a log of successes cannot answer "what did it try". */
 function logAct(act, decision, rule, result, observed, turn = null) {
+  if (!loggableRoot()) {
+    // Not silently skipped: the caller reports `logged: null` and `logRefused`, so the missing entry
+    // is a fact on the response rather than a hole in the record.
+    return null;
+  }
   try {
     const dir = path.join(active.root.path, ".audit");
     mkdirSync(dir, { recursive: true });
@@ -178,6 +209,7 @@ function machineContained(candidate) {
 
 /** Resolve a name through the seam, or the refusal that says why — used by every path below. */
 function resolveActive(name) {
+  if (!active) return { ...noRootDeclared() };
   const reach = reachableFrom(active.root, "machine");
   if (!reach.ok) return { ok: false, refused: reach.refused, why: reach.why };
   const resolved = resolveInRoot(active.root, name);
@@ -268,6 +300,9 @@ async function execute(action) {
   if (action.verb === "tool") {
     return extensions.callTool(action.name, action.args ?? {});
   }
+  // `logged` is present as null rather than absent: "there is no entry" must be a fact on the
+  // response, not something a reader has to notice the absence of.
+  if (!active) return { ...noRootDeclared(), error: `refused: ${ROOT_NOT_DECLARED}`, root: null, logged: null };
   if (action.verb === "list") {
     const reach = reachableFrom(active.root, "machine");
     if (!reach.ok) return { ok: false, refused: reach.refused, error: `refused: ${reach.refused}`, why: reach.why, root: active.root };
@@ -283,6 +318,8 @@ async function execute(action) {
     return {
       ok: false,
       refused: resolved.refused,
+      logged: entry ? entry.seq : null,
+      ...(entry ? {} : { logRefused: resolved.refused === "root-not-reachable-from-here" ? "root-not-reachable-from-here" : "log-not-written" }),
       error: `refused: ${resolved.refused === "outside-root" ? "path escapes the active project root" : resolved.refused}`,
       why: resolved.why,
       root: active.root,
@@ -311,12 +348,27 @@ async function execute(action) {
 }
 
 const routes = {
-  "GET /api/health": (req, res, url) => json(res, 200, { ok: true, provider: PROVIDER, workspace: WORKSPACE, root: active.root, project: active.project, build: BUILD }),
+  "GET /api/health": (req, res, url) => json(res, 200, {
+    ok: true,
+    provider: PROVIDER,
+    // There is no default root to report; `declared` says whether one exists at all.
+    declared: Boolean(active),
+    root: active ? active.root : null,
+    project: active ? active.project : null,
+    refused: active ? null : ROOT_NOT_DECLARED,
+    why: active ? null : noRootDeclared().why,
+    build: BUILD,
+  }),
   // THE SEAM, read side: which root is the loop writing into, and may this process act on it?
   "GET /api/root": (req, res, url) => {
+    if (!active) {
+      const absent = noRootDeclared();
+      return json(res, 200, { ok: true, declared: false, project: null, root: null, reachableFromThisProcess: false, ...absent });
+    }
     const reach = reachableFrom(active.root, "machine");
     return json(res, 200, {
       ok: true,
+      declared: true,
       project: active.project,
       root: active.root,
       facts: ROOT_FACTS[active.root.kind],
@@ -458,6 +510,7 @@ async function handle(req, res) {
   if (req.method === "GET" && url.pathname === "/api/audit") {
     // The root's log, read by whoever can reach the root — the same read the environment does in its
     // own placement, so "what did it do here" has one answer per root rather than one per placement.
+    if (!active) return json(res, 200, { ...noRootDeclared(), root: null, entries: [] });
     const reach = reachableFrom(active.root, "machine");
     if (!reach.ok) return json(res, 200, { ok: false, refused: reach.refused, why: reach.why, root: active.root, entries: [] });
     const dir = path.join(active.root.path, ".audit");
@@ -471,6 +524,7 @@ async function handle(req, res) {
   if (req.method === "GET" && url.pathname === "/api/files") {
     // The listing follows the ACTIVE root: a listing from a root the loop cannot reach would be the
     // two-root bug in miniature — a panel showing files from somewhere the project is not.
+    if (!active) return json(res, 200, { ...noRootDeclared(), root: null, files: [], entries: [] });
     const reach = reachableFrom(active.root, "machine");
     if (!reach.ok) {
       return json(res, 200, { ok: false, refused: reach.refused, why: reach.why, root: active.root, files: [], entries: [] });
@@ -492,6 +546,7 @@ async function handle(req, res) {
   if (req.method === "GET" && url.pathname === "/api/file") {
     const name = url.searchParams.get("name") ?? "";
     if (!name) return json(res, 400, { error: "action has no name" });
+    if (!active) return json(res, 409, { ...noRootDeclared() });
     const resolved = resolveActive(name);
     if (!resolved.ok) {
       return json(res, resolved.refused === "root-not-reachable-from-here" ? 409 : 403, {
