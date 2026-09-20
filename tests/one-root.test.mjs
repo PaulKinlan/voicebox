@@ -177,3 +177,38 @@ test("a picked folder is declared the same way, and the loop refuses it by name"
   assert.equal(escape.rule, "outside-root");
   assert.equal(existsSync(path.join(pickedFolder, "..", "escape.svg")), false, "a file escaped the root");
 });
+
+test("when the declared root vanishes, the page says so by name — with the remedy", { timeout: 120000 }, async () => {
+  // The end-to-end half of the hang fix: a person whose folder disappears must see a refusal they can
+  // act on, in the panel that shows that root, rather than an empty list (which looks like an empty
+  // folder) or a spinner that never resolves.
+  const doomed = path.join(scratch, "doomed-loop-root");
+  mkdirSync(doomed);
+  writeFileSync(path.join(doomed, "still-here.txt"), "x");
+  await page.evaluate(async (dir) => { await window.e1m0.useMachineRoot(dir, "doomed"); }, doomed);
+  await waitForRoot((i) => i.root?.path === doomed, "the loop to be told about the doomed root");
+
+  // The loop works, the panel lists the folder, and then the folder goes away underneath it.
+  const written = await turn("create a file called before-vanish.txt with hi");
+  assert.equal(written.result?.ok, true, JSON.stringify(written.result));
+  await page.evaluate(() => window.e1m0.renderView("server"));
+  await page.waitFor(() => document.getElementById("view-server").textContent.includes("still-here.txt"), { label: "the panel to show the folder" });
+
+  rmSync(doomed, { recursive: true, force: true });
+
+  await page.evaluate(() => window.e1m0.renderView("server"));
+  const panel = await page.waitFor(
+    () => (document.getElementById("view-server").textContent.includes("root-vanished") ? document.getElementById("view-server").textContent : false),
+    { label: "the panel to report the vanished root by name" },
+  );
+  assert.match(panel, /root-vanished/, "the panel does not name the refusal");
+  assert.match(panel, /declare it again|re-declare/, "the panel does not offer the remedy");
+
+  // And the loop refuses the same way rather than holding the request.
+  const after = await Promise.race([
+    turn("create a file called after-vanish.txt with hi"),
+    sleep(5000).then(() => ({ timedOut: true })),
+  ]);
+  assert.equal(after.timedOut, undefined, "the loop held the request after its root vanished");
+  assert.equal(after.result.refused, "root-vanished", JSON.stringify(after.result));
+});

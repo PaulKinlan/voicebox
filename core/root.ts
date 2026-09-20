@@ -120,6 +120,27 @@ export type Reachability = { ok: true } | { ok: false; refused: string; why: str
  */
 export const ROOT_NOT_DECLARED = "root-not-declared";
 export const ROOT_NOT_REACHABLE = "root-not-reachable-from-here";
+export const ROOT_VANISHED = "root-vanished";
+
+/**
+ * The declared root was there when it was declared and is not there now.
+ *
+ * This exists because the alternative is a HANG, and a hang is the one behaviour this whole
+ * vocabulary exists to prevent: measured on a live server, deleting a declared directory and then
+ * acting left the request unanswered forever (an unawaited async route threw ENOENT and nothing wrote
+ * a response). Every other failure in this system says what is wrong and what to do next; a vanished
+ * root has to as well.
+ */
+export function rootVanished(path: string, detail?: string): { ok: false; refused: string; why: string; detail?: string } {
+  return {
+    ok: false,
+    refused: ROOT_VANISHED,
+    why:
+      `the declared root '${path}' is not there any more, so there is nowhere to act: declare it again ` +
+      `(POST /api/root with the path that exists now), or let the environment re-declare it when it opens the project`,
+    ...(detail ? { detail } : {}),
+  };
+}
 
 /** No root has been declared: the answer names the side whose job it is. */
 export function noRootDeclared(): { ok: false; refused: string; why: string } {

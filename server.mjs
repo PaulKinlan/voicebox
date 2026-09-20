@@ -10,7 +10,7 @@ import { stripTypeScriptTypes } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveTurn } from "./lib/resolver.mjs";
-import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, resolveInRoot } from "./core/root.ts";
+import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, resolveInRoot, rootVanished } from "./core/root.ts";
 import { auditFileName, makeEntry, mergeAudit, nextSeq, parseEntry, resumeSeq, serializeEntry } from "./core/audit.ts";
 import * as extensions from "./lib/extensions.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
@@ -207,6 +207,48 @@ function machineContained(candidate) {
   return containedIn(rootReal, real) || real === rootReal;
 }
 
+/**
+ * Is the declared root still there? Asked BEFORE any filesystem access, because the filesystem is
+ * where the hang came from: `realpathSync` on a deleted directory throws, and a throw inside an
+ * unawaited async route callback leaves the caller waiting for a response that will never come.
+ *
+ * Only the machine kind can be checked from here — a page-owned root (OPFS, a picked handle) is
+ * reachability's business, and that refusal already names who can act.
+ */
+function rootMissing() {
+  if (!active) return noRootDeclared();
+  if (active.root.kind !== "machine") return null;
+  try {
+    if (existsSync(active.root.path) && statSync(active.root.path).isDirectory()) return null;
+  } catch {
+    /* an unstattable root is a missing one */
+  }
+  return rootVanished(active.root.path);
+}
+
+/**
+ * EVERY REQUEST GETS AN ANSWER. A route body that throws used to hang the caller: the async callback
+ * was never awaited, so nothing wrote a response — measured, with the directory deleted under a live
+ * declaration. The named refusal above is the product fix; this is the structural one, because a
+ * server that answers "server-error" is wrong in a way a reader can act on and a server that says
+ * nothing is not.
+ */
+function answerOnce(res, handler) {
+  void (async () => {
+    try {
+      await handler();
+    } catch (e) {
+      console.error(`[route] ${e?.stack ?? e}`);
+      try {
+        if (!res.headersSent) json(res, 500, { ok: false, refused: "server-error", why: String(e?.message ?? e) });
+        else res.end();
+      } catch {
+        /* the response is already gone */
+      }
+    }
+  })();
+}
+
 /** Resolve a name through the seam, or the refusal that says why — used by every path below. */
 function resolveActive(name) {
   if (!active) return { ...noRootDeclared() };
@@ -303,6 +345,8 @@ async function execute(action) {
   // `logged` is present as null rather than absent: "there is no entry" must be a fact on the
   // response, not something a reader has to notice the absence of.
   if (!active) return { ...noRootDeclared(), error: `refused: ${ROOT_NOT_DECLARED}`, root: null, logged: null };
+  const vanished = rootMissing();
+  if (vanished) return { ...vanished, error: `refused: ${vanished.refused}`, root: active.root, logged: null };
   if (action.verb === "list") {
     const reach = reachableFrom(active.root, "machine");
     if (!reach.ok) return { ok: false, refused: reach.refused, error: `refused: ${reach.refused}`, why: reach.why, root: active.root };
@@ -348,6 +392,24 @@ async function execute(action) {
 }
 
 const routes = {
+  // UN-DECLARE: back to `root-not-declared`, deliberately and by request. The gate asserts that
+  // state positively, and a state you cannot return to is one you can only test once per process —
+  // and for a person, "close the project" has to have an expression that is not "restart the server".
+  //
+  // ORDERING LESSON, kept where the next person will read it: the harness that found the vanished-root
+  // hang deleted its scratch directory BEFORE restoring the previous root, and left the live server
+  // holding a declaration pointing at nothing. RESTORE THE PREVIOUS STATE FIRST, then remove your own.
+  "DELETE /api/root": (req, res, url) => {
+    const previous = active;
+    active = null;
+    return json(res, 200, {
+      ok: true,
+      declared: false,
+      unDeclared: previous ? { project: previous.project, root: previous.root } : null,
+      refused: ROOT_NOT_DECLARED,
+      why: noRootDeclared().why,
+    });
+  },
   "GET /api/health": (req, res, url) => json(res, 200, {
     ok: true,
     provider: PROVIDER,
@@ -441,7 +503,7 @@ async function handle(req, res) {
   if (req.method === "POST" && url.pathname === "/api/root") {
     let body = "";
     req.on("data", (c) => (body += c));
-    req.on("end", () => {
+    req.on("end", () => answerOnce(res, async () => {
       let declared;
       try {
         declared = JSON.parse(body);
@@ -503,7 +565,7 @@ async function handle(req, res) {
         why: reach.why,
         declaredAt: active.declaredAt,
       });
-    });
+    }));
     return;
   }
 
@@ -511,6 +573,8 @@ async function handle(req, res) {
     // The root's log, read by whoever can reach the root — the same read the environment does in its
     // own placement, so "what did it do here" has one answer per root rather than one per placement.
     if (!active) return json(res, 200, { ...noRootDeclared(), root: null, entries: [] });
+    const vanished = rootMissing();
+    if (vanished) return json(res, 200, { ...vanished, root: active.root, entries: [] });
     const reach = reachableFrom(active.root, "machine");
     if (!reach.ok) return json(res, 200, { ok: false, refused: reach.refused, why: reach.why, root: active.root, entries: [] });
     const dir = path.join(active.root.path, ".audit");
@@ -525,6 +589,8 @@ async function handle(req, res) {
     // The listing follows the ACTIVE root: a listing from a root the loop cannot reach would be the
     // two-root bug in miniature — a panel showing files from somewhere the project is not.
     if (!active) return json(res, 200, { ...noRootDeclared(), root: null, files: [], entries: [] });
+    const vanishedFiles = rootMissing();
+    if (vanishedFiles) return json(res, 200, { ...vanishedFiles, root: active.root, files: [], entries: [] });
     const reach = reachableFrom(active.root, "machine");
     if (!reach.ok) {
       return json(res, 200, { ok: false, refused: reach.refused, why: reach.why, root: active.root, files: [], entries: [] });
@@ -547,6 +613,8 @@ async function handle(req, res) {
     const name = url.searchParams.get("name") ?? "";
     if (!name) return json(res, 400, { error: "action has no name" });
     if (!active) return json(res, 409, { ...noRootDeclared() });
+    const vanishedRead = rootMissing();
+    if (vanishedRead) return json(res, 409, { ...vanishedRead, root: active.root });
     const resolved = resolveActive(name);
     if (!resolved.ok) {
       return json(res, resolved.refused === "root-not-reachable-from-here" ? 409 : 403, {
@@ -571,7 +639,7 @@ async function handle(req, res) {
   if (req.method === "POST" && url.pathname === "/api/turn") {
     let body = "";
     req.on("data", (c) => (body += c));
-    req.on("end", async () => {
+    req.on("end", () => answerOnce(res, async () => {
       let transcript = "";
       try {
         transcript = String(JSON.parse(body).transcript ?? "").trim();
@@ -584,7 +652,7 @@ async function handle(req, res) {
         return json(res, 200, { transcript, action: null, note: action.unresolved });
       }
       return json(res, 200, { transcript, action, result: await execute(action) });
-    });
+    }));
     return;
   }
 

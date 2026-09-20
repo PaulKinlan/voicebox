@@ -261,3 +261,97 @@ test("the old root is not a second root: nothing writes to a folder nobody decla
     "an act leaked into a root that is not the active one",
   );
 });
+
+// ── the two states that must never be silent, and must never hold the caller ─────────────────────
+
+test("a VANISHED root refuses by name, with the remedy, and answers instead of hanging", async () => {
+  // Measured before the fix, on a live server: declare, delete the directory, act → the request was
+  // never answered (an unawaited async route threw ENOENT and nothing wrote a response). A hang is
+  // the one behaviour this whole refusal vocabulary exists to prevent.
+  const doomed = path.join(scratch, "doomed-root");
+  mkdirSync(doomed);
+  assert.equal((await declare("doomed", { kind: "machine", path: doomed })).body.ok, true);
+  writeFileSync(path.join(doomed, "was-here.txt"), "x"); // it worked a moment ago
+
+  rmSync(doomed, { recursive: true, force: true });
+
+  // The request must ANSWER. A timer racing the fetch is the assertion: the defect was silence, so
+  // "it replied quickly" is the property, not merely "it replied correctly".
+  const answered = await Promise.race([
+    turn("create a file called after-vanish.txt with hi"),
+    sleep(5000).then(() => ({ timedOut: true })),
+  ]);
+  assert.equal(answered.timedOut, undefined, "the server held the request instead of refusing it");
+  assert.equal(answered.result?.ok, false, `an act on a vanished root succeeded: ${JSON.stringify(answered.result)}`);
+  assert.equal(answered.result.refused, "root-vanished", JSON.stringify(answered.result));
+  assert.match(answered.result.why, /is not there any more/, "the refusal does not say what happened");
+  assert.match(answered.result.why, /declare it again|re-declare/, "the refusal does not state the remedy");
+  assert.equal(answered.result.logged, null, "a vanished root claims to have written a log entry");
+
+  // The read side refuses with the same name rather than an empty listing (which would look like an
+  // empty folder) or a 500.
+  const files = await fetch(`${BASE}/api/files`).then((r) => r.json());
+  assert.equal(files.refused, "root-vanished", JSON.stringify(files));
+  assert.deepEqual(files.entries, []);
+  const log = await audit();
+  assert.equal(log.refused, "root-vanished");
+
+  // And the remedy works: re-declare a path that exists and the loop acts again.
+  mkdirSync(doomed);
+  assert.equal((await declare("doomed-again", { kind: "machine", path: doomed })).body.ok, true);
+  const after = await turn("create a file called after-redeclare.txt with hi");
+  assert.equal(after.result?.ok, true, `re-declaring did not restore the loop: ${JSON.stringify(after.result)}`);
+  assert.equal(existsSync(path.join(doomed, "after-redeclare.txt")), true);
+});
+
+test("UN-DECLARE returns to root-not-declared, and the state is reachable twice in one process", async () => {
+  // `root-not-declared` is a contract the acceptance gate asserts positively. A state you cannot
+  // return to is one you can only test once per process — and for a person, "close the project" has
+  // to have an expression that is not "restart the server".
+  const before = await rootInfo();
+  assert.equal(before.declared, true, "this check needs a declared root to un-declare");
+
+  const removed = await fetch(`${BASE}/api/root`, { method: "DELETE" }).then((r) => r.json());
+  assert.equal(removed.ok, true);
+  assert.equal(removed.declared, false, "un-declare did not report the state it left");
+  assert.equal(removed.refused, "root-not-declared");
+  assert.equal(removed.unDeclared.root.path, before.root.path, "un-declare did not say what it removed");
+
+  const after = await rootInfo();
+  assert.equal(after.declared, false);
+  assert.equal(after.refused, "root-not-declared");
+
+  const act = await turn("create a file called nowhere.txt with nope");
+  assert.equal(act.result?.refused, "root-not-declared", JSON.stringify(act.result));
+  assert.match(act.result.why, /environment declares one/, "the refusal does not say whose job declaring is");
+
+  // Declare again: the state machine goes back, and forward.
+  assert.equal((await declare("back", { kind: "machine", path: defaultRoot })).body.ok, true);
+  const again = await turn("create a file called back-again.txt with hi");
+  assert.equal(again.result?.ok, true, JSON.stringify(again.result));
+  assert.equal(existsSync(path.join(defaultRoot, "back-again.txt")), true);
+});
+
+test("the ordering lesson: restore the previous state BEFORE removing your own", async () => {
+  // The harness that found the hang deleted its scratch directory first and restored the root after,
+  // leaving a live server holding a declaration pointing at nothing. Both orders now end in a named
+  // answer, but the harness's own discipline is asserted here too: a suite that removes its scratch
+  // tree while a server still points at it is the shape that produced a silent hang.
+  const scratchRoot = path.join(scratch, "ordering-root");
+  mkdirSync(scratchRoot);
+  await declare("ordering", { kind: "machine", path: scratchRoot });
+
+  // Remove my own state first, THEN the directory — the correct order.
+  await fetch(`${BASE}/api/root`, { method: "DELETE" });
+  rmSync(scratchRoot, { recursive: true, force: true });
+
+  const after = await Promise.race([
+    turn("create a file called after-ordering.txt with hi"),
+    sleep(5000).then(() => ({ timedOut: true })),
+  ]);
+  assert.equal(after.timedOut, undefined, "the server held the request after a correct teardown order");
+  assert.equal(after.result.refused, "root-not-declared", JSON.stringify(after.result));
+
+  // Leave the suite where it found it.
+  await declare("back", { kind: "machine", path: defaultRoot });
+});
