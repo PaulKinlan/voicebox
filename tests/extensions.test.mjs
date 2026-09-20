@@ -471,3 +471,47 @@ test("a declared root at the host directory neither lists nor serves its dotfile
     });
   }
 });
+
+// ── 12. the t9j door: a present file is decided HERE — same token, same gate, same ledger ──
+test("a present-not-admitted file has a direct admit door: same token, same gate, same ledger", async () => {
+  // Drop it into the host directory directly — no proposal ever exists.
+  mkdirSync(HOST_EXTENSIONS, { recursive: true });
+  writeFileSync(path.join(HOST_EXTENSIONS, "directdoor.json"), JSON.stringify({
+    id: "directdoor", name: "Direct Door", description: "dropped, decided in place",
+    source: "model", runsIn: "host", capabilities: [], bounds: {},
+    tools: [{ name: "directdoor_tool", description: "x", primitive: "now", params: {} }],
+  }));
+  // It is visible as present-not-admitted, and the plan endpoint discloses it BEFORE the decision:
+  let inv = await getJson("/api/extensions");
+  assert.equal(inv.present.find((p) => p.id === "directdoor")?.state, "present-not-admitted");
+  const plan = await getJson("/api/extensions/proposals/directdoor/plan");
+  assert.equal(plan.state, "present-not-admitted");
+  assert.equal(plan.gate.decision, "admitted");
+  // The door is GATED: no token, no decision.
+  const untokened = await postJson("/api/extensions/admit", { id: "directdoor", confirm: true, decision: "admit" });
+  assert.equal(untokened.ok, false);
+  assert.equal(untokened.refused, "host-token-required");
+  // With the token: admitted in place — and it runs.
+  const r = await admitAsHost("directdoor");
+  assert.equal(r.decision, "admitted");
+  const run = await turn("run the tool directdoor_tool");
+  assert.equal(run.result?.ok, true);
+  // The inventory moved it from present to the loaded set, and the ledger records the decision:
+  inv = await getJson("/api/extensions");
+  assert.equal(inv.extensions.find((e) => e.id === "directdoor")?.id, "directdoor");
+  assert.equal(inv.present.find((p) => p.id === "directdoor"), undefined);
+  const ledger = readFileSync(path.join(HOST_EXTENSIONS, ".ledger.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.ok(ledger.some((e) => e.id === "directdoor" && e.decision === "admitted"), "the admission is in the ledger");
+  // The DENY half: another present file, denied in place, stays present and never live.
+  writeFileSync(path.join(HOST_EXTENSIONS, "denieddrop.json"), JSON.stringify({
+    id: "denieddrop", name: "Denied Drop", description: "x",
+    source: "model", runsIn: "host", capabilities: [], bounds: {},
+    tools: [{ name: "denieddrop_tool", description: "x", primitive: "now", params: {} }],
+  }));
+  const denied = await admitAsHost("denieddrop", "deny");
+  assert.equal(denied.decision, "refused");
+  assert.equal(denied.rule, "host-deny");
+  inv = await getJson("/api/extensions");
+  assert.equal(inv.extensions.find((e) => e.id === "denieddrop"), undefined);
+  assert.equal(inv.present.find((p) => p.id === "denieddrop")?.state, "present-not-admitted");
+});
