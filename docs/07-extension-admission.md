@@ -102,3 +102,30 @@ decides on, not vibes.
   scratch directories — a test must never delete a directory the repository or
   a deployment owns (the hazard isocan-flash flagged in its notes; the suite
   no longer touches repo-owned files at all).
+
+## Decision recorded (2026-09-20): declared paths are not gate-checked — enforcement is at use
+
+The gate does not inspect a tool's `params.path`. An admitted `read-file` tool whose declared
+path escapes the root is ADMITTED and refused AT EXECUTION — `outside-root`, named, by the
+runtime containment (driven: `../`, deep `a/b/../../../`, and a symlink resolving outside).
+This is deliberate and is the design's own rule applied consistently: **the declaration is a
+request; enforcement is what makes the bound true** (§1.7). Enforcement-at-use is defensible
+and arguably better — the same admitted tool serves any root-legal path without re-admission —
+but it must be SAID: a reader would otherwise assume a declared path was checked when it was
+declared. The disclosure for file tools should carry the root-scope line.
+
+## The host token and the admission ledger (2026-09-20, driven findings closed)
+
+Two driven findings on `prove/n10-admission` closed in the same branch:
+
+- **The trigger is host-only now** (`voicebox-beads-m2i`): `POST /api/extensions/admit`
+  requires the host token — `x-voicebox-host-token`, the design's own §1.5 mechanism
+  (host-generated secret, file mode 0600, in the host's own directory, served by no route,
+  readable by neither the page nor the model). Missing or wrong → `host-token-required`,
+  named, 403. Driven acceptance: the page's two-fetch admission (propose → admit) now fails
+  by name, and the tool still refuses `not-admitted`; the host's token-bearing call admits.
+- **Set membership is ledger-defined** (`voicebox-beads-0xp`): `loadRegistry` loads only
+  descriptors with a RECORDED admission (`.ledger.jsonl`, appended by the host's admit). A
+  file present without an admission is `present-not-admitted` — visible in the inventory as
+  exactly that, never live. The sweep-in (a never-admitted dropped file going live at the
+  next host-triggered reload) is closed; driven.

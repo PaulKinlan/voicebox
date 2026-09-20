@@ -630,6 +630,14 @@ async function handle(req, res) {
     return r.ok ? json(res, 200, { ...r, note: "staged as a pending proposal — NOT loaded; the host admits it" }) : json(res, 400, r);
   }
   if (req.method === "POST" && url.pathname === "/api/extensions/admit") {
+    // Admission is the HOST's act (bead voicebox-beads-m2i): the route requires
+    // the host token (docs/02 §1.5's mechanism — a 0600 file in the host's own
+    // directory, readable by the person's shell, by neither the page nor the
+    // model). Driven finding, 2026-09-20: without this the page admitted its
+    // own proposal in two fetches. The refusal is named, like every other one.
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "admission is the host's act — this route requires the host token (x-voicebox-host-token); the page cannot hold it" });
+    }
     const body = await readJson();
     if (!body?.id) return json(res, 400, { error: "body must be JSON with an id" });
     const plan = extensions.proposalPlan(body.id);
