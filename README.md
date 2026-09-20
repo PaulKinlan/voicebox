@@ -103,8 +103,10 @@ What does not work yet:
   OpenAI Realtime. The seam is `lib/resolver.mjs` — wire a resolver that calls
   the model and returns the same `{ verb, name, content }` shape and the rest
   of the loop is unchanged.
-- **No streaming conversation.** One turn per press; the always-on conversation
-  from the brief comes with the live model.
+- **No always-on conversation.** While a live session is open the mic streams
+  continuously, the model replies, and you can interrupt it — that part landed.
+  What is missing is the version with **no press at all** (a wake word or a
+  standing session), which is what the brief's "always-on" means.
 - **The workspace is a flat directory** — no project scaffolding, no shell. (The
   environment page below is where projects exist; the skeleton loop above still writes
   loose files into `workspace/`.)
