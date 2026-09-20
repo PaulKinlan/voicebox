@@ -112,6 +112,25 @@ input { caret-color: var(--accent); }
 .root-note { max-width: 1100px; width: 100%; margin: 6px auto 0; font-size: .75rem; color: color-mix(in srgb, var(--muted) 85%, var(--ink)); }
 .root-note[data-tone="warn"] { color: var(--warn); }
 .where-sep { color: var(--line); }
+
+/* The environment list: one source, server-owned. A host that is not running reads as a named
+   refusal, never as ready. */
+.envs { position: relative; font-size: .75rem; color: color-mix(in srgb, var(--muted) 82%, var(--ink)); }
+.envs > summary { cursor: pointer; list-style: none; }
+.envs > summary::-webkit-details-marker { display: none; }
+.envs[open] { z-index: 20; }
+.env-list { list-style: none; margin: 6px 0 0; padding: 0; position: absolute; right: 0; min-width: 240px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px rgb(0 0 0 / .12); overflow: hidden; }
+.env-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; }
+.env-item + .env-item { border-top: 1px solid var(--line); }
+.env-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: none; }
+.env-dot[data-ok="true"] { background: var(--good); }
+.env-dot[data-ok="false"] { background: var(--warn); }
+.env-label { font-weight: 500; color: var(--ink); }
+.env-state { margin-left: auto; color: var(--muted); }
+.env-add { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--line); }
+.env-add input { flex: 1; min-width: 0; font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
+.env-add button { flex: none; font: inherit; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); cursor: pointer; }
+.env-note { margin: 0; padding: 8px 12px; color: var(--warn); }
 #root-kind { color: var(--muted); }
 .device-note { margin: 6px 0 0; max-width: 46ch; font-size: .75rem; color: var(--warn); text-align: center; }
 .voice-actions { display: flex; align-items: center; gap: 4px; margin-top: 12px; }

@@ -4,8 +4,8 @@
 // Zero dependencies: node:http for the server, node:fs for the workspace.
 // The resolver is a provider seam (lib/resolver.mjs) — swap it, don't rewrite the server.
 import { createServer } from "node:http";
-import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { execFile, execFileSync } from "node:child_process";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +20,14 @@ import {
   validateAgentSettings,
 } from "./core/agent-settings.ts";
 import { auditFileName, makeEntry, mergeAudit, nextSeq, parseEntry, resumeSeq, serializeEntry } from "./core/audit.ts";
+import { activityEntry } from "./core/shared-log.ts";
+import { randomBytes } from "node:crypto";
+import {
+  ENV_UNREACHABLE,
+  listUnreadable,
+  parseEnvironment,
+  unreachable,
+} from "./core/environment.ts";
 import * as extensions from "./lib/extensions.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
 import { createLiveSession, LIVE_MODEL, inputRateRequiredBy, resolvedLiveProviderName } from "./lib/live-session.mjs";
@@ -51,6 +59,222 @@ const WORKSPACE = process.env.VOICEBOX_WORKSPACE ?? path.join(ROOT, "workspace")
 // got — a grep for the old literal is the check, and it should be run before changing this line.
 /** null until somebody declares one — see the note above: no default is consulted when it is null. */
 let active = null;
+
+// ── THE ENVIRONMENT REGISTRY (core/environment.ts is the seam) ───────────────────────────────
+// The list of hosts the page can act in, SERVER-OWNED so it is the same from every browser (Paul:
+// "I might open the web page from many browsers so we lose client-side storage but sync on
+// environments via server"). One file, one writer (this process), atomic. It lives in the server's
+// own workspace so no active root has to exist and the list never depends on a project.
+//
+// THE TWO ABSENCES ARE DISTINCT, one level up from the root seam's pair: an unreadable registry file
+// (`environment-list-unreadable` — fix the file) is not an unreachable host (`environment-unreachable`
+// — start the service), and neither is the empty state (a fresh server, no environments yet — not an
+// error at all). A list that showed a host that is not there without saying so would be the same
+// defect as a footer promising files the live path could not write.
+const ENV_FILE = path.join(WORKSPACE, "environments.json");
+
+/** Read the registry. An absent file is the empty list; an unreadable/corrupt file is the named refusal. */
+function readEnvironments() {
+  if (!existsSync(ENV_FILE)) return { ok: true, environments: [], declared: false };
+  try {
+    const parsed = JSON.parse(readFileSync(ENV_FILE, "utf8"));
+    const list = Array.isArray(parsed?.environments) ? parsed.environments : [];
+    return { ok: true, environments: list, declared: true };
+  } catch (err) {
+    return { ok: false, ...listUnreadable(err?.message ?? "it is not JSON") };
+  }
+}
+
+/** Write the registry atomically (tmp + rename), so a crashed write never leaves a torn list. */
+function writeEnvironments(environments) {
+  mkdirSync(WORKSPACE, { recursive: true });
+  const tmp = `${ENV_FILE}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify({ environments }, null, 2)}\n`, { mode: 0o600 });
+  renameSync(tmp, ENV_FILE);
+}
+
+// ── AUTO-PROBE: the environment's capability report, observed and recorded ──────────────────────
+// The probe script ships in tools/ so the harness runs the SAME probe the survey measured, not a
+// copy. The report is cached next to the registry so the list can show it without re-running code
+// on every read; the `when` inside it is the freshness marker.
+const PROBE_FILE = path.join(WORKSPACE, "probe.json");
+const PROBE_SCRIPT = path.join(ROOT, "tools", "sandbox-probe.mjs");
+
+// ── PAIRING CUSTODY: the bearer, held host-side, OUT OF EVERY ROOT, never by the page ──────────
+// The store lives in the host's OWN directory — the same sidecar pattern as the extension host
+// token — NOT in the workspace, which is a root the page can write (and read). A bearer file inside
+// a writable root is a credential the page can reach; 0600 and no-route are necessary but the
+// LOCATION is the defence. A corrupt store is a NAMED refusal (every credential is not "no
+// credentials"), in the family of environment-list-unreadable.
+const HOST_DIR = process.env.VOICEBOX_EXTENSIONS_DIR ?? path.join(ROOT, "extensions");
+const PAIRINGS_FILE = path.join(HOST_DIR, ".pairings.json");
+
+const PAIRINGS_UNREADABLE = "pairing-list-unreadable";
+function readPairings() {
+  if (!existsSync(PAIRINGS_FILE)) return { ok: true, map: {} };
+  try {
+    const parsed = JSON.parse(readFileSync(PAIRINGS_FILE, "utf8"));
+    return { ok: true, map: parsed && typeof parsed === "object" ? parsed : {} };
+  } catch (err) {
+    return { ok: false, refused: PAIRINGS_UNREADABLE, why: `the pairing store could not be read — ${err?.message ?? "it is not JSON"}. Fix or remove ${PAIRINGS_FILE} rather than assuming nothing is paired` };
+  }
+}
+
+function writePairings(map) {
+  mkdirSync(HOST_DIR, { recursive: true });
+  writeFileSync(PAIRINGS_FILE, `${JSON.stringify(map, null, 2)}\n`, { mode: 0o600 });
+}
+
+/** The bearer THIS host holds for calling the named environment (local side of a pairing). */
+function bearerFor(envKey) {
+  const read = readPairings();
+  return read.ok ? (read.map[envKey]?.callBearer ?? null) : null;
+}
+
+/** Store the bearer this host will ACCEPT for itself (the remote side of a pairing). */
+function storeBearer(envKey, bearer) {
+  const read = readPairings();
+  const map = read.ok ? read.map : {};
+  map[envKey] = { ...(map[envKey] ?? {}), acceptBearer: bearer };
+  writePairings(map);
+}
+
+/** Check a bearer presented to THIS host against the one it issued for that environment key. */
+function bearerOk(envKey, bearer) {
+  const read = readPairings();
+  if (!read.ok) return false;
+  const held = read.map[envKey]?.acceptBearer;
+  return typeof held === "string" && held.length > 0 && typeof bearer === "string" && bearer === held;
+}
+
+/** Record the bearer the LOCAL host uses when calling a paired environment. */
+function recordCallBearer(envKey, bearer) {
+  const read = readPairings();
+  const map = read.ok ? read.map : {};
+  map[envKey] = { ...(map[envKey] ?? {}), callBearer: bearer };
+  writePairings(map);
+}
+
+/** Resolve an environment key to its origin, from the registry. A key nobody declared is a refusal. */
+async function resolveEnvironment(envKey) {
+  if (envKey === "local") {
+    return { ok: true, label: "this machine", origin: null, local: true };
+  }
+  const stored = readEnvironments();
+  if (!stored.ok) return stored;
+  const env = stored.environments.find((e) => e.key === envKey);
+  if (!env) {
+    return { ok: false, refused: "unknown-environment", why: `no environment with key '${envKey}' is in the registry — declare it (the "+" button) before calling it` };
+  }
+  return { ok: true, label: env.label, origin: env.origin };
+}
+
+function readProbeCache() {
+  try {
+    const parsed = JSON.parse(readFileSync(PROBE_FILE, "utf8"));
+    return parsed && typeof parsed === "object" && parsed.when ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeProbeCache(report) {
+  mkdirSync(WORKSPACE, { recursive: true });
+  writeFileSync(PROBE_FILE, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
+}
+
+/** Run the probe in THIS process's environment. JSON on stdout; a non-zero exit is the boundary
+ *  showing itself, and any stdout it produced is still the report. */
+function runProbe() {
+  return new Promise((resolve, reject) => {
+    execFile(process.execPath, [PROBE_SCRIPT], { timeout: 15000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+      const text = String(stdout ?? "").trim();
+      if (!text) return reject(err ?? new Error("the probe printed nothing"));
+      try {
+        resolve(JSON.parse(text));
+      } catch {
+        reject(err ?? new Error("the probe printed something that was not JSON"));
+      }
+    });
+  });
+}
+
+/**
+ * The probe's act, in the environment's own audit — because it ran unprompted, and the record is
+ * what lets the system say so. An `activity` entry, not an `act`: no tier decision was made. The
+ * write is best-effort (the probe's answer is the route's job; the audit is the record's), and it
+ * is skipped rather than invented when this process has no loggable root.
+ */
+function recordProbeAct(report) {
+  if (!loggableRoot()) return;
+  try {
+    const dir = path.join(active.root.path, ".audit");
+    mkdirSync(dir, { recursive: true });
+    const file = auditPathFor(active.root);
+    resumeLog();
+    const base = {
+      seq: nextSeq(),
+      instance: INSTANCE,
+      actor: { name: "voicebox-server", harness: "voicebox", session: null, cwd: ROOT },
+      project: active.project,
+      root: `machine:${active.root.path}`,
+      turn: null,
+      at: new Date().toISOString(),
+    };
+    const entry = activityEntry(base, "probed itself (auto-probe)", `sandbox-probe @ ${report.when ?? "unknown time"}`);
+    appendFileSync(file, `${serializeEntry(entry)}\n`);
+  } catch {
+    // A record that cannot be written must not fail the probe — but the route's answer stands on its own.
+  }
+}
+
+/**
+ * The registry, with each entry's reachability PROBED LAZILY (on read) rather than at declaration.
+ * The local server this process is on is always a row; remote rows are probed over HTTP. A host that
+ * does not answer is named unreachable, never silently shown as ready.
+ */
+async function environmentsWithStatus() {
+  const stored = readEnvironments();
+  if (!stored.ok) return stored;
+  // The local server is an implicit row: this host, reachable by construction, ambient on loopback.
+  const local = {
+    key: "local",
+    label: "this machine",
+    kind: "server",
+    origin: "same-origin",
+    home: active ? active.root : null,
+    // The probe report, if this host has probed itself: the boundary and the capability are the SAME
+    // observed report, split by what they answer (boundary: what is fenced; capability: what is present).
+    boundary: readProbeCache(),
+    capability: readProbeCache(),
+    reach: "ambient",
+    reachable: true,
+    refused: null,
+    why: null,
+  };
+  const rows = [local];
+  for (const env of stored.environments) {
+    // boundary/capability are OBSERVED, never inherited from the file: the probe is the ONLY writer
+    // of those fields, so a hand-edited or stale descriptor cannot echo a claim as a measurement.
+    // A stored row arrives here with both re-nulled; only a live probe fills them.
+    const declared = { ...env, boundary: null, capability: null };
+    if (env.kind !== "server" || !env.origin) {
+      rows.push({ ...declared, reachable: null, refused: null, why: "the browser environment is always present" });
+      continue;
+    }
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 2500);
+      const answer = await fetch(`${env.origin}/api/health`, { signal: controller.signal }).finally(() => clearTimeout(timer));
+      const no = unreachable(env.label, env.origin);
+      rows.push({ ...declared, reachable: answer.ok, refused: answer.ok ? null : no.refused, why: answer.ok ? null : no.why });
+    } catch {
+      const no = unreachable(env.label, env.origin);
+      rows.push({ ...declared, reachable: false, refused: no.refused, why: no.why });
+    }
+  }
+  return { ok: true, environments: rows, declared: true };
+}
 
 // ── THE AGENT'S OWN SETTINGS (provider · voice · personality) ─────────────────────────────────
 // Kept in memory, and the payload SAYS SO rather than implying durability: a restart resets the
@@ -781,6 +1005,60 @@ async function handle(req, res) {
     }
   }
 
+  if (req.method === "GET" && url.pathname === "/api/environments") {
+    // The list, with each host's reachability probed NOW and its STORED capability report merged in.
+    // An unreadable registry is the named refusal, not an empty list.
+    const result = await environmentsWithStatus();
+    if (!result.ok) return json(res, 500, result);
+    return json(res, 200, { ok: true, environments: result.environments });
+  }
+
+  /**
+   * **`GET /api/probe` — this environment probes ITSELF and says what it found.**
+   *
+   * Paul (2026-09-20): the probe runs AUTOMATICALLY (not a button), and because it runs code inside
+   * the environment unprompted, THE ACT IS RECORDED — an `activity` entry in the environment's own
+   * audit, so the first time something runs somewhere unasked, the system can say it did. The report
+   * is OBSERVED (the probe runs and reads), never a manifest, and it is cached with its `when` so a
+   * stale one reads as stale. A probe that cannot run is a named refusal, not a blank.
+   */
+  if (req.method === "GET" && url.pathname === "/api/probe") {
+    const cached = readProbeCache();
+    if (cached) return json(res, 200, { ok: true, probe: cached, cached: true });
+    try {
+      const report = await runProbe();
+      writeProbeCache(report);
+      recordProbeAct(report);
+      return json(res, 200, { ok: true, probe: report, cached: false });
+    } catch (err) {
+      return json(res, 500, { ok: false, refused: "probe-failed", why: `the environment could not probe itself — ${(err?.message ?? err)}` });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/environments") {
+    // The "+" button: declare an environment. It is written to the list, NOT started — a declared
+    // host that is not running will say so by name the next time the list is read. The server
+    // generates the key; the person supplies the label and the origin.
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON: {label, kind, origin, home?}" });
+      }
+      const candidate = parseEnvironment({ ...parsed, key: `env_${randomBytes(8).toString("hex")}` });
+      if (!candidate.ok) return json(res, 400, candidate);
+      const stored = readEnvironments();
+      if (!stored.ok) return json(res, 500, stored);
+      const descriptor = { ...candidate.value, declaredAt: new Date().toISOString() };
+      writeEnvironments([...stored.environments, descriptor]);
+      return json(res, 200, { ok: true, environment: descriptor });
+    });
+    return;
+  }
+
   if (req.method === "POST" && url.pathname === "/api/turn") {
     let body = "";
     req.on("data", (c) => (body += c));
@@ -862,6 +1140,108 @@ async function handle(req, res) {
     const r = extensions.admitProposal(body.id, body.decision === "deny" ? "deny" : "admit");
     return json(res, 200, r);
   }
+  // ── PAIRING + PROXIED CALL (docs/09-proxied-custody.md; journal-wdq decisions 3+4) ─────────────
+  // Custody: the page holds NO remote credential. It names an environment by KEY and the local host
+  // originates the call, attaching the bearer it holds. Pairing is the explicit act that creates the
+  // bearer on BOTH sides (0600, outside any project root, served by no route). A call to an unpaired
+  // or unreachable environment is refused BY NAME. THE DRIVEN CASE IS THE REMOTE ONE — two real
+  // servers — because local success is what hid the firewall failure all evening.
+  if (req.method === "POST" && url.pathname === "/api/pair") {
+    // The REMOTE side: accept a pairing request and issue a bearer bound to THIS environment's key.
+    // PAIRING CREATES A CREDENTIAL — the same authority class as admission, so the same gate: the
+    // host token. The token is checked, never logged, and never echoed in a refusal's `why`.
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "pairing creates a credential — it is the host's act and requires the host token (x-voicebox-host-token); the page cannot hold it" });
+    }
+    const body = await readJson();
+    const envKey = body?.envKey;
+    if (typeof envKey !== "string" || !envKey) {
+      return json(res, 400, { ok: false, refused: "bad-request", why: "pairing names the environment key it asks to pair with" });
+    }
+    const bearer = `vbx_${randomBytes(24).toString("hex")}`;
+    storeBearer(envKey, bearer); // this host's side: the bearer it will accept
+    return json(res, 200, { ok: true, envKey, bearer });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/pair/complete") {
+    // The LOCAL side of pairing: the person confirmed, the remote issued a bearer, and this host
+    // records the bearer it will use when calling that environment. The page is never given it —
+    // and this act is gated too, because it registers a credential on the host.
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "pairing creates a credential — it is the host's act and requires the host token (x-voicebox-host-token); the page cannot hold it" });
+    }
+    const body = await readJson();
+    const envKey = typeof body?.envKey === "string" ? body.envKey : null;
+    const bearer = typeof body?.bearer === "string" ? body.bearer : null;
+    if (!envKey || !bearer) return json(res, 400, { ok: false, refused: "bad-request", why: "pairing completion carries the environment key and the bearer it issued" });
+    const target = await resolveEnvironment(envKey);
+    if (!target.ok) return json(res, 404, target);
+    recordCallBearer(envKey, bearer);
+    return json(res, 200, { ok: true, envKey, paired: true });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/call") {
+    // The LOCAL side (the proxy): the page names an environment by key; the host looks up the bearer
+    // it holds for that key, attaches it, and forwards the call. The page never sees the bearer.
+    const body = await readJson();
+    const envKey = typeof body?.envKey === "string" ? body.envKey : null;
+    const tool = typeof body?.tool === "string" ? body.tool : null;
+    const args = body?.args && typeof body.args === "object" ? body.args : {};
+    if (!envKey || !tool) {
+      return json(res, 400, { ok: false, refused: "bad-request", why: "a proxied call names the environment key and the tool" });
+    }
+    // The local host is always callable and needs no pairing — saying "pair it" for it would name
+    // the wrong remedy.
+    if (envKey === "local") {
+      const result = await extensions.callTool(tool, args);
+      return json(res, result.ok === false ? 403 : 200, result);
+    }
+    const pairings = readPairings();
+    if (!pairings.ok) return json(res, 500, pairings);
+    const target = await resolveEnvironment(envKey);
+    if (!target.ok) return json(res, target.refused === "environment-unreachable" ? 502 : 404, target);
+    const bearer = bearerFor(envKey);
+    if (!bearer) {
+      return json(res, 403, { ok: false, refused: "environment-not-paired", why: `"${target.label ?? envKey}" is listed but not paired — pair it (an explicit act, gated by the host token) before the host will carry a call to it` });
+    }
+    try {
+      const answer = await fetch(`${target.origin}/api/execute`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },
+        body: JSON.stringify({ envKey, tool, args }),
+      });
+      const out = await answer.json().catch(() => null);
+      return json(res, answer.status, out ?? { ok: false, refused: "bad-answer", why: "the remote answered something that was not JSON" });
+    } catch (err) {
+      const no = unreachable(target.label ?? envKey, target.origin);
+      return json(res, 502, { ok: false, refused: no.refused, why: no.why });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/execute") {
+    // The REMOTE side: authenticate the bearer BEFORE anything is created (the /live hello-auth rule,
+    // on the call path), then execute inside this host's own root. The envKey is resolved against THIS
+    // host's registry FIRST — a bearer bound to a key that no longer exists here refuses by name, so a
+    // re-keyed environment cannot be reached through its old credential. An unauthenticated call is
+    // refused before any tool runs — the credential is checked, never trusted from the request, and
+    // never echoed in the refusal.
+    const auth = String(req.headers["authorization"] ?? "");
+    const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    const body = await readJson();
+    const envKey = typeof body?.envKey === "string" ? body.envKey : null;
+    if (!envKey) return json(res, 400, { ok: false, refused: "bad-request", why: "an execute names the environment key it is for" });
+    const known = await resolveEnvironment(envKey);
+    if (!known.ok) return json(res, 404, { ok: false, refused: "unknown-environment", why: `no environment with key '${envKey}' is in this host's registry — the credential that names it does not reach anything` });
+    if (!bearerOk(envKey, bearer)) {
+      return json(res, 403, { ok: false, refused: "unauthenticated-call", why: "a proxied call must carry the bearer this environment issued at pairing — it is checked before any tool runs" });
+    }
+    const tool = typeof body?.tool === "string" ? body.tool : null;
+    const args = body?.args && typeof body.args === "object" ? body.args : {};
+    if (!tool) return json(res, 400, { ok: false, refused: "bad-request", why: "an execute names the tool" });
+    const result = await extensions.callTool(tool, args);
+    return json(res, result.ok === false ? 403 : 200, result);
+  }
+
   json(res, 404, { error: "not found" });
 }
 

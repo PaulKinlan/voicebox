@@ -25,6 +25,8 @@ const WANTED = {
   settingsOpen: "settings-open", settings: "settings", settingsClose: "settings-close",
   micSelect: "mic-select", outSelect: "out-select",
   micDeviceState: "mic-device-state", outDeviceState: "out-device-state",
+  envs: "envs", envList: "env-list", envCount: "envs-count", envNote: "env-note",
+  envAdd: "env-add", envAddLabel: "env-add-label", envAddOrigin: "env-add-origin", envAddBtn: "env-add-btn",
 };
 const els = {};
 const missing = [];
@@ -87,7 +89,14 @@ function icon(id) {
 async function request(path, options) {
   const response = await fetch(path, options);
   const body = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(body?.error ?? `the server answered ${response.status}`);
+  // A named refusal carries refused+why, not error — carry them onto the throw so the catch renders
+  // the reason and the remedy, not "the server answered 500".
+  if (!response.ok) {
+    const err = new Error(body?.error ?? body?.why ?? `the server answered ${response.status}`);
+    if (body?.refused) err.refused = body.refused;
+    if (body?.why) err.why = body.why;
+    throw err;
+  }
   if (!body) throw new Error("the server sent something that was not JSON");
   return body;
 }
@@ -335,6 +344,69 @@ function renderRoot() {
   renderAbout();
 }
 
+// ── the environment list (core/environment.ts is the seam; server.mjs owns the store) ──────────
+// One source: the header chip, the settings surface and the "+" all read /api/environments. A host
+// that is listed but not running is named unreachable, never shown as ready; a registry the server
+// cannot read is a different named refusal from an empty list.
+async function renderEnvironments() {
+  if (!els.envList) return;
+  try {
+    const answer = await request("/api/environments");
+    const list = answer.environments ?? [];
+    els.envList.replaceChildren();
+    for (const env of list) {
+      const li = document.createElement("li");
+      li.className = "env-item";
+      const dot = document.createElement("span");
+      dot.className = "env-dot";
+      dot.dataset.ok = env.reachable === true ? "true" : env.reachable === false ? "false" : "pending";
+      li.appendChild(dot);
+      const name = document.createElement("span");
+      name.className = "env-label";
+      name.textContent = env.label ?? "an environment";
+      li.appendChild(name);
+      const state = document.createElement("span");
+      state.className = "env-state";
+      if (env.reachable === true) state.textContent = "reachable";
+      else if (env.reachable === false) state.textContent = env.refused ?? "not reachable";
+      else state.textContent = env.why ?? "always here";
+      if (env.why && env.reachable === false) state.title = env.why;
+      li.appendChild(state);
+      // The capability report, when this environment has been probed: tools and runtimes as a line a
+      // person reads, with the report's `when` so a stale one reads as stale. Not probed says so.
+      const cap = document.createElement("span");
+      cap.className = "env-cap";
+      const tools = env.capability?.tools;
+      if (tools && typeof tools === "object") {
+        const present = Object.entries(tools).filter(([, v]) => v && v.value).map(([k]) => k);
+        cap.textContent = present.length ? `tools: ${present.join(", ")}` : "no tools found";
+        cap.title = `probed ${env.capability.when ?? "at an unknown time"}`;
+      } else {
+        cap.textContent = "not probed";
+      }
+      li.appendChild(cap);
+      els.envList.appendChild(li);
+    }
+    if (els.envCount) {
+      const up = list.filter((e) => e.reachable === true).length;
+      els.envCount.textContent = `${list.length} environment${list.length === 1 ? "" : "s"} · ${up} reachable`;
+    }
+    if (els.envNote) els.envNote.textContent = "";
+    // AUTO-PROBE: a reachable environment that has never been probed is asked to probe itself, on
+    // first reach (Paul: automatically, not a button). The act is recorded in the environment's own
+    // audit by the host; here we only re-render once the report exists. This loop is the local
+    // server today; a remote environment's report rides its own /api/probe the same way.
+    const unprobed = list.filter((e) => e.reachable === true && !e.capability);
+    if (unprobed.some((e) => e.key === "local")) {
+      request("/api/probe").then(() => renderEnvironments()).catch(() => {});
+    }
+  } catch (err) {
+    // The registry could not be read, or the server is not answering: the refusal is named, not blank.
+    if (els.envCount) els.envCount.textContent = "Environments";
+    if (els.envNote) els.envNote.textContent = String(err?.message ?? "the environment list could not be read");
+  }
+}
+
 async function health() {
   try {
     const answer = await request("/api/health");
@@ -349,6 +421,7 @@ async function health() {
     stampBuild(answer.build ?? null);
     renderAbout();
     await loadRoot();
+    await renderEnvironments();
   } catch {
     if (els.dot) els.dot.dataset.ok = "false";
     if (els.where) { els.where.textContent = "no answer from the local server"; els.where.title = ""; }
@@ -729,6 +802,30 @@ on(els.outSelect, "change", async () => {
     return;
   }
   renderDevices();
+});
+
+// The "+" declares a server environment. It writes a descriptor to the server-owned list; it never
+// starts a service, and a host that is not running will say so by name on the next read.
+on(els.envAdd, "submit", async (event) => {
+  event.preventDefault();
+  const label = (els.envAddLabel?.value ?? "").trim();
+  const origin = (els.envAddOrigin?.value ?? "").trim();
+  if (!label || !origin) {
+    if (els.envNote) els.envNote.textContent = "an environment needs a name and an origin";
+    return;
+  }
+  try {
+    await request("/api/environments", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ label, kind: "server", origin }),
+    });
+    if (els.envAddLabel) els.envAddLabel.value = "";
+    if (els.envAddOrigin) els.envAddOrigin.value = "";
+    await renderEnvironments();
+  } catch (err) {
+    if (els.envNote) els.envNote.textContent = String(err?.message ?? "the environment was not added");
+  }
 });
 
 on(els.settingsOpen, "click", () => {
