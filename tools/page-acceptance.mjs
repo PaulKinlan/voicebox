@@ -11,59 +11,71 @@
 // WebSocket.
 //
 // To acceptance-test a CANDIDATE branch, run its own server pair and point
-// this at it: VOICEBOX_UI_URL / VOICEBOX_API_URL.
+// this at it: VOICEBOX_UI_URL / VOICEBOX_API_URL / VOICEBOX_TREE.
 //
-// Checks (each one traces to a defect somebody actually hit):
-//   0. the environment is current       — served bytes == disk bytes, FIRST,
-//                                         because every other check depends on it
-//   1. console clean on load            — the partial-update aborts class
-//   2. zero POST /api/turn on load      — the phantom-turn defect
-//   3. file list matches the workspace  — names, count, and byte counts
-//   4. a typed turn writes a real file  — page ≡ disk ≡ content, exactly one POST
-//   5. ../evil.sh is refused            — nothing outside workspace/
-//   6. the mic state is honest          — never "listening" without a gesture;
+// WHY THE ROOT DECLARATION IS IN HERE (2026-09-20, one-root): the old harness
+// assumed a `workspace/` default; the environment retired that fallback on
+// purpose — an undeclared root is a NAMED state that refuses with
+// `root-not-declared`. So the harness now asserts BOTH states in order: first
+// the refusal (the new contract, as a positive assertion), then it declares a
+// scratch directory of its own and runs the disk comparisons against it.
+// Together with the served-vs-disk marker check, this answers "is this
+// environment current" better than the old workspace field ever did.
+//
+// Checks:
+//   0. the environment is current       — served modules carry current markers
+//   1. root-not-declared refuses        — the new contract, positively asserted
+//   2. console clean on load            — the partial-update aborts class
+//   3. zero POST /api/turn on load      — the phantom-turn defect
+//   4. file list matches the workspace  — names, count, and byte counts
+//   5. a typed turn writes a real file  — page ≡ disk ≡ content, exactly one POST
+//   6. ../evil.sh is refused            — nothing lands outside the declared root
+//   7. the mic state is honest          — never "listening" without a gesture;
 //                                         the waveform may not lie either
-//   7. the font actually loads          — through Vite AND through server.mjs
-import { spawn } from "node:child_process";
+//   8. the font actually loads          — through Vite AND through server.mjs
+//   9. the run leaves no trace          — artefacts, scratch root, porcelain
+import { spawn, execFileSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
-import { existsSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-// The workspace under test belongs to the SERVER we talk to, not to the tree
-// this script runs from — a lane worktree and the served tree are different
-// directories, and stat'ing the wrong one is a false FAIL (2026-09-19,
-// voicebox-ui blocked twice). /api/health names the server's own workspace.
-let WORKSPACE = null; // resolved from /api/health, below
-const NAME = `acceptance-proof-${process.pid}.txt`; // hoisted: the finally must see it
+// The tree whose public/ should be served — defaults to THIS repo root, i.e.
+// the tree the harness itself runs from. For a candidate branch, point it at
+// the candidate worktree. The default is stated in the output, because an
+// unstated default is how "green on one machine" happened before.
+const TREE = process.env.VOICEBOX_TREE ?? ROOT;
 const UI = process.env.VOICEBOX_UI_URL ?? "http://127.0.0.1:5173";
 const API = process.env.VOICEBOX_API_URL ?? "http://127.0.0.1:8787";
 // per-run browser: two concurrent runs must never share one (2026-09-19,
 // voicebox-ui's run and another lane's overlapped on a fixed port + profile
 // and the typed-turn check failed with the OTHER run's timestamp)
 const CDP_PORT = 9500 + (process.pid % 500);
+const NAME = `acceptance-proof-${process.pid}.txt`; // hoisted: the finally must see it
 
 const results = [];
-// Cleanup on every exit path — finally does not run on signals or direct
-// process.exit, and a SIGTERM'd run (timeout, ctrl-C) used to leave its proof
-// file in Paul's workspace. Re-asserted at the end by the artefact-free check.
-const cleanupArtefacts = () => {
-  try { if (WORKSPACE) for (const f of readdirSync(WORKSPACE)) if (/^acceptance-proof-.*\.txt$/.test(f)) rmSync(path.join(WORKSPACE, f)); } catch {}
-};
-process.on("SIGTERM", () => { cleanupArtefacts(); process.exit(143); });
-process.on("SIGINT", () => { cleanupArtefacts(); process.exit(130); });
-process.on("uncaughtException", (e) => { cleanupArtefacts(); try { chromium?.kill(); } catch {} console.log(`FAIL  uncaught: ${String(e?.message ?? e).slice(0, 140)}`); process.exit(1); });
-// One page, one driver: concurrent runs interleave typed turns into the same
-// workspace and the list checks fail on each other's files. Serialise whole
-// runs on a lockfile — wait up to 2 minutes, then refuse rather than overlap.
-import { execFileSync } from "node:child_process";
-try { execFileSync("flock", ["-w", "120", "/tmp/vb-accept.lock", "-c", "true"]); }
-catch { console.log("FAIL  another acceptance run holds the lock (>120s) — retry when it finishes"); process.exit(1); }
 const report = (name, ok, detail) => {
   results.push(ok);
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`);
 };
+
+// Cleanup on every exit path — finally does not run on signals or direct
+// process.exit, and a SIGTERM'd run (timeout, ctrl-C) used to leave its proof
+// file in Paul's workspace. Re-asserted at the end by the artefact-free check.
+const cleanupArtefacts = () => {
+  try { if (scratchRoot) for (const f of readdirSync(scratchRoot)) if (/^acceptance-proof-.*\.txt$/.test(f)) rmSync(path.join(scratchRoot, f)); } catch {}
+};
+process.on("SIGTERM", () => { cleanupArtefacts(); process.exit(143); });
+process.on("SIGINT", () => { cleanupArtefacts(); process.exit(130); });
+process.on("uncaughtException", (e) => { cleanupArtefacts(); try { chromium?.kill(); } catch {} console.log(`FAIL  uncaught: ${String(e?.message ?? e).slice(0, 140)}`); process.exit(1); });
+
+// One page, one driver: concurrent runs interleave typed turns into the same
+// workspace and the list checks fail on each other's files. Serialise whole
+// runs on a lockfile — wait up to 2 minutes, then refuse rather than overlap.
+try { execFileSync("flock", ["-w", "120", "/tmp/vb-accept.lock", "-c", "true"]); }
+catch { console.log("FAIL  another acceptance run holds the lock (>120s) — retry when it finishes"); process.exit(1); }
 
 // ── bring up a headless browser and open the page ──────────────────────────
 const chromium = spawn("/usr/bin/chromium", [
@@ -108,40 +120,14 @@ for (const d of ["Runtime", "Log", "Page", "Network"]) await send(`${d}.enable`,
 const ev = async (expr) =>
   (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId))?.result?.value;
 
-// ── 0. the environment is current: served bytes == disk bytes ─────────────
+console.log(`measuring tree: ${TREE}${TREE === ROOT ? "  (default: this repo — set VOICEBOX_TREE to measure a candidate)" : ""}`);
+
+// ── 0. the environment is current: served modules carry current markers ───
 // The class this catches: an ff-merge replaced public/audio-client.js, Vite's
 // watcher never fired, and the server kept serving its cached transform while
 // every file-level stamp reported the new sha. "The environment is current"
 // is a claim someone has to make — this check makes it, FIRST, because every
-// other check depends on it. The tree under test is the SERVER's tree, taken
-// from /api/health.
-const health = await (await fetch(`${API}/api/health`)).json().catch(() => null);
-WORKSPACE = health?.workspace ?? null;
-// Some server revisions report a RELATIVE workspace ("workspace/") — anchor
-// it to the server process's own cwd (same-box instrument: the port names the
-// process), or every stat below becomes cwd-relative and fails from any other
-// worktree (2026-09-19, voicebox-ui blocked on exactly this).
-if (WORKSPACE && !path.isAbsolute(WORKSPACE)) {
-  try {
-    const port = new URL(API).port;
-    const out = execFileSync("ss", ["-ltnp"]).toString();
-    const pid = (out.match(new RegExp(`:${port}\\b[^\\n]*pid=(\\d+)`)) ?? [])[1];
-    if (pid) WORKSPACE = path.join(readlinkSync(`/proc/${pid}/cwd`), WORKSPACE);
-  } catch { /* fall through: the TREE check below reports it */ }
-}
-const TREE = WORKSPACE ? path.dirname(WORKSPACE) : null;
-if (!TREE || !existsSync(TREE)) {
-  console.log(`FAIL  cannot locate the server's tree — /api/health said ${JSON.stringify(health?.workspace ?? null)}`);
-  chromium.kill(); process.exit(1);
-}
-// THE RULE (coord, 2026-09-19): compare a MARKER, not bytes. Vite transforms
-// everything it serves — CSS arrives as a JS wrapper, JS arrives with
-// rewritten imports, HMR lines and a source map — so byte-equality against a
-// transforming server can only pass by accident. The marker is the longest
-// line of the current disk file: it survives every transform above while
-// still being absent from a STALE served copy (the audio-client defect).
-// Virtual, query-suffixed and directory-shaped refs are skipped before they
-// are ever treated as a comparison.
+// other check depends on it.
 const servedRefs = [];
 const indexHtml = await (await fetch(`${UI}/`)).text();
 for (const m of indexHtml.matchAll(/(?:src|href)="([^"#][^"]*)"/g)) {
@@ -177,152 +163,183 @@ while (servedRefs.length) {
       servedRefs.push(path.posix.join(path.posix.dirname(ref), m[1] ?? m[2]));
   }
 }
-// sweep our own past: a crashed run's proof file would fail THIS run's list
-// comparison — the gate jamming itself (2026-09-19). The lock guarantees no
-// concurrent run owns these.
-let swept = 0;
-try {
-  for (const f of readdirSync(WORKSPACE)) {
-    if (/^acceptance-proof-.*\.txt$/.test(f)) { rmSync(path.join(WORKSPACE, f)); swept++; }
-  }
-} catch { /* workspace unreadable: the list check will name it */ }
-if (swept) console.log(`note: swept ${swept} leftover harness artefact(s) from an earlier failed run`);
-
 report("environment is current (served modules carry current markers)", staleModules.length === 0,
   staleModules.length ? `STALE: ${staleModules.join(", ")} — touch the file or restart vite` : `${compared.size} modules compared`);
 
+// ── 1. the root lifecycle: refusal first, then the harness's own scratch ──
+const priorRoot = await (await fetch(`${API}/api/root`)).json();
+if (priorRoot.declared === false) {
+  const refusal = await (await fetch(`${API}/api/root`)).json();
+  const writeTry = await (await fetch(`${API}/api/turn`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ transcript: `create a file called should-refuse.txt with no` }),
+  })).json();
+  const refusedRight = refusal.refused === "root-not-declared"
+    && writeTry.result?.refused === "root-not-declared"
+    && typeof writeTry.result?.why === "string" && writeTry.result.why.length > 0;
+  report("with no root declared, reads and writes refuse as root-not-declared", refusedRight,
+    `get.refused=${refusal.refused} write.result.refused=${writeTry.result?.refused}`);
+} else {
+  console.log(`note: a root is already declared on this server ("${priorRoot.project}") — the root-not-declared refusal is asserted on a fresh server; this run will restore it at the end`);
+}
+
+// declare the harness's own scratch root — outside the repo, so the run can
+// never dirty the tree it is gating
+const scratchRoot = mkdtempSync(path.join(os.tmpdir(), "vb-accept-root-"));
+const priorToRestore = priorRoot.declared ? { project: priorRoot.project, root: priorRoot.root } : null;
+const declared = await (await fetch(`${API}/api/root`, {
+  method: "POST", headers: { "content-type": "application/json" },
+  body: JSON.stringify({ project: "page-acceptance", root: { kind: "machine", path: scratchRoot } }),
+})).json();
+report("scratch root declared", declared.ok === true,
+  declared.ok ? `project "page-acceptance" at ${scratchRoot}` : `refused: ${declared.refused} — ${declared.why}`);
+
+let rootDir = declared?.root?.path ?? scratchRoot; // the canonical path the server uses
+
 try {
-await send("Page.navigate", { url: UI }, sessionId);
-await sleep(4000); // let load() finish whatever it does — including phantom turns
+  await send("Page.navigate", { url: UI }, sessionId);
+  await sleep(4000); // let load() finish whatever it does — including phantom turns
 
-// ── 1. console clean on load ───────────────────────────────────────────────
-report("console clean on load", consoleMsgs.length === 0,
-  consoleMsgs.length ? `first: ${String(consoleMsgs[0]).slice(0, 140)}` : "");
+  // ── 2. console clean on load ─────────────────────────────────────────────
+  report("console clean on load", consoleMsgs.length === 0,
+    consoleMsgs.length ? `first: ${String(consoleMsgs[0]).slice(0, 140)}` : "");
 
-// ── 2. zero POST /api/turn while merely loading ────────────────────────────
-const loadTurns = turnPosts.filter((p) => p.phase === "load");
-report("zero POST /api/turn on page load", loadTurns.length === 0,
-  loadTurns.length ? `${loadTurns.length} phantom turn(s), e.g. ${loadTurns[0].body.slice(0, 60)}` : "");
+  // ── 3. zero POST /api/turn while merely loading ──────────────────────────
+  const loadTurns = turnPosts.filter((p) => p.phase === "load");
+  report("zero POST /api/turn on page load", loadTurns.length === 0,
+    loadTurns.length ? `${loadTurns.length} phantom turn(s), e.g. ${loadTurns[0].body.slice(0, 60)}` : "");
 
-// ── 3. the file list is the workspace ──────────────────────────────────────
-const safeJson = async (url, options) => {
-  try { return await (await fetch(url, options)).json(); } catch (e) {
-    report(`server reachable (${url.replace("http://127.0.0.1:", "")})`, false, String(e.cause ?? e).slice(0, 80));
-    throw new Error("API_UNREACHABLE");
+  // ── 4. the file list is the declared root ─────────────────────────────────
+  const apiFiles = (await (await fetch(`${API}/api/files`)).json()).files.sort();
+  const pageNames = ((await ev(`[...document.querySelectorAll('.file-name')].map(e => e.textContent)`)) ?? []).sort();
+  const countText = await ev(`document.getElementById('file-count')?.textContent`);
+  const expectedCount = apiFiles.length === 0 ? "nothing yet" : `${apiFiles.length} ${apiFiles.length === 1 ? "file" : "files"}`;
+  report("file list matches /api/files (names)",
+    JSON.stringify(apiFiles) === JSON.stringify(pageNames),
+    `api=[${apiFiles}] page=[${pageNames}]`);
+  report("file count matches", countText === expectedCount, `page says "${countText}", declared root has ${apiFiles.length}`);
+
+  // byte counts: the page claims "N bytes" per file — compare against real disk
+  let sizeMismatches = [];
+  for (const name of apiFiles.slice(0, 8)) {
+    const diskBytes = statSync(path.join(rootDir, name)).size;
+    const pageMeta = await ev(`document.querySelector('.file-open[data-file=${JSON.stringify(name)}] .file-meta')?.textContent`);
+    if (pageMeta !== `${diskBytes} bytes`) sizeMismatches.push(`${name}: page "${pageMeta}" vs disk ${diskBytes} bytes`);
   }
-};
-const apiFiles = (await safeJson(`${API}/api/files`)).files.sort();
-const pageNames = ((await ev(`[...document.querySelectorAll('.file-name')].map(e => e.textContent)`)) ?? []).sort();
-const countText = await ev(`document.getElementById('file-count')?.textContent`);
-const expectedCount = apiFiles.length === 0 ? "nothing yet" : `${apiFiles.length} ${apiFiles.length === 1 ? "file" : "files"}`;
-report("file list matches /api/files (names)",
-  JSON.stringify(apiFiles) === JSON.stringify(pageNames),
-  `api=[${apiFiles}] page=[${pageNames}]`);
-report("file count matches", countText === expectedCount, `page says "${countText}", workspace has ${apiFiles.length}`);
+  report("page byte counts match disk", apiFiles.length === 0 || sizeMismatches.length === 0,
+    sizeMismatches.join("; "));
 
-// byte counts: the page claims "N bytes" per file — compare against real disk
-let sizeMismatches = [];
-for (const name of apiFiles.slice(0, 8)) {
-  const diskBytes = statSync(path.join(WORKSPACE, name)).size;
-  const pageMeta = await ev(`document.querySelector('.file-open[data-file=${JSON.stringify(name)}] .file-meta')?.textContent`);
-  if (pageMeta !== `${diskBytes} bytes`) sizeMismatches.push(`${name}: page "${pageMeta}" vs disk ${diskBytes} bytes`);
-}
-report("page byte counts match disk", apiFiles.length === 0 || sizeMismatches.length === 0,
-  sizeMismatches.join("; "));
-
-// ── 4 + 7. a typed turn writes a real file (the positive control) ─────────
-const CONTENT = `acceptance ${Date.now()}`;
-const turnsBeforeTyped = turnPosts.length;
-phase = "typed";
-await ev(`
-  const u = document.getElementById('utterance');
-  const s = document.getElementById('send');
-  u.value = ${JSON.stringify(`create a file called ${NAME} with ${CONTENT}`)};
-  // the composer enables Send from an input event — programmatic .value does
-  // not fire one, so the button stays disabled and a bare click is a no-op
-  u.dispatchEvent(new Event('input', { bubbles: true }));
-  s.click();
-  true;
-`);
-let appeared = false;
-for (let i = 0; i < 20 && !appeared; i++) {
-  appeared = (await safeJson(`${API}/api/files`)).files.includes(NAME);
-  if (!appeared) await sleep(400);
-}
-const disk = existsSync(path.join(WORKSPACE, NAME)) ? readFileSync(path.join(WORKSPACE, NAME), "utf8") : null;
-report("typed turn writes a real file", appeared && disk !== null,
-  appeared ? "" : "the file never appeared in /api/files");
-report("page ≡ disk ≡ content", disk === CONTENT,
-  disk === CONTENT ? "" : `disk has ${JSON.stringify(String(disk).slice(0, 60))}, sent ${JSON.stringify(CONTENT)}`);
-const typedTurns = turnPosts.length - turnsBeforeTyped;
-report("a typed turn produces exactly one POST /api/turn", typedTurns === 1, `${typedTurns} posts`);
-let pageShowsIt = false;
-for (let i = 0; i < 15 && !pageShowsIt; i++) {
-  pageShowsIt = (await ev(`[...document.querySelectorAll('.file-name')].some(e => e.textContent === ${JSON.stringify(NAME)})`)) === true;
-  if (!pageShowsIt) await sleep(400);
-}
-report("the page's list shows the new file", pageShowsIt, pageShowsIt ? "" : "the list never refreshed to include it");
-
-// ── 5. traversal refused ───────────────────────────────────────────────────
-phase = "typed";
-await ev(`
-  const u = document.getElementById('utterance');
-  u.value = "create a file called ../evil.sh with pwned";
-  u.dispatchEvent(new Event('input', { bubbles: true }));
-  document.getElementById('send').click();
-  true;
-`);
-await sleep(1500);
-const evilOutside = existsSync(path.join(WORKSPACE, "..", "evil.sh"));
-const stillListed = (await safeJson(`${API}/api/files`)).files.includes("../evil.sh");
-report("../evil.sh is refused and nothing lands outside workspace/",
-  !evilOutside && !stillListed,
-  `outside=${evilOutside} listed=${stillListed}`);
-
-// ── 6. the mic state is honest ─────────────────────────────────────────────
-const micState = (await ev(`document.getElementById('voice-state')?.textContent`)) ?? "";
-report("mic state never claims listening without a gesture", !/listening/i.test(micState),
-  `state reads "${micState.trim().slice(0, 60)}"`);
-
-// ── 6b. the waveform may not lie either ── visual activity is gated by voice
-// state (as voicebox-ui's waveform lands: the invariant is that nothing
-// renders input energy when capture is off). The input-wave is display:none
-// unless [data-voice="listening"] and its path is only drawn from real
-// samples — assert the off case from the live page so a new visualisation
-// inherits the gate rather than inventing its own.
-const visual = await ev(`(() => {
-  const stage = document.getElementById('voice-ring-wrap');
-  const state = stage?.dataset.voice ?? "?";
-  const wave = document.querySelector('.input-wave');
-  const waveShown = wave ? getComputedStyle(wave).display !== "none" : null;
-  const wavePath = document.getElementById('input-path')?.getAttribute('d') ?? "";
-  return { state, waveShown, pathEmpty: wavePath.trim() === "" };
-})()`);
-const claimedListening = visual?.state === "listening" || visual?.state === "speaking";
-report("waveform visual activity is gated by voice state",
-  claimedListening ? true
-    : (visual?.waveShown === false && (visual?.pathEmpty === true || visual?.waveShown === null)),
-  `data-voice=${visual?.state} waveShown=${visual?.waveShown} pathEmpty=${visual?.pathEmpty}`);
-
-// ── 7. the font actually loads — through Vite AND through server.mjs ──────
-const fontInPage = await ev(`document.fonts.check('14px Inter')`);
-report("font loads in the page (dev front)", fontInPage === true, `document.fonts.check says ${fontInPage}`);
-const fontResp = await fetch(`${API}/fonts/inter-latin.woff2`);
-report("font serves through the real server", fontResp.status === 200,
-  `GET /fonts/inter-latin.woff2 -> ${fontResp.status} ${fontResp.headers.get("content-type") ?? ""}`);
-
-  } catch (e) {
-    report("harness ran to completion", false, String(e?.message ?? e).slice(0, 140));
-  } finally {
-    // the proof file is OURS — remove it whether the run passed, failed or
-    // was interrupted. A leftover fails the NEXT run's list comparison, which
-    // is the gate jamming itself (2026-09-19).
-    cleanupArtefacts();
-    chromium.kill();
+  // ── 5 + 7. a typed turn writes a real file (the positive control) ────────
+  const CONTENT = `acceptance ${Date.now()}`;
+  const turnsBeforeTyped = turnPosts.length;
+  phase = "typed";
+  await ev(`
+    const u = document.getElementById('utterance');
+    const s = document.getElementById('send');
+    u.value = ${JSON.stringify(`create a file called ${NAME} with ${CONTENT}`)};
+    // the composer enables Send from an input event — programmatic .value does
+    // not fire one, so the button stays disabled and a bare click is a no-op
+    u.dispatchEvent(new Event('input', { bubbles: true }));
+    s.click();
+    true;
+  `);
+  let appeared = false;
+  for (let i = 0; i < 20 && !appeared; i++) {
+    appeared = (await (await fetch(`${API}/api/files`)).json()).files.includes(NAME);
+    if (!appeared) await sleep(400);
   }
-  let postLeftovers = [];
-  try { postLeftovers = readdirSync(WORKSPACE).filter((f) => /^acceptance-proof-.*\.txt$/.test(f)); } catch {}
-  report("workspace left artefact-free", postLeftovers.length === 0, postLeftovers.join(", "));
-  const failed = results.filter((ok) => !ok).length;
-  console.log(failed === 0 ? "\nALL CLEAR" : `\n${failed} CHECK(S) FAILED — named above`);
-  process.exit(failed === 0 ? 0 : 1);
+  const disk = existsSync(path.join(rootDir, NAME)) ? readFileSync(path.join(rootDir, NAME), "utf8") : null;
+  report("typed turn writes a real file into the declared root", appeared && disk !== null,
+    appeared ? "" : "the file never appeared in /api/files");
+  report("page ≡ disk ≡ content", disk === CONTENT,
+    disk === CONTENT ? "" : `disk has ${JSON.stringify(String(disk).slice(0, 60))}, sent ${JSON.stringify(CONTENT)}`);
+  const typedTurns = turnPosts.length - turnsBeforeTyped;
+  report("a typed turn produces exactly one POST /api/turn", typedTurns === 1, `${typedTurns} posts`);
+  let pageShowsIt = false;
+  for (let i = 0; i < 15 && !pageShowsIt; i++) {
+    pageShowsIt = (await ev(`[...document.querySelectorAll('.file-name')].some(e => e.textContent === ${JSON.stringify(NAME)})`)) === true;
+    if (!pageShowsIt) await sleep(400);
+  }
+  report("the page's list shows the new file", pageShowsIt, pageShowsIt ? "" : "the list never refreshed to include it");
+
+  // ── 6. traversal refused — the boundary is now the DECLARED root ─────────
+  phase = "typed";
+  await ev(`
+    const u = document.getElementById('utterance');
+    u.value = "create a file called ../evil.sh with pwned";
+    u.dispatchEvent(new Event('input', { bubbles: true }));
+    document.getElementById('send').click();
+    true;
+  `);
+  await sleep(1500);
+  const evilOutside = existsSync(path.join(path.dirname(scratchRoot), "evil.sh"));
+  const stillListed = (await (await fetch(`${API}/api/files`)).json()).files.includes("../evil.sh");
+  report("../evil.sh is refused and nothing lands outside the declared root",
+    !evilOutside && !stillListed,
+    `outside=${evilOutside} listed=${stillListed}`);
+
+  // ── 7. the mic state is honest ────────────────────────────────────────────
+  const micState = (await ev(`document.getElementById('voice-state')?.textContent`)) ?? "";
+  report("mic state never claims listening without a gesture", !/listening/i.test(micState),
+    `state reads "${micState.trim().slice(0, 60)}"`);
+
+  // ── 7b. the waveform may not lie either ── visual activity is gated by voice
+  // state: nothing renders input energy when capture is off. The input-wave is
+  // display:none unless [data-voice="listening"] and its path is only drawn
+  // from real samples — assert the off case so a new visualisation inherits
+  // the gate rather than inventing its own.
+  const visual = await ev(`(() => {
+    const stage = document.getElementById('voice-ring-wrap');
+    const state = stage?.dataset.voice ?? "?";
+    const wave = document.querySelector('.input-wave');
+    const waveShown = wave ? getComputedStyle(wave).display !== "none" : null;
+    const wavePath = document.getElementById('input-path')?.getAttribute('d') ?? "";
+    return { state, waveShown, pathEmpty: wavePath.trim() === "" };
+  })()`);
+  const claimedListening = visual?.state === "listening" || visual?.state === "speaking";
+  report("waveform visual activity is gated by voice state",
+    claimedListening ? true
+      : (visual?.waveShown === false && (visual?.pathEmpty === true || visual?.waveShown === null)),
+    `data-voice=${visual?.state} waveShown=${visual?.waveShown} pathEmpty=${visual?.pathEmpty}`);
+
+  // ── 8. the font actually loads — through Vite AND through server.mjs ─────
+  const fontInPage = await ev(`document.fonts.check('14px Inter')`);
+  report("font loads in the page (dev front)", fontInPage === true, `document.fonts.check says ${fontInPage}`);
+  const fontResp = await fetch(`${API}/fonts/inter-latin.woff2`);
+  report("font serves through the real server", fontResp.status === 200,
+    `GET /fonts/inter-latin.woff2 -> ${fontResp.status} ${fontResp.headers.get("content-type") ?? ""}`);
+} catch (e) {
+  report("harness ran to completion", false, String(e?.message ?? e).slice(0, 140));
+} finally {
+  cleanupArtefacts();
+  chromium.kill();
+}
+
+// ── 9. the run leaves no trace ─────────────────────────────────────────────
+let postLeftovers = [];
+try { postLeftovers = readdirSync(rootDir).filter((f) => /^acceptance-proof-.*\.txt$/.test(f)); } catch {}
+report("workspace left artefact-free", postLeftovers.length === 0, postLeftovers.join(", "));
+
+let porcelain = "";
+try { porcelain = execFileSync("git", ["-C", TREE, "status", "--porcelain"]).toString().trim(); } catch {}
+report("run leaves the tree clean (git status --porcelain empty)", porcelain === "",
+  porcelain ? porcelain.split("\n").slice(0, 3).join(" | ") : "");
+
+// restore the root state the server had before this run, THEN remove the
+// scratch — order matters: deleting a still-declared root leaves the
+// executor aiming at a vanished directory (a write into it hung, 2026-09-20).
+if (priorToRestore) {
+  await fetch(`${API}/api/root`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify(priorToRestore),
+  });
+  try { rmSync(scratchRoot, { recursive: true, force: true }); } catch {}
+  console.log(`note: restored the previously declared root "${priorToRestore.project}"`);
+} else {
+  console.log(`note: the seam has no un-declare — the (empty) scratch root "page-acceptance" stays declared at ${scratchRoot}; a server restart clears it`);
+}
+
+const failed = results.filter((ok) => !ok).length;
+console.log(failed === 0 ? "\nALL CLEAR" : `\n${failed} CHECK(S) FAILED — named above`);
+console.log(`(served-vs-disk markers + the root-declaration lifecycle answer "is this environment current" better than the old workspace field ever did)`);
+process.exit(failed === 0 ? 0 : 1);
