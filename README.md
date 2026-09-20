@@ -37,7 +37,38 @@ is still undecided.
 
 ## Status
 
-Seeded 2026-09-19 from a spoken brief. Design in progress.
+Seeded 2026-09-19 from a spoken brief. Design in progress — and **the descriptions below are a
+snapshot**: what this tree does tonight, placeholders included.
+
+**Which documents are which**, because a reader needs to know whether they are holding a spec or a
+snapshot:
+
+| document | kind | authority for |
+|---|---|---|
+| [`docs/00-brief.md`](docs/00-brief.md) | **spec** (Paul's words) | what this is meant to be |
+| [`docs/02-environment.md`](docs/02-environment.md), [`docs/05-harvest.md`](docs/05-harvest.md) | **design records** | systems that may not exist yet — allowed to describe the future |
+| [`docs/07-architecture.md`](docs/07-architecture.md), [`docs/08-how-it-runs.md`](docs/08-how-it-runs.md), this README | **snapshots** | what runs *now*; a claim here that the code contradicts is a bug in the document |
+
+The blocks marked `BEGIN GENERATED` are written by `scripts/docs-check.mjs` from the code itself, and
+`tests/docs-drift.test.mjs` fails when they drift.
+
+## The two paths, stated separately
+
+The largest gap in this product was invisible because one word — *live* — covered two different things:
+the **audio** path and the **turn** path. They are not the same, so they are not written as one:
+
+<!-- BEGIN GENERATED: providers -->
+Registered resolvers: `script` (one — a placeholder)
+
+* `registerResolver(name, fn)` is the seam; `resolveTurn(transcript, provider = "script")` picks one.
+* The **script** provider handles `write`, `read` and `list`: `"create a file called hello.txt with hi"` → `{"verb":"write","name":"hello.txt","content":"hi"}`.
+* Anything else is **unresolved**, by design: `"book me a flight to Lisbon"` → `"the script resolver only knows create/read…"`.
+* Planned, and **not registered**: `gemini-live`, `openai-realtime`.
+<!-- END GENERATED: providers -->
+
+<!-- BEGIN GENERATED: live-session -->
+`lib/live-session.mjs` is present, using model `gemini-3.8-live`.
+<!-- END GENERATED: live-session -->
 
 
 ## Running (the skeleton loop)
