@@ -79,9 +79,75 @@ function addKeepOnTopButton(controls) {
   (controls.mic.parentElement ?? controls.mic).insertAdjacentElement("afterend", button);
 }
 
+/**
+ * GIVE THE PiP DOCUMENT THE PAGE'S CLOTHES.
+ *
+ * A Document Picture-in-Picture window gets a FRESH document — the opener's styles do NOT come with the DOM —
+ * so a window that only appends its own rules renders with default UA styles. Paul saw exactly that: an
+ * unstyled grey button, in the one control whose meaning depends on being read at a glance from another
+ * application. Copying the opener's sheets rather than restating a lookalike list is also why the two can no
+ * longer drift: they are the same sheets.
+ *
+ * `<link rel="stylesheet">` and `<style>` elements are cloned; `document.adoptedStyleSheets` is assigned,
+ * because constructable sheets do not appear in the DOM at all and a copy that ignores them silently loses
+ * whatever used them.
+ */
+function copyStylesInto(target) {
+  let copied = 0;
+  for (const node of document.querySelectorAll('link[rel="stylesheet"], style')) {
+    target.head.append(node.cloneNode(true));
+    copied += 1;
+  }
+  if (document.adoptedStyleSheets?.length) {
+    target.adoptedStyleSheets = [...document.adoptedStyleSheets];
+    copied += document.adoptedStyleSheets.length;
+  }
+  return copied;
+}
+
+/**
+ * KEEP THEM IN SYNC. The dev server hot-swaps CSS, so a window that copies once keeps the stylesheet it was
+ * born with — a second way to look broken later, and indistinguishable from having no styles at all. Watch the
+ * opener's head for the swap and re-copy; Vite replaces the node rather than editing it, which is why
+ * watching the DOM is enough for HMR.
+ *
+ * Returns a disposer, and the caller runs it when the window goes away: this observer watches the OPENER's
+ * document while holding the PiP document, so leaving it attached outlives the thing it is for.
+ */
+function keepStylesInSync(pip) {
+  let pending = false;
+  const recopy = () => {
+    if (pending) return;
+    pending = true;
+    // Coalesce: a swap can touch several nodes, and one re-copy per burst is enough.
+    setTimeout(() => {
+      pending = false;
+      const live = pip.document.head.querySelectorAll('link[rel="stylesheet"], style');
+      for (const node of live) node.remove();
+      copyStylesInto(pip.document);
+    }, 50);
+  };
+  const observer = new MutationObserver(recopy);
+  observer.observe(document.head, { childList: true, subtree: true, attributes: true, attributeFilter: ["href", "media"] });
+  const onViteUpdate = () => recopy();
+  if (import.meta.hot) import.meta.hot.on("vite:afterUpdate", onViteUpdate);
+  return () => {
+    observer.disconnect();
+    if (import.meta.hot) import.meta.hot.off?.("vite:afterUpdate", onViteUpdate);
+  };
+}
+
 /** The window's markup: mic, state, quick off, the log, the composer. Built once, per window. */
 function buildPip(pip, controls) {
   pip.document.title = "voicebox — microphone";
+
+  // THE PAGE'S SHEETS FIRST, so the window starts from the same tokens the page uses, and then our own rules
+  // layer on top of them. The order matters and is the point: this window is a surface that shows state, and
+  // it should read as the same product, not as a lookalike.
+  const copied = copyStylesInto(pip.document);
+  const stopSync = keepStylesInSync(pip);
+  pip.addEventListener("pagehide", stopSync);
+
   const style = pip.document.createElement("style");
   style.textContent = `
     :root { color-scheme: dark; }
@@ -105,6 +171,9 @@ function buildPip(pip, controls) {
     button.quiet { padding: .5rem .7rem; border-radius: 8px; border: 1px solid #3a3f4b; background: #1d2026; color: inherit; cursor: pointer; }
   `;
   pip.document.head.append(style);
+  // Reported rather than assumed: if the opener had no sheets to copy, this window is unstyled and the number
+  // says so instead of the difference being something a person has to notice by eye.
+  if (copied === 0) console.warn("[pip-mic] the opener had no stylesheets to copy — this window will render unstyled");
 
   const body = pip.document.body;
   const row = pip.document.createElement("div");
