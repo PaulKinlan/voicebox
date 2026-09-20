@@ -10,6 +10,8 @@
     "start": "node server.mjs",
     "test": "node --test tests/*.mjs",
     "accept": "node tools/page-acceptance.mjs",
+    "gate": "sh scripts/pre-push.sh",
+    "prepare": "git config core.hooksPath .githooks 2>/dev/null || true",
     "test:e1m0": "node --test tests/e1m0-core.test.mjs tests/e1m0-browser.test.mjs tests/n20-picked-root.test.mjs tests/n20-permission-denied.test.mjs tests/explorer.test.mjs tests/shared-log.test.mjs tests/two-agents.test.mjs tests/root-seam.test.mjs tests/one-root.test.mjs",
     "test:one-root": "node --test tests/root-seam.test.mjs tests/one-root.test.mjs",
     "test:shared-log": "node --test tests/shared-log.test.mjs tests/two-agents.test.mjs",

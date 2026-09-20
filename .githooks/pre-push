@@ -1,0 +1,18 @@
+#!/usr/bin/env sh
+# .githooks/pre-push — Tracked git pre-push hook for voicebox (voicebox-beads-99l)
+# Composes beads git hook integration with repo-owned quality gate.
+
+# 1. Run beads pre-push hook if installed and not already running
+if [ -z "$BD_GIT_HOOK" ] && command -v bd >/dev/null 2>&1; then
+  export BD_GIT_HOOK=1
+  _bd_timeout=${BEADS_HOOK_TIMEOUT:-300}
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$_bd_timeout" bd hooks run pre-push "$@" || true
+  else
+    bd hooks run pre-push "$@" || true
+  fi
+fi
+
+# 2. Run repo-owned pre-push gate
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+exec sh "$REPO_ROOT/scripts/pre-push.sh" "$@"
