@@ -127,18 +127,36 @@ const ev = async (expr) =>
 let sharedRootBefore = null;
 let sharedFilesBefore = "[]";
 let sharedServersRunning = false;
+// WHY the front is absent, recorded rather than swallowed: a skip that cannot name the address it could not
+// reach costs a debugging cycle to act on, and the address is the only actionable part of it.
+let sharedFrontFailure = null;
+
+async function frontReachable(url) {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(1200) });
+    if (!res.ok) { sharedFrontFailure ??= { url, code: `HTTP ${res.status}` }; return null; }
+    return res;
+  } catch (e) {
+    sharedFrontFailure ??= { url, code: e?.cause?.code ?? e?.message ?? String(e) };
+    return null;
+  }
+}
 
 try {
-  const rootRes = await fetch(`${SHARED_API}/api/root`, { signal: AbortSignal.timeout(1200) });
-  const uiRes = await fetch(`${SHARED_UI}/`, { signal: AbortSignal.timeout(1200) });
-  if (rootRes.ok && uiRes.ok) {
+  const rootRes = await frontReachable(`${SHARED_API}/api/root`);
+  const uiRes = await frontReachable(`${SHARED_UI}/`);
+  if (rootRes && uiRes) {
     sharedServersRunning = true;
     sharedRootBefore = await rootRes.json().catch(() => null);
-    const filesRes = await fetch(`${SHARED_API}/api/files`, { signal: AbortSignal.timeout(1200) });
+    const filesRes = await fetch(`${SHARED_API}/api/files`, { signal: AbortSignal.timeout(1200) }); // the front answered above, so this is inside the same window
     const filesJson = await filesRes.json().catch(() => ({ files: [] }));
     sharedFilesBefore = JSON.stringify((filesJson.files ?? []).sort());
   }
-} catch {
+} catch (e) {
+  // The front answered the probe and then went away mid-block (it flaps: its server restarts on landings), or
+  // the files fetch timed out. This is ALSO a reason, and it was the one path that recorded nothing — so the
+  // skip said "unreachable" when it knew perfectly well which request died.
+  sharedFrontFailure ??= { url: `${SHARED_API}/api/files`, code: e?.cause?.code ?? e?.message ?? String(e) };
   sharedServersRunning = false;
 }
 
@@ -298,7 +316,11 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   report("shared-front", "the shared server's file list is untouched", sharedFilesBefore === sharedFilesAfter,
     sharedFilesBefore === sharedFilesAfter ? `${JSON.parse(sharedFilesAfter).length} files, unchanged` : `before=${sharedFilesBefore} after=${sharedFilesAfter}`);
   } else {
-    console.log(`── phase A: SKIPPED (shared front ${SHARED_UI} / ${SHARED_API} not active — Phase B tests private instance)`);
+    console.log(
+        `SKIP  [shared-front]  phase A skipped: the shared front is not up ` +
+          `(${sharedFrontFailure?.code ?? "unreachable"} at ${sharedFrontFailure?.url ?? SHARED_API}) — it makes NO claim ` +
+          `about what Paul sees; phase B (its own private instance) carries this run.`,
+      );
   }
 
   // ════ PHASE B — [private]: every mutating check, own server ══════════════
@@ -437,6 +459,14 @@ report("harness", "run leaves the tree clean (git status --porcelain empty, .bea
   porcelain ? porcelain.split("\n").slice(0, 3).join(" | ") : "");
 
 const failed = results.filter((ok) => !ok).length;
-console.log(failed === 0 ? "\nALL CLEAR" : `\n${failed} CHECK(S) FAILED — named above`);
+console.log(
+  failed !== 0
+    ? `\n${failed} CHECK(S) FAILED — named above`
+    : sharedServersRunning
+      ? "\nALL CLEAR"
+      : `\nALL CLEAR — PHASE B ONLY; phase A could not witness the served front ` +
+        `(${sharedFrontFailure?.code ?? "unreachable"} at ${sharedFrontFailure?.url ?? SHARED_API}). ` +
+        `Nothing in this run says the served front is current.`,
+);
 console.log("(served-vs-disk markers on the shared front + the root-declaration lifecycle on a private instance answer \"is this environment current\" better than the old workspace field ever did)");
 process.exit(failed === 0 ? 0 : 1);
