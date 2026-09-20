@@ -39,10 +39,11 @@ let WORKSPACE = null; // resolved from /api/health, below
 const NAME = `acceptance-proof-${process.pid}.txt`; // hoisted: the finally must see it
 const UI = process.env.VOICEBOX_UI_URL ?? "http://127.0.0.1:5173";
 const API = process.env.VOICEBOX_API_URL ?? "http://127.0.0.1:8787";
-// per-run browser: two concurrent runs must never share one (2026-09-19,
-// voicebox-ui's run and another lane's overlapped on a fixed port + profile
-// and the typed-turn check failed with the OTHER run's timestamp)
-const CDP_PORT = 9500 + (process.pid % 500);
+// Per-run browser, on an EPHEMERAL debugging port. Two concurrent runs must never share one
+// (2026-09-19: two lanes overlapped on a fixed port + profile and the typed-turn check failed with
+// the other run's timestamp). A pid-derived band only narrows that window — `pid % 500` collides for
+// any two pids 500 apart — so this asks the OS and reads back what it got, which cannot collide.
+let CDP_PORT = 0;
 
 const results = [];
 // Cleanup on every exit path — finally does not run on signals or direct
@@ -69,13 +70,35 @@ const report = (name, ok, detail) => {
 const chromium = spawn("/usr/bin/chromium", [
   "--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
   `--remote-debugging-port=${CDP_PORT}`, `--user-data-dir=/tmp/vb-accept-profile-${process.pid}`, "about:blank",
-], { stdio: ["ignore", "ignore", "ignore"] });
+], { stdio: ["ignore", "pipe", "pipe"] });
 
+// Chromium prints "DevTools listening on ws://127.0.0.1:<port>/devtools/browser/<id>" when asked for
+// port 0, and that line is the only place the chosen port appears.
 let wsUrl = "";
 const t0 = Date.now();
-while (!wsUrl && Date.now() - t0 < 10000) {
-  try { wsUrl = (await (await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`)).json()).webSocketDebuggerUrl; }
-  catch { await sleep(200); }
+await new Promise((resolve) => {
+  let buffer = "";
+  const scan = (chunk) => {
+    buffer += String(chunk);
+    const match = buffer.match(/ws:\/\/127\.0\.0\.1:(\d+)\/devtools\/browser\/[0-9a-f-]+/);
+    if (match) {
+      wsUrl = match[0];
+      CDP_PORT = Number(match[1]);
+      resolve();
+    }
+  };
+  chromium.stderr.on("data", scan);
+  chromium.stdout.on("data", scan);
+  const timer = setInterval(() => {
+    if (wsUrl || Date.now() - t0 > 10000) { clearInterval(timer); resolve(); }
+  }, 200);
+});
+if (!wsUrl) {
+  // Fall back to the discovery endpoint only if the banner was missed; a silent browser is a FAIL.
+  while (!wsUrl && Date.now() - t0 < 10000) {
+    try { wsUrl = (await (await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`)).json()).webSocketDebuggerUrl; }
+    catch { await sleep(200); }
+  }
 }
 if (!wsUrl) { console.log("FAIL  harness could not start a browser — is chromium present?"); chromium.kill(); process.exit(1); }
 
