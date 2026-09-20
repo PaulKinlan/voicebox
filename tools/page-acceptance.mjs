@@ -325,9 +325,12 @@ try { porcelain = execFileSync("git", ["-C", TREE, "status", "--porcelain"]).toS
 report("run leaves the tree clean (git status --porcelain empty)", porcelain === "",
   porcelain ? porcelain.split("\n").slice(0, 3).join(" | ") : "");
 
-// restore the root state the server had before this run, THEN remove the
+// Restore the root state the server had before this run, THEN remove the
 // scratch — order matters: deleting a still-declared root leaves the
 // executor aiming at a vanished directory (a write into it hung, 2026-09-20).
+// And the OBSERVED exit state is asserted below: a cleanup that only ran on
+// the happy path once left Paul's server holding a declaration at a deleted
+// temp folder, and his page showed the gate's leftovers.
 if (priorToRestore) {
   await fetch(`${API}/api/root`, {
     method: "POST", headers: { "content-type": "application/json" },
@@ -338,6 +341,16 @@ if (priorToRestore) {
 } else {
   console.log(`note: the seam has no un-declare — the (empty) scratch root "page-acceptance" stays declared at ${scratchRoot}; a server restart clears it`);
 }
+const observed = await (await fetch(`${API}/api/root`)).json();
+const observedPath = observed?.root?.kind === "machine" ? observed.root.path : null;
+const deadDeclaration = observed?.declared === true
+  && typeof observedPath === "string"
+  && observedPath.startsWith(scratchRoot)
+  && !existsSync(observedPath);
+report("exit state: the server holds no declaration at a deleted path", !deadDeclaration,
+  observed?.declared
+    ? `server holds "${observed.project}" at ${observedPath}${deadDeclaration ? " — WHICH NO LONGER EXISTS" : ""}`
+    : "server holds no declared root");
 
 const failed = results.filter((ok) => !ok).length;
 console.log(failed === 0 ? "\nALL CLEAR" : `\n${failed} CHECK(S) FAILED — named above`);
