@@ -68,3 +68,25 @@ no evaluate path), but it IS server-side capability the page alone cannot otherw
 The design already holds the mechanism: docs/02 §1.5's host-generated token (mode 0600,
 passed on the upgrade). `admit`/`deny` should require the host token; the page keeps
 discover/propose/plan/sideload-stage. File bead: `voicebox-beads-8v0`.
+
+---
+
+## RE-DRIVE on the fix (52bcec5) — the acceptance — 2026-09-20
+
+Fresh scratch state, server on the fixed code, the SAME two fetches from page JS:
+
+1. `POST /api/extensions/proposals {pagetool2}` → `pending` (the page's door, still open).
+2. `POST /api/extensions/admit {confirm:true}` **without the host token** →
+   **`403 {ok:false, refused:"host-token-required", why:"admission is the host's act — this
+   route requires the host token (x-voicebox-host-token); the page cannot hold it"}`**.
+3. `"run the tool pagetool2_tool"` → `not-admitted` (named, still).
+4. The host, reading the 0600 token file, admits WITH `x-voicebox-host-token` → `admitted`;
+   from the page the tool runs (`"Sun Sep 20 2026 15:51:39 GMT+0100"`).
+5. The ledger: a fresh `sweep3.json` dropped into the directory (no admission), then the host
+   admits another tool (reload fires) → running set `[pagetool2, reloadbait2]` — sweep3 is
+   **not** live, refuses `unknown-tool`, and the inventory shows
+   `{id:"sweep3", state:"present-not-admitted", note:"…visible, never live"}`.
+
+The re-drive was rendered live on the served page and screenshot-verified in session (the
+transcript above is the page's own rendered log element; the first drive's screenshot is
+`drive-page.png`). Whole gate `npm test` 138/138; `git status --porcelain` empty.
