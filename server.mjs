@@ -370,6 +370,19 @@ async function execute(action) {
       logged: entry ? entry.seq : null,
     };
   }
+  // Dotfiles are behind the same line as the listing: containment first (so `..` and
+  // traversal keep their own, stronger refusal), then a hidden file inside the root is
+  // refused — otherwise a declared root pointed at a sensitive directory (the host's
+  // own extensions dir) hands over its secrets — including the admission token —
+  // through a read, or loses them to a write over it. Driven chain, 2026-09-20:
+  // declare -> read .host-token -> admit.
+  if (action.verb === "read" || action.verb === "write") {
+    const base = path.basename(resolved.path);
+    if (base.startsWith(".")) {
+      const entry = logAct({ kind: action.verb === "write" ? "write" : "read", target: name, tool: "turn" }, "refuse", "dotfile-refused", "refused", null, action.turn ?? null);
+      return { ok: false, refused: "dotfile-refused", logged: entry ? entry.seq : null, error: "refused: dotfile-refused", why: "dotfiles are neither readable nor writable through the loop — the listing hides them and so does this verb; host secrets live behind that line", root: active.root };
+    }
+  }
   const candidate = resolved.path;
   if (action.verb === "write") {
     writeFileSync(candidate, action.content ?? "");
@@ -626,6 +639,11 @@ async function handle(req, res) {
     }
     try {
       const real = resolved.path;
+      if (path.basename(real).startsWith(".")) {
+        // Same line as the verbs: containment first, then a hidden file inside the
+        // root is refused — the listing hides it, so the read does too.
+        return json(res, 403, { ok: false, refused: "dotfile-refused", error: "refused: dotfile-refused", why: "dotfiles are not readable through the loop — the listing hides them and so does this read; host secrets live behind that line", root: active.root });
+      }
       const stat = statSync(real);
       if (stat.isDirectory()) return json(res, 400, { error: "cannot read directory" });
       const content = readFileSync(real, "utf8");
@@ -698,6 +716,14 @@ async function handle(req, res) {
     return r.ok ? json(res, 200, { ...r, note: "staged as a pending proposal — NOT loaded; the host admits it" }) : json(res, 400, r);
   }
   if (req.method === "POST" && url.pathname === "/api/extensions/admit") {
+    // Admission is the HOST's act (bead voicebox-beads-m2i): the route requires
+    // the host token (docs/02 §1.5's mechanism — a 0600 file in the host's own
+    // directory, readable by the person's shell, by neither the page nor the
+    // model). Driven finding, 2026-09-20: without this the page admitted its
+    // own proposal in two fetches. The refusal is named, like every other one.
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "admission is the host's act — this route requires the host token (x-voicebox-host-token); the page cannot hold it" });
+    }
     const body = await readJson();
     if (!body?.id) return json(res, 400, { error: "body must be JSON with an id" });
     const plan = extensions.proposalPlan(body.id);
