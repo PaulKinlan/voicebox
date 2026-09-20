@@ -542,18 +542,38 @@ on(els.outSelect, "change", async () => {
 });
 
 on(els.settingsOpen, "click", () => {
-  if (!els.settings) return;
+  if (!els.settings || els.settings.open) return;
   // Opening settings does not start capture, stop playback or end the session.
-  els.settings.hidden = !els.settings.hidden;
-  els.settingsOpen.setAttribute("aria-expanded", String(!els.settings.hidden));
-  if (!els.settings.hidden) refreshDevices();
+  //
+  // showModal() IS the feature: top layer, modality, focus trapped inside, the room behind inert,
+  // Esc as a close request, and focus handed back here on close. All of it is the platform's, which
+  // is the point — a hand-rolled overlay gets four of those five wrong.
+  els.settings.showModal();
+  els.settingsOpen.setAttribute("aria-expanded", "true");
+  refreshDevices();
 });
-on(els.settingsClose, "click", () => {
-  if (!els.settings) return;
-  els.settings.hidden = true;
+
+// Every close path — the form's method="dialog" button, Esc, light dismiss, or a programmatic
+// close — arrives here, so the trigger's state is honest whichever way it went.
+on(els.settings, "close", () => {
   els.settingsOpen.setAttribute("aria-expanded", "false");
   els.settingsOpen.focus();
 });
+
+// Light dismiss, declaratively, where the platform supports it: `closedby="any"` on the element.
+//
+// The documented FALLBACK for browsers that do not (Safari, at the time of writing) is the geometry
+// check below — the click's target is the dialog only when the click landed on the backdrop, and the
+// coordinates tell the difference between the backdrop and the dialog's own padding.
+if (els.settings && !("closedBy" in HTMLDialogElement.prototype)) {
+  els.settings.addEventListener("click", (event) => {
+    if (event.target !== els.settings) return;
+    const rect = els.settings.getBoundingClientRect();
+    const inside = rect.top <= event.clientY && event.clientY <= rect.top + rect.height
+      && rect.left <= event.clientX && event.clientX <= rect.left + rect.width;
+    if (!inside) els.settings.close("dismissed");
+  });
+}
 
 // ── the two meters: your voice, and the agent's ───────────────────────────
 // Driven by the real PCM the client already has (audio-client.js `level()`):

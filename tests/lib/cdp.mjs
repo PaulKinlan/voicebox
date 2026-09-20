@@ -135,6 +135,45 @@ export async function launch({ width = 1000, height = 800, profile = null } = {}
     await sleep(150);
   };
 
+  /**
+   * A device viewport: width, height, DPR-downscaled touch device. Used for the mobile half of a UI
+   * check, because "it pushes the page on a phone" is not a claim a desktop window can falsify.
+   */
+  page.emulateViewport = async ({ width, height, mobile = true, scale = 2 }) => {
+    await page.send("Emulation.setDeviceMetricsOverride", {
+      width,
+      height,
+      deviceScaleFactor: scale,
+      mobile,
+    });
+    if (mobile) await page.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
+    await sleep(150);
+  };
+
+  page.clearViewport = async () => {
+    await page.send("Emulation.clearDeviceMetricsOverride");
+    await sleep(100);
+  };
+
+  page.screenshot = async (filePath, { fullPage = false } = {}) => {
+    const params = { format: "png", captureBeyondViewport: fullPage };
+    if (fullPage) {
+      const metrics = await page.send("Page.getLayoutMetrics");
+      const size = metrics.cssContentSize;
+      await page.send("Emulation.setDeviceMetricsOverride", {
+        width: Math.ceil(size.width),
+        height: Math.ceil(size.height),
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+    }
+    const { data } = await page.send("Page.captureScreenshot", params);
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(filePath, Buffer.from(data, "base64"));
+    if (fullPage) await page.send("Emulation.clearDeviceMetricsOverride");
+    return filePath;
+  };
+
   page.reload = async () => {
     await page.send("Page.reload", { ignoreCache: false });
     await sleep(600);
@@ -218,6 +257,35 @@ export async function launch({ width = 1000, height = 800, profile = null } = {}
     }
     await page.send("Input.insertText", { text });
     await sleep(80);
+  };
+
+  /** A real key press — for Esc-to-cancel and Tab-order checks, which cannot be faked from script. */
+  const KEYS = {
+    Escape: { keyCode: 27, code: "Escape", key: "Escape" },
+    Tab: { keyCode: 9, code: "Tab", key: "Tab" },
+    Enter: { keyCode: 13, code: "Enter", key: "Enter" },
+  };
+  page.press = async (key, { modifiers = 0 } = {}) => {
+    const spec = KEYS[key] ?? { keyCode: 0, code: key, key };
+    for (const type of ["keyDown", "keyUp"]) {
+      await page.send("Input.dispatchKeyEvent", { type, modifiers, key: spec.key, code: spec.code, windowsVirtualKeyCode: spec.keyCode, nativeVirtualKeyCode: spec.keyCode });
+    }
+    await sleep(120);
+  };
+
+  /** A real wheel gesture — the only way to test that the page behind a modal does not scroll for a
+   *  USER (programmatic window.scrollBy still moves an overflow:hidden root, by design). */
+  page.wheel = async (deltaY, { x = 200, y = 300, deltaX = 0 } = {}) => {
+    await page.send("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX, deltaY, pointerType: "mouse" });
+    await sleep(200);
+  };
+
+  /** A real click at viewport coordinates — how a check clicks the BACKDROP rather than an element. */
+  page.clickAt = async (x, y) => {
+    for (const type of ["mousePressed", "mouseReleased"]) {
+      await page.send("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1 });
+    }
+    await sleep(200);
   };
 
   /**

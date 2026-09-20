@@ -107,9 +107,50 @@ input { caret-color: var(--accent); }
 .device-note { margin: 6px 0 0; max-width: 46ch; font-size: .75rem; color: var(--warn); text-align: center; }
 .voice-actions { display: flex; align-items: center; gap: 4px; margin-top: 12px; }
 
-/* Settings sits in the quiet control line below the microphone, outside its
-   waveform — restraint must not mean an invisible button. */
-.settings { position: relative; z-index: 2; width: min(100%, 420px); margin-top: 10px; padding: 14px 16px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); box-shadow: var(--shadow); text-align: left; }
+/* The settings BUTTON sits in the quiet control line below the microphone, outside its
+   waveform — restraint must not mean an invisible button. (Paul: "I like where it is.")
+
+   Settings themselves are a REAL MODAL DIALOG, not a block that appears in the flow. The old
+   version was a div in the document flow, so opening it displaced everything below it and on a
+   phone it landed under the fold — you had to scroll to the thing you just opened. A modal is out
+   of flow by construction: the platform puts it in the top layer, makes the room behind it inert,
+   traps focus, and treats Esc as a close request. */
+.settings {
+  /* inset:0 + margin:auto centres it in the viewport; the block above is now out of flow. */
+  inset: 0;
+  margin: auto;
+  width: min(100% - 2rem, 420px);
+  max-height: 85vh;           /* for browsers without dvh */
+  max-height: 85dvh;          /* mobile browser chrome is exactly why this is dvh, not vh */
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  overflow: hidden;           /* the FORM scrolls, not the dialog: the head stays put */
+}
+.settings-form {
+  max-height: inherit;
+  overflow: auto;             /* a long device list scrolls INSIDE the dialog */
+  overscroll-behavior: contain; /* and reaching the end does not scroll the page behind it */
+  padding: 14px 16px calc(16px + env(safe-area-inset-bottom)); /* never under the home bar */
+  text-align: left;
+}
+/* The frosting. `::backdrop` is the browser's own layer behind a modal, so nothing has to be
+   positioned, stacked or remembered. */
+.settings::backdrop {
+  background: color-mix(in srgb, var(--ground) 55%, transparent);
+  backdrop-filter: blur(10px) saturate(120%);
+}
+/* Where there is no backdrop-filter the frosting would be a lie, so it becomes a solid scrim:
+   dimming still says "the room is behind this", which is the part that matters. */
+@supports not (backdrop-filter: blur(1px)) {
+  .settings::backdrop { background: light-dark(#fbfbf9e6, #0e0f12e6); }
+}
+/* A modal that leaves the page scrollable behind it is a modal you can lose. The platform makes the
+   CONTENT inert; this is the scroll half, declaratively, with no listener and nothing to unlock. */
+html:has(dialog.settings[open]) { overflow: hidden; }
 .settings-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .settings-head h2 { margin: 0; font-size: .9375rem; font-weight: 600; letter-spacing: -.02em; }
 .device-row { padding: 10px 0; }
