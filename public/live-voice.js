@@ -84,6 +84,8 @@ async function explainFailedUpgrade() {
 
 async function startLive() {
   const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/live`;
+  const caption = $("caption");
+  if (caption) caption.textContent = "";
   if (voiceState) voiceState.textContent = "Connecting to the live session…";
   try {
     socket = new WebSocket(url);
