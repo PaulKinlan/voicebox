@@ -76,7 +76,7 @@ deadlineTimer.unref();
 
 process.on("SIGTERM", () => { cleanupArtefacts(); killPrivate(); process.exit(143); });
 process.on("SIGINT", () => { cleanupArtefacts(); killPrivate(); process.exit(130); });
-process.on("uncaughtException", (e) => { cleanupArtefacts(); killPrivate(); try { chromium?.kill(); } catch {} console.log(`FAIL  uncaught: ${String(e?.message ?? e).slice(0, 140)}`); process.exit(1); });
+process.on("uncaughtException", (e) => { cleanupArtefacts(); killPrivate(); try { chromium?.kill(); } catch {} console.log(`FAIL  uncaught: ${String(e?.cause?.code ? `${e.message} (${e.cause.code})` : e?.message ?? e).slice(0, 140)}`); process.exit(1); });
 
 // One browser, two phases: the browser itself is per-run (port + profile
 // derived from pid — two concurrent runs must never share one). The phases
@@ -447,7 +447,7 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
       `refused=${vResp?.refused} in ${vMs}ms — why: ${String(vResp?.why ?? "").slice(0, 90)}`);
   }
 } catch (e) {
-  report("harness", "run completed without crashing", false, String(e?.message ?? e).slice(0, 140));
+  report("harness", "run completed without crashing", false, String(e?.cause?.code ? `${e.message} (${e.cause.code})` : e?.message ?? e).slice(0, 140));
 } finally {
   cleanupArtefacts();
   killPrivate(); // first: the declaration is process memory — dead server, no pointer

@@ -58,6 +58,13 @@ Task admission's API, evidence boundaries and unfinished execution work are docu
 without credentials. Actual delegated model tasks still refuse pending bounded provider access;
 this is not browser-only delegation acceptance.
 
+## Before pushing
+
+The pre-push hook keeps the full test suite: 180 seconds for `npm test`, then
+45 seconds for `npm run accept`. Refusals name the stage and distinguish a
+timeout from a failing command; both output streams remain visible. See
+[gate measurements and regression drives](docs/12-pre-push-gate.md).
+
 ## The two paths, stated separately
 
 The largest gap in this product was invisible because one word — *live* — covered two different things:

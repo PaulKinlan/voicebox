@@ -26,10 +26,7 @@ if [ -z "$BD_GIT_HOOK" ] && command -v bd >/dev/null 2>&1; then
   fi
 fi
 
-# 2. Run repo-owned pre-push gate with bounded timeout (never hang indefinitely)
+# 2. The gate bounds each stage and names its timeout. An outer timer could
+# kill the gate before it prints that diagnosis (or before its stages finish).
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-if command -v timeout >/dev/null 2>&1; then
-  exec timeout --kill-after=5s 120s sh "$REPO_ROOT/scripts/pre-push.sh" "$@"
-else
-  exec sh "$REPO_ROOT/scripts/pre-push.sh" "$@"
-fi
+exec sh "$REPO_ROOT/scripts/pre-push.sh" "$@"
