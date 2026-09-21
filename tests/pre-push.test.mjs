@@ -10,6 +10,10 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const timeout = execFileSync('which', ['timeout'], { encoding: 'utf8' }).trim();
+// Git exports its repository context inside hooks. Never let it redirect a
+// disposable fixture's init/config/add/commit into the repository being pushed.
+const cleanEnv = { ...process.env };
+for (const key of execFileSync('git', ['rev-parse', '--local-env-vars'], { encoding: 'utf8' }).trim().split('\n')) delete cleanEnv[key];
 
 test('pre-push names the stage and cause, streams output, and refuses real failing tests', { timeout: 60000 }, () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-pre-push-'));
@@ -17,7 +21,7 @@ test('pre-push names the stage and cause, streams output, and refuses real faili
   const work = path.join(dir, 'work');
   const remote = path.join(dir, 'remote.git');
   const bin = path.join(dir, 'bin');
-  const git = (...args) => execFileSync('git', args, { cwd: repo, stdio: 'pipe' });
+  const git = (...args) => execFileSync('git', args, { cwd: repo, stdio: 'pipe', env: cleanEnv });
   try {
     mkdirSync(repo); mkdirSync(bin);
     git('init', '-q'); git('config', 'user.email', 'fixture@example.invalid'); git('config', 'user.name', 'Gate fixture');
@@ -57,7 +61,7 @@ exec '${timeout}' "$@"
     for (const scenario of ['test-timeout', 'test-failure', 'accept-timeout', 'accept-failure', 'success']) {
       const result = spawnSync('git', ['push', remote, 'HEAD:refs/heads/candidate'], {
         cwd: work, encoding: 'utf8', timeout: 15000,
-        env: { ...process.env, NODE_TEST_CONTEXT: undefined, PATH: `${bin}:${process.env.PATH}`, BD_GIT_HOOK: '1',
+        env: { ...cleanEnv, NODE_TEST_CONTEXT: undefined, PATH: `${bin}:${process.env.PATH}`, BD_GIT_HOOK: '1',
           VOICEBOX_SKIP_GATE: '', VOICEBOX_SKIP_ACCEPT: '', GATE_CASE: scenario },
       });
       assert.ifError(result.error);
@@ -81,7 +85,7 @@ exec '${timeout}' "$@"
       }
       if (scenario === 'test-failure') assert.match(output, /deliberate arithmetic assertion/);
       if (scenario === 'accept-failure') assert.match(output, /fetch failed \(ECONNREFUSED\)/);
-      assert.equal(spawnSync('git', ['--git-dir', remote, 'show-ref', '--verify', '--quiet', 'refs/heads/candidate']).status, 1);
+      assert.equal(spawnSync('git', ['--git-dir', remote, 'show-ref', '--verify', '--quiet', 'refs/heads/candidate'], { env: cleanEnv }).status, 1);
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -98,7 +102,7 @@ test('acceptance names the network cause when a responding front drops mid-run',
   await new Promise(resolve => front.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${front.address().port}`;
   const child = spawn(process.execPath, ['tools/page-acceptance.mjs'], {
-    cwd: root, env: { ...process.env, VOICEBOX_UI_URL: url, VOICEBOX_API_URL: url, VOICEBOX_TREE: root },
+    cwd: root, env: { ...cleanEnv, VOICEBOX_UI_URL: url, VOICEBOX_API_URL: url, VOICEBOX_TREE: root },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';

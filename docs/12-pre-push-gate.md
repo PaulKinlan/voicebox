@@ -55,6 +55,10 @@ a genuinely failing arithmetic test, an acceptance refusal and a successful
 push. A fixture wrapper accelerates only the selected timeout to two seconds;
 it still runs GNU timeout and the actual tracked hook. Failed pushes leave no
 remote ref. Both output streams survive timeout and retain the original cause.
+Fixture subprocesses clear Git's repository-local environment variables so a
+real pre-push hook cannot redirect fixture writes into the pushed repository.
+This was caught by the first actual push, repaired, and rechecked with explicit
+GIT_DIR/GIT_WORK_TREE inheritance; direct gate execution alone did not expose it.
 A second check runs the real Chromium acceptance harness against an ephemeral
 HTTP front which answers the probes, then drops the page fetch; the failure
 must include UND_ERR_SOCKET, not just “fetch failed”.
