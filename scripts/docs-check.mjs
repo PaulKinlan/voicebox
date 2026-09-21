@@ -320,14 +320,14 @@ function catalogueVerdicts() {
   });
 }
 
-/** Every named refusal in the code, by file — the vocabulary a caller can be told. */
+/** Literal refusal declarations in the listed sources, not an exhaustive dynamic error catalogue. */
 function refusalNames() {
-  // ponytail: collected by regex over the files that name refusals. Promote to one table in core/ if a
-  // fourth file grows its own names; until then the regex is the cheapest thing that goes red on a change.
+  // Direct declarations and the task module's small refusal helpers; no AST dependency needed.
   const sources = {
     "the gate (`core/extensions.ts`)": ["core/extensions.ts", /rule:\s*"([a-z][a-z0-9-]*)"/g],
     "the routes and the root seam (`server.mjs`, `core/root.ts`)": ["server.mjs core/root.ts", /refused:\s*"([a-z][a-z0-9-]*)"/g],
     "admitted tools at run time (`lib/extensions.mjs`)": ["lib/extensions.mjs", /refused:\s*"([a-z][a-z0-9-]*)"/g],
+    "task admission/readback (`core/tasks.ts`, `lib/tasks.mjs`)": ["core/tasks.ts lib/tasks.mjs", /(?:refused:\s*|(?:refusal|fail|no)\(\s*)"([a-z][a-z0-9-]*)"/g],
   };
   return Object.entries(sources).map(([label, [files, re]]) => {
     const names = new Set();
@@ -482,7 +482,7 @@ async function blocks() {
       "|---|---|---|---|---|",
       ...catalogueVerdicts().map((c) => `| \`${c.id}\` | ${c.tools} | ${c.declared} | ${c.bounds} | ${c.verdict} |`),
       "",
-      "**What it refuses, by name** — every refusal the code can utter, collected from source:",
+      "**What it refuses, by name** — literal refusal declarations collected from these sources:",
       ...refusalNames().map((r) => `* ${r.label}: ${r.names.map((n) => "`" + n + "`").join(", ")}`),
       "",
       `**Listable at run time** — \`GET /api/extensions\` answers \`{ ${surface.inventoryKeys.join(", ")} }\` (probed: placement \`${surface.placement}\`, catalogueCount ${surface.catalogueCount}); \`GET /api/extensions/catalogue\` previews the gate's verdict on every stranger before anything is staged; \`GET /api/extensions/{proposals|catalogue}/<id>/plan\` is the disclosure — source, declared, enforced-by-which-mechanism, what it gets, what it cannot have — before any decision.`,

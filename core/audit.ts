@@ -12,6 +12,7 @@
 // arrival, so the honest answer is a per-instance order plus a deterministic tie-break.
 
 import type { Actor, LogEntryBase } from "./shared-log.ts";
+import type { TaskEvent } from "./tasks.ts";
 
 export interface AuditAct {
   kind: string;
@@ -40,6 +41,7 @@ export interface Observed {
  * are always present, and `makeEntry` is the only constructor that decides that.
  */
 export interface LogEntry extends LogEntryBase {
+  task?: TaskEvent;
   act?: AuditAct;
   decision?: "allow" | "confirm" | "refuse";
   rule?: string | null;

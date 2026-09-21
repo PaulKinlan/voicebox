@@ -22,7 +22,7 @@ import {
 } from "./core/agent-settings.ts";
 import { auditFileName, makeEntry, mergeAudit, nextSeq, parseEntry, resumeSeq, serializeEntry, sweepLostAttempts } from "./core/audit.ts";
 import { activityEntry } from "./core/shared-log.ts";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   ENV_UNREACHABLE,
   listUnreadable,
@@ -30,6 +30,7 @@ import {
   unreachable,
 } from "./core/environment.ts";
 import * as extensions from "./lib/extensions.mjs";
+import { createTaskHost, protectedAuditPath, TASK_TOOLS } from "./lib/tasks.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
 import { createLiveSession, LIVE_MODEL, inputRateRequiredBy, resolvedLiveProviderName } from "./lib/live-session.mjs";
 import { commandToAction, functionDeclarations, liveSystemInstruction } from "./lib/commands.mjs";
@@ -361,6 +362,16 @@ const INSTANCE = process.env.VOICEBOX_INSTANCE ?? "machine";
 // "pending from a dead process" (attempted-and-lost) from "pending right now" (in flight).
 const BOOT = randomBytes(8).toString("hex");
 
+const tasks = createTaskHost({
+  environment: SELF_ENVIRONMENT, instance: INSTANCE, boot: BOOT,
+  addressKey: readFileSync(path.join(HOST_DIR, ".host-token")),
+  root: () => active,
+});
+
+function callTool(tool, args, authority) {
+  return TASK_TOOLS.has(tool) ? tasks.call(tool, args, authority) : extensions.callTool(tool, args);
+}
+
 /**
  * The log lives WITH THE ROOT, and only for a root this process can actually name.
  *
@@ -626,6 +637,9 @@ function resolveActive(name) {
   if (!machineContained(resolved.path)) {
     return { ok: false, refused: "outside-root", why: `'${name}' resolves outside '${active.root.path}' by real path` };
   }
+  if (protectedAuditPath(active.root.path, resolved.path)) {
+    return { ok: false, refused: "protected-audit", why: "the audit is host-owned; task records require authenticated task_status, not a raw file read or write" };
+  }
   return { ok: true, path: resolved.path };
 }
 
@@ -707,7 +721,7 @@ async function execute(action) {
   }
   // tool: the ONLY way a tool runs — and only ADMITTED tools are here.
   if (action.verb === "tool") {
-    return extensions.callTool(action.name, action.args ?? {});
+    return callTool(action.name, action.args ?? {});
   }
   // `logged` is present as null rather than absent: "there is no entry" must be a fact on the
   // response, not something a reader has to notice the absence of.
@@ -1112,7 +1126,7 @@ async function handle(req, res) {
     const entries = files.flatMap((f) =>
       readFileSync(path.join(dir, f), "utf8").split("\n").map(parseEntry).filter(Boolean),
     );
-    return json(res, 200, { ok: true, root: active.root, instance: INSTANCE, files, entries: mergeAudit(entries) });
+    return json(res, 200, { ok: true, root: active.root, instance: INSTANCE, files, entries: mergeAudit(entries.filter((entry) => entry.kind !== "task")) });
   }
 
   if (req.method === "GET" && url.pathname === "/api/files") {
@@ -1379,7 +1393,7 @@ async function handle(req, res) {
     // The local host is always callable and needs no pairing — saying "pair it" for it would name
     // the wrong remedy.
     if (envKey === "local") {
-      const result = await extensions.callTool(tool, args);
+      const result = await callTool(tool, args);
       return json(res, result.ok === false ? 403 : 200, result);
     }
     const pairings = readPairings();
@@ -1396,7 +1410,10 @@ async function handle(req, res) {
     try {
       const answer = await fetch(`${target.origin}/api/execute`, {
         method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },
+        headers: {
+          "content-type": "application/json", authorization: `Bearer ${bearer}`,
+          ...(TASK_TOOLS.has(tool) ? { "x-voicebox-call-id": req.headers["x-voicebox-call-id"] ?? `call_${randomBytes(16).toString("hex")}` } : {}),
+        },
         body: JSON.stringify({ envKey, tool, args }),
       });
       const out = await answer.json().catch(() => null);
@@ -1432,7 +1449,13 @@ async function handle(req, res) {
     const tool = typeof body?.tool === "string" ? body.tool : null;
     const args = body?.args && typeof body.args === "object" ? body.args : {};
     if (!tool) return json(res, 400, { ok: false, refused: "bad-request", why: "an execute names the tool" });
-    const result = await extensions.callTool(tool, args);
+    // Credential identity is separate from the executing host's self key. It is never
+    // accepted from model arguments, and current pairing auth is rechecked on EVERY read.
+    const authority = {
+      owner: createHash("sha256").update(`voicebox-task-owner\0${envKey}\0${bearer}`).digest("hex"),
+      callId: req.headers["x-voicebox-call-id"],
+    };
+    const result = await callTool(tool, args, authority);
     return json(res, result.ok === false ? 403 : 200, result);
   }
 
