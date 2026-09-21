@@ -96,13 +96,14 @@ test("live tools: the model writes a file we read byte-for-byte, then reads it b
     // 1. WRITE — the model must choose write_file and the file must land.
     ws.send(JSON.stringify({ type: "text", text: "Please create a file called live-note.txt with the exact content: the live path wrote this" }));
     const target = path.join(WORKSPACE, "live-note.txt");
-    // 60s of headroom: the model thinks before it calls, and a slow model is
-    // not a failed mechanism — a MISSING file after all that time is.
-    for (let i = 0; i < 300 && !existsSync(target); i++) await sleep(200);
+    // The file can land before its websocket event. Wait for BOTH within the
+    // same 60s budget, including the specific successful write we assert below.
+    const writeReported = () => tools.some((t) => t.calls.some((c) => c.name === "write_file" && c.ok));
+    for (let i = 0; i < 300 && (!existsSync(target) || !writeReported()); i++) await sleep(200);
     assert(existsSync(target), "the live turn produced no file — the tool was not called");
     const onDisk = readFileSync(target, "utf8");
     assert.equal(onDisk, "the live path wrote this", `byte-for-byte compare failed: ${JSON.stringify(onDisk)}`);
-    assert(tools.some((t) => t.calls.some((c) => c.name === "write_file" && c.ok)), "the page-visible tool event did not report the write");
+    assert(writeReported(), "the page-visible tool event did not report the write");
 
     // 2. READ — the model must call read_file and SPEAK the content.
     const spokenBefore = texts.length;
