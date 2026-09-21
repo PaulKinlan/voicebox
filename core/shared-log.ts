@@ -70,7 +70,7 @@ export interface LogEntryBase {
   root: string;         // "v1/projects/atlas"
   turn: string | null;
   at: string;           // ISO wall clock — a HINT, never an ordering key
-  kind: "act" | "presence" | "activity" | "see";
+  kind: "act" | "presence" | "activity" | "see" | "task";
   presence?: PresenceFact;
   activity?: ActivityFact;
   see?: SeeFact;

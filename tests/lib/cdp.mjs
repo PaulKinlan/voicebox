@@ -101,6 +101,8 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
   const page = {
     sessionId,
     send: (method, params) => send(method, params, sessionId),
+    // Read-only protocol evidence: observe real frames without patching the page's WebSocket.
+    events: (method) => events.filter((event) => event.sessionId === sessionId && event.method === method).map((event) => event.params),
     async close() {
       try {
         socket.close();
