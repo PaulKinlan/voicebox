@@ -785,26 +785,44 @@ async function health() {
   try {
     const answer = await request("/api/health");
     if (els.dot) els.dot.dataset.ok = "true";
-    // The header answers ONE question — where the files are — so the server's
-    // health is the dot, not a second label competing for the same slot. Two
-    // labels describing storage in one line is what made the old header
-    // ambiguous (the folder path and the server's status both looked like the
-    // answer to "where are my files?").
-    if (els.where) { els.where.textContent = ""; els.where.title = "the local server answered"; }
+    // State is derived from GET /api/health's provider and build fields:
+    // the indicator names the agent provider so it is visible whether the
+    // provider side is configured and ready.
+    const provider = answer.provider || "agent";
+    if (els.where) {
+      els.where.textContent = `agent: ${provider}`;
+      els.where.title = `source: GET /api/health · provider: ${provider}, build: ${answer.build?.sha || "dev"}`;
+    }
     window.__voiceboxServerBuild = answer.build ?? null;
     stampBuild(answer.build ?? null);
     renderAbout();
     await loadRoot();
     await renderEnvironments();
     await renderExtensions();
-  } catch {
+  } catch (err) {
     if (els.dot) els.dot.dataset.ok = "false";
-    if (els.where) { els.where.textContent = "no answer from the local server"; els.where.title = ""; }
+    if (els.where) {
+      if (err?.refused) {
+        // e.g. environment-list-unreadable: "fix the file"
+        els.where.textContent = `${err.refused} (fix the file)`;
+        els.where.title = `source: GET /api/health · ${err.refused}: ${err.why || "fix the file"}`;
+      } else {
+        // The machine is unreachable (connection refused, network error)
+        els.where.textContent = "machine-unreachable (fix the host)";
+        els.where.title = `source: GET /api/health · machine-unreachable (${err?.message || "connection failed"})`;
+      }
+    }
     stampBuild(null);
     if (els.rootKind) els.rootKind.textContent = "folder unknown";
     if (els.dot) els.dot.dataset.ok = "false";
     renderEmptyState();
-    if (els.rootNote) { els.rootNote.textContent = "The local server is not answering, so which folder it saves into cannot be checked."; els.rootNote.dataset.tone = "warn"; els.rootNote.hidden = false; }
+    if (els.rootNote) {
+      els.rootNote.textContent = err?.refused
+        ? `The local server reported ${err.refused}: ${err.why || "fix the file"}.`
+        : "The local server is not answering (machine-unreachable), so which folder it saves into cannot be checked.";
+      els.rootNote.dataset.tone = "warn";
+      els.rootNote.hidden = false;
+    }
   }
 }
 
