@@ -146,9 +146,10 @@ Every environment variable the server and its libraries read, and where:
 | `PORT` | `server.mjs` | the port the server binds (default 8787) |
 | `VOICEBOX_BIND_DEADLINE_MS` | `server.mjs` | how long to keep retrying before giving up by name |
 | `VOICEBOX_BIND_RETRY_MS` | `server.mjs` | how often to retry a bind that lost the port race |
-| `VOICEBOX_EXTENSIONS_DIR` | `lib/extensions.mjs`, `server.mjs` | the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl` |
+| `VOICEBOX_EXTENSIONS_DIR` | `lib/extensions.mjs`, `server.mjs` | the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl`, and `.pairings.json` (the bearer custody store — outside every root) |
 | `VOICEBOX_INSTANCE` | `server.mjs` | this writer's name in the active root's shared log (default `machine`) |
 | `VOICEBOX_PROVIDER` | `server.mjs` | which TURN resolver answers `POST /api/turn` (default `script`) |
+| `VOICEBOX_SANDBOX_HOMES` | `lib/fence-provider.mjs` | where a fence's writable home is bound from (default `~/sandbox-homes/<key>`) — the one place a fenced environment may write |
 | `VOICEBOX_WORKSPACE` | `lib/extensions.mjs`, `server.mjs` | declares a machine root at boot — a decision, not a default — and is where the extension system keeps `proposals/` and `audit.jsonl` |
 <!-- END GENERATED: config -->
 

@@ -28,7 +28,7 @@
 
 import type { RootDescriptor } from "./root.ts";
 
-export type EnvironmentKind = "browser" | "server";
+export type EnvironmentKind = "browser" | "server" | "fence";
 
 /**
  * A host you can act in. `boundary` and `capability` are OBSERVED, never configured — a descriptor
@@ -100,12 +100,17 @@ export function parseEnvironment(raw: unknown): EnvParseResult {
   const o = raw as Record<string, unknown>;
   const label = typeof o.label === "string" ? o.label.trim() : "";
   if (!label) return { ok: false, refused: "bad-request", why: "an environment needs a label — the name the list shows" };
-  const origin = typeof o.origin === "string" ? o.origin.trim() : "";
+  let origin = typeof o.origin === "string" ? o.origin.trim() : "";
   if (o.kind === "server" && !origin) {
     return { ok: false, refused: "bad-request", why: "a server environment needs an origin — where the page reaches it" };
   }
-  if (o.kind !== "browser" && o.kind !== "server") {
-    return { ok: false, refused: "unknown-environment-kind", why: `'${String(o.kind)}' is not an environment kind (browser, server)` };
+  if (o.kind === "fence" && !origin) {
+    // A fence is BOOTED by the host and given its origin after boot; it is not dialed at one the
+    // person already knows. The label is what the person supplies.
+    origin = "booted-by-host";
+  }
+  if (o.kind !== "browser" && o.kind !== "server" && o.kind !== "fence") {
+    return { ok: false, refused: "unknown-environment-kind", why: `'${String(o.kind)}' is not an environment kind (browser, server, fence)` };
   }
   return {
     ok: true,
