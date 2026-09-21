@@ -140,6 +140,7 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
    * A device viewport: width, height, DPR-downscaled touch device. Used for the mobile half of a UI
    * check, because "it pushes the page on a phone" is not a claim a desktop window can falsify.
    */
+  let touchActive = false;
   page.emulateViewport = async ({ width, height, mobile = true, scale = 2 }) => {
     await page.send("Emulation.setDeviceMetricsOverride", {
       width,
@@ -147,12 +148,17 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
       deviceScaleFactor: scale,
       mobile,
     });
-    if (mobile) await page.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
+    if (mobile) {
+      await page.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
+      touchActive = true;
+    }
     await sleep(150);
   };
 
   page.clearViewport = async () => {
     await page.send("Emulation.clearDeviceMetricsOverride");
+    await page.send("Emulation.setTouchEmulationEnabled", { enabled: false });
+    touchActive = false;
     await sleep(100);
   };
 
@@ -227,11 +233,13 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
   page.click = async (selector) => {
     const at = await rect(selector);
     if (!at) throw new Error(`no element matches ${selector}`);
+    const x = Math.round(at.x);
+    const y = Math.round(at.y);
     for (const type of ["mousePressed", "mouseReleased"]) {
       await page.send("Input.dispatchMouseEvent", {
         type,
-        x: Math.round(at.x),
-        y: Math.round(at.y),
+        x,
+        y,
         button: "left",
         clickCount: 1,
       });

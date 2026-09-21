@@ -286,6 +286,7 @@ html:has(dialog.settings[open]) { overflow: hidden; }
 
 /* ── small, short and motion-sensitive ─────────────────────────────── */
 @media (max-width: 720px) {
+  .head { flex-wrap: wrap; gap: 8px 12px; }
   .room { padding: 12px 18px 10px; }
   .stage { gap: 28px; padding: 12px 0; }
   .mic-stage { width: 228px; }
