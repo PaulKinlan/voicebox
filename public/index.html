@@ -35,6 +35,32 @@
            browser, and a host that is listed but not running says so by name rather than reading as
            ready. The "+" declares a descriptor; it never starts a service. -->
       <button class="quiet" id="envs-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="envs"><span id="envs-count">Environments</span></button>
+      <!-- The extension surface (voicebox-beads-vwb): the same registry the host enforces, read
+           once and rendered in plain language. Four states a person must never confuse: RUNNING
+           (the host admitted it), WAITING (proposed, review pending), FOUND (in the folder, never
+           reviewed — never green, never running), REFUSED (decided, with the reason). The page
+           can stage and disclose; it can never approve — that is the host's hand, by design. -->
+      <button class="quiet" id="exts-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="exts"><span id="exts-count">Extensions</span></button>
+      <dialog class="envs" id="exts" closedby="any" aria-labelledby="exts-title">
+        <form class="envs-form" method="dialog">
+          <div class="settings-head">
+            <h2 id="exts-title">Extensions</h2>
+            <button class="icon-button" id="exts-close" type="submit" aria-label="Close extensions"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+          </div>
+          <p class="env-hint">Extensions give the agent new abilities. The machine that runs the server decides what is allowed; this page shows what is here and what each one would get.</p>
+          <h3 class="ext-section">Running</h3>
+          <ul class="env-list" id="ext-running"></ul>
+          <h3 class="ext-section">Waiting for review</h3>
+          <ul class="env-list" id="ext-waiting"></ul>
+          <h3 class="ext-section">Found here, never reviewed</h3>
+          <ul class="env-list" id="ext-present"></ul>
+          <h3 class="ext-section">Refused</h3>
+          <ul class="env-list" id="ext-refused"></ul>
+          <h3 class="ext-section">Available to add</h3>
+          <ul class="env-list" id="ext-catalogue"></ul>
+          <p class="env-note" id="ext-note" role="status"></p>
+        </form>
+      </dialog>
       <!-- The environments this page can act in, as a REAL dialog (the settings pattern): modality,
            focus trapping, an inert background and Esc for free; a bounded height with its own scroll
            so a long capability report becomes a scrollbar, not a collision with the controls. The list

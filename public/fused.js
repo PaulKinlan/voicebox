@@ -29,6 +29,12 @@ const WANTED = {
   micDeviceState: "mic-device-state", outDeviceState: "out-device-state",
   envs: "envs", envsOpen: "envs-open", envsClose: "envs-close", envList: "env-list", envCount: "envs-count", envNote: "env-note",
   envAdd: "env-add", envAddLabel: "env-add-label", envAddOrigin: "env-add-origin", envAddBtn: "env-add-btn",
+  // The extension surface (voicebox-beads-vwb): one source (/api/extensions + /api/extensions/catalogue),
+  // four states in four sections, never mixed — a present-but-unreviewed extension is never green
+  // and never described as running.
+  exts: "exts", extsOpen: "exts-open", extsClose: "exts-close", extCount: "exts-count", extNote: "ext-note",
+  extRunning: "ext-running", extWaiting: "ext-waiting", extPresent: "ext-present",
+  extRefused: "ext-refused", extCatalogue: "ext-catalogue",
 };
 const els = {};
 const missing = [];
@@ -536,6 +542,148 @@ function renderRoot() {
 // One source: the header chip, the settings surface and the "+" all read /api/environments. A host
 // that is listed but not running is named unreachable, never shown as ready; a registry the server
 // cannot read is a different named refusal from an empty list.
+// ── THE EXTENSION SURFACE (voicebox-beads-vwb) ──────────────────────────────────────────
+// One source: the server's registry and ledger, read fresh on every render. The page keeps no
+// copy, so it cannot drift from what the host enforces. Four states, four sections, never mixed:
+//   Running            the host allowed it — green, and the plain words say what it may do
+//   Waiting for review proposed from the conversation or the catalogue — amber, not running
+//   Found here         in the extensions folder, never reviewed — grey, NEVER green, NEVER running
+//   Refused            decided, with the human sentence saying why
+// The page can stage and disclose. It can never approve — the approval is the host's hand
+// (the host token), and that decision is filed as voicebox-beads-t80 for Paul.
+// PLAIN LANGUAGE RULE: internal rule ids never reach this panel. Where the API gives a human
+// sentence (the `why`), that is what the person reads; where it gives a state name, the page
+// renders the state's meaning instead.
+
+function plainCaps(declared, bounds) {
+  const words = [];
+  const caps = declared ?? [];
+  if (caps.includes("read")) words.push("read files in this project");
+  if (caps.includes("write")) words.push("write files in this project");
+  if (caps.includes("delete")) words.push("delete files");
+  if (caps.includes("network")) {
+    const hosts = (bounds?.hosts ?? []).join(", ") || "no host";
+    words.push(`fetch from ${hosts}${bounds?.maxRequests ? ` (at most ${bounds.maxRequests} requests)` : ""}`);
+  }
+  return words.length ? `It may ${words.join(", and ")}.` : "It needs no special ability.";
+}
+
+function extRow({ name, dotState, stateText, detail, disclose }) {
+  const li = document.createElement("li");
+  li.className = "env-item";
+  const head = document.createElement("div");
+  head.className = "env-head";
+  const dot = document.createElement("span");
+  dot.className = "env-dot";
+  dot.dataset.ok = dotState; // "present" is its own state — never green, never red
+  head.appendChild(dot);
+  const label = document.createElement("span");
+  label.className = "env-label";
+  label.textContent = name;
+  head.appendChild(label);
+  const state = document.createElement("span");
+  state.className = "env-state";
+  state.textContent = stateText;
+  head.appendChild(state);
+  li.appendChild(head);
+  if (detail) {
+    const d = document.createElement("p");
+    d.className = "ext-detail";
+    d.textContent = detail;
+    li.appendChild(d);
+  }
+  if (disclose) li.appendChild(disclose);
+  return li;
+}
+
+function extSection(listEl, rows, emptyText) {
+  listEl.replaceChildren();
+  if (rows.length === 0) {
+    const li = document.createElement("li");
+    li.className = "env-item env-empty";
+    li.textContent = emptyText;
+    listEl.appendChild(li);
+    return;
+  }
+  for (const row of rows) listEl.appendChild(row);
+}
+
+async function renderExtensions() {
+  if (!els.extRunning) return;
+  try {
+    const [inv, cat] = await Promise.all([request("/api/extensions"), request("/api/extensions/catalogue")]);
+    const running = inv.extensions ?? [];
+    const waiting = (inv.proposals ?? []).filter((p) => p.state === "pending");
+    const refused = (inv.proposals ?? []).filter((p) => p.state === "refused");
+    const present = inv.present ?? [];
+    const catalogue = cat.catalogue ?? [];
+
+    extSection(els.extRunning, running.map((e) =>
+      extRow({ name: e.name, dotState: "true", stateText: "Running", detail: plainCaps(e.declared, e.bounds) })), "Nothing running yet.");
+
+    extSection(els.extWaiting, waiting.map((p) => {
+      const disclose = document.createElement("details");
+      disclose.className = "ext-plan";
+      const summary = document.createElement("summary");
+      summary.textContent = "What is it, and what would it get?";
+      disclose.appendChild(summary);
+      const body = document.createElement("p");
+      body.textContent = plainCaps(p.declared, p.bounds ?? {});
+      disclose.appendChild(body);
+      return extRow({ name: p.name, dotState: "pending", stateText: "Waiting for the host's review", disclose });
+    }), "Nothing is waiting for review.");
+
+    // PRESENT, NOT RUNNING: visible, honest, and never green. A file the host has never
+    // reviewed is not a running tool, and this panel must never blur that difference.
+    extSection(els.extPresent, present.map((p) =>
+      extRow({ name: p.name ?? p.id, dotState: "present", stateText: "Found here · never reviewed · not running",
+               detail: "Someone placed this file in the extensions folder. It has never run. Reviewing it is the host's decision." })), "No unreviewed files here.");
+
+    extSection(els.extRefused, refused.map((p) =>
+      extRow({ name: p.name, dotState: "false", stateText: "Refused", detail: p.refusal?.why ?? "The host declined this extension." })), "Nothing was refused.");
+
+    extSection(els.extCatalogue, catalogue.map((c) => {
+      // The preview's ENFORCEMENT MAP is what separates "would run here" from "cannot": an
+      // admitted preview names the mechanisms it would get; a refusal names why it would not.
+      const wouldRun = c.preview != null && c.preview.enforced !== undefined;
+      const verdict = wouldRun
+        ? "Would run here after review."
+        : `Cannot run here — ${c.preview?.why ?? "this machine cannot give it what it asks for"}`;
+      const row = extRow({ name: c.name ?? c.id, dotState: "pending", stateText: verdict, detail: c.description });
+      if (wouldRun) {
+        const add = document.createElement("button");
+        add.className = "quiet";
+        add.type = "button";
+        add.textContent = "Add to review";
+        add.addEventListener("click", async () => {
+          try {
+            const staged = await request("/api/extensions/sideload", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ id: c.id, confirm: true }),
+            });
+            if (els.extNote) els.extNote.textContent = `${staged.id ?? "It"} was added to the review list.`;
+          } catch (err) {
+            if (els.extNote) els.extNote.textContent = String(err?.message ?? "it could not be added");
+          }
+          await renderExtensions();
+        });
+        row.appendChild(add);
+      }
+      return row;
+    }), "The catalogue is empty.");
+
+    if (els.extCount) {
+      const up = running.length;
+      els.extCount.textContent = `Extensions · ${up} running · ${waiting.length} waiting`;
+    }
+    if (els.extNote && !els.extNote.textContent) els.extNote.textContent = "";
+  } catch (err) {
+    if (els.extCount) els.extCount.textContent = "Extensions";
+    if (els.extNote) els.extNote.textContent = String(err?.message ?? "the extension list could not be read");
+  }
+}
+
 async function renderEnvironments() {
   if (!els.envList) return;
   try {
@@ -648,6 +796,7 @@ async function health() {
     renderAbout();
     await loadRoot();
     await renderEnvironments();
+    await renderExtensions();
   } catch {
     if (els.dot) els.dot.dataset.ok = "false";
     if (els.where) { els.where.textContent = "no answer from the local server"; els.where.title = ""; }
@@ -1154,6 +1303,14 @@ on(els.envAddBtn, "click", async () => {
 
 // The environments dialog opens like settings: showModal() for modality, focus trapping, an inert
 // background and Esc, with focus returned to the trigger on close. The platform provides all of it.
+on(els.extsOpen, "click", () => {
+  if (!els.exts || els.exts.open) return;
+  els.exts.showModal();
+  void renderExtensions();
+});
+on(els.exts, "close", () => {
+  els.extsOpen?.setAttribute("aria-expanded", "false");
+});
 on(els.envsOpen, "click", () => {
   if (!els.envs || els.envs.open) return;
   els.envs.showModal();
