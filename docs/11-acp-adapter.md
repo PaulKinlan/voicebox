@@ -61,10 +61,11 @@ for the browser screenshot and JSON receipt. All test servers bind ephemeral por
 and the missing task-scoped model broker. Descriptor claims cannot bypass this. No production
 admission is enabled by the diagnostic, a timeout alone, or S1's shared-network filesystem sandbox.
 
-The broker prerequisite is tracked as `voicebox-beads-8fv.5`: fixed provider endpoint/model,
-finite request/byte/token budgets, credentials held outside the delegate, and a no-network
-namespace with broker-only access. It needs independent security review and explicit approval
-for ACP credential use. Approval for embedding experiments does not authorize this work.
+**Policy correction, 2026-09-21:** Paul withdrew the mandatory broker/sandbox prerequisite
+and closed `voicebox-beads-8fv.5`. Independent harnesses use their user's configuration,
+security and privacy settings; Voicebox must not require wrapping them. The refusal above
+still exists in code: policy changed, production admission did not. Do not build a broker
+to satisfy that obsolete requirement. The isolated diagnostic remains just a diagnostic.
 No model task completion, model cost, permission enforcement against a real model, or real
 ACP cancellation acknowledgment is claimed here.
 
@@ -111,5 +112,6 @@ browser-scoped authority/key custodian and honest document/worker death handling
 adds no parallel browser engine or hidden local bridge. Direct browser provider authentication
 and real browser-only harness/voice acceptance are still unverified.
 
-**Smallest next step:** build and independently verify the bounded broker before enabling real
-machine task admission; separately finish the D1 browser-placement prerequisite. Keep D2 open.
+**Smallest next step:** align trusted configured-harness admission with the independent-harness
+policy and verify a real task; separately finish the D1 browser-placement prerequisite. Keep D2
+open. [Installed harness inventory](12-harness-inventory.md) does not enable task execution.
