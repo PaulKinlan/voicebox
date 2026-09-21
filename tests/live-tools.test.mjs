@@ -60,7 +60,7 @@ function waitForServer(proc, ms = 10000) {
 }
 
 async function liveSocket(port) {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/live`);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/live`, { headers: { origin: `http://127.0.0.1:${port}` } });
   const states = [];
   const texts = [];
   const tools = [];

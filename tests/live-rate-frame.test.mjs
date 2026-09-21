@@ -31,7 +31,7 @@ async function serverWith(env) {
 }
 
 async function firstFrame(port) {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/live`);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/live`, { headers: { origin: `http://127.0.0.1:${port}` } }); // local peer, declared
   const frames = [];
   ws.onmessage = (e) => frames.push(typeof e.data === "string" ? JSON.parse(e.data) : e.data);
   await once(ws, "open").catch(() => {});
@@ -56,7 +56,7 @@ test("rate frame: the FIRST frame on /live is the input rate the resolved provid
 test("rate frame: a provider that has not declared a rate is REFUSED before anything connects", async () => {
   const { proc, port } = await serverWith({ LIVE_PROVIDER: "no-such-provider" });
   try {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/live`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/live`, { headers: { origin: `http://127.0.0.1:${port}` } }); // local peer, declared
     const frames = [];
     ws.onmessage = (e) => frames.push(typeof e.data === "string" ? JSON.parse(e.data) : e.data);
     await once(ws, "open").catch(() => {});

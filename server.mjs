@@ -149,6 +149,20 @@ function bearerOk(envKey, bearer) {
   return typeof held === "string" && held.length > 0 && typeof bearer === "string" && bearer === held;
 }
 
+  /**
+   * Does THIS host accept this bearer for ANY environment key it has issued one for?
+   *
+   * The key is the CALLER's name for this environment when it paired, so the inbound peer cannot be
+   * asked to guess it — the credential is what identifies the pairing, and matching it anywhere is the
+   * honest reading of 'this host issued that bearer'. A store that cannot be read accepts NOTHING.
+   */
+  function bearerAcceptedByThisHost(bearer) {
+    if (typeof bearer !== "string" || bearer.length === 0) return false;
+    const read = readPairings();
+    if (!read.ok) return false;
+    return Object.values(read.map).some((entry) => entry?.acceptBearer === bearer);
+  }
+
 /** Record the bearer the LOCAL host uses when calling a paired environment. */
 function recordCallBearer(envKey, bearer) {
   const read = readPairings();
@@ -288,6 +302,12 @@ let agentSettings = { ...DEFAULT_AGENT_SETTINGS };
 
 /** What a LIVE session actually started with — the difference between "stored" and "in use". */
 let runningSession = null;
+// THE REAL PORT, once it is known: `PORT` may be 0 (the OS picks), so anything that has to recognise this
+// server's own origin must ask for the BOUND port, not the requested one.
+let boundPort = null;
+// MONOTONIC, and it counts ATTEMPTS: a session that is created and then fails to connect is still
+// provider spend, and this number is what makes 'nothing was created' assertable from outside.
+let liveSessionsCreated = 0;
 
 /** A declaration made by the operator at boot (VOICEBOX_WORKSPACE), which is a decision, not a default. */
 if (process.env.VOICEBOX_WORKSPACE) {
@@ -877,6 +897,9 @@ const routes = {
   },
   "GET /api/health": (req, res, url) => json(res, 200, {
     ok: true,
+      // `created` is the count the live-auth tests assert on: a refusal that still created a session is
+      // the defect this number exists to catch (a refusal is not proof that nothing was spent).
+      live: { created: liveSessionsCreated, running: Boolean(runningSession) },
     provider: PROVIDER,
     // There is no default root to report; `declared` says whether one exists at all.
     declared: Boolean(active),
@@ -1406,115 +1429,195 @@ server.on("upgrade", (req, socket) => {
   const ws = wsUpgrade(req, socket);
   if (!ws) { socket.destroy(); return; }
 
-  // STEP 2 OF THE RATE WORK: the page is told what rate to capture at BEFORE any audio is sent, ever.
+  // ── THE HELLO GATE: entitlement BEFORE provider spend (bead voicebox-beads-eet) ─────────────────────
   //
-  // The defect this closes (journal-6g0): the browser captured at 16 kHz, the OpenAI provider declared
-  // 24 kHz to its vendor, and the PCM was forwarded unchanged — the provider told OpenAI one thing and sent
-  // another, and nothing in the path could notice. It hid because Gemini also takes 16 kHz: with one
-  // implementation nobody had to negotiate. So the FIRST frame on this socket is the requirement, it comes
-  // from the provider that will receive the audio, and a provider that has not declared one is REFUSED —
-  // guessing a provider's rate is the defect, so the host will not guess.
-  let inputRate = null;
-  try {
-    inputRate = inputRateRequiredBy(resolvedLiveProviderName());
-  } catch (e) {
-    ws.send(JSON.stringify({ type: "error", error: e?.message ?? String(e) }));
-    ws.close(1011, "provider has not declared the input rate its protocol requires");
-    return;
-  }
-  ws.send(JSON.stringify({ type: "rate", inputRate, provider: resolvedLiveProviderName() }));
+  // THE DEFECT, measured before this existed: an unauthenticated peer connected to /live and received the
+  // rate frame, then transport-open, then ready — a real provider session, created and paid for, for a
+  // connection nothing had asked about. The refusal that followed was a cleanup, not a gate.
+  //
+  // So this socket does not reach the provider until the connection has shown it is entitled to one:
+  //
+  //   · THE LOCAL PAGE is entitled by construction: a page this process serves announces itself with its
+  //     own Origin, and this host does not hand credentials to a page. Same origin, no hello needed.
+  //   · EVERY OTHER PEER presents the pairing bearer its host issued, in the FIRST frame:
+  //     {"type":"hello","bearer":"vbx_…"}. Missing, malformed or non-matching is a NAMED refusal with the
+  //     remedy in it, and the socket is closed BEFORE any session exists.
+  //   · THE BOUND exists because silence is not a credential either: a peer that says nothing costs a close.
+  //
+  // WHAT THIS DOES NOT CLAIM, stated here rather than discovered later: a non-browser client can send any
+  // Origin it likes, so "same origin" is a claim the peer makes, not a proof. This gate stops an
+  // unauthenticated peer from costing a session and makes the PAIRED path enforceable; a per-process page
+  // token minted into the served HTML is what would close the claim itself, and it belongs with the
+  // environment-identity work rather than here.
+  const selfPort = boundPort ?? PORT;
+  const localOrigins = new Set([
+    `http://127.0.0.1:${selfPort}`,
+    `http://localhost:${selfPort}`,
+    `http://[::1]:${selfPort}`,
+  ]);
+  const claimsToBeTheLocalPage = typeof req.headers.origin === "string" && localOrigins.has(req.headers.origin);
 
-  let session = null;
-  try {
-    session = createLiveSession({
-      // THE AGENT SETTINGS APPLY HERE, which is what stops them being dead controls: the provider a
-      // person chose is the provider this session dials, and its model comes with it.
-      provider: agentSettings.provider,
-      model: PROVIDERS[agentSettings.provider].model,
-      onAudioOut: (pcm, mime) => { if (pcm.length > 4) ws.send(pcm); },
-      onText: (text, role) => ws.send(JSON.stringify({ type: "text", role, text })),
-      onState: (state, detail) => ws.send(JSON.stringify({ type: "state", state, detail, model: PROVIDERS[agentSettings.provider].model })),
-      // The voice gets the SAME verbs the text path resolves to, from the ONE
-      // command list (lib/commands.mjs) — and each call runs through the SAME
-      // executor, so containment, refusal names and the audit are identical
-      // whichever path the words arrive on.
-      tools: functionDeclarations(),
-      systemInstruction: liveSystemInstruction(),
-      onToolCall: async (calls) => {
-        const responses = [];
-        const seen = [];
-        for (const call of calls) {
-          // EVERY command in a batch answers, including the ones that fail — a batch that
-          // sends nothing is indistinguishable from a hang (astra's live-tools review,
-          // 2026-09-20: one failing command swallowed every sibling's response). So the
-          // mapping is validated, the executor is wrapped, and a throw becomes a NAMED
-          // refusal rather than a swallowed outcome.
-          const action = commandToAction(call.name, call.args);
-          let result;
-          if (!action) {
-            result = { ok: false, refused: "unknown-command", error: `unknown command: '${call.name}' — the only commands are in lib/commands.mjs` };
-          } else if (action.refused) {
-            result = { ok: false, refused: action.refused, error: `refused: ${action.refused}`, why: action.why };
-          } else {
-            try {
-              result = await execute({ ...action, turn: "live" });
-            } catch (e) {
-              result = { ok: false, refused: "exec-threw", error: `refused: exec-threw`, why: `the executor threw instead of answering: ${e?.message ?? e}` };
-            }
-          }
-          responses.push({ id: call.id, name: call.name, response: { result } });
-          seen.push({ name: call.name, ok: result.ok, action: result.action ?? result.error });
-        }
-        const answered = session.sendToolResponse(responses);
-        if (!answered) {
-          // The acts above may have LANDED while the answer could not be sent (the gate
-          // refuses a response before ready). That is the worst silence of the three, so it
-          // is the loudest line: which acts ran, and that the model never heard.
-          console.error(`[live] tool-call ${seen.map((s) => `${s.name}:${s.ok ? "ok" : "refused"}`).join(", ")} — toolResponse NOT SENT (the session was not ready; the host gates tool-call events on ready, so this means the gate was bypassed)`);
-        } else {
-          console.error(`[live] tool-call ${seen.map((s) => `${s.name}:${s.ok ? "ok" : "refused"}`).join(", ")} — toolResponse sent`);
-        }
-        // The page hears about it too (additive: today's client ignores the
-        // type; a UI lane can render it).
-        ws.send(JSON.stringify({ type: "tool", calls: seen }));
-      },
-    });
-    runningSession = { provider: session.state?.provider ?? agentSettings.provider, startedAt: new Date().toISOString() };
-  } catch (e) {
-    ws.send(JSON.stringify({ type: "error", error: e?.message ?? String(e) }));
-    ws.close(1011, "live session failed to start");
-    return;
-  }
+  const refuseLive = (refused, why) => {
+    try { ws.send(JSON.stringify({ type: "refused", refused, why })); } catch { /* the socket may be gone */ }
+    ws.close(1008, refused);
+  };
 
-  ws.on("message", (data) => {
-    if (typeof data === "string") {
-      let msg = null;
-      try { msg = JSON.parse(data); } catch { /* not JSON — ignore */ }
-      if (msg?.type === "text" && typeof msg.text === "string") session.sendText(msg.text);
-      if (msg?.type === "stop") { session.close(); ws.close(); }
+  const beginSession = () => {
+    // STEP 2 OF THE RATE WORK: the page is told what rate to capture at BEFORE any audio is sent, ever.
+    //
+    // The defect this closes (journal-6g0): the browser captured at 16 kHz, the OpenAI provider declared
+    // 24 kHz to its vendor, and the PCM was forwarded unchanged — the provider told OpenAI one thing and sent
+    // another, and nothing in the path could notice. It hid because Gemini also takes 16 kHz: with one
+    // implementation nobody had to negotiate. So the FIRST frame on this socket is the requirement, it comes
+    // from the provider that will receive the audio, and a provider that has not declared one is REFUSED —
+    // guessing a provider's rate is the defect, so the host will not guess.
+    let inputRate = null;
+    try {
+      inputRate = inputRateRequiredBy(resolvedLiveProviderName());
+    } catch (e) {
+      ws.send(JSON.stringify({ type: "error", error: e?.message ?? String(e) }));
+      ws.close(1011, "provider has not declared the input rate its protocol requires");
       return;
     }
-    // A binary frame is a PCM16 audio frame from the page's microphone.
-    // VALIDATE before forwarding — this is not defensive padding. Measured
-    // (ds-flash-1b, 2026-09-19): a single 3-byte frame reaches the model and
-    // the upstream closes 1007 "Request contains an invalid argument" — the
-    // SESSION dies while the page's socket stays open, so the user keeps
-    // talking into nothing. One malformed frame must cost a frame, never the
-    // conversation. PCM16 is always a non-empty EVEN number of bytes, and a
-    // frame past a bounded size is a fault, not audio.
-    const frameError =
-      data.length === 0 ? "empty audio frame" :
-      data.length % 2 !== 0 ? `odd-length audio frame (${data.length} bytes — PCM16 is even-length)` :
-      data.length > 1_048_576 ? `audio frame too large (${data.length} bytes)` :
-      null;
-    if (frameError) {
-      ws.send(JSON.stringify({ type: "error", error: `dropped malformed audio frame — ${frameError} (the session is fine)` }));
-      return; // rejected WITHOUT forwarding: one bad frame costs a frame.
+    ws.send(JSON.stringify({ type: "rate", inputRate, provider: resolvedLiveProviderName() }));
+
+    let session = null;
+    try {
+      liveSessionsCreated += 1;
+      session = createLiveSession({
+        // THE AGENT SETTINGS APPLY HERE, which is what stops them being dead controls: the provider a
+        // person chose is the provider this session dials, and its model comes with it.
+        provider: agentSettings.provider,
+        model: PROVIDERS[agentSettings.provider].model,
+        onAudioOut: (pcm, mime) => { if (pcm.length > 4) ws.send(pcm); },
+        onText: (text, role) => ws.send(JSON.stringify({ type: "text", role, text })),
+        onState: (state, detail) => ws.send(JSON.stringify({ type: "state", state, detail, model: PROVIDERS[agentSettings.provider].model })),
+        // The voice gets the SAME verbs the text path resolves to, from the ONE
+        // command list (lib/commands.mjs) — and each call runs through the SAME
+        // executor, so containment, refusal names and the audit are identical
+        // whichever path the words arrive on.
+        tools: functionDeclarations(),
+        systemInstruction: liveSystemInstruction(),
+        onToolCall: async (calls) => {
+          const responses = [];
+          const seen = [];
+          for (const call of calls) {
+            // EVERY command in a batch answers, including the ones that fail — a batch that
+            // sends nothing is indistinguishable from a hang (astra's live-tools review,
+            // 2026-09-20: one failing command swallowed every sibling's response). So the
+            // mapping is validated, the executor is wrapped, and a throw becomes a NAMED
+            // refusal rather than a swallowed outcome.
+            const action = commandToAction(call.name, call.args);
+            let result;
+            if (!action) {
+              result = { ok: false, refused: "unknown-command", error: `unknown command: '${call.name}' — the only commands are in lib/commands.mjs` };
+            } else if (action.refused) {
+              result = { ok: false, refused: action.refused, error: `refused: ${action.refused}`, why: action.why };
+            } else {
+              try {
+                result = await execute({ ...action, turn: "live" });
+              } catch (e) {
+                result = { ok: false, refused: "exec-threw", error: `refused: exec-threw`, why: `the executor threw instead of answering: ${e?.message ?? e}` };
+              }
+            }
+            responses.push({ id: call.id, name: call.name, response: { result } });
+            seen.push({ name: call.name, ok: result.ok, action: result.action ?? result.error });
+          }
+          const answered = session.sendToolResponse(responses);
+          if (!answered) {
+            // The acts above may have LANDED while the answer could not be sent (the gate
+            // refuses a response before ready). That is the worst silence of the three, so it
+            // is the loudest line: which acts ran, and that the model never heard.
+            console.error(`[live] tool-call ${seen.map((s) => `${s.name}:${s.ok ? "ok" : "refused"}`).join(", ")} — toolResponse NOT SENT (the session was not ready; the host gates tool-call events on ready, so this means the gate was bypassed)`);
+          } else {
+            console.error(`[live] tool-call ${seen.map((s) => `${s.name}:${s.ok ? "ok" : "refused"}`).join(", ")} — toolResponse sent`);
+          }
+          // The page hears about it too (additive: today's client ignores the
+          // type; a UI lane can render it).
+          ws.send(JSON.stringify({ type: "tool", calls: seen }));
+        },
+      });
+      runningSession = { provider: session.state?.provider ?? agentSettings.provider, startedAt: new Date().toISOString() };
+    } catch (e) {
+      ws.send(JSON.stringify({ type: "error", error: e?.message ?? String(e) }));
+      ws.close(1011, "live session failed to start");
+      return;
     }
-    session.sendAudio(data.toString("base64"));
+
+    ws.on("message", (data) => {
+      if (typeof data === "string") {
+        let msg = null;
+        try { msg = JSON.parse(data); } catch { /* not JSON — ignore */ }
+        if (msg?.type === "text" && typeof msg.text === "string") session.sendText(msg.text);
+        if (msg?.type === "stop") { session.close(); ws.close(); }
+        return;
+      }
+      // A binary frame is a PCM16 audio frame from the page's microphone.
+      // VALIDATE before forwarding — this is not defensive padding. Measured
+      // (ds-flash-1b, 2026-09-19): a single 3-byte frame reaches the model and
+      // the upstream closes 1007 "Request contains an invalid argument" — the
+      // SESSION dies while the page's socket stays open, so the user keeps
+      // talking into nothing. One malformed frame must cost a frame, never the
+      // conversation. PCM16 is always a non-empty EVEN number of bytes, and a
+      // frame past a bounded size is a fault, not audio.
+      const frameError =
+        data.length === 0 ? "empty audio frame" :
+        data.length % 2 !== 0 ? `odd-length audio frame (${data.length} bytes — PCM16 is even-length)` :
+        data.length > 1_048_576 ? `audio frame too large (${data.length} bytes)` :
+        null;
+      if (frameError) {
+        ws.send(JSON.stringify({ type: "error", error: `dropped malformed audio frame — ${frameError} (the session is fine)` }));
+        return; // rejected WITHOUT forwarding: one bad frame costs a frame.
+      }
+      session.sendAudio(data.toString("base64"));
+    });
+    ws.on("close", () => session.close());
+    ws.on("error", () => session.close());
+  };
+
+  if (claimsToBeTheLocalPage) { beginSession(); return; }
+
+  const HELLO_BOUND_MS = 5000;
+  const helloDeadline = setTimeout(
+    () => refuseLive(
+      "unauthenticated-call",
+      `this socket asked for a live session — which is a provider session, and provider spend — without ` +
+        `identifying itself. The first frame must be {"type":"hello","bearer":"<the pairing bearer this host ` +
+        `issued>"} unless you are the page this host serves; nothing arrived within ${HELLO_BOUND_MS}ms.`,
+    ),
+    HELLO_BOUND_MS,
+  );
+  // `ws` here is this project's own zero-dependency socket (lib/ws-server.mjs), which has `on` and NOT
+  // `once` — my first version called `once`, it threw inside the handler, and every remote peer fell
+  // through to the timeout instead of being read. The flag below is the same idea, on the API that exists.
+  let awaitingHello = true;
+  ws.on("message", (data) => {
+    if (!awaitingHello) return; // from here the session's own handler owns the frames
+    awaitingHello = false;
+    clearTimeout(helloDeadline);
+    let frame = null;
+    try { frame = JSON.parse(String(data)); } catch { /* fall through to the refusal below */ }
+    const bearer = typeof frame?.bearer === "string" ? frame.bearer : null;
+    if (frame?.type !== "hello" || !bearer) {
+      refuseLive(
+        "unauthenticated-call",
+        'the first frame must be {"type":"hello","bearer":"<the pairing bearer this host issued>"} — a live ' +
+          'session costs provider spend, so the entitlement is checked before the session is built.',
+      );
+      return;
+    }
+    if (!bearerAcceptedByThisHost(bearer)) {
+      refuseLive(
+        "bearer-refused",
+        "that bearer is not one this host issued. Pair first (POST /api/pair with the host token) and send " +
+          "the bearer it returns as the hello frame's `bearer` — a session is not created for a peer we " +
+          "cannot identify.",
+      );
+      return;
+    }
+    beginSession();
   });
-  ws.on("close", () => session.close());
-  ws.on("error", () => session.close());
+
 });
 
 /**
@@ -1569,6 +1672,7 @@ function bindWithRetry(port, startedAt = Date.now()) {
 
 try {
   const bound = await bindWithRetry(PORT);
+  boundPort = bound; // from here the origin check can recognise this server's own page
   // The REAL port, not the requested one: PORT=0 asks the OS for a free port, and a test suite that
   // binds an ephemeral port has to be able to read back which one it got. A suite that pins a fixed
   // port cannot run beside another, and the failure appears in someone else's lane as an unexplained

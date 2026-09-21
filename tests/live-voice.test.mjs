@@ -94,7 +94,9 @@ test("live voice [live-network]: WS codec, readiness gate, and a real Gemini rou
   try {
     await waitForServer(server);
 
-    const ws = new WebSocket(BASE.replace(/^http/, "ws") + "/live");
+    // The local origin, declared: this client talks to the server it just started, and the server now asks a
+    // /live peer to say who it is before it will build a provider session (bead voicebox-beads-eet).
+    const ws = new WebSocket(BASE.replace(/^http/, "ws") + "/live", { headers: { origin: BASE } });
     const states = [];
     const texts = [];
     let binaryFrames = 0;
@@ -155,7 +157,9 @@ test("live voice [live-network]: a malformed binary frame costs a frame, not the
   const server = await startServer();
   try {
     await waitForServer(server);
-    const ws = new WebSocket(BASE.replace(/^http/, "ws") + "/live");
+    // The local origin, declared: this client talks to the server it just started, and the server now asks a
+    // /live peer to say who it is before it will build a provider session (bead voicebox-beads-eet).
+    const ws = new WebSocket(BASE.replace(/^http/, "ws") + "/live", { headers: { origin: BASE } });
     const errors = [];
     const states = [];
     let audioFrames = 0;
