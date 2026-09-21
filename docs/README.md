@@ -75,6 +75,29 @@ to prevent collision with `03-architecture-k3.md` and `04-e1-m0-build-spec.md`.
 | **Other projects are prior art, never dependencies** | design §0 | techniques in, artefact out — and theirs to change, not ours |
 | **How the document has been tested** | design §6 | which sections are driven and which are **design, unproven** |
 
+## 3a. How the docs are kept true — the mechanism, not the reminder
+
+Every claim in this map is checked by `scripts/docs-check.mjs`, three ways:
+
+1. **Generated blocks** — the derivable facts (providers, routes, the page's scripts, the live session)
+   are generated from the code itself between `BEGIN/END GENERATED` markers, and drift fails the build.
+2. **Hand-written path claims** — every backtick token that looks like a repo path, in every markdown
+   document under `docs/` and the README, must exist in this tree. Cross-repo citations (the harvest
+   prior art) are exempt by visible prefix in `docs/claims.json`, each with its why; so are the
+   evidence receipts (history describes the tree as it was) and four named allowPaths whose truth
+   lives on a branch or in another tree.
+3. **Curated claims** — `docs/claims.json` names literals a document must keep (`require`) and must
+   never carry again (`forbid`): the retirees from voicebox-beads-f0b and the load-bearing facts a
+   doc must not lose. Each entry carries its why.
+
+**The named limit, kept honest:** a denylist and a path check catch *retirement* and *existence*.
+Neither can read a sentence for truth. A claim that becomes false without a forbidden word and
+without citing a path is exactly what a human re-read is still for — the mechanism turns
+"nobody is watching" into "the checkable half is checked, and the gap is a number" (today: 83 path
+claims and 6 curated claims across 15 documents, with the exemptions listed in `docs/claims.json`).
+Mutation-tested: a false mechanism citation, a removed capture path, and a returned retiree each go
+red naming the document, the line, and the why.
+
 ## 4. Decision, technique, or still open
 
 - **Decisions** (settled, with the reason): the placements and their order; concurrency by execution

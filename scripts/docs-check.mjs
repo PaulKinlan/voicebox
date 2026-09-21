@@ -590,6 +590,96 @@ if (missing.length) {
   process.exit(1);
 }
 
+// ── the hand-written claims ──────────────────────────────────────────────────
+//
+// GENERATED blocks are derived from the code, so they cannot lie about it. Everything OUTSIDE those
+// blocks is hand-written, and a hand-written sentence can be false with no forbidden word in sight —
+// the rot that started voicebox-beads-f0b was a sentence that survived a rebase and said a thing the
+// tree no longer did. Two passes watch the hand-written half of the covered documents, both
+// deliberately partial (docs/claims.json is the policy, and every entry carries its why):
+//
+//   REPO-PATH CLAIMS — every backtick token that looks like a repo path must exist in this tree.
+//   This is the check that would have caught tonight's rot: a document claiming a mechanism "at"
+//   a path that no longer exists. It reads EXISTENCE, never truth — a path that exists says
+//   nothing about the sentence around it, and this pass does not pretend otherwise.
+//
+//   CURATED CLAIMS — docs/claims.json names literals some document must keep (require) and must
+//   never carry again (forbid): the retirees from f0b's list and the load-bearing facts a doc must
+//   not lose. A denylist catches RETIREMENT, not ROT — f0b's own named limit, kept here so nobody
+//   mistakes the check for completeness. What neither pass can do is read a sentence for truth;
+//   the inventory printed below is the honest size of that gap.
+
+const CLAIMS_FILE = join(ROOT, "docs", "claims.json");
+if (!existsSync(CLAIMS_FILE)) {
+  console.error(`docs-check: ${relative(ROOT, CLAIMS_FILE)} is missing — the hand-written claims pass has no policy to run.`);
+  process.exit(1);
+}
+const claims = JSON.parse(readFileSync(CLAIMS_FILE, "utf8"));
+const pathIgnores = (claims.pathIgnorePrefixes ?? []).map((p) => p.prefix);
+
+// THE HAND-WRITTEN SET IS EVERY MARKDOWN DOCUMENT, not only the three the generated blocks live in.
+// The first version of this pass iterated the DOCS list and a mutation appended to an uncovered doc
+// stayed green — the exact "a check that watches part of the thing will report clean about the whole
+// of it" defect f0b was filed for, rebuilt by me in miniature. Path claims need no markers, so they
+// are checked everywhere markdown exists; evidence receipts are exempt as history (their paths
+// describe the tree as it was). Curated claims stay scoped to the documents their entries name.
+const HANDWRITTEN_DOCS = [
+  ...new Set([
+    ...DOCS.map((d) => d.rel),
+    ...readdirSync(join(ROOT, "docs"))
+      .filter((f) => f.endsWith(".md"))
+      .map((f) => join("docs", f)),
+    "README.md",
+  ]),
+].filter((rel) => existsSync(join(ROOT, rel)) && !pathIgnores.some((p) => rel.startsWith(p)));
+
+const claimFailures = [];
+let pathClaimsChecked = 0;
+for (const rel of HANDWRITTEN_DOCS) {
+  const text = readFileSync(join(ROOT, rel), "utf8");
+  const lines = text.split("\n");
+  lines.forEach((line, index) => {
+    for (const m of line.matchAll(/`([^`\n]+)`/g)) {
+      let token = m[1].trim();
+      token = token.replace(/:\d+$/, ""); // a :line suffix is an anchor; existence is checked, the line is not
+      token = token.replace(/[.,;]+$/, "");
+      if (!token.includes("/") || !/\.[a-z0-9]+$/i.test(token)) continue; // paths with an extension, not verbs or flags
+      if (/[\s<>*=]/.test(token)) continue; // globs (`catalogue/*.json`), shape placeholders (`<root>/…`), and command lines are not existence claims
+      if (/^(https?:|npm:|~|\.\.?\/|\/)/.test(token)) continue; // URLs, package specs, homes, site-absolute paths, and relative prose are outside this tree's claim
+      if (pathIgnores.some((p) => token.startsWith(p))) continue;
+      const allowed = (claims.allowPaths ?? []).some((a) => (a.doc === "*" || a.doc === rel) && a.path === token);
+      if (allowed) continue;
+      pathClaimsChecked++;
+      if (!existsSync(join(ROOT, token))) claimFailures.push(`${rel}:${index + 1} — backtick path \`${token}\` does not exist in this tree`);
+    }
+  });
+}
+
+for (const f of claims.forbid ?? []) {
+  const targets = f.docs ?? DOCS.map((d) => d.rel);
+  for (const rel of targets) {
+    const lines = readFileSync(join(ROOT, rel), "utf8").split("\n");
+    lines.forEach((line, i) => {
+      if (line.includes(f.literal)) claimFailures.push(`${rel}:${i + 1} — FORBIDDEN literal "${f.literal}": ${f.why}`);
+    });
+  }
+}
+
+for (const r of claims.require ?? []) {
+  const p = join(ROOT, r.doc);
+  if (!existsSync(p)) { claimFailures.push(`${r.doc} — required by claims.json but the document is missing`); continue; }
+  if (!readFileSync(p, "utf8").includes(r.contains)) claimFailures.push(`${r.doc} — REQUIRED literal "${r.contains}" is gone: ${r.why}`);
+}
+
+if (claimFailures.length) {
+  console.error(`docs-check: FAILED — ${claimFailures.length} hand-written claim(s) do not hold:`);
+  for (const f of claimFailures) console.error(`  - ${f}`);
+  console.error("");
+  console.error("Hand-written claims are checked for EXISTENCE and RETIREMENT, not truth — docs/claims.json is the policy");
+  console.error("and every entry carries its why. Fix the doc, or fix the claims file, and say which in the commit.");
+  process.exit(1);
+}
+
 if (drifted.length && !WRITE) {
   console.error("docs-check: FAILED — these documents no longer describe the code:");
   for (const d of drifted) console.error(`  - ${d}`);
@@ -601,5 +691,5 @@ if (drifted.length && !WRITE) {
 }
 
 console.log(
-  `docs-check: ${WRITE ? "regenerated" : "OK"} — ${DOCS.reduce((n, d) => n + d.blocks.length, 0)} generated blocks across ${DOCS.length} documents`,
+  `docs-check: ${WRITE ? "regenerated" : "OK"} — ${DOCS.reduce((n, d) => n + d.blocks.length, 0)} generated blocks across ${DOCS.length} documents, ${pathClaimsChecked} hand-written path claims and ${(claims.forbid ?? []).length + (claims.require ?? []).length} curated claims checked`,
 );

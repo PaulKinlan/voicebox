@@ -1,0 +1,122 @@
+{
+  "$comment": "The policy for the HAND-WRITTEN half of the docs (scripts/docs-check.mjs, passes two and three). Generated blocks are derived from the code and cannot lie about it; these claims watch what a person typed. Every entry carries its why, because a claim without a reason is a style opinion wearing a security badge. The named limit, from voicebox-beads-f0b and kept honest here: a denylist catches RETIREMENT, not ROT — a sentence can become false without using a forbidden word. These passes are progress, not coverage.",
+  "pathIgnorePrefixes": [
+    {
+      "prefix": "reports/",
+      "why": "the retained plan/evidence reports live in the private journal-data tree, not this repo"
+    },
+    {
+      "prefix": "journal/",
+      "why": "the journal repo is a different tree"
+    },
+    {
+      "prefix": "docs/evidence/",
+      "why": "evidence receipts are history: their paths describe the tree as it was at the drive, and a receipt that still cites a renamed path is a true sentence about the past"
+    },
+    {
+      "prefix": "packages/",
+      "why": "cross-repo citation: the isocan/CAP layouts (harvest prior art), not this tree"
+    },
+    {
+      "prefix": "extension/",
+      "why": "cross-repo citation: chrome-agent-platform's extension/lib layout"
+    },
+    {
+      "prefix": "wasm-tools/",
+      "why": "cross-repo citation: CAP's wasm-tools tree"
+    },
+    {
+      "prefix": "isocan/",
+      "why": "cross-repo citation: the isocan checkout"
+    },
+    {
+      "prefix": "cap-evidence/",
+      "why": "cross-repo citation: CAP evidence receipts"
+    },
+    {
+      "prefix": "fauxmium/",
+      "why": "cross-repo citation: the fauxmium experiment tree"
+    },
+    {
+      "prefix": ".pi/",
+      "why": "citation of the pi harness's own installation tree (prior art)"
+    },
+    {
+      "prefix": "src/",
+      "why": "cross-repo citation: pre-split harness layouts; this repo keeps code in core/, lib/, browser/, public/"
+    },
+    {
+      "prefix": "talk/",
+      "why": "cross-repo citation: the isocan talk module layout"
+    },
+    {
+      "prefix": "test/",
+      "why": "cross-repo citation: isocan/CAP test dirs; this repo's tests live in tests/ (checked)"
+    },
+    {
+      "prefix": "examples/",
+      "why": "cross-repo citation: CAP's examples tree"
+    },
+    {
+      "prefix": "docs/05-harvest.md",
+      "why": "a harvest census: its paths describe the trees it harvested FROM (isocan, CAP, the plans repo), by design"
+    },
+    {
+      "prefix": "voice-agent/",
+      "why": "cross-repo citation: the isocan voice-agent package layout (harvest prior art)"
+    }
+  ],
+  "forbid": [
+    {
+      "literal": "escapes the workspace",
+      "why": "retired refusal wording (voicebox-beads-f0b): containment refuses by name, and the phrase that landed names the active project root. Survives only in docs/evidence receipts, which are history and outside the covered documents."
+    },
+    {
+      "literal": "About this room",
+      "why": "retired study-UI string (voicebox-beads-f0b's starting list)."
+    },
+    {
+      "literal": "Nothing calls Gemini Live",
+      "why": "retired claim (voicebox-beads-mo9's founding rot): the audio path IS live over /live to models/gemini-3.8-live; the TURN path is the scripted resolver. A doc saying 'nothing calls Gemini Live' flattens the two halves into one false sentence."
+    }
+  ],
+  "require": [
+    {
+      "doc": "README.md",
+      "contains": "models/gemini-3.8-live",
+      "why": "the README must keep naming the real capture path — mic in, /live, models/gemini-3.8-live with thinking — and must never fall back to advertising browser dictation as the product route."
+    },
+    {
+      "doc": "docs/08-how-it-runs.md",
+      "contains": "127.0.0.1",
+      "why": "the single-host rule: the server binds 127.0.0.1, and serving on 0.0.0.0 is a different product (docs/08-how-it-runs.md)."
+    },
+    {
+      "doc": "docs/07-architecture.md",
+      "contains": "core/root.ts",
+      "why": "the architecture doc must keep naming the root seam it is built on — an architecture doc that loses its foundation path has drifted from the tree it describes."
+    }
+  ],
+  "allowPaths": [
+    {
+      "doc": "docs/README.md",
+      "path": "docs/interface.md",
+      "why": "true sentence: the interface doc lives on design/astra-interface, not main yet — the map says so beside the citation"
+    },
+    {
+      "doc": "docs/README.md",
+      "path": "docs/03-harvest.md",
+      "why": "true sentence: the collision note documents the pre-merge name (renumbered to 05-harvest.md on landing)"
+    },
+    {
+      "doc": "docs/README.md",
+      "path": "docs/04-dynamic-tools.md",
+      "why": "true sentence: the collision note documents the pre-merge name (renumbered to 06-dynamic-tools.md on landing)"
+    },
+    {
+      "doc": "*",
+      "path": "docs/extensions.md",
+      "why": "citation of the PI HARNESS's extensions doc (~/.local/share/mise/installs/pi/<ver>/pi/docs/extensions.md) — prior art outside this tree, named as such in the citing sentences"
+    }
+  ]
+}
