@@ -311,6 +311,13 @@ async function environmentsWithStatus() {
     // is a measurement, not a claim. Its `when` travels with it, so a stale one reads as stale.
     const probeMeasured = env.boundary?.measuredBy === "probe";
     const declared = probeMeasured ? { ...env } : { ...env, boundary: null, capability: null };
+    if (env.kind === "fence") {
+      // A fence BOOTS, probes, and exits — it is a provider, not a standing service, so its row says
+      // so rather than reading "unreachable" (which would look like a failure). A persistent fenced
+      // service is the next slice; today the honest state is that the boundary was measured at boot.
+      rows.push({ ...declared, reachable: null, refused: null, why: "a fence boots, probes, and exits — its boundary was measured at boot; it is not a standing service" });
+      continue;
+    }
     if (env.kind !== "server" || !env.origin) {
       rows.push({ ...declared, reachable: null, refused: null, why: "the browser environment is always present" });
       continue;

@@ -49,7 +49,7 @@ test("boots an L1 fence from a descriptor and returns a MEASURED per-axis bounda
   assert.ok(/shared|does not bound/i.test(out.boundary.axes.network.note), "the network axis is labelled as not bounded");
   // No axis reads "denied" by silence: each carries a verdict and whether it was measured.
   for (const [name, axis] of Object.entries(out.boundary.axes)) {
-    assert.ok(["fenced", "passes", "partial", "present", "not measured", "unknown"].includes(axis.verdict), `axis ${name} has a named verdict`);
+    assert.ok(["fenced", "not-fenced", "passes", "partial", "present", "not measured", "unknown"].includes(axis.verdict), `axis ${name} has a named verdict`);
     assert.equal(typeof axis.measured, "boolean", `axis ${name} says whether it was measured`);
   }
   // The capability report is the probe's own — observed, not configured.
@@ -76,6 +76,27 @@ test("measureBoundary never lets an unmeasured axis read as denied", () => {
   for (const axis of Object.values(report.axes)) {
     assert.notEqual(axis.verdict, "denied", "no axis is ever reported 'denied' — the fence either measured it or says not-measured");
   }
+});
+
+test("MUTATION (the reviewer's): a fence whose tree is writable reports not-fenced, with the violation named", () => {
+  // The reviewer mutated fence.sh's ro-bind to a writable bind and the files axis still read "fenced"
+  // — the middle branch let hostHomeGone alone produce it. Now: the measured violation (treeReadOnly
+  // false) MUST flip the axis to not-fenced and name the violation, even when the other conditions pass.
+  const violated = measureBoundary({
+    probe: "sandbox-probe/1",
+    when: "now",
+    filesystem: { dirs: { "/srv/voicebox": { writable: { value: true } }, "/home/voice": { writable: { value: true } }, "/home": { listable: false } } },
+    sandboxHints: { mountSample: { value: ["bwrap"] } },
+    network: {},
+    tools: {},
+  });
+  assert.equal(violated.axes.files.verdict, "not-fenced", "a writable tree must NOT read as fenced");
+  assert.equal(violated.axes.files.measured, true);
+  assert.ok(violated.axes.files.violations?.some((v) => /writable/.test(v)), "the violation is named, not hidden");
+
+  // And an unmeasured axis (a probe that never saw the paths) is not measured, not denied, not fenced.
+  const unmeasured = measureBoundary({ probe: "sandbox-probe/1", when: "now", filesystem: { dirs: {} }, sandboxHints: {}, network: {}, tools: {} });
+  assert.equal(unmeasured.axes.files.verdict, "not measured");
 });
 
 test("declared-and-booted through the registry, the measured boundary survives the read (probe-written, not a file claim)", async () => {

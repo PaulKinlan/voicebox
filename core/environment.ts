@@ -104,9 +104,9 @@ export function parseEnvironment(raw: unknown): EnvParseResult {
   if (o.kind === "server" && !origin) {
     return { ok: false, refused: "bad-request", why: "a server environment needs an origin — where the page reaches it" };
   }
-  if (o.kind === "fence" && !origin) {
-    // A fence is BOOTED by the host and given its origin after boot; it is not dialed at one the
-    // person already knows. The label is what the person supplies.
+  if (o.kind === "fence") {
+    // A fence is BOOTED by the host and given its origin after boot; asking the caller for one would
+    // be asking for a value that is always discarded. No origin is required — the boot assigns it.
     origin = "booted-by-host";
   }
   if (o.kind !== "browser" && o.kind !== "server" && o.kind !== "fence") {
