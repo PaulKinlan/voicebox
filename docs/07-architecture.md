@@ -87,7 +87,7 @@ Registered resolvers: `gemini`, `script`
 |---|---|---|---|
 | typed in the composer | yes | `public/fused.js` → `POST /api/turn` | `resolveTurn()` (`lib/resolver.mjs`, provider `script`) → `execute()` (`server.mjs`) → for tools, `callTool()` (`lib/extensions.mjs`) |
 | dictated (browser `SpeechRecognition`, no key) | yes — the same route | `public/fused.js` → `POST /api/turn` | the same |
-| spoken to the live model | audio yes; tools **no** | `public/live-voice.js` → `/live` → `lib/live-session.mjs` → the provider | the model's words come back to the page as text frames; the `/live` handler calls neither `resolveTurn()` nor `execute()` |
+| spoken to the live model | audio yes; tools **yes** | `public/live-voice.js` → `/live` → `lib/live-session.mjs` → the provider | the `/live` handler now calls the executor — update this row's prose |
 
 What each live handshake declares, captured from the provider itself: `gemini` → tools: **none**; `openai` → tools: **none**. When a provider starts declaring tools this line changes and the check goes red — that is the moment the row above stops being true.
 
@@ -123,7 +123,7 @@ Verbs the `script` resolver produces, driven: `"create a file called hello.txt w
 
 **What it refuses, by name** — every refusal the code can utter, collected from source:
 * the gate (`core/extensions.ts`): `absent-capability`, `bad-tool-name`, `capability-unmediated`, `duplicate-tool`, `eval-not-a-tool-path`, `exec-absent`, `network-unbounded`, `no-tools`, `under-declared`, `unknown-capability`, `unknown-primitive`
-* the routes and the root seam (`server.mjs`, `core/root.ts`): `audit-unreadable`, `bad-answer`, `bad-request`, `dotfile-refused`, `environment-not-paired`, `host-token-required`, `missing-content`, `not-a-directory`, `not-found`, `outside-root`, `path-missing`, `probe-failed`, `provider-not-configured`, `server-error`, `unauthenticated-call`, `unknown-environment`, `unknown-root-kind`, `unreadable`, `write-error`
+* the routes and the root seam (`server.mjs`, `core/root.ts`): `audit-unreadable`, `bad-answer`, `bad-request`, `dotfile-refused`, `environment-not-paired`, `exec-threw`, `host-token-required`, `missing-content`, `not-a-directory`, `not-found`, `outside-root`, `path-missing`, `probe-failed`, `provider-not-configured`, `server-error`, `unauthenticated-call`, `unknown-command`, `unknown-environment`, `unknown-root-kind`, `unreadable`, `write-error`
 * admitted tools at run time (`lib/extensions.mjs`): `admission-refused`, `bad-redirect`, `bad-url`, `budget-exhausted`, `fetch-failed`, `host-not-allowed`, `not-admitted`, `outside-root`, `over-budget`, `redirect-host-not-allowed`, `redirect-without-location`, `too-many-redirects`, `unknown-primitive`, `unknown-tool`
 
 **Listable at run time** — `GET /api/extensions` answers `{ placement, extensions, proposals, present, catalogueCount }` (probed: placement `machine`, catalogueCount 4); `GET /api/extensions/catalogue` previews the gate's verdict on every stranger before anything is staged; `GET /api/extensions/{proposals|catalogue}/<id>/plan` is the disclosure — source, declared, enforced-by-which-mechanism, what it gets, what it cannot have — before any decision.

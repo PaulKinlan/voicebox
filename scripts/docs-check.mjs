@@ -290,14 +290,15 @@ function liveHandlerReachesExecutor() {
 }
 
 /** The verbs the turn resolver produces — driven, one utterance per verb. */
-function resolverVerbs() {
-  return [
+async function resolverVerbs() {
+  const utterances = [
     "create a file called hello.txt with hi",
     "read hello.txt",
     "list files",
     "create a tool called clock that tells the time",
     "run the tool clock",
-  ].map((utterance) => ({ utterance, verb: resolveTurn(utterance).verb ?? "(unresolved)" }));
+  ];
+  return Promise.all(utterances.map(async (utterance) => ({ utterance, verb: (await resolveTurn(utterance)).verb ?? "(unresolved)" })));
 }
 
 /** The catalogue: every tracked descriptor, and what the REAL gate says about it on this placement. */
@@ -462,7 +463,7 @@ async function blocks() {
       "",
       `What each live handshake declares, captured from the provider itself: ${handshakes.map((h) => "`" + h.name + "` → tools: " + (h.tools === null ? "(not captured)" : h.tools.length ? h.tools.map((t) => "`" + t + "`").join(", ") : "**none**")).join("; ")}. When a provider starts declaring tools this line changes and the check goes red — that is the moment the row above stops being true.`,
       "",
-      `Verbs the \`${health.provider}\` resolver produces, driven: ${resolverVerbs().map((v) => "`\"" + v.utterance + "\"` → `" + v.verb + "`").join(", ")}. \`make-tool\` **proposes** (a pending file the host must admit); \`tool\` calls an **admitted** tool and nothing else.`,
+      `Verbs the \`${health.provider}\` resolver produces, driven: ${(await resolverVerbs()).map((v) => "`\"" + v.utterance + "\"` → `" + v.verb + "`").join(", ")}. \`make-tool\` **proposes** (a pending file the host must admit); \`tool\` calls an **admitted** tool and nothing else.`,
     ].join("\n")),
 
     tools: block("tools", [
