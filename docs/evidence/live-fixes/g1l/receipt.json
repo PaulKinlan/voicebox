@@ -1,0 +1,395 @@
+{
+  "envProvider": "openai",
+  "selectedProvider": "openai",
+  "observations": [
+    {
+      "label": "ready",
+      "browser": {
+        "state": {
+          "phase": "listening",
+          "ready": true,
+          "sessionEnded": false,
+          "model": "gpt-realtime",
+          "gatedFrames": 18,
+          "capture": true,
+          "playbackActive": false,
+          "sinkId": "",
+          "providerError": null,
+          "framesSent": 40,
+          "framesReceived": 0,
+          "framesRejected": 0,
+          "framesIgnoredAfterEnd": 0,
+          "captureError": "",
+          "captureErrorReason": "",
+          "lastError": "",
+          "inputRate": 24000,
+          "provider": "openai",
+          "captureRate": 24000,
+          "rateContradiction": null,
+          "label": "Listening — speak now"
+        },
+        "controls": [
+          {
+            "type": "rate",
+            "inputRate": 24000,
+            "provider": "openai"
+          },
+          {
+            "type": "state",
+            "state": "transport-open",
+            "detail": {
+              "provider": "openai"
+            },
+            "model": "gpt-realtime"
+          },
+          {
+            "type": "state",
+            "state": "ready",
+            "detail": {
+              "gatedFrames": 18,
+              "provider": "openai"
+            },
+            "model": "gpt-realtime"
+          }
+        ]
+      },
+      "wire": [
+        {
+          "provider": "openai",
+          "messages": [
+            {
+              "type": "session.update",
+              "session": {
+                "type": "realtime",
+                "model": "gpt-realtime",
+                "output_modalities": [
+                  "audio"
+                ],
+                "tools": [
+                  {
+                    "type": "function",
+                    "name": "write_file",
+                    "description": "Create or overwrite a file in the active project. Use a plain file name, no directories.",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "the file name, e.g. notes.txt"
+                        },
+                        "content": {
+                          "type": "string",
+                          "description": "the exact text to write into the file"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "content"
+                      ]
+                    }
+                  },
+                  {
+                    "type": "function",
+                    "name": "read_file",
+                    "description": "Read a file's contents from the active project.",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "the file name to read"
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ]
+                    }
+                  },
+                  {
+                    "type": "function",
+                    "name": "list_files",
+                    "description": "List the files in the active project.",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                ],
+                "instructions": "You are the voice of voicebox, a build environment on the user's machine. You can act on the active project with these tools:\n- write_file: Create or overwrite a file in the active project. Use a plain file name, no directories.\n- read_file: Read a file's contents from the active project.\n- list_files: List the files in the active project.\nRules you keep:\n- To create, read or list files you MUST call the tool. Never claim to have done it without the tool call.\n- After each tool call, tell the user the outcome in one short spoken sentence.\n- If a tool result has ok: false, SAY the refusal it names, exactly. 'root-not-declared' means no project folder has been declared yet — say you cannot act until one is, and stop. 'outside-root' means the name tried to leave the project — say so.\n- You have no other capabilities. If asked for anything else, say plainly that you cannot do it yet.",
+                "audio": {
+                  "input": {
+                    "format": {
+                      "type": "audio/pcm",
+                      "rate": 24000
+                    },
+                    "turn_detection": {
+                      "type": "server_vad"
+                    }
+                  },
+                  "output": {
+                    "format": {
+                      "type": "audio/pcm",
+                      "rate": 24000
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "conversation.item.create",
+              "item": {
+                "type": "function_call_output",
+                "call_id": "write-1",
+                "output": "{\"result\":{\"ok\":true,\"action\":\"wrote live.txt (30 bytes)\",\"file\":\"live.txt\",\"root\":{\"kind\":\"machine\",\"path\":\"/tmp/vb-openai-browser-zrf5pp/workspace\",\"environment\":\"env_e15431b5f17a626f\"},\"logged\":2,\"attempt\":1,\"auditLocation\":\"/tmp/vb-openai-browser-zrf5pp/workspace/.audit/\"}}"
+              }
+            },
+            {
+              "type": "response.create"
+            },
+            {
+              "type": "conversation.item.create",
+              "item": {
+                "type": "function_call_output",
+                "call_id": "unknown",
+                "output": "{\"result\":{\"ok\":false,\"refused\":\"unknown-command\",\"error\":\"unknown command: 'not_a_command' — the only commands are in lib/commands.mjs\"}}"
+              }
+            },
+            {
+              "type": "conversation.item.create",
+              "item": {
+                "type": "function_call_output",
+                "call_id": "missing",
+                "output": "{\"result\":{\"ok\":false,\"refused\":\"missing-argument\",\"error\":\"refused: missing-argument\",\"why\":\"write_file was called without 'content' — the call is refused, not repaired: pass the declared arguments exactly as the schema names them (name, content)\"}}"
+              }
+            },
+            {
+              "type": "conversation.item.create",
+              "item": {
+                "type": "function_call_output",
+                "call_id": "malformed",
+                "output": "{\"result\":{\"ok\":false,\"refused\":\"invalid-tool-call\",\"error\":\"invalid-tool-call: expected a function name and JSON object arguments\"}}"
+              }
+            }
+          ],
+          "frames": 22
+        }
+      ]
+    },
+    {
+      "label": "write-and-refusals",
+      "browser": {
+        "state": {
+          "phase": "listening",
+          "ready": true,
+          "sessionEnded": false,
+          "model": "gpt-realtime",
+          "gatedFrames": 18,
+          "capture": true,
+          "playbackActive": false,
+          "sinkId": "",
+          "providerError": null,
+          "framesSent": 72,
+          "framesReceived": 0,
+          "framesRejected": 0,
+          "framesIgnoredAfterEnd": 0,
+          "captureError": "",
+          "captureErrorReason": "",
+          "lastError": "",
+          "inputRate": 24000,
+          "provider": "openai",
+          "captureRate": 24000,
+          "rateContradiction": null,
+          "label": "Listening — speak now"
+        },
+        "controls": [
+          {
+            "type": "rate",
+            "inputRate": 24000,
+            "provider": "openai"
+          },
+          {
+            "type": "state",
+            "state": "transport-open",
+            "detail": {
+              "provider": "openai"
+            },
+            "model": "gpt-realtime"
+          },
+          {
+            "type": "state",
+            "state": "ready",
+            "detail": {
+              "gatedFrames": 18,
+              "provider": "openai"
+            },
+            "model": "gpt-realtime"
+          },
+          {
+            "type": "tool",
+            "calls": [
+              {
+                "name": "write_file",
+                "ok": true,
+                "action": "wrote live.txt (30 bytes)"
+              }
+            ]
+          },
+          {
+            "type": "state",
+            "state": "turn-complete",
+            "detail": {
+              "provider": "openai"
+            },
+            "model": "gpt-realtime"
+          },
+          {
+            "type": "tool",
+            "calls": [
+              {
+                "name": "not_a_command",
+                "ok": false,
+                "action": "unknown command: 'not_a_command' — the only commands are in lib/commands.mjs"
+              }
+            ]
+          },
+          {
+            "type": "tool",
+            "calls": [
+              {
+                "name": "write_file",
+                "ok": false,
+                "action": "refused: missing-argument"
+              }
+            ]
+          },
+          {
+            "type": "text",
+            "role": "model-transcript",
+            "text": "after tool results"
+          }
+        ]
+      },
+      "wire": [
+        {
+          "provider": "openai",
+          "messages": [
+            {
+              "type": "session.update",
+              "session": {
+                "type": "realtime",
+                "model": "gpt-realtime",
+                "output_modalities": [
+                  "audio"
+                ],
+                "tools": [
+                  {
+                    "type": "function",
+                    "name": "write_file",
+                    "description": "Create or overwrite a file in the active project. Use a plain file name, no directories.",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "the file name, e.g. notes.txt"
+                        },
+                        "content": {
+                          "type": "string",
+                          "description": "the exact text to write into the file"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "content"
+                      ]
+                    }
+                  },
+                  {
+                    "type": "function",
+                    "name": "read_file",
+                    "description": "Read a file's contents from the active project.",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "the file name to read"
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ]
+                    }
+                  },
+                  {
+                    "type": "function",
+                    "name": "list_files",
+                    "description": "List the files in the active project.",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                ],
+                "instructions": "You are the voice of voicebox, a build environment on the user's machine. You can act on the active project with these tools:\n- write_file: Create or overwrite a file in the active project. Use a plain file name, no directories.\n- read_file: Read a file's contents from the active project.\n- list_files: List the files in the active project.\nRules you keep:\n- To create, read or list files you MUST call the tool. Never claim to have done it without the tool call.\n- After each tool call, tell the user the outcome in one short spoken sentence.\n- If a tool result has ok: false, SAY the refusal it names, exactly. 'root-not-declared' means no project folder has been declared yet — say you cannot act until one is, and stop. 'outside-root' means the name tried to leave the project — say so.\n- You have no other capabilities. If asked for anything else, say plainly that you cannot do it yet.",
+                "audio": {
+                  "input": {
+                    "format": {
+                      "type": "audio/pcm",
+                      "rate": 24000
+                    },
+                    "turn_detection": {
+                      "type": "server_vad"
+                    }
+                  },
+                  "output": {
+                    "format": {
+                      "type": "audio/pcm",
+                      "rate": 24000
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "conversation.item.create",
+              "item": {
+                "type": "function_call_output",
+                "call_id": "write-1",
+                "output": "{\"result\":{\"ok\":true,\"action\":\"wrote live.txt (30 bytes)\",\"file\":\"live.txt\",\"root\":{\"kind\":\"machine\",\"path\":\"/tmp/vb-openai-browser-zrf5pp/workspace\",\"environment\":\"env_e15431b5f17a626f\"},\"logged\":2,\"attempt\":1,\"auditLocation\":\"/tmp/vb-openai-browser-zrf5pp/workspace/.audit/\"}}"
+              }
+            },
+            {
+              "type": "response.create"
+            },
+            {
+              "type": "conversation.item.create",
+              "item": {
+                "type": "function_call_output",
+                "call_id": "unknown",
+                "output": "{\"result\":{\"ok\":false,\"refused\":\"unknown-command\",\"error\":\"unknown command: 'not_a_command' — the only commands are in lib/commands.mjs\"}}"
+              }
+            },
+            {
+              "type": "conversation.item.create",
+              "item": {
+                "type": "function_call_output",
+                "call_id": "missing",
+                "output": "{\"result\":{\"ok\":false,\"refused\":\"missing-argument\",\"error\":\"refused: missing-argument\",\"why\":\"write_file was called without 'content' — the call is refused, not repaired: pass the declared arguments exactly as the schema names them (name, content)\"}}"
+              }
+            },
+            {
+              "type": "conversation.item.create",
+              "item": {
+                "type": "function_call_output",
+                "call_id": "malformed",
+                "output": "{\"result\":{\"ok\":false,\"refused\":\"invalid-tool-call\",\"error\":\"invalid-tool-call: expected a function name and JSON object arguments\"}}"
+              }
+            }
+          ],
+          "frames": 54
+        }
+      ]
+    }
+  ]
+}

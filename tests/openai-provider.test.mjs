@@ -132,3 +132,63 @@ test("PINCHE: the facade CARRIES this provider's headers to the socket it dials 
   } finally { globalThis.WebSocket = realWS; delete process.env.OPENAI_API_KEY; }
 });
 
+
+// The same command catalogue must survive selection of the second provider.
+import { functionDeclarations, liveSystemInstruction } from "../lib/commands.mjs";
+
+test("openai: tool contract, correlated outputs and response scheduling in both completion orders", () => {
+  process.env.OPENAI_API_KEY = "test-key";
+  try {
+    for (const executorFirst of [true, false]) {
+      const facade = makeFacade(), events = [];
+      const provider = createOpenAIProvider({ transport: facade, emit: e => events.push(e), log() {},
+        tools: functionDeclarations(), systemInstruction: liveSystemInstruction() });
+      const frame = data => facade.fire({ kind: "message", data: JSON.stringify(data) });
+      const sent = () => facade.frames.map(f => JSON.parse(f.payload));
+      facade.fire({ kind: "open" });
+      assert.deepEqual(sent()[0].session.tools, functionDeclarations().map(tool => ({ type: "function", ...tool })));
+      assert.equal(sent()[0].session.instructions, liveSystemInstruction());
+      frame({ type: "session.updated" });
+      frame({ type: "response.created" });
+      for (const id of ["one", "two"]) frame({ type: "response.function_call_arguments.done", call_id: id,
+        name: "list_files", arguments: "{}" });
+      assert.deepEqual(events.filter(e => e.type === "tool-call").flatMap(e => e.calls), [
+        { id: "one", name: "list_files", args: {} }, { id: "two", name: "list_files", args: {} },
+      ]);
+      if (!executorFirst) frame({ type: "response.done" });
+      for (const id of ["one", "two"]) {
+        assert.equal(sent().filter(f => f.type === "response.create").length, 0, "wait for generation AND all tool results");
+        assert.equal(provider.sendToolResponse([{ id, response: { result: { ok: true } } }]), true);
+      }
+      if (executorFirst) {
+        assert.equal(sent().filter(f => f.type === "response.create").length, 0, "do not interrupt the generating response");
+        frame({ type: "response.done" });
+      }
+      assert.equal(sent().filter(f => f.type === "response.create").length, 1);
+      assert.deepEqual(sent().filter(f => f.item?.type === "function_call_output").map(f => f.item), ["one", "two"].map(id => ({
+        type: "function_call_output", call_id: id, output: JSON.stringify({ result: { ok: true } }),
+      })));
+    }
+  } finally { delete process.env.OPENAI_API_KEY; }
+});
+
+test("openai: malformed tool calls refuse by name without running an action", () => {
+  process.env.OPENAI_API_KEY = "test-key";
+  try {
+    const facade = makeFacade(), events = [];
+    createOpenAIProvider({ transport: facade, emit: e => events.push(e), log() {} });
+    for (const [i, args] of ["{", "null", "[]", '"text"'].entries()) {
+      facade.fire({ kind: "message", data: JSON.stringify({ type: "response.function_call_arguments.done",
+        call_id: `bad-${i}`, name: "write_file", arguments: args }) });
+    }
+    facade.fire({ kind: "message", data: JSON.stringify({ type: "response.function_call_arguments.done", name: "write_file", arguments: "{}" }) });
+    assert.equal(events.filter(e => e.type === "tool-call").length, 0);
+    const outputs = facade.frames.map(f => JSON.parse(f.payload)).filter(f => f.item?.type === "function_call_output");
+    assert.equal(outputs.length, 4);
+    outputs.forEach((f, i) => {
+      assert.equal(f.item.call_id, `bad-${i}`);
+      assert.equal(JSON.parse(f.item.output).result.refused, "invalid-tool-call");
+    });
+    assert.match(events.find(e => e.type === "error")?.message, /invalid-tool-call.*call_id/);
+  } finally { delete process.env.OPENAI_API_KEY; }
+});

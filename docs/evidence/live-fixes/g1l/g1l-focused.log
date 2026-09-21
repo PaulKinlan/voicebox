@@ -1,0 +1,16 @@
+✔ OpenAI browser: real function call writes and answers; invalid calls refuse (1051.69294ms)
+✔ seam: the registry now has TWO providers — the claim 'pluggable' has an implementation count (0.422206ms)
+✔ openai: the GA protocol shapes — session.update, 24 kHz PCM, ready on session.updated (0.713696ms)
+✔ openai: the renamed GA events are normalised — output_audio.delta carries the declared rate (0.161384ms)
+✔ openai: a null frame and a bad frame cost a frame, not the conversation (0.170682ms)
+✔ PINCHE: the facade CARRIES this provider's headers to the socket it dials (corrected) (13.626761ms)
+✔ openai: tool contract, correlated outputs and response scheduling in both completion orders (0.623405ms)
+✔ openai: malformed tool calls refuse by name without running an action (0.342396ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1105.001263

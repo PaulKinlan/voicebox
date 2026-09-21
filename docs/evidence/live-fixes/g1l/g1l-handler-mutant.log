@@ -1,0 +1,26 @@
+✖ OpenAI browser: real function call writes and answers; invalid calls refuse (5789.917747ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5851.796897
+
+✖ failing tests:
+
+test at tests/live-openai-browser.test.mjs:100:1
+✖ OpenAI browser: real function call writes and answers; invalid calls refuse (5789.917747ms)
+  AssertionError [ERR_ASSERTION]: No correlated write result within 5000ms
+      at until (file:///home/paulkinlan/worktrees/vb-live-fixes/tests/live-openai-browser.test.mjs:20:10)
+      at async TestContext.<anonymous> (file:///home/paulkinlan/worktrees/vb-live-fixes/tests/live-openai-browser.test.mjs:108:18)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }

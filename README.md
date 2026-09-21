@@ -88,6 +88,12 @@ Registered resolvers: `gemini`, `script`
 
 ## Tool calling: how words become an act, and what tools exist
 
+OpenAI Realtime carries the same command declarations and instruction as Gemini.
+Its function calls run through the shared executor and return correlated results or
+named refusals; after generation and all tool results finish, it requests the spoken
+continuation. Synthetic browser/vendor verification and its withheld-handler negative
+control are recorded in [the live fixes report](docs/live-fixes.md).
+
 Everything in this section is one of three things, and says which: **exists-and-driven** (the
 generated blocks — produced by `scripts/docs-check.mjs` from the code and a real server, and red in
 `npm test` when they drift), **designed-not-built** (marked), or **neither**. A hand-written tool
