@@ -549,8 +549,8 @@ function renderRoot() {
 //   Waiting for review proposed from the conversation or the catalogue — amber, not running
 //   Found here         in the extensions folder, never reviewed — grey, NEVER green, NEVER running
 //   Refused            decided, with the human sentence saying why
-// The page can stage and disclose. It can never approve — the approval is the host's hand
-// (the host token), and that decision is filed as voicebox-beads-t80 for Paul.
+// The page can stage and disclose, but cannot approve alone: a person must copy a one-use
+// code from the host console. The long-lived host token never enters the page.
 // PLAIN LANGUAGE RULE: internal rule ids never reach this panel. Where the API gives a human
 // sentence (the `why`), that is what the person reads; where it gives a state name, the page
 // renders the state's meaning instead.
@@ -608,6 +608,70 @@ function extSection(listEl, rows, emptyText) {
   for (const row of rows) listEl.appendChild(row);
 }
 
+function extensionApproval(id) {
+  const details = document.createElement("details");
+  details.className = "ext-plan";
+  const summary = document.createElement("summary");
+  summary.textContent = "Review and approve on the host";
+  const note = document.createElement("p");
+  note.setAttribute("role", "status");
+  note.textContent = "Request a code, review the plan in the server terminal, then enter the code here. It expires after two minutes and works once. The host token stays on the machine.";
+  const plan = document.createElement("pre");
+  const ask = document.createElement("button");
+  ask.type = "button";
+  ask.className = "quiet";
+  ask.textContent = "Request approval code";
+  const form = document.createElement("form");
+  form.hidden = true;
+  const label = document.createElement("label");
+  label.textContent = "One-time code from the server terminal ";
+  const input = document.createElement("input");
+  input.type = "password";
+  input.inputMode = "numeric";
+  input.autocomplete = "one-time-code";
+  input.maxLength = 8;
+  input.pattern = "[0-9]{8}";
+  input.required = true;
+  label.appendChild(input);
+  const approve = document.createElement("button");
+  approve.type = "submit";
+  approve.className = "quiet";
+  approve.textContent = "Approve extension";
+  form.append(label, approve);
+  let requestId;
+  const post = (route, body) => request(`/api/extensions/${route}`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+  ask.addEventListener("click", async () => {
+    ask.disabled = true;
+    form.hidden = true;
+    input.value = "";
+    try {
+      const r = await post("approval-request", { id });
+      requestId = r.requestId;
+      plan.textContent = JSON.stringify(r.plan, null, 2);
+      note.textContent = "Review this same plan in the server terminal. Enter its eight-digit code only if you approve. It expires in two minutes.";
+      form.hidden = false;
+      input.focus();
+    } catch (err) { note.textContent = err.message; }
+    finally { ask.disabled = false; }
+  });
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    approve.disabled = true;
+    const code = input.value;
+    input.value = "";
+    try {
+      await post("approve", { id, requestId, code });
+      if (els.extNote) els.extNote.textContent = "You approved this extension with the host's one-time code. It is now running.";
+      await renderExtensions();
+    } catch (err) { note.textContent = err.message; }
+    finally { approve.disabled = false; }
+  });
+  details.append(summary, note, plan, ask, form);
+  return details;
+}
+
 async function renderExtensions() {
   if (!els.extRunning) return;
   try {
@@ -621,23 +685,16 @@ async function renderExtensions() {
     extSection(els.extRunning, running.map((e) =>
       extRow({ name: e.name, dotState: "true", stateText: "Running", detail: plainCaps(e.declared, e.bounds) })), "Nothing running yet.");
 
-    extSection(els.extWaiting, waiting.map((p) => {
-      const disclose = document.createElement("details");
-      disclose.className = "ext-plan";
-      const summary = document.createElement("summary");
-      summary.textContent = "What is it, and what would it get?";
-      disclose.appendChild(summary);
-      const body = document.createElement("p");
-      body.textContent = plainCaps(p.declared, p.bounds ?? {});
-      disclose.appendChild(body);
-      return extRow({ name: p.name, dotState: "pending", stateText: "Waiting for the host's review", disclose });
-    }), "Nothing is waiting for review.");
+    extSection(els.extWaiting, waiting.map((p) =>
+      extRow({ name: p.name, dotState: "pending", stateText: "Waiting for the host's review", disclose: extensionApproval(p.id) })
+    ), "Nothing is waiting for review.");
 
     // PRESENT, NOT RUNNING: visible, honest, and never green. A file the host has never
     // reviewed is not a running tool, and this panel must never blur that difference.
     extSection(els.extPresent, present.map((p) =>
       extRow({ name: p.name ?? p.id, dotState: "present", stateText: "Found here · never reviewed · not running",
-               detail: "Someone placed this file in the extensions folder. It has never run. Reviewing it is the host's decision." })), "No unreviewed files here.");
+               detail: "Someone placed this file in the extensions folder. It has never run. Reviewing it is the host's decision.",
+               disclose: extensionApproval(p.id) })), "No unreviewed files here.");
 
     extSection(els.extRefused, refused.map((p) =>
       extRow({ name: p.name, dotState: "false", stateText: "Refused", detail: p.refusal?.why ?? "The host declined this extension." })), "Nothing was refused.");
@@ -1327,6 +1384,7 @@ on(els.extsOpen, "click", () => {
   els.exts.showModal();
   void renderExtensions();
 });
+on(els.extsClose, "click", () => els.exts?.close());
 on(els.exts, "close", () => {
   els.extsOpen?.setAttribute("aria-expanded", "false");
 });

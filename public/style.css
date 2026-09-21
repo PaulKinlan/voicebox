@@ -332,4 +332,8 @@ body:has(#reader[data-state="ready"]) #file-body { max-height: 26svh; }
 .ext-plan { margin: 6px 0 0; }
 .ext-plan summary { cursor: pointer; font-size: 12px; color: #9a9aab; }
 .ext-plan p { margin: 6px 0 0; font-size: 12px; line-height: 1.5; }
+.ext-plan pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.ext-plan form { display: grid; gap: 8px; margin-top: 8px; }
+.ext-plan form[hidden] { display: none; }
+.ext-plan input { max-width: 100%; box-sizing: border-box; }
 .env-item.env-empty { color: #6f6f7c; font-size: 12px; }

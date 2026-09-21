@@ -1315,10 +1315,10 @@ async function handle(req, res) {
   // the RESOLVED PLAN — the extension's source, what it declares, what will
   // be enforced and by which mechanism, what it cannot have — before the act
   // runs. The page (astra's bead) renders this; the API is the surface.
-  const readJson = () => new Promise((resolve) => {
-    let body = "";
-    req.on("data", (c) => (body += c));
-    req.on("end", () => { try { resolve(JSON.parse(body || "{}")); } catch { resolve(null); } });
+  const readJson = (maxBytes = Infinity) => new Promise((resolve) => {
+    let body = "", bytes = 0;
+    req.on("data", (c) => { bytes += c.length; if (bytes <= maxBytes) body += c; });
+    req.on("end", () => { try { resolve(bytes > maxBytes ? null : JSON.parse(body || "{}")); } catch { resolve(null); } });
   });
 
   if (req.method === "GET" && url.pathname === "/api/extensions") {
@@ -1350,6 +1350,21 @@ async function handle(req, res) {
     }
     const r = extensions.sideload(body.id);
     return r.ok ? json(res, 200, { ...r, note: "staged as a pending proposal — NOT loaded; the host admits it" }) : json(res, 400, r);
+  }
+  if (req.method === "POST" && ["/api/extensions/approval-request", "/api/extensions/approve"].includes(url.pathname)) {
+    // JSON-only stops cross-site form submissions; no CORS permission is granted. The console
+    // code, not an Origin claim or page-held host credential, authorizes this specific plan.
+    if (req.headers["content-type"]?.split(";")[0].trim() !== "application/json") {
+      return json(res, 415, { ok: false, refused: "approval-json-required", why: "Send the approval request as JSON." });
+    }
+    const body = await readJson(4096);
+    if (typeof body?.id !== "string" || !/^[a-z0-9_-]{1,100}$/.test(body.id)) {
+      return json(res, 400, { ok: false, refused: "approval-invalid-id", why: "Choose an extension from the review list." });
+    }
+    const r = url.pathname.endsWith("/approval-request")
+      ? extensions.requestApproval(body.id)
+      : extensions.approveWithCode(body.id, body.requestId, body.code);
+    return json(res, r.ok ? 200 : 403, r);
   }
   if (req.method === "POST" && url.pathname === "/api/extensions/admit") {
     // Admission is the HOST's act (bead voicebox-beads-m2i): the route requires

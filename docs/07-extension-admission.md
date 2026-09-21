@@ -130,6 +130,39 @@ Two driven findings on `prove/n10-admission` closed in the same branch:
   exactly that, never live. The sweep-in (a never-admitted dropped file going live at the
   next host-triggered reload) is closed; driven.
 
+## One-time human approval (2026-09-21, t80)
+
+The page's **Request approval code** sends JSON `{id}` to
+`POST /api/extensions/approval-request`. The host prints the resolved plan and an eight-digit
+code to its console. The response contains only `{requestId, expiresAt, plan, ok}` — never the
+code or host token. The person checks the terminal's plan before entering the code in the page,
+which sends `{id, requestId, code}` to `POST /api/extensions/approve`.
+
+`lib/extension-approval.mjs` binds a code to that exact plan and admission decision, expires it
+in two minutes, allows at most five guesses, and consumes it before acting. Reuse refuses
+`approval-used`, expiry `approval-expired`, and a changed descriptor or gate
+`approval-plan-changed`. At most 32 recent requests are retained; a slot expires four minutes
+after issuance (two minutes for use, then two for named expiry/replay refusals). A busy host
+refuses `approval-rate-limited`; after cleanup or restart an old request is `approval-unknown`.
+Requests require JSON and have a 4 KB body limit. No model tool issues or redeems codes.
+
+Before admission, the workspace audit records `human-approved-extension`, the reviewed plan,
+`decision: confirm`, and actor `human-at-host` / `host-console-code`, with the request id as
+session. An unwritable audit refuses `approval-audit-unwritable` and admits nothing; the code
+is still consumed. Successful admission also carries that actor, then runs the existing gate,
+ledger and registry path. The old host-token route is unchanged.
+
+This proves possession of a host-console code, **not a named person's identity**. Protect server
+stdout and log files from agents, extensions and other users: anyone reading a live code can
+redeem it. Codes are not persisted or sent in audit entries; restart invalidates them. This is
+single-host process memory, not cross-server approval. Existing workspace/audit and ledger
+ownership limits below still apply. Refusing a plan is still available through the shell's
+host-token route; the page's new button only approves.
+
+Runnable checks: `node --test tests/extension-approval.test.mjs tests/extension-approval-ui.test.mjs`.
+For real elapsed expiry through Chromium, run the UI test with
+`VOICEBOX_TEST_APPROVAL_EXPIRY=1` (adds two minutes); the normal unit check uses an injected clock.
+
 ## The ledger's boundary, stated so nobody builds on it (2026-09-20)
 
 **`.ledger.jsonl` is unauthenticated JSONL appended by the host's admit, keyed by id, with no

@@ -170,8 +170,8 @@ every X.
 
 **What it refuses, by name** — literal refusal declarations collected from these sources:
 * the gate (`core/extensions.ts`): `absent-capability`, `bad-tool-name`, `capability-unmediated`, `duplicate-tool`, `eval-not-a-tool-path`, `exec-absent`, `network-unbounded`, `no-tools`, `under-declared`, `unknown-capability`, `unknown-primitive`
-* the routes and the root seam (`server.mjs`, `core/root.ts`): `audit-unreadable`, `bad-answer`, `bad-request`, `dotfile-refused`, `environment-not-paired`, `exec-threw`, `host-token-required`, `missing-content`, `not-a-directory`, `not-found`, `outside-root`, `path-missing`, `probe-failed`, `protected-audit`, `provider-not-configured`, `server-error`, `unauthenticated-call`, `unknown-command`, `unknown-environment`, `unknown-root-kind`, `unreadable`, `write-error`
-* admitted tools at run time (`lib/extensions.mjs`): `admission-refused`, `bad-redirect`, `bad-url`, `budget-exhausted`, `fetch-failed`, `host-not-allowed`, `not-admitted`, `outside-root`, `over-budget`, `protected-audit`, `redirect-host-not-allowed`, `redirect-without-location`, `too-many-redirects`, `unknown-primitive`, `unknown-tool`
+* the routes and the root seam (`server.mjs`, `core/root.ts`): `approval-invalid-id`, `approval-json-required`, `audit-unreadable`, `bad-answer`, `bad-request`, `dotfile-refused`, `environment-not-paired`, `exec-threw`, `host-token-required`, `missing-content`, `not-a-directory`, `not-found`, `outside-root`, `path-missing`, `probe-failed`, `protected-audit`, `provider-not-configured`, `server-error`, `unauthenticated-call`, `unknown-command`, `unknown-environment`, `unknown-root-kind`, `unreadable`, `write-error`
+* admitted tools at run time (`lib/extensions.mjs`): `admission-refused`, `approval-audit-unwritable`, `approval-no-proposal`, `approval-plan-changed`, `approval-unavailable`, `bad-redirect`, `bad-url`, `budget-exhausted`, `fetch-failed`, `host-not-allowed`, `not-admitted`, `outside-root`, `over-budget`, `protected-audit`, `redirect-host-not-allowed`, `redirect-without-location`, `too-many-redirects`, `unknown-primitive`, `unknown-tool`
 * task admission/readback (`core/tasks.ts`, `lib/tasks.mjs`): `agent-required`, `executor-unavailable`, `invalid-task`, `invalid-task-address`, `invalid-task-context`, `task-audit-unavailable`, `task-authority-field`, `task-call-id-conflict`, `task-call-id-required`, `task-capacity-exhausted`, `task-context-unavailable`, `task-deadline`, `task-environment-changed`, `task-environment-unverified`, `task-input-over-budget`, `task-invalid-result`, `task-not-found`, `task-output-over-budget`, `task-owner-mismatch`, `task-owner-unconfirmed`, `task-owner-unverified`, `task-persistence-failed`, `task-root-replaced`, `task-root-unavailable`, `unbounded-executor`, `unknown-tool`
 
 **Listable at run time** — `GET /api/extensions` answers `{ placement, extensions, proposals, present, catalogueCount }` (probed: placement `machine`, catalogueCount 4); `GET /api/extensions/catalogue` previews the gate's verdict on every stranger before anything is staged; `GET /api/extensions/{proposals|catalogue}/<id>/plan` is the disclosure — source, declared, enforced-by-which-mechanism, what it gets, what it cannot have — before any decision.
@@ -193,7 +193,13 @@ A tool is a **descriptor** — data, never code — carrying `id`, `name`, `capa
    file in `proposals/` under the workspace. Nothing loads.
 2. **Read the plan.** `GET /api/extensions/proposals/<id>/plan` — what it declares, what would be
    enforced and by which mechanism, what it would be handed, what it cannot have.
-3. **Admit — the host's act.** `POST /api/extensions/admit {id, confirm: true, decision: "admit"}`
+3. **Approve with a one-time host code.** In **Extensions → Waiting for review** (or **Found here**),
+   open **Review and approve on the host**, then **Request approval code**. Review the exact plan
+   in the server terminal and enter its eight-digit code in the page. It expires after two minutes,
+   works once, and cannot approve a changed plan. The human decision is recorded before admission;
+   the page never receives the host token. Keep server output private: anyone reading it can use
+   an unexpired code. Restarting the server invalidates outstanding codes.
+   The existing shell alternative remains: `POST /api/extensions/admit {id, confirm: true, decision: "admit"}`
    with the `x-voicebox-host-token` header, whose value is the file `.host-token` (mode 0600) in the
    extension directory. The page cannot read that file; your shell can. Admission re-runs the same
    `admit()` the plan showed, moves the descriptor into the host directory, records it in
