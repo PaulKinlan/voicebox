@@ -50,7 +50,11 @@ const audioClient = createAudioClient({
     if (voiceState) voiceState.textContent = info?.fatal ? `Live voice failed: ${error.message}` : `Ignored a malformed frame: ${error.message}`;
   },
   onDiagnostic: (d) => {
-    if (d?.kind === "socket-closed" && voiceState) voiceState.textContent = "Live voice disconnected · mic off";
+    if (d?.kind === "socket-closed" && voiceState) {
+      voiceState.textContent = capturing
+        ? "Live voice disconnected: machine-closed · mic off"
+        : "Live voice disconnected · mic off";
+    }
   },
 });
 
@@ -67,10 +71,14 @@ client = audioClient;
 async function explainFailedUpgrade() {
   try {
     const response = await fetch("/api/health", { cache: "no-store" });
-    if (!response.ok) return { text: `the server answered ${response.status} for /api/health, so its /live route is not available`, transient: false };
-    return { text: "the server is running but refused the /live upgrade", transient: false };
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      if (body?.refused) return { text: `${body.refused} (fix the file)`, transient: false };
+      return { text: `the server answered ${response.status} for /api/health (machine-refused)`, transient: false };
+    }
+    return { text: "the server is running but refused the /live upgrade (machine-refused)", transient: false };
   } catch {
-    return { text: "the local server is not answering — it may be restarting", transient: true };
+    return { text: "the local server is not answering (machine-unreachable — fix the host)", transient: true };
   }
 }
 
@@ -84,9 +92,9 @@ async function startLive() {
     return;
   }
   await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("no response to the /live upgrade within 4s")), 4000);
+    const timer = setTimeout(() => reject(new Error("machine-timeout (no response to the /live upgrade within 4s)")), 4000);
     socket.onopen = () => { clearTimeout(timer); resolve(); };
-    socket.onerror = () => { clearTimeout(timer); reject(new Error("the /live upgrade failed")); };
+    socket.onerror = () => { clearTimeout(timer); reject(new Error("machine-unreachable (the /live upgrade failed)")); };
   }).then(
     () => {
       audioClient.attachSocket(socket);
