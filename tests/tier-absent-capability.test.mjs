@@ -63,7 +63,12 @@ const ALL_DENIED = fixture((r) => {
   for (const name of Object.keys(r.tools)) r.tools[name] = { error: `${name}: not present` };
   r.filesystem.mountsReadable = { value: false, lines: 22 };
   r.filesystem.canReadPasswd = { value: false };
-  r.filesystem.dirs = { "/": { listable: false }, "/home/voice": { listable: false } };
+  // BOTH halves pinned: a fixture that omits `writable` cannot tell a refusal that quotes the field which
+  // fired from one that quotes a neighbour — which is the defect this pin exists to catch.
+  r.filesystem.dirs = {
+    "/": { listable: false, writable: { value: false } },
+    "/home/voice": { listable: false, writable: { value: false } },
+  };
   for (const field of Object.keys(r.network)) r.network[field] = { ok: false, error: "ECONNREFUSED" };
 });
 
@@ -128,14 +133,25 @@ test("NEGATIVE CONTROL: when the axis IS denied, no CONTRADICTION refusal fires 
   // may only ever be the ABSENCE sentence — never the contradiction one. That is what makes this a gate:
   // it refuses for the reason it measured, and a report where the fence held must never be read as a fence
   // that leaked.
-  const CONTRADICTION = /RAN:|REACHED out|READ outside|claims .* and its own probe/i;
+  // The accusers, precisely: "found the opposite" (files), "RAN:" (processes), "REACHED out" (network).
+  // NOT "claims … and its own probe could not tell", which is the UNVERIFIED sentence — a false positive
+  // here would have hidden exactly the distinction the polarity decision turns on.
+  const CONTRADICTION = /found the opposite|RAN:|REACHED out/i;
 
+  // FILES still verify the deny: an unreadable home and a false mount table are a satisfied claim.
   const readVerdict = decide(ALL_DENIED, readAct);
-  const netVerdict = decide(ALL_DENIED, netAct);
   assert.equal(readVerdict.ok, true, `a read act on a denied file axis must pass, got ${JSON.stringify(readVerdict)}`);
-  assert.equal(netVerdict.ok, true, `a network act on a denied network axis must pass, got ${JSON.stringify(netVerdict)}`);
   assert.ok(typeof readVerdict.why === "string" && readVerdict.why.length > 10, "the pass says what it saw");
-  assert.ok(typeof netVerdict.why === "string" && netVerdict.why.length > 10, "…both of them");
+
+  // NETWORK inverts (coord's polarity decision, 2026-09-21): a DEAD egress is UNMEASURED-BY-BROKENNESS, not
+  // a bounded network, so it refuses too — and it must refuse with THAT sentence, never by accusing a fence
+  // that held.
+  const netVerdict = decide(ALL_DENIED, netAct);
+  assert.equal(netVerdict.ok, false, `a dead egress must not be read as a bounded network: ${JSON.stringify(netVerdict)}`);
+  assert.equal(netVerdict.axis, "passthrough-network");
+  assert.ok(!CONTRADICTION.test(netVerdict.why), `the refusal must not accuse a fence that held: ${netVerdict.why}`);
+  assert.match(netVerdict.why, /UNVERIFIED|could not tell a closed door from a broken resolver/i, "it says the claim is unverified rather than satisfied");
+  assert.match(netVerdict.remedy, /IP-literal control/i, "and the remedy names what would make it verifiable");
 
   const execVerdict = decide(ALL_DENIED, execAct);
   assert.equal(execVerdict.ok, false, "a spawn with nothing to spawn is refused");
@@ -157,9 +173,12 @@ test("UNMEASURED is not a pass either: a report that cannot answer refuses in it
 
 test("an act kind with no axis mapped is a gap in the TABLE, named as one", () => {
   const verdict = decide(ALL_DENIED, { kind: "external", target: "" });
-  // `external` IS mapped (deny-files is not right for it — passthrough-network is), so this asserts the
-  // mapping is real rather than falling through to the gap. The gap sentence is exercised via a cast.
-  assert.equal(verdict.ok, true, "an external act on a fully-denied report passes");
+  // `external` IS mapped — to passthrough-network — so it inherits the polarity decision: on this probe
+  // family a network-shaped act cannot be verified, and it refuses with the UNVERIFIED sentence rather than
+  // falling through the gap or passing on a dead egress.
+  assert.equal(verdict.ok, false, "an external act leans on the network axis, which this probe family cannot verify");
+  assert.equal(verdict.axis, "passthrough-network", "and it says the mapping is real rather than falling through to the gap");
+  assert.match(verdict.why, /UNVERIFIED|could not tell a closed door/i, "refused for the measured reason, not a table gap");
   const gap = decide(ALL_DENIED, { kind: "teleport", target: "" });
   assert.equal(gap.ok, false);
   assert.match(gap.why, /no boundary axis is mapped/i, "an unmapped kind is named as a table gap, not waved through");
@@ -193,4 +212,75 @@ test("THE TWO HALVES SPEAK THE SAME IDIOM: the table's `absent-capability` rule 
   const explained = decide(ALL_DENIED, { kind: "exec", target: "/work/x" });
   assert.notEqual(explained.why, rule.why, "decide() must not simply echo the generic sentence — it has the measurement to do better");
   assert.match(explained.why, /no process mechanism|unmeasured/i, "it names what was looked at");
+});
+
+test("FIX 1: the evidence line quotes the field that FIRED, not a neighbour that happens to be false", () => {
+  // Driven by the review, and it is this bead's own defect class inside the refusal: with mounts and the
+  // listing half denied but the WRITABLE half true, CONTRADICTION fired (the two halves are OR'd) and the
+  // why-string printed `listable = true` — a measurement that was false.
+  const verdict = decide(
+    fixture((r) => {
+      r.filesystem.mountsReadable = { value: false, lines: 22 };
+      r.filesystem.canReadPasswd = { value: false };
+      r.filesystem.dirs["/home/voice"] = { listable: false, writable: { value: true } };
+    }),
+    readAct,
+  );
+  assert.equal(verdict.ok, false, "a writable home is a readable home for this purpose");
+  assert.match(verdict.why, /writable\.value = true/, "the fired field is the one quoted");
+  assert.ok(!/listable = true/.test(verdict.why), `and the false one is not: ${verdict.why}`);
+  assert.match(verdict.why, /the writable half, not the listing half/, "the distinction is said out loud, because it is the whole fix");
+});
+
+test("FIX 2a: an unmeasured SUB-FIELD refuses, even when the rest of the axis was measured", () => {
+  const verdict = decide(
+    fixture((r) => {
+      r.filesystem.mountsReadable = { value: false, lines: 22 };
+      r.filesystem.dirs["/home/voice"] = { listable: false, writable: { value: false } };
+      delete r.filesystem.canReadPasswd; // the probe did not look — and "did not look" is not "denied"
+    }),
+    readAct,
+  );
+  assert.equal(verdict.ok, false, `a report missing canReadPasswd must not pass: ${JSON.stringify(verdict)}`);
+  assert.match(verdict.why, /filesystem\.canReadPasswd/, "the missing field is named");
+  assert.match(verdict.why, /unmeasured/i, "and the refusal says which kind of gap it is");
+});
+
+test("FIX 2b: an ABSENT mount measurement refuses rather than being read as a closed mount table", () => {
+  const verdict = decide(
+    fixture((r) => {
+      delete r.filesystem.mountsReadable;
+      r.filesystem.dirs["/home/voice"] = { listable: false, writable: { value: false } };
+      r.filesystem.canReadPasswd = { value: false };
+    }),
+    readAct,
+  );
+  assert.equal(verdict.ok, false, `an unmeasured mount table must not pass: ${JSON.stringify(verdict)}`);
+  assert.match(verdict.why, /filesystem\.mountsReadable/, "named");
+});
+
+test("FIX 3: a DNS-broken egress is refused as BROKENNESS, with the field evidence and the fence that proved it", () => {
+  // The measured case: the retained fence's DNS was broken at probe time (EAI_AGAIN) so nothing was reached,
+  // and the same fence reached out on port 80 BY NAME once DNS worked. "Did not reach" is not "denied".
+  const verdict = decide(
+    fixture((r) => {
+      r.network.outboundTcp443IpLiteral = { ok: false, error: "timed out after 4000ms", ms: 4002 };
+      r.network.outboundTcp80ByName = { ok: false, error: "EAI_AGAIN", ms: 5 };
+      r.network.cloudMetadataService = { ok: false, error: "EAI_AGAIN", ms: 3 };
+    }),
+    netAct,
+  );
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.axis, "passthrough-network");
+  assert.match(verdict.why, /EAI_AGAIN/, "the evidence quotes the measured errors");
+  assert.match(verdict.why, /name resolution, which is brokenness, not a fence/i, "and names what kind of failure it is");
+  assert.match(verdict.why, /reached out by name once DNS worked/i, "citing the fence that proved the difference");
+  assert.ok(!/REACHED out/.test(verdict.why), "this is not the contradiction sentence");
+});
+
+test("FIX 2c (processes): a tool list that did not look for the mechanisms is unmeasured, not denial", () => {
+  const verdict = decide({ tools: { curl: { value: "curl 8.1" } } }, execAct);
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.axis, "deny-processes");
+  assert.match(verdict.why, /none of the mechanisms this axis depends on/, "the gap is named as a gap in the LOOKING");
 });

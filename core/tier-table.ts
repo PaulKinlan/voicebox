@@ -150,6 +150,24 @@ const PROCESS_MECHANISMS = ["sh", "bash", "node", "deno", "python3", "bwrap", "d
 const OUTBOUND_FIELDS = ["outboundTcp443IpLiteral", "outboundTcp80ByName", "cloudMetadataService"];
 
 /**
+ * WHAT A PASS MEANS, PER AXIS — the caller is entitled to know before it trusts `ok: true`.
+ *
+ *   · deny-files and deny-processes VERIFY THE DENY. A claimed deny meeting a path that was READ, or a
+ *     binary that RAN, is CONTRADICTED and refused with the measurement quoted. A claimed deny meeting an
+ *     unreadable path, or no runnable binary, is satisfied — that is what a pass means here.
+ *
+ *   · passthrough-network CANNOT BE VERIFIED TODAY, only contradicted. Egress that is ALIVE is refused (the
+ *     claim is contradicted). Egress that is DEAD is refused TOO, and that is the point: "did not reach"
+ *     conflates DENIED-BY-BOUNDARY with BROKEN-AND-DIDN'T-REACH. Measured on the only real fence we have —
+ *     its DNS was broken at probe time (EAI_AGAIN), so the report could not tell a closed door from a
+ *     missing resolver, and the same fence reached out on port 80 BY NAME once DNS worked. A network pass
+ *     needs a probe that distinguishes denied from broken (an IP-literal control beside the name lookup);
+ *     until one exists this axis refuses in both directions and says which one it saw.
+ *
+ * Every branch below is therefore a statement about a MEASUREMENT, and the refusal quotes the field that
+ * fired — never a different field that happens to be in the same report.
+ */
+/**
  * Decide whether the MEASURED boundary covers this act.
  *
  * Returns `{ ok: true, axis, why }` when the environment can back the act, or the named refusal when it
@@ -188,6 +206,19 @@ export function decide(report: BoundaryReport, act: Act): { ok: true; axis: Boun
           "do not rely on a process deny this fence does not provide: bwrap bounds which binary runs, not what it can do. " +
           "The fence must deny the interpreter (sh/node/python) rather than the wrapper, or the act must run in an " +
           "environment whose report shows no process mechanism at all.",
+      };
+    }
+    const lookedFor = PROCESS_MECHANISMS.filter((name) => report.tools?.[name] !== undefined);
+    if (lookedFor.length === 0 && report.tools && Object.keys(report.tools).length > 0) {
+      return {
+        ok: false,
+        refused: "absent-capability",
+        axis,
+        why:
+          `this environment's report lists tools but none of the mechanisms this axis depends on ` +
+          `(${PROCESS_MECHANISMS.slice(0, 6).join(", ")}…), so whether a process mechanism exists here is ` +
+          `unmeasured — and a tool list that did not look is not a denial.`,
+        remedy: "the self-probe must attempt each process mechanism and record it (value when it ran, error when it is absent); re-probe before assuming a process boundary",
       };
     }
     const measured = report.tools && Object.keys(report.tools).length > 0;
@@ -239,35 +270,83 @@ export function decide(report: BoundaryReport, act: Act): { ok: true; axis: Boun
         remedy: "the self-probe must attempt the outbound checks and record them (ok: false with an error, or ok: true); re-probe before assuming a bounded network",
       };
     }
-    return { ok: true, axis, why: "the outbound checks in this environment's own report did not reach anything" };
-  }
-
-  // deny-files
-  const fs = report.filesystem ?? {};
-  const home = typeof fs.home === "string" ? fs.home : null;
-  const readableHome = home ? fs.dirs?.[home]?.listable === true || fs.dirs?.[home]?.writable?.value === true : false;
-  if (fs.mountsReadable?.value === true || readableHome) {
+    // FIX 3 — THE POLARITY, decided as CONTAINMENT (coord, 2026-09-21). "Did not reach anything" is NOT a
+    // network boundary: it conflates DENIED-BY-BOUNDARY with BROKEN-AND-DIDN'T-REACH. Measured on the only
+    // real fence we have: its DNS was BROKEN at probe time (EAI_AGAIN on the by-name check), and the same
+    // fence went on to REACH OUT on port 80 by name once DNS worked. A tier claiming a bounded network,
+    // meeting a dead egress, is therefore not verified — it is unmeasured by brokenness, and it says so.
+    const deadEvidence = OUTBOUND_FIELDS.map(
+      (field) => `${field}: ${report.network?.[field]?.error ?? `ok=${String(report.network?.[field]?.ok)}`}`,
+    ).join("; ");
+    const dnsBroke = OUTBOUND_FIELDS.some((field) => /EAI_AGAIN|ENOTFOUND|getaddrinfo|DNS/i.test(String(report.network?.[field]?.error ?? "")));
     return {
       ok: false,
       refused: "absent-capability",
       axis,
       why:
-        `this environment claims files are scoped, and its own probe READ outside the act's root: ` +
-        `${fs.mountsReadable?.value === true ? `filesystem.mountsReadable = true across ${fs.mountsReadable?.lines ?? "?"} mount lines` : `filesystem.dirs[${JSON.stringify(home)}].listable = true`}` +
-        `${fs.canReadPasswd?.value === true ? ", and /etc/passwd was readable" : ""}`,
+        `this environment claims the network is bounded, and its own probe could not tell a closed door from a ` +
+        `broken resolver: nothing was reached (${deadEvidence}), so the claim is UNVERIFIED rather than ` +
+        `satisfied${dnsBroke ? " — and the failure is name resolution, which is brokenness, not a fence: the same fence reached out by name once DNS worked" : ""}.`,
       remedy:
-        "scope the root: a readable home or a listable mount table is not a deny. Bind only the act's root into the " +
-        "fence, or run the act where the report shows mountsReadable false.",
+        "re-probe with a working resolver AND an IP-literal control beside the name lookup, so 'denied' and " +
+        "'broken' are distinguishable; until a probe can tell them apart this axis is not verifiable and the " +
+        "act belongs where a fence's egress policy is measured directly.",
     };
   }
-  const filesMeasured = fs.mountsReadable !== undefined || Object.keys(fs.dirs ?? {}).length > 0;
-  if (!filesMeasured) {
+
+  // deny-files
+  const fs = report.filesystem ?? {};
+  const home = typeof fs.home === "string" ? fs.home : null;
+  const homeLabel = home === null ? "(no home reported)" : JSON.stringify(home);
+
+  // FIX 2a: EVERY SUB-MEASUREMENT THE DENY DEPENDS ON must exist. An axis-level "unmeasured is not denied"
+  // was not enough — a report could carry `mounts` and `dirs` and say nothing about passwd readability, and
+  // the axis passed on the strength of the fields that happened to be present.
+  const missing: string[] = [];
+  if (fs.mountsReadable === undefined) missing.push("filesystem.mountsReadable");
+  if (fs.canReadPasswd === undefined) missing.push("filesystem.canReadPasswd");
+  if (home === null || fs.dirs?.[home] === undefined) missing.push(`filesystem.dirs[${homeLabel}]`);
+  if (missing.length > 0) {
     return {
       ok: false,
       refused: "absent-capability",
       axis,
-      why: "this environment's report carries no filesystem measurement, so the file boundary is unmeasured — and unmeasured is not scoped",
-      remedy: "the self-probe must list the directories it can see and whether the mount table is readable; re-probe before assuming a scoped root",
+      why:
+        `this environment's report does not measure ${missing.join(", ")}, so the file boundary is unmeasured ` +
+        `in the place the act depends on it — and unmeasured is not scoped.`,
+      remedy:
+        "the self-probe must report every field this axis reads (mountsReadable, canReadPasswd, and the home " +
+        "directory's listable/writable halves); re-probe before assuming a scoped root.",
+    };
+  }
+
+  // FIX 1: THE EVIDENCE LINE QUOTES THE FIELD THAT FIRED. It used to OR `listable` with `writable` and then
+  // print `listable = true` — naming a measurement that was FALSE when only the writable half fired. A
+  // refusal whose evidence misreports its own trigger is this bead's defect class, inside the refusal.
+  const fileTriggers: string[] = [];
+  if (fs.mountsReadable?.value === true) {
+    fileTriggers.push(`filesystem.mountsReadable = true across ${fs.mountsReadable?.lines ?? "?"} mount lines`);
+  }
+  if (fs.dirs?.[home as string]?.listable === true) {
+    fileTriggers.push(`filesystem.dirs[${homeLabel}].listable = true`);
+  }
+  if (fs.dirs?.[home as string]?.writable?.value === true) {
+    fileTriggers.push(`filesystem.dirs[${homeLabel}].writable.value = true (the writable half, not the listing half)`);
+  }
+  if (fs.canReadPasswd?.value === true) {
+    fileTriggers.push("filesystem.canReadPasswd.value = true — /etc/passwd was readable");
+  }
+  if (fileTriggers.length > 0) {
+    return {
+      ok: false,
+      refused: "absent-capability",
+      axis,
+      why:
+        `this environment claims files are scoped, and its own probe found the opposite: ` +
+        `${fileTriggers.join("; ")}. A readable (or writable) path outside the act's root is not a deny.`,
+      remedy:
+        "scope the root: bind only the act's root into the fence, or run the act where the report shows " +
+        "mountsReadable false and the home directory neither listable nor writable.",
     };
   }
   return { ok: true, axis, why: "the report shows no readable path outside the act's root" };
