@@ -72,6 +72,19 @@ const ALL_DENIED = fixture((r) => {
   for (const field of Object.keys(r.network)) r.network[field] = { ok: false, error: "ECONNREFUSED" };
 });
 
+/**
+ * THE ACCUSERS, in one place, anchored on each contradiction sentence's OWN phrasing:
+ *   "found the opposite" (files) · "RAN:" (processes) · "probe REACHED out" (network).
+ *
+ * RESIDUAL B, from the round-two review and driven before it was believed: the earlier pattern said
+ * `REACHED out`, which ALSO matched the UNVERIFIED sentence on a DNS-broken report — its why ends with the
+ * remedy narration "…the same fence reached out by name once DNS worked". So the negative control would have
+ * gone red on the gate's own honest sentence, and the suite only passed because the ALL_DENIED fixture uses
+ * ECONNREFUSED with no DNS narration. Anchoring on `probe REACHED out` cannot match that narration, and the
+ * DNS-broken test below asserts it directly rather than trusting this comment.
+ */
+const CONTRADICTION = /found the opposite|RAN:|probe REACHED out/i;
+
 const execAct = { kind: "exec", target: "/work/run.sh", tool: "sh" };
 const readAct = { kind: "read", target: "/work/notes.txt" };
 const netAct = { kind: "network", target: "https://example.test" };
@@ -133,10 +146,6 @@ test("NEGATIVE CONTROL: when the axis IS denied, no CONTRADICTION refusal fires 
   // may only ever be the ABSENCE sentence — never the contradiction one. That is what makes this a gate:
   // it refuses for the reason it measured, and a report where the fence held must never be read as a fence
   // that leaked.
-  // The accusers, precisely: "found the opposite" (files), "RAN:" (processes), "REACHED out" (network).
-  // NOT "claims … and its own probe could not tell", which is the UNVERIFIED sentence — a false positive
-  // here would have hidden exactly the distinction the polarity decision turns on.
-  const CONTRADICTION = /found the opposite|RAN:|REACHED out/i;
 
   // FILES still verify the deny: an unreadable home and a false mount table are a satisfied claim.
   const readVerdict = decide(ALL_DENIED, readAct);
@@ -275,7 +284,13 @@ test("FIX 3: a DNS-broken egress is refused as BROKENNESS, with the field eviden
   assert.match(verdict.why, /EAI_AGAIN/, "the evidence quotes the measured errors");
   assert.match(verdict.why, /name resolution, which is brokenness, not a fence/i, "and names what kind of failure it is");
   assert.match(verdict.why, /reached out by name once DNS worked/i, "citing the fence that proved the difference");
-  assert.ok(!/REACHED out/.test(verdict.why), "this is not the contradiction sentence");
+  assert.ok(
+    !CONTRADICTION.test(verdict.why),
+    `this is NOT the contradiction sentence — and the fingerprint must not think it is: ${verdict.why}`,
+  );
+  // …and the reason the fingerprint can tell: the UNVERIFIED narration says "reached out by name once DNS
+  // worked", which is why the anchor is the longer phrase rather than the verb.
+  assert.match(verdict.why, /reached out by name once DNS worked/i, "the remedy narration is present and must stay unmatched");
 });
 
 test("FIX 2c (processes): a tool list that did not look for the mechanisms is unmeasured, not denial", () => {
@@ -283,4 +298,23 @@ test("FIX 2c (processes): a tool list that did not look for the mechanisms is un
   assert.equal(verdict.ok, false);
   assert.equal(verdict.axis, "deny-processes");
   assert.match(verdict.why, /none of the mechanisms this axis depends on/, "the gap is named as a gap in the LOOKING");
+});
+
+test("RESIDUAL A: a WRAPPER that ran with no interpreter probed is a FENCE finding — never an act verdict", () => {
+  // Driven by the round-two review: tools = {bwrap: ran, git: ran} with sh/node/python3 never probed used to
+  // refuse as CONTRADICTION, quoting tools.bwrap.value — so an exec act's executability stayed UNMEASURED
+  // behind an accusation about the fence's own machinery. A wrapper under a deny is a fence finding.
+  const verdict = decide({ tools: { bwrap: { value: "bubblewrap 0.12.0" }, git: { value: "git version 2.55.0" } } }, execAct);
+  assert.equal(verdict.ok, false, "it still refuses — the act's executability is unknown, and unknown is not a yes");
+  assert.equal(verdict.axis, "deny-processes");
+  assert.match(verdict.why, /FENCE finding, not an act verdict/i, "the sentence says which kind of statement it is");
+  assert.match(verdict.why, /tools\.bwrap\.value/, "the wrapper is quoted as evidence about the FENCE");
+  assert.ok(!CONTRADICTION.test(verdict.why), `and it must not accuse the fence of letting the ACT run: ${verdict.why}`);
+  assert.match(verdict.why, /UNMEASURED/, "the act's executability is named as unmeasured");
+  assert.match(verdict.remedy, /probe the interpreters/i, "the remedy is a measurement, not a policy");
+
+  // And the act verdict still fires when an INTERPRETER did run — the two are not confused in either direction.
+  const leaky = decide({ tools: { sh: { value: "GNU bash, version 5.3.15" }, bwrap: { value: "bubblewrap 0.12.0" } } }, execAct);
+  assert.match(leaky.why, /INTERPRETER ran/, "an interpreter that ran is the act verdict");
+  assert.ok(CONTRADICTION.test(leaky.why), "…and it IS the contradiction family");
 });

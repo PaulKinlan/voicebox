@@ -145,8 +145,20 @@ const AXIS_FOR_ACT: Partial<Record<Act["kind"], BoundaryAxis>> = {
   external: "passthrough-network",
 };
 
-/** The binaries that mean "a process mechanism ran here", in the receipt's own vocabulary. */
-const PROCESS_MECHANISMS = ["sh", "bash", "node", "deno", "python3", "bwrap", "docker", "podman"];
+// RESIDUAL A (coord's review, round two), decided rather than defaulted:
+//
+//   · AN INTERPRETER THAT RAN IS AN ACT VERDICT. `sh`/`node`/`python3` running inside a fence that claims to
+//     deny processes means the act's own mechanism exists — CONTRADICTED, and the refusal quotes the
+//     interpreter.
+//   · A WRAPPER THAT RAN IS A FENCE FINDING. `bwrap`/`docker`/`podman` present says something about the
+//     FENCE's machinery, not about the act's executability: a fence can carry its own wrapper and still have
+//     no shell to run. Treating the two as one list let a report with `bwrap` and `git` — and NO interpreter
+//     probed — refuse as CONTRADICTION, quoting the wrapper, while the act's interpreter stayed unmeasured.
+//     That is a wrapper-presence accusation standing in for an act verdict, and it is now its own sentence.
+const INTERPRETERS = ["sh", "bash", "node", "deno", "python3"];
+const WRAPPERS = ["bwrap", "docker", "podman"];
+/** Every name this axis depends on being LOOKED FOR, whichever side of the split it sits on. */
+const PROCESS_MECHANISMS = [...INTERPRETERS, ...WRAPPERS];
 const OUTBOUND_FIELDS = ["outboundTcp443IpLiteral", "outboundTcp80ByName", "cloudMetadataService"];
 
 /**
@@ -190,22 +202,45 @@ export function decide(report: BoundaryReport, act: Act): { ok: true; axis: Boun
   }
 
   if (axis === "deny-processes") {
-    const ran = PROCESS_MECHANISMS.filter((name) => typeof report.tools?.[name]?.value === "string");
-    if (ran.length > 0) {
-      const first = ran[0];
+    // 1. THE ACT VERDICT: an INTERPRETER ran.
+    const interpretersRan = INTERPRETERS.filter((name) => typeof report.tools?.[name]?.value === "string");
+    if (interpretersRan.length > 0) {
+      const first = interpretersRan[0];
       const version = String(report.tools?.[first]?.value ?? "").split("\n")[0].slice(0, 60);
       return {
         ok: false,
         refused: "absent-capability",
         axis,
         why:
-          `this environment claims processes are denied, and its own probe shows a process mechanism RAN: ` +
-          `tools.${first}.value = ${JSON.stringify(version)}${ran.length > 1 ? ` (and ${ran.length - 1} more)` : ""}. ` +
+          `this environment claims processes are denied, and its own probe shows an INTERPRETER ran: ` +
+          `tools.${first}.value = ${JSON.stringify(version)}${interpretersRan.length > 1 ? ` (and ${interpretersRan.length - 1} more)` : ""}. ` +
           `The deny is not in force, so an act that assumes a process boundary would run unbounded.`,
         remedy:
           "do not rely on a process deny this fence does not provide: bwrap bounds which binary runs, not what it can do. " +
           "The fence must deny the interpreter (sh/node/python) rather than the wrapper, or the act must run in an " +
-          "environment whose report shows no process mechanism at all.",
+          "environment whose report shows no interpreter at all.",
+      };
+    }
+
+    // 2. THE FENCE FINDING: a WRAPPER ran and the interpreter was never probed. This is a statement about the
+    //    fence, not a verdict on the act — so it must not read like one.
+    const interpretersLookedFor = INTERPRETERS.filter((name) => report.tools?.[name] !== undefined);
+    const wrappersRan = WRAPPERS.filter((name) => typeof report.tools?.[name]?.value === "string");
+    if (interpretersLookedFor.length === 0 && wrappersRan.length > 0) {
+      const first = wrappersRan[0];
+      const version = String(report.tools?.[first]?.value ?? "").split("\n")[0].slice(0, 60);
+      return {
+        ok: false,
+        refused: "absent-capability",
+        axis,
+        why:
+          `a FENCE finding, not an act verdict: the report shows a wrapper ran (tools.${first}.value = ` +
+          `${JSON.stringify(version)}) while NONE of the interpreters this act depends on was probed ` +
+          `(${INTERPRETERS.join(", ")}). A fence can carry its own wrapper and still have no shell, so the ` +
+          `act's executability is UNMEASURED — and a wrapper-presence accusation must not stand in for it.`,
+        remedy:
+          "the fence provider must probe the interpreters (sh/node/python3/…) rather than only its own wrapper: " +
+          "until it does, this axis cannot say whether the act could run, only that the fence's machinery is present.",
       };
     }
     const lookedFor = PROCESS_MECHANISMS.filter((name) => report.tools?.[name] !== undefined);
