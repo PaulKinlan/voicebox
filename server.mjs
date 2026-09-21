@@ -31,6 +31,7 @@ import {
 } from "./core/environment.ts";
 import * as extensions from "./lib/extensions.mjs";
 import { createTaskHost, protectedAuditPath, TASK_TOOLS } from "./lib/tasks.mjs";
+import { bootFence } from "./lib/fence-provider.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
 import { createLiveSession, LIVE_MODEL, inputRateRequiredBy, resolvedLiveProviderName } from "./lib/live-session.mjs";
 import { commandToAction, functionDeclarations, liveSystemInstruction } from "./lib/commands.mjs";
@@ -306,8 +307,11 @@ async function environmentsWithStatus() {
   for (const env of stored.environments) {
     // boundary/capability are OBSERVED, never inherited from the file: the probe is the ONLY writer
     // of those fields, so a hand-edited or stale descriptor cannot echo a claim as a measurement.
-    // A stored row arrives here with both re-nulled; only a live probe fills them.
-    const declared = { ...env, boundary: null, capability: null };
+    // A stored row arrives here with both re-nulled — EXCEPT a report the probe itself wrote (a
+    // fence's boot-time boundary, provenance-tagged measuredBy:"probe"), which is trusted because it
+    // is a measurement, not a claim. Its `when` travels with it, so a stale one reads as stale.
+    const probeMeasured = env.boundary?.measuredBy === "probe";
+    const declared = probeMeasured ? { ...env } : { ...env, boundary: null, capability: null };
     if (env.kind !== "server" || !env.origin) {
       rows.push({ ...declared, reachable: null, refused: null, why: "the browser environment is always present" });
       continue;
@@ -1241,7 +1245,7 @@ async function handle(req, res) {
     // generates the key; the person supplies the label and the origin.
     let body = "";
     req.on("data", (c) => (body += c));
-    req.on("end", () => {
+    req.on("end", async () => {
       let parsed;
       try {
         parsed = JSON.parse(body);
@@ -1252,6 +1256,26 @@ async function handle(req, res) {
       if (!candidate.ok) return json(res, 400, candidate);
       const stored = readEnvironments();
       if (!stored.ok) return json(res, 500, stored);
+
+      // **Declare-and-boot a fence.** `fence: true` asks the host to BOOT an L1 bwrap fence for this
+      // descriptor rather than only recording it — the prototype productized. The boundary the row
+      // carries is the fence's OWN probe report (host-collected at boot), which is the one writer the
+      // read path trusts — so a measured boundary survives where a hand-written claim would be nulled.
+      if (parsed.fence === true) {
+        const booted = await bootFence(candidate.value);
+        if (!booted.ok) return json(res, 502, { ok: false, refused: booted.refused, why: booted.why });
+        const descriptor = {
+          ...candidate.value,
+          origin: booted.origin,
+          home: booted.home,
+          boundary: booted.boundary,     // the measured report — the probe is its writer
+          capability: booted.capability,
+          declaredAt: new Date().toISOString(),
+        };
+        writeEnvironments([...stored.environments, descriptor]);
+        return json(res, 200, { ok: true, environment: descriptor, booted: true });
+      }
+
       const descriptor = { ...candidate.value, declaredAt: new Date().toISOString() };
       writeEnvironments([...stored.environments, descriptor]);
       return json(res, 200, { ok: true, environment: descriptor });

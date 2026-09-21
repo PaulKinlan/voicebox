@@ -13,6 +13,9 @@ SANDBOX_HOME="$1"
 PORT="$2"
 shift 2
 mkdir -p "$SANDBOX_HOME/workspace"
+# The tree the fence binds is THIS SCRIPT's repo, not the caller's cwd: a server that boots a fence
+# may run from anywhere, and the probe and the source it mounts live beside this script.
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 exec /usr/bin/bwrap \
   --ro-bind /usr /usr \
   --symlink usr/lib /lib64 \
@@ -26,10 +29,10 @@ exec /usr/bin/bwrap \
   --tmpfs /var \
   --tmpfs /home \
   --bind "$SANDBOX_HOME" /home/voice \
-  --ro-bind "$PWD" /srv/voicebox \
+  --ro-bind "$SELF" /srv/voicebox \
   --bind "$SANDBOX_HOME/workspace" /home/voice/workspace \
   --tmpfs /probes \
-  --ro-bind "$PWD/tools/sandbox-probe.mjs" /probes/sandbox-probe.mjs \
+  --ro-bind "$SELF/tools/sandbox-probe.mjs" /probes/sandbox-probe.mjs \
   --clearenv \
   --setenv PATH /usr/bin \
   --setenv PORT "$PORT" \

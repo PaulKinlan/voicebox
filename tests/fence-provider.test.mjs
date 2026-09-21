@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { startServer } from "./lib/server.mjs";
 import { bootFence, measureBoundary } from "../lib/fence-provider.mjs";
 import { fileURLToPath } from "node:url";
 
@@ -74,5 +75,33 @@ test("measureBoundary never lets an unmeasured axis read as denied", () => {
   const report = measureBoundary({ probe: "sandbox-probe/1", when: "now", filesystem: { dirs: {} }, network: {}, sandboxHints: {}, tools: {} });
   for (const axis of Object.values(report.axes)) {
     assert.notEqual(axis.verdict, "denied", "no axis is ever reported 'denied' — the fence either measured it or says not-measured");
+  }
+});
+
+test("declared-and-booted through the registry, the measured boundary survives the read (probe-written, not a file claim)", async () => {
+  // The seam wired: POST /api/environments with fence:true boots the fence and stores the MEASURED
+  // boundary; GET /api/environments returns it still carrying the probe's report — because the probe
+  // is the one writer the read path trusts.
+  const ws = path.join(scratch, "server-ws");
+  mkdirSync(ws, { recursive: true });
+  const server = await startServer({ env: { VOICEBOX_WORKSPACE: ws }, cwd: scratch });
+  try {
+    const declared = await fetch(`${server.base}/api/environments`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ label: "fenced box", kind: "fence", fence: true }),
+    }).then((r) => r.json());
+    assert.equal(declared.ok, true, `boot failed: ${JSON.stringify(declared)}`);
+    assert.equal(declared.booted, true);
+    assert.equal(declared.environment.boundary?.measuredBy, "probe", "the stored boundary is the probe's, provenance-tagged");
+    assert.equal(declared.environment.boundary?.axes?.network?.verdict, "passes");
+
+    const { environments } = await (await fetch(`${server.base}/api/environments`)).json();
+    const row = environments.find((e) => e.label === "fenced box");
+    assert.ok(row, "the booted fence is in the list");
+    assert.equal(row.boundary?.measuredBy, "probe", "the measured boundary survives the read — it is a measurement, not a file claim");
+    assert.ok(row.boundary?.when, "the report's freshness marker travels with it");
+  } finally {
+    await server.stop();
   }
 });
