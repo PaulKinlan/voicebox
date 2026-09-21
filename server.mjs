@@ -173,15 +173,37 @@ function recordCallBearer(envKey, bearer) {
 
 /** Resolve an environment key to its origin, from the registry. A key nobody declared is a refusal. */
 /**
- * **THIS host's environment identity** (`voicebox-beads-g7c`, environments plan §1).
+ * **THIS host's self-issued environment key** (`voicebox-beads-4x7`, plan §1).
  *
- * A stable key, never a label: `resolveEnvironment` reserves "local" for the
- * host answering on this machine, and the registry's remote hosts carry their
- * own self-issued keys. It is stamped on everything this host declares and
- * named on every act it takes, so a refusal can say WHICH machine is being
- * asked instead of the bare position "machine".
+ * A key, not a label — and NOT a value every host spells the same way. The
+ * first version of this was the constant `"local"`, shared by every server, so
+ * a descriptor posted to two hosts was re-stamped to the same string on each
+ * and no real path could produce a root whose owner differed from the acting
+ * environment. `not-reachable-from-this-environment` shipped, was correct, and
+ * could never fire: a refusal that cannot fire is a claim, not a gate.
+ *
+ * Minted once and kept in the host's own directory beside its token (0600),
+ * then read back on every boot — an identity that changed on restart would
+ * make yesterday's declared root belong to nobody today.
+ *
+ * NOT to be conflated with `resolveEnvironment("local")`, which is a ROUTING
+ * name ("the host answering on this machine"), not an identity.
  */
-const SELF_ENVIRONMENT = "local";
+const SELF_KEY_FILE = path.join(HOST_DIR, ".environment-key");
+function selfEnvironmentKey() {
+  try {
+    const held = readFileSync(SELF_KEY_FILE, "utf8").trim();
+    if (/^env_[0-9a-f]{16}$/.test(held)) return held;
+  } catch {
+    // Not minted yet (or unreadable): mint below rather than fall back to a
+    // shared string — falling back would restore the defect silently.
+  }
+  const minted = `env_${randomBytes(8).toString("hex")}`;
+  mkdirSync(HOST_DIR, { recursive: true });
+  writeFileSync(SELF_KEY_FILE, minted + "\n", { mode: 0o600 });
+  return minted;
+}
+const SELF_ENVIRONMENT = selfEnvironmentKey();
 
 async function resolveEnvironment(envKey) {
   if (envKey === "local") {
