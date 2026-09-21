@@ -630,6 +630,7 @@ async function renderEnvironments() {
     // The registry could not be read, or the server is not answering: the refusal is named, not blank.
     if (els.envCount) els.envCount.textContent = "Environments";
     if (els.envNote) els.envNote.textContent = String(err?.message ?? "the environment list could not be read");
+    throw err;
   }
 }
 
@@ -643,7 +644,7 @@ async function health() {
     const provider = answer.provider || "agent";
     if (els.where) {
       els.where.textContent = `agent: ${provider}`;
-      els.where.title = `source: GET /api/health · provider: ${provider}, build: ${answer.build?.sha || "dev"}`;
+      els.where.title = `source: GET /api/health · provider: ${provider}, build: ${answer.build?.commit || "dev"}`;
     }
     window.__voiceboxServerBuild = answer.build ?? null;
     stampBuild(answer.build ?? null);
@@ -656,11 +657,11 @@ async function health() {
       if (err?.refused) {
         // e.g. environment-list-unreadable: "fix the file"
         els.where.textContent = `${err.refused} (fix the file)`;
-        els.where.title = `source: GET /api/health · ${err.refused}: ${err.why || "fix the file"}`;
+        els.where.title = `source: GET /api/environments · ${err.refused}: ${err.why || "fix the file"}`;
       } else {
         // The machine is unreachable (connection refused, network error)
         els.where.textContent = "machine-unreachable (fix the host)";
-        els.where.title = `source: GET /api/health · machine-unreachable (${err?.message || "connection failed"})`;
+        els.where.title = "source: GET /api/health · machine-unreachable — the local server is not answering, fix the host";
       }
     }
     stampBuild(null);
