@@ -662,11 +662,7 @@ function extensionApproval(id) {
     const code = input.value;
     input.value = "";
     try {
-      const r = await post("approve", { id, requestId, code });
-      if (r.decision !== "admitted") {
-        note.textContent = r.why ?? "The extension was not approved for use here.";
-        return;
-      }
+      await post("approve", { id, requestId, code });
       if (els.extNote) els.extNote.textContent = "You approved this extension with the host's one-time code. It is now running.";
       await renderExtensions();
     } catch (err) { note.textContent = err.message; }
