@@ -47,18 +47,26 @@ test("live-caption: #caption renders output text properly across all viewports w
         if (el) el.textContent = "";
       });
 
-      // 1. Initial state: caption is empty and takes no space
+      // 1. Initial state: caption element is display:none, while caption-space reserves the slot
       const initial = await page.evaluate(() => {
         const el = document.querySelector("#caption");
+        const space = document.querySelector(".caption-space");
         return {
           exists: Boolean(el),
           text: el?.textContent ?? "",
           display: el ? getComputedStyle(el).display : "none",
+          height: el ? el.getBoundingClientRect().height : 0,
+          spaceMinHeight: space ? parseFloat(getComputedStyle(space).minHeight) : 0,
         };
       });
       assert.ok(initial.exists, `#caption must exist in DOM at ${vp.name}`);
       assert.equal(initial.text, "", `#caption must be empty on load at ${vp.name}`);
       assert.equal(initial.display, "none", `#caption:empty must have display:none on load at ${vp.name}`);
+      assert.equal(initial.height, 0, `#caption:empty must have 0 height at ${vp.name}`);
+      assert.ok(
+        initial.spaceMinHeight >= 24,
+        `.caption-space must reserve slot (min-height >= 24px, observed ${initial.spaceMinHeight}px) so mic does not jump at ${vp.name}`,
+      );
 
       // 2. Simulate live output text arriving
       const sampleText = "I made a file called notes.md with the first thing I noticed today.";
