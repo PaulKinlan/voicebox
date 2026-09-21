@@ -52,6 +52,7 @@ import {
 import { validate, type ToolSchema } from "../core/schema.ts";
 import * as idb from "./idb.ts";
 import { handleStorage, opfsStorage, type Entry, type Storage } from "./storage.ts";
+import { startActs } from "./acts.ts";
 
 /**
  * WHO THIS AGENT IS. One worker is one agent instance — §9's actor model in one line: an agent is a
@@ -1238,3 +1239,17 @@ self.onmessage = async (event: MessageEvent) => {
 };
 
 export { wasmInstance };
+
+// ── the routed-acts door (core/dispatch.ts's page half) ─────────────────────
+// The server asks over /channel when the ACTIVE root is one only the page can act on; this
+// page performs the act against the CURRENT project's storage and answers observed facts.
+// Everything is injected — acts.ts imports no browser module — so the same door runs in a
+// node test. The hooks read the live `current`/`storage` at call time, so a project change
+// needs no notification: the next call sees it.
+startActs({
+  getCurrentDescriptor: () => (current ? descriptorOf(current) : null),
+  getStorage: () => storage,
+  checkWritable: () => writable(""),
+  recordAct: (act, decision, rule, result, observed, turn) => record(act, decision, rule, result, observed, turn),
+  log: (line) => console.error(line),
+});
