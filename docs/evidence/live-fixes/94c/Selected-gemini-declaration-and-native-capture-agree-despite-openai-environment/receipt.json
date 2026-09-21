@@ -1,0 +1,278 @@
+{
+  "envProvider": "openai",
+  "selectedProvider": "gemini",
+  "observations": [
+    {
+      "label": "ready",
+      "browser": {
+        "state": {
+          "phase": "listening",
+          "ready": true,
+          "sessionEnded": false,
+          "model": "models/gemini-3.8-live",
+          "gatedFrames": 10,
+          "capture": true,
+          "playbackActive": false,
+          "sinkId": "",
+          "providerError": null,
+          "framesSent": 26,
+          "framesReceived": 0,
+          "framesRejected": 0,
+          "framesIgnoredAfterEnd": 0,
+          "captureError": "",
+          "captureErrorReason": "",
+          "lastError": "",
+          "inputRate": 16000,
+          "provider": "gemini",
+          "captureRate": 16000,
+          "rateContradiction": null,
+          "label": "Listening — speak now"
+        },
+        "controls": [
+          {
+            "type": "rate",
+            "inputRate": 16000,
+            "provider": "gemini"
+          },
+          {
+            "type": "state",
+            "state": "transport-open",
+            "detail": {
+              "provider": "gemini"
+            },
+            "model": "models/gemini-3.8-live"
+          },
+          {
+            "type": "state",
+            "state": "ready",
+            "detail": {
+              "gatedFrames": 10,
+              "provider": "gemini"
+            },
+            "model": "models/gemini-3.8-live"
+          }
+        ]
+      },
+      "wire": [
+        {
+          "provider": "gemini",
+          "messages": [
+            {
+              "setup": {
+                "model": "models/gemini-3.8-live",
+                "generationConfig": {
+                  "responseModalities": [
+                    "AUDIO"
+                  ],
+                  "thinkingConfig": {
+                    "thinkingBudget": -1
+                  }
+                },
+                "tools": [
+                  {
+                    "functionDeclarations": [
+                      {
+                        "name": "write_file",
+                        "description": "Create or overwrite a file in the active project. Use a plain file name, no directories.",
+                        "parameters": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "description": "the file name, e.g. notes.txt"
+                            },
+                            "content": {
+                              "type": "string",
+                              "description": "the exact text to write into the file"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "content"
+                          ]
+                        }
+                      },
+                      {
+                        "name": "read_file",
+                        "description": "Read a file's contents from the active project.",
+                        "parameters": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "description": "the file name to read"
+                            }
+                          },
+                          "required": [
+                            "name"
+                          ]
+                        }
+                      },
+                      {
+                        "name": "list_files",
+                        "description": "List the files in the active project.",
+                        "parameters": {
+                          "type": "object",
+                          "properties": {}
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "systemInstruction": {
+                  "parts": [
+                    {
+                      "text": "You are the voice of voicebox, a build environment on the user's machine. You can act on the active project with these tools:\n- write_file: Create or overwrite a file in the active project. Use a plain file name, no directories.\n- read_file: Read a file's contents from the active project.\n- list_files: List the files in the active project.\nRules you keep:\n- To create, read or list files you MUST call the tool. Never claim to have done it without the tool call.\n- After each tool call, tell the user the outcome in one short spoken sentence.\n- If a tool result has ok: false, SAY the refusal it names, exactly. 'root-not-declared' means no project folder has been declared yet — say you cannot act until one is, and stop. 'outside-root' means the name tried to leave the project — say so.\n- You have no other capabilities. If asked for anything else, say plainly that you cannot do it yet."
+                    }
+                  ]
+                },
+                "outputAudioTranscription": {}
+              }
+            }
+          ],
+          "frames": 16
+        }
+      ]
+    },
+    {
+      "label": "selected-rate-and-session-snapshot",
+      "browser": {
+        "state": {
+          "phase": "listening",
+          "ready": true,
+          "sessionEnded": false,
+          "model": "models/gemini-3.8-live",
+          "gatedFrames": 10,
+          "capture": true,
+          "playbackActive": false,
+          "sinkId": "",
+          "providerError": null,
+          "framesSent": 49,
+          "framesReceived": 0,
+          "framesRejected": 0,
+          "framesIgnoredAfterEnd": 0,
+          "captureError": "",
+          "captureErrorReason": "",
+          "lastError": "",
+          "inputRate": 16000,
+          "provider": "gemini",
+          "captureRate": 16000,
+          "rateContradiction": null,
+          "label": "Listening — speak now"
+        },
+        "controls": [
+          {
+            "type": "rate",
+            "inputRate": 16000,
+            "provider": "gemini"
+          },
+          {
+            "type": "state",
+            "state": "transport-open",
+            "detail": {
+              "provider": "gemini"
+            },
+            "model": "models/gemini-3.8-live"
+          },
+          {
+            "type": "state",
+            "state": "ready",
+            "detail": {
+              "gatedFrames": 10,
+              "provider": "gemini"
+            },
+            "model": "models/gemini-3.8-live"
+          },
+          {
+            "type": "state",
+            "state": "turn-complete",
+            "detail": {
+              "provider": "gemini"
+            },
+            "model": "models/gemini-3.8-live"
+          }
+        ]
+      },
+      "wire": [
+        {
+          "provider": "gemini",
+          "messages": [
+            {
+              "setup": {
+                "model": "models/gemini-3.8-live",
+                "generationConfig": {
+                  "responseModalities": [
+                    "AUDIO"
+                  ],
+                  "thinkingConfig": {
+                    "thinkingBudget": -1
+                  }
+                },
+                "tools": [
+                  {
+                    "functionDeclarations": [
+                      {
+                        "name": "write_file",
+                        "description": "Create or overwrite a file in the active project. Use a plain file name, no directories.",
+                        "parameters": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "description": "the file name, e.g. notes.txt"
+                            },
+                            "content": {
+                              "type": "string",
+                              "description": "the exact text to write into the file"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "content"
+                          ]
+                        }
+                      },
+                      {
+                        "name": "read_file",
+                        "description": "Read a file's contents from the active project.",
+                        "parameters": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "description": "the file name to read"
+                            }
+                          },
+                          "required": [
+                            "name"
+                          ]
+                        }
+                      },
+                      {
+                        "name": "list_files",
+                        "description": "List the files in the active project.",
+                        "parameters": {
+                          "type": "object",
+                          "properties": {}
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "systemInstruction": {
+                  "parts": [
+                    {
+                      "text": "You are the voice of voicebox, a build environment on the user's machine. You can act on the active project with these tools:\n- write_file: Create or overwrite a file in the active project. Use a plain file name, no directories.\n- read_file: Read a file's contents from the active project.\n- list_files: List the files in the active project.\nRules you keep:\n- To create, read or list files you MUST call the tool. Never claim to have done it without the tool call.\n- After each tool call, tell the user the outcome in one short spoken sentence.\n- If a tool result has ok: false, SAY the refusal it names, exactly. 'root-not-declared' means no project folder has been declared yet — say you cannot act until one is, and stop. 'outside-root' means the name tried to leave the project — say so.\n- You have no other capabilities. If asked for anything else, say plainly that you cannot do it yet."
+                    }
+                  ]
+                },
+                "outputAudioTranscription": {}
+              }
+            }
+          ],
+          "frames": 39
+        }
+      ]
+    }
+  ]
+}

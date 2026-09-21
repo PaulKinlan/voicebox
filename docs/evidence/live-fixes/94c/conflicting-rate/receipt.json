@@ -1,0 +1,233 @@
+{
+  "root": "/home/paulkinlan/worktrees/vb-live-fixes/",
+  "observations": [
+    {
+      "stage": "warm-up-16k",
+      "browser": {
+        "mediaCalls": 1,
+        "attempts": [
+          {
+            "started": 324.5,
+            "settled": true,
+            "elapsed": 38
+          }
+        ],
+        "attachments": 1,
+        "contexts": [
+          {
+            "requested": 16000,
+            "actual": 16000,
+            "status": "running"
+          }
+        ],
+        "state": {
+          "phase": "listening",
+          "ready": true,
+          "sessionEnded": false,
+          "model": "",
+          "gatedFrames": 0,
+          "capture": true,
+          "playbackActive": false,
+          "sinkId": "",
+          "providerError": null,
+          "framesSent": 14,
+          "framesReceived": 0,
+          "framesRejected": 0,
+          "framesIgnoredAfterEnd": 0,
+          "captureError": "",
+          "captureErrorReason": "",
+          "lastError": "",
+          "inputRate": 16000,
+          "provider": "fixture-16000",
+          "captureRate": 16000,
+          "rateContradiction": null,
+          "label": "Listening — speak now"
+        },
+        "label": "Listening — speak now"
+      },
+      "wire": [
+        {
+          "frames": 14,
+          "bytes": 3584,
+          "declared": [
+            16000
+          ]
+        }
+      ]
+    },
+    {
+      "stage": "conflicting-declaration-received",
+      "browser": {
+        "mediaCalls": 1,
+        "attempts": [
+          {
+            "started": 324.5,
+            "settled": true,
+            "elapsed": 38
+          }
+        ],
+        "attachments": 1,
+        "contexts": [
+          {
+            "requested": 16000,
+            "actual": 16000,
+            "status": "running"
+          }
+        ],
+        "state": {
+          "phase": "listening",
+          "ready": true,
+          "sessionEnded": false,
+          "model": "",
+          "gatedFrames": 0,
+          "capture": true,
+          "playbackActive": false,
+          "sinkId": "",
+          "providerError": null,
+          "framesSent": 14,
+          "framesReceived": 0,
+          "framesRejected": 0,
+          "framesIgnoredAfterEnd": 0,
+          "captureError": "",
+          "captureErrorReason": "",
+          "lastError": "",
+          "inputRate": 24000,
+          "provider": "fixture-24000",
+          "captureRate": 16000,
+          "rateContradiction": {
+            "declared": 24000,
+            "running": 16000
+          },
+          "label": "Listening — speak now"
+        },
+        "label": "Listening — speak now"
+      },
+      "wire": [
+        {
+          "frames": 14,
+          "bytes": 3584,
+          "declared": [
+            16000,
+            24000
+          ]
+        }
+      ]
+    },
+    {
+      "stage": "24k-declared-16k-running",
+      "browser": {
+        "mediaCalls": 1,
+        "attempts": [
+          {
+            "started": 324.5,
+            "settled": true,
+            "elapsed": 38
+          }
+        ],
+        "attachments": 1,
+        "contexts": [
+          {
+            "requested": 16000,
+            "actual": 16000,
+            "status": "running"
+          }
+        ],
+        "state": {
+          "phase": "listening",
+          "ready": true,
+          "sessionEnded": false,
+          "model": "",
+          "gatedFrames": 0,
+          "capture": true,
+          "playbackActive": false,
+          "sinkId": "",
+          "providerError": null,
+          "framesSent": 17,
+          "framesReceived": 0,
+          "framesRejected": 0,
+          "framesIgnoredAfterEnd": 0,
+          "captureError": "",
+          "captureErrorReason": "",
+          "lastError": "",
+          "inputRate": 24000,
+          "provider": "fixture-24000",
+          "captureRate": 16000,
+          "rateContradiction": {
+            "declared": 24000,
+            "running": 16000
+          },
+          "label": "Listening — speak now"
+        },
+        "label": "Listening — speak now"
+      },
+      "wire": [
+        {
+          "frames": 17,
+          "bytes": 4352,
+          "declared": [
+            16000,
+            24000
+          ]
+        }
+      ]
+    },
+    {
+      "stage": "exit",
+      "browser": {
+        "mediaCalls": 1,
+        "attempts": [
+          {
+            "started": 324.5,
+            "settled": true,
+            "elapsed": 38
+          }
+        ],
+        "attachments": 1,
+        "contexts": [
+          {
+            "requested": 16000,
+            "actual": 16000,
+            "status": "running"
+          }
+        ],
+        "state": {
+          "phase": "listening",
+          "ready": true,
+          "sessionEnded": false,
+          "model": "",
+          "gatedFrames": 0,
+          "capture": true,
+          "playbackActive": false,
+          "sinkId": "",
+          "providerError": null,
+          "framesSent": 17,
+          "framesReceived": 0,
+          "framesRejected": 0,
+          "framesIgnoredAfterEnd": 0,
+          "captureError": "",
+          "captureErrorReason": "",
+          "lastError": "",
+          "inputRate": 24000,
+          "provider": "fixture-24000",
+          "captureRate": 16000,
+          "rateContradiction": {
+            "declared": 24000,
+            "running": 16000
+          },
+          "label": "Listening — speak now"
+        },
+        "label": "Listening — speak now"
+      },
+      "wire": [
+        {
+          "frames": 17,
+          "bytes": 4352,
+          "declared": [
+            16000,
+            24000
+          ]
+        }
+      ]
+    }
+  ]
+}

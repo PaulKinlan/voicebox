@@ -1,0 +1,290 @@
+{
+  "envProvider": "gemini",
+  "selectedProvider": "openai",
+  "observations": [
+    {
+      "label": "ready",
+      "browser": {
+        "state": {
+          "phase": "listening",
+          "ready": true,
+          "sessionEnded": false,
+          "model": "gpt-realtime",
+          "gatedFrames": 14,
+          "capture": true,
+          "playbackActive": false,
+          "sinkId": "",
+          "providerError": null,
+          "framesSent": 36,
+          "framesReceived": 0,
+          "framesRejected": 0,
+          "framesIgnoredAfterEnd": 0,
+          "captureError": "",
+          "captureErrorReason": "",
+          "lastError": "",
+          "inputRate": 24000,
+          "provider": "openai",
+          "captureRate": 24000,
+          "rateContradiction": null,
+          "label": "Listening — speak now"
+        },
+        "controls": [
+          {
+            "type": "rate",
+            "inputRate": 24000,
+            "provider": "openai"
+          },
+          {
+            "type": "state",
+            "state": "transport-open",
+            "detail": {
+              "provider": "openai"
+            },
+            "model": "gpt-realtime"
+          },
+          {
+            "type": "state",
+            "state": "ready",
+            "detail": {
+              "gatedFrames": 14,
+              "provider": "openai"
+            },
+            "model": "gpt-realtime"
+          }
+        ]
+      },
+      "wire": [
+        {
+          "provider": "openai",
+          "messages": [
+            {
+              "type": "session.update",
+              "session": {
+                "type": "realtime",
+                "model": "gpt-realtime",
+                "output_modalities": [
+                  "audio"
+                ],
+                "tools": [
+                  {
+                    "type": "function",
+                    "name": "write_file",
+                    "description": "Create or overwrite a file in the active project. Use a plain file name, no directories.",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "the file name, e.g. notes.txt"
+                        },
+                        "content": {
+                          "type": "string",
+                          "description": "the exact text to write into the file"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "content"
+                      ]
+                    }
+                  },
+                  {
+                    "type": "function",
+                    "name": "read_file",
+                    "description": "Read a file's contents from the active project.",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "the file name to read"
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ]
+                    }
+                  },
+                  {
+                    "type": "function",
+                    "name": "list_files",
+                    "description": "List the files in the active project.",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                ],
+                "instructions": "You are the voice of voicebox, a build environment on the user's machine. You can act on the active project with these tools:\n- write_file: Create or overwrite a file in the active project. Use a plain file name, no directories.\n- read_file: Read a file's contents from the active project.\n- list_files: List the files in the active project.\nRules you keep:\n- To create, read or list files you MUST call the tool. Never claim to have done it without the tool call.\n- After each tool call, tell the user the outcome in one short spoken sentence.\n- If a tool result has ok: false, SAY the refusal it names, exactly. 'root-not-declared' means no project folder has been declared yet — say you cannot act until one is, and stop. 'outside-root' means the name tried to leave the project — say so.\n- You have no other capabilities. If asked for anything else, say plainly that you cannot do it yet.",
+                "audio": {
+                  "input": {
+                    "format": {
+                      "type": "audio/pcm",
+                      "rate": 24000
+                    },
+                    "turn_detection": {
+                      "type": "server_vad"
+                    }
+                  },
+                  "output": {
+                    "format": {
+                      "type": "audio/pcm",
+                      "rate": 24000
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "frames": 22
+        }
+      ]
+    },
+    {
+      "label": "selected-rate-and-session-snapshot",
+      "browser": {
+        "state": {
+          "phase": "listening",
+          "ready": true,
+          "sessionEnded": false,
+          "model": "gpt-realtime",
+          "gatedFrames": 14,
+          "capture": true,
+          "playbackActive": false,
+          "sinkId": "",
+          "providerError": null,
+          "framesSent": 76,
+          "framesReceived": 0,
+          "framesRejected": 0,
+          "framesIgnoredAfterEnd": 0,
+          "captureError": "",
+          "captureErrorReason": "",
+          "lastError": "",
+          "inputRate": 24000,
+          "provider": "openai",
+          "captureRate": 24000,
+          "rateContradiction": null,
+          "label": "Listening — speak now"
+        },
+        "controls": [
+          {
+            "type": "rate",
+            "inputRate": 24000,
+            "provider": "openai"
+          },
+          {
+            "type": "state",
+            "state": "transport-open",
+            "detail": {
+              "provider": "openai"
+            },
+            "model": "gpt-realtime"
+          },
+          {
+            "type": "state",
+            "state": "ready",
+            "detail": {
+              "gatedFrames": 14,
+              "provider": "openai"
+            },
+            "model": "gpt-realtime"
+          },
+          {
+            "type": "state",
+            "state": "turn-complete",
+            "detail": {
+              "provider": "openai"
+            },
+            "model": "gpt-realtime"
+          }
+        ]
+      },
+      "wire": [
+        {
+          "provider": "openai",
+          "messages": [
+            {
+              "type": "session.update",
+              "session": {
+                "type": "realtime",
+                "model": "gpt-realtime",
+                "output_modalities": [
+                  "audio"
+                ],
+                "tools": [
+                  {
+                    "type": "function",
+                    "name": "write_file",
+                    "description": "Create or overwrite a file in the active project. Use a plain file name, no directories.",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "the file name, e.g. notes.txt"
+                        },
+                        "content": {
+                          "type": "string",
+                          "description": "the exact text to write into the file"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "content"
+                      ]
+                    }
+                  },
+                  {
+                    "type": "function",
+                    "name": "read_file",
+                    "description": "Read a file's contents from the active project.",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "the file name to read"
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ]
+                    }
+                  },
+                  {
+                    "type": "function",
+                    "name": "list_files",
+                    "description": "List the files in the active project.",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {}
+                    }
+                  }
+                ],
+                "instructions": "You are the voice of voicebox, a build environment on the user's machine. You can act on the active project with these tools:\n- write_file: Create or overwrite a file in the active project. Use a plain file name, no directories.\n- read_file: Read a file's contents from the active project.\n- list_files: List the files in the active project.\nRules you keep:\n- To create, read or list files you MUST call the tool. Never claim to have done it without the tool call.\n- After each tool call, tell the user the outcome in one short spoken sentence.\n- If a tool result has ok: false, SAY the refusal it names, exactly. 'root-not-declared' means no project folder has been declared yet — say you cannot act until one is, and stop. 'outside-root' means the name tried to leave the project — say so.\n- You have no other capabilities. If asked for anything else, say plainly that you cannot do it yet.",
+                "audio": {
+                  "input": {
+                    "format": {
+                      "type": "audio/pcm",
+                      "rate": 24000
+                    },
+                    "turn_detection": {
+                      "type": "server_vad"
+                    }
+                  },
+                  "output": {
+                    "format": {
+                      "type": "audio/pcm",
+                      "rate": 24000
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "frames": 62
+        }
+      ]
+    }
+  ]
+}

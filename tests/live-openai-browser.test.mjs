@@ -128,3 +128,24 @@ test("OpenAI browser: real function call writes and answers; invalid calls refus
   assert.equal(observed.state.ready, true);
   assert.ok(observed.controls.some(c => c.type === "tool" && c.calls.some(call => call.name === "write_file" && call.ok)));
 });
+
+for (const [environment, selected, rate, model] of [
+  ["gemini", "openai", 24000, "gpt-realtime"],
+  ["openai", "gemini", 16000, "models/gemini-3.8-live"],
+]) test(`Selected ${selected}: declaration and native capture agree despite ${environment} environment`, { timeout: 15000 }, async t => {
+  const f = await fixture(t, environment, selected);
+  const first = await f.read();
+  assert.equal(f.row.provider, selected, "actual vendor destination");
+  assert.deepEqual(first.controls[0], { type: "rate", inputRate: rate, provider: selected });
+  assert.equal(first.state.captureRate, rate, "native running AudioContext rate, not only a declaration");
+  assert.equal(first.state.provider, selected);
+  assert.equal(first.state.rateContradiction, null);
+  // Settings affect the next session, not state frames emitted by this running one.
+  await f.select(environment);
+  f.send(selected === "openai" ? { type: "response.done" } : { serverContent: { turnComplete: true } });
+  await f.page.waitFor(() => window.liveControls.some(c => c.state === "turn-complete"));
+  const after = await f.record("selected-rate-and-session-snapshot");
+  const state = after.controls.find(c => c.state === "turn-complete");
+  assert.equal(state.detail.provider, selected);
+  assert.equal(state.model, model);
+});

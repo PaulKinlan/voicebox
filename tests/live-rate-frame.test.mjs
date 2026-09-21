@@ -1,68 +1,46 @@
-// tests/live-rate-frame.test.mjs — step 2 of the rate work (journal-6g0).
-//
-// The page must be told what to capture at BEFORE it sends audio, and the number must come from the provider
-// that will receive it. These two tests drive the real /live upgrade path of the real server — no key needed,
-// because the rate frame is the FIRST frame on the socket, ahead of any provider connection: that ordering is
-// the property (a rate that arrives after the audio has started is not a negotiation).
-//
-//   node --test tests/live-rate-frame.test.mjs
-
+// Rate negotiation follows the settings used to create the session, not LIVE_PROVIDER.
+// Real server/upgrade, synthetic missing keys, no vendor connection or fixed port.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { startServer } from "./lib/server.mjs";
 
-async function serverWith(env) {
-  const proc = spawn(process.execPath, ["server.mjs"], {
-    env: { ...process.env, PORT: "0", ...env },
-    stdio: ["ignore", "pipe", "pipe"],
+async function serverWith(t, env) {
+  const scratch = mkdtempSync(path.join(os.tmpdir(), "vb-rate-frame-"));
+  const server = await startServer({ extensionsDir: scratch, env: {
+    ...env, GEMINI_API_KEY: "", OPENAI_API_KEY: "", VOICEBOX_WORKSPACE: undefined,
+  } });
+  t.after(async () => {
+    const exited = once(server.child, "exit");
+    await server.stop(); await exited;
+    rmSync(scratch, { recursive: true, force: true });
   });
-  const line = await new Promise((res, rej) => {
-    let buf = "";
-    const t = setTimeout(() => rej(new Error(`server did not start: ${buf}`)), 15000);
-    proc.stdout.on("data", (d) => {
-      buf += d.toString();
-      const m = buf.match(/http:\/\/127\.0\.0\.1:(\d+)/);
-      if (m) { clearTimeout(t); res(m[1]); }
-    });
-    proc.stderr.on("data", (d) => { buf += d.toString(); });
-  });
-  return { proc, port: line };
+  return server;
 }
 
-async function firstFrame(port) {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/live`, { headers: { origin: `http://127.0.0.1:${port}` } }); // local peer, declared
-  const frames = [];
-  ws.onmessage = (e) => frames.push(typeof e.data === "string" ? JSON.parse(e.data) : e.data);
-  await once(ws, "open").catch(() => {});
-  const started = Date.now();
-  while (frames.length === 0 && Date.now() - started < 8000) await new Promise((r) => setTimeout(r, 50));
-  const first = frames[0];
-  ws.close();
-  return { first, frames };
+async function firstFrame(server) {
+  const ws = new WebSocket(`${server.base.replace("http:", "ws:")}/live`, { headers: { origin: server.base } });
+  const first = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("no rate frame within 5000ms")), 5000);
+    ws.addEventListener("message", e => { clearTimeout(timer); resolve(JSON.parse(e.data)); }, { once: true });
+    ws.addEventListener("error", e => { clearTimeout(timer); reject(e); }, { once: true });
+  }).finally(() => ws.close());
+  return first;
 }
 
-test("rate frame: the FIRST frame on /live is the input rate the resolved provider requires", async () => {
-  const { proc, port } = await serverWith({ LIVE_PROVIDER: "gemini" });
-  try {
-    const { first, frames } = await firstFrame(port);
-    assert.equal(first?.type, "rate", `the first frame must be the rate, got ${JSON.stringify(first)}`);
-    assert.equal(first.inputRate, 16000, "gemini's protocol takes 16 kHz and the page must be told so");
-    assert.equal(first.provider, "gemini", "and which provider is asking, so the page can say what it is talking to");
-    assert.ok(!frames.some((f) => f?.type === "state" && f.state === "ready"), "no audio flowed before the rate was declared");
-  } finally { proc.kill("SIGKILL"); }
+test("rate frame: selected OpenAI wins over Gemini environment before any vendor connection", async t => {
+  const server = await serverWith(t, { LIVE_PROVIDER: "gemini" });
+  const response = await fetch(server.base + "/api/agent-settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: "openai" }) });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await firstFrame(server), { type: "rate", inputRate: 24000, provider: "openai" });
 });
 
-test("rate frame: a provider that has not declared a rate is REFUSED before anything connects", async () => {
-  const { proc, port } = await serverWith({ LIVE_PROVIDER: "no-such-provider" });
-  try {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/live`, { headers: { origin: `http://127.0.0.1:${port}` } }); // local peer, declared
-    const frames = [];
-    ws.onmessage = (e) => frames.push(typeof e.data === "string" ? JSON.parse(e.data) : e.data);
-    await once(ws, "open").catch(() => {});
-    const started = Date.now();
-    while (frames.length === 0 && Date.now() - started < 8000) await new Promise((r) => setTimeout(r, 50));
-    assert.ok(frames.length > 0, "an unknown provider must produce a refusal, not silence");
-    assert.equal(frames[0]?.type, "error", `expected an error frame, got ${JSON.stringify(frames[0])}`);
-  } finally { proc.kill("SIGKILL"); }
+test("rate frame: invalid settings refuse at admission; environment cannot override valid settings", async t => {
+  const server = await serverWith(t, { LIVE_PROVIDER: "no-such-provider" });
+  const response = await fetch(server.base + "/api/agent-settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: "no-such-provider" }) });
+  assert.equal(response.status, 400);
+  assert.deepEqual(await firstFrame(server), { type: "rate", inputRate: 16000, provider: "gemini" });
 });

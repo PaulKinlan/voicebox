@@ -1,0 +1,47 @@
+{
+  "finished": true,
+  "findings": [
+    {
+      "name": "wrong-provider-rate",
+      "requiredRate": 24000,
+      "actual": 16000,
+      "serverDeclared": 16000,
+      "declarationProvider": "gemini",
+      "actualProvider": "openai",
+      "rateContradiction": null
+    },
+    {
+      "name": "selected-provider-loses-tool-contract",
+      "provider": "openai",
+      "declarationNames": [],
+      "instructionPresent": false
+    },
+    {
+      "name": "openai-tool-request-not-routed",
+      "toolId": "review_baseline-selected",
+      "markerAbsent": true,
+      "positiveFollowingTranscript": true
+    },
+    {
+      "name": "failed-response-loses-reason",
+      "emitted": [
+        {
+          "type": "state",
+          "state": "turn-complete",
+          "detail": {
+            "provider": "openai"
+          },
+          "model": "gpt-realtime"
+        }
+      ],
+      "failureMessageSurfaced": false
+    },
+    {
+      "name": "empty-terminal-cause-on-page",
+      "wireCode": 1006,
+      "wireReason": "",
+      "label": "Live session ended (). Your microphone is still on, but nothing is listening. Press the mic to start a new session."
+    }
+  ],
+  "exit": 1
+}

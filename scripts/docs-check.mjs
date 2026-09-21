@@ -346,7 +346,7 @@ const ENV_MEANING = {
   VOICEBOX_INSTANCE: "this writer's name in the active root's shared log (default `machine`)",
   VOICEBOX_BIND_RETRY_MS: "how often to retry a bind that lost the port race",
   VOICEBOX_BIND_DEADLINE_MS: "how long to keep retrying before giving up by name",
-  LIVE_PROVIDER: "which live voice provider `/live` uses (default `gemini`)",
+  LIVE_PROVIDER: "library fallback when no provider is passed; `/live` passes the agent-settings provider explicitly",
   GEMINI_API_KEY: "the Gemini Live key — without it the live session refuses to start, by name",
   OPENAI_API_KEY: "the OpenAI Realtime key — without it that provider refuses to start, by name",
 };
@@ -425,7 +425,7 @@ async function blocks() {
     ].join("\n")),
 
     "live-session": block("live-session", [
-      `\`lib/live-session.mjs\` is present. Registered live providers, with the model each one's handshake names (captured from the provider against a recording transport — never dialed): ${handshakes.map((h) => "`" + h.name + "` → `" + h.model + "`").join(", ")}. The default is \`${resolvedLiveProviderName()}\`; \`LIVE_PROVIDER\` overrides it.`,
+      `\`lib/live-session.mjs\` is present. Registered live providers, with the model each one's handshake names (captured from the provider against a recording transport — never dialed): ${handshakes.map((h) => "`" + h.name + "` → `" + h.model + "`").join(", ")}. The library fallback is \`${resolvedLiveProviderName()}\`, overridable by \`LIVE_PROVIDER\`; the server's \`/live\` route instead passes the agent-settings provider explicitly.`,
     ].join("\n")),
 
     loop: block("loop", [

@@ -1,0 +1,17 @@
+✔ OpenAI browser: real function call writes and answers; invalid calls refuse (1168.845336ms)
+✔ Selected openai: declaration and native capture agree despite gemini environment (1029.356248ms)
+✔ Selected gemini: declaration and native capture agree despite openai environment (1051.561796ms)
+✔ rate browser: a first native mic press waits for its rate, without a retry (736.427932ms)
+✔ rate browser: the same client on a new socket cannot capture using the old rate (1086.985344ms)
+✔ rate browser: a late conflicting declaration names both declared and running rates (749.967133ms)
+✔ rate browser: no declaration produces a named refusal after the real five-second wait (5586.731916ms)
+✔ rate frame: selected OpenAI wins over Gemini environment before any vendor connection (109.083696ms)
+✔ rate frame: invalid settings refuse at admission; environment cannot override valid settings (97.636863ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 8229.059721

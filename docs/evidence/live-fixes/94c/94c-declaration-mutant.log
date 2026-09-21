@@ -1,0 +1,58 @@
+✖ Selected openai: declaration and native capture agree despite gemini environment (780.792603ms)
+✖ Selected gemini: declaration and native capture agree despite openai environment (779.967006ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1619.015281
+
+✖ failing tests:
+
+test at tests/live-openai-browser.test.mjs:135:4
+✖ Selected openai: declaration and native capture agree despite gemini environment (780.792603ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    {
+  +   inputRate: 16000,
+  -   inputRate: 24000,
+      provider: 'openai',
+      type: 'rate'
+    }
+  
+      at TestContext.<anonymous> (file:///home/paulkinlan/worktrees/vb-live-fixes/tests/live-openai-browser.test.mjs:139:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { type: 'rate', inputRate: 16000, provider: 'openai' },
+    expected: { type: 'rate', inputRate: 24000, provider: 'openai' },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/live-openai-browser.test.mjs:135:4
+✖ Selected gemini: declaration and native capture agree despite openai environment (779.967006ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    {
+  +   inputRate: 24000,
+  -   inputRate: 16000,
+      provider: 'gemini',
+      type: 'rate'
+    }
+  
+      at TestContext.<anonymous> (file:///home/paulkinlan/worktrees/vb-live-fixes/tests/live-openai-browser.test.mjs:139:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { type: 'rate', inputRate: 24000, provider: 'gemini' },
+    expected: { type: 'rate', inputRate: 16000, provider: 'gemini' },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

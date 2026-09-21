@@ -33,7 +33,7 @@ import * as extensions from "./lib/extensions.mjs";
 import { createTaskHost, protectedAuditPath, TASK_TOOLS } from "./lib/tasks.mjs";
 import { bootFence } from "./lib/fence-provider.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
-import { createLiveSession, LIVE_MODEL, inputRateRequiredBy, resolvedLiveProviderName } from "./lib/live-session.mjs";
+import { createLiveSession, LIVE_MODEL, inputRateRequiredBy } from "./lib/live-session.mjs";
 import { commandToAction, functionDeclarations, liveSystemInstruction } from "./lib/commands.mjs";
 
 // Module-relative, decoded: `new URL(...).pathname` percent-encodes spaces and
@@ -1565,6 +1565,10 @@ server.on("upgrade", (req, socket) => {
   };
 
   const beginSession = () => {
+    // Snapshot once: rate, dial and later state frames describe this session,
+    // even if settings change while it is running (voicebox-beads-94c).
+    const provider = agentSettings.provider;
+    const model = PROVIDERS[provider].model;
     // STEP 2 OF THE RATE WORK: the page is told what rate to capture at BEFORE any audio is sent, ever.
     //
     // The defect this closes (journal-6g0): the browser captured at 16 kHz, the OpenAI provider declared
@@ -1575,13 +1579,13 @@ server.on("upgrade", (req, socket) => {
     // guessing a provider's rate is the defect, so the host will not guess.
     let inputRate = null;
     try {
-      inputRate = inputRateRequiredBy(resolvedLiveProviderName());
+      inputRate = inputRateRequiredBy(provider);
     } catch (e) {
       ws.send(JSON.stringify({ type: "error", error: e?.message ?? String(e) }));
       ws.close(1011, "provider has not declared the input rate its protocol requires");
       return;
     }
-    ws.send(JSON.stringify({ type: "rate", inputRate, provider: resolvedLiveProviderName() }));
+    ws.send(JSON.stringify({ type: "rate", inputRate, provider }));
 
     let session = null;
     try {
@@ -1589,11 +1593,11 @@ server.on("upgrade", (req, socket) => {
       session = createLiveSession({
         // THE AGENT SETTINGS APPLY HERE, which is what stops them being dead controls: the provider a
         // person chose is the provider this session dials, and its model comes with it.
-        provider: agentSettings.provider,
-        model: PROVIDERS[agentSettings.provider].model,
+        provider,
+        model,
         onAudioOut: (pcm, mime) => { if (pcm.length > 4) ws.send(pcm); },
         onText: (text, role) => ws.send(JSON.stringify({ type: "text", role, text })),
-        onState: (state, detail) => ws.send(JSON.stringify({ type: "state", state, detail, model: PROVIDERS[agentSettings.provider].model })),
+        onState: (state, detail) => ws.send(JSON.stringify({ type: "state", state, detail, model })),
         // The voice gets the SAME verbs the text path resolves to, from the ONE
         // command list (lib/commands.mjs) — and each call runs through the SAME
         // executor, so containment, refusal names and the audit are identical
@@ -1639,7 +1643,7 @@ server.on("upgrade", (req, socket) => {
           ws.send(JSON.stringify({ type: "tool", calls: seen }));
         },
       });
-      runningSession = { provider: session.state?.provider ?? agentSettings.provider, startedAt: new Date().toISOString() };
+      runningSession = { provider: session.state?.provider ?? provider, startedAt: new Date().toISOString() };
     } catch (e) {
       ws.send(JSON.stringify({ type: "error", error: e?.message ?? String(e) }));
       ws.close(1011, "live session failed to start");

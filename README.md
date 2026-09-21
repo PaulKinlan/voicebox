@@ -83,7 +83,7 @@ Registered resolvers: `gemini`, `script`
 <!-- END GENERATED: providers -->
 
 <!-- BEGIN GENERATED: live-session -->
-`lib/live-session.mjs` is present. Registered live providers, with the model each one's handshake names (captured from the provider against a recording transport — never dialed): `gemini` → `models/gemini-3.8-live`, `openai` → `gpt-realtime`. The default is `gemini`; `LIVE_PROVIDER` overrides it.
+`lib/live-session.mjs` is present. Registered live providers, with the model each one's handshake names (captured from the provider against a recording transport — never dialed): `gemini` → `models/gemini-3.8-live`, `openai` → `gpt-realtime`. The library fallback is `gemini`, overridable by `LIVE_PROVIDER`; the server's `/live` route instead passes the agent-settings provider explicitly.
 <!-- END GENERATED: live-session -->
 
 ## Tool calling: how words become an act, and what tools exist
@@ -245,7 +245,7 @@ Every environment variable the server and its libraries read, and where:
 | variable | read in | what it does |
 |---|---|---|
 | `GEMINI_API_KEY` | `lib/live-providers/gemini.mjs` | the Gemini Live key — without it the live session refuses to start, by name |
-| `LIVE_PROVIDER` | `lib/live-session.mjs` | which live voice provider `/live` uses (default `gemini`) |
+| `LIVE_PROVIDER` | `lib/live-session.mjs` | library fallback when no provider is passed; `/live` passes the agent-settings provider explicitly |
 | `OPENAI_API_KEY` | `lib/live-providers/openai.mjs` | the OpenAI Realtime key — without it that provider refuses to start, by name |
 | `PORT` | `server.mjs` | the port the server binds (default 8787) |
 | `VOICEBOX_BIND_DEADLINE_MS` | `server.mjs` | how long to keep retrying before giving up by name |
