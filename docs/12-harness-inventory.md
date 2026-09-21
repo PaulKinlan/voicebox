@@ -44,7 +44,9 @@ Known-purpose descriptions are separate from observed permissions. Project acces
 model access, cost, reliability and ACP support for ordinary CLIs remain unmeasured.
 Pi/pi-acp rows expose the actual production executor's `absent-capability` refusal.
 The stock server has no task executor. Other CLI rows say `adapter-not-configured`.
-The obsolete broker restriction is **a remaining code gap**, not a new policy decision.
+Inventory cards display the refusal's explanation, with its diagnostic identifier kept in
+`data-delegation-refusal`, not repeated as visible text. The obsolete broker restriction
+is **a remaining code gap**, not a new policy decision.
 
 A person explicitly starts the checks. The server shares one timestamped snapshot for
 60 seconds to avoid spawning more probes per reader. If the connection fails the page

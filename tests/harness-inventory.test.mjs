@@ -80,6 +80,15 @@ test("harness page: click lists host facts, cache does not spawn twice, lost ser
   assert.match(body, /Gemini CLI — unknown/);
   assert.match(body, /A browser cannot start a local CLI/);
   assert.match(body, /absent-capability/);
+  const rows = await page.evaluate(() => [...document.querySelectorAll("article")].map((row) => ({
+    id: row.dataset.harness, refusal: row.dataset.delegationRefusal, text: row.innerText,
+  })));
+  for (const row of rows) {
+    const refusal = row.id === "pi" || row.id === "pi-acp" ? "absent-capability" : "adapter-not-configured";
+    assert.ok(!row.text.includes(refusal), `${row.id}: refusal identifier must not be visible`);
+    assert.equal(row.refusal, refusal, `${row.id}: diagnostic identifier retained in data attribute`);
+    assert.match(row.text, /network and credential isolation|No Voicebox task adapter is configured/);
+  }
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   command("pi", "exit 77");
   const cached = await (await fetch(`${server.base}/api/harnesses?command=anything`)).json();

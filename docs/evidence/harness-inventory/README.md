@@ -43,3 +43,22 @@ state for unrecognized output. Restore original file; same command: exit 0,
 Not delivered: bridge, configured agents/default policy, voice catalogue tools,
 fleet routing, real model tasks, sandbox changes, remote-machine discovery.
 The authored gfg bead remains open for the configuration-dependent scope.
+
+## Independent review follow-up
+
+The reviewer passed inventory behavior but found diagnostic refusal IDs exposed as
+visible card text. The follow-up retains each ID in `data-delegation-refusal` and
+shows its explanation only. Pi's actual production refusal is unchanged.
+
+With only the new browser assertions applied to `27741b8`, running
+`node --test tests/harness-inventory.test.mjs` failed (2 pass, 1 fail):
+`pi: refusal identifier must not be visible`. See `review-fix-red.log`.
+After the rendering change the same command passed 3/3 (`review-fix-green.log`).
+All seven cards are checked for hidden diagnostic IDs, retained data attributes,
+and visible human-readable explanations. Screenshots and real-host observations
+were refreshed with the fix.
+
+The general acceptance check scans source literals, not rendered API data. Adding
+an identifier regex there would still miss this interpolation. Follow-up bead
+`voicebox-beads-0ye` tracks rendered-state coverage, costs and limitations; the
+source denylist was not silently widened.
