@@ -11,7 +11,7 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { resolveTurn } from "./lib/resolver.mjs";
-import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, resolveInRoot, rootVanished } from "./core/root.ts";
+import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, reachableFromEnvironment, resolveInRoot, rootVanished } from "./core/root.ts";
 import {
   AGENT_BASE_INSTRUCTION,
   DEFAULT_AGENT_SETTINGS,
@@ -172,6 +172,17 @@ function recordCallBearer(envKey, bearer) {
 }
 
 /** Resolve an environment key to its origin, from the registry. A key nobody declared is a refusal. */
+/**
+ * **THIS host's environment identity** (`voicebox-beads-g7c`, environments plan §1).
+ *
+ * A stable key, never a label: `resolveEnvironment` reserves "local" for the
+ * host answering on this machine, and the registry's remote hosts carry their
+ * own self-issued keys. It is stamped on everything this host declares and
+ * named on every act it takes, so a refusal can say WHICH machine is being
+ * asked instead of the bare position "machine".
+ */
+const SELF_ENVIRONMENT = "local";
+
 async function resolveEnvironment(envKey) {
   if (envKey === "local") {
     return { ok: true, label: "this machine", origin: null, local: true };
@@ -313,7 +324,7 @@ let liveSessionsCreated = 0;
 if (process.env.VOICEBOX_WORKSPACE) {
   const declared = path.resolve(process.env.VOICEBOX_WORKSPACE);
   if (existsSync(declared) && statSync(declared).isDirectory()) {
-    active = { project: path.basename(declared), root: { kind: "machine", path: realpathSync(declared) }, declaredAt: new Date().toISOString(), declaredBy: "VOICEBOX_WORKSPACE" };
+    active = { project: path.basename(declared), root: { kind: "machine", path: realpathSync(declared), environment: SELF_ENVIRONMENT }, declaredAt: new Date().toISOString(), declaredBy: "VOICEBOX_WORKSPACE" };
   } else {
     console.error(`[root] VOICEBOX_WORKSPACE='${process.env.VOICEBOX_WORKSPACE}' is not a directory — no root is declared`);
   }
@@ -586,7 +597,7 @@ function answerOnce(res, handler) {
 /** Resolve a name through the seam, or the refusal that says why — used by every path below. */
 function resolveActive(name) {
   if (!active) return { ...noRootDeclared() };
-  const reach = reachableFrom(active.root, "machine");
+  const reach = reachableFromEnvironment(active.root, { peer: "machine", environment: SELF_ENVIRONMENT });
   if (!reach.ok) return { ok: false, refused: reach.refused, why: reach.why };
   const resolved = resolveInRoot(active.root, name);
   if (!resolved.ok) return { ok: false, refused: resolved.rule, why: resolved.why };
@@ -682,7 +693,7 @@ async function execute(action) {
   const vanished = rootMissing();
   if (vanished) return { ...vanished, error: `refused: ${vanished.refused}`, root: active.root, logged: null };
   if (action.verb === "list") {
-    const reach = reachableFrom(active.root, "machine");
+    const reach = reachableFromEnvironment(active.root, { peer: "machine", environment: SELF_ENVIRONMENT });
     if (!reach.ok) return { ok: false, refused: reach.refused, error: `refused: ${reach.refused}`, why: reach.why, root: active.root };
     return { ok: true, action: `listed ${active.project}`, files: readdirSync(active.root.path).filter((f) => !f.startsWith(".")), root: active.root };
   }
@@ -915,7 +926,7 @@ const routes = {
       const absent = noRootDeclared();
       return json(res, 200, { ok: true, declared: false, project: null, root: null, reachableFromThisProcess: false, ...absent });
     }
-    const reach = reachableFrom(active.root, "machine");
+    const reach = reachableFromEnvironment(active.root, { peer: "machine", environment: SELF_ENVIRONMENT });
     return json(res, 200, {
       ok: true,
       declared: true,
@@ -1034,7 +1045,7 @@ async function handle(req, res) {
         if (!statSync(real).isDirectory()) {
           return json(res, 400, { ok: false, refused: "not-a-directory", why: `'${requested}' is a file; a project root is a folder` });
         }
-        active = { project, root: { kind: "machine", path: real }, declaredAt: new Date().toISOString() };
+        active = { project, root: { kind: "machine", path: real, environment: SELF_ENVIRONMENT }, declaredAt: new Date().toISOString() };
         return json(res, 200, {
           ok: true,
           project: active.project,
@@ -1049,8 +1060,8 @@ async function handle(req, res) {
 
       // opfs | handle: the page's roots. Recorded as the active project, and this process says
       // plainly that the act belongs to the page.
-      active = { project, root: { kind: root.kind, ...(root.path ? { path: String(root.path) } : {}), ...(root.id ? { id: String(root.id) } : {}) }, declaredAt: new Date().toISOString() };
-      const reach = reachableFrom(active.root, "machine");
+      active = { project, root: { kind: root.kind, environment: SELF_ENVIRONMENT, ...(root.path ? { path: String(root.path) } : {}), ...(root.id ? { id: String(root.id) } : {}) }, declaredAt: new Date().toISOString() };
+      const reach = reachableFromEnvironment(active.root, { peer: "machine", environment: SELF_ENVIRONMENT });
       return json(res, 200, {
         ok: true,
         project: active.project,
@@ -1072,7 +1083,7 @@ async function handle(req, res) {
     if (!active) return json(res, 200, { ...noRootDeclared(), root: null, entries: [] });
     const vanished = rootMissing();
     if (vanished) return json(res, 200, { ...vanished, root: active.root, entries: [] });
-    const reach = reachableFrom(active.root, "machine");
+    const reach = reachableFromEnvironment(active.root, { peer: "machine", environment: SELF_ENVIRONMENT });
     if (!reach.ok) return json(res, 200, { ok: false, refused: reach.refused, why: reach.why, root: active.root, entries: [] });
     const dir = path.join(active.root.path, ".audit");
     const files = existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".jsonl")) : [];
@@ -1088,7 +1099,7 @@ async function handle(req, res) {
     if (!active) return json(res, 200, { ...noRootDeclared(), root: null, files: [], entries: [] });
     const vanishedFiles = rootMissing();
     if (vanishedFiles) return json(res, 200, { ...vanishedFiles, root: active.root, files: [], entries: [] });
-    const reach = reachableFrom(active.root, "machine");
+    const reach = reachableFromEnvironment(active.root, { peer: "machine", environment: SELF_ENVIRONMENT });
     if (!reach.ok) {
       return json(res, 200, { ok: false, refused: reach.refused, why: reach.why, root: active.root, files: [], entries: [] });
     }

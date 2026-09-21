@@ -35,9 +35,23 @@ export type RootKind = "opfs" | "handle" | "machine";
 
 /** Where a project's files are. A descriptor is small, serialisable, and enough to act on. */
 export type RootDescriptor =
-  | { kind: "opfs"; path: string } // origin-private, relative to the origin's storage root
-  | { kind: "handle"; id: string; label?: string } // a picked folder, named by the project it belongs to
-  | { kind: "machine"; path: string }; // a path a machine process can name (usually absolute)
+  | { kind: "opfs"; path: string; environment?: string } // origin-private, relative to the origin's storage root
+  | { kind: "handle"; id: string; label?: string; environment?: string } // a picked folder, named by the project it belongs to
+  | { kind: "machine"; path: string; environment?: string }; // a path a machine process can name (usually absolute)
+
+/**
+ * **Which environment owns this root** — the key of the host that declared it.
+ *
+ * Optional because every root descriptor written before this landed has none,
+ * and a missing owner is *unknown*, never "everyone may act". The peer facts
+ * stay positional and true (they answer "page or machine, on this machine");
+ * this answers the question the seam could not previously ask: WHICH machine.
+ * A root with no owner keeps the old positional refusal, so an unattributed
+ * declaration fails exactly as it did before rather than opening up.
+ */
+export function ownerOf(root: RootDescriptor): string | null {
+  return typeof root.environment === "string" && root.environment !== "" ? root.environment : null;
+}
 
 export interface RootFacts {
   /** A sentence a person can read, for a record or a panel. */
@@ -120,6 +134,19 @@ export type Reachability = { ok: true } | { ok: false; refused: string; why: str
  */
 export const ROOT_NOT_DECLARED = "root-not-declared";
 export const ROOT_NOT_REACHABLE = "root-not-reachable-from-here";
+/**
+ * **The same refusal, with the ACTOR named** — environments plan §1.
+ *
+ * `root-not-reachable-from-here` states a fact about position without saying
+ * whose "here" it means: two machine environments both read it as a statement
+ * about themselves. This one is answered by *letting the other environment
+ * act*, and it names which one that is.
+ *
+ * A separate name rather than a reworded one: a caller matching the old code
+ * (a page refusing a machine root, where no environment identity is involved)
+ * must not start seeing a code it has never handled.
+ */
+export const ROOT_NOT_REACHABLE_FROM_ENVIRONMENT = "not-reachable-from-this-environment";
 export const ROOT_VANISHED = "root-vanished";
 
 /**
@@ -167,6 +194,36 @@ export function reachableFrom(root: RootDescriptor, peer: Peer): Reachability {
     why:
       `this project's root is ${facts.where}, and this placement is the ${peer === "page" ? "page" : "machine"}; ` +
       `only the ${who} can act on it — the act belongs to that side, not to this one`,
+  };
+}
+
+/**
+ * **May THIS environment act on this root?** (environments plan §1, `voicebox-beads-g7c`.)
+ *
+ * The peer check answers "page or machine, here"; it cannot tell two machine
+ * environments apart, and that is the sentence this function exists to say out
+ * loud. When the root names its owner and the owner is not the environment
+ * being asked, the refusal names the host that CAN act — an act that belongs to
+ * somebody is answered by asking them, which a positional message leaves the
+ * reader to infer.
+ *
+ * Falls back to the peer check when either side is unattributed, so a root
+ * declared before this landed behaves exactly as it did: unknown ownership is
+ * never read as permission.
+ */
+export function reachableFromEnvironment(
+  root: RootDescriptor,
+  acting: { peer: Peer; environment: string },
+): Reachability {
+  const owner = ownerOf(root);
+  if (owner === null || owner === acting.environment) return reachableFrom(root, acting.peer);
+  const facts = ROOT_FACTS[root.kind];
+  return {
+    ok: false,
+    refused: ROOT_NOT_REACHABLE_FROM_ENVIRONMENT,
+    why:
+      `this project's root is ${facts.where}, and it belongs to environment '${owner}'; the call asked ` +
+      `'${acting.environment}' to act, which cannot reach it — ask '${owner}', or move the act to that environment`,
   };
 }
 

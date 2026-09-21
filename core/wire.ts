@@ -51,6 +51,19 @@ export interface CallEnvelope {
   callId: string;
   tool: string;
   descriptorId: string; // WHICH admitted descriptor authorises this call
+  /**
+   * **WHICH environment is being asked to act** — its stable key
+   * (`core/environment.ts`: a self-issued key the host presents at handshake,
+   * never its label, which is mutable).
+   *
+   * `Peer` ("page" | "machine") is positional — where the caller sits — and
+   * two machine environments both answer "machine" (environments plan §1).
+   * The identity rides HERE, where two environments meet, so a reachability
+   * refusal can name the host that can act instead of the bare position it
+   * occupies. A call that cannot say who is being asked is refused by name
+   * (`unattributed-call`), never sent anonymously.
+   */
+  environment: string;
   args: Record<string, unknown>;
   boundsEcho: Record<string, unknown>; // the bounds it was admitted with — re-checked, never trusted
 }
@@ -63,15 +76,18 @@ export type ParseResult<T> =
   | { ok: true; value: T }
   | { ok: false; refused: string; why: string };
 
-const CALL_FIELDS = new Set(["v", "callId", "tool", "descriptorId", "args", "boundsEcho"]);
+const CALL_FIELDS = new Set(["v", "callId", "tool", "descriptorId", "environment", "args", "boundsEcho"]);
 const ANSWER_FIELDS = new Set(["v", "callId", "ok", "observed", "refused", "why"]);
 
-/** A call must be attributable (descriptorId) and re-checkable (boundsEcho) — a routed
- * call is trusted because it matches an ADMISSION, never because it arrived. */
+/** A call must be attributable — to the descriptor that authorised it
+ * (descriptorId), to the environment being asked to act (environment), and
+ * re-checkable (boundsEcho). A routed call is trusted because it matches an
+ * ADMISSION and names its ACTOR, never because it arrived. */
 export function makeCall(parts: {
   callId: string;
   tool: string;
   descriptorId: string;
+  environment: string;
   args?: Record<string, unknown>;
   boundsEcho: Record<string, unknown>;
 }): CallEnvelope {
@@ -80,6 +96,7 @@ export function makeCall(parts: {
     callId: parts.callId,
     tool: parts.tool,
     descriptorId: parts.descriptorId,
+    environment: parts.environment,
     args: parts.args ?? {},
     boundsEcho: parts.boundsEcho,
   };
@@ -120,6 +137,12 @@ export function parseCall(
   if (typeof obj.descriptorId !== "string" || !obj.descriptorId || typeof obj.tool !== "string" || !obj.tool || !obj.boundsEcho || typeof obj.boundsEcho !== "object") {
     return { ok: false, refused: "unattributed-call", why: "a routed call must name the descriptor that authorised it (descriptorId) and echo the bounds it was admitted with (boundsEcho) — it is trusted because it matches an admission, never because it arrived" };
   }
+  if (typeof obj.environment !== "string" || !obj.environment) {
+    // The missing ACTOR, named as its own refusal: "not allowed" and "not asked
+    // of anyone in particular" are different states, and only one of them is
+    // answered by changing a permission.
+    return { ok: false, refused: "unattributed-call", why: "the call does not say WHICH environment is being asked to act (environment) — a call with no actor cannot be refused in a way the reader can act on, so it is refused here instead of routed" };
+  }
   const admitted = lookup(obj.descriptorId, obj.tool);
   if (!admitted) {
     return { ok: false, refused: "unattributed-call", why: `no admitted descriptor '${obj.descriptorId}' carrying tool '${obj.tool}' — the call names an authority that does not exist here` };
@@ -134,6 +157,7 @@ export function parseCall(
       callId: obj.callId,
       tool: obj.tool,
       descriptorId: obj.descriptorId,
+      environment: obj.environment,
       args: (obj.args && typeof obj.args === "object" ? obj.args : {}) as Record<string, unknown>,
       boundsEcho: obj.boundsEcho as Record<string, unknown>,
     },

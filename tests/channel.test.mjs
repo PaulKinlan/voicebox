@@ -52,9 +52,11 @@ assert.equal(refusedMcp.decision, "refused");
 assert.equal(refusedMcp.rule, "exec-absent");
 
 // The stand-in pipe: sends are captured; the "peer" answers through deliver().
-function harness({ connected = () => true, peer = "page", timeoutMs = 500 } = {}) {
+function harness({ connected = () => true, peer = "page", timeoutMs = 500, environment = "env-harness" } = {}) {
   const sent = [];
-  const channel = createChannel({ peer, connected, send: (m) => sent.push(m), timeoutMs });
+  // The channel carries its OWN environment key (I1): every envelope it sends
+  // names the host being asked to act, and the asker cannot override it.
+  const channel = createChannel({ peer, connected, send: (m) => sent.push(m), timeoutMs, environment });
   return { channel, sent };
 }
 
@@ -107,7 +109,7 @@ test("a tampered boundsEcho is REFUSED, not trusted: the echo is checked against
 });
 
 test("a call naming an authority that does not exist is refused as unattributed", async () => {
-  const raw = JSON.stringify({ v: 1, callId: "rt_x", tool: "clock", descriptorId: "no-such-tool", args: {}, boundsEcho: {} });
+  const raw = JSON.stringify({ v: 1, callId: "rt_x", tool: "clock", environment: "env-harness", descriptorId: "no-such-tool", args: {}, boundsEcho: {} });
   const answer = door.receive(raw);
   const parsed = JSON.parse(answer);
   assert.equal(parsed.ok, false);
@@ -132,7 +134,7 @@ test("malformed wire is met with silence (nobody to answer), and the ask times o
 
 test("THE AUTHORITY BOUNDARY: a decision cannot ride the wire — unknown fields are refused both ways", async () => {
   // A call trying to carry a decision:
-  const call = JSON.stringify({ v: 1, callId: "rt_z", tool: "clock", descriptorId: "clock-tool", boundsEcho: {}, decision: "allow" });
+  const call = JSON.stringify({ v: 1, callId: "rt_z", tool: "clock", environment: "env-harness", descriptorId: "clock-tool", boundsEcho: {}, decision: "allow" });
   const parsed = JSON.parse(await door.receive(call));
   assert.equal(parsed.refused, "unknown-field");
   assert.match(parsed.why, /a decision has no field to ride on/);
@@ -219,7 +221,7 @@ test("an in-process caller may hand the door an OBJECT — the framing this comm
   // The reviewer's driven pair, identical data both ways: the object parses,
   // the same data with an unknown field lands on unknown-field — NOT malformed.
   const pure = await import("../core/wire.ts");
-  const asObject = pure.parseCall({ v: 1, callId: "rt_o", tool: "clock", descriptorId: "clock-tool", boundsEcho: {} }, extensions.lookupAdmitted);
+  const asObject = pure.parseCall({ v: 1, callId: "rt_o", tool: "clock", descriptorId: "clock-tool", environment: "env-harness", boundsEcho: {} }, extensions.lookupAdmitted);
   assert.equal(asObject.ok, true, "parseCall still refuses objects after the fix");
   const withExtra = pure.parseCall({ v: 1, callId: "rt_o", tool: "clock", descriptorId: "clock-tool", boundsEcho: {}, decision: "allow" }, extensions.lookupAdmitted);
   assert.equal(withExtra.ok, false);
