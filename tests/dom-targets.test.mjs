@@ -33,7 +33,7 @@ test("dom-targets: every element ID queried by client JS exists in the served HT
   assert.ok(clientFiles.length >= 3, "must specify at least 3 client files to guard");
 
   // Elements created dynamically at runtime by client scripts before being queried.
-  // Every entry MUST provide a concrete why (>=20 chars) stating where and how it is created.
+  // Every entry MUST provide a concrete why (>=20 chars trimmed) stating where and how it is created.
   const DYNAMICALLY_CREATED = [
     {
       id: "pip-open",
@@ -44,12 +44,13 @@ test("dom-targets: every element ID queried by client JS exists in the served HT
   for (const entry of DYNAMICALLY_CREATED) {
     assert.ok(entry.id && typeof entry.id === "string", "each dynamic entry must have a string id");
     assert.ok(
-      typeof entry.why === "string" && entry.why.length >= 20,
-      `dynamic entry '${entry.id}' must provide a concrete why (>=20 chars), got '${entry.why}'`,
+      typeof entry.why === "string" && entry.why.trim().length >= 20,
+      `dynamic entry '${entry.id}' must provide a concrete why (>=20 chars trimmed), got '${entry.why}'`,
     );
   }
   const dynamicIds = new Set(DYNAMICALLY_CREATED.map((e) => e.id));
 
+  const queryTargets = new Map();
   const targetMap = new Map();
   const missing = [];
   let scannedFiles = 0;
@@ -60,10 +61,14 @@ test("dom-targets: every element ID queried by client JS exists in the served HT
     const code = readFileSync(filePath, "utf8");
     scannedFiles++;
 
-    const recordTarget = (id, line) => {
+    const recordTarget = (id, line, isQueryDerived = false) => {
       if (!id || dynamicIds.has(id)) return;
       // Skip hex colors (e.g. #fff, #141c34) if any matched standalone hash pattern
       if (/^[0-9a-fA-F]{3,8}$/.test(id)) return;
+      if (isQueryDerived) {
+        if (!queryTargets.has(id)) queryTargets.set(id, new Set());
+        queryTargets.get(id).add(`${f}:${line}`);
+      }
       if (!targetMap.has(id)) targetMap.set(id, new Set());
       targetMap.get(id).add(`${f}:${line}`);
       if (!htmlIds.has(id)) {
@@ -76,7 +81,7 @@ test("dom-targets: every element ID queried by client JS exists in the served HT
     const reGet = /(?:getElementById|\$)\s*\(\s*["'`]#?([a-zA-Z0-9_-]+)["'`]\s*\)/g;
     for (const m of code.matchAll(reGet)) {
       const line = code.slice(0, m.index).split("\n").length;
-      recordTarget(m[1], line);
+      recordTarget(m[1], line, true);
     }
 
     // Pattern 2: querySelector("#literal") or querySelectorAll("#literal")
@@ -84,28 +89,28 @@ test("dom-targets: every element ID queried by client JS exists in the served HT
     const reQuery = /querySelector(?:All)?\s*\(\s*["'`]#([a-zA-Z0-9_-]+)["'`]\s*\)/g;
     for (const m of code.matchAll(reQuery)) {
       const line = code.slice(0, m.index).split("\n").length;
-      recordTarget(m[1], line);
+      recordTarget(m[1], line, true);
     }
 
     // Pattern 3: String concatenation ('#' + "literal" or "#" + 'literal')
     const reConcat = /["'`]#["'`]\s*\+\s*["'`]#?([a-zA-Z0-9_-]+)["'`]/g;
     for (const m of code.matchAll(reConcat)) {
       const line = code.slice(0, m.index).split("\n").length;
-      recordTarget(m[1], line);
+      recordTarget(m[1], line, true);
     }
 
     // Pattern 4: Selector held in a constant (const s = "#literal"; querySelector(s))
     const reConst = /(?:const|let|var)\s+[a-zA-Z0-9_$]+\s*=\s*["'`]#([a-zA-Z0-9_-]+)["'`]/g;
     for (const m of code.matchAll(reConst)) {
       const line = code.slice(0, m.index).split("\n").length;
-      recordTarget(m[1], line);
+      recordTarget(m[1], line, true);
     }
 
     // Pattern 5: Template literals with standalone hash (`#literal`)
     const reTemplate = /`#([a-zA-Z0-9_-]+)`/g;
     for (const m of code.matchAll(reTemplate)) {
       const line = code.slice(0, m.index).split("\n").length;
-      recordTarget(m[1], line);
+      recordTarget(m[1], line, true);
     }
 
     // Pattern 6: Object map tables of element IDs (e.g. const WANTED = { key: "id", ... })
@@ -114,17 +119,23 @@ test("dom-targets: every element ID queried by client JS exists in the served HT
       const wantedBlock = wantedMatch[1];
       const wantedLine = code.slice(0, wantedMatch.index).split("\n").length;
       for (const m of wantedBlock.matchAll(/:\s*["']([a-zA-Z0-9_-]+)["']/g)) {
-        recordTarget(m[1], wantedLine);
+        recordTarget(m[1], wantedLine, false);
       }
     }
   }
 
-  // Count assertion: guard MUST verify a non-trivial number of files and targets.
-  // Cannot pass by finding nothing or having neutered regex patterns.
+  // Count assertions:
+  // 1. Guard must scan multiple client files
   assert.ok(scannedFiles >= 3, `must scan at least 3 client files (scanned ${scannedFiles})`);
+  // 2. Guard must witness query-derived patterns independently from table declarations (Item 3)
+  assert.ok(
+    queryTargets.size >= 12,
+    `guard must find and verify at least 12 query-derived DOM targets in client JS (observed only ${queryTargets.size})`,
+  );
+  // 3. Guard must verify total targets across queries and tables
   assert.ok(
     targetMap.size >= 40,
-    `guard must find and verify at least 40 DOM targets in client JS (observed only ${targetMap.size})`,
+    `guard must find and verify at least 40 total DOM targets in client JS (observed only ${targetMap.size})`,
   );
 
   assert.deepEqual(
