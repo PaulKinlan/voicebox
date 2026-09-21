@@ -769,6 +769,13 @@ const routes = {
   // hang deleted its scratch directory BEFORE restoring the previous root, and left the live server
   // holding a declaration pointing at nothing. RESTORE THE PREVIOUS STATE FIRST, then remove your own.
   "DELETE /api/root": (req, res, url) => {
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, {
+        ok: false,
+        refused: "host-token-required",
+        why: "un-declaring is the host's act too: it cannot point the loop at a new directory, but it can break a project that is mid-write, so it takes the same token (x-voicebox-host-token)",
+      });
+    }
     const previous = active;
     active = null;
     return json(res, 200, {
@@ -866,6 +873,19 @@ async function handle(req, res) {
   // environment owning them is a fact, and refused, because this process must not pretend to act on
   // them. That is the whole difference between one root and two.
   if (req.method === "POST" && url.pathname === "/api/root") {
+    // DECLARING THE ROOT IS THE HOST'S ACT. Same authority class as admitting an extension or issuing
+    // a pairing bearer, and the same mechanism as both (voicebox-beads-m2i): a host-generated secret,
+    // mode 0600, in the host's own directory, served by no route — the person's shell has it.
+    //
+    // This route is the remaining hole of that shape: it re-points every file route, so without the
+    // token anything that can reach the server can aim the loop at anything the process can read.
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, {
+        ok: false,
+        refused: "host-token-required",
+        why: "declaring the project root is the host's act — it re-points every file route — and this route requires the host token (x-voicebox-host-token); the page cannot hold it",
+      });
+    }
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", () => answerOnce(res, async () => {

@@ -439,11 +439,12 @@ test("a dropped file is present-not-admitted: the next host admission does NOT s
 
 // ── 11. the dotfile line: declaring the HOST dir as a root must not expose its secrets ──
 test("a declared root at the host directory neither lists nor serves its dotfiles — the token-read chain is shut", async () => {
-  // The operator (or the page — see the /api/root bead) can declare any existing
-  // path as the active root. Point it at the HOST's own directory:
+  // The HOST declares a root at its own directory (voicebox-beads-cfn: declaring is the host's act and
+  // takes the token now, so a page cannot aim the loop here at all). The dotfile guard below is the
+  // second line of defence, and it still has to hold for the case where the host itself declares this.
   const declare = await fetch(`${BASE}/api/root`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken() },
     body: JSON.stringify({ project: "hostdir", root: { kind: "machine", path: HOST_EXTENSIONS } }),
   }).then((r) => r.json());
   assert.equal(declare.ok, true, `the declaration itself was refused: ${JSON.stringify(declare)}`);
@@ -466,7 +467,7 @@ test("a declared root at the host directory neither lists nor serves its dotfile
     // Restore the scratch workspace as the active root so later tests are unaffected:
     await fetch(`${BASE}/api/root`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken() },
       body: JSON.stringify({ project: path.basename(WORKSPACE), root: { kind: "machine", path: WORKSPACE } }),
     });
   }

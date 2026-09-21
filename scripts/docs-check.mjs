@@ -113,9 +113,10 @@ async function probeServer() {
       await new Promise((r) => setTimeout(r, 100));
     }
     if (!out.includes("voicebox on http")) throw new Error(`server did not start on ${port}: ${out.slice(0, 200)}`);
+    const token = readFileSync(join(dirs.extensions, ".host-token"), "utf8").trim();
     // VOICEBOX_WORKSPACE declared a root at boot; un-declare it so the routes are probed in the state a
     // fresh server is in, and so the loop drive below can show `root-not-declared` and the declaration.
-    await fetch(`http://127.0.0.1:${port}/api/root`, { method: "DELETE" });
+    await fetch(`http://127.0.0.1:${port}/api/root`, { method: "DELETE", headers: { "x-voicebox-host-token": token } });
     {
       const r = await fetch(`http://127.0.0.1:${port}/api/health`);
       health = r.ok ? await r.json() : { provider: "(no /api/health answer)", workspace: "?" };
@@ -141,7 +142,7 @@ async function probeServer() {
     // the line's own claim by hand (2026-09-20).
     const liveUpgradeLine = await probeLiveUpgrade(port);
     const surface = await probeExtensionSurface(port);
-    const loop = await driveLoop(port, dirs);
+    const loop = await driveLoop(port, dirs, token);
     return { health, routes, liveUpgradeLine, surface, loop };
   } catch (e) {
     // A probe that dies mid-run must say WHICH step and what the server was saying — one run in sixteen
@@ -162,7 +163,7 @@ async function probeServer() {
  * loop describes itself: what starts a turn, what decides, who acts, what returns, what is recorded, and
  * where it fails — each with the value the server actually answered.
  */
-async function driveLoop(port, dirs) {
+async function driveLoop(port, dirs, token) {
   const base = `http://127.0.0.1:${port}`;
   const post = async (p, body, headers = {}) => {
     const r = await fetch(base + p, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
@@ -172,13 +173,12 @@ async function driveLoop(port, dirs) {
   const turn = (transcript) => post("/api/turn", { transcript });
 
   const beforeRoot = await turn("create a file called hello.txt with hi");
-  const declared = await post("/api/root", { project: "docs-check", root: { kind: "machine", path: dirs.root } });
+  const declared = await post("/api/root", { project: "docs-check", root: { kind: "machine", path: dirs.root } }, { "x-voicebox-host-token": token });
   const write = await turn("create a file called hello.txt with hi");
   const escape = await turn("read ..");
   const audit = await get("/api/audit");
   const propose = await turn("create a tool called peek that lists files");
   const plan = await get("/api/extensions/proposals/peek-tool/plan");
-  const token = readFileSync(join(dirs.extensions, ".host-token"), "utf8").trim();
   const admitted = await post("/api/extensions/admit", { id: "peek-tool", confirm: true, decision: "admit" }, { "x-voicebox-host-token": token });
   const call = await turn("run the tool peek");
   const inventory = await get("/api/extensions");

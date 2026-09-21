@@ -36,6 +36,14 @@ let emptyFolder;
 let machineRoot;
 
 const send = (message) => page.evaluate((m) => window.e1m0.send(m), message);
+
+/** Declare a root AS THE HOST (the token lives in the host's own directory — voicebox-beads-cfn). */
+const declareAsHost = (project, root) =>
+  fetch(`${BASE}/api/root`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-voicebox-host-token": server.hostToken },
+    body: JSON.stringify({ project, root }),
+  }).then((r) => r.json());
 const stats = () => send({ type: "stats" });
 
 test.before(async () => {
@@ -80,6 +88,9 @@ test("7cd.1 Three views, three authorities, and each one names the root it is sh
   // (a) a project whose root the PAGE owns: the origin view and the picked view are real, and the
   // machine view refuses by name rather than listing some other folder under a machine heading.
   await send({ type: "openProject", name: folderName });
+  // The HOST declares this page-owned root (the page cannot — voicebox-beads-cfn), which is what makes
+  // "the machine cannot reach this root" a fact the server can report rather than a guess.
+  assert.equal((await declareAsHost(folderName, { kind: "handle", id: folderName })).ok, true);
   const opfs = await send({ type: "listView", view: "opfs", limit: LIMIT });
   const picked = await send({ type: "listView", view: "picked", limit: LIMIT });
   for (const [name, reply] of [["opfs", opfs], ["picked", picked]]) {
@@ -100,16 +111,23 @@ test("7cd.1 Three views, three authorities, and each one names the root it is sh
 
   // (b) the same project declares a root on the machine: now the machine view is the real one, it
   // names the folder, and the picked view refuses by name — the pair, from both sides.
-  await page.evaluate(async (dir) => { await window.e1m0.useMachineRoot(dir, "explorer"); }, machineRoot);
+  // The HOST declares (the page cannot — voicebox-beads-cfn), so the panel has a machine root to show.
+  await fetch(`${BASE}/api/root`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-voicebox-host-token": server.hostToken },
+    body: JSON.stringify({ project: "explorer", root: { kind: "machine", path: machineRoot } }),
+  });
   const machine = await send({ type: "listView", view: "server", limit: LIMIT });
   const pickedAfter = await send({ type: "listView", view: "picked", limit: LIMIT });
   assert.equal(machine.ok, true, `the machine view failed after declaring its root: ${JSON.stringify(machine)}`);
   assert.equal(machine.root, machineRoot, "the machine view does not name the root it is showing");
   assert.match(machine.authority.where, /a folder on this machine/);
   assert.match(machine.authority.whoCanSee, /anything on that machine/);
-  assert.equal(pickedAfter.ok, false, "the picked view answered for a machine root");
-  assert.equal(pickedAfter.code, "not-a-project");
-  assert.match(pickedAfter.why, /a folder on the machine/, "the refusal does not say what this root actually is");
+  // The picked view still answers for the PAGE's own project: the host's machine root is a different
+  // actor's fact now that the page cannot declare (voicebox-beads-cfn). Three views, three authorities,
+  // all answering, each naming its own root — which is what this check is named for.
+  assert.equal(pickedAfter.ok, true, `the picked view failed: ${JSON.stringify(pickedAfter)}`);
+  assert.notEqual(pickedAfter.root, machine.root, "the picked view reports the machine root");
 
   // Three roots, three authorities, and no two of them the same thing.
   assert.equal(new Set([opfs.root, picked.root, machine.root]).size, 3, "two views claim the same root");
@@ -128,7 +146,7 @@ test("7cd.1 Three views, three authorities, and each one names the root it is sh
   }));
   assert.match(panels.opfs, /v1/, "the origin panel does not name its root");
   assert.match(panels.picked, /a real folder on this machine/, "the picked panel does not name its authority");
-  assert.match(panels.server, /root-not-reachable-from-here/, "the machine panel does not show its refusal");
+  assert.match(panels.server, new RegExp(machineRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "the machine panel does not name the root it is showing");
   assert.notEqual(panels.opfs, panels.picked, "two panels render the same thing");
 });
 
@@ -168,6 +186,9 @@ test("7cd.2 'You are not pointing at a project' and 'your project is empty' are 
   // (c) the machine's root is not this root: the explorer's server panel refuses BY NAME when the
   // active root belongs to the page, instead of listing some other folder under a machine heading.
   await send({ type: "openProject", name: "atlas" });
+  // The HOST declares the page-owned root: that is what makes "the machine cannot reach this root" a
+  // fact the server can report rather than a guess (the page cannot declare it any more).
+  assert.equal((await declareAsHost("atlas", { kind: "opfs", path: "v1/projects/atlas" })).ok, true);
   const server = await send({ type: "listView", view: "server" });
   assert.equal(server.ok, false, `the machine panel served a page-owned root: ${JSON.stringify(server)}`);
   assert.equal(server.code, "root-not-reachable-from-here");

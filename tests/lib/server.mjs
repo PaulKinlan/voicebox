@@ -9,6 +9,8 @@
 // Nothing here is browser-specific: it is the shared spawn-and-wait that every HTTP suite in this repo
 // was hand-rolling, with the port made correct rather than constant.
 import { spawn } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -20,7 +22,12 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".
  *
  * @returns {Promise<{port: number, base: string, child: import("node:child_process").ChildProcess, stop: () => Promise<void>}>}
  */
-export async function startServer({ env = {}, cwd = ROOT, readyTimeoutMs = 20000 } = {}) {
+export async function startServer({ env = {}, cwd = ROOT, readyTimeoutMs = 20000, extensionsDir = null } = {}) {
+  // A SCRATCH EXTENSIONS DIRECTORY PER SERVER, because that is where the HOST TOKEN lives (mode 0600,
+  // host-generated, served by no route — voicebox-beads-m2i). Two things follow: a suite never touches
+  // Paul's real one, and a suite that spawns the server IS the host, so it can read the token and act
+  // with host authority — which is what declaring a root now requires (voicebox-beads-cfn).
+  const scratchExtensions = extensionsDir ?? env.VOICEBOX_EXTENSIONS_DIR ?? mkdtempSync(path.join(os.tmpdir(), "voicebox-ext-"));
   const child = spawn(process.execPath, [path.join(ROOT, "server.mjs")], {
     cwd,
     // THE DEFAULTS LIVE HERE, so a lane cannot forget them. Spreading `process.env` means a developer's
@@ -39,6 +46,7 @@ export async function startServer({ env = {}, cwd = ROOT, readyTimeoutMs = 20000
       PORT: "0",
       VOICEBOX_PROVIDER: env.VOICEBOX_PROVIDER ?? "script",
       VOICEBOX_WORKSPACE: env.VOICEBOX_WORKSPACE ?? undefined, // undefined = omitted: no root from the shell
+      VOICEBOX_EXTENSIONS_DIR: scratchExtensions,
       ...env,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -82,10 +90,17 @@ export async function startServer({ env = {}, cwd = ROOT, readyTimeoutMs = 20000
   }
   if (!up) throw new Error(`the server bound ${port} but never answered /api/health`);
 
+  // The host token, read the way the person's shell reads it: from the host's own directory. A suite
+  // that declares a root sends this header; a suite that impersonates the PAGE does not.
+  const tokenFile = path.join(scratchExtensions, ".host-token");
+  const hostToken = existsSync(tokenFile) ? readFileSync(tokenFile, "utf8").trim() : null;
+
   return {
     port,
     base,
     child,
+    hostToken,
+    extensionsDir: scratchExtensions,
     async stop() {
       try {
         process.kill(-child.pid, "SIGKILL");
