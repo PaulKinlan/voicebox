@@ -54,6 +54,9 @@ The blocks marked `BEGIN GENERATED` are written by `scripts/docs-check.mjs` from
 
 Task admission's API, evidence boundaries and unfinished execution work are documented in
 [D1: authenticated task admission and durable handles](docs/10-delegate-task-d1.md).
+[ACP adapter diagnostics](docs/11-acp-adapter.md) now verify one real pi-acp/pi version pair
+without credentials. Actual delegated model tasks still refuse pending bounded provider access;
+this is not browser-only delegation acceptance.
 
 ## The two paths, stated separately
 

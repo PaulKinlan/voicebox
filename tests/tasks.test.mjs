@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { auditFileName } from "../core/audit.ts";
 import { reduceTask, taskInput } from "../core/tasks.ts";
 import { createTaskHost } from "../lib/tasks.mjs";
+import { TaskInterrupted } from "../lib/task-interrupted.mjs";
 
 const environment = "env_0123456789abcdef";
 function fixture(t, implementation) {
@@ -34,6 +35,17 @@ async function until(read, predicate, timeoutMs = 3000) {
   }
   assert.fail(`condition did not occur: ${JSON.stringify(read())}`);
 }
+
+test("typed executor interruption is durable; an arbitrary error cannot spoof the outcome", async (t) => {
+  for (const [error, state] of [[new TaskInterrupted("harness-ended-outcome-unknown"), "interrupted"], [Object.assign(new Error("failure"), { state: "interrupted", refused: "executor-failed" }), "failed"]]) {
+    const f = fixture(t, runner(() => { throw error; }));
+    const { task } = f.admit();
+    const done = await until(() => f.status(task.address), (s) => s.task?.state === state);
+    assert.equal(done.task.reason, error.refused);
+    assert.equal(f.entries().at(-1).task.state, state);
+    assert.equal(f.admit().task.state, state);
+  }
+});
 
 test("the model cannot supply authority or a context snapshot that does not exist", () => {
   for (const key of ["owner", "root", "environment", "command", "cwd", "bounds", "bearer", "callId"]) {

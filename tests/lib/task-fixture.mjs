@@ -39,7 +39,7 @@ export async function taskFixture(t, { runtime = true } = {}) {
   const hostDir = path.join(scratch, "host");
   const controls = path.join(scratch, "controls");
   for (const dir of [workspace, secondRoot, hostDir, controls]) fs.mkdirSync(dir);
-  const preload = fileURLToPath(new URL("../fixtures/task-runtime.mjs", import.meta.url));
+  const preload = typeof runtime === "string" ? runtime : fileURLToPath(new URL("../fixtures/task-runtime.mjs", import.meta.url));
   let server;
   const env = {
     VOICEBOX_WORKSPACE: workspace, VOICEBOX_EXTENSIONS_DIR: hostDir,

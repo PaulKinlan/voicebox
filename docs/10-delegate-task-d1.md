@@ -34,9 +34,9 @@ There is no second task database or root index. Task events share the original r
 3. Append the `queued` record, flush the file and directory entries, then read it back. Failed persistence means no accepted handle and no execution.
 4. Return the handle; dispatch on a later event-loop turn, without awaiting completion. Dispatch also requires a durable `running` event.
 
-At most eight tasks are active per host service. Each admitted implementation must establish finite deadline and output bounds. Captured input and executor-facing bounds are immutable. A deadline records `interrupted`; it does **not** claim a subprocess was killed, and capacity stays charged until execution actually settles. No public Stop/cancel implementation is provided by D1.
+At most eight tasks are active per host service. Each admitted implementation must establish finite deadline and output bounds. Captured input and executor-facing bounds are immutable. A deadline records `interrupted`; it does **not** claim a subprocess was killed, and capacity stays charged until execution actually settles. A trusted executor can also report `TaskInterrupted` with a named reason when its runtime ends without a confirmed result; other errors remain `failed`. No public Stop/cancel implementation is provided by D1.
 
-`installTaskExecutor()` is a trusted **host-code** seam, not a request/configuration route or proof of containment. Its synchronous `check()` must establish the actual mechanism; `run()` is called only after persistence. D2 must supply and verify a real adapter and its enforcement before production tasks can run. The lifecycle fixture supplies fixed, no-untrusted-code operations only.
+`installTaskExecutor()` is a trusted **host-code** seam, not a request/configuration route or proof of containment. Its synchronous `check()` must establish the actual mechanism; `run()` is called only after persistence. D2 must supply and verify a real adapter and its enforcement before production tasks can run. The lifecycle fixture supplies fixed, no-untrusted-code operations only. The [ACP diagnostic slice](11-acp-adapter.md) verifies one actual adapter handshake and typed process interruption, but its production executor refuses pending bounded provider access.
 
 ## Process death is not replay permission
 
