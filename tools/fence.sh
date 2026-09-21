@@ -1,0 +1,40 @@
+#!/bin/bash
+# The voicebox fence: bubblewrap, no root, no daemon. Source tree read-only,
+# one writable home bound in from the host, everything else fresh. Network is
+# SHARED — deliberately: this fence bounds filesystem and processes, NOT the
+# network, and the boundary report says so.
+#
+# Usage: fence.sh <home> <port> [command...]
+#   <home>   the sandbox's writable home (host path), created if absent
+#   <port>   the loopback port the fenced server binds
+#   command  what to run inside (default: the probe)
+set -euo pipefail
+SANDBOX_HOME="$1"
+PORT="$2"
+shift 2
+mkdir -p "$SANDBOX_HOME/workspace"
+exec /usr/bin/bwrap \
+  --ro-bind /usr /usr \
+  --symlink usr/lib /lib64 \
+  --symlink usr/lib /lib \
+  --ro-bind /etc /etc \
+  --proc /proc \
+  --dev /dev \
+  --tmpfs /tmp \
+  --tmpfs /run \
+  --ro-bind-try /run/systemd/resolve/stub-resolv.conf /run/systemd/resolve/stub-resolv.conf \
+  --tmpfs /var \
+  --tmpfs /home \
+  --bind "$SANDBOX_HOME" /home/voice \
+  --ro-bind "$PWD" /srv/voicebox \
+  --bind "$SANDBOX_HOME/workspace" /home/voice/workspace \
+  --tmpfs /probes \
+  --ro-bind "$PWD/tools/sandbox-probe.mjs" /probes/sandbox-probe.mjs \
+  --clearenv \
+  --setenv PATH /usr/bin \
+  --setenv PORT "$PORT" \
+  --setenv HOME /home/voice \
+  --setenv SANDBOX_PROBE_PATHS /srv/voicebox:/home/voice/workspace \
+  --chdir /home/voice \
+  --unshare-pid --unshare-uts --die-with-parent --new-session \
+  -- "$@"
