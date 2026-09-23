@@ -7,7 +7,7 @@ const production = createPiAcpExecutor();
 const controls = process.env.VOICEBOX_TASK_FIXTURE;
 installTaskExecutor({
   check({ input }) {
-    if (input.agent !== "diagnostic-only") return production.check();
+    if (input.agent !== "diagnostic-only") return production.check({ input });
     return { ok: true, mechanism: "test-only-bwrap-no-network-credential-free-ACP-diagnostic", bounds: { deadlineMs: 20000, maxOutputBytes: 1024 } };
   },
   async run() {

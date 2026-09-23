@@ -13,7 +13,9 @@ function fixture(t) {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const adapter = path.join(dir, "adapter");
   mkdirSync(adapter);
+  mkdirSync(path.join(adapter, "dist"));
   writeFileSync(path.join(adapter, "package.json"), JSON.stringify({ name: "pi-acp", version: "0.0.33" }));
+  writeFileSync(path.join(adapter, "dist", "index.js"), "// adapter entry\n");
   const command = (name, body, mode = 0o700) => writeFileSync(path.join(dir, name), `#!/bin/sh\n${body}\n`, { mode });
   command("pi", 'test "$1" = "--version" || exit 3; echo 0.85.1');
   command("claude", "exit 7");
@@ -32,7 +34,8 @@ test("host inventory separates version-only presence, broken installs, unknown i
   const rows = Object.fromEntries(report.entries.map((r) => [r.id, r]));
   assert.equal(rows.pi.state, "present");
   assert.equal(rows.pi.version, "0.85.1");
-  assert.equal(rows.pi.delegation.refused, "absent-capability");
+  assert.equal(rows.pi.delegation.ok, true);
+  assert.match(rows.pi.delegation.mechanism, /stdio-acp-client/);
   assert.equal(rows.claude.state, "unrunnable");
   assert.match(rows.claude.why, /exit 7/);
   assert.equal(rows.codex.state, "unrunnable");
@@ -79,15 +82,17 @@ test("harness page: click lists host facts, cache does not spawn twice, lost ser
   assert.match(body, /Claude Code — unrunnable/);
   assert.match(body, /Gemini CLI — unknown/);
   assert.match(body, /A browser cannot start a local CLI/);
-  assert.match(body, /absent-capability/);
   const rows = await page.evaluate(() => [...document.querySelectorAll("article")].map((row) => ({
     id: row.dataset.harness, refusal: row.dataset.delegationRefusal, text: row.innerText,
   })));
   for (const row of rows) {
-    const refusal = row.id === "pi" || row.id === "pi-acp" ? "absent-capability" : "adapter-not-configured";
-    assert.ok(!row.text.includes(refusal), `${row.id}: refusal identifier must not be visible`);
-    assert.equal(row.refusal, refusal, `${row.id}: diagnostic identifier retained in data attribute`);
-    assert.match(row.text, /network and credential isolation|No Voicebox task adapter is configured/);
+    if (row.id === "pi" || row.id === "pi-acp") {
+      assert.equal(row.refusal, "none");
+      assert.match(row.text, /stdio-acp-client: pi-acp adapter/);
+    } else {
+      assert.equal(row.refusal, "adapter-not-configured");
+      assert.match(row.text, /No Voicebox task adapter is configured/);
+    }
   }
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   command("pi", "exit 77");

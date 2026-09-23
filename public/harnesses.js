@@ -23,8 +23,8 @@ button.addEventListener("click", async () => {
       text(article, "p", row.description);
       text(article, "p", row.why);
       text(article, "p", row.capabilities);
-      article.dataset.delegationRefusal = row.delegation.refused;
-      text(article, "p", `Voicebox delegation: ${row.delegation.why}`);
+      article.dataset.delegationRefusal = row.delegation.refused ?? "none";
+      text(article, "p", row.delegation.ok ? `Voicebox delegation: ${row.delegation.mechanism ?? "admitted"}` : `Voicebox delegation: ${row.delegation.why}`);
       list.append(article);
     }
     scope.textContent = `${report.scope}. ${report.note}`;
