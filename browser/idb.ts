@@ -64,3 +64,70 @@ export async function listHandleNames(): Promise<string[]> {
   db.close();
   return names;
 }
+
+// ── Room folder handles: persistent across reloads (voicebox-beads-69d) ─────
+const FOLDER_PREFIX = "room_folder:";
+
+export async function putRoomFolder(name: string, handle: FileSystemDirectoryHandle): Promise<void> {
+  await tx("readwrite", (store) => store.put(handle, `${FOLDER_PREFIX}${name}`));
+}
+
+export async function getRoomFolder(name: string): Promise<FileSystemDirectoryHandle | null> {
+  const db = await open();
+  const handle = await new Promise<FileSystemDirectoryHandle | null>((resolve, reject) => {
+    const request = db.transaction(STORE, "readonly").objectStore(STORE).get(`${FOLDER_PREFIX}${name}`);
+    request.onsuccess = () => resolve((request.result as FileSystemDirectoryHandle) ?? null);
+    request.onerror = () => reject(request.error);
+  });
+  db.close();
+  return handle;
+}
+
+export async function deleteRoomFolder(name: string): Promise<void> {
+  await tx("readwrite", (store) => store.delete(`${FOLDER_PREFIX}${name}`));
+}
+
+export async function listRoomFolders(): Promise<Array<{ name: string; handle: FileSystemDirectoryHandle }>> {
+  const db = await open();
+  const folders = await new Promise<Array<{ name: string; handle: FileSystemDirectoryHandle }>>((resolve, reject) => {
+    const transaction = db.transaction(STORE, "readonly");
+    const store = transaction.objectStore(STORE);
+    const results: Array<{ name: string; handle: FileSystemDirectoryHandle }> = [];
+    const request = store.openCursor();
+    request.onsuccess = (e) => {
+      const cursor = (e.target as IDBRequest<IDBCursorWithValue>).result;
+      if (cursor) {
+        const key = String(cursor.key);
+        if (key.startsWith(FOLDER_PREFIX)) {
+          results.push({
+            name: key.slice(FOLDER_PREFIX.length),
+            handle: cursor.value as FileSystemDirectoryHandle,
+          });
+        }
+        cursor.continue();
+      } else {
+        resolve(results);
+      }
+    };
+    request.onerror = () => reject(request.error);
+  });
+  db.close();
+  return folders;
+}
+
+const ACTIVE_FOLDER_KEY = "room_active_folder";
+
+export async function putActiveRoomFolderName(name: string): Promise<void> {
+  await tx("readwrite", (store) => store.put(name, ACTIVE_FOLDER_KEY));
+}
+
+export async function getActiveRoomFolderName(): Promise<string | null> {
+  const db = await open();
+  const name = await new Promise<string | null>((resolve, reject) => {
+    const request = db.transaction(STORE, "readonly").objectStore(STORE).get(ACTIVE_FOLDER_KEY);
+    request.onsuccess = () => resolve((request.result as string) ?? null);
+    request.onerror = () => reject(request.error);
+  });
+  db.close();
+  return name;
+}

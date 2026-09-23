@@ -200,3 +200,5 @@ Audio worklets loaded by that code: `pcm-worklet.js`.
 - **`public/fused.js`** is authoritative for what the page shows, and it **labels its own simulations on the
   page**: files, the turn submission and the containment refusals are real; the shared view, seen-marks and
   admission are simulated and say so. A reader should trust that label over any prose, including this file.
+  The room's folder handles (`#open-folder`, `#room-folders-bar`) provide read/write handles persisted in IndexedDB
+  across reloads, supporting several directories at once with a "Restore access" button when permission drops to prompt.

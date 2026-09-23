@@ -118,9 +118,12 @@
              browser cannot click an OS picker); the picker is what a person
              uses, and both produce the same handle. -->
         <div class="room-folder" id="room-folder-row">
-          <button class="quiet" id="open-folder" type="button">Open a folder to read…</button>
+          <button class="quiet" id="open-folder" type="button">Open a folder…</button>
           <button class="quiet" id="close-folder" type="button" hidden>Back to the server's folder</button>
-          <span class="room-folder-hint" id="room-folder-hint" hidden>or drop a folder here to read it — nothing is written, and it lasts this session</span>
+          <span class="room-folder-hint" id="room-folder-hint" hidden>or drop a folder here</span>
+        </div>
+        <div class="room-folders-bar" id="room-folders-bar" hidden>
+          <div class="room-folders-list" id="room-folders-list" role="tablist" aria-label="Opened folders"></div>
         </div>
         <p class="list-bound" id="list-bound" role="status" hidden></p>
         <ul class="files" id="files" role="list" aria-busy="true"></ul>

@@ -71,7 +71,7 @@ These are the things that must stay true; each is checkable, and the first three
 
 1. **The turn path is exactly one seam.** The server executes actions and never parses language; every verb
    comes from a registered resolver. (`docs-check` reads the provider list from the module that registers it.)
-2. **The page's load set is what the document says it is.** (`docs-check` reads `public/index.html`.)
+2. **The page's load set is what the document says it is.** (`docs-check` reads `public/index.html`, including the room folders bar and settings modal.)
 3. **A route a document claims is a route that answers.** (`docs-check` probes a live server on a scratch
    port — the same thing the suite does, because "it serves" and "the doc says it serves" are different
    claims.)

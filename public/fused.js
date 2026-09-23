@@ -36,6 +36,7 @@ const WANTED = {
   extRunning: "ext-running", extWaiting: "ext-waiting", extPresent: "ext-present",
   extRefused: "ext-refused", extCatalogue: "ext-catalogue",
   taskCard: "task-card",
+  roomFoldersBar: "room-folders-bar", roomFoldersList: "room-folders-list",
 };
 const els = {};
 const missing = [];
@@ -72,17 +73,51 @@ const matchesFilter = (entry) => !fileFilter || entry.name.toLowerCase().include
 // The environment page owns the writable handle and its persistence. The room
 // only LOOKS, so it asks for read and keeps the handle in memory: a narrower
 // permission for a narrower purpose, and no second copy of a persisted handle to
-// drift from the environment page's. The walk and the bounds match that page's
-// shape (entries() with a limit and an explicit truncation flag) because two
-// listers of the same kind should not disagree about how they lie.
+// ── Room folders: readable AND writable, persisted across reloads, several directories (voicebox-beads-69d) ──
 const ROOM_FOLDER_MAX = 200;
 const ROOM_FILE_MAX_BYTES = 256 * 1024;
-let roomFolder = null; // { handle, name } — session only, read-only, never persisted
+let roomFolders = new Map(); // name -> { name, handle, permission, mode }
+let roomFolder = null; // active folder { name, handle, permission, mode }
 let roomTruncated = false;
+
+// IDB persistence helpers (using voicebox/roots store with room_folder: prefix)
+async function idbStore() {
+  if (!("indexedDB" in globalThis)) return null;
+  try {
+    return await import(/* @vite-ignore */ "/browser/idb.ts");
+  } catch {
+    return null;
+  }
+}
+
+async function persistRoomFolder(name, handle) {
+  const idb = await idbStore();
+  if (idb?.putRoomFolder) {
+    await idb.putRoomFolder(name, handle).catch(() => {});
+  }
+}
+
+async function unpersistRoomFolder(name) {
+  const idb = await idbStore();
+  if (idb?.deleteRoomFolder) {
+    await idb.deleteRoomFolder(name).catch(() => {});
+  }
+}
+
+async function loadPersistedRoomFolders() {
+  const idb = await idbStore();
+  if (!idb?.listRoomFolders) return [];
+  try {
+    return await idb.listRoomFolders();
+  } catch {
+    return [];
+  }
+}
 
 async function walkRoomFolder() {
   const names = [];
   roomTruncated = false;
+  if (!roomFolder?.handle) return names;
   for await (const [name, node] of roomFolder.handle.entries()) {
     if (names.length >= ROOM_FOLDER_MAX) { roomTruncated = true; break; }
     names.push({ name, isDir: node.kind === "directory" });
@@ -98,23 +133,194 @@ async function openRoomFolder() {
     return;
   }
   try {
-    adoptRoomFolder(await picker({ mode: "read" }));
+    // 1. Ask for readwrite mode by default (readable AND writable)
+    let handle;
+    try {
+      handle = await picker({ mode: "readwrite" });
+    } catch (err) {
+      if (err?.name === "AbortError") return; // user cancelled picker
+      // Fallback to read-only if readwrite not permitted
+      handle = await picker({ mode: "read" });
+    }
+    if (handle) {
+      await adoptRoomFolder(handle);
+    }
   } catch (error) {
-    // Cancelling a picker is not a failure: say nothing rather than complain.
-    if (error?.name !== "AbortError") setReport(`Could not open that folder: ${error?.message ?? error}`, "bad");
+    if (error?.name !== "AbortError") {
+      setReport(`Could not open that folder: ${error?.message ?? error}`, "bad");
+    }
   }
 }
 
-async function adoptRoomFolder(handle) {
+async function adoptRoomFolder(handle, { makeActive = true, persist = true } = {}) {
   if (!handle || handle.kind !== "directory") return;
-  roomFolder = { handle, name: handle.name || "the folder you opened" };
+  const name = handle.name || "folder";
+
+  // Check readwrite and read permissions
+  let perm = "prompt";
+  let mode = "read";
+  try {
+    perm = await handle.queryPermission({ mode: "readwrite" });
+    if (perm === "granted") {
+      mode = "readwrite";
+    } else {
+      const readPerm = await handle.queryPermission({ mode: "read" });
+      if (readPerm === "granted") {
+        perm = "granted";
+        mode = "read";
+      }
+    }
+  } catch {
+    perm = "prompt";
+  }
+
+  const folder = { name, handle, permission: perm, mode };
+  roomFolders.set(name, folder);
+
+  if (persist) {
+    await persistRoomFolder(name, handle);
+  }
+
+  if (makeActive || !roomFolder) {
+    setActiveRoomFolder(name);
+  } else {
+    renderRoomFoldersBar();
+  }
+}
+
+function setActiveRoomFolder(name) {
+  const folder = roomFolders.get(name);
+  if (!folder) return;
+  roomFolder = folder;
   fileFilter = "";
   if (els.fileFilter) els.fileFilter.value = "";
-  await loadRoomFolder();
+  idbStore().then((idb) => idb?.putActiveRoomFolderName?.(name)).catch(() => {});
+  renderRoomFoldersBar();
+  loadRoomFolder();
+}
+
+function renderRoomFoldersBar() {
+  if (!els.roomFoldersBar || !els.roomFoldersList) return;
+  const count = roomFolders.size;
+  if (count === 0 && !roomFolder) {
+    els.roomFoldersBar.hidden = true;
+    els.roomFoldersList.replaceChildren();
+    if (els.closeFolder) els.closeFolder.hidden = true;
+    return;
+  }
+
+  els.roomFoldersBar.hidden = false;
+  if (els.closeFolder) els.closeFolder.hidden = false;
+  els.roomFoldersList.replaceChildren();
+
+  for (const folder of roomFolders.values()) {
+    const isActive = roomFolder && roomFolder.name === folder.name;
+    const chip = document.createElement("div");
+    chip.className = "folder-chip";
+    chip.dataset.folder = folder.name;
+    chip.dataset.active = String(isActive);
+    chip.dataset.permission = folder.permission;
+
+    // Folder select button
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "folder-select-btn";
+    btn.textContent = folder.name;
+    btn.setAttribute("aria-label", `Switch to folder ${folder.name}`);
+    btn.addEventListener("click", () => setActiveRoomFolder(folder.name));
+    chip.append(btn);
+
+    // Permission / Mode badge
+    const badge = document.createElement("span");
+    badge.className = "folder-perm-badge";
+    badge.textContent = folder.permission === "granted"
+      ? (folder.mode === "readwrite" ? "read/write" : "read-only")
+      : "needs access";
+    chip.append(badge);
+
+    // Restore access button (visible when permission is prompt)
+    const regrantBtn = document.createElement("button");
+    regrantBtn.type = "button";
+    regrantBtn.className = "quiet folder-regrant-btn";
+    regrantBtn.textContent = "Restore access";
+    regrantBtn.setAttribute("aria-label", `Restore access to ${folder.name}`);
+    regrantBtn.hidden = folder.permission === "granted";
+    regrantBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await requestFolderAccess(folder);
+    });
+    chip.append(regrantBtn);
+
+    // Close button
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "folder-close-btn";
+    closeBtn.textContent = "×";
+    closeBtn.setAttribute("aria-label", `Close folder ${folder.name}`);
+    closeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeOneRoomFolder(folder.name);
+    });
+    chip.append(closeBtn);
+
+    els.roomFoldersList.append(chip);
+  }
+}
+
+async function requestFolderAccess(folder) {
+  try {
+    let res = "prompt";
+    try {
+      res = await folder.handle.requestPermission({ mode: "readwrite" });
+    } catch {
+      res = await folder.handle.requestPermission({ mode: "read" }).catch(() => "denied");
+    }
+    folder.permission = res;
+    folder.mode = res === "granted" ? "readwrite" : "read";
+    renderRoomFoldersBar();
+    if (res === "granted") {
+      setReport(`Restored access to '${folder.name}'.`, "good");
+      if (roomFolder && roomFolder.name === folder.name) {
+        await loadRoomFolder();
+      }
+    } else {
+      setReport(`Permission to access '${folder.name}' was ${res}.`, "bad");
+    }
+  } catch (err) {
+    setReport(`Could not restore access to '${folder.name}': ${err?.message ?? err}`, "bad");
+  }
+}
+
+async function closeOneRoomFolder(name) {
+  roomFolders.delete(name);
+  await unpersistRoomFolder(name);
+  if (roomFolder && roomFolder.name === name) {
+    const next = roomFolders.values().next().value;
+    if (next) {
+      setActiveRoomFolder(next.name);
+    } else {
+      closeRoomFolder();
+    }
+  } else {
+    renderRoomFoldersBar();
+  }
 }
 
 async function loadRoomFolder() {
   if (!roomFolder) return load();
+  if (roomFolder.permission !== "granted") {
+    if (els.files) {
+      els.files.replaceChildren();
+      const li = document.createElement("li");
+      li.className = "file-placeholder";
+      li.textContent = `Access to '${roomFolder.name}' needs to be restored after reload — click 'Restore access' above.`;
+      els.files.append(li);
+    }
+    if (els.count) els.count.textContent = "needs access";
+    renderListingRoot();
+    renderEmptyState();
+    return;
+  }
   showSkeleton();
   try {
     const listed = await walkRoomFolder();
@@ -123,8 +329,6 @@ async function loadRoomFolder() {
     entries = listed.map(({ name, isDir }) => ({ name, isDir, meta: isDir ? "folder" : "file" }));
     render();
   } catch (error) {
-    // A handle that has gone (folder deleted, or permission withdrawn) is a
-    // named state, not an empty list.
     listingRefusal = { refused: "folder-unreadable", why: `could not read '${roomFolder.name}': ${error?.message ?? error}` };
     entries = [];
     render();
@@ -134,14 +338,80 @@ async function loadRoomFolder() {
 function closeRoomFolder() {
   roomFolder = null;
   listedRoot = null;
+  idbStore().then((idb) => idb?.putActiveRoomFolderName?.("")).catch(() => {});
+  renderRoomFoldersBar();
   load();
 }
 
 async function readRoomFile(name) {
+  if (!roomFolder || !roomFolder.handle) throw new Error("No folder open");
   const file = await (await roomFolder.handle.getFileHandle(name)).getFile();
   const truncated = file.size > ROOM_FILE_MAX_BYTES;
   const text = await (truncated ? file.slice(0, ROOM_FILE_MAX_BYTES) : file).text();
   return { text, bytes: file.size, truncated };
+}
+
+async function writeRoomFile(name, content) {
+  if (!roomFolder || !roomFolder.handle) throw new Error("No folder open");
+  let perm = "prompt";
+  try {
+    perm = await roomFolder.handle.queryPermission({ mode: "readwrite" });
+  } catch {
+    perm = "prompt";
+  }
+  if (perm !== "granted") {
+    throw new Error(`needs-gesture: write permission for '${roomFolder.name}' is ${perm} — click Restore access first`);
+  }
+  const fileHandle = await roomFolder.handle.getFileHandle(name, { create: true });
+  const writable = await fileHandle.createWritable();
+  await writable.write(content);
+  await writable.close();
+  await loadRoomFolder();
+}
+
+async function initRoomFolders() {
+  const saved = await loadPersistedRoomFolders();
+  if (!saved || saved.length === 0) return;
+
+  for (const { name, handle } of saved) {
+    if (!handle || handle.kind !== "directory") continue;
+    let perm = "prompt";
+    let mode = "read";
+    try {
+      perm = await handle.queryPermission({ mode: "readwrite" }).catch(() => "prompt");
+      mode = perm === "granted" ? "readwrite" : "read";
+      if (perm !== "granted") {
+        const readPerm = await handle.queryPermission({ mode: "read" }).catch(() => "prompt");
+        if (readPerm === "granted") {
+          perm = "granted";
+          mode = "read";
+        }
+      }
+    } catch {
+      perm = "prompt";
+    }
+    roomFolders.set(name, { name, handle, permission: perm, mode });
+  }
+
+  if (roomFolders.size > 0) {
+    const idb = await idbStore();
+    const storedActive = await idb?.getActiveRoomFolderName?.().catch(() => null);
+    const active = (storedActive && roomFolders.get(storedActive)) || roomFolders.values().next().value;
+    roomFolder = active;
+    renderRoomFoldersBar();
+    if (active.permission === "granted") {
+      loadRoomFolder();
+    } else {
+      if (els.files) {
+        els.files.replaceChildren();
+        const li = document.createElement("li");
+        li.className = "file-placeholder";
+        li.textContent = `Access to '${active.name}' needs to be restored after reload — click 'Restore access' above.`;
+        els.files.append(li);
+      }
+      if (els.count) els.count.textContent = "needs access";
+    }
+  }
 }
 
 let entries = [];
@@ -522,10 +792,9 @@ function render() {
   els.made.dataset.state = listingRefusal && count === 0 ? "failed" : count === 0 ? "empty" : "ready";
   if (nothingMatched && els.listBound) { els.listBound.hidden = false; }
   if (els.newFile) els.newFile.hidden = Boolean(listingRefusal);
-  if (els.closeFolder) els.closeFolder.hidden = !roomFolder;
-  if (els.openFolder) els.openFolder.hidden = Boolean(roomFolder);
-  if (els.roomFolderHint) els.roomFolderHint.hidden = Boolean(roomFolder);
-  if (els.openFolder) els.openFolder.hidden = Boolean(roomFolder) || typeof globalThis.showDirectoryPicker !== "function";
+  if (els.closeFolder) els.closeFolder.hidden = roomFolders.size === 0 && !roomFolder;
+  if (els.openFolder) els.openFolder.hidden = typeof globalThis.showDirectoryPicker !== "function";
+  if (els.roomFolderHint) els.roomFolderHint.hidden = roomFolders.size > 0 || Boolean(roomFolder);
   renderListingRoot();
   renderEmptyState();
   if (shownFile && !entries.some((entry) => entry.name === shownFile)) shownFile = null;
@@ -1056,7 +1325,8 @@ async function showRoomFile(name) {
   showFileSelection(name);
   try {
     const { text, bytes, truncated } = await readRoomFile(name);
-    els.readerFacts.textContent = `${bytes} ${bytes === 1 ? "byte" : "bytes"}${truncated ? ` (showing the first ${Math.round(ROOM_FILE_MAX_BYTES / 1024)} KB)` : ""} · read from '${roomFolder.name}' in this tab, read-only`;
+    const modeLabel = roomFolder.mode === "readwrite" ? "read/write" : "read-only";
+    els.readerFacts.textContent = `${bytes} ${bytes === 1 ? "byte" : "bytes"}${truncated ? ` (showing the first ${Math.round(ROOM_FILE_MAX_BYTES / 1024)} KB)` : ""} · read from '${roomFolder.name}' in this tab (${modeLabel})`;
     els.readerFacts.title = "";
     els.readerBody.textContent = text;
     els.reader.dataset.state = "ready";
@@ -1190,6 +1460,48 @@ async function send(said) {
 
   if (els.send) { els.send.disabled = true; els.send.textContent = "Sending…"; }
   setReport("Sending…");
+
+  // If a room folder is currently active, turns act on that folder directly (voicebox-beads-69d)
+  if (roomFolder) {
+    const writeMatch = transcript.match(/(?:create|write|make)\s+(?:a\s+)?(?:file\s+)?(?:called\s+)?["']?([\w.-]+)["']?\s*(?:with|containing)?\s*(.*)/i);
+    if (writeMatch) {
+      const [, fileName, rest] = writeMatch;
+      const content = rest.replace(/^(with|containing)\s+/i, "").replace(/^["']|["']$/g, "");
+      if (roomFolder.permission !== "granted" || roomFolder.mode !== "readwrite") {
+        if (els.send) { els.send.textContent = "Send"; els.send.disabled = !els.utterance.value.trim(); }
+        return finish(transcript, `needs-gesture: '${roomFolder.name}' needs write permission — click 'Restore access' first`, "bad");
+      }
+      try {
+        await writeRoomFile(fileName, content);
+        finish(transcript, `wrote ${fileName} (${bytes(content)} bytes) in ${roomFolder.name}`, "good");
+        await loadRoomFolder();
+      } catch (err) {
+        finish(transcript, `could not write '${fileName}': ${err?.message ?? err}`, "bad");
+      } finally {
+        if (els.send) { els.send.textContent = "Send"; els.send.disabled = !els.utterance.value.trim(); }
+      }
+      return;
+    }
+    const readMatch = transcript.match(/^read\s+["']?([\w.-]+)["']?$/i);
+    if (readMatch) {
+      const fileName = readMatch[1];
+      try {
+        await showFile(fileName);
+        finish(transcript, `read ${fileName} in ${roomFolder.name}`, "good");
+      } catch (err) {
+        finish(transcript, `could not read '${fileName}': ${err?.message ?? err}`, "bad");
+      } finally {
+        if (els.send) { els.send.textContent = "Send"; els.send.disabled = !els.utterance.value.trim(); }
+      }
+      return;
+    }
+    if (/\blist\b/i.test(transcript)) {
+      await loadRoomFolder();
+      finish(transcript, `listed ${roomFolder.name}`, "good");
+      if (els.send) { els.send.textContent = "Send"; els.send.disabled = !els.utterance.value.trim(); }
+      return;
+    }
+  }
   try {
     const answer = await turn(transcript);
     if (answer.error) return finish(transcript, reasonFrom(answer, answer.error), "bad");
@@ -1942,6 +2254,17 @@ if (els.where) els.where.textContent = "checking the local server…";
 
 health();
 load();
+initRoomFolders().catch((err) => console.warn("[voicebox] could not restore room folders:", err));
+
+// Expose room folder helpers on window for testability and non-speech drives
+window.__voiceboxAdoptFolder = adoptRoomFolder;
+window.__voiceboxGetRoomFolders = () => roomFolders;
+window.__voiceboxGetActiveFolder = () => roomFolder;
+window.__voiceboxWriteRoomFile = writeRoomFile;
+window.__voiceboxReadRoomFile = readRoomFile;
+window.__voiceboxRestoreFolderAccess = requestFolderAccess;
+window.__voiceboxCloseRoomFolder = closeRoomFolder;
+window.__voiceboxCloseOneRoomFolder = closeOneRoomFolder;
 
 // THE ROOT CAN CHANGE OUT FROM UNDER THE ROOM: the host (or another tab) may re-declare the active
 // root at any time, and the room's labels only refreshed on turns and reloads — a stale label was

@@ -355,6 +355,74 @@ body:has(#reader[data-state="ready"]) #file-body { max-height: 26svh; }
 .ext-plan input { max-width: 100%; box-sizing: border-box; }
 .env-item.env-empty { color: #6f6f7c; font-size: 12px; }
 
+/* ── Several opened folders bar (voicebox-beads-69d) ──────────────────────── */
+.room-folders-bar {
+  margin: 6px 0 10px;
+  width: 100%;
+}
+.room-folders-bar[hidden] { display: none !important; }
+.room-folders-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.folder-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #17171d;
+  border: 1px solid #2a2a34;
+  font-size: 12px;
+}
+.folder-chip[data-active="true"] {
+  border-color: #61afef;
+  background: #1a1e28;
+}
+.folder-chip button.folder-select-btn {
+  background: transparent;
+  border: none;
+  color: #e8e8ee;
+  padding: 0;
+  cursor: pointer;
+  font-weight: 500;
+}
+.folder-chip[data-active="true"] button.folder-select-btn {
+  color: #61afef;
+}
+.folder-perm-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #23232c;
+  color: #9a9aab;
+}
+.folder-chip[data-permission="prompt"] .folder-perm-badge {
+  background: color-mix(in srgb, #e5c07b 20%, transparent);
+  color: #e5c07b;
+}
+.folder-regrant-btn {
+  font-size: 11px !important;
+  padding: 2px 6px !important;
+  color: #e5c07b !important;
+  border-color: #e5c07b !important;
+}
+.folder-regrant-btn[hidden] { display: none !important; }
+.folder-close-btn {
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 4px;
+  background: transparent;
+  border: none;
+  color: #8b8b9c;
+  cursor: pointer;
+}
+.folder-close-btn:hover {
+  color: #e06c75;
+}
+
 /* ── The task / result card (voicebox-beads-snp) ────────────────────────── */
 .task-card {
   width: 100%;
