@@ -144,7 +144,6 @@ Every environment variable the server and its libraries read, and where:
 | variable | read in | what it does |
 |---|---|---|
 | `GEMINI_API_KEY` | `lib/live-providers/gemini.mjs`, `lib/resolver.mjs`, `server.mjs` | read by TWO things with different refusals: the live session refuses to start by name, and the gemini turn resolver answers `unresolved` saying it has no key |
-| the project's own instruction file | `lib/project-instruction.mjs` | read at live-session start from the declared machine root (`AGENT.md`, then `AGENTS.md`; 32 KiB bound), composed between the agent's instruction and the tools instruction — absence is normal, unreadable is named |
 | `LIVE_PROVIDER` | `lib/live-session.mjs`, `server.mjs` | the OLD NAME of `VOICEBOX_LIVE_PROVIDER`, honoured for one release |
 | `OPENAI_API_KEY` | `lib/live-providers/openai.mjs`, `server.mjs` | the OpenAI Realtime key — without it that provider refuses to start, by name |
 | `PORT` | `server.mjs` | the port the server binds (default 8787) |

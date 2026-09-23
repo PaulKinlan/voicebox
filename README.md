@@ -99,7 +99,6 @@ Registered resolvers: `gemini`, `script`
 
 <!-- BEGIN GENERATED: live-session — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 `lib/live-session.mjs` is present. Registered live providers, with the model each one's handshake names (captured from the provider against a recording transport — never dialed): `gemini` → `models/gemini-3.8-live`, `openai` → `gpt-realtime`. The library fallback is `gemini`, overridable by `VOICEBOX_LIVE_PROVIDER`; the server's `/live` route instead passes the agent-settings provider explicitly.
-| `AGENT.md` / `AGENTS.md` at the declared root | `lib/project-instruction.mjs` | read once per live session as project context for the system prompt — bounded at 32 KiB; absence is normal, unreadable is named |
 <!-- END GENERATED: live-session -->
 
 ## Tool calling: how words become an act, and what tools exist
