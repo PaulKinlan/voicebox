@@ -101,7 +101,11 @@ test("OpenAI browser: real function call writes and answers; invalid calls refus
   const f = await fixture(t);
   const setup = f.row.messages.find(msg => msg.type === "session.update").session;
   assert.deepEqual(setup.tools, functionDeclarations().map(tool => ({ type: "function", ...tool })));
-  assert.equal(setup.instructions, liveSystemInstruction());
+  // The instructions are LAYERED since the settings handoff: the composed agent instruction
+  // (base + personality) first, the tools instruction beneath it — the base cannot be replaced,
+  // and the tools text is still present in full.
+  assert(setup.instructions.startsWith("You are voicebox"), "the mandatory base does not lead the instructions");
+  assert(setup.instructions.includes(liveSystemInstruction()), "the tools instruction is missing from the layered instructions");
   f.send({ type: "response.created" });
   const content = "owned live-tool marker — café\n";
   f.send({ type: "response.function_call_arguments.done", call_id: "write-1", name: "write_file", arguments: JSON.stringify({ name: "live.txt", content }) });

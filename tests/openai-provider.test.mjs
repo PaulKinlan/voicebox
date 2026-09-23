@@ -192,3 +192,19 @@ test("openai: malformed tool calls refuse by name without running an action", ()
     assert.match(events.find(e => e.type === "error")?.message, /invalid-tool-call.*call_id/);
   } finally { delete process.env.OPENAI_API_KEY; }
 });
+
+test("openai: the agent's voice and instruction ride the session.update — vendor-shaped", () => {
+  process.env.OPENAI_API_KEY = "test-key";
+  try {
+    const facade = makeFacade();
+    createOpenAIProvider({
+      emit: () => {}, log: () => {}, transport: facade,
+      instruction: "BASE + tone", systemInstruction: "the tools instruction", voice: "verse",
+    });
+    facade.fire({ kind: "open" });
+    const setup = JSON.parse(facade.frames.find((f) => f.kind === "handshake").payload);
+    assert.equal(setup.session.voice, "verse", "the voice is the session's top-level field on this vendor");
+    // One string on this vendor: the agent's instruction FIRST, the tools instruction beneath.
+    assert.equal(setup.session.instructions, "BASE + tone\n\nthe tools instruction");
+  } finally { delete process.env.OPENAI_API_KEY; }
+});
