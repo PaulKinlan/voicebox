@@ -1092,16 +1092,16 @@ function agentSettingsPayload(extra = {}) {
       // "did my change take effect?" is usually asking about that second one.
       provider: agentSettings.provider,
       model: provider.model,
-      // No provider reads a voice or an instruction yet. Stated as null-with-a-reason rather than
-      // echoed back from the request.
-      voice: null,
-      instruction: null,
+      // Carried into the session's setup since the settings handoff landed: the voice in the
+      // provider's own field, the composed instruction as the session's system instruction.
+      voice: agentSettings.voice || `${provider.label}'s default`,
+      instruction: agentSettings.personality,
     },
     pending: {
-      voice: provider.voices.length
-        ? "stored, not applied: no provider carries a voice into its session yet (the setting lands with the provider seam)"
-        : "this provider offers no voices",
-      personality: "stored, not applied: no provider receives an instruction yet (the tone layer lands with the live-tools lane)",
+      // Nothing is pending any more: every setting the surface offers is carried into the session.
+      // The keys stay (null) so a reader can tell "nothing pending" from "the field is gone".
+      voice: provider.voices.length ? null : "this provider offers no voices",
+      personality: null,
     },
     base: {
       // The mandatory half, shown so a person can see what a personality is layered ON. Read-only by
@@ -1981,6 +1981,11 @@ server.on("upgrade", (req, socket) => {
         // person chose is the provider this session dials, and its model comes with it.
         provider,
         model,
+        // The agent settings ride the seam: the personality composed over the mandatory base
+        // (composeAgentInstruction cannot be handed a base — that is the mechanism), and the
+        // voice the person chose for THIS provider. Both land in the provider's setup.
+        instruction: composeAgentInstruction(agentSettings.personality),
+        voice: agentSettings.voice || undefined,
         onAudioOut: (pcm, mime) => { if (pcm.length > 4) ws.send(pcm); },
         onText: (text, role) => ws.send(JSON.stringify({ type: "text", role, text })),
         onState: (state, detail) => ws.send(JSON.stringify({ type: "state", state, detail, model })),

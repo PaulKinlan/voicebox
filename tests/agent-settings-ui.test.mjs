@@ -92,10 +92,11 @@ test("the dialog shows what is APPLIED, and says where the request and the reali
   assert.match(view.provider, /models\/gemini-3\.8-live/, "the provider row does not name the model");
   assert.match(view.provider, /No live session is open|A live session is using/, "the row does not say whether a session is running");
 
-  // VOICE and PERSONALITY: stored, and SAID not to be applied. This is the trap-1 assertion at the
-  // level a person reads — if someone later wires the picker straight through, these two lines fail.
-  assert.match(view.voice, /not applied/, `the voice row claims more than the system does: ${view.voice}`);
-  assert.match(view.personality, /not applied/, `the personality row claims more than the system does: ${view.personality}`);
+  // VOICE and PERSONALITY: APPLIED since the handoff — the session carries both. The trap-1
+  // assertion inverted: if someone later UNWIRES the seam, these rows go back to a pending reason
+  // and this test fails.
+  assert.match(view.voice, /Applied/, `the voice row does not say the choice is carried: ${view.voice}`);
+  assert.match(view.personality, /Applied/, `the personality row does not say the choice is carried: ${view.personality}`);
   assert.match(view.baseNote, /editable here: no/, "the dialog does not say the base is read-only");
 
   // THE BASE IS SHOWN, and it is not editable: no control in the dialog carries that text.

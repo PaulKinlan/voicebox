@@ -1553,21 +1553,28 @@ function renderAgentSettings() {
     ? `Cannot be used: ${chosen.why}.`
     : `In use for the next session: ${chosen.label} · ${agent.applied.model}.${running}`;
 
-  // VOICE — per provider, and honest about not being applied yet.
+  // VOICE — per provider. APPLIED since the settings handoff: the choice rides the provider's
+  // setup, so the row says what the next session starts with. A provider with no voices says so.
   const voicePicker = document.getElementById("agent-voice");
   fillAgentPicker(voicePicker, [
     { value: "", label: `${chosen.label}'s default` },
     ...chosen.voices.map((v) => ({ value: v.id, label: v.label })),
   ], agent.requested.voice ?? "");
-  voiceState.textContent = agent.requested.voice
-    ? `Chosen: ${agent.requested.voice}. ${agent.pending.voice}`
-    : `Using ${chosen.label}'s default voice. ${agent.pending.voice}`;
+  voiceState.textContent = agent.pending.voice
+    ? (agent.requested.voice
+      ? `Chosen: ${agent.requested.voice}. ${agent.pending.voice}`
+      : `Using ${chosen.label}'s default voice. ${agent.pending.voice}`)
+    : (agent.requested.voice
+      ? `Applied: ${agent.requested.voice} — the next session starts with it.`
+      : `Applied: ${chosen.label}'s default voice — the next session starts with it.`);
 
-  // PERSONALITY — stored, layered on the base, and the base is shown so a person can see what a
-  // personality is layered ON.
+  // PERSONALITY — APPLIED: the tone layer is composed over the base and carried into the session,
+  // and the base is shown so a person can see what a personality is layered ON.
   const personalityPicker = document.getElementById("agent-personality");
   fillAgentPicker(personalityPicker, agent.personalities.map((p) => ({ value: p.id, label: p.label })), agent.requested.personality);
-  personalityState.textContent = `Chosen: ${agent.requested.personality}. ${agent.pending.personality}`;
+  personalityState.textContent = agent.pending.personality
+    ? `Chosen: ${agent.requested.personality}. ${agent.pending.personality}`
+    : `Applied: ${agent.requested.personality} — layered beneath the base rules for the next session.`;
 
   const base = document.getElementById("agent-base");
   if (base) base.textContent = agent.base.instruction;

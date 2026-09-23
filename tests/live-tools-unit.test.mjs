@@ -27,6 +27,30 @@ function fakeTransport() {
   };
 }
 
+test("the agent's voice and instruction ride the Gemini setup — voice in speechConfig, instruction before the tools text", () => {
+  const transport = fakeTransport();
+  createGeminiProvider({
+    emit() {}, log() {}, transport,
+    instruction: "BASE + tone", systemInstruction: "the tools instruction", voice: "Kore",
+  });
+  transport.open();
+  const setup = transport.sent.find((s) => s.kind === "handshake").payload.setup;
+  assert.equal(setup.generationConfig.speechConfig?.voiceConfig?.prebuiltVoiceConfig?.voiceName, "Kore");
+  const parts = setup.systemInstruction?.parts ?? [];
+  assert.equal(parts.length, 2, "the agent instruction and the tools instruction are both there");
+  assert.equal(parts[0].text, "BASE + tone", "the agent's instruction comes first — the base the tone cannot replace");
+  assert.equal(parts[1].text, "the tools instruction");
+});
+
+test("no voice and no instruction means no fields are invented", () => {
+  const transport = fakeTransport();
+  createGeminiProvider({ emit() {}, log() {}, transport });
+  transport.open();
+  const setup = transport.sent.find((s) => s.kind === "handshake").payload.setup;
+  assert.equal(setup.generationConfig.speechConfig, undefined);
+  assert.equal(setup.systemInstruction, undefined);
+});
+
 test("the setup handshake declares the tools and the system instruction", () => {
   const transport = fakeTransport();
   const provider = createGeminiProvider({
