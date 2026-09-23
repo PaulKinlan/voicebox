@@ -68,8 +68,12 @@ exec '${timeout}' "$@"
     git('add', '.'); git('commit', '-qm', 'fixture'); git('init', '--bare', '-q', remote);
     git('worktree', 'add', '-qb', 'candidate', work);
     for (const scenario of ['unit-timeout', 'unit-failure', 'live-timeout', 'accept-timeout', 'accept-failure', 'success']) {
+      // 60s, not 15s (voicebox-beads-67b): these six fixture pushes run their real hooks, and
+      // inside the stage's file-parallel npm test they contend with ~40 other suites — 15s was
+      // starved routinely (ETIMEDOUT in-gate, green standalone). The budget is for the machine,
+      // not the mechanism; the mechanism's own assertions are on output, not timing.
       const result = spawnSync('git', ['push', remote, 'HEAD:refs/heads/candidate'], {
-        cwd: work, encoding: 'utf8', timeout: 15000,
+        cwd: work, encoding: 'utf8', timeout: 60000,
         env: { ...cleanEnv, NODE_TEST_CONTEXT: undefined, PATH: `${bin}:${process.env.PATH}`, BD_GIT_HOOK: '1',
           VOICEBOX_SKIP_GATE: '', VOICEBOX_SKIP_ACCEPT: '', GATE_CASE: scenario },
       });
