@@ -14,7 +14,7 @@ what runs, and a claim in them that the code contradicts is a bug in the documen
 
 | component | file | authority for | state |
 |---|---|---|---|
-| the page | `public/index.html`, `public/fused.js`, `public/style.css` | the interface: objects on a canvas, the turn box, the transcript | real, with labelled simulations |
+| the page | `public/index.html`, `public/fused.js`, `public/style.css`, `public/live-voice.js` | the interface: objects on a canvas, the turn box, the transcript — and the handler for the server's `{type:"tool"}` frame, which re-reads the file list so a file written by the live model appears without a refresh | real, with labelled simulations |
 | the server | `server.mjs` | routes, static serving, running actions, the workspace | **zero dependencies** (`node:http`) |
 | the turn resolver | `lib/resolver.mjs` | turning a transcript into an action `{ verb, name, content? }` | **one provider, three verbs — a placeholder** |
 | the environment core | `core/*.ts` | the tier table, policy, containment, the audit, project records | the E1-M0 library; not yet wired to the page | <!-- docs-check: names the mechanism -->
@@ -87,7 +87,7 @@ Registered resolvers: `gemini`, `script`
 |---|---|---|---|
 | typed in the composer | yes | `public/fused.js` → `POST /api/turn` | `resolveTurn()` (`lib/resolver.mjs`, provider `script`) → `execute()` (`server.mjs`) → for tools, `callTool()` (`lib/extensions.mjs`) |
 | dictated (browser `SpeechRecognition`, no key) | yes — the same route | `public/fused.js` → `POST /api/turn` | the same |
-| spoken to the live model | audio yes; tools **yes** | `public/live-voice.js` → `/live` → `lib/live-session.mjs` → the provider | provider tool call → `commandToAction()` → `execute()` → correlated tool response |
+| spoken to the live model | audio yes; tools **yes** | `public/live-voice.js` → `/live` → `lib/live-session.mjs` → the provider | provider tool call → `commandToAction()` → `execute()` → correlated tool response — and the server tells the page (`{type:"tool"}`), which re-reads the file list so a file the model wrote appears as it arrives |
 
 What each live handshake declares, captured from the provider with the server's shared command list: `gemini` → tools: `list_extensions`, `call_extension`, `write_file`, `read_file`, `list_files`; `openai` → tools: `list_extensions`, `call_extension`, `write_file`, `read_file`, `list_files`. Extension discovery reads the current registry; invocation goes through the existing admission and runtime bounds.
 

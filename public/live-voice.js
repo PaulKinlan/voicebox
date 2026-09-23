@@ -41,6 +41,12 @@ const audioClient = createAudioClient({
     renderMic(snap);
     if (interrupt) interrupt.disabled = phase !== "agent-speaking";
   },
+  onToolCalls: (calls) => {
+    // THE ROOM OWNS THE LISTING, so the frame goes to a hook rather than to an import — and the hook is
+    // called at FRAME TIME, so whichever of these two scripts loads first does not matter. A tool call is
+    // the only event that can change the folder without the page asking (voicebox-beads-a93).
+    window.__voiceboxOnToolCalls?.(calls);
+  },
   onText: (text) => {
     // Live means live: the transcript replaces the scripted caption.
     const caption = $("caption");

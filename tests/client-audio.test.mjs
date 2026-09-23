@@ -90,6 +90,29 @@ function makeClient(overrides = {}) {
   return { client, media, contexts, events, socket };
 }
 
+// ── the tool frame: the one event that changes the folder without the page asking ─────────────────
+// voicebox-beads-a93. The client used to ignore `{type:"tool"}` deliberately — an unknown-but-well-formed
+// type is not a malformed frame — and that was right for frame honesty, but it left the room unaware: a
+// file written by a live tool landed on disk while the list showed the old folder. Now the frame is a
+// known type, forwarded, and it must NOT be reported as unrecognised.
+test("a tool frame is FORWARDED to the page, not diagnosed as an unknown control type", () => {
+  const calls = [{ name: "write_file", ok: true, action: "wrote notes.txt (5 bytes) in /root" }];
+  const { client, events } = makeClient({ onToolCalls: (seen) => events.texts.push({ text: JSON.stringify(seen), kind: "tool" }) });
+  client.handleMessage(JSON.stringify({ type: "tool", calls }));
+  const forwarded = events.texts.find((t) => t.kind === "tool");
+  assert.ok(forwarded, "the tool frame must reach the page's handler");
+  assert.deepEqual(JSON.parse(forwarded.text), calls, "the calls arrive verbatim, so the room knows what ran");
+  assert.equal(events.diagnostics.filter((d) => /unknown|unrecognised|unrecognized/i.test(JSON.stringify(d))).length, 0,
+    "a handled type must not also be reported as unrecognised");
+
+  // and a tool frame with no calls (or a malformed `calls`) is a KNOWN type with nothing in it — it is
+  // forwarded as an empty list rather than refused, because the type is understood and the content is not
+  // a frame-shape problem.
+  const { client: c2, events: e2 } = makeClient({ onToolCalls: (seen) => e2.texts.push({ text: JSON.stringify(seen), kind: "tool" }) });
+  c2.handleMessage(JSON.stringify({ type: "tool" }));
+  assert.deepEqual(JSON.parse(e2.texts.find((t) => t.kind === "tool").text), [], "an empty tool frame forwards an empty list");
+});
+
 // ── 1. PCM conversion: rounding, clipping, endianness, validation ───────────
 test("pcm: float to int16 rounds, clips, and maps the extremes exactly", () => {
   assert.equal(floatToInt16Sample(0), 0);

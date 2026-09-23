@@ -150,7 +150,7 @@ stale.
 |---|---|---|---|
 | typed in the composer | yes | `public/fused.js` → `POST /api/turn` | `resolveTurn()` (`lib/resolver.mjs`, provider `script`) → `execute()` (`server.mjs`) → for tools, `callTool()` (`lib/extensions.mjs`) |
 | dictated (browser `SpeechRecognition`, no key) | yes — the same route | `public/fused.js` → `POST /api/turn` | the same |
-| spoken to the live model | audio yes; tools **yes** | `public/live-voice.js` → `/live` → `lib/live-session.mjs` → the provider | provider tool call → `commandToAction()` → `execute()` → correlated tool response |
+| spoken to the live model | audio yes; tools **yes** | `public/live-voice.js` → `/live` → `lib/live-session.mjs` → the provider | provider tool call → `commandToAction()` → `execute()` → correlated tool response — and the server tells the page (`{type:"tool"}`), which re-reads the file list so a file the model wrote appears as it arrives |
 
 What each live handshake declares, captured from the provider with the server's shared command list: `gemini` → tools: `list_extensions`, `call_extension`, `write_file`, `read_file`, `list_files`; `openai` → tools: `list_extensions`, `call_extension`, `write_file`, `read_file`, `list_files`. Extension discovery reads the current registry; invocation goes through the existing admission and runtime bounds.
 
