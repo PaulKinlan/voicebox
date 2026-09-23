@@ -99,7 +99,7 @@ Verbs the `script` resolver produces, driven: `"create a file called hello.txt w
 ## The tool surface — what exists, what it refuses, how to list it
 
 <!-- BEGIN GENERATED: tools — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
-**The default tools are a closed set of 5 primitives** (`PRIMITIVES` in `core/extensions.ts`). A model authors a descriptor that *parameterises* one; it never authors a body, so nothing in the runtime evaluates model-written code.
+**The default tools are a closed set of 6 primitives** (`PRIMITIVES` in `core/extensions.ts`). A model authors a descriptor that *parameterises* one; it never authors a body, so nothing in the runtime evaluates model-written code.
 
 | primitive | consumes | what the host hands the tool |
 |---|---|---|
@@ -108,6 +108,7 @@ Verbs the `script` resolver produces, driven: `"create a file called hello.txt w
 | `write-file` | write | a root-scoped write function: paths resolve inside the project root, writes are reported and revertible |
 | `list-files` | read | a root-scoped read function: paths resolve inside the project root or refuse |
 | `http-get` | network | a mediated fetch: hosts outside bounds.hosts are refused by name — INCLUDING across redirects, every hop charged to bounds.maxRequests — and the audit records the URL that actually served the bytes |
+| `wasm` | — | nothing — the module closes its own CAPABILITIES (linear memory, zero imports); its bytes are verified at admission and rehashed at every call, and its time and memory are bounded by HOST constants, never by the module's declaration |
 
 **What no tool can have on the `machine` placement**, asked of the gate itself:
 * exec — absent: no mechanism on this placement bounds a spawned child: --allow-run bounds which binary, never what it can do, and a child does not inherit the parent's flags. Admission requires a container that bounds the child.
@@ -124,7 +125,7 @@ Verbs the `script` resolver produces, driven: `"create a file called hello.txt w
 | `web-search` | `web_search` → `http-get` | network | hosts: api.duckduckgo.com; maxRequests: 5 | admitted — network via `mediated-fetch` |
 
 **What it refuses, by name** — literal refusal declarations collected from these sources:
-* the gate (`core/extensions.ts`): `absent-capability`, `bad-tool-name`, `capability-unmediated`, `duplicate-tool`, `eval-not-a-tool-path`, `exec-absent`, `network-unbounded`, `no-tools`, `under-declared`, `unknown-capability`, `unknown-primitive`
+* the gate (`core/extensions.ts`): `absent-capability`, `bad-tool-name`, `capability-unmediated`, `duplicate-tool`, `eval-not-a-tool-path`, `exec-absent`, `network-unbounded`, `no-tools`, `under-declared`, `unknown-capability`, `unknown-primitive`, `unsupported-abi`
 * the routes and the root seam (`server.mjs`, `core/root.ts`): `adapter-not-configured`, `approval-invalid-id`, `approval-json-required`, `audit-unreadable`, `bad-answer`, `bad-request`, `bearer-refused`, `dotfile-refused`, `environment-not-paired`, `exec-threw`, `host-token-required`, `missing-content`, `not-a-directory`, `not-found`, `outside-root`, `pairing-revoked`, `path-missing`, `probe-failed`, `protected-audit`, `provider-not-configured`, `server-error`, `unauthenticated-call`, `unknown-command`, `unknown-environment`, `unknown-root-kind`, `unreadable`, `write-error`
 * admitted tools at run time (`lib/extensions.mjs`): `admission-refused`, `approval-audit-unwritable`, `approval-no-proposal`, `approval-plan-changed`, `approval-unavailable`, `bad-redirect`, `bad-url`, `budget-exhausted`, `fetch-failed`, `host-not-allowed`, `not-admitted`, `outside-root`, `over-budget`, `protected-audit`, `redirect-host-not-allowed`, `redirect-without-location`, `root-not-declared`, `root-not-reachable-from-here`, `too-many-redirects`, `unknown-primitive`, `unknown-tool`
 * task admission/readback (`core/tasks.ts`, `lib/tasks.mjs`): `agent-required`, `executor-unavailable`, `invalid-task`, `invalid-task-address`, `invalid-task-context`, `task-audit-unavailable`, `task-authority-field`, `task-call-id-conflict`, `task-call-id-required`, `task-cancelled`, `task-capacity-exhausted`, `task-context-unavailable`, `task-deadline`, `task-environment-changed`, `task-environment-unverified`, `task-input-over-budget`, `task-invalid-result`, `task-not-found`, `task-not-running`, `task-output-over-budget`, `task-owner-mismatch`, `task-owner-unconfirmed`, `task-owner-unverified`, `task-persistence-failed`, `task-root-replaced`, `task-root-unavailable`, `unbounded-executor`, `unknown-tool`
