@@ -383,7 +383,7 @@ const tasks = createTaskHost({
 });
 
 function callTool(tool, args, authority) {
-  return TASK_TOOLS.has(tool) ? tasks.call(tool, args, authority) : extensions.callTool(tool, args);
+  return (TASK_TOOLS.has(tool) || tool === "cancel_task") ? tasks.call(tool, args, authority) : extensions.callTool(tool, args);
 }
 
 /**

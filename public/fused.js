@@ -35,6 +35,7 @@ const WANTED = {
   exts: "exts", extsOpen: "exts-open", extsClose: "exts-close", extCount: "exts-count", extNote: "ext-note",
   extRunning: "ext-running", extWaiting: "ext-waiting", extPresent: "ext-present",
   extRefused: "ext-refused", extCatalogue: "ext-catalogue",
+  taskCard: "task-card",
 };
 const els = {};
 const missing = [];
@@ -1120,6 +1121,25 @@ function finish(said, outcome, tone) {
 async function send(said) {
   const transcript = said.trim();
   if (!transcript) return;
+
+  // Non-speech status / cancel commands work from input without speech (voicebox-beads-snp)
+  const statusMatch = transcript.match(/^(?:task\s+status|status)\s+(task_[a-zA-Z0-9_.-]+)$/i);
+  if (statusMatch && taskCardController) {
+    const address = statusMatch[1];
+    setReport("Checking task status…");
+    await taskCardController.status(address);
+    finish(transcript, "checked task status", "good");
+    return;
+  }
+  const cancelMatch = transcript.match(/^(?:cancel\s+task|cancel)\s+(task_[a-zA-Z0-9_.-]+)$/i);
+  if (cancelMatch && taskCardController) {
+    const address = cancelMatch[1];
+    setReport("Cancelling task…");
+    await taskCardController.cancel(address);
+    finish(transcript, "cancel requested", "good");
+    return;
+  }
+
   if (els.send) { els.send.disabled = true; els.send.textContent = "Sending…"; }
   setReport("Sending…");
   try {
@@ -1834,6 +1854,19 @@ function stampBuild(server) {
 
 stampBuild(undefined);
 if (els.stage) new MutationObserver(startMeters).observe(els.stage, { attributes: true, attributeFilter: ["data-voice"] });
+
+// ── the task / result card (voicebox-beads-snp) ──────────────────────────
+let taskCardController = null;
+if (els.taskCard) {
+  try {
+    const { createTaskCard, RemoteTaskClient } = await import(/* @vite-ignore */ "/browser/task-card.ts");
+    const client = new RemoteTaskClient();
+    taskCardController = createTaskCard(els.taskCard, { client });
+    window.__voiceboxTaskCard = taskCardController;
+  } catch (err) {
+    console.warn("[voicebox] task card component failed to load:", err?.message ?? err);
+  }
+}
 
 // The empty state teaches the loop with turns the resolver really answers.
 const SAMPLES = [
