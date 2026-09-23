@@ -211,7 +211,37 @@ const turn = (transcript) => request("/api/turn", {
 });
 
 // ── what was made: a quiet name and its real size, nothing else ───────────
-function card(entry) {
+//
+// A CARD THAT JUST ARRIVED IS MARKED, AND THE MARK IS BOUNDED (voicebox-beads-kcs, finding 2). The count
+// and the turn report already say an arrival happened, in words, through role="status" — this is the
+// visual half: the list itself did not say WHICH file just arrived, and aria-current answers a different
+// question (which file the reader has OPEN). The attribute is removed after this window, because an
+// attribute saying "new" that outlives the fact is the same defect this codebase keeps finding.
+// The window matches the card's own animation (2.6 s in style.css) plus a margin, so the mark's life is
+// the visible event rather than arbitrary — and it is swept from the DOM when it expires, because a
+// re-render is not something to depend on: "6.5 s later, still marked" was the first version's result.
+const ARRIVAL_MARK_MS = 3000;
+let arrivalSweep = null;
+function scheduleArrivalSweep() {
+  if (arrivalSweep !== null || arrivedUntil.size === 0) return;
+  const next = Math.min(...arrivedUntil.values());
+  arrivalSweep = setTimeout(() => {
+    arrivalSweep = null;
+    const now = Date.now();
+    for (const [name, until] of arrivedUntil) if (until <= now) arrivedUntil.delete(name);
+    for (const el of document.querySelectorAll(".file-open[data-arrived]")) {
+      if (!arrivedUntil.has(el.dataset.file)) delete el.dataset.arrived;
+    }
+    scheduleArrivalSweep();
+  }, Math.max(0, next - Date.now()) + 20);
+}
+let previousFileNames = null; // the names the LAST render saw; null = no listing has been rendered yet
+// A WINDOW, NOT A SINGLE RENDER. The first version marked a name for exactly one render, and the page
+// renders twice around a write (the list, then the turn report) — so the second render created the card
+// unmarked and the mark was lost. A name that arrives stays marked until this timestamp passes.
+const arrivedUntil = new Map();
+
+function card(entry, { arrived = false } = {}) {
   const li = document.createElement("li");
   const open = document.createElement("button");
   open.type = "button";
@@ -222,6 +252,7 @@ function card(entry) {
   // threw it away, so a folder rendered as a nameless-size file and clicking it
   // produced "cannot read directory" — a failure dressed as a bad file.
   open.setAttribute("aria-label", entry.isDir ? `${entry.name}, folder` : `Read ${entry.name}`);
+  if (arrived) open.dataset.arrived = "true";
 
   const name = document.createElement("span");
   name.className = "file-name";
@@ -470,7 +501,20 @@ function render() {
         : "";
   }
 
-  els.files.replaceChildren(...(count === 0 ? (writable ? [placeholder()] : []) : shown.map(card)));
+  // WHICH NAMES ARRIVED? A name is new when the PREVIOUS LISTING HAD FILES and this one did not have that
+  // name. Two things that would otherwise lie are excluded on purpose:
+  //   · a first listing (previous names null or EMPTY) is a page loading, not an arrival — the first
+  //     version marked every existing file on load, because the page's first render is an empty list;
+  //   · a name whose window has passed is no longer new.
+  const namesNow = new Set(entries.map((e) => e.name));
+  if (previousFileNames && previousFileNames.size > 0) {
+    for (const name of namesNow) if (!previousFileNames.has(name)) arrivedUntil.set(name, Date.now() + ARRIVAL_MARK_MS);
+  }
+  previousFileNames = namesNow;
+  const nowMs = Date.now();
+  for (const [name, until] of arrivedUntil) if (until <= nowMs || !namesNow.has(name)) arrivedUntil.delete(name);
+  scheduleArrivalSweep();
+  els.files.replaceChildren(...(count === 0 ? (writable ? [placeholder()] : []) : shown.map((e) => card(e, { arrived: arrivedUntil.has(e.name) }))));
   els.made.dataset.state = count === 0 ? "empty" : "ready";
   els.files.setAttribute("aria-busy", "false");
   els.count.textContent = count === 0 ? "" : `${count} ${count === 1 ? "file" : "files"}`;

@@ -75,6 +75,10 @@ input { caret-color: var(--accent); }
 .file-open[data-kind="directory"] .file-name { font-weight: 600; }
 .file-open[data-kind="directory"] .file-meta { color: color-mix(in srgb, var(--accent) 55%, var(--muted)); }
 .file-meta { font-size: .75rem; color: var(--muted); }
+@keyframes arrive { from { background: color-mix(in srgb, var(--accent) 16%, transparent); } to { background: transparent; } }
+/* A card that just arrived tints and settles. The mark itself (data-arrived) is removed after 6 s in
+   fused.js, so this is an event rather than a state. */
+.file-open[data-arrived="true"] { animation: arrive 2.6s ease-out; }
 .file-open[aria-current="true"] { color: var(--accent); }
 .file-open[aria-current="true"] .file-meta { color: color-mix(in srgb, var(--accent) 60%, var(--muted)); }
 
