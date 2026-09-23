@@ -131,10 +131,28 @@ bd prime                # Refresh Beads context
 
 A landing to `main` runs the gates BEFORE pushing — the push itself is the gate:
 
+- `node scripts/docs-touched.mjs` — **every update updates the docs and the README in the same change** (Paul, voicebox-beads-ths). Runs first; costs one `git diff`.
 - `npm test` — the unit suite (must be 0 fail)
 - `npm run accept` — the page acceptance harness (drives the real page; must be ALL CLEAR)
 
-Both run automatically on `git push` via the installed pre-push hook. The harness
+**The docs rule, and the one question to ask on every change: *did this move something a
+document describes?*** The generated blocks answer for themselves (`npm run docs:write`); the prose
+around them does not, and a hand-written paragraph in the README was false **within the hour** on
+2026-09-20 because a route landed underneath it. So the gate uses the documents' own declarations:
+every file path a document names in backticks is a file that document describes. Move one of those
+and touch no document, and the push is refused, naming the file and every document that names it.
+
+It must not become a gate that always fails, so the way past is a **record rather than a shrug**:
+
+```sh
+git commit --amend --trailer "Docs-checked: a comment — nothing a document describes changed"
+```
+
+That trailer is the checklist item, made auditable. Use it when the prose is genuinely still true —
+not to get green.
+
+All three run automatically on `git push`: `.githooks/pre-push` (tracked, installed by `npm run prepare`)
+hands over to `scripts/pre-push.sh`, which bounds each stage and names its own timeout. The harness
 needs the environment up: `voicebox-serve` first (it also restarts a stale API
 server — if `server.mjs` changed since the process started, the old process is
 serving old routes). To acceptance-test a CANDIDATE branch, run its own server

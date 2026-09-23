@@ -96,3 +96,60 @@ this file, in `07-architecture.md` and in `README.md`; everything outside them i
 **What this check cannot see**, stated so nobody trusts it further than it goes: it derives the provider
 list, the probed routes, the page's scripts and the presence of a live-session file. It cannot tell whether
 a *sentence* in prose is still true, and it does not try.
+
+### The hand-written half
+
+```bash
+node scripts/docs-touched.mjs          # exit 1 when a change moves a described file and no document moves
+```
+
+The rule is Paul's: **every update updates the docs and the README in the same change.** The generated
+blocks answer for themselves; the prose around them had nothing watching it — and on 2026-09-20 a
+hand-written paragraph in the README was false *within the hour*, because a route landed underneath it
+while the generated block beside it went red and was regenerated.
+
+So the documents' own declarations are the mechanism: **every file path a document names in backticks is a
+file that document describes.** Change one of those files and touch no document, and the push is refused,
+naming the file and every document that names it. It runs first in the pre-push gate, before the suite,
+because it costs one `git diff`.
+
+**It must not become a gate that always fails**, so there is an explicit way past, and it is a record
+rather than a shrug:
+
+```bash
+git commit --amend --trailer "Docs-checked: a comment — nothing a document describes changed"
+```
+
+That trailer is the checklist item (*"did this move something a document describes?"*) turned into
+something a later reader can audit. Git's own parser decides what counts: it must be a real trailer in
+the message's terminal block, and it must carry a non-empty reason. `tests/docs-touched.test.mjs` drives
+the gate against a real scratch repository — refusal, the document-in-the-change case, the trailer, an
+undescribed file, a docs-only change, and an unknown base — so the gate has checks that can fail.
+
+#### What this gate does NOT do
+
+**It is a prompt, not a proof, and the list below is measured rather than imagined** — every line was
+driven against a scratch repository by an independent reviewer (2026-09-23). Read it before trusting the
+gate for a job it was never given:
+
+- **It watches described files, not new ones.** A change that *adds* a file no document describes passes
+  untouched. Naming a file in a document is what puts it under the gate.
+- **Any document satisfies it.** Changing an unrelated markdown file — or editing only a *generated*
+  block in the README — counts as "a document moved", even when the prose that describes your change is
+  untouched. **The README is not mandatory**; the gate cannot tell which document *should* have moved.
+- **One trailer excuses the whole range.** A `Docs-checked:` reason written for a trivial change in one
+  commit also excuses a described-code change in another commit in the same push.
+- **It sees the paths documents actually write.** `lib/extensions.mjs` and `./lib/extensions.mjs` are
+  both understood; the same path with a trailing line number is not, and a path written in a document
+  **nested deeper than one level** is not read at all — the document set is the root markdown files plus
+  `docs/`, one level.
+- **A deleted file stops being described**, because existence is what makes a backticked string a path —
+  so removing a file a document names does not trip the gate, though the prose is now wrong.
+- **Existence is not absence of collision.** The bare-name pattern also matches prose that looks like a
+  filename (`result.ok`, `bounds.hosts`); those are discarded because no such file exists. If a real file
+  ever shares a name with a property a document discusses, the gate will treat edits to it as described.
+  No such collision exists in this tree today; the case was constructed to find the boundary.
+
+**So: it catches the common, boring mistake — moving code a document talks about and forgetting the
+document — and it does not enforce "the docs and the README are correct."** Closing any line above is a
+policy decision, not a bug fix, because each one trades a false green for a false red.

@@ -26,7 +26,10 @@ test('pre-push names the stage and cause, streams output, and refuses real faili
     mkdirSync(repo); mkdirSync(bin);
     git('init', '-q'); git('config', 'user.email', 'fixture@example.invalid'); git('config', 'user.name', 'Gate fixture');
     git('config', 'core.hooksPath', '.githooks');
-    for (const file of ['.githooks/pre-push', 'scripts/pre-push.sh', 'scripts/test-lanes.mjs']) {
+    // Every file the gate RUNS, not just the gate script: a stage whose command is missing makes the
+    // gate refuse at that stage (correctly — a check that cannot run is not a check that passed), and
+    // the fixture would then never reach the stage the case is actually about.
+    for (const file of ['.githooks/pre-push', 'scripts/pre-push.sh', 'scripts/test-lanes.mjs', 'scripts/docs-touched.mjs']) {
       mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
       copyFileSync(path.join(root, file), path.join(repo, file));
     }
@@ -152,6 +155,11 @@ test('pre-push timeout refusal respects custom budget and reports measured elaps
     // the gate needs the classifier present (it tolerates having no tests/).
     copyFileSync(path.join(root, 'scripts/test-lanes.mjs'), path.join(repo, 'scripts/test-lanes.mjs'));
     chmodSync(path.join(repo, 'pre-push.sh'), 0o755);
+    // The docs stage runs before the test lanes; it needs its script here too. In this scratch repo
+    // there is no `origin/main`, so it reports SKIPPED BY NAME and exits 0 — which is the designed
+    // answer for "the base is unknown", and lets this case get to the timeout it is about.
+    mkdirSync(path.join(repo, 'scripts'), { recursive: true });
+    copyFileSync(path.join(root, 'scripts/docs-touched.mjs'), path.join(repo, 'scripts/docs-touched.mjs'));
     writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ scripts: { 'test:unit': 'node -e "setTimeout(()=>{}, 30000)"' } }));
 
     const result = spawnSync(path.join(repo, 'pre-push.sh'), [], {
@@ -174,5 +182,98 @@ test('pre-push timeout refusal respects custom budget and reports measured elaps
     assert.ok(elapsed >= 1 && elapsed <= 5, `elapsed must be measured execution time: ${elapsed}s`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a suite run inside a hook cannot move the repository it runs in (observer-based)', { timeout: 120000 }, () => {
+  // WHY THIS EXISTS, and why it is HERE rather than inside the suite it watches.
+  //
+  // `tests/docs-touched.test.mjs` builds scratch git repositories. Git exports GIT_DIR, GIT_INDEX_FILE
+  // and friends into the children of its hooks, so without a guard those fixtures commit into the
+  // repository being pushed — driven on 2026-09-23, when a push moved a branch onto a commit called
+  // "change the described file".
+  //
+  // THE REVIEW FINDING (voicebox-astra-66ef): stripping the guard left that suite at 8 pass / 0 fail
+  // WHILE THE HEAD MOVED, because every case asserted on the gate's OUTPUT — which is identical
+  // whether the fixture's commits landed in a scratch directory or in somebody's history. So the suite
+  // could not fail on its own defect, and no committed regression protected the guard.
+  //
+  // A test inside that file can assert the invariant, but only an OBSERVER can assert the consequence:
+  // this one owns a standalone repository, runs the suite inside it with a hook child's exact
+  // environment, and compares HEAD before and after from outside. The environment points at the
+  // FIXTURE's git dir, never the source checkout, so the failure mode being reproduced can only ever
+  // damage a directory this test created and deletes.
+  const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-hook-observer-'));
+  const repo = path.join(dir, 'repo');
+  const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', env: cleanEnv }).trim();
+  try {
+    mkdirSync(repo);
+    mkdirSync(path.join(repo, 'scripts'), { recursive: true });
+    mkdirSync(path.join(repo, 'tests'), { recursive: true });
+    copyFileSync(path.join(root, 'scripts/docs-touched.mjs'), path.join(repo, 'scripts/docs-touched.mjs'));
+    copyFileSync(path.join(root, 'tests/docs-touched.test.mjs'), path.join(repo, 'tests/docs-touched.test.mjs'));
+    writeFileSync(path.join(repo, 'README.md'), '# Observer fixture\n\nIt describes `scripts/docs-touched.mjs`.\n');
+    git('init', '-q', '-b', 'main');
+    git('-c', 'user.name=Observer', '-c', 'user.email=observer@example.invalid', 'add', '-A');
+    git('-c', 'user.name=Observer', '-c', 'user.email=observer@example.invalid', 'commit', '-qm', 'observer base');
+
+    const before = git('rev-parse', 'HEAD');
+    const commitsBefore = git('rev-list', '--count', 'HEAD');
+
+    // A hook child's environment, pointed at THIS fixture: exactly what git hands the suite when it
+    // runs from pre-push, and the reason an unguarded `git init` elsewhere is silently ignored.
+    const gitDir = git('rev-parse', '--absolute-git-dir');
+    const result = spawnSync(process.execPath, ['--test', 'tests/docs-touched.test.mjs'], {
+      cwd: repo,
+      encoding: 'utf8',
+      timeout: 90000,
+      // NODE_TEST_CONTEXT must go, or node sees a recursive `--test` run and SKIPS THE FILE — which
+      // would leave this observer watching a suite that never ran, and passing. (The same key is
+      // cleared by the hook case above; found here by the assertion that the run must have happened.)
+      env: { ...cleanEnv, NODE_TEST_CONTEXT: undefined, GIT_DIR: gitDir, GIT_INDEX_FILE: path.join(gitDir, 'index'), GIT_PREFIX: '' },
+    });
+
+    const after = git('rev-parse', 'HEAD');
+    const commitsAfter = git('rev-list', '--count', 'HEAD');
+    const said = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+    const tail = said.slice(-2000);
+
+    // ── THE VIOLATION FIRST, because it is unconditional and it is the most specific fact available:
+    // the observed suite may pass or fail for its own reasons, but it may never move the history of the
+    // repository it runs in. Ordering matters and I got it wrong once: with the execution witness first,
+    // stripping the guard made this test fail with "the child exited 1" — true, but a far weaker
+    // diagnosis than "it moved HEAD from X to Y", and it would have said the same thing for a dozen
+    // unrelated causes.
+    assert.equal(
+      after,
+      before,
+      'the suite moved the HEAD of the repository it was running in — the fixtures inherited this ' +
+        `repository's GIT_DIR instead of using their own (${before} -> ${after}).\n${tail}`,
+    );
+    assert.equal(commitsAfter, commitsBefore, `no commit may be added to the observing repository\n${tail}`);
+    assert.equal(git('status', '--porcelain'), '', `and the observing worktree must be left clean\n${tail}`);
+
+    // ── AND THEN THE EXECUTION WITNESS, because "HEAD did not move" is vacuous if nothing ran.
+    // This is the THIRD layer of one tautology, and a reviewer found each one:
+    //   1. the suite asserted the gate's output, which is the same whether fixtures wrote here or there;
+    //   2. this observer inherited NODE_TEST_CONTEXT, so node skipped the file and it watched nothing;
+    //   3. `/tests \d+/` matched even when the file ABORTED BEFORE ANY TEST RAN — node prints
+    //      `tests 1 / pass 0 / fail 1` for a file-level throw, so the witness accepted a child that
+    //      never reached a fixture (reviewer calibration, 2026-09-23: a prepended `throw` left this
+    //      observer green).
+    // So: the child must have STARTED, not been KILLED, EXITED 0, and a NAMED case must have PASSED.
+    assert.equal(result.error, undefined, `the child could not be started at all: ${result.error?.message}`);
+    assert.equal(result.signal, null, `the child was killed by ${result.signal} rather than finishing:\n${tail}`);
+    assert.equal(result.status, 0, `the observed suite must run to a clean finish, or this observer is watching a child that never reached a fixture (exit ${result.status}):\n${tail}`);
+    assert.match(said, /^ℹ fail 0$/m, `the observed suite reported failures, so no fixture outcome here is trustworthy:\n${tail}`);
+    // A NAMED case, not a count: node prints `tests 1 / pass 0 / fail 1` for a file that dies on line 1,
+    // so a count is satisfied by a suite that never reached a fixture at all.
+    assert.match(
+      said,
+      /✔ the fixture acts on ITS OWN repository/,
+      `the specific case that proves fixture isolation did not run — this observer would otherwise pass while observing no fixture:\n${tail}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
