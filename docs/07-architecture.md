@@ -208,3 +208,8 @@ Audio worklets loaded by that code: `pcm-worklet.js`.
   admission are simulated and say so. A reader should trust that label over any prose, including this file.
   The room's folder handles (`#open-folder`, `#room-folders-bar`) provide read/write handles persisted in IndexedDB
   across reloads, supporting several directories at once with a "Restore access" button when permission drops to prompt.
+  The frontend interface (`public/index.html`, `public/fused.js`, `public/style.css`) is built with modern web
+  platform primitives: native modal `<dialog>` (with `closedby="any"` and unified light-dismiss geometry fallbacks),
+  `container: env-dialog / inline-size` container queries for component-isolated responsive layout, `<search>` landmark
+  semantics, scroll containment (`overscroll-behavior: contain`, `scrollbar-gutter: stable`), keyboard-focusable
+  scrollable regions (`<pre tabindex="0">`), and IME composition guards.

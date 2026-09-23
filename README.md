@@ -389,5 +389,15 @@ Checks: `npm run test:e1m0` <!-- docs-check: names the mechanism --> (25 accepta
 Evidence, including what the platform actually does with a dropped folder and the two
 behaviours that cannot be driven headlessly: [docs/evidence/picked-root-20260919/RECEIPT.md](docs/evidence/picked-root-20260919/RECEIPT.md).
 
+### Room interface construction
+
+The room frontend (`public/index.html`, `public/fused.js`, `public/style.css`) is built with modern web platform primitives:
+- Native `<dialog>` elements with `closedby="any"` light-dismiss and unified geometry-check fallback.
+- `container: env-dialog / inline-size;` container queries for dialog-width responsive form layouts.
+- Semantic `<search>` landmark element enclosing file filtering.
+- Scroll containment (`overscroll-behavior: contain`) and layout stabilization (`scrollbar-gutter: stable`).
+- Keyboard-accessible scrollable code region (`<pre id="file-body" tabindex="0">`).
+- IME composition safety on utterance input and turn submissions.
+
 Next step: wire the first live model resolver behind the seam (Gemini Live),
 then grow the action set toward the build environment.

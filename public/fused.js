@@ -1610,10 +1610,14 @@ on(els.newFile, "click", () => {
   // read "called" as the filename and write a file by that name).
   els.send.disabled = true;
 });
-on(els.utterance, "input", () => { if (els.send) els.send.disabled = !els.utterance.value.trim(); });
+on(els.utterance, "input", (event) => {
+  if (event?.isComposing) return;
+  if (els.send) els.send.disabled = !els.utterance.value.trim();
+});
 
 on(els.form, "submit", (event) => {
   event.preventDefault();
+  if (event?.isComposing) return;
   const said = els.utterance.value.trim();
   if (!said) return;
   els.utterance.value = "";
@@ -1815,16 +1819,18 @@ on(els.envAddBtn, "click", async () => {
   }
 });
 
-// The environments dialog opens like settings: showModal() for modality, focus trapping, an inert
+// The dialogs open like settings: showModal() for modality, focus trapping, an inert
 // background and Esc, with focus returned to the trigger on close. The platform provides all of it.
 on(els.extsOpen, "click", () => {
   if (!els.exts || els.exts.open) return;
   els.exts.showModal();
+  els.extsOpen?.setAttribute("aria-expanded", "true");
   void renderExtensions();
 });
 on(els.extsClose, "click", () => els.exts?.close());
 on(els.exts, "close", () => {
   els.extsOpen?.setAttribute("aria-expanded", "false");
+  els.extsOpen?.focus();
 });
 // The heading's explanation, set as the button's tooltip FROM the one paragraph that carries it —
 // so the hover text and the screen-reader text cannot drift into two different sentences.
@@ -1844,15 +1850,25 @@ on(els.envs, "close", () => {
   els.envsOpen.setAttribute("aria-expanded", "false");
   els.envsOpen.focus();
 });
-if (els.envs && !("closedBy" in HTMLDialogElement.prototype)) {
-  els.envs.addEventListener("click", (event) => {
-    if (event.target !== els.envs) return;
-    const rect = els.envs.getBoundingClientRect();
+
+// Light dismiss, declaratively, where the platform supports it: `closedby="any"` on the element.
+//
+// The documented FALLBACK for browsers that do not (Safari, at the time of writing) is the geometry
+// check below — the click's target is the dialog only when the click landed on the backdrop, and the
+// coordinates tell the difference between the backdrop and the dialog's own padding.
+function installLightDismissFallback(dialog) {
+  if (!dialog || "closedBy" in HTMLDialogElement.prototype) return;
+  dialog.addEventListener("click", (event) => {
+    if (event.target !== dialog) return;
+    const rect = dialog.getBoundingClientRect();
     const inside = rect.top <= event.clientY && event.clientY <= rect.top + rect.height
       && rect.left <= event.clientX && event.clientX <= rect.left + rect.width;
-    if (!inside) els.envs.close("dismissed");
+    if (!inside) dialog.close("dismissed");
   });
 }
+installLightDismissFallback(els.exts);
+installLightDismissFallback(els.envs);
+installLightDismissFallback(els.settings);
 
 on(els.settingsOpen, "click", () => {
   if (!els.settings || els.settings.open) return;
@@ -1873,21 +1889,6 @@ on(els.settings, "close", () => {
   els.settingsOpen.setAttribute("aria-expanded", "false");
   els.settingsOpen.focus();
 });
-
-// Light dismiss, declaratively, where the platform supports it: `closedby="any"` on the element.
-//
-// The documented FALLBACK for browsers that do not (Safari, at the time of writing) is the geometry
-// check below — the click's target is the dialog only when the click landed on the backdrop, and the
-// coordinates tell the difference between the backdrop and the dialog's own padding.
-if (els.settings && !("closedBy" in HTMLDialogElement.prototype)) {
-  els.settings.addEventListener("click", (event) => {
-    if (event.target !== els.settings) return;
-    const rect = els.settings.getBoundingClientRect();
-    const inside = rect.top <= event.clientY && event.clientY <= rect.top + rect.height
-      && rect.left <= event.clientX && event.clientX <= rect.left + rect.width;
-    if (!inside) els.settings.close("dismissed");
-  });
-}
 
 // ── the agent you are talking to: provider, voice, personality ────────────
 //

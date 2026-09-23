@@ -163,6 +163,7 @@ dialog.envs {
   color: var(--ink);
   box-shadow: var(--shadow);
   overflow: hidden;            /* the FORM scrolls, not the dialog: the head stays put */
+  container: env-dialog / inline-size;
 }
 .envs-form {
   max-height: inherit;
@@ -198,7 +199,7 @@ html:has(dialog.envs[open]) { overflow: hidden; }
    bounded box rather than pushing the name and the actions down. */
 .env-cap { margin-left: 14px; color: var(--muted); font-size: .75rem; }
 .env-cap > summary { cursor: pointer; }
-.env-cap-list { max-height: 7em; overflow-y: auto; overflow-wrap: anywhere; }
+.env-cap-list { max-height: 7em; overflow-y: auto; overscroll-behavior: contain; overflow-wrap: anywhere; }
 .env-cap-none { margin-left: 14px; color: var(--muted); font-size: .75rem; font-style: italic; }
 .env-add-block { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .env-add-title { margin: 0 0 2px; font-size: .8125rem; font-weight: 600; }
@@ -206,16 +207,18 @@ html:has(dialog.envs[open]) { overflow: hidden; }
 .env-add { display: flex; flex-wrap: wrap; gap: 6px; }
 .env-add input { flex: 1 1 160px; min-width: 0; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
 .env-add button { flex: 0 0 auto; font: inherit; padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); cursor: pointer; }
-/* On a phone the fields stack rather than truncate: the name, the origin, then the action. */
-@media (max-width: 480px) {
+/* Container query: when the dialog itself is narrow, stack the fields rather than truncate */
+@container env-dialog (inline-size < 380px) {
   .env-add { flex-direction: column; }
   .env-add input, .env-add button { flex: 1 1 auto; width: 100%; }
 }
+@supports not (container-type: inline-size) {
+  @media (max-width: 480px) {
+    .env-add { flex-direction: column; }
+    .env-add input, .env-add button { flex: 1 1 auto; width: 100%; }
+  }
+}
 .env-note { margin: 8px 0 0; color: var(--warn); font-size: .75rem; }
-.env-add { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--line); }
-.env-add input { flex: 1; min-width: 0; font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
-.env-add button { flex: none; font: inherit; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); cursor: pointer; }
-.env-note { margin: 0; padding: 8px 12px; color: var(--warn); }
 #root-kind { color: var(--muted); }
 .device-note { margin: 6px 0 0; max-width: 46ch; font-size: .75rem; color: var(--warn); text-align: center; }
 .voice-actions { display: flex; align-items: center; gap: 4px; margin-top: 12px; }
@@ -288,12 +291,12 @@ html:has(dialog.settings[open]) { overflow: hidden; }
 .reader-facts { margin: 8px 0 0; font-size: .75rem; color: var(--muted); }
 .reader-details { margin-top: 10px; }
 .reader-details summary { font-size: .75rem; color: var(--muted); }
-#file-body { max-height: 34svh; margin: 0; overflow: auto; padding: 16px 18px; border-radius: 10px; background: color-mix(in srgb, var(--card) 60%, var(--ground)); font: .8125rem/1.7 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+#file-body { max-height: 34svh; margin: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 16px 18px; border-radius: 10px; background: color-mix(in srgb, var(--card) 60%, var(--ground)); font: .8125rem/1.7 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* ── what just happened: present, but never in the way ──────────────── */
 .session { width: min(100%, 720px); text-align: center; }
 .session h2 { margin: 0 0 8px; font-size: .6875rem; font-weight: 500; letter-spacing: .16em; text-transform: uppercase; color: color-mix(in srgb, var(--muted) 70%, var(--ink)); }
-#session-log { list-style: none; display: grid; gap: 6px; margin: 0; padding: 0; max-height: 132px; overflow: auto; }
+#session-log { list-style: none; display: grid; gap: 6px; margin: 0; padding: 0; max-height: 132px; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 #session-log li { font-size: .8125rem; }
 .said { display: block; color: var(--ink); overflow-wrap: anywhere; }
 .did { display: block; color: var(--muted); overflow-wrap: anywhere; }
@@ -334,8 +337,6 @@ html:has(dialog.settings[open]) { overflow: hidden; }
    pushing the reader below the fold, so what you asked to read is on screen. */
 body:has(#reader[data-state="ready"]) .stage, body:has(.session:not([hidden])) .stage { gap: 20px; padding: 10px 0; }
 body:has(#reader[data-state="ready"]) .mic-stage { width: 200px; }
-body:has(#reader[data-state="ready"]) .mic { width: 96px; height: 96px; }
-body:has(#reader[data-state="ready"]) .mic-glyph { width: 30px; height: 30px; }
 body:has(#reader[data-state="ready"]) .mic { width: 92px; height: 92px; }
 body:has(#reader[data-state="ready"]) .mic-glyph { width: 30px; height: 30px; }
 body:has(#reader[data-state="ready"]) #file-body { max-height: 26svh; }
