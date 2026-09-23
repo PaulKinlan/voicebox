@@ -15,7 +15,7 @@
 //     thing the suite does, because "it serves" and "the doc says it serves" are different claims;
 //   * the page's scripts come from `public/index.html`, read as HTML rather than matched as text.
 //
-// The generated blocks live between <!-- BEGIN GENERATED: name --> and <!-- END GENERATED: name --> in the
+// The generated blocks live between <!-- BEGIN GENERATED: name … --> and <!-- END GENERATED: name --> in the
 // docs below. Anything enumerable goes in one; anything a person writes stays outside.
 //
 // A check that cannot fail is a description of the code, not a check on it — which is why the suite runs
@@ -178,6 +178,11 @@ async function driveLoop(port, dirs, token) {
   const beforeRoot = await turn("create a file called hello.txt with hi");
   const declared = await post("/api/root", { project: "docs-check", root: { kind: "machine", path: dirs.root } }, { "x-voicebox-host-token": token });
   const write = await turn("create a file called hello.txt with hi");
+  // READ THE LOG BETWEEN THE TWO ACTS, so the write's entries can be told from the refusal's. Row 5
+  // used to TYPE "one entry per act" while reading only entries[0]; the shape it described had
+  // already changed under it (attempt-first, voicebox-beads-y69) and nothing could go red, because
+  // the false half was never derived. Counting here is what makes that row answer for itself.
+  const auditAfterWrite = await get("/api/audit");
   const escape = await turn("read ..");
   const audit = await get("/api/audit");
   const propose = await turn("create a tool called peek that lists files");
@@ -189,7 +194,7 @@ async function driveLoop(port, dirs, token) {
   const extAuditFile = join(dirs.workspace, "audit.jsonl");
   const extAuditLines = existsSync(extAuditFile) ? readFileSync(extAuditFile, "utf8").trim().split("\n").filter(Boolean).length : 0;
   const rootFiles = readdirSync(dirs.root).filter((f) => !f.startsWith(".")).sort();
-  return { beforeRoot, declared, write, escape, audit, propose, plan, admitted, call, inventory, auditAfter, extAuditLines, rootFiles };
+  return { beforeRoot, declared, write, escape, audit, auditAfterWrite, propose, plan, admitted, call, inventory, auditAfter, extAuditLines, rootFiles };
 }
 
 /** The extension surface, asked over HTTP — including the host's act attempted from where the page stands. */
@@ -353,14 +358,20 @@ const ENV_MEANING = {
   VOICEBOX_HELLO_BOUND_MS: "how long to wait for a hello frame on /channel or /live before refusing (default 5000ms)",
   VOICEBOX_LIVE_PROVIDER: "the live transport's fallback when the session passes no provider; `/live` passes the agent-settings provider explicitly — **not** the turn resolver",
   LIVE_PROVIDER: "the OLD NAME of `VOICEBOX_LIVE_PROVIDER`, honoured for one release",
-  GEMINI_API_KEY: "the Gemini Live key — without it the live session refuses to start, by name",
+  GEMINI_API_KEY: "read by TWO things with different refusals: the live session refuses to start by name, and the gemini turn resolver answers `unresolved` saying it has no key",
   OPENAI_API_KEY: "the OpenAI Realtime key — without it that provider refuses to start, by name",
 };
 function envVars() {
   const files = ["server.mjs", ...readdirSync(join(ROOT, "lib"), { recursive: true }).filter((f) => f.endsWith(".mjs")).map((f) => join("lib", f))];
   const where = new Map();
   for (const f of files) {
-    for (const m of readFileSync(join(ROOT, f), "utf8").matchAll(/process\.env\.([A-Z][A-Z0-9_]*)/g)) {
+    // BOTH SHAPES, because one of them was invisible: `process.env.X` and the optional-chained
+    // `globalThis.process?.env?.X` that `lib/resolver.mjs` uses to stay runnable off-host. The narrow
+    // pattern omitted the resolver's own GEMINI_API_KEY read, so the generated table named the key
+    // against the live provider only and a reader would not know the resolver wanted it too
+    // (reviewer finding, voicebox-beads-smx). A derived table is only as wide as its pattern.
+    const src = readFileSync(join(ROOT, f), "utf8");
+    for (const m of src.matchAll(/(?:globalThis\s*\.\s*)?process\s*\??\.\s*env\s*\??\.\s*([A-Z][A-Z0-9_]*)/g)) {
       if (!where.has(m[1])) where.set(m[1], new Set());
       where.get(m[1]).add(f);
     }
@@ -374,8 +385,30 @@ function envVars() {
 
 // ── the generated blocks ─────────────────────────────────────────────────────
 
+/**
+ * WHY EVERY BLOCK CARRIES A MARKER SAYING IT IS NOT ENTIRELY DERIVED.
+ *
+ * `BEGIN GENERATED` reads as "all of this came from the code". It does not. Each block is prose with
+ * derived values interpolated into it, and the prose is TYPED — so a sentence can be false while every
+ * number around it is current, and nothing goes red, because only the numbers are compared.
+ *
+ * That is not hypothetical: row 5 of the loop block said "one entry per act" for three days after the
+ * write path started recording an attempt AND an outcome (voicebox-beads-y69). The row's `seq` values
+ * were derived and correct; the sentence describing them was typed and wrong. Found by a reviewer
+ * reading the page against the server (voicebox-beads-smx), which is the only thing that could find it.
+ *
+ * WHY THE MARKER IS A SENTENCE AND NOT A PERCENTAGE: by the time this function receives `body`, the
+ * interpolation has already happened — there is no seam left at which derived and typed can be told
+ * apart, so any per-block fraction would itself be a typed claim, which is the defect. What is stated
+ * here is true of the mechanism rather than of any one block, so it cannot rot: regeneration makes the
+ * VALUES current, and it makes no promise at all about the sentences around them.
+ */
+const DERIVATION_NOTE =
+  "values below are derived and re-checked; the prose around them is written by a person and is only as " +
+  "true as its last reading";
+
 function block(name, body) {
-  return `<!-- BEGIN GENERATED: ${name} -->\n${body.trim()}\n<!-- END GENERATED: ${name} -->`;
+  return `<!-- BEGIN GENERATED: ${name} — ${DERIVATION_NOTE} -->\n${body.trim()}\n<!-- END GENERATED: ${name} -->`;
 }
 
 async function blocks() {
@@ -397,6 +430,19 @@ async function blocks() {
   const sample = await resolveTurn("create a file called hello.txt with hi", sampleProvider);
   const unresolved = await resolveTurn("book me a flight to Lisbon", sampleProvider);
 
+  // WHAT THE LOG DID, counted rather than described (voicebox-beads-smx, reviewer finding). The write's
+  // entries are everything present after the write; the refusal's are what the next turn added. Both are
+  // read from `GET /api/audit`, so the row below reports the shape the server actually produced and goes
+  // red when that shape changes — which is exactly what the typed version could not do.
+  // Driven ONCE and used twice (the providers block and the tool-path block): two drives of the same
+  // resolver could disagree, and a document that contradicts itself in two places is worse than one
+  // that is merely wrong in one.
+  const verbSamples = await resolverVerbs();
+
+  const writeEntries = loop.auditAfterWrite.entries ?? [];
+  const refusalEntries = (loop.audit.entries ?? []).slice(writeEntries.length);
+  const linkedAttempt = writeEntries.some((e) => e.attempt != null);
+
   if (process.env.DOCS_DEBUG) console.error("DEBUG live =", JSON.stringify(live), "| ROOT =", ROOT, "| tags =", JSON.stringify(tags));
 
   return {
@@ -405,7 +451,7 @@ async function blocks() {
       "",
       `* \`registerResolver(name, fn)\` is the seam; \`resolveTurn(transcript, provider = "${sampleProvider ?? "—"}")\` picks one.`,
       `* The **${sampleProvider ?? "—"}** provider handles \`write\`, \`read\` and \`list\`: \`"create a file called hello.txt with hi"\` → \`${JSON.stringify(sample)}\`.`,
-      `* Anything else is **unresolved**, by design: \`"book me a flight to Lisbon"\` → \`${JSON.stringify(unresolved.unresolved?.slice(0, 42) + "…")}\`.`,
+      `* The verbs it produces, driven one utterance each: ${verbSamples.map((v) => `\`${v.verb}\``).join(", ")}. An utterance matching **none** of them is **unresolved**, by design: \`"book me a flight to Lisbon"\` → \`${JSON.stringify(unresolved.unresolved?.slice(0, 42) + "…")}\`. (This line used to say *"anything else is unresolved"*, which was a TYPED universal beside a derived example — false the moment \`make-tool\` and \`tool\` started resolving.)`,
       `* The live voice providers (${availableLiveProviders().map((p) => "`" + p + "`").join(", ")}) live behind a **different** seam, \`registerLiveProvider\` in \`lib/live-session.mjs\`; none of them is a turn resolver — see the tool path below.`,
     ].join("\n")),
 
@@ -437,13 +483,15 @@ async function blocks() {
     loop: block("loop", [
       "**One turn, driven end to end on a scratch root while this document was generated.** Every value in the last column was read back from the server, not typed.",
       "",
+      `The log's SHAPE is derived too, not described: the write produced **${writeEntries.length}** entr${writeEntries.length === 1 ? "y" : "ies"} and the refusal **${refusalEntries.length}**, counted from \`GET /api/audit\` either side of each act. Row 5 used to say *"one entry per act"* as TYPED prose inside this generated block, and it stayed there after the shape changed (attempt-first, \`voicebox-beads-y69\`) because nothing about that sentence was derived — the marker on this block's opening comment says which half you can trust.`,
+      "",
       "| step | what happens | the mechanism | driven |",
       "|---|---|---|---|",
       `| **1 · a turn starts** | words arrive | \`POST /api/turn {transcript}\` — from the composer or browser dictation; the live model's words do **not** arrive here yet (see *the tool path*) | \`"${loop.write.transcript}"\` |`,
       `| **2 · something decides** | the resolver turns words into an action, or says it cannot (\`unresolved\`) | \`resolveTurn(transcript, "${health.provider}")\` in \`lib/resolver.mjs\` — the server never parses language itself | → \`${JSON.stringify(loop.write.action)}\` |`,
       `| **3 · something acts** | the executor runs the verb in the **active root** — the one declared over \`POST /api/root\`; none is assumed | \`execute(action)\` in \`server.mjs\` | → \`${loop.write.result?.action}\` in a root of kind \`${loop.write.result?.root?.kind}\` |`,
       `| **4 · the result returns** | the page gets the whole story in one response | \`{transcript, action, result}\` — \`result.ok\`, \`result.action\`, \`result.root\`, \`result.logged\` | → \`ok: ${loop.write.result?.ok}\`, \`logged: ${loop.write.result?.logged}\` |`,
-      `| **5 · the act is recorded** | one entry per act — allowed **or refused** — appended to the root's own log and readable back | \`<root>/.audit/<writer>.jsonl\` (\`core/shared-log.ts\`), \`GET /api/audit\` | → entry seq ${loop.audit.entries?.[0]?.seq}: kind \`${loop.audit.entries?.[0]?.act?.kind}\`, decision \`${loop.audit.entries?.[0]?.decision}\`, rule \`${loop.audit.entries?.[0]?.rule}\` |`,
+      `| **5 · the act is recorded** | ${writeEntries.length === 1 ? "one entry" : `**${writeEntries.length} entries**`} for that one write — ${writeEntries.map((e) => `\`${e.decision}\`/\`${e.rule}\``).join(" then ") || "(none)"}${linkedAttempt ? " — the outcome carrying the attempt's own seq" : ""}; a pre-flight refusal records ${refusalEntries.length === 1 ? "one" : String(refusalEntries.length)} | \`<root>/.audit/<writer>.jsonl\` (\`core/shared-log.ts\`), \`GET /api/audit\` | → ${writeEntries.map((e) => `seq ${e.seq} \`${e.decision}\``).join(", ")}; then ${refusalEntries.map((e) => `seq ${e.seq} \`${e.decision}\`/\`${e.rule}\``).join(", ") || "(none)"} |`,
       "",
       `**Where it fails, by name** (driven): the same turn **before any root is declared** → \`refused: ${loop.beforeRoot.result?.refused}\`, \`logged: ${loop.beforeRoot.result?.logged}\` (no root, so nowhere to hold a log — the response says so rather than omitting the field); \`"${loop.escape.transcript}"\` → \`refused: ${loop.escape.result?.refused}\`, and the refusal is itself logged as entry seq ${loop.escape.result?.logged}. Declaring the root answered \`ok: ${loop.declared.ok}\`, \`reachableFromThisProcess: ${loop.declared.reachableFromThisProcess}\`, and the turn that was refused a moment earlier then succeeded.`,
       "",
@@ -470,7 +518,7 @@ async function blocks() {
       "",
       `What each live handshake declares, captured from the provider with the server's shared command list: ${handshakes.map((h) => "`" + h.name + "` → tools: " + (h.tools === null ? "(not captured)" : h.tools.length ? h.tools.map((t) => "`" + t + "`").join(", ") : "**none**")).join("; ")}. Extension discovery reads the current registry; invocation goes through the existing admission and runtime bounds.`,
       "",
-      `Verbs the \`${health.provider}\` resolver produces, driven: ${(await resolverVerbs()).map((v) => "`\"" + v.utterance + "\"` → `" + v.verb + "`").join(", ")}. \`make-tool\` **proposes** (a pending file the host must admit); \`tool\` calls an **admitted** tool and nothing else.`,
+      `Verbs the \`${health.provider}\` resolver produces, driven: ${verbSamples.map((v) => "`\"" + v.utterance + "\"` → `" + v.verb + "`").join(", ")}. \`make-tool\` **proposes** (a pending file the host must admit); \`tool\` calls an **admitted** tool and nothing else.`,
     ].join("\n")),
 
     tools: block("tools", [
@@ -587,7 +635,10 @@ function replaceBlock(text, name, body) {
   // GLOBAL: a document may carry the same block twice (07 does — the audio path appears under two headings),
   // and a non-global replace leaves the second one empty. "The block is present" and "the block says
   // something" are two different assertions, and the first one passed while the second failed.
-  const re = new RegExp(`<!-- BEGIN GENERATED: ${name} -->[\\s\\S]*?<!-- END GENERATED: ${name} -->`, "g");
+  // THE OPENING MARKER NOW CARRIES A NOTE after the name, so this must match `name` followed by
+  // ANYTHING up to the comment's close — which also migrates a document written before the note
+  // existed, rather than failing to find a block that is plainly there.
+  const re = new RegExp(`<!-- BEGIN GENERATED: ${name}(?:[^>]*)?-->[\\s\\S]*?<!-- END GENERATED: ${name} -->`, "g");
   if (!re.test(text)) return { text, found: false };
   return { text: text.replace(re, body), found: true };
 }
@@ -607,13 +658,13 @@ for (const { rel, blocks: wanted } of DOCS) {
     // cannot fail, which is a description of the code rather than a check on it.
     if (!r.found) {
       console.error(`docs-check: ${rel} has no generated block named '${name}' — add the markers:`);
-      console.error(`  <!-- BEGIN GENERATED: ${name} --> … <!-- END GENERATED: ${name} -->`);
+      console.error(`  <!-- BEGIN GENERATED: ${name} --> … <!-- END GENERATED: ${name} -->   (the note after the name is added by --write)`);
       process.exit(1);
     }
     if (process.env.DOCS_DEBUG) console.error(`DEBUG ${rel} block=${name} found=${r.found} changed=${r.text !== text} bodyLen=${String(body).length}`);
     // THE FILE'S block, after the replacement — not the generated body, which is never empty. My first
     // version of this guard watched the wrong side and passed while the document carried a blank block.
-    const after = text.slice(text.indexOf(`<!-- BEGIN GENERATED: ${name} -->`));
+    const after = text.slice(text.search(new RegExp(`<!-- BEGIN GENERATED: ${name}(?:[^>]*)?-->`)));
     const inner = after.slice(after.indexOf("-->") + 3, after.indexOf(`<!-- END GENERATED: ${name} -->`));
     // In WRITE mode a blank block is the thing being seeded — a new marker pair starts empty by
     // definition, and refusing to fill it made every new block impossible to add (2026-09-20).
