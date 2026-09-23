@@ -2,7 +2,7 @@
 import type { RootDescriptor } from "./root.ts";
 import type { LogEntry } from "./audit.ts";
 
-export type TaskState = "queued" | "running" | "cancel_requested" | "cancelled" | "completed" | "failed" | "interrupted";
+export type TaskState = "queued" | "running" | "cancel_requested" | "cancelled" | "cancel_unconfirmed" | "completed" | "failed" | "interrupted";
 export interface TaskInput { agent: string; task: string; context: string[] }
 export interface TaskBounds { deadlineMs: number; maxOutputBytes: number }
 export interface TaskRecord {
@@ -23,6 +23,8 @@ export interface TaskRecord {
   updatedAt: string;
   reason?: string;
   answer?: string;
+  progress?: string;
+  partial?: string;
 }
 export interface TaskEvent {
   address: string;
@@ -30,6 +32,8 @@ export interface TaskEvent {
   created?: TaskRecord;
   reason?: string;
   answer?: string;
+  progress?: string;
+  partial?: string;
 }
 
 type Refusal = { ok: false; refused: string; why: string };
@@ -81,10 +85,11 @@ export function reduceTask(entries: LogEntry[], address: string): TaskRecord | n
       const allowed: Record<string, string[]> = {
         queued: ["running", "failed", "interrupted"],
         running: ["cancel_requested", "completed", "failed", "interrupted"],
-        cancel_requested: ["cancelled", "completed", "failed", "interrupted"],
+        cancel_requested: ["cancelled", "cancel_unconfirmed", "completed", "failed", "interrupted"],
+        cancel_unconfirmed: ["cancelled", "completed", "failed", "interrupted"],
       };
       if (!allowed[record.state]?.includes(event.state)) throw new Error("invalid task transition");
-      record = { ...record, state: event.state, updatedAt: entry.at, ...(event.reason ? { reason: event.reason } : {}), ...(event.answer !== undefined ? { answer: event.answer } : {}) };
+      record = { ...record, state: event.state, updatedAt: entry.at, ...(event.reason ? { reason: event.reason } : {}), ...(event.answer !== undefined ? { answer: event.answer } : {}), ...(event.progress !== undefined ? { progress: event.progress } : {}), ...(event.partial !== undefined ? { partial: event.partial } : {}) };
     }
     if (record.instance !== entry.instance || record.root.kind !== "machine" || entry.root !== `machine:${record.root.path}`) throw new Error("task writer or root mismatch");
   }
@@ -93,6 +98,6 @@ export function reduceTask(entries: LogEntry[], address: string): TaskRecord | n
 
 /** Readback intentionally excludes credential identity and the captured prompt. */
 export function taskView(record: TaskRecord) {
-  const { address, environment, root, state, createdAt, updatedAt, reason, answer } = record;
-  return { address, environment, root, state, agent: record.input.agent, createdAt, updatedAt, ...(reason ? { reason } : {}), ...(answer !== undefined ? { answer } : {}) };
+  const { address, environment, root, state, createdAt, updatedAt, reason, answer, progress, partial } = record;
+  return { address, environment, root, state, agent: record.input.agent, createdAt, updatedAt, ...(reason ? { reason } : {}), ...(answer !== undefined ? { answer } : {}), ...(progress ? { progress } : {}), ...(partial ? { partial } : {}) };
 }
