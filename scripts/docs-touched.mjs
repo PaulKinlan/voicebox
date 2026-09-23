@@ -58,6 +58,10 @@ export function documents() {
  * file, so it describes nothing and falls out. One regex per question, each as wide as its own
  * filter allows.
  */
+const normalise = (p) => p.replace(/^\.\//, ""); // `./lib/x.mjs` and `lib/x.mjs` name the same file;
+                                                 // git says the second, so a document saying the first
+                                                 // described nothing (reviewer finding, 2026-09-23).
+
 export function namedPaths(text) {
   // A FILENAME MAY CARRY MORE THAN ONE DOT, and the first version of this regex could not see it:
   // `[\w-]+\.[a-z]+` matched `channel.test.mjs` nowhere, so EVERY `tests/*.test.mjs` this repository
@@ -67,9 +71,9 @@ export function namedPaths(text) {
   // A nested path may also end WITHOUT an extension (`.githooks/pre-push`): inside a path that already
   // has a slash that is unambiguous enough, and `existsSync` in `describedFiles()` throws away anything
   // that is not a real file anyway.
-  const nested = [...text.matchAll(/`((?:[\w.-]+\/)+[\w-]+(?:\.[\w-]+)*)`/g)].map((m) => m[1]);
+  const nested = [...text.matchAll(/`(\.?\/?(?:[\w.-]+\/)+[\w-]+(?:\.[\w-]+)*)`/g)].map((m) => m[1]);
   const bare = [...text.matchAll(/`([\w-]+(?:\.[\w-]+)+)`/g)].map((m) => m[1]);
-  return new Set([...nested, ...bare]);
+  return new Set([...nested, ...bare].map(normalise));
 }
 
 /** path -> the documents that name it (only paths that exist; a missing one is docs-check's finding). */
@@ -117,12 +121,25 @@ function main() {
     return 0;
   }
 
-  const messages = gitTry(["log", "--format=%B", `${base}..HEAD`]);
-  const excused = messages.ok && messages.out.split("\n").map((l) => l.trim()).filter((l) => l.startsWith(TRAILER));
-  if (excused && excused.length > 0) {
-    console.log(`docs-touched: OK — no document changed, and the change says why:`);
-    for (const line of excused) console.log(`  ${line}`);
+  // THE EXCUSE MUST BE A REAL TRAILER WITH A REAL REASON, and git is the one that decides what a
+  // trailer is. The first version matched any body line beginning `Docs-checked:`, which accepted an
+  // EMPTY reason and accepted a line that is not in the terminal trailer block at all — a sentence
+  // quoting the mechanism in the middle of a commit message excused the change (reviewer finding,
+  // 2026-09-23). `%(trailers:key=…,valueonly)` uses git's own parser, so "is this a trailer" stops
+  // being my regex's opinion, and an empty value is refused by name rather than printed as a reason.
+  const trailers = gitTry(["log", `--format=%(trailers:key=${TRAILER.replace(/:$/, "")},valueonly,separator=%x0A)`, `${base}..HEAD`]);
+  const reasons = trailers.ok ? trailers.out.split("\n").map((l) => l.trim()).filter(Boolean) : [];
+  if (reasons.length > 0) {
+    console.log("docs-touched: OK — no document changed, and the change says why:");
+    for (const reason of reasons) console.log(`  ${TRAILER} ${reason}`);
     return 0;
+  }
+  // An empty or malformed attempt is worth naming, or somebody will write it twice.
+  if (trailers.ok && /Docs-checked/.test(gitTry(["log", "--format=%B", `${base}..HEAD`]).out ?? "")) {
+    console.error(`docs-touched: a '${TRAILER}' line is present but git does not read it as a trailer with a reason.`);
+    console.error("  It must be in the message's terminal trailer block and carry a non-empty reason, e.g.");
+    console.error(`    git commit --amend --trailer "${TRAILER} a comment — nothing a document describes changed"`);
+    console.error("");
   }
 
   console.error("docs-touched: FAILED — these changed files are described by documents nothing in this change touched:");

@@ -236,20 +236,43 @@ test('a suite run inside a hook cannot move the repository it runs in (observer-
     const after = git('rev-parse', 'HEAD');
     const commitsAfter = git('rev-list', '--count', 'HEAD');
     const said = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+    const tail = said.slice(-2000);
 
-    // THE ASSERTION THAT MATTERS, and it is deliberately not about the suite's verdict: the suite may
-    // pass or fail for its own reasons, but it may never move the history of the repository it runs in.
+    // ── THE VIOLATION FIRST, because it is unconditional and it is the most specific fact available:
+    // the observed suite may pass or fail for its own reasons, but it may never move the history of the
+    // repository it runs in. Ordering matters and I got it wrong once: with the execution witness first,
+    // stripping the guard made this test fail with "the child exited 1" — true, but a far weaker
+    // diagnosis than "it moved HEAD from X to Y", and it would have said the same thing for a dozen
+    // unrelated causes.
     assert.equal(
       after,
       before,
       'the suite moved the HEAD of the repository it was running in — the fixtures inherited this ' +
-        `repository's GIT_DIR instead of using their own (${before} -> ${after}).\n${said.slice(-2000)}`,
+        `repository's GIT_DIR instead of using their own (${before} -> ${after}).\n${tail}`,
     );
-    assert.equal(commitsAfter, commitsBefore, 'no commit may be added to the observing repository');
-    assert.equal(git('status', '--porcelain'), '', 'and the observing worktree must be left clean');
+    assert.equal(commitsAfter, commitsBefore, `no commit may be added to the observing repository\n${tail}`);
+    assert.equal(git('status', '--porcelain'), '', `and the observing worktree must be left clean\n${tail}`);
 
-    // Guard against the check silently watching nothing: the run has to have happened.
-    assert.match(said, /tests \d+/, `the suite must actually have run in the fixture:\n${said.slice(-2000)}`);
+    // ── AND THEN THE EXECUTION WITNESS, because "HEAD did not move" is vacuous if nothing ran.
+    // This is the THIRD layer of one tautology, and a reviewer found each one:
+    //   1. the suite asserted the gate's output, which is the same whether fixtures wrote here or there;
+    //   2. this observer inherited NODE_TEST_CONTEXT, so node skipped the file and it watched nothing;
+    //   3. `/tests \d+/` matched even when the file ABORTED BEFORE ANY TEST RAN — node prints
+    //      `tests 1 / pass 0 / fail 1` for a file-level throw, so the witness accepted a child that
+    //      never reached a fixture (reviewer calibration, 2026-09-23: a prepended `throw` left this
+    //      observer green).
+    // So: the child must have STARTED, not been KILLED, EXITED 0, and a NAMED case must have PASSED.
+    assert.equal(result.error, undefined, `the child could not be started at all: ${result.error?.message}`);
+    assert.equal(result.signal, null, `the child was killed by ${result.signal} rather than finishing:\n${tail}`);
+    assert.equal(result.status, 0, `the observed suite must run to a clean finish, or this observer is watching a child that never reached a fixture (exit ${result.status}):\n${tail}`);
+    assert.match(said, /^ℹ fail 0$/m, `the observed suite reported failures, so no fixture outcome here is trustworthy:\n${tail}`);
+    // A NAMED case, not a count: node prints `tests 1 / pass 0 / fail 1` for a file that dies on line 1,
+    // so a count is satisfied by a suite that never reached a fixture at all.
+    assert.match(
+      said,
+      /✔ the fixture acts on ITS OWN repository/,
+      `the specific case that proves fixture isolation did not run — this observer would otherwise pass while observing no fixture:\n${tail}`,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
