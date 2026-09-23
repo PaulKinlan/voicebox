@@ -13,7 +13,8 @@
 //   node --test tests/served-vs-disk.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { driftBetween, rewrittenByTransform } from "../tools/served-vs-disk.mjs";
+import { stripTypeScriptTypes } from "node:module";
+import { driftBetween, rewrittenByTransform, fallbackCompiledDrift } from "../tools/served-vs-disk.mjs";
 
 test("the drift the old marker could not see: a SHORT line changed, the longest line untouched", () => {
   const disk = ["// a very long shared comment that both revisions contain, so it makes a useless marker", "const ready = true;", "export const x = 1;"].join("\n");
@@ -82,30 +83,50 @@ test("stylesheets: the DECLARATION SET is compared (tokens verbatim, urls exclud
   assert.equal(driftBetween("@font-face { src: url(./inter.woff2) format(\"woff2\"); }", "@font-face{src:url(/inter.woff2)format(\"woff2\")}", { ref: "style.css", kind: "stylesheet" }), null,
     "a rewritten font URL is the transform's work, not drift");
 });
-test("a COMPILED module is compared by its comments and strings, not its lines", () => {
-  // The server compiles `.ts` (types stripped, imports rewritten), so a line rule reports compilation as
-  // drift — which the first version of this rule did, on its first run, against browser/ui/ui.ts:
-  // "42 line(s) of this tree's copy are not in what the front serves". Measured on the real file: 540 of
-  // 582 disk lines appear in the served copy, while every comment line (100/100) and every string literal
-  // of 8+ characters (142/142) survive. Those are what a drift changes.
+test("a COMPILED module is compared against what this tree COMPILES TO — a code-only edit is drift", () => {
+  // The server serves a `.ts` module as stripTypeScriptTypes(source, { mode: "strip" }), so the check
+  // computes that same output and compares it — no second implementation, no normal form to disagree about.
   const disk = [
-    "// the host answers what the page asks, one message at a time",
+    "// acting on the declared root, one call at a time",
     "type Reply = { id: number; ok: boolean } & Record<string, any>;",
-    "const label = \"this machine: omarchy\";",
+    "const LIMIT = 2000;",
+    "export function bound() { return LIMIT; }",
   ].join("\n");
-  const served = [
-    "// the host answers what the page asks, one message at a time",
-    "const label = \"this machine: omarchy\";",
+  const compiled = stripTypeScriptTypes(disk, { mode: "strip" });
+  assert.equal(driftBetween(disk, compiled, { ref: "acts.ts", kind: "compiled" }), null,
+    "a module the front is serving exactly as this tree compiles it is current");
+
+  // vb-resolver's repro, which the comments-and-strings rule could not see: a constant changed, no string
+  // and no comment touched.
+  const codeEdit = compiled.replace("const LIMIT = 2000;", "const LIMIT = 2500;");
+  const drift = driftBetween(disk, codeEdit, { ref: "acts.ts", kind: "compiled" });
+  assert.ok(drift, "a code-only edit must be drift once the comparison is exact");
+  assert.match(drift, /LIMIT = 2000/, "the reason quotes what this tree compiles to");
+  assert.match(drift, /LIMIT = 2500/, "and what the front is serving");
+
+  // a comment or user-visible string change is still drift, and still named
+  const stringEdit = compiled.replace("one call at a time", "one turn at a time");
+  const stringDrift = driftBetween(disk, stringEdit, { ref: "acts.ts", kind: "compiled" });
+  assert.ok(stringDrift, "a changed comment must remain drift");
+});
+
+test("the comments-and-strings rule is the FALLBACK for a runtime that cannot strip types", () => {
+  // Not a choice: `stripTypeScriptTypes` is what server.mjs serves .ts with, and where it is unavailable
+  // the comparison degrades to what survives compilation (comments and strings) rather than reporting
+  // every compiled module as stale. The fallback is exercised directly so its behaviour is pinned even
+  // though the primary path is what normally runs.
+  const disk = [
+    "// the host answers what the page asks",
+    "type Reply = { id: number; ok: boolean };",
+    'const label = "this machine: omarchy";',
   ].join("\n");
-  assert.equal(driftBetween(disk, served, { ref: "ui.ts", kind: "compiled" }), null,
-    "a stripped type annotation is the compiler's work, not drift");
-
-  const commentChanged = driftBetween(disk, served.replace("one message at a time", "one call at a time"), { ref: "ui.ts", kind: "compiled" });
-  assert.ok(commentChanged, "a changed comment is drift even in a compiled module");
-  assert.match(commentChanged, /comment line/i, "and the reason says which comparison caught it");
-
-  const stringChanged = driftBetween(disk, served.replace("this machine: omarchy", "this machine: elsewhere"), { ref: "ui.ts", kind: "compiled" });
-  assert.ok(stringChanged, "a changed user-visible string is drift");
-  assert.match(stringChanged, /this machine: omarchy/, "and the reason quotes the string");
-  assert.match(stringChanged, /not visible here/i, "the limit of a compiled-module comparison is stated, not implied");
+  // what the fallback sees when handed a copy with the type line gone (the compiled shape)
+  const served = ["// the host answers what the page asks", 'const label = "this machine: omarchy";'].join("\n");
+  const stripped = disk.split("\n").filter((l) => !l.startsWith("type ")).join("\n");
+  assert.equal(stripped, served, "the fixture models a compiled module");
+  const hits = fallbackCompiledDrift(disk, served, { ref: "ui.ts" });
+  assert.equal(hits, null, "the fallback passes a compiled module whose comments and strings survived");
+  const changed = fallbackCompiledDrift(disk, served.replace("this machine: omarchy", "this machine: elsewhere"), { ref: "ui.ts" });
+  assert.ok(changed, "and it still catches a changed user-visible string");
+  assert.match(changed, /not visible here/i, "with its limit stated in the failure");
 });
