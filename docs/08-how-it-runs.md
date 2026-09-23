@@ -121,6 +121,35 @@ git commit --amend --trailer "Docs-checked: a comment — nothing a document des
 ```
 
 That trailer is the checklist item (*"did this move something a document describes?"*) turned into
-something a later reader can audit. `tests/docs-touched.test.mjs` drives the gate against a real scratch
-repository — refusal, the document-in-the-change case, the trailer, an undescribed file, a docs-only
-change, and an unknown base — so the gate has checks that can fail.
+something a later reader can audit. Git's own parser decides what counts: it must be a real trailer in
+the message's terminal block, and it must carry a non-empty reason. `tests/docs-touched.test.mjs` drives
+the gate against a real scratch repository — refusal, the document-in-the-change case, the trailer, an
+undescribed file, a docs-only change, and an unknown base — so the gate has checks that can fail.
+
+#### What this gate does NOT do
+
+**It is a prompt, not a proof, and the list below is measured rather than imagined** — every line was
+driven against a scratch repository by an independent reviewer (2026-09-23). Read it before trusting the
+gate for a job it was never given:
+
+- **It watches described files, not new ones.** A change that *adds* a file no document describes passes
+  untouched. Naming a file in a document is what puts it under the gate.
+- **Any document satisfies it.** Changing an unrelated markdown file — or editing only a *generated*
+  block in the README — counts as "a document moved", even when the prose that describes your change is
+  untouched. **The README is not mandatory**; the gate cannot tell which document *should* have moved.
+- **One trailer excuses the whole range.** A `Docs-checked:` reason written for a trivial change in one
+  commit also excuses a described-code change in another commit in the same push.
+- **It sees the paths documents actually write.** `lib/extensions.mjs` and `./lib/extensions.mjs` are
+  both understood; the same path with a trailing line number is not, and a path written in a document
+  **nested deeper than one level** is not read at all — the document set is the root markdown files plus
+  `docs/`, one level.
+- **A deleted file stops being described**, because existence is what makes a backticked string a path —
+  so removing a file a document names does not trip the gate, though the prose is now wrong.
+- **Existence is not absence of collision.** The bare-name pattern also matches prose that looks like a
+  filename (`result.ok`, `bounds.hosts`); those are discarded because no such file exists. If a real file
+  ever shares a name with a property a document discusses, the gate will treat edits to it as described.
+  No such collision exists in this tree today; the case was constructed to find the boundary.
+
+**So: it catches the common, boring mistake — moving code a document talks about and forgetting the
+document — and it does not enforce "the docs and the README are correct."** Closing any line above is a
+policy decision, not a bug fix, because each one trades a false green for a false red.
