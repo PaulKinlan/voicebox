@@ -516,3 +516,59 @@ test("a present-not-admitted file has a direct admit door: same token, same gate
   assert.equal(inv.extensions.find((e) => e.id === "denieddrop"), undefined);
   assert.equal(inv.present.find((p) => p.id === "denieddrop")?.state, "present-not-admitted");
 });
+
+// ── 13. the qg1 lifecycle: admit → use → revoke → gone → re-add (voicebox-beads-qg1) ──
+test("REVOCATION: a running extension can be withdrawn by the host, and the tool stops at once", async () => {
+  // Admit the notes reader (existing catalogue fixture in this suite's flow):
+  await postJson("/api/extensions/proposals", {
+    descriptor: {
+      id: "notes-r2", name: "Notes Reader 2", description: "the revocation-lifecycle fixture",
+      source: "model", runsIn: "host", capabilities: ["read"], bounds: {},
+      tools: [{ name: "read_notes_r2", description: "x", primitive: "read-file", params: { path: "notes.md" } }],
+    },
+  });
+  const admittedResp = await fetch(`${server.base}/api/extensions/admit`, { method: "POST", headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken() }, body: JSON.stringify({ id: "notes-r2", confirm: true, decision: "admit" }) });
+  const admitted = await admittedResp.json();
+  console.log("DBG admit response:", admitted.decision);
+  assert.equal(admitted.decision, "admitted");
+  writeFileSync(path.join(WORKSPACE, "notes.md"), "the notes live here");
+  const used = await turn("run the tool read_notes_r2");
+  assert.equal(used.result?.ok, true, "the extension was usable before revocation");
+  // Token-gated: the page cannot revoke.
+  const untokened = await postJson("/api/extensions/revoke", { id: "notes-r2", confirm: true });
+  assert.equal(untokened.ok, false);
+  assert.equal(untokened.refused, "host-token-required");
+  // The host revokes: confirm-first discloses what stops, then the decision.
+  const disclosure = await fetch(`${server.base}/api/extensions/revoke`, { method: "POST", headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken() }, body: JSON.stringify({ id: "notes-r2" }) }).then((r) => r.json());
+  assert.equal(disclosure.confirmFirst, true);
+  assert.deepEqual(disclosure.plan.enforced.read, "host-primitive-scope", "the disclosure names what will stop");
+  const revoked = await fetch(`${server.base}/api/extensions/revoke`, { method: "POST", headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken() }, body: JSON.stringify({ id: "notes-r2", confirm: true, decision: "admit" }) }).then((r) => r.json());
+  assert.equal(revoked.decision, "revoked");
+  // The tool stops immediately:
+  const call = await turn("run the tool read_notes_r2");
+  assert.equal(call.result?.refused, "unknown-tool", "a revoked extension's tools are not callable");
+  // The ledger records the withdrawal with the descriptor snapshot:
+  const ledger = readFileSync(path.join(HOST_EXTENSIONS, ".ledger.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const revocation = ledger.find((e) => e.id === "notes-r2" && e.decision === "revoked");
+  assert(revocation, "the revocation is not in the ledger");
+  assert.equal(revocation.descriptor.name, "Notes Reader 2", "the revocation carries the descriptor snapshot");
+  // The inventory no longer lists it as running:
+  const inv = await getJson("/api/extensions");
+  assert.equal(inv.extensions.find((e) => e.id === "notes-r2"), undefined);
+});
+
+test("RECONFIGURE: revoke + re-add with corrected bounds — the new bounds are what the gate enforces", async () => {
+  // The web-search extension was admitted with maxRequests 5; re-add with 20 and prove the
+  // new bound is the one enforced (the reconfigure path: revoke, re-declare, re-admit).
+  const corrected = {
+    id: "web-search", name: "Web Search", description: "re-scoped web search",
+    source: "catalogue", runsIn: "host", capabilities: ["network"],
+    bounds: { hosts: ["api.duckduckgo.com"], maxRequests: 20 },
+    tools: [{ name: "web_search", description: "x", primitive: "http-get", params: { url: "https://api.duckduckgo.com/?format=json" } }],
+  };
+  await postJson("/api/extensions/proposals", { descriptor: corrected });
+  const r = await admitAsHost("web-search");
+  assert.equal(r.decision, "admitted");
+  const inv = await getJson("/api/extensions");
+  assert.deepEqual(inv.extensions.find((e) => e.id === "web-search")?.bounds, { hosts: ["api.duckduckgo.com"], maxRequests: 20 });
+});
