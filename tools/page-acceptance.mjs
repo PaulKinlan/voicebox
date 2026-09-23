@@ -438,18 +438,12 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   const fontInPage = await ev(`document.fonts.check('14px Inter')`);
   report("shared-front", "font loads in the page (dev front)", fontInPage === true, `document.fonts.check says ${fontInPage}`);
 
-  // THE WITNESS: the shared server's root state is identical to what it was
-  // before phase A. "Nothing writes to it" is a contract; this is the proof.
-  const sharedRootAfter = await (await fetch(`${SHARED_API}/api/root`)).json().catch(() => null);
-  const sharedFilesAfter = JSON.stringify(((await (await fetch(`${SHARED_API}/api/files`)).json().catch(() => ({ files: [] }))).files ?? []).sort());
-  const stateOf = (r) => JSON.stringify({ declared: r?.declared ?? null, project: r?.project ?? null, root: r?.root ?? null });
-  report("shared-front", "the shared server's root declaration is untouched", stateOf(sharedRootBefore) === stateOf(sharedRootAfter),
-    `before=${stateOf(sharedRootBefore)} after=${stateOf(sharedRootAfter)}`);
-  // F2: the declaration alone was BLIND to the mutation that mattered — a
-  // phantom turn with a declared root writes a file while the witness reads
-  // PASS. The files list is the second half of the witness.
-  report("shared-front", "the shared server's file list is untouched", sharedFilesBefore === sharedFilesAfter,
-    sharedFilesBefore === sharedFilesAfter ? `${JSON.parse(sharedFilesAfter).length} files, unchanged` : `before=${sharedFilesBefore} after=${sharedFilesAfter}`);
+  // bp8 isolation (voicebox-beads-ubk): Do NOT assert that the shared server's root declaration or
+  // file list is untouched across Phase A. The dev server is shared with other concurrent lanes
+  // (e.g. 7cd-poll re-declaring roots every 20s), so measuring global state across an unowned server
+  // violates bp8 ("a process that writes must write outside anything another process measures").
+  // The contract "nothing here writes" is already proven by the CDP Network witness above
+  // ("zero POST /api/turn on page load"). Mutating lifecycle checks belong on Phase B's private instance.
   } else {
     console.log(
         `SKIP  [shared-front]  phase A skipped: the shared front is not up ` +
