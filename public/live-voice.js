@@ -9,6 +9,7 @@
 // old SpeechRecognition dictation handler (public/fused.js) does not attach,
 // and the page's scripted captions stop while live.
 import { createAudioClient } from "./audio-client.js";
+import { debugEnabled, recordDebug, observeDebugSocket } from "./debug-transcript.js";
 
 window.__voiceboxLive = true;
 
@@ -47,9 +48,11 @@ const audioClient = createAudioClient({
     if (caption) caption.textContent = text;
   },
   onError: (error, info) => {
+    recordDebug({ type: "audio.error", error: error.message, info });
     if (voiceState) voiceState.textContent = info?.fatal ? `Live voice failed: ${error.message}` : `Ignored a malformed frame: ${error.message}`;
   },
   onDiagnostic: (d) => {
+    recordDebug({ type: "audio.diagnostic", detail: d });
     if (d?.kind === "socket-closed" && voiceState) {
       voiceState.textContent = capturing
         ? "Live voice disconnected: machine-closed · mic off"
@@ -83,13 +86,15 @@ async function explainFailedUpgrade() {
 }
 
 async function startLive() {
-  const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/live`;
+  const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/live${debugEnabled ? "?debug=1" : ""}`;
   const caption = $("caption");
   if (caption) caption.textContent = "";
   if (voiceState) voiceState.textContent = "Connecting to the live session…";
   try {
     socket = new WebSocket(url);
+    observeDebugSocket(socket);
   } catch (error) {
+    recordDebug({ type: "live.connect.error", error: error.message });
     if (voiceState) voiceState.textContent = `Live voice unavailable: ${error.message}`;
     return;
   }

@@ -20,7 +20,7 @@ async function until(check, label) {
   assert.fail(`No ${label} within 5000ms`);
 }
 
-async function fixture(t, envProvider = "openai", selectedProvider = "openai") {
+async function fixture(t, envProvider = "openai", selectedProvider = "openai", debug = false) {
   const scratch = mkdtempSync(path.join(os.tmpdir(), "vb-openai-browser-"));
   const workspace = path.join(scratch, "workspace"), host = path.join(scratch, "host");
   mkdirSync(workspace); mkdirSync(host);
@@ -83,8 +83,9 @@ async function fixture(t, envProvider = "openai", selectedProvider = "openai") {
       socket.addEventListener('message', e => { if (typeof e.data === 'string') window.liveControls.push(JSON.parse(e.data)); });
       return socket;
     } });` });
-  await page.goto(server.base + "/");
+  await page.goto(server.base + (debug ? "/?debug=1" : "/"));
   await page.waitFor(() => window.__voiceboxLiveClient);
+  assert.equal(await page.evaluate(() => document.querySelector("#debug-panel").hidden), !debug);
   await page.click("#mic");
   const row = await until(() => rows[0]?.messages.length && rows[0], "vendor setup");
   row.peer.send(JSON.stringify(row.provider === "openai" ? { type: "session.updated" } : { setupComplete: {} }));
@@ -99,6 +100,7 @@ async function fixture(t, envProvider = "openai", selectedProvider = "openai") {
 
 test("OpenAI browser: real function call writes and answers; invalid calls refuse", { timeout: 20000 }, async t => {
   const f = await fixture(t);
+  assert.equal((await f.read()).controls.some(c => c.type === "debug"), false, "normal sessions do not transmit debug payloads");
   const setup = f.row.messages.find(msg => msg.type === "session.update").session;
   assert.deepEqual(setup.tools, functionDeclarations().map(tool => ({ type: "function", ...tool })));
   assert.equal(setup.instructions, liveSystemInstruction());
@@ -148,4 +150,79 @@ for (const [environment, selected, rate, model] of [
   const state = after.controls.find(c => c.state === "turn-complete");
   assert.equal(state.detail.provider, selected);
   assert.equal(state.model, model);
+});
+
+for (const provider of ["gemini", "openai"]) test(`Debug transcript: ${provider} failing tool → clipboard, with redaction and error navigation`, { timeout: 30000 }, async t => {
+  const f = await fixture(t, provider, provider, true);
+  const callId = "debug-failure";
+  const secret = "AIzaSyntheticSecretForExportOnly123456789";
+  const args = { name: "debug-missing.txt", cookie: "synthetic-cookie", note: `key in prose ${secret}` };
+  f.send(provider === "gemini"
+    ? { toolCall: { functionCalls: [{ id: callId, name: "read_file", args }] } }
+    : { type: "response.function_call_arguments.done", call_id: callId, name: "read_file", arguments: JSON.stringify(args) });
+  await f.page.waitFor(() => document.querySelector("#debug-events").textContent.includes("tool.delivery"));
+  const raw = await f.page.evaluate(() => document.querySelector("#debug-events").textContent);
+  assert(raw.includes(secret), "positive witness: unredacted model arguments arrived at the actual page");
+  assert(raw.includes("synthetic-cookie"));
+  assert(raw.includes("tool.result"));
+  const upstream = await until(() => provider === "gemini"
+    ? f.row.messages.find(m => m.toolResponse)?.toolResponse.functionResponses.find(r => r.id === callId)
+    : f.answer(callId), "actual result at the fixture provider");
+  const result = provider === "gemini" ? upstream.response.result : JSON.parse(upstream.item.output).result;
+  assert.equal(result.ok, false, "real executor must fail on missing file");
+  assert(result.error || result.refused);
+  const setup = f.row.messages.find(m => m.setup || m.type === "session.update");
+  assert.equal(provider === "gemini" ? setup.setup.inputAudioTranscription : setup.session.audio.input.transcription, undefined,
+    "debug must not enable transcription or change the provider's setup");
+
+  await f.page.click("#debug-next-error");
+  assert.equal(await f.page.evaluate(() => document.activeElement.closest('[data-error="true"]') !== null), true);
+  await f.page.send("Browser.grantPermissions", { origin: f.server.base, permissions: ["clipboardReadWrite", "clipboardSanitizedWrite"] });
+  await f.page.click("#debug-copy");
+  await f.page.waitFor(() => document.querySelector("#debug-copy-status").textContent.startsWith("Copied"));
+  const text = await f.page.evaluate(() => navigator.clipboard.readText());
+  assert(!text.includes(secret), "opaque API key must not leave the page");
+  assert(!text.includes("synthetic-cookie"), "cookie value must not leave the page");
+  const events = text.trim().split("\n").map(JSON.parse);
+  assert.equal(events.length, await f.page.evaluate(() => document.querySelectorAll("#debug-events > li").length), "one copy captures the entire timeline");
+  assert(events.every(e => Number.isFinite(Date.parse(e.timestamp))));
+  assert(events.some(e => e.type === "debug.start" && e.inputTranscript.includes("does not enable transcription")));
+  const stages = events.filter(e => e.callId === callId);
+  for (const type of ["tool.request", "tool.route", "tool.result", "tool.delivery"]) assert(stages.some(e => e.type === type), type);
+  const routed = stages.find(e => e.type === "tool.route");
+  assert.equal(routed.route, "shared-executor");
+  const failed = stages.find(e => e.type === "tool.result");
+  assert.equal(failed.result.ok, false);
+  assert(failed.durationMs >= 0);
+  assert.equal(stages.find(e => e.type === "tool.delivery").delivery, "transport-accepted");
+  assert.equal(stages.find(e => e.type === "tool.delivery").modelReceipt, "unknown");
+
+  // Real typed turns are also captured, beyond the eight visible recent turns.
+  for (let i = 0; i < 9; i++) {
+    await f.page.type("#utterance", `read debug-missing-${i}.txt`);
+    await f.page.click("#send");
+    await f.page.waitFor(() => document.querySelector("#send").textContent === "Send");
+  }
+  await f.page.click("#debug-copy");
+  await f.page.waitFor(() => document.querySelector("#debug-export").value.includes("debug-missing-8.txt"));
+  const typed = (await f.page.evaluate(() => document.querySelector("#debug-export").value)).trim().split("\n").map(JSON.parse);
+  assert.equal(typed.filter(e => e.type === "turn.request").length, 9);
+  assert.equal(typed.filter(e => e.type === "turn.result").length, 9);
+  assert.equal(typed.filter(e => e.type === "turn.presented").length, 9);
+  for (const width of [1280, 390]) {
+    await f.page.emulateViewport({ width, height: 850, mobile: width === 390 });
+    const fits = await f.page.evaluate(() => {
+      const panel = document.querySelector("#debug-panel").getBoundingClientRect();
+      return panel.left >= 0 && panel.right <= innerWidth && document.documentElement.scrollWidth <= innerWidth;
+    });
+    assert(fits, `debug panel fits ${width}px viewport`);
+  }
+  // A refused clipboard still exposes ONLY the redacted fallback, with a remedy.
+  await f.page.evaluate(() => Object.defineProperty(navigator, "clipboard", { value: { writeText: () => Promise.reject(new Error("fixture denial")) }, configurable: true }));
+  await f.page.click("#debug-copy");
+  await f.page.waitFor(() => document.querySelector("#debug-copy-status").textContent.includes("Clipboard unavailable"));
+  assert.equal(await f.page.evaluate(() => {
+    const out = document.querySelector("#debug-export");
+    return !out.hidden && out.selectionEnd === out.value.length && out.selectionStart === 0;
+  }), true);
 });

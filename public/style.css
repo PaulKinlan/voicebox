@@ -337,3 +337,15 @@ body:has(#reader[data-state="ready"]) #file-body { max-height: 26svh; }
 .ext-plan form[hidden] { display: none; }
 .ext-plan input { max-width: 100%; box-sizing: border-box; }
 .env-item.env-empty { color: #6f6f7c; font-size: 12px; }
+
+/* Debugging stays in the room, but only an explicit ?debug=1 reveals it. */
+.debug-panel { margin-block: 32px; padding-block: 24px; border-top: 1px solid var(--line); min-width: 0; }
+.debug-panel h2 { font-size: 1.125rem; margin: 0 0 12px; }
+.debug-panel p { max-width: 72ch; color: var(--muted); }
+.debug-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+#debug-events { max-height: 50vh; overflow: auto; padding: 0; list-style: none; }
+#debug-events li { padding: 10px 4px; border-bottom: 1px solid var(--line); }
+#debug-events summary { cursor: pointer; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+#debug-events [data-error="true"] summary { color: var(--warn); font-weight: 600; }
+#debug-events pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8125rem; }
+#debug-export { width: 100%; min-height: 160px; padding: 12px; background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; }

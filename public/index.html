@@ -234,6 +234,20 @@
       </section>
     </main>
 
+    <section id="debug-panel" class="debug-panel" hidden aria-labelledby="debug-title">
+      <h2 id="debug-title">Debug transcript</h2>
+      <p>Recording this tab since page load. Copy before reloading. No audio recordings or earlier visits are included.</p>
+      <p>Details below are unredacted. Copy creates a redacted export; review it before sharing personal information.</p>
+      <div class="debug-actions">
+        <button class="quiet" id="debug-copy" type="button">Copy all events (redacted JSONL)</button>
+        <button class="quiet" id="debug-next-error" type="button" disabled>Next error</button>
+        <span id="debug-status" role="status">No events yet</span>
+      </div>
+      <p id="debug-copy-status" role="status"></p>
+      <textarea id="debug-export" hidden readonly aria-label="Redacted debug export" spellcheck="false"></textarea>
+      <ol id="debug-events" aria-label="Debug timeline"></ol>
+    </section>
+
     <footer class="foot">
       <p class="foot-fact">Typed turns go to the local server, which reads and writes the project folder when the folder is one it can reach.</p>
       <p class="foot-fact">Live voice runs through the same server and takes no tools yet, so it cannot write files.</p>

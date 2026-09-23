@@ -68,6 +68,53 @@ The live-tools write check waits for both the file and its successful `write_fil
 websocket event within the same 60-second budget; file creation alone does not
 prove that the page has received the report.
 
+## Debugging a transcript or tool call
+
+Open the main app with **`?debug=1`** (for example `http://localhost:5173/?debug=1`),
+then reproduce the problem. A **Debug transcript** panel below the conversation records
+this tab from page load, including every emitted text fragment and typed turn, not just
+the eight recent turns. Use **Next error** to open and focus a failure, then **Copy all
+events (redacted JSONL)** to paste the entire timeline into an agent chat. Each line is
+one event with a timestamp, sequence and elapsed time. Copy does not depend on which
+rows are expanded. If clipboard permission fails, a selected, redacted text box is the
+manual fallback.
+
+The panel stays in the main app so it observes the actual conversation, not a second
+page's session. It is hidden and does not collect events without `?debug=1`. Capture is
+memory-only: **copy before reloading or closing the tab**. Previous visits, other tabs,
+audio recordings and server console history are not included. Debug does **not** enable
+input transcription or change provider configuration: spoken words are absent unless
+the provider already emits their transcription. The export carries that disclosure too.
+
+For live tools, follow the same `callId` through `tool.wire-request` (original provider
+arguments), `tool.request` (normalized arguments), `tool.route` (shared executor or
+pre-execution refusal), `tool.result` (complete result/error and execution duration),
+and `tool.delivery`. Approval, containment and environment refusals remain in the
+executor's result, not a summary substituted for it. Malformed/early calls are marked
+refused or dropped. **`transport-accepted` means the local transport accepted a send;
+it does not prove provider acknowledgement or model consumption.** `not-sent` is a
+known refusal; `unknown` means a send threw. Missing result/delivery events mean pending
+or unknown, not success. Session and connection identifiers distinguish reconnects.
+Typed turns carry their full HTTP response and displayed outcome; their resolver does
+not receive execution results back. Server and page timestamps come from their own
+clocks; execution duration is measured on the server. The start/health events identify
+the page/server build and provider when available.
+
+Details on screen are **unredacted**. Only the copy/export path strips sensitive field
+values (including credentials, cookies and headers), embedded credential assignments,
+private keys and long opaque strings. Repeated opaque values get consistent redaction
+aliases so call correlation survives. Results are otherwise verbatim, without clipping
+or summarizing. Redaction deliberately over-matches some identifiers and paths; it
+cannot recognize every short secret hidden in arbitrary prose. **Review before sharing**:
+ordinary personal information, file contents and paths may remain. There is no automatic
+upload and no extra paid transcription. This feature needs the updated API server as
+well as a refreshed page; an older server cannot supply detailed tool-boundary events.
+
+Checks: `node --test tests/debug-transcript.test.mjs tests/live-openai-browser.test.mjs`.
+The browser checks drive real missing-file failures through both providers' adapters,
+the real server/executor and the native clipboard, using a loopback vendor fixture and
+synthetic media/credentials. They do not claim an authenticated model round-trip.
+
 ## The two paths, stated separately
 
 The largest gap in this product was invisible because one word — *live* — covered two different things:

@@ -108,7 +108,7 @@ async function fixture(t, name) {
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       return res.end(html);
     }
-    if (["/audio-client.js", "/live-voice.js", "/pcm.js", "/pcm-worklet.js"].includes(req.url)) {
+    if (["/audio-client.js", "/live-voice.js", "/debug-transcript.js", "/pcm.js", "/pcm-worklet.js"].includes(req.url)) {
       res.setHeader("Content-Type", "application/javascript");
       return res.end(readFileSync(path.join(root, "public", req.url)));
     }

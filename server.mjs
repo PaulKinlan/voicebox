@@ -1587,6 +1587,13 @@ server.on("upgrade", (req, socket) => {
     }
     ws.send(JSON.stringify({ type: "rate", inputRate, provider }));
 
+    // Debug data is private to this entitled socket, never a global log or a new route.
+    const sessionId = randomBytes(12).toString("hex");
+    const trace = url.searchParams.get("debug") === "1" ? (event) => {
+      try { ws.send(JSON.stringify({ type: "debug", event: { ...event, source: "server", timestamp: new Date().toISOString(), sessionId, provider, model } })); }
+      catch { /* diagnostics must not change execution when the page disconnects */ }
+    } : undefined;
+    trace?.({ type: "session.start", delivery: "Transport send is observable; model consumption is not acknowledged." });
     let session = null;
     try {
       liveSessionsCreated += 1;
@@ -1595,6 +1602,7 @@ server.on("upgrade", (req, socket) => {
         // person chose is the provider this session dials, and its model comes with it.
         provider,
         model,
+        onDebug: trace,
         onAudioOut: (pcm, mime) => { if (pcm.length > 4) ws.send(pcm); },
         onText: (text, role) => ws.send(JSON.stringify({ type: "text", role, text })),
         onState: (state, detail) => ws.send(JSON.stringify({ type: "state", state, detail, model })),
@@ -1613,7 +1621,10 @@ server.on("upgrade", (req, socket) => {
             // 2026-09-20: one failing command swallowed every sibling's response). So the
             // mapping is validated, the executor is wrapped, and a throw becomes a NAMED
             // refusal rather than a swallowed outcome.
+            const started = performance.now();
             const action = commandToAction(call.name, call.args);
+            trace?.({ type: "tool.route", callId: call.id, name: call.name, action,
+              route: !action || action.refused ? "refused-before-execution" : "shared-executor" });
             let result;
             if (!action) {
               result = { ok: false, refused: "unknown-command", error: `unknown command: '${call.name}' — the only commands are in lib/commands.mjs` };
@@ -1626,6 +1637,8 @@ server.on("upgrade", (req, socket) => {
                 result = { ok: false, refused: "exec-threw", error: `refused: exec-threw`, why: `the executor threw instead of answering: ${e?.message ?? e}` };
               }
             }
+            trace?.({ type: "tool.result", callId: call.id, name: call.name, result, durationMs: performance.now() - started,
+              severity: result.ok === false ? "error" : "info" });
             responses.push({ id: call.id, name: call.name, response: { result } });
             seen.push({ name: call.name, ok: result.ok, action: result.action ?? result.error });
           }
