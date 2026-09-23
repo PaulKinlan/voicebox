@@ -215,3 +215,8 @@ Audio worklets loaded by that code: `pcm-worklet.js`.
   `container: env-dialog / inline-size` container queries for component-isolated responsive layout, `<search>` landmark
   semantics, scroll containment (`overscroll-behavior: contain`, `scrollbar-gutter: stable`), keyboard-focusable
   scrollable regions (`<pre tabindex="0">`), and IME composition guards.
+  The room's file list is a `file-explorer` inline-size container: one column by default, two from 36rem,
+  with long names wrapping independently of their sizes. Its scroll area is bounded to 40svh/24rem
+  so a populated list does not keep growing through the room. Selection, root provenance, arrival
+  expiry and folder permissions remain controlled by the existing page logic; CSS changes only their
+  presentation. `tests/room-explorer-ui.test.mjs` drives the native controls and layout boundaries.
