@@ -666,8 +666,15 @@ function revokePairing(envKey) {
     console.error(`[live] pairing revoked for '${envKey}' — live session closed`);
   }
 
-  logAct({ kind: "pairing", target: envKey, tool: "pair" }, "allow", "pairing-revoked", "ok", null, null);
-  return { ok: true, envKey, revoked: true, at: entry.revokedAt };
+  const audit = logAct({ kind: "pairing", target: envKey, tool: "pair" }, "allow", "pairing-revoked", "ok", null, null);
+  return {
+    ok: true,
+    envKey,
+    revoked: true,
+    at: entry.revokedAt,
+    logged: audit ? audit.seq : null,
+    ...(audit ? {} : { logRefused: lastLogRefusal ?? "root-not-declared" }),
+  };
 }
 
 // The extension system's tools act in the ACTIVE root, not a workspace of their own

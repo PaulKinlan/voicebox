@@ -56,13 +56,20 @@ every claim below is stated for the remote path first.
   Withdrawing a pairing is gated by the host token (`x-voicebox-host-token`) and applies immediately:
   1. **Immediate active termination**: any currently open `/channel` executor socket and `/live` voice
      session socket holding that authority is closed with WebSocket code 1008 and refusal `pairing-revoked`.
-     `pageSocket` is cleared and pending calls are abandoned; live sessions are ended.
+     `pageSocket` is cleared and pending calls are abandoned; live sessions are ended (closing both the
+     door and the underlying provider session). A local-origin live session (admitted without a bearer,
+     since the hello gate waives same-origin) is NOT terminated by environment pairing revocation — it
+     holds no envKey or bearer, so revocation of a remote environment does not close the local user's
+     browser session.
   2. **Durable revocation record**: the bearer is marked revoked in `.pairings.json` (`revokedBearers`), so
      subsequent connection attempts refuse by name (`pairing-revoked`) rather than collapsing into
      `bearer-refused` (preserving the difference between a revoked credential and a stranger's token).
   3. **Proxy calls blocked**: `POST /api/call` to that environment and `POST /api/execute` presenting the
      revoked bearer both refuse HTTP 403 `pairing-revoked`.
-  4. **Audit recorded**: the revocation is logged to the host audit trail (`kind: "pairing", action: "revoke"`).
+  4. **Audit recorded**: when an active machine root is declared, the revocation is logged as
+     `act={kind:"pairing", target:envKey, tool:"pair"}, rule="pairing-revoked", result="ok"`. When no
+     machine root is declared, `logged: null` and `logRefused: "root-not-declared"` are reported on the
+     response, making the absence of logging visible rather than silently dropping it.
 
 ## 3. The proxy route, and the remote drive
 
