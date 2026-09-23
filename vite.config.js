@@ -200,7 +200,32 @@ export default defineConfig({
       "/api": { target: API_TARGET },
       // The audio socket (k3's live session, landing separately). ws: true so
       // the WebSocket upgrade is forwarded and survives HMR reloads.
-      "/live": { target: API_TARGET, ws: true },
+      //
+      // THE ORIGIN IS THE SERVER'S OWN, because this hop is ours.
+      //
+      // The API's hello gate (bead voicebox-beads-eet) entitles "the local page" by
+      // its Origin: it recognises the port THE SERVER BOUND, because a page this
+      // process serves announces itself with the server's own origin. A browser on
+      // this dev front sends `Origin: http://127.0.0.1:5173`, Vite forwards it
+      // verbatim, the gate does not recognise it, and the socket is closed in
+      // silence — after which the PAGE blames the audio rate, because from its side
+      // a live socket ended before any `{type:"rate"}` frame arrived. Measured on
+      // 2026-09-23: same socket, `Origin: …:8787` -> {"type":"rate","inputRate":16000,
+      // "provider":"gemini"}; `Origin: …:5173` -> no frame at all. The owner's
+      // "the server has not said what audio rate its provider needs" was that.
+      //
+      // Rewriting it here is the honest place: Vite IS this server's dev front on
+      // the same machine, and a proxy hop terminating its own origin is what a proxy
+      // is for. The gate keeps its rule unchanged for every non-proxied caller.
+      "/live": {
+        target: API_TARGET,
+        ws: true,
+        configure: (proxy) => {
+          proxy.on("proxyReqWs", (proxyReq) => {
+            proxyReq.setHeader("origin", API_TARGET);
+          });
+        },
+      },
       // environment.html's modules live at the project root (browser/ui/ui.ts),
       // one level above this root — Paul's console caught the 404 as a
       // pre-transform error while the page itself returned 200 (2026-09-20).

@@ -335,6 +335,40 @@ test("state: a socket close is ended, not 'listening'", async () => {
 // microphone is not available", which is not what happened. Fixed first, then
 // witnessed: the four facts below are each observable, and none of them needs a
 // microphone, a socket or a real device.
+// ── two absences, two sentences: a socket that ENDED is not a rate that was withheld ──────
+// The owner's bug (2026-09-23) produced "the server has not said what audio rate its provider needs"
+// for a socket the API's hello gate had already closed for entitlement — the sentence pointed at the
+// rate work, which was correct, instead of at the connection, which was not. The client can tell the
+// two apart, so it must.
+test("a socket that closed before the rate frame names the CONNECTION, not the rate", async () => {
+  const { client, socket, media } = makeClient();
+  let getUserMediaCalls = 0;
+  const nativeGetUserMedia = media.mediaDevices.getUserMedia;
+  media.mediaDevices.getUserMedia = (...args) => { getUserMediaCalls += 1; return nativeGetUserMedia(...args); };
+
+  // A socket the server has already closed: CLOSED (3), with the code its close carried.
+  client.attachSocket(socket);
+  socket.readyState = 3;
+  socket.onclose?.({ code: 1008, reason: "local-page-required" });
+
+  await client.startCapture();
+  const s = client.snapshot();
+  assert.equal(s.capture, false, "no capture on a dead socket");
+  assert.equal(s.captureErrorReason, "socket-closed-before-rate", "the reason is not the connection");
+  assert.match(s.label, /live connection ended/i, "the sentence does not say the connection ended");
+  assert.match(s.label, /1008/, "the close code is not named");
+  assert.doesNotMatch(s.label, /has not said what audio rate/, "the rate was blamed for a closed socket");
+  assert.equal(getUserMediaCalls, 0, "the microphone is never opened for a connection that is gone");
+
+  // And the OTHER absence keeps its own sentence: a live socket that stays silent.
+  const live = makeClient();
+  live.socket.readyState = 1;
+  await live.client.startCapture();
+  assert.equal(live.client.snapshot().captureErrorReason, "rate-not-declared",
+    "an OPEN socket that never declared a rate must not be reported as a closed connection");
+  assert.match(live.client.snapshot().label, /has not said what audio rate/, "the rate sentence is gone");
+});
+
 test("capture refuses without a declared rate, and names the RATE rather than the microphone", async () => {
   const { client, contexts, media } = makeClient();
   let getUserMediaCalls = 0;

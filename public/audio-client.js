@@ -75,6 +75,12 @@ export function createAudioClient({
     inputRate: null, // declared by the server on this socket; there is no default
     provider: "",
   };
+  // What the socket is doing, when a refusal needs to name it rather than guess.
+  const socketReadyState = () => (ws && typeof ws.readyState === "number" ? ws.readyState : -1);
+  let lastClose = null; // { code, reason } from the most recent close, for the sentence above
+  const closeDetail = () => (lastClose && (lastClose.code || lastClose.reason)
+    ? ` (the socket closed: code ${lastClose.code ?? "unknown"}${lastClose.reason ? `, ${lastClose.reason}` : ""})`
+    : "");
   let captureCtx = null;
   let captureNode = null;
   let captureSource = null;
@@ -415,6 +421,7 @@ export function createAudioClient({
     ws.onmessage = (event) => handleMessage(event.data);
     ws.onerror = () => reject("websocket error", { frameKind: "socket" });
     ws.onclose = (event) => {
+      lastClose = { code: event?.code ?? null, reason: event?.reason || "" };
       state.ready = false;
       if (!state.sessionEnded) {
         // The page's own socket is gone: that is also not "listening".
@@ -464,13 +471,32 @@ export function createAudioClient({
         // below, so this came out as "The microphone is not available: …" — naming the wrong cause, the
         // same mistake as blaming the /live route for a server that was restarting. The cause is a missing
         // declaration from the server; the microphone is fine and untouched.
-        state.captureErrorReason = "rate-not-declared";
-        state.captureError =
-          "The server has not said what audio rate its provider needs, so the microphone was not started. " +
-          "Sending audio at a guessed rate would be worse than not sending it. Typing still works.";
+        //
+        // WHICH ABSENCE, THOUGH. "The server has not said what audio rate its provider needs" is true of a
+        // server that is silent on principle and of one whose socket was already closed — and it points at
+        // the rate work, which was correct the whole time, for a connection that was refused for entitlement.
+        // Measured 2026-09-23: the API's hello gate (voicebox-beads-eet) recognises only the server's own
+        // origin, the dev front's socket was closed with no frame at all, and this sentence blamed the rate.
+        // So the sentence now names which of the two happened: a socket that is gone says so, with its code.
+        // Only CLOSING (2) and CLOSED (3) mean "the connection ended". A socket that is OPEN, or one that
+        // was never attached (-1), has not ended — saying so would be this defect's own mistake in a new
+        // place: naming a cause the state does not support.
+        const ready = socketReadyState();
+        const closed = ready === 2 || ready === 3;
+        if (closed) {
+          state.captureErrorReason = "socket-closed-before-rate";
+          state.captureError =
+            `The live connection ended before the server could say what audio rate its provider needs${closeDetail()} ` +
+            "so the microphone was not started. The rate was never the problem — the connection was. Typing still works.";
+        } else {
+          state.captureErrorReason = "rate-not-declared";
+          state.captureError =
+            "The server has not said what audio rate its provider needs, so the microphone was not started. " +
+            "Sending audio at a guessed rate would be worse than not sending it. Typing still works.";
+        }
         state.lastError = state.captureError;
-        onDiagnostic({ kind: "refused", message: state.captureError, reason: "rate-not-declared" });
-        emit("idle", { rateNotDeclared: true });
+        onDiagnostic({ kind: "refused", message: state.captureError, reason: state.captureErrorReason });
+        emit("idle", { rateNotDeclared: true, socketClosed: closed });
         return;
       }
       stream = await mediaDevices.getUserMedia({ audio: deviceId ? { deviceId: { exact: deviceId } } : true });
