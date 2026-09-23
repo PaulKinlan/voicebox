@@ -77,6 +77,15 @@ async function waitFor(predicate, { boundMs = 6000 } = {}) {
   return predicate();
 }
 
+async function closeWithin(socketWrapper, label, ms = 4000) {
+  const result = await Promise.race([
+    socketWrapper.closed,
+    new Promise((resolve) => setTimeout(() => resolve(null), ms)),
+  ]);
+  assert.ok(result, `${label} must close within ${ms}ms — hung close is a regression, not a pass`);
+  return result;
+}
+
 test("revoking a pairing immediately terminates active /channel and /live sockets, ends provider sessions, and blocks fresh calls", async () => {
   // ── Setup stub vendor for live session redirect ────────────────────────────
   const vendor = createServer();
@@ -175,13 +184,13 @@ test("revoking a pairing immediately terminates active /channel and /live socket
 
     // ── 6. EXISTING CONNECTIONS OBSERVED FIRST ────────────────────────────────
     // The active /channel executor socket MUST be terminated immediately
-    const channelClose = await channelPeer.closed;
+    const channelClose = await closeWithin(channelPeer, "active /channel executor socket");
     assert.equal(channelClose.code, 1008, "/channel socket must be closed with WS 1008");
     assert.equal(channelClose.reason, "pairing-revoked");
     assert.ok(channelPeer.frames.some((f) => f.refused === "pairing-revoked"), "refusal frame must be delivered to executor socket");
 
     // The active /live session socket MUST be terminated immediately
-    const liveClose = await livePeer.closed;
+    const liveClose = await closeWithin(livePeer, "active /live session socket");
     assert.equal(liveClose.code, 1008, "/live socket must be closed with WS 1008");
     assert.equal(liveClose.reason, "pairing-revoked");
     assert.ok(livePeer.frames.some((f) => f.refused === "pairing-revoked"), "refusal frame must be delivered to live socket");
@@ -194,7 +203,7 @@ test("revoking a pairing immediately terminates active /channel and /live socket
     const freshChannel = openSocket(`${server.base.replace(/^http/, "ws")}/channel`);
     await freshChannel.opened;
     freshChannel.ws.send(JSON.stringify({ type: "hello", role: "environment", bearer }));
-    const freshChannelClose = await freshChannel.closed;
+    const freshChannelClose = await closeWithin(freshChannel, "fresh /channel socket");
     assert.equal(freshChannelClose.code, 1008);
     assert.equal(freshChannelClose.reason, "pairing-revoked");
     assert.equal(freshChannel.frames.find((f) => f.type === "refused")?.refused, "pairing-revoked");
@@ -202,7 +211,7 @@ test("revoking a pairing immediately terminates active /channel and /live socket
     const freshLive = openSocket(`${server.base.replace(/^http/, "ws")}/live`);
     await freshLive.opened;
     freshLive.ws.send(JSON.stringify({ type: "hello", bearer }));
-    const freshLiveClose = await freshLive.closed;
+    const freshLiveClose = await closeWithin(freshLive, "fresh /live socket");
     assert.equal(freshLiveClose.code, 1008);
     assert.equal(freshLiveClose.reason, "pairing-revoked");
     assert.equal(freshLive.frames.find((f) => f.type === "refused")?.refused, "pairing-revoked");
@@ -243,7 +252,7 @@ test("revoking a pairing immediately terminates active /channel and /live socket
     const oldBearerLive = openSocket(`${server.base.replace(/^http/, "ws")}/live`);
     await oldBearerLive.opened;
     oldBearerLive.ws.send(JSON.stringify({ type: "hello", bearer }));
-    const oldClose = await oldBearerLive.closed;
+    const oldClose = await closeWithin(oldBearerLive, "old bearer /live socket");
     assert.equal(oldClose.code, 1008);
     assert.equal(oldClose.reason, "pairing-revoked", "historical revoked bearer must still refuse pairing-revoked");
 
@@ -251,7 +260,7 @@ test("revoking a pairing immediately terminates active /channel and /live socket
     const strangerLive = openSocket(`${server.base.replace(/^http/, "ws")}/live`);
     await strangerLive.opened;
     strangerLive.ws.send(JSON.stringify({ type: "hello", bearer: "vbx_never-issued-stranger-token" }));
-    const strangerClose = await strangerLive.closed;
+    const strangerClose = await closeWithin(strangerLive, "stranger /live socket");
     assert.equal(strangerClose.code, 1008);
     assert.equal(strangerClose.reason, "bearer-refused", "unknown bearer must be refused as bearer-refused, NOT pairing-revoked");
   } finally {
@@ -359,7 +368,7 @@ test("revocation state survives server restart on the same store", async () => {
       const wsRevoked = openSocket(`${server2.base.replace(/^http/, "ws")}/channel`);
       await wsRevoked.opened;
       wsRevoked.ws.send(JSON.stringify({ type: "hello", role: "environment", bearer }));
-      const closeRevoked = await wsRevoked.closed;
+      const closeRevoked = await closeWithin(wsRevoked, "restart revoked /channel socket");
       assert.equal(closeRevoked.code, 1008);
       assert.equal(closeRevoked.reason, "pairing-revoked", "revoked bearer must still answer pairing-revoked after server restart");
 
@@ -367,7 +376,7 @@ test("revocation state survives server restart on the same store", async () => {
       const wsStranger = openSocket(`${server2.base.replace(/^http/, "ws")}/channel`);
       await wsStranger.opened;
       wsStranger.ws.send(JSON.stringify({ type: "hello", role: "environment", bearer: "vbx_stranger" }));
-      const closeStranger = await wsStranger.closed;
+      const closeStranger = await closeWithin(wsStranger, "restart stranger /channel socket");
       assert.equal(closeStranger.code, 1008);
       assert.equal(closeStranger.reason, "bearer-refused", "unknown bearer must still answer bearer-refused after server restart");
     } finally {
