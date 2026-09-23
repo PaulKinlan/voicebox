@@ -154,7 +154,7 @@ function buildPip(pip, controls) {
     body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: #14161a; color: #e8eaf0;
            display: flex; flex-direction: column; gap: .75rem; padding: .9rem; height: 100vh; box-sizing: border-box; }
     .row { display: flex; align-items: center; gap: .6rem; }
-    #pip-mic { width: 3.4rem; height: 3.4rem; border-radius: 50%; border: 1px solid #3a3f4b;
+    #pip-mic { transition: background 150ms ease, border-color 150ms ease; width: 3.4rem; height: 3.4rem; border-radius: 50%; border: 1px solid #3a3f4b;
                background: #1d2026; color: inherit; font-size: 1.3rem; cursor: pointer; }
     #pip-mic[data-listening="true"] { background: #2b6b4b; border-color: #4fbf8b; }
     #pip-state { font-weight: 600; }
