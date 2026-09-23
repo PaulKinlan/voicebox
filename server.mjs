@@ -32,8 +32,9 @@ import {
   unreachable,
 } from "./core/environment.ts";
 import * as extensions from "./lib/extensions.mjs";
-import { createTaskHost, protectedAuditPath, TASK_TOOLS } from "./lib/tasks.mjs";
+import { createTaskHost, installTaskExecutor, protectedAuditPath, TASK_TOOLS } from "./lib/tasks.mjs";
 import { createPermissionPolicy } from "./lib/permission-policy.mjs";
+import { createPiAcpExecutor } from "./lib/pi-acp.mjs";
 import { bootFence } from "./lib/fence-provider.mjs";
 import { SOURCE_DIRS } from "./lib/browser-sources.mjs";
 import { bootUnitFence } from "./lib/unit-fence-provider.mjs";
@@ -435,6 +436,24 @@ const tasks = createTaskHost({
 
 const permissions = createPermissionPolicy();
 
+const HARNESS = process.env.VOICEBOX_HARNESS ?? null;
+if (HARNESS === "pi" || HARNESS === "pi-acp") {
+  const piExecutor = createPiAcpExecutor({
+    decide: permissions.decide,
+    root: () => active?.root,
+  });
+  installTaskExecutor(piExecutor);
+} else if (HARNESS === "claude") {
+  installTaskExecutor({
+    check({ input }) {
+      return { ok: false, refused: "adapter-not-configured", why: "No Voicebox task adapter is configured for this CLI; configure an adapter before delegating." };
+    },
+    async run() {
+      throw Object.assign(new Error("No Voicebox task adapter is configured for this CLI"), { refused: "adapter-not-configured" });
+    },
+  });
+}
+
 function callTool(tool, args, authority) {
   return (TASK_TOOLS.has(tool) || tool === "cancel_task") ? tasks.call(tool, args, authority) : extensions.callTool(tool, args);
 }
@@ -769,6 +788,7 @@ CHOICES — these are BOOT decisions, not settings for a running session
 `);
   line("VOICEBOX_RESOLVER", "script", "the TURN BRAIN: script | gemini");
   line("VOICEBOX_LIVE_PROVIDER", "gemini", "the LIVE TRANSPORT: gemini | openai");
+  line("VOICEBOX_HARNESS", "(none)", "the TASK HARNESS: pi");
   if (process.env.VOICEBOX_PROVIDER) {
     console.log(`  NOTE    VOICEBOX_PROVIDER is set — it is the OLD single name. Resolver is now`);
     console.log(`          VOICEBOX_RESOLVER and transport is VOICEBOX_LIVE_PROVIDER; they are`);
@@ -804,6 +824,15 @@ CREDENTIALS — presence only, never a value
 VERDICT`);
   console.log(`  turn brain        ${wantResolver}`);
   console.log(`  live transport    ${wantLive}`);
+  const wantHarness = process.env.VOICEBOX_HARNESS ?? "(none)";
+  const harnessVerdict = (wantHarness === "pi" || wantHarness === "pi-acp")
+    ? "pi (admitted via pi-acp)"
+    : wantHarness === "claude"
+    ? "claude (unrunnable: no Voicebox task adapter is configured for this CLI)"
+    : wantHarness === "(none)"
+    ? "none admitted (set VOICEBOX_HARNESS=pi to admit Pi)"
+    : `${wantHarness} (unsupported)`;
+  console.log(`  task harness      ${harnessVerdict}`);
   console.log(`  root at boot      ${set(process.env.VOICEBOX_WORKSPACE) ? process.env.VOICEBOX_WORKSPACE : "none — declare one from the page, or set VOICEBOX_WORKSPACE"}`);
   if (missing.length === 0) {
     console.log(`  credentials       present for what is selected`);
@@ -869,6 +898,10 @@ THE LIVE TRANSPORT is separate — it decides who carries spoken voice:
 
   VOICEBOX_LIVE_PROVIDER=gemini | openai
 
+THE TASK HARNESS executes async background tasks (delegate_task):
+
+  VOICEBOX_HARNESS=pi               the Pi coding agent via pi-acp adapter
+
 Both are per-process: there is no first-class settings file yet, so a change means
 a restart. (The agent-settings surface covers voice and instructions for a running
 session; the resolver and transport are boot choices.)
@@ -877,6 +910,7 @@ OTHER VARIABLES
 
   PORT                        default ${process.env.PORT ?? 8787}
   VOICEBOX_INSTANCE           this instance's name        default "machine"
+  VOICEBOX_HARNESS            task harness (pi)
   VOICEBOX_EXTENSIONS_DIR     where extensions live      default <repo>/extensions
   VOICEBOX_SANDBOX_HOMES      sandbox home root
   VOICEBOX_HELLO_BOUND_MS     entitlement handshake bound

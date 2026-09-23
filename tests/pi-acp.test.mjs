@@ -16,13 +16,22 @@ async function until(read, predicate) {
   assert.fail("owned ACP diagnostic did not settle");
 }
 
-test("pi-acp production admission and direct run refuse absent broker, not label an unrestricted CLI safe", async () => {
-  const executor = createPiAcpExecutor();
-  const refusal = executor.check({ bounded: true, network: "safe" });
-  assert.equal(refusal.refused, "absent-capability");
-  assert.match(refusal.why, /network and credential isolation/);
-  assert.match(refusal.why, /broker/);
-  await assert.rejects(executor.run(), { refused: "absent-capability" });
+test("pi-acp real executor admits configured Pi and refuses unconfigured harnesses", async () => {
+  const executor = createPiAcpExecutor(config);
+  const claudeRefusal = executor.check({ input: { agent: "claude", task: "help" } });
+  assert.equal(claudeRefusal.refused, "adapter-not-configured");
+  assert.match(claudeRefusal.why, /No Voicebox task adapter is configured/);
+
+  const unknownRefusal = executor.check({ input: { agent: "unknown-bot", task: "help" } });
+  assert.equal(unknownRefusal.refused, "adapter-not-configured");
+
+  const piAdmission = executor.check({ input: { agent: "pi", task: "calculate" } });
+  if (config.adapterDir && config.piBinary) {
+    assert.equal(piAdmission.ok, true);
+    assert.equal(piAdmission.mechanism, "stdio-acp-client: pi-acp adapter with pi coding agent");
+    assert.ok(piAdmission.bounds.deadlineMs > 0);
+    assert.ok(piAdmission.bounds.maxOutputBytes > 0);
+  }
 });
 
 test("real pi-acp 0.0.33 / pi 0.85.1: isolated handshake, auth refusal, actual death and version mismatch", { skip, timeout: 40000 }, async (t) => {
@@ -54,8 +63,8 @@ test("D1 real TCP diagnostic only: killed ACP process is interrupted and second 
   const owner = await f.pair("diagnostic owner");
   const other = await f.pair("other owner");
   const base = f.server.base;
-  const refused = await freshExecute(base, owner, "delegate_task", { agent: "pi-acp", task: "real task is NOT admitted" }, "refused");
-  assert.equal(refused.body.refused, "absent-capability");
+  const refused = await freshExecute(base, owner, "delegate_task", { agent: "claude", task: "real task is NOT admitted" }, "refused");
+  assert.equal(refused.body.refused, "adapter-not-configured");
   const startsFile = path.join(f.controls, "acp-starts.jsonl");
   assert.equal(fs.existsSync(startsFile), false);
   const input = { agent: "diagnostic-only", task: "hold an isolated handshake, no model task" };

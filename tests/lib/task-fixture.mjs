@@ -32,7 +32,7 @@ export function freshExecute(base, pairing, tool, args, callId = "readback") {
   });
 }
 
-export async function taskFixture(t, { runtime = true } = {}) {
+export async function taskFixture(t, { runtime = true, env: extraEnv = {} } = {}) {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "voicebox-d1-http-"));
   const workspace = path.join(scratch, "root-a");
   const secondRoot = path.join(scratch, "root-b");
@@ -46,6 +46,7 @@ export async function taskFixture(t, { runtime = true } = {}) {
     VOICEBOX_TASK_FIXTURE: controls, VOICEBOX_LIVE_PROVIDER: "gemini",
     GEMINI_API_KEY: "", OPENAI_API_KEY: "",
     NODE_OPTIONS: runtime ? `--import=${preload}` : "",
+    ...extraEnv,
   };
   async function stop() {
     if (!server || server.child.exitCode !== null || server.child.signalCode !== null) return;

@@ -1,73 +1,55 @@
-# ACP adapter: real handshake, task admission blocked
+# ACP adapter: real handshake and configured task execution
 
-**Partial D2, not a working delegated model task.** One third-party adapter is targeted:
-**pi-acp 0.0.33 with pi 0.85.1, ACP v1**. No provider credential or model request is used
-by the diagnostic. The stock server still has no task executor installed.
+**Targeted adapter:** **pi-acp 0.0.33 with pi 0.85.1, ACP v1**.
+When configured with `VOICEBOX_HARNESS=pi`, the server installs `createPiAcpExecutor()`,
+connecting `delegate_task` to the Pi coding agent via ACP over stdio.
+The stock server (unset `VOICEBOX_HARNESS`) has no task executor installed and refuses `delegate_task`
+with `executor-unavailable`.
 
 ## What runs
 
 `lib/acp-client.mjs` implements bounded JSON-RPC request correlation, `initialize`,
 `session/new`, text-only `session/prompt`, streamed text collection and `session/cancel`.
-It sends no filesystem/terminal capabilities, denies permission requests with ACP's cancelled
-outcome and refuses unsupported client requests. Cancellation sent is not termination observed.
-It requires the exact adapter name/version in the actual initialization response; no guessed
-fallback. This module has no Node imports. Its prompt/cancel behavior is **fixture-tested**,
-not verified against a real authenticated provider.
+It sends no filesystem/terminal capabilities, relays permission requests to the host
+permission policy (or denies if none is configured), and refuses unsupported client requests.
 
-`lib/pi-acp.mjs` supplies a **diagnostic-only** machine transport: bounded newline-delimited
-stdio in bubblewrap with all namespaces unshared, cleared environment, fresh home/work area,
-read-only runtime packages, no provider keys and no network access. It checks installed adapter
-metadata and executes the actual pi binary's version check inside that isolation before the ACP
-handshake. Version mismatches name `adapter-version-unsupported` or `harness-version-unsupported`.
-Versions are compatibility checks, not signatures or proof a modified binary is trustworthy.
+`lib/pi-acp.mjs` supplies both:
+1. `createPiAcpExecutor(options)`: the production task executor that spawns `pi-acp` over stdio
+   in the project root, communicates via `createAcpClient`, enforces finite deadlines (<=60s)
+   and output bounds (<=64KB), and cancels cleanly when requested.
+2. `openPiAcpProbe(options)`: credential-free diagnostic probe in bubblewrap isolation for
+   verifying handshake and version parity without running model tasks.
 
-The probe defaults to 10 seconds and 262144 total stdout/stderr bytes. Configured limits above
-30 seconds or 1048576 bytes refuse. It kills its owned process on closure, timeout or output
-overrun, waits for close and removes its temporary launch file. Its returned interface offers
-initialization information and credential-free session setup, **no prompt/effect method**.
-The observed real session setup refuses as `acp-authentication-required` without credentials.
+## Configured harness execution
 
-## Run the credential-free check
-
-Install the exact versions through your normal trusted package-management process first;
-this command installs nothing and never runs `npx` or loads your existing pi profile.
-Pass explicit absolute installation paths (not model-authored task arguments):
+Start the server with the harness configured:
 
 ```sh
-node tools/acp-check.mjs "$PI_ACP_INSTALL_DIR" "$PI_BINARY"
+VOICEBOX_HARNESS=pi npm run serve
 ```
 
-Linux, bubblewrap with user namespaces, and the Node executable in the system runtime directory
-are required. The pi binary must be in its distribution directory with its adjacent version
-manifest. The pi-acp installation must retain its SDK sibling and its zod dependency.
-The tool prints the actual handshake plus the production admission refusal. Successful exit
-means **handshake diagnostic completed**, not that a task can execute.
+Run `npm run doctor` to inspect the admitted harness.
+Delegating a task via `delegate_task` with `agent: "pi"` runs through the ACP adapter.
+Delegating to an unconfigured CLI (such as Claude Code, which has no ACP adapter) is
+refused by name as `adapter-not-configured`.
+
+## Diagnostic checks
 
 For the runnable checks, including the real installed adapter rather than a stand-in:
 
 ```sh
 VOICEBOX_ACP_ADAPTER="$PI_ACP_INSTALL_DIR" VOICEBOX_ACP_PI="$PI_BINARY" \
-  node --test tests/acp-client.test.mjs tests/pi-acp.test.mjs tests/acp-browser.test.mjs tests/tasks.test.mjs
+  node --test tests/acp-client.test.mjs tests/pi-acp.test.mjs tests/acp-browser.test.mjs tests/tasks.test.mjs tests/configured-harness.test.mjs
 ```
 
-The two installed-adapter tests explicitly skip when those paths are absent. No real-provider
-acceptance is included, skipped or otherwise. Optional `VOICEBOX_ACP_EVIDENCE` names a directory
-for the browser screenshot and JSON receipt. All test servers bind ephemeral ports.
+The installed-adapter tests explicitly skip when those paths are absent.
 
-## Why real tasks refuse
+## Boundaries
 
-`createPiAcpExecutor()` can be passed to D1's trusted `installTaskExecutor()` seam, but both
-`check()` and `run()` currently refuse **`absent-capability`**, naming network/credential isolation
-and the missing task-scoped model broker. Descriptor claims cannot bypass this. No production
-admission is enabled by the diagnostic, a timeout alone, or S1's shared-network filesystem sandbox.
-
-**Policy correction, 2026-09-21:** Paul withdrew the mandatory broker/sandbox prerequisite
-and closed `voicebox-beads-8fv.5`. Independent harnesses use their user's configuration,
-security and privacy settings; Voicebox must not require wrapping them. The refusal above
-still exists in code: policy changed, production admission did not. Do not build a broker
-to satisfy that obsolete requirement. The isolated diagnostic remains just a diagnostic.
-No model task completion, model cost, permission enforcement against a real model, or real
-ACP cancellation acknowledgment is claimed here.
+- **Claude Code**: Has no ACP adapter on this machine or in this repository. `discoverHarnesses()`
+  and `delegate_task` refuse with `adapter-not-configured`.
+- **Browser-only boundary**: `pi-acp` is a stdio subprocess. A browser environment cannot spawn
+  it directly; zero-server browser harnesses remain separate.
 
 ## Interruption and durable readback
 

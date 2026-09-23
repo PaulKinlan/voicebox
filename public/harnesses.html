@@ -20,7 +20,7 @@
   <p>Each harness keeps its own security and configuration; this does not wrap it in a Voicebox sandbox.</p>
   <p>A browser cannot start a local CLI by itself. To reach programs on your browser's machine, a local server or helper would need to bridge that connection. This page does not build that bridge. Browser-native harnesses need no such bridge, but are not discovered here.</p>
   <p>This is installed-program inventory, not configured agents, a default selection, or fleet/session addressing. Descriptions are known program purposes, not observed permissions. Cost, model access and task readiness are unknown.</p>
-  <p>The existing Pi task runner still refuses <code>absent-capability</code> because its code requires an absent provider broker. That older restriction has not yet been removed to match independent-harness policy. Inventory does not enable delegation or recommend adding a broker.</p>
+  <p>Pi coding agent is supported via the <code>pi-acp</code> adapter (start the server with <code>VOICEBOX_HARNESS=pi</code>). Other CLIs (like Claude Code) have no configured ACP adapter and cannot be delegated to directly.</p>
 </main>
 </body>
 </html>
