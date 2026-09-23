@@ -14,6 +14,12 @@ const timeout = execFileSync('which', ['timeout'], { encoding: 'utf8' }).trim();
 // disposable fixture's init/config/add/commit into the repository being pushed.
 const cleanEnv = { ...process.env };
 for (const key of execFileSync('git', ['rev-parse', '--local-env-vars'], { encoding: 'utf8' }).trim().split('\n')) delete cleanEnv[key];
+// The fixture's timeout shim accelerates the DEFAULT budgets (unit-timeout:90s). A parent gate
+// run with a raised VOICEBOX_GATE_*_SECS (the refusal's own documented escape) would otherwise
+// leak in, miss the shim's match, and let the "timeout" scenario finish — the instrument
+// measuring itself under someone else's budget (voicebox-beads-67b). Strip them: the fixture
+// always exercises the defaults it is written against.
+for (const key of ['VOICEBOX_GATE_UNIT_SECS', 'VOICEBOX_GATE_LIVE_SECS', 'VOICEBOX_GATE_ACCEPT_SECS']) delete cleanEnv[key];
 
 test('pre-push names the stage and cause, streams output, and refuses real failing tests', { timeout: 60000 }, () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-pre-push-'));
