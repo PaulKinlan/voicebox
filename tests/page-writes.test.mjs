@@ -24,6 +24,7 @@ import os from "node:os";
 import path from "node:path";
 import { startServer } from "./lib/server.mjs";
 import { launch } from "./lib/cdp.mjs";
+import { setTimeout as sleep } from "node:timers/promises";
 
 const SCRATCH = mkdtempSync(path.join(os.tmpdir(), "voicebox-pagewrites-"));
 
@@ -150,5 +151,61 @@ test("the page closing answers page-closed or no-page — the absence family, ne
   page = await launch();
   await page.goto(`${BASE}/environment.html`);
   await page.waitFor(() => window.e1m0 !== undefined, { label: "the page's host API, reopened" });
+  await undeclare();
+});
+
+// ── 5. the live leg: a VOICE turn routes to the page ────────────────────────
+const HAVE_KEY = Boolean(process.env.GEMINI_API_KEY);
+
+test("the live leg: a spoken write into a page-owned root lands through the channel", { skip: !HAVE_KEY && "GEMINI_API_KEY not set", timeout: 120000 }, async () => {
+  // The shape under test: page (OPFS project) ⇄ /channel ⇄ server ⇄ /live ⇄ Gemini Live.
+  // The live tool call hits the SAME execute() as the REST turn, so the dispatch routes it —
+  // this test proves that rather than assuming it from the code path.
+  const opened = await page.evaluate(async () => await window.e1m0.send({ type: "openProject", name: "live-routed" }));
+  assert.equal(opened.ok, true, JSON.stringify(opened));
+  await declareAsHost("live-routed", { kind: "opfs", path: "v1/projects/live-routed" });
+
+  // The local-origin claim, as the served page makes it: this client talks to the server the
+  // test just started, and the hello gate asks who is calling before it spends a session.
+  const ws = new WebSocket(`${BASE.replace("http", "ws")}/live`, { headers: { origin: BASE } });
+  const states = [];
+  const tools = [];
+  const texts = [];
+  ws.onmessage = (e) => {
+    if (typeof e.data !== "string") return;
+    const m = JSON.parse(e.data);
+    if (m.type === "state") states.push(m);
+    if (m.type === "tool") tools.push(m);
+    if (m.type === "text") texts.push(m);
+  };
+  await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
+  for (let i = 0; i < 100 && !states.some((s) => s.state === "ready"); i++) await sleep(200);
+  assert(states.some((s) => s.state === "ready"), "the live session never became ready");
+
+  ws.send(JSON.stringify({ type: "text", text: "Please create a file called voice-wrote-this.txt with the exact content: spoken and routed" }));
+  for (let i = 0; i < 300 && !tools.some((t) => t.calls.some((c) => c.name === "write_file")); i++) await sleep(200);
+  const writeCall = tools.flatMap((t) => t.calls).find((c) => c.name === "write_file");
+  assert(writeCall, "the model did not call write_file");
+  assert.equal(writeCall.ok, true, `the routed write was refused: ${JSON.stringify(writeCall)}`);
+  assert.match(writeCall.action ?? "", /observed by the page/, "the tool result does not name whose observation it quotes");
+
+  // The bytes, read back through the page's OWN door — the route's report is not the witness:
+  const direct = await page.evaluate(async () => await window.e1m0.send({ type: "readFile", path: "voice-wrote-this.txt" }));
+  assert.equal(direct.ok, true, JSON.stringify(direct));
+  assert.equal(direct.text, "spoken and routed", "the file in the page's root does not match the spoken write, byte for byte");
+
+  // And a spoken READ routes the same way and the model hears the content:
+  const spokenBefore = texts.length;
+  ws.send(JSON.stringify({ type: "text", text: "Read voice-wrote-this.txt back to me." }));
+  let said = "";
+  for (let i = 0; i < 300; i++) {
+    await sleep(200);
+    said = texts.slice(spokenBefore).map((t) => t.text).join(" ").replace(/\s+/g, " ");
+    if (/spoken and routed/i.test(said)) break;
+  }
+  assert(tools.flatMap((t) => t.calls).some((c) => c.name === "read_file" && c.ok), "the model did not call read_file");
+  assert.match(said, /spoken and routed/i, `the model did not speak the page-routed content — heard: ${said.slice(0, 160)}`);
+
+  ws.close();
   await undeclare();
 });
