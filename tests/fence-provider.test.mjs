@@ -25,7 +25,11 @@ let scratch;
 let homes;
 
 test.before(() => {
-  scratch = mkdtempSync(path.join(os.tmpdir(), "voicebox-fence-"));
+  // NOT os.tmpdir(): under a systemd --user unit with PrivateTmp=yes the caller's /tmp is
+  // HIDDEN in the unit's mount namespace, so a sandbox home under /tmp fails to bind and the
+  // unit dies 226/NAMESPACE before the fence runs (k3's S2 finding, 2026-09-23 — the scratch
+  // lives in $HOME for that reason, and is removed in after()).
+  scratch = mkdtempSync(path.join(os.homedir(), ".voicebox-fence-test-"));
   homes = path.join(scratch, "sandbox-homes");
   mkdirSync(homes, { recursive: true });
   process.env.VOICEBOX_SANDBOX_HOMES = homes;
@@ -41,6 +45,13 @@ test("boots an L1 fence from a descriptor and returns a MEASURED per-axis bounda
   assert.ok(out.ok, `the fence did not boot: ${JSON.stringify(out)}`);
   assert.match(out.origin, /^http:\/\/127\.0\.0\.1:\d+$/, "the origin is a loopback URL on a free port");
   assert.equal(out.home.kind, "machine");
+  // THE PIN THE POLLUTION NEEDED: the fence's home is under THIS suite's scratch, not the
+  // real ~/sandbox-homes. Without it, an import-time capture of VOICEBOX_SANDBOX_HOMES passes
+  // every other assertion while writing into the operator's home directory (it did).
+  assert.ok(
+    out.home.path.startsWith(homes),
+    `the fence's home is ${out.home.path} — OUTSIDE this suite's scratch (${homes}); the env var was captured before the override`,
+  );
   assert.equal(out.boundary.level, "L1");
 
   // The decisive case: files and processes FENCED, network PASSED — each named with its measurement.
