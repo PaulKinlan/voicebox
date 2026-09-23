@@ -132,23 +132,26 @@ stale.
 ### How tool calling works (exists-and-driven)
 
 <!-- BEGIN GENERATED: tool-path -->
-**Three ways words reach this server. Two of them reach a tool.**
+**Three ways words reach this server; all reach the shared executor.**
 
 | path | wired today | what carries the words | what runs |
 |---|---|---|---|
 | typed in the composer | yes | `public/fused.js` → `POST /api/turn` | `resolveTurn()` (`lib/resolver.mjs`, provider `script`) → `execute()` (`server.mjs`) → for tools, `callTool()` (`lib/extensions.mjs`) |
 | dictated (browser `SpeechRecognition`, no key) | yes — the same route | `public/fused.js` → `POST /api/turn` | the same |
-| spoken to the live model | audio yes; tools **yes** | `public/live-voice.js` → `/live` → `lib/live-session.mjs` → the provider | the `/live` handler now calls the executor — update this row's prose |
+| spoken to the live model | audio yes; tools **yes** | `public/live-voice.js` → `/live` → `lib/live-session.mjs` → the provider | provider tool call → `commandToAction()` → `execute()` → correlated tool response |
 
-What each live handshake declares, captured from the provider itself: `gemini` → tools: **none**; `openai` → tools: **none**. When a provider starts declaring tools this line changes and the check goes red — that is the moment the row above stops being true.
+What each live handshake declares, captured from the provider with the server's shared command list: `gemini` → tools: `list_extensions`, `call_extension`, `write_file`, `read_file`, `list_files`; `openai` → tools: `list_extensions`, `call_extension`, `write_file`, `read_file`, `list_files`. Extension discovery reads the current registry; invocation goes through the existing admission and runtime bounds.
 
 Verbs the `script` resolver produces, driven: `"create a file called hello.txt with hi"` → `write`, `"read hello.txt"` → `read`, `"list files"` → `list`, `"create a tool called clock that tells the time"` → `make-tool`, `"run the tool clock"` → `tool`. `make-tool` **proposes** (a pending file the host must admit); `tool` calls an **admitted** tool and nothing else.
 <!-- END GENERATED: tool-path -->
 
-So, precisely: **the live voice model cannot call a tool today.** Its words reach the page and stop
-there. Wiring the voice path to the executor the loop calls is another lane's work, in flight —
-*designed-not-built*. Until the table above says otherwise, "the voice agent can do X" is false for
-every X.
+**The live voice can discover and use approved extensions.** Ask “list extensions”, then
+“use Web Search to search for Saturn”. `list_extensions` reads the current inventory;
+`call_extension` invokes its exact tool name with optional `url`, `path`, or `content`.
+An extension approved during a conversation is discoverable without reconnecting. Pending,
+refused and merely present extensions remain non-runnable; the model cannot approve them.
+See [extension discovery and use](docs/07-extension-admission.md#model-discovery-and-use)
+for the argument and permission boundaries.
 
 ### What exists by default, and what it refuses (exists-and-driven)
 
