@@ -9,6 +9,7 @@
 //   node --test tests/docs-touched.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
+import { namedPaths } from "../scripts/docs-touched.mjs";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
 import os from "node:os";
@@ -97,6 +98,31 @@ test("a document changing on its own: allowed", () => {
   f.change({ "README.md": "\nA clarification.\n" }, "prose only");
   const r = f.run();
   assert.equal(r.code, 0, `a docs-only change is the thing we are asking for:\n${r.out}`);
+});
+
+test("a filename with more than one dot is seen — the gate was blind to every *.test.mjs", () => {
+  // The first regex allowed ONE dot (`[\w-]+\.[a-z]+`), so `channel.test.mjs` matched nowhere and every
+  // `tests/*.test.mjs` this repository names in prose — including this file — was invisible. Found by
+  // asking the mechanism whether it covered its own new files. RED on the old pattern, green on this one.
+  const named = namedPaths("see `tests/docs-touched.test.mjs`, `tools/wasm-tools/sbom.cdx.json`, `.githooks/pre-push` and `lib/extensions.mjs`");
+  assert.ok(named.has("tests/docs-touched.test.mjs"), "a doubled extension must be seen");
+  assert.ok(named.has("tools/wasm-tools/sbom.cdx.json"), "so must a dotted name deeper in a path");
+  assert.ok(named.has(".githooks/pre-push"), "and a nested path with no extension at all");
+  assert.ok(named.has("lib/extensions.mjs"), "without losing the ordinary case");
+});
+
+test("a described file with a doubled extension is refused like any other", () => {
+  // The bug above, through the gate rather than through the regex: a document naming a *.test.mjs file,
+  // that file changing, and no document moving.
+  const f = fixture();
+  mkdirSync(path.join(f.dir, "tests"), { recursive: true });
+  writeFileSync(path.join(f.dir, "tests/suite.test.mjs"), "// the suite\n");
+  f.change({ "README.md": "\nThe suite lives in `tests/suite.test.mjs`.\n" }, "describe the test file");
+  f.base = git(["rev-parse", "HEAD"], f.dir); // the description is the BASE; the change under test comes next
+  f.change({ "tests/suite.test.mjs": "\n// moved\n" }, "change the described test file");
+  const r = f.run();
+  assert.equal(r.code, 1, `a doubled-extension file is described like any other:\n${r.out}`);
+  assert.match(r.out, /tests\/suite\.test\.mjs/);
 });
 
 test("an unknown base is skipped by name, not counted as a pass or a failure", () => {
