@@ -246,9 +246,19 @@ export default defineConfig({
       // router tests drive the page against the server's own port, so they never see it, and the owner's
       // URL is this front.
       //
-      // ws: true, and no origin rewrite: /channel takes no origin check today (unlike /live's hello
-      // gate). If it ever gains one, the same `proxyReqWs` rewrite used for /live is what it will need.
-      "/channel": { target: API_TARGET, ws: true },
+      // THE EXECUTOR CHANNEL. The environment page connects here to act on a folder it owns
+      // (vb-resolver's router: a page-owned root is executed BY THE PAGE).
+      // Rewrites Origin to API_TARGET so the server's local origin check admits the dev front,
+      // matching the /live proxy configuration.
+      "/channel": {
+        target: API_TARGET,
+        ws: true,
+        configure: (proxy) => {
+          proxy.on("proxyReqWs", (proxyReq) => {
+            proxyReq.setHeader("origin", API_TARGET);
+          });
+        },
+      },
       // THE PAGE'S OWN MODULE GRAPH. The server serves the browser's TypeScript modules — the worker that
       // owns OPFS and the page-side executor imports them as absolute paths (`/core/paths.ts`,
       // `/lib/channel.mjs`), and its SOURCE_DIRS is exactly ["core", "browser", "tools", "tests", "lib"].
