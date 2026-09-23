@@ -169,6 +169,51 @@ test("a described file with a doubled extension is refused like any other", () =
   assert.match(r.out, /tests\/suite\.test\.mjs/);
 });
 
+// ── The three fixes of 2cbc22d, each with a regression that goes red on the code it replaced.
+//
+// WHY THESE EXIST AS A GROUP. 2cbc22d fixed `./` normalisation and the trailer parser and added no
+// tests for either — so copying the WHOLE previous gate script back over it left this suite at 13/0.
+// A fix whose absence nothing notices is the same defect as a guard whose absence nothing notices,
+// which is the finding this branch already paid for twice (reviewer, 2026-09-23). Each case below is
+// paired with the exact mutation that must redden it.
+
+test("a document naming `./lib/x.mjs` describes the file git calls `lib/x.mjs`", () => {
+  // RED on the pre-2cbc22d pattern (no leading `./`, no normalise): the document named a path the
+  // gate never matched, so the file read as undescribed and the change passed.
+  const f = fixture();
+  writeFileSync(path.join(f.dir, "lib/dotted.mjs"), "export const dotted = true;\n");
+  f.change({ "README.md": "\nThe dotted one is `./lib/dotted.mjs`.\n" }, "describe it with a leading ./");
+  f.base = git(["rev-parse", "HEAD"], f.dir);
+
+  f.change({ "lib/dotted.mjs": "\n// moved\n" }, "change the ./-described file");
+  const r = f.run();
+  assert.equal(r.code, 1, `a leading ./ is the same file to git, so it must be described:\n${r.out}`);
+  assert.match(r.out, /lib\/dotted\.mjs/, "and it must be named the way git names it");
+});
+
+test("an EMPTY reason is not a reason: `Docs-checked:` with nothing after it is refused", () => {
+  // RED on the pre-2cbc22d matcher (`line.startsWith(TRAILER)`): an empty value was printed back as
+  // though it were an explanation — the ceremony of an excuse with none of the content.
+  const f = fixture();
+  f.change({ "lib/described.mjs": "\n// moved\n" }, "change\n\nDocs-checked:");
+  const r = f.run();
+  assert.equal(r.code, 1, `an empty trailer value must not excuse anything:\n${r.out}`);
+  assert.match(r.out, /is present but git does not read it as a trailer with a reason/, "and it must say why, or it is written twice");
+});
+
+test("a `Docs-checked:` line that is not a terminal trailer is refused", () => {
+  // RED on the pre-2cbc22d matcher: any body line starting with the key was accepted, so prose
+  // QUOTING the mechanism excused the change. Git's own parser decides what a trailer is now.
+  const f = fixture();
+  f.change(
+    { "lib/described.mjs": "\n// moved\n" },
+    "change\n\nDocs-checked: copied as an example\n\nThis later paragraph means the previous line is not a terminal Git trailer.",
+  );
+  const r = f.run();
+  assert.equal(r.code, 1, `a mid-message line is not a trailer:\n${r.out}`);
+  assert.match(r.out, /is present but git does not read it as a trailer with a reason/);
+});
+
 test("an unknown base is skipped by name, not counted as a pass or a failure", () => {
   const f = fixture();
   f.change({ "lib/described.mjs": "\n// moved\n" }, "change the described file");
