@@ -15,6 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { startServer } from "./lib/server.mjs";
 import { bootUnitFence, stopUnitFence } from "../lib/unit-fence-provider.mjs";
+import { measureBoundary } from "../lib/fence-provider.mjs";
 
 const run = promisify(execFile);
 
@@ -119,6 +120,21 @@ test("declared with fence:'l15', the environment is LISTED with its measured bou
     if (declaredKey) await stopUnitFence(declaredKey).catch(() => {});
     await server.stop();
   }
+});
+
+test("the level is DERIVED, never stamped: seccomp+lockdown earns L1.5, the fence alone earns L1, failure reads not-earned, absence reads unmeasured", () => {
+  const fencedProbe = (seccomp, capEff) => ({
+    probe: "sandbox-probe/1", when: "now",
+    filesystem: { dirs: { "/srv/voicebox": { writable: { value: false, error: "EROFS" } }, "/home": { listable: false }, "/home/voice/workspace": { writable: { value: true } } } },
+    sandboxHints: { mountSample: { value: ["bwrap"] }, seccomp: { value: seccomp }, capEff: { value: capEff } },
+    network: {}, tools: {},
+  });
+  assert.equal(measureBoundary(fencedProbe("2", "0000000000000000")).level, "L1.5", "fence + kernel lockdown earns L1.5");
+  assert.equal(measureBoundary(fencedProbe("0", "0000000000000000")).level, "L1", "the bare fence reports L1 — a unit that failed to apply seccomp is NOT stamped L1.5");
+  assert.equal(measureBoundary(fencedProbe("2", "0000000000000001")).level, "L1", "a capability remaining is L1, not L1.5");
+  const violated = measureBoundary({ probe: "sandbox-probe/1", when: "now", filesystem: { dirs: { "/srv/voicebox": { writable: { value: true } }, "/home/voice": { writable: { value: true } }, "/home": { listable: false } } }, sandboxHints: { mountSample: { value: ["bwrap"] }, seccomp: { value: "2" }, capEff: { value: "0" } }, network: {}, tools: {} });
+  assert.equal(violated.level, "not-earned", "measured-and-failed reads not-earned, never a level");
+  assert.equal(measureBoundary({ probe: "sandbox-probe/1", when: "now", filesystem: { dirs: {} }, sandboxHints: {}, network: {}, tools: {} }).level, "unmeasured", "a probe that never measured the fence reads unmeasured");
 });
 
 test("a host without a systemd --user manager is REFUSED BY NAME, never a half-boot", () => {
