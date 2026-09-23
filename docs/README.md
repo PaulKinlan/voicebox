@@ -50,6 +50,7 @@ finding — say it rather than resolving it silently.
 | `docs/interface.md` *(astra)* | **the interface** — the look, the model, the artefact surface | **on `design/astra-interface`**, not main yet |
 | `docs/05-harvest.md`, `docs/06-dynamic-tools.md` *(qwen2)* | **prior-art findings** — read §5 of this page first, they are not a lift list | on main |
 | [`09-agent-loop.md`](09-agent-loop.md) | **the turn loop** — what decides, who executes, where the result goes, what is recorded, and where it fails; with what is **wired today** marked | on main |
+| [`14-s3-l2-bridge-decision.md`](14-s3-l2-bridge-decision.md) | **S3: the L2 bridge decision (`qmn`)** — why the inbound bridge is declared out of scope for interactive server environments, comparison with `srt`, and re-open conditions | on `design/s3-l2-bridge` |
 | `docs/evidence/*/RECEIPT.md` | **measurements**, with the probe beside them. Cited claims point here | on main |
 
 **Collision resolved on merge**: qwen2's branch carried `docs/03-harvest.md` and
