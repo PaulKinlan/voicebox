@@ -124,3 +124,63 @@ test("an authority that cannot be called is refused at construction", () => {
   const transport = { onMessage() {}, onClose() {}, send() {}, close() {} };
   assert.throws(() => createAcpClient(transport, { decide: 5 }), { refused: "acp-decider-invalid" });
 });
+
+/**
+ * PROOF (2) OF `lgx`: **a permission for a plan is not a permission for whatever
+ * the tool finally runs.**
+ *
+ * The client's half of that claim is what it can prove: each request is decided
+ * ON ITS OWN — nothing is cached, so a changed plan is asked again rather than
+ * inheriting the first yes — and the record a host keeps carries the frozen,
+ * validated ASK it answered, so an approval can be pinned to what was approved
+ * rather than to the fact that something was. Where the harness's `event.input`
+ * differs from what finally executes, the comparison is between these records
+ * and what ran; the client cannot make that comparison, but it must not destroy
+ * the evidence for it.
+ */
+test("PROOF 2: a changed plan is asked AGAIN — the first approval is never reused for a different ask", async () => {
+  const askedFor = [];
+  const asks = [
+    { title: "Permission: write", toolCall: { tool: "write", path: "/tmp/a.txt" } },
+    { title: "Permission: bash", toolCall: { tool: "bash", command: "rm -rf /srv/data" } },
+  ];
+  const f = fixture((m, send) => {
+    if (m.method === "initialize") send(result(m, info));
+    if (m.method === "session/new") send(result(m, { sessionId: "s" }));
+    if (m.method === "session/prompt") {
+      asks.forEach((extra, i) => send({
+        jsonrpc: "2.0",
+        id: `permission-${i + 1}`,
+        method: "session/request_permission",
+        params: { sessionId: "s", options: [{ optionId: "allow", kind: "allow_once" }], ...extra },
+      }));
+      send(result(m, { stopReason: "end_turn" }));
+    }
+  }, {
+    decide: (asked) => {
+      askedFor.push(asked.toolCall);
+      // The host approves the plan it was SHOWN, and refuses the one it was not.
+      return asked.toolCall?.tool === "write" ? { allow: true, reason: "approved the write" } : { allow: false, reason: "denied: not the plan I approved" };
+    },
+  });
+  await f.client.initialize();
+  await f.client.newSession("/work");
+  await f.client.prompt("do the thing");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const answered = f.sent.filter((m) => String(m.id).startsWith("permission-"));
+  assert.equal(answered.length, 2, "two asks, two answers: an approval is per request, not a standing grant");
+  assert.deepEqual(answered[0].result, { outcome: { outcome: "selected", optionId: "allow" } });
+  assert.deepEqual(answered[1].result, { outcome: { outcome: "cancelled" } }, "the second, different ask is refused on its own terms");
+
+  const decisions = f.client.permissions();
+  assert.equal(decisions.length, 2);
+  assert.equal(decisions[0].asked.toolCall.tool, "write", "the record carries WHAT was approved");
+  assert.equal(decisions[1].asked.toolCall.tool, "bash");
+  assert.notDeepEqual(decisions[0].asked.toolCall, decisions[1].asked.toolCall, "the two asks are distinguishable in the record");
+  assert.equal(decisions[0].reason, "approved the write");
+  assert.equal(decisions[1].reason, "denied: not the plan I approved");
+  // The asks handed to the host were frozen: a host cannot be shown a shape that
+  // then mutates underneath the decision it makes.
+  assert.equal(Object.isFrozen(decisions[0].asked), true);
+});
