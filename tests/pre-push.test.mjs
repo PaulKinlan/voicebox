@@ -26,7 +26,10 @@ test('pre-push names the stage and cause, streams output, and refuses real faili
     mkdirSync(repo); mkdirSync(bin);
     git('init', '-q'); git('config', 'user.email', 'fixture@example.invalid'); git('config', 'user.name', 'Gate fixture');
     git('config', 'core.hooksPath', '.githooks');
-    for (const file of ['.githooks/pre-push', 'scripts/pre-push.sh', 'scripts/test-lanes.mjs']) {
+    // Every file the gate RUNS, not just the gate script: a stage whose command is missing makes the
+    // gate refuse at that stage (correctly — a check that cannot run is not a check that passed), and
+    // the fixture would then never reach the stage the case is actually about.
+    for (const file of ['.githooks/pre-push', 'scripts/pre-push.sh', 'scripts/test-lanes.mjs', 'scripts/docs-touched.mjs']) {
       mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
       copyFileSync(path.join(root, file), path.join(repo, file));
     }
@@ -152,6 +155,11 @@ test('pre-push timeout refusal respects custom budget and reports measured elaps
     // the gate needs the classifier present (it tolerates having no tests/).
     copyFileSync(path.join(root, 'scripts/test-lanes.mjs'), path.join(repo, 'scripts/test-lanes.mjs'));
     chmodSync(path.join(repo, 'pre-push.sh'), 0o755);
+    // The docs stage runs before the test lanes; it needs its script here too. In this scratch repo
+    // there is no `origin/main`, so it reports SKIPPED BY NAME and exits 0 — which is the designed
+    // answer for "the base is unknown", and lets this case get to the timeout it is about.
+    mkdirSync(path.join(repo, 'scripts'), { recursive: true });
+    copyFileSync(path.join(root, 'scripts/docs-touched.mjs'), path.join(repo, 'scripts/docs-touched.mjs'));
     writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ scripts: { 'test:unit': 'node -e "setTimeout(()=>{}, 30000)"' } }));
 
     const result = spawnSync(path.join(repo, 'pre-push.sh'), [], {

@@ -59,8 +59,16 @@ export function documents() {
  * filter allows.
  */
 export function namedPaths(text) {
-  const nested = [...text.matchAll(/`((?:[\w.-]+\/)+[\w-]+\.[a-z]+)`/g)].map((m) => m[1]);
-  const bare = [...text.matchAll(/`([\w-]+\.[a-z]+)`/g)].map((m) => m[1]);
+  // A FILENAME MAY CARRY MORE THAN ONE DOT, and the first version of this regex could not see it:
+  // `[\w-]+\.[a-z]+` matched `channel.test.mjs` nowhere, so EVERY `tests/*.test.mjs` this repository
+  // names in prose — including this gate's own test — was invisible to the gate. Found by asking the
+  // mechanism whether it covered its own new files; it did not. Dotted segments now repeat.
+  //
+  // A nested path may also end WITHOUT an extension (`.githooks/pre-push`): inside a path that already
+  // has a slash that is unambiguous enough, and `existsSync` in `describedFiles()` throws away anything
+  // that is not a real file anyway.
+  const nested = [...text.matchAll(/`((?:[\w.-]+\/)+[\w-]+(?:\.[\w-]+)*)`/g)].map((m) => m[1]);
+  const bare = [...text.matchAll(/`([\w-]+(?:\.[\w-]+)+)`/g)].map((m) => m[1]);
   return new Set([...nested, ...bare]);
 }
 

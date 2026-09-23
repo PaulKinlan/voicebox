@@ -151,7 +151,8 @@ git commit --amend --trailer "Docs-checked: a comment — nothing a document des
 That trailer is the checklist item, made auditable. Use it when the prose is genuinely still true —
 not to get green.
 
-Both run automatically on `git push` via the installed pre-push hook. The harness
+All three run automatically on `git push`: `.githooks/pre-push` (tracked, installed by `npm run prepare`)
+hands over to `scripts/pre-push.sh`, which bounds each stage and names its own timeout. The harness
 needs the environment up: `voicebox-serve` first (it also restarts a stale API
 server — if `server.mjs` changed since the process started, the old process is
 serving old routes). To acceptance-test a CANDIDATE branch, run its own server
