@@ -53,6 +53,8 @@ Registered resolvers: `gemini`, `script`
 * The live voice providers (`gemini`, `openai`) live behind a **different** seam, `registerLiveProvider` in `lib/live-session.mjs`; none of them is a turn resolver — see the tool path below.
 <!-- END GENERATED: providers -->
 
+Hand-written addition (not generated): the project's own instruction file — `lib/project-instruction.mjs`, read at live-session start from the declared machine root (`AGENT.md`, then `AGENTS.md`; 32 KiB bound) — composes between the agent's instruction and the tools instruction; absence is normal, unreadable is named.
+
 ## The agent loop — one turn, driven
 
 <!-- BEGIN GENERATED: loop — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
