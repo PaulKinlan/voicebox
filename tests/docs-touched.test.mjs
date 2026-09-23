@@ -19,7 +19,22 @@ import { fileURLToPath } from "node:url";
 const script = fileURLToPath(new URL("../scripts/docs-touched.mjs", import.meta.url));
 const roots = [];
 
-const git = (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+// STRIP GIT'S OWN ENVIRONMENT, or the fixture commits into the repository being pushed.
+//
+// git exports GIT_DIR, GIT_INDEX_FILE, GIT_WORK_TREE and friends into the children of its hooks. When
+// the pre-push hook runs this suite, every `git` call below inherits them — so `git init` in a scratch
+// directory is ignored and `git commit` lands on the REAL branch. Driven, the hard way, on 2026-09-23:
+// a push ran this suite and moved `gate/docs-touched` to a commit called "change the described file",
+// which is a fixture message. Nothing was lost (the reflog had it), but a test that writes into the
+// tree it is testing is a defect of the same family as everything else tonight — a thing acting on a
+// root it was never given.
+//
+// `tests/pre-push.test.mjs` met this first and guards the same way; `git rev-parse --local-env-vars`
+// names the keys, so this list cannot drift from git's.
+const cleanEnv = { ...process.env };
+for (const key of execFileSync("git", ["rev-parse", "--local-env-vars"], { encoding: "utf8" }).trim().split("\n")) delete cleanEnv[key];
+
+const git = (args, cwd) => execFileSync("git", args, { cwd, env: cleanEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 /** A repository whose README describes `lib/described.mjs` and nothing else. */
 function fixture() {
@@ -48,7 +63,7 @@ function fixture() {
     },
     run() {
       try {
-        return { code: 0, out: execFileSync("node", [script, this.base], { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) };
+        return { code: 0, out: execFileSync("node", [script, this.base], { cwd: dir, env: cleanEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) };
       } catch (e) {
         return { code: e.status ?? 1, out: `${e.stdout ?? ""}${e.stderr ?? ""}` };
       }
@@ -119,6 +134,7 @@ test("a described file with a doubled extension is refused like any other", () =
   writeFileSync(path.join(f.dir, "tests/suite.test.mjs"), "// the suite\n");
   f.change({ "README.md": "\nThe suite lives in `tests/suite.test.mjs`.\n" }, "describe the test file");
   f.base = git(["rev-parse", "HEAD"], f.dir); // the description is the BASE; the change under test comes next
+
   f.change({ "tests/suite.test.mjs": "\n// moved\n" }, "change the described test file");
   const r = f.run();
   assert.equal(r.code, 1, `a doubled-extension file is described like any other:\n${r.out}`);
@@ -130,7 +146,7 @@ test("an unknown base is skipped by name, not counted as a pass or a failure", (
   f.change({ "lib/described.mjs": "\n// moved\n" }, "change the described file");
   const r = (() => {
     try {
-      return { code: 0, out: execFileSync("node", [script, "refs/heads/no-such-base"], { cwd: f.dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) };
+      return { code: 0, out: execFileSync("node", [script, "refs/heads/no-such-base"], { cwd: f.dir, env: cleanEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) };
     } catch (e) {
       return { code: e.status ?? 1, out: `${e.stdout ?? ""}${e.stderr ?? ""}` };
     }
