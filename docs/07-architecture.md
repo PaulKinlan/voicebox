@@ -19,7 +19,7 @@ what runs, and a claim in them that the code contradicts is a bug in the documen
 | the turn resolver | `lib/resolver.mjs` | turning a transcript into an action `{ verb, name, content? }` | **one provider, three verbs — a placeholder** |
 | the environment core | `core/*.ts` | the tier table, policy, containment, the audit, project records | the E1-M0 library; not yet wired to the page |
 | the tool | `tools/create-asset.wat` | the one tool E1-M0 runs, as a Wasm module | present, exercised by `tests/` |
-| the dev server | `vite.config.js` | HMR, proxying `/api` (and `/live`, for work not yet landed) | dev only — never the production path |
+| the dev server | `vite.config.js` | HMR, and forwarding everything the page needs from the server: `/api`, `/live`, the executor channel `/channel`, and **the browser's whole module graph** — the five directories in `lib/browser-sources.mjs` (`core`, `browser`, `tools`, `tests`, `lib`), generated from that one list so the front cannot hold a stale copy of it | dev only — never the production path |
 
 **What is here tonight:** `lib/live-session.mjs` (the upstream live session) and `lib/ws-server.mjs` (the
 WebSocket transport) have landed, and the page loads `live-voice.js`, which opens `/live` and streams PCM

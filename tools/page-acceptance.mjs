@@ -37,6 +37,7 @@
 import { spawn, execFileSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { SOURCE_PREFIXES } from "../lib/browser-sources.mjs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -208,6 +209,47 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   }
   report("shared-front", "environment is current (served modules carry current markers)", staleModules.length === 0,
     staleModules.length ? `STALE: ${staleModules.join(", ")} — touch the file or restart vite` : `${compared.size} modules compared`);
+
+  // ── 0a-ii. THE BROWSER'S MODULE GRAPH MUST ARRIVE AS JAVASCRIPT ──────────────────────────────
+  // The page and its worker import absolute paths served by the SERVER (`/core/paths.ts`,
+  // `/lib/channel.mjs`, `/browser/worker.ts`), so every front in front of that server must forward
+  // every directory it serves. When one falls through, the front answers with its SPA fallback —
+  // **200 `text/html`** — and a module worker cannot execute an HTML document, so it dies WITHOUT AN
+  // ERROR: the page looks alive and cannot act at all (voicebox-beads-geq, 2026-09-23: the executor
+  // channel was unproxied, then the worker's whole module graph was).
+  //
+  // The list is IMPORTED from the file the server reads, not copied here, so a directory added to the
+  // rule is checked the moment it exists — and the failure names the prefix and the content-type
+  // rather than reporting "the page is broken".
+  const firstModuleIn = (dir) => {
+    const abs = path.join(TREE, dir);
+    if (!existsSync(abs)) return null;
+    const found = readdirSync(abs, { recursive: true })
+      .map(String)
+      .filter((f) => f.endsWith(".ts") || f.endsWith(".mjs"))
+      .sort()[0];
+    return found ?? null;
+  };
+  const moduleFailures = [];
+  let moduleChecked = 0;
+  for (const prefix of SOURCE_PREFIXES) {
+    const dir = prefix.slice(1);
+    const file = firstModuleIn(dir);
+    if (!file) continue; // nothing in this tree to ask for; the prefix is still forwarded by the list
+    moduleChecked += 1;
+    const url = `${SHARED_UI}${prefix}/${file}`;
+    const res = await fetch(url);
+    const type = (res.headers.get("content-type") ?? "").split(";")[0].trim();
+    const body = (await res.text()).slice(0, 300);
+    const looksHtml = /html/i.test(type) || /^\s*<(!doctype|html)/i.test(body);
+    if (!res.ok || looksHtml || !/javascript/i.test(type)) {
+      moduleFailures.push(`${prefix}/${file} -> ${res.status} ${type || "(no type)"}${looksHtml ? " (the SPA fallback)" : ""}`);
+    }
+  }
+  report("shared-front", "the front serves the browser's module graph as JavaScript", moduleFailures.length === 0,
+    moduleFailures.length
+      ? `NOT A MODULE: ${moduleFailures.join(", ")} — the front has no proxy for that prefix, so a page module will fail silently`
+      : `${moduleChecked} module${moduleChecked === 1 ? "" : "s"} fetched through ${SOURCE_PREFIXES.length} forwarded prefixes`);
 
   // ── 0b. plain language: internal identifiers and jargon are not user-facing ──
   // Paul, 2026-09-20: "make it a priority to use plain language in this project

@@ -27,6 +27,7 @@ import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { cspSafeViteClient } from "./tools/vite-plugin-csp-safe-client.mjs";
+import { SOURCE_PREFIXES } from "./lib/browser-sources.mjs";
 
 const API_TARGET = `http://127.0.0.1:${process.env.PORT ?? 8787}`;
 
@@ -249,19 +250,19 @@ export default defineConfig({
       // ws: true, and no origin rewrite: /channel takes no origin check today (unlike /live's hello
       // gate). If it ever gains one, the same `proxyReqWs` rewrite used for /live is what it will need.
       "/channel": { target: API_TARGET, ws: true },
-      // THE PAGE'S OWN MODULE GRAPH. The server serves the browser's TypeScript modules — the worker that
-      // owns OPFS and the page-side executor imports them as absolute paths (`/core/paths.ts`,
-      // `/lib/channel.mjs`), and its SOURCE_DIRS is exactly ["core", "browser", "tools", "tests", "lib"].
-      // Only `/browser` was proxied here, so on this front every other one of those requests fell through
-      // to Vite — and Vite answered with its HTML fallback (measured: `/core/paths.ts` -> 200 text/html,
-      // 16 KB, with `/@vite/client` in it, against 200 text/javascript, 3.6 KB from the server). The
-      // environment page's WORKER therefore never loaded its imports, never answered the host hello, and
-      // `window.e1m0.ready` stayed pending forever: the page looked alive and could not act at all.
-      // Mirrored from the server's own list rather than guessed, so the two cannot drift.
-      "/core": { target: API_TARGET },
-      "/lib": { target: API_TARGET },
-      "/tools": { target: API_TARGET },
-      "/tests": { target: API_TARGET },
+      // THE PAGE'S OWN MODULE GRAPH — GENERATED, NOT COPIED. The server serves the browser's TypeScript
+      // modules (its SOURCE_DIRS) and the page and its worker import them as absolute paths
+      // (`/core/paths.ts`, `/lib/channel.mjs`, `/browser/worker.ts`). Every one of those directories must
+      // be forwarded here, or the request falls through to Vite's SPA fallback and the front answers a
+      // MODULE with an HTML DOCUMENT: measured 2026-09-23, `/core/paths.ts` -> 200 text/html, 16 KB, with
+      // `/@vite/client` in it, against 200 text/javascript, 3.6 KB from the server. A module worker cannot
+      // execute HTML, so the environment page's worker died without an error and `window.e1m0.ready` never
+      // resolved: the page looked alive and could not act at all.
+      //
+      // The list is IMPORTED from the file the server reads, so the two cannot drift; and
+      // tools/page-acceptance.mjs fetches one module per prefix through this front so the next drift fails
+      // loudly instead of silently (voicebox-beads-geq).
+      ...Object.fromEntries(SOURCE_PREFIXES.map((prefix) => [prefix, { target: API_TARGET }])),
       "/browser": { target: API_TARGET },
     },
   },

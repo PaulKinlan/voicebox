@@ -34,6 +34,7 @@ import {
 import * as extensions from "./lib/extensions.mjs";
 import { createTaskHost, protectedAuditPath, TASK_TOOLS } from "./lib/tasks.mjs";
 import { bootFence } from "./lib/fence-provider.mjs";
+import { SOURCE_DIRS } from "./lib/browser-sources.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
 import { createLiveSession, LIVE_MODEL, inputRateRequiredBy } from "./lib/live-session.mjs";
 import { commandToAction, functionDeclarations, liveSystemInstruction } from "./lib/commands.mjs";
@@ -762,7 +763,9 @@ const MIME_TYPES = {
 // Source served as source: the E1-M0 page imports core/ and browser/ directly, so the browser
 // runs the SAME files the tests run and there is no build step and no second copy to drift from
 // (N18, one level up). Node's own type-stripping is the transform — not a compiler, not a dep.
-const SOURCE_DIRS = new Set(["core", "browser", "tools", "tests", "lib"]); // lib: the page imports lib/channel.mjs through browser/acts.ts — same source-of-source rule as core/
+// lib: the page imports lib/channel.mjs through browser/acts.ts — same source-of-source rule as core/.
+// The list lives in lib/browser-sources.mjs because the dev front must forward exactly these, and a
+// second copy is how it drifted once already (voicebox-beads-geq).
 
 function serveSource(res, url) {
   const rel = url.pathname.replace(/^\/+/, "");
