@@ -238,6 +238,30 @@ export default defineConfig({
       // environment.html's modules live at the project root (browser/ui/ui.ts),
       // one level above this root — Paul's console caught the 404 as a
       // pre-transform error while the page itself returned 200 (2026-09-20).
+      // THE EXECUTOR CHANNEL. The environment page connects here to act on a folder it owns
+      // (vb-resolver's router: a page-owned root is executed BY THE PAGE). Without this line the page
+      // never registers as the executor through the dev front — `window.e1m0.ready` stays pending
+      // forever, a page-owned root reports executor.connected:false, and the room tells a person
+      // "The tab that holds this folder is not open" WHILE THE TAB IS OPEN. Measured on 2026-09-23:
+      // router tests drive the page against the server's own port, so they never see it, and the owner's
+      // URL is this front.
+      //
+      // ws: true, and no origin rewrite: /channel takes no origin check today (unlike /live's hello
+      // gate). If it ever gains one, the same `proxyReqWs` rewrite used for /live is what it will need.
+      "/channel": { target: API_TARGET, ws: true },
+      // THE PAGE'S OWN MODULE GRAPH. The server serves the browser's TypeScript modules — the worker that
+      // owns OPFS and the page-side executor imports them as absolute paths (`/core/paths.ts`,
+      // `/lib/channel.mjs`), and its SOURCE_DIRS is exactly ["core", "browser", "tools", "tests", "lib"].
+      // Only `/browser` was proxied here, so on this front every other one of those requests fell through
+      // to Vite — and Vite answered with its HTML fallback (measured: `/core/paths.ts` -> 200 text/html,
+      // 16 KB, with `/@vite/client` in it, against 200 text/javascript, 3.6 KB from the server). The
+      // environment page's WORKER therefore never loaded its imports, never answered the host hello, and
+      // `window.e1m0.ready` stayed pending forever: the page looked alive and could not act at all.
+      // Mirrored from the server's own list rather than guessed, so the two cannot drift.
+      "/core": { target: API_TARGET },
+      "/lib": { target: API_TARGET },
+      "/tools": { target: API_TARGET },
+      "/tests": { target: API_TARGET },
       "/browser": { target: API_TARGET },
     },
   },
