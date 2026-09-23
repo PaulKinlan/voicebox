@@ -39,6 +39,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { SOURCE_PREFIXES } from "../lib/browser-sources.mjs";
 import { refusalVocabulary, identifiersInRenderedText, ID_PATTERNS, JARGON, READ_VISIBLE_TEXT } from "./rendered-plain-language.mjs";
+import { driftBetween } from "./served-vs-disk.mjs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -153,6 +154,10 @@ async function renderedPlainLanguage(group, vocabulary, label) {
 let sharedRootBefore = null;
 let environmentsPayload = null;
 let sharedFilesPayload = null; // the parsed body, kept for the vocabulary (the string form is the witness)
+// When the currency check skips by name (the front is serving a different tree), the verdict must SAY so:
+// an ALL CLEAR over a skipped check is a green that measured nothing, which is one level up from the
+// defect the check itself was fixed for (vb-resolver's review, 2026-09-23).
+let currencySkipReason = null;
 let sharedFilesBefore = "[]";
 let sharedServersRunning = false;
 // WHY the front is absent, recorded rather than swallowed: a skip that cannot name the address it could not
@@ -210,9 +215,43 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
     servedRefs.push(raw.startsWith("/") ? raw.slice(1) : path.posix.join(path.posix.dirname(page), raw));
   }
 }
+  // ── WHOSE TREE IS THE FRONT SERVING? ─────────────────────────────────────────────────────────────
+  // The currency question has two halves and they answer different things (voicebox-beads-590):
+  //   · IDENTITY — is the front serving the tree being measured? (this gate; vb-resolver's half)
+  //   · CONTENT  — if it is, is every file the same? (driftBetween, below)
+  // Without identity, the content half is red for every lane whose tree is not on the front: true, and
+  // useless to that lane. Without content, a lane that edits the SERVED TREE without committing has the
+  // SAME head as the front's stamp and DIFFERENT bytes — the orphan edit that nearly went under a
+  // fast-forward on 2026-09-23 — and identity alone cannot see it.
+  //
+  // The front's identity is the stamp it publishes in its own HTML (Vite writes it from the tree it runs
+  // in); the measured identity is this tree's HEAD. A mismatch is NOT a failure: it means the question
+  // cannot be answered from here, and the check says so BY NAME rather than reporting drift that is not
+  // drift.
+  const shortSha = (text) => (String(text).match(/@\s*([0-9a-f]{7,40})/) ?? [])[1] ?? null;
+  const frontHtml = await (await fetch(`${SHARED_UI}/`)).text().catch(() => "");
+  const frontStamp = (frontHtml.match(/<meta name="voicebox-build" content="([^"]*)"/) ?? [])[1] ?? null;
+  let treeSha = null;
+  try { treeSha = execFileSync("git", ["-C", TREE, "rev-parse", "--short", "HEAD"]).toString().trim(); } catch { treeSha = null; }
+  const frontSha = shortSha(frontStamp ?? "");
+  const identityMismatch = frontSha && treeSha && frontSha !== treeSha;
+  if (identityMismatch) {
+    currencySkipReason = `the front is serving ${frontStamp}, and the measured tree is at ${treeSha}`;
+    report("shared-front", "environment is current (the front is serving the tree being measured)", true,
+      `SKIPPED BY NAME — ${currencySkipReason}. ` +
+      `Currency cannot be answered from here, and that is not a failure: land the change, move the served ` +
+      `tree onto it, and run the gate from there.`);
+  } else if (!frontSha) {
+    // NO STAMP ON THE FRONT: identity cannot decide, so the content comparison runs alone. That is the
+    // STRONGER check, not the weaker one — it needs no identity to be exact — so this is a note rather
+    // than a skip, and it lives here so the next reader does not have to work it out.
+    report("shared-front", "environment is current (the front is serving the tree being measured)", true,
+      "NOTE — the front publishes no build stamp, so identity cannot decide; the content comparison runs on its own");
+  }
+
   const staleModules = [];
   const compared = new Set();
-  while (servedRefs.length) {
+  while (!identityMismatch && servedRefs.length) {
     const ref = servedRefs.shift();
     if (compared.has(ref) || /^https?:/.test(ref)) continue;
     compared.add(ref);
@@ -227,20 +266,26 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
       staleModules.push(`${ref} (${e.message})`);
       continue;
     }
-    const lines = disk.split("\n").filter((l) => l.trim() !== "");
-    const marker = lines.reduce((a, b) => (b.length > a.length ? b : a), "");
-    if (marker.length < 8) continue;
     const cssMatch = served.match(/const __vite__css = ("(?:[^"\\]|\\.)*");/s);
     const core = cssMatch ? JSON.parse(cssMatch[1]) : served;
-    if (!core.includes(marker)) { staleModules.push(ref); continue; }
+    // EVERY non-empty line, not just the longest — and the reason names the line, so a failure says
+    // WHAT drifted rather than only which module (voicebox-beads-590: the marker rule passed two
+    // different files as current whenever their longest line was a shared comment).
+    const kind = ref.endsWith(".css") ? "stylesheet" : ref.endsWith(".ts") ? "compiled" : "module";
+    const drift = driftBetween(disk, core, { ref, kind });
+    if (drift) { staleModules.push(drift); continue; }
     if (ref.endsWith(".js")) {
       for (const m of served.matchAll(/from\s*"\.\/([^"]+)"|import\s*"\.\/([^"]+)"/g))
         servedRefs.push(path.posix.join(path.posix.dirname(ref), m[1] ?? m[2]));
     }
   }
-  report("shared-front", "environment is current (served modules carry current markers)", staleModules.length === 0,
-    staleModules.length ? `STALE: ${staleModules.join(", ")} — touch the file or restart vite` : `${compared.size} modules compared`);
-
+  if (identityMismatch) {
+    // Already reported by name above; saying it twice would be the "one fact, three times" defect in a
+    // log instead of on a page.
+  } else {
+    report("shared-front", "environment is current (served modules match the measured tree)", staleModules.length === 0,
+      staleModules.length ? `STALE: ${staleModules.join(", ")} — touch the file or restart vite` : `${compared.size} modules compared`);
+  }
   // ── 0a-iii. WHAT A PERSON CAN READ, on the front Paul is looking at ─────────────────────────────
   // The vocabulary comes from the responses THIS RUN received, so the assertion is "the page does not
   // show the identifier the server just sent" rather than "this text looks like a token" — a person's
@@ -554,11 +599,14 @@ const failed = results.filter((ok) => !ok).length;
 console.log(
   failed !== 0
     ? `\n${failed} CHECK(S) FAILED — named above`
-    : sharedServersRunning
-      ? "\nALL CLEAR"
-      : `\nALL CLEAR — PHASE B ONLY; phase A could not witness the served front ` +
+    : !sharedServersRunning
+      ? `\nALL CLEAR — PHASE B ONLY; phase A could not witness the served front ` +
         `(${sharedFrontFailure?.code ?? "unreachable"} at ${sharedFrontFailure?.url ?? SHARED_API}). ` +
-        `Nothing in this run says the served front is current.`,
+        `Nothing in this run says the served front is current.`
+      : currencySkipReason
+        ? `\nALL CLEAR — but the currency check was skipped: ${currencySkipReason}. ` +
+          `Everything else passed; nothing here says the served front is current.`
+        : "\nALL CLEAR",
 );
 console.log("(served-vs-disk markers on the shared front + the root-declaration lifecycle on a private instance answer \"is this environment current\" better than the old workspace field ever did)");
 process.exit(failed === 0 ? 0 : 1);

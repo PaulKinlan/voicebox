@@ -142,3 +142,23 @@ pair and point the harness at it with `VOICEBOX_UI_URL` / `VOICEBOX_API_URL`.
 
 If the harness fails, fix or extend the harness — never weaken a check to get
 green. Every check in it traces to a defect somebody actually hit.
+
+**When another lane holds the served tree, the `currency` line says so by name and
+skips — that is the check working, not a regression.** The line reports one of two
+things, and both are answers (voicebox-beads-590):
+
+- *a different tree is on the front* → **SKIPPED BY NAME**: "the front is serving
+  `main @ …`, and the measured tree is at … — currency cannot be answered from here".
+  Every lane but the landing one sees this, and it is not a failure.
+- *this tree is on the front* → the served modules are compared **line by line**
+  against the disk, so a drift inside the same tree (including an edit nobody
+  committed) fails by naming the line.
+
+Two rules follow, and both are enforced rather than requested:
+
+- **A page change cannot be pushed from a side worktree while the served tree
+  lags.** Land the change, move the served tree onto it, and run the gate from
+  there — the currency question is then true by construction.
+- **Nobody moves the served tree while another lane's branch is on it** without
+  that lane saying it is done: taking page work off the live front mid-drive is
+  how somebody loses an afternoon.
