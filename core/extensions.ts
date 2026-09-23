@@ -307,7 +307,7 @@ export function admit(
   if (descriptor.tools.some((t) => t.primitive === "wasm")) {
     // The admission plan is the surface a person reads BEFORE deciding — so it names what the
     // mechanism binds and what it merely trusts, in the same place it names what it enforces.
-    gets.push("wasm: the digest binds BYTES, never behavior — time is bounded by the host's call deadline and memory by the worker's resource limits (host constants, not admission data); behavior within those bounds is trusted");
+    gets.push("wasm: the digest binds BYTES, never behavior — time is bounded by the host's call deadline, memory by the worker's resource limits, the module file by the host's read bound (host constants, not admission data); behavior within those bounds is trusted, and call fan-out is bounded only by the host's turns (N parallel turns hold N workers for the deadline)");
   }
   for (const cap of caps) {
     const mechanism = MECHANISMS[placement][cap];
