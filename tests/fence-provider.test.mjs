@@ -176,3 +176,40 @@ test("declared-and-booted through the registry, the measured boundary survives t
     await server.stop();
   }
 });
+
+// voicebox-beads-7yv — a metadata-only TCP observation is the THIRD outcome: the attempt
+// HAPPENED (so the axis is measured), but a private-route connect is not unrestricted
+// internet, and a failed connect is NOT evidence the fence bounds the network. Absent
+// evidence stays absent. Nothing here implies credentials were actually read.
+test("metadata-only TCP observation: connected is measured, scoped, and never unrestricted", () => {
+  const report = measureBoundary({ probe: "sandbox-probe/1", when: "now", filesystem: { dirs: {} }, network: { cloudMetadataService: { ok: true } }, sandboxHints: {}, tools: {} });
+  const axis = report.axes.network;
+  assert.equal(axis.measured, true, "an attempted connect is a measurement");
+  assert.equal(axis.verdict, "passes", "a connected private route means the fence does not bound it");
+  assert.equal(axis.evidence.metadataTcp.connected, true);
+  assert.match(axis.note, /private-route scope/);
+  // The scope disclaimer must be present — and it must be a DISCLAIMER, not a claim:
+  assert.match(axis.note, /not unrestricted-internet reachability/);
+  assert.match(axis.note, /not proof credentials were read/);
+  assert.match(axis.how, /metadata-service/);
+});
+
+test("metadata-only TCP observation: FAILED is happened-and-did-not-pass — measured, never 'passes', never a bound", () => {
+  const report = measureBoundary({ probe: "sandbox-probe/1", when: "now", filesystem: { dirs: {} }, network: { cloudMetadataService: { ok: false, error: "connect ETIMEDOUT" } }, sandboxHints: {}, tools: {} });
+  const axis = report.axes.network;
+  assert.equal(axis.measured, true, "a failed attempt still HAPPENED — it is measured");
+  assert.equal(axis.verdict, "unknown", "a failed metadata connect must not read as passes");
+  assert.equal(axis.evidence.metadataTcp.connected, false);
+  assert.match(axis.evidence.metadataTcp.error, /ETIMEDOUT/);
+  assert.match(axis.note, /private-route scope/);
+  // And it must not claim the fence bounds the network off one failed connect:
+  assert.doesNotMatch(axis.verdict ?? "", /fenced/);
+});
+
+test("metadata ABSENT stays absent: not measured, no metadata evidence rendered", () => {
+  const report = measureBoundary({ probe: "sandbox-probe/1", when: "now", filesystem: { dirs: {} }, network: {}, sandboxHints: {}, tools: {} });
+  const axis = report.axes.network;
+  assert.equal(axis.measured, false);
+  assert.equal(axis.evidence.metadataTcp, undefined, "absent evidence must not render as an observation");
+  assert.doesNotMatch(axis.how, /metadata-service/);
+});
