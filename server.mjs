@@ -536,6 +536,7 @@ const PROVIDER = process.env.VOICEBOX_PROVIDER ?? "script";
 let pageSocket = null;
 const pageChannel = createChannel({
   peer: "page",
+  environment: SELF_ENVIRONMENT,
   connected: () => pageSocket !== null,
   send: (s) => pageSocket?.send(s),
 });
@@ -570,7 +571,9 @@ function askPage(action) {
 async function executeViaPage(action) {
   const answer = await askPage(action);
   if (!answer.ok) {
-    return { ok: false, refused: answer.refused, error: `refused: ${answer.refused}`, why: answer.why, via: "page", root: active.root, logged: null };
+    // The missing audit entry is REPORTED, as on the machine path: no entry exists anywhere
+    // (the page is the writer, and it never ran the act), and logRefused says why.
+    return { ok: false, refused: answer.refused, error: `refused: ${answer.refused}`, why: answer.why, via: "page", root: active.root, logged: null, logRefused: answer.refused };
   }
   const observed = answer.observed ?? {};
   if (action.verb === "list") {
@@ -740,7 +743,7 @@ const MIME_TYPES = {
 // Source served as source: the E1-M0 page imports core/ and browser/ directly, so the browser
 // runs the SAME files the tests run and there is no build step and no second copy to drift from
 // (N18, one level up). Node's own type-stripping is the transform — not a compiler, not a dep.
-const SOURCE_DIRS = new Set(["core", "browser", "tools", "tests"]);
+const SOURCE_DIRS = new Set(["core", "browser", "tools", "tests", "lib"]); // lib: the page imports lib/channel.mjs through browser/acts.ts — same source-of-source rule as core/
 
 function serveSource(res, url) {
   const rel = url.pathname.replace(/^\/+/, "");

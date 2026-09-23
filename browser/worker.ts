@@ -967,6 +967,15 @@ async function listView(message: Record<string, unknown>) {
     if (body.ok === false) {
       return fail((body.refused as FailureCode) ?? "root-unreachable", String(body.why ?? "the loop cannot reach this root"), JSON.stringify(body.root ?? {}));
     }
+    // A ROUTED listing is the page's root answered through the channel — the room's file list
+    // wants exactly that; THIS view is titled "the machine's root" and must not render the
+    // page's files as the machine's own (7cd: a panel names the authority it shows, or refuses).
+    if (body.via === "page") {
+      return fail(
+        "root-not-reachable-from-here" as FailureCode,
+        "the active root belongs to the page, so the machine has no view of it — the room's listing shows it through the page (via: \"page\")",
+      );
+    }
     const entries: Entry[] = (body.entries ?? []).map((f: Record<string, any>) => ({
       name: String(f.name),
       kind: f.kind === "directory" ? "directory" : "file",

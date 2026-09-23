@@ -159,7 +159,7 @@ test("THE PAGE CANNOT DECLARE A ROOT (by name), and the host's declaration drive
   assert.equal(existsSync(path.join(scratch, "escape.txt")), false, "a file escaped the machine root");
 });
 
-test("a picked folder is declared the same way, and the loop refuses it by name", { timeout: 120000 }, async () => {
+test("a picked folder is declared the same way, and the loop's acts ROUTE to the page that owns it", { timeout: 120000 }, async () => {
   // The page adopts a real folder the way a person does — by dropping it.
   await page.dropFolder("#dropzone", pickedFolder);
   await page.waitFor(
@@ -169,22 +169,29 @@ test("a picked folder is declared the same way, and the loop refuses it by name"
     },
     { args: ["picked-folder"], label: "the picked folder to be adopted" },
   );
-  // The HOST declares the picked root (the page cannot), and the loop still refuses to act on it —
-  // a picked folder is the page's to write, which is a different fact from who may declare it.
+  // The HOST declares the picked root (the page cannot). What changed (core/dispatch.ts):
+  // the loop no longer refuses a picked root as a dead end — it ROUTES the act to the page
+  // that owns the root, over /channel. The refusal survives only when nobody can act.
   await declareAsHost("picked-folder", { kind: "handle", id: "picked-folder" });
 
   const info = await rootInfo();
   assert.equal(info.root.kind, "handle", `the page did not declare its picked root: ${JSON.stringify(info.root)}`);
   assert.equal(info.reachableFromThisProcess, false, "the machine claimed to reach a picked folder");
-  assert.equal(info.refused, "root-not-reachable-from-here");
+  assert.equal(info.refused, "root-not-reachable-from-here", "the MACHINE still cannot act — that fact stays true");
   assert.match(info.why, /page/, "the refusal does not name the page as the actor");
+  // The routing facts the room keys on (voicebox-ui's contract):
+  assert.equal(info.actsVia, "page", "the declaration must say who performs the act");
+  assert.equal(info.executor?.connected, true, "the environment page is connected and answering");
 
-  // The loop refuses by name — it does not fall back to a root of its own.
+  // The ROUTED write, refused by the PAGE's own named answer: a dropped folder answers
+  // 'prompt' for write, and the page says so — with the remedy (a click), from the side that
+  // knows. This replaces the old dead-end refusal: the act REACHED its owner.
   const loopWrite = await turn("create a file called from-the-loop.txt with nope");
-  assert.equal(loopWrite.result?.ok, false, `the loop wrote into a picked root: ${JSON.stringify(loopWrite.result)}`);
-  assert.equal(loopWrite.result.refused, "root-not-reachable-from-here");
-  assert.match(loopWrite.result.why, /only the page/, "the refusal does not say who can act");
-  assert.equal(existsSync(path.join(pickedFolder, "from-the-loop.txt")), false, "the loop wrote into the picked folder anyway");
+  assert.equal(loopWrite.result?.ok, false, `the loop wrote into a picked root without a grant: ${JSON.stringify(loopWrite.result)}`);
+  assert.equal(loopWrite.result?.via, "page", "the act was routed to the page");
+  assert.equal(loopWrite.result.refused, "needs-gesture", JSON.stringify(loopWrite.result));
+  assert.match(loopWrite.result.why, /click/, "the page's refusal names the remedy");
+  assert.equal(existsSync(path.join(pickedFolder, "from-the-loop.txt")), false, "a refused write still wrote");
 
   // The page READS its own picked root with no trouble — the user's own file is right there.
   await page.evaluate(() => window.e1m0.renderView("picked"));
@@ -206,15 +213,33 @@ test("a picked folder is declared the same way, and the loop refuses it by name"
   });
   assert.equal(adopted.ok, true, `could not adopt the writable handle root: ${JSON.stringify(adopted)}`);
   assert.equal(adopted.project.rootKind, "handle");
+  // The page's current project changed (one-root-handle), so the active root must follow —
+  // the router's root-not-mine guard is exactly what keeps a turn for the PREVIOUS root
+  // from landing in the NEW one (proven above: the refusal before this line named it).
+  await declareAsHost("one-root-handle", { kind: "handle", id: "one-root-handle" });
 
   const pageWrite = await send({ type: "createAsset", args: { name: "from-the-page.txt", kind: "text", body: "the page wrote this" } });
   assert.equal(pageWrite.ok, true, `the page could not write into its own handle root: ${JSON.stringify(pageWrite)}`);
   assert.equal(pageWrite.observed.exists, true, "the world does not agree the page wrote it");
 
-  // The loop refuses the same root by name, and lands nothing.
-  const loopAgain = await turn("create a file called loop-again.txt with nope");
-  assert.equal(loopAgain.result?.refused, "root-not-reachable-from-here", JSON.stringify(loopAgain.result));
-  assert.match(loopAgain.result.why, /only the page/);
+  // THE WRITE THAT MAKES IT THE FEATURE: with a handle root the page may write, the loop's
+  // turn ROUTES and lands — the page performs it and answers observed facts.
+  const loopAgain = await turn("create a file called loop-again.txt with the loop wrote through the page");
+  assert.equal(loopAgain.result?.ok, true, `the routed write was refused: ${JSON.stringify(loopAgain.result)}`);
+  assert.equal(loopAgain.result?.via, "page", "the write was performed by the page");
+  assert.match(loopAgain.result?.action ?? "", /observed by the page/, "the result names whose observation it quotes");
+
+  // And the bytes come back through the same route — the page reads its own write, and the
+  // content is byte-exact what the turn asked for.
+  const readBack = await turn("read loop-again.txt");
+  assert.equal(readBack.result?.ok, true, `the routed read was refused: ${JSON.stringify(readBack.result)}`);
+  assert.equal(readBack.result?.content, "the loop wrote through the page", "the page's read-back does not match the write, byte for byte");
+
+  // Containment on the routed path too: the page re-resolves, it never trusts the resolved string.
+  const escapeTurn = await turn("create a file called ../escape.txt with nope");
+  assert.equal(escapeTurn.result?.ok, false);
+  assert.equal(escapeTurn.result?.refused, "outside-root", JSON.stringify(escapeTurn.result));
+  assert.equal(escapeTurn.result?.via, "page", "the containment refusal came from the page");
 
   // Containment on the handle root, through the page's own tool run.
   const escape = await send({ type: "createAsset", args: { name: "../escape.svg", kind: "svg", body: "<svg/>" } });
