@@ -1846,4 +1846,15 @@ if (els.where) els.where.textContent = "checking the local server…";
 
 health();
 load();
+
+// THE ROOT CAN CHANGE OUT FROM UNDER THE ROOM: the host (or another tab) may re-declare the active
+// root at any time, and the room's labels only refreshed on turns and reloads — a stale label was
+// exactly the "which backing is underneath" confusion this pane exists to prevent (7cd, 2026-09-20).
+// A modest poll re-asks the server for its root facts while the room is visible; turns and loads
+// still refresh immediately.
+const ROOT_POLL_MS = 20000;
+setInterval(() => {
+  if (typeof busy !== "undefined" && busy) return;
+  health(); // GETs only: root facts, environments, health — never a turn
+}, ROOT_POLL_MS);
 loadAgentSettings(); // the dialog has real state before anyone opens it
