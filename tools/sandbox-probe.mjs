@@ -18,9 +18,9 @@
  *    would distinguish bubblewrap / container / systemd unit / bare host is
  *    reported and the reader decides.
  *
- * Zero dependencies. `node sandbox-probe.mjs` — no arguments, JSON on
- * stdout, one line per top-level key when pretty-printed with
- * SANDBOX_PROBE_PRETTY=1.
+ * Zero dependencies. `node sandbox-probe.mjs` — JSON on stdout, pretty
+ * with SANDBOX_PROBE_PRETTY=1. The fence host may append its owned loopback
+ * port and 32-hex marker; this measures one parent route, not internet access.
  */
 import { execFile } from "node:child_process";
 import dns from "node:dns/promises";
@@ -66,18 +66,28 @@ function writeProbe(p) {
   }
 }
 
-/** TCP connect with a deadline. Resolve {ok, ms} or {ok:false, error}. */
-function tcpConnect(host, port, ms = 3000) {
+/** TCP connect, optionally requiring an exact marker through EOF, with a total deadline. */
+function tcpConnect(host, port, ms = 3000, expected) {
   return new Promise((resolve) => {
     const started = Date.now();
     const socket = net.connect({ host, port });
+    let settled = false, received = "";
     const done = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       socket.destroy();
       resolve({ ...result, ms: Date.now() - started });
     };
-    socket.setTimeout(ms);
-    socket.on("connect", () => done({ ok: true }));
-    socket.on("timeout", () => done({ ok: false, error: `timed out after ${ms}ms` }));
+    const timer = setTimeout(() => done({ ok: false, error: `timed out after ${ms}ms` }), ms);
+    socket.on("connect", () => { if (expected === undefined) done({ ok: true }); });
+    socket.on("data", (chunk) => {
+      if (settled || expected === undefined) return;
+      received += chunk.toString("utf8");
+      if (received.length > expected.length) done({ ok: false, error: "parent-witness-mismatch" });
+    });
+    socket.on("end", () => done(received === expected ? { ok: true } : { ok: false, error: "parent-witness-mismatch" }));
+    socket.on("close", () => done({ ok: false, error: "closed before the parent marker completed" }));
     socket.on("error", (err) => done({ ok: false, error: err.code ?? err.message }));
   });
 }
@@ -171,6 +181,15 @@ async function tools() {
 }
 
 async function network() {
+  const [witnessPort, marker] = process.argv.slice(2);
+  let parentLoopback;
+  if (witnessPort !== undefined || marker !== undefined) {
+    const valid = /^\d+$/.test(witnessPort ?? "") && Number(witnessPort) > 0 && Number(witnessPort) <= 65535
+      && /^[a-f0-9]{32}$/.test(marker ?? "");
+    parentLoopback = valid
+      ? { ...await tcpConnect("127.0.0.1", Number(witnessPort), 1500, marker), endpoint: `127.0.0.1:${witnessPort}`, method: "exact parent marker through EOF" }
+      : { error: "invalid parent witness arguments — no connection attempted" };
+  }
   const loopback = await tcpConnect("127.0.0.1", 1, 1500).then((r) => ({
     reachable: r.ok || r.error === "ECONNREFUSED",
     note: r.ok ? "connected (something listens on port 1)" : r.error === "ECONNREFUSED" ? "ECONNREFUSED — loopback UP, nothing on port 1 (normal)" : r.error,
@@ -190,6 +209,7 @@ async function network() {
   const privateRange = await tcpConnect("169.254.169.254", 80, 1500); // cloud metadata: interesting either way
   const interfaces = os.networkInterfaces();
   return {
+    parentLoopback,
     loopback,
     dns: dnsResult,
     outboundTcp443IpLiteral: outbound443,
