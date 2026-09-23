@@ -516,6 +516,59 @@ async function blocks() {
 // only helps if the expectation is stated: the README needs the two halves Paul asked about (the
 // providers and whether a live session exists), the architecture doc carries all four, and the
 // operating model is prose whose claims the others check.
+// ── the denylist pass: hand-written regions must not name retired things ─────
+//
+// FOUND WHILE LANDING THE workspace/ PHRASING FIX: docs:check verified only its
+// GENERATED blocks, so a retired default sat in three hand-written lines while
+// the check reported clean. A check that watches part of the thing will report
+// clean about the whole of it. This pass scans ONLY the hand-written regions
+// (generated blocks removed) for literals that name things that no longer exist
+// — retirements, not style opinions — and refuses by name, with file and line.
+//
+// A line that must name the mechanism anyway (a route, a command, a refusal
+// vocabulary) marks itself, visibly and greppably:
+//   <!-- docs-check: names the mechanism -->
+// An unmarked line does not get an exemption by asking nicely; the list is the
+// list. THE NAMED LIMIT: a denylist catches RETIREMENT, not ROT — a sentence
+// can become false without using a forbidden word. Progress, not coverage.
+const RETIRED_LITERALS = [
+  { literal: "workspace/", why: "the workspace/ default root was retired — a location claim must name the declared root (GET /api/root)" },
+  { literal: "escapes the workspace", why: "the containment refusal is 'outside-root', and the workspace default no longer exists to escape" },
+  { literal: "About this room", why: "retired copy — the room's own labels carry this now" },
+];
+const RETIRED_RES = [
+  { re: /\bE\d-M\d\b|\be1m0\b/, label: "internal project id (E1-M0)", why: "name the thing, not the ticket — e.g. 'the environment library', 'the create-asset tool'" },
+  { re: /\bN\d{1,3}\b/, label: "internal note number (N20 shape)", why: "say the idea, not the note number" },
+];
+const stripGenerated = (text) => text.replace(/<!-- BEGIN GENERATED:[\s\S]*?<!-- END GENERATED: [^>]+ -->\n?/g, "");
+function retiredHits(text) {
+  const MECHANISM_MARKER = "docs-check: names the mechanism";
+  // raw line numbers: generated blocks are skipped by RANGE, not by stripping,
+  // so every hit names the line a person would open.
+  const ranges = [];
+  const re = /<!-- BEGIN GENERATED:[\s\S]*?<!-- END GENERATED: [^>]+ -->\n?/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const startLine = text.slice(0, m.index).split("\n").length;
+    ranges.push([startLine, startLine + m[0].split("\n").length - 1]);
+  }
+  const inGenerated = (n) => ranges.some(([a, b]) => n >= a && n <= b);
+  const hits = [];
+  text.split("\n").forEach((line, i) => {
+    const n = i + 1;
+    if (inGenerated(n)) return;
+    if (line.includes(MECHANISM_MARKER)) return;
+    for (const { literal, why } of RETIRED_LITERALS) {
+      if (line.includes(literal)) hits.push(`line ${n}: retired literal "${literal}" — ${why}`);
+    }
+    for (const { re: r, label, why } of RETIRED_RES) {
+      const m2 = line.match(r);
+      if (m2) hits.push(`line ${n}: ${label} "${m2[0]}" — ${why}`);
+    }
+  });
+  return hits;
+}
+
 const DOCS = [
   { rel: "README.md", blocks: ["providers", "live-session", "loop", "tool-path", "tools", "config"] },
   { rel: join("docs", "07-architecture.md"), blocks: ["providers", "routes", "page", "live-session", "loop", "tool-path", "tools", "config"] },
@@ -585,6 +638,13 @@ for (const { rel, blocks: wanted } of DOCS) {
     for (const g of gone) console.error(`  - ${g}`);
     process.exit(1);
   }
+  const retired = retiredHits(text);
+  if (retired.length) {
+    console.error(`docs-check: ${rel} carries retired literals in its hand-written regions — these name things that no longer exist:`);
+    for (const r of retired) console.error(`  - ${r}`);
+    console.error("  a line that must name the mechanism marks itself: <!-- docs-check: names the mechanism -->");
+    process.exit(1);
+  }
   if (!changed) continue;
   if (WRITE) { writeFileSync(p, text); console.log(`  wrote ${rel}`); }
   else drifted.push(rel);
@@ -595,6 +655,7 @@ if (missing.length) {
   for (const m of missing) console.error(`  - ${m}`);
   process.exit(1);
 }
+
 
 // ── the hand-written claims ──────────────────────────────────────────────────
 //

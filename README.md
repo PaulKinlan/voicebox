@@ -304,7 +304,7 @@ disk, declared by the page (`POST /api/root`) rather than assumed.
 `VOICEBOX_WORKSPACE=/some/folder node server.mjs` declares one at boot, which is
 how you run the loop against a folder without opening the page. With no
 declaration the loop refuses every act by name — `root-not-declared` — because a
-default is a decision nobody made, and `workspace/` was exactly that.
+default is a decision nobody made, and `workspace/` was exactly that. <!-- docs-check: names the mechanism -->
 
 What works today:
 
@@ -319,7 +319,7 @@ What works today:
   resolver is a provider seam (`registerResolver(name, fn)`), and the model
   resolvers plug into exactly that contract.
 - **The action executor** — writes/reads/lists files in **the active project root** on disk, which the
-  environment page declares (or `VOICEBOX_WORKSPACE` at boot). It used to say `workspace/`, which
+  environment page declares (or `VOICEBOX_WORKSPACE` at boot). It used to say `workspace/`, <!-- docs-check: names the mechanism --> which
   stopped being true the moment the default root was retired: the loop has no root of its own, and a
   sentence naming one was the last piece of the second root left standing in the docs.
 
@@ -337,10 +337,10 @@ What does not work yet:
 - **The loop has no root of its own.** It writes into the active project root, which the
   environment declares — OPFS, a folder you picked, or a folder on this machine — and it
   refuses by name when the root belongs to another placement (see the environment page
-  below, and `docs/evidence/one-root-20260920/RECEIPT.md`). There is no `workspace/`
+  below, and `docs/evidence/one-root-20260920/RECEIPT.md`). There is no `workspace/` <!-- docs-check: names the mechanism -->
   default any more: what used to be two roots is one.
 
-## The browser environment (E1-M0 + N20)
+## The browser environment (projects that live in this browser)
 
 ```sh
 node server.mjs            # then open http://127.0.0.1:8787/environment.html
@@ -356,11 +356,11 @@ what makes "it cannot reach the network" structural instead of promised.
 - The page always says **which kind of root** it is showing, whether it is held
   persistently, which undo it has, and where its audit lives.
 - An **explorer over three roots** — origin storage, the picked folder, the server's
-  `workspace/` — each labelled with its own authority, each a single bounded listing.
+  `workspace/` — each labelled <!-- docs-check: names the mechanism --> with its own authority, each a single bounded listing.
 - Failures have names: `needs-gesture`, `permission-denied`, `handle-gone`,
   `root-unreachable`, `not-found`, `not-a-project`.
 
-Checks: `npm run test:e1m0` (25 acceptance checks, driven in a real headless Chromium).
+Checks: `npm run test:e1m0` <!-- docs-check: names the mechanism --> (25 acceptance checks, driven in a real headless Chromium).
 Evidence, including what the platform actually does with a dropped folder and the two
 behaviours that cannot be driven headlessly: [docs/evidence/picked-root-20260919/RECEIPT.md](docs/evidence/picked-root-20260919/RECEIPT.md).
 

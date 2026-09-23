@@ -17,8 +17,8 @@ what runs, and a claim in them that the code contradicts is a bug in the documen
 | the page | `public/index.html`, `public/fused.js`, `public/style.css` | the interface: objects on a canvas, the turn box, the transcript | real, with labelled simulations |
 | the server | `server.mjs` | routes, static serving, running actions, the workspace | **zero dependencies** (`node:http`) |
 | the turn resolver | `lib/resolver.mjs` | turning a transcript into an action `{ verb, name, content? }` | **one provider, three verbs — a placeholder** |
-| the environment core | `core/*.ts` | the tier table, policy, containment, the audit, project records | the E1-M0 library; not yet wired to the page |
-| the tool | `tools/create-asset.wat` | the one tool E1-M0 runs, as a Wasm module | present, exercised by `tests/` |
+| the environment core | `core/*.ts` | the tier table, policy, containment, the audit, project records | the E1-M0 library; not yet wired to the page | <!-- docs-check: names the mechanism -->
+| the tool | `tools/create-asset.wat` | the one tool E1-M0 runs, as a Wasm module | present, exercised by `tests/` | <!-- docs-check: names the mechanism -->
 | the dev server | `vite.config.js` | HMR, and forwarding everything the page needs from the server: `/api`, `/live`, the executor channel `/channel`, and **the browser's whole module graph** — the five directories in `lib/browser-sources.mjs` (`core`, `browser`, `tools`, `tests`, `lib`), generated from that one list so the front cannot hold a stale copy of it | dev only — never the production path |
 
 **What is here tonight:** `lib/live-session.mjs` (the upstream live session) and `lib/ws-server.mjs` (the
@@ -196,7 +196,7 @@ Audio worklets loaded by that code: `pcm-worklet.js`.
 - **`lib/resolver.mjs`** is authoritative for the provider list, and for what a transcript means. Its
   contract is one function; a new brain is a `registerResolver` call.
 - **`core/`** is authoritative for the tier table, containment and the audit — and it is a **library**: it
-  imports nothing outside `core/`, because two copies of it would drift silently (see the design's N18).
+  imports nothing outside `core/`, because two copies of it would drift silently (see the design's N18). <!-- docs-check: names the mechanism -->
 - **`public/fused.js`** is authoritative for what the page shows, and it **labels its own simulations on the
   page**: files, the turn submission and the containment refusals are real; the shared view, seen-marks and
   admission are simulated and say so. A reader should trust that label over any prose, including this file.

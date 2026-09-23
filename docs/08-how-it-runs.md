@@ -75,7 +75,7 @@ These are the things that must stay true; each is checkable, and the first three
 3. **A route a document claims is a route that answers.** (`docs-check` probes a live server on a scratch
    port — the same thing the suite does, because "it serves" and "the doc says it serves" are different
    claims.)
-4. **`core/` imports nothing outside `core/`.** (Checked in the test suite; the design's N18 explains why a
+4. **`core/` imports nothing outside `core/`.** (Checked in the test suite; the design's N18 explains why a <!-- docs-check: names the mechanism -->
    second copy is worse than no copy.)
 5. **Containment resolves and refuses.** `resolveInsideRoot` rejects any `..` segment and absolute paths;
    `tests/containment-paths.test.mjs` names the escaping case and carries a positive control.
