@@ -43,7 +43,7 @@ export async function taskFixture(t, { runtime = true } = {}) {
   let server;
   const env = {
     VOICEBOX_WORKSPACE: workspace, VOICEBOX_EXTENSIONS_DIR: hostDir,
-    VOICEBOX_TASK_FIXTURE: controls, LIVE_PROVIDER: "gemini",
+    VOICEBOX_TASK_FIXTURE: controls, VOICEBOX_LIVE_PROVIDER: "gemini",
     GEMINI_API_KEY: "", OPENAI_API_KEY: "",
     NODE_OPTIONS: runtime ? `--import=${preload}` : "",
   };

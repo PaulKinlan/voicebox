@@ -26,7 +26,7 @@ const HAVE_KEY = Boolean(process.env.GEMINI_API_KEY);
 // which is still a gamble on somebody else's listener — and a suite that grabs a port makes another
 // lane's verification fail with no explanation of why.
 async function startServer() {
-  const started = await startEphemeralServer({ env: { VOICEBOX_PROVIDER: "script" } });
+  const started = await startEphemeralServer({ env: { VOICEBOX_RESOLVER: "script" } });
   BASE = started.base;
   return started;
 }

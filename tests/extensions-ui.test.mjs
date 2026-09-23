@@ -23,7 +23,7 @@ const PINNED_ENV = {
   GEMINI_API_KEY: "fixture-key-presence-only",
   OPENAI_API_KEY: "fixture-key-presence-only",
   VOICEBOX_WORKSPACE: undefined, // omitted from the child env: no root arrives from the shell
-  VOICEBOX_PROVIDER: "script",
+  VOICEBOX_RESOLVER: "script",
 };
 
 let scratch;

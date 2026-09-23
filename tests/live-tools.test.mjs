@@ -44,7 +44,7 @@ mkdirSync(WORKSPACE, { recursive: true });
 function startServer(port, env = {}) {
   const proc = spawn("node", ["server.mjs"], {
     cwd: ROOT,
-    env: { ...process.env, PORT: String(port), VOICEBOX_PROVIDER: "script", ...env },
+    env: { ...process.env, PORT: String(port), VOICEBOX_RESOLVER: "script", ...env },
     stdio: ["ignore", "pipe", "pipe"],
   });
   return proc;

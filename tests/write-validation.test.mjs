@@ -23,7 +23,7 @@ let server;
 let BASE;
 
 test.before(async () => {
-  server = await startServer({ env: { VOICEBOX_WORKSPACE: WORKSPACE, VOICEBOX_PROVIDER: "script" } });
+  server = await startServer({ env: { VOICEBOX_WORKSPACE: WORKSPACE, VOICEBOX_RESOLVER: "script" } });
   BASE = server.base;
 });
 

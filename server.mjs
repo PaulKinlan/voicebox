@@ -523,7 +523,27 @@ function observeUnderRoot(relPath) {
 const PUBLIC = path.join(ROOT, "public");
 mkdirSync(WORKSPACE, { recursive: true });
 
-const PROVIDER = process.env.VOICEBOX_PROVIDER ?? "script";
+// WHICH TURN RESOLVER ANSWERS POST /api/turn. This is NOT the live provider — that is
+// `VOICEBOX_LIVE_PROVIDER` (lib/live-session.mjs), a different concept that happens to share the word
+// "provider". The old name `VOICEBOX_PROVIDER` is still honoured, out loud, because a shell that exports
+// it must not break silently.
+//
+// WHY TWO NAMES BECAME NECESSARY rather than merely tidier: the pair read as though `LIVE_PROVIDER` were
+// the live-mode sibling of `VOICEBOX_PROVIDER`, when one selects the TURN BRAIN and the other the LIVE
+// TRANSPORT. It misled in practice, not only in theory — tests/lib/server.mjs records a voice-path
+// developer exporting `VOICEBOX_PROVIDER=live`, which put "live" in the RESOLVER slot and stopped turns
+// writing. Under this name that export is a visible category error instead of a silent one.
+const legacyResolverEnv = process.env.VOICEBOX_PROVIDER;
+if (legacyResolverEnv) {
+  // ALWAYS SPEAKS WHEN THE OLD NAME IS SET — including when it is being ignored. A rename that silently
+  // drops a variable an operator set is how a shell ends up configuring something that no longer exists,
+  // and this line is the only place they can find out. (The test that caught the silent version is
+  // tests/env-names.test.mjs: it sets both names and asserts the operator is told.)
+  console.error(process.env.VOICEBOX_RESOLVER
+    ? `[voicebox] VOICEBOX_PROVIDER is now VOICEBOX_RESOLVER (it selects the turn resolver, not the live provider) — IGNORING ${JSON.stringify(legacyResolverEnv)} because VOICEBOX_RESOLVER is set`
+    : `[voicebox] VOICEBOX_PROVIDER is now VOICEBOX_RESOLVER (it selects the turn resolver, not the live provider) — honouring ${JSON.stringify(legacyResolverEnv)} for this release`);
+}
+const PROVIDER = process.env.VOICEBOX_RESOLVER ?? legacyResolverEnv ?? "script";
 const PORT = Number(process.env.PORT ?? 8787);
 
 const json = (res, code, body) => {

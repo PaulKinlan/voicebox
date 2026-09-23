@@ -41,6 +41,8 @@ const WRITE = process.argv.includes("--write");
 // This check describes the TREE, not the shell it runs in: a provider chosen by this machine's
 // environment would print itself into a committed document.
 delete process.env.LIVE_PROVIDER;
+delete process.env.VOICEBOX_LIVE_PROVIDER;
+delete process.env.VOICEBOX_RESOLVER;
 
 // ── derived facts ────────────────────────────────────────────────────────────
 
@@ -96,7 +98,7 @@ async function probeServer() {
   // the /live upgrade probe below was opening a REAL vendor session during a docs check. Blank keys make the
   // provider refuse by name after the 101 — which is the only fact the line reports.
   const env = { ...process.env, PORT: String(port), VOICEBOX_EXTENSIONS_DIR: dirs.extensions, VOICEBOX_WORKSPACE: dirs.workspace, GEMINI_API_KEY: "", OPENAI_API_KEY: "" };
-  for (const k of ["LIVE_PROVIDER", "VOICEBOX_PROVIDER", "VOICEBOX_INSTANCE"]) delete env[k];
+  for (const k of ["LIVE_PROVIDER", "VOICEBOX_LIVE_PROVIDER", "VOICEBOX_PROVIDER", "VOICEBOX_RESOLVER", "VOICEBOX_INSTANCE"]) delete env[k];
   const child = spawn(process.execPath, ["server.mjs"], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
   let out = "";
   let errOut = "";
@@ -339,14 +341,16 @@ function refusalNames() {
 /** Every environment variable the server and its libraries read, with where. */
 const ENV_MEANING = {
   PORT: "the port the server binds (default 8787)",
-  VOICEBOX_PROVIDER: "which TURN resolver answers `POST /api/turn` (default `script`)",
+  VOICEBOX_RESOLVER: "which TURN resolver answers `POST /api/turn` (default `script`) — **not** the live provider, which is a different concept",
+  VOICEBOX_PROVIDER: "the OLD NAME of `VOICEBOX_RESOLVER`, honoured for one release: a shell that exports it keeps working and gets a line on stderr",
   VOICEBOX_WORKSPACE: "declares a machine root at boot — a decision, not a default — and is where the extension system keeps `proposals/` and `audit.jsonl`",
   VOICEBOX_EXTENSIONS_DIR: "the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl`, and `.pairings.json` (the bearer custody store — outside every root)",
   VOICEBOX_SANDBOX_HOMES: "where a fence's writable home is bound from (default `~/sandbox-homes/<key>`) — the one place a fenced environment may write",
   VOICEBOX_INSTANCE: "this writer's name in the active root's shared log (default `machine`)",
   VOICEBOX_BIND_RETRY_MS: "how often to retry a bind that lost the port race",
   VOICEBOX_BIND_DEADLINE_MS: "how long to keep retrying before giving up by name",
-  LIVE_PROVIDER: "library fallback when no provider is passed; `/live` passes the agent-settings provider explicitly",
+  VOICEBOX_LIVE_PROVIDER: "the live transport's fallback when the session passes no provider; `/live` passes the agent-settings provider explicitly — **not** the turn resolver",
+  LIVE_PROVIDER: "the OLD NAME of `VOICEBOX_LIVE_PROVIDER`, honoured for one release",
   GEMINI_API_KEY: "the Gemini Live key — without it the live session refuses to start, by name",
   OPENAI_API_KEY: "the OpenAI Realtime key — without it that provider refuses to start, by name",
 };
@@ -425,7 +429,7 @@ async function blocks() {
     ].join("\n")),
 
     "live-session": block("live-session", [
-      `\`lib/live-session.mjs\` is present. Registered live providers, with the model each one's handshake names (captured from the provider against a recording transport — never dialed): ${handshakes.map((h) => "`" + h.name + "` → `" + h.model + "`").join(", ")}. The library fallback is \`${resolvedLiveProviderName()}\`, overridable by \`LIVE_PROVIDER\`; the server's \`/live\` route instead passes the agent-settings provider explicitly.`,
+      `\`lib/live-session.mjs\` is present. Registered live providers, with the model each one's handshake names (captured from the provider against a recording transport — never dialed): ${handshakes.map((h) => "`" + h.name + "` → `" + h.model + "`").join(", ")}. The library fallback is \`${resolvedLiveProviderName()}\`, overridable by \`VOICEBOX_LIVE_PROVIDER\`; the server's \`/live\` route instead passes the agent-settings provider explicitly.`,
     ].join("\n")),
 
     loop: block("loop", [

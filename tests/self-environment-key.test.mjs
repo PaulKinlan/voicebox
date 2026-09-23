@@ -39,7 +39,7 @@ async function host(label) {
   const child = spawn(process.execPath, [SERVER], {
     // PORT=0: the OS picks, and the server prints what it got. A fixed port
     // cannot run beside another lane's test.
-    env: { ...process.env, PORT: "0", VOICEBOX_EXTENSIONS_DIR: extensions, VOICEBOX_WORKSPACE: workspace, VOICEBOX_PROVIDER: "script" },
+    env: { ...process.env, PORT: "0", VOICEBOX_EXTENSIONS_DIR: extensions, VOICEBOX_WORKSPACE: workspace, VOICEBOX_RESOLVER: "script" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const port = await new Promise((resolve, reject) => {

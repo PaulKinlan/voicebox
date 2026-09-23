@@ -22,7 +22,7 @@ import { launch } from "./lib/cdp.mjs";
 import { startServer } from "./lib/server.mjs";
 
 test("presence: #where-note derives agent provider and real commit SHA from GET /api/health", async () => {
-  const server = await startServer({ env: { VOICEBOX_PROVIDER: "script" } });
+  const server = await startServer({ env: { VOICEBOX_RESOLVER: "script" } });
   const page = await launch({ fakeMedia: true });
   try {
     await page.goto(server.base);
@@ -54,7 +54,7 @@ test("presence: #where-note derives agent provider and real commit SHA from GET 
 });
 
 test("presence: when server is unreachable, #where-note names machine-unreachable without proxy-500 confusion", async () => {
-  const server = await startServer({ env: { VOICEBOX_PROVIDER: "script" } });
+  const server = await startServer({ env: { VOICEBOX_RESOLVER: "script" } });
   const page = await launch({ fakeMedia: true });
   try {
     await page.goto(server.base);
@@ -112,7 +112,7 @@ test("presence: environment-list-unreadable surfaces via GET /api/environments, 
 
   const server = await startServer({
     env: {
-      VOICEBOX_PROVIDER: "script",
+      VOICEBOX_RESOLVER: "script",
       VOICEBOX_WORKSPACE: scratchWorkspace,
     },
   });

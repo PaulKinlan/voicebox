@@ -1,4 +1,4 @@
-// Rate negotiation follows the settings used to create the session, not LIVE_PROVIDER.
+// Rate negotiation follows the settings used to create the session, not VOICEBOX_LIVE_PROVIDER.
 // Real server/upgrade, synthetic missing keys, no vendor connection or fixed port.
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -32,14 +32,14 @@ async function firstFrame(server) {
 }
 
 test("rate frame: selected OpenAI wins over Gemini environment before any vendor connection", async t => {
-  const server = await serverWith(t, { LIVE_PROVIDER: "gemini" });
+  const server = await serverWith(t, { VOICEBOX_LIVE_PROVIDER: "gemini" });
   const response = await fetch(server.base + "/api/agent-settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: "openai" }) });
   assert.equal(response.status, 200);
   assert.deepEqual(await firstFrame(server), { type: "rate", inputRate: 24000, provider: "openai" });
 });
 
 test("rate frame: invalid settings refuse at admission; environment cannot override valid settings", async t => {
-  const server = await serverWith(t, { LIVE_PROVIDER: "no-such-provider" });
+  const server = await serverWith(t, { VOICEBOX_LIVE_PROVIDER: "no-such-provider" });
   const response = await fetch(server.base + "/api/agent-settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: "no-such-provider" }) });
   assert.equal(response.status, 400);
   assert.deepEqual(await firstFrame(server), { type: "rate", inputRate: 16000, provider: "gemini" });

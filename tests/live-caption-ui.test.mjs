@@ -25,7 +25,7 @@ const VIEWPORTS = [
 ];
 
 test("live-caption: #caption renders output text properly across all viewports without overflow", async () => {
-  const server = await startServer({ env: { VOICEBOX_PROVIDER: "script" } });
+  const server = await startServer({ env: { VOICEBOX_RESOLVER: "script" } });
   const page = await launch({ fakeMedia: true });
 
   try {

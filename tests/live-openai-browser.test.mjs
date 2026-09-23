@@ -63,7 +63,7 @@ async function fixture(t, envProvider = "openai", selectedProvider = "openai") {
   });
   await new Promise(resolve => vendor.listen(0, "127.0.0.1", resolve));
   server = await startServer({ env: {
-    VOICEBOX_WORKSPACE: workspace, VOICEBOX_EXTENSIONS_DIR: host, LIVE_PROVIDER: envProvider,
+    VOICEBOX_WORKSPACE: workspace, VOICEBOX_EXTENSIONS_DIR: host, VOICEBOX_LIVE_PROVIDER: envProvider,
     GEMINI_API_KEY: "synthetic-fixture-only", OPENAI_API_KEY: "synthetic-fixture-only",
     NODE_OPTIONS: `--import=${fileURLToPath(new URL("./fixtures/live-vendor-redirect.mjs", import.meta.url))}`,
     FIXTURE_VENDOR: `ws://127.0.0.1:${vendor.address().port}`,

@@ -49,7 +49,7 @@ and the correct comparison reported no contradiction with that false declaration
 `beginSession` now snapshots the settings provider and its model once. That provider
 supplies the rate, actual dial and later session metadata. Changing settings affects
 the next session, not the running one's model label. **The contradiction comparison
-is untouched.** The library still supports its `LIVE_PROVIDER` fallback when no
+is untouched.** The library still supports its `VOICEBOX_LIVE_PROVIDER` (old name `LIVE_PROVIDER`) fallback when no
 explicit provider is supplied; the server supplies the settings provider explicitly.
 Invalid settings refuse at their existing API admission boundary. The frame tests
 now exercise that actual boundary rather than an unused environment override, and
@@ -68,7 +68,7 @@ own/remove their host directories instead of creating tokens in the checkout.
   [Receipt](evidence/live-fixes/94c/conflicting-rate/receipt.json).
 - Negative control: replace the unique
   `inputRate = inputRateRequiredBy(provider);` with
-  `inputRate = inputRateRequiredBy(process.env.LIVE_PROVIDER);`, then run
+  `inputRate = inputRateRequiredBy(process.env.VOICEBOX_LIVE_PROVIDER);`, then run
   `node --test --test-name-pattern='Selected ' tests/live-openai-browser.test.mjs`.
   **0 passed / 2 failed**: both mismatched directions reject the incorrect rate.
   Single replacement asserted; original source restored.

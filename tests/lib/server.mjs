@@ -32,19 +32,19 @@ export async function startServer({ env = {}, cwd = ROOT, readyTimeoutMs = 20000
     cwd,
     // THE DEFAULTS LIVE HERE, so a lane cannot forget them. Spreading `process.env` means a developer's
     // shell leaks into every fixture that does not override it — and this project's own development
-    // flags are exactly the ones that break tests: `VOICEBOX_PROVIDER=live` (what a voice-path
+    // flags are exactly the ones that break tests: `VOICEBOX_RESOLVER=live` (what a voice-path
     // developer exports) makes turns stop writing, and `VOICEBOX_WORKSPACE` declares a root the fixture
     // did not ask for. Nine suites each remembering a pin is nine chances to forget; one default is one
     // chance to get it right. A caller that genuinely wants either value still passes it in `env`,
     // which is spread last.
     //
     // (Found by the reviewer's per-suite property check: nine of ten pinned suites failed wholesale
-    // under `VOICEBOX_PROVIDER=live`, because d8af9a0 pinned the root in ten files and the provider in
+    // under `VOICEBOX_PROVIDER=live` (the resolver's old name), because d8af9a0 pinned the root in ten files and the provider in
     // one. Per-suite solo runs are the reliable instrument for this; whole-gate runs are noisy.)
     env: {
       ...process.env,
       PORT: "0",
-      VOICEBOX_PROVIDER: env.VOICEBOX_PROVIDER ?? "script",
+      VOICEBOX_RESOLVER: env.VOICEBOX_RESOLVER ?? env.VOICEBOX_PROVIDER ?? "script",
       VOICEBOX_WORKSPACE: env.VOICEBOX_WORKSPACE ?? undefined, // undefined = omitted: no root from the shell
       VOICEBOX_EXTENSIONS_DIR: scratchExtensions,
       ...env,

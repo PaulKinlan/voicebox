@@ -36,14 +36,14 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 //     instructive: the server reads `process.env.VOICEBOX_WORKSPACE ?? join(ROOT, "workspace")`, so
 //     an empty string IS the workspace path and the server dies on `mkdir ''`. "Absent" and "empty"
 //     are different states, and only one of them means "no declaration".)
-//   · VOICEBOX_PROVIDER selects the turn resolver (scripted here, so a shell that sets a live
+//   · VOICEBOX_RESOLVER selects the turn resolver (scripted here, so a shell that sets a live
 //     provider cannot make this suite reach a vendor)
 // A test that reads ambient state is a test that reports on the machine, not on the code.
 const PINNED_ENV = {
   GEMINI_API_KEY: "fixture-key-presence-only",
   OPENAI_API_KEY: "fixture-key-presence-only",
   VOICEBOX_WORKSPACE: undefined, // omitted from the child env: no root arrives from the shell
-  VOICEBOX_PROVIDER: "script",
+  VOICEBOX_RESOLVER: "script",
 };
 const NO_KEYS = { ...PINNED_ENV, GEMINI_API_KEY: "", OPENAI_API_KEY: "" };
 let server;
