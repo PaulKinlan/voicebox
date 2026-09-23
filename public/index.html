@@ -115,11 +115,11 @@
              bound keep it usable, and the bound SAYS what it is hiding — an
              explorer that silently shows the first N is the same defect as an
              unnamed root. -->
-        <div class="list-tools" id="list-tools" hidden>
+        <search class="list-tools" id="list-tools" hidden>
           <label class="sr-only" for="file-filter">Filter files by name</label>
           <input id="file-filter" type="search" autocomplete="off" placeholder="Filter by name…">
           <button class="quiet" id="show-all" type="button" hidden>Show all</button>
-        </div>
+        </search>
         <!-- READ-ONLY FOLDER VIEW. The environment page owns the writable
              handle; the room only looks, so it asks for read and keeps the
              handle for this session. Drop is the drivable half (a headless
@@ -158,7 +158,7 @@
           <button class="quiet" id="file-copy" type="button" disabled>Copy</button>
           <button class="icon-button" id="reader-close" type="button" aria-label="Close the file"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
         </div>
-        <pre id="file-body"></pre>
+        <pre id="file-body" tabindex="0" role="region" aria-label="File contents"></pre>
         <details class="reader-details" id="reader-details">
           <summary>Details</summary>
           <p id="file-facts"></p>
