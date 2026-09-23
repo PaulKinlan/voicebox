@@ -23,7 +23,6 @@ import { startServer } from "./lib/server.mjs";
 
 test("presence: #where-note derives agent provider and real commit SHA from GET /api/health", async () => {
   const server = await startServer({ env: { VOICEBOX_RESOLVER: "script" } });
-  const server = await startServer({ env: { VOICEBOX_PROVIDER: "script" } });
   const page = await launch({ fakeMedia: true });
   try {
     await page.goto(server.base);
@@ -56,7 +55,6 @@ test("presence: #where-note derives agent provider and real commit SHA from GET 
 
 test("presence: when server is unreachable, #where-note names machine-unreachable without proxy-500 confusion", async () => {
   const server = await startServer({ env: { VOICEBOX_RESOLVER: "script" } });
-  const server = await startServer({ env: { VOICEBOX_PROVIDER: "script" } });
   const page = await launch({ fakeMedia: true });
   try {
     await page.goto(server.base);
@@ -115,7 +113,6 @@ test("presence: environment-list-unreadable surfaces via GET /api/environments, 
   const server = await startServer({
     env: {
       VOICEBOX_RESOLVER: "script",
-      VOICEBOX_PROVIDER: "script",
       VOICEBOX_WORKSPACE: scratchWorkspace,
     },
   });
@@ -139,9 +136,6 @@ test("presence: environment-list-unreadable surfaces via GET /api/environments, 
     await page.waitFor(
       () => (document.querySelector("#where-note")?.getAttribute("title") ?? "").includes("environment-list-unreadable"),
       { label: "where-note title names environment-list-unreadable" },
-    await page.waitFor(
-      () => document.querySelector("#where-note")?.textContent.includes("environment-list-unreadable"),
-      { label: "where-note environment-list-unreadable" },
     );
 
     const unreadableState = await page.evaluate(() => {
@@ -164,9 +158,6 @@ test("presence: environment-list-unreadable surfaces via GET /api/environments, 
     assert.match(unreadableState.title, /source: GET \/api\/environments/, "title must cite GET /api/environments as source");
     assert.notEqual(unreadableState.text, "the machine is not answering — fix the host",
       "an unreadable list and an unreachable machine must not read the same");
-    assert.equal(unreadableState.text, "environment-list-unreadable (fix the file)", "must explicitly surface environment-list-unreadable");
-    assert.match(unreadableState.title, /source: GET \/api\/environments/, "title must cite GET /api/environments as source");
-    assert.notEqual(unreadableState.text, "machine-unreachable (fix the host)", "environment-list-unreadable must be distinguishable from machine-unreachable");
 
     // 3. Restore permissions (0600) and verify recovery back to agent: script
     chmodSync(envFile, 0o600);

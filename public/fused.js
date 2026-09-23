@@ -965,16 +965,6 @@ async function health() {
         els.where.title = `source: GET /api/environments · ${err.refused}: ${err.why || "fix the file"}`;
       } else {
         els.where.textContent = "the machine is not answering — fix the host";
-  } catch (err) {
-    if (els.dot) els.dot.dataset.ok = "false";
-    if (els.where) {
-      if (err?.refused) {
-        // e.g. environment-list-unreadable: "fix the file"
-        els.where.textContent = `${err.refused} (fix the file)`;
-        els.where.title = `source: GET /api/environments · ${err.refused}: ${err.why || "fix the file"}`;
-      } else {
-        // The machine is unreachable (connection refused, network error)
-        els.where.textContent = "machine-unreachable (fix the host)";
         els.where.title = "source: GET /api/health · machine-unreachable — the local server is not answering, fix the host";
       }
     }
