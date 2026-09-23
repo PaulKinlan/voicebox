@@ -128,7 +128,11 @@
           <p id="empty-next">Say or type something that names a file and it lands here.</p>
           <p class="empty-why" id="empty-why" hidden></p>
           <p class="empty-action" id="empty-action" hidden><a class="small-button" id="empty-link" href="/environment.html">Open a project</a></p>
-          <ul class="samples" id="samples" role="list"></ul>
+          <!-- A LABEL, because these sit inside the "Made while we talk" section: without one, a count of
+               "3 files" above three imperative sentences told a person those sentences were made things
+               (voicebox-beads-kcs, finding 3). The typography already distinguished them; this says so. -->
+          <p class="samples-label" id="samples-label">Or try one of these:</p>
+          <ul class="samples" id="samples" role="list" aria-labelledby="samples-label"></ul>
         </div>
         <div class="made-actions">
           <button class="quiet" id="new-file" type="button"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>New file</button>
