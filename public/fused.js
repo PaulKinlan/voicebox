@@ -1514,6 +1514,14 @@ on(els.extsClose, "click", () => els.exts?.close());
 on(els.exts, "close", () => {
   els.extsOpen?.setAttribute("aria-expanded", "false");
 });
+// The heading's explanation, set as the button's tooltip FROM the one paragraph that carries it —
+// so the hover text and the screen-reader text cannot drift into two different sentences.
+{
+  const help = document.getElementById("envs-help");
+  const text = document.getElementById("envs-help-text");
+  if (help && text) help.title = text.textContent.trim();
+}
+
 on(els.envsOpen, "click", () => {
   if (!els.envs || els.envs.open) return;
   els.envs.showModal();
