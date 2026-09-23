@@ -81,8 +81,8 @@ export interface ActsSocket {
 }
 
 const LIST_LIMIT = 200;
-/** The audit's name for the routed act: a turn that arrived over the channel. */
-const TURN = "channel";
+/** The audit's name for a routed act: the turn it arrived on (a tool call names its tool). */
+const turnOf = (call) => (typeof call.args?.turn === "string" && call.args.turn ? call.args.turn : "channel");
 
 function sameRoot(a: RootDescriptor, b: unknown): boolean {
   if (!b || typeof b !== "object") return false;
@@ -130,7 +130,7 @@ async function performAct(call: { tool: string; args: Record<string, unknown> },
   // CONTAINMENT, RE-RUN HERE (rule 1): the page resolves against its own descriptor.
   const resolved = resolveInRoot(descriptor, name);
   if (!resolved.ok) {
-    await hooks.recordAct({ kind: tool, target: name, tool: "turn" }, "refuse", "outside-root", "refused", { exists: false }, TURN);
+    await hooks.recordAct({ kind: tool, target: name, tool: "turn" }, "refuse", "outside-root", "refused", { exists: false }, turnOf(call));
     return { ok: false as const, refused: "outside-root", why: resolved.why };
   }
   // THE SAME LINE AS THE SERVER'S VERBS: containment first, then a hidden file inside the
@@ -138,7 +138,7 @@ async function performAct(call: { tool: string; args: Record<string, unknown> },
   // executes them. One rule, one vocabulary, two writers.
   const base = resolved.path.split("/").pop() ?? "";
   if (base.startsWith(".")) {
-    await hooks.recordAct({ kind: tool, target: name, tool: "turn" }, "refuse", "dotfile-refused", "refused", { exists: false }, TURN);
+    await hooks.recordAct({ kind: tool, target: name, tool: "turn" }, "refuse", "dotfile-refused", "refused", { exists: false }, turnOf(call));
     return { ok: false as const, refused: "dotfile-refused", why: "dotfiles are neither readable nor writable through the loop — the listing hides them and so does this verb; host secrets live behind that line" };
   }
 
@@ -147,24 +147,24 @@ async function performAct(call: { tool: string; args: Record<string, unknown> },
     // an empty write — it is a malformed act, refused by name, and the file is UNTOUCHED
     // (the review's worst outcome; absent ≠ empty, and `""` remains a valid empty file).
     if (call.args?.content == null) {
-      await hooks.recordAct({ kind: "write", target: name, tool: "turn" }, "refuse", "missing-content", "refused", { exists: false }, TURN);
+      await hooks.recordAct({ kind: "write", target: name, tool: "turn" }, "refuse", "missing-content", "refused", { exists: false }, turnOf(call));
       return { ok: false as const, refused: "missing-content", why: `the write to '${name}' carried no content — pass content explicitly (an empty string is a valid, intentional empty file). The existing file was NOT touched.` };
     }
     const unwritable = await hooks.checkWritable();
     if (unwritable) {
-      await hooks.recordAct({ kind: "write", target: name, tool: "turn" }, "refuse", unwritable.code, "refused", { exists: false }, TURN);
+      await hooks.recordAct({ kind: "write", target: name, tool: "turn" }, "refuse", unwritable.code, "refused", { exists: false }, turnOf(call));
       return { ok: false as const, refused: unwritable.code, why: unwritable.why };
     }
     const content = String(call.args.content);
     try {
       await storage.writeText(resolved.path, content);
     } catch (e) {
-      await hooks.recordAct({ kind: "write", target: name, tool: "turn" }, "refuse", "root-unreachable", "refused", { exists: false }, TURN);
+      await hooks.recordAct({ kind: "write", target: name, tool: "turn" }, "refuse", "root-unreachable", "refused", { exists: false }, turnOf(call));
       return { ok: false as const, refused: "root-unreachable", why: `the write did not land: ${(e as Error)?.message ?? e}` };
     }
     // OBSERVED, never claimed: the bytes are read back from the world after the write.
     const observed = await storage.observe(resolved.path);
-    const entry = await hooks.recordAct({ kind: "write", target: name, tool: "turn" }, "allow", "writes-inside", "ok", observed, TURN);
+    const entry = await hooks.recordAct({ kind: "write", target: name, tool: "turn" }, "allow", "writes-inside", "ok", observed, turnOf(call));
     return { ok: true as const, name, bytes: observed.bytes ?? content.length, mtime: observed.mtime ?? null, auditSeq: entry?.seq ?? null };
   }
 
@@ -173,11 +173,11 @@ async function performAct(call: { tool: string; args: Record<string, unknown> },
     try {
       content = await storage.readText(resolved.path);
     } catch {
-      await hooks.recordAct({ kind: "read", target: name, tool: "turn" }, "refuse", "not-found", "refused", { exists: false }, TURN);
+      await hooks.recordAct({ kind: "read", target: name, tool: "turn" }, "refuse", "not-found", "refused", { exists: false }, turnOf(call));
       return { ok: false as const, refused: "not-found", why: `'${name}' is not in this project` };
     }
     const observed = await storage.observe(resolved.path);
-    const entry = await hooks.recordAct({ kind: "read", target: name, tool: "turn" }, "allow", "reads-inside", "ok", observed, TURN);
+    const entry = await hooks.recordAct({ kind: "read", target: name, tool: "turn" }, "allow", "reads-inside", "ok", observed, turnOf(call));
     return { ok: true as const, name, content, bytes: observed.bytes ?? content.length, auditSeq: entry?.seq ?? null };
   }
 
