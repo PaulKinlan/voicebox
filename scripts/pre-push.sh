@@ -37,7 +37,8 @@ run_stage() {
   _elapsed=$(( $(date +%s) - _start ))
 
   case "$_stage" in
-    tests) _var="VOICEBOX_GATE_TESTS_SECS" ;;
+    unit) _var="VOICEBOX_GATE_UNIT_SECS" ;;
+    live) _var="VOICEBOX_GATE_LIVE_SECS" ;;
     acceptance) _var="VOICEBOX_GATE_ACCEPT_SECS" ;;
     *) _var="" ;;
   esac
@@ -55,11 +56,28 @@ run_stage() {
   exit 1
 }
 
-# Three loaded full-suite runs took 73.47–74.57s; keep the full suite with headroom.
-_test_secs="${VOICEBOX_GATE_TESTS_SECS:-180}"
+# ── TWO TEST LANES, because the suite's own concurrency caused the flakes ────
+# Measured 2026-09-23 (voicebox-beads-6qu): the whole suite run SERIALLY passes
+# at load average 36 — higher than during any refusal — while the default
+# (concurrent-files) run failed extension-approval-ui twice inside the suite and
+# environment-probe once, each passing alone. So the interference is between
+# test FILES, not the box, and the fix is to keep the files that own a browser
+# or a server out of the concurrent pass.
+#
+#   unit  — no browser, no server of its own: normal concurrency, fast
+#   live  — launches Chromium over CDP or a server process: ONE FILE AT A TIME
+#
+# Both lanes swap out at the same file list `npm test` uses (scripts/test-lanes.mjs
+# classifies every tests/*.mjs, and --check fails if a file is in neither lane).
+# Measured: unit 15s concurrent (175 tests), live 186s serial (182 tests), at load
+# 19.5. The budgets are headroom over those measurements, not a guess.
+_unit_secs="${VOICEBOX_GATE_UNIT_SECS:-${VOICEBOX_GATE_TESTS_SECS:-90}}"
+_live_secs="${VOICEBOX_GATE_LIVE_SECS:-400}"
 _accept_secs="${VOICEBOX_GATE_ACCEPT_SECS:-45}"
 
-run_stage tests "$_test_secs" npm test
+node scripts/test-lanes.mjs --check
+run_stage unit "$_unit_secs" npm run test:unit
+run_stage live "$_live_secs" npm run test:live
 
 if [ "$VOICEBOX_SKIP_ACCEPT" != "1" ]; then
   run_stage acceptance "$_accept_secs" npm run accept

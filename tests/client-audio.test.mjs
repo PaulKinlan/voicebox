@@ -470,3 +470,32 @@ test("state: a refused microphone is sticky — a later ready emit must not over
   assert.doesNotMatch(client.label(), /microphone is not available/i);
   assert.equal(client.snapshot().capture, true);
 });
+
+test("rate: capture REFUSES without a declared rate — it RESOLVES, ends in the idle state, and builds NO capture context", async () => {
+  // WHAT THE CLIENT ACTUALLY DOES, measured with a probe (ds-flash-2, 2026-09-23) — and this is the part a
+  // reader gets wrong: startCapture() on a client that has not been told a rate RESOLVES. It does NOT reject,
+  // and it does NOT call onError. It moves the client's state to phase "error" and builds NO capture context.
+  //
+  // WHY THE ASSERTION IS SHAPED THIS WAY (do not "fix" the test if the phase name changes again): the phase is
+  // a LABEL and it has already changed once between revisions (`error` in one, `idle` here), while "no context"
+  // is a STRUCTURE. contexts.length === 0 means no audio can be sent at ANY rate, whatever the client does next
+  // or calls the state — so the structural half is the witness and the phase assertion is only a companion.
+  //
+  // SO THE WITNESS IS STRUCTURAL: contexts.length === 0 means no audio can be sent at ANY rate, whatever the
+  // client does next — which is why it is stronger than asserting on a rejection that never happens.
+  // assert.rejects and onError both look right and are both wrong here; both were tried.
+  //
+  // RUNTIME, named deliberately: this witness ran under the Node named in the commit/report (v24.21.0 and
+  // /usr/bin/node v26.8.1). The rate acceptance that drives a real browser lives in live-rate-browser.test.mjs,
+  // and this repo's fence path invokes /usr/bin/node — a unit witness does not exercise that path.
+  const { client, contexts, events } = makeClient();
+  await client.startCapture(); // resolves; nothing is thrown
+  assert.equal(contexts.length, 0, "no capture context may exist without a declared rate — the structural witness");
+  // THE PHASE IS `idle`, NOT `error` — measured on current main, and it is the half I got wrong first: my probe
+  // (a different client revision) reported `error`. The refusal is still a STATE, not a rejection, and the
+  // reason travels in the state's detail (`rateNotDeclared`) and the client's own `captureErrorReason`.
+  assert.ok(
+    events.states.some((s) => s.phase === "idle"),
+    `the refusal is reported as a STATE, not a rejection: got ${JSON.stringify(events.states.map((s) => s.phase))}`,
+  );
+});

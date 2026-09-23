@@ -1,9 +1,36 @@
 # Pre-push gate: budgets and refusal causes
 
-The tracked hook runs the **full** `npm test` suite (180 seconds), then
-`npm run accept` (45 seconds). Each stage inherits stdout and stderr: partial
-output remains visible when it times out. GNU coreutils `timeout` is required;
-its absence is a named refusal, not an unbounded run.
+The tracked hook runs the test suite in **two lanes**, then `npm run accept`:
+
+| stage | what it runs | concurrency | default budget |
+| --- | --- | --- | --- |
+| `unit` | `npm run test:unit` — every `tests/*.test.mjs` that launches no browser and no server of its own | files in parallel | 90s |
+| `live` | `npm run test:live` — tests that launch Chromium over CDP or a server process | **one file at a time** | 400s |
+| `acceptance` | `npm run accept` | — | 45s |
+
+Each stage inherits stdout and stderr: partial output remains visible when it
+times out. GNU coreutils `timeout` is required; its absence is a named refusal,
+not an unbounded run. The lanes are derived from each file's code by
+`scripts/test-lanes.mjs` (comments stripped; every file lands in exactly one
+lane), so a new test cannot escape them the way it could escape a hand-kept
+list, and `npm test` still runs the whole suite for humans and CI.
+
+## Why two lanes — 2026-09-23 (`voicebox-beads-6qu`)
+
+The single full-suite stage refused good branches, and the cause was measured
+rather than guessed:
+
+- `extension-approval-ui.test.mjs` failed **inside** the suite twice at ~20.5s
+  (`timed out waiting for host code requested`), and `environment-probe.test.mjs`
+  once — **each passing alone** (3/3 and 1/1), and each passing when the suite
+  ran serially.
+- That serial run passed **357 tests, 354 pass, 0 fail, 3 skipped at load
+  average 36.31** — higher than during any refusal. So the interference is
+  between test FILES (node runs them concurrently), not the machine.
+- Lane costs, measured at load 19.5: `unit` **15s concurrent** (175 tests),
+  `live` **186s serial** (182 tests). The budgets above are headroom over those
+  numbers, not estimates; changing concurrency without raising the budget would
+  convert a flake into a timeout, which is why both moved together.
 
 A timeout reports the stage, command, budget and exit 124, and says completion
 is unknown rather than claiming tests failed. An ordinary nonzero exit reports

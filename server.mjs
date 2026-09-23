@@ -136,38 +136,86 @@ function writePairings(map) {
 /** The bearer THIS host holds for calling the named environment (local side of a pairing). */
 function bearerFor(envKey) {
   const read = readPairings();
-  return read.ok ? (read.map[envKey]?.callBearer ?? null) : null;
+  if (!read.ok) return null;
+  const entry = read.map[envKey];
+  if (!entry || entry.revoked) return null;
+  return entry.callBearer ?? null;
 }
 
 /** Store the bearer this host will ACCEPT for itself (the remote side of a pairing). */
 function storeBearer(envKey, bearer) {
   const read = readPairings();
   const map = read.ok ? read.map : {};
-  map[envKey] = { ...(map[envKey] ?? {}), acceptBearer: bearer };
+  const prev = map[envKey] ?? {};
+  map[envKey] = {
+    ...prev,
+    acceptBearer: bearer,
+    revoked: false,
+    revokedAt: null,
+    issuedAt: new Date().toISOString(),
+  };
   writePairings(map);
 }
 
 /** Check a bearer presented to THIS host against the one it issued for that environment key. */
 function bearerOk(envKey, bearer) {
   const read = readPairings();
-  if (!read.ok) return false;
-  const held = read.map[envKey]?.acceptBearer;
-  return typeof held === "string" && held.length > 0 && typeof bearer === "string" && bearer === held;
+  if (!read.ok) return { ok: false, refused: read.refused, why: read.why };
+  const entry = read.map[envKey];
+  if (!entry) return { ok: false, refused: "unauthenticated-call", why: "this environment is not paired" };
+  if (entry.revoked || entry.revokedBearers?.includes(bearer)) {
+    return { ok: false, refused: "pairing-revoked", why: `the pairing for environment '${envKey}' was revoked by the host` };
+  }
+  const held = entry.acceptBearer;
+  if (typeof held === "string" && held.length > 0 && typeof bearer === "string" && bearer === held) {
+    return { ok: true, envKey };
+  }
+  return { ok: false, refused: "unauthenticated-call", why: "a proxied call must carry the bearer this environment issued at pairing — it is checked before any tool runs" };
 }
 
-  /**
-   * Does THIS host accept this bearer for ANY environment key it has issued one for?
-   *
-   * The key is the CALLER's name for this environment when it paired, so the inbound peer cannot be
-   * asked to guess it — the credential is what identifies the pairing, and matching it anywhere is the
-   * honest reading of 'this host issued that bearer'. A store that cannot be read accepts NOTHING.
-   */
-  function bearerAcceptedByThisHost(bearer) {
-    if (typeof bearer !== "string" || bearer.length === 0) return false;
-    const read = readPairings();
-    if (!read.ok) return false;
-    return Object.values(read.map).some((entry) => entry?.acceptBearer === bearer);
+/**
+ * Does THIS host accept this bearer for ANY environment key it has issued one for?
+ * Returns { ok: true, envKey } or { ok: false, refused, why }.
+ */
+function checkBearerAccepted(bearer) {
+  if (typeof bearer !== "string" || bearer.length === 0) {
+    return { ok: false, refused: "bearer-refused", why: "bearer is missing or empty" };
   }
+  const read = readPairings();
+  if (!read.ok) return { ok: false, refused: read.refused, why: read.why };
+
+  // 1. Active bearer on any environment?
+  for (const [envKey, entry] of Object.entries(read.map)) {
+    if (!entry?.revoked && entry?.acceptBearer === bearer) {
+      return { ok: true, envKey };
+    }
+  }
+
+  // 2. Previously issued and revoked?
+  for (const [envKey, entry] of Object.entries(read.map)) {
+    if (entry?.revoked || entry?.revokedBearers?.includes(bearer)) {
+      if (entry?.acceptBearer === bearer || entry?.revokedBearers?.includes(bearer)) {
+        return {
+          ok: false,
+          refused: "pairing-revoked",
+          why: "this pairing was revoked by the host — re-pair first (POST /api/pair) to establish a new credential",
+        };
+      }
+    }
+  }
+
+  // 3. Never issued
+  return {
+    ok: false,
+    refused: "bearer-refused",
+    why: "that bearer is not one this host issued. Pair first (POST /api/pair with the host token) and send " +
+      "the bearer it returns as the hello frame's `bearer` — a session is not created for a peer we cannot identify.",
+  };
+}
+
+function bearerAcceptedByThisHost(bearer) {
+  return checkBearerAccepted(bearer).ok;
+}
 
 /** Record the bearer the LOCAL host uses when calling a paired environment. */
 function recordCallBearer(envKey, bearer) {
@@ -565,6 +613,72 @@ const pageChannel = createChannel({
   send: (s) => pageSocket?.send(s),
 });
 const pageExecutorConnected = () => pageSocket !== null;
+
+/**
+ * Revoke a pairing for the named environment key (voicebox-beads-yo1).
+ * Immediately invalidates the credential in the store and terminates any
+ * active connection (executor / live) currently operating under that authority.
+ */
+function revokePairing(envKey) {
+  const read = readPairings();
+  if (!read.ok) return read;
+  const map = read.map;
+  const entry = map[envKey];
+  if (!entry) {
+    return { ok: false, refused: "environment-not-paired", why: `no pairing exists for environment '${envKey}'` };
+  }
+  const oldAccept = entry.acceptBearer;
+  entry.revoked = true;
+  entry.revokedAt = new Date().toISOString();
+  entry.revokedBy = "host-token";
+  entry.revokedBearers = [
+    ...(entry.revokedBearers ?? []),
+    ...(oldAccept ? [oldAccept] : []),
+  ];
+  entry.acceptBearer = null;
+  entry.callBearer = null;
+  writePairings(map);
+
+  // Terminate active connections operating under this environment:
+  // 1. Executor channel:
+  if (pageSocket && (pageSocket.envKey === envKey || (oldAccept && pageSocket.bearer === oldAccept))) {
+    try {
+      pageSocket.send(JSON.stringify({
+        type: "refused",
+        refused: "pairing-revoked",
+        why: `the pairing for environment '${envKey}' was revoked by the host — executor authority terminated`,
+      }));
+      pageSocket.close(1008, "pairing-revoked");
+    } catch {}
+    pageSocket = null;
+    pageChannel.abandon();
+    console.error(`[channel] pairing revoked for '${envKey}' — executor socket closed and calls abandoned`);
+  }
+
+  // 2. Live session:
+  if (runningSession && (runningSession.socket?.envKey === envKey || (oldAccept && runningSession.socket?.bearer === oldAccept))) {
+    try {
+      runningSession.socket.send(JSON.stringify({
+        type: "refused",
+        refused: "pairing-revoked",
+        why: `the pairing for environment '${envKey}' was revoked by the host — live session terminated`,
+      }));
+      runningSession.socket.close(1008, "pairing-revoked");
+    } catch {}
+    runningSession = null;
+    console.error(`[live] pairing revoked for '${envKey}' — live session closed`);
+  }
+
+  const audit = logAct({ kind: "pairing", target: envKey, tool: "pair" }, "allow", "pairing-revoked", "ok", null, null);
+  return {
+    ok: true,
+    envKey,
+    revoked: true,
+    at: entry.revokedAt,
+    logged: audit ? audit.seq : null,
+    ...(audit ? {} : { logRefused: lastLogRefusal ?? "root-not-declared" }),
+  };
+}
 
 // The extension system's tools act in the ACTIVE root, not a workspace of their own
 // (voicebox-beads-gto): the host hands the declaration down live, and the page leg is the
@@ -981,16 +1095,16 @@ function agentSettingsPayload(extra = {}) {
       // "did my change take effect?" is usually asking about that second one.
       provider: agentSettings.provider,
       model: provider.model,
-      // No provider reads a voice or an instruction yet. Stated as null-with-a-reason rather than
-      // echoed back from the request.
-      voice: null,
-      instruction: null,
+      // Carried into the session's setup since the settings handoff landed: the voice in the
+      // provider's own field, the composed instruction as the session's system instruction.
+      voice: agentSettings.voice || `${provider.label}'s default`,
+      instruction: agentSettings.personality,
     },
     pending: {
-      voice: provider.voices.length
-        ? "stored, not applied: no provider carries a voice into its session yet (the setting lands with the provider seam)"
-        : "this provider offers no voices",
-      personality: "stored, not applied: no provider receives an instruction yet (the tone layer lands with the live-tools lane)",
+      // Nothing is pending any more: every setting the surface offers is carried into the session.
+      // The keys stay (null) so a reader can tell "nothing pending" from "the field is gone".
+      voice: provider.voices.length ? null : "this provider offers no voices",
+      personality: null,
     },
     base: {
       // The mandatory half, shown so a person can see what a personality is layered ON. Read-only by
@@ -1589,6 +1703,20 @@ async function handle(req, res) {
     return json(res, 200, { ok: true, envKey, paired: true });
   }
 
+  if (req.method === "DELETE" && url.pathname === "/api/pair") {
+    // Revoking pairing is the HOST's act (voicebox-beads-yo1): requires host token
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "revoking a pairing is the host's act and requires the host token (x-voicebox-host-token); the page cannot hold it" });
+    }
+    const body = await readJson().catch(() => ({}));
+    const envKey = (typeof body?.envKey === "string" ? body.envKey : null) ?? url.searchParams.get("envKey");
+    if (!envKey) {
+      return json(res, 400, { ok: false, refused: "bad-request", why: "revoking a pairing names the environment key (envKey)" });
+    }
+    const result = revokePairing(envKey);
+    return json(res, result.ok ? 200 : 404, result);
+  }
+
   if (req.method === "POST" && url.pathname === "/api/call") {
     // The LOCAL side (the proxy): the page names an environment by key; the host looks up the bearer
     // it holds for that key, attaches it, and forwards the call. The page never sees the bearer.
@@ -1609,6 +1737,9 @@ async function handle(req, res) {
     if (!pairings.ok) return json(res, 500, pairings);
     const target = await resolveEnvironment(envKey);
     if (!target.ok) return json(res, target.refused === "environment-unreachable" ? 502 : 404, target);
+    if (pairings.map[envKey]?.revoked) {
+      return json(res, 403, { ok: false, refused: "pairing-revoked", why: `pairing for "${target.label ?? envKey}" was revoked by the host — re-pair before the host will carry a call to it` });
+    }
     const bearer = bearerFor(envKey);
     if (!bearer) {
       return json(res, 403, { ok: false, refused: "environment-not-paired", why: `"${target.label ?? envKey}" is listed but not paired — pair it (an explicit act, gated by the host token) before the host will carry a call to it` });
@@ -1652,8 +1783,9 @@ async function handle(req, res) {
     if (!envKey) return json(res, 400, { ok: false, refused: "bad-request", why: "an execute names the environment key it is for" });
     const known = await resolveEnvironment(envKey);
     if (!known.ok) return json(res, 404, { ok: false, refused: "unknown-environment", why: `no environment with key '${envKey}' is in this host's registry — the credential that names it does not reach anything` });
-    if (!bearerOk(envKey, bearer)) {
-      return json(res, 403, { ok: false, refused: "unauthenticated-call", why: "a proxied call must carry the bearer this environment issued at pairing — it is checked before any tool runs" });
+    const check = bearerOk(envKey, bearer);
+    if (!check.ok) {
+      return json(res, 403, { ok: false, refused: check.refused, why: check.why });
     }
     const tool = typeof body?.tool === "string" ? body.tool : null;
     const args = body?.args && typeof body.args === "object" ? body.args : {};
@@ -1793,14 +1925,13 @@ server.on("upgrade", (req, socket) => {
         );
         return;
       }
-      if (!bearerAcceptedByThisHost(bearer)) {
-        refuseChannel(
-          "bearer-refused",
-          "that bearer is not one this host issued. Pair first (POST /api/pair with the host token) and send " +
-            "the bearer it returns as the hello frame's `bearer` — this connection did not present the executor entitlement.",
-        );
+      const check = checkBearerAccepted(bearer);
+      if (!check.ok) {
+        refuseChannel(check.refused, check.why);
         return;
       }
+      ws.envKey = check.envKey;
+      ws.bearer = bearer;
       attachExecutor(`paired executor (${frame.role ?? "environment"})`);
     });
     return;
@@ -1873,6 +2004,11 @@ server.on("upgrade", (req, socket) => {
         // person chose is the provider this session dials, and its model comes with it.
         provider,
         model,
+        // The agent settings ride the seam: the personality composed over the mandatory base
+        // (composeAgentInstruction cannot be handed a base — that is the mechanism), and the
+        // voice the person chose for THIS provider. Both land in the provider's setup.
+        instruction: composeAgentInstruction(agentSettings.personality),
+        voice: agentSettings.voice || undefined,
         onAudioOut: (pcm, mime) => { if (pcm.length > 4) ws.send(pcm); },
         onText: (text, role) => ws.send(JSON.stringify({ type: "text", role, text })),
         onState: (state, detail) => ws.send(JSON.stringify({ type: "state", state, detail, model })),
@@ -2006,15 +2142,13 @@ server.on("upgrade", (req, socket) => {
       );
       return;
     }
-    if (!bearerAcceptedByThisHost(bearer)) {
-      refuseLive(
-        "bearer-refused",
-        "that bearer is not one this host issued. Pair first (POST /api/pair with the host token) and send " +
-          "the bearer it returns as the hello frame's `bearer` — a session is not created for a peer we " +
-          "cannot identify.",
-      );
+    const check = checkBearerAccepted(bearer);
+    if (!check.ok) {
+      refuseLive(check.refused, check.why);
       return;
     }
+    ws.envKey = check.envKey;
+    ws.bearer = bearer;
     beginSession();
   });
 

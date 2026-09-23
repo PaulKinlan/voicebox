@@ -20,6 +20,13 @@
 // asset URLs excluded — measured 311/311 present through the transform — plus the design tokens
 // verbatim (9/9). The limits are in the failure message rather than in a comment nobody reads.
 
+// THE SERVER'S OWN TRANSFORM, IMPORTED RATHER THAN IMITATED. server.mjs's serveSource() serves a `.ts`
+// module as `stripTypeScriptTypes(readFileSync(file, "utf8"), { mode: "strip" })` — so the check can
+// compute what the front WILL serve for a given disk file and compare that, exactly, instead of trying
+// to re-derive a normal form. A second implementation would disagree with the first and produce false
+// reds; the first implementation cannot disagree with itself.
+import { stripTypeScriptTypes } from "node:module";
+
 /** Lines the dev transform rewrites by definition. Each is a *shape*, not a list of known strings. */
 const REWRITTEN_BY_TRANSFORM = [
   /^\s*(?:import|export)\b[^\n]*\bfrom\s*["'][^"']+["']/, // module specifiers -> resolved paths, ?t= stamps
@@ -69,30 +76,55 @@ export function driftBetween(diskText, servedText, { ref = "", kind = "module" }
     return null;
   }
   if (kind === "compiled") {
-    // THE SERVER COMPILES `.ts` MODULES (types stripped, imports rewritten), so lines cannot be compared
-    // — measured on browser/ui/ui.ts: 540 of 582 disk lines appear in the served copy, and the 42 that do
-    // not are exactly the type-annotated ones. What DOES survive compilation, measured on the same file:
-    // every COMMENT line (100/100) and every STRING LITERAL of 8+ characters (142/142). Those are what a
-    // drift would change — a renamed variable is invisible here, and this says so rather than reporting
-    // compilation as drift (the first version of this rule did exactly that, on its first run).
-    const comments = diskText.split("\n").map((l) => l.trimEnd()).filter((l) => /^\s*(\/\/|\*|\/\*)/.test(l));
-    const missingComments = comments.filter((l) => !servedText.includes(l));
-    if (missingComments.length > 0) {
-      return `${ref}: ${missingComments.length} comment line(s) of this tree's copy are not in what the front serves — first: "${missingComments[0].trim().slice(0, 80)}"`;
+    // EXACT, using the server's own call. Measured on this tree (2026-09-23): strip-then-compare is
+    // byte-identical for browser/ui/ui.ts, browser/acts.ts, core/paths.ts and core/root.ts — every
+    // compiled module the page loads — so a CODE-ONLY edit (a constant, a bound, a renamed local) is
+    // drift like any other, and the comments-and-strings rule below is the FALLBACK for a runtime whose
+    // stripper is unavailable rather than the primary rule.
+    let expected = null;
+    try { expected = stripTypeScriptTypes(diskText, { mode: "strip" }); } catch { expected = null; }
+    if (expected !== null) {
+      if (expected === servedText) return null;
+      const want = expected.split("\n");
+      const got = servedText.split("\n");
+      const at = want.findIndex((line, i) => line !== got[i]);
+      const where = at === -1
+        ? `the served copy has ${Math.abs(got.length - want.length)} line(s) this tree does not compile to`
+        : `first difference at line ${at + 1}: this tree compiles to "${(want[at] ?? "").trim().slice(0, 70)}" and the front serves "${(got[at] ?? "").trim().slice(0, 70)}"`;
+      return `${ref}: the front is not serving what this tree compiles to — ${where} (compared with the server's own transform)`;
     }
-    const literals = (t) => [...t.matchAll(/"([^"\\\n]{8,})"|'([^'\\\n]{8,})'/g)].map((m) => m[1] ?? m[2]);
-    const servedLiterals = new Set(literals(servedText));
-    const missingLiterals = [...new Set(literals(diskText))].filter((l) => !servedLiterals.has(l));
-    if (missingLiterals.length > 0) {
-      return `${ref}: ${missingLiterals.length} string(s) of this tree's copy are not in what the front serves — first: "${missingLiterals[0].slice(0, 80)}" (a compiled module is compared by its strings and comments: a change that touches neither is not visible here)`;
-    }
-    return null;
+
+    return fallbackCompiledDrift(diskText, servedText, { ref });
   }
   const lines = diskText.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim() !== "");
   const missing = lines.filter((l) => !isRewritten(l) && !servedText.includes(l));
   if (missing.length === 0) return null;
   const first = missing[0].trim().slice(0, 90);
   return `${ref}: ${missing.length} line(s) of this tree's copy are not in what the front serves — first: "${first}"`;
+}
+
+/**
+ * THE FALLBACK, exported so it is pinned by a test rather than only by a branch in the code: what can be
+ * compared about a compiled module when the runtime cannot strip types — its comments and its strings.
+ */
+export function fallbackCompiledDrift(diskText, servedText, { ref = "" } = {}) {
+  // FALLBACK ONLY — reached when the runtime cannot strip types (an older Node), never as a choice.
+  // Measured on browser/ui/ui.ts: 540 of 582 disk lines appear in the served copy, the 42 that do not
+  // being exactly the type-annotated ones; comments (100/100) and string literals of 8+ characters
+  // (142/142) survive. A code-only edit is invisible here, which is why the exact comparison above is
+  // the rule and this is what remains when it cannot run.
+  const comments = diskText.split("\n").map((l) => l.trimEnd()).filter((l) => /^\s*(\/\/|\*|\/\*)/.test(l));
+  const missingComments = comments.filter((l) => !servedText.includes(l));
+  if (missingComments.length > 0) {
+    return `${ref}: ${missingComments.length} comment line(s) of this tree's copy are not in what the front serves — first: "${missingComments[0].trim().slice(0, 80)}"`;
+  }
+  const literals = (t) => [...t.matchAll(/"([^"\\\n]{8,})"|'([^'\\\n]{8,})'/g)].map((m) => m[1] ?? m[2]);
+  const servedLiterals = new Set(literals(servedText));
+  const missingLiterals = [...new Set(literals(diskText))].filter((l) => !servedLiterals.has(l));
+  if (missingLiterals.length > 0) {
+    return `${ref}: ${missingLiterals.length} string(s) of this tree's copy are not in what the front serves — first: "${missingLiterals[0].slice(0, 80)}" (a compiled module is compared by its strings and comments: a change that touches neither is not visible here)`;
+  }
+  return null;
 }
 
 /** Does a line count as one the transform is allowed to rewrite? Exported for the test and for readers. */

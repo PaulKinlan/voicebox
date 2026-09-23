@@ -15,6 +15,9 @@ import path from "node:path";
 import { startServer } from "./lib/server.mjs";
 import { bootFence, measureBoundary } from "../lib/fence-provider.mjs";
 import { fileURLToPath } from "node:url";
+import { createServer } from "node:net";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -44,6 +47,8 @@ test("boots an L1 fence from a descriptor and returns a MEASURED per-axis bounda
   assert.equal(out.boundary.axes.files.verdict, "fenced");
   assert.equal(out.boundary.axes.files.measured, true);
   assert.equal(out.boundary.axes.processes.verdict, "fenced");
+  assert.equal(out.capability.network.parentLoopback.ok, true, "the fenced probe must read this parent's marker, even without internet");
+  assert.equal(out.boundary.axes.network.evidence.parentLoopback.ok, true);
   assert.equal(out.boundary.axes.network.verdict, "passes", "the network is shared, and the report must SAY so");
   assert.equal(out.boundary.axes.network.measured, true);
   assert.ok(/shared|does not bound/i.test(out.boundary.axes.network.note), "the network axis is labelled as not bounded");
@@ -75,6 +80,49 @@ test("measureBoundary never lets an unmeasured axis read as denied", () => {
   const report = measureBoundary({ probe: "sandbox-probe/1", when: "now", filesystem: { dirs: {} }, network: {}, sandboxHints: {}, tools: {} });
   for (const axis of Object.values(report.axes)) {
     assert.notEqual(axis.verdict, "denied", "no axis is ever reported 'denied' — the fence either measured it or says not-measured");
+  }
+  assert.equal(report.axes.network.measured, false, "absent fields are not failed measurements");
+  assert.equal(report.axes.network.verdict, "not measured");
+});
+
+for (const [name, network, verdict, measured] of [
+  ["absent network", {}, "not measured", false],
+  ["invalid witness arguments", { parentLoopback: { error: "invalid parent witness arguments — no connection attempted" } }, "not measured", false],
+  ["unreachable parent", { parentLoopback: { ok: false, error: "ECONNREFUSED" } }, "unknown", true],
+  ["wrong parent marker", { parentLoopback: { ok: false, error: "parent-witness-mismatch" } }, "unknown", true],
+  ["offline parent reached", { parentLoopback: { ok: true }, dns: { error: "ENETUNREACH" }, outboundTcp443IpLiteral: { ok: false } }, "passes", true],
+  ["external DNS only", { dns: { value: "resolved via 192.0.2.1" } }, "passes", true],
+]) test(`network evidence: ${name}`, () => {
+  const axis = measureBoundary({ network }).axes.network;
+  assert.equal(axis.verdict, verdict);
+  assert.equal(axis.measured, measured);
+  assert.deepEqual(axis.evidence.parentLoopback, network.parentLoopback, "failed/unavailable witnesses keep their named cause");
+  assert.match(axis.note, /internet reach is separate|do not establish unrestricted/, "one route is not unrestricted internet");
+});
+
+test("the actual fenced probe rejects a wrong marker, not merely a connected TCP port", async () => {
+  let contacts = 0;
+  const sockets = new Set();
+  const witness = createServer((socket) => {
+    contacts++;
+    sockets.add(socket);
+    socket.on("error", () => {});
+    socket.on("close", () => sockets.delete(socket));
+    socket.end("wrong marker");
+  });
+  try {
+    await new Promise((resolve, reject) => { witness.once("error", reject); witness.listen(0, "127.0.0.1", resolve); });
+    const { stdout } = await promisify(execFile)(path.join(REPO, "tools/fence.sh"), [
+      path.join(homes, "vb-test-wrong-marker"), "0", "/usr/bin/node", "/probes/sandbox-probe.mjs",
+      String(witness.address().port), "a".repeat(32),
+    ], { timeout: 20000, maxBuffer: 8 * 1024 * 1024 });
+    const network = JSON.parse(stdout).network;
+    assert.equal(contacts, 1, "the child really contacted the owned listener");
+    assert.equal(network.parentLoopback.ok, false);
+    assert.equal(network.parentLoopback.error, "parent-witness-mismatch");
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    await new Promise((resolve) => witness.close(resolve));
   }
 });
 
@@ -116,11 +164,13 @@ test("declared-and-booted through the registry, the measured boundary survives t
     assert.equal(declared.booted, true);
     assert.equal(declared.environment.boundary?.measuredBy, "probe", "the stored boundary is the probe's, provenance-tagged");
     assert.equal(declared.environment.boundary?.axes?.network?.verdict, "passes");
+    assert.equal(declared.environment.boundary?.axes?.network?.evidence?.parentLoopback?.ok, true);
 
     const { environments } = await (await fetch(`${server.base}/api/environments`)).json();
     const row = environments.find((e) => e.label === "fenced box");
     assert.ok(row, "the booted fence is in the list");
     assert.equal(row.boundary?.measuredBy, "probe", "the measured boundary survives the read — it is a measurement, not a file claim");
+    assert.equal(row.boundary?.axes?.network?.evidence?.parentLoopback?.ok, true, "the actual route witness survives the registry read");
     assert.ok(row.boundary?.when, "the report's freshness marker travels with it");
   } finally {
     await server.stop();

@@ -26,21 +26,27 @@ test('pre-push names the stage and cause, streams output, and refuses real faili
     mkdirSync(repo); mkdirSync(bin);
     git('init', '-q'); git('config', 'user.email', 'fixture@example.invalid'); git('config', 'user.name', 'Gate fixture');
     git('config', 'core.hooksPath', '.githooks');
-    for (const file of ['.githooks/pre-push', 'scripts/pre-push.sh']) {
+    for (const file of ['.githooks/pre-push', 'scripts/pre-push.sh', 'scripts/test-lanes.mjs']) {
       mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
       copyFileSync(path.join(root, file), path.join(repo, file));
     }
     chmodSync(path.join(repo, '.githooks/pre-push'), 0o755);
-    writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ scripts: { test: 'node --test case.cjs', accept: 'node acceptance.cjs' } }));
+    writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ scripts: { 'test:unit': 'node --test case.cjs', 'test:live': 'node --test --test-concurrency=1 live-case.cjs', accept: 'node acceptance.cjs' } }));
     writeFileSync(path.join(repo, 'case.cjs'), `
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 console.log('TEST OUTPUT BEFORE TERMINATION');
 console.error('TEST STDERR BEFORE TERMINATION');
 test('deliberate arithmetic assertion', async () => {
-  if (process.env.GATE_CASE === 'test-timeout') await new Promise(r => setTimeout(r, 30000));
-  assert.equal(2 + 2, process.env.GATE_CASE === 'test-failure' ? 5 : 4);
+  if (process.env.GATE_CASE === 'unit-timeout') await new Promise(r => setTimeout(r, 30000));
+  assert.equal(2 + 2, process.env.GATE_CASE === 'unit-failure' ? 5 : 4);
 });
+`);
+    writeFileSync(path.join(repo, 'live-case.cjs'), `
+const {test} = require('node:test');
+console.log('LIVE OUTPUT BEFORE TERMINATION');
+if (process.env.GATE_CASE === 'live-timeout') setTimeout(() => {}, 30000);
+test('live lane case', () => {});
 `);
     writeFileSync(path.join(repo, 'acceptance.cjs'), `
 console.log('ACCEPTANCE OUTPUT BEFORE TERMINATION');
@@ -51,14 +57,14 @@ if (process.env.GATE_CASE === 'accept-failure') { console.error('fetch failed (E
     // Accelerate only the timeout being tested; execute the real GNU timeout.
     writeFileSync(path.join(bin, 'timeout'), `#!/bin/sh
 case "$GATE_CASE:$3" in
-  test-timeout:180s|accept-timeout:45s) shift 3; exec '${timeout}' --verbose --kill-after=1s 2s "$@" ;;
+  unit-timeout:90s|live-timeout:400s|accept-timeout:45s) shift 3; exec '${timeout}' --verbose --kill-after=1s 2s "$@" ;;
 esac
 exec '${timeout}' "$@"
 `);
     chmodSync(path.join(bin, 'timeout'), 0o755);
     git('add', '.'); git('commit', '-qm', 'fixture'); git('init', '--bare', '-q', remote);
     git('worktree', 'add', '-qb', 'candidate', work);
-    for (const scenario of ['test-timeout', 'test-failure', 'accept-timeout', 'accept-failure', 'success']) {
+    for (const scenario of ['unit-timeout', 'unit-failure', 'live-timeout', 'accept-timeout', 'accept-failure', 'success']) {
       const result = spawnSync('git', ['push', remote, 'HEAD:refs/heads/candidate'], {
         cwd: work, encoding: 'utf8', timeout: 15000,
         env: { ...cleanEnv, NODE_TEST_CONTEXT: undefined, PATH: `${bin}:${process.env.PATH}`, BD_GIT_HOOK: '1',
@@ -74,7 +80,9 @@ exec '${timeout}' "$@"
         continue;
       }
       assert.notEqual(result.status, 0, output);
-      const stage = scenario.startsWith('test') ? 'tests' : 'acceptance';
+      const stage = scenario.startsWith('unit') ? 'unit' : scenario.startsWith('live') ? 'live' : 'acceptance';
+      const budgets = { unit: 90, live: 400, acceptance: 45 };
+      const remedyVars = { unit: 'VOICEBOX_GATE_UNIT_SECS', live: 'VOICEBOX_GATE_LIVE_SECS', acceptance: 'VOICEBOX_GATE_ACCEPT_SECS' };
       const cause = scenario.endsWith('timeout') ? 'TIMED OUT' : 'FAILED';
       assert.match(output, new RegExp(`REFUSED: ${stage} .* — ${cause}`));
       if (scenario.endsWith('timeout')) {
@@ -82,20 +90,21 @@ exec '${timeout}' "$@"
         assert.ok(timeoutMatch, `timeout refusal must state both budget and elapsed time: ${output}`);
         const budget = Number(timeoutMatch[1]);
         const elapsed = Number(timeoutMatch[2]);
-        const expectedBudget = scenario.startsWith('test') ? 180 : 45;
+        const expectedBudget = budgets[stage];
         assert.equal(budget, expectedBudget, `budget must match configured value: ${budget} vs ${expectedBudget}`);
         assert.notEqual(elapsed, budget, `elapsed (${elapsed}s) must not echo the budget claim (${budget}s)`);
         assert.ok(elapsed >= 1 && elapsed <= 10, `elapsed (${elapsed}s) must reflect actual measured execution time (~2s)`);
-        const expectedVar = scenario.startsWith('test') ? 'VOICEBOX_GATE_TESTS_SECS' : 'VOICEBOX_GATE_ACCEPT_SECS';
+        const expectedVar = remedyVars[stage];
         assert.match(output, new RegExp(`re-run when the box is quieter, or raise the budget with ${expectedVar}=<n>`));
       }
       if (cause === 'FAILED') assert.doesNotMatch(output, /TIMED OUT/);
-      if (stage === 'tests') assert.doesNotMatch(output, /ACCEPTANCE OUTPUT/);
+      if (scenario.startsWith('live') || stage === 'acceptance') assert.match(output, /LIVE OUTPUT BEFORE TERMINATION/);
+      if (stage !== 'acceptance') assert.doesNotMatch(output, /ACCEPTANCE OUTPUT/);
       else {
         assert.match(output, /ACCEPTANCE OUTPUT BEFORE TERMINATION/);
         assert.match(output, /ACCEPTANCE STDERR BEFORE TERMINATION/);
       }
-      if (scenario === 'test-failure') assert.match(output, /deliberate arithmetic assertion/);
+      if (scenario === 'unit-failure') assert.match(output, /deliberate arithmetic assertion/);
       if (scenario === 'accept-failure') assert.match(output, /fetch failed \(ECONNREFUSED\)/);
       assert.equal(spawnSync('git', ['--git-dir', remote, 'show-ref', '--verify', '--quiet', 'refs/heads/candidate'], { env: cleanEnv }).status, 1);
     }
@@ -137,23 +146,27 @@ test('pre-push timeout refusal respects custom budget and reports measured elaps
   try {
     mkdirSync(repo);
     execFileSync('git', ['init', '-q'], { cwd: repo, env: cleanEnv });
+    mkdirSync(path.join(repo, 'scripts'), { recursive: true });
     copyFileSync(path.join(root, 'scripts/pre-push.sh'), path.join(repo, 'pre-push.sh'));
+    // The gate calls the classifier before its stages, so a fixture that runs
+    // the gate needs the classifier present (it tolerates having no tests/).
+    copyFileSync(path.join(root, 'scripts/test-lanes.mjs'), path.join(repo, 'scripts/test-lanes.mjs'));
     chmodSync(path.join(repo, 'pre-push.sh'), 0o755);
-    writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "setTimeout(()=>{}, 30000)"' } }));
+    writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ scripts: { 'test:unit': 'node -e "setTimeout(()=>{}, 30000)"' } }));
 
     const result = spawnSync(path.join(repo, 'pre-push.sh'), [], {
       cwd: repo, encoding: 'utf8', timeout: 15000,
       env: {
         ...cleanEnv,
-        VOICEBOX_GATE_TESTS_SECS: '2',
+        VOICEBOX_GATE_UNIT_SECS: '2',
         VOICEBOX_SKIP_ACCEPT: '1',
       },
     });
 
     assert.notEqual(result.status, 0, result.stdout + result.stderr);
     const output = result.stdout + result.stderr;
-    assert.match(output, /running npm test \(max 2s\)\.\.\./);
-    const match = output.match(/REFUSED: tests \(npm test\) — TIMED OUT — budget (\d+)s, elapsed (\d+)s \(exit 124\); suite completion is unknown, not a test verdict — re-run when the box is quieter, or raise the budget with VOICEBOX_GATE_TESTS_SECS=<n>\./);
+    assert.match(output, /running npm run test:unit \(max 2s\)\.\.\./);
+    const match = output.match(/REFUSED: unit \(npm run test:unit\) — TIMED OUT — budget (\d+)s, elapsed (\d+)s \(exit 124\); suite completion is unknown, not a test verdict — re-run when the box is quieter, or raise the budget with VOICEBOX_GATE_UNIT_SECS=<n>\./);
     assert.ok(match, `refusal must match format with budget and elapsed: ${output}`);
     const budget = Number(match[1]);
     const elapsed = Number(match[2]);
