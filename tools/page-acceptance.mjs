@@ -151,14 +151,13 @@ async function renderedPlainLanguage(group, vocabulary, label) {
       : `${text.length} characters of visible text, this run's own refusal vocabulary included · driven pages and states only — it cannot prove anything about unvisited dialogs, another provider's text, or an inaccessible frame`);
 }
 
-let sharedRootBefore = null;
+let sharedRootPayload = null;
 let environmentsPayload = null;
-let sharedFilesPayload = null; // the parsed body, kept for the vocabulary (the string form is the witness)
+let sharedFilesPayload = null; // responses retained for the rendered refusal vocabulary
 // When the currency check skips by name (the front is serving a different tree), the verdict must SAY so:
 // an ALL CLEAR over a skipped check is a green that measured nothing, which is one level up from the
 // defect the check itself was fixed for (vb-resolver's review, 2026-09-23).
 let currencySkipReason = null;
-let sharedFilesBefore = "[]";
 let sharedServersRunning = false;
 // WHY the front is absent, recorded rather than swallowed: a skip that cannot name the address it could not
 // reach costs a debugging cycle to act on, and the address is the only actionable part of it.
@@ -180,14 +179,13 @@ try {
   const uiRes = await frontReachable(`${SHARED_UI}/`);
   if (rootRes && uiRes) {
     sharedServersRunning = true;
-    sharedRootBefore = await rootRes.json().catch(() => null);
+    sharedRootPayload = await rootRes.json().catch(() => null);
     // The environment rows are rendered on the page, and an unreachable one used to print its refusal
     // IDENTIFIER as the visible label (fixed alongside this check): the vocabulary has to include them.
     environmentsPayload = await fetch(`${SHARED_API}/api/environments`, { signal: AbortSignal.timeout(1200) }).then((r) => r.json()).catch(() => null);
     const filesRes = await fetch(`${SHARED_API}/api/files`, { signal: AbortSignal.timeout(1200) }); // the front answered above, so this is inside the same window
     const filesJson = await filesRes.json().catch(() => ({ files: [] }));
     sharedFilesPayload = filesJson;
-    sharedFilesBefore = JSON.stringify((filesJson.files ?? []).sort());
   }
 } catch (e) {
   // The front answered the probe and then went away mid-block (it flaps: its server restarts on landings), or
@@ -291,7 +289,7 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   // show the identifier the server just sent" rather than "this text looks like a token" — a person's
   // own words are content, and a pattern-only check fails on them.
   const sharedVocabulary = new Set();
-  for (const payload of [sharedRootBefore, sharedFilesPayload, environmentsPayload]) refusalVocabulary(payload, sharedVocabulary);
+  for (const payload of [sharedRootPayload, sharedFilesPayload, environmentsPayload]) refusalVocabulary(payload, sharedVocabulary);
   // NAVIGATE FIRST. The first version of this check ran before the page was loaded and read `0 characters`
   // — a green line that covered nothing, which is the whole class this session keeps finding. A rendered
   // check that can report zero text is not a check, so zero text is a FAILURE here.
@@ -426,18 +424,12 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   const fontInPage = await ev(`document.fonts.check('14px Inter')`);
   report("shared-front", "font loads in the page (dev front)", fontInPage === true, `document.fonts.check says ${fontInPage}`);
 
-  // THE WITNESS: the shared server's root state is identical to what it was
-  // before phase A. "Nothing writes to it" is a contract; this is the proof.
-  const sharedRootAfter = await (await fetch(`${SHARED_API}/api/root`)).json().catch(() => null);
-  const sharedFilesAfter = JSON.stringify(((await (await fetch(`${SHARED_API}/api/files`)).json().catch(() => ({ files: [] }))).files ?? []).sort());
-  const stateOf = (r) => JSON.stringify({ declared: r?.declared ?? null, project: r?.project ?? null, root: r?.root ?? null });
-  report("shared-front", "the shared server's root declaration is untouched", stateOf(sharedRootBefore) === stateOf(sharedRootAfter),
-    `before=${stateOf(sharedRootBefore)} after=${stateOf(sharedRootAfter)}`);
-  // F2: the declaration alone was BLIND to the mutation that mattered — a
-  // phantom turn with a declared root writes a file while the witness reads
-  // PASS. The files list is the second half of the witness.
-  report("shared-front", "the shared server's file list is untouched", sharedFilesBefore === sharedFilesAfter,
-    sharedFilesBefore === sharedFilesAfter ? `${JSON.parse(sharedFilesAfter).length} files, unchanged` : `before=${sharedFilesBefore} after=${sharedFilesAfter}`);
+  // bp8 isolation (voicebox-beads-ubk): Do NOT assert that the shared server's root declaration or
+  // file list is untouched across Phase A. The dev server is shared with other concurrent lanes
+  // (e.g. 7cd-poll re-declaring roots every 20s), so measuring global state across an unowned server
+  // violates bp8 ("a process that writes must write outside anything another process measures").
+  // The contract "nothing here writes" is already proven by the CDP Network witness above
+  // ("zero POST /api/turn on page load"). Mutating lifecycle checks belong on Phase B's private instance.
   } else {
     console.log(
         `SKIP  [shared-front]  phase A skipped: the shared front is not up ` +
