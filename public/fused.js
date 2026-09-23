@@ -2253,6 +2253,12 @@ for (const said of SAMPLES) {
 if (els.where) els.where.textContent = "checking the local server…";
 
 health();
+// A TOOL CAN CHANGE THE FOLDER WITHOUT THE PAGE ASKING (voicebox-beads-a93). The server sends
+// `{type:"tool"}` when the live model runs a command, and a write through that path landed on disk while
+// this list still showed the old folder — Paul's "files created by a tool do not appear in the UI
+// immediately". Re-listing on the frame is the whole fix: it is one GET, it preserves the open reader and
+// the scroll position, and the arrival mark then fires on the name that is new (data-arrived, ~3 s sweep).
+window.__voiceboxOnToolCalls = () => { void load(); };
 load();
 initRoomFolders().catch((err) => console.warn("[voicebox] could not restore room folders:", err));
 

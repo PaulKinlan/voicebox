@@ -59,6 +59,10 @@ Three things about the dev loop that are easy to get wrong and are therefore wri
 - **Vite is dev-only.** `server.mjs` stays zero-dependency and remains the production path; nothing in it
   imports Vite, and it runs with no `node_modules` at all. That is verified by serving the page on a machine
   with nothing installed.
+- **One frame makes the list move without the page asking.** The server sends `{type:"tool"}` when a live
+  model runs a command; `public/live-voice.js` forwards it and `public/fused.js` re-reads the file list. That
+  is the whole path from "the model wrote a file" to "the file is on screen": no polling, no refresh, and the
+  opening reader and scroll position survive the re-read (voicebox-beads-a93).
 - **The proxy's `/live` entry and the transport behind it.** Vite proxies `/live` with `ws: true`; the
   zero-dependency server hands the upgrade to `lib/ws-server.mjs`, which runs the session in
   `lib/live-session.mjs`. The proxy entry and the route are two halves of one path — and the route table

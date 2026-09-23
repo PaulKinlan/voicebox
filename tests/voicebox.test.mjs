@@ -376,7 +376,16 @@ test("the pages' prose matches the running system (prose sweep, 2026-09-20)", as
     const text = readFileSync(path.join(ROOT, "public", served), "utf8");
     assert.doesNotMatch(text, /escapes the workspace/, `${served} still carries the retired "escapes the workspace" message`);
   }
-  // The live-voice claim is pinned by the code it describes: no tool references.
+  // THE LIVE-VOICE CLAIM IS PINNED BY THE CODE IT DESCRIBES, and the direction of this assertion reversed
+  // on 2026-09-24 (voicebox-beads-a93) for a reason worth keeping: it used to forbid the words "tool" in
+  // live-voice.js, to keep the footer's "takes no tools yet, so it cannot write files" honest. Live tools
+  // had landed days earlier, so that footer sentence was ALREADY FALSE — and the guard, correct in
+  // mechanism, was defending a stale claim. What invalidated it was a change that made live-voice.js
+  // mention tools (forwarding the server's `{type:"tool"}` frame so the list updates when a tool writes).
+  // So the pairing is kept and flipped: the adapter must forward tool calls, and the footer must say that
+  // live voice can write files — if either half moves alone, this fails and somebody re-reads the prose.
   const live = readFileSync(path.join(ROOT, "public", "live-voice.js"), "utf8");
-  assert.doesNotMatch(live, /\btools?\b/, "live-voice.js now mentions tools — the footer's 'takes no tools yet' needs re-checking");
+  assert.match(live, /onToolCalls/, "live-voice.js no longer forwards tool calls, so a tool-written file would not reach the list");
+  assert.match(page, /Live voice runs through the same server and uses the same tools, so the model can write files/,
+    "the footer's live-voice claim does not match what live-voice.js does (it forwards tool calls)");
 });

@@ -50,6 +50,7 @@ export function createAudioClient({
   workletUrl = "pcm-worklet.js",
   onState = () => {},
   onText = () => {},
+  onToolCalls = () => {},
   onError = () => {},
   onDiagnostic = () => {},
   onLevel = () => {},
@@ -287,17 +288,28 @@ export function createAudioClient({
       reject(String(msg.message ?? "server error"), { frameKind: "control-error" });
       return;
     }
+    if (msg?.type === "tool") {
+      // THE ONE EVENT THAT CHANGES THE FOLDER WITHOUT THE PAGE ASKING (voicebox-beads-a93). This frame
+      // arrived with the live-tools work and the client deliberately ignored it — correctly, for frame
+      // honesty: an unknown-but-well-formed type is not a malformed frame, and saying so as a diagnostic
+      // beat calling it malformed. But IGNORING IT LEFT THE ROOM UNAWARE: a file written by a tool landed
+      // on disk while the list still showed the old folder, which is Paul's "files created by a tool do
+      // not appear in the UI immediately". So it is a known type now, and it is forwarded rather than
+      // diagnosed. The malformed-frame refusals below are untouched.
+      onToolCalls(Array.isArray(msg.calls) ? msg.calls : [], msg);
+      return;
+    }
     // AN UNKNOWN CONTROL TYPE IS NOT A MALFORMED FRAME. It parsed as JSON and it
-    // has a shape; it is a type this client does not handle YET — the protocol
-    // is additive (`{type:"tool"}` arrived with the live-tools work while this
-    // client was still the old one). Calling it malformed printed
-    // "Ignored a malformed frame: unrecognised control frame type \"tool\""
-    // on the real page after a SUCCESSFUL tool write: the client complaining
-    // about a perfectly good event, in the file whose job is to tell the truth
-    // about frames (coord, 2026-09-20).
+    // has a shape; it is a type this client does not handle YET — the protocol is
+    // additive, and calling an unknown type malformed printed "Ignored a malformed
+    // frame" on the real page after a SUCCESSFUL tool write: the client complaining
+    // about a perfectly good event, in the file whose job is to tell the truth about
+    // frames (coord, 2026-09-20).
     //
-    // So: ignore it, say so as a DIAGNOSTIC, and leave the malformed frames
-    // loud. Truncated, empty, odd-length and non-JSON frames are still refusals.
+    // `{type:"tool"}` has since become a type this client DOES handle (see above), so
+    // the diagnostic no longer fires for it — but the rule stands for whatever arrives
+    // next: say so as a DIAGNOSTIC, and leave the malformed frames loud. Truncated,
+    // empty, odd-length and non-JSON frames are still refusals.
     onDiagnostic({ kind: "ignored-control", type: msg?.type ?? null, message: "a control frame type this client does not handle yet" });
   }
 
