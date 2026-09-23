@@ -65,3 +65,16 @@ refused, charged attempt on a dead port, next call `budget-exhausted` — `1 of 
 The transport (which socket, which side listens) and the harness orientation (machine-held or
 page-held tier table). Both plug into `createChannel`/`createExecutorDoor` without touching the
 envelopes, the validators, or the absence vocabulary.
+
+## The `/channel` transport entitlement and authentication (server.mjs)
+
+The routed-acts WebSocket endpoint (`/channel`) enforces an entitlement gate before any socket
+can register as the executor (`pageSocket`):
+
+1. **Local page**: connects with a local Origin header (`http://127.0.0.1:<port>`, `http://localhost:<port>`, `http://[::1]:<port>`, or rewritten by the Vite proxy). Entitled by construction: same-origin browser contexts cannot forge `Origin` and the local page holds no credentials.
+2. **Paired remote executor**: any non-local connection must present a valid pairing bearer in the first hello frame within a bounded 5-second window:
+   `{"type":"hello","role":"environment","bearer":"vbx_…"}`
+   The bearer is validated against `readPairings()`.
+3. **Refusal**: unauthenticated or non-matching connections receive a named refusal (`executor-unauthenticated` or `bearer-refused`), are closed with WS code 1008, and are NEVER assigned as `pageSocket`.
+
+**What this boundary does NOT protect against:** A non-browser process running locally on the same machine can forge the `Origin: http://127.0.0.1:<port>` header on raw WebSocket requests. Closing that gap requires minting an ephemeral, per-process session token into the served HTML. This gate prevents Cross-Site WebSocket Hijacking (CSWSH) from untrusted browser tabs and unauthenticated remote network access.

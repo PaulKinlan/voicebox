@@ -349,6 +349,7 @@ const ENV_MEANING = {
   VOICEBOX_INSTANCE: "this writer's name in the active root's shared log (default `machine`)",
   VOICEBOX_BIND_RETRY_MS: "how often to retry a bind that lost the port race",
   VOICEBOX_BIND_DEADLINE_MS: "how long to keep retrying before giving up by name",
+  VOICEBOX_HELLO_BOUND_MS: "how long to wait for a hello frame on /channel or /live before refusing (default 5000ms)",
   VOICEBOX_LIVE_PROVIDER: "the live transport's fallback when the session passes no provider; `/live` passes the agent-settings provider explicitly — **not** the turn resolver",
   LIVE_PROVIDER: "the OLD NAME of `VOICEBOX_LIVE_PROVIDER`, honoured for one release",
   GEMINI_API_KEY: "the Gemini Live key — without it the live session refuses to start, by name",

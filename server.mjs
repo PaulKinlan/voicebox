@@ -1076,7 +1076,7 @@ const routes = {
   "GET /api/root": (req, res, url) => {
     if (!active) {
       const absent = noRootDeclared();
-      return json(res, 200, { ok: true, declared: false, project: null, root: null, reachableFromThisProcess: false, ...absent });
+      return json(res, 200, { ok: true, declared: false, project: null, root: null, reachableFromThisProcess: false, executor: { page: "environment", connected: pageExecutorConnected() }, ...absent });
     }
     const reach = reachableFromEnvironment(active.root, { peer: "machine", environment: SELF_ENVIRONMENT });
     return json(res, 200, {
@@ -1666,31 +1666,111 @@ server.on("upgrade", (req, socket) => {
   // page at a time — a second connection replaces the first, and the page-side root check
   // (root-not-mine) is what keeps an act addressed to a root that page does not own from
   // landing anywhere.
+  //
+  // THE EXECUTOR ENTITLEMENT GATE:
+  // An unauthenticated connection must NOT become the executor. Without this gate, any
+  // cross-origin webpage (CSWSH) or rogue local process could connect to /channel, become
+  // pageSocket, and spoof execution results (via:"page") for writes it never performed.
+  //
+  // Entitlement rule (mirroring /live):
+  //   · The LOCAL PAGE is entitled by construction: connects with same-origin header (Origin).
+  //   · Any NON-LOCAL or REMOTE connection MUST present a valid pairing bearer in hello:
+  //     {"type":"hello","role":"environment","bearer":"vbx_…"}.
+  //   · Unauthenticated or non-matching connections receive a named refusal with a remedy
+  //     ("executor-unauthenticated" / "bearer-refused") and are closed before pageSocket is set.
+  //
+  // WHAT THIS DOES NOT PROTECT AGAINST (same-machine non-browser processes are out of scope):
+  // A non-browser process on the local machine (curl, script) can forge an Origin header on raw loopback TCP.
+  // Closing that requires a per-process session token minted into the served HTML (the environment-identity milestone);
+  // this gate closes Cross-Site WebSocket Hijacking from other browser tabs and unauthenticated remote peers.
   if (url.pathname === "/channel") {
     const ws = wsUpgrade(req, socket);
     if (!ws) { socket.destroy(); return; }
-    if (pageSocket) console.error("[channel] a second page connected — replacing the first (root-not-mine guards every act)");
-    pageSocket = ws;
+
+    const selfPort = boundPort ?? PORT;
+    const localOrigins = new Set([
+      `http://127.0.0.1:${selfPort}`,
+      `http://localhost:${selfPort}`,
+      `http://[::1]:${selfPort}`,
+    ]);
+    const claimsToBeTheLocalPage = typeof req.headers.origin === "string" && localOrigins.has(req.headers.origin);
+
+    const refuseChannel = (refused, why) => {
+      try {
+        ws.send(JSON.stringify({ type: "refused", refused, why }));
+      } catch { /* the socket may be gone */ }
+      ws.close(1008, refused);
+    };
+
+    const attachExecutor = (label) => {
+      if (pageSocket && pageSocket !== ws) {
+        console.error(`[channel] a second page connected (${label}) — replacing the first (root-not-mine guards every act)`);
+      }
+      pageSocket = ws;
+      console.error(`[channel] the ${label} connected — routed acts have someone to ask`);
+      ws.on("message", (data) => {
+        if (typeof data !== "string") return; // the channel speaks JSON text; anything else is noise
+        let msg = null;
+        try { msg = JSON.parse(data); } catch { /* not JSON — not an answer */ }
+        if (msg?.type === "hello") {
+          return;
+        }
+        pageChannel.deliver(data);
+      });
+      ws.on("close", () => {
+        // Only the CURRENT socket's close empties the chair — an older tab closing must not
+        // abandon calls a newer tab could answer.
+        if (pageSocket === ws) {
+          pageSocket = null;
+          pageChannel.abandon();
+          console.error("[channel] the page disconnected — routed acts will answer no-page until it returns");
+        }
+      });
+      ws.on("error", () => {});
+    };
+
+    if (claimsToBeTheLocalPage) {
+      attachExecutor("local environment page");
+      return;
+    }
+
+    const HELLO_BOUND_MS = Number(process.env.VOICEBOX_HELLO_BOUND_MS ?? 5000);
+    const helloDeadline = setTimeout(
+      () => refuseChannel(
+        "executor-unauthenticated",
+        `this connection did not present the executor entitlement. The executor channel requires ` +
+          `the local page origin or a valid pairing bearer in the first hello frame {"type":"hello","bearer":"<bearer>"}; ` +
+          `nothing arrived within ${HELLO_BOUND_MS}ms.`,
+      ),
+      HELLO_BOUND_MS,
+    );
+
+    let awaitingHello = true;
     ws.on("message", (data) => {
-      if (typeof data !== "string") return; // the channel speaks JSON text; anything else is noise
-      let msg = null;
-      try { msg = JSON.parse(data); } catch { /* not JSON — not an answer */ }
-      if (msg?.type === "hello") {
-        console.error(`[channel] the ${msg.role ?? "environment"} page connected — routed acts have someone to ask`);
+      if (!awaitingHello) return;
+      awaitingHello = false;
+      clearTimeout(helloDeadline);
+      let frame = null;
+      try { frame = JSON.parse(String(data)); } catch { /* fall through to refusal */ }
+      const bearer = typeof frame?.bearer === "string" ? frame.bearer : null;
+      if (frame?.type !== "hello" || !bearer) {
+        refuseChannel(
+          "executor-unauthenticated",
+          'the first frame must be {"type":"hello","bearer":"<the pairing bearer this host issued>"} unless you are ' +
+            'the page this host serves — this connection did not present the executor entitlement.',
+        );
         return;
       }
-      pageChannel.deliver(data);
-    });
-    ws.on("close", () => {
-      // Only the CURRENT socket's close empties the chair — an older tab closing must not
-      // abandon calls a newer tab could answer.
-      if (pageSocket === ws) {
-        pageSocket = null;
-        pageChannel.abandon();
-        console.error("[channel] the page disconnected — routed acts will answer no-page until it returns");
+      if (!bearerAcceptedByThisHost(bearer)) {
+        refuseChannel(
+          "bearer-refused",
+          "that bearer is not one this host issued. Pair first (POST /api/pair with the host token) and send " +
+            "the bearer it returns as the hello frame's `bearer` — this connection did not present the executor entitlement.",
+        );
+        return;
       }
+      attachExecutor(`paired executor (${frame.role ?? "environment"})`);
     });
-    ws.on("error", () => {});
     return;
   }
   if (url.pathname !== "/live") { socket.destroy(); return; }
