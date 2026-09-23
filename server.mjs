@@ -743,6 +743,153 @@ async function executeViaPage(action) {
   };
 }const PORT = Number(process.env.PORT ?? 8787);
 
+// `--doctor` — WHAT IS SET, WHAT IS NOT, AND WHAT THAT MEANS. Written because the answer
+// to "why is it doing that" was always "one of eleven environment variables", and nothing
+// listed them. (Paul, 2026-09-23: "so I can see what is set and what isn't".)
+if (process.argv.includes("--doctor")) {
+  const set = (v) => v !== undefined && v !== "";
+  const mark = (v) => (set(v) ? "SET    " : "unset  ");
+  const line = (name, dflt, why) => {
+    const v = process.env[name];
+    const eff = set(v) ? v : dflt;
+    console.log(`  ${mark(v)}${name.padEnd(26)} ${String(eff).padEnd(26)} ${why}`);
+  };
+  console.log(`
+voicebox doctor — what this process would do, and why.
+
+PATHS
+`);
+  line("VOICEBOX_WORKSPACE", "(none declared)", "a root at boot; without it every write refuses");
+  line("VOICEBOX_EXTENSIONS_DIR", path.join(ROOT, "extensions"), "where extensions live");
+  line("VOICEBOX_SANDBOX_HOMES", "(default)", "sandbox home root");
+  line("VOICEBOX_INSTANCE", "machine", "this instance's name");
+
+  console.log(`
+CHOICES — these are BOOT decisions, not settings for a running session
+`);
+  line("VOICEBOX_RESOLVER", "script", "the TURN BRAIN: script | gemini");
+  line("VOICEBOX_LIVE_PROVIDER", "gemini", "the LIVE TRANSPORT: gemini | openai");
+  if (process.env.VOICEBOX_PROVIDER) {
+    console.log(`  NOTE    VOICEBOX_PROVIDER is set — it is the OLD single name. Resolver is now`);
+    console.log(`          VOICEBOX_RESOLVER and transport is VOICEBOX_LIVE_PROVIDER; they are`);
+    console.log(`          different concepts and this name selects the RESOLVER.`);
+  }
+
+  console.log(`
+NETWORK
+`);
+  line("PORT", "8787", "the API and static host");
+  line("VOICEBOX_HELLO_BOUND_MS", "(default)", "entitlement handshake bound");
+  line("VOICEBOX_BIND_DEADLINE_MS", "(default)", "port-bind deadline");
+  line("VOICEBOX_BIND_RETRY_MS", "(default)", "port-bind retry interval");
+
+  console.log(`
+CREDENTIALS — presence only, never a value
+`);
+  const key = (name, needed) => {
+    const v = process.env[name];
+    console.log(`  ${set(v) ? "SET    " : "unset  "}${name.padEnd(26)} ${set(v) ? `${String(v).length} chars` : "—"}  ${needed}`);
+  };
+  key("GEMINI_API_KEY", "needed by resolver=gemini and live provider gemini");
+  key("OPENAI_API_KEY", "needed by live provider openai");
+
+  const wantResolver = process.env.VOICEBOX_RESOLVER ?? process.env.VOICEBOX_PROVIDER ?? "script";
+  const wantLive = process.env.VOICEBOX_LIVE_PROVIDER ?? process.env.LIVE_PROVIDER ?? "gemini";
+  const missing = [];
+  if (wantResolver === "gemini" && !set(process.env.GEMINI_API_KEY)) missing.push("resolver=gemini needs GEMINI_API_KEY");
+  if (wantLive === "gemini" && !set(process.env.GEMINI_API_KEY)) missing.push("live=gemini needs GEMINI_API_KEY");
+  if (wantLive === "openai" && !set(process.env.OPENAI_API_KEY)) missing.push("live=openai needs OPENAI_API_KEY");
+
+  console.log(`
+VERDICT`);
+  console.log(`  turn brain        ${wantResolver}`);
+  console.log(`  live transport    ${wantLive}`);
+  console.log(`  root at boot      ${set(process.env.VOICEBOX_WORKSPACE) ? process.env.VOICEBOX_WORKSPACE : "none — declare one from the page, or set VOICEBOX_WORKSPACE"}`);
+  if (missing.length === 0) {
+    console.log(`  credentials       present for what is selected`);
+  } else {
+    for (const m of missing) console.log(`  MISSING           ${m}`);
+  }
+
+  // WHAT IT ACTUALLY ANSWERS, because "set" is not "working": a running server is
+  // the only place the declared root is visible, and the root is what every write
+  // depends on. Read-only; it touches nothing.
+  const port = Number(process.env.PORT ?? 8787);
+  const get = async (u) => {
+    try {
+      const r = await fetch(u, { signal: AbortSignal.timeout(1500) });
+      return await r.json();
+    } catch { return null; }
+  };
+  const health = await get(`http://127.0.0.1:${port}/api/health`);
+  console.log(`
+A SERVER ON :${port}`);
+  if (!health) {
+    console.log(`  not answering — start it with: npm run serve`);
+  } else {
+    const root = await get(`http://127.0.0.1:${port}/api/root`);
+    console.log(`  answering         yes`);
+    if (root && root.declared) {
+      console.log(`  root              ${root.project} at ${root.root?.path}  (${root.root?.kind})`);
+    } else {
+      console.log(`  root              NONE DECLARED — every write refuses with "root-not-declared"`);
+      console.log(`                    if that is not what you want: POST /api/root, or restart with`);
+      console.log(`                    VOICEBOX_WORKSPACE=/path npm run serve`);
+    }
+  }
+  console.log("");
+  process.exit(0);
+}
+
+// `--help` DONE PROPERLY, because the options were only discoverable by reading this
+// file: every one of them is an environment variable, and nothing said so. (Paul,
+// 2026-09-23: "I can't work out how to add a root or change the provider".)
+if (process.argv.includes("--help") || process.argv.includes("-h")) {
+  console.log(`
+voicebox server — the local room, its files and its live voice.
+
+  npm run serve                     start on :8787 (reloads when a source file changes)
+  npm run serve -- --help           this text
+
+A ROOT is the folder the room can read and write. There are three ways to get one:
+
+  1. From the page      the explorer's declare control (POST /api/root)
+  2. At boot            VOICEBOX_WORKSPACE=/path/to/folder npm run serve
+  3. From a worker      the browser worker declares one when it opens a project
+
+Without one, every write refuses with "root-not-declared" — that is the refusal
+naming its own remedy, not a broken room.
+
+THE TURN BRAIN decides who answers a typed turn, and is chosen at boot:
+
+  VOICEBOX_RESOLVER=gemini          the Gemini text model
+  VOICEBOX_RESOLVER=script          the scripted provider (no key, deterministic)
+
+THE LIVE TRANSPORT is separate — it decides who carries spoken voice:
+
+  VOICEBOX_LIVE_PROVIDER=gemini | openai
+
+Both are per-process: there is no first-class settings file yet, so a change means
+a restart. (The agent-settings surface covers voice and instructions for a running
+session; the resolver and transport are boot choices.)
+
+OTHER VARIABLES
+
+  PORT                        default ${process.env.PORT ?? 8787}
+  VOICEBOX_INSTANCE           this instance's name        default "machine"
+  VOICEBOX_EXTENSIONS_DIR     where extensions live      default <repo>/extensions
+  VOICEBOX_SANDBOX_HOMES      sandbox home root
+  VOICEBOX_HELLO_BOUND_MS     entitlement handshake bound
+  VOICEBOX_BIND_DEADLINE_MS   port-bind deadline
+  VOICEBOX_BIND_RETRY_MS      port-bind retry interval
+
+A note on the word "provider": VOICEBOX_RESOLVER selects the turn brain and
+VOICEBOX_LIVE_PROVIDER selects the live transport. They are different concepts.
+The old single name VOICEBOX_PROVIDER is still honoured, out loud, with a warning.
+`);
+  process.exit(0);
+}
+
 const json = (res, code, body) => {
   res.writeHead(code, { "content-type": "application/json" });
   res.end(JSON.stringify(body));

@@ -6,7 +6,7 @@
   "description": "voicebox \u2014 spoken turns become real files. Zero-dependency runtime; Vite is the dev server only.",
   "scripts": {
     "dev": "vite",
-    "serve": "node server.mjs",
+    "serve": "node --watch server.mjs",
     "start": "node server.mjs",
     "test": "node --test tests/*.mjs",
     "test:unit": "node --test $(node scripts/test-lanes.mjs --lane unit)",
@@ -19,7 +19,9 @@
     "test:shared-log": "node --test tests/shared-log.test.mjs tests/two-agents.test.mjs",
     "build:wasm": "node tools/build-wasm.mjs",
     "docs:check": "node scripts/docs-check.mjs",
-    "docs:write": "node scripts/docs-check.mjs --write"
+    "docs:write": "node scripts/docs-check.mjs --write",
+    "doctor": "node server.mjs --doctor",
+    "help": "node server.mjs --help"
   },
   "devDependencies": {
     "vite": "^7.1.7",
