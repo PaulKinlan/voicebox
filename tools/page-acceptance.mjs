@@ -38,6 +38,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { SOURCE_PREFIXES } from "../lib/browser-sources.mjs";
+import { refusalVocabulary, identifiersInRenderedText, ID_PATTERNS, JARGON, READ_VISIBLE_TEXT } from "./rendered-plain-language.mjs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -125,7 +126,33 @@ for (const d of ["Runtime", "Log", "Page", "Network"]) await send(`${d}.enable`,
 const ev = async (expr) =>
   (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId))?.result?.value;
 
+// WHAT A PERSON CAN READ, read the way a person reads it: TEXT NODES OF VISIBLE ELEMENTS.
+// Deliberately not `innerText` and deliberately not a regex over the HTML source, because both would
+// include things a person cannot see (`title`, `data-*`) — and the diagnostic allowance depends on that
+// difference: an identifier in a title PASSES, the same identifier visible FAILS (voicebox-beads-0ye).
+// code/pre/samp/kbd are skipped by ELEMENT, with the reason recorded here rather than as a word allowlist:
+// they quote commands and output, they do not make claims about the system.
+
+/** The rendered half of the plain-language check. Reads the served page, then names any identifier a
+ *  person can see — from the vocabulary THIS RUN's own responses used, and from the documented shapes. */
+async function renderedPlainLanguage(group, vocabulary, label) {
+  // The settings surface is on screen only when it is open, so open it: coverage that skips a whole
+  // surface is coverage that reports green while the surface is unread (0ye's own lesson, one level up).
+  await ev(`(() => { const d = document.getElementById("settings"); if (d && !d.open) { try { d.showModal(); } catch {} } return Boolean(d); })()`);
+  await sleep(200);
+  const text = String((await ev(READ_VISIBLE_TEXT)) ?? "");
+  const hits = identifiersInRenderedText(text, vocabulary);
+  const vacuous = text.trim().length < 40; // nothing to read is not a pass: it is a check that covered nothing
+  if (vacuous) hits.push({ token: "(no readable text)", label: "the page was not read", remedy: "navigate to the page before the rendered check runs" });
+  report(group, `what a person can read is plain language (${label})`, hits.length === 0,
+    hits.length
+      ? `${hits.length} identifier(s) VISIBLE: ${hits.slice(0, 4).map((h) => `"${h.token}" (${h.label}) → ${h.remedy}`).join("; ")}`.slice(0, 400)
+      : `${text.length} characters of visible text, this run's own refusal vocabulary included · driven pages and states only — it cannot prove anything about unvisited dialogs, another provider's text, or an inaccessible frame`);
+}
+
 let sharedRootBefore = null;
+let environmentsPayload = null;
+let sharedFilesPayload = null; // the parsed body, kept for the vocabulary (the string form is the witness)
 let sharedFilesBefore = "[]";
 let sharedServersRunning = false;
 // WHY the front is absent, recorded rather than swallowed: a skip that cannot name the address it could not
@@ -149,8 +176,12 @@ try {
   if (rootRes && uiRes) {
     sharedServersRunning = true;
     sharedRootBefore = await rootRes.json().catch(() => null);
+    // The environment rows are rendered on the page, and an unreachable one used to print its refusal
+    // IDENTIFIER as the visible label (fixed alongside this check): the vocabulary has to include them.
+    environmentsPayload = await fetch(`${SHARED_API}/api/environments`, { signal: AbortSignal.timeout(1200) }).then((r) => r.json()).catch(() => null);
     const filesRes = await fetch(`${SHARED_API}/api/files`, { signal: AbortSignal.timeout(1200) }); // the front answered above, so this is inside the same window
     const filesJson = await filesRes.json().catch(() => ({ files: [] }));
+    sharedFilesPayload = filesJson;
     sharedFilesBefore = JSON.stringify((filesJson.files ?? []).sort());
   }
 } catch (e) {
@@ -210,6 +241,19 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   report("shared-front", "environment is current (served modules carry current markers)", staleModules.length === 0,
     staleModules.length ? `STALE: ${staleModules.join(", ")} — touch the file or restart vite` : `${compared.size} modules compared`);
 
+  // ── 0a-iii. WHAT A PERSON CAN READ, on the front Paul is looking at ─────────────────────────────
+  // The vocabulary comes from the responses THIS RUN received, so the assertion is "the page does not
+  // show the identifier the server just sent" rather than "this text looks like a token" — a person's
+  // own words are content, and a pattern-only check fails on them.
+  const sharedVocabulary = new Set();
+  for (const payload of [sharedRootBefore, sharedFilesPayload, environmentsPayload]) refusalVocabulary(payload, sharedVocabulary);
+  // NAVIGATE FIRST. The first version of this check ran before the page was loaded and read `0 characters`
+  // — a green line that covered nothing, which is the whole class this session keeps finding. A rendered
+  // check that can report zero text is not a check, so zero text is a FAILURE here.
+  await send("Page.navigate", { url: SHARED_UI }, sessionId);
+  await sleep(1200);
+  await renderedPlainLanguage("shared-front", sharedVocabulary, "the shared front, as served");
+
   // ── 0a-ii. THE BROWSER'S MODULE GRAPH MUST ARRIVE AS JAVASCRIPT ──────────────────────────────
   // The page and its worker import absolute paths served by the SERVER (`/core/paths.ts`,
   // `/lib/channel.mjs`, `/browser/worker.ts`), so every front in front of that server must forward
@@ -259,19 +303,9 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   // Every hit carries a REMEDY — a refusal without a remedy is the one thing
   // this system does not do. The instruction we are following: state the
   // consequence, not the mechanism; say what a person would call it.
-  const JARGON = [
-    ["reachableFromThisProcess", "name what can reach it: \"only this page\" / \"the server too\""],
-    ["executor", "say what it does: \"the part that runs a tool\" / \"the runner\""],
-    ["admitted", "say what happened: \"allowed\" / \"approved for use here\""],
-    ["placement", "say where: \"where the tool runs\" / \"its home\""],
-    ["envelope", "say what it carries: \"the message\" / \"the request\""],
-  ];
-  const ID_PATTERNS = [
-    [/\bE\d-M\d\b/, "internal ticket id", "describe the change in words — the id belongs in our docs, not on the page"],
-    [/\be1m0\b/i, "internal ticket id", "describe the change in words — the id belongs in our docs, not on the page"],
-    [/\bN\d{1,3}\b/, "internal note number", "say the idea, not the note number"],
-    [/##?\d{2,6}\b/, "issue reference", "say the idea, not the issue number"],
-  ];
+  // THE VOCABULARY LIVES IN tools/rendered-plain-language.mjs and is used TWICE: here, on source
+  // literals (what did we write?), and further down, on RENDERED text (what is on the page?). A list
+  // that exists in two places drifts — the lesson of lib/browser-sources.mjs, one file earlier.
   const stripCommentsHtml = (t) => t
   // <style> blocks are colours and layout, not user-facing text — without this
   // a hex colour (#101014) reads as an issue reference (first run, 2026-09-20)
@@ -379,11 +413,14 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   PRIVATE_ORIGIN = started.base;
 
   // on a FRESH instance the refusal is guaranteed, so it is asserted EVERY run
+  const privateVocabulary = new Set();
   const refusal = await (await fetch(`${PRIVATE_ORIGIN}/api/root`)).json();
+  refusalVocabulary(refusal, privateVocabulary);
   const writeTry = await (await fetch(`${PRIVATE_ORIGIN}/api/turn`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ transcript: `create a file called should-refuse.txt with no` }),
   })).json();
+  refusalVocabulary(writeTry, privateVocabulary);
   report("private", "with no root declared, reads and writes refuse as root-not-declared",
     refusal.refused === "root-not-declared"
     && writeTry.result?.refused === "root-not-declared"
@@ -484,10 +521,17 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   }
   const vMs = Date.now() - vStart;
   if (vResp) {
+    refusalVocabulary(vResp, privateVocabulary);
     report("private", "a vanished root refuses by name with a remedy, fast",
       vResp?.refused === "root-vanished" && typeof vResp?.why === "string" && vResp.why.length > 0 && vMs < 2000,
       `refused=${vResp?.refused} in ${vMs}ms — why: ${String(vResp?.why ?? "").slice(0, 90)}`);
   }
+
+  // ── 0ye: WHAT A PERSON CAN READ, after the states above have been DRIVEN ────────────────────────
+  // This is the check that was missing: every refusal this run provoked has a name, and the page is
+  // read afterwards to prove the name is not what a person is shown. The vocabulary is the run's own,
+  // so an identifier that exists in no source literal — one that arrived in a payload — is still caught.
+  await renderedPlainLanguage("private", privateVocabulary, `after ${privateVocabulary.size} driven refusal name(s)`);
 } catch (e) {
   report("harness", "run completed without crashing", false, String(e?.cause?.code ? `${e.message} (${e.cause.code})` : e?.message ?? e).slice(0, 140));
 } finally {

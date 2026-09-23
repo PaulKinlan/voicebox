@@ -131,9 +131,11 @@ test("presence: environment-list-unreadable surfaces via GET /api/environments, 
 
     // Re-trigger page load / health check
     await page.reload();
+    // The identifier is the TITLE now, not the visible line (voicebox-beads-0ye), so the wait watches
+    // where it actually lives — waiting on the visible text would time out on a page that is correct.
     await page.waitFor(
-      () => document.querySelector("#where-note")?.textContent.includes("environment-list-unreadable"),
-      { label: "where-note environment-list-unreadable" },
+      () => (document.querySelector("#where-note")?.getAttribute("title") ?? "").includes("environment-list-unreadable"),
+      { label: "where-note title names environment-list-unreadable" },
     );
 
     const unreadableState = await page.evaluate(() => {
@@ -147,9 +149,15 @@ test("presence: environment-list-unreadable surfaces via GET /api/environments, 
     });
 
     assert.equal(unreadableState.dotOk, "false", "server-dot must be false on unreadable registry");
-    assert.equal(unreadableState.text, "environment-list-unreadable (fix the file)", "must explicitly surface environment-list-unreadable");
+    // THE VISIBLE LINE IS PLAIN; THE IDENTIFIER IS THE DIAGNOSTIC (voicebox-beads-0ye). The two failure
+    // classes stay distinguishable — by their sentences — while the server's own word for each lives in
+    // the title, where somebody diagnosing finds it and nobody else has to read it.
+    assert.equal(unreadableState.text, "the environment list could not be read — fix the file",
+      "the visible line must say what happened in words");
+    assert.match(unreadableState.title, /environment-list-unreadable/, "the title must still name the refusal the server used");
     assert.match(unreadableState.title, /source: GET \/api\/environments/, "title must cite GET /api/environments as source");
-    assert.notEqual(unreadableState.text, "machine-unreachable (fix the host)", "environment-list-unreadable must be distinguishable from machine-unreachable");
+    assert.notEqual(unreadableState.text, "the machine is not answering — fix the host",
+      "an unreadable list and an unreachable machine must not read the same");
 
     // 3. Restore permissions (0600) and verify recovery back to agent: script
     chmodSync(envFile, 0o600);
