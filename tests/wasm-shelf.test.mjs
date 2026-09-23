@@ -216,6 +216,18 @@ test("LGW: the grow module dies against the host's bounds, named — and the hos
   assert.equal(kat.ok, true, "the host is alive and answering after the attack");
 });
 
+test("LGW follow-up: a module file over the host's read bound is refused BEFORE the read — the parent's half costs the host's own loop (vb-resolver's fan-out review)", async () => {
+  const file = path.join(scratch, "giant.wasm");
+  const { callWasmTool, WASM_MODULE_MAX_BYTES } = await import("../lib/wasm-shelf.mjs");
+  writeFileSync(file, Buffer.alloc(WASM_MODULE_MAX_BYTES + 1, 0x60)); // one byte past the bound
+  const tool = attackTool(readFileSync(file));
+  tool.wasm.path = file;
+  const out = await callWasmTool(tool, { input: "abc" });
+  assert.equal(out.ok, false);
+  assert.equal(out.refused, "over-budget");
+  assert.match(out.why, /the module file is \d+ bytes; the host reads and hashes at most \d+/, "the refusal shows both sizes — and the read never happened");
+});
+
 test("the REAL shelf on this box, if present, admits hash and answers the KAT through the driver", async (t) => {
   if (!existsSync(REAL_SHELF)) return t.skip("no isocan shelf installed on this box");
   const out = readShelf(REAL_SHELF);
