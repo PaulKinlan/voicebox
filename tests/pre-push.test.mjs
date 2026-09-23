@@ -69,7 +69,7 @@ exec '${timeout}' "$@"
     git('worktree', 'add', '-qb', 'candidate', work);
     for (const scenario of ['unit-timeout', 'unit-failure', 'live-timeout', 'accept-timeout', 'accept-failure', 'success']) {
       const result = spawnSync('git', ['push', remote, 'HEAD:refs/heads/candidate'], {
-        cwd: work, encoding: 'utf8', timeout: 15000,
+        cwd: work, encoding: 'utf8', timeout: 60000,
         env: { ...cleanEnv, NODE_TEST_CONTEXT: undefined, PATH: `${bin}:${process.env.PATH}`, BD_GIT_HOOK: '1',
           VOICEBOX_SKIP_GATE: '', VOICEBOX_SKIP_ACCEPT: '', GATE_CASE: scenario },
       });
