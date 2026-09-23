@@ -2227,24 +2227,68 @@ function stampBuild(server) {
   const line = document.getElementById("build");
   if (!line) return;
   const page = pageBuild();
-  if (!page) return;
-  // BOTH HALVES, because they go stale independently: Vite reloads the page on
-  // every edit and the node process behind it never does. On 2026-09-19 Paul
-  // spent an hour on "the voice does not work with the API keys" while the page
-  // happily reported its own revision and said nothing about a server started
-  // before /live existed.
-  const parts = [`page ${page}`];
-  if (server?.commit) {
-    parts.push(`server ${server.branch} @ ${server.commit}${server.dirty ? " · uncommitted changes" : ""}`);
-  } else if (server === null) {
-    parts.push("server revision unknown");
-  }
-  // The comparison is on the sha alone: both halves carry branch, distance from
-  // their remote and a dirty flag, and those are allowed to differ legitimately.
+  if (!page && !server?.commit) return;
+
+  const repo = "https://github.com/PaulKinlan/voicebox";
   const sha = (text) => (text.match(/@\s*([0-9a-f]{7,40})/) ?? [])[1] ?? null;
-  const mismatch = Boolean(server?.commit) && sha(page) !== null && server.commit !== sha(page);
-  if (mismatch) parts.push("the server is a different revision — restart it");
-  line.textContent = parts.join(" · ");
+  const pageSha = sha(page);
+
+  line.replaceChildren();
+
+  const addSep = () => line.append(document.createTextNode(" · "));
+
+  const addCommitLink = (textBefore, commitSha, textAfter) => {
+    line.append(document.createTextNode(textBefore));
+    if (commitSha && /^[0-9a-f]{7,40}$/i.test(commitSha)) {
+      const a = document.createElement("a");
+      a.href = `${repo}/commit/${commitSha}`;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = commitSha;
+      line.append(a);
+    } else if (commitSha) {
+      line.append(document.createTextNode(commitSha));
+    }
+    if (textAfter) line.append(document.createTextNode(textAfter));
+  };
+
+  let hasPrev = false;
+  if (page) {
+    if (pageSha) {
+      const atIdx = page.indexOf(`@ ${pageSha}`);
+      const before = `page ${page.slice(0, atIdx)}@ `;
+      const after = page.slice(atIdx + 2 + pageSha.length);
+      addCommitLink(before, pageSha, after);
+    } else {
+      line.append(document.createTextNode(`page ${page}`));
+    }
+    hasPrev = true;
+  }
+
+  if (server?.commit) {
+    if (hasPrev) addSep();
+    const after = server.dirty ? " · uncommitted changes" : "";
+    addCommitLink(`server ${server.branch} @ `, server.commit, after);
+    hasPrev = true;
+  } else if (server === null) {
+    if (hasPrev) addSep();
+    line.append(document.createTextNode("server revision unknown"));
+    hasPrev = true;
+  }
+
+  const mismatch = Boolean(server?.commit) && pageSha !== null && server.commit !== pageSha;
+  if (mismatch) {
+    if (hasPrev) addSep();
+    line.append(document.createTextNode("the server is a different revision — restart it"));
+    hasPrev = true;
+  }
+
+  if (hasPrev) addSep();
+  const clLink = document.createElement("a");
+  clLink.href = "changelog.html";
+  clLink.textContent = "change log";
+  line.append(clLink);
+
   line.dataset.dirty = String(mismatch || Boolean(server?.dirty) || page.includes("uncommitted"));
 }
 

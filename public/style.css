@@ -305,6 +305,8 @@ html:has(dialog.settings[open]) { overflow: hidden; }
 .foot-fact { margin: 0; font-size: .75rem; color: color-mix(in srgb, var(--muted) 80%, var(--ink)); }
 .build { font: .6875rem/1.5 ui-monospace, monospace; color: color-mix(in srgb, var(--muted) 55%, var(--ground)); }
 .build[data-dirty="true"] { color: var(--warn); }
+.build a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.build a:hover { color: var(--ink); }
 .no-script { margin: 24px; padding: 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
 
 /* ── small, short and motion-sensitive ─────────────────────────────── */

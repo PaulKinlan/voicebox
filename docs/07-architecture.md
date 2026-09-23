@@ -214,4 +214,4 @@ Audio worklets loaded by that code: `pcm-worklet.js`.
   platform primitives: native modal `<dialog>` (with `closedby="any"` and unified light-dismiss geometry fallbacks),
   `container: env-dialog / inline-size` container queries for component-isolated responsive layout, `<search>` landmark
   semantics, scroll containment (`overscroll-behavior: contain`, `scrollbar-gutter: stable`), keyboard-focusable
-  scrollable regions (`<pre tabindex="0">`), and IME composition guards.
+  scrollable regions (`<pre tabindex="0">`), IME composition guards, and GitHub-linked commit references in `#build` alongside a quick link to `changelog.html` (`GET /api/changelog`).
