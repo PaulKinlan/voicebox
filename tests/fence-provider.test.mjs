@@ -22,7 +22,11 @@ let scratch;
 let homes;
 
 test.before(() => {
-  scratch = mkdtempSync(path.join(os.tmpdir(), "voicebox-fence-"));
+  // NOT os.tmpdir(): under a systemd --user unit with PrivateTmp=yes the caller's /tmp is
+  // HIDDEN in the unit's mount namespace, so a sandbox home under /tmp fails to bind and the
+  // unit dies 226/NAMESPACE before the fence runs (k3's S2 finding, 2026-09-23 — the scratch
+  // lives in $HOME for that reason, and is removed in after()).
+  scratch = mkdtempSync(path.join(os.homedir(), ".voicebox-fence-test-"));
   homes = path.join(scratch, "sandbox-homes");
   mkdirSync(homes, { recursive: true });
   process.env.VOICEBOX_SANDBOX_HOMES = homes;

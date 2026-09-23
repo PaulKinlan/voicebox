@@ -166,6 +166,36 @@ try {
     console.log(`── phase A: shared front ${SHARED_UI} (GET-only; witness below) · measuring tree: ${TREE}${TREE === ROOT ? " (default: this repo)" : ""}`);
 
   const servedRefs = [];
+// ── WHICH TREE IS THE FRONT? The markers below compare the front's SERVED modules
+// against THIS tree's disk — an answer only when the front serves THIS tree.
+// Measured 2026-09-23 (the moving-object repro): a front serving another branch failed
+// a push with 'STALE: fused.js' while nothing was wrong with the branch, and the same
+// run against a front serving the measured tree passed. So the check reads the front's
+// OWN stamp and the tree's HEAD, and when they differ it SKIPS BY NAME — the currency of
+// a shared front is the landing's business, not this push's. A skip is named, never a
+// pass and never a failure.
+let currencySkipped = null;
+const treeGit = (args, fallback) => {
+  try { return execFileSync("git", ["-C", TREE, ...args], { encoding: "utf8" }).trim() || fallback; } catch { return fallback; }
+};
+const treeId = {
+  commit: treeGit(["rev-parse", "--short", "HEAD"], "unknown"),
+  dirty: treeGit(["status", "--porcelain", "--untracked-files=no"], "") !== "",
+};
+const frontHtml = await (await fetch(`${SHARED_UI}/`)).text();
+const stamp = frontHtml.match(/name="voicebox-build" content="([^"]*)"/)?.[1] ?? "";
+const stampCommit = stamp.match(/@\s*([a-f0-9]+)/i)?.[1] ?? null;
+if (!stamp || stamp.includes("__VOICEBOX_BUILD_STAMP__") || !stampCommit) {
+  currencySkipped = `the front does not name the tree it serves (no build stamp at ${SHARED_UI}/)`;
+} else if (treeId.dirty) {
+  currencySkipped = `the measured tree has uncommitted changes the front cannot serve (tree ${treeId.commit}, dirty)`;
+} else if (stampCommit !== treeId.commit) {
+  currencySkipped = `the front serves ${stamp}; this run measures ${treeId.commit} — different trees, so served-vs-disk is not this push's question`;
+}
+if (currencySkipped) {
+  console.log(`SKIP  [shared-front]  environment currency — ${currencySkipped}`);
+}
+
 // EVERY page in public/, not just index — environment.html loaded a module
 // that 404'd through the dev front while its HTML returned 200, and a walk of
 // index.html alone could never see it (Paul's console, 2026-09-20).
@@ -180,7 +210,7 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
 }
   const staleModules = [];
   const compared = new Set();
-  while (servedRefs.length) {
+  while (!currencySkipped && servedRefs.length) {
     const ref = servedRefs.shift();
     if (compared.has(ref) || /^https?:/.test(ref)) continue;
     compared.add(ref);
@@ -206,8 +236,10 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
         servedRefs.push(path.posix.join(path.posix.dirname(ref), m[1] ?? m[2]));
     }
   }
-  report("shared-front", "environment is current (served modules carry current markers)", staleModules.length === 0,
-    staleModules.length ? `STALE: ${staleModules.join(", ")} — touch the file or restart vite` : `${compared.size} modules compared`);
+  if (!currencySkipped) {
+    report("shared-front", "environment is current (served modules carry current markers)", staleModules.length === 0,
+      staleModules.length ? `STALE: ${staleModules.join(", ")} — touch the file or restart vite` : `${compared.size} modules compared`);
+  }
 
   // ── 0b. plain language: internal identifiers and jargon are not user-facing ──
   // Paul, 2026-09-20: "make it a priority to use plain language in this project
