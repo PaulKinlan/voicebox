@@ -71,7 +71,15 @@
         <form class="envs-form" method="dialog">
           <div class="settings-head">
             <h2 id="envs-title">Environments</h2>
+            <!-- THE HEADING'S EXPLANATION, for anyone who asks: what an environment is, what the two
+                 boxes mean, and what adding one gets you. It EXPLAINS THE CHOICES and does not restate
+                 the state — the list below already shows what is reachable and what is not, and a
+                 tooltip that repeats it would be the third copy of one fact. The text lives once, in
+                 the paragraph below, and the button's tooltip is set from it at boot so the two cannot
+                 drift apart. -->
+            <button class="icon-button" id="envs-help" type="button" aria-label="What these options mean" aria-describedby="envs-help-text">?</button>
             <button class="icon-button" id="envs-close" type="submit" aria-label="Close environments"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+            <p class="sr-only" id="envs-help-text">An environment is a place your project can live and turns can run: this browser, a server on this machine, or a server on another machine you can reach. The first box is what you will call it in the list; the second is how to reach that machine's server — the same address you would open in a browser, for example http://127.0.0.1:8787. Turns run on a server environment while that server is answering, and a server that is not answering says so when you look.</p>
           </div>
           <ul class="env-list" id="env-list"></ul>
           <div class="env-add-block">
