@@ -52,6 +52,7 @@ import {
 import { validate, type ToolSchema } from "../core/schema.ts";
 import * as idb from "./idb.ts";
 import { handleStorage, opfsStorage, type Entry, type Storage } from "./storage.ts";
+import { startActs } from "./acts.ts";
 
 /**
  * WHO THIS AGENT IS. One worker is one agent instance — §9's actor model in one line: an agent is a
@@ -966,6 +967,15 @@ async function listView(message: Record<string, unknown>) {
     if (body.ok === false) {
       return fail((body.refused as FailureCode) ?? "root-unreachable", String(body.why ?? "the loop cannot reach this root"), JSON.stringify(body.root ?? {}));
     }
+    // A ROUTED listing is the page's root answered through the channel — the room's file list
+    // wants exactly that; THIS view is titled "the machine's root" and must not render the
+    // page's files as the machine's own (7cd: a panel names the authority it shows, or refuses).
+    if (body.via === "page") {
+      return fail(
+        "root-not-reachable-from-here" as FailureCode,
+        "the active root belongs to the page, so the machine has no view of it — the room's listing shows it through the page (via: \"page\")",
+      );
+    }
     const entries: Entry[] = (body.entries ?? []).map((f: Record<string, any>) => ({
       name: String(f.name),
       kind: f.kind === "directory" ? "directory" : "file",
@@ -1238,3 +1248,17 @@ self.onmessage = async (event: MessageEvent) => {
 };
 
 export { wasmInstance };
+
+// ── the routed-acts door (core/dispatch.ts's page half) ─────────────────────
+// The server asks over /channel when the ACTIVE root is one only the page can act on; this
+// page performs the act against the CURRENT project's storage and answers observed facts.
+// Everything is injected — acts.ts imports no browser module — so the same door runs in a
+// node test. The hooks read the live `current`/`storage` at call time, so a project change
+// needs no notification: the next call sees it.
+startActs({
+  getCurrentDescriptor: () => (current ? descriptorOf(current) : null),
+  getStorage: () => storage,
+  checkWritable: () => writable(""),
+  recordAct: (act, decision, rule, result, observed, turn) => record(act, decision, rule, result, observed, turn),
+  log: (line) => console.error(line),
+});

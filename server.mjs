@@ -12,6 +12,8 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { resolveTurn } from "./lib/resolver.mjs";
 import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, reachableFromEnvironment, resolveInRoot, rootVanished } from "./core/root.ts";
+import { CORE_FS_DESCRIPTOR, dispatchFor } from "./core/dispatch.ts";
+import { createChannel } from "./lib/channel.mjs";
 import {
   AGENT_BASE_INSTRUCTION,
   DEFAULT_AGENT_SETTINGS,
@@ -544,7 +546,73 @@ if (legacyResolverEnv) {
     : `[voicebox] VOICEBOX_PROVIDER is now VOICEBOX_RESOLVER (it selects the turn resolver, not the live provider) — honouring ${JSON.stringify(legacyResolverEnv)} for this release`);
 }
 const PROVIDER = process.env.VOICEBOX_RESOLVER ?? legacyResolverEnv ?? "script";
-const PORT = Number(process.env.PORT ?? 8787);
+
+// ── the routed-acts channel (core/dispatch.ts) ──────────────────────────────
+// The page is a PLACEMENT the server can ask to act. The channel is created once; the socket
+// behind it is whichever environment page connected last. Its absence is never silent: the
+// wire's own family answers (`no-page`, `page-timeout`, `page-closed`), so a turn against a
+// page-owned root with no page open gets a named state and a remedy — "the page that owns
+// this root is not open — open it and the turn will land" — never a hang.
+let pageSocket = null;
+const pageChannel = createChannel({
+  peer: "page",
+  environment: SELF_ENVIRONMENT,
+  connected: () => pageSocket !== null,
+  send: (s) => pageSocket?.send(s),
+});
+const pageExecutorConnected = () => pageSocket !== null;
+
+// One ask, shaped the wire's way: attributed to the built-in file descriptor, carrying the
+// ACTIVE root so the page can check the call is really for its project (root-not-mine), with
+// containment RE-RUN page-side (core/dispatch.ts states the rule; browser/acts.ts enforces it).
+function askPage(action) {
+  return pageChannel.ask({
+    tool: action.verb,
+    descriptorId: CORE_FS_DESCRIPTOR,
+    args: {
+      root: active.root,
+      name: String(action.name ?? ""),
+      ...(action.content != null ? { content: String(action.content) } : {}),
+    },
+    boundsEcho: {},
+  });
+}
+
+/**
+ * The page half of the dispatch: the machine cannot act on this root, so the page is asked.
+ *
+ * THE TRUST BOUNDARY (coord, 2026-09-20 — written here because a result is where it is read):
+ * the server CANNOT verify a page-side act by reading the file itself. `observed` below is the
+ * PAGE'S account of its own storage, and `via: "page"` is on every result so a reader can
+ * always tell whose bytes a result quotes. The discipline around the account is the same as
+ * the machine's — containment, named refusals, an audit entry read back from the world — and
+ * the limit is stated in core/dispatch.ts and browser/acts.ts, not hidden.
+ */
+async function executeViaPage(action) {
+  const answer = await askPage(action);
+  if (!answer.ok) {
+    // The missing audit entry is REPORTED, as on the machine path: no entry exists anywhere
+    // (the page is the writer, and it never ran the act), and logRefused says why.
+    return { ok: false, refused: answer.refused, error: `refused: ${answer.refused}`, why: answer.why, via: "page", root: active.root, logged: null, logRefused: answer.refused };
+  }
+  const observed = answer.observed ?? {};
+  if (action.verb === "list") {
+    return { ok: true, action: `listed ${active.project}`, files: observed.files ?? [], entries: observed.entries ?? [], via: "page", root: active.root };
+  }
+  if (action.verb === "read") {
+    return { ok: true, action: observed.name ?? action.name, content: observed.content ?? "", via: "page", root: active.root, logged: observed.auditSeq ?? null };
+  }
+  // write — the action line carries the provenance, because this line is what the room prints.
+  return {
+    ok: true,
+    action: `wrote ${observed.name ?? action.name} (${observed.bytes ?? 0} bytes) — observed by the page`,
+    file: observed.name ?? action.name,
+    via: "page",
+    root: active.root,
+    logged: observed.auditSeq ?? null,
+    observed,
+  };
+}const PORT = Number(process.env.PORT ?? 8787);
 
 const json = (res, code, body) => {
   res.writeHead(code, { "content-type": "application/json" });
@@ -694,7 +762,7 @@ const MIME_TYPES = {
 // Source served as source: the E1-M0 page imports core/ and browser/ directly, so the browser
 // runs the SAME files the tests run and there is no build step and no second copy to drift from
 // (N18, one level up). Node's own type-stripping is the transform — not a compiler, not a dep.
-const SOURCE_DIRS = new Set(["core", "browser", "tools", "tests"]);
+const SOURCE_DIRS = new Set(["core", "browser", "tools", "tests", "lib"]); // lib: the page imports lib/channel.mjs through browser/acts.ts — same source-of-source rule as core/
 
 function serveSource(res, url) {
   const rel = url.pathname.replace(/^\/+/, "");
@@ -759,6 +827,13 @@ async function execute(action) {
   if (!active) return { ...noRootDeclared(), error: `refused: ${ROOT_NOT_DECLARED}`, root: null, logged: null };
   const vanished = rootMissing();
   if (vanished) return { ...vanished, error: `refused: ${vanished.refused}`, root: active.root, logged: null };
+  // THE ROUTER (core/dispatch.ts): who acts on this root? `machine` falls through to the
+  // unchanged local path below; `page` asks the connected environment page; the refusal
+  // survives only when neither can act. ONE decision, one place — the REST turn path here,
+  // and the live tool-call path when it lands, call the same executor.
+  const dispatch = dispatchFor(active.root, SELF_ENVIRONMENT);
+  if (dispatch.refuse) return { ok: false, refused: dispatch.refuse.refused, error: `refused: ${dispatch.refuse.refused}`, why: dispatch.refuse.why, root: active.root, logged: null };
+  if (dispatch.executeOn === "page") return executeViaPage(action);
   if (action.verb === "list") {
     const reach = reachableFromEnvironment(active.root, { peer: "machine", environment: SELF_ENVIRONMENT });
     if (!reach.ok) return { ok: false, refused: reach.refused, error: `refused: ${reach.refused}`, why: reach.why, root: active.root };
@@ -1011,6 +1086,10 @@ const routes = {
       reachableFromThisProcess: reach.ok,
       refused: reach.ok ? null : reach.refused,
       why: reach.ok ? null : reach.why,
+      // Who performs the act (core/dispatch.ts) — and whether that someone is here right now.
+      // The room keys its honesty off these two fields (voicebox-ui, 2026-09-20).
+      actsVia: dispatchFor(active.root, SELF_ENVIRONMENT).executeOn === "page" ? "page" : "server",
+      executor: { page: "environment", connected: pageExecutorConnected() },
       declaredAt: active.declaredAt,
     });
   },
@@ -1128,12 +1207,15 @@ async function handle(req, res) {
           facts: ROOT_FACTS.machine,
           description: describeRoot(active.root),
           reachableFromThisProcess: true,
+          actsVia: "server",
+          executor: { page: "environment", connected: pageExecutorConnected() },
           declaredAt: active.declaredAt,
         });
       }
 
-      // opfs | handle: the page's roots. Recorded as the active project, and this process says
-      // plainly that the act belongs to the page.
+      // opfs | handle: the page's roots. Recorded as the active project; the machine cannot
+      // act on them directly, and since core/dispatch.ts the act ROUTES to the page — the
+      // response says so, and whether the page that owns them is connected right now.
       active = { project, root: { kind: root.kind, environment: SELF_ENVIRONMENT, ...(root.path ? { path: String(root.path) } : {}), ...(root.id ? { id: String(root.id) } : {}) }, declaredAt: new Date().toISOString() };
       const reach = reachableFromEnvironment(active.root, { peer: "machine", environment: SELF_ENVIRONMENT });
       return json(res, 200, {
@@ -1145,6 +1227,8 @@ async function handle(req, res) {
         reachableFromThisProcess: false,
         refused: reach.refused,
         why: reach.why,
+        actsVia: "page",
+        executor: { page: "environment", connected: pageExecutorConnected() },
         declaredAt: active.declaredAt,
       });
     }));
@@ -1173,6 +1257,14 @@ async function handle(req, res) {
     if (!active) return json(res, 200, { ...noRootDeclared(), root: null, files: [], entries: [] });
     const vanishedFiles = rootMissing();
     if (vanishedFiles) return json(res, 200, { ...vanishedFiles, root: active.root, files: [], entries: [] });
+    // A page-owned root lists through the page (core/dispatch.ts): the room sees the same
+    // files whichever root kind the project is on, and the answer says whose listing it is.
+    if (dispatchFor(active.root, SELF_ENVIRONMENT).executeOn === "page") {
+      const answer = await askPage({ verb: "list", name: "" });
+      if (!answer.ok) return json(res, 200, { ok: false, refused: answer.refused, why: answer.why, via: "page", root: active.root, files: [], entries: [] });
+      const observed = answer.observed ?? {};
+      return json(res, 200, { ok: true, via: "page", root: active.root, project: active.project, files: observed.files ?? [], entries: observed.entries ?? [] });
+    }
     const reach = reachableFromEnvironment(active.root, { peer: "machine", environment: SELF_ENVIRONMENT });
     if (!reach.ok) {
       return json(res, 200, { ok: false, refused: reach.refused, why: reach.why, root: active.root, files: [], entries: [] });
@@ -1197,6 +1289,16 @@ async function handle(req, res) {
     if (!active) return json(res, 409, { ...noRootDeclared() });
     const vanishedRead = rootMissing();
     if (vanishedRead) return json(res, 409, { ...vanishedRead, root: active.root });
+    // A page-owned root reads through the page (core/dispatch.ts) — the room's reader works
+    // for a picked folder exactly as for a machine folder, and says whose bytes it shows.
+    if (dispatchFor(active.root, SELF_ENVIRONMENT).executeOn === "page") {
+      const answer = await askPage({ verb: "read", name });
+      if (!answer.ok) {
+        return json(res, answer.refused === "not-found" ? 404 : 409, { ok: false, refused: answer.refused, error: `refused: ${answer.refused}`, why: answer.why, via: "page", root: active.root });
+      }
+      const observed = answer.observed ?? {};
+      return json(res, 200, { ok: true, via: "page", name, content: observed.content ?? "", bytes: observed.bytes ?? 0 });
+    }
     const resolved = resolveActive(name);
     if (!resolved.ok) {
       return json(res, resolved.refused === "root-not-reachable-from-here" ? 409 : 403, {
@@ -1554,6 +1656,40 @@ process.on("unhandledRejection", (e) => console.error(`[unhandledRejection] ${e?
 // {"type":"stop"}). The session owns the readiness gate and the model label.
 server.on("upgrade", (req, socket) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
+  // ── the routed-acts channel ───────────────────────────────────────────────
+  // The environment page connects here and ANSWERS acts the server routes to it
+  // (core/dispatch.ts: a page-owned root is executed by the page). JSON text frames only:
+  // a hello, then answer envelopes the channel settles waiting calls with. One executor
+  // page at a time — a second connection replaces the first, and the page-side root check
+  // (root-not-mine) is what keeps an act addressed to a root that page does not own from
+  // landing anywhere.
+  if (url.pathname === "/channel") {
+    const ws = wsUpgrade(req, socket);
+    if (!ws) { socket.destroy(); return; }
+    if (pageSocket) console.error("[channel] a second page connected — replacing the first (root-not-mine guards every act)");
+    pageSocket = ws;
+    ws.on("message", (data) => {
+      if (typeof data !== "string") return; // the channel speaks JSON text; anything else is noise
+      let msg = null;
+      try { msg = JSON.parse(data); } catch { /* not JSON — not an answer */ }
+      if (msg?.type === "hello") {
+        console.error(`[channel] the ${msg.role ?? "environment"} page connected — routed acts have someone to ask`);
+        return;
+      }
+      pageChannel.deliver(data);
+    });
+    ws.on("close", () => {
+      // Only the CURRENT socket's close empties the chair — an older tab closing must not
+      // abandon calls a newer tab could answer.
+      if (pageSocket === ws) {
+        pageSocket = null;
+        pageChannel.abandon();
+        console.error("[channel] the page disconnected — routed acts will answer no-page until it returns");
+      }
+    });
+    ws.on("error", () => {});
+    return;
+  }
   if (url.pathname !== "/live") { socket.destroy(); return; }
   const ws = wsUpgrade(req, socket);
   if (!ws) { socket.destroy(); return; }

@@ -165,14 +165,18 @@ test("a root this process cannot reach is REFUSED BY NAME, and the listing refus
 
     const write = await turn("create a file called nowhere.txt with nope");
     assert.equal(write.result?.ok, false, `the loop wrote into a ${root.kind} root it cannot reach`);
-    assert.equal(write.result.refused, "root-not-reachable-from-here", JSON.stringify(write.result));
-    assert.match(write.result.why, /only the page/, "the refusal does not say who can act");
+    // The act ROUTES now (core/dispatch.ts) — and with no page connected, the channel's own
+    // absence family answers: `no-page`, naming the missing side. The declaration's refusal
+    // above is unchanged: the machine still cannot act; the page is simply not here.
+    assert.equal(write.result.refused, "no-page", JSON.stringify(write.result));
+    assert.equal(write.result.via, "page", "the routing must say where the act was sent");
+    assert.match(write.result.why, /page/, "the refusal does not say who can act");
 
     // And the listing refuses too: showing files from the last machine root would be the two-root
     // bug again, one panel at a time.
     const listing = await files();
     assert.equal(listing.ok, false, `the listing served a ${root.kind} root from the machine: ${JSON.stringify(listing)}`);
-    assert.equal(listing.refused, "root-not-reachable-from-here");
+    assert.equal(listing.refused, "no-page");
     assert.deepEqual(listing.entries, []);
   }
 });
@@ -186,9 +190,9 @@ test("an unreachable root is refused by name, NOT logged, and nothing lands in t
   assert.equal(declared.body.ok, true);
 
   const write = await turn("create a file called nowhere.txt with nope");
-  assert.equal(write.result?.refused, "root-not-reachable-from-here", JSON.stringify(write.result));
+  assert.equal(write.result?.refused, "no-page", JSON.stringify(write.result));
   assert.equal(write.result.logged, null, "the loop claims to have written an entry for a root it cannot reach");
-  assert.equal(write.result.logRefused, "root-not-reachable-from-here", "the missing entry is not reported");
+  assert.equal(write.result.logRefused, "no-page", "the missing entry is not reported");
 
   // And the tree: the cwd the server ran in is still empty — no v1/, no .audit/, nothing.
   assert.deepEqual(readdirSync(serverCwd), [], `the loop wrote into its own working directory: ${JSON.stringify(readdirSync(serverCwd))}`);
