@@ -316,22 +316,54 @@ function renderEmptyState() {
     return;
   }
 
-  // 3. a root this server cannot act on (a picked folder, this origin's
-  //    storage): name the kind FIRST, then the reachability, then what to do.
-  if (activeRoot !== undefined && !activeRoot.reachableFromThisProcess) {
+  // 3. A ROOT THIS SERVER CANNOT ACT ON — which is NOT the same as a root nothing can act on.
+  //    `reachableFromThisProcess` answers "can the SERVER act"; `actsVia` + `executor` answer
+  //    "can ANYTHING act, and is it here right now". They are two questions, and the page used to
+  //    answer the first with the second one's words: it told a person "Turns cannot save into this
+  //    folder" about a folder the tab in front of them could write into perfectly well once routed
+  //    (voicebox-beads-*, held until the router landed: actsVia/executor from vb-resolver).
+  const serverCanAct = activeRoot === undefined || activeRoot.reachableFromThisProcess === true;
+  const pageOwnsRoot = activeRoot?.actsVia === "page";
+  const pageIsHere = pageOwnsRoot && activeRoot?.executor?.connected === true;
+  // The page owns this folder AND is connected: a turn is routed to it, so the room is usable and
+  // says nothing about refusal. (The page may still refuse a turn it cannot serve — a picked folder
+  // without a write grant answers the page's own `needs-gesture`, and that sentence arrives from the
+  // side that knows rather than being guessed here.)
+  if (activeRoot !== undefined && !serverCanAct && !pageIsHere) {
     const where = activeRoot.facts?.where ?? "this project's root";
-    // The ACTION is the headline; the limitation is the sentence under it. A
-    // first-time reader should meet the next step first, not a list of what is
-    // missing (coord, 2026-09-20).
-    // The state's cause, once, then the remedy. The kinds themselves are taught
-    // where the choice is made (the environment page), not repeated here.
-    headline.textContent = "Turns cannot save into this folder.";
-    next.textContent = `This folder belongs to this browser tab, and turns run in the local server — so a typed turn is refused: ${where} is not somewhere the server can save. Choose a folder on this machine in the environment page, or do the work in the tab that holds this folder.`;
-    if (els.emptyWhy) { els.emptyWhy.textContent = activeRoot.why ?? ""; els.emptyWhy.hidden = !activeRoot.why; }
+    // Two causes, two sentences, and each names its own remedy. "The tab is not open" and "no part of
+    // the system can save here" are different problems with different next steps.
+    if (pageOwnsRoot) {
+      headline.textContent = "The tab that holds this folder is not open.";
+      next.textContent = `${where} belongs to a browser tab, and that tab is not connected to this server right now — so a typed turn has nothing to hand the work to. Open the tab that holds this folder, or choose a folder on this machine in the environment page.`;
+    } else {
+      headline.textContent = "Turns cannot save into this folder.";
+      next.textContent = `This folder belongs to this browser tab, and turns run in the local server — so a typed turn is refused: ${where} is not somewhere the server can save. Choose a folder on this machine in the environment page, or do the work in the tab that holds this folder.`;
+    }
+    // The detail line: the CAUSE in plain words, with the seam's own sentence kept on the element's
+    // title for anyone who asks for it. Its `why` for a page-owned root is written to explain the
+    // router — "this placement is the machine", "the act belongs to that side, not to this one" — and
+    // the owner's rule names "placement" as jargon that must not reach a person. (The same sentence
+    // stays visible where the platform's own refusal text belongs: turn results, verbatim.)
+    if (els.emptyWhy) {
+      const detail = pageOwnsRoot
+        ? "This folder is in the tab's own storage, so only that tab can write into it — and it is not connected to this server right now."
+        : (activeRoot.why ?? "");
+      els.emptyWhy.textContent = detail;
+      els.emptyWhy.hidden = !detail;
+      if (activeRoot.why) els.emptyWhy.title = activeRoot.why;
+    }
     if (els.emptyAction) els.emptyAction.hidden = false;
     if (els.emptyLink) els.emptyLink.textContent = "Open the environment page";
     showSamples(false);
-    setComposerEnabled(false, activeRoot.why ?? "the open root is one only the page can act on");
+    // The composer's reason is written for the person reading it, not inherited from the seam: the
+    // server's `why` for a page-owned root is written to explain the router ("this placement is the
+    // machine", "the act belongs to that side") and a tooltip that says "placement" is jargon where a
+    // plain cause belongs. The seam's sentence still appears in the empty state's detail line, which is
+    // the place for the longer explanation.
+    setComposerEnabled(false, pageOwnsRoot
+      ? "the tab that holds this folder is not connected, so a turn has nothing to hand the work to"
+      : (activeRoot.why ?? "the open root is one only the page can act on"));
     return;
   }
 
@@ -411,7 +443,10 @@ function renderListingRoot() {
 function render() {
   const count = entries.length;
   if (!els.files || !els.made || !els.count) return;
-  const writable = activeRoot === undefined || activeRoot?.reachableFromThisProcess === true;
+  // Usable when the SERVER acts, or when the page that owns the root is connected and will act.
+  const writable = activeRoot === undefined
+    || activeRoot?.reachableFromThisProcess === true
+    || (activeRoot?.actsVia === "page" && activeRoot?.executor?.connected === true);
   const matched = entries.filter(matchesFilter);
   const shown = showAllFiles ? matched : matched.slice(0, MAX_CARDS);
 
@@ -501,7 +536,13 @@ function renderAbout() {
     const root = activeRoot.root ?? {};
     const where = activeRoot.facts?.where ?? root.kind ?? "a root";
     const name = root.path ?? root.name ?? root.label ?? "";
-    lines.push(`Turns save into ${where}${name ? ` · ${name}` : ""}.`);
+    // WHO WRITES is part of where the work goes (the drawer is the one place allowed a second fact).
+    // A folder in this tab's storage and a folder on this machine read identically in a path, and they
+    // behave differently the moment the tab closes.
+    const writer = activeRoot.actsVia === "page"
+      ? (activeRoot.executor?.connected ? ", written by the tab that holds it" : ", and the tab that holds it is not open, so turns cannot save there yet")
+      : "";
+    lines.push(`Turns save into ${where}${name ? ` · ${name}` : ""}${writer}.`);
   }
   const page = pageBuild();
   const server = window.__voiceboxServerBuild;
@@ -936,6 +977,15 @@ async function load() {
   }
 }
 
+/**
+ * WHOSE BYTES THESE ARE. `via` says which side performed the read: the server's own disk, or the page
+ * that holds a picked folder. "read from disk" was already a lie once, for a source that was not the
+ * server's — so the line names the side rather than assuming it.
+ */
+function readProvenance(via) {
+  return via === "page" ? "read by the tab that holds this folder" : "read from disk";
+}
+
 /** How to name a file's home in one string, whatever kind of root it is. */
 // The same reader, reading from the folder this tab opened: the facts say which
 // source and that it is read-only, because "read from disk" was already a lie
@@ -988,7 +1038,7 @@ async function showFile(name) {
       const content = answer.content ?? "";
       // One short line: on a phone the old facts wrapped to five lines above a
       // two-line note (astra's landing review). The path is the title.
-      els.readerFacts.textContent = `${size(content)} · read from disk`;
+      els.readerFacts.textContent = `${size(content)} · ${readProvenance(answer.via)}`;
       els.readerFacts.title = `${rootLabel()}${name}, read just now`;
       els.readerBody.textContent = content;
       els.reader.dataset.state = "ready";
@@ -1074,7 +1124,7 @@ async function send(said) {
     finish(transcript, result.action ? `${result.action}${landed ? ` in ${landed}` : ""}` : "done", "good");
     if (answer.action?.verb === "read" && typeof result.content === "string") {
       els.readerTitle.textContent = result.action;
-      els.readerFacts.textContent = `${size(result.content)} · read from disk`;
+      els.readerFacts.textContent = `${size(result.content)} · ${readProvenance(result.via)}`;
       els.readerFacts.title = `${rootLabel()}${result.action}, read just now`;
       els.readerBody.textContent = result.content;
       els.reader.dataset.state = "ready";
