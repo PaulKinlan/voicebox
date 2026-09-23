@@ -306,8 +306,8 @@ export function admit(
   const gets: string[] = [];
   if (descriptor.tools.some((t) => t.primitive === "wasm")) {
     // The admission plan is the surface a person reads BEFORE deciding — so it names what the
-    // mechanism does NOT bound, in the same place it names what it enforces.
-    gets.push("wasm: the digest binds BYTES, never behavior — an admitted module is trusted for its time and memory (neither is bounded: no fuel, memory.grow needs no import)");
+    // mechanism binds and what it merely trusts, in the same place it names what it enforces.
+    gets.push("wasm: the digest binds BYTES, never behavior — time is bounded by the host's call deadline and memory by the worker's resource limits (host constants, not admission data); behavior within those bounds is trusted");
   }
   for (const cap of caps) {
     const mechanism = MECHANISMS[placement][cap];

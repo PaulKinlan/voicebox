@@ -141,6 +141,81 @@ test("a module whose memory does not cover the declared ABI is a NAMED refusal, 
   assert.match(out.why, /memory is \d+ bytes but the declared ABI needs \d+/, "the refusal shows both sizes — evidence, not a stack trace");
 });
 
+// ── voicebox-beads-lgw: the resource bounds, proven against the reviewer's attacks ─────────
+
+/** Hand-assembled attack modules (no wabt), equivalents of vb-resolver's originals. Each
+ *  validates, and each hashes to whatever its descriptor pins — so admission passes them BY
+ *  CONSTRUCTION, which is the point: the digest binds bytes, never behavior. */
+const leb = (n) => { const out = []; do { let b = n & 0x7f; n >>>= 7; if (n) b |= 0x80; out.push(b); } while (n); return out; };
+const section = (id, body) => [id, ...leb(body.length), ...body];
+const name = (s) => [...leb(s.length), ...Buffer.from(s)];
+const attackModule = (bodyBytes) => Buffer.from([
+  0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+  ...section(1, [...leb(1), 0x60, 0x01, 0x7f, 0x01, 0x7f]), // type: (i32) -> i32
+  ...section(3, [...leb(1), 0x00]), // one function, type 0
+  ...section(5, [...leb(1), 0x00, 0x01]), // one memory, min 1 page
+  ...section(7, [...leb(2), ...name("memory"), 0x02, 0x00, ...name("sha256"), 0x00, 0x00]), // exports
+  ...section(10, [...leb(1), ...leb(bodyBytes.length), ...bodyBytes]),
+]);
+// (loop (br 0)) then unreachable — an export that never returns (the trailing unreachable makes
+// the fallthru explicitly dead; without it the body does not validate).
+const LOOP_MODULE = attackModule([0x00, 0x03, 0x40, 0x0c, 0x00, 0x0b, 0x00, 0x0b]);
+// (loop (drop (memory.grow (i32.const 1))) (br 0)) then unreachable — an export that grows forever.
+const GROW_MODULE = attackModule([0x00, 0x03, 0x40, 0x41, 0x01, 0x40, 0x00, 0x1a, 0x0c, 0x00, 0x0b, 0x00, 0x0b]);
+
+const attackTool = (bytes) => ({
+  name: "attack",
+  wasm: {
+    path: null, // filled per test — the file must exist for the rehash
+    digest: createHash("sha256").update(bytes).digest("hex"),
+    abi: "buffer-abi/1",
+    input: { addr: 0x400, maxBytes: 8192 },
+    output: { addr: 0x2400, bytes: 32 },
+    call: { export: "sha256" },
+  },
+});
+
+test("LGW: the loop module is terminated BY NAME at the host's deadline — and the host answers after (vb-resolver's hang)", async () => {
+  const file = path.join(scratch, "loop.wasm");
+  writeFileSync(file, LOOP_MODULE);
+  const tool = attackTool(LOOP_MODULE);
+  tool.wasm.path = file;
+  const { callWasmTool, WASM_CALL_DEADLINE_MS } = await import("../lib/wasm-shelf.mjs");
+  const started = Date.now();
+  const out = await callWasmTool(tool, { input: "abc" });
+  const elapsed = Date.now() - started;
+  assert.equal(out.ok, false);
+  assert.equal(out.refused, "time-exceeded", "the hang dies by name, not by someone's kill switch");
+  assert.ok(elapsed < WASM_CALL_DEADLINE_MS + 5000, `terminated near the deadline (${elapsed}ms), never hung`);
+  assert.match(out.why, /bounded by the host/, "the refusal names whose bound it is");
+
+  // The host's event loop never noticed: the KAT answers immediately after.
+  const shelfOut = readShelf(shelf);
+  const descriptor = descriptorFor(shelfOut.tools.find((t) => t.id === "hash"));
+  const kat = await import("../lib/wasm-shelf.mjs").then((m) => m.callWasmTool(descriptor.tools[0], { input: "abc" }));
+  assert.equal(kat.ok, true, "the host is alive and answering after the attack");
+  assert.equal(kat.output, SHA256_ABC);
+});
+
+test("LGW: the grow module dies against the host's bounds, named — and the host's memory is untouched (vb-resolver's grow-loop)", async () => {
+  const file = path.join(scratch, "grow.wasm");
+  writeFileSync(file, GROW_MODULE);
+  const tool = attackTool(GROW_MODULE);
+  tool.wasm.path = file;
+  const { callWasmTool } = await import("../lib/wasm-shelf.mjs");
+  const hostBefore = process.memoryUsage().rss;
+  const out = await callWasmTool(tool, { input: "abc" });
+  assert.equal(out.ok, false);
+  assert.ok(["resource-exceeded", "time-exceeded"].includes(out.refused), `the grow dies by a named bound (got ${out.refused})`);
+  const hostDelta = process.memoryUsage().rss - hostBefore;
+  assert.ok(hostDelta < 256 * 1024 * 1024, `the HOST's memory is untouched by the module's growth (delta ${Math.round(hostDelta / 1048576)}MB)`);
+
+  const shelfOut = readShelf(shelf);
+  const descriptor = descriptorFor(shelfOut.tools.find((t) => t.id === "hash"));
+  const kat = await import("../lib/wasm-shelf.mjs").then((m) => m.callWasmTool(descriptor.tools[0], { input: "abc" }));
+  assert.equal(kat.ok, true, "the host is alive and answering after the attack");
+});
+
 test("the REAL shelf on this box, if present, admits hash and answers the KAT through the driver", async (t) => {
   if (!existsSync(REAL_SHELF)) return t.skip("no isocan shelf installed on this box");
   const out = readShelf(REAL_SHELF);
