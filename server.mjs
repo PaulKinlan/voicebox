@@ -34,6 +34,7 @@ import {
 import * as extensions from "./lib/extensions.mjs";
 import { createTaskHost, protectedAuditPath, TASK_TOOLS } from "./lib/tasks.mjs";
 import { bootFence } from "./lib/fence-provider.mjs";
+import { bootUnitFence } from "./lib/unit-fence-provider.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
 import { createLiveSession, LIVE_MODEL, inputRateRequiredBy } from "./lib/live-session.mjs";
 import { commandToAction, functionDeclarations, liveSystemInstruction } from "./lib/commands.mjs";
@@ -1397,8 +1398,11 @@ async function handle(req, res) {
       // descriptor rather than only recording it — the prototype productized. The boundary the row
       // carries is the fence's OWN probe report (host-collected at boot), which is the one writer the
       // read path trusts — so a measured boundary survives where a hand-written claim would be nulled.
-      if (parsed.fence === true) {
-        const booted = await bootFence(candidate.value);
+      if (parsed.fence === true || parsed.fence === "l15") {
+        // fence:true boots the L1 bwrap fence; fence:"l15" boots the L1.5 composition — a transient
+        // systemd --user unit whose Exec is the fence (voicebox-beads-8ny). Same declare-and-boot,
+        // same rule: the boundary the row carries is measured by the environment's own probe.
+        const booted = parsed.fence === "l15" ? await bootUnitFence(candidate.value) : await bootFence(candidate.value);
         if (!booted.ok) return json(res, 502, { ok: false, refused: booted.refused, why: booted.why });
         const descriptor = {
           ...candidate.value,

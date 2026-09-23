@@ -1,0 +1,37 @@
+# voicebox-fence@.service — the L1.5 composition as an installable template unit.
+#
+# tools/fence-unit.sh is the no-install path (systemd-run makes these same properties transient);
+# this template is the same composition for a named, startable environment:
+#
+#   cp tools/voicebox-fence@.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user start voicebox-fence@<env-key>.service
+#
+# The instance name is the environment key. The unit expects its sandbox home at
+# %h/sandbox-homes/<env-key> (created by fence.sh if absent) and the repo checkout
+# beside this template (fence.sh resolves its own tree, so a checkout move is a
+# template move). PORT is read from the environment; override on start with:
+#   systemctl --user set-environment VOICEBOX_FENCE_PORT=8793
+#
+# The hardening here is the UNIT's half of L1.5: kernel lockdown AROUND the fence.
+# The seccomp filter is a denylist by design — the fence needs mount/pivot_root/userns,
+# so only the groups a build environment never calls are blocked. Measured, not claimed:
+# the probe inside reports Seccomp: 2, CapEff: 0, the code tree EROFS, the home writable.
+
+[Unit]
+Description=voicebox fenced environment (%i) — L1.5: bwrap inside a hardened transient unit
+
+[Service]
+Type=simple
+Environment=VOICEBOX_FENCE_PORT=0
+ProtectSystem=strict
+ReadWritePaths=%h/sandbox-homes/%i
+PrivateTmp=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+SystemCallFilter=~@obsolete @debug @cpu-emulation @keyring @module @raw-io @reboot @swap
+ExecStart=%h/voicebox/tools/fence.sh %h/sandbox-homes/%i ${VOICEBOX_FENCE_PORT} /usr/bin/node /srv/voicebox/tools/env-serve.mjs
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
