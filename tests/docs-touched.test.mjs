@@ -115,6 +115,34 @@ test("a document changing on its own: allowed", () => {
   assert.equal(r.code, 0, `a docs-only change is the thing we are asking for:\n${r.out}`);
 });
 
+test("the fixture acts on ITS OWN repository — the guard has a test that fails without it", () => {
+  // ASTRA'S FINDING, and it is the sharper half of the GIT_DIR defect: with `env: cleanEnv` removed from
+  // every call site, this suite stayed **8 pass / 0 fail** while the clone's HEAD moved from afafcd9 to a
+  // commit called "change the described file". Every case asserted on the GATE'S OUTPUT, and the gate's
+  // output is the same whether the fixture's commits landed in the scratch directory or in the repository
+  // running the suite — so the guard protected a real defect that nothing could detect. A check that
+  // cannot fail is a description of the code, not a check on it, which is the thing this branch exists to
+  // fix in documents; it was true of my own test.
+  //
+  // So this asserts the property the others assume: the fixture's git operations act on the FIXTURE.
+  const f = fixture();
+  f.change({ "lib/described.mjs": "\n// moved\n", "README.md": "\nSaid.\n" }, "a change of its own");
+
+  const gitDir = git(["rev-parse", "--absolute-git-dir"], f.dir);
+  assert.ok(
+    gitDir.startsWith(f.dir),
+    `the fixture's git dir must be inside the fixture (${f.dir}), not ${gitDir} — an inherited GIT_DIR ` +
+      "means `git init` was ignored and these commits landed in the repository running this suite",
+  );
+
+  // Two commits and no more: `base` and the change. The repository running this suite has hundreds, so
+  // this number is the difference between acting on a scratch tree and acting on somebody's history.
+  assert.equal(git(["rev-list", "--count", "HEAD"], f.dir), "2", "the fixture's history is its own two commits");
+
+  // And its worktree is the scratch directory, not a checkout somebody is using.
+  assert.equal(git(["rev-parse", "--show-toplevel"], f.dir), f.dir, "the fixture's worktree is the fixture");
+});
+
 test("a filename with more than one dot is seen — the gate was blind to every *.test.mjs", () => {
   // The first regex allowed ONE dot (`[\w-]+\.[a-z]+`), so `channel.test.mjs` matched nowhere and every
   // `tests/*.test.mjs` this repository names in prose — including this file — was invisible. Found by
