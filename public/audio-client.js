@@ -144,7 +144,6 @@ export function createAudioClient({
     if (current === meter.lastPlayed) return;
     meter.lastPlayed = current;
     shiftInto(meter.output, current.value);
-    smooth(meter.output, meter.smoothOutput, 0.3);
     meter.lastAt = Date.now();
     onLevel(level());
   }
@@ -158,6 +157,13 @@ export function createAudioClient({
   /** The current meter reading. Decays on read, so silence falls away. */
   function level() {
     followPlayback();
+    // Smooth the output ring EVERY frame, not only when a chunk arrives:
+    // the shift is discrete (one slot per chunk), so smoothing inside
+    // followPlayback makes the ring's contour jump once per chunk and stay
+    // frozen between them — the jank the owner reported on the outer ring.
+    // Here the blend runs per frame, so the contour transitions continuously
+    // between chunk arrivals instead of stepping when they land.
+    smooth(meter.output, meter.smoothOutput, 0.3);
     const idle = Date.now() - meter.lastAt > LEVEL_HOLD_MS;
     if (idle) {
       const fall = 0.86;
