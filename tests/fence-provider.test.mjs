@@ -38,6 +38,13 @@ test("boots an L1 fence from a descriptor and returns a MEASURED per-axis bounda
   assert.ok(out.ok, `the fence did not boot: ${JSON.stringify(out)}`);
   assert.match(out.origin, /^http:\/\/127\.0\.0\.1:\d+$/, "the origin is a loopback URL on a free port");
   assert.equal(out.home.kind, "machine");
+  // THE PIN THE POLLUTION NEEDED: the fence's home is under THIS suite's scratch, not the
+  // real ~/sandbox-homes. Without it, an import-time capture of VOICEBOX_SANDBOX_HOMES passes
+  // every other assertion while writing into the operator's home directory (it did).
+  assert.ok(
+    out.home.path.startsWith(homes),
+    `the fence's home is ${out.home.path} — OUTSIDE this suite's scratch (${homes}); the env var was captured before the override`,
+  );
   assert.equal(out.boundary.level, "L1");
 
   // The decisive case: files and processes FENCED, network PASSED — each named with its measurement.
