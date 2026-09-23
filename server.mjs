@@ -943,7 +943,14 @@ const routes = {
       // Changing the provider does NOT start a session: the next one this page opens will use it, and
       // the payload says the live session is untouched rather than implying the change took effect now.
       agentSettings = checked.value;
-      return json(res, 200, agentSettingsPayload({ note: "stored — a session already running keeps the provider it started with" }));
+      // THE NOTE HAS TO MATCH THE STATE, not the common case. It used to say "a session already running
+      // keeps the provider it started with" to everybody, including a person with no session — a change
+      // deferred to nothing. Now it says which of the two is true.
+      return json(res, 200, agentSettingsPayload({
+        note: runningSession
+          ? "stored — the live session already running keeps the provider it started with"
+          : "stored — no live session is running, so the next one this page opens will use it",
+      }));
     }));
     return;
   },
@@ -1663,7 +1670,14 @@ server.on("upgrade", (req, socket) => {
           ws.send(JSON.stringify({ type: "tool", calls: seen }));
         },
       });
-      runningSession = { provider: session.state?.provider ?? provider, startedAt: new Date().toISOString() };
+      // WHICH session, AND FOR WHOM. The socket is recorded with it because a later close must clear only
+      // its OWN session: with two peers connected, the first to leave would otherwise report the second as
+      // gone — the same class of lie as the flag never clearing at all, told the other way round.
+      runningSession = {
+        provider: session.state?.provider ?? provider,
+        startedAt: new Date().toISOString(),
+        socket: ws,
+      };
     } catch (e) {
       ws.send(JSON.stringify({ type: "error", error: e?.message ?? String(e) }));
       ws.close(1011, "live session failed to start");
@@ -1697,8 +1711,17 @@ server.on("upgrade", (req, socket) => {
       }
       session.sendAudio(data.toString("base64"));
     });
-    ws.on("close", () => session.close());
-    ws.on("error", () => session.close());
+    // A SESSION IS RUNNING ONLY WHILE SOMEBODY IS CONNECTED TO IT. This flag is what tells a person
+    // whether it is safe to change the provider, so it must not outlive the socket that started it: it was
+    // set and never cleared, and /api/health reported `running: true` for the life of the process after the
+    // first session, with nobody attached. (tests/live-session-flag.test.mjs is the falsifier: it opens a
+    // real session through this route, closes the socket, and requires the payload to flip back.)
+    const endSession = () => {
+      session.close();
+      if (runningSession?.socket === ws) runningSession = null;
+    };
+    ws.on("close", endSession);
+    ws.on("error", endSession);
   };
 
   if (claimsToBeTheLocalPage) { beginSession(); return; }
