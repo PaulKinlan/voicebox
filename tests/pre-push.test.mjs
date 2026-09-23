@@ -14,6 +14,9 @@ const timeout = execFileSync('which', ['timeout'], { encoding: 'utf8' }).trim();
 // disposable fixture's init/config/add/commit into the repository being pushed.
 const cleanEnv = { ...process.env };
 for (const key of execFileSync('git', ['rev-parse', '--local-env-vars'], { encoding: 'utf8' }).trim().split('\n')) delete cleanEnv[key];
+for (const key of Object.keys(cleanEnv)) {
+  if (key.startsWith('VOICEBOX_GATE_')) delete cleanEnv[key];
+}
 
 test('pre-push names the stage and cause, streams output, and refuses real failing tests', { timeout: 60000 }, () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-pre-push-'));
