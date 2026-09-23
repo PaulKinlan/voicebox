@@ -731,7 +731,7 @@ function renderListingRoot() {
   if (roomFolder) {
     line.hidden = false;
     line.dataset.tone = "";
-    line.textContent = `listed from '${roomFolder.name}' — a folder you opened in this tab, read-only, for this session${roomTruncated ? ` (first ${ROOM_FOLDER_MAX} entries)` : ""}. Turns still write into the folder named in the header.`;
+    line.textContent = `Read-only view of “${roomFolder.name}”${roomTruncated ? ` (first ${ROOM_FOLDER_MAX})` : ""} — turns save to the folder in the header.`;
     return;
   }
   if (listingRefusal) {
@@ -760,7 +760,7 @@ function renderListingRoot() {
   // Symmetric wording: this says the two disagree, and does not assert which of
   // them is the one that moved.
   line.textContent = stale
-    ? `The header says ${activeWhere}, and this listing came from ${where}. Press Refresh to read the folder the header names.`
+    ? `This listing is older than the header's folder — press Refresh.`
     : `listed from ${where}`;
 }
 
@@ -908,10 +908,14 @@ function renderRoot() {
     renderAbout();
     return;
   }
-  const where = activeRoot.facts?.where ?? activeRoot.root?.kind ?? "a root";
-  const name = activeRoot.root?.path ?? activeRoot.root?.name ?? activeRoot.root?.label ?? "";
-  kindEl.textContent = name ? `${where} · ${name}` : where;
-  kindEl.title = activeRoot.description ?? "";
+  const kind = activeRoot.root?.kind ?? "";
+  const kindPlain = { machine: "machine folder", opfs: "browser storage", handle: "picked folder" }[kind]
+    ?? activeRoot.facts?.where ?? activeRoot.root?.kind ?? "a root";
+  const fullPath = activeRoot.root?.path ?? activeRoot.root?.name ?? activeRoot.root?.label ?? "";
+  // Plain words + the folder's NAME only. The full path is one hover away, not one glance away —
+  // a long /tmp/... path in the header line was the clutter Paul pointed at.
+  kindEl.textContent = fullPath ? `${kindPlain} · ${fullPath.split("/").filter(Boolean).pop()}` : kindPlain;
+  kindEl.title = [activeRoot.description, fullPath].filter(Boolean).join(" — ");
   renderAbout();
 }
 
