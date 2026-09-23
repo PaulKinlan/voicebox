@@ -1,0 +1,120 @@
+{
+  "ok": true,
+  "observedAt": "2026-09-21T12:18:09.266Z",
+  "scope": "Voicebox server machine only",
+  "entries": [
+    {
+      "id": "pi",
+      "name": "Pi coding agent",
+      "description": "Coding assistant with its own tools and model configuration; pi-acp adapts it to ACP.",
+      "command": "pi",
+      "state": "present",
+      "version": "0.85.1",
+      "capabilities": "Purpose described above; project access, tools, authentication and ACP support are not measured.",
+      "delegation": {
+        "ok": false,
+        "refused": "absent-capability",
+        "why": "network and credential isolation: no task-scoped provider broker is installed; shared-network S1 is insufficient. Install and verify bounded broker-only model access before admitting pi-acp tasks."
+      },
+      "why": "Version check passed only; no model task, authentication or ACP handshake was attempted."
+    },
+    {
+      "id": "claude",
+      "name": "Claude Code",
+      "description": "Anthropic coding CLI with its own project permissions and authentication.",
+      "command": "claude",
+      "state": "present",
+      "version": "2.1.265",
+      "capabilities": "Purpose described above; project access, tools, authentication and ACP support are not measured.",
+      "delegation": {
+        "ok": false,
+        "refused": "adapter-not-configured",
+        "why": "No Voicebox task adapter is configured for this CLI; configure an adapter before delegating."
+      },
+      "why": "Version check passed only; no model task, authentication or ACP handshake was attempted."
+    },
+    {
+      "id": "codex",
+      "name": "Codex CLI",
+      "description": "OpenAI coding CLI with its own approval and execution settings.",
+      "command": "codex",
+      "state": "present",
+      "version": "0.153.4",
+      "capabilities": "Purpose described above; project access, tools, authentication and ACP support are not measured.",
+      "delegation": {
+        "ok": false,
+        "refused": "adapter-not-configured",
+        "why": "No Voicebox task adapter is configured for this CLI; configure an adapter before delegating."
+      },
+      "why": "Version check passed only; no model task, authentication or ACP handshake was attempted."
+    },
+    {
+      "id": "gemini",
+      "name": "Gemini CLI",
+      "description": "Google coding CLI with its own tools and authentication.",
+      "command": "gemini",
+      "state": "present",
+      "version": "0.60.0",
+      "capabilities": "Purpose described above; project access, tools, authentication and ACP support are not measured.",
+      "delegation": {
+        "ok": false,
+        "refused": "adapter-not-configured",
+        "why": "No Voicebox task adapter is configured for this CLI; configure an adapter before delegating."
+      },
+      "why": "Version check passed only; no model task, authentication or ACP handshake was attempted."
+    },
+    {
+      "id": "opencode",
+      "name": "OpenCode",
+      "description": "Coding CLI with its own provider and tool configuration.",
+      "command": "opencode",
+      "state": "present",
+      "version": "1.18.31",
+      "capabilities": "Purpose described above; project access, tools, authentication and ACP support are not measured.",
+      "delegation": {
+        "ok": false,
+        "refused": "adapter-not-configured",
+        "why": "No Voicebox task adapter is configured for this CLI; configure an adapter before delegating."
+      },
+      "why": "Version check passed only; no model task, authentication or ACP handshake was attempted."
+    },
+    {
+      "id": "aider",
+      "name": "Aider",
+      "description": "Terminal pair-programming CLI; ACP support is not established here.",
+      "command": "aider",
+      "state": "absent",
+      "version": null,
+      "capabilities": "Purpose described above; project access, tools, authentication and ACP support are not measured.",
+      "delegation": {
+        "ok": false,
+        "refused": "adapter-not-configured",
+        "why": "No Voicebox task adapter is configured for this CLI; configure an adapter before delegating."
+      },
+      "why": "Not found in this server's absolute PATH directories; install it or correct the server PATH."
+    },
+    {
+      "id": "pi-acp",
+      "name": "Pi ACP adapter",
+      "command": "pi-acp",
+      "description": "Adapts Pi's coding agent to Agent Client Protocol.",
+      "state": "unknown",
+      "version": "0.0.33",
+      "capabilities": "ACP adapter package; no handshake or model task tested by inventory.",
+      "delegation": {
+        "ok": false,
+        "refused": "absent-capability",
+        "why": "network and credential isolation: no task-scoped provider broker is installed; shared-network S1 is insufficient. Install and verify bounded broker-only model access before admitting pi-acp tasks."
+      },
+      "why": "Installed package metadata found; runnable state unknown. Inventory does not start an ACP session."
+    }
+  ],
+  "note": "Known CLI names in absolute PATH plus the Pi ACP package location; not an exhaustive machine scan. A matching version is not identity attestation or task readiness. No configured default, fleet discovery or model task is supplied. Pi's existing absent-capability broker refusal is an older code restriction awaiting alignment with independent-harness policy, not a new requirement to add a broker.",
+  "browserChecks": [
+    "navigation",
+    "explicit click",
+    "all seven rows match API",
+    "Pi production refusal visible",
+    "390px no horizontal overflow"
+  ]
+}

@@ -37,6 +37,7 @@ import { createPermissionPolicy } from "./lib/permission-policy.mjs";
 import { bootFence } from "./lib/fence-provider.mjs";
 import { SOURCE_DIRS } from "./lib/browser-sources.mjs";
 import { bootUnitFence } from "./lib/unit-fence-provider.mjs";
+import { createHarnessInventory } from "./lib/harness-inventory.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
 import { createLiveSession, LIVE_MODEL, inputRateRequiredBy } from "./lib/live-session.mjs";
 import { commandToAction, functionDeclarations, liveSystemInstruction } from "./lib/commands.mjs";
@@ -1129,7 +1130,9 @@ function agentSettingsPayload(extra = {}) {
   };
 }
 
+const harnessInventory = createHarnessInventory();
 const routes = {
+  "GET /api/harnesses": async (req, res) => json(res, 200, await harnessInventory()),
   // THE AGENT'S SETTINGS, and the distinction this whole surface exists to keep:
   //   requested — what a person asked for, stored whether or not anything can use it yet
   //   applied   — what the RUNNING session can be shown to use, never what was asked for

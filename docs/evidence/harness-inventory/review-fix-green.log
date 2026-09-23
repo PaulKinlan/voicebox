@@ -1,0 +1,11 @@
+✔ host inventory separates version-only presence, broken installs, unknown identity and absence (510.532578ms)
+✔ no guessed identity, project PATH lookup, or fallback for a broken configured Pi (105.988385ms)
+✔ harness page: click lists host facts, cache does not spawn twice, lost server marks old data stale (744.390807ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1407.107686

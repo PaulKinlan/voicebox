@@ -1,0 +1,11 @@
+:root { color-scheme: dark; font: 16px/1.5 system-ui, sans-serif; background: #101014; color: #e8e8ee; }
+body { margin: 0; }
+main { max-width: 76ch; margin: auto; padding: 24px; overflow-wrap: anywhere; }
+a { color: #abc8ff; }
+h1 { font-size: 1.6rem; }
+h2 { font-size: 1.15rem; }
+button { font: inherit; padding: 10px 16px; color: inherit; background: #242432; border: 1px solid #888; border-radius: 6px; cursor: pointer; }
+button:disabled { opacity: .6; cursor: wait; }
+:focus-visible { outline: 3px solid #abc8ff; outline-offset: 3px; }
+article { border: 1px solid #666; border-radius: 8px; padding: 16px; margin: 16px 0; }
+article h2 { margin-top: 0; }

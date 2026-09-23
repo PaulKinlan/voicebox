@@ -1,0 +1,138 @@
+✖ host inventory separates version-only presence, broken installs, unknown identity and absence (108.945794ms)
+✔ no guessed identity, project PATH lookup, or fallback for a broken configured Pi (1.553041ms)
+✖ harness page: click lists host facts, cache does not spawn twice, lost server marks old data stale (605.962813ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 1
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 763.404842
+
+✖ failing tests:
+
+test at tests/harness-inventory.test.mjs:25:1
+✖ host inventory separates version-only presence, broken installs, unknown identity and absence (108.945794ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'present'
+  - 'unknown'
+  
+      at TestContext.<anonymous> (file:///home/paulkinlan/worktrees/voicebox-harness-discovery/tests/harness-inventory.test.mjs:38:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'present',
+    expected: 'unknown',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/harness-inventory.test.mjs:59:1
+✖ harness page: click lists host facts, cache does not spawn twice, lost server marks old data stale (605.962813ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /Gemini CLI — unknown/. Input:
+  
+  'Back to Voicebox\n' +
+    'Harnesses on the server\n' +
+    '\n' +
+    'See which known agent programs are installed on the machine running this Voicebox server — not necessarily the machine running your browser.\n' +
+    '\n' +
+    'Checking runs bounded --version commands, not model tasks. Each harness keeps its own security and configuration; this does not wrap it in a Voicebox sandbox.\n' +
+    '\n' +
+    'Check installed harnesses\n' +
+    '\n' +
+    'Observed 2026-09-21T11:56:59.276Z. Snapshot reused for up to 60 seconds.\n' +
+    '\n' +
+    "Voicebox server machine only. Known CLI names in absolute PATH plus the Pi ACP package location; not an exhaustive machine scan. A matching version is not identity attestation or task readiness. No configured default, fleet discovery or model task is supplied. Pi's existing absent-capability broker refusal is an older code restriction awaiting alignment with independent-harness policy, not a new requirement to add a broker.\n" +
+    '\n' +
+    'Pi coding agent — present (0.85.1)\n' +
+    '\n' +
+    'Coding assistant with its own tools and model configuration; pi-acp adapts it to ACP.\n' +
+    '\n' +
+    'Version check passed only; no model task, authentication or ACP handshake was attempted.\n' +
+    '\n' +
+    'Purpose described above; project access, tools, authentication and ACP support are not measured.\n' +
+    '\n' +
+    'Voicebox delegation: absent-capability. network and credential isolation: no task-scoped provider broker is installed; shared-network S1 is insufficient. Install and verify bounded broker-only model access before admitting pi-acp tasks.\n' +
+    '\n' +
+    'Claude Code — unrunnable\n' +
+    '\n' +
+    'Anthropic coding CLI with its own project permissions and authentication.\n' +
+    '\n' +
+    'The version check failed (exit 7); run claude --version in the host shell to diagnose.\n' +
+    '\n' +
+    'Purpose described above; project access, tools, authentication and ACP support are not measured.\n' +
+    '\n' +
+    'Voicebox delegation: adapter-not-configured. No Voicebox task adapter is configured for this CLI; configure an adapter before delegating.\n' +
+    '\n' +
+    'Codex CLI — unrunnable\n' +
+    '\n' +
+    'OpenAI coding CLI with its own approval and execution settings.\n' +
+    '\n' +
+    'Found a command or configured path, but it is not an accessible executable file; repair the install or permissions.\n' +
+    '\n' +
+    'Purpose described above; project access, tools, authentication and ACP support are not measured.\n' +
+    '\n' +
+    'Voicebox delegation: adapter-not-configured. No Voicebox task adapter is configured for this CLI; configure an adapter before delegating.\n' +
+    '\n' +
+    'Gemini CLI — present\n' +
+    '\n' +
+    'Google coding CLI with its own tools and authentication.\n' +
+    '\n' +
+    'A command exists, but its version response is not recognized; inspect the host install. Identity and readiness are unknown.\n' +
+    '\n' +
+    'Purpose described above; project access, tools, authentication and ACP support are not measured.\n' +
+    '\n' +
+    'Voicebox delegation: adapter-not-configured. No Voicebox task adapter is configured for this CLI; configure an adapter before delegating.\n' +
+    '\n' +
+    'OpenCode — unrunnable\n' +
+    '\n' +
+    'Coding CLI with its own provider and tool configuration.\n' +
+    '\n' +
+    'The version check failed (exit 2); run opencode --version in the host shell to diagnose.\n' +
+    '\n' +
+    'Purpose described above; project access, tools, authentication and ACP support are not measured.\n' +
+    '\n' +
+    'Voicebox delegation: adapter-not-configured. No Voicebox task adapter is configured for this CLI; configure an adapter before delegating.\n' +
+    '\n' +
+    'Aider — absent\n' +
+    '\n' +
+    'Terminal pair-programming CLI; ACP support is not established here.\n' +
+    '\n' +
+    "Not found in this server's absolute PATH directories; install it or correct the server PATH.\n" +
+    '\n' +
+    'Purpose described above; project access, tools, authentication and ACP support are not measured.\n' +
+    '\n' +
+    'Voicebox delegation: adapter-not-configured. No Voicebox task adapter is configured for this CLI; configure an adapter before delegating.\n' +
+    '\n' +
+    'Pi ACP adapter — unknown (0.0.33)\n' +
+    '\n' +
+    "Adapts Pi's coding agent to Agent Client Protocol.\n" +
+    '\n' +
+    'Installed package metadata found; runnable state unknown. Inventory does not start an ACP session.\n' +
+    '\n' +
+    'ACP adapter package; no handshake or model task tested by inventory.\n' +
+    '\n' +
+    'Voicebox delegation: absent-capability. network and credential isolation: no task-scoped provider broker is installed; shared-network S1 is insufficient. Install and verify bounded broker-only model access before admitting pi-acp tasks.\n' +
+    '\n' +
+    'What this cannot do yet\n' +
+    '\n' +
+    "A browser cannot start a local CLI by itself. To reach programs on your browser's machine, a local server or helper would need to bridge that connection. This page does not build that bridge. Browser-native harnesses need no such bridge, but are not discovered here.\n" +
+    '\n' +
+    'This is installed-program inventory, not configured agents, a default selection, or fleet/session addressing. Descriptions are known program purposes, not observed permissions. Cost, model access and task readiness are unknown.\n' +
+    '\n' +
+    'The existing Pi task executor still refuses absent-capability because its code requires an absent provider broker. That older restriction has not yet been removed to match independent-harness policy. Inventory does not enable delegation or recommend adding a broker.'
+  
+      at TestContext.<anonymous> (file:///home/paulkinlan/worktrees/voicebox-harness-discovery/tests/harness-inventory.test.mjs:73:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: "Back to Voicebox\nHarnesses on the server\n\nSee which known agent programs are installed on the machine running this Voicebox server — not necessarily the machine running your browser.\n\nChecking runs bounded --version commands, not model tasks. Each harness keeps its own security and configuration; this does not wrap it in a Voicebox sandbox.\n\nCheck installed harnesses\n\nObserved 2026-09-21T11:56:59.276Z. Snapshot reused for up to 60 seconds.\n\nVoicebox server machine only. Known CLI names in absolute PATH plus the Pi ACP package location; not an exhaustive machine scan. A matching version is not identity attestation or task readiness. No configured default, fleet discovery or model task is supplied. Pi's existing absent-capability broker refusal is an older code restriction awaiting alignment with independent-harness policy, not a new requirement to add a broker.\n\nPi coding agent — present (0.85.1)\n\nCoding assistant with its own tools and model configuration; pi-acp adapts it to ACP.\n\nVersion check passed only; no model task, authentication or ACP handshake was attempted.\n\nPurpose described above; project access, tools, authentication and ACP support are not measured.\n\nVoicebox delegation: absent-capability. network and credential isolation: no task-scoped provider broker is installed; shared-network S1 is insufficient. Install and verify bounded broker-only model access before admitting pi-acp tasks.\n\nClaude Code — unrunnable\n\nAnthropic coding CLI with its own project permissions and authentication.\n\nThe version check failed (exit 7); run claude --version in the host shell to diagnose.\n\nPurpose described above; project access, tools, authentication and ACP support are not measured.\n\nVoicebox delegation: adapter-not-configured. No Voicebox task adapter is configured for this CLI; configure an adapter before delegating.\n\nCodex CLI — unrunnable\n\nOpenAI coding CLI with its own approval and execution settings.\n\nFound a command or configured path, but it is not an accessible executable file; repair the install or permissions.\n\nPurpose described above; project access, tools, authentication and ACP support are not measured.\n\nVoicebox delegation: adapter-not-configured. No Voicebox task adapter is configured for this CLI; configure an adapter before delegating.\n\nGemini CLI — present\n\nGoogle coding CLI with its own tools and authentication.\n\nA command exists, but its version response is not recognized; inspect the host install. Identity and readiness are unknown.\n\nPurpose described above; project access, tools, authentication and ACP support are not measured.\n\nVoicebox delegation: adapter-not-configured. No Voicebox task adapter is configured for this CLI; configure an adapter before delegating.\n\nOpenCode — unrunnable\n\nCoding CLI with its own provider and tool configuration.\n\nThe version check failed (exit 2); run opencode --version in the host shell to diagnose.\n\nPurpose described above; project access, tools, authentication and ACP support are not measured.\n\nVoicebox delegation: adapter-not-configured. No Voicebox task adapter is configured for this CLI; configure an adapter before delegating.\n\nAider — absent\n\nTerminal pair-programming CLI; ACP support is not established here.\n\nNot found in this server's absolute PATH directories; install it or correct the server PATH.\n\nPurpose described above; project access, tools, authentication and ACP support are not measured.\n\nVoicebox delegation: adapter-not-configured. No Voicebox task adapter is configured for this CLI; configure an adapter before delegating.\n\nPi ACP adapter — unknown (0.0.33)\n\nAdapts Pi's coding agent to Agent Client Protocol.\n\nInstalled package metadata found; runnable state unknown. Inventory does not start an ACP session.\n\nACP adapter package; no handshake or model task tested by inventory.\n\nVoicebox delegation: absent-capability. network and credential isolation: no task-scoped provider broker is installed; shared-network S1 is insufficient. Install and verify bounded broker-only model access before admitting pi-acp tasks.\n\nWhat this cannot do yet\n\nA browser cannot start a local CLI by itself. To reach programs on your browser's machine, a local server or helper would need to bridge that connection. This page does not build that bridge. Browser-native harnesses need no such bridge, but are not discovered here.\n\nThis is installed-program inventory, not configured agents, a default selection, or fleet/session addressing. Descriptions are known program purposes, not observed permissions. Cost, model access and task readiness are unknown.\n\nThe existing Pi task executor still refuses absent-capability because its code requires an absent provider broker. That older restriction has not yet been removed to match independent-harness policy. Inventory does not enable delegation or recommend adding a broker.",
+    expected: /Gemini CLI — unknown/,
+    operator: 'match',
+    diff: 'simple'
+  }

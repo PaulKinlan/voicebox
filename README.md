@@ -35,6 +35,15 @@ Built from parts of projects that already work — see [docs/00-brief.md](docs/0
 for what is borrowed from where, and [docs/01-questions.md](docs/01-questions.md) for what
 is still undecided.
 
+## Installed harnesses
+
+Open **Harnesses** from the voice page and click **Check installed harnesses**, or run
+`node tools/list-harnesses.mjs`. This lists known host CLIs with descriptions, observed
+versions and present/unrunnable/unknown/absent states. It does not infer task readiness
+or discover programs on a different browser machine. Pi's production task adapter still
+refuses `absent-capability`; listing it does not enable delegation. No sandbox wrapping
+or local browser-to-CLI bridge is added. See [the inventory guide](docs/12-harness-inventory.md).
+
 ## Status
 
 Seeded 2026-09-19 from a spoken brief. Design in progress — and **the descriptions below are a

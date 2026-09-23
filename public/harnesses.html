@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Harnesses — Voicebox</title>
+  <link rel="stylesheet" href="harnesses.css">
+  <script type="module" src="harnesses.js"></script>
+</head>
+<body>
+<main>
+  <a href="./">Back to Voicebox</a>
+  <h1>Harnesses on the server</h1>
+  <p>Programs on this Voicebox server's machine, not necessarily your browser's machine. Checks run <code>--version</code>, not model tasks.</p>
+  <button id="check" type="button">Check installed harnesses</button>
+  <p id="status" role="status" aria-live="polite">Not checked yet.</p>
+  <div id="harnesses"></div>
+  <h2>Scope and limits</h2>
+  <p id="scope"></p>
+  <p>Each harness keeps its own security and configuration; this does not wrap it in a Voicebox sandbox.</p>
+  <p>A browser cannot start a local CLI by itself. To reach programs on your browser's machine, a local server or helper would need to bridge that connection. This page does not build that bridge. Browser-native harnesses need no such bridge, but are not discovered here.</p>
+  <p>This is installed-program inventory, not configured agents, a default selection, or fleet/session addressing. Descriptions are known program purposes, not observed permissions. Cost, model access and task readiness are unknown.</p>
+  <p>The existing Pi task runner still refuses <code>absent-capability</code> because its code requires an absent provider broker. That older restriction has not yet been removed to match independent-harness policy. Inventory does not enable delegation or recommend adding a broker.</p>
+</main>
+</body>
+</html>
