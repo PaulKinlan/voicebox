@@ -25,6 +25,8 @@ Description=voicebox fenced environment (%i) — L1.5: bwrap inside a hardened t
 Type=simple
 Environment=VOICEBOX_FENCE_PORT=0
 ProtectSystem=strict
+# The home must live outside /tmp: PrivateTmp hides /tmp in this unit's namespace, so a home
+# under /tmp fails to bind and the unit dies with status 226/NAMESPACE before the fence runs.
 ReadWritePaths=%h/sandbox-homes/%i
 PrivateTmp=yes
 NoNewPrivileges=yes

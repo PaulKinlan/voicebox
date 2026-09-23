@@ -345,7 +345,7 @@ const ENV_MEANING = {
   VOICEBOX_PROVIDER: "the OLD NAME of `VOICEBOX_RESOLVER`, honoured for one release: a shell that exports it keeps working and gets a line on stderr",
   VOICEBOX_WORKSPACE: "declares a machine root at boot — a decision, not a default — and is where the extension system keeps `proposals/` and `audit.jsonl`",
   VOICEBOX_EXTENSIONS_DIR: "the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl`, and `.pairings.json` (the bearer custody store — outside every root)",
-  VOICEBOX_SANDBOX_HOMES: "where a fence's writable home is bound from (default `~/sandbox-homes/<key>`) — the one place a fenced environment may write",
+  VOICEBOX_SANDBOX_HOMES: "where a fence's writable home is bound from (default `~/sandbox-homes/<key>`) — the one place a fenced environment may write. Must live OUTSIDE /tmp: an L1.5 unit's PrivateTmp hides /tmp in its namespace and a home there fails to bind (status 226/NAMESPACE)",
   VOICEBOX_INSTANCE: "this writer's name in the active root's shared log (default `machine`)",
   VOICEBOX_BIND_RETRY_MS: "how often to retry a bind that lost the port race",
   VOICEBOX_BIND_DEADLINE_MS: "how long to keep retrying before giving up by name",

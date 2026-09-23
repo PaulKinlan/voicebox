@@ -11,8 +11,13 @@
 # raw I/O, reboot, swap, keyrings, debugging, CPU emulation, obsolete syscalls). It is mode 2
 # (filter), and the probe inside reports Seccomp: 2 — measured, not claimed.
 #
+# TRAP (status 226/NAMESPACE): PrivateTmp=yes hides the caller's /tmp inside the unit's mount
+# namespace, so a <home> under /tmp cannot be bind-mounted — the unit fails with 'Failed to set
+# up mount namespacing' before the fence ever runs. The sandbox home must live OUTSIDE /tmp
+# (the default ~/sandbox-homes/<key> is fine; os.tmpdir() is not).
+#
 # Usage: fence-unit.sh <home> <port> <unit-name> [command...]
-#   <home>       the sandbox's writable home (host path), created if absent
+#   <home>       the sandbox's writable home (host path), created if absent — OUTSIDE /tmp, see above
 #   <port>       the loopback port the fenced server binds
 #   <unit-name>  the transient unit's name (systemd-safe; the caller namespaces it)
 #   command      what the fence runs inside (default: the environment server)
