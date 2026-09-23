@@ -154,6 +154,10 @@ async function renderedPlainLanguage(group, vocabulary, label) {
 let sharedRootBefore = null;
 let environmentsPayload = null;
 let sharedFilesPayload = null; // the parsed body, kept for the vocabulary (the string form is the witness)
+// When the currency check skips by name (the front is serving a different tree), the verdict must SAY so:
+// an ALL CLEAR over a skipped check is a green that measured nothing, which is one level up from the
+// defect the check itself was fixed for (vb-resolver's review, 2026-09-23).
+let currencySkipReason = null;
 let sharedFilesBefore = "[]";
 let sharedServersRunning = false;
 // WHY the front is absent, recorded rather than swallowed: a skip that cannot name the address it could not
@@ -232,10 +236,17 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   const frontSha = shortSha(frontStamp ?? "");
   const identityMismatch = frontSha && treeSha && frontSha !== treeSha;
   if (identityMismatch) {
+    currencySkipReason = `the front is serving ${frontStamp}, and the measured tree is at ${treeSha}`;
     report("shared-front", "environment is current (the front is serving the tree being measured)", true,
-      `SKIPPED BY NAME — the front is serving ${frontStamp}, and the measured tree is at ${treeSha}. ` +
+      `SKIPPED BY NAME — ${currencySkipReason}. ` +
       `Currency cannot be answered from here, and that is not a failure: land the change, move the served ` +
       `tree onto it, and run the gate from there.`);
+  } else if (!frontSha) {
+    // NO STAMP ON THE FRONT: identity cannot decide, so the content comparison runs alone. That is the
+    // STRONGER check, not the weaker one — it needs no identity to be exact — so this is a note rather
+    // than a skip, and it lives here so the next reader does not have to work it out.
+    report("shared-front", "environment is current (the front is serving the tree being measured)", true,
+      "NOTE — the front publishes no build stamp, so identity cannot decide; the content comparison runs on its own");
   }
 
   const staleModules = [];
@@ -588,11 +599,14 @@ const failed = results.filter((ok) => !ok).length;
 console.log(
   failed !== 0
     ? `\n${failed} CHECK(S) FAILED — named above`
-    : sharedServersRunning
-      ? "\nALL CLEAR"
-      : `\nALL CLEAR — PHASE B ONLY; phase A could not witness the served front ` +
+    : !sharedServersRunning
+      ? `\nALL CLEAR — PHASE B ONLY; phase A could not witness the served front ` +
         `(${sharedFrontFailure?.code ?? "unreachable"} at ${sharedFrontFailure?.url ?? SHARED_API}). ` +
-        `Nothing in this run says the served front is current.`,
+        `Nothing in this run says the served front is current.`
+      : currencySkipReason
+        ? `\nALL CLEAR — but the currency check was skipped: ${currencySkipReason}. ` +
+          `Everything else passed; nothing here says the served front is current.`
+        : "\nALL CLEAR",
 );
 console.log("(served-vs-disk markers on the shared front + the root-declaration lifecycle on a private instance answer \"is this environment current\" better than the old workspace field ever did)");
 process.exit(failed === 0 ? 0 : 1);
