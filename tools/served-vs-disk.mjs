@@ -37,6 +37,7 @@ const REWRITTEN_BY_TRANSFORM = [
   // specifier is what changes, so the specifier is what is excluded.
   /(?<![\w$])import\s*\(\s*(?:\/\*[\s\S]*?\*\/\s*)?["'][^"']+["']/, // dynamic import() specifiers
   /["'`][^"'`]*\.(?:css|png|jpe?g|gif|svg|webp|woff2?|ttf)["'`]/, // asset URLs -> hashed/re-written
+  /<script\b[^>]*\bsrc=["'][^"']+["']/, // HTML script tags -> ?t= stamps, resolved URLs
 ];
 
 const isRewritten = (line) => REWRITTEN_BY_TRANSFORM.some((re) => re.test(line));
