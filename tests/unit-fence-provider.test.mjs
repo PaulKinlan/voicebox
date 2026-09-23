@@ -14,8 +14,9 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { startServer } from "./lib/server.mjs";
-import { bootUnitFence, stopUnitFence } from "../lib/unit-fence-provider.mjs";
+import { bootUnitFence, stopUnitFence, awaitBootIdentity } from "../lib/unit-fence-provider.mjs";
 import { measureBoundary } from "../lib/fence-provider.mjs";
+import { createServer } from "node:http";
 
 const run = promisify(execFile);
 
@@ -79,6 +80,7 @@ test("the composed environment's probe report shows seccomp=2, the EROFS code tr
   // The environment SERVES: the origin answers liveness, and answers with its measured report.
   const health = await fetch(`${out.origin}/health`).then((r) => r.json());
   assert.equal(health.ok, true, "the environment's origin answers /health — it serves, not just boots");
+  assert.match(health.bootMarker, /^[0-9a-f]{32}$/, "the serve carries this boot's marker — identity, not just liveness");
   const served = await fetch(`${out.origin}/probe`).then((r) => r.json());
   assert.equal(served.sandboxHints.seccomp.value, "2", "the served report is the environment's own measurement");
 
@@ -135,6 +137,36 @@ test("the level is DERIVED, never stamped: seccomp+lockdown earns L1.5, the fenc
   const violated = measureBoundary({ probe: "sandbox-probe/1", when: "now", filesystem: { dirs: { "/srv/voicebox": { writable: { value: true } }, "/home/voice": { writable: { value: true } }, "/home": { listable: false } } }, sandboxHints: { mountSample: { value: ["bwrap"] }, seccomp: { value: "2" }, capEff: { value: "0" } }, network: {}, tools: {} });
   assert.equal(violated.level, "not-earned", "measured-and-failed reads not-earned, never a level");
   assert.equal(measureBoundary({ probe: "sandbox-probe/1", when: "now", filesystem: { dirs: {} }, sandboxHints: {}, network: {}, tools: {} }).level, "unmeasured", "a probe that never measured the fence reads unmeasured");
+});
+
+test("a stranger on the port is NEVER accepted as the boot (the reviewer's attack, driven)", async () => {
+  // The exact case gemini drove: a dummy HTTP server answering 200 with a plausible body must not
+  // pass the collector. Without THIS boot's 32-hex marker, identity never resolves.
+  const stranger = createServer((req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true, probe: "sandbox-probe/1", stale: true }));
+  });
+  await new Promise((r) => stranger.listen(0, "127.0.0.1", r));
+  const origin = `http://127.0.0.1:${stranger.address().port}`;
+  try {
+    const refused = await awaitBootIdentity(origin, "0123456789abcdef0123456789abcdef", 3000);
+    assert.equal(refused.ok, false, "a server without this boot's marker is a stranger, however plausible its JSON");
+    assert.match(refused.why, /marker/, "the refusal names identity, not liveness");
+  } finally {
+    stranger.close();
+  }
+  // And the marked server IS accepted — the mechanism fails safe, not closed.
+  const owned = createServer((req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true, bootMarker: "0123456789abcdef0123456789abcdef" }));
+  });
+  await new Promise((r) => owned.listen(0, "127.0.0.1", r));
+  try {
+    const accepted = await awaitBootIdentity(`http://127.0.0.1:${owned.address().port}`, "0123456789abcdef0123456789abcdef", 3000);
+    assert.equal(accepted.ok, true, "the boot's own marker, returned exactly, is the identity");
+  } finally {
+    owned.close();
+  }
 });
 
 test("a host without a systemd --user manager is REFUSED BY NAME, never a half-boot", () => {

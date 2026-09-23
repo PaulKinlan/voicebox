@@ -18,6 +18,10 @@ import { createServer } from "node:http";
 
 const PORT = Number(process.env.PORT ?? 0);
 const PROBE = process.env.SANDBOX_PROBE ?? "/probes/sandbox-probe.mjs";
+// BOOT IDENTITY: the marker this boot was launched with (xqg's per-boot pattern). /health answers
+// with it, so the host that minted it can tell THIS environment from a stranger that grabbed the
+// recycled port first — an open port answering 200 is not proof of who is answering.
+const BOOT_MARKER = process.env.VOICEBOX_BOOT_MARKER ?? null;
 
 /** Run the probe against this environment; resolve the parsed report or the failure as data. */
 function selfProbe() {
@@ -40,7 +44,7 @@ const server = createServer((req, res) => {
   const url = new URL(req.url, "http://127.0.0.1");
   if (url.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
-    return res.end(JSON.stringify({ ok: true, serves: "env-serve/1" }));
+    return res.end(JSON.stringify({ ok: true, serves: "env-serve/1", ...(BOOT_MARKER ? { bootMarker: BOOT_MARKER } : {}) }));
   }
   if (url.pathname === "/" || url.pathname === "/probe") {
     res.writeHead(200, { "content-type": "application/json" });
