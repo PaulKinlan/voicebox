@@ -274,9 +274,21 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
     const kind = ref.endsWith(".css") ? "stylesheet" : ref.endsWith(".ts") ? "compiled" : "module";
     const drift = driftBetween(disk, core, { ref, kind });
     if (drift) { staleModules.push(drift); continue; }
-    if (ref.endsWith(".js")) {
+    // FOLLOW THE MODULE GRAPH, INCLUDING THE WORKER'S. Two things were not walked and both are page code:
+    //   · `.ts` imports — only `.js` refs were followed, so a compiled module's own imports were never
+    //     fetched (the served copy is compiled JS, so the same specifier regex applies);
+    //   · the WORKER ENTRY POINTS — a worker is constructed at runtime
+    //     (`new Worker("/browser/worker.ts", …)`), so nothing in the HTML or the import graph points at it,
+    //     and its whole graph (browser/acts.ts, browser/opfs.ts, …) went uncompared. Measured 2026-09-23:
+    //     a code-only edit to browser/acts.ts was invisible to this check for exactly that reason — the
+    //     comparison was right and never reached the file.
+    if (/\.(?:js|ts|mjs)$/.test(ref)) {
       for (const m of served.matchAll(/from\s*"\.\/([^"]+)"|import\s*"\.\/([^"]+)"/g))
         servedRefs.push(path.posix.join(path.posix.dirname(ref), m[1] ?? m[2]));
+      for (const m of served.matchAll(/new\s+(?:Shared)?Worker\s*\(\s*["']([^"']+)["']/g))
+        servedRefs.push(m[1].startsWith("/") ? m[1].slice(1) : path.posix.join(path.posix.dirname(ref), m[1]));
+      for (const m of served.matchAll(/new\s+(?:Shared)?Worker\s*\(\s*new\s+URL\s*\(\s*["']([^"']+)["']\s*,\s*import\.meta\.url\s*\)/g))
+        servedRefs.push(path.posix.join(path.posix.dirname(ref), m[1]));
     }
   }
   if (identityMismatch) {
