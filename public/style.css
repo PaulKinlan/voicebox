@@ -59,6 +59,9 @@ input { caret-color: var(--accent); }
 .made[data-state="failed"] .files, .made[data-state="failed"] .empty, .made[data-state="empty"] .made-note { display: none; }
 .file-placeholder { grid-column: 1 / -1; padding: 14px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); font-size: .8125rem; }
 .made:not([data-state="empty"]) .empty { display: none; }
+/* An undeclared/unreachable root is a failed listing, but its explicit recovery
+   link must remain visible. Do not reveal creation samples on other failures. */
+.made[data-state="failed"] .empty:has(.empty-action:not([hidden])) { display: flex; }
 /* Keep the actual root legible in every state; long paths wrap, never truncate. */
 .listing-root { margin: 0 0 8px; font-size: .8125rem; color: var(--muted); overflow-wrap: anywhere; }
 .listing-root[data-tone="warn"] { color: var(--warn); }

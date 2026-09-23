@@ -219,4 +219,6 @@ Audio worklets loaded by that code: `pcm-worklet.js`.
   with long names wrapping independently of their sizes. Its scroll area is bounded to 40svh/24rem
   so a populated list does not keep growing through the room. Selection, root provenance, arrival
   expiry and folder permissions remain controlled by the existing page logic; CSS changes only their
-  presentation. `tests/room-explorer-ui.test.mjs` drives the native controls and layout boundaries.
+  presentation. A failed listing still reveals an explicit recovery link when the page provides one;
+  other failures do not expose file-creation samples. `tests/room-explorer-ui.test.mjs` drives the native
+  controls, layout boundaries and the visible no-project recovery link.
