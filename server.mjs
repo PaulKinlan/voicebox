@@ -1373,6 +1373,28 @@ const routes = {
       why: noRootDeclared().why,
     });
   },
+  "GET /api/changelog": (req, res, url) => {
+    try {
+      const raw = execFileSync("git", ["log", "-n", "30", "--pretty=format:%H\t%h\t%s\t%an\t%aI\t%as"], {
+        cwd: ROOT,
+        encoding: "utf8",
+      });
+      const commits = raw.trim().split("\n").filter(Boolean).map((line) => {
+        const [sha, shortSha, subject, author, isoDate, date] = line.split("\t");
+        return {
+          sha,
+          shortSha,
+          subject,
+          author,
+          date,
+          url: `https://github.com/PaulKinlan/voicebox/commit/${sha}`,
+        };
+      });
+      return json(res, 200, { ok: true, repo: "https://github.com/PaulKinlan/voicebox", commits });
+    } catch (e) {
+      return json(res, 500, { ok: false, error: e?.message ?? String(e), repo: "https://github.com/PaulKinlan/voicebox", commits: [] });
+    }
+  },
   "GET /api/health": (req, res, url) => json(res, 200, {
     ok: true,
       // `created` is the count the live-auth tests assert on: a refusal that still created a session is
@@ -1413,7 +1435,14 @@ const routes = {
   },
   "GET /": (req, res, url) => {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    res.end(readFileSync(path.join(PUBLIC, "index.html")));
+    const where = BUILD.ahead === null
+      ? ` · no origin/${BUILD.branch} here, so the distance from a remote is unknown`
+      : BUILD.ahead === 0
+      ? ""
+      : ` · ${BUILD.ahead} commit${BUILD.ahead === 1 ? "" : "s"} ahead of origin/${BUILD.branch} (not landed)`;
+    const stamp = `${BUILD.branch} @ ${BUILD.commit}${where}${BUILD.dirty ? " · uncommitted changes" : ""}`;
+    const html = readFileSync(path.join(PUBLIC, "index.html"), "utf8").replace("__VOICEBOX_BUILD_STAMP__", stamp);
+    res.end(html);
   },
   "GET /index.html": (req, res, url) => routes["GET /"](req, res, url),
   "GET /fused.js": (req, res, url) => {

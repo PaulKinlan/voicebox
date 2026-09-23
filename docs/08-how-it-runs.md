@@ -19,7 +19,7 @@ The active project root is wherever the environment declares it (or the boot-tim
 variable, which is a declaration too) — the server's `GET /api/root` answers where, so this
 diagram does not have to.
 
-In production there is no Vite: `node server.mjs` serves the same `public/` directory itself, from disk.
+In production there is no Vite: `node server.mjs` serves the same `public/` directory itself, from disk (including `changelog.html` and `GET /api/changelog`).
 
 ## Ports, and why
 
