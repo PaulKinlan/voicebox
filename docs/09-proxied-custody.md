@@ -52,9 +52,17 @@ every claim below is stated for the remote path first.
 - **Who holds it**: the **local host**, never the page. The page's `POST /api/call` names the
   environment by **key** and the tool + args; the local host looks up the bearer for that key, attaches
   it, and forwards. The page cannot read the bearer and cannot be asked to.
-- **Revocation is part of pairing, not deferred**: withdrawing a bearer (a) removes it from both sides
-  and (b) makes the next call refuse by name (`environment-not-paired`), and a running task's authority
-  is cancelled by the host that admitted it.
+- **Revocation is an explicit host act (`DELETE /api/pair`)**:
+  Withdrawing a pairing is gated by the host token (`x-voicebox-host-token`) and applies immediately:
+  1. **Immediate active termination**: any currently open `/channel` executor socket and `/live` voice
+     session socket holding that authority is closed with WebSocket code 1008 and refusal `pairing-revoked`.
+     `pageSocket` is cleared and pending calls are abandoned; live sessions are ended.
+  2. **Durable revocation record**: the bearer is marked revoked in `.pairings.json` (`revokedBearers`), so
+     subsequent connection attempts refuse by name (`pairing-revoked`) rather than collapsing into
+     `bearer-refused` (preserving the difference between a revoked credential and a stranger's token).
+  3. **Proxy calls blocked**: `POST /api/call` to that environment and `POST /api/execute` presenting the
+     revoked bearer both refuse HTTP 403 `pairing-revoked`.
+  4. **Audit recorded**: the revocation is logged to the host audit trail (`kind: "pairing", action: "revoke"`).
 
 ## 3. The proxy route, and the remote drive
 
