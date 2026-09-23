@@ -33,6 +33,7 @@ import {
 } from "./core/environment.ts";
 import * as extensions from "./lib/extensions.mjs";
 import { createTaskHost, protectedAuditPath, TASK_TOOLS } from "./lib/tasks.mjs";
+import { createPermissionPolicy } from "./lib/permission-policy.mjs";
 import { bootFence } from "./lib/fence-provider.mjs";
 import { SOURCE_DIRS } from "./lib/browser-sources.mjs";
 import { bootUnitFence } from "./lib/unit-fence-provider.mjs";
@@ -430,6 +431,8 @@ const tasks = createTaskHost({
   addressKey: readFileSync(path.join(HOST_DIR, ".host-token")),
   root: () => active,
 });
+
+const permissions = createPermissionPolicy();
 
 function callTool(tool, args, authority) {
   return (TASK_TOOLS.has(tool) || tool === "cancel_task") ? tasks.call(tool, args, authority) : extensions.callTool(tool, args);
@@ -1648,6 +1651,25 @@ async function handle(req, res) {
     const r = extensions.admitProposal(body.id, body.decision === "deny" ? "deny" : "admit");
     return json(res, 200, r);
   }
+
+  if (req.method === "GET" && url.pathname === "/api/permissions/pending") {
+    return json(res, 200, { ok: true, pending: permissions.pending() });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/permissions/resolve") {
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "resolving a permission request requires the host token (x-voicebox-host-token); the page cannot hold it" });
+    }
+    const body = await readJson().catch(() => ({}));
+    const requestId = typeof body?.requestId === "string" ? body.requestId : null;
+    if (!requestId) return json(res, 400, { ok: false, refused: "bad-request", why: "resolving a permission request names the requestId" });
+    const result = permissions.resolve(requestId, {
+      allow: Boolean(body.allow),
+      optionId: typeof body.optionId === "string" ? body.optionId : undefined,
+      reason: typeof body.reason === "string" ? body.reason : undefined,
+    });
+    return json(res, result.ok ? 200 : 409, result);
+  }
   // ── PAIRING + PROXIED CALL (docs/09-proxied-custody.md; journal-wdq decisions 3+4) ─────────────
   // Custody: the page holds NO remote credential. It names an environment by KEY and the local host
   // originates the call, attaching the bearer it holds. Pairing is the explicit act that creates the
@@ -1871,6 +1893,7 @@ server.on("upgrade", (req, socket) => {
         if (pageSocket === ws) {
           pageSocket = null;
           pageChannel.abandon();
+          permissions.disconnect();
           console.error("[channel] the page disconnected — routed acts will answer no-page until it returns");
         }
       });
