@@ -5,6 +5,8 @@
 // reading its bytes back. There is no seeded content, no timer that fakes a
 // state, and no claim the server has not made. Strings are rendered with
 // textContent only.
+import { debugEnabled, recordDebug } from "./debug-transcript.js";
+
 const $ = (id) => document.getElementById(id);
 const SVG = "http://www.w3.org/2000/svg";
 
@@ -459,9 +461,13 @@ function icon(id) {
   return svg;
 }
 
-async function request(path, options) {
+async function request(path, options, traceId) {
   const response = await fetch(path, options);
   const body = await response.json().catch(() => null);
+  if (traceId) recordDebug({ type: "turn.result", traceId, status: response.status, body,
+    severity: !response.ok || body?.result?.ok === false || body?.error || body?.note ? "error" : "info",
+    delivery: "HTTP response received by page; the typed resolver does not send execution results back to a model" });
+  if (path === "/api/health") recordDebug({ type: "host.health", body });
   // A named refusal carries refused+why, not error — carry them onto the throw so the catch renders
   // the reason and the remedy, not "the server answered 500".
   if (!response.ok) {
@@ -474,11 +480,20 @@ async function request(path, options) {
   return body;
 }
 
-const turn = (transcript) => request("/api/turn", {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify({ transcript }),
-});
+const turn = async (transcript) => {
+  const traceId = debugEnabled ? crypto.randomUUID() : null;
+  recordDebug({ type: "turn.request", traceId, transcript });
+  try {
+    return await request("/api/turn", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ transcript }),
+    }, traceId);
+  } catch (error) {
+    recordDebug({ type: "turn.error", traceId, error: error.message, refused: error.refused, why: error.why });
+    throw error;
+  }
+};
 
 // ── what was made: a quiet name and its real size, nothing else ───────────
 //
@@ -1432,6 +1447,7 @@ function logTurn(said, outcome) {
 }
 
 function finish(said, outcome, tone) {
+  recordDebug({ type: "turn.presented", transcript: said, outcome, severity: tone === "bad" ? "error" : "info" });
   setReport(outcome, tone, said);
   logTurn(said, outcome);
 }
