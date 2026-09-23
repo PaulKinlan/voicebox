@@ -4,8 +4,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { COMMANDS, COMMAND_VERBS, commandToAction, functionDeclarations, liveSystemInstruction } from "../lib/commands.mjs";
 
-test("the list declares write/read/list — the executor's verbs, once", () => {
-  assert.deepEqual([...COMMAND_VERBS].sort(), ["list", "read", "write"]);
+test("the list declares file and extension actions — the executor's verbs, once", () => {
+  assert.deepEqual([...COMMAND_VERBS].sort(), ["extension", "extensions", "list", "read", "write"]);
   const names = COMMANDS.map((c) => c.name);
   assert.equal(new Set(names).size, names.length, "command names must be unique");
 });
@@ -26,6 +26,18 @@ test("commandToAction maps a tool call to the executor's action shape", () => {
   assert.deepEqual(commandToAction("write_file", { name: "a.txt", content: "hi" }), { verb: "write", name: "a.txt", content: "hi" });
   assert.deepEqual(commandToAction("read_file", { name: "a.txt" }), { verb: "read", name: "a.txt" });
   assert.deepEqual(commandToAction("list_files"), { verb: "list", name: "" });
+});
+
+test("extension calls preserve arguments and refuse malformed values", () => {
+  assert.deepEqual(commandToAction("list_extensions"), { verb: "extensions", name: "" });
+  assert.deepEqual(commandToAction("call_extension", { name: "web_search", url: "https://example.com/?q=Saturn" }), {
+    verb: "extension", name: "web_search", args: { url: "https://example.com/?q=Saturn" },
+  });
+  assert.deepEqual(commandToAction("call_extension", { name: "clock" }), { verb: "extension", name: "clock", args: {} });
+  for (const args of [{ name: "" }, { name: 1 }, { name: "clock", url: {} }, { name: "clock", authority: "host" }, JSON.parse('{"name":"clock","__proto__":"bad"}')]) {
+    assert.equal(commandToAction("call_extension", args).refused, "invalid-argument");
+  }
+  assert.equal(commandToAction("call_extension", {}).refused, "missing-argument");
 });
 
 test("an unknown command maps to null — the caller refuses, never guesses", () => {

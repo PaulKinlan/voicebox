@@ -34,6 +34,7 @@ import { admit, PRIMITIVES, PRIMITIVE_NEEDS, GETS } from "../core/extensions.ts"
 import { availableLiveProviders, resolvedLiveProviderName } from "../lib/live-session.mjs";
 import { createGeminiProvider } from "../lib/live-providers/gemini.mjs";
 import { createOpenAIProvider } from "../lib/live-providers/openai.mjs";
+import { functionDeclarations, liveSystemInstruction } from "../lib/commands.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WRITE = process.argv.includes("--write");
@@ -268,7 +269,7 @@ function liveHandshakes() {
     const saved = process.env[keyVar[name]];
     process.env[keyVar[name]] = "docs-check-placeholder";
     try {
-      factory({ emit: () => {}, log: () => {}, transport });
+      factory({ emit: () => {}, log: () => {}, transport, tools: functionDeclarations(), systemInstruction: liveSystemInstruction() });
     } finally {
       if (saved === undefined) delete process.env[keyVar[name]]; else process.env[keyVar[name]] = saved;
     }
@@ -459,15 +460,15 @@ async function blocks() {
     ].join("\n")),
 
     "tool-path": block("tool-path", [
-      "**Three ways words reach this server. Two of them reach a tool.**",
+      "**Three ways words reach this server; all reach the shared executor.**",
       "",
       "| path | wired today | what carries the words | what runs |",
       "|---|---|---|---|",
       `| typed in the composer | ${routes.find((r) => r.path === "/api/turn")?.status === 200 ? "yes" : "**no** (route probe failed)"} | \`public/fused.js\` → \`POST /api/turn\` | \`resolveTurn()\` (\`lib/resolver.mjs\`, provider \`${health.provider}\`) → \`execute()\` (\`server.mjs\`) → for tools, \`callTool()\` (\`lib/extensions.mjs\`) |`,
       `| dictated (browser \`SpeechRecognition\`, no key) | ${dictation ? "yes — the same route" : "**no** — `SpeechRecognition` is not in `public/fused.js`"} | \`public/fused.js\` → \`POST /api/turn\` | the same |`,
-      `| spoken to the live model | audio yes; tools **${liveReachesExecutor ? "yes" : "no"}** | \`public/live-voice.js\` → \`/live\` → \`lib/live-session.mjs\` → the provider | ${liveReachesExecutor ? "the `/live` handler now calls the executor — update this row's prose" : "the model's words come back to the page as text frames; the `/live` handler calls neither `resolveTurn()` nor `execute()`"} |`,
+      `| spoken to the live model | audio yes; tools **${liveReachesExecutor ? "yes" : "no"}** | \`public/live-voice.js\` → \`/live\` → \`lib/live-session.mjs\` → the provider | ${liveReachesExecutor ? "provider tool call → `commandToAction()` → `execute()` → correlated tool response" : "the model's words come back to the page as text frames; the `/live` handler calls neither `resolveTurn()` nor `execute()`"} |`,
       "",
-      `What each live handshake declares, captured from the provider itself: ${handshakes.map((h) => "`" + h.name + "` → tools: " + (h.tools === null ? "(not captured)" : h.tools.length ? h.tools.map((t) => "`" + t + "`").join(", ") : "**none**")).join("; ")}. When a provider starts declaring tools this line changes and the check goes red — that is the moment the row above stops being true.`,
+      `What each live handshake declares, captured from the provider with the server's shared command list: ${handshakes.map((h) => "`" + h.name + "` → tools: " + (h.tools === null ? "(not captured)" : h.tools.length ? h.tools.map((t) => "`" + t + "`").join(", ") : "**none**")).join("; ")}. Extension discovery reads the current registry; invocation goes through the existing admission and runtime bounds.`,
       "",
       `Verbs the \`${health.provider}\` resolver produces, driven: ${(await resolverVerbs()).map((v) => "`\"" + v.utterance + "\"` → `" + v.verb + "`").join(", ")}. \`make-tool\` **proposes** (a pending file the host must admit); \`tool\` calls an **admitted** tool and nothing else.`,
     ].join("\n")),

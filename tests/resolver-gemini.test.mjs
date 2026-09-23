@@ -25,6 +25,18 @@ test("read and list answers map to the contract", async () => {
   assert.deepEqual(await list("what files exist"), { verb: "list", name: "" });
 });
 
+test("extension discovery and invocation map through the shared command contract", async () => {
+  let answer = { verb: "extensions" };
+  const resolve = makeGeminiResolver({ key: "k", fetchImpl: async () => modelSays(JSON.stringify(answer)) });
+  assert.deepEqual(await resolve("list extensions"), { verb: "extensions", name: "" });
+  answer = { verb: "extension", name: "web_search", url: "https://example.com/?q=Saturn" };
+  assert.deepEqual(await resolve("use web_search"), { verb: "extension", name: "web_search", args: { url: answer.url } });
+  answer = { verb: "extension", name: "web_search", url: {} };
+  assert.match((await resolve("use web_search")).unresolved, /optional string/);
+  answer = { verb: "extension" };
+  assert.match((await resolve("use a tool")).unresolved, /without 'name'/);
+});
+
 test("the model's own unresolved passes through with its message", async () => {
   const resolve = makeGeminiResolver({ key: "k", fetchImpl: async () => modelSays('{"verb":"unresolved","content":"I can only create, read and list files."}') });
   assert.deepEqual(await resolve("delete everything"), { unresolved: "I can only create, read and list files." });

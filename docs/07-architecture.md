@@ -81,15 +81,15 @@ Registered resolvers: `gemini`, `script`
 ## The tool path — which words reach a tool
 
 <!-- BEGIN GENERATED: tool-path -->
-**Three ways words reach this server. Two of them reach a tool.**
+**Three ways words reach this server; all reach the shared executor.**
 
 | path | wired today | what carries the words | what runs |
 |---|---|---|---|
 | typed in the composer | yes | `public/fused.js` → `POST /api/turn` | `resolveTurn()` (`lib/resolver.mjs`, provider `script`) → `execute()` (`server.mjs`) → for tools, `callTool()` (`lib/extensions.mjs`) |
 | dictated (browser `SpeechRecognition`, no key) | yes — the same route | `public/fused.js` → `POST /api/turn` | the same |
-| spoken to the live model | audio yes; tools **yes** | `public/live-voice.js` → `/live` → `lib/live-session.mjs` → the provider | the `/live` handler now calls the executor — update this row's prose |
+| spoken to the live model | audio yes; tools **yes** | `public/live-voice.js` → `/live` → `lib/live-session.mjs` → the provider | provider tool call → `commandToAction()` → `execute()` → correlated tool response |
 
-What each live handshake declares, captured from the provider itself: `gemini` → tools: **none**; `openai` → tools: **none**. When a provider starts declaring tools this line changes and the check goes red — that is the moment the row above stops being true.
+What each live handshake declares, captured from the provider with the server's shared command list: `gemini` → tools: `list_extensions`, `call_extension`, `write_file`, `read_file`, `list_files`; `openai` → tools: `list_extensions`, `call_extension`, `write_file`, `read_file`, `list_files`. Extension discovery reads the current registry; invocation goes through the existing admission and runtime bounds.
 
 Verbs the `script` resolver produces, driven: `"create a file called hello.txt with hi"` → `write`, `"read hello.txt"` → `read`, `"list files"` → `list`, `"create a tool called clock that tells the time"` → `make-tool`, `"run the tool clock"` → `tool`. `make-tool` **proposes** (a pending file the host must admit); `tool` calls an **admitted** tool and nothing else.
 <!-- END GENERATED: tool-path -->

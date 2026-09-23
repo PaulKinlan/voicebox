@@ -184,3 +184,38 @@ overwrite it), after which the page-held token admits. The listing filter withou
 refusal was blindness-ware. (The deeper question — `POST /api/root` accepts any existing path
 unauthenticated — is filed as its own bead: it is the environment-declares flow, e1m0's to
 decide.)
+
+## Model discovery and use
+
+Both live providers receive `list_extensions` and `call_extension` from the shared
+command list. Previously they received only the three file commands and an instruction
+saying they had no other capabilities: approval worked, but the voice could neither
+discover nor invoke the admitted tools.
+
+`list_extensions` reads the **current** registry, including approvals made during a
+conversation. Its admitted entries have exact tool names, descriptions, primitives and
+supported argument names; pending/refused proposals and present-but-not-admitted files
+are separately identified. Descriptor default values are not copied into tool metadata.
+`call_extension` accepts an exact tool name plus optional string `url`, `path`, `content`
+arguments. Omitted arguments use the tool's configured defaults. It calls the existing
+extension runtime, not arbitrary code or the task launcher. Admission, host allowlists,
+request budgets, file containment and auditing still apply. Discovery does not grant
+approval authority. Extension descriptions and results are untrusted model input.
+
+The page's successful console-code approval **is admission**: it records the decision
+and reloads the registry. “Running” means available in that registry, not a separate
+extension process. These extensions are descriptors over host primitives, with no
+independent enabled/reachable state. A network tool may still fail at its upstream;
+Web Search uses DuckDuckGo instant answers, not a general web crawling service.
+
+The script text resolver supports “list extensions” and its existing “run the tool
+web_search <URL>” syntax. The Gemini text resolver shares the discovery/invocation action
+contract but remains a single-action resolver, not a conversational tool loop; it does
+not automatically discover and invoke a tool in one turn. The live model can do both.
+File primitives still use the extension workspace, not a subsequently selected project
+root (the existing two-root limitation in the README).
+
+Checks: `node --test tests/extensions-live.test.mjs tests/commands.test.mjs tests/resolver-gemini.test.mjs`.
+The live-wire fixture covers both providers, approval during an already-open session,
+correlated successful search results, and pending/unknown/malformed/host/budget refusals.
+It uses local synthetic vendor and search endpoints, not paid provider sessions.

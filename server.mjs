@@ -936,6 +936,9 @@ function resolvePublicFile(pathname) {
 // The executor: the one place that touches the build environment. It grows;
 // the resolver stays the same shape.
 async function execute(action) {
+  // Read the registry at call time, not live-session setup: approval can happen mid-conversation.
+  if (action.verb === "extensions") return { ok: true, ...extensions.inventory() };
+  if (action.verb === "extension") return extensions.callTool(action.name, action.args ?? {});
   // make-tool: the model's authoring act (N10). It PROPOSES — a tier 1 write
   // into workspace/proposals/ — and nothing else. Registration is the host's
   // route (POST /api/extensions/admit), which the model does not reach.
