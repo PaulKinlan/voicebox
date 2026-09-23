@@ -31,6 +31,11 @@ import { stripTypeScriptTypes } from "node:module";
 const REWRITTEN_BY_TRANSFORM = [
   /^\s*(?:import|export)\b[^\n]*\bfrom\s*["'][^"']+["']/, // module specifiers -> resolved paths, ?t= stamps
   /^\s*import\s*["'][^"']+["'];?\s*$/, // side-effect imports
+  // A DYNAMIC import() is rewritten to an /@fs/ absolute path even when it carries
+  // @vite-ignore — measured 2026-09-23, when the task-card import made this check
+  // refuse every lane's push for a line that was present in both copies. The
+  // specifier is what changes, so the specifier is what is excluded.
+  /(?<![\w$])import\s*\(\s*(?:\/\*[\s\S]*?\*\/\s*)?["'][^"']+["']/, // dynamic import() specifiers
   /["'`][^"'`]*\.(?:css|png|jpe?g|gif|svg|webp|woff2?|ttf)["'`]/, // asset URLs -> hashed/re-written
 ];
 
