@@ -1675,6 +1675,11 @@ server.on("upgrade", (req, socket) => {
   //     {"type":"hello","role":"environment","bearer":"vbx_…"}.
   //   · Unauthenticated or non-matching connections receive a named refusal with a remedy
   //     ("executor-unauthenticated" / "bearer-refused") and are closed before pageSocket is set.
+  //
+  // WHAT THIS DOES NOT PROTECT AGAINST (same-machine non-browser processes are out of scope):
+  // A non-browser process on the local machine (curl, script) can forge an Origin header on raw loopback TCP.
+  // Closing that requires a per-process session token minted into the served HTML (the environment-identity milestone);
+  // this gate closes Cross-Site WebSocket Hijacking from other browser tabs and unauthenticated remote peers.
   if (url.pathname === "/channel") {
     const ws = wsUpgrade(req, socket);
     if (!ws) { socket.destroy(); return; }
