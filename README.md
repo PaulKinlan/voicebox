@@ -182,7 +182,11 @@ for the argument and permission boundaries.
 | `write-file` | write | a root-scoped write function: paths resolve inside the project root, writes are reported and revertible |
 | `list-files` | read | a root-scoped read function: paths resolve inside the project root or refuse |
 | `http-get` | network | a mediated fetch: hosts outside bounds.hosts are refused by name — INCLUDING across redirects, every hop charged to bounds.maxRequests — and the audit records the URL that actually served the bytes |
+<<<<<<< HEAD
 | `wasm` | — | nothing — the containment is the module itself: linear memory, zero imports, and the call-time rehash binding the executing bytes to the admitted digest |
+=======
+| `wasm` | — | nothing — the module closes its own CAPABILITIES (linear memory, zero imports); its bytes are verified at admission and rehashed at every call, and its time and memory are bounded by HOST constants, never by the module's declaration |
+>>>>>>> c85ee467e2728916a802ab05e1b620cee131c3c1
 
 **What no tool can have on the `machine` placement**, asked of the gate itself:
 * exec — absent: no mechanism on this placement bounds a spawned child: --allow-run bounds which binary, never what it can do, and a child does not inherit the parent's flags. Admission requires a container that bounds the child.

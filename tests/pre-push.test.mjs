@@ -14,9 +14,12 @@ const timeout = execFileSync('which', ['timeout'], { encoding: 'utf8' }).trim();
 // disposable fixture's init/config/add/commit into the repository being pushed.
 const cleanEnv = { ...process.env };
 for (const key of execFileSync('git', ['rev-parse', '--local-env-vars'], { encoding: 'utf8' }).trim().split('\n')) delete cleanEnv[key];
-for (const key of Object.keys(cleanEnv)) {
-  if (key.startsWith('VOICEBOX_GATE_')) delete cleanEnv[key];
-}
+// The fixture's timeout shim accelerates the DEFAULT budgets (unit-timeout:90s). A parent gate
+// run with a raised VOICEBOX_GATE_*_SECS (the refusal's own documented escape) would otherwise
+// leak in, miss the shim's match, and let the "timeout" scenario finish — the instrument
+// measuring itself under someone else's budget (voicebox-beads-67b). Strip them: the fixture
+// always exercises the defaults it is written against.
+for (const key of ['VOICEBOX_GATE_UNIT_SECS', 'VOICEBOX_GATE_LIVE_SECS', 'VOICEBOX_GATE_ACCEPT_SECS']) delete cleanEnv[key];
 
 test('pre-push names the stage and cause, streams output, and refuses real failing tests', { timeout: 60000 }, () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-pre-push-'));
@@ -71,6 +74,10 @@ exec '${timeout}' "$@"
     git('add', '.'); git('commit', '-qm', 'fixture'); git('init', '--bare', '-q', remote);
     git('worktree', 'add', '-qb', 'candidate', work);
     for (const scenario of ['unit-timeout', 'unit-failure', 'live-timeout', 'accept-timeout', 'accept-failure', 'success']) {
+      // 60s, not 15s (voicebox-beads-67b): these six fixture pushes run their real hooks, and
+      // inside the stage's file-parallel npm test they contend with ~40 other suites — 15s was
+      // starved routinely (ETIMEDOUT in-gate, green standalone). The budget is for the machine,
+      // not the mechanism; the mechanism's own assertions are on output, not timing.
       const result = spawnSync('git', ['push', remote, 'HEAD:refs/heads/candidate'], {
         cwd: work, encoding: 'utf8', timeout: 60000,
         env: { ...cleanEnv, NODE_TEST_CONTEXT: undefined, PATH: `${bin}:${process.env.PATH}`, BD_GIT_HOOK: '1',
