@@ -56,4 +56,23 @@ The browser test drives native microphone capture with fake media through real `
 
 The first browser instrument waited on the absent `#caption` element and failed. That RED is retained externally; the product bug is tracked as `voicebox-beads-sor`. The corrected instrument observes raw CDP WebSocket frames without modifying the page's WebSocket or inventing a product caption. Frame arrival is not proof the product displays the reply.
 
-D2–D10 remain unfinished: adapter execution, discovery/default selection, outcome guidance, permission mediation, progress/cancellation, broader recovery, result UI, interjection semantics and lifetime policy are not supplied by this slice.
+D2–D10 remain unfinished: adapter execution, discovery/default selection, permission mediation,
+broader recovery, result UI, interjection semantics and lifetime policy are not supplied by this slice.
+(Progress/cancellation arrived with D6; the outcome half of D4 is described next.)
+
+**What D4 supplies now, and what it deliberately does not** (voicebox-beads-m9u): every terminal
+delegation carries an **outcome class** in its record and in `task_view` — `claimed-complete`
+(`basis: "executor-claimed"`), `observed-failure`, `observed-interruption`, `observed-cancellation`
+(each `basis: "host-observed"`). A completion is therefore recorded AS a claim: the executor returned text
+inside its bounds, and the record never presents that as verified effectiveness. Non-terminal states
+(including `cancel_unconfirmed`) carry no class at all — that state is an open question, not an outcome.
+**Nothing in the record ranks one delegation against another**: no score, weight, order or confidence, and
+`tests/task-outcome.test.mjs` refuses those field names by name, because a record that quietly reorders
+anything has taken authority nobody gave it.
+
+**What is still missing, stated so this document is not read as complete**: the *selection guidance* —
+instructions telling a harness how to choose among listed agents — needs D3's list (`list_agents` /
+`list_harnesses`, not implemented) and a delegation surface the live model can actually call (D3 is not in
+`lib/commands.mjs`'s function declarations today). Writing that guidance now would name tools a harness
+cannot call and agents nothing can enumerate, which is the capability-claim defect this project keeps
+finding. The guidance goes in when the list exists.
