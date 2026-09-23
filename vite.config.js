@@ -145,8 +145,17 @@ function buildStamp() {
     name: "voicebox-build-stamp",
     transformIndexHtml(html) {
       const build = buildIdentity();
+      // A BRANCH WITH NO REMOTE-TRACKING REF used to render as `0635dd5no origin/feat/serve-help`:
+      // the clause carried no leading separator, so the sha ran straight into the sentence and the
+      // stamp read as nonsense — on Paul's page, from this stamp's own text. The separator is the bug.
+      //
+      // And the words now say what is actually unknown. "no origin/<branch>" named a missing ref as
+      // though the reader knew what a remote-tracking ref is; what a person needs from this line is
+      // whether the number of commits AHEAD OF THE REMOTE can be known at all. A branch that was never
+      // pushed, one whose remote ref was pruned, and one fetched from elsewhere all look identical from
+      // here, so the line says only the thing that is true of all three.
       const where = build.ahead === null
-        ? `no origin/${build.branch}`
+        ? ` · no origin/${build.branch} here, so the distance from a remote is unknown`
         : build.ahead === 0
         ? ""
         : ` · ${build.ahead} commit${build.ahead === 1 ? "" : "s"} ahead of origin/${build.branch} (not landed)`;
