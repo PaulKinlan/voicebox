@@ -14,7 +14,7 @@ const SVG = "http://www.w3.org/2000/svg";
 // inert while everything else keeps working (Paul hit this on 2026-09-19 by
 // reloading across a live edit).
 const WANTED = {
-  files: "files", made: "made-list", samples: "samples", count: "file-count", empty: "empty",
+  files: "files", made: "made-list", samples: "samples", samplesLabel: "samples-label", count: "file-count", empty: "empty",
   emptyHeadline: "empty-headline", emptyNext: "empty-next", emptyWhy: "empty-why", emptyAction: "empty-action",
   where: "where-note", dot: "server-dot", refresh: "refresh", report: "turn-report", newFile: "new-file",
   rootKind: "root-kind", madeHeading: "made-heading", emptyLink: "empty-link", listingRoot: "listing-root",
@@ -281,7 +281,11 @@ function renderEmptyState() {
   if (!headline || !next) return;
 
   const sampleList = els.samples;
-  const showSamples = (allowed) => { if (sampleList) sampleList.hidden = !allowed; };
+  // The label goes with the list it labels: a heading left behind over nothing is worse than none.
+  const showSamples = (allowed) => {
+    if (sampleList) sampleList.hidden = !allowed;
+    if (els.samplesLabel) els.samplesLabel.hidden = !allowed;
+  };
 
   // 1. no answer from the server: nothing can be written, and saying so is the
   //    useful sentence.
