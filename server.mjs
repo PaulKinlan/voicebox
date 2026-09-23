@@ -563,6 +563,14 @@ const pageChannel = createChannel({
 });
 const pageExecutorConnected = () => pageSocket !== null;
 
+// The extension system's tools act in the ACTIVE root, not a workspace of their own
+// (voicebox-beads-gto): the host hands the declaration down live, and the page leg is the
+// same dispatch a turn takes.
+extensions.setHostHooks({
+  activeRoot: () => active,
+  actViaPage: (action) => executeViaPage(action),
+});
+
 // One ask, shaped the wire's way: attributed to the built-in file descriptor, carrying the
 // ACTIVE root so the page can check the call is really for its project (root-not-mine), with
 // containment RE-RUN page-side (core/dispatch.ts states the rule; browser/acts.ts enforces it).
@@ -574,6 +582,7 @@ function askPage(action) {
       root: active.root,
       name: String(action.name ?? ""),
       ...(action.content != null ? { content: String(action.content) } : {}),
+      ...(action.turn != null ? { turn: String(action.turn) } : {}),
     },
     boundsEcho: {},
   });
