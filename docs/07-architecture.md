@@ -26,7 +26,7 @@ WebSocket transport) have landed, and the page loads `live-voice.js`, which open
 through `pcm-worklet.js`. The generated line below says what the model is; the *turn* path is still the
 `script` placeholder, and those two facts are what an earlier version of this file managed to conflate.
 
-<!-- BEGIN GENERATED: live-session -->
+<!-- BEGIN GENERATED: live-session — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 `lib/live-session.mjs` is present. Registered live providers, with the model each one's handshake names (captured from the provider against a recording transport — never dialed): `gemini` → `models/gemini-3.8-live`, `openai` → `gpt-realtime`. The library fallback is `gemini`, overridable by `VOICEBOX_LIVE_PROVIDER`; the server's `/live` route instead passes the agent-settings provider explicitly.
 <!-- END GENERATED: live-session -->
 
@@ -44,19 +44,21 @@ fixed location this diagram names.
 The server **never parses language itself**: `resolveTurn` returns an action, and the server runs it. That
 is the whole seam, and it is why swapping the brain does not touch the page or the server.
 
-<!-- BEGIN GENERATED: providers -->
+<!-- BEGIN GENERATED: providers — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 Registered resolvers: `gemini`, `script`
 
 * `registerResolver(name, fn)` is the seam; `resolveTurn(transcript, provider = "script")` picks one.
 * The **script** provider handles `write`, `read` and `list`: `"create a file called hello.txt with hi"` → `{"verb":"write","name":"hello.txt","content":"hi"}`.
-* Anything else is **unresolved**, by design: `"book me a flight to Lisbon"` → `"the script resolver only knows create/read…"`.
+* The verbs it produces, driven one utterance each: `write`, `read`, `list`, `make-tool`, `tool`. An utterance matching **none** of them is **unresolved**, by design: `"book me a flight to Lisbon"` → `"the script resolver only knows create/read…"`. (This line used to say *"anything else is unresolved"*, which was a TYPED universal beside a derived example — false the moment `make-tool` and `tool` started resolving.)
 * The live voice providers (`gemini`, `openai`) live behind a **different** seam, `registerLiveProvider` in `lib/live-session.mjs`; none of them is a turn resolver — see the tool path below.
 <!-- END GENERATED: providers -->
 
 ## The agent loop — one turn, driven
 
-<!-- BEGIN GENERATED: loop -->
+<!-- BEGIN GENERATED: loop — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 **One turn, driven end to end on a scratch root while this document was generated.** Every value in the last column was read back from the server, not typed.
+
+The log's SHAPE is derived too, not described: the write produced **2** entries and the refusal **1**, counted from `GET /api/audit` either side of each act. Row 5 used to say *"one entry per act"* as TYPED prose inside this generated block, and it stayed there after the shape changed (attempt-first, `voicebox-beads-y69`) because nothing about that sentence was derived — the marker on this block's opening comment says which half you can trust.
 
 | step | what happens | the mechanism | driven |
 |---|---|---|---|
@@ -64,7 +66,7 @@ Registered resolvers: `gemini`, `script`
 | **2 · something decides** | the resolver turns words into an action, or says it cannot (`unresolved`) | `resolveTurn(transcript, "script")` in `lib/resolver.mjs` — the server never parses language itself | → `{"verb":"write","name":"hello.txt","content":"hi"}` |
 | **3 · something acts** | the executor runs the verb in the **active root** — the one declared over `POST /api/root`; none is assumed | `execute(action)` in `server.mjs` | → `wrote hello.txt (2 bytes)` in a root of kind `machine` |
 | **4 · the result returns** | the page gets the whole story in one response | `{transcript, action, result}` — `result.ok`, `result.action`, `result.root`, `result.logged` | → `ok: true`, `logged: 2` |
-| **5 · the act is recorded** | one entry per act — allowed **or refused** — appended to the root's own log and readable back | `<root>/.audit/<writer>.jsonl` (`core/shared-log.ts`), `GET /api/audit` | → entry seq 1: kind `write`, decision `attempt`, rule `attempted` |
+| **5 · the act is recorded** | **2 entries** for that one write — `attempt`/`attempted` then `allow`/`writes-inside` — the outcome carrying the attempt's own seq; a pre-flight refusal records one | `<root>/.audit/<writer>.jsonl` (`core/shared-log.ts`), `GET /api/audit` | → seq 1 `attempt`, seq 2 `allow`; then seq 3 `refuse`/`outside-root` |
 
 **Where it fails, by name** (driven): the same turn **before any root is declared** → `refused: root-not-declared`, `logged: null` (no root, so nowhere to hold a log — the response says so rather than omitting the field); `"read .."` → `refused: outside-root`, and the refusal is itself logged as entry seq 3. Declaring the root answered `ok: true`, `reachableFromThisProcess: true`, and the turn that was refused a moment earlier then succeeded.
 
@@ -80,7 +82,7 @@ Registered resolvers: `gemini`, `script`
 
 ## The tool path — which words reach a tool
 
-<!-- BEGIN GENERATED: tool-path -->
+<!-- BEGIN GENERATED: tool-path — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 **Three ways words reach this server; all reach the shared executor.**
 
 | path | wired today | what carries the words | what runs |
@@ -96,7 +98,7 @@ Verbs the `script` resolver produces, driven: `"create a file called hello.txt w
 
 ## The tool surface — what exists, what it refuses, how to list it
 
-<!-- BEGIN GENERATED: tools -->
+<!-- BEGIN GENERATED: tools — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 **The default tools are a closed set of 5 primitives** (`PRIMITIVES` in `core/extensions.ts`). A model authors a descriptor that *parameterises* one; it never authors a body, so nothing in the runtime evaluates model-written code.
 
 | primitive | consumes | what the host hands the tool |
@@ -136,12 +138,12 @@ Verbs the `script` resolver produces, driven: `"create a file called hello.txt w
 
 ## Configuration — every variable the process reads
 
-<!-- BEGIN GENERATED: config -->
+<!-- BEGIN GENERATED: config — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 Every environment variable the server and its libraries read, and where:
 
 | variable | read in | what it does |
 |---|---|---|
-| `GEMINI_API_KEY` | `lib/live-providers/gemini.mjs`, `server.mjs` | the Gemini Live key — without it the live session refuses to start, by name |
+| `GEMINI_API_KEY` | `lib/live-providers/gemini.mjs`, `lib/resolver.mjs`, `server.mjs` | read by TWO things with different refusals: the live session refuses to start by name, and the gemini turn resolver answers `unresolved` saying it has no key |
 | `LIVE_PROVIDER` | `lib/live-session.mjs`, `server.mjs` | the OLD NAME of `VOICEBOX_LIVE_PROVIDER`, honoured for one release |
 | `OPENAI_API_KEY` | `lib/live-providers/openai.mjs`, `server.mjs` | the OpenAI Realtime key — without it that provider refuses to start, by name |
 | `PORT` | `server.mjs` | the port the server binds (default 8787) |
@@ -159,7 +161,7 @@ Every environment variable the server and its libraries read, and where:
 
 ## The routes, as they answer
 
-<!-- BEGIN GENERATED: routes -->
+<!-- BEGIN GENERATED: routes — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 The zero-dependency server (`server.mjs`, `node:http`) binds **127.0.0.1** and serves:
 
 | method | path | probed status |
@@ -176,7 +178,7 @@ A WEBSOCKET UPGRADE ON /live IS ACCEPTED (101) — the zero-dependency server ow
 
 ## What the page actually loads
 
-<!-- BEGIN GENERATED: page -->
+<!-- BEGIN GENERATED: page — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 The page loads `fused.js` and `pip-mic.mjs` and `live-voice.js` from `public/`.
 Audio worklets loaded by that code: `pcm-worklet.js`.
 
@@ -185,7 +187,7 @@ Audio worklets loaded by that code: `pcm-worklet.js`.
 
 ## The audio path, tonight
 
-<!-- BEGIN GENERATED: live-session -->
+<!-- BEGIN GENERATED: live-session — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 `lib/live-session.mjs` is present. Registered live providers, with the model each one's handshake names (captured from the provider against a recording transport — never dialed): `gemini` → `models/gemini-3.8-live`, `openai` → `gpt-realtime`. The library fallback is `gemini`, overridable by `VOICEBOX_LIVE_PROVIDER`; the server's `/live` route instead passes the agent-settings provider explicitly.
 <!-- END GENERATED: live-session -->
 
