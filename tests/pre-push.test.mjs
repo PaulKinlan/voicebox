@@ -77,6 +77,18 @@ exec '${timeout}' "$@"
       const stage = scenario.startsWith('test') ? 'tests' : 'acceptance';
       const cause = scenario.endsWith('timeout') ? 'TIMED OUT' : 'FAILED';
       assert.match(output, new RegExp(`REFUSED: ${stage} .* — ${cause}`));
+      if (scenario.endsWith('timeout')) {
+        const timeoutMatch = output.match(/TIMED OUT — budget (\d+)s, elapsed (\d+)s \(exit 124\)/);
+        assert.ok(timeoutMatch, `timeout refusal must state both budget and elapsed time: ${output}`);
+        const budget = Number(timeoutMatch[1]);
+        const elapsed = Number(timeoutMatch[2]);
+        const expectedBudget = scenario.startsWith('test') ? 180 : 45;
+        assert.equal(budget, expectedBudget, `budget must match configured value: ${budget} vs ${expectedBudget}`);
+        assert.notEqual(elapsed, budget, `elapsed (${elapsed}s) must not echo the budget claim (${budget}s)`);
+        assert.ok(elapsed >= 1 && elapsed <= 10, `elapsed (${elapsed}s) must reflect actual measured execution time (~2s)`);
+        const expectedVar = scenario.startsWith('test') ? 'VOICEBOX_GATE_TESTS_SECS' : 'VOICEBOX_GATE_ACCEPT_SECS';
+        assert.match(output, new RegExp(`re-run when the box is quieter, or raise the budget with ${expectedVar}=<n>`));
+      }
       if (cause === 'FAILED') assert.doesNotMatch(output, /TIMED OUT/);
       if (stage === 'tests') assert.doesNotMatch(output, /ACCEPTANCE OUTPUT/);
       else {
@@ -116,5 +128,38 @@ test('acceptance names the network cause when a responding front drops mid-run',
     assert.match(output, /run completed without crashing — fetch failed \(UND_ERR_SOCKET\)/);
   } finally {
     child.kill(); front.closeAllConnections(); await new Promise(resolve => front.close(resolve));
+  }
+});
+
+test('pre-push timeout refusal respects custom budget and reports measured elapsed time', { timeout: 30000 }, () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-pre-push-budget-'));
+  const repo = path.join(dir, 'repo');
+  try {
+    mkdirSync(repo);
+    execFileSync('git', ['init', '-q'], { cwd: repo, env: cleanEnv });
+    copyFileSync(path.join(root, 'scripts/pre-push.sh'), path.join(repo, 'pre-push.sh'));
+    chmodSync(path.join(repo, 'pre-push.sh'), 0o755);
+    writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "setTimeout(()=>{}, 30000)"' } }));
+
+    const result = spawnSync(path.join(repo, 'pre-push.sh'), [], {
+      cwd: repo, encoding: 'utf8', timeout: 15000,
+      env: {
+        ...cleanEnv,
+        VOICEBOX_GATE_TESTS_SECS: '2',
+        VOICEBOX_SKIP_ACCEPT: '1',
+      },
+    });
+
+    assert.notEqual(result.status, 0, result.stdout + result.stderr);
+    const output = result.stdout + result.stderr;
+    assert.match(output, /running npm test \(max 2s\)\.\.\./);
+    const match = output.match(/REFUSED: tests \(npm test\) — TIMED OUT — budget (\d+)s, elapsed (\d+)s \(exit 124\); suite completion is unknown, not a test verdict — re-run when the box is quieter, or raise the budget with VOICEBOX_GATE_TESTS_SECS=<n>\./);
+    assert.ok(match, `refusal must match format with budget and elapsed: ${output}`);
+    const budget = Number(match[1]);
+    const elapsed = Number(match[2]);
+    assert.equal(budget, 2, 'configured budget must be 2s');
+    assert.ok(elapsed >= 1 && elapsed <= 5, `elapsed must be measured execution time: ${elapsed}s`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
