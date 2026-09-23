@@ -96,3 +96,31 @@ this file, in `07-architecture.md` and in `README.md`; everything outside them i
 **What this check cannot see**, stated so nobody trusts it further than it goes: it derives the provider
 list, the probed routes, the page's scripts and the presence of a live-session file. It cannot tell whether
 a *sentence* in prose is still true, and it does not try.
+
+### The hand-written half
+
+```bash
+node scripts/docs-touched.mjs          # exit 1 when a change moves a described file and no document moves
+```
+
+The rule is Paul's: **every update updates the docs and the README in the same change.** The generated
+blocks answer for themselves; the prose around them had nothing watching it — and on 2026-09-20 a
+hand-written paragraph in the README was false *within the hour*, because a route landed underneath it
+while the generated block beside it went red and was regenerated.
+
+So the documents' own declarations are the mechanism: **every file path a document names in backticks is a
+file that document describes.** Change one of those files and touch no document, and the push is refused,
+naming the file and every document that names it. It runs first in the pre-push gate, before the suite,
+because it costs one `git diff`.
+
+**It must not become a gate that always fails**, so there is an explicit way past, and it is a record
+rather than a shrug:
+
+```bash
+git commit --amend --trailer "Docs-checked: a comment — nothing a document describes changed"
+```
+
+That trailer is the checklist item (*"did this move something a document describes?"*) turned into
+something a later reader can audit. `tests/docs-touched.test.mjs` drives the gate against a real scratch
+repository — refusal, the document-in-the-change case, the trailer, an undescribed file, a docs-only
+change, and an unknown base — so the gate has checks that can fail.

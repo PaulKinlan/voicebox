@@ -50,7 +50,10 @@ snapshot:
 | [`docs/07-architecture.md`](docs/07-architecture.md), [`docs/08-how-it-runs.md`](docs/08-how-it-runs.md), this README | **snapshots** | what runs *now*; a claim here that the code contradicts is a bug in the document |
 
 The blocks marked `BEGIN GENERATED` are written by `scripts/docs-check.mjs` from the code itself, and
-`tests/docs-drift.test.mjs` fails when they drift.
+`tests/docs-drift.test.mjs` fails when they drift. The prose **around** them is watched too:
+`scripts/docs-touched.mjs` refuses a push that moves a file a document describes without touching a
+document — Paul's rule, *every update updates the docs and the README in the same change*. See
+[`docs/08-how-it-runs.md`](docs/08-how-it-runs.md) for the mechanism and its recorded way past.
 
 Task admission's API, evidence boundaries and unfinished execution work are documented in
 [D1: authenticated task admission and durable handles](docs/10-delegate-task-d1.md).

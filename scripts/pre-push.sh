@@ -58,6 +58,13 @@ run_stage() {
 # Three loaded full-suite runs took 73.47–74.57s; keep the full suite with headroom.
 _test_secs="${VOICEBOX_GATE_TESTS_SECS:-180}"
 _accept_secs="${VOICEBOX_GATE_ACCEPT_SECS:-45}"
+_docs_secs="${VOICEBOX_GATE_DOCS_SECS:-30}"
+
+# The documents' HAND-WRITTEN half (voicebox-beads-ths): a change that moves a file a document
+# describes, with no document in it, is refused here — `Docs-checked:` in the commit message is the
+# recorded way past. It runs FIRST because it costs one `git diff`: a gate that makes you wait three
+# minutes to be told you forgot a sentence is a gate people learn to skip.
+run_stage docs-touched "$_docs_secs" node scripts/docs-touched.mjs
 
 run_stage tests "$_test_secs" npm test
 
