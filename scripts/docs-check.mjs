@@ -526,7 +526,7 @@ async function blocks() {
       "",
       "| primitive | consumes | what the host hands the tool |",
       "|---|---|---|",
-      ...PRIMITIVES.map((p) => `| \`${p}\` | ${PRIMITIVE_NEEDS[p].join(", ") || "—"} | ${PRIMITIVE_NEEDS[p].map((c) => GETS[c]).join("; ") || "nothing — it answers with the clock"} |`),
+      ...PRIMITIVES.map((p) => `| \`${p}\` | ${PRIMITIVE_NEEDS[p].join(", ") || "—"} | ${PRIMITIVE_NEEDS[p].length ? PRIMITIVE_NEEDS[p].map((c) => GETS[c]).join("; ") : p === "now" ? "nothing — it answers with the clock" : "nothing — the containment is the module itself: linear memory, zero imports, and the call-time rehash binding the executing bytes to the admitted digest"} |`),
       "",
       `**What no tool can have on the \`${surface.placement}\` placement**, asked of the gate itself:`,
       ...admit({ id: "probe", name: "probe", description: "", source: "builtin", runsIn: "host", capabilities: [], bounds: {}, tools: [{ name: "probe", description: "", primitive: "now", params: {} }] }, "machine").cannotHave.map((line) => `* ${line}`),

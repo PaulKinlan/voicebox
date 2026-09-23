@@ -34,9 +34,9 @@ export type Bounds = {
  * descriptor whose tool names something outside this set is refused, because
  * the host would have to evaluate model-authored code to run it.
  */
-export type Primitive = "now" | "read-file" | "write-file" | "list-files" | "http-get";
+export type Primitive = "now" | "read-file" | "write-file" | "list-files" | "http-get" | "wasm";
 
-export const PRIMITIVES: readonly Primitive[] = ["now", "read-file", "write-file", "list-files", "http-get"];
+export const PRIMITIVES: readonly Primitive[] = ["now", "read-file", "write-file", "list-files", "http-get", "wasm"];
 
 /** What each primitive CONSUMES — the needs a descriptor must declare to use it. */
 export const PRIMITIVE_NEEDS: Record<Primitive, Capability[]> = {
@@ -45,7 +45,28 @@ export const PRIMITIVE_NEEDS: Record<Primitive, Capability[]> = {
   "write-file": ["write"],
   "list-files": ["read"],
   "http-get": ["network"],
+  // wasm CONSUMES NO CAPABILITY: its imports are a closed, declared set (buffer-abi/1: ZERO
+  // imports). That is the answer to the closed set's own refusal: `execute` was refused because
+  // 'there is no mechanism'; a verified-digest module with no imports IS the mechanism
+  // (voicebox-beads-4vz, provider-under-gate). BUT the closure is over CAPABILITIES, never over
+  // RESOURCES (vb-resolver's review, driven): an export runs synchronously with no fuel and
+  // memory.grow needs no import — an admitted module is trusted for its time and memory, and
+  // neither is bounded. The digest binds bytes, never behavior.
+  wasm: [],
 };
+
+/** The wasm asset a 'wasm' tool must carry: the digest its bytes are checked against, and the ABI
+ *  as DATA. A digest binds bytes to a manifest — the authority is the host's admission, and the
+ *  call-time rehash binds the bytes about to execute to what was admitted (the shelf directory is
+ *  mutable as this user, which is the fact that makes the second check non-redundant). */
+export interface WasmAsset {
+  path: string; // the module file, read and rehashed at EVERY call
+  digest: string; // /^[0-9a-f]{64}$/ — the sha256 the host admitted
+  abi: string; // the ONLY driven family: "buffer-abi/1" — anything else refuses unsupported-abi
+  input: { addr: number; maxBytes: number };
+  output: { addr: number; bytes: number };
+  call: { export: string }; // buffer-abi/1: called with the input LENGTH, returns the output size or a negative refusal
+}
 
 export interface ToolSpec {
   name: string; // /^[a-z0-9_]+$/ — pi's dynamic-tools.ts rule
@@ -53,6 +74,7 @@ export interface ToolSpec {
   promptSnippet?: string; // pi's lesson (docs/06 §1.1): without it the tool is invisible in the prompt
   primitive: Primitive;
   params: Record<string, string | number | boolean>;
+  wasm?: WasmAsset; // REQUIRED when primitive is 'wasm', absent otherwise
 }
 
 export interface ExtensionDescriptor {
@@ -252,6 +274,28 @@ export function admit(
         cannotHave,
       };
     }
+    if (tool.primitive === "wasm") {
+      // The asset class (voicebox-beads-qph): a wasm tool without its digest is a module nobody
+      // can check — under-declared, because a digest binds bytes to a manifest and nothing else does.
+      const w = tool.wasm;
+      if (!w || typeof w.path !== "string" || w.path.length === 0) {
+        return { decision: "refused", rule: "under-declared", why: `tool '${tool.name}' uses primitive 'wasm' but carries no module path — the asset is the thing the digest binds`, gets: [], cannotHave };
+      }
+      if (typeof w.digest !== "string" || !/^[0-9a-f]{64}$/.test(w.digest)) {
+        return { decision: "refused", rule: "under-declared", why: `tool '${tool.name}' uses primitive 'wasm' but carries no 64-hex digest — a module nobody can verify is a module nobody admitted`, gets: [], cannotHave };
+      }
+      if (w.abi !== "buffer-abi/1") {
+        return { decision: "refused", rule: "unsupported-abi", why: `tool '${tool.name}' declares abi '${w.abi}' — the driven family is 'buffer-abi/1' (fixed input buffer, call with length, fixed output); an ABI nobody drives is not a mechanism`, gets: [], cannotHave };
+      }
+      for (const [label, value] of [["input.addr", w.input?.addr], ["input.maxBytes", w.input?.maxBytes], ["output.addr", w.output?.addr], ["output.bytes", w.output?.bytes]] as const) {
+        if (!Number.isInteger(value) || (value as number) < 0) {
+          return { decision: "refused", rule: "under-declared", why: `tool '${tool.name}' has a wasm asset whose ${label} is ${value} — the ABI is data, declared exactly`, gets: [], cannotHave };
+        }
+      }
+      if (typeof w.call?.export !== "string" || w.call.export.length === 0) {
+        return { decision: "refused", rule: "under-declared", why: `tool '${tool.name}' names no export to call — the ABI is data, declared exactly`, gets: [], cannotHave };
+      }
+    }
     if (seen.has(tool.name) || existingToolNames.has(tool.name)) {
       return { decision: "refused", rule: "duplicate-tool", why: `tool name '${tool.name}' is already registered`, gets: [], cannotHave };
     }
@@ -260,6 +304,11 @@ export function admit(
 
   const enforced: Partial<Record<Capability, string>> = {};
   const gets: string[] = [];
+  if (descriptor.tools.some((t) => t.primitive === "wasm")) {
+    // The admission plan is the surface a person reads BEFORE deciding — so it names what the
+    // mechanism binds and what it merely trusts, in the same place it names what it enforces.
+    gets.push("wasm: the digest binds BYTES, never behavior — time is bounded by the host's call deadline, memory by the worker's resource limits, the module file by the host's read bound (host constants, not admission data); behavior within those bounds is trusted, and call fan-out is bounded only by the host's turns (N parallel turns hold N workers for the deadline)");
+  }
   for (const cap of caps) {
     const mechanism = MECHANISMS[placement][cap];
     if (!mechanism) {
