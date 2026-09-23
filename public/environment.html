@@ -58,6 +58,14 @@
   #confirm::backdrop { background: color-mix(in srgb, #101014 60%, transparent); backdrop-filter: blur(10px) saturate(120%); }
   @supports not (backdrop-filter: blur(1px)) { #confirm::backdrop { background: #101014e6; } }
   html:has(dialog#confirm[open]) { overflow: hidden; }
+  #declare { margin: 0.75rem 0 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+  #declare label { flex-basis: 100%; opacity: 0.8; }
+  #root-path { flex: 1 1 22rem; padding: 0.5rem 0.6rem; background: #101216; color: inherit; border: 1px solid #2a2f36; border-radius: 6px; font: inherit; }
+  #declare-root { padding: 0.5rem 0.8rem; background: #1b2026; color: inherit; border: 1px solid #2a2f36; border-radius: 6px; font: inherit; cursor: pointer; }
+  #declare-root[disabled] { opacity: 0.5; cursor: progress; }
+  #declare-result { flex-basis: 100%; margin: 0; }
+  #declare-result[data-ok="true"] { color: #7fd18a; }
+  #declare-result[data-ok="false"] { color: #e2a1a1; }
   #dropzone { border: 1px dashed #3b3b48; border-radius: 8px; padding: 12px; color: #9a9aab; font-size: 13px; }
   #dropzone.over { border-color: #69f; color: #dcdcf5; }
   .chooser { max-width: 78ch; font-size: 13px; line-height: 1.6; color: #b9b9c8; margin: 0 0 14px; }
@@ -105,6 +113,17 @@
     <button type="submit">Save turns into this folder <span class="tag tag-good">turns can write here</span></button>
   </form>
   <p class="chooser-note">The path is a folder <strong>on this machine</strong> — type or paste its absolute path. The server (which runs turns) writes there, so this is the choice that lets turns save files you can open in your own editor.</p>
+  <!-- A dropped folder cannot become a project root: browsers do not expose a
+       dropped folder's REAL path, and the server needs one to write into it.
+       So the path is asked for in words, and the declaration posted is exactly
+       the one the worker posts (browser/worker.ts useMachineRoot) — one
+       declaration, not a second vocabulary for it. -->
+  <div id="declare">
+    <label for="root-path">Or type the folder the server should write into:</label>
+    <input id="root-path" placeholder="/home/you/projects/notes" spellcheck="false" autocomplete="off">
+    <button id="declare-root" type="button">Declare this folder</button>
+    <p id="declare-result" hidden></p>
+  </div>
   <div id="dropzone">or drop a folder here to make it a project root — the files stay where they are and this page becomes a window onto them. <span class="tag">read-only for turns</span></div>
 
   <h2>Where the files are</h2>
@@ -152,5 +171,54 @@
   <ul id="transcript"></ul>
 
   <script type="module" src="/browser/ui/ui.ts"></script>
+<script>
+  /**
+   * **Declare a project root, from the page** (`voicebox-beads-utj`).
+   *
+   * The seam answers and nothing could reach it: GET /api/root said
+   * `refused: "root-not-declared"` with a remedy that named POST /api/root,
+   * while the page that points people here offered a dropzone with no handler
+   * and no way to declare anything. A remedy with no route reads as though the
+   * way exists and you simply cannot find it.
+   *
+   * The body is the worker's own shape (`browser/worker.ts`, `useMachineRoot`),
+   * and the server's refusals travel unchanged: `path-missing` and
+   * `not-a-directory` are the same facts a person needs, and re-wording them
+   * here would be a second vocabulary for one thing.
+   */
+  const pathInput = document.getElementById("root-path");
+  const declareButton = document.getElementById("declare-root");
+  const declareResult = document.getElementById("declare-result");
+
+  function say(text, ok) {
+    declareResult.hidden = false;
+    declareResult.dataset.ok = String(ok);
+    declareResult.textContent = text;
+  }
+
+  declareButton.addEventListener("click", async () => {
+    const path = pathInput.value.trim();
+    if (path === "") {
+      say("a folder needs a path — the folder the loop should write into", false);
+      return;
+    }
+    const name = path.split("/").filter(Boolean).pop() ?? "project";
+    declareButton.disabled = true;
+    try {
+      const response = await fetch("/api/root", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ project: name, root: { kind: "machine", path } }),
+      });
+      const answer = await response.json();
+      if (answer && answer.ok) say("declared: " + answer.root.path + " — the loop writes here now.", true);
+      else say((answer && answer.refused ? answer.refused : "refused") + ": " + ((answer && answer.why) || "the declaration was refused"), false);
+    } catch (error) {
+      say("could not reach the server: " + error.message, false);
+    } finally {
+      declareButton.disabled = false;
+    }
+  });
+</script>
 </body>
 </html>
