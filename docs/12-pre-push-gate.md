@@ -45,6 +45,23 @@ before the stage printed its diagnosis. The two stage timers remain bounded,
 with up to five seconds of kill grace each. The existing Beads hook runs
 separately before these stages. Existing explicit skip flags are unchanged.
 
+## Private read idempotence
+
+Phase B declares an owned root and seeds a nonempty file before navigating the
+private page, so page polling does not compete with the measurement. It makes
+three sequential GETs each to `/api/root` and `/api/files`. Every response must
+succeed, identify the declared project/root and include the known file with its
+correct byte count; all three response pairs must agree. Zero requests, empty
+responses and identical refusals cannot pass.
+
+The directory must still contain exactly the seeded file, with its original
+bytes, mode, nanosecond mtime and ctime. This catches hidden file creation and
+same-byte rewrites even when API responses remain identical. Access time is not
+compared: a legitimate read may update it. The seed is removed before the later
+page/turn checks. This measures the declared state and this flat private fixture,
+not every internal server field or side effects outside its root. Phase A does
+not compare shared-server state across a window another lane can write to.
+
 ## Measurement — 2026-09-21, worker-gzm
 
 Baseline revision: 984aad95f16d1fbe42d37efeea23125ff50b396d. Node 24.21.0,

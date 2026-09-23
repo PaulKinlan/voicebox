@@ -10,9 +10,8 @@
 // away mid-session, even with perfect cleanup: the declaration is process
 // memory, so restoring it still flaps the state a person is looking at):
 //   [shared-front]  GET-ONLY checks against the dev front Paul uses
-//                   (:5173). Nothing here writes. The server's root state is
-//                   captured before and asserted identical after — a witness,
-//                   not an assumption.
+//                   (:5173). No mutating requests: other lanes may change its
+//                   state, so read idempotence is measured on the private instance.
 //   [private]       every state-mutating check runs against a server this
 //                   harness spawns itself (ephemeral port, killed at exit).
 //                   On a fresh instance `declared:false` is guaranteed, so the
@@ -24,7 +23,8 @@
 // Checks:
 //   [shared-front] environment currency · console clean on load · zero phantom
 //                  turns · file list rendering · mic + waveform honesty · font
-//   [private]      root-not-declared refusal · scratch declaration · typed
+//   [private]      root-not-declared refusal · scratch declaration · seeded GET
+//                  response + disk idempotence before page traffic · typed
 //                  turn page≡disk≡content (exactly one POST) · ../ traversal
 //                  refused · artefact-free · porcelain-clean
 //   journal-omr's case is LANDED here: the private half declares a root,
@@ -36,7 +36,8 @@
 // the local front, not about the product.
 import { spawn, execFileSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync, statSync } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import { SOURCE_PREFIXES } from "../lib/browser-sources.mjs";
 import { refusalVocabulary, identifiersInRenderedText, ID_PATTERNS, JARGON, READ_VISIBLE_TEXT } from "./rendered-plain-language.mjs";
 import { driftBetween } from "./served-vs-disk.mjs";
@@ -151,14 +152,13 @@ async function renderedPlainLanguage(group, vocabulary, label) {
       : `${text.length} characters of visible text, this run's own refusal vocabulary included · driven pages and states only — it cannot prove anything about unvisited dialogs, another provider's text, or an inaccessible frame`);
 }
 
-let sharedRootBefore = null;
+let sharedRootPayload = null;
 let environmentsPayload = null;
-let sharedFilesPayload = null; // the parsed body, kept for the vocabulary (the string form is the witness)
+let sharedFilesPayload = null; // responses retained for the rendered refusal vocabulary
 // When the currency check skips by name (the front is serving a different tree), the verdict must SAY so:
 // an ALL CLEAR over a skipped check is a green that measured nothing, which is one level up from the
 // defect the check itself was fixed for (vb-resolver's review, 2026-09-23).
 let currencySkipReason = null;
-let sharedFilesBefore = "[]";
 let sharedServersRunning = false;
 // WHY the front is absent, recorded rather than swallowed: a skip that cannot name the address it could not
 // reach costs a debugging cycle to act on, and the address is the only actionable part of it.
@@ -180,14 +180,13 @@ try {
   const uiRes = await frontReachable(`${SHARED_UI}/`);
   if (rootRes && uiRes) {
     sharedServersRunning = true;
-    sharedRootBefore = await rootRes.json().catch(() => null);
+    sharedRootPayload = await rootRes.json().catch(() => null);
     // The environment rows are rendered on the page, and an unreachable one used to print its refusal
     // IDENTIFIER as the visible label (fixed alongside this check): the vocabulary has to include them.
     environmentsPayload = await fetch(`${SHARED_API}/api/environments`, { signal: AbortSignal.timeout(1200) }).then((r) => r.json()).catch(() => null);
     const filesRes = await fetch(`${SHARED_API}/api/files`, { signal: AbortSignal.timeout(1200) }); // the front answered above, so this is inside the same window
     const filesJson = await filesRes.json().catch(() => ({ files: [] }));
     sharedFilesPayload = filesJson;
-    sharedFilesBefore = JSON.stringify((filesJson.files ?? []).sort());
   }
 } catch (e) {
   // The front answered the probe and then went away mid-block (it flaps: its server restarts on landings), or
@@ -198,9 +197,9 @@ try {
 }
 
 try {
-  // ════ PHASE A — [shared-front]: GET-only, witnessed ══════════════════════
+  // ════ PHASE A — [shared-front]: GET-only, no shared-state stability claim ═
   if (sharedServersRunning) {
-    console.log(`── phase A: shared front ${SHARED_UI} (GET-only; witness below) · measuring tree: ${TREE}${TREE === ROOT ? " (default: this repo)" : ""}`);
+    console.log(`── phase A: shared front ${SHARED_UI} (GET-only; not a shared-state stability check) · measuring tree: ${TREE}${TREE === ROOT ? " (default: this repo)" : ""}`);
 
   const servedRefs = [];
 // EVERY page in public/, not just index — environment.html loaded a module
@@ -303,7 +302,7 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   // show the identifier the server just sent" rather than "this text looks like a token" — a person's
   // own words are content, and a pattern-only check fails on them.
   const sharedVocabulary = new Set();
-  for (const payload of [sharedRootBefore, sharedFilesPayload, environmentsPayload]) refusalVocabulary(payload, sharedVocabulary);
+  for (const payload of [sharedRootPayload, sharedFilesPayload, environmentsPayload]) refusalVocabulary(payload, sharedVocabulary);
   // NAVIGATE FIRST. The first version of this check ran before the page was loaded and read `0 characters`
   // — a green line that covered nothing, which is the whole class this session keeps finding. A rendered
   // check that can report zero text is not a check, so zero text is a FAILURE here.
@@ -442,8 +441,8 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   // file list is untouched across Phase A. The dev server is shared with other concurrent lanes
   // (e.g. 7cd-poll re-declaring roots every 20s), so measuring global state across an unowned server
   // violates bp8 ("a process that writes must write outside anything another process measures").
-  // The contract "nothing here writes" is already proven by the CDP Network witness above
-  // ("zero POST /api/turn on page load"). Mutating lifecycle checks belong on Phase B's private instance.
+  // The CDP witness checks for page-load turns, not side effects inside a GET handler.
+  // Read idempotence and mutating lifecycle checks belong on Phase B's private instance.
   } else {
     console.log(
         `SKIP  [shared-front]  phase A skipped: the shared front is not up ` +
@@ -490,6 +489,41 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   report("private", "scratch root declared", declared.ok === true,
     declared.ok ? `project "page-acceptance" at ${scratchRoot}` : `refused: ${declared.refused} — ${declared.why}`);
   const rootDir = declared?.root?.path ?? scratchRoot;
+
+  // f2o: before private-page navigation, no page polling competes with these reads.
+  // Seed known nonempty bytes, not an empty-list equality. Compare the actual disk too:
+  // a GET can return the same listing while changing bytes or writing a hidden file.
+  const readName = `acceptance-proof-read-${process.pid}.txt`;
+  const readPath = path.join(scratchRoot, readName);
+  const readBytes = Buffer.from("Reads must leave this nonempty witness unchanged.\n");
+  writeFileSync(readPath, readBytes);
+  const readFileState = () => {
+    const { mode, mtimeNs, ctimeNs } = statSync(readPath, { bigint: true });
+    return { mode, mtimeNs, ctimeNs, bytes: readFileSync(readPath) }; // atime may change on a legitimate read
+  };
+  const beforeReads = readFileState();
+  const reads = [];
+  for (let i = 0; i < 3; i++) {
+    const rootResponse = await fetch(`${PRIVATE_ORIGIN}/api/root`);
+    const root = await rootResponse.json();
+    const filesResponse = await fetch(`${PRIVATE_ORIGIN}/api/files`);
+    reads.push({ rootStatus: rootResponse.status, root,
+      filesStatus: filesResponse.status, files: await filesResponse.json() });
+  }
+  const nonempty = readBytes.length > 0 && reads.length === 3 && reads.every(({ rootStatus, root, filesStatus, files }) =>
+    rootStatus === 200 && root?.ok === true && root.declared === true
+    && root.project === declared.project && isDeepStrictEqual(root.root, declared.root)
+    && root.declaredAt === declared.declaredAt
+    && filesStatus === 200 && files?.ok === true && files.project === declared.project
+    && isDeepStrictEqual(files.root, declared.root) && isDeepStrictEqual(files.files, [readName])
+    && isDeepStrictEqual(files.entries, [{ name: readName, bytes: readBytes.length, kind: "file" }]));
+  const sameResponses = reads.every((read) => isDeepStrictEqual(read, reads[0]));
+  const sameDisk = beforeReads.bytes.equals(readBytes) && isDeepStrictEqual(readdirSync(scratchRoot), [readName])
+    && isDeepStrictEqual(readFileState(), beforeReads);
+  report("private", "repeated GET /api/root and /api/files preserve nonempty responses and seeded disk state",
+    nonempty && sameResponses && sameDisk,
+    `${reads.length}/3 rounds, ${readBytes.length} seeded bytes; nonempty=${nonempty} responsesSame=${sameResponses} diskSame=${sameDisk}`);
+  rmSync(readPath, { force: true }); // the later UI/turn checks start from their own empty root
 
   consoleMsgs = []; turnPosts = [];
   pageOrigin = PRIVATE_ORIGIN;

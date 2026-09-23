@@ -76,6 +76,9 @@ The pre-push hook keeps the full test suite: 180 seconds for `npm test`, then
 45 seconds for `npm run accept`. Refusals name the stage and distinguish a
 timeout from a failing command; both output streams remain visible. See
 [gate measurements and regression drives](docs/12-pre-push-gate.md).
+Acceptance checks read idempotence on its private instance: three GETs per root/file
+route must return the seeded state and leave its file bytes and write metadata unchanged.
+It does not assert that another lane's shared server stays unchanged.
 The live-tools write check waits for both the file and its successful `write_file`
 websocket event within the same 60-second budget; file creation alone does not
 prove that the page has received the report.
