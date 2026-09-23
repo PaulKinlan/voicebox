@@ -1802,6 +1802,26 @@ async function handle(req, res) {
     return json(res, 200, r);
   }
 
+  if (req.method === "POST" && url.pathname === "/api/extensions/revoke") {
+    // REVOCATION is the same authority class as admission (voicebox-beads-qg1): it
+    // withdraws a running extension's tools, so it is gated by the same host token.
+    // Without it → host-token-required, named. Without confirm → the disclosure of
+    // what will stop working, before anything is decided.
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "revocation is the host's act — this route requires the host token (x-voicebox-host-token); the page cannot hold it" });
+    }
+    const body = await readJson();
+    if (!body?.id) return json(res, 400, { error: "body must be JSON with an id" });
+    if (body.confirm !== true) {
+      const inv = extensions.inventory();
+      const row = inv.extensions.find((e) => e.id === body.id);
+      if (!row) return json(res, 404, { ok: false, refused: "extension-not-admitted", why: `'${body.id}' is not a running extension — nothing to revoke` });
+      return json(res, 200, { confirmFirst: true, id: body.id, whatStopsWorking: { tools: row.tools, may: row.gets, bounds: row.bounds }, note: "nothing decided — repeat with confirm:true to revoke; the extension's tools stop being callable at once" });
+    }
+    const r = extensions.revokeExtension(body.id, body.actor ?? "host");
+    return json(res, r.ok ? 200 : 404, r);
+  }
+
   if (req.method === "GET" && url.pathname === "/api/permissions/pending") {
     return json(res, 200, { ok: true, pending: permissions.pending() });
   }
