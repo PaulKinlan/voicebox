@@ -417,7 +417,10 @@ function renderListingRoot() {
     if (listingRefusal.refused === "root-not-declared") { line.hidden = true; return; }
     line.hidden = false;
     line.dataset.tone = "warn";
-    line.textContent = `This list could not be read: ${listingRefusal.why || listingRefusal.refused} `;
+    // A refusal with no explanation must still read as a sentence: the identifier is the server's word
+    // for it, not the person's, so it goes in the title rather than into this line.
+    line.textContent = `This list could not be read: ${listingRefusal.why || "the folder did not answer"} `;
+    line.title = [listingRefusal.refused, listingRefusal.why].filter(Boolean).join(" — ");
     // …and the way out, in the same sentence, because the empty state that
     // normally carries the route is hidden while the listing is refused.
     const link = document.createElement("a");
@@ -827,9 +830,12 @@ async function renderEnvironments() {
       const state = document.createElement("span");
       state.className = "env-state";
       if (env.reachable === true) state.textContent = "reachable";
-      else if (env.reachable === false) state.textContent = env.refused ?? "not reachable";
-      else state.textContent = env.why ?? "always here";
-      if (env.why && env.reachable === false) state.title = env.why;
+      else if (env.reachable === false) {
+        // "not reachable" is what a person needs; WHICH refusal it was is a diagnostic, and the row
+        // already carries one as its title (voicebox-beads-0ye: the identifier was the visible label).
+        state.textContent = "not reachable";
+        state.title = [env.refused, env.why].filter(Boolean).join(" — ");
+      } else state.textContent = env.why ?? "always here";
       head.appendChild(state);
       li.appendChild(head);
       // The capability report is CONTAINED and SCROLLABLE, and it SUMMARISES: a long probe is a count
@@ -901,13 +907,15 @@ async function health() {
   } catch (err) {
     if (els.dot) els.dot.dataset.ok = "false";
     if (els.where) {
+      // The VISIBLE line says what happened, in words; the identifier the server used lives in the
+      // title, where somebody diagnosing can find it and nobody else has to read it (voicebox-beads-0ye:
+      // `environment-list-unreadable (fix the file)` was on screen, and `machine-unreachable (fix the
+      // host)` was a hard-coded identifier that no source-literal check was even looking for).
       if (err?.refused) {
-        // e.g. environment-list-unreadable: "fix the file"
-        els.where.textContent = `${err.refused} (fix the file)`;
+        els.where.textContent = "the environment list could not be read — fix the file";
         els.where.title = `source: GET /api/environments · ${err.refused}: ${err.why || "fix the file"}`;
       } else {
-        // The machine is unreachable (connection refused, network error)
-        els.where.textContent = "machine-unreachable (fix the host)";
+        els.where.textContent = "the machine is not answering — fix the host";
         els.where.title = "source: GET /api/health · machine-unreachable — the local server is not answering, fix the host";
       }
     }

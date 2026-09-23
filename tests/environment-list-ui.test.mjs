@@ -78,13 +78,17 @@ test("the header lists the local environment, and a declared host appears and re
     [...document.querySelectorAll("#env-list .env-item")].map((li) => ({
       label: li.querySelector(".env-label")?.textContent,
       state: li.querySelector(".env-state")?.textContent,
+      stateTitle: li.querySelector(".env-state")?.getAttribute("title") ?? "",
       ok: li.querySelector(".env-dot")?.dataset.ok,
     })),
   );
   const remote = after.find((e) => e.label === "atlas box");
   assert.ok(remote, `the declared environment appears in the list: ${JSON.stringify(after)}`);
   assert.equal(remote.ok, "false", "a stopped service reads as not-ok, not ready");
-  assert.match(remote.state, /unreachable/i, "the row names the refusal, not a blank");
+  // PLAIN ON SCREEN, NAMED IN THE TITLE (voicebox-beads-0ye): this label used to be the refusal
+  // identifier itself, which is the server's word for the state rather than the person's.
+  assert.equal(remote.state, "not reachable", "the row says what a person needs; the refusal is a diagnostic");
+  assert.ok(remote.stateTitle.length > 0, "the row keeps the server's own reason reachable on the title");
 
   // The summary counts what is reachable, so a person sees the state at a glance (browser + local +
   // the declared stopped one = 3, of which browser and local are reachable).
