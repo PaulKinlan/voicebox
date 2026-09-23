@@ -1816,7 +1816,8 @@ async function handle(req, res) {
       const inv = extensions.inventory();
       const row = inv.extensions.find((e) => e.id === body.id);
       if (!row) return json(res, 404, { ok: false, refused: "extension-not-admitted", why: `'${body.id}' is not a running extension — nothing to revoke` });
-      return json(res, 200, { confirmFirst: true, id: body.id, whatStopsWorking: { tools: row.tools, may: row.gets, bounds: row.bounds }, note: "nothing decided — repeat with confirm:true to revoke; the extension's tools stop being callable at once" });
+      return json(res, 200, { confirmFirst: true, id: body.id, plan: { enforced: row.enforced, gets: row.gets, bounds: row.bounds, tools: row.tools },
+        whatStopsWorking: { tools: row.tools, may: row.gets, bounds: row.bounds }, note: "nothing decided — repeat with confirm:true to revoke; the extension's tools stop being callable at once" });
     }
     const r = extensions.revokeExtension(body.id, body.actor ?? "host");
     return json(res, r.ok ? 200 : 404, r);
