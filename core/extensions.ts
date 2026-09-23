@@ -45,10 +45,13 @@ export const PRIMITIVE_NEEDS: Record<Primitive, Capability[]> = {
   "write-file": ["write"],
   "list-files": ["read"],
   "http-get": ["network"],
-  // wasm CONSUMES NOTHING: the containment is the module itself — linear memory and a closed,
-  // declared import set (buffer-abi/1: ZERO imports). That is the answer to the closed set's own
-  // refusal: `execute` was refused because 'there is no mechanism'; a verified-digest module with
-  // no imports IS the mechanism (voicebox-beads-4vz, provider-under-gate).
+  // wasm CONSUMES NO CAPABILITY: its imports are a closed, declared set (buffer-abi/1: ZERO
+  // imports). That is the answer to the closed set's own refusal: `execute` was refused because
+  // 'there is no mechanism'; a verified-digest module with no imports IS the mechanism
+  // (voicebox-beads-4vz, provider-under-gate). BUT the closure is over CAPABILITIES, never over
+  // RESOURCES (vb-resolver's review, driven): an export runs synchronously with no fuel and
+  // memory.grow needs no import — an admitted module is trusted for its time and memory, and
+  // neither is bounded. The digest binds bytes, never behavior.
   wasm: [],
 };
 
@@ -301,6 +304,11 @@ export function admit(
 
   const enforced: Partial<Record<Capability, string>> = {};
   const gets: string[] = [];
+  if (descriptor.tools.some((t) => t.primitive === "wasm")) {
+    // The admission plan is the surface a person reads BEFORE deciding — so it names what the
+    // mechanism does NOT bound, in the same place it names what it enforces.
+    gets.push("wasm: the digest binds BYTES, never behavior — an admitted module is trusted for its time and memory (neither is bounded: no fuel, memory.grow needs no import)");
+  }
   for (const cap of caps) {
     const mechanism = MECHANISMS[placement][cap];
     if (!mechanism) {

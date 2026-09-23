@@ -125,6 +125,22 @@ test("through the seam: the KAT passes, and a post-admission swap is digest-mism
   writeFileSync(wasmPath, original); // restore — the shelf outlives the assertion
 });
 
+test("a module whose memory does not cover the declared ABI is a NAMED refusal, never an uncaught throw (vb-resolver's crash, driven)", async () => {
+  // vb-resolver's defect: a zero-page-memory module crashed the driver with an UNCAUGHT
+  // RangeError — a 500 through the turn path, not a refusal. The fix checks the memory covers
+  // everything the ABI declares BEFORE the view is touched. Driven here with the real module
+  // and a descriptor that LIES about addresses (the same code path as a small-memory module).
+  const shelfOut = readShelf(shelf);
+  const descriptor = descriptorFor(shelfOut.tools.find((t) => t.id === "hash"));
+  const liar = JSON.parse(JSON.stringify(descriptor));
+  liar.tools[0].wasm.input.addr = 0x1f000; // + 8192 maxBytes exceeds the module's 128 KiB
+  const { callWasmTool } = await import("../lib/wasm-shelf.mjs");
+  const out = await callWasmTool(liar.tools[0], { input: "abc" });
+  assert.equal(out.ok, false);
+  assert.equal(out.refused, "unsupported-abi");
+  assert.match(out.why, /memory is \d+ bytes but the declared ABI needs \d+/, "the refusal shows both sizes — evidence, not a stack trace");
+});
+
 test("the REAL shelf on this box, if present, admits hash and answers the KAT through the driver", async (t) => {
   if (!existsSync(REAL_SHELF)) return t.skip("no isocan shelf installed on this box");
   const out = readShelf(REAL_SHELF);
