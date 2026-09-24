@@ -500,6 +500,36 @@ async function saveRegistry(record: ProjectRecord): Promise<void> {
   records.set(record.name, record);
 }
 
+/**
+ * DURABLE, ASKED FOR AND REPORTED (voicebox-beads-s61). `navigator.storage.persisted()` only reports the
+ * CURRENT answer, and an origin that has never asked is best-effort: the browser may evict that storage
+ * under pressure, which from the outside is exactly "my data did not save". `persist()` is the request —
+ * it needs no gesture and returns what the browser decided (Chrome decides on engagement; a denial is an
+ * answer, not an error). Either way the answer travels with the record, because "best-effort" is a fact a
+ * person needs before they trust a folder with their work.
+ */
+async function askDurable(): Promise<boolean> {
+  // GUARD, DO NOT CALL BLINDLY (coord's root cause, 2026-09-24). `navigator.storage.persist` is not
+  // guaranteed here: this code runs in a DEDICATED WORKER, and a method that is absent throws a
+  // SYNCHRONOUS TypeError — which `.catch()` cannot catch, because `.catch()` only sees rejections of a
+  // call that already happened. That is how asking for durability took `openProject` down with it
+  // (`root-unreachable`, "no project is open") in every page-driven test. Each call is checked for the
+  // function, and the whole thing is wrapped, because "can I ask?" is a question about the environment.
+  try {
+    if (typeof navigator?.storage?.persisted === "function") {
+      const already = await navigator.storage.persisted().catch(() => false);
+      if (already) return true;
+    }
+    if (typeof navigator?.storage?.persist === "function") {
+      return await navigator.storage.persist().catch(() => false);
+    }
+  } catch {
+    // A worker without the API cannot answer, and "unavailable" is not "not durable": both are reported
+    // as false, and the callers print the fact rather than pretending the question was answered.
+  }
+  return false;
+}
+
 async function openProject(name: string): Promise<Record<string, unknown> | Failure> {
   const clean = String(name ?? "").trim();
   if (!clean || clean.includes("/") || clean.includes("..")) {
@@ -526,12 +556,12 @@ async function openProject(name: string): Promise<Record<string, unknown> | Fail
   const durability = record.root.kind === "opfs"
     ? {
         kind: "opfs" as const,
-        persisted: await navigator.storage.persisted().catch(() => false),
+        persisted: await askDurable(),
         checkedAt: new Date().toISOString(),
       }
     : {
         kind: "handle" as const,
-        persisted: await navigator.storage.persisted().catch(() => false),
+        persisted: await askDurable(),
         permission: await permission(record),
         checkedAt: new Date().toISOString(),
       };
@@ -621,7 +651,7 @@ async function adoptPicked(message: Record<string, unknown>): Promise<unknown> {
     lastUsed: new Date().toISOString(),
     durability: {
       kind: "handle",
-      persisted: await navigator.storage.persisted().catch(() => false),
+      persisted: await askDurable(),
       permission: state,
       checkedAt: new Date().toISOString(),
     },
@@ -1102,7 +1132,7 @@ async function handle(message: Message) {
         instance,
         actor,
         schema: (await loadSchema()).title,
-        durability: { persisted: await navigator.storage.persisted().catch(() => false) },
+        durability: { persisted: await askDurable() },
         projects: [...records.values()].map((p) => ({
           name: p.name,
           id: p.id,

@@ -59,6 +59,14 @@ Three things about the dev loop that are easy to get wrong and are therefore wri
 - **Vite is dev-only.** `server.mjs` stays zero-dependency and remains the production path; nothing in it
   imports Vite, and it runs with no `node_modules` at all. That is verified by serving the page on a machine
   with nothing installed.
+- **A write goes where you are standing, and says what was observed** (voicebox-beads-s61). The room's own
+  commands for a picked folder name a FILE, so a bare name means "here, in the folder on screen" — for the
+  write *and* the read — while a name that already carries a path is honoured as itself. This is the same
+  rule the listing and the reader follow, and it was not: standing in `proposals`, "create a file called x"
+  wrote x at the folder's root, quietly ignoring which folder the person was looking at. The write line then
+  reports the size the FILE SYSTEM reported (read back after `close()`), not the number of bytes the code
+  intended to write, and whether the storage is durable — because "saved" and "saved durably" are different
+  promises. If the read-back disagrees, the write is refused by name rather than reported as a success.
 - **One frame makes the list move without the page asking.** The server sends `{type:"tool"}` when a live
   model runs a command; `public/live-voice.js` forwards it and `public/fused.js` re-reads the file list. That
   is the whole path from "the model wrote a file" to "the file is on screen": no polling, no refresh, and the
