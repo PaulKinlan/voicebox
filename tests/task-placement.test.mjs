@@ -469,3 +469,68 @@ test("lost runner reconciliation: dead prior generation reconciles to interrupte
   assert.equal(stNew.task.staleReason, "generation-unconfirmed");
 });
 
+test("availability transitions: existing task retry recovers handle even if executor or root becomes unavailable", async () => {
+  const keyBytes = new Uint8Array(32).fill(77);
+  const environment = "env_avail_trans";
+  const auth = { owner: "retry-user", callId: "stable-call-1" };
+  const input = { agent: "fixture", task: "write effect" };
+
+  let rootPresent = true;
+  let executorPresent = true;
+  let runs = 0;
+
+  const host = createBrowserTaskHost({
+    environment,
+    instance: "tab-avail",
+    boot: "boot-1",
+    keyBytes,
+    root: () => rootPresent ? { kind: "opfs", path: "test-root", environment } : null,
+    executor: () => executorPresent ? {
+      check: () => ({ ok: true, mechanism: "test", bounds: { deadlineMs: 5000, maxOutputBytes: 1024 } }),
+      run: async () => { runs++; return "done"; },
+    } : null,
+  });
+
+  const first = await host.call("delegate_task", input, auth);
+  assert.equal(first.ok, true);
+  assert.equal(runs, 1);
+
+  // 1. Executor becomes unavailable
+  executorPresent = false;
+  // Fresh call must refuse
+  const freshNoExec = await host.call("delegate_task", input, { ...auth, callId: "fresh-call-no-exec" });
+  assert.equal(freshNoExec.ok, false);
+  assert.equal(freshNoExec.refused, "executor-unavailable");
+
+  // Existing retry MUST succeed and recover existing handle
+  const retryNoExec = await host.call("delegate_task", input, auth);
+  assert.equal(retryNoExec.ok, true);
+  assert.equal(retryNoExec.existing, true);
+  assert.equal(retryNoExec.task.address, first.task.address);
+  assert.equal(runs, 1, "must not re-execute");
+
+  // 2. Root becomes unavailable
+  executorPresent = true;
+  rootPresent = false;
+  // Fresh call must refuse
+  const freshNoRoot = await host.call("delegate_task", input, { ...auth, callId: "fresh-call-no-root" });
+  assert.equal(freshNoRoot.ok, false);
+  assert.equal(freshNoRoot.refused, "task-root-unavailable");
+
+  // Existing retry MUST succeed and recover existing handle
+  const retryNoRoot = await host.call("delegate_task", input, auth);
+  assert.equal(retryNoRoot.ok, true);
+  assert.equal(retryNoRoot.existing, true);
+  assert.equal(retryNoRoot.task.address, first.task.address);
+  assert.equal(runs, 1, "must not re-execute");
+
+  // 3. Restoring availability recovers original handle
+  rootPresent = true;
+  const recovered = await host.call("delegate_task", input, auth);
+  assert.equal(recovered.ok, true);
+  assert.equal(recovered.existing, true);
+  assert.equal(recovered.task.address, first.task.address);
+  assert.equal(runs, 1);
+});
+
+
