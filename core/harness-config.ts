@@ -65,6 +65,8 @@ export type AdapterTransport = "stdio" | "websocket" | "in-process" | "web-worke
 export interface ModelReference {
   provider: string; // e.g. "anthropic", "openai", "gemini"
   model: string;    // e.g. "claude-3-7-sonnet", "gpt-4o"
+  id?: string;
+  thinking?: string;
   options?: Record<string, unknown>;
 }
 
@@ -276,15 +278,25 @@ export function validateConfiguredAgent(
     environmentKey,
     description: typeof o.description === "string" ? o.description.trim() : "",
     isDefault: Boolean(o.isDefault),
-    model: o.model && typeof o.model === "object"
-      ? {
-          provider: String((o.model as Record<string, unknown>).provider ?? ""),
-          model: String((o.model as Record<string, unknown>).model ?? ""),
-          options: (o.model as Record<string, unknown>).options && typeof (o.model as Record<string, unknown>).options === "object"
-            ? ((o.model as Record<string, unknown>).options as Record<string, unknown>)
-            : undefined,
-        }
-      : null,
+    model: typeof o.model === "string"
+      ? (o.model.includes("/")
+          ? { provider: o.model.split("/")[0], model: o.model.split("/").slice(1).join("/") }
+          : { provider: "", model: o.model })
+      : (o.model && typeof o.model === "object"
+          ? {
+              provider: String((o.model as Record<string, unknown>).provider ?? ""),
+              model: String((o.model as Record<string, unknown>).model ?? (o.model as Record<string, unknown>).id ?? ""),
+              ...(typeof (o.model as Record<string, unknown>).id === "string"
+                ? { id: String((o.model as Record<string, unknown>).id) }
+                : {}),
+              ...(typeof (o.model as Record<string, unknown>).thinking === "string"
+                ? { thinking: String((o.model as Record<string, unknown>).thinking) }
+                : {}),
+              options: (o.model as Record<string, unknown>).options && typeof (o.model as Record<string, unknown>).options === "object"
+                ? ((o.model as Record<string, unknown>).options as Record<string, unknown>)
+                : undefined,
+            }
+          : null),
     prompt: typeof o.prompt === "string" ? o.prompt : null,
     reach: {
       root: reachRoot,
@@ -328,7 +340,7 @@ export function publicAgentProjection(agent: ConfiguredAgent) {
     environmentKey: agent.environmentKey,
     description: agent.description,
     isDefault: agent.isDefault,
-    model: agent.model ? { provider: agent.model.provider, model: agent.model.model } : null,
+    model: agent.model ? { provider: agent.model.provider, model: agent.model.model, thinking: agent.model.thinking } : null,
     reach: agent.reach,
     bounds: agent.bounds,
     readiness: agent.readiness,

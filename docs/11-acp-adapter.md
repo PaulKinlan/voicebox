@@ -46,6 +46,17 @@ not in the host's agent registry is refused as `agent-not-configured`. An admitt
 record carries the frozen configured-agent snapshot (`agentConfig`) beside its `agentId`
 and `harness`, so what the delegation was told at admission is readable back later.
 
+### Configured options consumption (voicebox-beads-ozf)
+
+When an admitted task targets a configured agent record (`core/harness-config.ts`), `lib/pi-acp.mjs`
+validates and forwards supported options according to the `pi-acp` adapter contract:
+1. **Model selection**: Forwarded via ACP `session/set_config_option` with `configId: "model"` and `value: modelId` (e.g. `google/gemini-2.0-flash`, `openai/gpt-4o`). Unsupported models returned by the adapter refuse before prompt dispatch (`model-unsupported`).
+2. **Reasoning / thinking effort**: If `model.thinking` is specified, it is applied via ACP `session/set_config_option` with `configId: "thought_level"`. Unsupported levels refuse (`thinking-level-unsupported`).
+3. **Persona / system prompt**: Base persona text (`agentConfig.prompt`) is prepended as system instruction framing to the task prompt.
+4. **Needed reach vs granted effect authority**: If `agentConfig.reach.tools` is declared, the host decider refuses any tool outside the declared reach list before consulting outer host policy (`tool-not-in-agent-reach`). Needed reach is necessary but not sufficient: host authority must still independently grant the call.
+5. **Unsupported claims refusal**: Adapters other than `pi-acp`, pinned versions not matching the installed adapter, non-stdio transports, or custom model options refuse explicitly at preflight (`adapter-not-configured`, `adapter-version-unsupported`, `unsupported-runtime-capability`, `unsupported-model-options`).
+
+
 ## Diagnostic checks
 
 For the runnable checks, including the real installed adapter rather than a stand-in:
