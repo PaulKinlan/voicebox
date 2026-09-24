@@ -25,6 +25,9 @@
 
 const SUPPORTED = typeof window !== "undefined" && "documentPictureInPicture" in window;
 
+/** The namespace every element this module builds with `createElementNS` needs (the icons). */
+const SVG_NS = "http://www.w3.org/2000/svg";
+
 /** The page's own controls — the single source of truth for every action. */
 function pageControls() {
   return {
@@ -94,15 +97,59 @@ function addKeepOnTopButton(controls) {
  */
 function copyStylesInto(target) {
   let copied = 0;
+  // THE BASE FIRST, AND BEFORE ANY LINK (voicebox-beads-9d3). This document is `about:blank`, so a
+  // relative URL in it has no origin to resolve against: the cloned `<link href="style.css">` asked for
+  // a file sitting next to `about:blank`, loaded nothing, and the window opened as bare HTML in the
+  // browser's default font. The base makes every relative URL in this document resolve exactly as it
+  // does in the opener — including the `@font-face` src inside the sheet, which is the other half of
+  // why an unstyled window looked *nothing* like the product. Added once: the re-copy path below only
+  // replaces links and styles, and a second <base> would be a second answer to the same question.
+  if (!target.head.querySelector("base")) {
+    const base = target.createElement("base");
+    base.href = document.baseURI;
+    target.head.prepend(base);
+  }
+  // The explicit theme choice travels with the window. Nothing sets this attribute today — the product
+  // follows the OS scheme through `light-dark()` — so this is a guard rather than a live feature: when a
+  // theme control lands, the PiP window must not be the one surface that ignores it.
+  if (document.documentElement.dataset.theme) {
+    target.documentElement.dataset.theme = document.documentElement.dataset.theme;
+  }
   for (const node of document.querySelectorAll('link[rel="stylesheet"], style')) {
-    target.head.append(node.cloneNode(true));
+    const clone = node.cloneNode(true);
+    // AN ABSOLUTE href ON THE CLONE. The clone still carries the string the opener wrote (`/style.css`),
+    // and this document has no business guessing what that is relative to.
+    if (clone.tagName === "LINK") clone.href = node.href;
+    target.head.append(clone);
     copied += 1;
   }
   if (document.adoptedStyleSheets?.length) {
-    target.adoptedStyleSheets = [...document.adoptedStyleSheets];
-    copied += document.adoptedStyleSheets.length;
+    // APPEND, never replace. The window adopts its OWN sheet after this call (buildPip: an inline <style>
+    // is inert in this document), and assigning the opener's list wholesale would drop it again on every
+    // re-copy — the same class of bug as the re-copy deleting the window's own rules.
+    for (const sheet of document.adoptedStyleSheets) {
+      if (!target.adoptedStyleSheets.includes(sheet)) {
+        target.adoptedStyleSheets = [...target.adoptedStyleSheets, sheet];
+        copied += 1;
+      }
+    }
   }
   return copied;
+}
+
+/**
+ * One icon, imported from the page's own symbol sprite (voicebox-beads-9d3): a `<use href="#i-mic">`
+ * resolves against the DOCUMENT it lives in, so a symbol that stayed behind in the opener's sprite
+ * renders as nothing at all — which is how a mic button becomes an empty circle.
+ */
+function icon(doc, id) {
+  const svg = doc.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("class", "icon");
+  svg.setAttribute("aria-hidden", "true");
+  const use = doc.createElementNS(SVG_NS, "use");
+  use.setAttribute("href", `#${id}`);
+  svg.append(use);
+  return svg;
 }
 
 /**
@@ -122,7 +169,12 @@ function keepStylesInSync(pip) {
     // Coalesce: a swap can touch several nodes, and one re-copy per burst is enough.
     setTimeout(() => {
       pending = false;
-      const live = pip.document.head.querySelectorAll('link[rel="stylesheet"], style');
+      // ONLY THE SHEETS THIS WINDOW COPIED. The first version matched every `style` in the head, which
+      // includes THIS WINDOW'S OWN RULES — and the observer fires on the very append that installs them,
+      // so the window deleted its own styling moments after opening and the re-copy restored only the
+      // opener's sheets. That is a window that looks unstyled however good its rules are (voicebox-beads-9d3:
+      // found by driving, because the DOM still showed a full set of copied stylesheets).
+      const live = pip.document.head.querySelectorAll('link[rel="stylesheet"]');
       for (const node of live) node.remove();
       copyStylesInto(pip.document);
     }, 50);
@@ -148,42 +200,76 @@ function buildPip(pip, controls) {
   const stopSync = keepStylesInSync(pip);
   pip.addEventListener("pagehide", stopSync);
 
-  const style = pip.document.createElement("style");
-  style.textContent = `
-    :root { color-scheme: dark; }
-    body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: #14161a; color: #e8eaf0;
-           display: flex; flex-direction: column; gap: .75rem; padding: .9rem; height: 100vh; box-sizing: border-box; }
-    .row { display: flex; align-items: center; gap: .6rem; }
-    #pip-mic { transition: background 150ms ease, border-color 150ms ease; width: 3.4rem; height: 3.4rem; border-radius: 50%; border: 1px solid #3a3f4b;
-               background: #1d2026; color: inherit; font-size: 1.3rem; cursor: pointer; }
-    #pip-mic[data-listening="true"] { background: #2b6b4b; border-color: #4fbf8b; }
+  // THE WINDOW'S OWN RULES RIDE A CONSTRUCTABLE SHEET, NOT AN INLINE <style> — measured, not assumed
+  // (voicebox-beads-9d3): in a Document-PiP document a `<style>` appended to the head, even a brand-new one
+  // carrying a marker rule, reports `sheet === null` and applies NOTHING, while a copied `<link>` applies
+  // normally and an adopted CSSStyleSheet applies normally. So the window had the page's sheet and none of
+  // its own rules: it read as unstyled however good those rules were, and no selector work would fix it.
+  const own = new (pip.CSSStyleSheet ?? CSSStyleSheet)();
+  // THE SAME TOKENS THE PAGE USES, not a lookalike palette. The copied sheet above already declares
+  // them, so everything here reads `var(--…)` and follows the theme with it — the hardcoded greys this
+  // replaced were a second theme that agreed with the product only by coincidence (voicebox-beads-9d3).
+  own.replaceSync(`
+    body { margin: 0; font: 14px/1.5 Inter, system-ui, sans-serif; background: var(--ground); color: var(--ink);
+           display: flex; flex-direction: column; gap: .7rem; padding: .9rem; block-size: 100vh; box-sizing: border-box; }
+    .icon { inline-size: 1.15em; block-size: 1.15em; fill: none; stroke: currentColor; stroke-width: 2;
+            stroke-linecap: round; flex: none; }
+    .lead { display: flex; flex-direction: column; align-items: center; gap: .45rem; text-align: center; }
+    #pip-mic { position: relative; inline-size: 3.6rem; block-size: 3.6rem; border-radius: 50%;
+               border: 1px solid var(--line); background: var(--card); color: var(--ink); font-size: 1.35rem;
+               display: grid; place-items: center; cursor: pointer;
+               transition: border-color 150ms ease, color 150ms ease, background 150ms ease; }
+    #pip-mic:hover { border-color: var(--accent); color: var(--accent); }
+    #pip-mic[data-listening="true"] { border-color: var(--good); color: var(--good); background: color-mix(in srgb, var(--good) 12%, var(--card));
+               animation: pip-breathe 1.8s ease-in-out infinite; }
+    @keyframes pip-breathe {
+      0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--good) 55%, transparent); }
+      50%      { box-shadow: 0 0 0 .6rem color-mix(in srgb, var(--good) 0%, transparent); }
+    }
+    @media (prefers-reduced-motion: reduce) { #pip-mic[data-listening="true"] { animation: none; } }
     #pip-state { font-weight: 600; }
-    #pip-state[data-listening="false"] { color: #9aa1ae; font-weight: 400; }
-    #pip-hint { color: #9aa1ae; font-size: 12px; }
-    .meters { display: grid; gap: 3px; }
-    .meter { height: 6px; background: #23262d; border-radius: 3px; overflow: hidden; }
-    .meter > i { display: block; height: 100%; width: 0%; background: #4fbf8b; transition: width 60ms linear; }
-    .meter.out > i { background: #5b8def; }
-    #pip-log { flex: 1; overflow: auto; border: 1px solid #262a33; border-radius: 8px; padding: .5rem;
+    #pip-state[data-listening="false"] { color: var(--muted); font-weight: 400; }
+    #pip-hint { color: var(--muted); font-size: 12px; }
+    .meters { display: grid; gap: 4px; }
+    .meter { block-size: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+    .meter > i { display: block; block-size: 100%; inline-size: 0%; background: var(--good);
+                 transition: inline-size 60ms linear; }
+    .meter.out > i { background: var(--accent); }
+    #pip-log { flex: 1; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable;
+               border: 1px solid var(--line); border-radius: 10px; padding: .55rem .65rem; background: var(--card);
                white-space: pre-wrap; font-size: 13px; }
     form { display: flex; gap: .4rem; }
-    input { flex: 1; padding: .5rem .6rem; border-radius: 8px; border: 1px solid #3a3f4b; background: #1d2026; color: inherit; }
-    button.quiet { padding: .5rem .7rem; border-radius: 8px; border: 1px solid #3a3f4b; background: #1d2026; color: inherit; cursor: pointer; }
-  `;
-  pip.document.head.append(style);
+    input { flex: 1; min-inline-size: 0; padding: .5rem .6rem; border-radius: 8px; border: 1px solid var(--line);
+            background: var(--card); color: var(--ink); font: inherit; }
+    input::placeholder { color: var(--muted); }
+    button.quiet { display: inline-flex; align-items: center; gap: .35rem; padding: .5rem .7rem; border-radius: 8px;
+                   border: 1px solid var(--line); background: var(--card); color: var(--ink); font: inherit; cursor: pointer; }
+    button.quiet:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+    button.quiet:disabled { opacity: .5; cursor: default; }
+    .actions { display: flex; flex-wrap: wrap; gap: .4rem; }
+  `);
+  pip.document.adoptedStyleSheets = [...pip.document.adoptedStyleSheets, own];
   // Reported rather than assumed: if the opener had no sheets to copy, this window is unstyled and the number
   // says so instead of the difference being something a person has to notice by eye.
   if (copied === 0) console.warn("[pip-mic] the opener had no stylesheets to copy — this window will render unstyled");
 
   const body = pip.document.body;
-  const row = pip.document.createElement("div");
-  row.className = "row";
+  // THE SPRITE TRAVELS WITH THE WINDOW (voicebox-beads-9d3). `<use href="#i-mic">` resolves against the
+  // document it lives in, so the symbols must be IN this document — a copy that leaves them behind draws
+  // an empty circle where the mic should be, which is exactly how the window looked.
+  const defs = document.querySelector(".icon-definitions");
+  if (defs) body.append(pip.document.importNode(defs, true));
+  else console.warn("[pip-mic] the opener has no .icon-definitions — the icons in this window will be blank");
+
+  // The mic leads, centred: it is the one control a person presses here, and the state belongs under it.
+  const lead = pip.document.createElement("div");
+  lead.className = "lead";
 
   const micButton = pip.document.createElement("button");
   micButton.id = "pip-mic";
   micButton.type = "button";
   micButton.setAttribute("aria-label", "Speak a turn");
-  micButton.textContent = "🎙";
+  micButton.append(icon(pip.document, "i-mic"));
   // SAME HANDLER: the page's mic button owns the behaviour; this clicks it.
   micButton.addEventListener("click", () => controls.mic?.click());
 
@@ -194,7 +280,7 @@ function buildPip(pip, controls) {
   hint.id = "pip-hint";
   state.append(stateText, hint);
 
-  row.append(micButton, state);
+  lead.append(micButton, state);
 
   const meters = pip.document.createElement("div");
   meters.className = "meters";
@@ -209,7 +295,7 @@ function buildPip(pip, controls) {
   meters.append(inBar, outBar);
 
   const actions = pip.document.createElement("div");
-  actions.className = "row";
+  actions.className = "actions";
   const stop = pip.document.createElement("button");
   stop.className = "quiet";
   stop.id = "pip-stop";
@@ -222,7 +308,16 @@ function buildPip(pip, controls) {
   stopReply.type = "button";
   stopReply.textContent = "Stop reply";
   stopReply.addEventListener("click", () => controls.interrupt?.click());
-  actions.append(stop, stopReply);
+  const close = pip.document.createElement("button");
+  close.className = "quiet";
+  close.id = "pip-close";
+  close.type = "button";
+  close.title = "Close this window — the microphone stays under the page's control";
+  close.append(icon(pip.document, "i-close"), pip.document.createTextNode("Close"));
+  // Closing changes NOTHING about the microphone: the page's control is the truth, and this window never
+  // held a second capture.
+  close.addEventListener("click", () => pip.close());
+  actions.append(stop, stopReply, close);
 
   const log = pip.document.createElement("div");
   log.id = "pip-log";
@@ -248,7 +343,7 @@ function buildPip(pip, controls) {
     controls.form.requestSubmit();
   });
 
-  body.append(row, meters, actions, log, form);
+  body.append(lead, meters, actions, log, form);
   return { micButton, stateText, hint, stop, inFill, outFill, log, input };
 }
 
