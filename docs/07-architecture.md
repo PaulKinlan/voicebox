@@ -14,7 +14,7 @@ what runs, and a claim in them that the code contradicts is a bug in the documen
 
 | component | file | authority for | state |
 |---|---|---|---|
-| the page | `public/index.html`, `public/fused.js`, `public/style.css`, `public/live-voice.js` | the interface: objects on a canvas, the turn box, the transcript — and native modal dialogs for settings, environments, extensions, and harnesses | real, with labelled simulations |
+| the page | `public/index.html`, `public/fused.js`, `public/style.css`, `public/live-voice.js` | the interface: objects on a canvas, the turn box, the transcript, native modal dialogs for settings, environments, extensions, and harnesses — and the handler for the server's `{type:"tool"}` frame, which re-reads the file list so a file written by the live model appears without a refresh | real, with labelled simulations |
 | the server | `server.mjs` | routes, static serving, running actions, the workspace | **zero dependencies** (`node:http`) |
 | the turn resolver | `lib/resolver.mjs` | turning a transcript into an action `{ verb, name, content? }` | **one provider, three verbs — a placeholder** |
 | the environment core | `core/*.ts` | the tier table, policy, containment, the audit, project records | the E1-M0 library; not yet wired to the page | <!-- docs-check: names the mechanism -->
