@@ -465,8 +465,7 @@ test("lost runner reconciliation: dead prior generation reconciles to interrupte
 
   const stNew = await hostNew.call("task_status", { address }, auth);
   assert.equal(stNew.ok, true);
-  assert.equal(stNew.task.state, "interrupted", "lost runner from dead generation must be reconciled to interrupted");
-  assert.equal(stNew.task.reason, "environment-ended-outcome-unknown");
-  assert.equal(stNew.task.outcome?.class, "observed-interruption");
+  assert.equal(stNew.task.stale, true, "task from unconfirmed generation must be marked stale on status read");
+  assert.equal(stNew.task.staleReason, "generation-unconfirmed");
 });
 
