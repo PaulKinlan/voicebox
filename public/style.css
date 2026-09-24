@@ -369,6 +369,71 @@ body:has(#reader[data-state="ready"]) #file-body { max-height: 26svh; }
 .ext-plan input { max-width: 100%; box-sizing: border-box; }
 .env-item.env-empty { color: #6f6f7c; font-size: 12px; }
 
+/* ── Harnesses modal dialog (voicebox-beads-f1o) ─────────────────────────── */
+dialog.harnesses-modal {
+  width: min(100% - 2rem, 640px);
+}
+.harness-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0 16px;
+  flex-wrap: wrap;
+}
+.harness-status {
+  font-size: 13px;
+  color: var(--muted);
+}
+.harnesses-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 12px 0;
+}
+.harness-article {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px 16px;
+  background: var(--shade);
+}
+.harness-article h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  color: var(--ink);
+}
+.harness-article p {
+  margin: 4px 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.harness-article .tool-catalogue {
+  border-top: 1px solid var(--line);
+  margin-top: 12px;
+  padding-top: 8px;
+}
+.harness-article summary {
+  cursor: pointer;
+  padding-block: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.harness-article summary:hover {
+  color: #61afef;
+}
+.harness-article dt {
+  font-weight: 600;
+  margin-top: 10px;
+  font-size: 13px;
+}
+.harness-article dd {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+
 /* ── Several opened folders bar (voicebox-beads-69d) ──────────────────────── */
 .room-folders-bar {
   margin-block: 0 8px;
