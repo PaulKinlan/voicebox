@@ -20,7 +20,7 @@ test("API: GET /api/agents, POST /api/agents, PATCH /api/agents/:id, and GET /ap
     const base = server.base;
     const extensionsDir = path.join(process.cwd(), "extensions");
     const tokenFile = path.join(extensionsDir, ".host-token");
-    const hostToken = fs.existsSync(tokenFile) ? fs.readFileSync(tokenFile, "utf8").trim() : "";
+    const hostToken = server.hostToken ?? (fs.existsSync(tokenFile) ? fs.readFileSync(tokenFile, "utf8").trim() : "");
 
     // 1. GET /api/agents (ambient, no token needed)
     const listRes = await fetch(`${base}/api/agents`);
