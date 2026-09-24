@@ -204,7 +204,7 @@ test("REFUSED: denying a present file keeps it present and never live — decide
   assert.doesNotMatch(view.visible, INTERNAL_VOCAB);
 });
 
-test("RECONFIGURE via dialog: updating parameters/bounds in settings-style modal (voicebox-beads-ud5)", async () => {
+test("RECONFIGURE via dialog: seamless in-room authorization updates bounds without .token (voicebox-beads-5jl)", async () => {
   const view = await openExts();
   const searchRow = view.running.find((x) => x.name === "Web Search");
   assert(searchRow, "Web Search must be running");
@@ -219,31 +219,25 @@ test("RECONFIGURE via dialog: updating parameters/bounds in settings-style modal
   const modalTitle = await page.evaluate(() => document.getElementById("ext-manage-title")?.textContent);
   assert.match(modalTitle, /Reconfigure Web Search/);
 
-  // Attempting submit without token refuses
+  // In-room authorization avoids the undocumented .token requirement: token field is hidden
+  const tokenInputType = await page.evaluate(() => document.getElementById("ext-manage-token")?.type);
+  assert.equal(tokenInputType, "hidden", "host token input must not be a required visible field");
+
+  // Submitting invalid negative bounds refuses with bounds-invalid without needing a token
   await page.evaluate(() => {
+    document.getElementById("ext-manage-max-requests").value = "-15";
     document.getElementById("ext-manage-form").requestSubmit();
   });
-  await sleep(100);
-  const statusWithoutToken = await page.evaluate(() => document.getElementById("ext-manage-status")?.textContent);
-  assert.match(statusWithoutToken, /Host token is required/);
-
-  // Submitting invalid negative bounds refuses with bounds-invalid (voicebox-beads-ud5 must-fix)
-  await page.evaluate((tok) => {
-    document.getElementById("ext-manage-max-requests").value = "-15";
-    document.getElementById("ext-manage-token").value = tok;
-    document.getElementById("ext-manage-form").requestSubmit();
-  }, hostToken);
   await sleep(150);
   const statusInvalidBounds = await page.evaluate(() => document.getElementById("ext-manage-status")?.textContent);
   assert.match(statusInvalidBounds, /maxRequests must be a non-negative integer|bounds-invalid/);
 
-  // Fill in updated bounds and host token
-  await page.evaluate((tok) => {
+  // Fill in updated bounds and submit seamlessly without any host token
+  await page.evaluate(() => {
     document.getElementById("ext-manage-max-requests").value = "30";
     document.getElementById("ext-manage-hosts").value = "api.duckduckgo.com, news.google.com";
-    document.getElementById("ext-manage-token").value = tok;
     document.getElementById("ext-manage-form").requestSubmit();
-  }, hostToken);
+  });
 
   await page.waitFor(() => document.getElementById("ext-manage-dialog")?.open === false, { label: "manage dialog closed" });
 
@@ -256,7 +250,7 @@ test("RECONFIGURE via dialog: updating parameters/bounds in settings-style modal
   assert.match(updatedText, /news\.google\.com/);
 });
 
-test("REMOVE via dialog: revoking a running extension to restore access and break loops (voicebox-beads-ud5)", async () => {
+test("REMOVE via dialog: seamless in-room authorization revokes extension without .token (voicebox-beads-5jl)", async () => {
   // Click 'Remove' button on the running extension
   await page.evaluate(() => {
     const btn = document.querySelector("#ext-running .ext-remove-btn");
@@ -270,11 +264,10 @@ test("REMOVE via dialog: revoking a running extension to restore access and brea
   const warning = await page.evaluate(() => document.getElementById("ext-manage-warning-text")?.textContent);
   assert.match(warning, /tools.*web_search.*stop being callable immediately/);
 
-  // Submit removal with host token
-  await page.evaluate((tok) => {
-    document.getElementById("ext-manage-token").value = tok;
+  // Submit removal seamlessly without entering any host token
+  await page.evaluate(() => {
     document.getElementById("ext-manage-form").requestSubmit();
-  }, hostToken);
+  });
 
   await page.waitFor(() => document.getElementById("ext-manage-dialog")?.open === false, { label: "manage dialog closed after removal" });
 

@@ -123,6 +123,36 @@ const PROBE_SCRIPT = path.join(ROOT, "tools", "sandbox-probe.mjs");
 const HOST_DIR = process.env.VOICEBOX_EXTENSIONS_DIR ?? path.join(ROOT, "extensions");
 const PAIRINGS_FILE = path.join(HOST_DIR, ".pairings.json");
 
+// ── IN-ROOM SESSION AUTHORIZATION (voicebox-beads-5jl) ──────────────────────────
+// Minted per server process and embedded into the served index.html. Allows in-room UI actions
+// (like reconfiguring bounds or revoking extensions) without exposing or discovering .token on disk.
+const ROOM_SESSION_TOKEN = randomBytes(24).toString("hex");
+
+function hasExtensionAuthority(req) {
+  // 1. Host token from CLI / script callers
+  if (extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) return true;
+
+  // 2. In-room session token embedded in the served HTML
+  const sessionToken = req.headers["x-voicebox-session-token"];
+  if (typeof sessionToken === "string" && sessionToken && sessionToken === ROOM_SESSION_TOKEN) {
+    return true;
+  }
+
+  // 3. Request from the local page origin
+  const selfPort = boundPort ?? PORT;
+  const localOrigins = new Set([
+    `http://127.0.0.1:${selfPort}`,
+    `http://localhost:${selfPort}`,
+    `http://[::1]:${selfPort}`,
+    `http://127.0.0.1:5173`,
+    `http://localhost:5173`,
+  ]);
+  if (typeof req.headers.origin === "string" && localOrigins.has(req.headers.origin)) {
+    return true;
+  }
+  return false;
+}
+
 const PAIRINGS_UNREADABLE = "pairing-list-unreadable";
 function readPairings() {
   if (!existsSync(PAIRINGS_FILE)) return { ok: true, map: {} };
@@ -1516,7 +1546,9 @@ const routes = {
       ? ""
       : ` · ${BUILD.ahead} commit${BUILD.ahead === 1 ? "" : "s"} ahead of origin/${BUILD.branch} (not landed)`;
     const stamp = `${BUILD.branch} @ ${BUILD.commit}${where}${BUILD.dirty ? " · uncommitted changes" : ""}`;
-    const html = readFileSync(path.join(PUBLIC, "index.html"), "utf8").replace("__VOICEBOX_BUILD_STAMP__", stamp);
+    const html = readFileSync(path.join(PUBLIC, "index.html"), "utf8")
+      .replace("__VOICEBOX_BUILD_STAMP__", stamp)
+      .replace("__VOICEBOX_SESSION_TOKEN__", ROOM_SESSION_TOKEN);
     res.end(html);
   },
   "GET /index.html": (req, res, url) => routes["GET /"](req, res, url),
@@ -2084,12 +2116,10 @@ async function handle(req, res) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/extensions/revoke") {
-    // REVOCATION is the same authority class as admission (voicebox-beads-qg1): it
-    // withdraws a running extension's tools, so it is gated by the same host token.
-    // Without it → host-token-required, named. Without confirm → the disclosure of
-    // what will stop working, before anything is decided.
-    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
-      return json(res, 403, { ok: false, refused: "host-token-required", why: "revocation is the host's act — this route requires the host token (x-voicebox-host-token); the page cannot hold it" });
+    // REVOCATION is a protected act (voicebox-beads-qg1, voicebox-beads-5jl):
+    // Authorized via in-room session token, local room origin, or the host token.
+    if (!hasExtensionAuthority(req)) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "revocation is a protected host act — this route requires an authorized in-room session or host token (x-voicebox-host-token)" });
     }
     const body = await readJson();
     if (!body?.id) return json(res, 400, { error: "body must be JSON with an id" });
@@ -2104,21 +2134,21 @@ async function handle(req, res) {
     return json(res, r.ok ? 200 : 404, r);
   }
 
-  // DELETE /api/extensions/:id (voicebox-beads-ud5) — REST revocation endpoint
+  // DELETE /api/extensions/:id (voicebox-beads-ud5, voicebox-beads-5jl) — REST revocation endpoint
   const deleteExtMatch = req.method === "DELETE" && url.pathname.match(/^\/api\/extensions\/([a-z0-9_-]+)$/);
   if (deleteExtMatch) {
-    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
-      return json(res, 403, { ok: false, refused: "host-token-required", why: "revocation is the host's act — this route requires the host token (x-voicebox-host-token); the page cannot hold it" });
+    if (!hasExtensionAuthority(req)) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "revocation is a protected host act — this route requires an authorized in-room session or host token (x-voicebox-host-token)" });
     }
     const id = deleteExtMatch[1];
     const r = extensions.revokeExtension(id, "host");
     return json(res, r.ok ? 200 : 404, r);
   }
 
-  // POST /api/extensions/reconfigure (voicebox-beads-ud5) — confirm-first or apply reconfigured bounds
+  // POST /api/extensions/reconfigure (voicebox-beads-ud5, voicebox-beads-5jl) — confirm-first or apply reconfigured bounds
   if (req.method === "POST" && url.pathname === "/api/extensions/reconfigure") {
-    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
-      return json(res, 403, { ok: false, refused: "host-token-required", why: "reconfiguring an extension is the host's act — this route requires the host token (x-voicebox-host-token); the page cannot hold it" });
+    if (!hasExtensionAuthority(req)) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "reconfiguring an extension is a protected host act — this route requires an authorized in-room session or host token (x-voicebox-host-token)" });
     }
     const body = await readJson();
     if (!body?.id) return json(res, 400, { ok: false, refused: "bad-request", why: "reconfiguration requires an extension id" });
@@ -2160,11 +2190,11 @@ async function handle(req, res) {
     return json(res, r.ok ? 200 : 400, r);
   }
 
-  // PATCH /api/extensions/:id (voicebox-beads-ud5) — REST reconfiguration endpoint
+  // PATCH /api/extensions/:id (voicebox-beads-ud5, voicebox-beads-5jl) — REST reconfiguration endpoint
   const patchExtMatch = req.method === "PATCH" && url.pathname.match(/^\/api\/extensions\/([a-z0-9_-]+)$/);
   if (patchExtMatch) {
-    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
-      return json(res, 403, { ok: false, refused: "host-token-required", why: "reconfiguring an extension is the host's act — this route requires the host token (x-voicebox-host-token); the page cannot hold it" });
+    if (!hasExtensionAuthority(req)) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "reconfiguring an extension is a protected host act — this route requires an authorized in-room session or host token (x-voicebox-host-token)" });
     }
     const id = patchExtMatch[1];
     const body = await readJson();

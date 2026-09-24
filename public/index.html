@@ -9,6 +9,8 @@
   <!-- the revision this page was served from; Vite fills it in (vite.config.js).
        Empty when a plain server serves this file, which is the honest answer. -->
   <meta name="voicebox-build" content="__VOICEBOX_BUILD_STAMP__">
+  <!-- per-process in-room session token for seamless in-room authorization (voicebox-beads-5jl) -->
+  <meta name="voicebox-session-token" content="__VOICEBOX_SESSION_TOKEN__">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
   <script type="module" src="fused.js"></script>
@@ -88,7 +90,7 @@
             <h2 id="ext-manage-title">Reconfigure extension</h2>
             <button class="icon-button" id="ext-manage-close" type="button" aria-label="Close extension settings"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
           </div>
-          <p class="env-hint" id="ext-manage-hint">Update bounds or remove this extension to restore tool access. Requires host token.</p>
+          <p class="env-hint" id="ext-manage-hint">Update bounds or remove this extension to restore tool access.</p>
           <input type="hidden" id="ext-manage-id" value="">
           <input type="hidden" id="ext-manage-mode" value="reconfigure">
 
@@ -109,11 +111,7 @@
             <p class="device-note" id="ext-manage-warning-text">The extension's tools will stop being callable immediately.</p>
           </div>
 
-          <label class="device-row">
-            <h3>Host token</h3>
-            <p class="device-state">The authentication token from the server's .token file.</p>
-            <input type="password" id="ext-manage-token" autocomplete="current-password" placeholder="Enter host token" class="setting-input">
-          </label>
+          <input type="hidden" id="ext-manage-token" value="">
 
           <p class="device-note" id="ext-manage-status" role="status" aria-live="polite"></p>
 

@@ -646,7 +646,32 @@ test("API: DELETE /api/extensions/:id and POST/PATCH /api/extensions/reconfigure
   inv = await getJson("/api/extensions");
   assert.equal(inv.extensions.find((e) => e.id === "web-search")?.bounds?.maxRequests, 100);
 
-  // 5. DELETE /api/extensions/:id requires host token
+  // 5. In-room session authorization (voicebox-beads-5jl)
+  const roomHtml = await fetch(`${server.base}/`).then((r) => r.text());
+  const tokenMatch = roomHtml.match(/<meta\s+name=["']voicebox-session-token["']\s+content=["']([a-f0-9]+)["']/i);
+  assert.ok(tokenMatch, "served room HTML must carry the in-room session token");
+  const sessionToken = tokenMatch[1];
+
+  // In-room session token authorizes reconfigure without .token file
+  const sessionReconfig = await fetch(`${server.base}/api/extensions/reconfigure`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-voicebox-session-token": sessionToken },
+    body: JSON.stringify({ id: "web-search", bounds: { maxRequests: 75 }, confirm: true }),
+  }).then((r) => r.json());
+  assert.equal(sessionReconfig.ok, true);
+  assert.equal(sessionReconfig.decision, "reconfigured");
+  assert.equal(sessionReconfig.bounds.maxRequests, 75);
+
+  // Bogus session token from foreign caller is refused
+  const foreignCall = await fetch(`${server.base}/api/extensions/reconfigure`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-voicebox-session-token": "bogus-token-12345", Origin: "http://malicious.example.com" },
+    body: JSON.stringify({ id: "web-search", bounds: { maxRequests: 99 }, confirm: true }),
+  }).then((r) => r.json());
+  assert.equal(foreignCall.ok, false);
+  assert.equal(foreignCall.refused, "host-token-required");
+
+  // 6. DELETE /api/extensions/:id requires authorization
   const unauthDelete = await fetch(`${server.base}/api/extensions/web-search`, { method: "DELETE" }).then((r) => r.json());
   assert.equal(unauthDelete.ok, false);
   assert.equal(unauthDelete.refused, "host-token-required");
