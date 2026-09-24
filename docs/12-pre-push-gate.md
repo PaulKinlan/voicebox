@@ -12,7 +12,9 @@ Each stage inherits stdout and stderr: partial output remains visible when it
 times out. GNU coreutils `timeout` is required; its absence is a named refusal,
 not an unbounded run. The lanes are derived from each file's code by
 `scripts/test-lanes.mjs` (comments stripped; every file lands in exactly one
-lane), so a new test cannot escape them the way it could escape a hand-kept
+lane; detecting direct and helper-mediated browser launches like `page-acceptance.mjs`,
+and server processes like `server.mjs`, `task-fixture.mjs` and `createServer`),
+so a new test cannot escape them the way it could escape a hand-kept
 list, and `npm test` still runs the whole suite for humans and CI.
 
 ## Why two lanes — 2026-09-23 (`voicebox-beads-6qu`)

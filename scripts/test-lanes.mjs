@@ -25,8 +25,11 @@ const TESTS = path.join(ROOT, "tests");
 /** What makes a file LIVE: it starts a browser, or a server of its own. */
 const LAUNCHES = [
   { what: "a browser over CDP", re: /from\s+["'][^"']*lib\/cdp\.mjs["']/ },
+  { what: "a browser via page-acceptance", re: /\bpage-acceptance\.mjs\b/ },
   { what: "a server process", re: /from\s+["'][^"']*lib\/server\.mjs["']/ },
   { what: "a server process", re: /["'][^"']*\bserver\.mjs["']/ },
+  { what: "a server via task-fixture", re: /from\s+["'][^"']*lib\/task-fixture\.mjs["']/ },
+  { what: "a server via createServer", re: /\bcreateServer\b/ },
 ];
 
 const stripComments = (source) =>
