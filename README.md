@@ -341,8 +341,11 @@ Every environment variable the server and its libraries read, and where:
 
 | variable | read in | what it does |
 |---|---|---|
+| `FORCE_COLOR` | `lib/logger.mjs` | (undocumented — add a line to ENV_MEANING in scripts/docs-check.mjs) |
 | `GEMINI_API_KEY` | `lib/live-providers/gemini.mjs`, `lib/resolver.mjs`, `server.mjs` | read by TWO things with different refusals: the live session refuses to start by name, and the gemini turn resolver answers `unresolved` saying it has no key |
 | `LIVE_PROVIDER` | `lib/live-session.mjs`, `server.mjs` | the OLD NAME of `VOICEBOX_LIVE_PROVIDER`, honoured for one release |
+| `NODE_DISABLE_COLORS` | `lib/logger.mjs` | (undocumented — add a line to ENV_MEANING in scripts/docs-check.mjs) |
+| `NO_COLOR` | `lib/logger.mjs` | (undocumented — add a line to ENV_MEANING in scripts/docs-check.mjs) |
 | `OPENAI_API_KEY` | `lib/live-providers/openai.mjs`, `server.mjs` | the OpenAI Realtime key — without it that provider refuses to start, by name |
 | `PORT` | `server.mjs` | the port the server binds (default 8787) |
 | `VOICEBOX_ACP_ADAPTER` | `lib/pi-acp.mjs` | (undocumented — add a line to ENV_MEANING in scripts/docs-check.mjs) |

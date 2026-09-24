@@ -52,6 +52,9 @@ import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
 import { createLiveSession, LIVE_MODEL, inputRateRequiredBy } from "./lib/live-session.mjs";
 import { commandToAction, functionDeclarations, liveSystemInstruction } from "./lib/commands.mjs";
 import { readProjectInstruction } from "./lib/project-instruction.mjs";
+import { installColorConsole } from "./lib/logger.mjs";
+
+installColorConsole();
 
 // Module-relative, decoded: `new URL(...).pathname` percent-encodes spaces and
 // silently points every read at a directory that does not exist.
