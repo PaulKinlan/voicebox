@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { resolveTurn } from "./lib/resolver.mjs";
 import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, reachableFromEnvironment, resolveInRoot, rootVanished } from "./core/root.ts";
 import { normaliseRelativeDir, parentDir } from "./core/paths.ts";
-import { CORE_FS_DESCRIPTOR, dispatchFor } from "./core/dispatch.ts";
+import { CORE_FS_DESCRIPTOR, createUnifiedDiff, dispatchFor } from "./core/dispatch.ts";
 import { createChannel } from "./lib/channel.mjs";
 import {
   AGENT_BASE_INSTRUCTION,
@@ -796,6 +796,9 @@ function askPage(action) {
       ...(active ? { root: active.root } : {}),
       name: String(action.name ?? ""),
       ...(action.content != null ? { content: String(action.content) } : {}),
+      ...(action.oldText != null ? { oldText: String(action.oldText) } : {}),
+      ...(action.newText != null ? { newText: String(action.newText) } : {}),
+      ...(action.query != null ? { query: String(action.query) } : {}),
       ...(action.turn != null ? { turn: String(action.turn) } : {}),
     },
     boundsEcho: {},
@@ -825,6 +828,15 @@ async function executeViaPage(action) {
   }
   if (action.verb === "read") {
     return { ok: true, action: observed.name ?? action.name, content: observed.content ?? "", via: "page", root: active.root, logged: observed.auditSeq ?? null };
+  }
+  if (action.verb === "delete") {
+    return { ok: true, action: `deleted ${observed.name ?? action.name} — observed by the page`, file: observed.name ?? action.name, via: "page", root: active.root, logged: observed.auditSeq ?? null };
+  }
+  if (action.verb === "edit") {
+    return { ok: true, action: `edited ${observed.name ?? action.name} (${observed.bytes ?? 0} bytes) — observed by the page`, file: observed.name ?? action.name, via: "page", root: active.root, logged: observed.auditSeq ?? null };
+  }
+  if (action.verb === "diff") {
+    return { ok: true, action: `diff ${observed.name ?? action.name}`, file: observed.name ?? action.name, diff: observed.diff ?? "", changed: Boolean(observed.changed), via: "page", root: active.root };
   }
   // write — the action line carries the provenance, because this line is what the room prints.
   return {
@@ -1250,12 +1262,61 @@ async function execute(action) {
     if (!reach.ok) return { ok: false, refused: reach.refused, error: `refused: ${reach.refused}`, why: reach.why, root: active.root };
     return { ok: true, action: `listed ${active.project}`, files: readdirSync(active.root.path).filter((f) => !f.startsWith(".")), root: active.root };
   }
+  if (action.verb === "grep") {
+    const query = String(action.query ?? action.name ?? "").trim();
+    if (!query) {
+      return { ok: false, refused: "missing-argument", error: "refused: missing-argument", why: "grep requires a search query", root: active.root };
+    }
+    const matches = [];
+    const MAX_MATCHES = 100;
+    const MAX_FILE_BYTES = 524288;
+    function scanDir(dir, relDir = "") {
+      if (matches.length >= MAX_MATCHES) return;
+      let entries;
+      try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const ent of entries) {
+        if (matches.length >= MAX_MATCHES) break;
+        if (ent.name.startsWith(".") || ent.name === "node_modules") continue;
+        const fullPath = path.join(dir, ent.name);
+        const relPath = relDir ? `${relDir}/${ent.name}` : ent.name;
+        if (ent.isDirectory()) {
+          scanDir(fullPath, relPath);
+        } else if (ent.isFile()) {
+          try {
+            const stat = statSync(fullPath);
+            if (stat.size > MAX_FILE_BYTES) continue;
+            const text = readFileSync(fullPath, "utf8");
+            const lines = text.split("\n");
+            for (let idx = 0; idx < lines.length; idx++) {
+              if (matches.length >= MAX_MATCHES) break;
+              const line = lines[idx];
+              if (line.toLowerCase().includes(query.toLowerCase())) {
+                matches.push({ file: relPath, line: idx + 1, text: line.slice(0, 300) });
+              }
+            }
+          } catch {}
+        }
+      }
+    }
+    scanDir(active.root.path);
+    const entry = logAct({ kind: "grep", target: query, tool: "turn" }, "allow", "greps-inside", "ok", { count: matches.length }, action.turn ?? null);
+    return {
+      ok: true,
+      action: `grep "${query}" (${matches.length} matches)`,
+      query,
+      matches,
+      count: matches.length,
+      truncated: matches.length >= MAX_MATCHES,
+      root: active.root,
+      logged: entry ? entry.seq : null,
+    };
+  }
   const name = String(action.name ?? "");
   if (!name) return { ok: false, error: "action has no name" };
   const resolved = resolveActive(name);
   if (!resolved.ok) {
     // A refusal is recorded as well: the log answers "what did it try", not only "what did it do".
-    const kind = action.verb === "read" ? "read" : "write";
+    const kind = ["read", "diff"].includes(action.verb) ? action.verb : ["write", "edit", "delete"].includes(action.verb) ? action.verb : "read";
     const entry = logAct({ kind, target: name, tool: "turn" }, "refuse", resolved.refused, "refused", null, action.turn ?? null);
     return {
       ok: false,
@@ -1274,10 +1335,11 @@ async function execute(action) {
   // own extensions dir) hands over its secrets — including the admission token —
   // through a read, or loses them to a write over it. Driven chain, 2026-09-20:
   // declare -> read .host-token -> admit.
-  if (action.verb === "read" || action.verb === "write") {
+  if (["read", "write", "delete", "edit", "diff"].includes(action.verb)) {
     const base = path.basename(resolved.path);
     if (base.startsWith(".")) {
-      const entry = logAct({ kind: action.verb === "write" ? "write" : "read", target: name, tool: "turn" }, "refuse", "dotfile-refused", "refused", null, action.turn ?? null);
+      const kind = ["read", "diff"].includes(action.verb) ? action.verb : ["write", "edit", "delete"].includes(action.verb) ? action.verb : "write";
+      const entry = logAct({ kind, target: name, tool: "turn" }, "refuse", "dotfile-refused", "refused", null, action.turn ?? null);
       return { ok: false, refused: "dotfile-refused", logged: entry ? entry.seq : null, error: "refused: dotfile-refused", why: "dotfiles are neither readable nor writable through the loop — the listing hides them and so does this verb; host secrets live behind that line", root: active.root };
     }
   }
@@ -1345,6 +1407,78 @@ async function execute(action) {
     }
     const entry = logAct({ kind: "read", target: name, tool: "turn" }, "allow", "reads-inside", "ok", observeUnderRoot(name), action.turn ?? null, [{ path: name, bytes: Buffer.byteLength(content) }]);
     return { ok: true, action: name, content, root: active.root, logged: entry ? entry.seq : null };
+  }
+  if (action.verb === "delete") {
+    if (!existsSync(candidate)) {
+      const entry = logAct({ kind: "delete", target: name, tool: "turn" }, "refuse", "not-found", "refused", null, action.turn ?? null);
+      return { ok: false, refused: "not-found", logged: entry ? entry.seq : null, error: "refused: not-found", why: `'${name}' is not in ${active.project}`, root: active.root };
+    }
+    const stat = statSync(candidate);
+    if (stat.isDirectory()) {
+      const entry = logAct({ kind: "delete", target: name, tool: "turn" }, "refuse", "cannot-delete-directory", "refused", null, action.turn ?? null);
+      return { ok: false, refused: "cannot-delete-directory", logged: entry ? entry.seq : null, error: "refused: cannot-delete-directory", why: `'${name}' is a directory; delete applies to files`, root: active.root };
+    }
+    unlinkSync(candidate);
+    const entry = logAct({ kind: "delete", target: name, tool: "turn" }, "allow", "deletes-inside", "ok", observeUnderRoot(name), action.turn ?? null, [{ path: name, bytes: stat.size }]);
+    return {
+      ok: true,
+      action: `deleted ${name}`,
+      file: name,
+      root: active.root,
+      logged: entry ? entry.seq : null,
+      auditLocation: `${active.root.path}/.audit/`,
+    };
+  }
+  if (action.verb === "edit") {
+    if (!existsSync(candidate)) {
+      const entry = logAct({ kind: "edit", target: name, tool: "turn" }, "refuse", "not-found", "refused", null, action.turn ?? null);
+      return { ok: false, refused: "not-found", logged: entry ? entry.seq : null, error: "refused: not-found", why: `'${name}' is not in ${active.project}`, root: active.root };
+    }
+    if (action.oldText == null || action.newText == null) {
+      const entry = logAct({ kind: "edit", target: name, tool: "turn" }, "refuse", "missing-argument", "refused", null, action.turn ?? null);
+      return { ok: false, refused: "missing-argument", logged: entry ? entry.seq : null, error: "refused: missing-argument", why: "edit requires both 'oldText' and 'newText'", root: active.root };
+    }
+    const original = readFileSync(candidate, "utf8");
+    if (!original.includes(action.oldText)) {
+      const entry = logAct({ kind: "edit", target: name, tool: "turn" }, "refuse", "pattern-not-found", "refused", null, action.turn ?? null);
+      return { ok: false, refused: "pattern-not-found", logged: entry ? entry.seq : null, error: "refused: pattern-not-found", why: `could not find exact text match for oldText in '${name}'`, root: active.root };
+    }
+    const firstIdx = original.indexOf(action.oldText);
+    const lastIdx = original.lastIndexOf(action.oldText);
+    if (firstIdx !== lastIdx) {
+      const entry = logAct({ kind: "edit", target: name, tool: "turn" }, "refuse", "pattern-not-unique", "refused", null, action.turn ?? null);
+      return { ok: false, refused: "pattern-not-unique", logged: entry ? entry.seq : null, error: "refused: pattern-not-unique", why: `found multiple occurrences of oldText in '${name}' — specify a unique text block`, root: active.root };
+    }
+    const updated = original.slice(0, firstIdx) + action.newText + original.slice(firstIdx + action.oldText.length);
+    writeFileSync(candidate, updated, "utf8");
+    const entry = logAct({ kind: "edit", target: name, tool: "turn" }, "allow", "edits-inside", "ok", observeUnderRoot(name), action.turn ?? null, [{ path: name, bytes: Buffer.byteLength(updated) }]);
+    return {
+      ok: true,
+      action: `edited ${name} (${Buffer.byteLength(updated)} bytes)`,
+      file: name,
+      bytes: Buffer.byteLength(updated),
+      root: active.root,
+      logged: entry ? entry.seq : null,
+      auditLocation: `${active.root.path}/.audit/`,
+    };
+  }
+  if (action.verb === "diff") {
+    let current = "";
+    if (existsSync(candidate)) {
+      try { current = readFileSync(candidate, "utf8"); } catch {}
+    }
+    const proposed = typeof action.content === "string" ? action.content : "";
+    const unifiedDiff = createUnifiedDiff(name, current, proposed);
+    const entry = logAct({ kind: "diff", target: name, tool: "turn" }, "allow", "diffs-inside", "ok", observeUnderRoot(name), action.turn ?? null);
+    return {
+      ok: true,
+      action: `diff ${name}`,
+      file: name,
+      diff: unifiedDiff,
+      changed: current !== proposed,
+      root: active.root,
+      logged: entry ? entry.seq : null,
+    };
   }
   return { ok: false, error: `unknown verb: ${action.verb}` };
 }
@@ -1575,6 +1709,11 @@ const routes = {
 };
 
 async function handle(req, res) {
+  const readJson = (maxBytes = Infinity) => new Promise((resolve) => {
+    let body = "", bytes = 0;
+    req.on("data", (c) => { bytes += c.length; if (bytes <= maxBytes) body += c; });
+    req.on("end", () => { try { resolve(bytes > maxBytes ? null : JSON.parse(body || "{}")); } catch { resolve(null); } });
+  });
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   const key = `${req.method} ${url.pathname}`;
   // Fall through to public/ for any other path the page requests.
@@ -1905,6 +2044,34 @@ async function handle(req, res) {
     }
   }
 
+  if (req.method === "DELETE" && url.pathname === "/api/file") {
+    const name = url.searchParams.get("name") ?? "";
+    const result = await execute({ verb: "delete", name });
+    if (!result.ok) return json(res, result.refused === "not-found" ? 404 : 400, result);
+    return json(res, 200, result);
+  }
+
+  if (req.method === "PATCH" && url.pathname === "/api/file") {
+    const body = await readJson();
+    const result = await execute({ verb: "edit", name: body?.name, oldText: body?.oldText, newText: body?.newText });
+    if (!result.ok) return json(res, result.refused === "not-found" ? 404 : 400, result);
+    return json(res, 200, result);
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/file/diff") {
+    const body = await readJson();
+    const result = await execute({ verb: "diff", name: body?.name, content: body?.content });
+    if (!result.ok) return json(res, 400, result);
+    return json(res, 200, result);
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/grep") {
+    const query = url.searchParams.get("q") ?? url.searchParams.get("query") ?? "";
+    const result = await execute({ verb: "grep", query });
+    if (!result.ok) return json(res, 400, result);
+    return json(res, 200, result);
+  }
+
   if (req.method === "GET" && url.pathname === "/api/environments") {
     // The list, with each host's reachability probed NOW and its STORED capability report merged in.
     // An unreadable registry is the named refusal, not an empty list.
@@ -2008,11 +2175,6 @@ async function handle(req, res) {
   // the RESOLVED PLAN — the extension's source, what it declares, what will
   // be enforced and by which mechanism, what it cannot have — before the act
   // runs. The page (astra's bead) renders this; the API is the surface.
-  const readJson = (maxBytes = Infinity) => new Promise((resolve) => {
-    let body = "", bytes = 0;
-    req.on("data", (c) => { bytes += c.length; if (bytes <= maxBytes) body += c; });
-    req.on("end", () => { try { resolve(bytes > maxBytes ? null : JSON.parse(body || "{}")); } catch { resolve(null); } });
-  });
 
   if (req.method === "POST" && url.pathname === "/api/agents") {
     if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {

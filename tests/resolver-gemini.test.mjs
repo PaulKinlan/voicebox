@@ -37,14 +37,28 @@ test("extension discovery and invocation map through the shared command contract
   assert.match((await resolve("use a tool")).unresolved, /without 'name'/);
 });
 
+test("delete, edit, diff, and grep answers map to the contract", async () => {
+  const del = makeGeminiResolver({ key: "k", fetchImpl: async () => modelSays('{"verb":"delete","name":"old.txt"}') });
+  assert.deepEqual(await del("delete old.txt"), { verb: "delete", name: "old.txt" });
+
+  const edit = makeGeminiResolver({ key: "k", fetchImpl: async () => modelSays('{"verb":"edit","name":"doc.txt","oldText":"foo","newText":"bar"}') });
+  assert.deepEqual(await edit("edit doc.txt replace foo with bar"), { verb: "edit", name: "doc.txt", oldText: "foo", newText: "bar" });
+
+  const diff = makeGeminiResolver({ key: "k", fetchImpl: async () => modelSays('{"verb":"diff","name":"doc.txt","content":"hello"}') });
+  assert.deepEqual(await diff("diff doc.txt with hello"), { verb: "diff", name: "doc.txt", content: "hello" });
+
+  const grep = makeGeminiResolver({ key: "k", fetchImpl: async () => modelSays('{"verb":"grep","query":"secret"}') });
+  assert.deepEqual(await grep("grep secret"), { verb: "grep", name: "", query: "secret" });
+});
+
 test("the model's own unresolved passes through with its message", async () => {
-  const resolve = makeGeminiResolver({ key: "k", fetchImpl: async () => modelSays('{"verb":"unresolved","content":"I can only create, read and list files."}') });
-  assert.deepEqual(await resolve("delete everything"), { unresolved: "I can only create, read and list files." });
+  const resolve = makeGeminiResolver({ key: "k", fetchImpl: async () => modelSays('{"verb":"unresolved","content":"I cannot perform that act."}') });
+  assert.deepEqual(await resolve("destroy everything"), { unresolved: "I cannot perform that act." });
 });
 
 test("a verb outside the contract is unresolved — never dispatched", async () => {
-  const resolve = makeGeminiResolver({ key: "k", fetchImpl: async () => modelSays('{"verb":"delete","name":"everything"}') });
-  const action = await resolve("delete everything");
+  const resolve = makeGeminiResolver({ key: "k", fetchImpl: async () => modelSays('{"verb":"destroy","name":"everything"}') });
+  const action = await resolve("destroy everything");
   assert.match(action.unresolved, /outside the contract/);
   assert.equal(action.verb, undefined, "no verb leaks through");
 });
