@@ -505,6 +505,11 @@ function icon(id) {
 }
 
 async function request(path, options, traceId) {
+  const sessionToken = document.querySelector('meta[name="voicebox-session-token"]')?.content;
+  if (sessionToken && sessionToken !== "__VOICEBOX_SESSION_TOKEN__") {
+    options = options ?? {};
+    options.headers = { ...(options.headers ?? {}), "x-voicebox-session-token": sessionToken };
+  }
   const response = await fetch(path, options);
   const body = await response.json().catch(() => null);
   if (traceId) recordDebug({ type: "turn.result", traceId, status: response.status, body,
@@ -1180,7 +1185,7 @@ function openManageExt(ext, mode = "reconfigure") {
 
   if (mode === "reconfigure") {
     if (els.extManageTitle) els.extManageTitle.textContent = `Reconfigure ${ext.name ?? ext.id}`;
-    if (els.extManageHint) els.extManageHint.textContent = "Update bounds to restore tool access or resolve configuration loops. Requires host token.";
+    if (els.extManageHint) els.extManageHint.textContent = "Update bounds to restore tool access or resolve configuration loops.";
     if (els.extManageFields) els.extManageFields.hidden = false;
     if (els.extManageRemoveWarning) els.extManageRemoveWarning.hidden = true;
     if (els.extManageHosts) els.extManageHosts.value = (ext.bounds?.hosts ?? []).join(", ");
@@ -1192,7 +1197,7 @@ function openManageExt(ext, mode = "reconfigure") {
     if (els.extManageDelete) els.extManageDelete.hidden = false;
   } else {
     if (els.extManageTitle) els.extManageTitle.textContent = `Remove ${ext.name ?? ext.id}`;
-    if (els.extManageHint) els.extManageHint.textContent = "Withdrawing an extension revokes its tools immediately. Requires host token.";
+    if (els.extManageHint) els.extManageHint.textContent = "Withdrawing an extension revokes its tools immediately.";
     if (els.extManageFields) els.extManageFields.hidden = true;
     if (els.extManageRemoveWarning) els.extManageRemoveWarning.hidden = false;
     const toolNames = (ext.tools ?? []).map((t) => (typeof t === "string" ? t : t.name)).join(", ");
@@ -2050,21 +2055,24 @@ on(els.extManageForm, "submit", async (event) => {
   const id = els.extManageId?.value;
   const mode = els.extManageMode?.value;
   const token = els.extManageToken?.value.trim();
-  if (!token) {
-    if (els.extManageStatus) els.extManageStatus.textContent = "Host token is required.";
-    return;
-  }
+
   if (els.extManageSubmit) els.extManageSubmit.disabled = true;
   if (els.extManageStatus) els.extManageStatus.textContent = "Applying...";
+
+  const headers = { "content-type": "application/json" };
+  const roomSessionToken = document.querySelector('meta[name="voicebox-session-token"]')?.content;
+  if (roomSessionToken && roomSessionToken !== "__VOICEBOX_SESSION_TOKEN__") {
+    headers["x-voicebox-session-token"] = roomSessionToken;
+  }
+  if (token) {
+    headers["x-voicebox-host-token"] = token;
+  }
 
   try {
     if (mode === "remove") {
       const resp = await request(`/api/extensions/${encodeURIComponent(id)}`, {
         method: "DELETE",
-        headers: {
-          "content-type": "application/json",
-          "x-voicebox-host-token": token,
-        },
+        headers,
       });
       if (resp.ok) {
         els.extManageDialog?.close();
@@ -2079,16 +2087,12 @@ on(els.extManageForm, "submit", async (event) => {
       const bounds = {};
       if (hosts.length > 0) bounds.hosts = hosts;
       if (maxReqVal) {
-        const parsed = Number.parseInt(maxReqVal, 10);
-        if (!Number.isNaN(parsed)) bounds.maxRequests = parsed;
+        bounds.maxRequests = Number(maxReqVal);
       }
 
       const resp = await request("/api/extensions/reconfigure", {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-voicebox-host-token": token,
-        },
+        headers,
         body: JSON.stringify({ id, bounds, confirm: true }),
       });
       if (resp.ok) {

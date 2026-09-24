@@ -165,7 +165,9 @@ function buildStamp() {
         ? ""
         : ` · ${build.ahead} commit${build.ahead === 1 ? "" : "s"} ahead of origin/${build.branch} (not landed)`;
       const content = `${build.branch} @ ${build.commit}${where}${build.dirty ? " · uncommitted changes" : ""}`;
-      return html.replace("__VOICEBOX_BUILD_STAMP__", content);
+      return html
+        .replace("__VOICEBOX_BUILD_STAMP__", content)
+        .replace("__VOICEBOX_SESSION_TOKEN__", "");
     },
   };
 }
