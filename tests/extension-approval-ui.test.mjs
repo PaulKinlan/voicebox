@@ -1,7 +1,8 @@
 // Real host console -> human entry in Chromium -> the ordinary admitted tool path.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -63,6 +64,18 @@ test("extension approval in Chromium: console code admits and runs, replay/tampe
     assert(!JSON.stringify(request).includes(code));
     assert(!JSON.stringify(request).includes(server.hostToken));
     assert.match(terminal, /Review this plan on the host/);
+
+    // Guidance text informs developer to run 'node tools/approval-code.mjs' (voicebox-beads-62f)
+    const noteText = await page.evaluate(() => document.querySelector("#ext-waiting .ext-plan p[role='status']")?.textContent ?? "");
+    assert.match(noteText, /node tools\/approval-code\.mjs/);
+
+    // CLI tools/approval-code.mjs reads the pending file and outputs the exact code and plan
+    const cliOutput = execFileSync(process.execPath, [path.join(path.resolve(path.dirname(new URL(import.meta.url).pathname), ".."), "tools/approval-code.mjs")], {
+      env: { ...process.env, VOICEBOX_EXTENSIONS_DIR: server.extensionsDir },
+      encoding: "utf8",
+    });
+    assert.match(cliOutput, new RegExp(`Approval code:\\s*${code}`));
+
     assert.equal(await page.evaluate(() => {
       const dialog = document.getElementById("exts");
       return dialog.scrollWidth <= dialog.clientWidth && getComputedStyle(document.querySelector(".ext-plan pre")).whiteSpace === "pre-wrap";
