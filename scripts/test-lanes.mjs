@@ -30,6 +30,7 @@ const LAUNCHES = [
   { what: "a server process", re: /["'][^"']*\bserver\.mjs["']/ },
   { what: "a server via task-fixture", re: /from\s+["'][^"']*lib\/task-fixture\.mjs["']/ },
   { what: "a server via createServer", re: /\bcreateServer\b/ },
+  { what: "worker threads or wasm execution", re: /\bcallWasmTool\b/ },
 ];
 
 const stripComments = (source) =>
