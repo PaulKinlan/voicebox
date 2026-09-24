@@ -53,6 +53,7 @@ finding — say it rather than resolving it silently.
 | [`14-s3-l2-bridge-decision.md`](14-s3-l2-bridge-decision.md) | **S3: the L2 bridge decision (`qmn`)** — why the inbound bridge is declared out of scope for interactive server environments, comparison with `srt`, and re-open conditions | on main (merged) |
 | [`13-local-browser-authentication-options.md`](13-local-browser-authentication-options.md) | **the local browser boundary (`2gq`)** — why minting a token in HTML is an illusion, the two architectural alternatives (bootstrap ticket vs WebCrypto pairing), UX impact, and recommendation | on main (merged) |
 | [`15-sandbox.md`](15-sandbox.md) | **the sandbox, for a reader** — what bounds an environment and what deliberately does not; the boundary report's tri-state verdicts and the derived level; `probe.json` field by field with what each entitles you to conclude; and the proposals folder — what lands there, who writes it, and who decides | on `feat/wasm-bounds` |
+| [`16-zero-server-delegation.md`](16-zero-server-delegation.md) | **zero-server browser delegation (`8fv.1`)** — placement as an environment property (`browser` / `machine` / `remote`), portable roots (`opfs`, `handle`, `machine`), execution bounds, and zero-server execution | on `feat/8fv1-zero-server-delegation` |
 | `docs/evidence/*/RECEIPT.md` | **measurements**, with the probe beside them. Cited claims point here | on main |
 
 **Collision resolved on merge**: qwen2's branch carried `docs/03-harvest.md` and

@@ -38,6 +38,8 @@ At most eight tasks are active per host service. Each admitted implementation mu
 
 `installTaskExecutor()` is a trusted **host-code** seam, not a request/configuration route or proof of containment. Its synchronous `check()` must establish the actual mechanism; `run()` is called only after persistence. D2 must supply and verify a real adapter and its enforcement before production tasks can run. The lifecycle fixture supplies fixed, no-untrusted-code operations only. The [ACP diagnostic slice](11-acp-adapter.md) verifies one actual adapter handshake and typed process interruption, but its production executor refuses pending bounded provider access.
 
+The zero-server browser-owned placement model (`voicebox-beads-8fv.1`, [`16-zero-server-delegation.md`](16-zero-server-delegation.md)) associates placement with the environment directly, allowing `opfs` and `handle` roots to be admitted and executed locally via `createBrowserTaskHost()` in `lib/task-placement.mjs`.
+
 ## Process death is not replay permission
 
 On authenticated readback, an unfinished record from a different boot is marked `interrupted` only after the old process is observed absent (`ESRCH`). A process that might still exist yields `task-owner-unconfirmed`. No saved prompt is submitted during recovery or retry. Late completion cannot rewrite a terminal state.

@@ -215,7 +215,9 @@ Audio worklets loaded by that code: `pcm-worklet.js`.
   `container: env-dialog / inline-size` container queries for component-isolated responsive layout, `<search>` landmark
   semantics, scroll containment (`overscroll-behavior: contain`, `scrollbar-gutter: stable`), keyboard-focusable
   scrollable regions (`<pre tabindex="0">`), IME composition guards, and GitHub-linked commit references in `#build` alongside a quick link to `changelog.html` (`GET /api/changelog`).
-scrollable regions (`<pre tabindex="0">`), and IME composition guards.
+  Zero-server browser delegation (`lib/task-placement.mjs`, `docs/16-zero-server-delegation.md`, `voicebox-beads-8fv.1`)
+  associates placement (`browser`, `machine`, `remote`) with the environment rather than requiring a dedicated server broker;
+  supports `opfs` and `handle` roots portably without hardcoded machine filesystem paths.
   The room's file list is a `file-explorer` inline-size container: one column by default, two from 36rem,
   with long names wrapping independently of their sizes. Its scroll area is bounded to 40svh/24rem
   so a populated list does not keep growing through the room. Selection, root provenance, arrival
