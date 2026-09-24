@@ -37,6 +37,15 @@ const WANTED = {
   exts: "exts", extsOpen: "exts-open", extsClose: "exts-close", extCount: "exts-count", extNote: "ext-note",
   extRunning: "ext-running", extWaiting: "ext-waiting", extPresent: "ext-present",
   extRefused: "ext-refused", extCatalogue: "ext-catalogue",
+  // Extension reconfiguration and removal modal (voicebox-beads-ud5)
+  extManageDialog: "ext-manage-dialog", extManageForm: "ext-manage-form",
+  extManageTitle: "ext-manage-title", extManageClose: "ext-manage-close",
+  extManageHint: "ext-manage-hint", extManageId: "ext-manage-id",
+  extManageMode: "ext-manage-mode", extManageFields: "ext-manage-fields",
+  extManageHosts: "ext-manage-hosts", extManageMaxRequests: "ext-manage-max-requests",
+  extManageRemoveWarning: "ext-manage-remove-warning", extManageWarningText: "ext-manage-warning-text",
+  extManageToken: "ext-manage-token", extManageStatus: "ext-manage-status",
+  extManageSubmit: "ext-manage-submit", extManageDelete: "ext-manage-delete",
   taskCard: "task-card",
   roomFoldersBar: "room-folders-bar", roomFoldersList: "room-folders-list",
   harnessesOpen: "harnesses-open", harnessesDialog: "harnesses-dialog",
@@ -1160,18 +1169,81 @@ function extensionApproval(id) {
   return details;
 }
 
+let lastRunningExtensions = [];
+
+function openManageExt(ext, mode = "reconfigure") {
+  if (!els.extManageDialog) return;
+  if (els.extManageId) els.extManageId.value = ext.id;
+  if (els.extManageMode) els.extManageMode.value = mode;
+  if (els.extManageToken) els.extManageToken.value = "";
+  if (els.extManageStatus) els.extManageStatus.textContent = "";
+
+  if (mode === "reconfigure") {
+    if (els.extManageTitle) els.extManageTitle.textContent = `Reconfigure ${ext.name ?? ext.id}`;
+    if (els.extManageHint) els.extManageHint.textContent = "Update bounds to restore tool access or resolve configuration loops. Requires host token.";
+    if (els.extManageFields) els.extManageFields.hidden = false;
+    if (els.extManageRemoveWarning) els.extManageRemoveWarning.hidden = true;
+    if (els.extManageHosts) els.extManageHosts.value = (ext.bounds?.hosts ?? []).join(", ");
+    if (els.extManageMaxRequests) els.extManageMaxRequests.value = ext.bounds?.maxRequests ?? "";
+    if (els.extManageSubmit) {
+      els.extManageSubmit.textContent = "Save configuration";
+      els.extManageSubmit.hidden = false;
+    }
+    if (els.extManageDelete) els.extManageDelete.hidden = false;
+  } else {
+    if (els.extManageTitle) els.extManageTitle.textContent = `Remove ${ext.name ?? ext.id}`;
+    if (els.extManageHint) els.extManageHint.textContent = "Withdrawing an extension revokes its tools immediately. Requires host token.";
+    if (els.extManageFields) els.extManageFields.hidden = true;
+    if (els.extManageRemoveWarning) els.extManageRemoveWarning.hidden = false;
+    const toolNames = (ext.tools ?? []).map((t) => (typeof t === "string" ? t : t.name)).join(", ");
+    if (els.extManageWarningText) {
+      els.extManageWarningText.textContent = `The extension's tools (${toolNames || "all tools"}) will stop being callable immediately.`;
+    }
+    if (els.extManageSubmit) {
+      els.extManageSubmit.textContent = "Confirm removal";
+      els.extManageSubmit.hidden = false;
+    }
+    if (els.extManageDelete) els.extManageDelete.hidden = true;
+  }
+
+  els.extManageDialog.showModal();
+}
+
 async function renderExtensions() {
   if (!els.extRunning) return;
   try {
     const [inv, cat] = await Promise.all([request("/api/extensions"), request("/api/extensions/catalogue")]);
     const running = inv.extensions ?? [];
+    lastRunningExtensions = running;
     const waiting = (inv.proposals ?? []).filter((p) => p.state === "pending");
     const refused = (inv.proposals ?? []).filter((p) => p.state === "refused");
     const present = inv.present ?? [];
     const catalogue = cat.catalogue ?? [];
 
-    extSection(els.extRunning, running.map((e) =>
-      extRow({ name: e.name, dotState: "true", stateText: "Running", detail: plainCaps(e.declared, e.bounds) })), "Nothing running yet.");
+    extSection(els.extRunning, running.map((e) => {
+      const row = extRow({ name: e.name, dotState: "true", stateText: "Running", detail: plainCaps(e.declared, e.bounds) });
+      const actions = document.createElement("div");
+      actions.className = "ext-actions";
+
+      const reconfigBtn = document.createElement("button");
+      reconfigBtn.className = "quiet ext-reconfigure-btn";
+      reconfigBtn.type = "button";
+      reconfigBtn.textContent = "Reconfigure";
+      reconfigBtn.setAttribute("data-id", e.id);
+      reconfigBtn.addEventListener("click", () => openManageExt(e, "reconfigure"));
+      actions.appendChild(reconfigBtn);
+
+      const removeBtn = document.createElement("button");
+      removeBtn.className = "quiet danger ext-remove-btn";
+      removeBtn.type = "button";
+      removeBtn.textContent = "Remove";
+      removeBtn.setAttribute("data-id", e.id);
+      removeBtn.addEventListener("click", () => openManageExt(e, "remove"));
+      actions.appendChild(removeBtn);
+
+      row.appendChild(actions);
+      return row;
+    }), "Nothing running yet.");
 
     extSection(els.extWaiting, waiting.map((p) =>
       extRow({ name: p.name, dotState: "pending", stateText: "Waiting for the host's review", disclose: extensionApproval(p.id) })
@@ -1962,6 +2034,76 @@ on(els.extsClose, "click", () => els.exts?.close());
 on(els.exts, "close", () => {
   els.extsOpen?.setAttribute("aria-expanded", "false");
   els.extsOpen?.focus();
+});
+
+on(els.extManageClose, "click", () => els.extManageDialog?.close());
+installLightDismissFallback(els.extManageDialog);
+
+on(els.extManageDelete, "click", () => {
+  const id = els.extManageId?.value;
+  const current = lastRunningExtensions.find((e) => e.id === id);
+  if (current) openManageExt(current, "remove");
+});
+
+on(els.extManageForm, "submit", async (event) => {
+  event.preventDefault();
+  const id = els.extManageId?.value;
+  const mode = els.extManageMode?.value;
+  const token = els.extManageToken?.value.trim();
+  if (!token) {
+    if (els.extManageStatus) els.extManageStatus.textContent = "Host token is required.";
+    return;
+  }
+  if (els.extManageSubmit) els.extManageSubmit.disabled = true;
+  if (els.extManageStatus) els.extManageStatus.textContent = "Applying...";
+
+  try {
+    if (mode === "remove") {
+      const resp = await request(`/api/extensions/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        headers: {
+          "content-type": "application/json",
+          "x-voicebox-host-token": token,
+        },
+      });
+      if (resp.ok) {
+        els.extManageDialog?.close();
+        if (els.extNote) els.extNote.textContent = `'${id}' was removed. Tools are no longer callable.`;
+        await renderExtensions();
+      } else {
+        if (els.extManageStatus) els.extManageStatus.textContent = resp.why ?? resp.refused ?? "Could not remove extension.";
+      }
+    } else {
+      const hosts = els.extManageHosts?.value.split(",").map((h) => h.trim()).filter(Boolean) ?? [];
+      const maxReqVal = els.extManageMaxRequests?.value.trim() ?? "";
+      const bounds = {};
+      if (hosts.length > 0) bounds.hosts = hosts;
+      if (maxReqVal) {
+        const parsed = Number.parseInt(maxReqVal, 10);
+        if (!Number.isNaN(parsed)) bounds.maxRequests = parsed;
+      }
+
+      const resp = await request("/api/extensions/reconfigure", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-voicebox-host-token": token,
+        },
+        body: JSON.stringify({ id, bounds, confirm: true }),
+      });
+      if (resp.ok) {
+        els.extManageDialog?.close();
+        if (els.extNote) els.extNote.textContent = `'${id}' was reconfigured with updated bounds.`;
+        await renderExtensions();
+      } else {
+        if (els.extManageStatus) els.extManageStatus.textContent = resp.why ?? resp.refused ?? "Could not reconfigure extension.";
+      }
+    }
+  } catch (err) {
+    if (els.extManageStatus) els.extManageStatus.textContent = err?.why ?? err?.refused ?? err?.message ?? "An error occurred.";
+  } finally {
+    if (els.extManageSubmit) els.extManageSubmit.disabled = false;
+  }
 });
 // The heading's explanation, set as the button's tooltip FROM the one paragraph that carries it —
 // so the hover text and the screen-reader text cannot drift into two different sentences.

@@ -572,3 +572,93 @@ test("RECONFIGURE: revoke + re-add with corrected bounds — the new bounds are 
   const inv = await getJson("/api/extensions");
   assert.deepEqual(inv.extensions.find((e) => e.id === "web-search")?.bounds, { hosts: ["api.duckduckgo.com"], maxRequests: 20 });
 });
+
+test("API: DELETE /api/extensions/:id and POST/PATCH /api/extensions/reconfigure (voicebox-beads-ud5)", async () => {
+  // 1. Reconfigure endpoint requires host token
+  const unauthReconfig = await postJson("/api/extensions/reconfigure", { id: "web-search", bounds: { maxRequests: 50 }, confirm: true });
+  assert.equal(unauthReconfig.ok, false);
+  assert.equal(unauthReconfig.refused, "host-token-required");
+
+  // 2. Reconfigure confirm-first disclosure
+  const disclosure = await fetch(`${server.base}/api/extensions/reconfigure`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken() },
+    body: JSON.stringify({ id: "web-search", bounds: { maxRequests: 50 } }),
+  }).then((r) => r.json());
+  assert.equal(disclosure.confirmFirst, true);
+  assert.equal(disclosure.id, "web-search");
+  assert.equal(disclosure.proposed.bounds.maxRequests, 50);
+
+  // 2b. Reconfigure with invalid bounds refuses 400 bounds-invalid (voicebox-beads-ud5 must-fix)
+  const negReqResp = await fetch(`${server.base}/api/extensions/reconfigure`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken() },
+    body: JSON.stringify({ id: "web-search", bounds: { maxRequests: -10 }, confirm: true }),
+  });
+  assert.equal(negReqResp.status, 400);
+  const negReq = await negReqResp.json();
+  assert.equal(negReq.ok, false);
+  assert.equal(negReq.refused, "bounds-invalid");
+
+  const malformedReqResp = await fetch(`${server.base}/api/extensions/web-search`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken() },
+    body: JSON.stringify({ bounds: { maxRequests: "invalid" } }),
+  });
+  assert.equal(malformedReqResp.status, 400);
+  const malformedReq = await malformedReqResp.json();
+  assert.equal(malformedReq.ok, false);
+  assert.equal(malformedReq.refused, "bounds-invalid");
+
+  const negBytesResp = await fetch(`${server.base}/api/extensions/web-search`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken() },
+    body: JSON.stringify({ bounds: { maxBytes: -50 } }),
+  });
+  assert.equal(negBytesResp.status, 400);
+  const negBytes = await negBytesResp.json();
+  assert.equal(negBytes.ok, false);
+  assert.equal(negBytes.refused, "bounds-invalid");
+
+  // 3. Reconfigure confirmed updates bounds and reloads registry
+  const reconfigured = await fetch(`${server.base}/api/extensions/reconfigure`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken() },
+    body: JSON.stringify({ id: "web-search", bounds: { maxRequests: 50 }, confirm: true }),
+  }).then((r) => r.json());
+  assert.equal(reconfigured.ok, true);
+  assert.equal(reconfigured.decision, "reconfigured");
+  assert.equal(reconfigured.bounds.maxRequests, 50);
+
+  let inv = await getJson("/api/extensions");
+  assert.equal(inv.extensions.find((e) => e.id === "web-search")?.bounds?.maxRequests, 50);
+
+  // 4. PATCH /api/extensions/:id also works with host token
+  const patched = await fetch(`${server.base}/api/extensions/web-search`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken() },
+    body: JSON.stringify({ bounds: { maxRequests: 100 } }),
+  }).then((r) => r.json());
+  assert.equal(patched.ok, true);
+  assert.equal(patched.decision, "reconfigured");
+  assert.equal(patched.bounds.maxRequests, 100);
+
+  inv = await getJson("/api/extensions");
+  assert.equal(inv.extensions.find((e) => e.id === "web-search")?.bounds?.maxRequests, 100);
+
+  // 5. DELETE /api/extensions/:id requires host token
+  const unauthDelete = await fetch(`${server.base}/api/extensions/web-search`, { method: "DELETE" }).then((r) => r.json());
+  assert.equal(unauthDelete.ok, false);
+  assert.equal(unauthDelete.refused, "host-token-required");
+
+  // 6. DELETE /api/extensions/:id revokes the running extension
+  const deleted = await fetch(`${server.base}/api/extensions/web-search`, {
+    method: "DELETE",
+    headers: { "x-voicebox-host-token": hostToken() },
+  }).then((r) => r.json());
+  assert.equal(deleted.ok, true);
+  assert.equal(deleted.decision, "revoked");
+
+  inv = await getJson("/api/extensions");
+  assert.equal(inv.extensions.find((e) => e.id === "web-search"), undefined);
+});
