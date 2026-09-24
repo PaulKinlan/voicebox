@@ -37,7 +37,7 @@ import { createPermissionPolicy } from "./lib/permission-policy.mjs";
 import { createPiAcpExecutor } from "./lib/pi-acp.mjs";
 import { bootFence } from "./lib/fence-provider.mjs";
 import { SOURCE_DIRS } from "./lib/browser-sources.mjs";
-import { bootUnitFence } from "./lib/unit-fence-provider.mjs";
+import { bootUnitFence, stopUnitFence } from "./lib/unit-fence-provider.mjs";
 import { createHarnessInventory } from "./lib/harness-inventory.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
 import { createLiveSession, LIVE_MODEL, inputRateRequiredBy } from "./lib/live-session.mjs";
@@ -761,7 +761,22 @@ async function executeViaPage(action) {
     logged: observed.auditSeq ?? null,
     observed,
   };
-}const PORT = Number(process.env.PORT ?? 8787);
+}
+// voicebox-beads-4kp: booted L1.5 units are transients that outlive this process by construction.
+// Track every key this process booted and stop them on exit — the sandbox a lane forgot must not
+// hold a port and its RSS until reboot. (The RuntimeMaxSec property in fence-unit.sh is the
+// backstop; this is the polite path.)
+const bootedUnitKeys = new Set();
+const stopBootedUnits = () => {
+  for (const key of bootedUnitKeys) {
+    stopUnitFence(key).catch(() => {});
+  }
+};
+process.on("beforeExit", stopBootedUnits);
+process.on("SIGTERM", () => { stopBootedUnits(); process.exit(0); });
+process.on("SIGINT", () => { stopBootedUnits(); process.exit(0); });
+
+const PORT = Number(process.env.PORT ?? 8787);
 
 // `--doctor` — WHAT IS SET, WHAT IS NOT, AND WHAT THAT MEANS. Written because the answer
 // to "why is it doing that" was always "one of eleven environment variables", and nothing
@@ -1750,6 +1765,7 @@ async function handle(req, res) {
         // same rule: the boundary the row carries is measured by the environment's own probe.
         const booted = parsed.fence === "l15" ? await bootUnitFence(candidate.value) : await bootFence(candidate.value);
         if (!booted.ok) return json(res, 502, { ok: false, refused: booted.refused, why: booted.why });
+        if (parsed.fence === "l15") bootedUnitKeys.add(candidate.value.key);
         const descriptor = {
           ...candidate.value,
           origin: booted.origin,
@@ -1943,6 +1959,25 @@ async function handle(req, res) {
     if (!target.ok) return json(res, 404, target);
     recordCallBearer(envKey, bearer);
     return json(res, 200, { ok: true, envKey, paired: true });
+  }
+
+  // DELETE /api/environments/<key> (voicebox-beads-4kp): stop what you minted. A booted fence
+  // unit is a systemd transient that outlives the process that asked for it by construction —
+  // without this route every declare-and-boot leaks a unit, a port and its RSS until reboot.
+  // Host-token gated (it stops a running environment); best-effort stop, then removal from the
+  // stored list so the registry cannot claim a running environment it no longer has.
+  const envDelete = url.pathname.match(/^\/api\/environments\/([^/]+)$/);
+  if (req.method === "DELETE" && envDelete) {
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "stopping a booted environment is a host act — supply the host token" });
+    }
+    const key = decodeURIComponent(envDelete[1]);
+    await stopUnitFence(key);
+    const stored = readEnvironments();
+    if (stored.ok) {
+      writeEnvironments(stored.environments.filter((e) => e.key !== key));
+    }
+    return json(res, 200, { ok: true, stopped: key });
   }
 
   if (req.method === "DELETE" && url.pathname === "/api/pair") {

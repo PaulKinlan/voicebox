@@ -47,4 +47,5 @@ exec /usr/bin/systemd-run --user --collect \
   --property=NoNewPrivileges=yes \
   --property=CapabilityBoundingSet= \
   --property='SystemCallFilter=~@obsolete @debug @cpu-emulation @keyring @module @raw-io @reboot @swap' \
+  --property=RuntimeMaxSec="${VOICEBOX_FENCE_MAX_SEC:-1800}" \
   -- "$SELF/fence.sh" "$SANDBOX_HOME" "$PORT" "$@"

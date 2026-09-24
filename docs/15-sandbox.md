@@ -17,7 +17,12 @@ driven, both of which bound *filesystem and processes* and deliberately do not b
 - **L1.5 — the composition** ([`tools/fence-unit.sh`](../tools/fence-unit.sh)): the same fence
   launched inside a transient `systemd-run --user` unit that adds the kernel half the fence lacks —
   a seccomp filter (`Seccomp: 2`), an empty capability set (`CapEff: 0`), `PrivateTmp`, and
-  `ProtectSystem=strict` with the one sandbox home as the writable exception.
+  `ProtectSystem=strict` with the one sandbox home as the writable exception. Units are transient
+  by design, so they are bounded in time: `RuntimeMaxSec` (default 1800s, `VOICEBOX_FENCE_MAX_SEC`
+  overrides) reaps a forgotten sandbox, the host stops one by name with
+  `DELETE /api/environments/<key>` (host-token gated), and the server stops the units it booted on
+  exit. Without these, every declare-and-boot leaks a unit, a port and its RSS until reboot —
+  measured at 42 orphaned units and ~2.8 GB in one night (voicebox-beads-4kp).
 
 ## What it does not do — say it plainly, because each of these is someone's assumption
 
