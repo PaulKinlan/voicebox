@@ -25,7 +25,9 @@ test("ACP protocol fixture: handshake, session, text, permission denial and canc
       finish = () => send(result(m, { stopReason: "end_turn" }));
     }
   });
-  assert.throws(() => f.client.cancel(), { refused: "task-not-running" });
+  // Nothing has run in this session: the remedy is to start a task, not to
+  // change a permission — so the name says that (voicebox-beads-6co).
+  assert.throws(() => f.client.cancel(), { refused: "task-not-found" });
   await f.client.initialize(); await f.client.newSession("/work");
   const answer = f.client.prompt("hello");
   await new Promise((resolve) => setImmediate(resolve));
@@ -61,4 +63,61 @@ test("ACP fixture bounds output and rejects foreign-session updates", async () =
     await f.client.initialize(); await f.client.newSession("/work");
     await assert.rejects(f.client.prompt("hello"), { refused: refusal });
   }
+});
+
+/**
+ * D2's cancellation half (`voicebox-beads-6co`): a cancel during an in-flight
+ * turn SETTLES the turn as cancelled, and cancelling anything that is not a
+ * running turn refuses by name — three states, three names, so the reader knows
+ * which remedy applies.
+ */
+test("cancel during an in-flight turn settles the turn as cancelled, and says the notification left", async () => {
+  let answerPrompt;
+  const f = fixture((m, send) => {
+    if (m.method === "initialize") send(result(m, info));
+    if (m.method === "session/new") send(result(m, { sessionId: "s" }));
+    if (m.method === "session/prompt") answerPrompt = () => send(result(m, { stopReason: "cancelled" }));
+  });
+  await f.client.initialize();
+  await f.client.newSession("/work");
+  const turn = f.client.prompt("do something long");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const sent = f.client.cancel();
+  assert.deepEqual(sent, { ok: true, sent: true }, "cancel reports what it DID: the notification left");
+  const cancel = f.sent.find((m) => m.method === "session/cancel");
+  assert.ok(cancel, "a session/cancel notification was sent");
+  assert.equal(cancel.id, undefined, "session/cancel is a notification, not a request");
+  assert.deepEqual(cancel.params, { sessionId: "s" });
+
+  answerPrompt();
+  await assert.rejects(turn, { refused: "task-cancelled" }, "the turn settles BY NAME as cancelled, not as an incomplete turn");
+});
+
+test("cancelling a COMPLETED task refuses by name, and it is not the same name as nothing-to-cancel", async () => {
+  const f = fixture((m, send) => {
+    if (m.method === "initialize") send(result(m, info));
+    if (m.method === "session/new") send(result(m, { sessionId: "s" }));
+    if (m.method === "session/prompt") {
+      send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "s", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "done" } } } });
+      send(result(m, { stopReason: "end_turn" }));
+    }
+  });
+  await f.client.initialize();
+  await f.client.newSession("/work");
+  assert.equal(await f.client.prompt("quick"), "done");
+  // A task HAS run here, so "start a task" is the wrong remedy — and the name says so.
+  assert.throws(() => f.client.cancel(), { refused: "task-not-running" });
+  assert.equal(f.sent.filter((m) => m.method === "session/cancel").length, 0, "nothing was sent for a completed task");
+});
+
+test("a turn that is neither end_turn nor cancelled is still an incomplete turn — the new name did not swallow it", async () => {
+  const f = fixture((m, send) => {
+    if (m.method === "initialize") send(result(m, info));
+    if (m.method === "session/new") send(result(m, { sessionId: "s" }));
+    if (m.method === "session/prompt") send(result(m, { stopReason: "max_tokens" }));
+  });
+  await f.client.initialize();
+  await f.client.newSession("/work");
+  await assert.rejects(f.client.prompt("too long"), { refused: "acp-turn-incomplete" });
 });
