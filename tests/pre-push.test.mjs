@@ -123,6 +123,27 @@ exec '${timeout}' "$@"
       if (scenario === 'accept-failure') assert.match(output, /fetch failed \(ECONNREFUSED\)/);
       assert.equal(spawnSync('git', ['--git-dir', remote, 'show-ref', '--verify', '--quiet', 'refs/heads/candidate'], { env: cleanEnv }).status, 1);
     }
+
+    /**
+     * A push AIMED AT main from a branch is refused BY NAME, before any stage runs
+     * (`voicebox-beads-85w`). This is the real hazard, driven with a real `git push`:
+     * a worktree made with `git worktree add -b <branch> <dir> origin/main` tracks
+     * main, so a bare `git push` offers HEAD:main and git's own remedy line suggests
+     * `git push origin HEAD:main` — the worst available outcome, offered as help.
+     */
+    const aimed = spawnSync('git', ['push', remote, 'HEAD:refs/heads/main'], {
+      cwd: work, encoding: 'utf8', timeout: 15000,
+      env: { ...cleanEnv, NODE_TEST_CONTEXT: undefined, PATH: `${bin}:${process.env.PATH}`, BD_GIT_HOOK: '1', GATE_CASE: 'success' },
+    });
+    assert.notEqual(aimed.status, 0, 'a branch pushing to main must be refused');
+    const aimedOut = aimed.stdout + aimed.stderr;
+    assert.match(aimedOut, /\[gate\] pre-push REFUSED: non-main branch attempting to push to main ref/);
+    assert.match(aimedOut, /push your branch instead/, 'the refusal names the remedy');
+    assert.doesNotMatch(aimedOut, /\[gate\] pre-push: (unit|live|tests)|npm test/, 'the destination is checked BEFORE any stage runs — a mis-aimed push must not wait for a suite');
+    assert.equal(
+      spawnSync('git', ['--git-dir', remote, 'show-ref', '--verify', '--quiet', 'refs/heads/main'], { env: cleanEnv }).status, 1,
+      'main was not created on the remote',
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
