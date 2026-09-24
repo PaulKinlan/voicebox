@@ -49,6 +49,12 @@ test("delete, edit, diff, and grep answers map to the contract", async () => {
 
   const grep = makeGeminiResolver({ key: "k", fetchImpl: async () => modelSays('{"verb":"grep","query":"secret"}') });
   assert.deepEqual(await grep("grep secret"), { verb: "grep", name: "", query: "secret" });
+
+  const listAgents = makeGeminiResolver({ key: "k", fetchImpl: async () => modelSays('{"verb":"list_agents"}') });
+  assert.deepEqual(await listAgents("list agents"), { verb: "list_agents", name: "" });
+
+  const delegate = makeGeminiResolver({ key: "k", fetchImpl: async () => modelSays('{"verb":"delegate_task","agent":"pi","task":"do research"}') });
+  assert.deepEqual(await delegate("ask pi to do research"), { verb: "delegate_task", agent: "pi", task: "do research" });
 });
 
 test("the model's own unresolved passes through with its message", async () => {

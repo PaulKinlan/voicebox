@@ -799,6 +799,8 @@ function askPage(action) {
       ...(action.oldText != null ? { oldText: String(action.oldText) } : {}),
       ...(action.newText != null ? { newText: String(action.newText) } : {}),
       ...(action.query != null ? { query: String(action.query) } : {}),
+      ...(action.agent != null ? { agent: String(action.agent) } : {}),
+      ...(action.task != null ? { task: String(action.task) } : {}),
       ...(action.turn != null ? { turn: String(action.turn) } : {}),
     },
     boundsEcho: {},
@@ -837,6 +839,12 @@ async function executeViaPage(action) {
   }
   if (action.verb === "diff") {
     return { ok: true, action: `diff ${observed.name ?? action.name}`, file: observed.name ?? action.name, diff: observed.diff ?? "", changed: Boolean(observed.changed), via: "page", root: active.root };
+  }
+  if (action.verb === "list_agents") {
+    return { ok: true, action: "listed agents", agents: observed.agents ?? [], count: observed.agents?.length ?? 0, via: "page", root: active?.root ?? null };
+  }
+  if (action.verb === "delegate_task") {
+    return { ok: true, action: `delegated task to ${observed.agent ?? action.agent}`, task: observed.task, address: observed.address, via: "page", root: active?.root ?? null };
   }
   // write — the action line carries the provenance, because this line is what the room prints.
   return {
@@ -1309,6 +1317,54 @@ async function execute(action) {
       truncated: matches.length >= MAX_MATCHES,
       root: active.root,
       logged: entry ? entry.seq : null,
+    };
+  }
+  if (action.verb === "list_agents") {
+    const agents = agentRegistry.list({ environmentKey: SELF_ENVIRONMENT }).map(publicAgentProjection);
+    return {
+      ok: true,
+      action: `listed ${agents.length} agent(s)`,
+      agents,
+      count: agents.length,
+      root: active?.root ?? null,
+    };
+  }
+  if (action.verb === "delegate_task") {
+    if (!active) {
+      return {
+        ok: false,
+        refused: "task-root-unavailable",
+        why: "delegating a task requires an active project root",
+        error: "refused: task-root-unavailable",
+        root: null,
+      };
+    }
+    const authority = {
+      owner: createHash("sha256").update(`voicebox-task-owner\0${SELF_ENVIRONMENT}\0local`).digest("hex"),
+      callId: `turn_${randomBytes(12).toString("hex")}`,
+    };
+    const admitted = tasks.call("delegate_task", {
+      agent: action.agent ?? "default",
+      task: action.task ?? "",
+    }, authority);
+    if (!admitted.ok) {
+      return {
+        ok: false,
+        refused: admitted.refused,
+        why: admitted.why,
+        error: `refused: ${admitted.refused}`,
+        root: active.root,
+      };
+    }
+    try { pageSocket?.send(JSON.stringify({ type: "task", task: admitted.task })); } catch {}
+    try { runningSession?.socket?.send(JSON.stringify({ type: "task", task: admitted.task })); } catch {}
+    return {
+      ok: true,
+      action: `delegated task to ${admitted.task.agent} (${admitted.task.address})`,
+      task: admitted.task,
+      address: admitted.task.address,
+      agent: admitted.task.agent,
+      root: active.root,
     };
   }
   const name = String(action.name ?? "");
@@ -2070,6 +2126,24 @@ async function handle(req, res) {
     const result = await execute({ verb: "grep", query });
     if (!result.ok) return json(res, 400, result);
     return json(res, 200, result);
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/delegate") {
+    const body = await readJson();
+    const result = await execute({ verb: "delegate_task", agent: body?.agent, task: body?.task });
+    if (!result.ok) return json(res, 400, result);
+    return json(res, 200, result);
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/task") {
+    const address = url.searchParams.get("address") ?? "";
+    const authority = {
+      owner: createHash("sha256").update(`voicebox-task-owner\0${SELF_ENVIRONMENT}\0local`).digest("hex"),
+      callId: `status_${randomBytes(8).toString("hex")}`,
+    };
+    const resStatus = tasks.call("task_status", { address }, authority);
+    if (!resStatus.ok) return json(res, 404, resStatus);
+    return json(res, 200, resStatus);
   }
 
   if (req.method === "GET" && url.pathname === "/api/environments") {

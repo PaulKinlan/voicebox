@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { COMMANDS, COMMAND_VERBS, commandToAction, functionDeclarations, liveSystemInstruction } from "../lib/commands.mjs";
 
 test("the list declares file and extension actions — the executor's verbs, once", () => {
-  assert.deepEqual([...COMMAND_VERBS].sort(), ["delete", "diff", "edit", "extension", "extensions", "grep", "list", "read", "write"]);
+  assert.deepEqual([...COMMAND_VERBS].sort(), ["delegate_task", "delete", "diff", "edit", "extension", "extensions", "grep", "list", "list_agents", "read", "write"]);
   const names = COMMANDS.map((c) => c.name);
   assert.equal(new Set(names).size, names.length, "command names must be unique");
 });
@@ -28,6 +28,8 @@ test("functionDeclarations are vendor-ready JSON-schema declarations", () => {
   assert.deepEqual(diff.parameters.required.sort(), ["content", "name"]);
   const grep = decls.find((d) => d.name === "grep_files");
   assert.deepEqual(grep.parameters.required.sort(), ["query"]);
+  const delegate = decls.find((d) => d.name === "delegate_task");
+  assert.deepEqual(delegate.parameters.required.sort(), ["agent", "task"]);
 });
 
 test("commandToAction maps a tool call to the executor's action shape", () => {
@@ -38,6 +40,8 @@ test("commandToAction maps a tool call to the executor's action shape", () => {
   assert.deepEqual(commandToAction("edit_file", { name: "a.txt", oldText: "foo", newText: "bar" }), { verb: "edit", name: "a.txt", oldText: "foo", newText: "bar" });
   assert.deepEqual(commandToAction("diff_file", { name: "a.txt", content: "new text" }), { verb: "diff", name: "a.txt", content: "new text" });
   assert.deepEqual(commandToAction("grep_files", { query: "target" }), { verb: "grep", name: "", query: "target" });
+  assert.deepEqual(commandToAction("list_agents"), { verb: "list_agents", name: "" });
+  assert.deepEqual(commandToAction("delegate_task", { agent: "pi", task: "calculate" }), { verb: "delegate_task", agent: "pi", task: "calculate" });
 });
 
 test("extension calls preserve arguments and refuse malformed values", () => {
