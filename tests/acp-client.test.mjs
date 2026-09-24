@@ -121,3 +121,32 @@ test("a turn that is neither end_turn nor cancelled is still an incomplete turn 
   await f.client.newSession("/work");
   await assert.rejects(f.client.prompt("too long"), { refused: "acp-turn-incomplete" });
 });
+
+test("setConfigOption sets option on active session and validates inputs and session state", async () => {
+  const f = fixture((m, send) => {
+    if (m.method === "initialize") send(result(m, info));
+    if (m.method === "session/new") send(result(m, { sessionId: "s" }));
+    if (m.method === "session/set_config_option") {
+      if (m.params.configId === "bad") {
+        send({ jsonrpc: "2.0", id: m.id, error: { code: -32602, message: "unknown option" } });
+      } else {
+        send(result(m, { configOptions: [] }));
+      }
+    }
+  });
+
+  // Cannot set config before session
+  await assert.rejects(f.client.setConfigOption("model", "gpt-4o"), { refused: "acp-state" });
+  await f.client.initialize();
+  await assert.rejects(f.client.setConfigOption("model", "gpt-4o"), { refused: "acp-state" });
+
+  await f.client.newSession("/work");
+  await assert.rejects(f.client.setConfigOption("", "val"), { refused: "acp-invalid-config" });
+  await assert.rejects(f.client.setConfigOption("model", 123), { refused: "acp-invalid-config" });
+
+  const res = await f.client.setConfigOption("model", "gpt-4o");
+  assert.deepEqual(res, { configOptions: [] });
+  assert.ok(f.sent.some((m) => m.method === "session/set_config_option" && m.params.configId === "model" && m.params.value === "gpt-4o"));
+
+  await assert.rejects(f.client.setConfigOption("bad", "val"), { refused: "acp-request-refused" });
+});
