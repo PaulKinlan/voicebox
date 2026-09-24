@@ -51,6 +51,22 @@ input { caret-color: var(--accent); }
 .stage { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; width: 100%; max-width: 1100px; margin: 0 auto; padding: 18px 0; }
 
 /* ── what was made: aligned names, with size kept secondary ──────────── */
+/* ── where in the root we are (voicebox-beads-tee) ─────────────────────────
+   A folder is a door now, so the panel needs a way back: the path from the root to the folder on
+   screen, each step a 44px target, the current one plain text with aria-current. It wraps rather than
+   scrolling, because a deep path on a phone is a real path and hiding part of it would be the same
+   class of lie as an unnamed root. */
+.folder-path { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; margin: 0 0 8px; }
+.folder-path .crumb {
+  display: inline-flex; align-items: center; min-block-size: 44px; padding: 0 8px;
+  border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--muted);
+  font: inherit; font-size: .8125rem; cursor: pointer;
+}
+.folder-path button.crumb:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.folder-path .crumb[aria-current="page"] { color: var(--ink); font-weight: 600; cursor: default; }
+.folder-path .crumb-up { font-weight: 600; font-size: .9375rem; }
+.folder-path .crumb-sep { color: var(--line); }
+
 .made { display: flex; flex-direction: column; align-items: stretch; gap: 8px; inline-size: min(100%, 720px); min-inline-size: 0; text-align: start; container: file-explorer / inline-size; }
 .made h2 { margin: 0; font-size: 1rem; font-weight: 600; letter-spacing: -.015em; color: var(--ink); }
 .made-note { margin: 0; font-size: .8125rem; color: var(--muted); font-variant-numeric: tabular-nums; }

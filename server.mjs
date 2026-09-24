@@ -12,6 +12,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { resolveTurn } from "./lib/resolver.mjs";
 import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, reachableFromEnvironment, resolveInRoot, rootVanished } from "./core/root.ts";
+import { normaliseRelativeDir, parentDir } from "./core/paths.ts";
 import { CORE_FS_DESCRIPTOR, dispatchFor } from "./core/dispatch.ts";
 import { createChannel } from "./lib/channel.mjs";
 import {
@@ -1703,13 +1704,23 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/files") {
+    // WHICH FOLDER: `?dir=proposals/drafts` lists INSIDE the root instead of listing the root itself
+    // (voicebox-beads-tee). The path arrives from a person clicking a folder, so it is normalised and
+    // bounded here — one shared helper, so the page and the server cannot disagree about what
+    // `proposals/../..` means — and every refusal is named rather than quietly rewritten.
+    const wanted = normaliseRelativeDir(url.searchParams.get("dir") ?? "");
+    if (!wanted.ok) {
+      return json(res, 200, { ok: false, refused: wanted.refused, why: wanted.why, dir: "", parent: null, files: [], entries: [] });
+    }
+    const dir = wanted.dir;
+    const here = { dir, parent: parentDir(dir) };
     // NO SERVER ROOT, BUT THE PAGE HOLDS A PROJECT: list it through the page (voicebox-beads-fqq).
     // This is the fresh-room case — nothing declared, nothing picked — where the page has made a
     // browser-stored project and the room must be able to see it. The server declares nothing here and
     // stores nothing: it relays one question to the only side that can answer it, and every field of
     // the answer says whose listing it is. A refusal is the page's own words, never a blank list.
     if (!active && pageExecutorConnected()) {
-      const onPage = await askPage({ verb: "list", name: "" });
+      const onPage = await askPage({ verb: "list", name: dir });
       const observed = onPage.observed ?? {};
       if (onPage.ok) {
         return json(res, 200, {
@@ -1718,6 +1729,7 @@ async function handle(req, res) {
           declared: false,
           root: observed.root ?? { kind: "opfs" },
           project: null,
+          ...here,
           files: observed.files ?? [],
           entries: observed.entries ?? [],
           truncated: observed.truncated ?? false,
@@ -1726,38 +1738,65 @@ async function handle(req, res) {
       // The page is connected but has nothing to list (no project open): that is a NAMED state with a
       // route, not an empty folder — the room prints the sentence and the link.
       if (onPage.refused && onPage.refused !== "no-page") {
-        return json(res, 200, { ok: false, refused: onPage.refused, why: onPage.why, via: "page", root: observed.root ?? null, files: [], entries: [] });
+        return json(res, 200, { ok: false, refused: onPage.refused, why: onPage.why, via: "page", root: observed.root ?? null, ...here, files: [], entries: [] });
       }
     }
     // The listing follows the ACTIVE root: a listing from a root the loop cannot reach would be the
     // two-root bug in miniature — a panel showing files from somewhere the project is not.
-    if (!active) return json(res, 200, { ...noRootDeclared(), root: null, files: [], entries: [] });
+    if (!active) return json(res, 200, { ...noRootDeclared(), root: null, ...here, files: [], entries: [] });
     const vanishedFiles = rootMissing();
-    if (vanishedFiles) return json(res, 200, { ...vanishedFiles, root: active.root, files: [], entries: [] });
+    if (vanishedFiles) return json(res, 200, { ...vanishedFiles, root: active.root, ...here, files: [], entries: [] });
     // A page-owned root lists through the page (core/dispatch.ts): the room sees the same
     // files whichever root kind the project is on, and the answer says whose listing it is.
     if (dispatchFor(active.root, SELF_ENVIRONMENT).executeOn === "page") {
-      const answer = await askPage({ verb: "list", name: "" });
-      if (!answer.ok) return json(res, 200, { ok: false, refused: answer.refused, why: answer.why, via: "page", root: active.root, files: [], entries: [] });
+      const answer = await askPage({ verb: "list", name: dir });
+      if (!answer.ok) return json(res, 200, { ok: false, refused: answer.refused, why: answer.why, via: "page", root: active.root, ...here, files: [], entries: [] });
       const observed = answer.observed ?? {};
-      return json(res, 200, { ok: true, via: "page", root: active.root, project: active.project, files: observed.files ?? [], entries: observed.entries ?? [] });
+      return json(res, 200, { ok: true, via: "page", root: active.root, project: active.project, ...here, files: observed.files ?? [], entries: observed.entries ?? [], truncated: observed.truncated ?? false });
     }
     const reach = reachableFromEnvironment(active.root, { peer: "machine", environment: SELF_ENVIRONMENT });
     if (!reach.ok) {
-      return json(res, 200, { ok: false, refused: reach.refused, why: reach.why, root: active.root, files: [], entries: [] });
+      return json(res, 200, { ok: false, refused: reach.refused, why: reach.why, root: active.root, ...here, files: [], entries: [] });
     }
-    const dir = active.root.path;
-    const fileNames = readdirSync(dir).filter(f => !f.startsWith("."));
-    const entries = fileNames.map(name => {
+    // THE FOLDER ITSELF, through the SAME containment gate the file routes use: `..` escapes, a real-path
+    // escape (a symlink), and the host-owned audit are all refused by name, so navigating down cannot
+    // reach somewhere reading a file could not.
+    // The ROOT is the one path that needs no resolution — it IS the root. Passing '.' to the shared
+    // resolver made it name a file and list the root as `outside-root` (found by driving: the root listing
+    // refused itself), so the empty path is answered directly and only subfolders go through the gate.
+    const target = dir === "" ? { ok: true, path: active.root.path } : resolveActive(dir);
+    if (!target.ok) {
+      return json(res, 200, { ok: false, refused: target.refused, why: target.why, root: active.root, ...here, files: [], entries: [] });
+    }
+    let dirents;
+    try {
+      dirents = readdirSync(target.path, { withFileTypes: true });
+    } catch (e) {
+      const code = e?.code ?? "error";
+      return json(res, 200, {
+        ok: false,
+        refused: code === "ENOENT" ? "folder-missing" : code === "ENOTDIR" ? "not-a-folder" : "folder-unreadable",
+        why: code === "ENOENT"
+          ? `'${dir}' is not there any more — it may have been renamed or removed since the listing you clicked`
+          : code === "ENOTDIR"
+            ? `'${dir}' is a file, not a folder`
+            : `'${dir}' could not be listed: ${e?.message ?? e}`,
+        root: active.root,
+        ...here,
+        files: [],
+        entries: [],
+      });
+    }
+    const visible = dirents.filter((entry) => !entry.name.startsWith("."));
+    const entries = visible.map((entry) => {
       try {
-        const full = path.join(dir, name);
-        const stat = statSync(full);
-        return { name, bytes: stat.size, kind: stat.isDirectory() ? "directory" : "file" };
+        const stat = statSync(path.join(target.path, entry.name));
+        return { name: entry.name, bytes: stat.size, kind: stat.isDirectory() ? "directory" : "file" };
       } catch {
-        return { name, bytes: 0, kind: "file" };
+        return { name: entry.name, bytes: 0, kind: entry.isDirectory() ? "directory" : "file" };
       }
     });
-    return json(res, 200, { ok: true, root: active.root, project: active.project, files: fileNames, entries });
+    return json(res, 200, { ok: true, root: active.root, project: active.project, ...here, files: entries.map((e) => e.name), entries });
   }
 
   if (req.method === "GET" && url.pathname === "/api/file") {

@@ -66,3 +66,39 @@ export function resolveInsideRoot(root: string, candidate: string): ResolveResul
   }
   return { ok: true, path: resolved };
 }
+
+/**
+ * A DIRECTORY PATH FROM THE UI, normalised and bounded — ONE implementation for the server and for the
+ * page, so "what does `proposals/../..` mean here" cannot have two answers (voicebox-beads-tee). The
+ * room navigates folders by sending this string; every side that turns it into a path runs it through
+ * here first, and every refusal is named rather than silently rewritten to something harmless-looking.
+ *
+ * Refused, by name: absolute paths and backslashes (`outside-root`), any `..` segment (`outside-root` —
+ * climbing out is not "normalising"), and any segment beginning with a dot (`dotfile-refused`): the
+ * listing hides dotfiles, so navigating into one would show what the listing refuses to show.
+ */
+export function normaliseRelativeDir(value: unknown): { ok: true; dir: string } | { ok: false; refused: string; why: string } {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (raw === "" || raw === ".") return { ok: true, dir: "" };
+  if (raw.startsWith("/") || raw.includes("\\")) {
+    return { ok: false, refused: "outside-root", why: `'${raw}' is not a folder inside the root — a folder path is relative to the root, with forward slashes` };
+  }
+  const parts = raw.split("/").filter((part) => part !== "" && part !== ".");
+  for (const part of parts) {
+    if (part === "..") {
+      return { ok: false, refused: "outside-root", why: `'${raw}' points outside the root — a folder path may not climb out of it` };
+    }
+    if (part.startsWith(".")) {
+      return { ok: false, refused: "dotfile-refused", why: `'${raw}' enters '${part}', and dotfiles are not readable through the loop — the listing hides them and so does this path` };
+    }
+  }
+  return { ok: true, dir: parts.join("/") };
+}
+
+/** The parent of an already-normalised relative directory; null means "this is the root". */
+export function parentDir(dir: string): string | null {
+  if (!dir) return null;
+  const parts = dir.split("/").filter(Boolean);
+  parts.pop();
+  return parts.length ? parts.join("/") : "";
+}
