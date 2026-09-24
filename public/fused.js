@@ -395,6 +395,24 @@ async function readRoomFile(name) {
   return { text, bytes: file.size, truncated };
 }
 
+/**
+ * IS THIS STORAGE DURABLE? Asked once, and only when it matters (voicebox-beads-s61). The browser persists
+ * an origin only when it decides to, and best-effort storage can be evicted — which, from the outside, is
+ * exactly "my data did not save". The room writes into a folder the person picked, so the fact belongs on
+ * the line that says a write succeeded: "saved" and "saved durably" are different promises.
+ */
+let durableAnswer = null;
+async function durableFact() {
+  if (durableAnswer === null) {
+    try {
+      durableAnswer = (await navigator.storage.persisted()) || (await navigator.storage.persist());
+    } catch {
+      durableAnswer = false;
+    }
+  }
+  return durableAnswer ? "" : " — this browser may evict it (storage here is best-effort)";
+}
+
 async function writeRoomFile(name, content) {
   if (!roomFolder || !roomFolder.handle) throw new Error("No folder open");
   let perm = "prompt";
@@ -406,11 +424,30 @@ async function writeRoomFile(name, content) {
   if (perm !== "granted") {
     throw new Error(`needs-gesture: write permission for '${roomFolder.name}' is ${perm} — click Restore access first`);
   }
-  const fileHandle = await roomFolder.handle.getFileHandle(name, { create: true });
+  // A NAME MAY BE A PATH (voicebox-beads-s61): with folders navigable, saving into a subfolder is an
+  // ordinary thing to do — the READER already walked the path and the WRITER did not, so `nested/kept.txt`
+  // could be read and never written. Both now resolve the containing directory the same way.
+  const parts = (name ?? "").split("/").filter(Boolean);
+  const fileName = parts.pop() ?? "";
+  if (!fileName) throw new Error(`'${name}' names no file to write`);
+  const dir = await roomDirHandle(parts.join("/"));
+  const fileHandle = await dir.getFileHandle(fileName, { create: true });
   const writable = await fileHandle.createWritable();
   await writable.write(content);
   await writable.close();
+  // READ IT BACK, and report what was OBSERVED (voicebox-beads-s61). The complaint this bead exists for is
+  // data that "does not seem to save", and a resolved close() is the API's promise, not the world's answer.
+  // The size that comes back from the file is the answer — and if it disagrees, the caller must hear it
+  // rather than a success line computed from what we THOUGHT we wrote.
+  const expected = new TextEncoder().encode(content).length;
+  const observed = (await fileHandle.getFile()).size;
+  if (observed !== expected) {
+    throw new Error(
+      `the file did not read back what was written (wrote ${expected} bytes, read ${observed} back) — it is not saved`,
+    );
+  }
   await loadRoomFolder();
+  return { bytes: observed };
 }
 
 async function initRoomFolders() {
@@ -1666,7 +1703,7 @@ async function send(said) {
 
   // If a room folder is currently active, turns act on that folder directly (voicebox-beads-69d)
   if (roomFolder) {
-    const writeMatch = transcript.match(/(?:create|write|make)\s+(?:a\s+)?(?:file\s+)?(?:called\s+)?["']?([\w.-]+)["']?\s*(?:with|containing)?\s*(.*)/i);
+    const writeMatch = transcript.match(/(?:create|write|make)\s+(?:a\s+)?(?:file\s+)?(?:called\s+)?["']?([\w./-]+)["']?\s*(?:with|containing)?\s*(.*)/i);
     if (writeMatch) {
       const [, fileName, rest] = writeMatch;
       const content = rest.replace(/^(with|containing)\s+/i, "").replace(/^["']|["']$/g, "");
@@ -1674,20 +1711,32 @@ async function send(said) {
         if (els.send) { els.send.textContent = "Send"; els.send.disabled = !els.utterance.value.trim(); }
         return finish(transcript, `needs-gesture: '${roomFolder.name}' needs write permission — click 'Restore access' first`, "bad");
       }
+      // WHERE DOES IT GO? Into the folder you are LOOKING AT (voicebox-beads-s61). The command names a
+      // file, not a folder, so a write made while standing in `proposals` landing at the root was the
+      // room quietly ignoring where the person was — the same class of lie as a listing that will not
+      // name its root. A name that already carries a path is honoured as itself.
+      const target = fileName.includes("/") ? fileName : joinDir(listingDir, fileName);
       try {
-        await writeRoomFile(fileName, content);
-        finish(transcript, `wrote ${fileName} (${bytes(content)} bytes) in ${roomFolder.name}`, "good");
+        const written = await writeRoomFile(target, content);
+        // THE OBSERVED SIZE, not the intended one: the number in this line is what the file system said.
+        const durable = await durableFact();
+        // `size()` takes a NUMBER as a number and a string as text; `bytes()` counts a STRING, and handing it
+        // the number 12 counted the two characters of "12" — a line reporting "2 observed" for a 12-byte
+        // write, which is worse than no line (found by reading the file back and comparing).
+        finish(transcript, `wrote ${target} (${size(written.bytes)} observed) in ${roomFolder.name}${durable}`, "good");
         await loadRoomFolder();
       } catch (err) {
-        finish(transcript, `could not write '${fileName}': ${err?.message ?? err}`, "bad");
+        finish(transcript, `could not write '${target}': ${err?.message ?? err}`, "bad");
       } finally {
         if (els.send) { els.send.textContent = "Send"; els.send.disabled = !els.utterance.value.trim(); }
       }
       return;
     }
-    const readMatch = transcript.match(/^read\s+["']?([\w.-]+)["']?$/i);
+    const readMatch = transcript.match(/^read\s+["']?([\w./-]+)["']?$/i);
     if (readMatch) {
-      const fileName = readMatch[1];
+      const named = readMatch[1];
+      // Same rule as the write: a bare name means "here, where I am standing".
+      const fileName = named.includes("/") ? named : joinDir(listingDir, named);
       try {
         await showFile(fileName);
         finish(transcript, `read ${fileName} in ${roomFolder.name}`, "good");
