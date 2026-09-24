@@ -443,6 +443,8 @@ The room frontend (`public/index.html`, `public/fused.js`, `public/style.css`) i
 - Native `<dialog>` elements with `closedby="any"` light-dismiss and unified geometry-check fallback.
 - `container: env-dialog / inline-size;` container queries for dialog-width responsive form layouts.
 - Semantic `<search>` landmark element enclosing file filtering.
+- The room's file list uses aligned, full-width buttons with separate name/size columns, a bounded scroll area, and a two-column layout only when its own container is wide enough. Folder chips use the same light/dark tokens; root labels, arrival marks and permission controls keep their existing behavior.
+- `node --test tests/room-explorer-ui.test.mjs` drives native read/filter/folder controls, keyboard activation, long filenames, empty/no-project states, and light/dark layouts at phone, desktop and narrow-container widths.
 - Scroll containment (`overscroll-behavior: contain`) and layout stabilization (`scrollbar-gutter: stable`).
 - Keyboard-accessible scrollable code region (`<pre id="file-body" tabindex="0">`).
 - IME composition safety on utterance input and turn submissions.

@@ -50,43 +50,55 @@ input { caret-color: var(--accent); }
 .dot[data-ok="false"] { background: var(--warn); }
 .stage { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; width: 100%; max-width: 1100px; margin: 0 auto; padding: 18px 0; }
 
-/* ── what was made: quiet names, not cards ───────────────────────────── */
-.made { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
-.made h2 { margin: 0; font-size: .75rem; font-weight: 500; letter-spacing: .16em; text-transform: uppercase; color: color-mix(in srgb, var(--muted) 85%, var(--ink)); }
-.made-note { margin: 0; font-size: .8125rem; color: color-mix(in srgb, var(--muted) 85%, var(--ink)); }
-.files { display: flex; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: 6px 10px; list-style: none; margin: 0; padding: 0; max-width: 720px; }
+/* ── what was made: aligned names, with size kept secondary ──────────── */
+.made { display: flex; flex-direction: column; align-items: stretch; gap: 8px; inline-size: min(100%, 720px); min-inline-size: 0; text-align: start; container: file-explorer / inline-size; }
+.made h2 { margin: 0; font-size: 1rem; font-weight: 600; letter-spacing: -.015em; color: var(--ink); }
+.made-note { margin: 0; font-size: .8125rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.files { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; inline-size: 100%; max-block-size: min(40svh, 24rem); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; list-style: none; margin: 0; padding: 6px; }
+.files > li { min-inline-size: 0; }
 .made[data-state="failed"] .files, .made[data-state="failed"] .empty, .made[data-state="empty"] .made-note { display: none; }
-.file-placeholder { padding: 3px 12px; border: 1px dashed var(--line); border-radius: 999px; color: var(--muted); font-size: .8125rem; }
+.file-placeholder { grid-column: 1 / -1; padding: 14px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); font-size: .8125rem; }
 .made:not([data-state="empty"]) .empty { display: none; }
-/* The listing's own line, in EVERY state: a refused listing is exactly when it
-   matters most, and a state-scoped rule left it unstyled there. */
-.listing-root { width: 100%; margin: 0 0 10px; font-size: .75rem; color: var(--muted); }
+/* An undeclared/unreachable root is a failed listing, but its explicit recovery
+   link must remain visible. Do not reveal creation samples on other failures. */
+.made[data-state="failed"] .empty:has(.empty-action:not([hidden])) { display: flex; }
+/* Keep the actual root legible in every state; long paths wrap, never truncate. */
+.listing-root { margin: 0 0 8px; font-size: .8125rem; color: var(--muted); overflow-wrap: anywhere; }
 .listing-root[data-tone="warn"] { color: var(--warn); }
-.made-actions { display: none; }
-.list-tools { display: flex; align-items: center; gap: 8px; width: 100%; margin: 0 0 8px; }
-.list-tools input { flex: 1; min-width: 0; min-height: 36px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font-size: .8125rem; }
-.room-folder { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%; margin: 0 0 8px; }
-.room-folder-hint { font-size: .75rem; color: var(--muted); }
-.made.dropping { outline: 1px dashed color-mix(in srgb, var(--accent) 55%, var(--line)); outline-offset: 6px; border-radius: 10px; }
-.list-bound { width: 100%; margin: 0 0 8px; font-size: .75rem; color: var(--muted); }
-.file-open { display: inline-flex; align-items: baseline; gap: 6px; padding: 4px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font-size: .9375rem; }
-.file-open:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
-.file-name { overflow-wrap: anywhere; }
+.list-tools { display: flex; align-items: center; gap: 8px; inline-size: 100%; margin: 0; }
+.list-tools input { flex: 1; min-inline-size: 0; min-block-size: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font-size: 1rem; }
+.list-tools input::placeholder { color: var(--muted); opacity: 1; }
+.room-folder { display: flex; align-items: center; gap: 4px 8px; flex-wrap: wrap; inline-size: 100%; margin: 0; }
+.room-folder-hint { font-size: .8125rem; color: var(--muted); }
+.made .quiet { min-block-size: 44px; }
+.made.dropping { outline: 1px dashed var(--accent); outline-offset: 6px; border-radius: 12px; }
+.list-bound { margin: 0; padding-block: 8px; font-size: .8125rem; color: var(--muted); }
+.file-open { display: flex; align-items: baseline; gap: 12px; inline-size: 100%; min-block-size: 48px; block-size: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--ink); font-size: .9375rem; text-align: start; }
+.file-open:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--accent) 5%, var(--card)); }
+.file-open:active { background: color-mix(in srgb, var(--accent) 10%, var(--card)); }
+.file-name { flex: 1; min-inline-size: 0; overflow-wrap: anywhere; }
 .file-open[data-kind="directory"] .file-name { font-weight: 600; }
-.file-open[data-kind="directory"] .file-meta { color: color-mix(in srgb, var(--accent) 55%, var(--muted)); }
-.file-meta { font-size: .75rem; color: var(--muted); }
+.file-open[data-kind="directory"] .file-meta { color: var(--accent); }
+.file-meta { flex: none; font-size: .75rem; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* The component's width, not the screen's: a narrow embedded list stays one column.
+   The one-column default also remains usable without container-query support. */
+@container file-explorer (inline-size >= 36rem) {
+  .files { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @keyframes arrive { from { background: color-mix(in srgb, var(--accent) 16%, transparent); } to { background: transparent; } }
 /* A card that just arrived tints and settles. The mark itself (data-arrived) is removed after 6 s in
    fused.js, so this is an event rather than a state. */
 .file-open[data-arrived="true"] { animation: arrive 2.6s ease-out; }
-.file-open[aria-current="true"] { color: var(--accent); }
+.file-open[aria-current="true"] { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--card)); }
+.file-open[aria-current="true"] .file-name { font-weight: 600; }
 .file-open[aria-current="true"] .file-meta { color: color-mix(in srgb, var(--accent) 60%, var(--muted)); }
 
 .skeleton { display: none; }
 .skeleton .bar { display: block; width: 96px; height: 13px; border-radius: 4px; background: color-mix(in srgb, var(--ink) 10%, transparent); animation: settle 1.6s ease-in-out infinite; }
 .skeleton-visible { display: block; }
 @keyframes settle { 0%, 100% { opacity: .4; } 50% { opacity: 1; } }
-.empty { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; max-width: 62ch; text-align: left; }
+.empty { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; max-width: 62ch; padding-block: 16px; text-align: start; }
+.empty h3 { margin: 0; font-size: 1.125rem; font-weight: 600; }
 .empty-why { margin: 0; font-size: .8125rem; color: var(--warn); }
 .empty-action { margin: 0; }
 .empty-action .small-button { display: inline-flex; align-items: center; text-decoration: none; }
@@ -95,9 +107,8 @@ input { caret-color: var(--accent); }
 .samples-label { margin: 2px 0 0; color: color-mix(in srgb, var(--muted) 85%, var(--ink)); font-size: .8125rem; }
 .samples button { padding: 2px 0; border: 0; background: none; color: color-mix(in srgb, var(--muted) 70%, var(--ink)); font-size: .8125rem; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: .25em; }
 .samples button:hover { color: var(--accent); text-decoration-color: currentColor; }
-.listing-root { width: 100%; margin: 0 0 10px; font-size: .75rem; color: var(--muted); }
-.listing-root[data-tone="warn"] { color: var(--warn); }
-.made-actions { display: flex; gap: 4px; margin-top: 2px; }
+.made-actions { display: flex; flex-wrap: wrap; gap: 4px; padding-block-start: 6px; }
+.made-actions #new-file { color: var(--accent); }
 
 /* ── the voice stage: concentric hairlines, one soft accent ──────────── */
 .voice { display: flex; flex-direction: column; align-items: center; }
@@ -360,8 +371,8 @@ body:has(#reader[data-state="ready"]) #file-body { max-height: 26svh; }
 
 /* ── Several opened folders bar (voicebox-beads-69d) ──────────────────────── */
 .room-folders-bar {
-  margin: 6px 0 10px;
-  width: 100%;
+  margin-block: 0 8px;
+  inline-size: 100%;
 }
 .room-folders-bar[hidden] { display: none !important; }
 .room-folders-list {
@@ -372,59 +383,54 @@ body:has(#reader[data-state="ready"]) #file-body { max-height: 26svh; }
 }
 .folder-chip {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border-radius: 6px;
-  background: #17171d;
-  border: 1px solid #2a2a34;
-  font-size: 12px;
+  gap: 4px;
+  max-inline-size: 100%;
+  min-inline-size: 0;
+  padding-inline: 8px 2px;
+  border-radius: 12px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  font-size: .8125rem;
 }
 .folder-chip[data-active="true"] {
-  border-color: #61afef;
-  background: #1a1e28;
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--card));
 }
 .folder-chip button.folder-select-btn {
+  flex: 1 1 8ch;
+  min-inline-size: 0;
+  min-block-size: 44px;
   background: transparent;
-  border: none;
-  color: #e8e8ee;
-  padding: 0;
-  cursor: pointer;
+  border: 0;
+  color: var(--ink);
+  padding: 6px 4px;
+  text-align: start;
+  overflow-wrap: anywhere;
   font-weight: 500;
 }
-.folder-chip[data-active="true"] button.folder-select-btn {
-  color: #61afef;
-}
+.folder-chip[data-active="true"] button.folder-select-btn { color: var(--accent); }
 .folder-perm-badge {
-  font-size: 10px;
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: #23232c;
-  color: #9a9aab;
+  font-size: .75rem;
+  padding: 2px 4px;
+  color: var(--muted);
 }
-.folder-chip[data-permission="prompt"] .folder-perm-badge {
-  background: color-mix(in srgb, #e5c07b 20%, transparent);
-  color: #e5c07b;
-}
-.folder-regrant-btn {
-  font-size: 11px !important;
-  padding: 2px 6px !important;
-  color: #e5c07b !important;
-  border-color: #e5c07b !important;
-}
-.folder-regrant-btn[hidden] { display: none !important; }
+.folder-chip[data-permission="prompt"] .folder-perm-badge { color: var(--warn); }
+.folder-chip .folder-regrant-btn { font-size: .8125rem; color: var(--warn); text-decoration: underline; text-underline-offset: .2em; }
 .folder-close-btn {
-  font-size: 14px;
+  flex: none;
+  inline-size: 44px;
+  min-block-size: 44px;
+  font-size: 1.125rem;
   line-height: 1;
-  padding: 0 4px;
+  padding: 0;
+  border-radius: 8px;
   background: transparent;
-  border: none;
-  color: #8b8b9c;
-  cursor: pointer;
+  border: 0;
+  color: var(--muted);
 }
-.folder-close-btn:hover {
-  color: #e06c75;
-}
+.folder-close-btn:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
 
 /* ── The task / result card (voicebox-beads-snp) ────────────────────────── */
 .task-card {
