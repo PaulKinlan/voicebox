@@ -509,16 +509,23 @@ async function saveRegistry(record: ProjectRecord): Promise<void> {
  * person needs before they trust a folder with their work.
  */
 async function askDurable(): Promise<boolean> {
+  // GUARD, DO NOT CALL BLINDLY (coord's root cause, 2026-09-24). `navigator.storage.persist` is not
+  // guaranteed here: this code runs in a DEDICATED WORKER, and a method that is absent throws a
+  // SYNCHRONOUS TypeError — which `.catch()` cannot catch, because `.catch()` only sees rejections of a
+  // call that already happened. That is how asking for durability took `openProject` down with it
+  // (`root-unreachable`, "no project is open") in every page-driven test. Each call is checked for the
+  // function, and the whole thing is wrapped, because "can I ask?" is a question about the environment.
   try {
-    if (typeof (navigator as unknown as { storage?: { persisted?: () => Promise<boolean> } })?.storage?.persisted === "function") {
+    if (typeof navigator?.storage?.persisted === "function") {
       const already = await navigator.storage.persisted().catch(() => false);
       if (already) return true;
     }
-    if (typeof (navigator as unknown as { storage?: { persist?: () => Promise<boolean> } })?.storage?.persist === "function") {
+    if (typeof navigator?.storage?.persist === "function") {
       return await navigator.storage.persist().catch(() => false);
     }
   } catch {
-    // navigator.storage.persist is not supported in WorkerGlobalScope
+    // A worker without the API cannot answer, and "unavailable" is not "not durable": both are reported
+    // as false, and the callers print the fact rather than pretending the question was answered.
   }
   return false;
 }
