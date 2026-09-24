@@ -39,13 +39,23 @@ export const RUNTIME_CAPABILITIES: Record<RuntimeKind, RuntimeCapabilities> = {
 
 /** Detect the current JavaScript execution runtime platform. */
 export function detectRuntime(): RuntimeKind {
-  // @ts-ignore: browser window check
-  if (typeof window !== "undefined" && typeof window.document !== "undefined") {
-    return "browser";
-  }
   // @ts-ignore: Deno global check
   if (typeof Deno !== "undefined") {
     return "deno";
+  }
+  // Browser main window, iframe, or web worker (WorkerGlobalScope)
+  // @ts-ignore
+  const isWorker = typeof WorkerGlobalScope !== "undefined" && (
+    (typeof self !== "undefined" && self instanceof WorkerGlobalScope) ||
+    (typeof globalThis !== "undefined" && Boolean((globalThis as any).WorkerGlobalScope) && globalThis instanceof (globalThis as any).WorkerGlobalScope)
+  );
+  // @ts-ignore
+  const isWindow = typeof window !== "undefined" && typeof window.document !== "undefined";
+  // @ts-ignore
+  const isBrowserEnv = typeof navigator !== "undefined" && typeof process === "undefined";
+
+  if (isWindow || isWorker || isBrowserEnv) {
+    return "browser";
   }
   return "node";
 }
@@ -134,6 +144,14 @@ const SECRET_PREFIXES = ["sk-", "vbx_", "ghp_", "xoxb-", "Bearer "];
  * Returns the violating key or value pattern if found, null otherwise.
  */
 function findSecretLeak(obj: unknown, path = ""): string | null {
+  if (typeof obj === "string") {
+    for (const prefix of SECRET_PREFIXES) {
+      if (obj.includes(prefix)) {
+        return `value at '${path || "root"}' contains secret prefix '${prefix}'`;
+      }
+    }
+    return null;
+  }
   if (!obj || typeof obj !== "object") return null;
   if (Array.isArray(obj)) {
     for (let i = 0; i < obj.length; i++) {
@@ -147,14 +165,8 @@ function findSecretLeak(obj: unknown, path = ""): string | null {
     for (const pat of SECRET_PATTERNS) {
       if (pat.test(k)) return `key '${currentPath}' looks like a secret`;
     }
-    if (typeof v === "string") {
-      for (const prefix of SECRET_PREFIXES) {
-        if (v.includes(prefix)) return `value at '${currentPath}' contains secret prefix '${prefix}'`;
-      }
-    } else if (typeof v === "object" && v !== null) {
-      const leak = findSecretLeak(v, currentPath);
-      if (leak) return leak;
-    }
+    const leak = findSecretLeak(v, currentPath);
+    if (leak) return leak;
   }
   return null;
 }
@@ -302,13 +314,38 @@ export function validateConfiguredAgent(
 }
 
 /**
- * Rename an agent's display name without changing its stable ID.
- * Proves that renaming a label cannot retarget a task address or ID reference.
+ * Safe public projection of a configured agent for unauthenticated inventory readback.
+ * Strictly excludes unvetted model options, prompts, or credentials.
  */
+export function publicAgentProjection(agent: ConfiguredAgent) {
+  return {
+    id: agent.id,
+    name: agent.name,
+    harness: agent.harness,
+    adapter: agent.adapter,
+    pinnedVersion: agent.pinnedVersion,
+    transport: agent.transport,
+    environmentKey: agent.environmentKey,
+    description: agent.description,
+    isDefault: agent.isDefault,
+    model: agent.model ? { provider: agent.model.provider, model: agent.model.model } : null,
+    reach: agent.reach,
+    bounds: agent.bounds,
+    readiness: agent.readiness,
+    createdAt: agent.createdAt,
+    updatedAt: agent.updatedAt,
+  };
+}
 export function renameConfiguredAgent(agent: ConfiguredAgent, newName: string): ConfiguredAgent {
   const trimmed = newName.trim();
   if (!trimmed) {
     throw new Error("agent name cannot be empty");
+  }
+  const leak = findSecretLeak(trimmed, "name");
+  if (leak) {
+    throw Object.assign(new Error(`secrets-forbidden: Renaming agent cannot inject secrets (${leak})`), {
+      refused: "secrets-forbidden",
+    });
   }
   return {
     ...agent,

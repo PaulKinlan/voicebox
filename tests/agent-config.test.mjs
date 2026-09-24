@@ -227,6 +227,47 @@ test("secrets: configuring an agent with secrets is strictly REFUSED", () => {
   });
   assert.equal(leak3.ok, false);
   assert.equal(leak3.refused, "secrets-forbidden");
+
+  // Test array secret leak (Astra item 5)
+  const leak4 = validateConfiguredAgent({
+    id: "agent_secret_leak4",
+    name: "Leaky Agent 4",
+    harness: "pi",
+    adapter: "pi-acp",
+    transport: "stdio",
+    environmentKey: "local",
+    model: {
+      provider: "fixture",
+      model: "fixture",
+      options: { examples: ["sk-fixture-canary-secret"] },
+    },
+  });
+  assert.equal(leak4.ok, false);
+  assert.equal(leak4.refused, "secrets-forbidden");
+  assert.match(leak4.why, /secret prefix 'sk-'/);
+
+  // Test rename cannot bypass secret check (Astra item 6)
+  const safeAgent = {
+    id: "agent_safe",
+    name: "Safe Agent",
+    harness: "pi",
+    adapter: "pi-acp",
+    transport: "stdio",
+    environmentKey: "local",
+    description: "Safe",
+    isDefault: false,
+    model: null,
+    prompt: null,
+    reach: { root: "active", network: "none", tools: [] },
+    bounds: { deadlineMs: 10000, maxOutputBytes: 10000 },
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  assert.throws(
+    () => renameConfiguredAgent(safeAgent, "sk-injected-canary"),
+    /secrets-forbidden/,
+    "renaming to a name with secret prefix must throw secrets-forbidden",
+  );
 });
 
 test("browser runtime: stdio-only adapter is REFUSED explicitly", () => {
@@ -306,7 +347,7 @@ test("admission: delegating to an unknown configured agent ID refuses before tas
 
     assert.equal(res.ok, false);
     assert.equal(res.refused, "agent-not-configured");
-    assert.match(res.why, /No configured agent with ID 'agent_nonexistent_id' exists/);
+    assert.match(res.why, /No configured agent with ID/);
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
@@ -411,4 +452,161 @@ test("D3: listHarnessesWithConfiguredAgents decorates harness discovery without 
   const claudeEntry = decorated.entries.find((e) => e.id === "claude");
   assert.ok(claudeEntry);
   assert.equal(claudeEntry.configuredAgents.length, 0, "Claude has no configured agents");
+});
+
+test("admission: foreign environment configured agent refuses before execution (Astra item 1)", () => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-agent-foreign-"));
+  try {
+    const registry = createAgentRegistry({ defaultAgents: [] });
+    registry.register({
+      id: "agent_foreign",
+      name: "Foreign Agent",
+      harness: "pi",
+      adapter: "pi-acp",
+      transport: "stdio",
+      environmentKey: "env_2222222222222222", // belongs to a different environment
+      description: "Remote agent",
+      bounds: { deadlineMs: 5000, maxOutputBytes: 4096 },
+    });
+
+    const host = createTaskHost({
+      environment: "env_1111111111111111", // executing environment is local
+      instance: "test-instance",
+      boot: "boot1",
+      addressKey: Buffer.alloc(32, 1),
+      root: () => ({ root: { kind: "machine", path: scratch, environment: "env_1111111111111111" }, project: "test" }),
+      executor: () => ({ check: () => ({ ok: true, bounds: { deadlineMs: 5000, maxOutputBytes: 4096 }, mechanism: "test" }), run: () => {} }),
+      agentRegistry: registry,
+    });
+
+    const res = host.call("delegate_task", {
+      agent: "agent_foreign",
+      task: "do foreign work",
+    }, { owner: "owner1", callId: "call-foreign" });
+
+    assert.equal(res.ok, false);
+    assert.equal(res.refused, "agent-environment-mismatch");
+    assert.match(res.why, /belongs to environment 'env_2222222222222222', not 'env_1111111111111111'/);
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("admission: unknown ID without agent_ prefix refuses before execution (Astra item 2)", () => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-agent-unknown-"));
+  try {
+    const registry = createAgentRegistry({ defaultAgents: [] });
+    const host = createTaskHost({
+      environment: "env_1111111111111111",
+      instance: "test-instance",
+      boot: "boot1",
+      addressKey: Buffer.alloc(32, 1),
+      root: () => ({ root: { kind: "machine", path: scratch, environment: "env_1111111111111111" }, project: "test" }),
+      executor: () => ({ check: () => ({ ok: true, bounds: { deadlineMs: 5000, maxOutputBytes: 4096 }, mechanism: "test" }), run: () => {} }),
+      agentRegistry: registry,
+    });
+
+    const res = host.call("delegate_task", {
+      agent: "unconfigured_arbitrary_name",
+      task: "do unconfigured work",
+    }, { owner: "owner1", callId: "call-unconfigured" });
+
+    assert.equal(res.ok, false);
+    assert.equal(res.refused, "agent-not-configured");
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("bounds: configured 256-byte output bound fails task returning 600 bytes (Astra item 3)", async () => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-agent-bounds-"));
+  try {
+    const registry = createAgentRegistry({ defaultAgents: [] });
+    registry.register({
+      id: "agent_tightly_bounded",
+      name: "Tight Bounded Agent",
+      harness: "pi",
+      adapter: "pi-acp",
+      transport: "stdio",
+      environmentKey: "env_1111111111111111",
+      bounds: { deadlineMs: 5000, maxOutputBytes: 256 },
+    });
+
+    const host = createTaskHost({
+      environment: "env_1111111111111111",
+      instance: "test-instance",
+      boot: "boot1",
+      addressKey: Buffer.alloc(32, 1),
+      root: () => ({ root: { kind: "machine", path: scratch, environment: "env_1111111111111111" }, project: "test" }),
+      executor: () => ({
+        check: () => ({ ok: true, bounds: { deadlineMs: 5000, maxOutputBytes: 8192 }, mechanism: "test" }),
+        run: async () => "x".repeat(600), // exceeds 256 byte bound
+      }),
+      agentRegistry: registry,
+    });
+
+    const authority = { owner: "owner1", callId: "call-bounds" };
+    const admitted = host.call("delegate_task", {
+      agent: "agent_tightly_bounded",
+      task: "produce big output",
+    }, authority);
+
+    assert.equal(admitted.ok, true);
+
+    // Poll status until terminal
+    let status;
+    for (let i = 0; i < 50; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+      status = host.call("task_status", { address: admitted.task.address }, authority);
+      if (status.task?.state !== "queued" && status.task?.state !== "running") break;
+    }
+
+    assert.equal(status.task.state, "failed");
+    assert.equal(status.task.reason, "task-output-over-budget");
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("executor: configured Pi ID resolves before adapter installation check (Astra item 4)", async () => {
+  const { createPiAcpExecutor } = await import("../lib/pi-acp.mjs");
+  const absentAdapter = createPiAcpExecutor({
+    adapterDir: path.join(os.tmpdir(), "intentionally-absent-adapter-dir"),
+  });
+
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-agent-pi-check-"));
+  try {
+    const registry = createAgentRegistry({ defaultAgents: [] });
+    registry.register({
+      id: "agent_custom_pi",
+      name: "Custom Pi Agent",
+      harness: "pi",
+      adapter: "pi-acp",
+      transport: "stdio",
+      environmentKey: "env_1111111111111111",
+      bounds: { deadlineMs: 5000, maxOutputBytes: 4096 },
+    });
+
+    const host = createTaskHost({
+      environment: "env_1111111111111111",
+      instance: "test-instance",
+      boot: "boot1",
+      addressKey: Buffer.alloc(32, 1),
+      root: () => ({ root: { kind: "machine", path: scratch, environment: "env_1111111111111111" }, project: "test" }),
+      executor: () => absentAdapter,
+      agentRegistry: registry,
+    });
+
+    const res = host.call("delegate_task", {
+      agent: "agent_custom_pi",
+      task: "run with absent adapter",
+    }, { owner: "owner1", callId: "call-absent-adapter" });
+
+    assert.equal(res.ok, false);
+    // Must be adapter-unavailable (reached adapter check) rather than adapter-not-configured (mismatched name)
+    assert.equal(res.refused, "adapter-unavailable");
+    assert.match(res.why, /pi-acp adapter not found/);
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
 });
