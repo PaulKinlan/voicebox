@@ -84,14 +84,19 @@ test("N20.7 'denied' is a state of its own: distinct code, its own reason, and i
 
   // The platform's answer first, so the test cannot pass by accident of our own bookkeeping:
   // `handleState` asks the handle itself, through the same `queryPermission` the host uses.
-  const answers = await page.evaluate(async (expected) => {
+  // Adoption is a state change inside the page (CDP round-trips under multi-lane
+  // load can take seconds): WAIT for it, bounded, with a named timeout — never a
+  // one-shot read that turns a slow answer into a false "was not adopted".
+  // waitFor's signature is (fn, opts) — the expected name rides INSIDE opts.args;
+  // a third positional argument is dropped on the floor (the silent-false bug).
+  const answers = await page.waitFor(async (expected) => {
     const reply = await window.e1m0.send({ type: "listProjects" });
     const adopted = (reply.projects ?? []).find((p) => p.name === expected);
-    if (!adopted) return { adopted: false };
+    if (!adopted) return false;
     const state = await window.e1m0.send({ type: "handleState", name: expected });
     return { adopted: true, state };
-  }, folderName);
-  assert.equal(answers.adopted, true, "the blocked folder was not adopted");
+  }, { timeout: 15000, label: "blocked folder to be adopted into project list", args: [folderName] });
+  assert.equal(answers.adopted, true, "the blocked folder was not adopted within 15s");
   assert.equal(answers.state.permission, "denied", `expected the platform to answer 'denied', saw '${answers.state.permission}'`);
   assert.equal(answers.state.readPermission ?? "denied", "denied", "expected read to be denied as well");
 
