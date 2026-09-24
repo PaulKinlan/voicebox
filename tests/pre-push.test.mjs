@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync, spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, chmodSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
 import path from 'node:path';
@@ -81,7 +81,9 @@ exec '${timeout}' "$@"
       const result = spawnSync('git', ['push', remote, 'HEAD:refs/heads/candidate'], {
         cwd: work, encoding: 'utf8', timeout: 60000,
         env: { ...cleanEnv, NODE_TEST_CONTEXT: undefined, PATH: `${bin}:${process.env.PATH}`, BD_GIT_HOOK: '1',
-          VOICEBOX_SKIP_GATE: '', VOICEBOX_SKIP_ACCEPT: '', GATE_CASE: scenario },
+          VOICEBOX_SKIP_GATE: '', VOICEBOX_SKIP_ACCEPT: '', GATE_CASE: scenario,
+          VOICEBOX_GATE_LOCK: path.join(dir, 'fixture-gate.lock'),
+          VOICEBOX_GATE_HOLDER: path.join(dir, 'fixture-gate.holder.json') },
       });
       assert.ifError(result.error);
       const output = result.stdout + result.stderr;
@@ -178,6 +180,8 @@ test('pre-push timeout refusal respects custom budget and reports measured elaps
         ...cleanEnv,
         VOICEBOX_GATE_UNIT_SECS: '2',
         VOICEBOX_SKIP_ACCEPT: '1',
+        VOICEBOX_GATE_LOCK: path.join(dir, 'fixture-gate.lock'),
+        VOICEBOX_GATE_HOLDER: path.join(dir, 'fixture-gate.holder.json'),
       },
     });
 
@@ -285,5 +289,71 @@ test('a suite run inside a hook cannot move the repository it runs in (observer-
     );
   } finally {
     rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('gate lock serializes concurrent pre-push runs and announces waiting holder (voicebox-beads-6qu)', { timeout: 30000 }, async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-gate-lock-'));
+  const repo = path.join(dir, 'repo');
+  const lockFile = path.join(dir, 'gate.lock');
+  const holderFile = path.join(dir, 'gate.holder.json');
+
+  try {
+    mkdirSync(repo);
+    execFileSync('git', ['init', '-q'], { cwd: repo, env: cleanEnv });
+    mkdirSync(path.join(repo, 'scripts'), { recursive: true });
+    copyFileSync(path.join(root, 'scripts/pre-push.sh'), path.join(repo, 'pre-push.sh'));
+    copyFileSync(path.join(root, 'scripts/test-lanes.mjs'), path.join(repo, 'scripts/test-lanes.mjs'));
+    copyFileSync(path.join(root, 'scripts/docs-touched.mjs'), path.join(repo, 'scripts/docs-touched.mjs'));
+    chmodSync(path.join(repo, 'pre-push.sh'), 0o755);
+
+    writeFileSync(path.join(repo, 'package.json'), JSON.stringify({
+      scripts: {
+        'test:unit': 'echo "unit passed"',
+        'test:live': 'echo "live passed"',
+        accept: 'echo "accept passed"',
+      },
+    }));
+
+    // Start a background holder process that holds the lock for 1.5 seconds
+    const holder = spawn('sh', [
+      '-c',
+      `exec 9>"${lockFile}"; flock 9; echo '{"pid":'$$',"branch":"holder-branch"}' > "${holderFile}"; echo READY; sleep 1.5`,
+    ], { stdio: ['ignore', 'pipe', 'inherit'] });
+
+    await new Promise((resolve) => {
+      holder.stdout.on('data', (d) => {
+        if (d.toString().includes('READY')) resolve();
+      });
+    });
+
+    // Run pre-push.sh pointing at this lockfile: it should wait, announce holder PID, then succeed
+    const start = Date.now();
+    const result = spawnSync(path.join(repo, 'pre-push.sh'), [], {
+      cwd: repo,
+      encoding: 'utf8',
+      timeout: 20000,
+      env: {
+        ...cleanEnv,
+        VOICEBOX_GATE_LOCK: lockFile,
+        VOICEBOX_GATE_HOLDER: holderFile,
+        VOICEBOX_SKIP_ACCEPT: '1',
+      },
+    });
+
+    const elapsed = Date.now() - start;
+    const output = result.stdout + result.stderr;
+    assert.equal(result.status, 0, output);
+    assert.match(output, /Waiting for gate lock held by PID \d+/);
+    assert.match(output, /Acquired gate lock/);
+    assert.match(output, /ALL GATES GREEN/);
+    assert.ok(elapsed >= 1000, `must have waited for the lock: elapsed ${elapsed}ms`);
+
+    // Lock holder file must be cleaned up on release
+    assert.equal(existsSync(holderFile), false, 'holder file must be deleted after release');
+
+    await new Promise((resolve) => holder.on('close', resolve));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

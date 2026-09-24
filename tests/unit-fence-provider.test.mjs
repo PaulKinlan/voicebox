@@ -24,6 +24,7 @@ let scratch;
 let homes;
 let userManager = false;
 let declaredKey = null;
+const measureKey = `vb-test-l15-measure-${process.pid}-${Date.now()}`;
 
 test.before(async () => {
   // NOT under /tmp: the unit runs with PrivateTmp=yes, which hides the caller's /tmp inside the
@@ -43,6 +44,7 @@ test.before(async () => {
 
 test.after(async () => {
   if (declaredKey) await stopUnitFence(declaredKey).catch(() => {});
+  await stopUnitFence(measureKey).catch(() => {});
   await stopUnitFence("vb-test-l15-measure").catch(() => {});
   await run("systemctl", ["--user", "reset-failed"], { timeout: 10000 }).catch(() => {});
   rmSync(scratch, { recursive: true, force: true });
@@ -59,7 +61,7 @@ const needsUserManager = (t) => {
 
 test("the composed environment's probe report shows seccomp=2, the EROFS code tree, and the writable home — and it SERVES", async (t) => {
   if (needsUserManager(t)) return;
-  const out = await bootUnitFence({ key: "vb-test-l15-measure", label: "measure" });
+  const out = await bootUnitFence({ key: measureKey, label: "measure" });
   assert.ok(out.ok, `the composition did not boot: ${JSON.stringify(out)}`);
   assert.match(out.origin, /^http:\/\/127\.0\.0\.1:\d+$/, "the origin is a loopback URL on a free port");
   assert.equal(out.boundary.level, "L1.5", "the composition is measured at its own level, not the fence's L1");

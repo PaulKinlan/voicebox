@@ -84,10 +84,75 @@ run_stage docs-touched "$_docs_secs" node scripts/docs-touched.mjs
 
 node scripts/test-lanes.mjs --check
 run_stage unit "$_unit_secs" npm run test:unit
+
+# ── GATE LOCK (voicebox-beads-6qu) ──────────────────────────────────────────
+# Serializes live browser test runs across concurrent lanes on this loaded box.
+# Unit tests run without the lock; the live and acceptance stages acquire the
+# lock so multiple lanes pushing at once wait their turn instead of launching
+# concurrent Chromium instances that starve each other.
+_gate_lock_held=0
+_lock_file="${VOICEBOX_GATE_LOCK:-/tmp/voicebox-gate.lock}"
+_holder_file="${VOICEBOX_GATE_HOLDER:-/tmp/voicebox-gate.holder.json}"
+
+release_gate_lock() {
+  if [ "$_gate_lock_held" = "1" ]; then
+    rm -f "$_holder_file" 2>/dev/null || true
+    exec 9>&- 2>/dev/null || true
+    _gate_lock_held=0
+  fi
+}
+trap release_gate_lock EXIT INT TERM
+
+acquire_gate_lock() {
+  if [ "$VOICEBOX_GATE_LOCK_DISABLE" = "1" ]; then
+    return 0
+  fi
+
+  if ! command -v flock >/dev/null 2>&1; then
+    echo >&2 "[gate] pre-push: flock command not found; running live stage without lock"
+    return 0
+  fi
+
+  exec 9>"$_lock_file"
+
+  _t0=$(date +%s)
+  if ! flock -n 9; then
+    _holder_info=""
+    if [ -f "$_holder_file" ]; then
+      _holder_pid=$(grep -o '"pid":[0-9]*' "$_holder_file" 2>/dev/null | cut -d: -f2 || true)
+      if [ -n "$_holder_pid" ]; then
+        if kill -0 "$_holder_pid" 2>/dev/null; then
+          _holder_info="held by PID $_holder_pid"
+        else
+          _holder_info="held by PID $_holder_pid (NOT RUNNING — stale sidecar)"
+        fi
+      fi
+    fi
+    if [ -z "$_holder_info" ]; then
+      _holder_info="held by another gate process"
+    fi
+
+    echo "[gate] pre-push: Waiting for gate lock $_holder_info [$_lock_file]..."
+    _lock_wait_secs="${VOICEBOX_GATE_LOCK_WAIT_SECS:-600}"
+    if ! timeout "${_lock_wait_secs}s" flock 9; then
+      echo >&2 "[gate] pre-push REFUSED: timed out waiting for gate lock after ${_lock_wait_secs}s ($_holder_info)."
+      exit 1
+    fi
+    _waited=$(( $(date +%s) - _t0 ))
+    echo "[gate] pre-push: Acquired gate lock (waited ${_waited}s)."
+  fi
+
+  _curr_branch=$(git branch --show-current 2>/dev/null || echo "unknown")
+  echo "{\"pid\":$$,\"branch\":\"$_curr_branch\",\"startedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > "$_holder_file" 2>/dev/null || true
+  _gate_lock_held=1
+}
+
+acquire_gate_lock
 run_stage live "$_live_secs" npm run test:live
 
 if [ "$VOICEBOX_SKIP_ACCEPT" != "1" ]; then
   run_stage acceptance "$_accept_secs" npm run accept
 fi
+release_gate_lock
 
 echo "[gate] pre-push: ALL GATES GREEN"

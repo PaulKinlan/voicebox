@@ -34,6 +34,18 @@ rather than guessed:
   numbers, not estimates; changing concurrency without raising the budget would
   convert a flake into a timeout, which is why both moved together.
 
+## Gate lock and serialization across lanes — 2026-09-24 (`voicebox-beads-6qu`)
+
+The fast `unit` stage runs concurrently across lanes without locking.
+Before starting `live` (`npm run test:live`) and `acceptance` (`npm run accept`),
+the pre-push hook acquires a fleet-wide file lock (`VOICEBOX_GATE_LOCK`, default
+`/tmp/voicebox-gate.lock`) with a sidecar announcement (`VOICEBOX_GATE_HOLDER`,
+default `/tmp/voicebox-gate.holder.json`). When another lane is currently running
+its live/browser stage, subsequent push attempts wait their turn with an announced
+message (`Waiting for gate lock held by PID ...`) rather than launching concurrent
+Chromium processes that starve each other. The lock is released on exit or failure.
+Override with `VOICEBOX_GATE_LOCK_DISABLE=1` or `VOICEBOX_GATE_LOCK_WAIT_SECS=<n>`.
+
 A timeout reports the stage, command, budget and exit 124, and says completion
 is unknown rather than claiming tests failed. An ordinary nonzero exit reports
 FAILED with the stage and exit code; the test or harness output above gives the
