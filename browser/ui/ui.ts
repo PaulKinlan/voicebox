@@ -437,7 +437,12 @@ async function open(name: string): Promise<Reply> {
     return reply;
   }
   header(reply.project);
-  line(`opened ${reply.project.id} — root: ${reply.project.root}`, "ok");
+  line(
+    reply.created
+      ? `made ${reply.project.name} in this browser — root: ${reply.project.root}`
+      : `opened ${reply.project.id} — root: ${reply.project.root}`,
+    "ok",
+  );
   await declareToLoop(reply.project);
   $("gallery").textContent = "";
   for (const asset of reply.assets ?? []) {
@@ -491,15 +496,24 @@ async function declareToLoop(project: Record<string, any>): Promise<void> {
     // useless on its own: the person has just chosen a root and the page must say what to choose
     // instead, in the place they are standing. (The same lesson as the room's empty state, which
     // named a remedy it offered no way to reach.)
-    line(`the loop cannot write here — ${body.why ?? body.refused ?? "no reason given"}`, "note");
+    // A REFUSAL MUST CARRY THE ROUTE, not just the reason — and for a page-owned root the refusal's own
+    // subject changed with voicebox-beads-fqq: the page CAN declare this root now, so the honest sentence
+    // is not "you may not have this", it is "the loop cannot write here yet, and here is why" plus the
+    // route to a root it can write. The bead that closes the asymmetry is named so a reader can find it.
     line(
       kind === "machine"
-        ? "nothing to do: this is a machine folder, so turns write into it"
-        : "to have turns write, choose a folder on this machine with 'Use this folder for the loop' — " +
-          "a picked folder or this origin's storage is readable here and writable only by the page until " +
-          "page-side writes land (journal-2cf)",
+        ? `the loop cannot write here — ${body.why ?? body.refused ?? "no reason given"}`
+        : "the loop cannot write here yet — this project is in this browser's own storage, so only this page can act on it: the room lists and reads it through this page",
       "note",
     );
+    if (kind !== "machine") {
+      line(
+        "to have turns write, choose a folder on this machine with 'Save turns into this folder' — " +
+          "that is the root the loop acts on today; a picked folder or this origin's storage is readable " +
+          "and writable only by the page until page-side writes land (voicebox-beads-2cf)",
+        "note",
+      );
+    }
   } catch {
     line("the loop was not told about this root (no server reachable from the page)", "note");
   }

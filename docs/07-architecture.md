@@ -41,6 +41,25 @@ The active project root is wherever the environment declares it (or the boot-tim
 variable, which is a declaration too) — the path is the server's answer to `GET /api/root`, not a
 fixed location this diagram names.
 
+**Who may declare, and why the token is scoped the way it is** (voicebox-beads-fqq). `POST /api/root`
+needed the host token for every kind of root, and the page cannot hold one — so a browser-stored project
+could never be declared, and a fresh room could not list or write anything at all. The token now guards
+what it was actually defending: a **machine** root re-points every file route the *server itself* serves,
+so that declaration stays the host's act (403 `host-token-required` without it). A **page-owned** root
+(`opfs`, `handle`) grants the server no file-route power — `core/root.ts` `ROOT_FACTS.opfs.reachableFrom
+= ["page"]`, every act routes back to the page, and the page refuses any root that is not its own
+(`browser/acts.ts`: `root-not-mine`) — so the page may declare it, authorized by the same rule `/channel`
+already uses to decide who the local page is: the request's `Origin` is one of this server's own bound
+origins. The response says which of the two acts it was (`declaredBy: "host" | "page"`). A request from
+any other origin is refused, and the refusal names the rule that would have allowed it.
+
+**A room with no root declared, and a page that holds one.** When nothing is declared at all, the room's
+listing and read routes ask the page that holds its own project (`GET /api/files`, `GET /api/file` →
+`via: "page"`), and the page answers for its project: the server stores nothing and declares nothing,
+and the answer carries the page's descriptor so the room can name whose files these are. A call that
+names **no** root means "the project this page holds"; a call that names a *different* root is still
+refused `root-not-mine`, and a page with no project open answers `no-project` rather than an empty list.
+
 The server **never parses language itself**: `resolveTurn` returns an action, and the server runs it. That
 is the whole seam, and it is why swapping the brain does not touch the page or the server.
 

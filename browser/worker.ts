@@ -507,6 +507,10 @@ async function openProject(name: string): Promise<Record<string, unknown> | Fail
   }
   await loadRegistry();
   let record = records.get(clean);
+  // Whether this call MAKES the project or reopens one is a fact the page must be able to say out
+  // loud (voicebox-beads-fqq): a control labelled "new project" that silently reopened an existing
+  // one would be the sentence/behaviour gap the room has been burned by before.
+  const created = !record;
 
   if (!record) {
     // A new project is an OPFS project. A picked folder is adopted, never assumed: the user is
@@ -566,6 +570,9 @@ async function openProject(name: string): Promise<Record<string, unknown> | Fail
   const files = await storage.listChildren(root(), LIST_LIMIT);
   return {
     ok: true as const,
+    // `created` is what lets the page say "made it" instead of "opened it" — the same fact, told to
+    // the person who asked for it rather than left for them to infer (voicebox-beads-fqq).
+    created,
     // `root` on the wire is the VIRTUAL root string the tier table measures against, and
     // `rootKind` travels beside it: a record that cannot say which kind of root it has cannot
     // report an honest recovery story, and the page must not have to infer it from a string.

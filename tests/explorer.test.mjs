@@ -88,8 +88,10 @@ test("7cd.1 Three views, three authorities, and each one names the root it is sh
   // (a) a project whose root the PAGE owns: the origin view and the picked view are real, and the
   // machine view refuses by name rather than listing some other folder under a machine heading.
   await send({ type: "openProject", name: folderName });
-  // The HOST declares this page-owned root (the page cannot — voicebox-beads-cfn), which is what makes
-  // "the machine cannot reach this root" a fact the server can report rather than a guess.
+  // The HOST declares this page-owned root. Since voicebox-beads-fqq the PAGE may also declare a root
+  // only the page can act on, so the host is kept as the declarer here to keep the two acts
+  // distinguishable — which is what makes "the machine cannot reach this root" a fact the server can
+  // report rather than a guess.
   assert.equal((await declareAsHost(folderName, { kind: "handle", id: folderName })).ok, true);
   const opfs = await send({ type: "listView", view: "opfs", limit: LIMIT });
   const picked = await send({ type: "listView", view: "picked", limit: LIMIT });
@@ -111,7 +113,8 @@ test("7cd.1 Three views, three authorities, and each one names the root it is sh
 
   // (b) the same project declares a root on the machine: now the machine view is the real one, it
   // names the folder, and the picked view refuses by name — the pair, from both sides.
-  // The HOST declares (the page cannot — voicebox-beads-cfn), so the panel has a machine root to show.
+  // The HOST declares it (the page declares its own roots too since voicebox-beads-fqq; the host's act
+  // is the one that makes the SERVER the actor, which is the authority this half is about).
   await fetch(`${BASE}/api/root`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-voicebox-host-token": server.hostToken },
@@ -133,12 +136,23 @@ test("7cd.1 Three views, three authorities, and each one names the root it is sh
   assert.equal(new Set([opfs.root, picked.root, machine.root]).size, 3, "two views claim the same root");
 
   // And the page renders all three: the two that answer name their root, the third shows its refusal.
+  // ORDER MATTERS NOW (voicebox-beads-fqq): `e1m0.open` makes the page DECLARE its own project, which the
+  // page may do since fqq — so the host's machine declaration has to come AFTER it, or the machine root
+  // would no longer be the active one and the machine panel would refuse (correctly) instead of naming
+  // it. Three authorities, unchanged; only who declared last is.
   await page.evaluate(async (name) => {
     await window.e1m0.open(name); // the project the page owns, so the picked panel has something real to show
+  }, folderName);
+  await fetch(`${BASE}/api/root`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-voicebox-host-token": server.hostToken },
+    body: JSON.stringify({ project: "explorer", root: { kind: "machine", path: machineRoot } }),
+  });
+  await page.evaluate(async () => {
     await window.e1m0.renderView("opfs");
     await window.e1m0.renderView("picked");
     await window.e1m0.renderView("server");
-  }, folderName);
+  });
   const panels = await page.evaluate(() => ({
     opfs: document.getElementById("view-opfs").textContent,
     picked: document.getElementById("view-picked").textContent,

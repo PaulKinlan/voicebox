@@ -93,7 +93,7 @@
 
   <div id="project"></div>
 
-  <h2>Open a project</h2>
+  <h2>Start a project</h2>
   <!-- WHICH ROOT DO I WANT? The two choices differ in who can act on them, and
        that difference used to be discoverable only by being refused. Turns run
        in the server, so today it can write only into a folder it can name. -->
@@ -102,12 +102,12 @@
     <!-- No default name: a placeholder would show a project that does not exist as if it were a
          real choice. The label says what Open DOES. -->
     <label for="project-name" class="sr-only">Project name</label>
-    <input id="project-name" placeholder="a name for the browser-stored project" aria-label="project name">
-    <button type="submit" title="Opens the project stored in this browser's own storage (OPFS), creating it if it is new, and makes it the one this page acts on. It is not a folder on your disk.">Open</button>
+    <input id="project-name" placeholder="a name for a project in this browser" aria-label="project name">
+    <button type="submit" title="Makes a project in this browser's own storage (OPFS) and makes it the one this page acts on. It is not a folder on your disk. A name you have used before opens that project instead of making a new one.">New project in this browser</button>
     <button type="button" id="pick">Pick a folder… <span class="tag">read-only for turns</span></button>
     <button type="button" id="regrant" hidden>Restore write access</button>
   </form>
-  <p class="chooser-note"><strong>Open</strong> opens a project kept in <strong>this browser's own storage</strong> (origin storage, OPFS) — not a folder on your disk. It makes that project the one this page acts on, creating it empty if the name is new.</p>
+  <p class="chooser-note"><strong>New project in this browser</strong> keeps its files in <strong>this browser's own storage</strong> (origin storage, OPFS) — not a folder on your disk, and it asks for no host token and no path. The room lists and reads those files through this page. A name you have used before opens that project instead of making a new one.</p>
   <form id="machine-form">
     <input id="machine-path" placeholder="/a/folder/on/this/machine" aria-label="machine folder path" style="min-width:22rem">
     <button type="submit">Save turns into this folder <span class="tag tag-good">turns can write here</span></button>
