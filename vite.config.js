@@ -211,7 +211,23 @@ export default defineConfig({
     // missed inotify event.
     watch: { usePolling: true, interval: 300 },
     proxy: {
-      "/api": { target: API_TARGET },
+      "/api": {
+        target: API_TARGET,
+        // THE ORIGIN IS THE SERVER'S OWN ON THIS HOP TOO (voicebox-beads-fqq). Declaring a PAGE-OWNED
+        // root is authorized by Origin — "this request came from a page this server serves" — because
+        // such a declaration grants the server no file-route power (core/root.ts: only the page can act
+        // on opfs/handle, and the page refuses a root that is not its own). A browser on this dev front
+        // sends `Origin: http://127.0.0.1:5173`, so the page's own "New project in this browser" would
+        // be refused with host-token-required — measured 2026-09-24 — and the owner's front is this one.
+        // Same reasoning and same remedy as /live and /channel below: Vite IS this server's dev front, a
+        // proxy hop terminating its own origin is what a proxy is for, and the server's rule is
+        // unchanged for every non-proxied caller.
+        configure: (proxy) => {
+          proxy.on("proxyReq", (proxyReq) => {
+            proxyReq.setHeader("origin", API_TARGET);
+          });
+        },
+      },
       // The audio socket (k3's live session, landing separately). ws: true so
       // the WebSocket upgrade is forwarded and survives HMR reloads.
       //

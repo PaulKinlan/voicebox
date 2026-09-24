@@ -718,7 +718,12 @@ function askPage(action) {
     tool: action.verb,
     descriptorId: CORE_FS_DESCRIPTOR,
     args: {
-      root: active.root,
+      // WHAT ROOT THIS CALL NAMES. A declared root is named so the page can refuse a call that is not
+      // for the project it holds (browser/acts.ts: root-not-mine). With NO root declared the field is
+      // omitted on purpose — undefined drops out in JSON — and the page answers for its OWN project:
+      // that is the fqq path, where a browser-stored project is listed and read without the server ever
+      // declaring a root, and the page's own descriptor is the only authority for its storage.
+      ...(active ? { root: active.root } : {}),
       name: String(action.name ?? ""),
       ...(action.content != null ? { content: String(action.content) } : {}),
       ...(action.turn != null ? { turn: String(action.turn) } : {}),
@@ -1516,19 +1521,24 @@ async function handle(req, res) {
   // environment owning them is a fact, and refused, because this process must not pretend to act on
   // them. That is the whole difference between one root and two.
   if (req.method === "POST" && url.pathname === "/api/root") {
-    // DECLARING THE ROOT IS THE HOST'S ACT. Same authority class as admitting an extension or issuing
-    // a pairing bearer, and the same mechanism as both (voicebox-beads-m2i): a host-generated secret,
-    // mode 0600, in the host's own directory, served by no route — the person's shell has it.
+    // DECLARING A ROOT IS THE HOST'S ACT — for a root the HOST can act on. The authority is the same
+    // class as admitting an extension or issuing a pairing bearer, and the same mechanism as both
+    // (voicebox-beads-m2i): a host-generated secret, mode 0600, in the host's own directory, served by
+    // no route — the person's shell has it. A machine root needs it because that route re-points every
+    // FILE route the server itself serves, so without the token anything that can reach the server
+    // could aim the loop at anything the process can read.
     //
-    // This route is the remaining hole of that shape: it re-points every file route, so without the
-    // token anything that can reach the server can aim the loop at anything the process can read.
-    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
-      return json(res, 403, {
-        ok: false,
-        refused: "host-token-required",
-        why: "declaring the project root is the host's act — it re-points every file route — and this route requires the host token (x-voicebox-host-token); the page cannot hold it",
-      });
-    }
+    // A PAGE-OWNED ROOT IS A DIFFERENT ACT, and the same token would defend nothing. The server cannot
+    // act on an opfs or handle root at all (core/root.ts ROOT_FACTS.opfs.reachableFrom = ["page"]):
+    // every act routes back to the page over /channel, and the page refuses any root that is not its own
+    // (browser/acts.ts: root-not-mine) — so a declaration here grants no file-route power to anyone. The
+    // page may therefore declare what only the page can act on, and the check is the SAME one /channel
+    // already makes to decide who the local page is: the request's Origin is one of THIS server's own
+    // bound origins. That is not any origin, and it is not a credential a stranger benefits from: a
+    // page-owned declaration is inert for the server and answers only to the page that owns the files.
+    //
+    // This is the defect voicebox-beads-fqq names: the page could not hold a token, so a browser-stored
+    // project could never be declared, so a fresh room could not list or write anything at all.
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", () => answerOnce(res, async () => {
@@ -1546,6 +1556,28 @@ async function handle(req, res) {
       if (!Object.prototype.hasOwnProperty.call(ROOT_FACTS, root.kind)) {
         return json(res, 400, { ok: false, refused: "unknown-root-kind", why: `'${root.kind}' is not a root kind this seam knows (${Object.keys(ROOT_FACTS).join(", ")})` });
       }
+
+      // Who is asking? The token decides for a machine root; the page's own origin decides for a root
+      // only the page can act on. Both refusals name the rule they were refused by.
+      const pageOwned = root.kind === "opfs" || root.kind === "handle";
+      const declaredByHost = extensions.hostTokenOk(req.headers["x-voicebox-host-token"]);
+      const selfPort = boundPort ?? PORT;
+      const ownOrigins = new Set([
+        `http://127.0.0.1:${selfPort}`,
+        `http://localhost:${selfPort}`,
+        `http://[::1]:${selfPort}`,
+      ]);
+      const fromOwnPage = typeof req.headers.origin === "string" && ownOrigins.has(req.headers.origin);
+      if (!declaredByHost && !(pageOwned && fromOwnPage)) {
+        return json(res, 403, {
+          ok: false,
+          refused: "host-token-required",
+          why: pageOwned
+            ? "declaring a page-owned root needs either the host token (x-voicebox-host-token) or a request from this server's own origin — a browser-stored project is declared by the page that owns it, and this request came from somewhere else"
+            : "declaring the project root is the host's act — it re-points every file route — and this route requires the host token (x-voicebox-host-token); the page cannot hold it, and the server cannot act on a page-owned root either way",
+        });
+      }
+      const declaredBy = declaredByHost ? "host" : "page";
 
       if (root.kind === "machine") {
         const requested = String(root.path ?? "");
@@ -1595,6 +1627,9 @@ async function handle(req, res) {
         refused: reach.refused,
         why: reach.why,
         actsVia: "page",
+        // WHO declared it, so a reader can tell the host's act from the page's own (fqq): the room's
+        // header and the page's line both say which of the two aimed this root.
+        declaredBy,
         executor: { page: "environment", connected: pageExecutorConnected() },
         declaredAt: active.declaredAt,
       });
@@ -1619,6 +1654,32 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/files") {
+    // NO SERVER ROOT, BUT THE PAGE HOLDS A PROJECT: list it through the page (voicebox-beads-fqq).
+    // This is the fresh-room case — nothing declared, nothing picked — where the page has made a
+    // browser-stored project and the room must be able to see it. The server declares nothing here and
+    // stores nothing: it relays one question to the only side that can answer it, and every field of
+    // the answer says whose listing it is. A refusal is the page's own words, never a blank list.
+    if (!active && pageExecutorConnected()) {
+      const onPage = await askPage({ verb: "list", name: "" });
+      const observed = onPage.observed ?? {};
+      if (onPage.ok) {
+        return json(res, 200, {
+          ok: true,
+          via: "page",
+          declared: false,
+          root: observed.root ?? { kind: "opfs" },
+          project: null,
+          files: observed.files ?? [],
+          entries: observed.entries ?? [],
+          truncated: observed.truncated ?? false,
+        });
+      }
+      // The page is connected but has nothing to list (no project open): that is a NAMED state with a
+      // route, not an empty folder — the room prints the sentence and the link.
+      if (onPage.refused && onPage.refused !== "no-page") {
+        return json(res, 200, { ok: false, refused: onPage.refused, why: onPage.why, via: "page", root: observed.root ?? null, files: [], entries: [] });
+      }
+    }
     // The listing follows the ACTIVE root: a listing from a root the loop cannot reach would be the
     // two-root bug in miniature — a panel showing files from somewhere the project is not.
     if (!active) return json(res, 200, { ...noRootDeclared(), root: null, files: [], entries: [] });
@@ -1653,6 +1714,18 @@ async function handle(req, res) {
   if (req.method === "GET" && url.pathname === "/api/file") {
     const name = url.searchParams.get("name") ?? "";
     if (!name) return json(res, 400, { error: "action has no name" });
+    // NO SERVER ROOT, BUT THE PAGE HOLDS A PROJECT: read through the page, the same way the listing
+    // above does (voicebox-beads-fqq) — a listing whose files cannot be opened is half an answer.
+    if (!active && pageExecutorConnected()) {
+      const onPage = await askPage({ verb: "read", name });
+      if (onPage.ok) {
+        const observed = onPage.observed ?? {};
+        return json(res, 200, { ok: true, via: "page", declared: false, name, content: observed.content ?? "", bytes: observed.bytes ?? 0, root: observed.root ?? null });
+      }
+      if (onPage.refused && onPage.refused !== "no-page") {
+        return json(res, onPage.refused === "not-found" ? 404 : 409, { ok: false, refused: onPage.refused, error: `refused: ${onPage.refused}`, why: onPage.why, via: "page" });
+      }
+    }
     if (!active) return json(res, 409, { ...noRootDeclared() });
     const vanishedRead = rootMissing();
     if (vanishedRead) return json(res, 409, { ...vanishedRead, root: active.root });

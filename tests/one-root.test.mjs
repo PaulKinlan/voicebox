@@ -296,11 +296,36 @@ test("a declaration the loop cannot act on carries the ROUTE, not just the reaso
 
   const transcript = await page.evaluate(() => document.getElementById("transcript").textContent);
   assert.match(transcript, /the loop cannot write here/, "the page does not say the loop cannot write there");
-  assert.match(transcript, /Use this folder for the loop/, "the refusal names no route to a root that works");
-  assert.match(transcript, /journal-2cf/, "the sentence does not say where the asymmetry goes away");
+  // The route, named with the label the button ACTUALLY has. This assertion used to demand "Use this
+  // folder for the loop" — a label no control has had for a while, kept alive by the fixture while the
+  // sentence it pinned said something else (voicebox-beads-fqq). A test that names a stale label is a
+  // test that cannot see the drift it exists to catch.
+  assert.match(transcript, /Save turns into this folder/, "the refusal names no route to a root that works");
+  assert.match(transcript, /voicebox-beads-2cf/, "the sentence does not say where the asymmetry goes away");
 
   const header = await page.evaluate(() => document.getElementById("project").textContent);
   assert.match(header, /turns cannot write into this kind yet/, "the header hides which kinds turns can write into");
+
+  // THE COPY CONSEQUENCE, re-driven after voicebox-beads-fqq. This block used to assert the opposite —
+  // that the page's own declaration attempt ends in a refusal showing `host-token-required` — because the
+  // page could not hold a token. fqq scoped the token to the act it defends (a MACHINE root re-points the
+  // server's own file routes; a page-owned root grants it nothing, and only the page can act on it), so
+  // the page now declares ITS OWN root and the server answers with who declared it. The rule this test
+  // enforces does not change: the page must still say what turns can and cannot write into.
+  const pageDeclares = await page.evaluate(async () => {
+    const r = await fetch("/api/root", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ project: "origin-project", root: { kind: "opfs", path: "v1/projects/origin-project" } }),
+    });
+    return { status: r.status, body: await r.json() };
+  });
+  assert.equal(pageDeclares.status, 200, `the page's own root must be declarable now: ${JSON.stringify(pageDeclares)}`);
+  assert.equal(pageDeclares.body.declaredBy, "page", "and the answer must say the PAGE declared it");
+  assert.equal(pageDeclares.body.actsVia, "page", "with the acts routed to the page");
+  assert.equal(pageDeclares.body.reachableFromThisProcess, false, "and the server still unable to act on it");
+  const afterOwnDeclaration = await page.evaluate(() => document.getElementById("transcript").textContent);
+  assert.match(afterOwnDeclaration, /the loop cannot write here/, "the page stopped saying what turns cannot do");
 
   // And the machine-folder route really does change it — declared BY THE HOST, because the page's own
   // attempt is refused (asserted in the first test). The page's header keeps describing the page's
@@ -309,12 +334,6 @@ test("a declaration the loop cannot act on carries the ROUTE, not just the reaso
   const machine = await waitForRoot((i) => i.root?.kind === "machine", "the machine declaration");
   assert.equal(machine.reachableFromThisProcess, true);
 
-  // THE COPY CONSEQUENCE, asserted rather than left implicit: the page still tells a person that
-  // choosing a machine folder is the route to a writable root — and with this token requirement that
-  // route now ends in a refusal on the page. Recorded here as the open design question, so a reader
-  // sees the contradiction in the test rather than in production.
-  const declarationNotice = await page.evaluate(() => document.getElementById("transcript").textContent);
-  assert.match(declarationNotice, /host-token-required/, "the page does not show the token refusal for its own declaration attempt");
 });
 
 // ── a read that fails for a permission reason says so ───────────────────────

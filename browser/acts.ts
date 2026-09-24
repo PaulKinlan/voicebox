@@ -98,9 +98,15 @@ async function performAct(call: { tool: string; args: Record<string, unknown> },
   if (!descriptor) {
     return { ok: false as const, refused: "no-project", why: "this page has no project open, so there is no root it can act on — open the project in the environment page and the turn will land" };
   }
-  if (!sameRoot(descriptor, call.args?.root)) {
+  if (call.args?.root !== undefined && !sameRoot(descriptor, call.args.root)) {
     return { ok: false as const, refused: "root-not-mine", why: `the call names a root this page does not own — this page acts on '${descriptor.kind}:${"path" in descriptor ? descriptor.path : descriptor.id}', and the active root belongs to a different page or project` };
   }
+  // AN UNNAMED ROOT MEANS "THE PROJECT THIS PAGE HOLDS" (voicebox-beads-fqq). A call that NAMES a root
+  // is still checked against this page's own — root-not-mine is what stops the server aiming this page
+  // at storage it does not own, and it stays above every act. A call that names NO root is not naming a
+  // different one: it is the room asking the page for the project the page itself holds, which is the
+  // only part of the system that can answer when no server root is declared. Everything below resolves
+  // against the descriptor found HERE, never against anything the caller sent.
   const storage = hooks.getStorage();
   if (!storage) {
     return { ok: false as const, refused: "root-not-reachable-from-here", why: "this page's current root is not one it has a storage adapter for — the act belongs to the other side, and it was routed here by mistake" };
@@ -121,6 +127,10 @@ async function performAct(call: { tool: string; args: Record<string, unknown> },
         files: visible.map((e) => e.name),
         entries: visible.map((e) => ({ name: e.name, bytes: e.bytes ?? 0 })),
         truncated,
+        // WHO ANSWERED, AND FROM WHICH ROOT (fqq): the server cannot see this page's storage, so the
+        // page's own descriptor is the only honest provenance for a listing it returns. The room prints
+        // it, which is why a listing with no server root can still say whose files these are.
+        root: descriptor,
       };
     } catch (e) {
       return { ok: false as const, refused: "root-unreachable", why: `the root cannot be listed: ${(e as Error)?.message ?? e} — the folder may be gone, renamed, or unmounted` };
