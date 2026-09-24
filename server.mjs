@@ -2063,6 +2063,27 @@ async function handle(req, res) {
     const row = inv.extensions.find((e) => e.id === body.id);
     if (!row) return json(res, 404, { ok: false, refused: "extension-not-admitted", why: `'${body.id}' is not a running extension — nothing to reconfigure` });
 
+    if (body.bounds !== undefined) {
+      if (typeof body.bounds !== "object" || body.bounds === null) {
+        return json(res, 400, { ok: false, refused: "bounds-invalid", why: "bounds must be an object with parameters" });
+      }
+      if (body.bounds.maxRequests !== undefined) {
+        const parsed = Number(body.bounds.maxRequests);
+        if (!Number.isInteger(parsed) || parsed < 0) {
+          return json(res, 400, { ok: false, refused: "bounds-invalid", why: `maxRequests must be a non-negative integer (received ${body.bounds.maxRequests})` });
+        }
+      }
+      if (body.bounds.maxBytes !== undefined) {
+        const parsed = Number(body.bounds.maxBytes);
+        if (!Number.isInteger(parsed) || parsed < 0) {
+          return json(res, 400, { ok: false, refused: "bounds-invalid", why: `maxBytes must be a non-negative integer (received ${body.bounds.maxBytes})` });
+        }
+      }
+      if (body.bounds.hosts !== undefined && !Array.isArray(body.bounds.hosts) && typeof body.bounds.hosts !== "string") {
+        return json(res, 400, { ok: false, refused: "bounds-invalid", why: "hosts must be an array of hostnames or a comma-separated string" });
+      }
+    }
+
     if (body.confirm !== true) {
       return json(res, 200, {
         confirmFirst: true,

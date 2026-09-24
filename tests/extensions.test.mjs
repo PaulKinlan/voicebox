@@ -589,6 +589,37 @@ test("API: DELETE /api/extensions/:id and POST/PATCH /api/extensions/reconfigure
   assert.equal(disclosure.id, "web-search");
   assert.equal(disclosure.proposed.bounds.maxRequests, 50);
 
+  // 2b. Reconfigure with invalid bounds refuses 400 bounds-invalid (voicebox-beads-ud5 must-fix)
+  const negReqResp = await fetch(`${server.base}/api/extensions/reconfigure`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken() },
+    body: JSON.stringify({ id: "web-search", bounds: { maxRequests: -10 }, confirm: true }),
+  });
+  assert.equal(negReqResp.status, 400);
+  const negReq = await negReqResp.json();
+  assert.equal(negReq.ok, false);
+  assert.equal(negReq.refused, "bounds-invalid");
+
+  const malformedReqResp = await fetch(`${server.base}/api/extensions/web-search`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken() },
+    body: JSON.stringify({ bounds: { maxRequests: "invalid" } }),
+  });
+  assert.equal(malformedReqResp.status, 400);
+  const malformedReq = await malformedReqResp.json();
+  assert.equal(malformedReq.ok, false);
+  assert.equal(malformedReq.refused, "bounds-invalid");
+
+  const negBytesResp = await fetch(`${server.base}/api/extensions/web-search`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken() },
+    body: JSON.stringify({ bounds: { maxBytes: -50 } }),
+  });
+  assert.equal(negBytesResp.status, 400);
+  const negBytes = await negBytesResp.json();
+  assert.equal(negBytes.ok, false);
+  assert.equal(negBytes.refused, "bounds-invalid");
+
   // 3. Reconfigure confirmed updates bounds and reloads registry
   const reconfigured = await fetch(`${server.base}/api/extensions/reconfigure`, {
     method: "POST",

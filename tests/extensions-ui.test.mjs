@@ -227,6 +227,16 @@ test("RECONFIGURE via dialog: updating parameters/bounds in settings-style modal
   const statusWithoutToken = await page.evaluate(() => document.getElementById("ext-manage-status")?.textContent);
   assert.match(statusWithoutToken, /Host token is required/);
 
+  // Submitting invalid negative bounds refuses with bounds-invalid (voicebox-beads-ud5 must-fix)
+  await page.evaluate((tok) => {
+    document.getElementById("ext-manage-max-requests").value = "-15";
+    document.getElementById("ext-manage-token").value = tok;
+    document.getElementById("ext-manage-form").requestSubmit();
+  }, hostToken);
+  await sleep(150);
+  const statusInvalidBounds = await page.evaluate(() => document.getElementById("ext-manage-status")?.textContent);
+  assert.match(statusInvalidBounds, /maxRequests must be a non-negative integer|bounds-invalid/);
+
   // Fill in updated bounds and host token
   await page.evaluate((tok) => {
     document.getElementById("ext-manage-max-requests").value = "30";
