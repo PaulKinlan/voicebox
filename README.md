@@ -83,6 +83,23 @@ timeout from a failing command; both output streams remain visible. See
 [gate measurements and regression drives](docs/12-pre-push-gate.md).
 Acceptance checks read idempotence on its private instance: three GETs per root/file
 route must return the seeded state and leave its file bytes and write metadata unchanged.
+
+## The top bar
+
+The header carries the surface controls as icon buttons — Harnesses, Change
+log, Environments, Extensions and Settings — each with `aria-label` and
+tooltip. The icons come from the page's own SVG symbol set (`#i-list`,
+`#i-book`, `#i-layers`, `#i-box`, `#i-gear`); adding a control means adding
+its symbol and its `aria-label`, nothing else. The live count lines
+(`#envs-count`, `#exts-count`) are screen-reader text, so runtime updates
+still reach assistive tech without cluttering the bar.
+
+The pre-push hook keeps the full test suite: 180 seconds for `npm test`, then
+45 seconds for `npm run accept`. Refusals name the stage and distinguish a
+timeout from a failing command; both output streams remain visible. See
+[gate measurements and regression drives](docs/12-pre-push-gate.md).
+Acceptance checks read idempotence on its private instance: three GETs per root/file
+route must return the seeded state and leave its file bytes and write metadata unchanged.
 It does not assert that another lane's shared server stays unchanged.
 The live-tools write check waits for both the file and its successful `write_file`
 websocket event within the same 60-second budget; file creation alone does not

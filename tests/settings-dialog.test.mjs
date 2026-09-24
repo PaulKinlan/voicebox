@@ -100,13 +100,14 @@ test("it is a modal, over the page rather than in it — and opening it does not
   assert.equal(after.composerTop, before.composerTop, "opening settings moved the page content");
   assert.equal(after.contentHeight, before.contentHeight, "opening settings changed the page's height");
 
-  // And the button keeps its place: it is exactly where Paul said he likes it.
+  // And the button keeps its KIND: an icon gear, now in the top bar (5kn moved it
+  // out of the control line — the newer Paul directive supersedes the old seat).
   const gear = await page.evaluate(() => {
     const el = document.getElementById("settings-open");
     const rect = el.getBoundingClientRect();
-    return { inVoiceActions: Boolean(el.closest(".voice-actions")), hasGearIcon: Boolean(el.querySelector("use[href='#i-gear']")), visible: rect.width > 0 && rect.height > 0 };
+    return { inHeader: Boolean(el.closest("header.head")), hasGearIcon: Boolean(el.querySelector("use[href='#i-gear']")), visible: rect.width > 0 && rect.height > 0 };
   });
-  assert.equal(gear.inVoiceActions, true, "the settings button moved out of the control line");
+  assert.equal(gear.inHeader, true, "the settings button is not in the top bar");
   assert.equal(gear.hasGearIcon, true, "the settings button lost its gear");
   assert.equal(gear.visible, true, "the settings button is not visible");
 });
