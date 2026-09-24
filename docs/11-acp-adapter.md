@@ -1,5 +1,6 @@
 # ACP adapter: real handshake and configured task execution
 
+
 **Targeted adapter:** **pi-acp 0.0.33 with pi 0.85.1, ACP v1**.
 When configured with `VOICEBOX_HARNESS=pi`, the server installs `createPiAcpExecutor()`,
 connecting `delegate_task` to the Pi coding agent via ACP over stdio.
@@ -10,6 +11,15 @@ with `executor-unavailable`.
 
 `lib/acp-client.mjs` implements bounded JSON-RPC request correlation, `initialize`,
 `session/new`, text-only `session/prompt`, streamed text collection and `session/cancel`.
+**Cancellation has three states and three names** (`voicebox-beads-6co`): `cancel()` during a
+running turn sends `session/cancel` and returns what it DID (`{ ok: true, sent: true }`) rather
+than claiming termination; the TURN then settles as **`task-cancelled`** when the harness reports
+`stopReason: cancelled`, which is a different fact from `acp-turn-incomplete` (the harness answered
+something this client does not accept). Cancelling when nothing has run refuses **`task-not-found`**
+(the remedy is to start a task) and cancelling after a turn finished refuses **`task-not-running`**
+— the name `lib/tasks.mjs` already uses for a terminal task, so the client did not invent a second
+spelling of it. Sending cancellation is still not observing termination.
+
 It sends no filesystem/terminal capabilities, relays permission requests to the host
 permission policy (or denies if none is configured), and refuses unsupported client requests.
 
