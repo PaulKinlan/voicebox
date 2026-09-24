@@ -77,6 +77,34 @@ async function waitFor(predicate, { boundMs = 6000 } = {}) {
   return predicate();
 }
 
+/**
+ * **Bounded waits, everywhere the termination chain waits** (`voicebox-beads-6io`).
+ *
+ * The close half was already bounded; the OPEN half and the fetches were not, so a
+ * regression in the revocation path could leave the suite waiting on a socket that
+ * never opens or a route that never answers — measured at ~399s, with the child
+ * server outliving the runner. A hang is not a failing test: it reports nothing and
+ * hides which assertion never ran. These bound the wait and say WHICH thing did not
+ * settle, so a regression is a named red in seconds.
+ */
+async function openWithin(socketWrapper, label, ms = 4000) {
+  const result = await Promise.race([
+    socketWrapper.opened,
+    new Promise((resolve) => setTimeout(() => resolve(null), ms)),
+  ]);
+  assert.ok(result !== null, `${label} must OPEN within ${ms}ms — a socket that never opens is a regression, not a wait`);
+  return socketWrapper.ws;
+}
+
+async function fetchWithin(url, init, label = String(url).replace(/^.*?\/api\//, "/api/"), ms = 5000) {
+  const result = await Promise.race([
+    fetch(url, init).then((response) => ({ response })),
+    new Promise((resolve) => setTimeout(() => resolve(null), ms)),
+  ]);
+  assert.ok(result, `${label} must answer within ${ms}ms — an unanswered route is a regression, not a wait`);
+  return result.response;
+}
+
 async function closeWithin(socketWrapper, label, ms = 4000) {
   const result = await Promise.race([
     socketWrapper.closed,
@@ -111,7 +139,7 @@ test("revoking a pairing immediately terminates active /channel and /live socket
     const hostToken = server.hostToken();
 
     // Declare environment in registry
-    const declRes = await fetch(`${server.base}/api/environments`, {
+    const declRes = await fetchWithin(`${server.base}/api/environments`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ label: "Worker Alpha", kind: "server", origin: "http://127.0.0.1:9999" }),
@@ -121,7 +149,7 @@ test("revoking a pairing immediately terminates active /channel and /live socket
     const envKey = declData.environment.key;
 
     // 1. Pair the environment
-    const pairRes = await fetch(`${server.base}/api/pair`, {
+    const pairRes = await fetchWithin(`${server.base}/api/pair`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken },
       body: JSON.stringify({ envKey }),
@@ -133,12 +161,12 @@ test("revoking a pairing immediately terminates active /channel and /live socket
 
     // 2. Connect an active executor socket on /channel
     const channelPeer = openSocket(`${server.base.replace(/^http/, "ws")}/channel`);
-    await channelPeer.opened;
+    await openWithin(channelPeer, "channelPeer must open");
     channelPeer.ws.send(JSON.stringify({ type: "hello", role: "environment", bearer }));
 
     // 3. Connect an active session socket on /live (dials stub vendor)
     const livePeer = openSocket(`${server.base.replace(/^http/, "ws")}/live`);
-    await livePeer.opened;
+    await openWithin(livePeer, "livePeer must open");
     livePeer.ws.send(JSON.stringify({ type: "hello", bearer }));
 
     // Wait for /live to receive rate frame and connect to stub vendor
@@ -150,7 +178,7 @@ test("revoking a pairing immediately terminates active /channel and /live socket
     assert.equal(livePeer.ws.readyState, WebSocket.OPEN, "live socket must be admitted and open");
 
     // 4. Verify authority over execute works
-    const execBefore = await fetch(`${server.base}/api/execute`, {
+    const execBefore = await fetchWithin(`${server.base}/api/execute`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },
       body: JSON.stringify({ envKey, tool: "unknown-tool", args: {} }),
@@ -161,7 +189,7 @@ test("revoking a pairing immediately terminates active /channel and /live socket
 
     // ── 5. REVOCATION: Host revokes the pairing (with no root declared) ────────
     // Refusal when token missing
-    const unauthDelete = await fetch(`${server.base}/api/pair`, {
+    const unauthDelete = await fetchWithin(`${server.base}/api/pair`, {
       method: "DELETE",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ envKey }),
@@ -170,7 +198,7 @@ test("revoking a pairing immediately terminates active /channel and /live socket
     assert.equal((await unauthDelete.json()).refused, "host-token-required");
 
     // Acceptance with host token (finding 1: reports logged: null and logRefused when root is not declared)
-    const deleteRes = await fetch(`${server.base}/api/pair`, {
+    const deleteRes = await fetchWithin(`${server.base}/api/pair`, {
       method: "DELETE",
       headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken },
       body: JSON.stringify({ envKey }),
@@ -201,7 +229,7 @@ test("revoking a pairing immediately terminates active /channel and /live socket
 
     // ── 7. FRESH CONNECTIONS WITH REVOKED BEARER ──────────────────────────────
     const freshChannel = openSocket(`${server.base.replace(/^http/, "ws")}/channel`);
-    await freshChannel.opened;
+    await openWithin(freshChannel, "freshChannel must open");
     freshChannel.ws.send(JSON.stringify({ type: "hello", role: "environment", bearer }));
     const freshChannelClose = await closeWithin(freshChannel, "fresh /channel socket");
     assert.equal(freshChannelClose.code, 1008);
@@ -209,7 +237,7 @@ test("revoking a pairing immediately terminates active /channel and /live socket
     assert.equal(freshChannel.frames.find((f) => f.type === "refused")?.refused, "pairing-revoked");
 
     const freshLive = openSocket(`${server.base.replace(/^http/, "ws")}/live`);
-    await freshLive.opened;
+    await openWithin(freshLive, "freshLive must open");
     freshLive.ws.send(JSON.stringify({ type: "hello", bearer }));
     const freshLiveClose = await closeWithin(freshLive, "fresh /live socket");
     assert.equal(freshLiveClose.code, 1008);
@@ -217,7 +245,7 @@ test("revoking a pairing immediately terminates active /channel and /live socket
     assert.equal(freshLive.frames.find((f) => f.type === "refused")?.refused, "pairing-revoked");
 
     // Fresh POST /api/execute with revoked bearer: HTTP 403 pairing-revoked
-    const execAfter = await fetch(`${server.base}/api/execute`, {
+    const execAfter = await fetchWithin(`${server.base}/api/execute`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },
       body: JSON.stringify({ envKey, tool: "unknown-tool", args: {} }),
@@ -227,7 +255,7 @@ test("revoking a pairing immediately terminates active /channel and /live socket
     assert.equal(execAfterData.refused, "pairing-revoked");
 
     // Fresh POST /api/call for revoked environment: HTTP 403 pairing-revoked
-    const callAfter = await fetch(`${server.base}/api/call`, {
+    const callAfter = await fetchWithin(`${server.base}/api/call`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ envKey, tool: "now", args: {} }),
@@ -238,7 +266,7 @@ test("revoking a pairing immediately terminates active /channel and /live socket
     assert.match(callAfterData.why, /was revoked/);
 
     // ── 8. RE-PAIRING ISSUES A FRESH BEARER, OLD BEARER REMAINS REVOKED ─────
-    const rePairRes = await fetch(`${server.base}/api/pair`, {
+    const rePairRes = await fetchWithin(`${server.base}/api/pair`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken },
       body: JSON.stringify({ envKey }),
@@ -250,7 +278,7 @@ test("revoking a pairing immediately terminates active /channel and /live socket
 
     // Old bearer is STILL refused as pairing-revoked!
     const oldBearerLive = openSocket(`${server.base.replace(/^http/, "ws")}/live`);
-    await oldBearerLive.opened;
+    await openWithin(oldBearerLive, "oldBearerLive must open");
     oldBearerLive.ws.send(JSON.stringify({ type: "hello", bearer }));
     const oldClose = await closeWithin(oldBearerLive, "old bearer /live socket");
     assert.equal(oldClose.code, 1008);
@@ -258,7 +286,7 @@ test("revoking a pairing immediately terminates active /channel and /live socket
 
     // ── 9. UNKNOWN BEARER DISTINCTION (NEGATIVE CONTROL) ──────────────────────
     const strangerLive = openSocket(`${server.base.replace(/^http/, "ws")}/live`);
-    await strangerLive.opened;
+    await openWithin(strangerLive, "strangerLive must open");
     strangerLive.ws.send(JSON.stringify({ type: "hello", bearer: "vbx_never-issued-stranger-token" }));
     const strangerClose = await closeWithin(strangerLive, "stranger /live socket");
     assert.equal(strangerClose.code, 1008);
@@ -278,26 +306,26 @@ test("revocation writes to audit trail when a machine root is declared", async (
     const envKey = "worker-beta";
 
     // 1. Declare machine root
-    await fetch(`${server.base}/api/root`, {
+    await fetchWithin(`${server.base}/api/root`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken },
       body: JSON.stringify({ project: "audit-test-project", root: { kind: "machine", path: rootDir } }),
     });
 
     // 2. Declare & pair environment
-    await fetch(`${server.base}/api/environments`, {
+    await fetchWithin(`${server.base}/api/environments`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ label: "Worker Beta", kind: "server", origin: "http://127.0.0.1:9998" }),
     });
-    await fetch(`${server.base}/api/pair`, {
+    await fetchWithin(`${server.base}/api/pair`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken },
       body: JSON.stringify({ envKey }),
     });
 
     // 3. Revoke pairing
-    const deleteRes = await fetch(`${server.base}/api/pair`, {
+    const deleteRes = await fetchWithin(`${server.base}/api/pair`, {
       method: "DELETE",
       headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken },
       body: JSON.stringify({ envKey }),
@@ -336,12 +364,12 @@ test("revocation state survives server restart on the same store", async () => {
     const server1 = await scratchServer({ extensionsDir: hostDir });
     hostToken = server1.hostToken();
     try {
-      await fetch(`${server1.base}/api/environments`, {
+      await fetchWithin(`${server1.base}/api/environments`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ label: "Worker Gamma", kind: "server", origin: "http://127.0.0.1:9997" }),
       });
-      const pairData = await (await fetch(`${server1.base}/api/pair`, {
+      const pairData = await (await fetchWithin(`${server1.base}/api/pair`, {
         method: "POST",
         headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken },
         body: JSON.stringify({ envKey }),
@@ -349,7 +377,7 @@ test("revocation state survives server restart on the same store", async () => {
       bearer = pairData.bearer;
 
       // Revoke in process 1
-      const del = await (await fetch(`${server1.base}/api/pair`, {
+      const del = await (await fetchWithin(`${server1.base}/api/pair`, {
         method: "DELETE",
         headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken },
         body: JSON.stringify({ envKey }),
@@ -366,7 +394,7 @@ test("revocation state survives server restart on the same store", async () => {
     try {
       // Connect to /channel with the revoked bearer
       const wsRevoked = openSocket(`${server2.base.replace(/^http/, "ws")}/channel`);
-      await wsRevoked.opened;
+      await openWithin(wsRevoked, "wsRevoked must open");
       wsRevoked.ws.send(JSON.stringify({ type: "hello", role: "environment", bearer }));
       const closeRevoked = await closeWithin(wsRevoked, "restart revoked /channel socket");
       assert.equal(closeRevoked.code, 1008);
@@ -374,7 +402,7 @@ test("revocation state survives server restart on the same store", async () => {
 
       // Connect with stranger bearer
       const wsStranger = openSocket(`${server2.base.replace(/^http/, "ws")}/channel`);
-      await wsStranger.opened;
+      await openWithin(wsStranger, "wsStranger must open");
       wsStranger.ws.send(JSON.stringify({ type: "hello", role: "environment", bearer: "vbx_stranger" }));
       const closeStranger = await closeWithin(wsStranger, "restart stranger /channel socket");
       assert.equal(closeStranger.code, 1008);

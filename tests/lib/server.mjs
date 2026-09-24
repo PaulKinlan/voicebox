@@ -22,6 +22,36 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".
  *
  * @returns {Promise<{port: number, base: string, child: import("node:child_process").ChildProcess, stop: () => Promise<void>}>}
  */
+/**
+ * **Every child this helper spawns is reaped, even when a test never reaches its
+ * `stop()`** (`voicebox-beads-6io`).
+ *
+ * A suite that hangs, throws, or is killed leaves the spawned server behind: the
+ * orphan holds its port and its scratch directory, and the next lane's fixture
+ * meets a server it did not start. The process-level handler is the last line of
+ * defence — synchronous, because `exit` allows nothing else — and `stop()` uses
+ * the same reaper so there is one way a child dies.
+ */
+const LIVE_CHILDREN = new Set();
+
+function reap(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  try {
+    process.kill(-child.pid, "SIGKILL"); // the group: the server may have children of its own
+  } catch {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      /* already gone */
+    }
+  }
+  LIVE_CHILDREN.delete(child);
+}
+
+process.on("exit", () => {
+  for (const child of LIVE_CHILDREN) reap(child);
+});
+
 export async function startServer({ env = {}, cwd = ROOT, readyTimeoutMs = 20000, extensionsDir = null } = {}) {
   // A SCRATCH EXTENSIONS DIRECTORY PER SERVER, because that is where the HOST TOKEN lives (mode 0600,
   // host-generated, served by no route — voicebox-beads-m2i). Two things follow: a suite never touches
@@ -54,6 +84,9 @@ export async function startServer({ env = {}, cwd = ROOT, readyTimeoutMs = 20000
   });
 
   let noise = "";
+  // Registered the moment it exists: a test that never reaches stop() must still be reaped.
+  LIVE_CHILDREN.add(child);
+
   child.stderr.on("data", (chunk) => {
     noise += String(chunk);
   });
@@ -102,15 +135,7 @@ export async function startServer({ env = {}, cwd = ROOT, readyTimeoutMs = 20000
     hostToken,
     extensionsDir: scratchExtensions,
     async stop() {
-      try {
-        process.kill(-child.pid, "SIGKILL");
-      } catch {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          /* already gone */
-        }
-      }
+      reap(child);
     },
   };
 }
