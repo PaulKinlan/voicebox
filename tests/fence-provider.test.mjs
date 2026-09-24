@@ -9,22 +9,24 @@
 // "not measured", never "denied".
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, existsSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { startServer } from "./lib/server.mjs";
-import { bootFence, measureBoundary } from "../lib/fence-provider.mjs";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:net";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
+import { once } from "node:events";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+const previousHomes = process.env.VOICEBOX_SANDBOX_HOMES;
 let scratch;
 let homes;
+let bootFence, measureBoundary;
 
-test.before(() => {
+test.before(async () => {
   // NOT os.tmpdir(): under a systemd --user unit with PrivateTmp=yes the caller's /tmp is
   // HIDDEN in the unit's mount namespace, so a sandbox home under /tmp fails to bind and the
   // unit dies 226/NAMESPACE before the fence runs (k3's S2 finding, 2026-09-23 — the scratch
@@ -32,26 +34,33 @@ test.before(() => {
   scratch = mkdtempSync(path.join(os.homedir(), ".voicebox-fence-test-"));
   homes = path.join(scratch, "sandbox-homes");
   mkdirSync(homes, { recursive: true });
+  // A capture-at-import regression must fail without writing to the caller's home.
+  // Both the stale import location and the later selected location belong to us.
+  process.env.VOICEBOX_SANDBOX_HOMES = path.join(scratch, "import-homes");
+  ({ bootFence, measureBoundary } = await import("../lib/fence-provider.mjs"));
   process.env.VOICEBOX_SANDBOX_HOMES = homes;
 });
 
 test.after(() => {
-  rmSync(scratch, { recursive: true, force: true });
-  delete process.env.VOICEBOX_SANDBOX_HOMES;
+  try {
+    if (scratch) rmSync(scratch, { recursive: true, force: true });
+  } finally {
+    if (previousHomes === undefined) delete process.env.VOICEBOX_SANDBOX_HOMES;
+    else process.env.VOICEBOX_SANDBOX_HOMES = previousHomes;
+  }
 });
+
+function assertOwnWorkspace(workspace, key) {
+  assert.equal(realpathSync(workspace), path.join(realpathSync(homes), key, "workspace"),
+    "the booted workspace must be exactly under this fixture's selected homes, not an import-time or prefix-matching sibling");
+}
 
 test("boots an L1 fence from a descriptor and returns a MEASURED per-axis boundary", async () => {
   const out = await bootFence({ key: "vb-test-measure", label: "measure" });
   assert.ok(out.ok, `the fence did not boot: ${JSON.stringify(out)}`);
   assert.match(out.origin, /^http:\/\/127\.0\.0\.1:\d+$/, "the origin is a loopback URL on a free port");
   assert.equal(out.home.kind, "machine");
-  // THE PIN THE POLLUTION NEEDED: the fence's home is under THIS suite's scratch, not the
-  // real ~/sandbox-homes. Without it, an import-time capture of VOICEBOX_SANDBOX_HOMES passes
-  // every other assertion while writing into the operator's home directory (it did).
-  assert.ok(
-    out.home.path.startsWith(homes),
-    `the fence's home is ${out.home.path} — OUTSIDE this suite's scratch (${homes}); the env var was captured before the override`,
-  );
+  assertOwnWorkspace(out.home.path, "vb-test-measure");
   assert.equal(out.boundary.level, "L1");
 
   // The decisive case: files and processes FENCED, network PASSED — each named with its measurement.
@@ -72,14 +81,16 @@ test("boots an L1 fence from a descriptor and returns a MEASURED per-axis bounda
   assert.equal(out.capability.probe, "sandbox-probe/1");
 });
 
-test("a turn's write lands in the sandbox home and reads back off host disk; the host tree is untouched", async () => {
+test("a real fenced write uses the booted home and reads back off host disk; the host tree is untouched", async () => {
   const out = await bootFence({ key: "vb-test-write", label: "write" });
   assert.ok(out.ok);
-  // Write from INSIDE the fence into its home, read it off the host's disk.
-  const { execFileSync } = await import("node:child_process");
-  execFileSync(path.join(REPO, "tools", "fence.sh"), [path.join(homes, "vb-test-write"), "0", "/usr/bin/node", "-e",
+  assertOwnWorkspace(out.home.path, "vb-test-write");
+  assert.equal(realpathSync(out.fence.homes), path.dirname(realpathSync(out.home.path)));
+  const onDisk = path.join(out.home.path, "proof.txt");
+  assert.equal(existsSync(onDisk), false, "the write witness must start absent");
+  // Consume the ACTUAL boot result, not a second fence given our expected path.
+  execFileSync(path.join(REPO, "tools", "fence.sh"), [out.fence.homes, "0", "/usr/bin/node", "-e",
     "require('fs').writeFileSync('/home/voice/workspace/proof.txt', 'from inside\\n')"], { cwd: REPO });
-  const onDisk = path.join(homes, "vb-test-write", "workspace", "proof.txt");
   assert.ok(existsSync(onDisk), "the file landed in the sandbox's home");
   assert.equal(readFileSync(onDisk, "utf8"), "from inside\n");
   // The host tree is untouched: nothing leaked into the repo's workspace.
@@ -164,7 +175,8 @@ test("declared-and-booted through the registry, the measured boundary survives t
   // is the one writer the read path trusts.
   const ws = path.join(scratch, "server-ws");
   mkdirSync(ws, { recursive: true });
-  const server = await startServer({ env: { VOICEBOX_WORKSPACE: ws }, cwd: scratch });
+  const server = await startServer({ env: { VOICEBOX_WORKSPACE: ws }, cwd: scratch,
+    extensionsDir: path.join(scratch, "server-extensions") });
   try {
     const declared = await fetch(`${server.base}/api/environments`, {
       method: "POST",
@@ -173,6 +185,7 @@ test("declared-and-booted through the registry, the measured boundary survives t
     }).then((r) => r.json());
     assert.equal(declared.ok, true, `boot failed: ${JSON.stringify(declared)}`);
     assert.equal(declared.booted, true);
+    assertOwnWorkspace(declared.environment.home.path, declared.environment.key);
     assert.equal(declared.environment.boundary?.measuredBy, "probe", "the stored boundary is the probe's, provenance-tagged");
     assert.equal(declared.environment.boundary?.axes?.network?.verdict, "passes");
     assert.equal(declared.environment.boundary?.axes?.network?.evidence?.parentLoopback?.ok, true);
@@ -180,11 +193,16 @@ test("declared-and-booted through the registry, the measured boundary survives t
     const { environments } = await (await fetch(`${server.base}/api/environments`)).json();
     const row = environments.find((e) => e.label === "fenced box");
     assert.ok(row, "the booted fence is in the list");
+    assertOwnWorkspace(row.home.path, row.key);
     assert.equal(row.boundary?.measuredBy, "probe", "the measured boundary survives the read — it is a measurement, not a file claim");
     assert.equal(row.boundary?.axes?.network?.evidence?.parentLoopback?.ok, true, "the actual route witness survives the registry read");
     assert.ok(row.boundary?.when, "the report's freshness marker travels with it");
   } finally {
-    await server.stop();
+    if (server.child.exitCode === null && server.child.signalCode === null) {
+      const exited = once(server.child, "exit");
+      await server.stop();
+      await exited;
+    }
   }
 });
 
