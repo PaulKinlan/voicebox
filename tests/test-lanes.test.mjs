@@ -24,12 +24,22 @@ test("every test file is in exactly one lane, and the known victims are LIVE", (
   const output = run("--check");
   assert.match(output, /\[lanes\] ok: \d+ unit, \d+ live/);
   const live = new Set(execFileSync(process.execPath, [path.join(root, "scripts/test-lanes.mjs"), "--lane", "live"], { cwd: root, encoding: "utf8" }).trim().split(/\s+/));
-  for (const victim of ["tests/extension-approval-ui.test.mjs", "tests/environment-probe.test.mjs"]) {
+  for (const victim of [
+    "tests/extension-approval-ui.test.mjs",
+    "tests/environment-probe.test.mjs",
+    "tests/pre-push.test.mjs",
+    "tests/tasks-http.test.mjs",
+  ]) {
     assert.ok(live.has(victim), `${victim} launches a browser or a server and must be in the live lane`);
   }
   // The lane that races must not contain the files that broke the gate.
   const unit = new Set(execFileSync(process.execPath, [path.join(root, "scripts/test-lanes.mjs"), "--lane", "unit"], { cwd: root, encoding: "utf8" }).trim().split(/\s+/));
-  for (const victim of ["tests/extension-approval-ui.test.mjs", "tests/environment-probe.test.mjs"]) {
+  for (const victim of [
+    "tests/extension-approval-ui.test.mjs",
+    "tests/environment-probe.test.mjs",
+    "tests/pre-push.test.mjs",
+    "tests/tasks-http.test.mjs",
+  ]) {
     assert.equal(unit.has(victim), false, `${victim} must not be in the concurrent lane`);
   }
 });
@@ -44,6 +54,23 @@ test("classification reads CODE: a comment naming a browser does not make a live
     assert.deepEqual(unit.map(({ file }) => file), ["mentions.test.mjs"]);
     assert.deepEqual(live.map(({ file }) => file), ["launches.test.mjs"]);
     assert.equal(live[0].why, "a browser over CDP", "the reason is named, so a misclassification can be argued with");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("classification detects browser/server helper launches: page-acceptance, task-fixture, and createServer are LIVE", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-lanes-helpers-"));
+  try {
+    writeFileSync(path.join(dir, "prepush.test.mjs"), `// spawns page acceptance\nconst child = spawn(process.execPath, ['tools/page-acceptance.mjs']);\n`);
+    writeFileSync(path.join(dir, "taskfix.test.mjs"), `import { taskFixture } from "./lib/task-fixture.mjs";\n`);
+    writeFileSync(path.join(dir, "netserver.test.mjs"), `import { createServer } from "node:http";\n`);
+    const { unit, live } = classify(dir);
+    assert.deepEqual(unit, []);
+    assert.equal(live.length, 3);
+    assert.ok(live.some((l) => l.file === "prepush.test.mjs" && l.why.includes("page-acceptance")));
+    assert.ok(live.some((l) => l.file === "taskfix.test.mjs" && l.why.includes("task-fixture")));
+    assert.ok(live.some((l) => l.file === "netserver.test.mjs" && l.why.includes("createServer")));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
