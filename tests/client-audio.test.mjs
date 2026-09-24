@@ -113,6 +113,17 @@ test("a tool frame is FORWARDED to the page, not diagnosed as an unknown control
   assert.deepEqual(JSON.parse(e2.texts.find((t) => t.kind === "tool").text), [], "an empty tool frame forwards an empty list");
 });
 
+test("a task frame is FORWARDED to onTask, not diagnosed as an unknown control type", () => {
+  const task = { address: "task_live_123", agent: "pi", state: "queued" };
+  const received = [];
+  const { client, events } = makeClient({ onTask: (t) => received.push(t) });
+  client.handleMessage(JSON.stringify({ type: "task", task }));
+  assert.equal(received.length, 1);
+  assert.deepEqual(received[0], task, "the task arrives verbatim");
+  assert.equal(events.diagnostics.filter((d) => /unknown|unrecognised|unrecognized/i.test(JSON.stringify(d))).length, 0,
+    "a handled type must not also be reported as unrecognised");
+});
+
 // ── 1. PCM conversion: rounding, clipping, endianness, validation ───────────
 test("pcm: float to int16 rounds, clips, and maps the extremes exactly", () => {
   assert.equal(floatToInt16Sample(0), 0);

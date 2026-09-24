@@ -2239,7 +2239,12 @@ async function handle(req, res) {
       if (action.unresolved) {
         return json(res, 200, { transcript, action: null, note: action.unresolved });
       }
-      return json(res, 200, { transcript, action, result: await execute(action) });
+      const executionResult = await execute(action);
+      const responsePayload = { transcript, action, result: executionResult };
+      if (executionResult?.task) {
+        responsePayload.task = executionResult.task;
+      }
+      return json(res, 200, responsePayload);
     }));
     return;
   }
@@ -2887,6 +2892,9 @@ server.on("upgrade", (req, socket) => {
             }
             trace?.({ type: "tool.result", callId: call.id, name: call.name, result, durationMs: performance.now() - started,
               severity: result.ok === false ? "error" : "info" });
+            if (result?.task) {
+              try { ws.send(JSON.stringify({ type: "task", task: result.task })); } catch {}
+            }
             responses.push({ id: call.id, name: call.name, response: { result } });
             seen.push({ name: call.name, ok: result.ok, action: result.action ?? result.error });
           }

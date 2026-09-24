@@ -71,6 +71,9 @@ Three things about the dev loop that are easy to get wrong and are therefore wri
   model runs a command; `public/live-voice.js` forwards it and `public/fused.js` re-reads the file list. That
   is the whole path from "the model wrote a file" to "the file is on screen": no polling, no refresh, and the
   opening reader and scroll position survive the re-read (voicebox-beads-a93).
+- **Live task frames mount the task card immediately.** The server sends `{type:"task"}` when a task is
+  delegated; `public/live-voice.js` forwards it to `public/fused.js` which dynamically displays the task card
+  with agent name, address, and live status without manual status checks (voicebox-beads-8fv.4).
 - **The proxy's `/live` entry and the transport behind it.** Vite proxies `/live` with `ws: true`; the
   zero-dependency server hands the upgrade to `lib/ws-server.mjs`, which runs the session in
   `lib/live-session.mjs`. The proxy entry and the route are two halves of one path — and the route table

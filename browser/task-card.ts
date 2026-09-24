@@ -30,6 +30,8 @@ export interface TaskCardOptions {
   client?: TaskCardClient;
   onCancel?: (address: string) => Promise<unknown> | void;
   onRefresh?: (address: string) => Promise<unknown> | void;
+  onViewFiles?: (root?: any) => Promise<unknown> | void;
+  onDismiss?: () => void;
   silenceThresholdMs?: number;
 }
 
@@ -96,13 +98,20 @@ export class RemoteTaskClient implements TaskCardClient {
   }
 }
 
+export interface TaskCardActions {
+  onCancel?: () => void;
+  onRefresh?: () => void;
+  onViewFiles?: () => void;
+  onDismiss?: () => void;
+}
+
 /**
  * Render the task card DOM structure into container.
  */
 export function renderTaskCard(
   container: HTMLElement,
   data: TaskCardData,
-  actions: { onCancel?: () => void; onRefresh?: () => void } = {}
+  actions: TaskCardActions = {}
 ) {
   container.dataset.outcome = data.outcome;
   container.dataset.state = data.state;
@@ -274,6 +283,28 @@ export function renderTaskCard(
   }
   actionsBlock.append(refreshBtn);
 
+  if (data.state === "completed") {
+    const viewFilesBtn = document.createElement("button");
+    viewFilesBtn.type = "button";
+    viewFilesBtn.className = "quiet task-view-files-btn";
+    viewFilesBtn.id = "task-view-files-btn";
+    viewFilesBtn.textContent = "View files";
+    if (actions.onViewFiles) {
+      viewFilesBtn.addEventListener("click", () => actions.onViewFiles!());
+    }
+    actionsBlock.append(viewFilesBtn);
+
+    const dismissBtn = document.createElement("button");
+    dismissBtn.type = "button";
+    dismissBtn.className = "quiet task-dismiss-btn";
+    dismissBtn.id = "task-dismiss-btn";
+    dismissBtn.textContent = "Dismiss";
+    if (actions.onDismiss) {
+      dismissBtn.addEventListener("click", () => actions.onDismiss!());
+    }
+    actionsBlock.append(dismissBtn);
+  }
+
   const feedback = document.createElement("span");
   feedback.className = "task-action-feedback";
   feedback.id = "task-action-feedback";
@@ -315,6 +346,20 @@ export function createTaskCard(container: HTMLElement, options: TaskCardOptions 
       renderTaskCard(container, currentData, {
         onCancel: () => void cancel(),
         onRefresh: () => void refresh(),
+        onViewFiles: () => {
+          if (options.onViewFiles) {
+            options.onViewFiles(currentTask?.root);
+          } else {
+            window.dispatchEvent(new CustomEvent("voicebox:view-files", { detail: { root: currentTask?.root } }));
+          }
+        },
+        onDismiss: () => {
+          if (options.onDismiss) {
+            options.onDismiss();
+          } else {
+            setTask(null);
+          }
+        },
       });
     }
   }

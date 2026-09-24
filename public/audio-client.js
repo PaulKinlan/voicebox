@@ -51,6 +51,7 @@ export function createAudioClient({
   onState = () => {},
   onText = () => {},
   onToolCalls = () => {},
+  onTask = () => {},
   onError = () => {},
   onDiagnostic = () => {},
   onLevel = () => {},
@@ -297,6 +298,10 @@ export function createAudioClient({
       // not appear in the UI immediately". So it is a known type now, and it is forwarded rather than
       // diagnosed. The malformed-frame refusals below are untouched.
       onToolCalls(Array.isArray(msg.calls) ? msg.calls : [], msg);
+      return;
+    }
+    if (msg?.type === "task") {
+      onTask(msg.task ?? null, msg);
       return;
     }
     // AN UNKNOWN CONTROL TYPE IS NOT A MALFORMED FRAME. It parsed as JSON and it

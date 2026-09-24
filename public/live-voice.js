@@ -48,6 +48,10 @@ const audioClient = createAudioClient({
     // the only event that can change the folder without the page asking (voicebox-beads-a93).
     window.__voiceboxOnToolCalls?.(calls);
   },
+  onTask: (task) => {
+    // THE TASK CARD: forward the live task handle to the room component (voicebox-beads-8fv.4)
+    window.__voiceboxOnTask?.(task);
+  },
   onText: (text) => {
     // Live means live: the transcript replaces the scripted caption.
     const caption = $("caption");

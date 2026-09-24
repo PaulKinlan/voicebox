@@ -21,6 +21,9 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { startServer } from "./lib/server.mjs";
 import { launch } from "./lib/cdp.mjs";
@@ -387,7 +390,16 @@ test("task-card browser: card renders each state and cancel works from the card 
       const stateBadge = document.querySelector("#task-card-state-badge")?.textContent;
       const answer = document.querySelector("#task-card-answer")?.textContent;
       const cancelBtn = document.querySelector("#task-cancel-btn");
-      return { dataset: { ...card?.dataset }, stateBadge, answer, cancelDisabled: cancelBtn?.disabled };
+      const viewFilesBtn = document.querySelector("#task-view-files-btn");
+      const dismissBtn = document.querySelector("#task-dismiss-btn");
+      return {
+        dataset: { ...card?.dataset },
+        stateBadge,
+        answer,
+        cancelDisabled: cancelBtn?.disabled,
+        hasViewFiles: Boolean(viewFilesBtn),
+        hasDismiss: Boolean(dismissBtn),
+      };
     });
 
     assert.equal(sCompleted.dataset.state, "completed");
@@ -395,6 +407,16 @@ test("task-card browser: card renders each state and cancel works from the card 
     assert.equal(sCompleted.stateBadge, "Completed");
     assert.match(sCompleted.answer ?? "", /built 3 assets successfully/);
     assert.equal(sCompleted.cancelDisabled, true);
+    assert.equal(sCompleted.hasViewFiles, true, "completed task card must render view files button");
+    assert.equal(sCompleted.hasDismiss, true, "completed task card must render dismiss button");
+
+    // Dismiss action clears the card
+    await evaluate(() => {
+      document.querySelector("#task-dismiss-btn")?.click();
+    });
+    await sleep(200);
+    const sDismissed = await evaluate(() => document.querySelector("#task-card")?.hidden);
+    assert.equal(sDismissed, true, "clicking dismiss button must hide the card");
 
     // 7. FAILED STATE WITH PARTIAL OUTPUT
     await evaluate(() => {
@@ -522,8 +544,109 @@ test("task-card browser: card renders each state and cancel works from the card 
 
     const turnReport = await evaluate(() => document.querySelector("#turn-report")?.textContent);
     assert.match(turnReport ?? "", /checked task status/);
+
+    // 13. DYNAMIC TASK CARD MOUNT VIA LIVE TASK FRAME WITHOUT TYPING STATUS
+    // Dismiss first to ensure card is hidden
+    await evaluate(() => {
+      window.__voiceboxTaskCard.setTask(null);
+    });
+    await sleep(200);
+    const beforeLive = await evaluate(() => document.querySelector("#task-card")?.hidden);
+    assert.equal(beforeLive, true, "card must start hidden");
+
+    // Deliver a task frame via the live voice hook (mirroring WebSocket {type: "task"})
+    await evaluate(() => {
+      window.__voiceboxOnTask?.({
+        address: "task_dynamic_live_789",
+        agent: "auto-agent",
+        environment: "local",
+        root: { kind: "opfs", path: "v1/live-project" },
+        state: "running",
+        progress: "delegated work in flight",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    });
+    await sleep(200);
+
+    const afterLive = await evaluate(() => {
+      const card = document.querySelector("#task-card");
+      const agent = document.querySelector("#task-card-agent")?.textContent;
+      const stateBadge = document.querySelector("#task-card-state-badge")?.textContent;
+      const progress = document.querySelector("#task-card-progress")?.textContent;
+      return {
+        hidden: card?.hidden,
+        agent,
+        stateBadge,
+        progress,
+      };
+    });
+
+    assert.equal(afterLive.hidden, false, "task frame must dynamically mount and unhide task card without typing status");
+    assert.equal(afterLive.agent, "auto-agent");
+    assert.equal(afterLive.stateBadge, "Running");
+    assert.match(afterLive.progress ?? "", /delegated work in flight/);
   } finally {
     await page.close();
     await server.stop();
   }
+});
+
+test("task-card browser: delegation turn automatically mounts task card without typing status", { timeout: 30000 }, async (t) => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-card-turn-"));
+  const workspace = path.join(scratch, "project");
+  fs.mkdirSync(workspace, { recursive: true });
+
+  const server = await startServer({
+    env: {
+      VOICEBOX_WORKSPACE: workspace,
+      VOICEBOX_RESOLVER: "script",
+      VOICEBOX_HARNESS: "pi",
+    },
+  });
+  t.after(async () => {
+    await server.stop();
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+
+  const page = await launch();
+  t.after(() => page.close());
+
+  await page.goto(`${server.base}/`);
+  await page.waitFor(() => window.__voiceboxTaskCard !== undefined, { label: "task card controller" });
+
+  // Initially hidden
+  const initHidden = await page.evaluate(() => document.querySelector("#task-card")?.hidden);
+  assert.equal(initHidden, true, "task card should start hidden");
+
+  // Send turn through composer: "ask pi to review code"
+  await page.evaluate(() => {
+    const input = document.querySelector("#utterance");
+    const form = document.querySelector("#text-form");
+    input.value = "ask pi to review code";
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  });
+
+  // Wait for task-card to become visible
+  await page.waitFor(() => {
+    const card = document.querySelector("#task-card");
+    return card && !card.hidden && document.querySelector("#task-card-agent")?.textContent === "pi";
+  }, { label: "task card appearing automatically" });
+
+  const cardData = await page.evaluate(() => {
+    const card = document.querySelector("#task-card");
+    const agent = document.querySelector("#task-card-agent")?.textContent;
+    const title = document.querySelector("#task-card-title")?.textContent;
+    const stateBadge = document.querySelector("#task-card-state-badge")?.textContent;
+    return {
+      hidden: card?.hidden,
+      agent,
+      title,
+      stateBadge,
+    };
+  });
+
+  assert.equal(cardData.hidden, false, "task card must be visible after delegation turn");
+  assert.equal(cardData.agent, "pi");
+  assert.match(cardData.title, /^Task: task_/);
 });

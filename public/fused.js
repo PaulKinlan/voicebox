@@ -1765,6 +1765,10 @@ async function send(said) {
     if (answer.note) return finish(transcript, answer.note, "bad");
     const result = answer.result ?? {};
     if (!result.ok) return finish(transcript, reasonFrom(result, result.error ?? "the turn was refused"), "bad");
+    const delegatedTask = answer.task ?? result.task;
+    if (delegatedTask && taskCardController) {
+      taskCardController.setTask(delegatedTask);
+    }
     const landed = result.root?.path ?? result.root?.name ?? result.root?.label ?? "";
     finish(transcript, result.action ? `${result.action}${landed ? ` in ${landed}` : ""}` : "done", "good");
     if (answer.action?.verb === "read" && typeof result.content === "string") {
@@ -2685,7 +2689,16 @@ if (els.taskCard) {
   try {
     const { createTaskCard, RemoteTaskClient } = await import(/* @vite-ignore */ "/browser/task-card.ts");
     const client = new RemoteTaskClient();
-    taskCardController = createTaskCard(els.taskCard, { client });
+    taskCardController = createTaskCard(els.taskCard, {
+      client,
+      onViewFiles: async () => {
+        await load();
+        if (els.explorer) els.explorer.scrollIntoView({ behavior: "smooth" });
+      },
+      onDismiss: () => {
+        taskCardController.setTask(null);
+      },
+    });
     window.__voiceboxTaskCard = taskCardController;
   } catch (err) {
     console.warn("[voicebox] task card component failed to load:", err?.message ?? err);
@@ -2716,6 +2729,11 @@ health();
 // immediately". Re-listing on the frame is the whole fix: it is one GET, it preserves the open reader and
 // the scroll position, and the arrival mark then fires on the name that is new (data-arrived, ~3 s sweep).
 window.__voiceboxOnToolCalls = () => { void load(); };
+window.__voiceboxOnTask = (task) => {
+  if (task && taskCardController) {
+    taskCardController.setTask(task);
+  }
+};
 load();
 initRoomFolders().catch((err) => console.warn("[voicebox] could not restore room folders:", err));
 
