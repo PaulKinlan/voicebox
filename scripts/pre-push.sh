@@ -7,6 +7,39 @@ set -e
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$REPO_ROOT"
 
+# ── REFUSE A NON-MAIN BRANCH PUSHING TO main (voicebox-beads-85w) ─────────────
+# A worktree created with `git worktree add -b <branch> <dir> origin/main` has its
+# UPSTREAM set to origin/main, so a BARE `git push` in it offers HEAD:main — and git's
+# own remedy text suggests `git push origin HEAD:main` to a lane in a hurry. That is a
+# loaded gun pointed at main, so the destination is checked FIRST: before the skip flag,
+# before the lock, before any stage. A mis-aimed push must not wait three minutes for a
+# suite whose verdict would be about a different refspec.
+#
+# Git hands a pre-push hook its refs on stdin, one line each:
+#   <local ref> <local sha> <remote ref> <remote sha>
+# Creating the branch without tracking avoids the whole class:
+#   git worktree add --no-track -b <branch> <dir> origin/main
+# or, on a branch that already tracks main:  git branch --unset-upstream
+_current_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo "")"
+# The tracking hook (.githooks/pre-push) reads stdin for its own ref scan and exports what
+# it read; a direct run (the tests) still has stdin. Either way, the check reads a FILE so
+# the refusal exits THIS shell rather than a pipeline subshell.
+_refs_file="$(mktemp)"
+if [ -n "${VOICEBOX_PUSH_DESTINATIONS:-}" ]; then printf '%s' "$VOICEBOX_PUSH_DESTINATIONS" > "$_refs_file"; else cat > "$_refs_file" 2>/dev/null || true; fi
+while read -r _local_ref _local_sha _remote_ref _remote_sha; do
+  case "$_remote_ref" in
+    refs/heads/main|refs/heads/master)
+      if [ "$_current_branch" != "main" ] && [ "$_current_branch" != "master" ]; then
+        echo >&2 "[gate] pre-push REFUSED: non-main branch attempting to push to main ref"
+        echo >&2 "[gate]   checked-out branch: ${_current_branch:-(detached HEAD)}  local ref offered: ${_local_ref:-?}  destination: ${_remote_ref}"
+        echo >&2 "[gate]   push your branch instead:  git push -u origin ${_current_branch:-<branch>}"
+        echo >&2 "[gate]   (a worktree made with -b <branch> origin/main tracks main; use --no-track, or git branch --unset-upstream)"
+        exit 1
+      fi ;;
+  esac
+done < "$_refs_file"
+rm -f "$_refs_file"
+
 if [ "$VOICEBOX_SKIP_GATE" = "1" ]; then
   echo "[gate] pre-push: VOICEBOX_SKIP_GATE=1 set — skipping gate"
   exit 0

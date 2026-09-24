@@ -2,6 +2,21 @@
 
 The tracked hook runs the test suite in **two lanes**, then `npm run accept`:
 
+## A push aimed at main from a branch (2026-09-24, `voicebox-beads-85w`)
+
+The gate refuses, **by name and before any stage runs**:
+
+    [gate] pre-push REFUSED: non-main branch attempting to push to main ref
+
+Git hands the hook its destination refs on stdin, so the check is about where the push
+is GOING, not where it came from. It exists because
+`git worktree add -b <branch> <dir> origin/main` sets the new branch's UPSTREAM to
+`origin/main`: a bare `git push` in that worktree then offers `HEAD:main`, and git's own
+remedy line suggests `git push origin HEAD:main` — the worst available outcome, offered
+as help. Create worktrees with **`--no-track`**, or clear it afterwards with
+**`git branch --unset-upstream`**; a lane that means to land names its refspec anyway
+(`git push -u origin <branch>`).
+
 | stage | what it runs | concurrency | default budget |
 | --- | --- | --- | --- |
 | `unit` | `npm run test:unit` — every `tests/*.test.mjs` that launches no browser and no server of its own | files in parallel | 90s |
