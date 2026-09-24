@@ -76,7 +76,11 @@ const git = (args, fallback) => {
 const buildIdentity = () => {
   const branch = git(["branch", "--show-current"], "(detached)");
   const commit = git(["rev-parse", "--short", "HEAD"], "unknown");
-  const remote = git(["rev-parse", "--short", `origin/${branch}`], "");
+  // Same reason as server.mjs's twin (voicebox-beads-8js): --quiet --verify is the existence test, so a
+  // branch with no upstream yields exit 1 and NO "fatal: Needed a single revision" on stderr. The stamp's
+  // own wording for that case — "no origin/<branch> here, so the distance from a remote is unknown" —
+  // is unchanged, because the case is unchanged; only the shout is gone.
+  const remote = git(["rev-parse", "--quiet", "--verify", "--short", `origin/${branch}`], "");
   const ahead = remote ? Number(git(["rev-list", "--count", `origin/${branch}..HEAD`], "0")) : null;
   return {
     branch,

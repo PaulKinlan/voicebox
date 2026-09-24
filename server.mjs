@@ -963,7 +963,12 @@ const git = (args, fallback) => {
 };
 const BUILD = (() => {
   const branch = git(["branch", "--show-current"], "(detached)");
-  const remote = git(["rev-parse", "--short", `origin/${branch}`], "");
+  // --quiet --verify: the IDIOMATIC existence test for a ref. Without them, `git rev-parse` prints
+  // "fatal: Needed a single revision" to stderr on EVERY call in a worktree whose branch has no upstream
+  // — which is every lane worktree before its first push, so the line appeared in server logs and in a
+  // test's captured stderr next to unrelated failures (voicebox-beads-8js). Same result, no noise: exit 1
+  // and empty stderr when the ref is absent, which the default below already handles.
+  const remote = git(["rev-parse", "--quiet", "--verify", "--short", `origin/${branch}`], "");
   return {
     branch,
     commit: git(["rev-parse", "--short", "HEAD"], "unknown"),
