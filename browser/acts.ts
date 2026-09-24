@@ -38,13 +38,15 @@
 import { createExecutorDoor } from "../lib/channel.mjs";
 import { resolveInRoot, type RootDescriptor } from "../core/root.ts";
 import { normaliseRelativeDir, parentDir } from "../core/paths.ts";
-import { CORE_FS_DESCRIPTOR, CORE_FS_VERBS } from "../core/dispatch.ts";
+import { CORE_FS_DESCRIPTOR, CORE_FS_VERBS, createUnifiedDiff } from "../core/dispatch.ts";
 
 /** The structural slice of browser/storage.ts this module uses — injected, never imported. */
 export interface ActsStorage {
   readonly root: string;
   writeText(resolved: string, text: string): Promise<void>;
   readText(resolved: string): Promise<string>;
+  remove?(resolved: string): Promise<boolean>;
+  deleteFile?(resolved: string): Promise<void>;
   appendLine?(resolved: string, line: string): Promise<void>;
   observe(resolved: string): Promise<{ exists: boolean; bytes?: number; mtime?: string }>;
   listChildren(resolved: string, limit: number, strict?: boolean): Promise<{ entries: { name: string; kind: string; bytes?: number }[]; truncated: boolean }>;
@@ -213,6 +215,84 @@ async function performAct(call: { tool: string; args: Record<string, unknown> },
     const observed = await storage.observe(resolved.path);
     const entry = await hooks.recordAct({ kind: "read", target: name, tool: "turn" }, "allow", "reads-inside", "ok", observed, turnOf(call));
     return { ok: true as const, name, content, bytes: observed.bytes ?? content.length, auditSeq: entry?.seq ?? null };
+  }
+
+  if (tool === "delete") {
+    const unwritable = await hooks.checkWritable();
+    if (unwritable) {
+      await hooks.recordAct({ kind: "delete", target: name, tool: "turn" }, "refuse", unwritable.code, "refused", { exists: false }, turnOf(call));
+      return { ok: false as const, refused: unwritable.code, why: unwritable.why };
+    }
+    const observedBefore = await storage.observe(resolved.path);
+    if (!observedBefore.exists) {
+      await hooks.recordAct({ kind: "delete", target: name, tool: "turn" }, "refuse", "not-found", "refused", { exists: false }, turnOf(call));
+      return { ok: false as const, refused: "not-found", why: `'${name}' is not in this project` };
+    }
+    try {
+      if (typeof storage.remove === "function") {
+        await storage.remove(resolved.path);
+      } else if (typeof storage.deleteFile === "function") {
+        await storage.deleteFile(resolved.path);
+      }
+    } catch (e) {
+      await hooks.recordAct({ kind: "delete", target: name, tool: "turn" }, "refuse", "root-unreachable", "refused", { exists: false }, turnOf(call));
+      return { ok: false as const, refused: "root-unreachable", why: `delete failed: ${(e as Error)?.message ?? e}` };
+    }
+    const observed = await storage.observe(resolved.path);
+    const entry = await hooks.recordAct({ kind: "delete", target: name, tool: "turn" }, "allow", "deletes-inside", "ok", observed, turnOf(call));
+    return { ok: true as const, name, bytes: 0, auditSeq: entry?.seq ?? null };
+  }
+
+  if (tool === "edit") {
+    if (call.args?.oldText == null || call.args?.newText == null) {
+      await hooks.recordAct({ kind: "edit", target: name, tool: "turn" }, "refuse", "missing-argument", "refused", { exists: false }, turnOf(call));
+      return { ok: false as const, refused: "missing-argument", why: `edit to '${name}' requires both oldText and newText` };
+    }
+    const unwritable = await hooks.checkWritable();
+    if (unwritable) {
+      await hooks.recordAct({ kind: "edit", target: name, tool: "turn" }, "refuse", unwritable.code, "refused", { exists: false }, turnOf(call));
+      return { ok: false as const, refused: unwritable.code, why: unwritable.why };
+    }
+    let original: string;
+    try {
+      original = await storage.readText(resolved.path);
+    } catch {
+      await hooks.recordAct({ kind: "edit", target: name, tool: "turn" }, "refuse", "not-found", "refused", { exists: false }, turnOf(call));
+      return { ok: false as const, refused: "not-found", why: `'${name}' is not in this project` };
+    }
+    const oldText = String(call.args.oldText);
+    const newText = String(call.args.newText);
+    if (!original.includes(oldText)) {
+      await hooks.recordAct({ kind: "edit", target: name, tool: "turn" }, "refuse", "pattern-not-found", "refused", { exists: true }, turnOf(call));
+      return { ok: false as const, refused: "pattern-not-found", why: `could not find exact text match for oldText in '${name}'` };
+    }
+    const firstIdx = original.indexOf(oldText);
+    const lastIdx = original.lastIndexOf(oldText);
+    if (firstIdx !== lastIdx) {
+      await hooks.recordAct({ kind: "edit", target: name, tool: "turn" }, "refuse", "pattern-not-unique", "refused", { exists: true }, turnOf(call));
+      return { ok: false as const, refused: "pattern-not-unique", why: `found multiple occurrences of oldText in '${name}' — specify a unique text block` };
+    }
+    const updated = original.slice(0, firstIdx) + newText + original.slice(firstIdx + oldText.length);
+    try {
+      await storage.writeText(resolved.path, updated);
+    } catch (e) {
+      await hooks.recordAct({ kind: "edit", target: name, tool: "turn" }, "refuse", "root-unreachable", "refused", { exists: false }, turnOf(call));
+      return { ok: false as const, refused: "root-unreachable", why: `edit did not land: ${(e as Error)?.message ?? e}` };
+    }
+    const observed = await storage.observe(resolved.path);
+    const entry = await hooks.recordAct({ kind: "edit", target: name, tool: "turn" }, "allow", "edits-inside", "ok", observed, turnOf(call));
+    return { ok: true as const, name, bytes: observed.bytes ?? updated.length, mtime: observed.mtime ?? null, auditSeq: entry?.seq ?? null };
+  }
+
+  if (tool === "diff") {
+    let current = "";
+    try {
+      current = await storage.readText(resolved.path);
+    } catch {}
+    const proposed = typeof call.args?.content === "string" ? call.args.content : "";
+    const unifiedDiff = createUnifiedDiff(name, current, proposed);
+    const entry = await hooks.recordAct({ kind: "diff", target: name, tool: "turn" }, "allow", "diffs-inside", "ok", { exists: true }, turnOf(call));
+    return { ok: true as const, name, diff: unifiedDiff, changed: current !== proposed, auditSeq: entry?.seq ?? null };
   }
 
   // Unreachable: the door's attribution check refuses non-CORE_FS verbs first — this is the

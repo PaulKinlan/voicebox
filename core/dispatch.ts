@@ -59,4 +59,35 @@ export function dispatchFor(root: RootDescriptor, environment: string): Dispatch
  * write/read/list — the same set lib/commands.mjs declares for the model paths.
  */
 export const CORE_FS_DESCRIPTOR = "voicebox-core-fs";
-export const CORE_FS_VERBS = new Set(["write", "read", "list"]);
+export const CORE_FS_VERBS = new Set(["write", "read", "list", "delete", "edit", "diff", "grep"]);
+
+/** Compute a unified diff between two strings. */
+export function createUnifiedDiff(filename: string, oldStr: string, newStr: string): string {
+  if (oldStr === newStr) return "";
+  const oldLines = oldStr ? oldStr.split("\n") : [];
+  const newLines = newStr ? newStr.split("\n") : [];
+  const lines = [
+    `--- a/${filename}`,
+    `+++ b/${filename}`,
+    `@@ -1,${oldLines.length} +1,${newLines.length} @@`,
+  ];
+  let i = 0;
+  let j = 0;
+  while (i < oldLines.length || j < newLines.length) {
+    if (i < oldLines.length && j < newLines.length && oldLines[i] === newLines[j]) {
+      lines.push(` ${oldLines[i]}`);
+      i++;
+      j++;
+    } else if (i < oldLines.length && (j >= newLines.length || !newLines.includes(oldLines[i]))) {
+      lines.push(`-${oldLines[i]}`);
+      i++;
+    } else if (j < newLines.length) {
+      lines.push(`+${newLines[j]}`);
+      j++;
+    } else {
+      lines.push(`-${oldLines[i++]}`);
+      lines.push(`+${newLines[j++]}`);
+    }
+  }
+  return lines.join("\n");
+}
