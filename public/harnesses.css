@@ -9,3 +9,10 @@ button:disabled { opacity: .6; cursor: wait; }
 :focus-visible { outline: 3px solid #abc8ff; outline-offset: 3px; }
 article { border: 1px solid #666; border-radius: 8px; padding: 16px; margin: 16px 0; }
 article h2 { margin-top: 0; }
+h3 { font-size: 1rem; margin-bottom: 0; }
+.tool-catalogue { border-top: 1px solid #666; margin-top: 16px; }
+summary { cursor: pointer; padding-block: 12px; min-block-size: 24px; }
+summary:hover { color: #abc8ff; }
+summary:active { background: #242432; }
+dt { font-weight: 600; margin-top: 16px; }
+dd { margin: 4px 0 0; white-space: pre-wrap; }

@@ -39,10 +39,15 @@ is still undecided.
 
 Open **Harnesses** from the voice page and click **Check installed harnesses**, or run
 `node tools/list-harnesses.mjs`. This lists known host CLIs with descriptions, observed
-versions and present/unrunnable/unknown/absent states. It does not infer task readiness
-or discover programs on a different browser machine. Pi's production task adapter still
-refuses `absent-capability`; listing it does not enable delegation. No sandbox wrapping
-or local browser-to-CLI bridge is added. See [the inventory guide](docs/12-harness-inventory.md).
+versions and present/unrunnable/unknown/absent states. Set `VOICEBOX_HARNESS_TOOLS` to
+an absolute JSON file path to add host-declared tool names and descriptions, with their
+source and scope. Expand **Declared tools** on a row to read them. Missing or invalid
+metadata says **Tools — unknown**; an explicitly empty declaration is shown separately.
+These are declarations, not observed session tools or permissions. Listing a tool neither
+enables delegation nor checks authentication. Pi's task adapter can be selected with
+`VOICEBOX_HARNESS=pi`; other inventoried CLIs have no configured task adapter.
+No sandbox wrapping or local browser-to-CLI bridge is added. See
+[the catalogue format and limits](docs/12-harness-inventory.md).
 
 ## Status
 
