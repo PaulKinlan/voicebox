@@ -41,6 +41,13 @@ import { SOURCE_DIRS } from "./lib/browser-sources.mjs";
 import { bootUnitFence, stopUnitFence } from "./lib/unit-fence-provider.mjs";
 import { createHarnessInventory } from "./lib/harness-inventory.mjs";
 import { createAgentRegistry, listHarnessesWithConfiguredAgents, publicAgentProjection } from "./lib/harness-config.mjs";
+import {
+  createFleetManager,
+  publicFleetProjection,
+  parseTargetKey,
+  formatTargetKey,
+  resolveFleetTarget,
+} from "./lib/fleet.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
 import { createLiveSession, LIVE_MODEL, inputRateRequiredBy } from "./lib/live-session.mjs";
 import { commandToAction, functionDeclarations, liveSystemInstruction } from "./lib/commands.mjs";
@@ -487,6 +494,101 @@ const tasks = createTaskHost({
   addressKey: readFileSync(path.join(HOST_DIR, ".host-token")),
   root: () => active,
   agentRegistry,
+});
+
+const fleetManager = createFleetManager({
+  localEnvironmentKey: "local",
+  localRegistry: agentRegistry,
+  getEnvironments: async () => {
+    const list = await environmentsWithStatus();
+    return list.environments;
+  },
+  resolveEnvironment: async (envKey) => {
+    if (envKey === "local" || envKey === SELF_ENVIRONMENT) {
+      return { ok: true, local: true, key: envKey };
+    }
+    const resolved = await resolveEnvironment(envKey);
+    if (!resolved.ok) {
+      return {
+        ok: false,
+        refused: "environment-unknown",
+        why: `no environment with key '${envKey}' is in the registry — declare it before calling it`,
+      };
+    }
+    const bearer = bearerFor(envKey);
+    return {
+      ok: true,
+      local: false,
+      key: envKey,
+      label: resolved.label,
+      origin: resolved.origin,
+      paired: Boolean(bearer),
+      bearer,
+    };
+  },
+  fetchRemoteAgents: async (envKey, auth) => {
+    const target = await resolveEnvironment(envKey);
+    if (!target.ok || !target.origin) return [];
+    const bearer = auth?.bearer || bearerFor(envKey);
+    if (!bearer) return [];
+    const url = new URL("/api/agents", target.origin);
+    const headers = { authorization: `Bearer ${bearer}` };
+    try {
+      const res = await fetch(url, { headers, signal: AbortSignal.timeout(3000) });
+      if (!res.ok) return [];
+      const body = await res.json();
+      return Array.isArray(body.agents) ? body.agents : [];
+    } catch {
+      return [];
+    }
+  },
+  remoteContact: async (envKey, { agentId, message, sessionId, auth }) => {
+    const target = await resolveEnvironment(envKey);
+    if (!target.ok || !target.origin) {
+      return {
+        ok: false,
+        refused: "environment-unknown",
+        why: `Environment '${envKey}' not found in registry`,
+      };
+    }
+    const bearer = auth?.bearer || bearerFor(envKey);
+    if (!bearer) {
+      return {
+        ok: false,
+        refused: "environment-not-paired",
+        why: `Environment '${envKey}' is listed but not paired`,
+      };
+    }
+    const url = new URL("/api/fleet/contact", target.origin);
+    const headers = {
+      "content-type": "application/json",
+      authorization: `Bearer ${bearer}`,
+    };
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ target: `${envKey}/${agentId}`, message, sessionId }),
+        signal: AbortSignal.timeout(5000),
+      });
+      const data = await res.json().catch(() => null);
+      if (!data) {
+        return {
+          ok: false,
+          refused: "environment-unreachable",
+          why: `remote environment '${envKey}' did not answer with JSON`,
+        };
+      }
+      return data;
+    } catch (err) {
+      return {
+        ok: false,
+        refused: "environment-unreachable",
+        why: `environment "${target.label ?? envKey}" at ${target.origin} is unreachable: ${err?.message ?? err}`,
+      };
+    }
+  },
+  tasks,
 });
 
 const permissions = createPermissionPolicy();
@@ -1320,12 +1422,40 @@ async function execute(action) {
     };
   }
   if (action.verb === "list_agents") {
-    const agents = agentRegistry.list({ environmentKey: SELF_ENVIRONMENT }).map(publicAgentProjection);
+    const fleetAgents = await fleetManager.listAgents({ environmentKey: action.environment });
+    const agents = fleetAgents.map(publicFleetProjection);
     return {
       ok: true,
       action: `listed ${agents.length} agent(s)`,
       agents,
       count: agents.length,
+      root: active?.root ?? null,
+    };
+  }
+  if (action.verb === "contact_agent") {
+    const authority = {
+      owner: createHash("sha256").update(`voicebox-fleet-contact\0${SELF_ENVIRONMENT}`).digest("hex"),
+      callId: `contact_${Date.now().toString(36)}`,
+    };
+    const res = await fleetManager.contact({
+      target: action.target,
+      message: action.message,
+      sessionId: action.sessionId,
+      authority,
+    });
+    if (!res.ok) {
+      return {
+        ok: false,
+        refused: res.refused,
+        why: res.why,
+        error: `refused: ${res.refused}`,
+        root: active?.root ?? null,
+      };
+    }
+    return {
+      ok: true,
+      action: `contacted ${res.targetKey || action.target}`,
+      ...res,
       root: active?.root ?? null,
     };
   }
@@ -1339,12 +1469,36 @@ async function execute(action) {
         root: null,
       };
     }
+    const requested = action.agent ?? "default";
+    const target = parseTargetKey(requested, SELF_ENVIRONMENT);
+
+    if (target.environmentKey !== SELF_ENVIRONMENT) {
+      const fleet = await fleetManager.listAgents();
+      const resolution = resolveFleetTarget(target, fleet, SELF_ENVIRONMENT);
+      if (!resolution.ok) {
+        return {
+          ok: false,
+          refused: resolution.refused,
+          why: resolution.why,
+          error: `refused: ${resolution.refused}`,
+          root: active.root,
+        };
+      }
+      return {
+        ok: false,
+        refused: "cross-environment-unauthorized",
+        why: `Calling agent '${formatTargetKey(target)}' in remote environment '${target.environmentKey}' requires pairing credentials`,
+        error: "refused: cross-environment-unauthorized",
+        root: active.root,
+      };
+    }
+
     const authority = {
       owner: createHash("sha256").update(`voicebox-task-owner\0${SELF_ENVIRONMENT}\0local`).digest("hex"),
       callId: `turn_${randomBytes(12).toString("hex")}`,
     };
     const admitted = tasks.call("delegate_task", {
-      agent: action.agent ?? "default",
+      agent: target.agentId,
       task: action.task ?? "",
     }, authority);
     if (!admitted.ok) {
@@ -1604,6 +1758,35 @@ const routes = {
     const harness = url.searchParams.get("harness") || undefined;
     const agents = agentRegistry.list({ environmentKey, harness }).map(publicAgentProjection);
     return json(res, 200, { ok: true, agents });
+  },
+  "GET /api/fleet": async (req, res, url) => {
+    const environmentKey = url.searchParams.get("environment") || undefined;
+    const harness = url.searchParams.get("harness") || undefined;
+    const fleet = await fleetManager.listAgents({ environmentKey, harness });
+    return json(res, 200, { ok: true, fleet: fleet.map(publicFleetProjection) });
+  },
+  "POST /api/fleet/contact": (req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => answerOnce(res, async () => {
+      let parsed = {};
+      try { parsed = JSON.parse(body || "{}"); } catch {
+        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
+      }
+      const authority = {
+        owner: createHash("sha256").update(`voicebox-fleet-contact\0${SELF_ENVIRONMENT}`).digest("hex"),
+        callId: `contact_${Date.now().toString(36)}`,
+      };
+      const resContact = await fleetManager.contact({
+        target: parsed.target,
+        message: parsed.message,
+        sessionId: parsed.sessionId,
+        authority,
+        auth: { bearer: req.headers["authorization"]?.replace(/^Bearer\s+/i, "") },
+      });
+      const status = resContact.ok ? 200 : (["cross-environment-unauthorized", "environment-not-paired"].includes(resContact.refused) ? 403 : 400);
+      return json(res, status, resContact);
+    }));
   },
   "GET /api/harnesses": async (req, res) => {
     const inv = await harnessInventory();
