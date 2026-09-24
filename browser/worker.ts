@@ -509,9 +509,18 @@ async function saveRegistry(record: ProjectRecord): Promise<void> {
  * person needs before they trust a folder with their work.
  */
 async function askDurable(): Promise<boolean> {
-  const already = await navigator.storage.persisted().catch(() => false);
-  if (already) return true;
-  return await navigator.storage.persist().catch(() => false);
+  try {
+    if (typeof (navigator as unknown as { storage?: { persisted?: () => Promise<boolean> } })?.storage?.persisted === "function") {
+      const already = await navigator.storage.persisted().catch(() => false);
+      if (already) return true;
+    }
+    if (typeof (navigator as unknown as { storage?: { persist?: () => Promise<boolean> } })?.storage?.persist === "function") {
+      return await navigator.storage.persist().catch(() => false);
+    }
+  } catch {
+    // navigator.storage.persist is not supported in WorkerGlobalScope
+  }
+  return false;
 }
 
 async function openProject(name: string): Promise<Record<string, unknown> | Failure> {
