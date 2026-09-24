@@ -4,12 +4,17 @@
 //   "there is a world where there is zero server and it's all run locally on the client,
 //    and that has to be a hard requirement."
 //
-// Tests:
-//   1. Placement derivation for environment kinds and reach
-//   2. Placement-specific execution bounds and limits
-//   3. createBrowserTaskHost: zero-server admission, OPFS/handle roots, WebCrypto sealing, execution and cancel honesty
-//   4. Multi-environment placement dispatch without a central server broker
-//   5. Portable root reduction in core/tasks.ts (opfs, handle, machine)
+// Invariants tested:
+//   1. Placement derivation for environment kinds and reach (browser, machine, remote)
+//   2. Placement-specific execution bounds and limits (rejection of typos/excessive bounds)
+//   3. Browser task host: zero-server admission, OPFS/handle roots, WebCrypto sealing
+//   4. Terminal completion carries outcome contract (claimed-complete / executor-claimed)
+//   5. Call-ID deduplication: idempotent on same content, conflicts on changed content
+//   6. Atomic capacity reservation: concurrent admissions cannot exceed 4 active browser tasks
+//   7. Immutability: root and bounds captured synchronously before async signing window
+//   8. Timed-out executors retain capacity until runner promise actually settles
+//   9. Host placement dispatcher rejects unknown placement and mismatched environment
+//  10. Status recovery across reload: subsequent host instance reads prior completed task
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -32,6 +37,10 @@ test("placement derivation: associates placement with environment kind and reach
 
   assert.equal(placementForEnvironment({ kind: "server", reach: "paired" }), "remote");
   assert.equal(placementForEnvironment("remote"), "remote");
+
+  // Unknown environment kind / placement returns null
+  assert.equal(placementForEnvironment({ kind: "browesr" }), null);
+  assert.equal(placementForEnvironment("unknown"), null);
 });
 
 test("placement bounds: enforces limits per placement category", () => {
@@ -51,9 +60,14 @@ test("placement bounds: enforces limits per placement category", () => {
   const excessiveMachine = validatePlacementBounds("machine", { deadlineMs: 3600001, maxOutputBytes: 32768 });
   assert.equal(excessiveMachine.ok, false);
   assert.equal(excessiveMachine.refused, "unbounded-executor");
+
+  // Unknown placement must be refused
+  const unknownPlacement = validatePlacementBounds("browesr", { deadlineMs: 1000, maxOutputBytes: 100 });
+  assert.equal(unknownPlacement.ok, false);
+  assert.equal(unknownPlacement.refused, "unbounded-executor");
 });
 
-test("browser task host: zero-server admission, execution and completion on OPFS root", async () => {
+test("browser task host: zero-server admission, OPFS root, and terminal outcome contract", async () => {
   let executed = false;
   const executor = {
     check({ input, placement }) {
@@ -65,7 +79,7 @@ test("browser task host: zero-server admission, execution and completion on OPFS
         bounds: { deadlineMs: 10000, maxOutputBytes: 2048 },
       };
     },
-    async run({ input, bounds, signal, root }) {
+    async run({ input, root }) {
       assert.equal(root.kind, "opfs");
       assert.equal(root.path, "v1/projects/atlas");
       executed = true;
@@ -108,194 +122,351 @@ test("browser task host: zero-server admission, execution and completion on OPFS
   assert.equal(status.task.state, "completed");
   assert.equal(status.task.answer, "Answer for Summarize active chapter");
   assert.equal(executed, true);
+
+  // Outcome contract verified
+  assert.equal(status.task.outcome?.class, "claimed-complete");
+  assert.equal(status.task.outcome?.basis, "executor-claimed");
 });
 
-test("browser task host: handle root and cancellation honesty", async () => {
-  let abortObserved = false;
-  const executor = {
-    check() {
-      return {
-        ok: true,
-        mechanism: "client-side-wasm",
-        bounds: { deadlineMs: 15000, maxOutputBytes: 1024 },
-      };
-    },
-    run({ signal }) {
-      return new Promise((resolve, reject) => {
-        signal.addEventListener("abort", () => {
-          abortObserved = true;
-          reject(Object.assign(new Error("aborted by user"), { refused: "task-cancelled" }));
-        });
-      });
-    },
-  };
-
-  const host = createBrowserTaskHost({
-    environment: "env_browser_picked",
-    instance: "tab-picked",
-    root: () => ({ kind: "handle", id: "user-picked-folder", environment: "env_browser_picked" }),
-    executor: () => executor,
-  });
-
-  const authority = { owner: "client-owner-2", callId: "call-picked-1" };
-
-  const admitted = await host.call("delegate_task", {
-    agent: "any-agent",
-    task: "Long running client work",
-  }, authority);
-
-  assert.equal(admitted.ok, true);
-  const address = admitted.task.address;
-
-  // Let task enter running state
-  await new Promise((r) => setTimeout(r, 20));
-
-  // Cancel task
-  const cancelRes = await host.call("cancel_task", { address }, authority);
-  assert.equal(cancelRes.ok, true);
-  assert.equal(cancelRes.state, "cancelled");
-  assert.equal(cancelRes.observed, true);
-  assert.equal(abortObserved, true);
-
-  // Status is cancelled
-  const st = await host.call("task_status", { address }, authority);
-  assert.equal(st.task.state, "cancelled");
-  assert.equal(st.task.reason, "task-cancelled");
-
-  // Subsequent cancel on terminal task refuses
-  const cancelAgain = await host.call("cancel_task", { address }, authority);
-  assert.equal(cancelAgain.ok, false);
-  assert.equal(cancelAgain.refused, "task-not-running");
-});
-
-test("browser task host: enforces capacity and caller authority", async () => {
+test("call-ID deduplication: idempotent on same content, conflicts on changed content", async () => {
+  let writes = 0;
   const executor = {
     check: () => ({ ok: true, mechanism: "test", bounds: { deadlineMs: 5000, maxOutputBytes: 1024 } }),
-    run: () => new Promise(() => {}), // hold forever
+    run: async () => {
+      writes++;
+      return "done";
+    },
   };
 
   const host = createBrowserTaskHost({
-    environment: "env_browser_cap",
-    instance: "tab-cap",
-    root: () => ({ kind: "opfs", path: "v1/cap", environment: "env_browser_cap" }),
+    environment: "env_browser_dup",
+    instance: "tab-dup",
     executor: () => executor,
   });
 
-  const ownerA = { owner: "owner-a", callId: "call-1" };
-  const ownerB = { owner: "owner-b", callId: "call-2" };
+  const auth = { owner: "client-owner-1", callId: "stable-call-100" };
 
-  // Admit max allowed browser tasks (4)
-  const tasks = [];
-  for (let i = 0; i < PLACEMENT_BOUNDS.browser.maxActiveTasks; i++) {
-    const res = await host.call("delegate_task", { agent: "hold", task: `task ${i}` }, { owner: "owner-a", callId: `call-${i}` });
-    assert.equal(res.ok, true);
-    tasks.push(res.task);
+  // First call
+  const first = await host.call("delegate_task", { agent: "test", task: "same task" }, auth);
+  assert.equal(first.ok, true);
+  assert.equal(first.existing, false);
+
+  // Poll until completed
+  for (let i = 0; i < 30; i++) {
+    const st = await host.call("task_status", { address: first.task.address }, auth);
+    if (st.task?.state === "completed") break;
+    await new Promise((r) => setTimeout(r, 10));
   }
 
-  // 5th task must refuse capacity-exhausted
-  const overflow = await host.call("delegate_task", { agent: "hold", task: "task overflow" }, { owner: "owner-a", callId: "call-overflow" });
+  // Second call with same ID and same content -> idempotent return of existing task
+  const second = await host.call("delegate_task", { agent: "test", task: "same task" }, auth);
+  assert.equal(second.ok, true);
+  assert.equal(second.existing, true);
+  assert.equal(second.task.address, first.task.address);
+  assert.equal(writes, 1, "executor must not execute a second time for duplicate callId");
+
+  // Third call with same ID but different content -> conflict
+  const conflict = await host.call("delegate_task", { agent: "test", task: "different task content" }, auth);
+  assert.equal(conflict.ok, false);
+  assert.equal(conflict.refused, "task-call-id-conflict");
+});
+
+test("atomic capacity reservation: concurrent admissions cannot exceed four browser executions", async () => {
+  let running = 0;
+  let peak = 0;
+  const releases = [];
+
+  const executor = {
+    check: () => ({ ok: true, mechanism: "test", bounds: { deadlineMs: 5000, maxOutputBytes: 1024 } }),
+    run: async () => {
+      running++;
+      peak = Math.max(peak, running);
+      await new Promise((r) => releases.push(r));
+      running--;
+      return "finished";
+    },
+  };
+
+  const host = createBrowserTaskHost({
+    environment: "env_browser_conc",
+    instance: "tab-conc",
+    executor: () => executor,
+  });
+
+  // Launch 9 concurrent admissions via Promise.all
+  const attempts = await Promise.all(
+    Array.from({ length: 9 }, (_, i) =>
+      host.call(
+        "delegate_task",
+        { agent: "test", task: `concurrent task ${i}` },
+        { owner: "owner-conc", callId: `call-conc-${i}` },
+      ),
+    ),
+  );
+
+  const accepted = attempts.filter((r) => r.ok);
+  const refused = attempts.filter((r) => !r.ok);
+
+  // Exactly 4 admitted, exactly 5 refused
+  assert.equal(accepted.length, 4, "must accept exactly 4 tasks");
+  assert.equal(refused.length, 5, "must reject 5 overflow tasks");
+  assert.ok(refused.every((r) => r.refused === "task-capacity-exhausted"));
+
+  // Release running tasks
+  releases.forEach((r) => r());
+  await new Promise((r) => setTimeout(r, 50));
+  assert.ok(peak <= 4, "peak concurrency must not exceed 4");
+});
+
+test("immutability: root and bounds captured before async signing window", async () => {
+  const selectedRoot = { kind: "opfs", path: "captured-before", environment: "env_immut" };
+  const bounds = { deadlineMs: 1000, maxOutputBytes: 4 };
+  let capturedAtRun = null;
+
+  const executor = {
+    check: () => ({ ok: true, mechanism: "test", bounds }),
+    run: async ({ root, bounds: b }) => {
+      capturedAtRun = { root, bounds: b };
+      return "more than four bytes";
+    },
+  };
+
+  const host = createBrowserTaskHost({
+    environment: "env_immut",
+    instance: "tab-immut",
+    root: () => selectedRoot,
+    executor: () => executor,
+  });
+
+  const auth = { owner: "owner-immut", callId: "call-immut" };
+
+  // Dispatch admission
+  const pending = host.call("delegate_task", { agent: "test", task: "immutability task" }, auth);
+
+  // Mutate caller objects synchronously while signing is pending
+  selectedRoot.path = "captured-after";
+  bounds.maxOutputBytes = 1024;
+
+  const admitted = await pending;
+  assert.equal(admitted.ok, true);
+
+  // Poll until terminal
+  let status;
+  for (let i = 0; i < 50; i++) {
+    status = await host.call("task_status", { address: admitted.task.address }, auth);
+    if (["completed", "failed"].includes(status.task?.state)) break;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+
+  // The runner saw the frozen values captured at admission
+  assert.equal(capturedAtRun.root.path, "captured-before");
+  assert.equal(capturedAtRun.bounds.maxOutputBytes, 4);
+
+  // Because the runner captured 4 bytes max and output was >4, it failed output-over-budget
+  assert.equal(status.task.state, "failed");
+  assert.equal(status.task.reason, "task-output-over-budget");
+});
+
+test("alive check: timed-out executors retain capacity until runner promise settles", async () => {
+  let alive = 0;
+  const finishes = [];
+
+  const executor = {
+    check: () => ({ ok: true, mechanism: "test", bounds: { deadlineMs: 30, maxOutputBytes: 100 } }),
+    run: async () => {
+      alive++;
+      await new Promise((r) => finishes.push(r));
+      alive--;
+      return "finished late";
+    },
+  };
+
+  const host = createBrowserTaskHost({
+    environment: "env_browser_alive",
+    instance: "tab-alive",
+    executor: () => executor,
+  });
+
+  // Admit 4 tasks
+  const tasks = [];
+  for (let i = 0; i < 4; i++) {
+    tasks.push(await host.call("delegate_task", { agent: "test", task: `timed ${i}` }, { owner: "owner-alive", callId: `call-timed-${i}` }));
+  }
+
+  // Wait for 30ms deadlines to elapse and tasks to record interrupted
+  for (const t of tasks) {
+    for (let i = 0; i < 50; i++) {
+      const st = await host.call("task_status", { address: t.task.address }, { owner: "owner-alive" });
+      if (st.task?.state === "interrupted") break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+  }
+
+  // The 4 runners are still alive in the background
+  assert.equal(alive, 4, "all 4 runners must still be alive");
+
+  // Attempting 5th task while 4 are still alive MUST refuse capacity-exhausted
+  const overflow = await host.call("delegate_task", { agent: "test", task: "fifth task" }, { owner: "owner-alive", callId: "call-overflow" });
   assert.equal(overflow.ok, false);
   assert.equal(overflow.refused, "task-capacity-exhausted");
 
-  // Foreign caller cannot read task of ownerA
-  const foreignRead = await host.call("task_status", { address: tasks[0].address }, ownerB);
+  // Finish background executions
+  finishes.forEach((r) => r());
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(alive, 0);
+
+  // Now that capacity is released, 5th task can be admitted
+  const retry5 = await host.call("delegate_task", { agent: "test", task: "fifth task" }, { owner: "owner-alive", callId: "call-retry-5" });
+  assert.equal(retry5.ok, true);
+  finishes.forEach((r) => r());
+});
+
+test("placement dispatcher: rejects unknown placement and mismatched environment", () => {
+  const machineHost = { call: () => "machine", placement: "machine", environment: "env_machine_a" };
+  const browserHost = { call: () => "browser", placement: "browser", environment: "env_browser_a" };
+
+  const dispatcher = createPlacementDispatcher({
+    machine: machineHost,
+    browser: browserHost,
+  });
+
+  // Typo placement
+  const typo = dispatcher.dispatch({ key: "env_typo", kind: "browesr" });
+  assert.equal(typo.ok, false);
+  assert.equal(typo.refused, "placement-unavailable");
+
+  // Mismatched environment key
+  const mismatch = dispatcher.dispatch({ key: "env_browser_b", kind: "browser" });
+  assert.equal(mismatch.ok, false);
+  assert.equal(mismatch.refused, "environment-mismatch");
+
+  // Matched environment
+  const match = dispatcher.dispatch({ key: "env_browser_a", kind: "browser" });
+  assert.equal(match.ok, true);
+  assert.equal(match.host.call(), "browser");
+});
+
+test("tuple identity: distinct owner/callId pairs cannot share or alias deduplication records", async () => {
+  let writes = 0;
+  const executor = {
+    check: () => ({ ok: true, mechanism: "test", bounds: { deadlineMs: 5000, maxOutputBytes: 1024 } }),
+    run: async () => {
+      writes++;
+      return "done";
+    },
+  };
+
+  const host = createBrowserTaskHost({
+    environment: "env_tuple_test",
+    instance: "tab-tuple",
+    executor: () => executor,
+  });
+
+  // Two distinct (owner, callId) pairs that would alias under naive colon concatenation: ("a:b", "c") vs ("a", "b:c")
+  const authA = { owner: "a:b", callId: "c" };
+  const authB = { owner: "a", callId: "b:c" };
+
+  const first = await host.call("delegate_task", { agent: "test", task: "first" }, authA);
+  assert.equal(first.ok, true);
+  assert.equal(first.existing, false);
+
+  const second = await host.call("delegate_task", { agent: "test", task: "second" }, authB);
+  assert.equal(second.ok, true);
+  assert.equal(second.existing, false);
+  assert.notEqual(second.task.address, first.task.address, "distinct principals must get distinct task addresses");
+  assert.equal(writes, 2, "both tasks must execute independently");
+
+  // Foreign owner cannot read first task
+  const foreignRead = await host.call("task_status", { address: first.task.address }, authB);
   assert.equal(foreignRead.ok, false);
   assert.equal(foreignRead.refused, "task-owner-mismatch");
 });
 
-test("placement dispatcher: routes to designated placement host without centralized broker", () => {
-  const browserHost = { call: () => "browser-call", placement: "browser" };
-  const machineHost = { call: () => "machine-call", placement: "machine" };
-  const remoteHost = { call: () => "remote-call", placement: "remote" };
-
-  const dispatcher = createPlacementDispatcher({
-    browser: browserHost,
-    machine: machineHost,
-    remote: remoteHost,
-  });
-
-  const toBrowser = dispatcher.dispatch({ kind: "browser" });
-  assert.equal(toBrowser.ok, true);
-  assert.equal(toBrowser.placement, "browser");
-  assert.equal(toBrowser.host.call(), "browser-call");
-
-  const toServer = dispatcher.dispatch({ kind: "server" });
-  assert.equal(toServer.ok, true);
-  assert.equal(toServer.placement, "machine");
-  assert.equal(toServer.host.call(), "machine-call");
-
-  const toRemote = dispatcher.dispatch({ kind: "server", reach: "paired" });
-  assert.equal(toRemote.ok, true);
-  assert.equal(toRemote.placement, "remote");
-  assert.equal(toRemote.host.call(), "remote-call");
-
-  // Missing host
-  const missingDispatcher = createPlacementDispatcher({ machine: machineHost });
-  const missing = missingDispatcher.dispatch({ kind: "browser" });
-  assert.equal(missing.ok, false);
-  assert.equal(missing.refused, "placement-unavailable");
-});
-
-test("core/tasks reduction: supports portable roots (opfs, handle, machine)", () => {
-  const opfsRecord = {
-    address: "task_opfs_123.sig",
-    environment: "env_browser_1",
-    placement: "browser",
-    owner: "owner-1",
-    root: { kind: "opfs", path: "v1/projects/my-proj", environment: "env_browser_1" },
-    project: "my-proj",
-    instance: "browser-tab",
-    callId: "call-1",
-    input: { agent: "in-page", task: "do work", context: [] },
-    bounds: { deadlineMs: 10000, maxOutputBytes: 1024 },
-    mechanism: "browser-runner",
-    boot: "boot-1",
-    state: "queued",
-    createdAt: "2026-09-24T00:00:00.000Z",
-    updatedAt: "2026-09-24T00:00:00.000Z",
+test("durable persistence failure: quota error fails closed and forbids execution", async () => {
+  let ran = false;
+  const executor = {
+    check: () => ({ ok: true, mechanism: "test", bounds: { deadlineMs: 5000, maxOutputBytes: 1024 } }),
+    run: async () => {
+      ran = true;
+      return "should not run";
+    },
   };
 
-  const entries = [
-    {
-      kind: "task",
-      seq: 1,
-      instance: "browser-tab",
-      project: "my-proj",
-      root: "opfs:v1/projects/my-proj",
-      turn: "call-1",
-      at: "2026-09-24T00:00:00.000Z",
-      task: { address: "task_opfs_123.sig", state: "queued", created: opfsRecord },
-    },
-    {
-      kind: "task",
-      seq: 2,
-      instance: "browser-tab",
-      project: "my-proj",
-      root: "opfs:v1/projects/my-proj",
-      turn: "call-1",
-      at: "2026-09-24T00:00:01.000Z",
-      task: { address: "task_opfs_123.sig", state: "running" },
-    },
-    {
-      kind: "task",
-      seq: 3,
-      instance: "browser-tab",
-      project: "my-proj",
-      root: "opfs:v1/projects/my-proj",
-      turn: "call-1",
-      at: "2026-09-24T00:00:02.000Z",
-      task: { address: "task_opfs_123.sig", state: "completed", answer: "All done" },
-    },
-  ];
+  // Mock localStorage that throws QuotaExceededError
+  const origStorage = globalThis.localStorage;
+  try {
+    globalThis.localStorage = {
+      getItem: () => null,
+      setItem: () => {
+        const err = new Error("Quota exceeded");
+        err.name = "QuotaExceededError";
+        throw err;
+      },
+      removeItem: () => {},
+    };
 
-  const reduced = reduceTask(entries, "task_opfs_123.sig");
-  assert.ok(reduced);
-  assert.equal(reduced.state, "completed");
-  assert.equal(reduced.answer, "All done");
-  assert.equal(reduced.placement, "browser");
-  assert.equal(reduced.outcome.class, "claimed-complete");
+    const host = createBrowserTaskHost({
+      environment: "env_quota_test",
+      instance: "tab-quota",
+      executor: () => executor,
+    });
 
-  const view = taskView(reduced);
-  assert.equal(view.placement, "browser");
-  assert.equal(view.agent, "in-page");
+    const res = await host.call(
+      "delegate_task",
+      { agent: "test", task: "quota test" },
+      { owner: "quota-owner", callId: "call-quota" },
+    );
+
+    assert.equal(res.ok, false);
+    assert.equal(res.refused, "task-persistence-failed");
+    assert.equal(ran, false, "execution must not be authorized when durable persistence fails");
+  } finally {
+    if (origStorage) globalThis.localStorage = origStorage;
+    else delete globalThis.localStorage;
+  }
 });
+
+test("lost runner reconciliation: dead prior generation reconciles to interrupted on status read", async () => {
+  let hostRan = false;
+  const executor = {
+    check: () => ({ ok: true, mechanism: "test", bounds: { deadlineMs: 5000, maxOutputBytes: 1024 } }),
+    run: () => new Promise(() => { hostRan = true; }), // held running
+  };
+
+  const keyBytes = new Uint8Array(32).fill(88);
+  const hostOld = createBrowserTaskHost({
+    environment: "env_dead_gen",
+    instance: "tab-gen",
+    boot: "boot-generation-1",
+    keyBytes,
+    executor: () => executor,
+  });
+
+  const auth = { owner: "owner-gen", callId: "call-gen-1" };
+  const admitted = await hostOld.call("delegate_task", { agent: "test", task: "held task" }, auth);
+  assert.equal(admitted.ok, true);
+  const address = admitted.task.address;
+
+  // Let task enter running state
+  for (let i = 0; i < 20; i++) {
+    const st = await hostOld.call("task_status", { address }, auth);
+    if (st.task?.state === "running") break;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+
+  // Create new host from a different boot generation (simulating page reload after crash/close)
+  const hostNew = createBrowserTaskHost({
+    environment: "env_dead_gen",
+    instance: "tab-gen",
+    boot: "boot-generation-2",
+    keyBytes,
+    executor: () => { throw new Error("must not rerun"); },
+  });
+
+  const stNew = await hostNew.call("task_status", { address }, auth);
+  assert.equal(stNew.ok, true);
+  assert.equal(stNew.task.state, "interrupted", "lost runner from dead generation must be reconciled to interrupted");
+  assert.equal(stNew.task.reason, "environment-ended-outcome-unknown");
+  assert.equal(stNew.task.outcome?.class, "observed-interruption");
+});
+

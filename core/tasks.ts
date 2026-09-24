@@ -37,19 +37,22 @@ export const PLACEMENT_BOUNDS: Record<TaskPlacement, TaskPlacementBounds> = {
 /**
  * Determine task execution placement from an environment descriptor or key.
  * Zero-server execution: browser environments own in-page/worker placement directly.
+ * Returns null if the environment kind or placement is unrecognized.
  */
-export function placementForEnvironment(env: { kind?: string; reach?: string } | string): TaskPlacement {
+export function placementForEnvironment(env: { kind?: string; reach?: string } | string): TaskPlacement | null {
   if (typeof env === "object" && env !== null) {
     if (env.reach === "paired") return "remote";
     if (env.kind === "browser") return "browser";
     if (env.kind === "server" || env.kind === "fence") return "machine";
+    return null;
   }
   if (typeof env === "string") {
     if (env === "browser") return "browser";
     if (env === "server" || env === "fence" || env === "machine") return "machine";
     if (env === "remote" || env.startsWith("remote_")) return "remote";
+    return null;
   }
-  return "machine";
+  return null;
 }
 
 export interface TaskInput { agent: string; task: string; context: string[] }
@@ -193,7 +196,7 @@ export function taskView(record: TaskRecord) {
   return {
     address,
     environment,
-    placement: placement ?? placementForEnvironment(environment),
+    placement: placement ?? placementForEnvironment(environment) ?? "machine",
     root,
     state,
     agent: record.input.agent,
