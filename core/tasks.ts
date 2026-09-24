@@ -3,11 +3,64 @@ import type { RootDescriptor } from "./root.ts";
 import type { LogEntry } from "./audit.ts";
 
 export type TaskState = "queued" | "running" | "cancel_requested" | "cancelled" | "cancel_unconfirmed" | "completed" | "failed" | "interrupted";
+export type TaskPlacement = "browser" | "machine" | "remote";
+export const TASK_PLACEMENTS: readonly TaskPlacement[] = ["browser", "machine", "remote"] as const;
+
+export interface TaskPlacementBounds {
+  defaultDeadlineMs: number;
+  maxDeadlineMs: number;
+  maxOutputBytes: number;
+  maxActiveTasks: number;
+}
+
+export const PLACEMENT_BOUNDS: Record<TaskPlacement, TaskPlacementBounds> = {
+  browser: {
+    defaultDeadlineMs: 30000,
+    maxDeadlineMs: 300000, // 5 min max for browser tab execution
+    maxOutputBytes: 65536,
+    maxActiveTasks: 4,
+  },
+  machine: {
+    defaultDeadlineMs: 60000,
+    maxDeadlineMs: 3600000, // 1 hour max for local machine process
+    maxOutputBytes: 65536,
+    maxActiveTasks: 8,
+  },
+  remote: {
+    defaultDeadlineMs: 60000,
+    maxDeadlineMs: 3600000,
+    maxOutputBytes: 65536,
+    maxActiveTasks: 8,
+  },
+};
+
+/**
+ * Determine task execution placement from an environment descriptor or key.
+ * Zero-server execution: browser environments own in-page/worker placement directly.
+ * Returns null if the environment kind or placement is unrecognized.
+ */
+export function placementForEnvironment(env: { kind?: string; reach?: string } | string): TaskPlacement | null {
+  if (typeof env === "object" && env !== null) {
+    if (env.reach === "paired") return "remote";
+    if (env.kind === "browser") return "browser";
+    if (env.kind === "server" || env.kind === "fence") return "machine";
+    return null;
+  }
+  if (typeof env === "string") {
+    if (env === "browser") return "browser";
+    if (env === "server" || env === "fence" || env === "machine") return "machine";
+    if (env === "remote" || env.startsWith("remote_")) return "remote";
+    return null;
+  }
+  return null;
+}
+
 export interface TaskInput { agent: string; task: string; context: string[] }
 export interface TaskBounds { deadlineMs: number; maxOutputBytes: number }
 export interface TaskRecord {
   address: string;
   environment: string;
+  placement?: TaskPlacement;
   owner: string; // opaque credential identity, never the credential
   root: RootDescriptor;
   project: string;
@@ -17,7 +70,7 @@ export interface TaskRecord {
   bounds: TaskBounds;
   mechanism: string;
   boot: string;
-  pid: number;
+  pid?: number;
   state: TaskState;
   createdAt: string;
   updatedAt: string;
@@ -130,7 +183,10 @@ export function reduceTask(entries: LogEntry[], address: string): TaskRecord | n
       if (!allowed[record.state]?.includes(event.state)) throw new Error("invalid task transition");
       record = { ...record, state: event.state, updatedAt: entry.at, ...(event.reason ? { reason: event.reason } : {}), ...(event.answer !== undefined ? { answer: event.answer } : {}), ...(event.progress !== undefined ? { progress: event.progress } : {}), ...(event.partial !== undefined ? { partial: event.partial } : {}) };
     }
-    if (record.instance !== entry.instance || record.root.kind !== "machine" || entry.root !== `machine:${record.root.path}`) throw new Error("task writer or root mismatch");
+    const expectedRoot = record.root.kind === "handle"
+      ? `picked:${record.root.id}`
+      : `${record.root.kind}:${record.root.path}`;
+    if (record.instance !== entry.instance || entry.root !== expectedRoot) throw new Error("task writer or root mismatch");
   }
   if (record && taskTerminal(record.state)) record = { ...record, outcome: outcomeFor(record.state) ?? undefined };
   return record;
@@ -138,12 +194,13 @@ export function reduceTask(entries: LogEntry[], address: string): TaskRecord | n
 
 /** Readback intentionally excludes credential identity and the captured prompt. */
 export function taskView(record: TaskRecord) {
-  const { address, environment, root, state, createdAt, updatedAt, reason, answer, progress, partial, outcome, agentId, harness } = record;
+  const { address, environment, placement, root, state, createdAt, updatedAt, reason, answer, progress, partial, outcome, agentId, harness } = record;
   // The readable half of the record: the class and its basis, and NOTHING that ranks one delegation
   // against another — no score, no weight, no ordering (voicebox-beads-m9u, "no automatic ranking").
   return {
     address,
     environment,
+    placement: placement ?? placementForEnvironment(environment) ?? "machine",
     root,
     state,
     agent: record.input.agent,
