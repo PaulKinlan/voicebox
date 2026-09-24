@@ -225,7 +225,7 @@ Audio worklets loaded by that code: `pcm-worklet.js`.
 - **`core/`** is authoritative for the tier table, containment and the audit — and it is a **library**: it
   imports nothing outside `core/`, because two copies of it would drift silently (see the design's N18). <!-- docs-check: names the mechanism -->
 - **`core/harness-config.ts`** is authoritative for the pure, secret-free configured-agent contract, distinguishing runtime ("node" | "deno" | "browser"), configured agent instances (permanent ID, mutable name, model, reach, bounds), and executing environments. PURE: zero imports outside `core/` (self-contained core library).
-- **`lib/harness-config.mjs`** is authoritative for the agent registry and loader, supporting both server storage and zero-server browser-local placements, and feeding configured agents into harness discovery.
+- **`lib/harness-config.mjs`** is authoritative for the agent registry and loader, supporting both server storage and zero-server browser-local placements, and feeding configured agents into harness discovery. Server storage writes are atomic (temp file + rename) so a failed write cannot truncate the registry; the host-token-gated `GET`/`POST /api/agents` and `PATCH /api/agents/:id` routes are its HTTP surface.
 - **`public/fused.js`** is authoritative for what the page shows, and it **labels its own simulations on the
   page**: files, the turn submission and the containment refusals are real; the shared view, seen-marks and
   admission are simulated and say so. A reader should trust that label over any prose, including this file.

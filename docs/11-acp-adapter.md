@@ -41,7 +41,10 @@ VOICEBOX_HARNESS=pi npm run serve
 Run `npm run doctor` to inspect the admitted harness.
 Delegating a task via `delegate_task` with `agent: "pi"` runs through the ACP adapter.
 Delegating to an unconfigured CLI (such as Claude Code, which has no ACP adapter) is
-refused by name as `adapter-not-configured`.
+refused by name as `adapter-not-configured`. Delegating to a configured agent ID that is
+not in the host's agent registry is refused as `agent-not-configured`. An admitted task's
+record carries the frozen configured-agent snapshot (`agentConfig`) beside its `agentId`
+and `harness`, so what the delegation was told at admission is readable back later.
 
 ## Diagnostic checks
 

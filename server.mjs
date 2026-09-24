@@ -5,7 +5,7 @@
 // The resolver is a provider seam (lib/resolver.mjs) — swap it, don't rewrite the server.
 import { createServer } from "node:http";
 import { execFile, execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import path from "node:path";
 import os from "node:os";
@@ -436,10 +436,17 @@ const serverAgentStorage = {
     try { return readFileSync(AGENTS_FILE, "utf8"); } catch { return null; }
   },
   setItem(_k, v) {
+    mkdirSync(HOST_DIR, { recursive: true });
+    if (existsSync(AGENTS_FILE)) {
+      accessSync(AGENTS_FILE, constants.W_OK);
+    }
+    const tmp = `${AGENTS_FILE}.tmp.${process.pid}.${Date.now()}`;
     try {
-      mkdirSync(HOST_DIR, { recursive: true });
-      writeFileSync(AGENTS_FILE, v, { mode: 0o600 });
-    } catch { /* best effort */ }
+      writeFileSync(tmp, v, { mode: 0o600 });
+      renameSync(tmp, AGENTS_FILE);
+    } finally {
+      try { if (existsSync(tmp)) unlinkSync(tmp); } catch {}
+    }
   },
 };
 const agentRegistry = createAgentRegistry({ storage: serverAgentStorage });
