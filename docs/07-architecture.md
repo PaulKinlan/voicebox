@@ -236,7 +236,15 @@ Audio worklets loaded by that code: `pcm-worklet.js`.
   `container: env-dialog / inline-size` container queries for component-isolated responsive layout, `<search>` landmark
   semantics, scroll containment (`overscroll-behavior: contain`, `scrollbar-gutter: stable`), keyboard-focusable
   scrollable regions (`<pre tabindex="0">`), IME composition guards, and GitHub-linked commit references in `#build` alongside a quick link to `changelog.html` (`GET /api/changelog`).
-scrollable regions (`<pre tabindex="0">`), and IME composition guards.
+  **Folders are navigable** (voicebox-beads-tee): a folder row opens that folder in the same list — the
+  listing IS the navigation, and every row carries its path from the root. A crumb bar says where you are
+  (`root / proposals / drafts`), every ancestor is a 44px button, a parent control leads back, and Enter
+  opens a focused folder row. ONE shared helper (`core/paths.ts` `normaliseRelativeDir`) normalises the
+  path for the server and the page alike, so `proposals//drafts/` is the same folder to both while `..`, a
+  leading slash and any dotfile segment are refused by name; the root itself is answered directly, because
+  a root is not a file name (handing `""` to the file resolver refuses the root — found by driving, on
+  both sides). It holds across root kinds: a machine root is listed by the server, a page-owned root (OPFS
+  or a picked folder) is listed through the page, which resolves the subpath against its own descriptor.
   The room's file list is a `file-explorer` inline-size container: one column by default, two from 36rem,
   with long names wrapping independently of their sizes. Its scroll area is bounded to 40svh/24rem
   so a populated list does not keep growing through the room. Selection, root provenance, arrival

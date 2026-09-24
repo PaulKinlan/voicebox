@@ -43,6 +43,7 @@ const WANTED = {
   harnessesClose: "harnesses-close", harnessesCheck: "harnesses-check",
   harnessesStatus: "harnesses-status", harnessesList: "harnesses-list",
   harnessesScope: "harnesses-scope",
+  folderPath: "folder-path",
 };
 const els = {};
 const missing = [];
@@ -63,6 +64,11 @@ function on(el, type, handler) {
 
 let shownFile = null; // the file currently in the reader panel
 let listedRoot = null; // the root the CURRENT entries were read from — not assumed to be the active one
+// WHICH FOLDER OF THE ROOT IS ON SCREEN (voicebox-beads-tee): "" is the root itself, and every listing
+// request carries it. The server's answer gives it back normalised, and the page adopts THAT as the
+// truth, so a path can never drift between what the button did and what the list shows.
+let listingDir = "";
+const joinDir = (dir, name) => (dir ? `${dir}/${name}` : name);
 let listingRefusal = null; // the server's refusal, when it could not list the active root at all
 // A lot of files must stay usable: filter by name, and never render an unbounded
 // list — but the bound is STATED, because an explorer showing the first 60 of 240
@@ -120,16 +126,33 @@ async function loadPersistedRoomFolders() {
   }
 }
 
-async function walkRoomFolder() {
+async function walkRoomFolder(dir = "") {
   const names = [];
   roomTruncated = false;
   if (!roomFolder?.handle) return names;
-  for await (const [name, node] of roomFolder.handle.entries()) {
+  // THE FOLDER ON SCREEN, not always the root (voicebox-beads-tee): the same relative path the server and
+  // the page take, walked down the handle chain this tab holds.
+  let handle;
+  try {
+    handle = await roomDirHandle(dir);
+  } catch (error) {
+    throw new Error(`'${dir}' could not be opened: ${error?.message ?? error}`);
+  }
+  for await (const [name, node] of handle.entries()) {
     if (names.length >= ROOM_FOLDER_MAX) { roomTruncated = true; break; }
     names.push({ name, isDir: node.kind === "directory" });
   }
   names.sort((a, b) => a.name.localeCompare(b.name));
   return names;
+}
+
+/** The directory handle for a relative path inside the room's own picked folder. */
+async function roomDirHandle(dir) {
+  let handle = roomFolder.handle;
+  for (const part of (dir ? dir.split("/").filter(Boolean) : [])) {
+    handle = await handle.getDirectoryHandle(part);
+  }
+  return handle;
 }
 
 async function openRoomFolder() {
@@ -198,6 +221,7 @@ function setActiveRoomFolder(name) {
   const folder = roomFolders.get(name);
   if (!folder) return;
   roomFolder = folder;
+  listingDir = ""; // a path means nothing across folders — a new pick starts at its root
   fileFilter = "";
   if (els.fileFilter) els.fileFilter.value = "";
   idbStore().then((idb) => idb?.putActiveRoomFolderName?.(name)).catch(() => {});
@@ -329,13 +353,13 @@ async function loadRoomFolder() {
   }
   showSkeleton();
   try {
-    const listed = await walkRoomFolder();
+    const listed = await walkRoomFolder(listingDir);
     listedRoot = null;
     listingRefusal = null;
     entries = listed.map(({ name, isDir }) => ({ name, isDir, meta: isDir ? "folder" : "file" }));
     render();
   } catch (error) {
-    listingRefusal = { refused: "folder-unreadable", why: `could not read '${roomFolder.name}': ${error?.message ?? error}` };
+    listingRefusal = { refused: "folder-unreadable", why: `could not read '${listingDir || roomFolder.name}': ${error?.message ?? error}` };
     entries = [];
     render();
   }
@@ -351,7 +375,12 @@ function closeRoomFolder() {
 
 async function readRoomFile(name) {
   if (!roomFolder || !roomFolder.handle) throw new Error("No folder open");
-  const file = await (await roomFolder.handle.getFileHandle(name)).getFile();
+  // A NAME MAY BE A PATH (voicebox-beads-tee): a file inside a folder is `proposals/drafts/x.txt`, so the
+  // containing directory is resolved by walking, exactly as the listing does.
+  const parts = (name ?? "").split("/").filter(Boolean);
+  const fileName = parts.pop() ?? "";
+  const dir = await roomDirHandle(parts.join("/"));
+  const file = await (await dir.getFileHandle(fileName)).getFile();
   const truncated = file.size > ROOM_FILE_MAX_BYTES;
   const text = await (truncated ? file.slice(0, ROOM_FILE_MAX_BYTES) : file).text();
   return { text, bytes: file.size, truncated };
@@ -404,6 +433,7 @@ async function initRoomFolders() {
     const storedActive = await idb?.getActiveRoomFolderName?.().catch(() => null);
     const active = (storedActive && roomFolders.get(storedActive)) || roomFolders.values().next().value;
     roomFolder = active;
+    listingDir = "";
     renderRoomFoldersBar();
     if (active.permission === "granted") {
       loadRoomFolder();
@@ -536,6 +566,9 @@ function card(entry, { arrived = false } = {}) {
   open.type = "button";
   open.className = "file-open";
   open.dataset.file = entry.name;
+  // The PATH is what navigation and the reader use; the bare NAME is what arrival marks key on, because
+  // the listing inside a folder carries bare names (voicebox-beads-tee). Two facts, two attributes.
+  open.dataset.path = joinDir(listingDir, entry.name);
   if (entry.isDir) open.dataset.kind = "directory";
   // A FOLDER IS NOT A FILE. The listing has carried `kind` all along and the page
   // threw it away, so a folder rendered as a nameless-size file and clicking it
@@ -557,21 +590,12 @@ function card(entry, { arrived = false } = {}) {
   open.append(name, meta);
 
   if (entry.isDir) {
-    open.addEventListener("click", () => {
-      // Not a refusal by the server — a thing this explorer cannot do yet, said
-      // plainly, with the folder named. Acceptance 7cd.4 wants failure modes
-      // distinguishable; "no drill-down yet" is one of them.
-      els.readerTitle.textContent = `${entry.name}/`;
-      const sentence = `'${entry.name}' is a folder. This list shows one level of the root, and opening folders is not available yet.`;
-      els.readerFacts.textContent = sentence;
-      els.readerFacts.title = "";
-      els.readerBody.textContent = sentence;
-      els.reader.dataset.state = "ready";
-      if (els.readerDetails) els.readerDetails.open = true;
-      showFileSelection(entry.name);
-    });
+    // A FOLDER IS A DOOR (voicebox-beads-tee). This used to refuse with a sentence saying folders could
+    // not be opened yet; the refusal was honest and the thing it described was a gap. Opening it is the
+    // listing: the same request, with the folder named, and the answer says which folder it listed.
+    open.addEventListener("click", () => goToDir(joinDir(listingDir, entry.name)));
   } else {
-    open.addEventListener("click", () => showFile(entry.name));
+    open.addEventListener("click", () => showFile(joinDir(listingDir, entry.name)));
   }
   li.append(open);
   return li;
@@ -771,6 +795,7 @@ function renderListingRoot() {
 function render() {
   const count = entries.length;
   if (!els.files || !els.made || !els.count) return;
+  renderCrumbs();
   // Usable when the SERVER acts, or when the page that owns the root is connected and will act.
   const writable = activeRoot === undefined
     || activeRoot?.reachableFromThisProcess === true
@@ -822,7 +847,71 @@ function render() {
 
 function showFileSelection(name) {
   for (const card of document.querySelectorAll(".file-open")) {
-    card.setAttribute("aria-current", String(card.dataset.file === name));
+    card.setAttribute("aria-current", String(card.dataset.path === name));
+  }
+}
+
+/**
+ * GO INTO A FOLDER (voicebox-beads-tee). Navigation IS the listing: the same request, carrying the
+ * folder. Nothing is fetched twice and no second view is invented — the answer says which folder it
+ * listed, and the crumbs are drawn from that, so the bar cannot disagree with the list under it.
+ */
+function goToDir(dir) {
+  listingDir = dir ?? "";
+  // WHICH LISTING AM I NAVIGATING? A room folder picked in THIS tab is listed from its own handle, not
+  // from the server; everything else goes through the server, which asks the page when the root is the
+  // page's (voicebox-beads-tee). One path for the person, one request per source.
+  if (roomFolder) void loadRoomFolder();
+  else void load();
+}
+
+/** The way back up: root / folder / folder, each step a button, with a parent control in front. */
+function renderCrumbs() {
+  const nav = els.folderPath;
+  if (!nav) return;
+  const parts = listingDir ? listingDir.split("/").filter(Boolean) : [];
+  const kind = listedRoot?.kind ?? activeRoot?.root?.kind ?? null;
+  // A folder picked in this tab is its own root, and its name is the only honest label for the top crumb.
+  const rootLabel = roomFolder?.name
+    ?? { machine: "this machine", opfs: "browser storage", handle: "picked folder" }[kind]
+    ?? "the root";
+  nav.replaceChildren();
+  // At the root there is nowhere to go back to, and the line above already names it.
+  nav.hidden = parts.length === 0;
+  if (!parts.length) return;
+
+  const up = document.createElement("button");
+  up.type = "button";
+  up.className = "crumb crumb-up";
+  up.textContent = "↑";
+  up.setAttribute("aria-label", `Go up to ${parts.length === 1 ? rootLabel : parts[parts.length - 2]}`);
+  up.addEventListener("click", () => goToDir(parts.slice(0, -1).join("/")));
+  nav.append(up);
+
+  const steps = [{ label: rootLabel, dir: "" }, ...parts.map((part, i) => ({ label: part, dir: parts.slice(0, i + 1).join("/") }))];
+  for (const [i, step] of steps.entries()) {
+    if (i > 0) {
+      const sep = document.createElement("span");
+      sep.className = "crumb-sep";
+      sep.setAttribute("aria-hidden", "true");
+      sep.textContent = "/";
+      nav.append(sep);
+    }
+    const current = i === steps.length - 1;
+    if (current) {
+      const here = document.createElement("span");
+      here.className = "crumb";
+      here.setAttribute("aria-current", "page");
+      here.textContent = step.label;
+      nav.append(here);
+    } else {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "crumb";
+      button.textContent = step.label;
+      button.addEventListener("click", () => goToDir(step.dir));
+      nav.append(button);
+    }
   }
 }
 
@@ -850,17 +939,31 @@ function showSkeleton() {
 let activeRoot = undefined; // undefined = not asked yet, null = none declared
 
 async function loadRoot() {
+  const before = rootIdentity();
   try {
     const answer = await request("/api/root");
     activeRoot = answer?.declared ? answer : null;
   } catch {
     activeRoot = undefined; // an older server with no root seam: say so, do not invent one
   }
+  // A PATH MEANS NOTHING ACROSS ROOTS (voicebox-beads-tee): `proposals` in one root is a different folder
+  // — or no folder — in the next, so a root change puts the view back at the root. Only a CHANGE resets;
+  // pressing Refresh while inside a folder must leave you inside it.
+  const now = rootIdentity();
+  if (before !== null && before !== now) listingDir = "";
   renderRoot();
   // The list's placeholder chip is a promise too ("the first file appears
   // here"), so it is decided with the root facts in hand rather than before
   // they arrive.
   render();
+}
+
+/** What root is this, as a string — the identity a folder path is relative to. */
+function rootIdentity() {
+  if (activeRoot === undefined) return null;
+  if (activeRoot === null) return "none";
+  const root = activeRoot.root ?? {};
+  return `${activeRoot.project ?? ""}:${root.kind ?? ""}:${root.path ?? root.id ?? root.name ?? ""}`;
 }
 
 // The settings dialog's facts drawer: only facts this page actually holds, and
@@ -1281,7 +1384,7 @@ async function load() {
     // read every file back through `POST /api/turn`, so a loaded page quietly
     // POSTed turns nobody typed — an independent verifier saw eight of them and
     // a `read alpha.txt` that was never spoken. Reading is not a turn.
-    const answer = await request("/api/files");
+    const answer = await request(`/api/files${listingDir ? `?dir=${encodeURIComponent(listingDir)}` : ""}`);
     // A LISTING CAN BE REFUSED, and then there is no listing to attribute. This
     // used to fall through and render "listed from an unnamed root" — a claim
     // about a listing that never happened, in front of an empty list.
@@ -1294,6 +1397,10 @@ async function load() {
     }
     listingRefusal = null;
     showAllFiles = false;
+    // THE ANSWER SAYS WHICH FOLDER IT LISTED, and the page adopts that rather than trusting the path it
+    // asked for: the server normalises it, so `proposals//drafts/` and `proposals/drafts` cannot leave the
+    // crumb bar and the list describing different folders (voicebox-beads-tee).
+    if (typeof answer.dir === "string") listingDir = answer.dir;
     // The server says which root it listed, so the page records it rather than
     // assuming it is the active one. When they differ, the cards are a listing of
     // somewhere else and the panel says so (acceptance 7cd.1: an explorer must

@@ -37,6 +37,7 @@
 
 import { createExecutorDoor } from "../lib/channel.mjs";
 import { resolveInRoot, type RootDescriptor } from "../core/root.ts";
+import { normaliseRelativeDir, parentDir } from "../core/paths.ts";
 import { CORE_FS_DESCRIPTOR, CORE_FS_VERBS } from "../core/dispatch.ts";
 
 /** The structural slice of browser/storage.ts this module uses — injected, never imported. */
@@ -118,14 +119,37 @@ async function performAct(call: { tool: string; args: Record<string, unknown> },
   // A list never touches a path — but it still answers from the WORLD, with the platform's own
   // error naming a vanished root rather than an empty list that looks like an empty folder.
   if (tool === "list") {
+    // WHICH FOLDER (voicebox-beads-tee). `name` is a path relative to the root, normalised by the SAME
+    // helper the server uses, so a folder click lands in the same place whichever side owns the bytes.
+    // The listing used to list the root and ignore the name entirely, which is why the room could not
+    // navigate: it had no way to ask a page-owned root for a subfolder at all.
+    const wanted = normaliseRelativeDir(call.args?.name ?? "");
+    if (!wanted.ok) {
+      return { ok: false as const, refused: wanted.refused, why: wanted.why };
+    }
+    // CONTAINMENT, RE-RUN HERE (rule 1): the page resolves against its own descriptor, so a path that
+    // climbs out is refused by this side even if the server somehow asked for it.
+    // THE ROOT IS NOT A FILE NAME: the shared resolver is for files inside the root, and handing it ""
+    // makes it refuse the root itself ("names no file inside the root") — which is exactly how listing a
+    // project's root broke when this verb learned to take a path. The root needs no resolution; it IS the
+    // root, and `storage.root` is the adapter's own answer for where that is.
+    const target = wanted.dir === "" ? { ok: true as const, path: storage.root } : resolveInRoot(descriptor, wanted.dir);
+    if (!target.ok) {
+      return { ok: false as const, refused: target.rule, why: target.why };
+    }
     try {
       await storage.probe();
-      const { entries, truncated } = await storage.listChildren(storage.root, LIST_LIMIT, true);
+      const { entries, truncated } = await storage.listChildren(target.path, LIST_LIMIT, true);
       const visible = entries.filter((e) => !e.name.startsWith("."));
       return {
         ok: true as const,
+        dir: wanted.dir,
+        parent: parentDir(wanted.dir),
         files: visible.map((e) => e.name),
-        entries: visible.map((e) => ({ name: e.name, bytes: e.bytes ?? 0 })),
+        // `kind` travels with every entry: without it a folder cannot be told from a file, and a room
+        // that cannot tell them apart cannot offer to open one (see the harnesses' lesson: the listing
+        // is the honest view, and what it leaves out is what the UI cannot do).
+        entries: visible.map((e) => ({ name: e.name, bytes: e.bytes ?? 0, kind: e.kind })),
         truncated,
         // WHO ANSWERED, AND FROM WHICH ROOT (fqq): the server cannot see this page's storage, so the
         // page's own descriptor is the only honest provenance for a listing it returns. The room prints

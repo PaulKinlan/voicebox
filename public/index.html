@@ -128,6 +128,10 @@
              usually the same sentence with a different subject — and when they
              differ, this is the only place the difference can be seen. -->
         <p class="listing-root" id="listing-root" hidden></p>
+        <!-- WHERE IN THE ROOT WE ARE (voicebox-beads-tee). Folders are navigable, so the panel needs a way
+             back up: this is the path from the root to the folder on screen, each step a button, with a
+             parent control in front of it. Hidden at the root — the root line above already names it. -->
+        <nav class="folder-path" id="folder-path" aria-label="Folder path" hidden></nav>
         <!-- With a lot of files the list is a wall of names. A filter and a
              bound keep it usable, and the bound SAYS what it is hiding — an
              explorer that silently shows the first N is the same defect as an
