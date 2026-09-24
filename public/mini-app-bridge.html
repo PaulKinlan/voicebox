@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Voicebox Mini-App Bridge</title>
+  <style>
+    :root { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+    body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; display: flex; flex-direction: column; }
+    #inner-app { border: 0; width: 100%; height: 100%; flex: 1; display: block; background: transparent; }
+    .bridge-error { padding: 12px; color: #ff6b6b; font-family: system-ui, sans-serif; font-size: 13px; }
+  </style>
+  <script type="module" src="mini-app-bridge.js"></script>
+</head>
+<body>
+  <iframe id="inner-app" sandbox="allow-scripts" title="Sandboxed Mini-App"></iframe>
+</body>
+</html>
