@@ -5,7 +5,7 @@
 // The resolver is a provider seam (lib/resolver.mjs) — swap it, don't rewrite the server.
 import { createServer } from "node:http";
 import { execFile, execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import path from "node:path";
 import os from "node:os";
@@ -39,7 +39,7 @@ import { bootFence } from "./lib/fence-provider.mjs";
 import { SOURCE_DIRS } from "./lib/browser-sources.mjs";
 import { bootUnitFence, stopUnitFence } from "./lib/unit-fence-provider.mjs";
 import { createHarnessInventory } from "./lib/harness-inventory.mjs";
-import { createAgentRegistry, listHarnessesWithConfiguredAgents } from "./lib/harness-config.mjs";
+import { createAgentRegistry, listHarnessesWithConfiguredAgents, publicAgentProjection } from "./lib/harness-config.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
 import { createLiveSession, LIVE_MODEL, inputRateRequiredBy } from "./lib/live-session.mjs";
 import { commandToAction, functionDeclarations, liveSystemInstruction } from "./lib/commands.mjs";
@@ -436,10 +436,17 @@ const serverAgentStorage = {
     try { return readFileSync(AGENTS_FILE, "utf8"); } catch { return null; }
   },
   setItem(_k, v) {
+    mkdirSync(HOST_DIR, { recursive: true });
+    if (existsSync(AGENTS_FILE)) {
+      accessSync(AGENTS_FILE, constants.W_OK);
+    }
+    const tmp = `${AGENTS_FILE}.tmp.${process.pid}.${Date.now()}`;
     try {
-      mkdirSync(HOST_DIR, { recursive: true });
-      writeFileSync(AGENTS_FILE, v, { mode: 0o600 });
-    } catch { /* best effort */ }
+      writeFileSync(tmp, v, { mode: 0o600 });
+      renameSync(tmp, AGENTS_FILE);
+    } finally {
+      try { if (existsSync(tmp)) unlinkSync(tmp); } catch {}
+    }
   },
 };
 const agentRegistry = createAgentRegistry({ storage: serverAgentStorage });
@@ -460,6 +467,14 @@ if (HARNESS === "pi" || HARNESS === "pi-acp") {
     root: () => active?.root,
   });
   installTaskExecutor(piExecutor);
+  agentRegistry.register({
+    id: "pi",
+    name: "Pi",
+    harness: "pi",
+    adapter: "pi-acp",
+    environmentKey: SELF_ENVIRONMENT,
+    isDefault: true,
+  });
 } else if (HARNESS === "claude") {
   installTaskExecutor({
     check({ input }) {
@@ -468,6 +483,14 @@ if (HARNESS === "pi" || HARNESS === "pi-acp") {
     async run() {
       throw Object.assign(new Error("No Voicebox task adapter is configured for this CLI"), { refused: "adapter-not-configured" });
     },
+  });
+  agentRegistry.register({
+    id: "claude",
+    name: "Claude",
+    harness: "claude",
+    adapter: "claude-code",
+    environmentKey: SELF_ENVIRONMENT,
+    isDefault: true,
   });
 }
 
@@ -1358,7 +1381,8 @@ const routes = {
   "GET /api/agents": (req, res, url) => {
     const environmentKey = url.searchParams.get("environment") || undefined;
     const harness = url.searchParams.get("harness") || undefined;
-    return json(res, 200, { ok: true, agents: agentRegistry.list({ environmentKey, harness }) });
+    const agents = agentRegistry.list({ environmentKey, harness }).map(publicAgentProjection);
+    return json(res, 200, { ok: true, agents });
   },
   "GET /api/harnesses": async (req, res) => {
     const inv = await harnessInventory();
@@ -1930,7 +1954,7 @@ async function handle(req, res) {
     const body = await readJson();
     const registered = agentRegistry.register(body);
     if (!registered.ok) return json(res, 400, registered);
-    return json(res, 201, registered);
+    return json(res, 201, { ok: true, agent: publicAgentProjection(registered.agent) });
   }
 
   const agentMatch = url.pathname.match(/^\/api\/agents\/([a-zA-Z0-9_-]+)$/);
@@ -1947,11 +1971,11 @@ async function handle(req, res) {
     if (typeof body?.name === "string" && Object.keys(body).length === 1) {
       const renamed = agentRegistry.rename(agentId, body.name);
       if (!renamed.ok) return json(res, renamed.refused === "agent-not-found" ? 404 : 400, renamed);
-      return json(res, 200, renamed);
+      return json(res, 200, { ok: true, agent: publicAgentProjection(renamed.agent) });
     }
     const updated = agentRegistry.update(agentId, body);
     if (!updated.ok) return json(res, updated.refused === "agent-not-found" ? 404 : 400, updated);
-    return json(res, 200, updated);
+    return json(res, 200, { ok: true, agent: publicAgentProjection(updated.agent) });
   }
 
   if (req.method === "GET" && url.pathname === "/api/extensions") {
