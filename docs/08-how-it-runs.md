@@ -88,6 +88,9 @@ These are the things that must stay true; each is checkable, and the first three
    `tests/containment-paths.test.mjs` names the escaping case and carries a positive control.
 6. **Nothing in `public/` trusts a transcript.** The page's own note says so, and the suite drives an XSS
    payload through the API and asserts it never becomes elements.
+7. **Harness configuration distinguishes runtime, agent, and environment.** (`core/harness-config.ts`,
+   `lib/harness-config.mjs`). Configured agent records are secret-free, permanent IDs are distinct from
+   mutable names and transient task addresses, and stdio CLI adapters are refused in browser runtimes.
 
 ## Keeping this document true
 
