@@ -295,7 +295,7 @@ A tool is a **descriptor** — data, never code — carrying `id`, `name`, `capa
    enforced and by which mechanism, what it would be handed, what it cannot have.
 3. **Approve with a one-time host code.** In **Extensions → Waiting for review** (or **Found here**),
    open **Review and approve on the host**, then **Request approval code**. Review the exact plan
-   in the server terminal and enter its eight-digit code in the page. It expires after two minutes,
+   in the server terminal (or run `node tools/approval-code.mjs` on the host) and enter its eight-digit code in the page. It expires after two minutes,
    works once, and cannot approve a changed plan. The human decision is recorded before admission;
    the page never receives the host token. Keep server output private: anyone reading it can use
    an unexpired code. Restarting the server invalidates outstanding codes.

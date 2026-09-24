@@ -134,12 +134,13 @@ Two driven findings on `prove/n10-admission` closed in the same branch:
 
 The page's **Request approval code** sends JSON `{id}` to
 `POST /api/extensions/approval-request`. The host prints the resolved plan and an eight-digit
-code to its console. The response contains only `{requestId, expiresAt, plan, ok}` — never the
-code or host token. The person checks the terminal's plan before entering the code in the page,
+code to its console and writes a mode 0600 `.pending-approval.json` file in the host extensions directory
+for discovery via `node tools/approval-code.mjs` (for headless/systemd runs). The response contains only `{requestId, expiresAt, plan, ok}` — never the
+code or host token. The person checks the plan before entering the code in the page,
 and the page's dialog says what to look FOR: the extension's name with an eight-digit
-code beside it, that the code expires in two minutes and works once, and that five
+code beside it (visible in the terminal or via `node tools/approval-code.mjs`), that the code expires in two minutes and works once, and that five
 wrong guesses end it — the reader is never left hunting for what the terminal shows
-(`voicebox-beads-ky5`).
+(`voicebox-beads-ky5`, `voicebox-beads-62f`).
 which sends `{id, requestId, code}` to `POST /api/extensions/approve`.
 
 `lib/extension-approval.mjs` binds a code to that exact plan and admission decision, expires it

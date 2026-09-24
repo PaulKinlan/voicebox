@@ -5,7 +5,7 @@
 // The resolver is a provider seam (lib/resolver.mjs) — swap it, don't rewrite the server.
 import { createServer } from "node:http";
 import { execFile, execFileSync } from "node:child_process";
-import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import path from "node:path";
 import os from "node:os";
@@ -129,6 +129,8 @@ const PROBE_SCRIPT = path.join(ROOT, "tools", "sandbox-probe.mjs");
 // credentials"), in the family of environment-list-unreadable.
 const HOST_DIR = process.env.VOICEBOX_EXTENSIONS_DIR ?? path.join(ROOT, "extensions");
 const PAIRINGS_FILE = path.join(HOST_DIR, ".pairings.json");
+// Stale pending approval files must never survive a restart (voicebox-beads-62f).
+rmSync(path.join(HOST_DIR, ".pending-approval.json"), { force: true });
 
 // ── IN-ROOM SESSION AUTHORIZATION (voicebox-beads-5jl) ──────────────────────────
 // Minted per server process and embedded into the served index.html. Allows in-room UI actions

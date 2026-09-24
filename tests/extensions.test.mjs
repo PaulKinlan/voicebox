@@ -11,7 +11,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { startServer } from "./lib/server.mjs";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -686,4 +686,49 @@ test("API: DELETE /api/extensions/:id and POST/PATCH /api/extensions/reconfigure
 
   inv = await getJson("/api/extensions");
   assert.equal(inv.extensions.find((e) => e.id === "web-search"), undefined);
+});
+
+test("HTTP: approval-request writes 0600 .pending-approval.json and code NEVER leaks into HTTP response body (voicebox-beads-62f)", async () => {
+  await postJson("/api/extensions/proposals", {
+    descriptor: {
+      id: "httpclock",
+      name: "HTTP Clock",
+      runsIn: "host",
+      capabilities: [],
+      bounds: {},
+      tools: [{ name: "httpclock", primitive: "now", description: "time" }],
+    },
+  });
+
+  const resp = await fetch(`${server.base}/api/extensions/approval-request`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: "httpclock" }),
+  });
+  const responseBodyText = await resp.text();
+  assert.equal(resp.status, 200);
+  const data = JSON.parse(responseBodyText);
+  assert.equal(data.ok, true);
+  assert.equal(data.plan.id, "httpclock");
+
+  // Read the code from the 0600 .pending-approval.json file on host disk
+  const pendingFilePath = path.join(HOST_EXTENSIONS, ".pending-approval.json");
+  assert.ok(existsSync(pendingFilePath), ".pending-approval.json must exist on host disk");
+  const stat = statSync(pendingFilePath);
+  assert.equal(stat.mode & 0o777, 0o600, ".pending-approval.json must have mode 0600");
+
+  const pending = JSON.parse(readFileSync(pendingFilePath, "utf8"));
+  assert.match(pending.code, /^\d{8}$/, "approval code must be an 8-digit string");
+
+  // Security Invariant: The exact code string must NOT appear anywhere in the HTTP response body text
+  assert(!responseBodyText.includes(pending.code), "approval code must NEVER leak into the HTTP response body");
+
+  // Consuming the approval code via /api/extensions/approve deletes the pending file
+  const approveResp = await fetch(`${server.base}/api/extensions/approve`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: "httpclock", requestId: data.requestId, code: pending.code }),
+  });
+  assert.equal(approveResp.status, 200);
+  assert.equal(existsSync(pendingFilePath), false, ".pending-approval.json must be deleted upon consume");
 });

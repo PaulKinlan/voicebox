@@ -1154,7 +1154,7 @@ function extensionApproval(id) {
   summary.textContent = "Review and approve on the host";
   const note = document.createElement("p");
   note.setAttribute("role", "status");
-  note.textContent = "Request a code, review the plan in the server terminal, then enter the code here. The terminal prints the extension's name with an eight-digit code beside it. The code expires after two minutes, works once, and five wrong guesses end it. The host token stays on the machine.";
+  note.textContent = "Request a code, review the plan on the host, then enter the code here. Run 'node tools/approval-code.mjs' (or check your server terminal) to view the code. It expires after two minutes, works once, and five wrong guesses end it.";
   const plan = document.createElement("pre");
   const ask = document.createElement("button");
   ask.type = "button";
@@ -1189,7 +1189,7 @@ function extensionApproval(id) {
       const r = await post("approval-request", { id });
       requestId = r.requestId;
       plan.textContent = JSON.stringify(r.plan, null, 2);
-      note.textContent = "Review this same plan in the server terminal — it prints the extension's name with an eight-digit code beside it. Enter that code only if you approve. It expires in two minutes and works once.";
+      note.textContent = "Review this plan on the host. Run 'node tools/approval-code.mjs' (or check your server terminal) to view the 8-digit code. Enter that code only if you approve. It expires in two minutes and works once.";
       form.hidden = false;
       input.focus();
     } catch (err) { note.textContent = err.message; }
