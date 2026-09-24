@@ -289,6 +289,7 @@ A tool is a **descriptor** — data, never code — carrying `id`, `name`, `capa
    `.ledger.jsonl`, and rebuilds the registry. A file dropped into the directory by hand is
    *present, not admitted* — visible in the inventory, never live.
 4. **Call it.** *"run the tool clock"* → the `tool` verb → `callTool()`. Only admitted tools answer.
+5. **Reconfigure or remove it.** Running extensions can be updated (`POST /api/extensions/reconfigure`, `PATCH /api/extensions/:id`) or withdrawn (`DELETE /api/extensions/:id`, `POST /api/extensions/revoke`) via the UI settings-style dialog or API with the host token (`x-voicebox-host-token`), updating bounds or revoking tools without restarting the server.
 
 Where an extension **may** act today is *driven* in the loop block above — through the root-scoped
 primitives in **the active project root**, the same root a turn writes into; and on the network only

@@ -2041,6 +2041,53 @@ async function handle(req, res) {
     return json(res, r.ok ? 200 : 404, r);
   }
 
+  // DELETE /api/extensions/:id (voicebox-beads-ud5) — REST revocation endpoint
+  const deleteExtMatch = req.method === "DELETE" && url.pathname.match(/^\/api\/extensions\/([a-z0-9_-]+)$/);
+  if (deleteExtMatch) {
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "revocation is the host's act — this route requires the host token (x-voicebox-host-token); the page cannot hold it" });
+    }
+    const id = deleteExtMatch[1];
+    const r = extensions.revokeExtension(id, "host");
+    return json(res, r.ok ? 200 : 404, r);
+  }
+
+  // POST /api/extensions/reconfigure (voicebox-beads-ud5) — confirm-first or apply reconfigured bounds
+  if (req.method === "POST" && url.pathname === "/api/extensions/reconfigure") {
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "reconfiguring an extension is the host's act — this route requires the host token (x-voicebox-host-token); the page cannot hold it" });
+    }
+    const body = await readJson();
+    if (!body?.id) return json(res, 400, { ok: false, refused: "bad-request", why: "reconfiguration requires an extension id" });
+    const inv = extensions.inventory();
+    const row = inv.extensions.find((e) => e.id === body.id);
+    if (!row) return json(res, 404, { ok: false, refused: "extension-not-admitted", why: `'${body.id}' is not a running extension — nothing to reconfigure` });
+
+    if (body.confirm !== true) {
+      return json(res, 200, {
+        confirmFirst: true,
+        id: body.id,
+        current: { bounds: row.bounds, declared: row.declared, tools: row.tools },
+        proposed: { bounds: body.bounds ?? row.bounds },
+        note: "nothing decided — repeat with confirm:true to apply reconfiguration",
+      });
+    }
+    const r = extensions.reconfigureExtension(body.id, { bounds: body.bounds, tools: body.tools }, body.actor ?? "host");
+    return json(res, r.ok ? 200 : 400, r);
+  }
+
+  // PATCH /api/extensions/:id (voicebox-beads-ud5) — REST reconfiguration endpoint
+  const patchExtMatch = req.method === "PATCH" && url.pathname.match(/^\/api\/extensions\/([a-z0-9_-]+)$/);
+  if (patchExtMatch) {
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "reconfiguring an extension is the host's act — this route requires the host token (x-voicebox-host-token); the page cannot hold it" });
+    }
+    const id = patchExtMatch[1];
+    const body = await readJson();
+    const r = extensions.reconfigureExtension(id, { bounds: body?.bounds, tools: body?.tools }, body?.actor ?? "host");
+    return json(res, r.ok ? 200 : 400, r);
+  }
+
   if (req.method === "GET" && url.pathname === "/api/permissions/pending") {
     return json(res, 200, { ok: true, pending: permissions.pending() });
   }

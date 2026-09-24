@@ -367,7 +367,35 @@ body:has(#reader[data-state="ready"]) #file-body { max-height: 26svh; }
 .ext-plan form { display: grid; gap: 8px; margin-top: 8px; }
 .ext-plan form[hidden] { display: none; }
 .ext-plan input { max-width: 100%; box-sizing: border-box; }
+.ext-actions { display: flex; gap: 8px; margin-top: 6px; }
 .env-item.env-empty { color: #6f6f7c; font-size: 12px; }
+
+/* ── Extension reconfigure & removal dialog (voicebox-beads-ud5) ─────────── */
+.setting-input {
+  width: 100%;
+  min-height: 38px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--ground);
+  color: var(--ink);
+  font-size: .8125rem;
+  box-sizing: border-box;
+}
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+.quiet.danger {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--line));
+}
+.quiet.danger:hover {
+  background: color-mix(in srgb, var(--warn) 15%, transparent);
+}
 
 /* ── Harnesses modal dialog (voicebox-beads-f1o) ─────────────────────────── */
 dialog.harnesses-modal {

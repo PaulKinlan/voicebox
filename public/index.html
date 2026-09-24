@@ -66,18 +66,62 @@
             <button class="icon-button" id="exts-close" type="button" aria-label="Close extensions"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
           </div>
           <p class="env-hint">Extensions give the agent new abilities. The machine that runs the server decides what is allowed; this page shows what is here and what each one would get.</p>
-          <h3 class="ext-section">Running</h3>
-          <ul class="env-list" id="ext-running"></ul>
-          <h3 class="ext-section">Waiting for review</h3>
-          <ul class="env-list" id="ext-waiting"></ul>
-          <h3 class="ext-section">Found here, never reviewed</h3>
-          <ul class="env-list" id="ext-present"></ul>
-          <h3 class="ext-section">Refused</h3>
-          <ul class="env-list" id="ext-refused"></ul>
-          <h3 class="ext-section">Available to add</h3>
-          <ul class="env-list" id="ext-catalogue"></ul>
+          <div id="exts-list">
+            <h3 class="ext-section">Running</h3>
+            <ul class="env-list" id="ext-running"></ul>
+            <h3 class="ext-section">Waiting for review</h3>
+            <ul class="env-list" id="ext-waiting"></ul>
+            <h3 class="ext-section">Found here, never reviewed</h3>
+            <ul class="env-list" id="ext-present"></ul>
+            <h3 class="ext-section">Refused</h3>
+            <ul class="env-list" id="ext-refused"></ul>
+            <h3 class="ext-section">Available to add</h3>
+            <ul class="env-list" id="ext-catalogue"></ul>
+          </div>
           <p class="env-note" id="ext-note" role="status"></p>
         </div>
+      </dialog>
+      <!-- Dialog for reconfiguring or removing a running extension (voicebox-beads-ud5) -->
+      <dialog class="envs settings-modal" id="ext-manage-dialog" closedby="any" aria-labelledby="ext-manage-title">
+        <form class="envs-form settings-form" id="ext-manage-form" method="dialog">
+          <div class="settings-head">
+            <h2 id="ext-manage-title">Reconfigure extension</h2>
+            <button class="icon-button" id="ext-manage-close" type="button" aria-label="Close extension settings"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+          </div>
+          <p class="env-hint" id="ext-manage-hint">Update bounds or remove this extension to restore tool access. Requires host token.</p>
+          <input type="hidden" id="ext-manage-id" value="">
+          <input type="hidden" id="ext-manage-mode" value="reconfigure">
+
+          <div id="ext-manage-fields">
+            <label class="device-row" id="ext-manage-hosts-group">
+              <h3>Allowed network hosts</h3>
+              <p class="device-state">Comma-separated domains this extension may fetch.</p>
+              <input type="text" id="ext-manage-hosts" placeholder="api.example.com" class="setting-input">
+            </label>
+            <label class="device-row" id="ext-manage-requests-group">
+              <h3>Max requests</h3>
+              <p class="device-state">Maximum number of outbound requests allowed.</p>
+              <input type="number" id="ext-manage-max-requests" min="1" max="1000" placeholder="20" class="setting-input">
+            </label>
+          </div>
+
+          <div id="ext-manage-remove-warning" hidden>
+            <p class="device-note" id="ext-manage-warning-text">The extension's tools will stop being callable immediately.</p>
+          </div>
+
+          <label class="device-row">
+            <h3>Host token</h3>
+            <p class="device-state">The authentication token from the server's .token file.</p>
+            <input type="password" id="ext-manage-token" autocomplete="current-password" placeholder="Enter host token" class="setting-input">
+          </label>
+
+          <p class="device-note" id="ext-manage-status" role="status" aria-live="polite"></p>
+
+          <div class="settings-actions">
+            <button type="submit" class="quiet" id="ext-manage-submit">Save configuration</button>
+            <button type="button" class="quiet danger" id="ext-manage-delete">Remove extension</button>
+          </div>
+        </form>
       </dialog>
       <!-- The environments this page can act in, as a REAL dialog (the settings pattern): modality,
            focus trapping, an inert background and Esc for free; a bounded height with its own scroll
