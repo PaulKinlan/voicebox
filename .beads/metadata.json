@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "voicebox_beads",
+  "project_id": "c954fc6e-cdd7-4095-b23d-bcc6ecd2bc25"
+}
