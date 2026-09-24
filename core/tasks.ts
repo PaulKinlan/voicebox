@@ -25,6 +25,10 @@ export interface TaskRecord {
   answer?: string;
   progress?: string;
   partial?: string;
+  /** Stable configured agent ID (from core/harness-config.ts) */
+  agentId?: string;
+  /** Harness implementation */
+  harness?: string;
   /** Present once the task is terminal — see OutcomeClass for what the class does and does not mean. */
   outcome?: TaskOutcome;
 }
@@ -134,8 +138,23 @@ export function reduceTask(entries: LogEntry[], address: string): TaskRecord | n
 
 /** Readback intentionally excludes credential identity and the captured prompt. */
 export function taskView(record: TaskRecord) {
-  const { address, environment, root, state, createdAt, updatedAt, reason, answer, progress, partial, outcome } = record;
+  const { address, environment, root, state, createdAt, updatedAt, reason, answer, progress, partial, outcome, agentId, harness } = record;
   // The readable half of the record: the class and its basis, and NOTHING that ranks one delegation
   // against another — no score, no weight, no ordering (voicebox-beads-m9u, "no automatic ranking").
-  return { address, environment, root, state, agent: record.input.agent, createdAt, updatedAt, ...(reason ? { reason } : {}), ...(answer !== undefined ? { answer } : {}), ...(progress ? { progress } : {}), ...(partial ? { partial } : {}), ...(outcome ? { outcome } : {}) };
+  return {
+    address,
+    environment,
+    root,
+    state,
+    agent: record.input.agent,
+    ...(agentId ? { agentId } : {}),
+    ...(harness ? { harness } : {}),
+    createdAt,
+    updatedAt,
+    ...(reason ? { reason } : {}),
+    ...(answer !== undefined ? { answer } : {}),
+    ...(progress ? { progress } : {}),
+    ...(partial ? { partial } : {}),
+    ...(outcome ? { outcome } : {}),
+  };
 }

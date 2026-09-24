@@ -250,7 +250,7 @@ for the argument and permission boundaries.
 * the gate (`core/extensions.ts`): `absent-capability`, `bad-tool-name`, `capability-unmediated`, `duplicate-tool`, `eval-not-a-tool-path`, `exec-absent`, `network-unbounded`, `no-tools`, `under-declared`, `unknown-capability`, `unknown-primitive`, `unsupported-abi`
 * the routes and the root seam (`server.mjs`, `core/root.ts`): `adapter-not-configured`, `approval-invalid-id`, `approval-json-required`, `audit-unreadable`, `bad-answer`, `bad-request`, `bearer-refused`, `dotfile-refused`, `environment-not-paired`, `exec-threw`, `extension-not-admitted`, `host-token-required`, `missing-content`, `not-a-directory`, `not-found`, `outside-root`, `pairing-revoked`, `path-missing`, `probe-failed`, `protected-audit`, `provider-not-configured`, `server-error`, `unauthenticated-call`, `unknown-command`, `unknown-environment`, `unknown-root-kind`, `unreadable`, `write-error`
 * admitted tools at run time (`lib/extensions.mjs`): `admission-refused`, `approval-audit-unwritable`, `approval-no-proposal`, `approval-plan-changed`, `approval-unavailable`, `bad-redirect`, `bad-url`, `budget-exhausted`, `extension-not-admitted`, `fetch-failed`, `host-not-allowed`, `not-admitted`, `outside-root`, `over-budget`, `protected-audit`, `redirect-host-not-allowed`, `redirect-without-location`, `root-not-declared`, `root-not-reachable-from-here`, `too-many-redirects`, `unknown-primitive`, `unknown-tool`
-* task admission/readback (`core/tasks.ts`, `lib/tasks.mjs`): `agent-required`, `executor-unavailable`, `invalid-task`, `invalid-task-address`, `invalid-task-context`, `task-audit-unavailable`, `task-authority-field`, `task-call-id-conflict`, `task-call-id-required`, `task-cancelled`, `task-capacity-exhausted`, `task-context-unavailable`, `task-deadline`, `task-environment-changed`, `task-environment-unverified`, `task-input-over-budget`, `task-invalid-result`, `task-not-found`, `task-not-running`, `task-output-over-budget`, `task-owner-mismatch`, `task-owner-unconfirmed`, `task-owner-unverified`, `task-persistence-failed`, `task-root-replaced`, `task-root-unavailable`, `unbounded-executor`, `unknown-tool`
+* task admission/readback (`core/tasks.ts`, `lib/tasks.mjs`): `agent-not-configured`, `agent-required`, `executor-unavailable`, `invalid-task`, `invalid-task-address`, `invalid-task-context`, `task-audit-unavailable`, `task-authority-field`, `task-call-id-conflict`, `task-call-id-required`, `task-cancelled`, `task-capacity-exhausted`, `task-context-unavailable`, `task-deadline`, `task-environment-changed`, `task-environment-unverified`, `task-input-over-budget`, `task-invalid-result`, `task-not-found`, `task-not-running`, `task-output-over-budget`, `task-owner-mismatch`, `task-owner-unconfirmed`, `task-owner-unverified`, `task-persistence-failed`, `task-root-replaced`, `task-root-unavailable`, `unbounded-executor`, `unknown-tool`, `unsupported-runtime-capability`
 
 **Listable at run time** — `GET /api/extensions` answers `{ placement, extensions, proposals, present, catalogueCount }` (probed: placement `machine`, catalogueCount 4); `GET /api/extensions/catalogue` previews the gate's verdict on every stranger before anything is staged; `GET /api/extensions/{proposals|catalogue}/<id>/plan` is the disclosure — source, declared, enforced-by-which-mechanism, what it gets, what it cannot have — before any decision.
 
@@ -339,6 +339,16 @@ Every environment variable the server and its libraries read, and where:
 
 There is no config file. What is on or off is decided by which provider is named, which key is
 present, and which descriptors the host has admitted — the ledger is the switch.
+
+### Configured agents and harness distinction (exists-and-driven)
+
+The architecture distinguishes the **runtime** (node, deno, browser), the **configured agent** (named instance with permanent ID, model, prompt, reach and bounds), and the **execution environment** (filesystem root, sandboxing, and reach). See `core/harness-config.ts` and `lib/harness-config.mjs`.
+- One harness engine (e.g. Pi) can have multiple configured agent instances in the same environment.
+- Stable agent IDs are permanent; renaming an agent's display label updates its title without retargeting tasks.
+- Stdio CLI adapters are explicitly refused in browser runtimes (`unsupported-runtime-capability`).
+- Configured agent records are secret-free; credentials belong to the environment owner, never agent configs.
+- Browser-local registries run entirely in-browser with zero server dependency.
+- Endpoints: `GET /api/agents`, `POST /api/agents`, `PATCH /api/agents/:id`, and `GET /api/harnesses` (combines host discovery with matching configured agents, feeding D3).
 
 ## The agent loop
 

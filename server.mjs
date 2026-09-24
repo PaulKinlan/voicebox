@@ -39,6 +39,7 @@ import { bootFence } from "./lib/fence-provider.mjs";
 import { SOURCE_DIRS } from "./lib/browser-sources.mjs";
 import { bootUnitFence, stopUnitFence } from "./lib/unit-fence-provider.mjs";
 import { createHarnessInventory } from "./lib/harness-inventory.mjs";
+import { createAgentRegistry, listHarnessesWithConfiguredAgents } from "./lib/harness-config.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
 import { createLiveSession, LIVE_MODEL, inputRateRequiredBy } from "./lib/live-session.mjs";
 import { commandToAction, functionDeclarations, liveSystemInstruction } from "./lib/commands.mjs";
@@ -429,10 +430,25 @@ const INSTANCE = process.env.VOICEBOX_INSTANCE ?? "machine";
 // "pending from a dead process" (attempted-and-lost) from "pending right now" (in flight).
 const BOOT = randomBytes(8).toString("hex");
 
+const AGENTS_FILE = path.join(HOST_DIR, ".agents.json");
+const serverAgentStorage = {
+  getItem() {
+    try { return readFileSync(AGENTS_FILE, "utf8"); } catch { return null; }
+  },
+  setItem(_k, v) {
+    try {
+      mkdirSync(HOST_DIR, { recursive: true });
+      writeFileSync(AGENTS_FILE, v, { mode: 0o600 });
+    } catch { /* best effort */ }
+  },
+};
+const agentRegistry = createAgentRegistry({ storage: serverAgentStorage });
+
 const tasks = createTaskHost({
   environment: SELF_ENVIRONMENT, instance: INSTANCE, boot: BOOT,
   addressKey: readFileSync(path.join(HOST_DIR, ".host-token")),
   root: () => active,
+  agentRegistry,
 });
 
 const permissions = createPermissionPolicy();
@@ -1329,7 +1345,16 @@ function agentSettingsPayload(extra = {}) {
 
 const harnessInventory = createHarnessInventory();
 const routes = {
-  "GET /api/harnesses": async (req, res) => json(res, 200, await harnessInventory()),
+  "GET /api/agents": (req, res, url) => {
+    const environmentKey = url.searchParams.get("environment") || undefined;
+    const harness = url.searchParams.get("harness") || undefined;
+    return json(res, 200, { ok: true, agents: agentRegistry.list({ environmentKey, harness }) });
+  },
+  "GET /api/harnesses": async (req, res) => {
+    const inv = await harnessInventory();
+    const combined = await listHarnessesWithConfiguredAgents(inv, agentRegistry);
+    return json(res, 200, combined);
+  },
   // THE AGENT'S SETTINGS, and the distinction this whole surface exists to keep:
   //   requested — what a person asked for, stored whether or not anything can use it yet
   //   applied   — what the RUNNING session can be shown to use, never what was asked for
@@ -1815,6 +1840,41 @@ async function handle(req, res) {
     req.on("data", (c) => { bytes += c.length; if (bytes <= maxBytes) body += c; });
     req.on("end", () => { try { resolve(bytes > maxBytes ? null : JSON.parse(body || "{}")); } catch { resolve(null); } });
   });
+
+  if (req.method === "POST" && url.pathname === "/api/agents") {
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, {
+        ok: false,
+        refused: "host-token-required",
+        why: "configuring an agent is the host's act and requires the host token (x-voicebox-host-token); the page cannot hold it",
+      });
+    }
+    const body = await readJson();
+    const registered = agentRegistry.register(body);
+    if (!registered.ok) return json(res, 400, registered);
+    return json(res, 201, registered);
+  }
+
+  const agentMatch = url.pathname.match(/^\/api\/agents\/([a-zA-Z0-9_-]+)$/);
+  if (req.method === "PATCH" && agentMatch) {
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, {
+        ok: false,
+        refused: "host-token-required",
+        why: "updating an agent is the host's act and requires the host token (x-voicebox-host-token); the page cannot hold it",
+      });
+    }
+    const agentId = agentMatch[1];
+    const body = await readJson();
+    if (typeof body?.name === "string" && Object.keys(body).length === 1) {
+      const renamed = agentRegistry.rename(agentId, body.name);
+      if (!renamed.ok) return json(res, renamed.refused === "agent-not-found" ? 404 : 400, renamed);
+      return json(res, 200, renamed);
+    }
+    const updated = agentRegistry.update(agentId, body);
+    if (!updated.ok) return json(res, updated.refused === "agent-not-found" ? 404 : 400, updated);
+    return json(res, 200, updated);
+  }
 
   if (req.method === "GET" && url.pathname === "/api/extensions") {
     return json(res, 200, extensions.inventory());
