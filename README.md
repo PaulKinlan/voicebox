@@ -37,7 +37,7 @@ is still undecided.
 
 ## Installed harnesses
 
-Open **Harnesses** from the voice page and click **Check installed harnesses**, or run
+Open **Harnesses** from the voice page (which opens the modal dialog without navigating away) and click **Check installed harnesses**, or run
 `node tools/list-harnesses.mjs`. This lists known host CLIs with descriptions, observed
 versions and present/unrunnable/unknown/absent states. Set `VOICEBOX_HARNESS_TOOLS` to
 an absolute JSON file path to add host-declared tool names and descriptions, with their

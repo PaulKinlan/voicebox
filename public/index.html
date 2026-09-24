@@ -34,15 +34,31 @@
            server the person has declared. The list is SERVER-OWNED so it is the same from every
            browser, and a host that is listed but not running says so by name rather than reading as
            ready. The "+" declares a descriptor; it never starts a service. -->
-      <a class="quiet" href="harnesses.html">Harnesses</a>
+      <!-- The environments, extensions and harnesses interfaces open as native modal dialogs directly
+           in the room (voicebox-beads-snk, voicebox-beads-f1o) matching the settings pattern. -->
+      <button class="quiet" id="harnesses-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="harnesses-dialog">Harnesses</button>
       <a class="quiet" href="changelog.html">Change log</a>
       <button class="quiet" id="envs-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="envs"><span id="envs-count">Environments</span></button>
-      <!-- The extension surface (voicebox-beads-vwb): the same registry the host enforces, read
-           once and rendered in plain language. Four states a person must never confuse: RUNNING
-           (the host admitted it), WAITING (proposed, review pending), FOUND (in the folder, never
-           reviewed — never green, never running), REFUSED (decided, with the reason). The page
-           can stage and disclose; approval needs a one-use code from the host console. -->
       <button class="quiet" id="exts-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="exts"><span id="exts-count">Extensions</span></button>
+      <dialog class="envs harnesses-modal" id="harnesses-dialog" closedby="any" aria-labelledby="harnesses-dialog-title">
+        <form class="envs-form" method="dialog">
+          <div class="settings-head">
+            <h2 id="harnesses-dialog-title">Harnesses</h2>
+            <button class="icon-button" id="harnesses-close" type="submit" aria-label="Close harnesses"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+          </div>
+          <p class="env-hint">Programs on this Voicebox server's machine, not necessarily your browser's machine. Checks run <code>--version</code>, not model tasks. Expand a declared tool catalogue to read host-supplied tools.</p>
+          <div class="harness-actions">
+            <button class="quiet" id="harnesses-check" type="button">Check installed harnesses</button>
+            <span class="harness-status" id="harnesses-status" role="status" aria-live="polite">Not checked yet.</span>
+          </div>
+          <div class="harnesses-list" id="harnesses-list"></div>
+          <h3 class="ext-section">Scope and limits</h3>
+          <p class="env-note" id="harnesses-scope"></p>
+          <p class="env-hint">Each harness keeps its own security and configuration; this does not wrap it in a Voicebox sandbox.</p>
+          <p class="env-hint">This is installed-program inventory with optional host-declared tool metadata, not configured agents, a default selection, or fleet/session addressing. Metadata does not prove active tools or permissions. Cost, model access and task readiness are unknown.</p>
+          <p class="env-hint">Pi coding agent is supported via the <code>pi-acp</code> adapter (start the server with <code>VOICEBOX_HARNESS=pi</code>). Other CLIs (like Claude Code) have no configured ACP adapter and cannot be delegated to directly.</p>
+        </form>
+      </dialog>
       <dialog class="envs" id="exts" closedby="any" aria-labelledby="exts-title">
         <div class="envs-form">
           <div class="settings-head">

@@ -39,6 +39,10 @@ const WANTED = {
   extRefused: "ext-refused", extCatalogue: "ext-catalogue",
   taskCard: "task-card",
   roomFoldersBar: "room-folders-bar", roomFoldersList: "room-folders-list",
+  harnessesOpen: "harnesses-open", harnessesDialog: "harnesses-dialog",
+  harnessesClose: "harnesses-close", harnessesCheck: "harnesses-check",
+  harnessesStatus: "harnesses-status", harnessesList: "harnesses-list",
+  harnessesScope: "harnesses-scope",
 };
 const els = {};
 const missing = [];
@@ -1889,6 +1893,84 @@ function installLightDismissFallback(dialog) {
 installLightDismissFallback(els.exts);
 installLightDismissFallback(els.envs);
 installLightDismissFallback(els.settings);
+installLightDismissFallback(els.harnessesDialog);
+
+// ── Harnesses modal dialog (voicebox-beads-f1o) ───────────────────────────
+function textNode(parent, tag, value) {
+  const element = document.createElement(tag);
+  element.textContent = value;
+  parent.append(element);
+  return element;
+}
+
+function renderModalToolCatalogue(article, catalogue) {
+  if (catalogue?.status !== "declared") {
+    textNode(article, "h4", "Tools — unknown");
+    textNode(article, "p", catalogue?.why ?? "No tool catalogue was reported. Unknown does not mean this harness has no tools.");
+    return;
+  }
+  const details = document.createElement("details");
+  details.className = "tool-catalogue";
+  textNode(details, "summary", `Declared tools (${catalogue.tools.length})`);
+  textNode(details, "p", `Source: ${catalogue.source}`);
+  textNode(details, "p", `Scope: ${catalogue.scope}`);
+  textNode(details, "p", "Host-supplied metadata, not a live session inspection. Tools may be disabled, changed or extended; this list grants no permission to run them.");
+  if (catalogue.tools.length === 0) textNode(details, "p", "The host declared an empty list. This does not establish that the harness has no tools.");
+  const descriptions = document.createElement("dl");
+  for (const tool of catalogue.tools) {
+    textNode(textNode(descriptions, "dt", ""), "code", tool.name);
+    textNode(descriptions, "dd", tool.description);
+  }
+  details.append(descriptions);
+  article.append(details);
+}
+
+async function checkHarnesses() {
+  if (!els.harnessesList || !els.harnessesStatus) return;
+  if (els.harnessesCheck) els.harnessesCheck.disabled = true;
+  els.harnessesStatus.textContent = "Checking host programs…";
+  try {
+    const response = await fetch("/api/harnesses", { signal: AbortSignal.timeout(15000) });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const report = await response.json();
+    if (!report.ok || !Array.isArray(report.entries)) throw new Error("invalid inventory response");
+    els.harnessesList.replaceChildren();
+    for (const row of report.entries) {
+      const article = document.createElement("article");
+      article.className = "harness-article";
+      article.dataset.harness = row.id;
+      textNode(article, "h3", `${row.name} — ${row.state}${row.version ? ` (${row.version})` : ""}`);
+      textNode(article, "p", row.description);
+      textNode(article, "p", row.why);
+      textNode(article, "p", row.capabilities);
+      article.dataset.delegationRefusal = row.delegation?.refused ?? "none";
+      textNode(article, "p", row.delegation?.ok ? `Voicebox delegation: ${row.delegation?.mechanism ?? "allowed"}` : `Voicebox delegation: ${row.delegation?.why ?? "none"}`);
+      renderModalToolCatalogue(article, row.toolCatalogue);
+      els.harnessesList.append(article);
+    }
+    if (els.harnessesScope) els.harnessesScope.textContent = `${report.scope}. ${report.note}`;
+    els.harnessesStatus.textContent = `Observed ${report.observedAt}. Snapshot reused for up to 60 seconds.`;
+  } catch (error) {
+    els.harnessesStatus.textContent = `Inventory unavailable (${error.message}). Check the Voicebox server connection and retry. Any previous entries below are stale, not a fresh observation.`;
+  } finally {
+    if (els.harnessesCheck) els.harnessesCheck.disabled = false;
+  }
+}
+
+on(els.harnessesOpen, "click", () => {
+  if (!els.harnessesDialog || els.harnessesDialog.open) return;
+  els.harnessesDialog.showModal();
+  els.harnessesOpen?.setAttribute("aria-expanded", "true");
+  if (els.harnessesList && els.harnessesList.children.length === 0) {
+    void checkHarnesses();
+  }
+});
+on(els.harnessesClose, "click", () => els.harnessesDialog?.close());
+on(els.harnessesDialog, "close", () => {
+  els.harnessesOpen?.setAttribute("aria-expanded", "false");
+  els.harnessesOpen?.focus();
+});
+on(els.harnessesCheck, "click", () => void checkHarnesses());
 
 on(els.settingsOpen, "click", () => {
   if (!els.settings || els.settings.open) return;
