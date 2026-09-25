@@ -297,6 +297,18 @@ html:has(dialog.settings[open]) { overflow: hidden; }
 .about p { margin: 8px 0 0; font-size: .75rem; color: var(--muted); }
 .interrupt { display: none; }
 .voice:has(#voice-ring-wrap[data-voice="speaking"]) .interrupt { display: inline-flex; }
+
+/* The docked mic (voicebox-beads-dzd): appears only when the ring has scrolled
+   out of view, so the page holds exactly one microphone control at a time.
+   Fixed to the corner with the safe-area respect a platform control gets;
+   z-index 5 is the page's one tier above in-flow content — the modals are
+   native <dialog> top layer and always stack above it. */
+.mic-dock { position: fixed; right: max(14px, env(safe-area-inset-right)); bottom: max(14px, env(safe-area-inset-bottom)); z-index: 5; display: grid; place-items: center; width: 56px; height: 56px; border: 1px solid color-mix(in srgb, var(--ink) 12%, var(--line)); border-radius: 50%; color: var(--accent); background: var(--card); box-shadow: 0 10px 24px -12px color-mix(in srgb, var(--ink) 45%, transparent); }
+.mic-dock .icon { width: 24px; height: 24px; }
+.mic-dock[data-voice="listening"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.mic-dock[data-voice="speaking"] { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, var(--line)); }
+.mic-dock:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.mic-dock[hidden] { display: none; }
 .composer { display: flex; align-items: center; gap: 4px; width: min(100%, 520px); margin-top: 20px; padding: 4px 4px 4px 6px; border: 1px solid color-mix(in srgb, var(--ink) 10%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--card) 55%, var(--ground)); transition: border-color 160ms ease-out, background 160ms ease-out; }
 .composer:focus-within { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--card) 85%, var(--ground)); }
 .composer input { flex: 1; min-width: 0; min-height: 38px; padding: 8px 14px; border: 0; border-radius: 999px; background: none; color: var(--ink); font-size: .875rem; text-overflow: ellipsis; }

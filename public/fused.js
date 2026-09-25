@@ -22,7 +22,7 @@ const WANTED = {
   rootKind: "root-kind", madeHeading: "made-heading", emptyLink: "empty-link", listingRoot: "listing-root",
   listTools: "list-tools", fileFilter: "file-filter", showAll: "show-all", listBound: "list-bound",
   openFolder: "open-folder", closeFolder: "close-folder", roomFolderHint: "room-folder-hint",
-  stage: "voice-ring-wrap", mic: "mic", state: "voice-state",
+  stage: "voice-ring-wrap", mic: "mic", state: "voice-state", micDock: "mic-dock",
   session: "session", log: "session-log", form: "text-form", utterance: "utterance", send: "send",
   reader: "reader", readerTitle: "reader-title", readerFacts: "file-facts", readerBody: "file-body",
   copy: "file-copy", close: "reader-close", about: "about-facts", readerDetails: "reader-details",
@@ -1850,6 +1850,28 @@ function startListening() {
 }
 
 on(els.mic, "click", startListening);
+
+// ── the docked mic (voicebox-beads-dzd): the ring's delegate, not a rival ──
+// The ring scrolls with the page; the microphone must not. While the ring is on
+// screen the dock stays hidden (exactly one mic in the page and in the tab
+// order); the moment scrolling takes the ring away the dock appears, and its
+// click is els.mic's click — same handler, same verbs, the pip-mic rule. Its
+// pressed/coloured state is painted by watching the same data-voice attribute
+// the ring's meters watch: one writer, two viewers, no drift.
+if (els.micDock && els.stage) {
+  on(els.micDock, "click", () => els.mic?.click());
+  const paintDock = () => {
+    const voice = els.stage.dataset.voice;
+    els.micDock.dataset.voice = voice;
+    els.micDock.setAttribute("aria-pressed", String(voice === "listening"));
+  };
+  paintDock();
+  new MutationObserver(paintDock).observe(els.stage, { attributes: true, attributeFilter: ["data-voice"] });
+  // Watch the BUTTON, not the ring: the ring's outer hairline can linger on
+  // screen after the button itself has scrolled away, and a dock that stays
+  // hidden then is exactly the miss this bead exists to close.
+  new IntersectionObserver(([entry]) => { els.micDock.hidden = entry.isIntersecting; }).observe(els.mic);
+}
 on(els.refresh, "click", load);
 on(els.fileFilter, "input", () => { fileFilter = els.fileFilter.value.trim(); showAllFiles = false; render(); });
 on(els.openFolder, "click", openRoomFolder);
