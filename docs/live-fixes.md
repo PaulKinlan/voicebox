@@ -73,3 +73,48 @@ own/remove their host directories instead of creating tokens in the checkout.
   **0 passed / 2 failed**: both mismatched directions reject the incorrect rate.
   Single replacement asserted; original source restored.
   [Log](evidence/live-fixes/94c/94c-declaration-mutant.log).
+
+## The live half, driven for real (journal-6g0, 2026-09-25)
+
+Everything above this section either redirected the vendor or declined to claim a
+paid call. This one is the bead's own live half, and the claim is the other way
+round: a REAL, AUTHENTICATED OpenAI Realtime session, real speech in, real audio
+out, and machine witnesses for both directions of the rate contract.
+
+The drive ([evidence/live-fixes/6g0/drive.mjs](evidence/live-fixes/6g0/drive.mjs), run under node v24.21.0) builds the
+session exactly as the host does — `createLiveSession({ provider: "openai" })`, so the
+dial is the 7ade86e probe-as-dial with `Authorization: Bearer` attached — waits for
+`session.updated`, then speaks a TTS-synthesized question ("What is two plus two")
+INTO the session as 24 kHz pcm16 frames, followed by 1.4 s of room tone. The room tone
+is not decoration: the vendor's server VAD end-points on silence IN THE AUDIO TIMELINE,
+and a buffer that merely stops appending never advances past the last word — measured:
+speech_started, then no commit and no response for a full timeout. Pacing the send has
+the opposite failure: perceived silence between chunks end-points the utterance early
+and the vendor answers a fragment (measured twice). Burst speech, then real silence.
+
+What the passing receipt proves, check by check:
+
+- **V1 — output rate**: every `output-audio` delta arrived at `rate=24000` — the
+declared output rate is the delivered rate. [Receipt](evidence/live-fixes/6g0/receipt.json).
+- **V2 — input intelligibility**: the model's SPOKEN answer was "The answer is 4."
+A model cannot answer a question it did not hear and understand, so the 24 kHz speech
+that went in was intelligible. (Earlier attempts that heard fragments answered with
+fragments — "you" — which is the failure signature this check guards against.)
+- **V3/V3b — duration**: 40800 samples = 1.70 s at 24 kHz, 9.4 chars/sec against the
+heard text — natural speech; a wrong-rate stream shrinks or stretches exactly here.
+- **V4 — audible output**: whisper-1 transcribed the output wav to "The answer is 4."
+[Output audio](evidence/live-fixes/6g0/output.wav) — machine-transcribed, not
+human-listened; no person heard this drive.
+- **V5 — gate quiet**: the host refused zero frames (`refusedByTransport` all zero).
+
+What stays open, stated plainly: the vendor emitted no `output_audio_transcript.delta`
+this provider sees (audio + whisper prove the turn regardless), and the provider's
+`session.update` configures no `input_audio_transcription`, so there is no input-side
+ASR receipt — the input witness is the model's own correct answer. Both are provider
+observations, not rate failures. Pitch and speed are correct BY RATE AGREEMENT
+(declared = sent = played = 24000, duration natural) plus the whisper transcription;
+no human ear was on the call.
+
+Paid-call accounting: one TTS render, one realtime turn, and one whisper transcription
+per attempt; two attempts total for the clean receipt (attempt 1 is recorded in the
+receipt with its fragment answer).
