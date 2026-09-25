@@ -9,8 +9,16 @@
 const inner = document.getElementById("inner-app");
 let currentAppId = null;
 let appChannel = null;
+let roomPort = null;
 const registeredTools = new Map();
 const pendingCalls = new Map();
+
+try {
+  const urlParams = new URLSearchParams(window.location.search);
+  currentAppId = urlParams.get("appId") || "app-" + Date.now().toString(36);
+} catch {
+  currentAppId = "app-" + Date.now().toString(36);
+}
 
 const BOUNDS = {
   maxTools: 16,
@@ -89,8 +97,11 @@ const INJECTED_SDK = `<script>
 <\/script>`;
 
 function postToHost(msg) {
+  if (roomPort) {
+    try { roomPort.postMessage(msg); } catch {}
+  }
   if (window.parent && window.parent !== window) {
-    window.parent.postMessage(msg, window.location.origin);
+    try { window.parent.postMessage(msg, window.location.origin); } catch {}
   }
 }
 
@@ -202,6 +213,26 @@ window.addEventListener("message", (event) => {
   const data = event.data;
   if (!data) return;
 
+  if (data.type === "mini_app_port" && event.ports && event.ports[0]) {
+    roomPort = event.ports[0];
+    roomPort.onmessage = (e) => {
+      const msg = e.data;
+      if (!msg) return;
+      if (msg.type === "mini_app_init" || msg.type === "load_app") {
+        currentAppId = msg.appId || currentAppId;
+        registeredTools.clear();
+        pendingCalls.clear();
+
+        appChannel = new MessageChannel();
+        appChannel.port1.onmessage = handleInnerMessage;
+
+        const rawHtml = msg.html || "<!doctype html><html><body></body></html>";
+        inner.srcdoc = INJECTED_SDK + "\n" + rawHtml;
+      }
+    };
+    return;
+  }
+
   if (data.type === "load_app") {
     currentAppId = data.appId || "app-" + Date.now().toString(36);
     registeredTools.clear();
@@ -254,4 +285,5 @@ window.addEventListener("message", (event) => {
 });
 
 // Notify host window that bridge is loaded and ready
-postToHost({ type: "bridge_ready" });
+postToHost({ type: "bridge_ready", appId: currentAppId });
+postToHost({ type: "mini_app_handshake", appId: currentAppId });

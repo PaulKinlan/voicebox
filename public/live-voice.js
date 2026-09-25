@@ -52,6 +52,10 @@ const audioClient = createAudioClient({
     // THE TASK CARD: forward the live task handle to the room component (voicebox-beads-8fv.4)
     window.__voiceboxOnTask?.(task);
   },
+  onMiniApp: (miniApp) => {
+    // THE MINI-APP CONTAINER: mount the interactive mini-app in the room (voicebox-beads-5h1)
+    window.__voiceboxOnMiniApp?.(miniApp);
+  },
   onText: (text) => {
     // Live means live: the transcript replaces the scripted caption.
     const caption = $("caption");

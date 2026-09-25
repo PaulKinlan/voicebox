@@ -1360,6 +1360,22 @@ async function execute(action) {
   if (action.verb === "tool") {
     return callTool(action.name, action.args ?? {});
   }
+  if (action.verb === "mini_app") {
+    const appId = `app_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`;
+    const miniApp = {
+      appId,
+      title: action.title || "Interactive App",
+      html: action.html || "<!doctype html><html><body></body></html>",
+    };
+    try { pageSocket?.send(JSON.stringify({ type: "mini_app", miniApp })); } catch {}
+    try { runningSession?.socket?.send(JSON.stringify({ type: "mini_app", miniApp })); } catch {}
+    return {
+      ok: true,
+      action: `launched mini-app "${miniApp.title}" (${appId})`,
+      miniApp,
+      root: active?.root ?? null,
+    };
+  }
   // `logged` is present as null rather than absent: "there is no entry" must be a fact on the
   // response, not something a reader has to notice the absence of.
   if (!active) return { ...noRootDeclared(), error: `refused: ${ROOT_NOT_DECLARED}`, root: null, logged: null };
@@ -2432,6 +2448,9 @@ async function handle(req, res) {
       if (executionResult?.task) {
         responsePayload.task = executionResult.task;
       }
+      if (executionResult?.miniApp) {
+        responsePayload.miniApp = executionResult.miniApp;
+      }
       return json(res, 200, responsePayload);
     }));
     return;
@@ -3082,6 +3101,9 @@ server.on("upgrade", (req, socket) => {
               severity: result.ok === false ? "error" : "info" });
             if (result?.task) {
               try { ws.send(JSON.stringify({ type: "task", task: result.task })); } catch {}
+            }
+            if (result?.miniApp) {
+              try { ws.send(JSON.stringify({ type: "mini_app", miniApp: result.miniApp })); } catch {}
             }
             responses.push({ id: call.id, name: call.name, response: { result } });
             seen.push({ name: call.name, ok: result.ok, action: result.action ?? result.error });

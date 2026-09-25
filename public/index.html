@@ -29,6 +29,9 @@
       <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5v15A2.5 2.5 0 0 0 6.5 22H20v-2.5"/></symbol>
       <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></symbol>
       <symbol id="i-box" viewBox="0 0 24 24"><path d="M21 8l-9-5-9 5v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v9"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></symbol>
+      <symbol id="i-minimize" viewBox="0 0 24 24"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></symbol>
+      <symbol id="i-maximize" viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></symbol>
     </defs>
   </svg>
 
@@ -315,6 +318,30 @@
       </section>
 
       <section class="task-card" id="task-card" hidden aria-labelledby="task-card-title"></section>
+
+      <section class="mini-app-container card" id="mini-app-container" hidden aria-labelledby="mini-app-title">
+        <header class="mini-app-header">
+          <div class="mini-app-title-group">
+            <span class="mini-app-badge">App</span>
+            <h3 class="mini-app-title" id="mini-app-title">Interactive Mini-App</h3>
+          </div>
+          <div class="mini-app-actions">
+            <button class="quiet icon-button mini-app-reload" id="mini-app-reload" type="button" aria-label="Reload App" title="Reload App">
+              <svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>
+              <span class="sr-only">Reload</span>
+            </button>
+            <button class="quiet icon-button mini-app-toggle" id="mini-app-toggle" type="button" aria-label="Collapse App" title="Collapse App">
+              <svg class="icon" aria-hidden="true"><use href="#i-minimize"/></svg>
+              <span class="sr-only">Toggle</span>
+            </button>
+            <button class="quiet icon-button mini-app-close" id="mini-app-close" type="button" aria-label="Close App" title="Close App">
+              <svg class="icon" aria-hidden="true"><use href="#i-close"/></svg>
+              <span class="sr-only">Close</span>
+            </button>
+          </div>
+        </header>
+        <div class="mini-app-viewport" id="mini-app-viewport"></div>
+      </section>
 
       <section class="session" id="session" hidden aria-labelledby="session-heading">
         <h2 id="session-heading">Recent turns</h2>

@@ -47,6 +47,12 @@ const WANTED = {
   extManageToken: "ext-manage-token", extManageStatus: "ext-manage-status",
   extManageSubmit: "ext-manage-submit", extManageDelete: "ext-manage-delete",
   taskCard: "task-card",
+  miniAppContainer: "mini-app-container",
+  miniAppTitle: "mini-app-title",
+  miniAppViewport: "mini-app-viewport",
+  miniAppReload: "mini-app-reload",
+  miniAppToggle: "mini-app-toggle",
+  miniAppClose: "mini-app-close",
   roomFoldersBar: "room-folders-bar", roomFoldersList: "room-folders-list",
   harnessesOpen: "harnesses-open", harnessesDialog: "harnesses-dialog",
   harnessesClose: "harnesses-close", harnessesCheck: "harnesses-check",
@@ -1769,6 +1775,10 @@ async function send(said) {
     if (delegatedTask && taskCardController) {
       taskCardController.setTask(delegatedTask);
     }
+    const miniApp = answer.miniApp ?? result.miniApp;
+    if (miniApp && miniAppController) {
+      miniAppController.mount(miniApp);
+    }
     const landed = result.root?.path ?? result.root?.name ?? result.root?.label ?? "";
     finish(transcript, result.action ? `${result.action}${landed ? ` in ${landed}` : ""}` : "done", "good");
     if (answer.action?.verb === "read" && typeof result.content === "string") {
@@ -2734,6 +2744,117 @@ window.__voiceboxOnTask = (task) => {
     taskCardController.setTask(task);
   }
 };
+window.__voiceboxOnMiniApp = (miniApp) => {
+  if (miniApp && miniAppController) {
+    miniAppController.mount(miniApp);
+  }
+};
+
+// ── the interactive mini-app surface (voicebox-beads-5h1) ─────────────────
+let miniAppController = null;
+if (els.miniAppContainer) {
+  let currentDescriptor = null;
+  let currentChannel = null;
+  let isCollapsed = false;
+
+  function close() {
+    els.miniAppContainer.hidden = true;
+    if (els.miniAppViewport) els.miniAppViewport.replaceChildren();
+    if (currentChannel) {
+      try { currentChannel.port1.close(); } catch {}
+      currentChannel = null;
+    }
+    currentDescriptor = null;
+  }
+
+  function toggle() {
+    isCollapsed = !isCollapsed;
+    els.miniAppContainer.dataset.collapsed = String(isCollapsed);
+    if (els.miniAppToggle) {
+      els.miniAppToggle.setAttribute("aria-label", isCollapsed ? "Expand App" : "Collapse App");
+      els.miniAppToggle.setAttribute("title", isCollapsed ? "Expand App" : "Collapse App");
+      const use = els.miniAppToggle.querySelector("use");
+      if (use) use.setAttribute("href", isCollapsed ? "#i-maximize" : "#i-minimize");
+    }
+  }
+
+  function mount(descriptor) {
+    if (!descriptor || typeof descriptor.html !== "string") {
+      console.warn("[voicebox] mini-app mount requires an html string");
+      return;
+    }
+    currentDescriptor = descriptor;
+    isCollapsed = false;
+    els.miniAppContainer.dataset.collapsed = "false";
+    els.miniAppContainer.hidden = false;
+    if (els.miniAppTitle) {
+      els.miniAppTitle.textContent = descriptor.title || "Interactive Mini-App";
+    }
+
+    const appId = descriptor.appId || `app_${Date.now().toString(36)}`;
+    const bridgeUrl = `/mini-app-bridge.html?appId=${encodeURIComponent(appId)}`;
+
+    const outer = document.createElement("iframe");
+    outer.src = bridgeUrl;
+    outer.setAttribute("sandbox", "allow-scripts");
+    outer.className = "mini-app-frame";
+    outer.id = "mini-app-outer-frame";
+    outer.title = descriptor.title || "Interactive Mini-App";
+
+    currentChannel = new MessageChannel();
+    currentChannel.port1.onmessage = (event) => {
+      const data = event.data;
+      if (!data) return;
+      if (data.type === "tools_updated" && Array.isArray(data.tools)) {
+        if (window.__voiceboxMiniAppRegistry) {
+          window.__voiceboxMiniAppRegistry.updateTools("active-room-app", data.tools);
+        }
+      }
+    };
+
+    const onBridgeHandshake = (e) => {
+      if (e.origin !== window.location.origin) return;
+      if (e.data && (e.data.type === "mini_app_handshake" || e.data.type === "bridge_ready") && outer.contentWindow) {
+        window.removeEventListener("message", onBridgeHandshake);
+        outer.contentWindow.postMessage(
+          { type: "mini_app_port", appId },
+          window.location.origin,
+          [currentChannel.port2],
+        );
+        outer.contentWindow.postMessage(
+          { type: "load_app", appId, html: descriptor.html, title: descriptor.title },
+          window.location.origin,
+        );
+        currentChannel.port1.postMessage({
+          type: "mini_app_init",
+          appId,
+          html: descriptor.html,
+        });
+      }
+    };
+    window.addEventListener("message", onBridgeHandshake);
+
+    if (els.miniAppViewport) els.miniAppViewport.replaceChildren(outer);
+  }
+
+  function reload() {
+    if (currentDescriptor) mount(currentDescriptor);
+  }
+
+  if (els.miniAppClose) els.miniAppClose.addEventListener("click", close);
+  if (els.miniAppToggle) els.miniAppToggle.addEventListener("click", toggle);
+  if (els.miniAppReload) els.miniAppReload.addEventListener("click", reload);
+
+  miniAppController = {
+    mount,
+    close,
+    toggle,
+    reload,
+    getDescriptor: () => currentDescriptor,
+    getContainer: () => els.miniAppContainer,
+  };
+  window.__voiceboxMiniApp = miniAppController;
+}
 load();
 initRoomFolders().catch((err) => console.warn("[voicebox] could not restore room folders:", err));
 

@@ -52,6 +52,7 @@ export function createAudioClient({
   onText = () => {},
   onToolCalls = () => {},
   onTask = () => {},
+  onMiniApp = () => {},
   onError = () => {},
   onDiagnostic = () => {},
   onLevel = () => {},
@@ -302,6 +303,10 @@ export function createAudioClient({
     }
     if (msg?.type === "task") {
       onTask(msg.task ?? null, msg);
+      return;
+    }
+    if (msg?.type === "mini_app") {
+      onMiniApp(msg.miniApp ?? null, msg);
       return;
     }
     // AN UNKNOWN CONTROL TYPE IS NOT A MALFORMED FRAME. It parsed as JSON and it

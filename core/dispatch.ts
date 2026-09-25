@@ -59,7 +59,7 @@ export function dispatchFor(root: RootDescriptor, environment: string): Dispatch
  * write/read/list — the same set lib/commands.mjs declares for the model paths.
  */
 export const CORE_FS_DESCRIPTOR = "voicebox-core-fs";
-export const CORE_FS_VERBS = new Set(["write", "read", "list", "delete", "edit", "diff", "grep", "list_agents", "delegate_task", "contact_agent"]);
+export const CORE_FS_VERBS = new Set(["write", "read", "list", "delete", "edit", "diff", "grep", "list_agents", "delegate_task", "contact_agent", "mini_app"]);
 
 /** Compute a unified diff between two strings. */
 export function createUnifiedDiff(filename: string, oldStr: string, newStr: string): string {
