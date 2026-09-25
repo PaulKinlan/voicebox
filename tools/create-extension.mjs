@@ -13,6 +13,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { declareOverrides } from "../lib/state-dirs.mjs";
 
 function usage() {
   console.log(`Usage:
@@ -70,9 +71,10 @@ for (let i = 0; i < args.length; i++) {
 }
 
 if (workspaceDir || extensionsDir) {
-  // Set env vars BEFORE importing lib/extensions.mjs so module-level directory bindings take effect
-  if (workspaceDir) process.env.VOICEBOX_WORKSPACE = path.resolve(workspaceDir);
-  if (extensionsDir) process.env.VOICEBOX_EXTENSIONS_DIR = path.resolve(extensionsDir);
+  // The override is declared THROUGH the fact's owner (voicebox-beads-y5k): only
+  // lib/state-dirs.mjs touches these env vars. Owners read env at use time, so the
+  // dynamic import below sees the declaration wherever it lands.
+  declareOverrides({ workspace: workspaceDir, extensions: extensionsDir });
 }
 
 const {
