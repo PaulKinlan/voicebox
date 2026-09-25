@@ -371,5 +371,17 @@
   </div>
 
   <noscript><p class="no-script">Voicebox needs JavaScript: the file list, the turns and the microphone are all driven by the page. Nothing here is a static picture of them.</p></noscript>
+
+  <!-- The docked microphone (voicebox-beads-dzd): the same control, one surface.
+       While the ring button is on screen this button is hidden — one mic in the
+       page and in the tab order; when scrolling takes the ring away the dock
+       appears, its click IS the ring button's click (pip-mic.mjs's rule:
+       delegate, never duplicate), and the ring button itself steps out of the
+       tab order and the a11y tree until it scrolls back (the handoff is wired
+       beside the observer in fused.js). Its state is painted by watching the
+       same attributes the ring answers to — one writer, two viewers. -->
+  <button class="mic-dock" id="mic-dock" type="button" aria-label="Speak a turn" aria-pressed="false" hidden>
+    <svg class="icon" aria-hidden="true"><use href="#i-mic"/></svg>
+  </button>
 </body>
 </html>

@@ -22,7 +22,7 @@ const WANTED = {
   rootKind: "root-kind", madeHeading: "made-heading", emptyLink: "empty-link", listingRoot: "listing-root",
   listTools: "list-tools", fileFilter: "file-filter", showAll: "show-all", listBound: "list-bound",
   openFolder: "open-folder", closeFolder: "close-folder", roomFolderHint: "room-folder-hint",
-  stage: "voice-ring-wrap", mic: "mic", state: "voice-state",
+  stage: "voice-ring-wrap", mic: "mic", state: "voice-state", micDock: "mic-dock",
   session: "session", log: "session-log", form: "text-form", utterance: "utterance", send: "send",
   reader: "reader", readerTitle: "reader-title", readerFacts: "file-facts", readerBody: "file-body",
   copy: "file-copy", close: "reader-close", about: "about-facts", readerDetails: "reader-details",
@@ -1850,6 +1850,61 @@ function startListening() {
 }
 
 on(els.mic, "click", startListening);
+
+// ── the docked mic (voicebox-beads-dzd): the ring's delegate, not a rival ──
+// The ring scrolls with the page; the microphone must not. While the ring is on
+// screen the dock stays hidden (the ring button is the one mic, in the page and
+// in the tab order); the moment scrolling takes the button away the dock
+// appears and its click is els.mic's click — same handler, same verbs, the
+// pip-mic rule. Its
+// pressed/coloured state is painted by watching the same data-voice attribute
+// the ring's meters watch: one writer, two viewers, no drift.
+if (els.micDock && els.stage && els.mic) {
+  on(els.micDock, "click", () => els.mic?.click());
+  // ONE mic in the page and in the tab order — now enforced, not just claimed:
+  // while the ring button is off screen the dock stands in for it, and the real
+  // button steps out of the tab order and the a11y tree (tabIndex -1 +
+  // aria-hidden). The handback is exact: scrolling the ring into view restores
+  // both and retires the dock.
+  //
+  // Synced from the LIVE rect on scroll/resize, not from IntersectionObserver
+  // entries: the harness's headless window delivered a stale initial entry (the
+  // dock came up "docked" while the ring was on screen and never handed back),
+  // and a pin that depends on when an async callback lands is a pin that lies
+  // sometimes. The throttle is TIME-based, not rAF-based, on purpose — a
+  // headless page produces no frames unless watched, and a gated rAF then
+  // never runs; this handler always does.
+  let lastDockSync = 0;
+  const syncDock = (force) => {
+    const now = performance.now();
+    if (!force && now - lastDockSync < 66) return;
+    lastDockSync = now;
+    const r = els.mic.getBoundingClientRect();
+    const docked = r.bottom <= 0 || r.top >= innerHeight || r.width === 0;
+    els.micDock.hidden = !docked;
+    els.mic.tabIndex = docked ? -1 : 0;
+    if (docked) els.mic.setAttribute("aria-hidden", "true");
+    else els.mic.removeAttribute("aria-hidden");
+  };
+  addEventListener("scroll", () => syncDock(), { passive: true });
+  addEventListener("resize", () => syncDock(true));
+  syncDock(true);
+  // The dock shows the button's OWN pressed state, not a phase guessed from
+  // data-voice: live-voice.js writes aria-pressed=true while a live session
+  // captures even when the ring phase reads "speaking", so painting from
+  // data-voice alone showed a not-pressed dock for a mic that WAS live. Both
+  // writers the ring answers to are watched; the dock repaints from the same
+  // attributes the ring shows — one writer, mirrored viewers, no drift.
+  const paintDock = () => {
+    const pressed = els.mic.getAttribute("aria-pressed") === "true";
+    els.micDock.setAttribute("aria-pressed", String(pressed));
+    els.micDock.dataset.voice = pressed ? "listening"
+      : (els.stage.dataset.voice === "speaking" ? "speaking" : "off");
+  };
+  paintDock();
+  new MutationObserver(paintDock).observe(els.mic, { attributes: true, attributeFilter: ["aria-pressed"] });
+  new MutationObserver(paintDock).observe(els.stage, { attributes: true, attributeFilter: ["data-voice"] });
+}
 on(els.refresh, "click", load);
 on(els.fileFilter, "input", () => { fileFilter = els.fileFilter.value.trim(); showAllFiles = false; render(); });
 on(els.openFolder, "click", openRoomFolder);

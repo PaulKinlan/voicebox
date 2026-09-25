@@ -595,6 +595,72 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   report("private", "page byte counts match disk", pApiFiles.length === 0 || sizeMismatches.length === 0,
     sizeMismatches.join("; "));
 
+  // ── the docked mic (voicebox-beads-dzd), driven: one mic, reachable, honest ──
+  // Scroll the ring off a grown page and the dock must stand in for it — shown,
+  // in the viewport, the ONLY focusable mic (the ring button steps out of the
+  // tab order and the a11y tree), its click landing on the ring button's own
+  // handler. Scrolling back hands everything back.
+  const dockProbe = await ev(`(async () => {
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const mic = document.getElementById('mic');
+    const dock = document.getElementById('mic-dock');
+    if (!mic || !dock) return { present: false };
+    const focusableMics = () => {
+      let n = 0;
+      for (const el of [mic, dock]) {
+        if (el.hidden || el.getAttribute('aria-hidden') === 'true') continue;
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) n += 1;
+      }
+      return n;
+    };
+    // Where the ring sits at scrollTop 0 depends on the window height (in a
+    // short headless window it is BELOW the fold and the dock is CORRECT to be
+    // up), so the states are forced by position: scroll the BUTTON into view,
+    // then away, then back — never assume what the top of the page shows.
+    const spacer = document.createElement('div');
+    spacer.style.height = '200vh';
+    document.querySelector('main').appendChild(spacer);
+    const ringIntoView = async () => { mic.scrollIntoView({ block: 'center', behavior: 'instant' }); await wait(250); };
+    await ringIntoView();
+    const atRingVisible = { micTabIndex: mic.tabIndex, micAriaHidden: mic.getAttribute('aria-hidden'), dockHidden: dock.hidden, focusableMics: focusableMics() };
+    scrollTo({ top: 999999, behavior: 'instant' }); await wait(250);
+    const dr = dock.getBoundingClientRect();
+    let clicks = 0;
+    const counter = () => { clicks += 1; };
+    mic.addEventListener('click', counter);
+    dock.click(); await wait(50);
+    mic.removeEventListener('click', counter);
+    const atRingAway = {
+      dockShown: !dock.hidden,
+      dockInViewport: dr.width > 0 && dr.top >= 0 && dr.bottom <= innerHeight && dr.right <= innerWidth,
+      micTabIndex: mic.tabIndex,
+      micAriaHidden: mic.getAttribute('aria-hidden'),
+      focusableMics: focusableMics(),
+      delegatedClicks: clicks,
+    };
+    await ringIntoView();
+    const backAtRingVisible = { dockHidden: dock.hidden, micTabIndex: mic.tabIndex, micAriaHidden: mic.getAttribute('aria-hidden'), focusableMics: focusableMics() };
+    spacer.remove();
+    scrollTo({ top: 0, behavior: 'instant' });
+    return { present: true, atRingVisible, atRingAway, backAtRingVisible };
+  })()`);
+  report("private", "docked mic: hidden while the ring is up, stands in when it scrolls away",
+    dockProbe?.present === true && dockProbe.atRingVisible.dockHidden === true && dockProbe.atRingVisible.focusableMics === 1
+      && dockProbe.atRingAway.dockShown === true && dockProbe.atRingAway.dockInViewport === true,
+    dockProbe?.present === false ? "#mic or #mic-dock missing" : JSON.stringify(dockProbe));
+  report("private", "docked mic: exactly ONE focusable mic in every state (tab handoff)",
+    dockProbe?.present === true && dockProbe.atRingVisible.focusableMics === 1
+      && dockProbe.atRingAway.focusableMics === 1 && dockProbe.backAtRingVisible.focusableMics === 1,
+    dockProbe ? `ring=${dockProbe.atRingVisible.focusableMics} away=${dockProbe.atRingAway.focusableMics} back=${dockProbe.backAtRingVisible.focusableMics}` : "no probe");
+  report("private", "docked mic: the real button steps out of the a11y tree while docked",
+    dockProbe?.present === true && dockProbe.atRingAway.micTabIndex === -1 && dockProbe.atRingAway.micAriaHidden === "true"
+      && dockProbe.backAtRingVisible.micTabIndex === 0 && dockProbe.backAtRingVisible.micAriaHidden === null,
+    dockProbe ? `docked: tabIndex=${dockProbe.atRingAway.micTabIndex} aria-hidden=${dockProbe.atRingAway.micAriaHidden}; back: tabIndex=${dockProbe.backAtRingVisible.micTabIndex} aria-hidden=${dockProbe.backAtRingVisible.micAriaHidden}` : "no probe");
+  report("private", "docked mic: its click is the ring button's click (exactly one)",
+    dockProbe?.present === true && dockProbe.atRingAway.delegatedClicks === 1,
+    dockProbe ? `${dockProbe.atRingAway.delegatedClicks} click(s) reached #mic` : "no probe");
+
   const turnsBeforeTyped = turnPosts.length;
   const CONTENT = `acceptance ${Date.now()}`;
   await ev(`
