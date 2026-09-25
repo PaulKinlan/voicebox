@@ -67,12 +67,8 @@ test("default hotkey 'M': badge rendered, aria-keyshortcuts set, and pressing 'm
   await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "m", code: "KeyM", windowsVirtualKeyCode: 77 });
   await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "m", code: "KeyM", windowsVirtualKeyCode: 77 });
 
-  const afterPress = await page.evaluate(() => ({
-    clicked: window.__micClickedCount,
-    hotkeyActive: document.getElementById("mic")?.classList.contains("hotkey-active"),
-  }));
-
-  assert.equal(afterPress.clicked, 1, "pressing 'm' should trigger mic click once");
+  const clicked = await page.evaluate(() => window.__micClickedCount);
+  assert.equal(clicked, 1, "pressing 'm' should trigger mic click once");
 });
 
 test("typing in composer input does NOT trigger mic hotkey", async () => {
@@ -91,6 +87,37 @@ test("typing in composer input does NOT trigger mic hotkey", async () => {
 
   // Blur input
   await page.evaluate(() => document.getElementById("utterance")?.blur());
+});
+
+test("hotkey is disabled when a modal dialog is open (modal-bypass pin)", async () => {
+  await page.evaluate(() => { window.__micClickedCount = 0; });
+
+  // Open settings modal
+  await page.click("#settings-open");
+  await page.waitFor(() => document.getElementById("settings")?.open, { label: "settings dialog to open" });
+
+  // Focus a non-input element inside the modal so input/select guards do not shadow the modal guard
+  await page.click("#settings-title");
+
+  // Press 'm' while modal is open
+  await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "m", code: "KeyM", windowsVirtualKeyCode: 77 });
+  await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "m", code: "KeyM", windowsVirtualKeyCode: 77 });
+  await new Promise((r) => setTimeout(r, 200));
+
+  const clicksWhileOpen = await page.evaluate(() => window.__micClickedCount);
+  assert.equal(clicksWhileOpen, 0, "pressing hotkey with modal open must NOT toggle microphone");
+
+  // Close settings modal
+  await page.click("#settings-close");
+  await page.waitFor(() => !document.getElementById("settings")?.open, { label: "settings dialog to close" });
+
+  // Press 'm' after closing modal — control check
+  await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "m", code: "KeyM", windowsVirtualKeyCode: 77 });
+  await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "m", code: "KeyM", windowsVirtualKeyCode: 77 });
+  await new Promise((r) => setTimeout(r, 200));
+
+  const clicksAfterClose = await page.evaluate(() => window.__micClickedCount);
+  assert.equal(clicksAfterClose, 1, "pressing hotkey after closing modal toggles microphone");
 });
 
 test("reconfiguring hotkey in settings updates badge and persists across reload", async () => {

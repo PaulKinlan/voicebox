@@ -346,7 +346,7 @@ function buildPip(pip, controls) {
   pip.window.addEventListener("keydown", (e) => {
     if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
     const active = pip.document.activeElement;
-    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) return;
+    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT" || active.isContentEditable)) return;
     const hotkey = window.__voiceboxHotkey?.get?.() ?? "M";
     if (e.key && e.key.toUpperCase() === hotkey.toUpperCase()) {
       e.preventDefault();
