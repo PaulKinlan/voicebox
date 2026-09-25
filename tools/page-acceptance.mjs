@@ -26,7 +26,8 @@
 //   [private]      root-not-declared refusal · scratch declaration · seeded GET
 //                  response + disk idempotence before page traffic · typed
 //                  turn page≡disk≡content (exactly one POST) · ../ traversal
-//                  refused · artefact-free · porcelain-clean
+//                  refused · artefact-free · no-dirt-added (pre/post git status
+//                  delta, voicebox-beads-bp8) · no pre-existing dirt
 //   journal-omr's case is LANDED here: the private half declares a root,
 //   deletes its directory out from under the declaration, acts, and asserts
 //   the named `root-vanished` refusal with a remedy, in bounded time.
@@ -36,12 +37,12 @@
 // the local front, not about the product.
 import { spawn, execFileSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync, rmSync, statSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { SOURCE_PREFIXES } from "../lib/browser-sources.mjs";
 import { refusalVocabulary, identifiersInRenderedText, ID_PATTERNS, JARGON, READ_VISIBLE_TEXT } from "./rendered-plain-language.mjs";
 import { driftBetween } from "./served-vs-disk.mjs";
-import os from "node:os";
+import { makeScratchDir, porcelainLines, dirtDelta, gitEnv } from "./tree-dirt.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startServer } from "../tests/lib/server.mjs";
@@ -52,6 +53,12 @@ const SHARED_UI = process.env.VOICEBOX_UI_URL ?? "http://127.0.0.1:5173";
 const SHARED_API = process.env.VOICEBOX_API_URL ?? "http://127.0.0.1:8787";
 let PRIVATE_ORIGIN = "(private instance: port read at spawn)"; // ephemeral: PORT=0, read from the startup banner
 const NAME = `acceptance-proof-${process.pid}.txt`; // hoisted: the finally must see it
+
+// bp8: what the measured tree looked like BEFORE this run wrote anything. The final check
+// compares against this snapshot, so its verdict says whether the dirt is THIS run's writing
+// or was already there — the difference between pointing at a writer and pointing at the
+// next person (a review chasing a file no author wrote is the defect this rule exists for).
+const dirtBefore = porcelainLines(TREE);
 
 const results = [];
 const report = (inst, name, ok, detail) => {
@@ -222,7 +229,9 @@ try {
 // pass and never a failure.
 let currencySkipped = null;
 const treeGit = (args, fallback) => {
-  try { return execFileSync("git", ["-C", TREE, ...args], { encoding: "utf8" }).trim() || fallback; } catch { return fallback; }
+  // gitEnv(): a GIT_DIR inherited from a pre-push hook would answer about the PUSHED repo,
+  // not about TREE — the measurement must be steerable only by what it names (bp8 field fix).
+  try { return execFileSync("git", ["-C", TREE, ...args], { encoding: "utf8", env: gitEnv() }).trim() || fallback; } catch { return fallback; }
 };
 const treeId = {
   commit: treeGit(["rev-parse", "--short", "HEAD"], "unknown"),
@@ -270,7 +279,7 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   const shortSha = (text) => (String(text).match(/@\s*([0-9a-f]{7,40})/) ?? [])[1] ?? null;
   const frontStamp = (frontHtml.match(/<meta name="voicebox-build" content="([^"]*)"/) ?? [])[1] ?? null;
   let treeSha = null;
-  try { treeSha = execFileSync("git", ["-C", TREE, "rev-parse", "--short", "HEAD"]).toString().trim(); } catch { treeSha = null; }
+  try { treeSha = execFileSync("git", ["-C", TREE, "rev-parse", "--short", "HEAD"], { env: gitEnv() }).toString().trim(); } catch { treeSha = null; }
   const frontSha = shortSha(frontStamp ?? "");
   const identityMismatch = frontSha && treeSha && frontSha !== treeSha;
   if (identityMismatch) {
@@ -516,7 +525,10 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
     && typeof writeTry.result?.why === "string" && writeTry.result.why.length > 0,
     `get.refused=${refusal.refused} write.result.refused=${writeTry.result?.refused}`);
 
-  scratchRoot = mkdtempSync(path.join(os.tmpdir(), "vb-accept-root-"));
+  // bp8: the writer's scratch comes from the guard, which refuses a destination that resolves
+  // inside the tree this run measures — the rule is enforced where the writing starts, not
+  // assumed from the fact that os.tmpdir() looked right on the day this line was written.
+  scratchRoot = makeScratchDir("vb-accept-root-", { tree: TREE });
   // the harness SPAWNS the server, so it is the host: the declaration carries
   // the host token the helper read from this server's own scratch extensions
   // dir (an unauthenticated declaration is refused — cfn, 2026-09-20)
@@ -665,14 +677,22 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   chromium.kill();
 }
 
-// ── the run leaves no trace ────────────────────────────────────────────────
-let porcelain = "";
-try { porcelain = execFileSync("git", ["-C", TREE, "status", "--porcelain"]).toString().trim(); } catch {}
-// F6: beads' own untracked sync dir is not this run's dirt — filter it before
-// judging, so the check can pass on a tree that carries a healthy .beads/
-porcelain = porcelain.split("\n").filter((l) => !l.includes(".beads/")).join("\n").trim();
-report("harness", "run leaves the tree clean (git status --porcelain empty, .beads/ excluded)", porcelain === "",
-  porcelain ? porcelain.split("\n").slice(0, 3).join(" | ") : "");
+// ── the run leaves no trace (voicebox-beads-bp8) ───────────────────────────
+// Two claims, because the old single claim mixed them: this run must not ADD dirt to the tree
+// it measures, and if the tree was already dirty the report must SAY that rather than blame a
+// writer inside the run. The snapshot is taken before any phase writes (dirtBefore, above), so
+// `added` is this run's writing and `preExisting` is not — and both still refuse a landing,
+// because dirt in a measured tree is dirt a landing has to know about either way.
+const dirtAfter = porcelainLines(TREE);
+const { added, preExisting } = dirtDelta(dirtBefore, dirtAfter);
+report("harness", "no process in this run wrote inside the measured tree (git status delta, .beads/ excluded)",
+  added.length === 0,
+  added.length ? `appeared during this run: ${added.slice(0, 3).join(" | ")}` : "");
+report("harness", "the measured tree was already clean before this run",
+  preExisting.length === 0,
+  preExisting.length
+    ? `pre-existing dirt, not written by this run: ${preExisting.slice(0, 3).join(" | ")} — clean or move it, then re-run`
+    : "");
 
 const failed = results.filter((ok) => !ok).length;
 console.log(
