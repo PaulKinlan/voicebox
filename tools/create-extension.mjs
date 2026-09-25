@@ -13,12 +13,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import {
-  createExtension,
-  createAndAdmitExtension,
-  setHostHooks,
-  planFor,
-} from "../lib/extensions.mjs";
 
 function usage() {
   console.log(`Usage:
@@ -76,10 +70,15 @@ for (let i = 0; i < args.length; i++) {
 }
 
 if (workspaceDir || extensionsDir) {
-  // Allow CLI caller to direct state paths if given
+  // Set env vars BEFORE importing lib/extensions.mjs so module-level directory bindings take effect
   if (workspaceDir) process.env.VOICEBOX_WORKSPACE = path.resolve(workspaceDir);
   if (extensionsDir) process.env.VOICEBOX_EXTENSIONS_DIR = path.resolve(extensionsDir);
 }
+
+const {
+  createExtension,
+  createAndAdmitExtension,
+} = await import("../lib/extensions.mjs");
 
 let descriptor;
 if (file) {

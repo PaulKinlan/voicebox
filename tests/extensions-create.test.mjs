@@ -218,7 +218,7 @@ test("HTTP API /api/extensions/local: unauthenticated staging vs host-token admi
   }
 });
 
-test("CLI tools/create-extension.mjs: stage and admit", () => {
+test("CLI tools/create-extension.mjs: stage and admit with --workspace and --extensions flags", () => {
   const scratch = mkdtempSync(path.join(os.tmpdir(), "vb-cli-create-"));
   const workspace = path.join(scratch, "workspace");
   const hostDir = path.join(scratch, "extensions");
@@ -227,30 +227,29 @@ test("CLI tools/create-extension.mjs: stage and admit", () => {
   writeFileSync(path.join(hostDir, ".host-token"), "test-host-token-xyz");
 
   const cli = path.join(REPO, "tools/create-extension.mjs");
-  const env = {
-    ...process.env,
-    VOICEBOX_WORKSPACE: workspace,
-    VOICEBOX_EXTENSIONS_DIR: hostDir,
-  };
+  const cleanEnv = { ...process.env };
+  delete cleanEnv.VOICEBOX_WORKSPACE;
+  delete cleanEnv.VOICEBOX_EXTENSIONS_DIR;
 
   try {
-    // 1. Stage proposal via CLI flags
+    // 1. Stage proposal via CLI with explicit --workspace and --extensions flags
     const stageOut = execFileSync(
       process.execPath,
-      [cli, "--id", "cli-tool", "--name", "CLI Tool", "--desc", "Tool created via CLI", "--primitive", "now", "--stage"],
-      { env, encoding: "utf8" },
+      [cli, "--id", "cli-tool", "--name", "CLI Tool", "--desc", "Tool created via CLI", "--primitive", "now", "--workspace", workspace, "--extensions", hostDir, "--stage"],
+      { env: cleanEnv, encoding: "utf8" },
     );
     assert.match(stageOut, /Staged local extension proposal 'cli-tool'/);
-    assert.equal(existsSync(path.join(workspace, "proposals/cli-tool.json")), true);
+    assert.equal(existsSync(path.join(workspace, "proposals/cli-tool.json")), true, "proposal must land in designated --workspace");
 
-    // 2. Admit via CLI flags
+    // 2. Admit via CLI with explicit --workspace and --extensions flags
     const admitOut = execFileSync(
       process.execPath,
-      [cli, "--id", "cli-tool-admit", "--name", "Admitted CLI Tool", "--desc", "Admitted tool", "--primitive", "now", "--admit"],
-      { env, encoding: "utf8" },
+      [cli, "--id", "cli-tool-admit", "--name", "Admitted CLI Tool", "--desc", "Admitted tool", "--primitive", "now", "--workspace", workspace, "--extensions", hostDir, "--admit"],
+      { env: cleanEnv, encoding: "utf8" },
     );
     assert.match(admitOut, /Created and admitted local extension 'cli-tool-admit'/);
-    assert.equal(existsSync(path.join(hostDir, "cli-tool-admit.json")), true);
+    assert.equal(existsSync(path.join(hostDir, "cli-tool-admit.json")), true, "admitted file must land in designated --extensions");
+    assert.equal(existsSync(path.join(hostDir, ".ledger.jsonl")), true, "ledger must land in designated --extensions");
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
