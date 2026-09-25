@@ -50,6 +50,14 @@ never code.
 (transcript or `POST /api/extensions/proposals`) land in the same pending
 state and pass the same `admit()`. Neither loads its own proposal.
 
+**Local creation and staging** (`voicebox-beads-b1p`): new extensions can be created locally via the room UI
+or host CLI (`tools/create-extension.mjs`), or over HTTP (`POST /api/extensions/local`). Creating a local
+extension (`source: "local"`) validates the descriptor against the closed primitive set and stages it as a pending
+proposal in `proposals/<id>.json`. Staging is unprivileged, but **admission remains strictly host-controlled**:
+direct admission requires host authority (`x-voicebox-host-token` or local CLI with `--admit`), and unauthenticated
+attempts to directly admit are refused (`host-token-required`). A declared capability is not an enforced one:
+unsupported or unmediated capabilities (e.g. `exec`, `eval`) are refused at the admission gate by name.
+
 **The disclosure** (vwb) sits before every decision: `GET .../plan` returns the
 resolved plan — the source, what it declares, what will be enforced and by
 which mechanism, what it will be GIVEN (the mediated interfaces), and what it

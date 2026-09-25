@@ -91,6 +91,24 @@
             <h3 class="ext-section">Available to add</h3>
             <ul class="env-list" id="ext-catalogue"></ul>
           </div>
+          <div class="env-add-block" id="ext-create-section">
+            <h3 class="env-add-title">Create local extension</h3>
+            <p class="env-hint">Define a local tool for this Voicebox server. Staging creates a pending proposal; the host reviews and admits it.</p>
+            <form class="env-add" id="ext-create-form">
+              <input id="ext-create-id" type="text" placeholder="ID (e.g. local-search)" aria-label="extension id" required pattern="[a-z0-9_-]+" />
+              <input id="ext-create-name" type="text" placeholder="Name (e.g. Local Search)" aria-label="extension name" required />
+              <input id="ext-create-desc" type="text" placeholder="Description of tool" aria-label="extension description" required />
+              <select id="ext-create-primitive" aria-label="tool primitive">
+                <option value="http-get">http-get (fetch JSON/text from allowed host)</option>
+                <option value="read-file">read-file (read project files)</option>
+                <option value="write-file">write-file (write project files)</option>
+                <option value="list-files">list-files (list project files)</option>
+                <option value="now">now (timestamp)</option>
+              </select>
+              <input id="ext-create-target" type="text" placeholder="Allowed host (e.g. 127.0.0.1)" aria-label="target host or parameter" />
+              <button id="ext-create-btn" type="submit">Create local extension</button>
+            </form>
+          </div>
           <p class="env-note" id="ext-note" role="status"></p>
         </div>
       </dialog>
