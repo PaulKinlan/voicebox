@@ -227,6 +227,7 @@ html:has(dialog.envs[open]) { overflow: hidden; }
 .env-cap { margin-left: 14px; color: var(--muted); font-size: .75rem; }
 .env-cap > summary { cursor: pointer; }
 .env-cap-list { max-height: 7em; overflow-y: auto; overscroll-behavior: contain; overflow-wrap: anywhere; }
+.env-cap-note { margin: 4px 0 6px; max-width: 56ch; font-size: .72rem; color: var(--muted); }
 .env-cap-none { margin-left: 14px; color: var(--muted); font-size: .75rem; font-style: italic; }
 .env-add-block { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .env-add-title { margin: 0 0 2px; font-size: .8125rem; font-weight: 600; }
