@@ -25,11 +25,11 @@
 import { spawn } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
-import { readFileSync, writeFileSync, existsSync, readdirSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative } from "node:path";
 import { registeredResolvers, resolveTurn } from "../lib/resolver.mjs";
+import { makeScratchDir } from "../tools/tree-dirt.mjs";
 import { admit, PRIMITIVES, PRIMITIVE_NEEDS, GETS } from "../core/extensions.ts";
 import { availableLiveProviders, resolvedLiveProviderName } from "../lib/live-session.mjs";
 import { createGeminiProvider } from "../lib/live-providers/gemini.mjs";
@@ -87,7 +87,10 @@ async function probeServer() {
   // extension audit land), the host's extension directory, and a project root to declare over /api/root.
   // Keeping the workspace and the declared root apart is what lets the loop drive below SEE whether an
   // admitted tool acts in the declared root or somewhere else — the same directory would hide the answer.
-  const scratch = mkdtempSync(join(tmpdir(), "voicebox-docs-check-"));
+  // bp8: the probe's scratch comes from the guard, which refuses a destination resolving inside
+  // the tree this check measures — a writer's output belongs outside anything another process
+  // measures, and that is asserted where the directory is made rather than assumed from os.tmpdir().
+  const scratch = makeScratchDir("voicebox-docs-check-", { tree: ROOT });
   const dirs = { workspace: join(scratch, "workspace"), extensions: join(scratch, "extensions"), root: join(scratch, "project"), shelf: join(scratch, "shelf") };
   for (const d of Object.values(dirs)) mkdirSync(d, { recursive: true });
   // THE PROBE MUST NOT INHERIT A ROOT FROM THE SHELL (248f6c6): with VOICEBOX_WORKSPACE in the operator's

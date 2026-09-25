@@ -1062,10 +1062,25 @@ announce the problem is absent, and its absence is invisible.**
 | "Nothing dangerous is imported or evaluated" | a **regex** over source text — CAP's first evaluator gate was text-only and **missed eight live alias sites** | an **AST**: the thing that sees what the text *means*, not what it spells |
 | "The approved thing is the thing that runs" | a handler registered **after** the gate — it rewrites the input between the approval and the execution, so the approval is **correct-looking and about a different act** | the gate is the **last** handler and the gap between "yes" and "do it" is empty; any extension whose load order is not the gate's own is an **admission act**, not a configuration detail |
 
-Two habits follow, and they are the reason this section is written the way it is:
+The habits that follow are the reason this section is written the way it is:
 
 - **Ask what enforces it, not what states it.** If the answer is a comment, a descriptor, a
   variable name or a helper that tidies input, there is no guard yet.
+- **A process that writes must write outside anything another process measures.** Three instances
+  landed in one day (2026-09-20), from three authors, and each produced a **red check that pointed at
+  the wrong thing**: the one-root test suite committed its own audit logs into the repository, so a
+  change looked like it carried files it never touched; the acceptance harness declared its scratch
+  root on the shared server, so a person's page showed a test's directory as if it were theirs; and a
+  Dolt backup was written into the served tree because the backup process's **cwd was that tree** —
+  the harness counts untracked directories, so every landing from that tree read as dirty for a reason
+  no author caused. The cost is paid by whoever looks next: a reviewer chasing a file they did not
+  write, a lane unable to land. So scratch dirs go to temp, owned by the process that made them and
+  removed by it; backups go outside every repository and stay re-runnable without landing inside one;
+  test output goes to its own tree, never the served tree and never the audited root. And the
+  instrument reports **which**: `tools/tree-dirt.mjs` refuses a scratch destination that resolves
+  inside the measured tree (`writer-inside-measured-tree`), and a run that measures a tree snapshots
+  its `git status` **before** it writes and reports what appeared — pre-existing dirt is named as
+  pre-existing rather than blamed on the run (§3.6).
 - **When a claim changes, sweep every place it is repeated.** A caveat removed at the top of a
   section survived in that section's closing sentence, and the sentence went on stating the opposite
   of the upgrade. Applied three times in one document on one day: a correction that is *applied* is
@@ -1361,6 +1376,13 @@ request succeeds. So both directions:
   run.
 - **The reuse test**: the cwd the harness receives is the project's realpath, and no default
   is invented when a project lacks one (a rule we learned the hard way this week).
+- **Writer-containment tests (voicebox-beads-bp8)**: against a real repository, a child process
+  whose **cwd is that repository** writes a `backup/` directory into it, and the before/after
+  `git status` delta **names it** as this run's writing; dirt present before the run is reported as
+  **pre-existing**, never as the run's; a destination that resolves inside the measured tree through
+  a symlink is **refused by name** (`writer-inside-measured-tree`); and a name-prefix sibling
+  (`repo-other` beside `repo`) is correctly **outside**. The prose rule is §3.0's: *a process that
+  writes must write outside anything another process measures.*
 
 ### 3.7 What this boundary does not do
 
