@@ -1404,21 +1404,25 @@ async function renderEnvironments() {
       head.appendChild(state);
       li.appendChild(head);
       // The capability report is CONTAINED and SCROLLABLE, and it SUMMARISES: a long probe is a count
-      // with the full list behind an expansion, so it never overwrites the name or the actions. Its
-      // honesty is already right; that it fits is the point.
+      // with the full list behind an expansion, so it never overwrites the name or the actions.
+      // voicebox-beads-1jk: presence is not capability. The probe measured what the HOST has; the
+      // executor has no program-execution verb, so the row must not read as "my agent can use these".
       const tools = env.capability?.tools;
       if (tools && typeof tools === "object") {
         const present = Object.entries(tools).filter(([, v]) => v && v.value).map(([k]) => k);
         const cap = document.createElement("details");
         cap.className = "env-cap";
         const summary = document.createElement("summary");
-        summary.textContent = present.length ? `${present.length} tools` : "no tools found";
+        summary.textContent = present.length ? `${present.length} host programs — present, not invocable` : "no programs found on this host";
         cap.appendChild(summary);
         if (present.length) {
+          const note = document.createElement("p");
+          note.className = "env-cap-note";
+          note.textContent = "Present on this host when probed. Voicebox tasks act on files — read, write, list, grep, edit, diff, delete — they cannot run these programs. A delegated harness runs its own tools under its own grants.";
           const full = document.createElement("div");
           full.className = "env-cap-list";
           full.textContent = present.join(", ");
-          cap.appendChild(full);
+          cap.append(note, full);
         }
         cap.title = `probed ${env.capability.when ?? "at an unknown time"}`;
         li.appendChild(cap);
