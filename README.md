@@ -379,21 +379,24 @@ The architecture distinguishes the **runtime** (node, deno, browser), the **conf
 ## The agent loop
 
 Separate from both of those paths, and the thing that actually runs when a turn arrives: the loop from
-**speech or typing → a decision → an execution → a result → a record**. It is not the live connection, and the
-live connection cannot do it: the loop is entered on **`POST /api/turn`**, and everything below is what happens
-after that.
+**speech or typing → a decision → an execution → a result → a record**.
 
+The loop operates across two execution paths:
+- **Typed turns**: submitted via the composer on **`POST /api/turn`**, which carries `{ transcript }`, asks the registered resolver seam (`lib/resolver.mjs`), and passes the resulting action to the executor.
+- **Live turns**: streamed over the **`/live`** WebSocket, where model tool calls (`toolCall`) are mapped via `commandToAction()` directly into the shared executor, returning tool outputs over the wire.
+
+Key invariants:
 - **What decides** is a **resolver seam** — a provider registered by name that turns a transcript into an
   **action**, or into an explicit *unresolved* sentence. The server never parses language itself; that is what
-  the seam is for. Today exactly **one** resolver is registered (a script provider with a few verbs), and a
-  model-backed one is *planned and not registered*.
+  the seam is for. Two resolvers are registered: the deterministic `script` provider (create/read/list/tools)
+  and the model-backed `gemini` provider (requires `GEMINI_API_KEY`).
 - **Who executes** is **the executor the server calls** — the one place that touches the build environment. It
   resolves every path *inside the active root* before touching it, records a tool *proposal* without loading
   it, and invokes tools through the runtime's admission, bounds and budget.
-- **Where the result goes** is back on the turn response, and into the active root for the verbs that write. A
+- **Loading a tool** is an explicit host-authorized admission step (`POST /api/extensions/admit` with the host token, or a single-use console code via `POST /api/extensions/approve` / `node tools/approval-code.mjs`).
+- **Where the result goes** is back on the turn response (or live tool response frame), and into the active root for the verbs that write. A
   tool that declines answers **refused with a reason** — a result, not an exception.
-- **What gets recorded** is the **audit in the active root**, refusals included, numbered by sequence so a
-  resumed process continues rather than restarts.
+- **What gets recorded** is the **audit in the active root**: a write records an attempt entry and a completed outcome entry; pre-flight refusals record a single refusal entry.
 - **Where it fails** is named: no root declared, the root vanishing, a path outside the root, nothing to do,
   a tool declining, and a proposal that is recorded but **not loaded**. Each has its own sentence, because a
   refusal that names the wrong cause is worse than no refusal.
@@ -428,9 +431,8 @@ What works today:
   dictation remains only as a no-key fallback for one-shot turns — it is not
   the product path.
 - **Turn resolution** — a deterministic script resolver (`lib/resolver.mjs`)
-  that knows create/read/list. It is a placeholder brain, deliberately: the
-  resolver is a provider seam (`registerResolver(name, fn)`), and the model
-  resolvers plug into exactly that contract.
+  that knows create/read/list/tools, plus the registered model-backed resolver (`gemini`).
+  The resolver is a provider seam (`registerResolver(name, fn)`).
 - **The action executor** — writes/reads/lists files in **the active project root** on disk, which the
   environment page declares (or `VOICEBOX_WORKSPACE` at boot). It used to say `workspace/`, <!-- docs-check: names the mechanism --> which
   stopped being true the moment the default root was retired: the loop has no root of its own, and a

@@ -9,18 +9,12 @@ What actually runs when a person speaks or types a turn. Six questions, in the o
 
 ## 1. What starts a turn
 
-Two doors, one route:
+Two doors, two paths:
 
-- the **composer** in the page (typed, or sent from the pinned window) — a form submit;
-- the **live voice session**, whose transcript can be turned into a turn.
+- the **composer** in the page (typed, or sent from the picture-in-picture window) — lands on **`POST /api/turn`**, which carries **`{ transcript }`** and returns the action and execution result;
+- the **live voice session** (`/live`), which streams PCM audio back and forth with the model (Gemini Live or OpenAI Realtime). When the live model requests an action, its tool calls (`toolCall`) are mapped via `commandToAction()` directly into the shared executor on the server, and tool responses stream back to the model over the socket.
 
-The route takes one string and nothing else. There is no session id, no conversation history and no
-per-connection state in it: **a turn is stateless by construction**, and the state that persists is the audit
-and the files in the root.
-
-Both land on **`POST /api/turn`**, which carries **`{ transcript }`** — not `text`; asking with the wrong field
-answers `{"error":"empty transcript"}`, which is how this page learned it — and answers with the result of the
-loop below:
+A typed turn on `POST /api/turn` takes one string and nothing else:
 
 ```json
 { "transcript": "create a file called hello.txt with hi",
@@ -28,12 +22,11 @@ loop below:
   "result":  { "ok": true, "action": "wrote hello.txt (2 bytes)", "file": "hello.txt", "root": { … } } }
 ```
 
-*(Driven: a command typed in the picture-in-picture composer reaches this route and its refusal text arrives
-back on the page — that is what the "list files" case shows when no root is declared.)*
+There is no session id, no conversation history and no per-connection state in the turn route: **a turn is stateless by construction**, and the state that persists is the audit and the files in the root.
 
-**The live session does not resolve anything by itself.** It carries audio and text; the turn route is what
-decides and executes. Treating the live connection as the agent would be a reasonable reading of the UI and it
-is not what the code does.
+*(Driven: a command typed in the picture-in-picture composer reaches this route and its refusal text arrives back on the page — that is what the "list files" case shows when no root is declared.)*
+
+The live voice session and the typed turn route share the same executor; they differ in how actions are prompted and resolved.
 
 ## 2. What decides
 
@@ -45,25 +38,23 @@ is not what the code does.
 ```
 
 - resolvers are **registered by name** (`registerResolver`), and `resolveTurn(transcript, provider)` asks one;
-- the provider defaults to the one named at the route, and an unknown name is an **explicit** unresolved
+- the provider defaults to the one configured on the server, and an unknown name is an **explicit** unresolved
   answer rather than a silent fallback;
 - **the server never parses language itself.** That is the point of the seam: swap the decider, keep the
   executor.
 
-**Wired today:** the **`script`** resolver — a small set of verbs with no model. It can build a *tool proposal*
-from an utterance (`make-tool`), read, write, list, and invoke a tool by name.
-**Not wired:** a model-backed resolver. The seam accepts one; nothing registers one.
+**Registered resolvers today:**
+- the deterministic **`script`** resolver — handles `write`, `read`, `list`, `make-tool`, `tool`, `delete`, `edit`, `diff`, `grep`.
+- the model-backed **`gemini`** resolver — turns arbitrary language into structured actions via the Gemini API (`GEMINI_API_KEY`). When the key is missing, it returns an explicit unresolved answer (`"the gemini resolver has no GEMINI_API_KEY"`).
 
 ## 3. Who executes
 
-**The executor in the server** — the one place that touches the build environment. It is a cascade of
-decisions, and each branch reports its own refusal rather than throwing:
+**The executor in the server** — the one place that touches the build environment. Both the typed turn route (`POST /api/turn`) and the live voice session (`/live`) dispatch actions through this shared executor (`execute(action)`):
 
-- a **tool proposal** is recorded as a *proposal* — and is **not loaded**; loading is a separate admission step;
-- an **invocation** goes to the extension runtime (admission, bounds, budget), which may answer **refused**
-  with a reason;
-- **list / read / write** are resolved **inside the active root** first — the path is checked against the root
-  before anything is touched.
+- a **tool proposal** is recorded as a *proposal* under `proposals/` — and is **not loaded**; loading is a separate admission step;
+- **loading an extension** is an explicit host-authorized admission step (`POST /api/extensions/admit` with the host token, or `POST /api/extensions/approve` with a single-use console code from `tools/approval-code.mjs`);
+- an **invocation** goes to the extension runtime (admission, bounds, budget), which may answer **refused** with a reason;
+- **list / read / write / delete / edit / grep** are resolved **inside the active root** first — the path is checked against the root before anything is touched.
 
 ## 4. Where the result goes
 
@@ -76,15 +67,15 @@ decisions, and each branch reports its own refusal rather than throwing:
 
 **The audit**, written into the **active root** (not into the product's own tree, and not into whatever
 directory the process happened to start in). It lands in **`.audit/`**, one file per root kind —
-`.audit/machine-<hash>.jsonl` — and the first entry of a turned-on write, as measured, is:
+`.audit/machine-<hash>.jsonl` (or the page-owned log).
 
-```json
-{"kind":"act","seq":1,"instance":"machine",
- "actor":{"name":"voicebox-server","harness":"voicebox","session":null,"cwd":"…"},
- "project":"vb-root-PzPF","root":"…"}
-```
+A successful write records **two entries**:
+1. an `attempt` entry (`decision: "attempt"`, `result: "pending"`);
+2. an `allow` outcome entry (`decision: "allow"`, `result: "ok"`), linking back to the attempt's sequence number (`attempt: 1`).
 
-An entry is built by the audit module's constructor, serialized, and merged by sequence number, so a resumed
+Pre-flight refusals (such as `outside-root` or `root-not-declared`) record a single refusal entry without an applying attempt.
+
+Entries are built by the audit module's constructor, serialized, and merged by sequence number, so a resumed
 process continues the numbering rather than restarting it.
 
 Refusals are recorded too, where the attempt had a target — the record is what happened, not only what
@@ -106,12 +97,13 @@ succeeded.
 | part | state |
 |---|---|
 | `POST /api/turn` → resolver → executor | **wired** |
-| the `script` resolver and its verbs | **wired** |
-| audit of acts and refusals into the active root | **wired** |
+| the `script` deterministic resolver | **wired** |
+| the model-backed `gemini` resolver | **registered** (requires `GEMINI_API_KEY`) |
+| `/live` provider tool calls → shared executor | **wired** (Gemini Live & OpenAI Realtime) |
+| audit of attempts, outcomes, and refusals into the active root | **wired** |
+| tool proposal (`make-tool`) | **wired** (staged under `proposals/`) |
+| host-authorized tool admission | **wired** (token-gated or one-time code via `tools/approval-code.mjs`) |
 | tool invocation through the extension runtime | **wired** |
-| the live voice session carrying audio/text | **wired** |
-| a model-backed resolver | **not wired** (the seam accepts one) |
-| loading a proposed tool | **not wired** — an admission step, and it is named rather than implied |
 
 ## How to check any of this in a minute
 
