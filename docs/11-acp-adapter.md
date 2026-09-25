@@ -1,7 +1,9 @@
 # ACP adapter: real handshake and configured task execution
 
 
-**Targeted adapter:** **pi-acp 0.0.33 with pi 0.85.1, ACP v1**.
+**Targeted adapter:** **pi-acp 0.0.34 with pi 0.87.1, ACP v1** (re-pinned from 0.0.33 / 0.85.1 after the
+2026-09-25 pi update; the bump was verified by driving the real end-to-end delegation, `configured-harness`
+4/4 — see voicebox-beads-4iv).
 When configured with `VOICEBOX_HARNESS=pi`, the server installs `createPiAcpExecutor()`,
 connecting `delegate_task` to the Pi coding agent via ACP over stdio.
 The stock server (unset `VOICEBOX_HARNESS`) has no task executor installed and refuses `delegate_task`

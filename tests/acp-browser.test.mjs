@@ -29,13 +29,13 @@ test("real browser: portable ACP fixture + IndexedDB control; D1 executor import
   await page.send("Network.enable");
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
   const result = await page.evaluate(async () => {
-    const { createAcpClient } = await import("/lib/acp-client.mjs");
+    const { createAcpClient, ACP_AGENT } = await import("/lib/acp-client.mjs");
     let receive;
     const client = createAcpClient({
       onMessage(fn) { receive = fn; }, onClose() {}, close() {},
       send(m) {
         queueMicrotask(() => {
-          const r = m.method === "initialize" ? { protocolVersion: 1, agentInfo: { name: "pi-acp", version: "0.0.33" } }
+          const r = m.method === "initialize" ? { protocolVersion: 1, agentInfo: { name: ACP_AGENT.name, version: ACP_AGENT.version } }
             : m.method === "session/new" ? { sessionId: "browser-fixture" } : { stopReason: "end_turn" };
           if (m.method === "session/prompt") receive({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "browser-fixture", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "protocol fixture only" } } } });
           receive({ jsonrpc: "2.0", id: m.id, result: r });

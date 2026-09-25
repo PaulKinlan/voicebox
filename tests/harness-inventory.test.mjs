@@ -7,6 +7,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { discoverHarnesses } from "../lib/harness-inventory.mjs";
+import { ACP_AGENT } from "../lib/acp-client.mjs"; // fixtures track the pin (voicebox-beads-4iv)
 import { startServer } from "./lib/server.mjs";
 import { launch } from "./lib/cdp.mjs";
 
@@ -16,10 +17,10 @@ function fixture(t) {
   const adapter = path.join(dir, "adapter");
   mkdirSync(adapter);
   mkdirSync(path.join(adapter, "dist"));
-  writeFileSync(path.join(adapter, "package.json"), JSON.stringify({ name: "pi-acp", version: "0.0.33" }));
+  writeFileSync(path.join(adapter, "package.json"), JSON.stringify({ name: ACP_AGENT.name, version: ACP_AGENT.version }));
   writeFileSync(path.join(adapter, "dist", "index.js"), "// adapter entry\n");
   const command = (name, body, mode = 0o700) => writeFileSync(path.join(dir, name), `#!/bin/sh\n${body}\n`, { mode });
-  command("pi", 'test "$1" = "--version" || exit 3; echo 0.85.1');
+  command("pi", `test "$1" = "--version" || exit 3; echo ${ACP_AGENT.piVersion}`);
   command("claude", "exit 7");
   command("codex", "echo ignored", 0o600);
   command("gemini", "echo private-output-must-not-leak");
@@ -35,7 +36,7 @@ test("host inventory separates version-only presence, broken installs, unknown i
   assert.equal(report.entries.length, 7);
   const rows = Object.fromEntries(report.entries.map((r) => [r.id, r]));
   assert.equal(rows.pi.state, "present");
-  assert.equal(rows.pi.version, "0.85.1");
+  assert.equal(rows.pi.version, ACP_AGENT.piVersion);
   assert.equal(rows.pi.toolCatalogue.status, "unknown");
   assert.equal(Object.hasOwn(rows.pi.toolCatalogue, "tools"), false);
   assert.equal(rows.pi.delegation.ok, true);
@@ -47,7 +48,7 @@ test("host inventory separates version-only presence, broken installs, unknown i
   assert.equal(rows.opencode.state, "unrunnable");
   assert.match(rows.opencode.why, /exceeded 500ms/);
   assert.equal(rows.aider.state, "absent");
-  assert.equal(rows["pi-acp"].version, "0.0.33");
+  assert.equal(rows["pi-acp"].version, ACP_AGENT.version);
   assert.equal(rows["pi-acp"].state, "unknown");
   assert.ok(!JSON.stringify(report).includes("private-output"));
   assert.ok(!JSON.stringify(report).includes(env.PATH));
@@ -102,7 +103,7 @@ test("harness page: click lists host facts, cache does not spawn twice, lost ser
   await page.click("#check");
   await page.waitFor(() => document.querySelectorAll("article").length === 7, { label: "seven inventory rows" });
   const body = await page.evaluate(() => document.body.innerText);
-  assert.match(body, /Pi coding agent — present \(0.85.1\)/);
+  assert.match(body, new RegExp(`Pi coding agent — present \\(${ACP_AGENT.piVersion}\\)`));
   assert.match(body, /Claude Code — unrunnable/);
   assert.match(body, /Gemini CLI — unknown/);
   assert.match(body, /A browser cannot start a local CLI/);

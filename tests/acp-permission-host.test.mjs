@@ -20,9 +20,9 @@
 //   node --test tests/acp-permission-host.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createAcpClient } from "../lib/acp-client.mjs";
+import { createAcpClient, ACP_AGENT } from "../lib/acp-client.mjs";
 
-const info = { protocolVersion: 1, agentInfo: { name: "pi-acp", version: "0.0.33" } };
+const info = { protocolVersion: 1, agentInfo: { name: ACP_AGENT.name, version: ACP_AGENT.version } }; // tracks the pin (voicebox-beads-4iv)
 const result = (m, r) => ({ jsonrpc: "2.0", id: m.id, result: r });
 
 // The same fixture shape tests/acp-client.test.mjs uses: a stand-in harness over
