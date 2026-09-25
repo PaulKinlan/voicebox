@@ -24,6 +24,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { ACP_AGENT } from "../lib/acp-client.mjs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { startServer } from "./lib/server.mjs";
 import { launch } from "./lib/cdp.mjs";
@@ -602,7 +603,7 @@ test("task-card browser: delegation turn automatically mounts task card without 
   if (!fs.existsSync(path.join(adapterDir, "dist", "index.js"))) {
     adapterDir = path.join(scratch, "pi-acp-stub");
     fs.mkdirSync(path.join(adapterDir, "dist"), { recursive: true });
-    fs.writeFileSync(path.join(adapterDir, "package.json"), JSON.stringify({ name: "pi-acp", version: "0.0.33" }));
+    fs.writeFileSync(path.join(adapterDir, "package.json"), JSON.stringify({ name: "pi-acp", version: ACP_AGENT.version }));
     fs.writeFileSync(path.join(adapterDir, "dist", "index.js"), "setTimeout(() => {}, 5000);\n");
   }
 

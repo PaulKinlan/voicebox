@@ -71,7 +71,7 @@ document — Paul's rule, *every update updates the docs and the README in the s
 
 Task admission's API, evidence boundaries and unfinished execution work are documented in
 [D1: authenticated task admission and durable handles](docs/10-delegate-task-d1.md).
-[ACP adapter diagnostics](docs/11-acp-adapter.md) now verify one real pi-acp/pi version pair
+[ACP adapter diagnostics](docs/11-acp-adapter.md) now verify one real pi-acp/pi version pair (pi-acp 0.0.34 / pi 0.87.1)
 without credentials. Actual delegated model tasks still refuse pending bounded provider access;
 this is not browser-only delegation acceptance.
 

@@ -98,7 +98,7 @@ export interface ConfiguredAgent {
   harness: string;
   /** The adapter used to talk to the harness (e.g. "pi-acp", "acp-stdio", "in-process"). */
   adapter: string;
-  /** Pinned adapter/harness version if required (e.g. "0.0.33"). */
+  /** Pinned adapter/harness version if required (e.g. "0.0.34"). */
   pinnedVersion: string | null;
   /** Transport required by the adapter. */
   transport: AdapterTransport;

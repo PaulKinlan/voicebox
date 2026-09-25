@@ -54,7 +54,7 @@ test("two configured instances of one harness in one environment + browser insta
     name: "Pi Generalist",
     harness: "pi",
     adapter: "pi-acp",
-    pinnedVersion: "0.0.33",
+    pinnedVersion: "0.0.34",
     transport: "stdio",
     environmentKey: "local",
     description: "General coding agent",
@@ -71,7 +71,7 @@ test("two configured instances of one harness in one environment + browser insta
     name: "Pi Code Reviewer",
     harness: "pi",
     adapter: "pi-acp",
-    pinnedVersion: "0.0.33",
+    pinnedVersion: "0.0.34",
     transport: "stdio",
     environmentKey: "local",
     description: "Read-only strict code reviewer",
@@ -436,7 +436,7 @@ test("D3: listHarnessesWithConfiguredAgents decorates harness discovery without 
     ok: true,
     observedAt: new Date().toISOString(),
     entries: [
-      { id: "pi", name: "Pi coding agent", state: "present", version: "0.85.1" },
+      { id: "pi", name: "Pi coding agent", state: "present", version: "0.87.1" },
       { id: "claude", name: "Claude Code", state: "absent", version: null },
     ],
   });

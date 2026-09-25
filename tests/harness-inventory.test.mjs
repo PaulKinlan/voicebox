@@ -7,6 +7,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { discoverHarnesses } from "../lib/harness-inventory.mjs";
+import { ACP_AGENT } from "../lib/acp-client.mjs";
 import { startServer } from "./lib/server.mjs";
 import { launch } from "./lib/cdp.mjs";
 
@@ -16,7 +17,7 @@ function fixture(t) {
   const adapter = path.join(dir, "adapter");
   mkdirSync(adapter);
   mkdirSync(path.join(adapter, "dist"));
-  writeFileSync(path.join(adapter, "package.json"), JSON.stringify({ name: "pi-acp", version: "0.0.33" }));
+  writeFileSync(path.join(adapter, "package.json"), JSON.stringify({ name: "pi-acp", version: ACP_AGENT.version }));
   writeFileSync(path.join(adapter, "dist", "index.js"), "// adapter entry\n");
   const command = (name, body, mode = 0o700) => writeFileSync(path.join(dir, name), `#!/bin/sh\n${body}\n`, { mode });
   command("pi", 'test "$1" = "--version" || exit 3; echo 0.85.1');
@@ -47,7 +48,7 @@ test("host inventory separates version-only presence, broken installs, unknown i
   assert.equal(rows.opencode.state, "unrunnable");
   assert.match(rows.opencode.why, /exceeded 500ms/);
   assert.equal(rows.aider.state, "absent");
-  assert.equal(rows["pi-acp"].version, "0.0.33");
+  assert.equal(rows["pi-acp"].version, ACP_AGENT.version);
   assert.equal(rows["pi-acp"].state, "unknown");
   assert.ok(!JSON.stringify(report).includes("private-output"));
   assert.ok(!JSON.stringify(report).includes(env.PATH));

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createAcpClient } from "../lib/acp-client.mjs";
+import { createAcpClient, ACP_AGENT } from "../lib/acp-client.mjs";
 import { TaskInterrupted } from "../lib/task-interrupted.mjs";
 
 // Protocol fixtures prove client validation, never third-party/provider acceptance.
@@ -12,7 +12,7 @@ function fixture(reply, options) {
   return { client, sent, receive: (m) => receive(m), end: (e) => ended(e), closed: () => closed };
 }
 const result = (m, r) => ({ jsonrpc: "2.0", id: m.id, result: r });
-const info = { protocolVersion: 1, agentInfo: { name: "pi-acp", version: "0.0.33" } };
+const info = { protocolVersion: 1, agentInfo: { name: ACP_AGENT.name, version: ACP_AGENT.version } };
 
 test("ACP protocol fixture: handshake, session, text, permission denial and cancellation framing", async () => {
   let finish;

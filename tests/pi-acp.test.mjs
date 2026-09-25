@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { createPiAcpExecutor, openPiAcpProbe } from "../lib/pi-acp.mjs";
+import { ACP_AGENT } from "../lib/acp-client.mjs";
 import { TaskInterrupted } from "../lib/task-interrupted.mjs";
 import { freshExecute, taskFixture } from "./lib/task-fixture.mjs";
 
@@ -34,11 +35,11 @@ test("pi-acp real executor admits configured Pi and refuses unconfigured harness
   }
 });
 
-test("real pi-acp 0.0.33 / pi 0.85.1: isolated handshake, auth refusal, actual death and version mismatch", { skip, timeout: 40000 }, async (t) => {
+test(`real ${ACP_AGENT.name} ${ACP_AGENT.version} / pi ${ACP_AGENT.piVersion}: isolated handshake, auth refusal, actual death and version mismatch`, { skip, timeout: 40000 }, async (t) => {
   const probe = await openPiAcpProbe(config);
   t.after(() => probe.close());
   assert.equal(probe.info.protocolVersion, 1);
-  assert.equal(probe.info.agentInfo.version, "0.0.33");
+  assert.equal(probe.info.agentInfo.version, ACP_AGENT.version);
   await assert.rejects(probe.newSession(), { refused: "acp-authentication-required" });
   process.kill(probe.pid, "SIGKILL");
   const ended = await probe.exited;
@@ -73,7 +74,7 @@ test("D1 real TCP diagnostic only: killed ACP process is interrupted and second 
   const starts = () => fs.existsSync(startsFile) ? fs.readFileSync(startsFile, "utf8").trim().split("\n").map(JSON.parse) : [];
   const [start] = await until(starts, (list) => list.length === 1);
   t.after(() => { try { process.kill(start.pid, "SIGKILL"); } catch {} });
-  assert.equal(start.agentInfo.version, "0.0.33");
+  assert.equal(start.agentInfo.version, ACP_AGENT.version);
   const address = admitted.body.task.address;
   const second = await freshExecute(base, owner, "task_status", { address });
   assert.notEqual(second.localPort, admitted.localPort);

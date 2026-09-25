@@ -24,11 +24,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createPermissionPolicy } from "../lib/permission-policy.mjs";
-import { createAcpClient } from "../lib/acp-client.mjs";
+import { createAcpClient, ACP_AGENT } from "../lib/acp-client.mjs";
 import { createTaskHost, TASK_TOOLS } from "../lib/tasks.mjs";
 import { reduceTask } from "../core/tasks.ts";
 
-const info = { protocolVersion: 1, agentInfo: { name: "pi-acp", version: "0.0.33" } };
+const info = { protocolVersion: 1, agentInfo: { name: ACP_AGENT.name, version: ACP_AGENT.version } };
 const result = (m, r) => ({ jsonrpc: "2.0", id: m.id, result: r });
 
 /** Mock ACP harness that issues a permission request during prompt */
