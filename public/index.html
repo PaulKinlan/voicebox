@@ -245,13 +245,14 @@
         <div class="mic-stage" id="voice-ring-wrap" data-voice="off">
           <!-- the agent's voice: one radius per sample around the circle -->
           <svg class="output-ring" viewBox="0 0 240 240" aria-hidden="true"><path id="output-path"></path></svg>
-          <button class="mic" id="mic" type="button" aria-label="Speak a turn" aria-pressed="false" aria-describedby="voice-state">
+          <button class="mic" id="mic" type="button" aria-label="Speak a turn" aria-pressed="false" aria-describedby="voice-state" aria-keyshortcuts="M" title="Speak a turn (hotkey: M)">
             <svg class="mic-glyph icon" aria-hidden="true"><use href="#i-mic"/></svg>
             <!-- your voice: recent input energy at the microphone itself -->
             <svg class="input-wave" viewBox="0 0 100 100" aria-hidden="true">
               <defs><clipPath id="mic-inner"><circle cx="50" cy="50" r="46"/></clipPath></defs>
               <path id="input-path" clip-path="url(#mic-inner)"></path>
             </svg>
+            <kbd class="mic-hotkey-badge" id="mic-hotkey-badge" aria-hidden="true">M</kbd>
           </button>
         </div>
         <p class="voice-state" id="voice-state" role="status">Microphone off — press the circle to speak</p>
@@ -273,6 +274,11 @@
             <h3 id="mic-label">Microphone</h3>
             <select id="mic-select" aria-labelledby="mic-label"></select>
             <p class="device-state" id="mic-device-state">Mic off</p>
+          </div>
+          <div class="device-row">
+            <h3 id="mic-hotkey-label">Microphone hotkey</h3>
+            <input type="text" id="mic-hotkey" class="setting-input" aria-labelledby="mic-hotkey-label" maxlength="1" value="M" autocomplete="off" spellcheck="false">
+            <p class="device-state" id="mic-hotkey-state">Press 'M' to toggle mic</p>
           </div>
           <div class="device-row">
             <h3 id="out-label">Reply output</h3>
