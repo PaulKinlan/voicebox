@@ -25,6 +25,7 @@ const WANTED = {
   stage: "voice-ring-wrap", mic: "mic", state: "voice-state",
   session: "session", log: "session-log", form: "text-form", utterance: "utterance", send: "send",
   reader: "reader", readerTitle: "reader-title", readerFacts: "file-facts", readerBody: "file-body",
+  fileRefresh: "file-refresh",
   copy: "file-copy", close: "reader-close", about: "about-facts", readerDetails: "reader-details",
   settingsOpen: "settings-open", settings: "settings", settingsClose: "settings-close",
   micSelect: "mic-select", outSelect: "out-select",
@@ -1568,7 +1569,9 @@ function readProvenance(via) {
 // once for a source that was not the server's.
 async function showRoomFile(name) {
   els.copy.disabled = true;
+  if (els.fileRefresh) els.fileRefresh.disabled = false;
   els.reader.dataset.state = "empty";
+  els.reader.dataset.error = "false";
   els.readerTitle.textContent = name;
   els.readerFacts.textContent = "Reading…";
   els.readerBody.textContent = "";
@@ -1580,6 +1583,7 @@ async function showRoomFile(name) {
     els.readerFacts.title = "";
     els.readerBody.textContent = text;
     els.reader.dataset.state = "ready";
+    els.reader.dataset.error = "false";
     els.copy.disabled = text.length === 0;
     if (els.readerDetails) els.readerDetails.open = true;
   } catch (error) {
@@ -1587,6 +1591,8 @@ async function showRoomFile(name) {
     els.readerFacts.textContent = sentence;
     els.readerBody.textContent = sentence;
     els.reader.dataset.state = "ready";
+    els.reader.dataset.error = "true";
+    els.copy.disabled = true;
     if (els.readerDetails) els.readerDetails.open = true;
   }
 }
@@ -1603,11 +1609,12 @@ async function showFile(name) {
   shownFile = name;
   if (roomFolder) return showRoomFile(name);
   els.copy.disabled = true;
+  if (els.fileRefresh) els.fileRefresh.disabled = false;
   els.reader.dataset.state = "empty";
+  els.reader.dataset.error = "false";
   els.readerTitle.textContent = name;
   els.readerFacts.textContent = "Reading…";
   els.readerBody.textContent = "";
-  els.reader.dataset.state = "empty";
   showFileSelection(name);
   try {
     const answer = await request(`/api/file?name=${encodeURIComponent(name)}`);
@@ -1619,6 +1626,7 @@ async function showFile(name) {
       els.readerFacts.title = `${rootLabel()}${name}, read just now`;
       els.readerBody.textContent = content;
       els.reader.dataset.state = "ready";
+      els.reader.dataset.error = "false";
       els.copy.disabled = content.length === 0;
     } else {
       // A FAILED read puts the reason where the file's text would have been.
@@ -1630,6 +1638,8 @@ async function showFile(name) {
       els.readerFacts.textContent = reason;
       els.readerBody.textContent = reason;
       els.reader.dataset.state = "ready";
+      els.reader.dataset.error = "true";
+      els.copy.disabled = true;
       if (els.readerDetails) els.readerDetails.open = true;
     }
   } catch (error) {
@@ -1643,9 +1653,37 @@ async function showFile(name) {
     els.readerFacts.textContent = sentence;
     els.readerBody.textContent = sentence;
     els.reader.dataset.state = "ready";
+    els.reader.dataset.error = "true";
+    els.copy.disabled = true;
     if (els.readerDetails) els.readerDetails.open = true;
   }
 }
+
+async function refreshCurrentFile() {
+  if (!shownFile) return;
+  if (els.fileRefresh) {
+    els.fileRefresh.disabled = true;
+    els.fileRefresh.setAttribute("aria-busy", "true");
+    els.fileRefresh.textContent = "Reloading…";
+  }
+  if (els.reader) els.reader.dataset.loading = "true";
+  try {
+    if (roomFolder) {
+      await showRoomFile(shownFile);
+    } else {
+      await showFile(shownFile);
+    }
+  } finally {
+    if (els.fileRefresh) {
+      els.fileRefresh.disabled = !shownFile;
+      els.fileRefresh.removeAttribute("aria-busy");
+      els.fileRefresh.textContent = "Reload";
+    }
+    if (els.reader) els.reader.dataset.loading = "false";
+  }
+}
+
+on(els.fileRefresh, "click", refreshCurrentFile);
 
 on(els.copy, "click", async () => {
   try {
@@ -1659,8 +1697,12 @@ on(els.copy, "click", async () => {
 on(els.close, "click", () => {
   shownFile = null;
   els.reader.dataset.state = "empty";
+  els.reader.dataset.error = "false";
+  els.reader.dataset.loading = "false";
   els.readerBody.textContent = "";
   els.readerFacts.textContent = "";
+  els.copy.disabled = true;
+  if (els.fileRefresh) els.fileRefresh.disabled = true;
   showFileSelection(null);
   document.querySelector(".file-open")?.focus();
 });

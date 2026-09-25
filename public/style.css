@@ -313,6 +313,8 @@ html:has(dialog.settings[open]) { overflow: hidden; }
 /* ── the reader: it appears where the room is, and closes again ──────── */
 .reader { display: flex; flex-direction: column; width: min(100%, 720px); }
 .reader[data-state="empty"] { display: none; }
+.reader[data-loading="true"] #file-body { opacity: .5; pointer-events: none; }
+.reader[data-error="true"] #file-body { color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 30%, var(--line)); }
 .reader-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; }
 .reader-head h2 { margin: 0; font-size: .9375rem; font-weight: 500; }
 .reader-facts { margin: 8px 0 0; font-size: .75rem; color: var(--muted); }
