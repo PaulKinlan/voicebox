@@ -1,0 +1,21 @@
+{
+  "id": "brave-search",
+  "name": "Brave Search",
+  "description": "A search extension using the Brave Search API. Requires a Brave Search API subscription key (BRAVE_API_KEY in the host environment). Returns web results with title, description and URL.",
+  "source": "catalogue",
+  "runsIn": "host",
+  "capabilities": ["network"],
+  "bounds": { "hosts": ["api.search.brave.com"], "maxRequests": 20 },
+  "tools": [
+    {
+      "name": "brave_search",
+      "description": "Search the web using Brave Search API. Requires BRAVE_API_KEY env var for authentication. Returns web results with title, description and URL.",
+      "promptSnippet": "brave_search queries the web via the Brave Search API (api.search.brave.com).",
+      "primitive": "http-get",
+      "params": {
+        "url": "https://api.search.brave.com/res/v1/web/search",
+        "headers": { "X-Subscription-Token": "$BRAVE_API_KEY" }
+      }
+    }
+  ]
+}
