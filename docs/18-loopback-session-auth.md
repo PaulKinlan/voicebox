@@ -80,6 +80,13 @@ loopback against it while `~/.config` sits readable is an asymmetric boundary. O
 WebCrypto pairing, docs/13 §2B) is the answer if that threat model ever becomes real; it is not built
 here.
 
+One deliberate asymmetry, named rather than left implicit: the HTTP wall checks the cookie but not
+Origin (WS upgrades check both). That is sound because the credential itself answers the cross-site
+question — `SameSite=Strict` means a cross-site browser request does not *carry* the cookie, so an
+`evil.com` page has nothing to send and the wall refuses it, which is the same CSWSH family 5c1
+closed by Origin on the sockets. A local non-browser caller bypasses Origin anyway, which is exactly
+why the wall's real boundary is the ticket/host-token reach, not the header.
+
 ## 5. The proofs
 
 `tests/loopback-auth.test.mjs` drives a real spawned server (the shared `tests/lib/server.mjs`
