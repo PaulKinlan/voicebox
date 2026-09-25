@@ -32,10 +32,11 @@ const WANTED = {
   envs: "envs", envsOpen: "envs-open", envsClose: "envs-close", envList: "env-list", envCount: "envs-count", envNote: "env-note",
   envAdd: "env-add", envAddLabel: "env-add-label", envAddOrigin: "env-add-origin", envAddBtn: "env-add-btn",
   // The extension surface (voicebox-beads-vwb): one source (/api/extensions + /api/extensions/catalogue),
-  // four states in four sections, never mixed — a present-but-unreviewed extension is never green
-  // and never described as running.
+  // five states in five sections, never mixed — a present-but-unreviewed extension is never green
+  // and never described as running, and an admitted extension that failed to load is never silent
+  // (voicebox-beads-qdo: named error + next action, its own section).
   exts: "exts", extsOpen: "exts-open", extsClose: "exts-close", extCount: "exts-count", extNote: "ext-note",
-  extRunning: "ext-running", extWaiting: "ext-waiting", extPresent: "ext-present",
+  extRunning: "ext-running", extFailed: "ext-failed", extWaiting: "ext-waiting", extPresent: "ext-present",
   extRefused: "ext-refused", extCatalogue: "ext-catalogue",
   // Extension reconfiguration and removal modal (voicebox-beads-ud5)
   extManageDialog: "ext-manage-dialog", extManageForm: "ext-manage-form",
@@ -1292,6 +1293,14 @@ async function renderExtensions() {
       row.appendChild(actions);
       return row;
     }), "Nothing running yet.");
+
+    // APPROVED, NOT RUNNING (voicebox-beads-qdo): an approved extension that failed to load is
+    // named HERE, never silent — the row says what happened and what to do next, in the person's
+    // words. Never green, never mixed into Running: half-loaded is a state the person must SEE.
+    extSection(els.extFailed, (inv.failedLoads ?? []).map((f) =>
+      extRow({ name: f.name ?? f.id, dotState: "false", stateText: "Approved · not running",
+               detail: `${f.why} Next: ${f.next}` })
+    ), "No approved extension is failing to load.");
 
     extSection(els.extWaiting, waiting.map((p) =>
       extRow({ name: p.name, dotState: "pending", stateText: "Waiting for the host's review", disclose: extensionApproval(p.id) })
