@@ -2639,7 +2639,7 @@ async function handle(req, res) {
         note: "nothing decided — repeat with confirm:true to apply reconfiguration",
       });
     }
-    const r = extensions.reconfigureExtension(body.id, { bounds: body.bounds, tools: body.tools }, body.actor ?? "host");
+    const r = extensions.reconfigureExtension(body.id, { bounds: body.bounds, tools: body.tools, params: body.params }, body.actor ?? "host");
     return json(res, r.ok ? 200 : 400, r);
   }
 
@@ -2651,7 +2651,7 @@ async function handle(req, res) {
     }
     const id = patchExtMatch[1];
     const body = await readJson();
-    const r = extensions.reconfigureExtension(id, { bounds: body?.bounds, tools: body?.tools }, body?.actor ?? "host");
+    const r = extensions.reconfigureExtension(id, { bounds: body?.bounds, tools: body?.tools, params: body?.params }, body?.actor ?? "host");
     return json(res, r.ok ? 200 : 400, r);
   }
 
