@@ -21,6 +21,15 @@ const SHA256_ABC = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f200
 let scratch;
 let shelf; // the scratch COPY of the real shelf — the real one is never touched
 
+const hasShelf = existsSync(REAL_SHELF);
+const needsShelf = (t) => {
+  if (!hasShelf) {
+    t.skip("no isocan shelf installed on this box");
+    return true;
+  }
+  return false;
+};
+
 /** A FRESH copy per test that mutates: a tamper in one test must never leak into another's admission. */
 function freshShelf(name) {
   const dir = path.join(scratch, name);
@@ -30,14 +39,15 @@ function freshShelf(name) {
 
 test.before(() => {
   scratch = mkdtempSync(path.join(os.tmpdir(), "voicebox-wasm-shelf-"));
-  shelf = freshShelf("shelf");
+  if (hasShelf) shelf = freshShelf("shelf");
 });
 
 test.after(() => {
   rmSync(scratch, { recursive: true, force: true });
 });
 
-test("admission rehash: an untampered shelf admits, and the digest in the manifest is the one measured", () => {
+test("admission rehash: an untampered shelf admits, and the digest in the manifest is the one measured", (t) => {
+  if (needsShelf(t)) return;
   const out = readShelf(shelf);
   assert.equal(out.ok, true, JSON.stringify(out));
   const hash = out.tools.find((t) => t.id === "hash");
@@ -48,7 +58,8 @@ test("admission rehash: an untampered shelf admits, and the digest in the manife
   assert.equal(diff.abi.abi, "buffer-abi/diff", "diff's ABI is declared and driven (voicebox-beads-9nk)");
 });
 
-test("ADMISSION TAMPER: one flipped byte in the module is digest-mismatch, named with both digests", () => {
+test("ADMISSION TAMPER: one flipped byte in the module is digest-mismatch, named with both digests", (t) => {
+  if (needsShelf(t)) return;
   const tampered = freshShelf("tampered");
   const wasmPath = path.join(tampered, "assets", "hash.wasm");
   const bytes = readFileSync(wasmPath);
@@ -61,7 +72,8 @@ test("ADMISSION TAMPER: one flipped byte in the module is digest-mismatch, named
   assert.match(hash.why, /hashes [0-9a-f]{16}… but the manifest pins [0-9a-f]{16}…/, "the refusal shows BOTH digests — evidence, not just a verdict");
 });
 
-test("the gate: a wasm tool without a digest is under-declared; an undriven ABI is unsupported-abi; buffer-abi/1 with a 64-hex digest passes", () => {
+test("the gate: a wasm tool without a digest is under-declared; an undriven ABI is unsupported-abi; buffer-abi/1 with a 64-hex digest passes", (t) => {
+  if (needsShelf(t)) return;
   const shelfOut = readShelf(shelf);
   const hash = shelfOut.tools.find((t) => t.id === "hash");
   const descriptor = descriptorFor(hash);
@@ -86,7 +98,8 @@ test("the gate: a wasm tool without a digest is under-declared; an undriven ABI 
 // The full seam, in-process: propose → the host admits → callTool runs the module — and the
 // CALL-TIME rehash refuses a module swapped AFTER admission. env is set BEFORE the import of
 // lib/extensions.mjs, whose module state (workspace, host dir) is read at import.
-test("through the seam: the KAT passes, and a post-admission swap is digest-mismatch at call time", async () => {
+test("through the seam: the KAT passes, and a post-admission swap is digest-mismatch at call time", async (t) => {
+  if (needsShelf(t)) return;
   const ws = path.join(scratch, "seam-ws");
   const ext = path.join(scratch, "seam-ext");
   mkdirSync(ws, { recursive: true });
@@ -123,7 +136,8 @@ test("through the seam: the KAT passes, and a post-admission swap is digest-mism
   writeFileSync(wasmPath, original); // restore — the shelf outlives the assertion
 });
 
-test("a module whose memory does not cover the declared ABI is a NAMED refusal, never an uncaught throw (vb-resolver's crash, driven)", async () => {
+test("a module whose memory does not cover the declared ABI is a NAMED refusal, never an uncaught throw (vb-resolver's crash, driven)", async (t) => {
+  if (needsShelf(t)) return;
   // vb-resolver's defect: a zero-page-memory module crashed the driver with an UNCAUGHT
   // RangeError — a 500 through the turn path, not a refusal. The fix checks the memory covers
   // everything the ABI declares BEFORE the view is touched. Driven here with the real module
@@ -188,11 +202,13 @@ test("LGW: the loop module is terminated BY NAME at the host's deadline — and 
   assert.match(out.why, /bounded by the host/, "the refusal names whose bound it is");
 
   // The host's event loop never noticed: the KAT answers immediately after.
-  const shelfOut = readShelf(shelf);
-  const descriptor = descriptorFor(shelfOut.tools.find((t) => t.id === "hash"));
-  const kat = await import("../lib/wasm-shelf.mjs").then((m) => m.callWasmTool(descriptor.tools[0], { input: "abc" }));
-  assert.equal(kat.ok, true, "the host is alive and answering after the attack");
-  assert.equal(kat.output, SHA256_ABC);
+  if (hasShelf) {
+    const shelfOut = readShelf(shelf);
+    const descriptor = descriptorFor(shelfOut.tools.find((t) => t.id === "hash"));
+    const kat = await import("../lib/wasm-shelf.mjs").then((m) => m.callWasmTool(descriptor.tools[0], { input: "abc" }));
+    assert.equal(kat.ok, true, "the host is alive and answering after the attack");
+    assert.equal(kat.output, SHA256_ABC);
+  }
 });
 
 test("LGW: the grow module dies against the host's bounds, named — and the host's memory is untouched (vb-resolver's grow-loop)", async () => {
@@ -208,10 +224,12 @@ test("LGW: the grow module dies against the host's bounds, named — and the hos
   const hostDelta = process.memoryUsage().rss - hostBefore;
   assert.ok(hostDelta < 256 * 1024 * 1024, `the HOST's memory is untouched by the module's growth (delta ${Math.round(hostDelta / 1048576)}MB)`);
 
-  const shelfOut = readShelf(shelf);
-  const descriptor = descriptorFor(shelfOut.tools.find((t) => t.id === "hash"));
-  const kat = await import("../lib/wasm-shelf.mjs").then((m) => m.callWasmTool(descriptor.tools[0], { input: "abc" }));
-  assert.equal(kat.ok, true, "the host is alive and answering after the attack");
+  if (hasShelf) {
+    const shelfOut = readShelf(shelf);
+    const descriptor = descriptorFor(shelfOut.tools.find((t) => t.id === "hash"));
+    const kat = await import("../lib/wasm-shelf.mjs").then((m) => m.callWasmTool(descriptor.tools[0], { input: "abc" }));
+    assert.equal(kat.ok, true, "the host is alive and answering after the attack");
+  }
 });
 
 test("LGW follow-up: a module file over the host's read bound is refused BEFORE the read — the parent's half costs the host's own loop (vb-resolver's fan-out review)", async () => {
@@ -239,7 +257,8 @@ test("the REAL shelf on this box, if present, admits hash and answers the KAT th
   assert.equal(called.output, SHA256_ABC);
 });
 
-test("diff.wasm: output format decoded and declared (Hirschberg line edit script)", async () => {
+test("diff.wasm: output format decoded and declared (Hirschberg line edit script)", async (t) => {
+  if (needsShelf(t)) return;
   const shelfOut = readShelf(shelf);
   const diffTool = shelfOut.tools.find((t) => t.id === "diff");
   assert.ok(diffTool.admitted);
@@ -260,7 +279,8 @@ test("diff.wasm: output format decoded and declared (Hirschberg line edit script
   assert.deepEqual(called.blocks[2], { op: "equal", aLine: 1, aCount: 1, bLine: 2, bCount: 1 });
 });
 
-test("wasm shelf hookup: catalogue discovery surfaces shelf tools and callTool executes via o45 seam", async () => {
+test("wasm shelf hookup: catalogue discovery surfaces shelf tools and callTool executes via o45 seam", async (t) => {
+  if (needsShelf(t)) return;
   const ws = path.join(scratch, "hookup-ws");
   const ext = path.join(scratch, "hookup-ext");
   mkdirSync(ws, { recursive: true });

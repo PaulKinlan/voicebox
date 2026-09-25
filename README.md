@@ -259,7 +259,7 @@ for the argument and permission boundaries.
 * eval — absent: eval is not a tool path (design §1.7): the evaluator bypasses whatever the substrate would otherwise enforce.
 * import — absent: no import boundary on this placement: dynamic import executes fetched code with no flags by default.
 
-**The catalogue** — `catalogue/*.json`, 7 tracked descriptors (strangers' extensions you can sideload). **None is loaded until the host admits it**; the last column is what `admit()` says today:
+**The catalogue** — `catalogue/*.json`, 5 tracked descriptors (strangers' extensions you can sideload). **None is loaded until the host admits it**; the last column is what `admit()` says today:
 
 | id | tools | declares | bounds | the gate's verdict |
 |---|---|---|---|---|
@@ -275,7 +275,7 @@ for the argument and permission boundaries.
 * admitted tools at run time (`lib/extensions.mjs`): `approval-audit-unwritable`, `approval-no-proposal`, `approval-plan-changed`, `approval-unavailable`, `bad-redirect`, `bounds-invalid`, `extension-not-admitted`, `fetch-failed`, `outside-root`, `over-budget`, `protected-audit`, `redirect-host-not-allowed`, `redirect-without-location`, `too-many-redirects`
 * task admission/readback (`core/tasks.ts`, `lib/tasks.mjs`): `agent-environment-mismatch`, `agent-not-configured`, `agent-required`, `executor-unavailable`, `invalid-task`, `invalid-task-address`, `invalid-task-context`, `task-audit-unavailable`, `task-authority-field`, `task-call-id-conflict`, `task-call-id-required`, `task-cancelled`, `task-capacity-exhausted`, `task-context-unavailable`, `task-deadline`, `task-environment-changed`, `task-environment-unverified`, `task-input-over-budget`, `task-invalid-result`, `task-not-found`, `task-not-running`, `task-output-over-budget`, `task-owner-mismatch`, `task-owner-unconfirmed`, `task-owner-unverified`, `task-persistence-failed`, `task-root-replaced`, `task-root-unavailable`, `unbounded-executor`, `unknown-tool`, `unsupported-runtime-capability`
 
-**Listable at run time** — `GET /api/extensions` answers `{ placement, extensions, proposals, present, catalogueCount }` (probed: placement `machine`, catalogueCount 7); `GET /api/extensions/catalogue` previews the gate's verdict on every stranger before anything is staged; `GET /api/extensions/{proposals|catalogue}/<id>/plan` is the disclosure — source, declared, enforced-by-which-mechanism, what it gets, what it cannot have — before any decision.
+**Listable at run time** — `GET /api/extensions` answers `{ placement, extensions, proposals, present, catalogueCount }` (probed: placement `machine`, catalogueCount 5); `GET /api/extensions/catalogue` previews the gate's verdict on every stranger before anything is staged; `GET /api/extensions/{proposals|catalogue}/<id>/plan` is the disclosure — source, declared, enforced-by-which-mechanism, what it gets, what it cannot have — before any decision.
 
 **What the process itself can reach** — `GET /api/probe` runs `tools/sandbox-probe.mjs` on this environment and answers an **observed** report (probed: HTTP 200, sections `identity`, `sandboxHints`, `filesystem`, `limits`, `tools`, `network`), cached with its `when` and recorded as an activity in the environment's own audit. It reports files, network and limits as facts with the method beside them — a different question from "which tools are admitted", answered by a different instrument.
 
@@ -342,27 +342,27 @@ Every environment variable the server and its libraries read, and where:
 
 | variable | read in | what it does |
 |---|---|---|
-| `BRAVE_API_KEY` | `lib/extensions.mjs` | (undocumented — add a line to ENV_MEANING in scripts/docs-check.mjs) |
-| `FORCE_COLOR` | `lib/logger.mjs` | (undocumented — add a line to ENV_MEANING in scripts/docs-check.mjs) |
+| `BRAVE_API_KEY` | `lib/extensions.mjs` | the Brave Search API subscription token used by `callHttp` when an extension declares `api.search.brave.com` — without it that call refuses by name (`api-key-missing`) |
+| `FORCE_COLOR` | `lib/logger.mjs` | standard terminal colour override (`0` disables ANSI colours in `lib/logger.mjs`, non-zero enables them even when stdout is not a TTY) |
 | `GEMINI_API_KEY` | `lib/live-providers/gemini.mjs`, `lib/resolver.mjs`, `server.mjs` | read by TWO things with different refusals: the live session refuses to start by name, and the gemini turn resolver answers `unresolved` saying it has no key |
 | `LIVE_PROVIDER` | `lib/live-session.mjs`, `server.mjs` | the OLD NAME of `VOICEBOX_LIVE_PROVIDER`, honoured for one release |
-| `NODE_DISABLE_COLORS` | `lib/logger.mjs` | (undocumented — add a line to ENV_MEANING in scripts/docs-check.mjs) |
-| `NO_COLOR` | `lib/logger.mjs` | (undocumented — add a line to ENV_MEANING in scripts/docs-check.mjs) |
+| `NODE_DISABLE_COLORS` | `lib/logger.mjs` | Node's built-in colour disable flag — honoured by `lib/logger.mjs` alongside `NO_COLOR` |
+| `NO_COLOR` | `lib/logger.mjs` | standard terminal colour override — when set to a non-empty value, `lib/logger.mjs` strips ANSI colour sequences |
 | `OPENAI_API_KEY` | `lib/live-providers/openai.mjs`, `server.mjs` | the OpenAI Realtime key — without it that provider refuses to start, by name |
 | `PORT` | `server.mjs` | the port the server binds (default 8787) |
-| `VOICEBOX_ACP_ADAPTER` | `lib/pi-acp.mjs` | (undocumented — add a line to ENV_MEANING in scripts/docs-check.mjs) |
-| `VOICEBOX_ACP_PI` | `lib/pi-acp.mjs` | (undocumented — add a line to ENV_MEANING in scripts/docs-check.mjs) |
+| `VOICEBOX_ACP_ADAPTER` | `lib/pi-acp.mjs` | path or command override for the `pi-acp` stdio adapter binary in `lib/pi-acp.mjs` |
+| `VOICEBOX_ACP_PI` | `lib/pi-acp.mjs` | path or command override for the `pi` coding agent CLI used by `lib/pi-acp.mjs` |
 | `VOICEBOX_BIND_DEADLINE_MS` | `server.mjs` | how long to keep retrying before giving up by name |
 | `VOICEBOX_BIND_RETRY_MS` | `server.mjs` | how often to retry a bind that lost the port race |
 | `VOICEBOX_EXTENSIONS_DIR` | `lib/extensions.mjs`, `server.mjs` | the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl`, and `.pairings.json` (the bearer custody store — outside every root) |
-| `VOICEBOX_HARNESS` | `server.mjs` | (undocumented — add a line to ENV_MEANING in scripts/docs-check.mjs) |
+| `VOICEBOX_HARNESS` | `server.mjs` | selects the host task adapter (`pi` enables the Pi ACP task adapter in `server.mjs`; unset leaves no default adapter configured) |
 | `VOICEBOX_HELLO_BOUND_MS` | `server.mjs` | how long to wait for a hello frame on /channel or /live before refusing (default 5000ms) |
 | `VOICEBOX_INSTANCE` | `server.mjs` | this writer's name in the active root's shared log (default `machine`) |
 | `VOICEBOX_LIVE_PROVIDER` | `lib/live-session.mjs`, `server.mjs` | the live transport's fallback when the session passes no provider; `/live` passes the agent-settings provider explicitly — **not** the turn resolver |
 | `VOICEBOX_PROVIDER` | `server.mjs` | the OLD NAME of `VOICEBOX_RESOLVER`, honoured for one release: a shell that exports it keeps working and gets a line on stderr |
 | `VOICEBOX_RESOLVER` | `server.mjs` | which TURN resolver answers `POST /api/turn` (default `script`) — **not** the live provider, which is a different concept |
 | `VOICEBOX_SANDBOX_HOMES` | `lib/fence-provider.mjs`, `lib/unit-fence-provider.mjs` | where a fence's writable home is bound from (default `~/sandbox-homes/<key>`) — the one place a fenced environment may write. Must live OUTSIDE /tmp: an L1.5 unit's PrivateTmp hides /tmp in its namespace and a home there fails to bind (status 226/NAMESPACE) |
-| `VOICEBOX_WASM_SHELF_DIR` | `lib/extensions.mjs` | (undocumented — add a line to ENV_MEANING in scripts/docs-check.mjs) |
+| `VOICEBOX_WASM_SHELF_DIR` | `lib/extensions.mjs` | directory holding the digest-pinned WASM tool shelf (`manifest.json` and `.wasm` modules; default `~/.isocan/modules/wasm-tools`) |
 | `VOICEBOX_WORKSPACE` | `lib/extensions.mjs`, `server.mjs` | declares a machine root at boot — a decision, not a default — and is where the extension system keeps `proposals/` and `audit.jsonl` |
 <!-- END GENERATED: config -->
 

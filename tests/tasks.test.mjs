@@ -11,7 +11,7 @@ import { TaskInterrupted } from "../lib/task-interrupted.mjs";
 
 const environment = "env_0123456789abcdef";
 function fixture(t, implementation) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "voicebox-tasks-"));
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "voicebox-tasks-")));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   let selected = { project: "fixture", root: { kind: "machine", path: dir, environment } };
   const options = { environment, instance: "fixture", boot: "boot-one", addressKey: "test-only-host-key-not-a-live-credential", root: () => selected, executor: () => implementation };
@@ -233,3 +233,27 @@ test("executor failure and oversized results are not successful tasks", async (t
     assert.ok(!("answer" in result.task));
   }
 });
+
+test("D9 and D10: admission states closurePolicy and settlement pushes surface-notification delivery contract", async (t) => {
+  const pushed = [];
+  const f = fixture(t, runner(() => "done"));
+  const host = createTaskHost({ ...f.options, onUpdate: (view) => pushed.push(view) });
+  const admitted = host.call("delegate_task", { agent: "fixture", task: "held" }, { owner: "user-1", callId: "d9-d10-1" });
+  assert.equal(admitted.ok, true);
+  assert.deepEqual(admitted.task.closurePolicy, {
+    onVoiceDisconnect: "continue-within-bounds",
+    onEnvironmentClose: "continue-within-bounds",
+    reconciliation: "interrupted-on-restart",
+  });
+  assert.deepEqual(admitted.task.delivery, {
+    mode: "surface-notification",
+    surfaceUpdated: true,
+    modelReceived: false,
+  });
+  await until(() => pushed.length >= 1, Boolean);
+  assert.equal(pushed[0].state, "completed");
+  assert.equal(pushed[0].answer, "done");
+  assert.equal(pushed[0].delivery.mode, "surface-notification");
+  assert.equal(pushed[0].delivery.modelReceived, false);
+});
+

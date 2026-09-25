@@ -44,7 +44,7 @@ The zero-server browser-owned placement model (`voicebox-beads-8fv.1`, [`16-zero
 
 On authenticated readback, an unfinished record from a different boot is marked `interrupted` only after the old process is observed absent (`ESRCH`). A process that might still exist yields `task-owner-unconfirmed`. No saved prompt is submitted during recovery or retry. Late completion cannot rewrite a terminal state.
 
-This uses the audit's existing single-writer-per-root assumption and local process namespace. It is not a distributed ownership lease. Torn/inconsistent logs fail closed; automatic repair, PID-reuse recovery, credential migration and broader reconciliation remain D7/I3 work. Readback performs this narrow reconciliation lazily; there is no background all-root scan. D10's broader harness-closure lifetime policy remains open.
+This uses the audit's existing single-writer-per-root assumption and local process namespace. It is not a distributed ownership lease. Torn/inconsistent logs fail closed; automatic repair, PID-reuse recovery, credential migration and broader reconciliation remain D7/I3 work. Readback performs this narrow reconciliation lazily; there is no background all-root scan. D10 (`voicebox-beads-pbl`) states the explicit `closurePolicy` on every admitted `task_view` (`onVoiceDisconnect: "continue"`, `onEnvironmentClose`: `"continue-until-host-exit"` for server placement or `"interrupt"` for browser-local placement, and `reconciliation`).
 
 ## Verification and limits
 
@@ -58,9 +58,13 @@ The browser test drives native microphone capture with fake media through real `
 
 The first browser instrument waited on the absent `#caption` element and failed. That RED is retained externally; the product bug is tracked as `voicebox-beads-sor`. The corrected instrument observes raw CDP WebSocket frames without modifying the page's WebSocket or inventing a product caption. Frame arrival is not proof the product displays the reply.
 
-D2–D10 remain unfinished: adapter execution, discovery/default selection, permission mediation,
-broader recovery, result UI, interjection semantics and lifetime policy are not supplied by this slice.
-(Progress/cancellation arrived with D6; the outcome half of D4 is described next.)
+D2–D8 remain partially open where noted: adapter execution, discovery/default selection, permission mediation,
+and broader recovery are not supplied by this slice.
+(Progress/cancellation arrived with D6; D9 delivery and D10 lifetime policy are supplied below; the outcome half of D4 is described next.)
+
+**What D9 and D10 supply** (`voicebox-beads-8ui`, `voicebox-beads-pbl`): every `task_view` states both its
+lifetime contract (`closurePolicy`) and its settlement delivery contract (`delivery: { mode: "surface-notification", surfaceUpdated: true, modelReceived: false }`).
+When a task settles in `lib/tasks.mjs` (`createTaskHost`) or `lib/task-placement.mjs` (`createBrowserTaskHost`), `onUpdate` pushes `{ type: "task", task, delivery }` to the active surface without injecting a live model turn (`modelReceived: false`).
 
 **What D4 supplies now, and what it deliberately does not** (voicebox-beads-m9u): every terminal
 delegation carries an **outcome class** in its record and in `task_view` — `claimed-complete`

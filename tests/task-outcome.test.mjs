@@ -20,7 +20,7 @@ import { createTaskHost } from "../lib/tasks.mjs";
 const environment = "env_0123456789abcdef";
 
 function fixture(t, implementation, deadlineMs = 2000) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "voicebox-outcome-"));
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "voicebox-outcome-")));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const selected = { project: "fixture", root: { kind: "machine", path: dir, environment } };
   const host = createTaskHost({

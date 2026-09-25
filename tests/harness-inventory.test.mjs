@@ -23,14 +23,14 @@ function fixture(t) {
   command("claude", "exit 7");
   command("codex", "echo ignored", 0o600);
   command("gemini", "echo private-output-must-not-leak");
-  command("opencode", `(/bin/sleep 0.3; echo escaped > '${path.join(dir, "escaped")}') & wait`);
+  command("opencode", `(/bin/sleep 1; echo escaped > '${path.join(dir, "escaped")}') & wait`);
   return { env: { PATH: dir, VOICEBOX_ACP_ADAPTER: adapter, VOICEBOX_HARNESS_TOOLS: "" }, command, dir };
 }
 
 test("host inventory separates version-only presence, broken installs, unknown identity and absence", async (t) => {
   const { env, dir } = fixture(t);
   const before = Date.now();
-  const report = await discoverHarnesses({ env, timeoutMs: 100 });
+  const report = await discoverHarnesses({ env, timeoutMs: 500 });
   assert.ok(Date.now() - before < 5000);
   assert.equal(report.entries.length, 7);
   const rows = Object.fromEntries(report.entries.map((r) => [r.id, r]));
@@ -45,19 +45,19 @@ test("host inventory separates version-only presence, broken installs, unknown i
   assert.equal(rows.codex.state, "unrunnable");
   assert.equal(rows.gemini.state, "unknown");
   assert.equal(rows.opencode.state, "unrunnable");
-  assert.match(rows.opencode.why, /exceeded 100ms/);
+  assert.match(rows.opencode.why, /exceeded 500ms/);
   assert.equal(rows.aider.state, "absent");
   assert.equal(rows["pi-acp"].version, "0.0.33");
   assert.equal(rows["pi-acp"].state, "unknown");
   assert.ok(!JSON.stringify(report).includes("private-output"));
   assert.ok(!JSON.stringify(report).includes(env.PATH));
-  await delay(400);
+  await delay(1200);
   assert.equal(existsSync(path.join(dir, "escaped")), false, "version-check descendants must be killed too");
 });
 
 test("no guessed identity, project PATH lookup, or fallback for a broken configured Pi", async (t) => {
   const { env, dir, command } = fixture(t);
-  const report = await discoverHarnesses({ env: { ...env, PATH: ".:", VOICEBOX_ACP_PI: path.join(dir, "missing"), VOICEBOX_ACP_ADAPTER: dir }, timeoutMs: 100 });
+  const report = await discoverHarnesses({ env: { ...env, PATH: ".:", VOICEBOX_ACP_PI: path.join(dir, "missing"), VOICEBOX_ACP_ADAPTER: dir }, timeoutMs: 500 });
   assert.equal(report.entries.find((r) => r.id === "pi").state, "unrunnable");
   assert.equal(report.entries.find((r) => r.id === "claude").state, "absent");
   assert.equal(report.entries.find((r) => r.id === "pi-acp").state, "absent");

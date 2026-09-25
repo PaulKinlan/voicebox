@@ -9,7 +9,42 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const timeout = execFileSync('which', ['timeout'], { encoding: 'utf8' }).trim();
+const timeout = (() => {
+  for (const cmd of ['timeout', 'gtimeout']) {
+    try { return execFileSync('which', [cmd], { encoding: 'utf8' }).trim(); } catch {}
+  }
+  const shimDir = mkdtempSync(path.join(tmpdir(), 'voicebox-timeout-shim-'));
+  const shim = path.join(shimDir, 'timeout-real');
+  writeFileSync(shim, `#!/usr/bin/env node
+const { spawn } = require("node:child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--help") { console.log("--verbose --kill-after"); process.exit(0); }
+let killAfterMs = 5000, verbose = false;
+while (args[0] && args[0].startsWith("--")) {
+  const f = args.shift();
+  if (f === "--verbose") verbose = true;
+  else if (f.startsWith("--kill-after=")) killAfterMs = parseFloat(f.slice(13)) * 1000;
+}
+const durMs = parseFloat(args.shift()) * 1000;
+const child = spawn(args[0], args.slice(1), { stdio: "inherit", detached: true });
+let timedOut = false, killed = false, killTimer = null;
+const sigGroup = (sig) => { try { process.kill(-child.pid, sig); } catch {} try { child.kill(sig); } catch {} };
+const timer = setTimeout(() => {
+  timedOut = true;
+  if (verbose) process.stderr.write("timeout: sending signal TERM to command\\n");
+  sigGroup("SIGTERM");
+  killTimer = setTimeout(() => { killed = true; sigGroup("SIGKILL"); }, killAfterMs);
+}, durMs);
+child.on("exit", (code, sig) => {
+  clearTimeout(timer); clearTimeout(killTimer);
+  if (killed) process.exit(137);
+  if (timedOut) process.exit(124);
+  process.exit(code ?? (sig ? 128 : 0));
+});
+`);
+  chmodSync(shim, 0o755);
+  return shim;
+})();
 // Git exports its repository context inside hooks. Never let it redirect a
 // disposable fixture's init/config/add/commit into the repository being pushed.
 const cleanEnv = { ...process.env };
@@ -313,7 +348,9 @@ test('a suite run inside a hook cannot move the repository it runs in (observer-
   }
 });
 
-test('gate lock serializes concurrent pre-push runs and announces waiting holder (voicebox-beads-6qu)', { timeout: 30000 }, async () => {
+const hasFlock = (() => { try { execFileSync('which', ['flock'], { stdio: 'ignore' }); return true; } catch { return false; } })();
+
+test('gate lock serializes concurrent pre-push runs and announces waiting holder (voicebox-beads-6qu)', { timeout: 30000, skip: !hasFlock && 'flock not installed on macOS' }, async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-gate-lock-'));
   const repo = path.join(dir, 'repo');
   const lockFile = path.join(dir, 'gate.lock');

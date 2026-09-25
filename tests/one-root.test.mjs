@@ -11,7 +11,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { startServer } from "./lib/server.mjs";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -61,7 +61,7 @@ const waitForRoot = async (predicate, label) => {
 };
 
 test.before(async () => {
-  scratch = mkdtempSync(path.join(os.tmpdir(), "voicebox-oneroot-"));
+  scratch = realpathSync(mkdtempSync(path.join(os.tmpdir(), "voicebox-oneroot-")));
   machineRoot = path.join(scratch, "loop-root");
   pickedFolder = path.join(scratch, "picked-folder");
   mkdirSync(machineRoot);

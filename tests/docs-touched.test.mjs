@@ -11,7 +11,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { namedPaths } from "../scripts/docs-touched.mjs";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,7 +38,7 @@ const git = (args, cwd) => execFileSync("git", args, { cwd, env: cleanEnv, encod
 
 /** A repository whose README describes `lib/described.mjs` and nothing else. */
 function fixture() {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "docs-touched-"));
+  const dir = realpathSync(mkdtempSync(path.join(os.tmpdir(), "docs-touched-")));
   roots.push(dir);
   mkdirSync(path.join(dir, "lib"), { recursive: true });
   mkdirSync(path.join(dir, "docs"), { recursive: true });

@@ -499,6 +499,11 @@ const tasks = createTaskHost({
   addressKey: readFileSync(path.join(HOST_DIR, ".host-token")),
   root: () => active,
   agentRegistry,
+  onUpdate: (view) => {
+    const frame = JSON.stringify({ type: "task", task: view, delivery: view.delivery });
+    try { pageSocket?.send(frame); } catch {}
+    try { runningSession?.socket?.send(frame); } catch {}
+  },
 });
 
 const fleetManager = createFleetManager({

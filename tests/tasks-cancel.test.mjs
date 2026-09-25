@@ -10,7 +10,7 @@ import { createTaskHost } from "../lib/tasks.mjs";
 const environment = "env_0123456789abcdef";
 const runner = (run, deadlineMs = 2000) => ({ check: () => ({ ok: true, mechanism: "closed-no-effects-unit-fixture", bounds: { deadlineMs, maxOutputBytes: 4096 } }), run });
 function fixture(t, implementation) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "voicebox-cancel-"));
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "voicebox-cancel-")));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   let selected = { project: "fixture", root: { kind: "machine", path: dir, environment } };
   const options = { environment, instance: "fixture", boot: "boot-one", addressKey: "test-only-host-key-not-a-live-credential", root: () => selected, executor: () => implementation };

@@ -192,15 +192,34 @@ export function reduceTask(entries: LogEntry[], address: string): TaskRecord | n
   return record;
 }
 
+/** D10 (voicebox-beads-pbl): stated once at admission, distinguishing voice disconnect from environment closure. */
+export function closurePolicyFor(placement: TaskPlacement = "machine") {
+  return {
+    onVoiceDisconnect: "continue-within-bounds" as const,
+    onEnvironmentClose: placement === "browser" ? ("terminates-with-tab" as const) : ("continue-within-bounds" as const),
+    reconciliation: placement === "browser" ? ("stale-on-reload" as const) : ("interrupted-on-restart" as const),
+  };
+}
+
+/** D9 (voicebox-beads-8ui): delivery contract naming whether an update is a surface notification or joined the conversation. */
+export function taskDelivery(mode: "surface-notification" | "conversation-interjection" = "surface-notification", modelReceived = false) {
+  return {
+    mode,
+    surfaceUpdated: true,
+    modelReceived: Boolean(modelReceived),
+  };
+}
+
 /** Readback intentionally excludes credential identity and the captured prompt. */
 export function taskView(record: TaskRecord) {
   const { address, environment, placement, root, state, createdAt, updatedAt, reason, answer, progress, partial, outcome, agentId, harness } = record;
+  const resolvedPlacement = placement ?? placementForEnvironment(environment) ?? "machine";
   // The readable half of the record: the class and its basis, and NOTHING that ranks one delegation
   // against another — no score, no weight, no ordering (voicebox-beads-m9u, "no automatic ranking").
   return {
     address,
     environment,
-    placement: placement ?? placementForEnvironment(environment) ?? "machine",
+    placement: resolvedPlacement,
     root,
     state,
     agent: record.input.agent,
@@ -208,6 +227,8 @@ export function taskView(record: TaskRecord) {
     ...(harness ? { harness } : {}),
     createdAt,
     updatedAt,
+    closurePolicy: closurePolicyFor(resolvedPlacement),
+    delivery: taskDelivery("surface-notification", false),
     ...(reason ? { reason } : {}),
     ...(answer !== undefined ? { answer } : {}),
     ...(progress ? { progress } : {}),
@@ -215,3 +236,4 @@ export function taskView(record: TaskRecord) {
     ...(outcome ? { outcome } : {}),
   };
 }
+

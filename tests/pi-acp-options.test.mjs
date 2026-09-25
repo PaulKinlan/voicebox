@@ -9,13 +9,22 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { createPiAcpExecutor } from "../lib/pi-acp.mjs";
 import { ACP_AGENT } from "../lib/acp-client.mjs";
 
 const DEFAULT_ADAPTER = path.join(os.homedir(), ".pi/agent/npm/node_modules/pi-acp");
-const adapterDir = process.env.VOICEBOX_ACP_ADAPTER ?? DEFAULT_ADAPTER;
+const adapterDir = (() => {
+  const candidate = process.env.VOICEBOX_ACP_ADAPTER ?? DEFAULT_ADAPTER;
+  if (fs.existsSync(path.join(candidate, "package.json")) && fs.existsSync(path.join(candidate, "dist/index.js"))) return candidate;
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "voicebox-pi-acp-stub-")));
+  fs.mkdirSync(path.join(dir, "dist"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: ACP_AGENT.name, version: ACP_AGENT.version }));
+  fs.writeFileSync(path.join(dir, "dist/index.js"), "// stub for protocol harness unit tests\n");
+  return dir;
+})();
 
 function createProtocolHarness(options = {}) {
   const sent = [];

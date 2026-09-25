@@ -7,13 +7,14 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdirSync } from "node:fs";
 import { launch } from "./lib/cdp.mjs";
 import { startServer } from "./lib/server.mjs";
 
-const EVIDENCE_DIR = "/home/paulkinlan/cap-evidence/voicebox-sor-20260921";
+const EVIDENCE_DIR = path.join(os.tmpdir(), "cap-evidence", "voicebox-sor-20260921");
 mkdirSync(EVIDENCE_DIR, { recursive: true });
 
 const VIEWPORTS = [

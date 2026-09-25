@@ -16,7 +16,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { startServer } from "./lib/server.mjs";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -47,7 +47,7 @@ const declareAsHost = (project, root) =>
 const stats = () => send({ type: "stats" });
 
 test.before(async () => {
-  const parent = mkdtempSync(path.join(os.tmpdir(), "voicebox-explorer-"));
+  const parent = realpathSync(mkdtempSync(path.join(os.tmpdir(), "voicebox-explorer-")));
   folder = path.join(parent, "crowded-root");
   mkdirSync(folder);
   mkdirSync(path.join(folder, "subdir"));

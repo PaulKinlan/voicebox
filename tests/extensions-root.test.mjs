@@ -7,12 +7,12 @@
 //   node --test tests/extensions-root.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { startServer } from "./lib/server.mjs";
 
-const SCRATCH = mkdtempSync(path.join(os.tmpdir(), "voicebox-gto-"));
+const SCRATCH = realpathSync(mkdtempSync(path.join(os.tmpdir(), "voicebox-gto-")));
 const WORKSPACE = path.join(SCRATCH, "workspace");
 const PROJECT = path.join(SCRATCH, "project"); // the DECLARED root — deliberately not WORKSPACE
 mkdirSync(WORKSPACE, { recursive: true });

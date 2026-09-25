@@ -21,6 +21,8 @@ const BROWSERS = [
   "/usr/bin/chromium-browser",
   "/usr/bin/google-chrome-stable",
   "/usr/bin/google-chrome",
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/Applications/Chromium.app/Contents/MacOS/Chromium",
 ].filter(Boolean);
 
 export async function launch({ width = 1000, height = 800, profile = null, fakeMedia = false } = {}) {
@@ -257,13 +259,15 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
    */
   page.type = async (selector, text) => {
     await page.click(selector);
+    const selectMod = process.platform === "darwin" ? 4 : 2;
     for (const type of ["keyDown", "keyUp"]) {
       await page.send("Input.dispatchKeyEvent", {
         type,
-        modifiers: 2, // Ctrl
+        modifiers: selectMod,
         key: "a",
         code: "KeyA",
         windowsVirtualKeyCode: 65,
+        ...(type === "keyDown" ? { commands: ["selectAll"] } : {}),
       });
     }
     await page.send("Input.insertText", { text });
@@ -279,7 +283,7 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
   page.press = async (key, { modifiers = 0 } = {}) => {
     const spec = KEYS[key] ?? { keyCode: 0, code: key, key };
     for (const type of ["keyDown", "keyUp"]) {
-      await page.send("Input.dispatchKeyEvent", { type, modifiers, key: spec.key, code: spec.code, windowsVirtualKeyCode: spec.keyCode, nativeVirtualKeyCode: spec.keyCode });
+      await page.send("Input.dispatchKeyEvent", { type, modifiers, key: spec.key, code: spec.code, windowsVirtualKeyCode: spec.keyCode });
     }
     await sleep(120);
   };

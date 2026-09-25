@@ -14,7 +14,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { startServer } from "./lib/server.mjs";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,7 +51,7 @@ const files = () => fetch(`${BASE}/api/files`).then((r) => r.json());
 const audit = () => fetch(`${BASE}/api/audit`).then((r) => r.json());
 
 test.before(async () => {
-  scratch = mkdtempSync(path.join(os.tmpdir(), "voicebox-seam-"));
+  scratch = realpathSync(mkdtempSync(path.join(os.tmpdir(), "voicebox-seam-")));
   // The server runs in a scratch cwd, so a path that is wrongly treated as relative lands somewhere
   // this suite can SEE. That is how the committed-artefact defect was found: the loop wrote a
   // virtual root string ("v1/projects/atlas") through `path.join`, and it landed in the process's

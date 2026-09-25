@@ -45,24 +45,58 @@ if [ "$VOICEBOX_SKIP_GATE" = "1" ]; then
   exit 0
 fi
 
+_node_timeout() {
+  if [ "$1" = "--help" ]; then echo "--verbose --kill-after"; return 0; fi
+  node -e '
+    const { spawn } = require("node:child_process");
+    const args = process.argv.slice(1);
+    let killAfterMs = 5000, verbose = false;
+    while (args[0] && args[0].startsWith("--")) {
+      const f = args.shift();
+      if (f === "--verbose") verbose = true;
+      else if (f.startsWith("--kill-after=")) killAfterMs = parseFloat(f.slice(13)) * 1000;
+    }
+    const durMs = parseFloat(args.shift()) * 1000;
+    const child = spawn(args[0], args.slice(1), { stdio: "inherit", detached: true });
+    let timedOut = false, killed = false, killTimer = null;
+    const sigGroup = (sig) => { try { process.kill(-child.pid, sig); } catch {} try { child.kill(sig); } catch {} };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      if (verbose) process.stderr.write(`timeout: sending signal TERM to command ${JSON.stringify(args[0])}\n`);
+      sigGroup("SIGTERM");
+      killTimer = setTimeout(() => { killed = true; sigGroup("SIGKILL"); }, killAfterMs);
+    }, durMs);
+    child.on("exit", (code, sig) => {
+      clearTimeout(timer); clearTimeout(killTimer);
+      if (killed) process.exit(137);
+      if (timedOut) process.exit(124);
+      process.exit(code ?? (sig ? 128 : 0));
+    });
+  ' -- "$@"
+}
+
 # Inherit stdout/stderr: output must stream even when the stage is terminated.
 run_stage() {
   _stage="$1"
   _secs="$2"
   shift 2
-  if ! command -v timeout >/dev/null 2>&1; then
-    echo >&2 "[gate] pre-push REFUSED: $_stage — timeout command missing; install GNU coreutils."
-    exit 1
+  _timeout_bin=""
+  if command -v timeout >/dev/null 2>&1; then
+    _timeout_bin="timeout"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    _timeout_bin="gtimeout"
+  else
+    _timeout_bin="_node_timeout"
   fi
 
   _timeout_flags="--kill-after=5s"
-  if timeout --help 2>&1 | grep -q -- '--verbose'; then
+  if [ "$_timeout_bin" = "_node_timeout" ] || "$_timeout_bin" --help 2>&1 | grep -q -- '--verbose'; then
     _timeout_flags="--verbose $_timeout_flags"
   fi
 
   echo "[gate] pre-push: $_stage — running $* (max ${_secs}s)..."
   _start=$(date +%s)
-  if timeout $_timeout_flags "${_secs}s" "$@"; then
+  if "$_timeout_bin" $_timeout_flags "${_secs}s" "$@"; then
     return 0
   else
     _status=$?

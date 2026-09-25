@@ -593,15 +593,25 @@ test("task-card browser: card renders each state and cancel works from the card 
 });
 
 test("task-card browser: delegation turn automatically mounts task card without typing status", { timeout: 30000 }, async (t) => {
-  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-card-turn-"));
+  const scratch = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "vb-card-turn-")));
   const workspace = path.join(scratch, "project");
   fs.mkdirSync(workspace, { recursive: true });
+
+  const defaultAdapter = path.join(os.homedir(), ".pi/agent/npm/node_modules/pi-acp");
+  let adapterDir = process.env.VOICEBOX_ACP_ADAPTER ?? defaultAdapter;
+  if (!fs.existsSync(path.join(adapterDir, "dist", "index.js"))) {
+    adapterDir = path.join(scratch, "pi-acp-stub");
+    fs.mkdirSync(path.join(adapterDir, "dist"), { recursive: true });
+    fs.writeFileSync(path.join(adapterDir, "package.json"), JSON.stringify({ name: "pi-acp", version: "0.0.33" }));
+    fs.writeFileSync(path.join(adapterDir, "dist", "index.js"), "setTimeout(() => {}, 5000);\n");
+  }
 
   const server = await startServer({
     env: {
       VOICEBOX_WORKSPACE: workspace,
       VOICEBOX_RESOLVER: "script",
       VOICEBOX_HARNESS: "pi",
+      VOICEBOX_ACP_ADAPTER: adapterDir,
     },
   });
   t.after(async () => {

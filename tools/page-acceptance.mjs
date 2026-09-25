@@ -86,7 +86,17 @@ process.on("uncaughtException", (e) => { cleanupArtefacts(); killPrivate(); try 
 // derived from pid — two concurrent runs must never share one). The phases
 // are sequential, so no lock is needed: the shared half writes nothing, and
 // the private half owns its own server.
-const chromium = spawn("/usr/bin/chromium", [
+const CHROME_BIN = [
+  process.env.VOICEBOX_CHROME,
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "/usr/bin/google-chrome-stable",
+  "/usr/bin/google-chrome",
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/Applications/Chromium.app/Contents/MacOS/Chromium",
+].filter(Boolean).find((b) => existsSync(b)) ?? "/usr/bin/chromium";
+
+const chromium = spawn(CHROME_BIN, [
   "--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
   "--remote-debugging-port=0", `--user-data-dir=/tmp/vb-accept-profile-${process.pid}`, "about:blank",
 ], { stdio: ["ignore", "pipe", "pipe"] });

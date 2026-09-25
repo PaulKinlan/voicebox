@@ -55,7 +55,17 @@ function assertOwnWorkspace(workspace, key) {
     "the booted workspace must be exactly under this fixture's selected homes, not an import-time or prefix-matching sibling");
 }
 
-test("boots an L1 fence from a descriptor and returns a MEASURED per-axis boundary", async () => {
+const hasBwrap = existsSync("/usr/bin/bwrap");
+const needsBwrap = (t) => {
+  if (!hasBwrap) {
+    t.skip("no /usr/bin/bwrap on this host — the L1 bwrap fence cannot boot here");
+    return true;
+  }
+  return false;
+};
+
+test("boots an L1 fence from a descriptor and returns a MEASURED per-axis boundary", async (t) => {
+  if (needsBwrap(t)) return;
   const out = await bootFence({ key: "vb-test-measure", label: "measure" });
   assert.ok(out.ok, `the fence did not boot: ${JSON.stringify(out)}`);
   assert.match(out.origin, /^http:\/\/127\.0\.0\.1:\d+$/, "the origin is a loopback URL on a free port");
@@ -81,7 +91,8 @@ test("boots an L1 fence from a descriptor and returns a MEASURED per-axis bounda
   assert.equal(out.capability.probe, "sandbox-probe/1");
 });
 
-test("a real fenced write uses the booted home and reads back off host disk; the host tree is untouched", async () => {
+test("a real fenced write uses the booted home and reads back off host disk; the host tree is untouched", async (t) => {
+  if (needsBwrap(t)) return;
   const out = await bootFence({ key: "vb-test-write", label: "write" });
   assert.ok(out.ok);
   assertOwnWorkspace(out.home.path, "vb-test-write");
@@ -122,7 +133,8 @@ for (const [name, network, verdict, measured] of [
   assert.match(axis.note, /internet reach is separate|do not establish unrestricted/, "one route is not unrestricted internet");
 });
 
-test("the actual fenced probe rejects a wrong marker, not merely a connected TCP port", async () => {
+test("the actual fenced probe rejects a wrong marker, not merely a connected TCP port", async (t) => {
+  if (needsBwrap(t)) return;
   let contacts = 0;
   const sockets = new Set();
   const witness = createServer((socket) => {
@@ -169,7 +181,8 @@ test("MUTATION (the reviewer's): a fence whose tree is writable reports not-fenc
   assert.equal(unmeasured.axes.files.verdict, "not measured");
 });
 
-test("declared-and-booted through the registry, the measured boundary survives the read (probe-written, not a file claim)", async () => {
+test("declared-and-booted through the registry, the measured boundary survives the read (probe-written, not a file claim)", async (t) => {
+  if (needsBwrap(t)) return;
   // The seam wired: POST /api/environments with fence:true boots the fence and stores the MEASURED
   // boundary; GET /api/environments returns it still carrying the probe's report — because the probe
   // is the one writer the read path trusts.

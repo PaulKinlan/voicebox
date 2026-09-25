@@ -88,7 +88,7 @@ async function probeServer() {
   // Keeping the workspace and the declared root apart is what lets the loop drive below SEE whether an
   // admitted tool acts in the declared root or somewhere else — the same directory would hide the answer.
   const scratch = mkdtempSync(join(tmpdir(), "voicebox-docs-check-"));
-  const dirs = { workspace: join(scratch, "workspace"), extensions: join(scratch, "extensions"), root: join(scratch, "project") };
+  const dirs = { workspace: join(scratch, "workspace"), extensions: join(scratch, "extensions"), root: join(scratch, "project"), shelf: join(scratch, "shelf") };
   for (const d of Object.values(dirs)) mkdirSync(d, { recursive: true });
   // THE PROBE MUST NOT INHERIT A ROOT FROM THE SHELL (248f6c6): with VOICEBOX_WORKSPACE in the operator's
   // shell the block computed `declared: true` and the document depended on the shell. Here the variable is
@@ -98,7 +98,7 @@ async function probeServer() {
   // PIN THE CHILD'S ENVIRONMENT (the suite's own lesson, d8af9a0): with a real GEMINI_API_KEY in the shell,
   // the /live upgrade probe below was opening a REAL vendor session during a docs check. Blank keys make the
   // provider refuse by name after the 101 — which is the only fact the line reports.
-  const env = { ...process.env, PORT: String(port), VOICEBOX_EXTENSIONS_DIR: dirs.extensions, VOICEBOX_WORKSPACE: dirs.workspace, GEMINI_API_KEY: "", OPENAI_API_KEY: "" };
+  const env = { ...process.env, PORT: String(port), VOICEBOX_EXTENSIONS_DIR: dirs.extensions, VOICEBOX_WORKSPACE: dirs.workspace, VOICEBOX_WASM_SHELF_DIR: dirs.shelf, GEMINI_API_KEY: "", OPENAI_API_KEY: "" };
   for (const k of ["LIVE_PROVIDER", "VOICEBOX_LIVE_PROVIDER", "VOICEBOX_PROVIDER", "VOICEBOX_RESOLVER", "VOICEBOX_INSTANCE"]) delete env[k];
   const child = spawn(process.execPath, ["server.mjs"], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
   let out = "";
@@ -360,6 +360,14 @@ const ENV_MEANING = {
   LIVE_PROVIDER: "the OLD NAME of `VOICEBOX_LIVE_PROVIDER`, honoured for one release",
   GEMINI_API_KEY: "read by TWO things with different refusals: the live session refuses to start by name, and the gemini turn resolver answers `unresolved` saying it has no key",
   OPENAI_API_KEY: "the OpenAI Realtime key — without it that provider refuses to start, by name",
+  BRAVE_API_KEY: "the Brave Search API subscription token used by `callHttp` when an extension declares `api.search.brave.com` — without it that call refuses by name (`api-key-missing`)",
+  FORCE_COLOR: "standard terminal colour override (`0` disables ANSI colours in `lib/logger.mjs`, non-zero enables them even when stdout is not a TTY)",
+  NO_COLOR: "standard terminal colour override — when set to a non-empty value, `lib/logger.mjs` strips ANSI colour sequences",
+  NODE_DISABLE_COLORS: "Node's built-in colour disable flag — honoured by `lib/logger.mjs` alongside `NO_COLOR`",
+  VOICEBOX_ACP_ADAPTER: "path or command override for the `pi-acp` stdio adapter binary in `lib/pi-acp.mjs`",
+  VOICEBOX_ACP_PI: "path or command override for the `pi` coding agent CLI used by `lib/pi-acp.mjs`",
+  VOICEBOX_HARNESS: "selects the host task adapter (`pi` enables the Pi ACP task adapter in `server.mjs`; unset leaves no default adapter configured)",
+  VOICEBOX_WASM_SHELF_DIR: "directory holding the digest-pinned WASM tool shelf (`manifest.json` and `.wasm` modules; default `~/.isocan/modules/wasm-tools`)",
 };
 function envVars() {
   const files = ["server.mjs", ...readdirSync(join(ROOT, "lib"), { recursive: true }).filter((f) => f.endsWith(".mjs")).map((f) => join("lib", f))];

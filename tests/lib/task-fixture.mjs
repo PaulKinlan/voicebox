@@ -33,7 +33,7 @@ export function freshExecute(base, pairing, tool, args, callId = "readback") {
 }
 
 export async function taskFixture(t, { runtime = true, env: extraEnv = {} } = {}) {
-  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "voicebox-d1-http-"));
+  const scratch = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "voicebox-d1-http-")));
   const workspace = path.join(scratch, "root-a");
   const secondRoot = path.join(scratch, "root-b");
   const hostDir = path.join(scratch, "host");
