@@ -83,7 +83,7 @@ export interface ExtensionDescriptor {
   id: string; // /^[a-z0-9_-]+$/
   name: string;
   description: string;
-  source: "model" | "catalogue" | "builtin";
+  source: "model" | "catalogue" | "builtin" | "local" | "sideload";
   /** Where the tool's work happens. "process" means the model authored a LAUNCH. */
   runsIn: "host" | "process" | "remote";
   capabilities: Capability[];

@@ -38,6 +38,14 @@ const WANTED = {
   exts: "exts", extsOpen: "exts-open", extsClose: "exts-close", extCount: "exts-count", extNote: "ext-note",
   extRunning: "ext-running", extWaiting: "ext-waiting", extPresent: "ext-present",
   extRefused: "ext-refused", extCatalogue: "ext-catalogue",
+  // Extension creation section (voicebox-beads-b1p)
+  extCreateForm: "ext-create-form",
+  extCreateId: "ext-create-id",
+  extCreateName: "ext-create-name",
+  extCreateDesc: "ext-create-desc",
+  extCreatePrimitive: "ext-create-primitive",
+  extCreateTarget: "ext-create-target",
+  extCreateBtn: "ext-create-btn",
   // Extension reconfiguration and removal modal (voicebox-beads-ud5)
   extManageDialog: "ext-manage-dialog", extManageForm: "ext-manage-form",
   extManageTitle: "ext-manage-title", extManageClose: "ext-manage-close",
@@ -2237,6 +2245,69 @@ on(els.extsClose, "click", () => els.exts?.close());
 on(els.exts, "close", () => {
   els.extsOpen?.setAttribute("aria-expanded", "false");
   els.extsOpen?.focus();
+});
+
+on(els.extCreateForm, "submit", async (event) => {
+  event.preventDefault();
+  const id = els.extCreateId?.value?.trim();
+  const name = els.extCreateName?.value?.trim();
+  const description = els.extCreateDesc?.value?.trim();
+  const primitive = els.extCreatePrimitive?.value ?? "http-get";
+  const target = els.extCreateTarget?.value?.trim() ?? "";
+  if (!id || !name || !description) return;
+
+  const capabilities = [];
+  const bounds = {};
+  const params = {};
+  if (primitive === "http-get") {
+    capabilities.push("network");
+    const host = target || "127.0.0.1";
+    bounds.hosts = [host];
+    bounds.maxRequests = 50;
+  } else if (primitive === "read-file" || primitive === "list-files") {
+    capabilities.push("read");
+  } else if (primitive === "write-file") {
+    capabilities.push("write");
+    bounds.maxBytes = 65536;
+  }
+
+  const descriptor = {
+    id,
+    name,
+    description,
+    source: "local",
+    runsIn: "host",
+    capabilities,
+    bounds,
+    tools: [
+      {
+        name: id.replace(/-/g, "_"),
+        description,
+        primitive,
+        params,
+      },
+    ],
+  };
+
+  if (els.extCreateBtn) els.extCreateBtn.disabled = true;
+  try {
+    const resp = await request("/api/extensions/local", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ descriptor }),
+    });
+    if (resp.ok) {
+      if (els.extNote) els.extNote.textContent = `Local extension '${id}' staged as pending proposal. Review and approve below.`;
+      els.extCreateForm.reset();
+      await renderExtensions();
+    } else {
+      if (els.extNote) els.extNote.textContent = resp.why ?? resp.error ?? "Failed to stage local extension";
+    }
+  } catch (err) {
+    if (els.extNote) els.extNote.textContent = err.message;
+  } finally {
+    if (els.extCreateBtn) els.extCreateBtn.disabled = false;
+  }
 });
 
 on(els.extManageClose, "click", () => els.extManageDialog?.close());

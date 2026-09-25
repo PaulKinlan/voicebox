@@ -2630,6 +2630,26 @@ async function handle(req, res) {
     const r = extensions.propose(body?.descriptor, body?.descriptor?.source ?? "model");
     return r.ok ? json(res, 200, { ...r, note: "staged as a pending proposal — NOT loaded; the host admits it" }) : json(res, 400, r);
   }
+  if (req.method === "POST" && ["/api/extensions/local", "/api/extensions/create"].includes(url.pathname)) {
+    // Create and locally add new extensions (voicebox-beads-b1p).
+    // Host-owned admission gate: staging creates a pending proposal with source "local".
+    // Direct admission requires the host token (x-voicebox-host-token); without it, direct admission is refused.
+    const body = await readJson();
+    const descriptor = body?.descriptor ?? body;
+    if (!descriptor || typeof descriptor !== "object") {
+      return json(res, 400, { ok: false, refused: "bad-request", why: "extension descriptor object required" });
+    }
+    const wantsAdmit = Boolean(body?.admit);
+    if (wantsAdmit) {
+      if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+        return json(res, 403, { ok: false, refused: "host-token-required", why: "direct admission is the host's act — this requires the host token (x-voicebox-host-token); stage as proposal first" });
+      }
+      const r = extensions.createAndAdmitExtension(descriptor, "host");
+      return json(res, r.ok ? 200 : 400, r);
+    }
+    const r = extensions.createExtension(descriptor, descriptor.source ?? "local");
+    return json(res, r.ok ? 200 : 400, r);
+  }
   const planMatch = url.pathname.match(/^\/api\/extensions\/(proposals|catalogue)\/([a-z0-9_-]+)\/plan$/);
   if (req.method === "GET" && planMatch) {
     const plan = planMatch[1] === "proposals" ? extensions.proposalPlan(planMatch[2]) : extensions.cataloguePlan(planMatch[2]);
