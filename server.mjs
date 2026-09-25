@@ -135,6 +135,36 @@ const PAIRINGS_FILE = path.join(HOST_DIR, ".pairings.json");
 // Stale pending approval files must never survive a restart (voicebox-beads-62f).
 rmSync(path.join(HOST_DIR, ".pending-approval.json"), { force: true });
 
+function isPidDead(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (err) {
+    return err.code === "ESRCH";
+  }
+}
+
+/** Sweep orphaned .sandbox-probe-<pid>-* markers left by killed processes (voicebox-beads-ebq). */
+function sweepOrphanedProbeMarkers(dirPath) {
+  try {
+    const entries = readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+      const match = entry.name.match(/^\.sandbox-probe-(\d+)-/);
+      if (!match) continue;
+      const pid = parseInt(match[1], 10);
+      if (isPidDead(pid)) {
+        try { unlinkSync(path.join(dirPath, entry.name)); } catch {}
+      }
+    }
+  } catch {}
+}
+
+// Stale sandbox probe markers from killed runs must never survive (voicebox-beads-ebq).
+sweepOrphanedProbeMarkers(ROOT);
+if (process.cwd() !== ROOT) sweepOrphanedProbeMarkers(process.cwd());
+
 // ── IN-ROOM SESSION AUTHORIZATION (voicebox-beads-5jl) ──────────────────────────
 // Minted per server process and embedded into the served index.html. Allows in-room UI actions
 // (like reconfiguring bounds or revoking extensions) without exposing or discovering .token on disk.
@@ -337,8 +367,12 @@ function writeProbeCache(report) {
 /** Run the probe in THIS process's environment. JSON on stdout; a non-zero exit is the boundary
  *  showing itself, and any stdout it produced is still the report. */
 function runProbe() {
+  sweepOrphanedProbeMarkers(ROOT);
+  if (process.cwd() !== ROOT) sweepOrphanedProbeMarkers(process.cwd());
   return new Promise((resolve, reject) => {
     execFile(process.execPath, [PROBE_SCRIPT], { timeout: 15000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+      sweepOrphanedProbeMarkers(ROOT);
+      if (process.cwd() !== ROOT) sweepOrphanedProbeMarkers(process.cwd());
       const text = String(stdout ?? "").trim();
       if (!text) return reject(err ?? new Error("the probe printed nothing"));
       try {

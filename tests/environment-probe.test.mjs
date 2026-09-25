@@ -8,7 +8,7 @@
 // so the list can show it without re-running code on every read.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, existsSync, readdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { startServer } from "./lib/server.mjs";
@@ -74,4 +74,31 @@ test("the registry carries the probed report, so the list shows it without re-ru
   assert.ok(local.capability, "the local environment's row carries the capability report");
   assert.equal(local.capability.probe, "sandbox-probe/1");
   assert.ok(local.capability.when, "the report in the row carries its freshness marker");
+});
+
+test("sandbox probe sweeps dead-PID markers and preserves live ones (voicebox-beads-ebq)", async () => {
+  const { sweepOrphanedProbeMarkers, isPidDead } = await import("../tools/sandbox-probe.mjs");
+  const testDir = mkdtempSync(path.join(os.tmpdir(), "voicebox-probe-sweep-"));
+  try {
+    let deadPid = 9999999;
+    while (!isPidDead(deadPid)) deadPid++;
+
+    const deadMarker = path.join(testDir, `.sandbox-probe-${deadPid}-20260925180000000`);
+    const liveMarker = path.join(testDir, `.sandbox-probe-${process.pid}-20260925180000000`);
+    const unrelatedFile = path.join(testDir, "normal-file.txt");
+
+    writeFileSync(deadMarker, "probe\n");
+    writeFileSync(liveMarker, "probe\n");
+    writeFileSync(unrelatedFile, "data\n");
+
+    sweepOrphanedProbeMarkers(testDir);
+
+    assert.equal(existsSync(deadMarker), false, "dead PID probe marker must be swept");
+    assert.equal(existsSync(liveMarker), true, "live PID probe marker must be preserved");
+    assert.equal(existsSync(unrelatedFile), true, "unrelated files must not be touched");
+
+    rmSync(liveMarker, { force: true });
+  } finally {
+    rmSync(testDir, { recursive: true, force: true });
+  }
 });
