@@ -1080,7 +1080,10 @@ The habits that follow are the reason this section is written the way it is:
   instrument reports **which**: `tools/tree-dirt.mjs` refuses a scratch destination that resolves
   inside the measured tree (`writer-inside-measured-tree`), and a run that measures a tree snapshots
   its `git status` **before** it writes and reports what appeared — pre-existing dirt is named as
-  pre-existing rather than blamed on the run (§3.6).
+  pre-existing rather than blamed on the run (§3.6). Every git command the guard and the harness run
+  strips git's own local plumbing first: `GIT_DIR` **outranks** `-C`, so a hook's exported repository
+  would otherwise answer a question about the tree it names — the field finding where this bead's own
+  fixture wrote its identity into the real checkout during a gate run (2026-09-25).
 - **When a claim changes, sweep every place it is repeated.** A caveat removed at the top of a
   section survived in that section's closing sentence, and the sentence went on stating the opposite
   of the upgrade. Applied three times in one document on one day: a correction that is *applied* is
@@ -1380,9 +1383,12 @@ request succeeds. So both directions:
   whose **cwd is that repository** writes a `backup/` directory into it, and the before/after
   `git status` delta **names it** as this run's writing; dirt present before the run is reported as
   **pre-existing**, never as the run's; a destination that resolves inside the measured tree through
-  a symlink is **refused by name** (`writer-inside-measured-tree`); and a name-prefix sibling
-  (`repo-other` beside `repo`) is correctly **outside**. The prose rule is §3.0's: *a process that
-  writes must write outside anything another process measures.*
+  a symlink is **refused by name** (`writer-inside-measured-tree`); a name-prefix sibling
+  (`repo-other` beside `repo`) is correctly **outside**; and an ambient `GIT_DIR` pointed at another
+  repository **cannot steer the fixture or the measurement** — the field finding (2026-09-25) in
+  which this file's own fixture, run under a pre-push hook, wrote `user.name` into the real checkout.
+  The prose rule is §3.0's: *a process that writes must write outside anything another process
+  measures.*
 
 ### 3.7 What this boundary does not do
 

@@ -101,15 +101,56 @@ export function makeScratchDir(prefix, { tree }) {
 }
 
 /**
+ * Git's local plumbing (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, …), stripped.
+ *
+ * FIELD FINDING (2026-09-25, this bead's own fixture): git exports those variables
+ * into every child it starts, and GIT_DIR OUTRANKS `-C` — so inside a pre-push hook,
+ * `git -C <fixture> config user.name …` writes the PUSHED repository's config. This
+ * fixture did exactly that to the real voicebox checkout during a gate run (user.name
+ * 'Tree-dirt fixture') and was caught in the field. A measurement (or a fixture) of a
+ * tree must not be steerable by the environment of whatever ran it — the same rule as
+ * the rest of this module, one layer down.
+ *
+ * The names come from git itself, so a future git variable is covered without an edit.
+ */
+let localGitEnvNames = null;
+function gitLocalEnvNames() {
+  if (localGitEnvNames) return localGitEnvNames;
+  try {
+    localGitEnvNames = execFileSync("git", ["rev-parse", "--local-env-vars"], { encoding: "utf8" })
+      .split("\n")
+      .map((name) => name.trim())
+      .filter(Boolean);
+  } catch {
+    localGitEnvNames = []; // no git: nothing to strip; callers fail on their own terms
+  }
+  return localGitEnvNames;
+}
+
+/**
+ * The environment for running a git command AGAINST A NAMED TREE: process.env minus git's
+ * own local plumbing. Use it wherever the answer must be about `tree` rather than about
+ * whatever repository the caller happens to be inside.
+ */
+export function gitEnv() {
+  const env = { ...process.env };
+  for (const name of gitLocalEnvNames()) delete env[name];
+  return env;
+}
+
+/**
  * A tree's dirt, as `git status --porcelain` lines, `.beads/` excluded (its untracked sync dir
  * is not a writer's artefact — voicebox-beads-590's F6). `--untracked-files=all` so a file
  * appearing INSIDE an untracked directory is visible: the Dolt backup case was exactly that
  * shape, one `?? backup/` line that never changed while files kept landing in it.
+ *
+ * Runs with `gitEnv()`: a `GIT_DIR` inherited from a hook would otherwise answer this question
+ * about the WRONG repository — the field finding above, in the measurement itself.
  */
 export function porcelainLines(tree) {
   let out = "";
   try {
-    out = execFileSync("git", ["-C", tree, "status", "--porcelain", "--untracked-files=all"], { encoding: "utf8" });
+    out = execFileSync("git", ["-C", tree, "status", "--porcelain", "--untracked-files=all"], { encoding: "utf8", env: gitEnv() });
   } catch {
     return []; // not a repository, or git unavailable: no measurement, no invented one
   }

@@ -8,26 +8,34 @@
 // measurement really examines the git status before and after, and the guard is asked about paths
 // that really resolve (including through a symlink) — a regex over source would be the "looks like
 // a guard" row of §3.0, not this.
+//
+// AND THE FIXTURE ITSELF IS SUBJECT TO THE RULE (field finding, 2026-09-25): git exports GIT_DIR
+// into every child a hook starts, GIT_DIR outranks `-C`, and this fixture's `git config` therefore
+// wrote user.name 'Tree-dirt fixture' into the real voicebox checkout during a gate run. Every git
+// command here runs through gitEnv(), and the last test below pins that an ambient GIT_DIR cannot
+// steer either the fixture or the measurement.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { INSIDE_MEASURED_TREE, dirtDelta, makeScratchDir, outsideTree, porcelainLines } from "../tools/tree-dirt.mjs";
+import { INSIDE_MEASURED_TREE, dirtDelta, gitEnv, makeScratchDir, outsideTree, porcelainLines } from "../tools/tree-dirt.mjs";
 
-function fixtureRepo() {
+function fixtureRepo({ commit = true } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "voicebox-tree-dirt-"));
   const repo = path.join(dir, "repo");
   mkdirSync(repo);
-  const git = (...args) => execFileSync("git", ["-C", repo, ...args], { stdio: "pipe" });
+  const git = (...args) => execFileSync("git", ["-C", repo, ...args], { stdio: "pipe", env: gitEnv() });
   git("init", "-q");
   git("config", "user.email", "fixture@example.invalid");
   git("config", "user.name", "Tree-dirt fixture");
-  writeFileSync(path.join(repo, "tracked.txt"), "here\n");
-  git("add", ".");
-  git("commit", "-qm", "fixture");
-  return { dir, repo };
+  if (commit) {
+    writeFileSync(path.join(repo, "tracked.txt"), "here\n");
+    git("add", ".");
+    git("commit", "-qm", "fixture");
+  }
+  return { dir, repo, git };
 }
 
 test("a writer whose cwd is the measured tree is named by the before/after delta", () => {
@@ -114,5 +122,43 @@ test("the beads sync dir is not a writer's artefact", () => {
     assert.deepEqual(porcelainLines(repo), [], ".beads/ dirt was counted as a writer's output");
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The field finding, pinned: a git hook exports GIT_DIR into every child it starts, and GIT_DIR
+// OUTRANKS `-C` — so without gitEnv() this file's own fixture wrote its identity into the real
+// voicebox checkout, and the measurement could be answered by the wrong repository. This test runs
+// under a deliberately poisoned GIT_DIR and asserts neither can happen.
+test("an ambient GIT_DIR cannot steer the fixture or the measurement", () => {
+  // The field shape: the ambient variable is already set (by a hook) BEFORE any fixture exists,
+  // so fixture creation itself must be isolation-safe, not just later reads.
+  const ambient = fixtureRepo({ commit: false }); // a different repo with no HEAD/index of its own
+  const saved = { GIT_DIR: process.env.GIT_DIR, GIT_WORK_TREE: process.env.GIT_WORK_TREE };
+  let measured = null;
+  try {
+    process.env.GIT_DIR = path.join(ambient.repo, ".git");
+    measured = fixtureRepo(); // created UNDER the poisoned env — the exact shape that escaped to the field
+
+    // (1) The fixture's own git commands must write the FIXTURE, not the ambient repo.
+    execFileSync("git", ["-C", measured.repo, "config", "user.name", "only-the-fixture"], { env: gitEnv() });
+    assert.equal(
+      execFileSync("git", ["-C", measured.repo, "config", "--local", "user.name"], { encoding: "utf8", env: gitEnv() }).trim(),
+      "only-the-fixture",
+      "the fixture's config write did not land in the fixture",
+    );
+    assert.equal(
+      execFileSync("git", ["-C", ambient.repo, "config", "--local", "user.name"], { encoding: "utf8", env: gitEnv() }).trim(),
+      "Tree-dirt fixture",
+      "the ambient GIT_DIR steered the fixture's config write into another repository",
+    );
+
+    // (2) The measurement must answer about the tree it was handed. With ambient's empty repo
+    // steering it, the clean measured tree would read as `?? tracked.txt` instead of empty.
+    assert.deepEqual(porcelainLines(measured.repo), [], "an ambient GIT_DIR made the measurement read the wrong repository");
+  } finally {
+    if (saved.GIT_DIR === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved.GIT_DIR;
+    if (saved.GIT_WORK_TREE === undefined) delete process.env.GIT_WORK_TREE; else process.env.GIT_WORK_TREE = saved.GIT_WORK_TREE;
+    if (measured) rmSync(measured.dir, { recursive: true, force: true });
+    rmSync(ambient.dir, { recursive: true, force: true });
   }
 });

@@ -42,7 +42,7 @@ import { isDeepStrictEqual } from "node:util";
 import { SOURCE_PREFIXES } from "../lib/browser-sources.mjs";
 import { refusalVocabulary, identifiersInRenderedText, ID_PATTERNS, JARGON, READ_VISIBLE_TEXT } from "./rendered-plain-language.mjs";
 import { driftBetween } from "./served-vs-disk.mjs";
-import { makeScratchDir, porcelainLines, dirtDelta } from "./tree-dirt.mjs";
+import { makeScratchDir, porcelainLines, dirtDelta, gitEnv } from "./tree-dirt.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startServer } from "../tests/lib/server.mjs";
@@ -229,7 +229,9 @@ try {
 // pass and never a failure.
 let currencySkipped = null;
 const treeGit = (args, fallback) => {
-  try { return execFileSync("git", ["-C", TREE, ...args], { encoding: "utf8" }).trim() || fallback; } catch { return fallback; }
+  // gitEnv(): a GIT_DIR inherited from a pre-push hook would answer about the PUSHED repo,
+  // not about TREE — the measurement must be steerable only by what it names (bp8 field fix).
+  try { return execFileSync("git", ["-C", TREE, ...args], { encoding: "utf8", env: gitEnv() }).trim() || fallback; } catch { return fallback; }
 };
 const treeId = {
   commit: treeGit(["rev-parse", "--short", "HEAD"], "unknown"),
@@ -277,7 +279,7 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   const shortSha = (text) => (String(text).match(/@\s*([0-9a-f]{7,40})/) ?? [])[1] ?? null;
   const frontStamp = (frontHtml.match(/<meta name="voicebox-build" content="([^"]*)"/) ?? [])[1] ?? null;
   let treeSha = null;
-  try { treeSha = execFileSync("git", ["-C", TREE, "rev-parse", "--short", "HEAD"]).toString().trim(); } catch { treeSha = null; }
+  try { treeSha = execFileSync("git", ["-C", TREE, "rev-parse", "--short", "HEAD"], { env: gitEnv() }).toString().trim(); } catch { treeSha = null; }
   const frontSha = shortSha(frontStamp ?? "");
   const identityMismatch = frontSha && treeSha && frontSha !== treeSha;
   if (identityMismatch) {
