@@ -470,7 +470,7 @@ what makes "it cannot reach the network" structural instead of promised.
 - An **explorer over three roots** — origin storage, the picked folder, the server's
   `workspace/` — each labelled <!-- docs-check: names the mechanism --> with its own authority, each a single bounded listing.
 - Failures have names: `needs-gesture`, `permission-denied`, `handle-gone`,
-  `root-unreachable`, `not-found`, `not-a-project`.
+  `root-vanished`, `root-unreachable`, `not-found`, `not-a-project`.
 - The room's folder handles (`#open-folder`) provide read/write handles persisted across reloads in IndexedDB, supporting several directories at once with a "Restore access" button when permission regresses to prompt.
 
 Checks: `npm run test:e1m0` <!-- docs-check: names the mechanism --> (25 acceptance checks, driven in a real headless Chromium).

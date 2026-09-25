@@ -40,7 +40,9 @@ answer: { v: 1, callId, ok: true,  observed: { … } }
 proved (`createMemoryBroker`, `voice-harness.ts:591`, driven 4/4 on 2026-09-19). `ask` refuses
 in words and sends NOTHING when the peer is absent; invalid answers NEVER settle a pending call
 (inaudible peers get honest timeouts); `abandon()` settles every pending call with a NAMED
-refusal — pending asks are never silence.
+refusal — pending asks are never silence. And an executor that throws — synchronously or inside
+an awaited call — is ANSWERED `exec-threw`: a thrown act is a named refusal, never an ask left to
+wait out its timeout.
 
 ## Absence is a vocabulary — which half is missing is IN the refusal name
 

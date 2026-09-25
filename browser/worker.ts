@@ -81,12 +81,15 @@ const MODULES: Record<string, string> = {
  * The named failures. Three of them are about a ROOT's reachability and are deliberately not
  * folded into one code: "you must click to restore access", "this project's folder handle is not
  * here", and "the folder is gone or unmounted" are three different things to tell a person.
+ * `root-vanished` is the third of those, named the same way the machine side names it
+ * (journal-omr): the root was there when it was declared and is not there now.
  */
 export type FailureCode =
   | "needs-gesture"
   | "permission-denied"
   | "handle-gone"
   | "root-unreachable"
+  | "root-vanished"
   | "not-found"
   | "no-project"
   | "not-a-project"
@@ -254,6 +257,19 @@ async function reachable(): Promise<Failure | null> {
     return null;
   } catch (e) {
     const error = e as Error;
+    // A ROOT THAT IS GONE IS NOT A ROOT THAT CANNOT BE REACHED (journal-omr). The platform's own
+    // NotFoundError is the one shape that means "the folder is not at that path any more" — what
+    // an eviction, a deletion, a rename or an unmounted volume leaves behind. It gets the same name
+    // the machine side gives it, and the remedy, because the alternative (root-unreachable, and
+    // browser writes are create: true all the way down) is a silent rebuild of the project tree.
+    if (error?.name === "NotFoundError") {
+      return fail(
+        "root-vanished",
+        `'${record.name}' is not there any more: the folder is gone, renamed, or on a volume that is not mounted — ` +
+          `open the project again to make its folder anew, or declare the root again with a path that exists now`,
+        `${error?.name}: ${error?.message}`,
+      );
+    }
     return fail(
       "root-unreachable",
       `'${record.name}' cannot be reached: the folder is gone, renamed, or on a volume that is not mounted`,
@@ -1296,6 +1312,7 @@ startActs({
   getCurrentDescriptor: () => (current ? descriptorOf(current) : null),
   getStorage: () => storage,
   checkWritable: () => writable(""),
+  checkReachable: () => reachable(),
   recordAct: (act, decision, rule, result, observed, turn) => record(act, decision, rule, result, observed, turn),
   log: (line) => console.error(line),
 });

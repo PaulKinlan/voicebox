@@ -233,12 +233,13 @@ test("7cd.3 The three failure modes are distinguishable and named", { timeout: 9
     assert.doesNotMatch(reply.why, /internal error/i, `the ${label} failure is generic`);
   }
 
-  // The root that is genuinely unreachable — the folder deleted from under the handle — is its
-  // own fact, and it arrives with the platform's own words attached.
+  // The root that is genuinely gone — the folder deleted from under the handle — is its own fact,
+  // named the same way the machine side names it (journal-omr), and it arrives with the platform's
+  // own words attached.
   rmSync(folder, { recursive: true, force: true });
-  const unreachable = await send({ type: "listView", view: "picked" });
-  assert.equal(unreachable.code, "root-unreachable", `expected root-unreachable, saw ${JSON.stringify(unreachable)}`);
-  assert.ok(unreachable.detail || unreachable.why, "root-unreachable arrived with nothing to act on");
+  const vanished = await send({ type: "listView", view: "picked" });
+  assert.equal(vanished.code, "root-vanished", `expected root-vanished, saw ${JSON.stringify(vanished)}`);
+  assert.ok(vanished.detail || vanished.why, "root-vanished arrived with nothing to act on");
 });
 
 // 4 ------------------------------------------------------------------------------------------
