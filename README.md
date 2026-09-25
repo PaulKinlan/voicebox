@@ -62,14 +62,17 @@ their adapter.
    mismatch instead of failing silently.
 2. **Select the harness and start the server.** `VOICEBOX_HARNESS=pi` (default adapter
    and binary locations; override with `VOICEBOX_ACP_ADAPTER` / `VOICEBOX_ACP_PI`).
-   The startup banner prints an admission table — one line per configured agent:
+   The startup log names every configured agent's admission:
 
    ```
-   configured agents for environment 'env_…' — admission at boot:
-       ADMITTED  Pi (pi) — pi-acp @ 0.0.34
-       REFUSED   Claude Reviewer (agent_claude_reviewer) — claude-code: adapter-not-configured
-                 No Voicebox task adapter is implemented for 'claude' on this host; …
+   [harness] ADMITTED pi (pi-acp @ 0.0.34)
+   [harness] REFUSED agent_claude_reviewer (claude-code) — adapter-not-configured: No Voicebox
+             task adapter is implemented for 'claude-code' on this host; the agent is
+             configured but cannot run.
    ```
+
+   `node server.mjs --doctor` renders the same verdicts as a table without starting the
+   server — use it to check a configuration before committing to a boot.
 
 3. **Add more agents (optional).** Every configured agent lives in the registry:
    `POST /api/agents` with the host token (or edit `<host dir>/.agents.json`), for example

@@ -41,7 +41,7 @@ import { SOURCE_DIRS } from "./lib/browser-sources.mjs";
 import { bootUnitFence, stopUnitFence } from "./lib/unit-fence-provider.mjs";
 import { createHarnessInventory } from "./lib/harness-inventory.mjs";
 import { createAgentRegistry, listHarnessesWithConfiguredAgents, publicAgentProjection } from "./lib/harness-config.mjs";
-import { validateHarnessAgents, renderHarnessTable, describeAgentAdmission } from "./lib/harness-startup.mjs";
+import { validateHarnessAgents, renderHarnessTable, describeAgentAdmission, unimplementedAdapterWhy, CLAUDE_LEGACY_DELEGATE_WHY } from "./lib/harness-startup.mjs";
 import {
   createFleetManager,
   publicFleetProjection,
@@ -628,12 +628,9 @@ function executorForAgent(agentConfig, harness) {
   const installed = adapterExecutors.get(adapter);
   if (installed) return installed;
   const label = UNIMPLEMENTED_ADAPTER_LABELS.get(adapter) ?? adapter ?? harness;
-  // Claude's refusal sentence is the LONG-STANDING user-facing contract (pinned by
-  // configured-harness's boundary test) — keep it exact; the generalized wording is for
-  // adapters that never had a sentence of their own.
-  const why = label === "claude"
-    ? "No Voicebox task adapter is configured for this CLI; configure an adapter before delegating."
-    : `No Voicebox task adapter is implemented for '${label}' on this host; the agent is configured but cannot run.`;
+  // The sentence comes from the ONE home (harness-startup.mjs); claude's delegate path keeps
+  // its long-standing, test-pinned sentence — the vantage rule lives with the constant.
+  const why = label === "claude" ? CLAUDE_LEGACY_DELEGATE_WHY : unimplementedAdapterWhy(label);
   return {
     check() {
       return { ok: false, refused: "adapter-not-configured", why };
