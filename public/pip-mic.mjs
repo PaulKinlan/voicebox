@@ -343,6 +343,17 @@ function buildPip(pip, controls) {
     controls.form.requestSubmit();
   });
 
+  pip.window.addEventListener("keydown", (e) => {
+    if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+    const active = pip.document.activeElement;
+    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) return;
+    const hotkey = window.__voiceboxHotkey?.get?.() ?? "M";
+    if (e.key && e.key.toUpperCase() === hotkey.toUpperCase()) {
+      e.preventDefault();
+      controls.mic?.click();
+    }
+  });
+
   body.append(lead, meters, actions, log, form);
   return { micButton, stateText, hint, stop, inFill, outFill, log, input };
 }

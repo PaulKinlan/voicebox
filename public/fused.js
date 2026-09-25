@@ -29,6 +29,7 @@ const WANTED = {
   settingsOpen: "settings-open", settings: "settings", settingsClose: "settings-close",
   micSelect: "mic-select", outSelect: "out-select",
   micDeviceState: "mic-device-state", outDeviceState: "out-device-state",
+  micHotkey: "mic-hotkey", micHotkeyState: "mic-hotkey-state", micHotkeyBadge: "mic-hotkey-badge",
   envs: "envs", envsOpen: "envs-open", envsClose: "envs-close", envList: "env-list", envCount: "envs-count", envNote: "env-note",
   envAdd: "env-add", envAddLabel: "env-add-label", envAddOrigin: "env-add-origin", envAddBtn: "env-add-btn",
   // The extension surface (voicebox-beads-vwb): one source (/api/extensions + /api/extensions/catalogue),
@@ -2065,6 +2066,81 @@ on(els.outSelect, "change", async () => {
   renderDevices();
 });
 
+// ── Configurable microphone hotkey (voicebox-beads-ebu) ───────────────────
+const HOTKEY_KEY = "voicebox-mic-hotkey";
+let micHotkey = "M";
+
+function updateHotkeyUI() {
+  if (els.micHotkey && els.micHotkey.value !== micHotkey) {
+    els.micHotkey.value = micHotkey;
+  }
+  if (els.micHotkeyState) {
+    els.micHotkeyState.textContent = `Press '${micHotkey}' to toggle mic`;
+  }
+  if (els.micHotkeyBadge) {
+    els.micHotkeyBadge.textContent = micHotkey;
+  }
+  if (els.mic) {
+    els.mic.setAttribute("aria-keyshortcuts", micHotkey);
+    els.mic.title = `Speak a turn (hotkey: ${micHotkey})`;
+  }
+}
+
+function loadHotkey() {
+  try {
+    const saved = localStorage.getItem(HOTKEY_KEY);
+    if (saved && typeof saved === "string" && saved.trim()) {
+      micHotkey = saved.trim().charAt(0).toUpperCase();
+    }
+  } catch {}
+  updateHotkeyUI();
+}
+
+function setHotkey(key) {
+  const clean = (key || "M").trim().charAt(0).toUpperCase() || "M";
+  micHotkey = clean;
+  try { localStorage.setItem(HOTKEY_KEY, micHotkey); } catch {}
+  updateHotkeyUI();
+}
+
+on(els.micHotkey, "input", () => {
+  const val = (els.micHotkey?.value ?? "").trim();
+  if (val) {
+    setHotkey(val);
+  }
+});
+
+on(els.micHotkey, "keydown", (e) => {
+  if (e.key === "Escape" || e.key === "Tab") return;
+  if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    setHotkey(e.key);
+  }
+});
+
+window.addEventListener("keydown", (e) => {
+  if (e.defaultPrevented) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const active = document.activeElement;
+  if (active) {
+    const tag = active.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || active.isContentEditable) {
+      return;
+    }
+  }
+  if (document.querySelector("dialog[open]")) {
+    return;
+  }
+  if (e.key && e.key.toUpperCase() === micHotkey.toUpperCase()) {
+    e.preventDefault();
+    if (els.mic) {
+      els.mic.classList.add("hotkey-active");
+      setTimeout(() => els.mic?.classList.remove("hotkey-active"), 300);
+      els.mic.click();
+    }
+  }
+});
+
 // The "Add environment" control declares a server environment. It writes a descriptor to the
 // server-owned list; it never starts a service, and a host that is not running will say so by name
 // on the next read. (A button, not a form submit: the dialog's method="dialog" form would otherwise
@@ -2595,6 +2671,8 @@ function startMeters() {
 stopMeters();
 
 loadPrefs();
+loadHotkey();
+window.__voiceboxHotkey = { get: () => micHotkey, set: setHotkey };
 window.__voiceboxDevices = {
   micId: () => devices.prefs.mic.id || null,
   outputId: () => devices.prefs.out.id || null,
