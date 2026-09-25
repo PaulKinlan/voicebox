@@ -61,9 +61,9 @@ function fixture() {
       if (trailer) args.push("--trailer", trailer);
       git(args, dir);
     },
-    run() {
+    run(env = cleanEnv) {
       try {
-        return { code: 0, out: execFileSync("node", [script, this.base], { cwd: dir, env: cleanEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) };
+        return { code: 0, out: execFileSync("node", [script, this.base], { cwd: dir, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) };
       } catch (e) {
         return { code: e.status ?? 1, out: `${e.stdout ?? ""}${e.stderr ?? ""}` };
       }
@@ -73,6 +73,23 @@ function fixture() {
 
 test.after(() => {
   for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+});
+
+test("a poisoned GIT_DIR does not steer the verdict (voicebox-beads-bbb)", () => {
+  // The gate runs as the first pre-push stage — always under a hook — and a hook exports GIT_DIR,
+  // which OUTRANKS cwd/-C. Point it at a SECOND repository whose history cannot answer base..HEAD:
+  // an un-stripped gate would measure that repository and change its verdict (or its error).
+  const f = fixture();
+  f.change({ "lib/described.mjs": "\n// moved\n" }, "change the described file");
+  const clean = f.run();
+  assert.equal(clean.code, 1, `control: the gate refuses the undescribed move: ${clean.out}`);
+
+  const other = fixture();
+  other.change({ "lib/quiet.mjs": "\n// unrelated history\n" }, "unrelated commit", "Docs-checked: none");
+  const poisonedEnv = { ...cleanEnv, GIT_DIR: path.join(other.dir, ".git"), GIT_WORK_TREE: other.dir };
+  const poisoned = f.run(poisonedEnv);
+  assert.equal(poisoned.code, clean.code, "a foreign GIT_DIR must not change the gate's verdict");
+  assert.equal(poisoned.out, clean.out, "a foreign GIT_DIR must not change the gate's answer");
 });
 
 test("a described file changes and no document moves: REFUSED, naming both sides", () => {

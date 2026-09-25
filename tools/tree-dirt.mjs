@@ -101,42 +101,15 @@ export function makeScratchDir(prefix, { tree }) {
 }
 
 /**
- * Git's local plumbing (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, …), stripped.
+ * Git's local plumbing (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, …), stripped — moved to the
+ * neutral home `lib/git-env.mjs` (voicebox-beads-bbb) so scripts/ and tests/ strip without
+ * importing a tools/ module. The field finding that motivated it is recorded there.
  *
- * FIELD FINDING (2026-09-25, this bead's own fixture): git exports those variables
- * into every child it starts, and GIT_DIR OUTRANKS `-C` — so inside a pre-push hook,
- * `git -C <fixture> config user.name …` writes the PUSHED repository's config. This
- * fixture did exactly that to the real voicebox checkout during a gate run (user.name
- * 'Tree-dirt fixture') and was caught in the field. A measurement (or a fixture) of a
- * tree must not be steerable by the environment of whatever ran it — the same rule as
- * the rest of this module, one layer down.
- *
- * The names come from git itself, so a future git variable is covered without an edit.
+ * Re-exported here so the module's existing importers (page-acceptance, tree-dirt tests)
+ * keep working unchanged.
  */
-let localGitEnvNames = null;
-function gitLocalEnvNames() {
-  if (localGitEnvNames) return localGitEnvNames;
-  try {
-    localGitEnvNames = execFileSync("git", ["rev-parse", "--local-env-vars"], { encoding: "utf8" })
-      .split("\n")
-      .map((name) => name.trim())
-      .filter(Boolean);
-  } catch {
-    localGitEnvNames = []; // no git: nothing to strip; callers fail on their own terms
-  }
-  return localGitEnvNames;
-}
-
-/**
- * The environment for running a git command AGAINST A NAMED TREE: process.env minus git's
- * own local plumbing. Use it wherever the answer must be about `tree` rather than about
- * whatever repository the caller happens to be inside.
- */
-export function gitEnv() {
-  const env = { ...process.env };
-  for (const name of gitLocalEnvNames()) delete env[name];
-  return env;
-}
+import { gitEnv } from "../lib/git-env.mjs";
+export { gitEnv };
 
 /**
  * A tree's dirt, as `git status --porcelain` lines, `.beads/` excluded (its untracked sync dir

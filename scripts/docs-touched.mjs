@@ -31,10 +31,15 @@ import { join } from "node:path";
 // `import.meta.url` would make every fixture test a test of voicebox itself — so the mechanism
 // could never be driven against a scratch repository, which is how a gate ends up with no test
 // that can fail. (The lesson is `scripts/nightly-prs.mjs`'s, in isocan, learned the same way.)
+import { gitEnv } from "../lib/git-env.mjs";
+
 const ROOT = process.cwd();
 const TRAILER = "Docs-checked:";
 
-const git = (args) => execFileSync("git", args, { cwd: ROOT, encoding: "utf8" }).trim();
+// voicebox-beads-bbb: this gate runs as the FIRST pre-push stage, i.e. always under the hook,
+// and the hook exports GIT_DIR — which OUTRANKS cwd. Without the strip, a future caller that
+// points ROOT elsewhere would silently measure the hook's repository.
+const git = (args) => execFileSync("git", args, { cwd: ROOT, env: gitEnv(), encoding: "utf8" }).trim();
 const gitTry = (args) => { try { return { ok: true, out: git(args) }; } catch (e) { return { ok: false, out: String(e?.stderr ?? e?.message ?? e).trim() }; } };
 
 /** Every document a person writes in: the root markdown files and docs/, minus generated evidence. */

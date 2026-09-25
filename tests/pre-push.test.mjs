@@ -70,7 +70,7 @@ test('pre-push names the stage and cause, streams output, and refuses real faili
     // Every file the gate RUNS, not just the gate script: a stage whose command is missing makes the
     // gate refuse at that stage (correctly — a check that cannot run is not a check that passed), and
     // the fixture would then never reach the stage the case is actually about.
-    for (const file of ['.githooks/pre-push', 'scripts/pre-push.sh', 'scripts/test-lanes.mjs', 'scripts/docs-touched.mjs']) {
+    for (const file of ['.githooks/pre-push', 'scripts/pre-push.sh', 'scripts/test-lanes.mjs', 'scripts/docs-touched.mjs', 'lib/git-env.mjs']) {
       mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
       copyFileSync(path.join(root, file), path.join(repo, file));
     }
@@ -227,7 +227,9 @@ test('pre-push timeout refusal respects custom budget and reports measured elaps
     // there is no `origin/main`, so it reports SKIPPED BY NAME and exits 0 — which is the designed
     // answer for "the base is unknown", and lets this case get to the timeout it is about.
     mkdirSync(path.join(repo, 'scripts'), { recursive: true });
+    mkdirSync(path.join(repo, 'lib'), { recursive: true });
     copyFileSync(path.join(root, 'scripts/docs-touched.mjs'), path.join(repo, 'scripts/docs-touched.mjs'));
+    copyFileSync(path.join(root, 'lib/git-env.mjs'), path.join(repo, 'lib/git-env.mjs'));
     writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ scripts: { 'test:unit': 'node -e "setTimeout(()=>{}, 30000)"' } }));
 
     const result = spawnSync(path.join(repo, 'pre-push.sh'), [], {
@@ -281,6 +283,8 @@ test('a suite run inside a hook cannot move the repository it runs in (observer-
     mkdirSync(path.join(repo, 'scripts'), { recursive: true });
     mkdirSync(path.join(repo, 'tests'), { recursive: true });
     copyFileSync(path.join(root, 'scripts/docs-touched.mjs'), path.join(repo, 'scripts/docs-touched.mjs'));
+    mkdirSync(path.join(repo, 'lib'), { recursive: true });
+    copyFileSync(path.join(root, 'lib/git-env.mjs'), path.join(repo, 'lib/git-env.mjs'));
     copyFileSync(path.join(root, 'tests/docs-touched.test.mjs'), path.join(repo, 'tests/docs-touched.test.mjs'));
     writeFileSync(path.join(repo, 'README.md'), '# Observer fixture\n\nIt describes `scripts/docs-touched.mjs`.\n');
     git('init', '-q', '-b', 'main');
@@ -363,6 +367,8 @@ test('gate lock serializes concurrent pre-push runs and announces waiting holder
     copyFileSync(path.join(root, 'scripts/pre-push.sh'), path.join(repo, 'pre-push.sh'));
     copyFileSync(path.join(root, 'scripts/test-lanes.mjs'), path.join(repo, 'scripts/test-lanes.mjs'));
     copyFileSync(path.join(root, 'scripts/docs-touched.mjs'), path.join(repo, 'scripts/docs-touched.mjs'));
+    mkdirSync(path.join(repo, 'lib'), { recursive: true });
+    copyFileSync(path.join(root, 'lib/git-env.mjs'), path.join(repo, 'lib/git-env.mjs'));
     chmodSync(path.join(repo, 'pre-push.sh'), 0o755);
 
     writeFileSync(path.join(repo, 'package.json'), JSON.stringify({
