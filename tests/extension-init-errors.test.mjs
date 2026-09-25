@@ -157,6 +157,23 @@ test("fixing the file recovers: the failure entry leaves the inventory and the t
   assert.ok(runningIds().has("fifth-ext"), "the tool is live again");
 });
 
+test("an admitted id whose descriptor FILE is deleted is named too — descriptor-missing", async () => {
+  // The file loop walks the DIRECTORY, so a deleted file behind a live admission used to be the
+  // one state no section caught: not running, not present (the ledger still admits it), not
+  // failed (there was no file to fail on). The admittedIds() diff closes it.
+  await admitValid("eighth-ext", "eighth_clock");
+  rmSync(descriptorFile("eighth-ext"));
+  await admitValid("ninth-ext", "ninth_clock");
+
+  const entry = failureFor("eighth-ext");
+  assert.ok(entry, "the vanished descriptor must be named in the inventory");
+  assert.equal(entry.refused, "descriptor-missing");
+  assert.match(entry.why, /no descriptor file/);
+  assert.match(entry.next, /restore .*revoke/);
+  assert.ok(!runningIds().has("eighth-ext"), "a deleted descriptor keeps no tool live");
+  assert.ok(runningIds().has("ninth-ext"), "the trigger extension still loads");
+});
+
 test("every failure entry honours the contract: named refused, why, and a next action", () => {
   for (const f of failures()) {
     assert.equal(typeof f.refused, "string");
