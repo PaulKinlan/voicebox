@@ -62,10 +62,12 @@ export const PRIMITIVE_NEEDS: Record<Primitive, Capability[]> = {
 export interface WasmAsset {
   path: string; // the module file, read and rehashed at EVERY call
   digest: string; // /^[0-9a-f]{64}$/ — the sha256 the host admitted
-  abi: string; // the ONLY driven family: "buffer-abi/1" — anything else refuses unsupported-abi
-  input: { addr: number; maxBytes: number };
-  output: { addr: number; bytes: number };
-  call: { export: string }; // buffer-abi/1: called with the input LENGTH, returns the output size or a negative refusal
+  abi: string; // the driven families: "buffer-abi/1" | "buffer-abi/diff"
+  input?: { addr: number; maxBytes: number };
+  inputA?: { addr: number; maxBytes: number };
+  inputB?: { addr: number; maxBytes: number };
+  output: { addr: number; bytes?: number; maxBytes?: number };
+  call: { export: string }; // function export to invoke
 }
 
 export interface ToolSpec {
@@ -284,12 +286,20 @@ export function admit(
       if (typeof w.digest !== "string" || !/^[0-9a-f]{64}$/.test(w.digest)) {
         return { decision: "refused", rule: "under-declared", why: `tool '${tool.name}' uses primitive 'wasm' but carries no 64-hex digest — a module nobody can verify is a module nobody admitted`, gets: [], cannotHave };
       }
-      if (w.abi !== "buffer-abi/1") {
-        return { decision: "refused", rule: "unsupported-abi", why: `tool '${tool.name}' declares abi '${w.abi}' — the driven family is 'buffer-abi/1' (fixed input buffer, call with length, fixed output); an ABI nobody drives is not a mechanism`, gets: [], cannotHave };
+      if (w.abi !== "buffer-abi/1" && w.abi !== "buffer-abi/diff") {
+        return { decision: "refused", rule: "unsupported-abi", why: `tool '${tool.name}' declares abi '${w.abi}' — the driven families are 'buffer-abi/1' and 'buffer-abi/diff'; an ABI nobody drives is not a mechanism`, gets: [], cannotHave };
       }
-      for (const [label, value] of [["input.addr", w.input?.addr], ["input.maxBytes", w.input?.maxBytes], ["output.addr", w.output?.addr], ["output.bytes", w.output?.bytes]] as const) {
-        if (!Number.isInteger(value) || (value as number) < 0) {
-          return { decision: "refused", rule: "under-declared", why: `tool '${tool.name}' has a wasm asset whose ${label} is ${value} — the ABI is data, declared exactly`, gets: [], cannotHave };
+      if (w.abi === "buffer-abi/1") {
+        for (const [label, value] of [["input.addr", w.input?.addr], ["input.maxBytes", w.input?.maxBytes], ["output.addr", w.output?.addr], ["output.bytes", w.output?.bytes]] as const) {
+          if (!Number.isInteger(value) || (value as number) < 0) {
+            return { decision: "refused", rule: "under-declared", why: `tool '${tool.name}' has a wasm asset whose ${label} is ${value} — the ABI is data, declared exactly`, gets: [], cannotHave };
+          }
+        }
+      } else if (w.abi === "buffer-abi/diff") {
+        for (const [label, value] of [["inputA.addr", w.inputA?.addr], ["inputA.maxBytes", w.inputA?.maxBytes], ["inputB.addr", w.inputB?.addr], ["inputB.maxBytes", w.inputB?.maxBytes], ["output.addr", w.output?.addr], ["output.maxBytes", w.output?.maxBytes]] as const) {
+          if (!Number.isInteger(value) || (value as number) < 0) {
+            return { decision: "refused", rule: "under-declared", why: `tool '${tool.name}' has a wasm asset whose ${label} is ${value} — the ABI is data, declared exactly`, gets: [], cannotHave };
+          }
         }
       }
       if (typeof w.call?.export !== "string" || w.call.export.length === 0) {
