@@ -25,6 +25,7 @@ import { defineConfig } from "vite";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { request } from "node:http";
 import path from "node:path";
 import { cspSafeViteClient } from "./tools/vite-plugin-csp-safe-client.mjs";
 import { SOURCE_PREFIXES } from "./lib/browser-sources.mjs";
@@ -107,6 +108,45 @@ const buildIdentity = () => {
 //
 // Rule recorded explicitly (a wrong rule here would 404 real navigations):
 // file-looking = has a dot-separated extension, and is not .html.
+// THE BOOTSTRAP DOOR ON THE DEV FRONT (docs/13 §4, voicebox-beads-kkc).
+//
+// With VOICEBOX_LOOPBACK_AUTH=1 the real server answers only with a session cookie minted by a
+// one-time bootstrap ticket. On THIS front the page lives at localhost:5173, so the redemption
+// has to happen here: a cookie the browser held for 127.0.0.1:8787 would never ride a same-origin
+// request to localhost:5173, and the gated server would refuse every API call the page makes —
+// a dev front that cannot log in is not a dev front.
+//
+// So any navigation carrying ?bootstrap= is forwarded to the API server verbatim (status,
+// Set-Cookie and body), BEFORE Vite's own transform/router middlewares see it. The backend's
+// Set-Cookie carries no Domain attribute, so the browser scopes the cookie to THIS front's host,
+// where it then rides every proxied API fetch and WebSocket upgrade (/api, /live, /channel — the
+// proxy hops below forward cookies verbatim and rewrite Origin, which is their existing job).
+// Default (gate off) behaviour is untouched: no ?bootstrap= in the URL, no interception.
+function loopbackBootstrapProxy() {
+  return {
+    name: "loopback-bootstrap-proxy",
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const url = new URL(req.url ?? "/", "http://localhost");
+        if (!url.searchParams.has("bootstrap")) return next();
+        const upstream = request(
+          `${API_TARGET}${req.url}`,
+          { method: req.method, headers: { cookie: req.headers.cookie ?? "" } },
+          (up) => {
+            res.writeHead(up.statusCode ?? 502, up.headers);
+            up.pipe(res);
+          },
+        );
+        upstream.on("error", () => {
+          res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
+          res.end("the API server did not answer the bootstrap redemption — is it running?");
+        });
+        upstream.end();
+      });
+    },
+  };
+}
+
 function loudStaticMiss() {
   return {
     name: "loud-static-miss",
@@ -181,7 +221,7 @@ export default defineConfig({
       "/browser": path.join(path.dirname(fileURLToPath(import.meta.url)), "browser"),
     },
   },
-  plugins: [buildStamp(), cspSafeViteClient(), loudStaticMiss()],
+  plugins: [buildStamp(), cspSafeViteClient(), loudStaticMiss(), loopbackBootstrapProxy()],
   root: "public",
   publicDir: false, // public/ IS the root; there is no second static dir
   // appType stays default ("spa") so "/" serves index.html. The loud 404 for a
