@@ -102,3 +102,24 @@ test("sandbox probe sweeps dead-PID markers and preserves live ones (voicebox-be
     rmSync(testDir, { recursive: true, force: true });
   }
 });
+
+test("server boot sweeps dead-PID probe marker in server cwd (voicebox-beads-ebq)", async () => {
+  const bootDir = mkdtempSync(path.join(os.tmpdir(), "voicebox-boot-sweep-"));
+  const bootWorkspace = path.join(bootDir, "workspace");
+  mkdirSync(bootWorkspace, { recursive: true });
+
+  const { isPidDead } = await import("../tools/sandbox-probe.mjs");
+  let deadPid = 9999999;
+  while (!isPidDead(deadPid)) deadPid++;
+
+  const deadMarker = path.join(bootDir, `.sandbox-probe-${deadPid}-20260925180000000`);
+  writeFileSync(deadMarker, "probe\n");
+
+  const bootServer = await startServer({ env: { VOICEBOX_WORKSPACE: bootWorkspace }, cwd: bootDir });
+  try {
+    assert.equal(existsSync(deadMarker), false, "server boot must sweep dead-PID marker in server cwd");
+  } finally {
+    await bootServer.stop();
+    rmSync(bootDir, { recursive: true, force: true });
+  }
+});

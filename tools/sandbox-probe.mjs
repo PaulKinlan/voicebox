@@ -300,7 +300,7 @@ export async function runProbe() {
 const isMain = !process.env.SANDBOX_PROBE_NO_MAIN && (
   !process.argv[1] ||
   path.resolve(process.argv[1]) === fileURLToPath(import.meta.url) ||
-  process.argv[1].endsWith("sandbox-probe.mjs")
+  path.basename(process.argv[1]) === "sandbox-probe.mjs"
 );
 
 if (isMain) {

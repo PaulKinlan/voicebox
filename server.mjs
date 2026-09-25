@@ -33,6 +33,7 @@ import {
   unreachable,
 } from "./core/environment.ts";
 import * as extensions from "./lib/extensions.mjs";
+import { sweepOrphanedProbeMarkers } from "./tools/sandbox-probe.mjs";
 import { createTaskHost, installTaskExecutor, protectedAuditPath, TASK_TOOLS } from "./lib/tasks.mjs";
 import { createPermissionPolicy } from "./lib/permission-policy.mjs";
 import { createPiAcpExecutor } from "./lib/pi-acp.mjs";
@@ -134,32 +135,6 @@ const HOST_DIR = process.env.VOICEBOX_EXTENSIONS_DIR ?? path.join(ROOT, "extensi
 const PAIRINGS_FILE = path.join(HOST_DIR, ".pairings.json");
 // Stale pending approval files must never survive a restart (voicebox-beads-62f).
 rmSync(path.join(HOST_DIR, ".pending-approval.json"), { force: true });
-
-function isPidDead(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return false;
-  } catch (err) {
-    return err.code === "ESRCH";
-  }
-}
-
-/** Sweep orphaned .sandbox-probe-<pid>-* markers left by killed processes (voicebox-beads-ebq). */
-function sweepOrphanedProbeMarkers(dirPath) {
-  try {
-    const entries = readdirSync(dirPath, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isFile() && !entry.isSymbolicLink()) continue;
-      const match = entry.name.match(/^\.sandbox-probe-(\d+)-/);
-      if (!match) continue;
-      const pid = parseInt(match[1], 10);
-      if (isPidDead(pid)) {
-        try { unlinkSync(path.join(dirPath, entry.name)); } catch {}
-      }
-    }
-  } catch {}
-}
 
 // Stale sandbox probe markers from killed runs must never survive (voicebox-beads-ebq).
 sweepOrphanedProbeMarkers(ROOT);
