@@ -259,3 +259,22 @@ test("absence is a vocabulary: which half is missing is IN the refusal name", as
     new Set([NOT_CONNECTED.page, TIMED_OUT.page, CLOSED.page, NOT_CONNECTED.machine, TIMED_OUT.machine, CLOSED.machine]).size,
     "the absence vocabulary has duplicate names");
 });
+
+test("an executor that rejects after an await still ANSWERS exec-threw — the caller is not left to the timeout", async () => {
+  // journal-omr, the page-side half of the answer-once rule: the sync throw was caught, but a
+  // rejection inside an awaited executor escaped the page's socket callback, so nothing went back on
+  // the wire and the asker waited out its timeout. A thrown act must arrive as a named refusal.
+  const rejecting = createExecutorDoor({
+    lookup: extensions.lookupAdmitted,
+    exec: async () => {
+      throw new Error("the page's storage threw after an await");
+    },
+  });
+  const raw = JSON.stringify({ v: 1, callId: "rt_reject", tool: "clock", descriptorId: "clock-tool", environment: "env-harness", args: {}, boundsEcho: {} });
+  const answer = await rejecting.receive(raw);
+  assert(typeof answer === "string", "a rejected executor produced no answer at all");
+  const parsed = JSON.parse(answer);
+  assert.equal(parsed.ok, false, "a rejected executor produced a success answer");
+  assert.equal(parsed.refused, "exec-threw", JSON.stringify(parsed));
+  assert.match(parsed.why, /storage threw/, "the refusal does not carry the thrower's own words");
+});
