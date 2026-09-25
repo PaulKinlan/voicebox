@@ -132,6 +132,26 @@
           </div>
         </form>
       </dialog>
+      <!-- CONFIRMING A DELETION FROM THE ROOM (voicebox-beads-g8y). A real modal: modality,
+           focus trapping, Esc-to-cancel and ::backdrop come from the platform. The sentence names the
+           FILE and the ROOT it will leave, because "delete" against an unnamed folder is the kind of
+           promise that turns out to be about somewhere else. Closing without an answer — the Keep
+           button, Esc, the X, a click outside — is a NO, and the room says so in its report line. -->
+      <dialog class="envs settings-modal" id="delete-confirm" closedby="any" aria-labelledby="delete-confirm-title">
+        <form class="envs-form" method="dialog">
+          <div class="settings-head">
+            <h2 id="delete-confirm-title">Delete this file?</h2>
+            <button class="icon-button" id="delete-confirm-close" type="submit" aria-label="Close without deleting"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+          </div>
+          <p class="device-note" id="delete-confirm-what"></p>
+          <p class="device-state" id="delete-confirm-where"></p>
+          <p class="device-note" id="delete-confirm-warning">The root's own log records the deletion. Esc or a click outside keeps the file — an unanswered question is never a yes.</p>
+          <div class="settings-actions">
+            <button type="submit" class="quiet" id="delete-confirm-no">Keep it</button>
+            <button type="button" class="quiet danger" id="delete-confirm-yes">Delete file</button>
+          </div>
+        </form>
+      </dialog>
       <!-- The environments this page can act in, as a REAL dialog (the settings pattern): modality,
            focus trapping, an inert background and Esc for free; a bounded height with its own scroll
            so a long capability report becomes a scrollbar, not a collision with the controls. The list

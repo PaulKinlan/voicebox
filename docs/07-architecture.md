@@ -262,3 +262,9 @@ Zero-server browser delegation (`lib/task-placement.mjs`, `docs/16-zero-server-d
   presentation. A failed listing still reveals an explicit recovery link when the page provides one;
   other failures do not expose file-creation samples. `tests/room-explorer-ui.test.mjs` drives the native
   controls, layout boundaries and the visible no-project recovery link.
+  **Deleting a file** (voicebox-beads-g8y) is offered on file rows in the room and in the explorer, and
+  never on folders: a native dialog names the file and the root it will leave, closing it without an
+  answer keeps the file, and the act goes through `DELETE /api/file` → `execute()` → `dispatch()` so a
+  page-owned root is deleted by the page that owns it and the root's own audit records it. The OPFS
+  explorer is the origin's tree, not the project's, so it offers the control only for entries inside the
+  open project and its rows now navigate past the first level (`renderViewAt` had no click wiring).

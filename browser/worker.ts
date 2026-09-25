@@ -868,27 +868,47 @@ function decodeSpan(ptr: number, len: number): string {
 
 // ---------------------------------------------------------------- tier 2: delete
 
-async function requestDelete(args: { name?: unknown; turn?: string | null }) {
+async function requestDelete(args: { name?: unknown; path?: unknown; of?: unknown; turn?: string | null }, tool = "delete-asset") {
   requireCurrent();
-  const unreachableHere = pageReachable();
+  // THE ROOT IS PROBED FIRST, the same question every routed act asks (journal-omr): a root that
+  // is gone refuses `root-vanished` with the remedy rather than opening a gate that could only
+  // fail after the person answered it.
+  const unreachableHere = await reachable();
   if (unreachableHere) return unreachableHere;
   const boundary = root();
-  const resolved = resolveInsideRoot(boundary, `${ASSET_DIR}/${String(args?.name ?? "")}`);
+  // TWO CALLERS, ONE RESOLVER: the asset gallery names an asset (`name`, under assets/), the
+  // explorer names a path relative to the root (`path`). Both go through the same containment.
+  let relative = String(args?.path ?? (args?.name != null ? `${ASSET_DIR}/${args.name}` : ""));
+  // THE OPFS VIEW LISTS FROM THE ORIGIN, NOT THE PROJECT: its rows are relative to `v1`, while this
+  // adapter can only act inside the open project. `v1/<path>` is the absolute origin path, so a row
+  // inside the project is translated to project-relative; anything else is refused BY NAME rather
+  // than deleted from a project that does not own it.
+  if (args?.of === "origin") {
+    const inOrigin = `v1/${relative}`;
+    if (inOrigin.startsWith(`${boundary}/`)) {
+      relative = inOrigin.slice(boundary.length + 1);
+    } else {
+      const why = `'${relative}' is not inside the open project (${boundary}) — open the project that owns it, then delete it there`;
+      await record({ kind: "delete", target: inOrigin, tool }, "refuse", "outside-root", "refused", null, args?.turn ?? null);
+      return { ok: false as const, refused: true, rule: "outside-root", why, decision: "refuse" };
+    }
+  }
+  const resolved = resolveInsideRoot(boundary, relative);
   if (!resolved.ok) {
-    await record({ kind: "delete", target: `${boundary}/${ASSET_DIR}/${String(args?.name ?? "")}`, tool: "delete-asset" }, "refuse", resolved.rule, "refused", null, args?.turn ?? null);
+    await record({ kind: "delete", target: relative, tool }, "refuse", resolved.rule, "refused", null, args?.turn ?? null);
     return { ok: false as const, refused: true, rule: resolved.rule, why: resolved.why, decision: "refuse" };
   }
-  const verdict = decide({ kind: "delete", target: resolved.path, tool: "delete-asset" }, { root: boundary });
+  const verdict = decide({ kind: "delete", target: resolved.path, tool }, { root: boundary });
   if (verdict.decision === "refuse") {
-    await record({ kind: "delete", target: resolved.path, tool: "delete-asset" }, "refuse", verdict.rule, "refused", null, args?.turn ?? null);
+    await record({ kind: "delete", target: resolved.path, tool }, "refuse", verdict.rule, "refused", null, args?.turn ?? null);
     return { ok: false as const, refused: true, rule: verdict.rule, why: verdict.why, decision: "refuse" };
   }
 
   // The ask is itself an entry: "asked and not yet performed" is the truthful state, and a log
   // that only records answers cannot answer "what was it about to do, and was it allowed".
   const confirmId = `c${Date.now().toString(36)}-${pending.size + 1}`;
-  pending.set(confirmId, { act: { kind: "delete", target: resolved.path, tool: "delete-asset" }, rule: verdict.rule, why: verdict.why });
-  await record({ kind: "delete", target: resolved.path, tool: "delete-asset" }, "confirm", verdict.rule, "refused", await storage!.observe(resolved.path), args?.turn ?? null);
+  pending.set(confirmId, { act: { kind: "delete", target: resolved.path, tool }, rule: verdict.rule, why: verdict.why });
+  await record({ kind: "delete", target: resolved.path, tool }, "confirm", verdict.rule, "refused", await storage!.observe(resolved.path), args?.turn ?? null);
 
   return {
     ok: true as const,
@@ -896,7 +916,7 @@ async function requestDelete(args: { name?: unknown; turn?: string | null }) {
       id: confirmId,
       rule: verdict.rule,
       why: verdict.why,
-      plan: { kind: "delete", target: resolved.path, name: String(args?.name ?? "") },
+      plan: { kind: "delete", target: resolved.path, name: relative },
     },
   };
 }
@@ -1103,6 +1123,11 @@ async function listView(message: Record<string, unknown>) {
     path: originTarget.path === "v1" ? "" : String(message.path),
     label: "this origin's storage",
     root: "v1",
+    // WHICH PROJECT ROOT THIS VIEW CAN ACT ON (voicebox-beads-g8y), in THIS VIEW'S coordinates: the
+    // OPFS view lists from `v1`, so the project root is reported relative to it. A project whose
+    // root is not in the origin (a picked folder, a machine path) is null here — nothing in this
+    // view is the page's to delete. requestDelete's `of: "origin"` re-prefixes `v1/`.
+    projectRoot: current && root().startsWith("v1/") ? root().slice(3) : null,
     permission: "implicit",
     authority: {
       where: "this origin's private file system, inside the browser",
@@ -1198,6 +1223,11 @@ async function handle(message: Message) {
       );
     case "deleteAsset":
       return await requestDelete({ name: message.name, turn: (message.turn as string) ?? null });
+    case "deletePath":
+      // The explorer's delete (voicebox-beads-g8y): a path relative to the root, same gate, same
+      // audit, same containment as every other act. Only files are offered this in the UI. `of:
+      // "origin"` names the OPFS view's coordinate system (paths under `v1`).
+      return await requestDelete({ path: message.path, of: message.of, turn: (message.turn as string) ?? null }, "delete-entry");
     case "answer":
       return await answer(String(message.confirmId ?? ""), Boolean(message.approved));
     case "readFile":

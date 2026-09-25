@@ -46,6 +46,10 @@ const WANTED = {
   extManageRemoveWarning: "ext-manage-remove-warning", extManageWarningText: "ext-manage-warning-text",
   extManageToken: "ext-manage-token", extManageStatus: "ext-manage-status",
   extManageSubmit: "ext-manage-submit", extManageDelete: "ext-manage-delete",
+  // Deleting from the room (voicebox-beads-g8y): a real modal, the file and its root named, Keep as
+  // the default answer. The control is only drawn where the act can actually land (render()).
+  deleteConfirm: "delete-confirm", deleteConfirmWhat: "delete-confirm-what", deleteConfirmWhere: "delete-confirm-where",
+  deleteConfirmYes: "delete-confirm-yes", deleteConfirmNo: "delete-confirm-no",
   taskCard: "task-card",
   miniAppContainer: "mini-app-container",
   miniAppTitle: "mini-app-title",
@@ -617,7 +621,56 @@ let previousFileNames = null; // the names the LAST render saw; null = no listin
 // unmarked and the mark was lost. A name that arrives stays marked until this timestamp passes.
 const arrivedUntil = new Map();
 
-function card(entry, { arrived = false } = {}) {
+// ── deleting a file from the room (voicebox-beads-g8y) ────────────────────────────────────────
+// Deletion is confirmed, names the file AND the root it leaves, and goes through the same route the
+// loop writes through: `DELETE /api/file` → execute() → dispatch(). A page-owned root routes to the
+// page that owns it, a machine root deletes on disk, and either way the root's own audit records the
+// act. The control is only drawn where the room believes the act can land (`writable` in render(),
+// never for a room-held folder, which the room only reads).
+let pendingDelete = null;
+
+/** Where this listing's files actually live, in words, for the confirmation. */
+function deleteRootSentence() {
+  const root = listedRoot ?? activeRoot?.root ?? null;
+  const kind = root?.kind ?? "";
+  const where = root?.path ?? root?.name ?? root?.label ?? "";
+  if (kind === "opfs") return "It will be deleted from this browser's storage for this site; the page that owns the project performs the deletion.";
+  if (kind === "handle") return `It will be deleted from the folder you picked${where ? ` (${where})` : ""}; the page that owns the folder performs the deletion.`;
+  if (kind === "machine") return `It will be deleted from ${where || "the folder this server writes into"} on this machine.`;
+  return where ? `It will be deleted from ${where}.` : "It will be deleted from the folder this list came from.";
+}
+
+function askDelete(relativePath, name) {
+  if (!els.deleteConfirm) return;
+  pendingDelete = { path: relativePath, name };
+  if (els.deleteConfirmWhat) els.deleteConfirmWhat.textContent = name;
+  if (els.deleteConfirmWhere) els.deleteConfirmWhere.textContent = deleteRootSentence();
+  els.deleteConfirm.showModal();
+}
+
+async function confirmDelete() {
+  const target = pendingDelete;
+  pendingDelete = null; // the close listener must not read this as an unanswered close
+  if (els.deleteConfirm?.open) els.deleteConfirm.close("delete");
+  if (!target) return;
+  let answer;
+  try {
+    answer = await request(`/api/file?name=${encodeURIComponent(target.path)}`, { method: "DELETE" });
+  } catch (error) {
+    setReport(`Could not delete ${target.name}: ${error?.message ?? error}`, "bad");
+    return;
+  }
+  if (answer?.ok === false) {
+    // The server's own name for the refusal, not a generic failure — not-found, outside-root,
+    // root-vanished, no-page all mean different things and the person needs the one that applies.
+    setReport(`Could not delete ${target.name}: ${answer.refused ?? "refused"}${answer.why ? ` — ${answer.why}` : ""}`, "bad");
+    return;
+  }
+  setReport(`Deleted ${target.name}${answer?.logged != null ? " — recorded in the root's log" : ""}.`, "good");
+  await load();
+}
+
+function card(entry, { arrived = false, canDelete = false } = {}) {
   const li = document.createElement("li");
   const open = document.createElement("button");
   open.type = "button";
@@ -655,6 +708,19 @@ function card(entry, { arrived = false } = {}) {
     open.addEventListener("click", () => showFile(joinDir(listingDir, entry.name)));
   }
   li.append(open);
+  // THE DELETE CONTROL (voicebox-beads-g8y), for files only: this bead does not do recursive folder
+  // deletion, so a folder row simply has no such button. It is a SIBLING of the open button, so a
+  // click here can never be a click on the file.
+  if (canDelete && !entry.isDir) {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "quiet danger file-delete";
+    remove.dataset.file = entry.name;
+    remove.setAttribute("aria-label", `Delete ${entry.name}`);
+    remove.textContent = "Delete";
+    remove.addEventListener("click", () => askDelete(open.dataset.path, entry.name));
+    li.append(remove);
+  }
   return li;
 }
 
@@ -885,7 +951,7 @@ function render() {
   const nowMs = Date.now();
   for (const [name, until] of arrivedUntil) if (until <= nowMs || !namesNow.has(name)) arrivedUntil.delete(name);
   scheduleArrivalSweep();
-  els.files.replaceChildren(...(count === 0 ? (writable ? [placeholder()] : []) : shown.map((e) => card(e, { arrived: arrivedUntil.has(e.name) }))));
+  els.files.replaceChildren(...(count === 0 ? (writable ? [placeholder()] : []) : shown.map((e) => card(e, { arrived: arrivedUntil.has(e.name), canDelete: writable && !roomFolder }))));
   els.made.dataset.state = count === 0 ? "empty" : "ready";
   els.files.setAttribute("aria-busy", "false");
   els.count.textContent = count === 0 ? "" : `${count} ${count === 1 ? "file" : "files"}`;
@@ -1851,6 +1917,16 @@ function startListening() {
 
 on(els.mic, "click", startListening);
 on(els.refresh, "click", load);
+on(els.deleteConfirmYes, "click", () => void confirmDelete());
+// CLOSING WITHOUT AN ANSWER KEEPS THE FILE. Keep, Esc, the X, and a click outside all arrive here;
+// confirmDelete() clears pendingDelete before it closes the dialog, so a confirmed delete does not
+// pass through this branch.
+els.deleteConfirm?.addEventListener("close", () => {
+  if (!pendingDelete) return;
+  const kept = pendingDelete.name;
+  pendingDelete = null;
+  setReport(`Kept ${kept} — nothing was deleted.`, "note");
+});
 on(els.fileFilter, "input", () => { fileFilter = els.fileFilter.value.trim(); showAllFiles = false; render(); });
 on(els.openFolder, "click", openRoomFolder);
 on(els.closeFolder, "click", closeRoomFolder);

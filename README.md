@@ -470,6 +470,11 @@ what makes "it cannot reach the network" structural instead of promised.
   persistently, which undo it has, and where its audit lives.
 - An **explorer over three roots** — origin storage, the picked folder, the server's
   `workspace/` — each labelled <!-- docs-check: names the mechanism --> with its own authority, each a single bounded listing.
+- Files can be **deleted from the page**: the room's list and the environment explorer give a file a
+  Delete control, the confirmation names the file AND the root it will leave, closing it without an
+  answer keeps the file, and the deletion goes through the same route a write takes (a page-owned
+  root is deleted by the page that owns it) and is recorded in the root's own audit. Folders are not
+  deleted — there is no recursive delete.
 - Failures have names: `needs-gesture`, `permission-denied`, `handle-gone`,
   `root-unreachable`, `not-found`, `not-a-project`.
 - The room's folder handles (`#open-folder`) provide read/write handles persisted across reloads in IndexedDB, supporting several directories at once with a "Restore access" button when permission regresses to prompt.
@@ -485,6 +490,7 @@ The room frontend (`public/index.html`, `public/fused.js`, `public/style.css`) i
 - `container: env-dialog / inline-size;` container queries for dialog-width responsive form layouts.
 - Semantic `<search>` landmark element enclosing file filtering.
 - The room's file list uses aligned, full-width buttons with separate name/size columns, a bounded scroll area, and a two-column layout only when its own container is wide enough. Folder chips use the same light/dark tokens; root labels, arrival marks and permission controls keep their existing behavior.
+- Each file row carries a **Delete** control that opens a native `<dialog>` confirmation naming the file and the root it will be deleted from; closing it without an answer keeps the file, and the room's report line states the outcome (including the server's own name for a refusal).
 - `node --test tests/room-explorer-ui.test.mjs` drives native read/filter/folder controls, keyboard activation, long filenames, empty/no-project states, and light/dark layouts at phone, desktop and narrow-container widths.
 - Scroll containment (`overscroll-behavior: contain`) and layout stabilization (`scrollbar-gutter: stable`).
 - Keyboard-accessible scrollable code region (`<pre id="file-body" tabindex="0">`).
