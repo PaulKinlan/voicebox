@@ -179,16 +179,16 @@ Every environment variable the server and its libraries read, and where:
 | `VOICEBOX_ACP_PI` | `lib/pi-acp.mjs` | path or command override for the `pi` coding agent CLI used by `lib/pi-acp.mjs` |
 | `VOICEBOX_BIND_DEADLINE_MS` | `server.mjs` | how long to keep retrying before giving up by name |
 | `VOICEBOX_BIND_RETRY_MS` | `server.mjs` | how often to retry a bind that lost the port race |
-| `VOICEBOX_EXTENSIONS_DIR` | `lib/extensions.mjs`, `server.mjs` | the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl`, and `.pairings.json` (the bearer custody store — outside every root) |
+| `VOICEBOX_EXTENSIONS_DIR` | `lib/state-dirs.mjs` | the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl`, and `.pairings.json` (the bearer custody store — outside every root) |
 | `VOICEBOX_HARNESS` | `server.mjs` | selects the host task adapter (`pi` enables the Pi ACP task adapter in `server.mjs`; unset leaves no default adapter configured) |
 | `VOICEBOX_HELLO_BOUND_MS` | `server.mjs` | how long to wait for a hello frame on /channel or /live before refusing (default 5000ms) |
 | `VOICEBOX_INSTANCE` | `server.mjs` | this writer's name in the active root's shared log (default `machine`) |
 | `VOICEBOX_LIVE_PROVIDER` | `lib/live-session.mjs`, `server.mjs` | the live transport's fallback when the session passes no provider; `/live` passes the agent-settings provider explicitly — **not** the turn resolver |
 | `VOICEBOX_PROVIDER` | `server.mjs` | the OLD NAME of `VOICEBOX_RESOLVER`, honoured for one release: a shell that exports it keeps working and gets a line on stderr |
 | `VOICEBOX_RESOLVER` | `server.mjs` | which TURN resolver answers `POST /api/turn` (default `script`) — **not** the live provider, which is a different concept |
-| `VOICEBOX_SANDBOX_HOMES` | `lib/fence-provider.mjs`, `lib/unit-fence-provider.mjs` | where a fence's writable home is bound from (default `~/sandbox-homes/<key>`) — the one place a fenced environment may write. Must live OUTSIDE /tmp: an L1.5 unit's PrivateTmp hides /tmp in its namespace and a home there fails to bind (status 226/NAMESPACE) |
-| `VOICEBOX_WASM_SHELF_DIR` | `lib/extensions.mjs` | directory holding the digest-pinned WASM tool shelf (`manifest.json` and `.wasm` modules; default `~/.isocan/modules/wasm-tools`) |
-| `VOICEBOX_WORKSPACE` | `lib/extensions.mjs`, `server.mjs` | declares a machine root at boot — a decision, not a default — and is where the extension system keeps `proposals/` and `audit.jsonl` |
+| `VOICEBOX_SANDBOX_HOMES` | `lib/state-dirs.mjs` | where a fence's writable home is bound from (default `~/sandbox-homes/<key>`) — the one place a fenced environment may write. Must live OUTSIDE /tmp: an L1.5 unit's PrivateTmp hides /tmp in its namespace and a home there fails to bind (status 226/NAMESPACE) |
+| `VOICEBOX_WASM_SHELF_DIR` | `lib/state-dirs.mjs` | directory holding the digest-pinned WASM tool shelf (`manifest.json` and `.wasm` modules; default `~/.isocan/modules/wasm-tools`) |
+| `VOICEBOX_WORKSPACE` | `lib/state-dirs.mjs` | declares a machine root at boot — a decision, not a default — and is where the extension system keeps `proposals/` and `audit.jsonl` |
 <!-- END GENERATED: config -->
 
 ## The routes, as they answer
@@ -232,6 +232,21 @@ Audio worklets loaded by that code: `pcm-worklet.js`.
 - **`core/`** is authoritative for the tier table, containment and the audit — and it is a **library**: it
   imports nothing outside `core/`, because two copies of it would drift silently (see the design's N18). <!-- docs-check: names the mechanism -->
 - **`core/harness-config.ts`** is authoritative for the pure, secret-free configured-agent contract, distinguishing runtime ("node" | "deno" | "browser"), configured agent instances (permanent ID, mutable name, model, reach, bounds), and executing environments. PURE: zero imports outside `core/` (self-contained core library).
+- **`lib/state-dirs.mjs`** is authoritative for the state-DIRECTORY facts — `VOICEBOX_WORKSPACE`,
+  `VOICEBOX_EXTENSIONS_DIR`, `VOICEBOX_WASM_SHELF_DIR`, `VOICEBOX_SANDBOX_HOMES` — each with its
+  default and its declaration (`workspaceDir()`, `workspaceDeclared()`, `extensionsDir()`,
+  `wasmShelfDir()`, `sandboxHomesDir()`). It exists because the tree answered them from more than one
+  copy (voicebox-beads-y5k): the extensions directory was resolved twice inside `lib/extensions.mjs`
+  — once as a constant, once as a getter five lines later — and again in `server.mjs` and
+  `tools/approval-code.mjs`; the wasm shelf default was written out three times in one file; and the
+  fence's home root was computed separately by `lib/fence-provider.mjs` and
+  `lib/unit-fence-provider.mjs` (both, rightly, resolved it lazily — the copy was the defect, not the
+  timing). `scripts/single-owner.mjs` derives the facts from this module's own `FACTS` declaration
+  and refuses any other site that reads the variable or rebuilds the default, naming the file and the
+  owner to ask. `tests/single-owner.test.mjs` drives both halves — it adds a fourth copy to a scratch
+  tree and watches the check refuse, then removes it and watches it pass — so "it is green" is not the
+  only thing anybody knows about it. The review question behind the rule: *is this component answering
+  about itself?*
 - **`lib/harness-config.mjs`** is authoritative for the agent registry and loader, supporting both server storage and zero-server browser-local placements, and feeding configured agents into harness discovery. Server storage writes are atomic (temp file + rename) so a failed write cannot truncate the registry; the host-token-gated `GET`/`POST /api/agents` and `PATCH /api/agents/:id` routes are its HTTP surface.
 - **`public/fused.js`** is authoritative for what the page shows, and it **labels its own simulations on the
   page**: files, the turn submission and the containment refusals are real; the shared view, seen-marks and

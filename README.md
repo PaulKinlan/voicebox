@@ -83,6 +83,16 @@ timeout from a failing command; both output streams remain visible. See
 [gate measurements and regression drives](docs/12-pre-push-gate.md).
 Acceptance checks read idempotence on its private instance: three GETs per root/file
 route must return the seeded state and leave its file bytes and write metadata unchanged.
+It does not assert that another lane's shared server stays unchanged.
+The live-tools write check waits for both the file and its successful `write_file`
+websocket event within the same 60-second budget; file creation alone does not
+prove that the page has received the report.
+
+One of those tests is a rule rather than a feature: **each declared state-directory fact has exactly
+one computing site**, in `lib/state-dirs.mjs`. `scripts/single-owner.mjs` refuses a second read of the
+variable or a rebuilt default anywhere else, naming the file and the owner to ask instead, and
+`tests/single-owner.test.mjs` drives a fourth copy into a scratch tree to prove that refusal can
+happen (voicebox-beads-y5k).
 
 ## The top bar
 
@@ -93,17 +103,6 @@ tooltip. The icons come from the page's own SVG symbol set (`#i-list`,
 its symbol and its `aria-label`, nothing else. The live count lines
 (`#envs-count`, `#exts-count`) are screen-reader text, so runtime updates
 still reach assistive tech without cluttering the bar.
-
-The pre-push hook keeps the full test suite: 180 seconds for `npm test`, then
-45 seconds for `npm run accept`. Refusals name the stage and distinguish a
-timeout from a failing command; both output streams remain visible. See
-[gate measurements and regression drives](docs/12-pre-push-gate.md).
-Acceptance checks read idempotence on its private instance: three GETs per root/file
-route must return the seeded state and leave its file bytes and write metadata unchanged.
-It does not assert that another lane's shared server stays unchanged.
-The live-tools write check waits for both the file and its successful `write_file`
-websocket event within the same 60-second budget; file creation alone does not
-prove that the page has received the report.
 
 ## Debugging a transcript or tool call
 
@@ -354,16 +353,16 @@ Every environment variable the server and its libraries read, and where:
 | `VOICEBOX_ACP_PI` | `lib/pi-acp.mjs` | path or command override for the `pi` coding agent CLI used by `lib/pi-acp.mjs` |
 | `VOICEBOX_BIND_DEADLINE_MS` | `server.mjs` | how long to keep retrying before giving up by name |
 | `VOICEBOX_BIND_RETRY_MS` | `server.mjs` | how often to retry a bind that lost the port race |
-| `VOICEBOX_EXTENSIONS_DIR` | `lib/extensions.mjs`, `server.mjs` | the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl`, and `.pairings.json` (the bearer custody store — outside every root) |
+| `VOICEBOX_EXTENSIONS_DIR` | `lib/state-dirs.mjs` | the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl`, and `.pairings.json` (the bearer custody store — outside every root) |
 | `VOICEBOX_HARNESS` | `server.mjs` | selects the host task adapter (`pi` enables the Pi ACP task adapter in `server.mjs`; unset leaves no default adapter configured) |
 | `VOICEBOX_HELLO_BOUND_MS` | `server.mjs` | how long to wait for a hello frame on /channel or /live before refusing (default 5000ms) |
 | `VOICEBOX_INSTANCE` | `server.mjs` | this writer's name in the active root's shared log (default `machine`) |
 | `VOICEBOX_LIVE_PROVIDER` | `lib/live-session.mjs`, `server.mjs` | the live transport's fallback when the session passes no provider; `/live` passes the agent-settings provider explicitly — **not** the turn resolver |
 | `VOICEBOX_PROVIDER` | `server.mjs` | the OLD NAME of `VOICEBOX_RESOLVER`, honoured for one release: a shell that exports it keeps working and gets a line on stderr |
 | `VOICEBOX_RESOLVER` | `server.mjs` | which TURN resolver answers `POST /api/turn` (default `script`) — **not** the live provider, which is a different concept |
-| `VOICEBOX_SANDBOX_HOMES` | `lib/fence-provider.mjs`, `lib/unit-fence-provider.mjs` | where a fence's writable home is bound from (default `~/sandbox-homes/<key>`) — the one place a fenced environment may write. Must live OUTSIDE /tmp: an L1.5 unit's PrivateTmp hides /tmp in its namespace and a home there fails to bind (status 226/NAMESPACE) |
-| `VOICEBOX_WASM_SHELF_DIR` | `lib/extensions.mjs` | directory holding the digest-pinned WASM tool shelf (`manifest.json` and `.wasm` modules; default `~/.isocan/modules/wasm-tools`) |
-| `VOICEBOX_WORKSPACE` | `lib/extensions.mjs`, `server.mjs` | declares a machine root at boot — a decision, not a default — and is where the extension system keeps `proposals/` and `audit.jsonl` |
+| `VOICEBOX_SANDBOX_HOMES` | `lib/state-dirs.mjs` | where a fence's writable home is bound from (default `~/sandbox-homes/<key>`) — the one place a fenced environment may write. Must live OUTSIDE /tmp: an L1.5 unit's PrivateTmp hides /tmp in its namespace and a home there fails to bind (status 226/NAMESPACE) |
+| `VOICEBOX_WASM_SHELF_DIR` | `lib/state-dirs.mjs` | directory holding the digest-pinned WASM tool shelf (`manifest.json` and `.wasm` modules; default `~/.isocan/modules/wasm-tools`) |
+| `VOICEBOX_WORKSPACE` | `lib/state-dirs.mjs` | declares a machine root at boot — a decision, not a default — and is where the extension system keeps `proposals/` and `audit.jsonl` |
 <!-- END GENERATED: config -->
 
 There is no config file. What is on or off is decided by which provider is named, which key is

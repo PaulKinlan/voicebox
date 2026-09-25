@@ -35,6 +35,7 @@ import { availableLiveProviders, resolvedLiveProviderName } from "../lib/live-se
 import { createGeminiProvider } from "../lib/live-providers/gemini.mjs";
 import { createOpenAIProvider } from "../lib/live-providers/openai.mjs";
 import { functionDeclarations, liveSystemInstruction } from "../lib/commands.mjs";
+import { FACTS as STATE_DIR_FACTS } from "../lib/state-dirs.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WRITE = process.argv.includes("--write");
@@ -375,6 +376,16 @@ const ENV_MEANING = {
 function envVars() {
   const files = ["server.mjs", ...readdirSync(join(ROOT, "lib"), { recursive: true }).filter((f) => f.endsWith(".mjs")).map((f) => join("lib", f))];
   const where = new Map();
+  const remember = (name, file) => {
+    if (!where.has(name)) where.set(name, new Set());
+    where.get(name).add(file);
+  };
+  // THE DECLARED STATE FACTS COME FROM THEIR OWNER, imported rather than grepped. `lib/state-dirs.mjs`
+  // reads its variables through `process.env[env]` so that each name is written down once, which a text
+  // scan cannot see — and when that module took ownership, three rows silently VANISHED from this table
+  // (2026-09-25). A table that says where a variable is read must ask the thing that reads it; the
+  // declaration is the source, exactly as the provider list is imported rather than matched.
+  for (const fact of Object.values(STATE_DIR_FACTS ?? {})) remember(fact.env, "lib/state-dirs.mjs");
   for (const f of files) {
     // BOTH SHAPES, because one of them was invisible: `process.env.X` and the optional-chained
     // `globalThis.process?.env?.X` that `lib/resolver.mjs` uses to stay runnable off-host. The narrow
@@ -383,8 +394,7 @@ function envVars() {
     // (reviewer finding, voicebox-beads-smx). A derived table is only as wide as its pattern.
     const src = readFileSync(join(ROOT, f), "utf8");
     for (const m of src.matchAll(/(?:globalThis\s*\.\s*)?process\s*\??\.\s*env\s*\??\.\s*([A-Z][A-Z0-9_]*)/g)) {
-      if (!where.has(m[1])) where.set(m[1], new Set());
-      where.get(m[1]).add(f);
+      remember(m[1], f);
     }
   }
   return [...where.keys()].sort().map((name) => ({

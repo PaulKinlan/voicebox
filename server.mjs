@@ -53,14 +53,18 @@ import { createLiveSession, LIVE_MODEL, inputRateRequiredBy } from "./lib/live-s
 import { commandToAction, functionDeclarations, liveSystemInstruction } from "./lib/commands.mjs";
 import { readProjectInstruction } from "./lib/project-instruction.mjs";
 import { installColorConsole } from "./lib/logger.mjs";
+// The state directories have ONE owner; this file no longer computes its own copy of any of them
+// (voicebox-beads-y5k: `VOICEBOX_WORKSPACE` and `VOICEBOX_EXTENSIONS_DIR` were each resolved here
+// AND in lib/extensions.mjs, with the same fallbacks written twice).
+import { workspaceDir, workspaceDeclared, extensionsDir } from "./lib/state-dirs.mjs";
 
 installColorConsole();
 
 // Module-relative, decoded: `new URL(...).pathname` percent-encodes spaces and
 // silently points every read at a directory that does not exist.
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-// Movable workspace (tests point it at scratch; see lib/extensions.mjs).
-const WORKSPACE = process.env.VOICEBOX_WORKSPACE ?? path.join(ROOT, "workspace");
+// Movable workspace (tests point it at scratch; the fact is owned by lib/state-dirs.mjs).
+const WORKSPACE = workspaceDir();
 
 // ── THE ACTIVE ROOT (core/root.ts is the seam) ────────────────────────────────────────────────
 // The loop does not invent a root, and it has NO DEFAULT. It acts on the ACTIVE PROJECT'S root,
@@ -130,7 +134,7 @@ const PROBE_SCRIPT = path.join(ROOT, "tools", "sandbox-probe.mjs");
 // a writable root is a credential the page can reach; 0600 and no-route are necessary but the
 // LOCATION is the defence. A corrupt store is a NAMED refusal (every credential is not "no
 // credentials"), in the family of environment-list-unreadable.
-const HOST_DIR = process.env.VOICEBOX_EXTENSIONS_DIR ?? path.join(ROOT, "extensions");
+const HOST_DIR = extensionsDir();
 const PAIRINGS_FILE = path.join(HOST_DIR, ".pairings.json");
 // Stale pending approval files must never survive a restart (voicebox-beads-62f).
 rmSync(path.join(HOST_DIR, ".pending-approval.json"), { force: true });
@@ -455,12 +459,13 @@ let boundPort = null;
 let liveSessionsCreated = 0;
 
 /** A declaration made by the operator at boot (VOICEBOX_WORKSPACE), which is a decision, not a default. */
-if (process.env.VOICEBOX_WORKSPACE) {
-  const declared = path.resolve(process.env.VOICEBOX_WORKSPACE);
+const bootRoot = workspaceDeclared();
+if (bootRoot) {
+  const declared = path.resolve(bootRoot);
   if (existsSync(declared) && statSync(declared).isDirectory()) {
     active = { project: path.basename(declared), root: { kind: "machine", path: realpathSync(declared), environment: SELF_ENVIRONMENT }, declaredAt: new Date().toISOString(), declaredBy: "VOICEBOX_WORKSPACE" };
   } else {
-    console.error(`[root] VOICEBOX_WORKSPACE='${process.env.VOICEBOX_WORKSPACE}' is not a directory — no root is declared`);
+    console.error(`[root] VOICEBOX_WORKSPACE='${bootRoot}' is not a directory — no root is declared`);
   }
 }
 
@@ -1002,7 +1007,7 @@ voicebox doctor — what this process would do, and why.
 PATHS
 `);
   line("VOICEBOX_WORKSPACE", "(none declared)", "a root at boot; without it every write refuses");
-  line("VOICEBOX_EXTENSIONS_DIR", path.join(ROOT, "extensions"), "where extensions live");
+  line("VOICEBOX_EXTENSIONS_DIR", extensionsDir(), "where extensions live");
   line("VOICEBOX_SANDBOX_HOMES", "(default)", "sandbox home root");
   line("VOICEBOX_INSTANCE", "machine", "this instance's name");
 
@@ -1056,7 +1061,7 @@ VERDICT`);
     ? "none admitted (set VOICEBOX_HARNESS=pi to admit Pi)"
     : `${wantHarness} (unsupported)`;
   console.log(`  task harness      ${harnessVerdict}`);
-  console.log(`  root at boot      ${set(process.env.VOICEBOX_WORKSPACE) ? process.env.VOICEBOX_WORKSPACE : "none — declare one from the page, or set VOICEBOX_WORKSPACE"}`);
+  console.log(`  root at boot      ${workspaceDeclared() ?? "none — declare one from the page, or set VOICEBOX_WORKSPACE"}`);
   if (missing.length === 0) {
     console.log(`  credentials       present for what is selected`);
   } else {

@@ -133,6 +133,7 @@ A landing to `main` runs the gates BEFORE pushing — the push itself is the gat
 
 - `node scripts/docs-touched.mjs` — **every update updates the docs and the README in the same change** (Paul, voicebox-beads-ths). Runs first; costs one `git diff`.
 - `npm test` — the unit suite (must be 0 fail)
+- `node scripts/single-owner.mjs` — **one fact, one computing site.** The state directories are owned by `lib/state-dirs.mjs`; a second read of the variable, or a rebuilt default, anywhere else is refused by name and by owner. It also runs inside the unit lane: `tests/single-owner.test.mjs` drives a fourth copy into a scratch tree and watches the check refuse, so the refusal is proven rather than assumed. The review question behind it (voicebox-beads-y5k): *is this component answering about itself?*
 - `npm run accept` — the page acceptance harness (drives the real page; must be ALL CLEAR)
 
 **The docs rule, and the one question to ask on every change: *did this move something a
