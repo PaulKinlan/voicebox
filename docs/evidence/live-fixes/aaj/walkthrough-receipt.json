@@ -1,0 +1,109 @@
+{
+  "steps": {
+    "apiAgents": [
+      {
+        "id": "agent_pi_default",
+        "adapter": "pi-acp",
+        "admission": {
+          "admitted": true,
+          "refused": null,
+          "why": null,
+          "installedVersion": "0.0.34"
+        }
+      },
+      {
+        "id": "agent_browser_default",
+        "adapter": "in-process",
+        "admission": {
+          "admitted": false,
+          "refused": "adapter-not-configured",
+          "why": "No Voicebox task adapter is implemented for 'in-process' on this host; the agent is configured but cannot run."
+        }
+      },
+      {
+        "id": "pi",
+        "adapter": "pi-acp",
+        "admission": {
+          "admitted": true,
+          "refused": null,
+          "why": null,
+          "installedVersion": "0.0.34"
+        }
+      }
+    ],
+    "registerClaude": {
+      "status": 201,
+      "body": {
+        "ok": true,
+        "agent": {
+          "id": "agent_claude_reviewer",
+          "name": "Claude Reviewer",
+          "harness": "claude",
+          "adapter": "claude-code",
+          "pinnedVersion": null,
+          "transport": "stdio",
+          "environmentKey": "env_eb144ada6fc3bcd9",
+          "description": "",
+          "isDefault": false,
+          "model": {
+            "provider": "anthropic",
+            "model": "claude-3-5-haiku"
+          },
+          "reach": {
+            "root": "active",
+            "network": "none",
+            "tools": []
+          },
+          "bounds": {
+            "deadlineMs": 60000,
+            "maxOutputBytes": 65536
+          },
+          "createdAt": "2026-09-25T20:19:59.251Z",
+          "updatedAt": "2026-09-25T20:19:59.251Z"
+        }
+      }
+    },
+    "claudeAdmission": {
+      "admitted": false,
+      "refused": "adapter-not-configured",
+      "why": "No Voicebox task adapter is implemented for 'claude-code' on this host; the agent is configured but cannot run."
+    },
+    "claudeDelegate": {
+      "refused": "adapter-not-configured",
+      "why": "No Voicebox task adapter is configured for this CLI; configure an adapter before delegating."
+    },
+    "piDelegate": {
+      "state": "queued",
+      "address": "task_eyJlbnZpcm9ubWVudCI6ImVudl9lYjE0NGFkYTZmYzNiY2Q5IiwiaW5zdGFuY2UiOiJtYWNoaW5lIiwicGF0aCI6Ii90bXAvdm9pY2Vib3gtd29yay1hYWotUkVqYk5XIiwiZGV2IjoiNTUiLCJpbm8iOiIzODI5NTExMiIsImlkIjoiMjcyYWFlYjNlN2Y5YmY0ZmEyYmRkY2VhMjgxNjJmODMifQ.bd3976ad58165ae298cb5fad58d4426c21b081be7be6a84f84260fe3dc2af8fb"
+    },
+    "piAnswer": {
+      "state": "completed",
+      "answer": "221"
+    }
+  },
+  "restarts": [
+    {
+      "bootAdmissionLines": [
+        "  [harness] ADMITTED pi (pi-acp @ 0.0.34)",
+        "  [harness] REFUSED agent_claude_reviewer (claude-code) — adapter-not-configured: No Voicebox task adapter is implemented for 'claude-code' on this host; the agent is configured but cannot run."
+      ]
+    }
+  ],
+  "bootAdmissionLines": [
+    "  [harness] ADMITTED pi (pi-acp @ 0.0.34)",
+    "  [harness] REFUSED agent_claude_reviewer (claude-code) — adapter-not-configured: No Voicebox task adapter is implemented for 'claude-code' on this host; the agent is configured but cannot run."
+  ],
+  "bannerHasTable": true,
+  "stepsSummary": {
+    "bannerTable": true,
+    "apiAdmission": true,
+    "claudeRegistered": true,
+    "claudeAdmissionRefused": true,
+    "claudeDelegateRefusedByName": true,
+    "piDelegated": true,
+    "piAnswered221": true,
+    "bootNamedAdmission": true
+  },
+  "allPass": true,
+  "finished": "2026-09-25T20:20:06.489Z"
+}

@@ -1,0 +1,61 @@
+{
+  "base": "http://127.0.0.1:42095",
+  "rows": [
+    {
+      "id": "pi",
+      "text": "Pi coding agent — present (0.87.1)\n\nCoding assistant with it"
+    },
+    {
+      "id": "claude",
+      "text": "Claude Code — present (2.1.282)\n\nAnthropic coding CLI with i"
+    },
+    {
+      "id": "codex",
+      "text": "Codex CLI — present (0.157.0)\n\nOpenAI coding CLI with its ow"
+    },
+    {
+      "id": "gemini",
+      "text": "Gemini CLI — present (0.61.0)\n\nGoogle coding CLI with its ow"
+    },
+    {
+      "id": "opencode",
+      "text": "OpenCode — present (1.18.32)\n\nCoding CLI with its own provid"
+    },
+    {
+      "id": "aider",
+      "text": "Aider — absent\n\nTerminal pair-programming CLI; ACP support i"
+    },
+    {
+      "id": "pi-acp",
+      "text": "Pi ACP adapter — unknown (0.0.34)\n\nAdapts Pi's coding agent "
+    }
+  ],
+  "admission": [
+    {
+      "id": "agent_pi_default",
+      "admission": {
+        "admitted": true,
+        "refused": null,
+        "why": null,
+        "installedVersion": "0.0.34"
+      }
+    },
+    {
+      "id": "agent_browser_default",
+      "admission": {
+        "admitted": false,
+        "refused": "adapter-not-configured",
+        "why": "No Voicebox task adapter is implemented for 'in-process' on this host; the agent is configured but cannot run."
+      }
+    },
+    {
+      "id": "pi",
+      "admission": {
+        "admitted": true,
+        "refused": null,
+        "why": null,
+        "installedVersion": "0.0.34"
+      }
+    }
+  ]
+}

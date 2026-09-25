@@ -44,10 +44,50 @@ an absolute JSON file path to add host-declared tool names and descriptions, wit
 source and scope. Expand **Declared tools** on a row to read them. Missing or invalid
 metadata says **Tools — unknown**; an explicitly empty declaration is shown separately.
 These are declarations, not observed session tools or permissions. Listing a tool neither
-enables delegation nor checks authentication. Pi's task adapter can be selected with
-`VOICEBOX_HARNESS=pi`; other inventoried CLIs have no configured task adapter.
-No sandbox wrapping or local browser-to-CLI bridge is added. See
+enables delegation nor checks authentication. See
 [the catalogue format and limits](docs/12-harness-inventory.md).
+
+## Set up a task harness (five minutes, start to first delegation)
+
+A task harness is a host CLI that `delegate_task` can run work on. Today exactly one
+adapter is implemented — **pi-acp** (the Pi coding agent over ACP on stdio). Other
+inventoried CLIs (claude, codex, gemini, opencode) can be CONFIGURED as agents, and the
+server answers each one by name, but they refuse at delegation until someone builds
+their adapter.
+
+1. **Check what the machine has.** Open the **Harnesses** dialog and click
+   **Check installed harnesses** (or `node tools/list-harnesses.mjs`). You need a row
+   `pi-acp — present` (the adapter, `~/.pi/agent/npm/node_modules/pi-acp`) and a working
+   `pi` on PATH. The adapter must be the pinned version; the startup table names a
+   mismatch instead of failing silently.
+2. **Select the harness and start the server.** `VOICEBOX_HARNESS=pi` (default adapter
+   and binary locations; override with `VOICEBOX_ACP_ADAPTER` / `VOICEBOX_ACP_PI`).
+   The startup banner prints an admission table — one line per configured agent:
+
+   ```
+   configured agents for environment 'env_…' — admission at boot:
+       ADMITTED  Pi (pi) — pi-acp @ 0.0.34
+       REFUSED   Claude Reviewer (agent_claude_reviewer) — claude-code: adapter-not-configured
+                 No Voicebox task adapter is implemented for 'claude' on this host; …
+   ```
+
+3. **Add more agents (optional).** Every configured agent lives in the registry:
+   `POST /api/agents` with the host token (or edit `<host dir>/.agents.json`), for example
+   a second Pi instance with a different model, or a Claude agent prepared for the day an
+   adapter exists. `GET /api/agents` returns each agent WITH its current `admission` —
+   `{ admitted: true }` or `{ admitted: false, refused, why }` — so the page and scripts
+   can see what would happen before delegating.
+4. **Delegate.** From the page, or `delegate_task` with `agent: "pi"`. The task runs
+   through the host → ACP client → pi-acp → Pi coding agent path, and lands in the audit
+   log like every other act.
+5. **Read the refusal, fix the cause.** If a delegation refuses, the name tells you where:
+   `executor-unavailable` (no `VOICEBOX_HARNESS` selected), `adapter-not-configured`
+   (no adapter exists for that harness on this host), `adapter-version-unsupported`
+   (installed adapter is not the verified pin), `agent-environment-mismatch` (the agent
+   belongs to another environment).
+
+The walkthrough above is the same one driven end to end against a real server and a real
+Pi delegation in `tests/configured-harness.test.mjs` (live lane).
 
 ## Status
 
