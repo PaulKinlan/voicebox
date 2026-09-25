@@ -18,7 +18,9 @@ act on your machine.
 ## Principles
 
 1. **Voice-first.** The interface is conversation, and it stays available — you can keep
-   talking to it while working on something else.
+   talking to it while working on something else. Literally: when scrolling takes the
+   mic button off screen, a docked copy of it appears in the corner (one control, in
+   the page and the tab order at a time — `voicebox-beads-dzd`).
 2. **A web front end to a real environment.** Not a sandbox demo: it drives a build
    system that can produce software.
 3. **Extensible models.** Gemini Live first, OpenAI Realtime alongside — swap the live
