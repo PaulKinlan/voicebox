@@ -36,6 +36,15 @@ test("colorizeTags: styles known bracketed tags with distinct ANSI colors and re
   const extMsg = colorizeTags("[extensions] 3 tools loaded", true);
   assert.equal(extMsg, `${TAG_COLORS.extensions}[extensions]${RESET_COLOR} 3 tools loaded`);
 
+  const extNetMsg = colorizeTags("[extension:network] fetch https://example.com", true);
+  assert.equal(extNetMsg, `${TAG_COLORS["extension:network"]}[extension:network]${RESET_COLOR} fetch https://example.com`);
+
+  const extWasmMsg = colorizeTags("[extension:wasm] diff executed in 2ms", true);
+  assert.equal(extWasmMsg, `${TAG_COLORS["extension:wasm"]}[extension:wasm]${RESET_COLOR} diff executed in 2ms`);
+
+  const extRefusedMsg = colorizeTags("[extension:refused] host-not-allowed: forbidden", true);
+  assert.equal(extRefusedMsg, `${TAG_COLORS["extension:refused"]}[extension:refused]${RESET_COLOR} host-not-allowed: forbidden`);
+
   // Yellow family: approval, auth
   const approvalMsg = colorizeTags("[extension approval] review plan", true);
   assert.equal(approvalMsg, `${TAG_COLORS["extension approval"]}[extension approval]${RESET_COLOR} review plan`);
