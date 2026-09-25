@@ -1010,7 +1010,7 @@ async function listView(message: Record<string, unknown>) {
     if (body.via === "page") {
       return fail(
         "root-not-reachable-from-here" as FailureCode,
-        "the active root belongs to the page, so the machine has no view of it — the room's listing shows it through the page (via: \"page\")",
+        "the active root belongs to the page, so the machine has no view of it — the page's listing shows it (via: \"page\")",
       );
     }
     const entries: Entry[] = (body.entries ?? []).map((f: Record<string, any>) => ({

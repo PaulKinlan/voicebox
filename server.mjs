@@ -1103,19 +1103,19 @@ A SERVER ON :${port}`);
 // 2026-09-23: "I can't work out how to add a root or change the provider".)
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
   console.log(`
-voicebox server — the local room, its files and its live voice.
+voicebox server — the local project, its files and its live voice.
 
   npm run serve                     start on :8787 (reloads when a source file changes)
   npm run serve -- --help           this text
 
-A ROOT is the folder the room can read and write. There are three ways to get one:
+A ROOT is the folder voicebox can read and write. There are three ways to get one:
 
   1. From the page      the explorer's declare control (POST /api/root)
   2. At boot            VOICEBOX_WORKSPACE=/path/to/folder npm run serve
   3. From a worker      the browser worker declares one when it opens a project
 
 Without one, every write refuses with "root-not-declared" — that is the refusal
-naming its own remedy, not a broken room.
+naming its own remedy, not a fault.
 
 THE TURN BRAIN decides who answers a typed turn, and is chosen at boot:
 

@@ -503,7 +503,7 @@ async function declareToLoop(project: Record<string, any>): Promise<void> {
     line(
       kind === "machine"
         ? `the loop cannot write here — ${body.why ?? body.refused ?? "no reason given"}`
-        : "the loop cannot write here yet — this project is in this browser's own storage, so only this page can act on it: the room lists and reads it through this page",
+        : "the loop cannot write here yet — this project is in this browser's own storage, so only this page can act on it: the page lists and reads its files",
       "note",
     );
     if (kind !== "machine") {
