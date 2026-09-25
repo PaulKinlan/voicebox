@@ -361,6 +361,7 @@ const ENV_MEANING = {
   VOICEBOX_BIND_DEADLINE_MS: "how long to keep retrying before giving up by name",
   VOICEBOX_HELLO_BOUND_MS: "how long to wait for a hello frame on /channel or /live before refusing (default 5000ms)",
   VOICEBOX_LIVE_PROVIDER: "the live transport's fallback when the session passes no provider; `/live` passes the agent-settings provider explicitly — **not** the turn resolver",
+  VOICEBOX_LOOPBACK_AUTH: "set to `1` to turn on the loopback session gate (docs/13 §4, docs/18): the page and the APIs answer only with the HttpOnly `SameSite=Strict` session cookie that a one-time bootstrap ticket mints — the ticket's URL is printed at startup, or minted from the shell via `POST /api/bootstrap` with the host token. Default unset serves the page openly (the 5c1 surface). The session secret is per-process and in-memory: a restart invalidates every issued cookie, and the remedy is the URL the new process printed",
   LIVE_PROVIDER: "the OLD NAME of `VOICEBOX_LIVE_PROVIDER`, honoured for one release",
   GEMINI_API_KEY: "read by TWO things with different refusals: the live session refuses to start by name, and the gemini turn resolver answers `unresolved` saying it has no key",
   OPENAI_API_KEY: "the OpenAI Realtime key — without it that provider refuses to start, by name",

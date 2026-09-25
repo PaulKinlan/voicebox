@@ -25,7 +25,7 @@ import {
 } from "./core/agent-settings.ts";
 import { auditFileName, makeEntry, mergeAudit, nextSeq, parseEntry, resumeSeq, serializeEntry, sweepLostAttempts } from "./core/audit.ts";
 import { activityEntry } from "./core/shared-log.ts";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   ENV_UNREACHABLE,
   listUnreadable,
@@ -172,6 +172,57 @@ function hasExtensionAuthority(req) {
     return true;
   }
   return false;
+}
+
+// ── LOOPBACK SESSION AUTH (docs/13 §4 — voicebox-beads-kkc, epic 2gq) ─────────────────────────
+// The residual boundary 5c1 named but did not close: on loopback TCP any local process can write
+// `Origin: http://127.0.0.1:<port>` on a raw socket, so the Origin check distinguishes BROWSER
+// contexts but not which local PROCESS connects. docs/13 §1 rules out minting a token into the
+// openly-served HTML (anyone who can reach the port can fetch that HTML); §4 lands Option A, the
+// Jupyter/code-server pattern, phased as an OPT-IN gate:
+//
+//   VOICEBOX_LOOPBACK_AUTH=1  →  the page and every API/WS route answer only with a session
+//   cookie, and the only way in is a ONE-TIME bootstrap ticket the server mints and prints at
+//   startup (or mints on demand for a holder of the host token — the same 0600 authority as
+//   admission). The ticket redeems once, on the page route, into an HttpOnly SameSite=Strict
+//   cookie; a local process that cannot read the ticket output (a different UID, a container)
+//   can no longer fetch the page or take the executor chair by forging an Origin header.
+//
+// DEFAULT OFF: every check below asks LOOPBACK_AUTH first, so the default surface is byte-for-
+// byte the 5c1 behaviour and every existing suite runs unchanged. The secret is EPHEMERAL and
+// PER-PROCESS — a restart mints a new one and silently invalidates every issued cookie, which
+// is the honest failure mode: the remedy (open the URL the new process printed) is the launch.
+const LOOPBACK_AUTH = process.env.VOICEBOX_LOOPBACK_AUTH === "1";
+const SESSION_COOKIE = "vb_session";
+const LOOPBACK_SESSION = randomBytes(32).toString("hex");
+const outstandingBootstrapTickets = new Set(); // single-use: consumed on redemption
+function mintBootstrapTicket() {
+  const ticket = randomBytes(32).toString("hex");
+  outstandingBootstrapTickets.add(ticket);
+  return ticket;
+}
+function consumeBootstrapTicket(ticket) {
+  if (typeof ticket !== "string" || !outstandingBootstrapTickets.has(ticket)) return false;
+  outstandingBootstrapTickets.delete(ticket);
+  return true;
+}
+function sessionCookieOk(req) {
+  const header = req.headers.cookie;
+  if (typeof header !== "string") return false;
+  const match = header.split(/;\s*/).find((pair) => pair.startsWith(`${SESSION_COOKIE}=`));
+  if (!match) return false;
+  const provided = Buffer.from(match.slice(SESSION_COOKIE.length + 1));
+  const expected = Buffer.from(LOOPBACK_SESSION);
+  // Length differs → not ours; timingSafeEqual throws on length mismatch, so gate on it first.
+  return provided.length === expected.length && timingSafeEqual(provided, expected);
+}
+function claimsToBeTheLocalPage(req, localOrigins) {
+  const origin = typeof req.headers.origin === "string" ? req.headers.origin : null;
+  if (!origin || !localOrigins.has(origin)) return false;
+  // WITH the gate on, a matching Origin is no longer entitlement by itself — the browser proves
+  // the session by presenting the cookie the bootstrap ticket minted. A script that forges the
+  // header without the cookie falls through to the bearer-hello path and is refused there, by name.
+  return !LOOPBACK_AUTH || sessionCookieOk(req);
 }
 
 const PAIRINGS_UNREADABLE = "pairing-list-unreadable";
@@ -1952,7 +2003,23 @@ const routes = {
     });
   },
   "GET /": (req, res, url) => {
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    // THE BOOTSTRAP DOOR (docs/13 §4, opt-in): a valid one-time ticket is exchanged for the
+    // session cookie on this very response, so the page the person asked for is the page they
+    // get — no second navigation. An invalid or already-consumed ticket is a NAMED refusal with
+    // the remedy in it, because a ticket that silently 404s would read as the server being broken.
+    const bootstrapHeaders = {};
+    if (LOOPBACK_AUTH && url.searchParams.has("bootstrap")) {
+      if (!consumeBootstrapTicket(url.searchParams.get("bootstrap"))) {
+        res.writeHead(401, { "content-type": "text/plain; charset=utf-8" });
+        return res.end(
+          "401 bootstrap-ticket-refused — that bootstrap ticket is unknown or already used; one ticket opens one session. " +
+            "Open the bootstrap URL the server printed when it started, or mint a fresh one: " +
+            "POST /api/bootstrap with the x-voicebox-host-token header.",
+        );
+      }
+      bootstrapHeaders["set-cookie"] = `${SESSION_COOKIE}=${LOOPBACK_SESSION}; HttpOnly; SameSite=Strict; Path=/`;
+    }
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", ...bootstrapHeaders });
     const where = BUILD.ahead === null
       ? ` · no origin/${BUILD.branch} here, so the distance from a remote is unknown`
       : BUILD.ahead === 0
@@ -1995,6 +2062,40 @@ async function handle(req, res) {
   });
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   const key = `${req.method} ${url.pathname}`;
+  // THE WALL (opt-in, docs/13 §4): with the gate on, an unauthenticated request gets a named
+  // refusal and a remedy, before any route — including the static fallthrough below — answers.
+  // Self-authorising exemptions, each with its reason named:
+  //   · /api/health — the spawn-and-wait harness, supervisors and the currency gate heartbeat
+  //     read it before any session exists; it reports no root, no file and no credential.
+  //   · POST /api/bootstrap — it IS the authority check (host token) and the re-entry door.
+  //   · the page carrying ?bootstrap= — the route itself validates and consumes the ticket.
+  // The WebSocket upgrades (/channel, /live) do not pass through here: their local-page
+  // entitlement checks the session cookie in place, and every other peer still answers the
+  // pairing-bearer hello exactly as 5c1 built it.
+  if (LOOPBACK_AUTH && !sessionCookieOk(req)) {
+    const pageBootstrapping =
+      (url.pathname === "/" || url.pathname === "/index.html") && url.searchParams.has("bootstrap");
+    // The HOST TOKEN also passes the wall: it is the 0600 authority the person's shell already
+    // holds (admission, root declaration, pairing) — a process that can read it is inside the host
+    // boundary by definition (docs/13 §4), and the host's own acts must not need a browser.
+    const exempt =
+      url.pathname === "/api/health" ||
+      (req.method === "POST" && url.pathname === "/api/bootstrap") ||
+      pageBootstrapping ||
+      extensions.hostTokenOk(req.headers["x-voicebox-host-token"]);
+    if (!exempt) {
+      const why =
+        "this server was started with VOICEBOX_LOOPBACK_AUTH=1: open the bootstrap URL it printed at startup " +
+        "(one-time), or mint a fresh ticket with POST /api/bootstrap and the x-voicebox-host-token header. " +
+        "Requests carrying the host token pass directly. Everything else answers only with the session " +
+        "cookie that the bootstrap exchange mints.";
+      if (url.pathname.startsWith("/api/")) {
+        return json(res, 401, { ok: false, refused: "loopback-unauthenticated", why });
+      }
+      res.writeHead(401, { "content-type": "text/plain; charset=utf-8" });
+      return res.end(`401 loopback-unauthenticated — ${why}`);
+    }
+  }
   // Fall through to public/ for any other path the page requests.
   if (req.method === "GET" && !routes[key] && !url.pathname.startsWith("/api/")) {
     const file = resolvePublicFile(url.pathname);
@@ -2760,6 +2861,21 @@ async function handle(req, res) {
     return json(res, result.ok ? 200 : 404, result);
   }
 
+  if (req.method === "POST" && url.pathname === "/api/bootstrap") {
+    // MINTING A TICKET IS THE HOST'S ACT — the same 0600 authority as admission (m2i) and root
+    // declaration (cfn). This is the re-entry door when the cookie is lost without a restart:
+    // the person's shell holds the host token, so the remedy is one curl away. The ticket is
+    // single-use like the startup one; the URL it names is this server's own bound address.
+    if (!LOOPBACK_AUTH) {
+      return json(res, 404, { ok: false, refused: "loopback-auth-disabled", why: "no bootstrap door exists when the server was not started with VOICEBOX_LOOPBACK_AUTH=1 — the page is served openly in that mode, which is the default" });
+    }
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, { ok: false, refused: "host-token-refused", why: "minting a bootstrap ticket requires the host token (x-voicebox-host-token) — the same authority that admits extensions and declares roots" });
+    }
+    const ticket = mintBootstrapTicket();
+    return json(res, 200, { ok: true, url: `http://127.0.0.1:${boundPort ?? PORT}/?bootstrap=${ticket}` });
+  }
+
   if (req.method === "POST" && url.pathname === "/api/call") {
     // The LOCAL side (the proxy): the page names an environment by key; the host looks up the bearer
     // it holds for that key, attaches it, and forwards the call. The page never sees the bearer.
@@ -2885,10 +3001,12 @@ server.on("upgrade", (req, socket) => {
   //   · Unauthenticated or non-matching connections receive a named refusal with a remedy
   //     ("executor-unauthenticated" / "bearer-refused") and are closed before pageSocket is set.
   //
-  // WHAT THIS DOES NOT PROTECT AGAINST (same-machine non-browser processes are out of scope):
+  // WHAT THIS DOES NOT PROTECT AGAINST — and what now closes it (docs/13 §4, opt-in):
   // A non-browser process on the local machine (curl, script) can forge an Origin header on raw loopback TCP.
-  // Closing that requires a per-process session token minted into the served HTML (the environment-identity milestone);
-  // this gate closes Cross-Site WebSocket Hijacking from other browser tabs and unauthenticated remote peers.
+  // By default that residual stays open (5c1's documented boundary). With VOICEBOX_LOOPBACK_AUTH=1 the local-page
+  // entitlement ALSO requires the session cookie minted by the one-time bootstrap ticket, so a process that
+  // cannot read the ticket output cannot take the chair by forging the header — it falls to the bearer-hello
+  // path below and is refused there, by name. See the LOOPBACK SESSION AUTH block near the top of this file.
   if (url.pathname === "/channel") {
     const ws = wsUpgrade(req, socket);
     if (!ws) { socket.destroy(); return; }
@@ -2899,7 +3017,7 @@ server.on("upgrade", (req, socket) => {
       `http://localhost:${selfPort}`,
       `http://[::1]:${selfPort}`,
     ]);
-    const claimsToBeTheLocalPage = typeof req.headers.origin === "string" && localOrigins.has(req.headers.origin);
+    const claimsToBeTheLocalPageNow = claimsToBeTheLocalPage(req, localOrigins);
 
     const refuseChannel = (refused, why) => {
       try {
@@ -2936,7 +3054,7 @@ server.on("upgrade", (req, socket) => {
       ws.on("error", () => {});
     };
 
-    if (claimsToBeTheLocalPage) {
+    if (claimsToBeTheLocalPageNow) {
       attachExecutor("local environment page");
       return;
     }
@@ -3000,16 +3118,17 @@ server.on("upgrade", (req, socket) => {
   //
   // WHAT THIS DOES NOT CLAIM, stated here rather than discovered later: a non-browser client can send any
   // Origin it likes, so "same origin" is a claim the peer makes, not a proof. This gate stops an
-  // unauthenticated peer from costing a session and makes the PAIRED path enforceable; a per-process page
-  // token minted into the served HTML is what would close the claim itself, and it belongs with the
-  // environment-identity work rather than here.
+  // unauthenticated peer from costing a session and makes the PAIRED path enforceable. By default the claim
+  // itself stays open (5c1's boundary); with VOICEBOX_LOOPBACK_AUTH=1 the local-page branch below also
+  // requires the bootstrap-minted session cookie (docs/13 §4), which is what turns the claim into a proof
+  // for every local process that cannot read the ticket output.
   const selfPort = boundPort ?? PORT;
   const localOrigins = new Set([
     `http://127.0.0.1:${selfPort}`,
     `http://localhost:${selfPort}`,
     `http://[::1]:${selfPort}`,
   ]);
-  const claimsToBeTheLocalPage = typeof req.headers.origin === "string" && localOrigins.has(req.headers.origin);
+  const claimsToBeTheLocalPageNow = claimsToBeTheLocalPage(req, localOrigins);
 
   const refuseLive = (refused, why) => {
     try { ws.send(JSON.stringify({ type: "refused", refused, why })); } catch { /* the socket may be gone */ }
@@ -3195,7 +3314,7 @@ server.on("upgrade", (req, socket) => {
     ws.on("error", endSession);
   };
 
-  if (claimsToBeTheLocalPage) { beginSession(); return; }
+  if (claimsToBeTheLocalPageNow) { beginSession(); return; }
 
   const HELLO_BOUND_MS = 5000;
   const helloDeadline = setTimeout(
@@ -3298,6 +3417,15 @@ try {
   console.log(
     `voicebox on http://127.0.0.1:${bound} — provider: ${PROVIDER}, root: ${active ? active.root.path : "(none declared)"}`,
   );
+  if (LOOPBACK_AUTH) {
+    // The bootstrap URL is the ONLY way in while the gate is on (docs/13 §4): one-time ticket,
+    // redeemed by the first browser that opens it into the session cookie. Printed, not written
+    // to a file, for the same reason Jupyter prints its token: the terminal is the boundary.
+    const ticket = mintBootstrapTicket();
+    console.log(`bootstrap  http://127.0.0.1:${bound}/?bootstrap=${ticket}`);
+    console.log(`  the page and every API/WS route answer only with the session cookie that URL mints (one-time; HttpOnly; SameSite=Strict).`);
+    console.log(`  lost the cookie? mint another without restarting: curl -X POST -H "x-voicebox-host-token: $(cat "${HOST_DIR}/.host-token")" http://127.0.0.1:${bound}/api/bootstrap`);
+  }
 } catch (error) {
   console.error(
     `[bind] giving up after waiting ${BIND_DEADLINE_MS}ms for 127.0.0.1:${PORT} (${error?.code ?? error?.message}). ` +
