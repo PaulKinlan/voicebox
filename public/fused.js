@@ -25,6 +25,7 @@ const WANTED = {
   stage: "voice-ring-wrap", mic: "mic", state: "voice-state", micDock: "mic-dock",
   session: "session", log: "session-log", form: "text-form", utterance: "utterance", send: "send",
   reader: "reader", readerTitle: "reader-title", readerFacts: "file-facts", readerBody: "file-body",
+  fileRefresh: "file-refresh",
   copy: "file-copy", close: "reader-close", about: "about-facts", readerDetails: "reader-details",
   settingsOpen: "settings-open", settings: "settings", settingsClose: "settings-close",
   micSelect: "mic-select", outSelect: "out-select",
@@ -88,6 +89,7 @@ function on(el, type, handler) {
 }
 
 let shownFile = null; // the file currently in the reader panel
+let fileReadSeq = 0; // monotonic sequence token guarding in-flight reads against stale settlements
 let listedRoot = null; // the root the CURRENT entries were read from — not assumed to be the active one
 // WHICH FOLDER OF THE ROOT IS ON SCREEN (voicebox-beads-tee): "" is the root itself, and every listing
 // request carries it. The server's answer gives it back normalised, and the page adopts THAT as the
@@ -1588,28 +1590,53 @@ function readProvenance(via) {
 // The same reader, reading from the folder this tab opened: the facts say which
 // source and that it is read-only, because "read from disk" was already a lie
 // once for a source that was not the server's.
-async function showRoomFile(name) {
+async function showRoomFile(name, { reloading = false } = {}) {
+  const seq = ++fileReadSeq;
+  shownFile = name;
   els.copy.disabled = true;
-  els.reader.dataset.state = "empty";
+  if (els.fileRefresh) {
+    els.fileRefresh.disabled = true;
+    if (reloading) {
+      els.fileRefresh.setAttribute("aria-busy", "true");
+      els.fileRefresh.textContent = "Reloading…";
+    }
+  }
+  if (reloading && els.reader) els.reader.dataset.loading = "true";
+  if (!reloading) els.reader.dataset.state = "empty";
+  els.reader.dataset.error = "false";
   els.readerTitle.textContent = name;
-  els.readerFacts.textContent = "Reading…";
-  els.readerBody.textContent = "";
+  els.readerFacts.textContent = reloading ? "Reloading…" : "Reading…";
+  if (!reloading) els.readerBody.textContent = "";
   showFileSelection(name);
   try {
     const { text, bytes, truncated } = await readRoomFile(name);
+    if (seq !== fileReadSeq || shownFile !== name) return;
     const modeLabel = roomFolder.mode === "readwrite" ? "read/write" : "read-only";
     els.readerFacts.textContent = `${bytes} ${bytes === 1 ? "byte" : "bytes"}${truncated ? ` (showing the first ${Math.round(ROOM_FILE_MAX_BYTES / 1024)} KB)` : ""} · read from '${roomFolder.name}' in this tab (${modeLabel})`;
     els.readerFacts.title = "";
     els.readerBody.textContent = text;
     els.reader.dataset.state = "ready";
+    els.reader.dataset.error = "false";
     els.copy.disabled = text.length === 0;
     if (els.readerDetails) els.readerDetails.open = true;
   } catch (error) {
+    if (seq !== fileReadSeq || shownFile !== name) return;
     const sentence = `Could not read '${name}' in '${roomFolder.name}': ${error?.message ?? error}`;
     els.readerFacts.textContent = sentence;
     els.readerBody.textContent = sentence;
     els.reader.dataset.state = "ready";
+    els.reader.dataset.error = "true";
+    els.copy.disabled = true;
     if (els.readerDetails) els.readerDetails.open = true;
+  } finally {
+    if (seq === fileReadSeq && shownFile === name) {
+      if (els.fileRefresh) {
+        els.fileRefresh.disabled = false;
+        els.fileRefresh.removeAttribute("aria-busy");
+        els.fileRefresh.textContent = "Reload";
+      }
+      if (els.reader) els.reader.dataset.loading = "false";
+    }
   }
 }
 
@@ -1621,18 +1648,28 @@ function rootLabel() {
   return `${base.replace(/\/$/, "")}/`;
 }
 
-async function showFile(name) {
+async function showFile(name, { reloading = false } = {}) {
+  const seq = ++fileReadSeq;
   shownFile = name;
-  if (roomFolder) return showRoomFile(name);
+  if (roomFolder) return showRoomFile(name, { reloading });
   els.copy.disabled = true;
-  els.reader.dataset.state = "empty";
+  if (els.fileRefresh) {
+    els.fileRefresh.disabled = true;
+    if (reloading) {
+      els.fileRefresh.setAttribute("aria-busy", "true");
+      els.fileRefresh.textContent = "Reloading…";
+    }
+  }
+  if (reloading && els.reader) els.reader.dataset.loading = "true";
+  if (!reloading) els.reader.dataset.state = "empty";
+  els.reader.dataset.error = "false";
   els.readerTitle.textContent = name;
-  els.readerFacts.textContent = "Reading…";
-  els.readerBody.textContent = "";
-  els.reader.dataset.state = "empty";
+  els.readerFacts.textContent = reloading ? "Reloading…" : "Reading…";
+  if (!reloading) els.readerBody.textContent = "";
   showFileSelection(name);
   try {
     const answer = await request(`/api/file?name=${encodeURIComponent(name)}`);
+    if (seq !== fileReadSeq || shownFile !== name) return;
     if (answer.ok) {
       const content = answer.content ?? "";
       // One short line: on a phone the old facts wrapped to five lines above a
@@ -1641,6 +1678,7 @@ async function showFile(name) {
       els.readerFacts.title = `${rootLabel()}${name}, read just now`;
       els.readerBody.textContent = content;
       els.reader.dataset.state = "ready";
+      els.reader.dataset.error = "false";
       els.copy.disabled = content.length === 0;
     } else {
       // A FAILED read puts the reason where the file's text would have been.
@@ -1652,9 +1690,12 @@ async function showFile(name) {
       els.readerFacts.textContent = reason;
       els.readerBody.textContent = reason;
       els.reader.dataset.state = "ready";
+      els.reader.dataset.error = "true";
+      els.copy.disabled = true;
       if (els.readerDetails) els.readerDetails.open = true;
     }
   } catch (error) {
+    if (seq !== fileReadSeq || shownFile !== name) return;
     // Name the place the file is actually supposed to be. This said
     // "workspace/" long after the loop stopped having a root of its own —
     // driven to it by vb-e1m0 on 2026-09-20: with the root at /tmp/prose2 the
@@ -1665,9 +1706,31 @@ async function showFile(name) {
     els.readerFacts.textContent = sentence;
     els.readerBody.textContent = sentence;
     els.reader.dataset.state = "ready";
+    els.reader.dataset.error = "true";
+    els.copy.disabled = true;
     if (els.readerDetails) els.readerDetails.open = true;
+  } finally {
+    if (seq === fileReadSeq && shownFile === name) {
+      if (els.fileRefresh) {
+        els.fileRefresh.disabled = false;
+        els.fileRefresh.removeAttribute("aria-busy");
+        els.fileRefresh.textContent = "Reload";
+      }
+      if (els.reader) els.reader.dataset.loading = "false";
+    }
   }
 }
+
+async function refreshCurrentFile() {
+  if (!shownFile) return;
+  if (roomFolder) {
+    await showRoomFile(shownFile, { reloading: true });
+  } else {
+    await showFile(shownFile, { reloading: true });
+  }
+}
+
+on(els.fileRefresh, "click", refreshCurrentFile);
 
 on(els.copy, "click", async () => {
   try {
@@ -1679,10 +1742,19 @@ on(els.copy, "click", async () => {
 });
 
 on(els.close, "click", () => {
+  ++fileReadSeq;
   shownFile = null;
   els.reader.dataset.state = "empty";
+  els.reader.dataset.error = "false";
+  els.reader.dataset.loading = "false";
   els.readerBody.textContent = "";
   els.readerFacts.textContent = "";
+  els.copy.disabled = true;
+  if (els.fileRefresh) {
+    els.fileRefresh.disabled = true;
+    els.fileRefresh.removeAttribute("aria-busy");
+    els.fileRefresh.textContent = "Reload";
+  }
   showFileSelection(null);
   document.querySelector(".file-open")?.focus();
 });

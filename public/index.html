@@ -249,13 +249,14 @@
       <section class="reader" id="reader" data-state="empty" aria-labelledby="reader-title">
         <div class="reader-head">
           <h2 id="reader-title">Nothing open</h2>
+          <button class="quiet" id="file-refresh" type="button" disabled aria-label="Reload file contents" title="Reload file contents">Reload</button>
           <button class="quiet" id="file-copy" type="button" disabled>Copy</button>
           <button class="icon-button" id="reader-close" type="button" aria-label="Close the file"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
         </div>
         <pre id="file-body" tabindex="0" role="region" aria-label="File contents"></pre>
         <details class="reader-details" id="reader-details">
           <summary>Details</summary>
-          <p id="file-facts"></p>
+          <p id="file-facts" role="status" aria-live="polite"></p>
         </details>
       </section>
 
