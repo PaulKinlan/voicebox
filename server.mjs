@@ -36,12 +36,13 @@ import * as extensions from "./lib/extensions.mjs";
 import { sweepOrphanedProbeMarkers } from "./tools/sandbox-probe.mjs";
 import { createTaskHost, installTaskExecutor, protectedAuditPath, TASK_TOOLS } from "./lib/tasks.mjs";
 import { createPermissionPolicy } from "./lib/permission-policy.mjs";
-import { createPiAcpExecutor } from "./lib/pi-acp.mjs";
+import { createPiAcpExecutor, describeAdapterInstall } from "./lib/pi-acp.mjs";
 import { bootFence } from "./lib/fence-provider.mjs";
 import { SOURCE_DIRS } from "./lib/browser-sources.mjs";
 import { bootUnitFence, stopUnitFence } from "./lib/unit-fence-provider.mjs";
 import { createHarnessInventory } from "./lib/harness-inventory.mjs";
 import { createAgentRegistry, listHarnessesWithConfiguredAgents, publicAgentProjection } from "./lib/harness-config.mjs";
+import { validateHarnessAgents, renderHarnessTable, describeAgentAdmission, unimplementedAdapterWhy, CLAUDE_LEGACY_DELEGATE_WHY } from "./lib/harness-startup.mjs";
 import {
   createFleetManager,
   publicFleetProjection,
@@ -669,12 +670,55 @@ const fleetManager = createFleetManager({
 const permissions = createPermissionPolicy();
 
 const HARNESS = process.env.VOICEBOX_HARNESS ?? null;
-if (HARNESS === "pi" || HARNESS === "pi-acp") {
-  const piExecutor = createPiAcpExecutor({
-    decide: permissions.decide,
-    root: () => active?.root,
+
+// Multi-harness task execution (voicebox-beads-aaj): ONE dispatcher, many adapters.
+// A delegate_task names an agent; the registry resolves its adapter; the dispatcher hands
+// check/run to THAT adapter's executor. Adapters with no real implementation refuse by name
+// at admission — a configured harness that cannot run is a named fact, never a crash and
+// never a silent drop. The pi-acp executor is constructed unconditionally because its own
+// check() IS the honest answer when the machine lacks a verified adapter install.
+const piExecutor = createPiAcpExecutor({
+  decide: permissions.decide,
+  root: () => active?.root,
+});
+const adapterExecutors = new Map([["pi-acp", piExecutor]]);
+const UNIMPLEMENTED_ADAPTER_LABELS = new Map([
+  ["claude-code", "claude"],
+  ["codex-cli", "codex"],
+  ["gemini-cli", "gemini"],
+  ["opencode", "opencode"],
+]);
+function executorForAgent(agentConfig, harness) {
+  const adapter = agentConfig?.adapter ?? (harness === "pi" || harness === "pi-acp" ? "pi-acp" : harness);
+  const installed = adapterExecutors.get(adapter);
+  if (installed) return installed;
+  const label = UNIMPLEMENTED_ADAPTER_LABELS.get(adapter) ?? adapter ?? harness;
+  // The sentence comes from the ONE home (harness-startup.mjs); claude's delegate path keeps
+  // its long-standing, test-pinned sentence — the vantage rule lives with the constant.
+  const why = label === "claude" ? CLAUDE_LEGACY_DELEGATE_WHY : unimplementedAdapterWhy(label);
+  return {
+    check() {
+      return { ok: false, refused: "adapter-not-configured", why };
+    },
+    async run() {
+      throw Object.assign(new Error(why), { refused: "adapter-not-configured" });
+    },
+  };
+}
+if (HARNESS) {
+  // The delegating executor: check/run read the task's agentConfig and hand off to THAT
+  // adapter's executor, so admission carries the named refusal of the right adapter.
+  installTaskExecutor({
+    check(args = {}) {
+      return executorForAgent(args.agentConfig, args.harness ?? args.agent).check(args);
+    },
+    run(args = {}) {
+      const target = executorForAgent(args.agentConfig, args.harness ?? args.agent);
+      return target.run(args);
+    },
   });
-  installTaskExecutor(piExecutor);
+}
+if (HARNESS === "pi" || HARNESS === "pi-acp") {
   agentRegistry.register({
     id: "pi",
     name: "Pi",
@@ -684,14 +728,6 @@ if (HARNESS === "pi" || HARNESS === "pi-acp") {
     isDefault: true,
   });
 } else if (HARNESS === "claude") {
-  installTaskExecutor({
-    check({ input }) {
-      return { ok: false, refused: "adapter-not-configured", why: "No Voicebox task adapter is configured for this CLI; configure an adapter before delegating." };
-    },
-    async run() {
-      throw Object.assign(new Error("No Voicebox task adapter is configured for this CLI"), { refused: "adapter-not-configured" });
-    },
-  });
   agentRegistry.register({
     id: "claude",
     name: "Claude",
@@ -700,6 +736,25 @@ if (HARNESS === "pi" || HARNESS === "pi-acp") {
     environmentKey: SELF_ENVIRONMENT,
     isDefault: true,
   });
+}
+
+// Startup admission for every configured agent of this environment (voicebox-beads-aaj):
+// the table says what a delegation to each agent would do TODAY, before anyone delegates.
+const harnessAdmission = validateHarnessAgents({
+  registry: agentRegistry,
+  environment: SELF_ENVIRONMENT,
+  describeAdapter: () => describeAdapterInstall({}),
+  implementedAdapters: new Set(adapterExecutors.keys()),
+  executorSelected: Boolean(HARNESS),
+});
+// Refused agents are named in the normal startup log — a broken harness configuration is a
+// boot fact a person should meet WITHOUT running --doctor or a delegation that fails.
+for (const row of harnessAdmission.rows) {
+  if (!row.admitted) {
+    console.log(`  [harness] REFUSED ${row.agent.id} (${row.agent.adapter}) — ${row.refused}: ${row.why}`);
+  } else {
+    console.log(`  [harness] ADMITTED ${row.agent.id} (${row.agent.adapter}${row.installedVersion ? ` @ ${row.installedVersion}` : ""})`);
+  }
 }
 
 function callTool(tool, args, authority) {
@@ -1113,14 +1168,13 @@ VERDICT`);
   console.log(`  turn brain        ${wantResolver}`);
   console.log(`  live transport    ${wantLive}`);
   const wantHarness = process.env.VOICEBOX_HARNESS ?? "(none)";
-  const harnessVerdict = (wantHarness === "pi" || wantHarness === "pi-acp")
-    ? "pi (admitted via pi-acp)"
-    : wantHarness === "claude"
-    ? "claude (unrunnable: no Voicebox task adapter is configured for this CLI)"
-    : wantHarness === "(none)"
-    ? "none admitted (set VOICEBOX_HARNESS=pi to admit Pi)"
-    : `${wantHarness} (unsupported)`;
+  const harnessVerdict = wantHarness === "(none)"
+    ? "none selected (set VOICEBOX_HARNESS=pi to admit Pi; see the per-agent admission table below)"
+    : `${wantHarness} selected`;
   console.log(`  task harness      ${harnessVerdict}`);
+  for (const admissionLine of renderHarnessTable(harnessAdmission.rows, { environment: SELF_ENVIRONMENT })) {
+    console.log(admissionLine);
+  }
   console.log(`  root at boot      ${workspaceDeclared() ?? "none — declare one from the page, or set VOICEBOX_WORKSPACE"}`);
   if (missing.length === 0) {
     console.log(`  credentials       present for what is selected`);
@@ -1847,7 +1901,18 @@ const routes = {
   "GET /api/agents": (req, res, url) => {
     const environmentKey = url.searchParams.get("environment") || undefined;
     const harness = url.searchParams.get("harness") || undefined;
-    const agents = agentRegistry.list({ environmentKey, harness }).map(publicAgentProjection);
+    // Admission is the LIVE verdict for THIS environment (voicebox-beads-aaj): what a
+    // delegation to each agent would do today, refused by name when it would refuse.
+    // Live, not a boot snapshot: agents registered after boot get their verdict too.
+    const admissionContext = {
+      describeAdapter: () => describeAdapterInstall({}),
+      implementedAdapters: new Set(adapterExecutors.keys()),
+      executorSelected: Boolean(HARNESS),
+    };
+    const agents = agentRegistry.list({ environmentKey, harness }).map((a) => ({
+      ...publicAgentProjection(a),
+      admission: describeAgentAdmission(a, admissionContext),
+    }));
     return json(res, 200, { ok: true, agents });
   },
   "GET /api/fleet": async (req, res, url) => {
