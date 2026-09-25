@@ -89,7 +89,10 @@ and `refused` are three different words. Fields:
   nonzero→zero), and the reader decides.
 - **`filesystem`** — per path: `listable`, and `writable` measured **by doing** (create a file,
   unlink it). `writable.value: false` with `error: "EROFS"` is a read-only mount; `"EACCES"` is a
-  denial; `ENOENT` is absence. *Read as:* absence is not refusal and neither is not-permitted.
+  denial; `ENOENT` is absence. Probe writability checks create and unlink `.sandbox-probe-<pid>-<when>`;
+  orphaned markers left if a probe process is SIGKILL'd mid-write are swept at server boot and
+  on probe start by checking PID liveness (`kill -0`), preventing probe artefacts from polluting the tree (`voicebox-beads-ebq`).
+  *Read as:* absence is not refusal and neither is not-permitted.
 - **`limits`** — CPU count, total/free memory, and `/proc/self/limits` as `{soft, hard}` per name.
   *Read as:* the OS's numbers for this process — a moment, not a promise, and not the sandbox's
   bounds (those are the host constants above).

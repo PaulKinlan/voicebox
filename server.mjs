@@ -33,6 +33,7 @@ import {
   unreachable,
 } from "./core/environment.ts";
 import * as extensions from "./lib/extensions.mjs";
+import { sweepOrphanedProbeMarkers } from "./tools/sandbox-probe.mjs";
 import { createTaskHost, installTaskExecutor, protectedAuditPath, TASK_TOOLS } from "./lib/tasks.mjs";
 import { createPermissionPolicy } from "./lib/permission-policy.mjs";
 import { createPiAcpExecutor } from "./lib/pi-acp.mjs";
@@ -138,6 +139,10 @@ const HOST_DIR = extensionsDir();
 const PAIRINGS_FILE = path.join(HOST_DIR, ".pairings.json");
 // Stale pending approval files must never survive a restart (voicebox-beads-62f).
 rmSync(path.join(HOST_DIR, ".pending-approval.json"), { force: true });
+
+// Stale sandbox probe markers from killed runs must never survive (voicebox-beads-ebq).
+sweepOrphanedProbeMarkers(ROOT);
+if (process.cwd() !== ROOT) sweepOrphanedProbeMarkers(process.cwd());
 
 // ── IN-ROOM SESSION AUTHORIZATION (voicebox-beads-5jl) ──────────────────────────
 // Minted per server process and embedded into the served index.html. Allows in-room UI actions
@@ -341,8 +346,12 @@ function writeProbeCache(report) {
 /** Run the probe in THIS process's environment. JSON on stdout; a non-zero exit is the boundary
  *  showing itself, and any stdout it produced is still the report. */
 function runProbe() {
+  sweepOrphanedProbeMarkers(ROOT);
+  if (process.cwd() !== ROOT) sweepOrphanedProbeMarkers(process.cwd());
   return new Promise((resolve, reject) => {
     execFile(process.execPath, [PROBE_SCRIPT], { timeout: 15000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+      sweepOrphanedProbeMarkers(ROOT);
+      if (process.cwd() !== ROOT) sweepOrphanedProbeMarkers(process.cwd());
       const text = String(stdout ?? "").trim();
       if (!text) return reject(err ?? new Error("the probe printed nothing"));
       try {
