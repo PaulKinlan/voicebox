@@ -75,6 +75,7 @@ Three things about the dev loop that are easy to get wrong and are therefore wri
   delegated; `public/live-voice.js` forwards it to `public/fused.js` which dynamically displays the task card
   with agent name, address, and live status without manual status checks (voicebox-beads-8fv.4).
 - **Fleet addressability across environments.** Agents are addressed by `environmentKey/agentId` (e.g. `local/pi`, `env_b/worker`) or `environmentKey/agentId:sessionId` (`core/fleet.ts`, `lib/fleet.mjs`). If an environment is stopped or unreachable, requests to it refuse by name (`environment-unreachable`) without blind rerouting. Existing session contact reaches active interactive sessions without creating replacement sessions (voicebox-beads-8fv.3).
+- **WASM shelf tools discoverable and invocable via extensions.** Admitted shelf tools (e.g. `hash.wasm`, `diff.wasm`) surface in `list_extensions` with their measured boundary (zero imports, admitted digest, buffer-abi) and execute through `call_extension` via `lib/wasm-shelf.mjs`, decoding Hirschberg line diffs into structured blocks without separate wasm-specific tooling routes (voicebox-beads-9nk).
 - **The proxy's `/live` entry and the transport behind it.** Vite proxies `/live` with `ws: true`; the
   zero-dependency server hands the upgrade to `lib/ws-server.mjs`, which runs the session in
   `lib/live-session.mjs`. The proxy entry and the route are two halves of one path — and the route table

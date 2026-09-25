@@ -42,12 +42,10 @@ test("admission rehash: an untampered shelf admits, and the digest in the manife
   assert.equal(out.ok, true, JSON.stringify(out));
   const hash = out.tools.find((t) => t.id === "hash");
   assert.equal(hash.admitted, true, "the hash tool passes admission on untampered bytes");
-  // diff is admission-verified too, but NOT emitted: its ABI is undeclared and undriven —
-  // an ABI nobody drives is not a mechanism, and the reader must SAY so.
+  assert.equal(hash.abi.abi, "buffer-abi/1");
   const diff = out.tools.find((t) => t.id === "diff");
   assert.equal(diff.admitted, true, "diff's bytes verify against its manifest digest");
-  assert.equal(diff.abi, null, "diff carries no driven ABI, named as a note, never silently emitted");
-  assert.match(diff.note, /not emitted/);
+  assert.equal(diff.abi.abi, "buffer-abi/diff", "diff's ABI is declared and driven (voicebox-beads-9nk)");
 });
 
 test("ADMISSION TAMPER: one flipped byte in the module is digest-mismatch, named with both digests", () => {
@@ -239,4 +237,68 @@ test("the REAL shelf on this box, if present, admits hash and answers the KAT th
   const called = await callWasmTool(descriptor.tools[0], { input: "abc" });
   assert.equal(called.ok, true, JSON.stringify(called));
   assert.equal(called.output, SHA256_ABC);
+});
+
+test("diff.wasm: output format decoded and declared (Hirschberg line edit script)", async () => {
+  const shelfOut = readShelf(shelf);
+  const diffTool = shelfOut.tools.find((t) => t.id === "diff");
+  assert.ok(diffTool.admitted);
+  assert.equal(diffTool.abi.abi, "buffer-abi/diff");
+  const descriptor = descriptorFor(diffTool);
+  assert.ok(descriptor);
+  assert.equal(descriptor.tools[0].wasm.abi, "buffer-abi/diff");
+
+  const { callWasmTool } = await import("../lib/wasm-shelf.mjs");
+  const textA = "alpha\nbeta\n";
+  const textB = "alpha\ngamma\nbeta\n";
+  const called = await callWasmTool(descriptor.tools[0], { a: textA, b: textB });
+  assert.equal(called.ok, true, JSON.stringify(called));
+  assert.equal(called.returned, 52);
+  assert.equal(called.blocks.length, 3);
+  assert.deepEqual(called.blocks[0], { op: "equal", aLine: 0, aCount: 1, bLine: 0, bCount: 1 });
+  assert.deepEqual(called.blocks[1], { op: "insert", aLine: 0, aCount: 0, bLine: 1, bCount: 1 });
+  assert.deepEqual(called.blocks[2], { op: "equal", aLine: 1, aCount: 1, bLine: 2, bCount: 1 });
+});
+
+test("wasm shelf hookup: catalogue discovery surfaces shelf tools and callTool executes via o45 seam", async () => {
+  const ws = path.join(scratch, "hookup-ws");
+  const ext = path.join(scratch, "hookup-ext");
+  mkdirSync(ws, { recursive: true });
+  mkdirSync(ext, { recursive: true });
+  process.env.VOICEBOX_WORKSPACE = ws;
+  process.env.VOICEBOX_EXTENSIONS_DIR = ext;
+  process.env.VOICEBOX_WASM_SHELF_DIR = shelf;
+  const extensions = await import("../lib/extensions.mjs");
+
+  // 1. Catalogue discovery: shelf tools surface with their measured boundary
+  const cat = extensions.catalogue();
+  const hashEntry = cat.find((e) => e.id === "wasm-shelf-hash");
+  assert.ok(hashEntry, "wasm-shelf-hash must surface in catalogue");
+  assert.equal(hashEntry.wasm.abi, "buffer-abi/1");
+  assert.equal(hashEntry.wasm.imports, 0);
+  assert.equal(hashEntry.preview.decision, "admitted");
+
+  const diffEntry = cat.find((e) => e.id === "wasm-shelf-diff");
+  assert.ok(diffEntry, "wasm-shelf-diff must surface in catalogue");
+  assert.equal(diffEntry.wasm.abi, "buffer-abi/diff");
+  assert.equal(diffEntry.wasm.imports, 0);
+  assert.equal(diffEntry.preview.decision, "admitted");
+
+  // 2. Sideload and admit diff tool through the shared seam
+  const proposed = extensions.sideload("wasm-shelf-diff");
+  assert.equal(proposed.ok, true, JSON.stringify(proposed));
+  const admitted = extensions.admitProposal(proposed.id, "admit", "test-host");
+  assert.equal(admitted.ok, true, JSON.stringify(admitted));
+
+  // 3. callTool runs the admitted diff tool
+  const result = await extensions.callTool("diff", {
+    a: "line 1\nline 2\n",
+    b: "line 1\nline 1.5\nline 2\n",
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.action, "wasm");
+  assert.equal(result.tool, "diff");
+  assert.ok(Array.isArray(result.blocks));
+  assert.equal(result.blocks.length, 3);
+  assert.equal(result.blocks[1].op, "insert");
 });
