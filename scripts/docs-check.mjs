@@ -337,7 +337,7 @@ function refusalNames() {
   // Direct declarations and the task module's small refusal helpers; no AST dependency needed.
   const sources = {
     "the gate (`core/extensions.ts`)": ["core/extensions.ts", /rule:\s*"([a-z][a-z0-9-]*)"/g],
-    "the routes and the root seam (`server.mjs`, `core/root.ts`)": ["server.mjs core/root.ts", /refused:\s*"([a-z][a-z0-9-]*)"/g],
+    "the routes and the root seam (`server.mjs`, `core/root.ts`, `browser/acts.ts`)": ["server.mjs core/root.ts browser/acts.ts", /refused:\s*"([a-z][a-z0-9-]*)"/g],
     "admitted tools at run time (`lib/extensions.mjs`)": ["lib/extensions.mjs", /refused:\s*"([a-z][a-z0-9-]*)"/g],
     "task admission/readback (`core/tasks.ts`, `lib/tasks.mjs`)": ["core/tasks.ts lib/tasks.mjs", /(?:refused:\s*|(?:refusal|fail|no)\(\s*)"([a-z][a-z0-9-]*)"/g],
   };
