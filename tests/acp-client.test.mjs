@@ -150,3 +150,25 @@ test("setConfigOption sets option on active session and validates inputs and ses
 
   await assert.rejects(f.client.setConfigOption("bad", "val"), { refused: "acp-request-refused" });
 });
+
+test("the timeout ceiling is PER-ADAPTER (voicebox-beads-hmco): a raised ceiling admits longer deadlines, the default still refuses them", async () => {
+  // With the adapter's own ceiling, a 120s timeout is finite and admitted.
+  const raised = fixture((m, send) => { if (m.method === "initialize") send(result(m, info)); },
+    { timeoutMs: 120000, timeoutCeilingMs: 120000 });
+  await raised.client.initialize(); // a within-ceiling client initializes — nothing refuses it
+  raised.client.close();
+
+  // The DEFAULT ceiling (60000 — pi's) still refuses a 120s timeout, naming the ceiling.
+  assert.throws(
+    () => fixture(() => {}, { timeoutMs: 120000 }),
+    (err) => err.refused === "unbounded-executor" && /ceiling 60000ms/.test(err.message),
+    "the default ceiling must refuse 120s by name",
+  );
+
+  // Even a raised ceiling is itself bounded: nothing here can be made unbounded.
+  assert.throws(
+    () => fixture(() => {}, { timeoutMs: 601000, timeoutCeilingMs: 601000 }),
+    (err) => err.refused === "unbounded-executor",
+    "a ceiling above the 600000ms meta-cap must refuse",
+  );
+});
