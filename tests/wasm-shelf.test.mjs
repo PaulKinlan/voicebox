@@ -322,3 +322,44 @@ test("wasm shelf hookup: catalogue discovery surfaces shelf tools and callTool e
   assert.equal(result.blocks.length, 3);
   assert.equal(result.blocks[1].op, "insert");
 });
+
+test("MBK concurrency semaphore: excess concurrent worker calls refuse over-budget by name (voicebox-beads-mbk)", async (t) => {
+  if (needsShelf(t)) return;
+  const { callWasmTool, descriptorFor, readShelf, _resetWasmWorkerStateForTest } = await import("../lib/wasm-shelf.mjs");
+  const shelfOut = readShelf(shelf);
+  const descriptor = descriptorFor(shelfOut.tools.find((x) => x.id === "hash"));
+  const tool = descriptor.tools[0];
+
+  const prevMax = process.env.VOICEBOX_WASM_MAX_CONCURRENT_WORKERS;
+  const prevQueue = process.env.VOICEBOX_WASM_MAX_QUEUE_SIZE;
+  // Cap at 2 concurrent workers, 0 queue capacity
+  process.env.VOICEBOX_WASM_MAX_CONCURRENT_WORKERS = "2";
+  process.env.VOICEBOX_WASM_MAX_QUEUE_SIZE = "0";
+  _resetWasmWorkerStateForTest();
+
+  try {
+    // Launch 3 concurrent calls
+    const p1 = callWasmTool(tool, { input: "call-1" });
+    const p2 = callWasmTool(tool, { input: "call-2" });
+    const p3 = callWasmTool(tool, { input: "call-3" });
+
+    const results = await Promise.all([p1, p2, p3]);
+    const refused = results.filter((r) => !r.ok);
+    const succeeded = results.filter((r) => r.ok);
+
+    assert.equal(succeeded.length, 2, "2 calls must succeed within the concurrency cap");
+    assert.equal(refused.length, 1, "excess 3rd call must be refused");
+    assert.equal(refused[0].refused, "over-budget");
+    assert.match(refused[0].why, /concurrent wasm worker limit reached/);
+
+    // After completion, capacity is freed
+    const after = await callWasmTool(tool, { input: "after-free" });
+    assert.equal(after.ok, true, "after workers finish, fresh call succeeds");
+  } finally {
+    if (prevMax !== undefined) process.env.VOICEBOX_WASM_MAX_CONCURRENT_WORKERS = prevMax;
+    else delete process.env.VOICEBOX_WASM_MAX_CONCURRENT_WORKERS;
+    if (prevQueue !== undefined) process.env.VOICEBOX_WASM_MAX_QUEUE_SIZE = prevQueue;
+    else delete process.env.VOICEBOX_WASM_MAX_QUEUE_SIZE;
+    _resetWasmWorkerStateForTest();
+  }
+});

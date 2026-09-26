@@ -35,7 +35,7 @@ driven, both of which bound *filesystem and processes* and deliberately do not b
 - **The digest binds bytes, never behavior.** A wasm tool's module is rehashed at admission and
   again at every call, so the bytes that run are the bytes that were admitted — but what those
   bytes *do* is bounded only by host constants: a call deadline, worker memory limits, a file-read
-  bound. No declaration inside a descriptor buys more of any of them.
+  bound, and worker concurrency capped by a semaphore (`WASM_MAX_CONCURRENT_WORKERS`, excess calls refused `over-budget`, `voicebox-beads-mbk`). No declaration inside a descriptor buys more of any of them.
 - **`/tmp` is not a place for a sandbox home.** The L1.5 unit's `PrivateTmp` hides the caller's
   `/tmp`; a home under it fails to bind (`226/NAMESPACE`). Homes live outside `/tmp` — the default
   is `~/sandbox-homes/<key>` (`VOICEBOX_SANDBOX_HOMES`).
