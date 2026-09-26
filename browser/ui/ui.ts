@@ -173,7 +173,49 @@ function renderAsset(asset: { name: string; kind: string; body: string }): void 
  */
 let gateAnswered = false;
 
-function askConfirmation(confirm: { id: string; rule: string; why: string; plan: Record<string, any> }): void {
+/**
+ * Re-draw every "Where the files are" panel from the worker, so a deletion is visible everywhere it
+ * should be — the same three renders the page already does after a project opens.
+ */
+const refreshViews = () => Promise.all([renderView("opfs"), renderView("picked"), renderView("server")]);
+
+/**
+ * Delete one entry from any explorer view (voicebox-beads-g8y): the SAME gate the asset gallery uses,
+ * for an arbitrary path — the plan is shown before anything happens, the answer is recorded either
+ * way, and approval goes through the real storage adapter (browser/worker.ts `deletePath`).
+ */
+async function deleteEntry(path: string, view: ViewName): Promise<void> {
+  const reply = await send({ type: "deletePath", path, ...(view === "opfs" ? { of: "origin" } : {}) });
+  if (reply.confirm) askConfirmation(reply.confirm, () => void refreshViews());
+  else line(failure(reply), "refused");
+}
+
+/** The per-row delete control: files only, real input, one confirmation gate. */
+function appendDeleteControl(item: HTMLLIElement, kind: string, childPath: string, view: ViewName, projectRoot: string | null): void {
+  if (kind === "directory") return;
+  // A DOTFILE IS NOT OFFERED THIS EITHER: the verbs refuse dotfiles by name (`dotfile-refused`) and
+  // the listing hides them — the explorer shows them, so the control must not pretend they can go.
+  if (childPath.split("/").pop()?.startsWith(".")) return;
+  // The server panel is the SERVER's authority over its root: the room lists that same root and
+  // offers the delete there; this page has no handle on a machine folder and does not pretend to.
+  if (view === "server") return;
+  // The OPFS view lists the whole origin; only entries inside the OPEN PROJECT are this page's to
+  // delete. An entry outside it gets no control — an absence, not a button that promises a refusal.
+  if (view === "opfs" && !(projectRoot && (childPath === projectRoot || childPath.startsWith(`${projectRoot}/`)))) return;
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "delete entry-delete";
+  remove.dataset.path = childPath;
+  remove.textContent = "Delete";
+  remove.addEventListener("click", (event) => {
+    // The row itself navigates directories; a click on Delete must never be a click on the row.
+    event.stopPropagation();
+    void deleteEntry(childPath, view);
+  });
+  item.append(remove);
+}
+
+function askConfirmation(confirm: { id: string; rule: string; why: string; plan: Record<string, any> }, onApproved?: () => void): void {
   const dialog = $("confirm") as HTMLDialogElement;
   const plan = $("confirm-plan");
   plan.textContent = "";
@@ -189,10 +231,15 @@ function askConfirmation(confirm: { id: string; rule: string; why: string; plan:
     if (dialog.open) dialog.close();
     const reply = await send({ type: "answer", confirmId: confirm.id, approved });
     if (reply.answered === "approved") {
-      const card = document.querySelector(`figure.asset[data-name="${CSS.escape(confirm.plan.name)}"]`);
-      if (card) card.remove();
+      if (onApproved) {
+        // The caller redraws the surface it owns (the explorer re-renders the view it deleted from).
+        onApproved();
+      } else {
+        const card = document.querySelector(`figure.asset[data-name="${CSS.escape(confirm.plan.name)}"]`);
+        if (card) card.remove();
+      }
       line(`deleted ${confirm.plan.name} (rule: ${confirm.rule})`, "ok");
-      void renderView("picked");
+      if (!onApproved) void renderView("picked");
     } else {
       line(`kept ${confirm.plan.name} — the confirmation was answered no`, "note");
     }
@@ -308,12 +355,17 @@ async function renderView(view: ViewName): Promise<Reply> {
     const size = document.createElement("span");
     size.className = "size";
     size.textContent = entry.bytes === undefined ? "" : `${entry.bytes} bytes`;
+    // WHICH PATH THIS ROW IS (voicebox-beads-g8y): navigation and deletion both need it, and a row
+    // that cannot say its own path is how a page deletes "a file with this name" from the wrong folder.
+    const childPath = [reply.path, entry.name].filter(Boolean).join("/");
+    item.dataset.path = childPath;
     item.append(name, size);
     item.addEventListener("click", () => {
       // One more bounded listing per level, never a walk: the page asks for the directory the
       // user clicked and nothing else.
-      if (entry.kind === "directory") void renderViewAt(view, [reply.path, entry.name].filter(Boolean).join("/"));
+      if (entry.kind === "directory") void renderViewAt(view, childPath);
     });
+    appendDeleteControl(item, entry.kind, childPath, view, typeof reply.projectRoot === "string" ? reply.projectRoot : null);
     list.appendChild(item);
   }
   if (!(reply.entries ?? []).length) {
@@ -349,10 +401,20 @@ async function renderViewAt(view: ViewName, path: string): Promise<void> {
   for (const entry of reply.entries ?? []) {
     const item = document.createElement("li");
     item.dataset.kind = entry.kind;
+    const childPath = [path, entry.name].join("/");
+    item.dataset.path = childPath;
     const name = document.createElement("span");
     name.className = "name";
     name.textContent = entry.kind === "directory" ? `${entry.name}/` : entry.name;
     item.appendChild(name);
+    // ONE MORE BOUNDED LISTING PER LEVEL, here too: `renderViewAt` rendered the rows but never
+    // wired the click, so the explorer could open a directory once and no further — the file a
+    // person wanted to delete two levels down was unreachable. Found by driving the delete journey.
+    item.addEventListener("click", () => {
+      if (entry.kind === "directory") void renderViewAt(view, childPath);
+    });
+    // A FOLDER IS NOT OFFERED THIS: the bead is about deleting a file, not a tree.
+    appendDeleteControl(item, entry.kind, childPath, view, typeof reply.projectRoot === "string" ? reply.projectRoot : null);
     list.appendChild(item);
   }
   panel.appendChild(list);
