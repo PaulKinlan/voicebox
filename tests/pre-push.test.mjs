@@ -108,11 +108,12 @@ exec '${timeout}' "$@"
     chmodSync(path.join(bin, 'timeout'), 0o755);
     git('add', '.'); git('commit', '-qm', 'fixture'); git('init', '--bare', '-q', remote);
     git('worktree', 'add', '-qb', 'candidate', work);
-    for (const scenario of ['unit-timeout', 'unit-failure', 'live-timeout', 'accept-timeout', 'accept-failure', 'success']) {
-      // 60s, not 15s (voicebox-beads-67b): these six fixture pushes run their real hooks, and
-      // inside the stage's file-parallel npm test they contend with ~40 other suites — 15s was
-      // starved routinely (ETIMEDOUT in-gate, green standalone). The budget is for the machine,
-      // not the mechanism; the mechanism's own assertions are on output, not timing.
+    // FEATURE-BRANCH DESTINATION (voicebox-beads-uadl): the unit lane is the whole gate.
+    // The live/acceptance stages and the gate lock are for LANDINGS; a candidate push must
+    // not queue behind the flock (measured: lanes waited 398s-1058s for locks). Scenarios
+    // that matter here: success is green with NO live/acceptance/lock activity, and a unit
+    // failure/time-out still refuses with the same named shape as ever.
+    for (const scenario of ['unit-timeout', 'unit-failure', 'success']) {
       const result = spawnSync('git', ['push', remote, 'HEAD:refs/heads/candidate'], {
         cwd: work, encoding: 'utf8', timeout: 60000,
         env: { ...cleanEnv, NODE_TEST_CONTEXT: undefined, PATH: `${bin}:${process.env.PATH}`, BD_GIT_HOOK: '1',
@@ -124,38 +125,20 @@ exec '${timeout}' "$@"
       const output = result.stdout + result.stderr;
       assert.match(output, /TEST OUTPUT BEFORE TERMINATION/);
       assert.match(output, /TEST STDERR BEFORE TERMINATION/);
+      assert.doesNotMatch(output, /LIVE OUTPUT BEFORE TERMINATION/, 'the live lane must not run for a feature-branch push');
+      assert.doesNotMatch(output, /ACCEPTANCE OUTPUT/, 'acceptance must not run for a feature-branch push');
+      assert.doesNotMatch(output, /Acquired gate lock|Waiting for gate lock/, 'a feature-branch push must not queue on the gate lock');
       if (scenario === 'success') {
         assert.equal(result.status, 0, output);
-        assert.match(output, /ALL GATES GREEN/);
+        assert.match(output, /ALL GATES GREEN \(unit\)/);
+        assert.match(output, /feature-branch push — unit lane is the gate/, 'the fast path names itself on the way out');
+        assert.equal(existsSync(path.join(dir, 'fixture-gate.lock')), false, 'the gate lock file must never be created by a feature-branch push');
         continue;
       }
       assert.notEqual(result.status, 0, output);
-      const stage = scenario.startsWith('unit') ? 'unit' : scenario.startsWith('live') ? 'live' : 'acceptance';
-      const budgets = { unit: 90, live: 400, acceptance: 45 };
-      const remedyVars = { unit: 'VOICEBOX_GATE_UNIT_SECS', live: 'VOICEBOX_GATE_LIVE_SECS', acceptance: 'VOICEBOX_GATE_ACCEPT_SECS' };
       const cause = scenario.endsWith('timeout') ? 'TIMED OUT' : 'FAILED';
-      assert.match(output, new RegExp(`REFUSED: ${stage} .* — ${cause}`));
-      if (scenario.endsWith('timeout')) {
-        const timeoutMatch = output.match(/TIMED OUT — budget (\d+)s, elapsed (\d+)s \(exit 124\)/);
-        assert.ok(timeoutMatch, `timeout refusal must state both budget and elapsed time: ${output}`);
-        const budget = Number(timeoutMatch[1]);
-        const elapsed = Number(timeoutMatch[2]);
-        const expectedBudget = budgets[stage];
-        assert.equal(budget, expectedBudget, `budget must match configured value: ${budget} vs ${expectedBudget}`);
-        assert.notEqual(elapsed, budget, `elapsed (${elapsed}s) must not echo the budget claim (${budget}s)`);
-        assert.ok(elapsed >= 1 && elapsed <= 10, `elapsed (${elapsed}s) must reflect actual measured execution time (~2s)`);
-        const expectedVar = remedyVars[stage];
-        assert.match(output, new RegExp(`re-run when the box is quieter, or raise the budget with ${expectedVar}=<n>`));
-      }
-      if (cause === 'FAILED') assert.doesNotMatch(output, /TIMED OUT/);
-      if (scenario.startsWith('live') || stage === 'acceptance') assert.match(output, /LIVE OUTPUT BEFORE TERMINATION/);
-      if (stage !== 'acceptance') assert.doesNotMatch(output, /ACCEPTANCE OUTPUT/);
-      else {
-        assert.match(output, /ACCEPTANCE OUTPUT BEFORE TERMINATION/);
-        assert.match(output, /ACCEPTANCE STDERR BEFORE TERMINATION/);
-      }
+      assert.match(output, new RegExp(`REFUSED: unit .* — ${cause}`));
       if (scenario === 'unit-failure') assert.match(output, /deliberate arithmetic assertion/);
-      if (scenario === 'accept-failure') assert.match(output, /fetch failed \(ECONNREFUSED\)/);
       assert.equal(spawnSync('git', ['--git-dir', remote, 'show-ref', '--verify', '--quiet', 'refs/heads/candidate'], { env: cleanEnv }).status, 1);
     }
 
@@ -178,6 +161,62 @@ exec '${timeout}' "$@"
     assert.equal(
       spawnSync('git', ['--git-dir', remote, 'show-ref', '--verify', '--quiet', 'refs/heads/main'], { env: cleanEnv }).status, 1,
       'main was not created on the remote',
+    );
+
+    /**
+     * MAIN DESTINATION (voicebox-beads-uadl): a landing runs the FULL gate — unit, the
+     * gate-locked live lane, and acceptance. The push comes FROM a main checkout (the 85w
+     * refusal above is what stops a branch aiming at main), and the timeout/failure
+     * scenarios live here because these are the stages a feature push no longer runs.
+     */
+    execFileSync('git', ['checkout', '-qb', 'main'], { cwd: work, stdio: 'pipe', env: cleanEnv });
+    for (const scenario of ['live-timeout', 'accept-timeout', 'accept-failure', 'success']) {
+      const result = spawnSync('git', ['push', remote, 'HEAD:refs/heads/main'], {
+        cwd: work, encoding: 'utf8', timeout: 60000,
+        env: { ...cleanEnv, NODE_TEST_CONTEXT: undefined, PATH: `${bin}:${process.env.PATH}`, BD_GIT_HOOK: '1',
+          VOICEBOX_SKIP_GATE: '', VOICEBOX_SKIP_ACCEPT: '', GATE_CASE: scenario,
+          VOICEBOX_GATE_LOCK: path.join(dir, 'fixture-gate.lock'),
+          VOICEBOX_GATE_HOLDER: path.join(dir, 'fixture-gate.holder.json') },
+      });
+      assert.ifError(result.error);
+      const output = result.stdout + result.stderr;
+      const stage = scenario.startsWith('live') ? 'live' : 'acceptance';
+      const budgets = { live: 400, acceptance: 45 };
+      const remedyVars = { live: 'VOICEBOX_GATE_LIVE_SECS', acceptance: 'VOICEBOX_GATE_ACCEPT_SECS' };
+      const cause = scenario.endsWith('timeout') ? 'TIMED OUT' : 'FAILED';
+      // An UNCONTENDED lock acquires silently (the wait announcement is the contended branch);
+      // the lock file's existence is the evidence the landing took the gate lock.
+      assert.equal(existsSync(path.join(dir, 'fixture-gate.lock')), true, 'a landing to main takes the gate lock');
+      assert.match(output, /LIVE OUTPUT BEFORE TERMINATION/);
+      if (scenario === 'success') {
+        assert.equal(result.status, 0, output);
+        assert.match(output, /ALL GATES GREEN/);
+        assert.match(output, /ACCEPTANCE OUTPUT BEFORE TERMINATION/);
+        assert.match(output, /ACCEPTANCE STDERR BEFORE TERMINATION/);
+        continue;
+      }
+      assert.notEqual(result.status, 0, output);
+      assert.match(output, new RegExp(`REFUSED: ${stage} .* — ${cause}`));
+      if (scenario.endsWith('timeout')) {
+        const timeoutMatch = output.match(/TIMED OUT — budget (\d+)s, elapsed (\d+)s \(exit 124\)/);
+        assert.ok(timeoutMatch, `timeout refusal must state both budget and elapsed time: ${output}`);
+        const budget = Number(timeoutMatch[1]);
+        const elapsed = Number(timeoutMatch[2]);
+        assert.equal(budget, budgets[stage], `budget must match configured value: ${budget} vs ${budgets[stage]}`);
+        assert.notEqual(elapsed, budget, `elapsed (${elapsed}s) must not echo the budget claim (${budget}s)`);
+        assert.ok(elapsed >= 1 && elapsed <= 10, `elapsed (${elapsed}s) must reflect actual measured execution time (~2s)`);
+        assert.match(output, new RegExp(`re-run when the box is quieter, or raise the budget with ${remedyVars[stage]}=<n>`));
+      }
+      if (cause === 'FAILED') assert.doesNotMatch(output, /TIMED OUT/);
+      if (stage === 'acceptance') {
+        assert.match(output, /ACCEPTANCE OUTPUT BEFORE TERMINATION/);
+        assert.match(output, /ACCEPTANCE STDERR BEFORE TERMINATION/);
+        if (scenario === 'accept-failure') assert.match(output, /fetch failed \(ECONNREFUSED\)/);
+      }
+    }
+    assert.equal(
+      spawnSync('git', ['--git-dir', remote, 'show-ref', '--verify', '--quiet', 'refs/heads/main'], { env: cleanEnv }).status, 0,
+      'the landing to main succeeded and main exists on the remote',
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });

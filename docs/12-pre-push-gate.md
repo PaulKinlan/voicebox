@@ -1,6 +1,12 @@
 # Pre-push gate: budgets and refusal causes
 
-The tracked hook runs the test suite in **two lanes**, then `npm run accept`:
+The tracked hook runs the test suite in **two lanes**, then `npm run accept` — **for a push
+to main**. A push to any other branch runs `docs-touched` + the `unit` lane only and exits:
+the gate lock and the live/acceptance stages protect LANDINGS, and a candidate push is an
+announcement, not a landing (`voicebox-beads-uadl`). Measured without the split: five lanes
+pushing candidates serialized behind one flock, with waits of 398s-1058s before the live
+stage even started. A push whose destination cannot be read (direct script runs, exotic
+transports) keeps the full gate — an unseen destination might be a landing.
 
 ## A push aimed at main from a branch (2026-09-24, `voicebox-beads-85w`)
 

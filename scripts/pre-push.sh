@@ -1,6 +1,9 @@
 #!/usr/bin/env sh
 # scripts/pre-push.sh — Voicebox pre-push gate (voicebox-beads-99l)
-# Runs full unit/integration test glob + page acceptance harness before push with bounded timeouts.
+# Scoped by destination (voicebox-beads-uadl):
+#   push to main/master  → docs-touched + unit + (gate-locked) live + acceptance
+#   push to any branch   → docs-touched + unit only; live/acceptance run on the landing
+# A push with no destination information keeps the full gate. Bounded timeouts throughout.
 
 set -e
 
@@ -26,9 +29,13 @@ _current_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo "")
 # the refusal exits THIS shell rather than a pipeline subshell.
 _refs_file="$(mktemp)"
 if [ -n "${VOICEBOX_PUSH_DESTINATIONS:-}" ]; then printf '%s' "$VOICEBOX_PUSH_DESTINATIONS" > "$_refs_file"; else cat > "$_refs_file" 2>/dev/null || true; fi
+_destination_is_main=0
+_had_destination=0
 while read -r _local_ref _local_sha _remote_ref _remote_sha; do
+  _had_destination=1
   case "$_remote_ref" in
     refs/heads/main|refs/heads/master)
+      _destination_is_main=1
       if [ "$_current_branch" != "main" ] && [ "$_current_branch" != "master" ]; then
         echo >&2 "[gate] pre-push REFUSED: non-main branch attempting to push to main ref"
         echo >&2 "[gate]   checked-out branch: ${_current_branch:-(detached HEAD)}  local ref offered: ${_local_ref:-?}  destination: ${_remote_ref}"
@@ -151,6 +158,19 @@ run_stage docs-touched "$_docs_secs" node scripts/docs-touched.mjs
 
 node scripts/test-lanes.mjs --check
 run_stage unit "$_unit_secs" npm run test:unit
+
+# ── SCOPE: the lock and the long stages protect LANDINGS (voicebox-beads-uadl) ──
+# A feature-branch push is a candidate announcement: the unit lane (fast, lock-free) is
+# the verdict a lane needs, and live/acceptance run when the branch LANDS to main. Without
+# this split, five lanes pushing candidates serialized behind one flock — measured waits of
+# 398s, 543s, 857s and 1058s for locks before the live stage even started. A push with NO
+# destination information (direct script runs, exotic transports) keeps the FULL gate: an
+# unseen destination might be a landing, and the conservative answer is the old behaviour.
+if [ "$_had_destination" = "1" ] && [ "$_destination_is_main" != "1" ]; then
+  echo "[gate] pre-push: feature-branch push — unit lane is the gate; live/acceptance run on the landing to main"
+  echo "[gate] pre-push: ALL GATES GREEN (unit)"
+  exit 0
+fi
 
 # ── GATE LOCK (voicebox-beads-6qu) ──────────────────────────────────────────
 # Serializes live browser test runs across concurrent lanes on this loaded box.
