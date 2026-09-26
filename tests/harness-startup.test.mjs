@@ -3,7 +3,7 @@
 // injected, so these tests need no installed adapter and no browser.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateHarnessAgents, renderHarnessTable } from "../lib/harness-startup.mjs";
+import { validateHarnessAgents, renderHarnessTable, describeAgentAdmission } from "../lib/harness-startup.mjs";
 import { createAgentRegistry } from "../lib/harness-config.mjs";
 
 function registryWith(agents) {
@@ -129,4 +129,37 @@ test("rows carry the secret-free projection only — no raw config escapes", () 
   for (const forbidden of ["token", "apiKey", "api_key", "secret", "password"]) {
     assert.equal(keys.some((k) => k.toLowerCase().includes(forbidden)), false, `projection must not carry ${forbidden}`);
   }
+});
+
+test("describeAgentAdmission marks non-local environments as 'not-judged-here' (voicebox-beads-ufo)", () => {
+  const browserAgent = {
+    id: "agent_browser_default",
+    name: "Browser Agent",
+    harness: "browser-worker",
+    adapter: "in-process",
+    environmentKey: "browser",
+  };
+  const verdict = describeAgentAdmission(browserAgent, {
+    describeAdapter: () => ({ ok: true }),
+    implementedAdapters: new Set(["pi-acp"]),
+    hostEnvironment: "local",
+  });
+  assert.equal(verdict.admitted, false);
+  assert.equal(verdict.refused, "not-judged-here");
+  assert.match(verdict.why, /not judged on this host/);
+  assert.match(verdict.why, /environment 'browser'/);
+});
+
+test("renderHarnessTable renders NOT JUDGED for unjudged non-local rows (voicebox-beads-ufo)", () => {
+  const rows = [
+    {
+      agent: { id: "agent_browser_default", adapter: "in-process" },
+      projection: { name: "Browser Agent" },
+      admitted: false,
+      refused: "not-judged-here",
+      why: "Admission for environment 'browser' is not judged on this host.",
+    },
+  ];
+  const lines = renderHarnessTable(rows, { environment: "local" });
+  assert.match(lines.join("\n"), /NOT JUDGED  Browser Agent \(agent_browser_default\) — Admission for environment 'browser' is not judged on this host\./);
 });

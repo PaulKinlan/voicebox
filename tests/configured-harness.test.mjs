@@ -208,6 +208,14 @@ test("multi-harness coexistence: pi selected, a claude-adapter agent configured 
   assert.equal(claudeRow.admission.admitted, false);
   assert.equal(claudeRow.admission.refused, "adapter-not-configured");
 
+  // Non-local environment agent (browser) is marked 'not-judged-here' (voicebox-beads-ufo)
+  const browserRow = byId["agent_browser_default"];
+  if (browserRow) {
+    assert.equal(browserRow.admission.admitted, false);
+    assert.equal(browserRow.admission.refused, "not-judged-here");
+    assert.match(browserRow.admission.why, /not judged on this host/);
+  }
+
   // Delegating to the claude agent refuses BY NAME at admission — the pi path is untouched.
   const refused = await freshExecute(base, owner, "delegate_task", {
     agent: "agent_claude_reviewer",
