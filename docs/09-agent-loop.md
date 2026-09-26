@@ -14,7 +14,7 @@ Two doors, two paths:
 - the **composer** in the page (typed, or sent from the picture-in-picture window) — lands on **`POST /api/turn`**, which carries **`{ transcript }`** and returns the action and execution result;
 - the **live voice session** (`/live`), which streams PCM audio back and forth with the model (Gemini Live or OpenAI Realtime). When the live model requests an action, its tool calls (`toolCall`) are mapped via `commandToAction()` directly into the shared executor on the server, and tool responses stream back to the model over the socket.
 
-A typed turn on `POST /api/turn` takes one string and nothing else:
+A turn on `POST /api/turn` takes `{ transcript }` (resolved via `lib/resolver.mjs`), or optionally a direct schema-validated action `{ action: { verb, ... } }` from the allow-listed command catalogue (`COMMAND_VERBS`). An unknown verb refuses `unknown-command`, and any caller-supplied `turn` index is ignored to protect audit integrity:
 
 ```json
 { "transcript": "create a file called hello.txt with hi",

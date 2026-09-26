@@ -53,7 +53,7 @@ import {
 } from "./lib/fleet.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
 import { createLiveSession, LIVE_MODEL, inputRateRequiredBy } from "./lib/live-session.mjs";
-import { commandToAction, functionDeclarations, liveSystemInstruction } from "./lib/commands.mjs";
+import { COMMAND_VERBS, commandToAction, functionDeclarations, liveSystemInstruction } from "./lib/commands.mjs";
 import { readProjectInstruction } from "./lib/project-instruction.mjs";
 import { installColorConsole } from "./lib/logger.mjs";
 // The state directories have ONE owner; this file no longer computes its own copy of any of them
@@ -1612,7 +1612,7 @@ async function execute(action) {
       for (const line of lines) {
         if (line.startsWith("## ")) {
           const header = line.slice(3).trim();
-          const match = header.match(/^([^\s.]+)(?:\.\.\.([^\s]+))?(?:\s+\[(?:ahead\s+(\d+))?(?:,\s*)?(?:behind\s+(\d+))?\])?/);
+          const match = header.match(/^([^\s]+?)(?:\.\.\.([^\s]+))?(?:\s+\[(?:ahead\s+(\d+))?(?:,\s*)?(?:behind\s+(\d+))?\])?$/);
           if (match) {
             branch = match[1];
             upstream = match[2] ?? null;
@@ -1623,9 +1623,12 @@ async function execute(action) {
           }
         } else if (line.length >= 4) {
           const x = line[0];
-          const path = line.slice(3).trim();
-          if (path.startsWith(".audit/") || path === ".audit") continue;
-          files.push({ path, staged: x !== " " && x !== "?", status: line.slice(0, 2).trim() });
+          let filePath = line.slice(3).trim();
+          if (filePath.startsWith(".audit/") || filePath === ".audit") continue;
+          if (filePath.includes(" -> ")) {
+            filePath = filePath.split(" -> ").pop().trim();
+          }
+          files.push({ path: filePath, staged: x !== " " && x !== "?", status: line.slice(0, 2).trim() });
         }
       }
 
@@ -2837,19 +2840,37 @@ async function handle(req, res) {
       try {
         parsed = JSON.parse(body);
       } catch {
-        return json(res, 400, { error: "body must be JSON" });
+        return json(res, 400, { ok: false, error: "body must be JSON" });
       }
-      let transcript = String(parsed.transcript ?? "").trim();
-      let action = parsed.action ?? null;
-      if (!action && !transcript) return json(res, 400, { error: "empty transcript or action required" });
-      if (!action) {
+      let transcript = typeof parsed.transcript === "string" ? parsed.transcript.trim() : "";
+      let action = null;
+
+      if (parsed.action != null) {
+        if (typeof parsed.action !== "object" || parsed.action === null || Array.isArray(parsed.action)) {
+          return json(res, 400, { ok: false, refused: "bad-request", error: "refused: bad-request", why: "action must be an object with a verb" });
+        }
+        const verb = parsed.action.verb;
+        if (typeof verb !== "string" || !COMMAND_VERBS.has(verb)) {
+          return json(res, 400, {
+            ok: false,
+            refused: "unknown-command",
+            error: "refused: unknown-command",
+            why: `'${String(verb ?? "")}' is not a recognised command (${[...COMMAND_VERBS].sort().join(", ")})`,
+          });
+        }
+        action = { ...parsed.action };
+        delete action.turn;
+      } else {
+        if (!transcript) return json(res, 400, { ok: false, error: "empty transcript or action required" });
         action = await resolveTurn(transcript, PROVIDER);
+        if (action.unresolved) {
+          return json(res, 200, { transcript, action: null, note: action.unresolved });
+        }
+        delete action.turn;
       }
-      if (action.unresolved) {
-        return json(res, 200, { transcript, action: null, note: action.unresolved });
-      }
+
       const executionResult = await execute(action);
-      const responsePayload = { transcript, action, result: executionResult };
+      const responsePayload = { transcript: transcript || `(action: ${action.verb})`, action, result: executionResult };
       if (executionResult?.task) {
         responsePayload.task = executionResult.task;
       }

@@ -70,7 +70,7 @@ const declareRoot = (project, rootPath) =>
     body: JSON.stringify({ project, root: { kind: "machine", path: rootPath } }),
   }).then((r) => r.json());
 
-test("git_status: clean state, dirty modified file, and untracked file", async () => {
+test("git_status: clean state, dirty modified file, rename, and dotted branch", async () => {
   await declareRoot("git-test", repoDir);
 
   // 1. Clean status
@@ -80,18 +80,31 @@ test("git_status: clean state, dirty modified file, and untracked file", async (
   assert.equal(clean.result?.dirty, false);
   assert.deepEqual(clean.result?.files, []);
 
-  // 2. Modify tracked file and add untracked file
+  // 2. Dotted branch name (release/1.2) must not truncate at the dot
+  execFileSync("git", ["checkout", "-qb", "release/1.2"], { cwd: repoDir, env: gitEnv() });
+  const branchStatus = await turn("git status");
+  assert.equal(branchStatus.result?.branch, "release/1.2", "dotted branch name must not truncate at dot");
+
+  // 3. Modify tracked file, add untracked file, and rename a file
   writeFileSync(path.join(repoDir, "tracked.txt"), "line 1\nline 2\n");
+  writeFileSync(path.join(repoDir, "to-rename.txt"), "rename me\n");
+  execFileSync("git", ["add", "to-rename.txt"], { cwd: repoDir, env: gitEnv() });
+  execFileSync("git", ["commit", "-qm", "add to-rename"], { cwd: repoDir, env: gitEnv() });
+  execFileSync("git", ["mv", "to-rename.txt", "renamed.txt"], { cwd: repoDir, env: gitEnv() });
   writeFileSync(path.join(repoDir, "new-untracked.txt"), "hello world\n");
 
   const dirty = await turn("git status");
   assert.equal(dirty.result?.ok, true);
   assert.equal(dirty.result?.dirty, true);
-  assert.equal(dirty.result?.files?.length, 2);
-  const trackedFile = dirty.result?.files?.find((f) => f.path.includes("tracked.txt"));
-  const untrackedFile = dirty.result?.files?.find((f) => f.path.includes("new-untracked.txt"));
+  const trackedFile = dirty.result?.files?.find((f) => f.path === "tracked.txt");
+  const untrackedFile = dirty.result?.files?.find((f) => f.path === "new-untracked.txt");
+  const renamedFile = dirty.result?.files?.find((f) => f.path === "renamed.txt");
   assert.ok(trackedFile, "tracked file must be listed in status");
   assert.ok(untrackedFile, "untracked file must be listed in status");
+  assert.ok(renamedFile, "renamed file must report target path, not old -> new");
+
+  // Switch back to main
+  execFileSync("git", ["checkout", "-q", "main"], { cwd: repoDir, env: gitEnv() });
 });
 
 test("git_diff: unstaged diff, staged diff, and file-scoped diff", async () => {
@@ -158,6 +171,47 @@ test("not-a-git-repo: refuses git tools when project root is not a git repositor
   const log = await turn("git log");
   assert.equal(log.result?.ok, false);
   assert.equal(log.result?.refused, "not-a-git-repo");
+});
+
+test("POST /api/turn {action} validation: unknown command refused and forged turn stripped", async () => {
+  await declareRoot("git-test", repoDir);
+
+  // 1. Unknown verb -> 400 unknown-command
+  const unknownRes = await fetch(`${BASE}/api/turn`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: { verb: "nonexistent_command" } }),
+  });
+  assert.equal(unknownRes.status, 400);
+  const unknownJson = await unknownRes.json();
+  assert.equal(unknownJson.refused, "unknown-command");
+  assert.match(unknownJson.why, /nonexistent_command/);
+
+  // 2. Malformed action -> 400 bad-request
+  const malformedRes = await fetch(`${BASE}/api/turn`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "not an object" }),
+  });
+  assert.equal(malformedRes.status, 400);
+  const malformedJson = await malformedRes.json();
+  assert.equal(malformedJson.refused, "bad-request");
+
+  // 3. Forged turn index ignored and stripped
+  const forgedRes = await fetch(`${BASE}/api/turn`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: { verb: "git_status", turn: 424242 } }),
+  });
+  assert.equal(forgedRes.status, 200);
+  const forgedJson = await forgedRes.json();
+  assert.equal(forgedJson.result?.ok, true);
+
+  // Verify the audit log does NOT carry turn 424242
+  const auditRes = await fetch(`${BASE}/api/audit`).then((r) => r.json());
+  const entry = (auditRes.entries ?? []).find((e) => e.act?.kind === "git_status");
+  assert.ok(entry, "audit must have git_status entry");
+  assert.notEqual(entry.turn, 424242, "caller cannot forge turn index in audit log");
 });
 
 test("inspect_environment: returns underlying machine platform, runtime, limits, and tools", async () => {
