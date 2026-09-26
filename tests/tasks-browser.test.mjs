@@ -8,6 +8,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
+import { gitEnv } from "../lib/git-env.mjs";
 import { launch } from "./lib/cdp.mjs";
 import { taskFixture } from "./lib/task-fixture.mjs";
 
@@ -125,8 +126,8 @@ test("D1 browser: handle first, unrelated live transport/text turn, independent 
 
     fs.writeFileSync(path.join(output, "browser-receipt.json"), JSON.stringify({
       scope: "author real-browser/HTTP/process acceptance with closed host and voice fixtures; not ACP, real-model, ASR or D8 UI acceptance",
-      base: execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).trim(),
-      dirty: Boolean(execFileSync("git", ["status", "--porcelain"], { cwd: ROOT, encoding: "utf8" }).trim()),
+      base: execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, env: gitEnv(), encoding: "utf8" }).trim(),
+      dirty: Boolean(execFileSync("git", ["status", "--porcelain"], { cwd: ROOT, env: gitEnv(), encoding: "utf8" }).trim()),
       acceptedState: accepted.task.state, midTaskState: held.task.state,
       cdpObservedAudioReply: audioReply, productCaptionMissing, unrelatedLiveText: liveText, nativeTextFormCompleted: true,
       reloadState: reloaded.task.state, independentBrowserState: independent.task.state,
