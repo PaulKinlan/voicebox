@@ -396,3 +396,60 @@ test("MBK: invalid concurrency env values refuse bounds-invalid by name (voicebo
     else delete process.env.VOICEBOX_WASM_MAX_QUEUE_SIZE;
   }
 });
+
+test("MBK S1: queued wasm calls drain in order as active workers complete", async (t) => {
+  if (needsShelf(t)) return;
+  const { callWasmTool, descriptorFor, readShelf, _resetWasmWorkerStateForTest, wasmWorkerConcurrency } = await import("../lib/wasm-shelf.mjs");
+  const shelfOut = readShelf(shelf);
+  const descriptor = descriptorFor(shelfOut.tools.find((x) => x.id === "hash"));
+  const tool = descriptor.tools[0];
+
+  const prevMax = process.env.VOICEBOX_WASM_MAX_CONCURRENT_WORKERS;
+  const prevQueue = process.env.VOICEBOX_WASM_MAX_QUEUE_SIZE;
+  // Cap at 1 active worker, 2 queued
+  process.env.VOICEBOX_WASM_MAX_CONCURRENT_WORKERS = "1";
+  process.env.VOICEBOX_WASM_MAX_QUEUE_SIZE = "2";
+  _resetWasmWorkerStateForTest();
+
+  try {
+    const p1 = callWasmTool(tool, { input: "item-1" });
+    const p2 = callWasmTool(tool, { input: "item-2" });
+    const p3 = callWasmTool(tool, { input: "item-3" });
+    // 4th call exceeds maxQueue of 2, so it immediately refuses over-budget
+    const p4 = callWasmTool(tool, { input: "item-4" });
+
+    const r4 = await p4;
+    assert.equal(r4.ok, false);
+    assert.equal(r4.refused, "over-budget");
+
+    const [r1, r2, r3] = await Promise.all([p1, p2, p3]);
+    assert.equal(r1.ok, true);
+    assert.equal(r2.ok, true);
+    assert.equal(r3.ok, true);
+
+    const status = wasmWorkerConcurrency();
+    assert.equal(status.active, 0, "active workers must drain to 0");
+    assert.equal(status.queued, 0, "queue must drain to 0");
+  } finally {
+    if (prevMax !== undefined) process.env.VOICEBOX_WASM_MAX_CONCURRENT_WORKERS = prevMax;
+    else delete process.env.VOICEBOX_WASM_MAX_CONCURRENT_WORKERS;
+    if (prevQueue !== undefined) process.env.VOICEBOX_WASM_MAX_QUEUE_SIZE = prevQueue;
+    else delete process.env.VOICEBOX_WASM_MAX_QUEUE_SIZE;
+    _resetWasmWorkerStateForTest();
+  }
+});
+
+test("MBK S2: releaseWorkerSlot asserts activeWorkers > 0 and prevents double-release underflow", async (t) => {
+  if (needsShelf(t)) return;
+  const { callWasmTool, descriptorFor, readShelf, _resetWasmWorkerStateForTest, wasmWorkerConcurrency } = await import("../lib/wasm-shelf.mjs");
+  const shelfOut = readShelf(shelf);
+  const descriptor = descriptorFor(shelfOut.tools.find((x) => x.id === "hash"));
+  const tool = descriptor.tools[0];
+
+  _resetWasmWorkerStateForTest();
+  const res = await callWasmTool(tool, { input: "exact-release" });
+  assert.equal(res.ok, true);
+
+  const status = wasmWorkerConcurrency();
+  assert.equal(status.active, 0, "exactly one worker released, active is exactly 0");
+});

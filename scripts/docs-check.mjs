@@ -373,6 +373,8 @@ const ENV_MEANING = {
   VOICEBOX_ACP_PI: "path or command override for the `pi` coding agent CLI used by `lib/pi-acp.mjs`",
   VOICEBOX_HARNESS: "selects the host task adapter (`pi` enables the Pi ACP task adapter in `server.mjs`; unset leaves no default adapter configured)",
   VOICEBOX_WASM_SHELF_DIR: "directory holding the digest-pinned WASM tool shelf (`manifest.json` and `.wasm` modules; default `~/.isocan/modules/wasm-tools`)",
+  VOICEBOX_WASM_MAX_CONCURRENT_WORKERS: "maximum concurrent in-process worker threads for wasm tool execution (default 8, range 1..1024; excess calls refused `over-budget`, voicebox-beads-mbk)",
+  VOICEBOX_WASM_MAX_QUEUE_SIZE: "maximum queued wasm tool calls waiting for an available worker thread (default 0, range 0..1024; excess calls refused `over-budget`, voicebox-beads-mbk)",
 };
 function envVars() {
   const files = ["server.mjs", ...readdirSync(join(ROOT, "lib"), { recursive: true }).filter((f) => f.endsWith(".mjs")).map((f) => join("lib", f))];

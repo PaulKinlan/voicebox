@@ -198,8 +198,8 @@ Every environment variable the server and its libraries read, and where:
 | `VOICEBOX_PROVIDER` | `server.mjs` | the OLD NAME of `VOICEBOX_RESOLVER`, honoured for one release: a shell that exports it keeps working and gets a line on stderr |
 | `VOICEBOX_RESOLVER` | `server.mjs` | which TURN resolver answers `POST /api/turn` (default `script`) — **not** the live provider, which is a different concept |
 | `VOICEBOX_SANDBOX_HOMES` | `lib/state-dirs.mjs` | where a fence's writable home is bound from (default `~/sandbox-homes/<key>`) — the one place a fenced environment may write. Must live OUTSIDE /tmp: an L1.5 unit's PrivateTmp hides /tmp in its namespace and a home there fails to bind (status 226/NAMESPACE) |
-| `VOICEBOX_WASM_MAX_CONCURRENT_WORKERS` | `lib/wasm-shelf.mjs` | (undocumented — add a line to ENV_MEANING in scripts/docs-check.mjs) |
-| `VOICEBOX_WASM_MAX_QUEUE_SIZE` | `lib/wasm-shelf.mjs` | (undocumented — add a line to ENV_MEANING in scripts/docs-check.mjs) |
+| `VOICEBOX_WASM_MAX_CONCURRENT_WORKERS` | `lib/wasm-shelf.mjs` | maximum concurrent in-process worker threads for wasm tool execution (default 8, range 1..1024; excess calls refused `over-budget`, voicebox-beads-mbk) |
+| `VOICEBOX_WASM_MAX_QUEUE_SIZE` | `lib/wasm-shelf.mjs` | maximum queued wasm tool calls waiting for an available worker thread (default 0, range 0..1024; excess calls refused `over-budget`, voicebox-beads-mbk) |
 | `VOICEBOX_WASM_SHELF_DIR` | `lib/state-dirs.mjs` | directory holding the digest-pinned WASM tool shelf (`manifest.json` and `.wasm` modules; default `~/.isocan/modules/wasm-tools`) |
 | `VOICEBOX_WORKSPACE` | `lib/state-dirs.mjs` | declares a machine root at boot — a decision, not a default — and is where the extension system keeps `proposals/` and `audit.jsonl` |
 <!-- END GENERATED: config -->
