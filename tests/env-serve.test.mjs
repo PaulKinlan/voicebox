@@ -16,15 +16,17 @@ import { startServer } from "./lib/server.mjs";
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const ENV_SERVE = path.join(ROOT, "tools", "env-serve.mjs");
 
-/** Spawn env-serve as the environment would run it: its own HOME, its own port, no shared state. */
-async function spawnEnvironment(t) {
+/** Spawn env-serve as the environment would run it: its own HOME, its own port, no shared state.
+ *  voicebox-beads-pehr: the fixture boots PAIRED — minted a bearer the same way the fence's boot
+ *  channel would carry it. An unpaired boot (bearer: null) is its own case below. */
+async function spawnEnvironment(t, { bearer = "vbx_fixture_bearer_pehr" } = {}) {
   const home = mkdtempSync(path.join(os.tmpdir(), "0vlp-env-home-"));
   mkdirSync(path.join(home, "workspace"), { recursive: true });
   const child = spawn(process.execPath, [ENV_SERVE], {
     cwd: ROOT,
     // XDG_CONFIG_HOME is pinned to the scratch home too: a test must not read or write the
     // caller's git identity while it proves the sandbox owns its own.
-    env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), PORT: "0" },
+    env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), PORT: "0", ...(bearer ? { VOICEBOX_BEARER: bearer } : {}) },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const port = await new Promise((resolve, reject) => {
@@ -38,13 +40,13 @@ async function spawnEnvironment(t) {
     setTimeout(() => reject(new Error("env-serve printed no port")), 30000);
   });
   t.after(() => { try { child.kill("SIGKILL"); } catch { /* already gone */ } rmSync(home, { recursive: true, force: true }); });
-  return { origin: `http://127.0.0.1:${port}`, home };
+  return { origin: `http://127.0.0.1:${port}`, home, bearer };
 }
 
-const ask = async (origin, pathname, body, method = "POST") => {
+const ask = async (origin, pathname, body, method = "POST", bearer = "vbx_fixture_bearer_pehr") => {
   const answer = await fetch(`${origin}${pathname}`, {
     method,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...(bearer ? { authorization: `Bearer ${bearer}` } : {}) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   return { status: answer.status, body: await answer.json() };
@@ -134,6 +136,14 @@ test("the host is the door: local authority is required, the command runs in the
   const door = `${server.base}/api/environments/${key}`;
   const hostHeaders = { "content-type": "application/json", "x-voicebox-host-token": server.hostToken };
 
+  // PAIR first (pehr): the host records the bearer it will use when calling this environment —
+  // the fixture env was booted minted with it, so the door opens for the host and nobody else.
+  const pair = await fetch(`${server.base}/api/pair/complete`, {
+    method: "POST", headers: hostHeaders,
+    body: JSON.stringify({ envKey: key, bearer: env.bearer }),
+  }).then((r) => r.json());
+  assert.equal(pair.ok, true, `pairing the host to the fixture environment: ${JSON.stringify(pair)}`);
+
   // NO authority, no command — the page cannot hand a sandbox a command it does not own.
   const unauthed = await fetch(`${door}/exec`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ command: "echo no" }) });
   assert.equal(unauthed.status, 403);
@@ -155,4 +165,71 @@ test("the host is the door: local authority is required, the command runs in the
   // A key that names nothing is refused by name, not by an empty success.
   const unknown = await fetch(`${server.base}/api/environments/env_0000000000000000/exec`, { method: "POST", headers: hostHeaders, body: JSON.stringify({ command: "echo no" }) }).then((r) => r.json());
   assert.equal(unknown.refused, "unknown-environment");
+});
+
+// ── The door's gate (voicebox-beads-pehr) ────────────────────────────────────────────────
+// The mutating doors (/exec, /git/config POST, /git/init) answer only with the pairing bearer
+// this boot was minted. These tests drive env-serve DIRECTLY (own HOME, own port) so the gate
+// is pinned without a fence, a host, or a boot.
+
+test("the gate: no bearer or a wrong bearer is 403 unauthenticated, and the credential is never echoed", async (t) => {
+  const env = await spawnEnvironment(t);
+
+  const noHeader = await ask(env.origin, "/exec", { argv: ["node", "-p", "1"] }, "POST", null);
+  assert.equal(noHeader.status, 403);
+  assert.equal(noHeader.body.refused, "unauthenticated");
+
+  const wrong = await ask(env.origin, "/exec", { argv: ["node", "-p", "1"] }, "POST", "vbx_wrong_same_length_padding_xx");
+  assert.equal(wrong.status, 403);
+  assert.equal(wrong.body.refused, "unauthenticated");
+  assert.doesNotMatch(wrong.body.why ?? "", /vbx_/, "the credential is never echoed in a refusal");
+
+  // The same gate stands on the git doors, not just /exec — one class, not one route.
+  const gitWrite = await ask(env.origin, "/git/config", { name: "No Auth" }, "POST", null);
+  assert.equal(gitWrite.status, 403);
+  assert.equal(gitWrite.body.refused, "unauthenticated");
+  const gitInit = await ask(env.origin, "/git/init", {}, "POST", "vbx_wrong_same_length_padding_xx");
+  assert.equal(gitInit.status, 403);
+  assert.equal(gitInit.body.refused, "unauthenticated");
+
+  // The open routes stay open without a credential: the boundary report is not the door.
+  const health = await fetch(`${env.origin}/health`).then((r) => r.json());
+  assert.equal(health.ok, true);
+  assert.equal(health.exec, true, "a paired boot names its door open");
+  const gitRead = await ask(env.origin, "/git/config", undefined, "GET", null);
+  assert.equal(gitRead.status, 200);
+});
+
+test("exec-unpaired: a boot minted no bearer keeps every door closed, by name, with the remedy", async (t) => {
+  const env = await spawnEnvironment(t, { bearer: null });
+
+  const health = await fetch(`${env.origin}/health`).then((r) => r.json());
+  assert.equal(health.ok, true, "an unpaired boot still answers its boundary report");
+  assert.equal(health.exec, false, "and names its door closed");
+
+  for (const [path, body] of [["/exec", { argv: ["node", "-p", "1"] }], ["/git/config", { name: "x" }], ["/git/init", {}]]) {
+    const r = await ask(env.origin, path, body, "POST", "vbx_fixture_bearer_pehr");
+    assert.equal(r.status, 403, `${path} refuses on an unpaired boot`);
+    assert.equal(r.body.refused, "exec-unpaired", `${path} names the remedy class`);
+    assert.match(r.body.why, /pair it.*re-boot/s, `${path} says how the door opens`);
+  }
+});
+
+test("the paired door still runs: bearer-carrying exec and git identity work end to end", async (t) => {
+  const env = await spawnEnvironment(t);
+
+  const exec = await ask(env.origin, "/exec", { argv: ["node", "-p", "6*7"] });
+  assert.equal(exec.status, 200);
+  assert.equal(exec.body.ok, true);
+  assert.equal(exec.body.stdout.trim(), "42", "arguments pass to the binary verbatim — no shell");
+
+  const set = await ask(env.origin, "/git/config", { name: "Gate Keeper", email: "gate@example.invalid" });
+  assert.equal(set.body.ok, true);
+  assert.equal(set.body.config.name, "Gate Keeper");
+  const get = await ask(env.origin, "/git/config", undefined, "GET");
+  assert.equal(get.body.config.email, "gate@example.invalid");
+
+  const init = await ask(env.origin, "/git/init", {});
+  assert.equal(init.body.ok, true);
+  assert.equal(existsSync(path.join(env.home, "workspace", ".git")), true, "the repo exists in the sandbox home");
 });
