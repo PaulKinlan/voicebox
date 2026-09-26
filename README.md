@@ -433,6 +433,47 @@ The architecture distinguishes the **runtime** (node, deno, browser), the **conf
 - Browser-local registries run entirely in-browser with zero server dependency.
 - Endpoints: `GET /api/agents`, `POST /api/agents`, `PATCH /api/agents/:id`, and `GET /api/harnesses` (combines host discovery with matching configured agents, feeding D3).
 
+## The sandbox: what bounds an environment, and what deliberately does not
+
+Voicebox's sandbox story is a **measured boundary, never a configured label**. Two rungs are
+built and driven, and both bound **filesystem and processes** while deliberately leaving **the
+network shared**:
+
+- **L1 — the fence** (`tools/fence.sh`): bubblewrap with the system mounts read-only, fresh
+  tmpfs on the writable spots, **one** writable home bound in from the host, and the pid
+  namespace isolated. No root, no daemon, nothing installed.
+- **L1.5 — the composition** (`tools/fence-unit.sh`): the same fence inside a transient
+  `systemd-run --user` unit that adds the kernel half the fence lacks — a seccomp filter, an
+  empty capability set, `ProtectSystem=strict` with the sandbox home as the one writable
+  exception. Units are bounded in time (`VOICEBOX_FENCE_MAX_SEC`, default 1800s) and stopped
+  by name or on server exit, so a forgotten sandbox cannot leak resources forever.
+
+What it does **not** do — stated plainly, because each of these is someone's assumption:
+
+- **The network is shared.** The boundary report says `passes` with the measurement that showed
+  it. Reaching outbound 443 from inside a fence is the design working, not a bug.
+- **Ambient credentials are not fenced.** A process inside reads what its uid can read; the
+  report's credentials axis says exactly this.
+- **A digest binds bytes, never behaviour.** A wasm tool's module is re-verified at admission
+  and at every call, but what those bytes *do* is bounded only by host constants — a call
+  deadline, worker memory limits, a file-read bound. Nothing in a descriptor buys more.
+- **`/tmp` is not a home.** A sandbox home must live outside `/tmp` (`VOICEBOX_SANDBOX_HOMES`,
+  default `~/sandbox-homes/<key>`): the L1.5 unit's PrivateTmp hides `/tmp`, and a home there
+  fails to bind.
+
+**How a level is earned, and how to read a report.** Every axis of a booted environment's
+boundary is **tri-state** — `fenced`, `not-fenced` (with the violations named), `passes`
+(deliberately unbounded), or `not measured` (never read as denied) — and the level (`L1.5`,
+`L1`, `not-earned`, `unmeasured`) is **derived from those measurements, never stamped by a
+caller**. `GET /api/probe` runs the probe **on the environment itself**, unprompted, and caches
+the report at `<workspace>/probe.json` (mode 0600): facts with the method beside them, never
+verdicts — and `false`, `absent` and `refused` are three different words.
+
+The field-by-field reading — what each probe field entitles you to conclude, the proposals
+folder, and where every piece lives — is [`docs/15-sandbox.md`](docs/15-sandbox.md), which
+also carries the standing rule: where this documentation and a live report disagree, **the
+report is the fact and the page has a bug**.
+
 ## The agent loop
 
 Separate from both of those paths, and the thing that actually runs when a turn arrives: the loop from
