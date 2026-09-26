@@ -33,6 +33,7 @@ import {
   unreachable,
 } from "./core/environment.ts";
 import * as extensions from "./lib/extensions.mjs";
+import { gitEnv } from "./tools/tree-dirt.mjs";
 import { sweepOrphanedProbeMarkers } from "./tools/sandbox-probe.mjs";
 import { createTaskHost, installTaskExecutor, protectedAuditPath, TASK_TOOLS } from "./lib/tasks.mjs";
 import { createPermissionPolicy } from "./lib/permission-policy.mjs";
@@ -1466,6 +1467,29 @@ function resolvePublicFile(pathname) {
   }
 }
 
+function isGitRepo(rootPath) {
+  if (!rootPath) return false;
+  try {
+    const res = execFileSync("git", ["-C", rootPath, "rev-parse", "--is-inside-work-tree"], {
+      encoding: "utf8",
+      env: gitEnv(),
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+    return res === "true";
+  } catch {
+    return false;
+  }
+}
+
+function runProjectGit(rootPath, args) {
+  return execFileSync("git", ["-C", rootPath, ...args], {
+    encoding: "utf8",
+    env: gitEnv(),
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 4 * 1024 * 1024,
+  }).trim();
+}
+
 // The executor: the one place that touches the build environment. It grows;
 // the resolver stays the same shape.
 async function execute(action) {
@@ -1563,6 +1587,198 @@ async function execute(action) {
       count: matches.length,
       truncated: matches.length >= MAX_MATCHES,
       root: active.root,
+      logged: entry ? entry.seq : null,
+    };
+  }
+  if (action.verb === "git_status") {
+    if (!isGitRepo(active.root.path)) {
+      return {
+        ok: false,
+        refused: "not-a-git-repo",
+        error: "refused: not-a-git-repo",
+        why: `'${active.project}' is not a git repository`,
+        root: active.root,
+      };
+    }
+    try {
+      const statusOutput = runProjectGit(active.root.path, ["status", "--porcelain=v1", "--branch", "-u"]);
+      const lines = statusOutput.split("\n").filter(Boolean);
+      let branch = "unknown";
+      let upstream = null;
+      let ahead = 0;
+      let behind = 0;
+      const files = [];
+
+      for (const line of lines) {
+        if (line.startsWith("## ")) {
+          const header = line.slice(3).trim();
+          const match = header.match(/^([^\s.]+)(?:\.\.\.([^\s]+))?(?:\s+\[(?:ahead\s+(\d+))?(?:,\s*)?(?:behind\s+(\d+))?\])?/);
+          if (match) {
+            branch = match[1];
+            upstream = match[2] ?? null;
+            ahead = Number(match[3] ?? 0);
+            behind = Number(match[4] ?? 0);
+          } else {
+            branch = header;
+          }
+        } else if (line.length >= 4) {
+          const x = line[0];
+          const path = line.slice(3).trim();
+          if (path.startsWith(".audit/") || path === ".audit") continue;
+          files.push({ path, staged: x !== " " && x !== "?", status: line.slice(0, 2).trim() });
+        }
+      }
+
+      const dirty = files.length > 0;
+      const entry = logAct({ kind: "git_status", target: active.project, tool: "turn" }, "allow", "git-inside", "ok", { branch, filesCount: files.length, dirty }, action.turn ?? null);
+      return {
+        ok: true,
+        action: `git status on ${active.project} (${branch}${dirty ? ", dirty" : ", clean"})`,
+        branch,
+        upstream,
+        ahead,
+        behind,
+        dirty,
+        files,
+        root: active.root,
+        logged: entry ? entry.seq : null,
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        refused: "git-failed",
+        error: "refused: git-failed",
+        why: `git status failed: ${err?.message ?? err}`,
+        root: active.root,
+      };
+    }
+  }
+  if (action.verb === "git_diff") {
+    if (!isGitRepo(active.root.path)) {
+      return {
+        ok: false,
+        refused: "not-a-git-repo",
+        error: "refused: not-a-git-repo",
+        why: `'${active.project}' is not a git repository`,
+        root: active.root,
+      };
+    }
+    const gitArgs = ["diff"];
+    if (action.staged) gitArgs.push("--cached");
+    if (action.file) {
+      const fileTarget = normaliseRelativeDir(action.file);
+      if (!fileTarget.ok) {
+        return { ok: false, refused: fileTarget.refused, why: fileTarget.why, root: active.root };
+      }
+      gitArgs.push("--", fileTarget.dir);
+    }
+    try {
+      const diffOutput = runProjectGit(active.root.path, gitArgs);
+      const entry = logAct({ kind: "git_diff", target: action.file || active.project, tool: "turn" }, "allow", "git-inside", "ok", { bytes: diffOutput.length }, action.turn ?? null);
+      return {
+        ok: true,
+        action: `git diff${action.staged ? " --cached" : ""}${action.file ? ` -- ${action.file}` : ""}`,
+        diff: diffOutput,
+        staged: Boolean(action.staged),
+        file: action.file ?? null,
+        empty: diffOutput.length === 0,
+        root: active.root,
+        logged: entry ? entry.seq : null,
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        refused: "git-failed",
+        error: "refused: git-failed",
+        why: `git diff failed: ${err?.message ?? err}`,
+        root: active.root,
+      };
+    }
+  }
+  if (action.verb === "git_log") {
+    if (!isGitRepo(active.root.path)) {
+      return {
+        ok: false,
+        refused: "not-a-git-repo",
+        error: "refused: not-a-git-repo",
+        why: `'${active.project}' is not a git repository`,
+        root: active.root,
+      };
+    }
+    const limit = Math.min(Math.max(1, Number(action.limit) || 10), 50);
+    try {
+      const logOutput = runProjectGit(active.root.path, ["log", `-n${limit}`, "--format=%H%x1f%an%x1f%aI%x1f%s"]);
+      const commits = logOutput ? logOutput.split("\n").filter(Boolean).map((line) => {
+        const [hash, author, date, message] = line.split("\x1f");
+        return { hash, author, date, message };
+      }) : [];
+      const entry = logAct({ kind: "git_log", target: active.project, tool: "turn" }, "allow", "git-inside", "ok", { count: commits.length }, action.turn ?? null);
+      return {
+        ok: true,
+        action: `git log (${commits.length} commit${commits.length === 1 ? "" : "s"})`,
+        commits,
+        count: commits.length,
+        root: active.root,
+        logged: entry ? entry.seq : null,
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        refused: "git-failed",
+        error: "refused: git-failed",
+        why: `git log failed: ${err?.message ?? err}`,
+        root: active.root,
+      };
+    }
+  }
+  if (action.verb === "inspect_environment") {
+    let report = readProbeCache();
+    if (!report) {
+      try {
+        report = await runProbe();
+        writeProbeCache(report);
+        recordProbeAct(report);
+      } catch (err) {
+        return {
+          ok: false,
+          refused: "probe-failed",
+          error: "refused: probe-failed",
+          why: `environment probe failed: ${err?.message ?? err}`,
+          root: active?.root ?? null,
+        };
+      }
+    }
+    const envSummary = {
+      environment: SELF_ENVIRONMENT,
+      kind: active?.root?.kind ?? "machine",
+      platform: report.identity?.platform ?? `${process.platform} ${os.release()} ${process.arch}`,
+      nodeVersion: report.tools?.node?.value ?? process.version,
+      cwd: active?.root?.path ?? process.cwd(),
+      limits: {
+        cpuCount: report.limits?.cpuCount ?? os.cpus().length,
+        totalMemBytes: report.limits?.totalMemBytes ?? os.totalmem(),
+        freeMemBytes: report.limits?.freeMemBytes ?? os.freemem(),
+      },
+      tools: {
+        git: report.tools?.git?.value ?? null,
+        node: report.tools?.node?.value ?? null,
+        deno: report.tools?.deno?.value ?? null,
+        python3: report.tools?.python3?.value ?? null,
+        bwrap: report.tools?.bwrap?.value ?? null,
+        systemctl: report.tools?.systemctl?.value ?? null,
+      },
+      network: {
+        dns: report.network?.dns?.value ?? null,
+        outboundTcp80: report.network?.outboundTcp80ByName?.ok ?? null,
+      },
+      root: active?.root ?? null,
+    };
+    const entry = logAct({ kind: "inspect_environment", target: SELF_ENVIRONMENT, tool: "turn" }, "allow", "inspect-environment", "ok", { when: report.when }, action.turn ?? null);
+    return {
+      ok: true,
+      action: `inspected environment (${envSummary.platform})`,
+      environment: envSummary,
+      root: active?.root ?? null,
       logged: entry ? entry.seq : null,
     };
   }
@@ -2617,14 +2833,18 @@ async function handle(req, res) {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", () => answerOnce(res, async () => {
-      let transcript = "";
+      let parsed = {};
       try {
-        transcript = String(JSON.parse(body).transcript ?? "").trim();
+        parsed = JSON.parse(body);
       } catch {
-        return json(res, 400, { error: "body must be JSON with a transcript" });
+        return json(res, 400, { error: "body must be JSON" });
       }
-      if (!transcript) return json(res, 400, { error: "empty transcript" });
-      const action = await resolveTurn(transcript, PROVIDER);
+      let transcript = String(parsed.transcript ?? "").trim();
+      let action = parsed.action ?? null;
+      if (!action && !transcript) return json(res, 400, { error: "empty transcript or action required" });
+      if (!action) {
+        action = await resolveTurn(transcript, PROVIDER);
+      }
       if (action.unresolved) {
         return json(res, 200, { transcript, action: null, note: action.unresolved });
       }

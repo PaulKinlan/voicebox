@@ -185,6 +185,22 @@ async function performAct(call: { tool: string; args: Record<string, unknown> },
     }
   }
 
+  if (tool === "git_status" || tool === "git_diff" || tool === "git_log") {
+    return { ok: false as const, refused: "not-supported-in-browser", why: `git operations are not supported in browser-owned roots (${descriptor.kind}) — declare a machine project to use git tools` };
+  }
+
+  if (tool === "inspect_environment") {
+    return {
+      ok: true as const,
+      environment: {
+        kind: descriptor.kind,
+        root: descriptor,
+        platform: "browser",
+      },
+      action: `inspected browser environment (${descriptor.kind})`,
+    };
+  }
+
   // CONTAINMENT, RE-RUN HERE (rule 1): the page resolves against its own descriptor.
   const resolved = resolveInRoot(descriptor, name);
   if (!resolved.ok) {
