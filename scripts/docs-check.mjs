@@ -370,6 +370,8 @@ const ENV_MEANING = {
   NO_COLOR: "standard terminal colour override — when set to a non-empty value, `lib/logger.mjs` strips ANSI colour sequences",
   NODE_DISABLE_COLORS: "Node's built-in colour disable flag — honoured by `lib/logger.mjs` alongside `NO_COLOR`",
   VOICEBOX_ACP_ADAPTER: "path or command override for the `pi-acp` stdio adapter binary in `lib/pi-acp.mjs`",
+  VOICEBOX_CLAUDE_ACP_ADAPTER: "explicit local install of the claude-code ACP adapter package in `lib/claude-acp.mjs` (unset: pi npm-prefix convention, then npx)",
+  VOICEBOX_CLAUDE_KEEP_API_KEY: "set '1' to let the claude-code adapter child inherit ANTHROPIC_API_KEY (default scopes it out — an inherited key overrides the claude.ai login and stalls the prompt)",
   VOICEBOX_ACP_PI: "path or command override for the `pi` coding agent CLI used by `lib/pi-acp.mjs`",
   VOICEBOX_HARNESS: "selects the host task adapter (`pi` enables the Pi ACP task adapter in `server.mjs`; unset leaves no default adapter configured)",
   VOICEBOX_WASM_SHELF_DIR: "directory holding the digest-pinned WASM tool shelf (`manifest.json` and `.wasm` modules; default `~/.isocan/modules/wasm-tools`)",

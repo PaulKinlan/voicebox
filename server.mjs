@@ -37,12 +37,13 @@ import { sweepOrphanedProbeMarkers } from "./tools/sandbox-probe.mjs";
 import { createTaskHost, installTaskExecutor, protectedAuditPath, TASK_TOOLS } from "./lib/tasks.mjs";
 import { createPermissionPolicy } from "./lib/permission-policy.mjs";
 import { createPiAcpExecutor, describeAdapterInstall } from "./lib/pi-acp.mjs";
+import { createClaudeAcpExecutor, describeClaudeAdapterInstall } from "./lib/claude-acp.mjs";
 import { bootFence } from "./lib/fence-provider.mjs";
 import { SOURCE_DIRS } from "./lib/browser-sources.mjs";
 import { bootUnitFence, stopUnitFence } from "./lib/unit-fence-provider.mjs";
 import { createHarnessInventory } from "./lib/harness-inventory.mjs";
 import { createAgentRegistry, listHarnessesWithConfiguredAgents, publicAgentProjection } from "./lib/harness-config.mjs";
-import { validateHarnessAgents, renderHarnessTable, describeAgentAdmission, unimplementedAdapterWhy, CLAUDE_LEGACY_DELEGATE_WHY } from "./lib/harness-startup.mjs";
+import { validateHarnessAgents, renderHarnessTable, describeAgentAdmission, unimplementedAdapterWhy } from "./lib/harness-startup.mjs";
 import {
   createFleetManager,
   publicFleetProjection,
@@ -681,9 +682,15 @@ const piExecutor = createPiAcpExecutor({
   decide: permissions.decide,
   root: () => active?.root,
 });
-const adapterExecutors = new Map([["pi-acp", piExecutor]]);
+// voicebox-beads-a74y: the claude executor is real now. Registered under BOTH derivation keys —
+// executorForAgent derives adapter = agentConfig.adapter ?? harness, so a registry agent with
+// harness 'claude' resolves 'claude' and one naming 'claude-code' resolves that; both must answer.
+const claudeExecutor = createClaudeAcpExecutor({
+  decide: permissions.decide,
+  root: () => active?.root,
+});
+const adapterExecutors = new Map([["pi-acp", piExecutor], ["claude", claudeExecutor], ["claude-code", claudeExecutor]]);
 const UNIMPLEMENTED_ADAPTER_LABELS = new Map([
-  ["claude-code", "claude"],
   ["codex-cli", "codex"],
   ["gemini-cli", "gemini"],
   ["opencode", "opencode"],
@@ -693,18 +700,27 @@ function executorForAgent(agentConfig, harness) {
   const installed = adapterExecutors.get(adapter);
   if (installed) return installed;
   const label = UNIMPLEMENTED_ADAPTER_LABELS.get(adapter) ?? adapter ?? harness;
-  // The sentence comes from the ONE home (harness-startup.mjs); claude's delegate path keeps
-  // its long-standing, test-pinned sentence — the vantage rule lives with the constant.
-  const why = label === "claude" ? CLAUDE_LEGACY_DELEGATE_WHY : unimplementedAdapterWhy(label);
   return {
     check() {
-      return { ok: false, refused: "adapter-not-configured", why };
+      return { ok: false, refused: "adapter-not-configured", why: unimplementedAdapterWhy(label) };
     },
     async run() {
-      throw Object.assign(new Error(why), { refused: "adapter-not-configured" });
+      throw Object.assign(new Error(unimplementedAdapterWhy(label)), { refused: "adapter-not-configured" });
     },
   };
 }
+/**
+ * The adapter probe for ONE configured agent (voicebox-beads-a74y): each adapter describes its
+ * OWN install — a claude agent must never be admitted on the strength of the pi adapter being
+ * healthy. Both describe functions share the same verdict shape (ok / refused / why /
+ * installedVersion), so the admission table stays adapter-agnostic.
+ */
+function describeAdapterForAgent(agent) {
+  const adapter = agent?.adapter ?? agent?.harness;
+  if (adapter === "claude" || adapter === "claude-code") return describeClaudeAdapterInstall({});
+  return describeAdapterInstall({});
+}
+
 if (HARNESS) {
   // The delegating executor: check/run read the task's agentConfig and hand off to THAT
   // adapter's executor, so admission carries the named refusal of the right adapter.
@@ -743,7 +759,7 @@ if (HARNESS === "pi" || HARNESS === "pi-acp") {
 const harnessAdmission = validateHarnessAgents({
   registry: agentRegistry,
   environment: SELF_ENVIRONMENT,
-  describeAdapter: () => describeAdapterInstall({}),
+  describeAdapter: describeAdapterForAgent,
   implementedAdapters: new Set(adapterExecutors.keys()),
   executorSelected: Boolean(HARNESS),
 });
@@ -1905,7 +1921,7 @@ const routes = {
     // delegation to each agent would do today, refused by name when it would refuse.
     // Live, not a boot snapshot: agents registered after boot get their verdict too.
     const admissionContext = {
-      describeAdapter: () => describeAdapterInstall({}),
+      describeAdapter: describeAdapterForAgent,
       implementedAdapters: new Set(adapterExecutors.keys()),
       executorSelected: Boolean(HARNESS),
     };

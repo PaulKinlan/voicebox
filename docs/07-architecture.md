@@ -189,6 +189,8 @@ Every environment variable the server and its libraries read, and where:
 | `VOICEBOX_ACP_PI` | `lib/pi-acp.mjs` | path or command override for the `pi` coding agent CLI used by `lib/pi-acp.mjs` |
 | `VOICEBOX_BIND_DEADLINE_MS` | `server.mjs` | how long to keep retrying before giving up by name |
 | `VOICEBOX_BIND_RETRY_MS` | `server.mjs` | how often to retry a bind that lost the port race |
+| `VOICEBOX_CLAUDE_ACP_ADAPTER` | `lib/claude-acp.mjs` | explicit local install of the claude-code ACP adapter package in `lib/claude-acp.mjs` (unset: pi npm-prefix convention, then npx) |
+| `VOICEBOX_CLAUDE_KEEP_API_KEY` | `lib/claude-acp.mjs` | set '1' to let the claude-code adapter child inherit ANTHROPIC_API_KEY (default scopes it out — an inherited key overrides the claude.ai login and stalls the prompt) |
 | `VOICEBOX_EXTENSIONS_DIR` | `lib/state-dirs.mjs` | the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl`, and `.pairings.json` (the bearer custody store — outside every root) |
 | `VOICEBOX_HARNESS` | `server.mjs` | selects the host task adapter (`pi` enables the Pi ACP task adapter in `server.mjs`; unset leaves no default adapter configured) |
 | `VOICEBOX_HELLO_BOUND_MS` | `server.mjs` | how long to wait for a hello frame on /channel or /live before refusing (default 5000ms) |

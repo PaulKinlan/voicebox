@@ -82,13 +82,46 @@ test("configured harness: end-to-end delegate_task reaches Pi via pi-acp adapter
   assert.match(queuedEntry.task.created.mechanism, /stdio-acp-client: pi-acp adapter/);
 });
 
-test("boundary: unconfigured harness (Claude) refuses by name as adapter-not-configured", { timeout: 20000 }, async (t) => {
+test("admission: a claude agent with a VERIFIED adapter install is ADMITTED, visible in the live table (a74y)", { timeout: 20000 }, async (t) => {
+  // The boot/register path for VOICEBOX_HARNESS=claude registers the agent with adapter
+  // 'claude-code'; the admission must come from the CLAUDE adapter's own describe — never
+  // from the pi adapter's health. The fixture package only needs to LOOK installed (the
+  // admission describes, it never spawns).
+  const fakeAdapter = fs.mkdtempSync(path.join(os.tmpdir(), "claude-acp-admit-"));
+  t.after(() => fs.rmSync(fakeAdapter, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(fakeAdapter, "package.json"), JSON.stringify({ name: "@agentclientprotocol/claude-agent-acp", version: "0.78.0" }));
+  fs.mkdirSync(path.join(fakeAdapter, "dist"), { recursive: true });
+  fs.writeFileSync(path.join(fakeAdapter, "dist", "index.js"), "// fixture\n");
+
+  const f = await taskFixture(t, {
+    runtime: false,
+    env: {
+      VOICEBOX_HARNESS: "claude",
+      VOICEBOX_CLAUDE_ACP_ADAPTER: fakeAdapter,
+    },
+  });
+  const base = f.server.base;
+  const res = await fetch(`${base}/api/agents`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  const claude = (body.agents ?? []).find((a) => a.harness === "claude");
+  assert.ok(claude, "the claude agent is registered when VOICEBOX_HARNESS=claude");
+  assert.equal(claude.admission.admitted, true, `a verified claude adapter admits the agent: ${JSON.stringify(claude.admission)}`);
+  assert.equal(claude.admission.installedVersion, "0.78.0");
+});
+
+test("boundary: claude with a broken adapter install refuses by name as adapter-unavailable (a74y)", { timeout: 20000 }, async (t) => {
+  // voicebox-beads-a74y: claude HAS an adapter now, so the old 'adapter-not-configured' boundary
+  // moved: the refusal that must never regress is a configured-but-missing install failing closed.
+  // An explicit VOICEBOX_CLAUDE_ACP_ADAPTER that does not exist refuses adapter-unavailable and
+  // NEVER falls through to npx or a real run.
   const f = await taskFixture(t, {
     runtime: false,
     env: {
       VOICEBOX_HARNESS: "pi",
       VOICEBOX_ACP_ADAPTER: adapterDir,
       VOICEBOX_ACP_PI: piBinary,
+      VOICEBOX_CLAUDE_ACP_ADAPTER: "/nonexistent/voicebox-a74y-no-such-adapter",
     },
   });
 
@@ -102,8 +135,32 @@ test("boundary: unconfigured harness (Claude) refuses by name as adapter-not-con
 
   assert.equal(refused.status, 403);
   assert.equal(refused.body.ok, false);
+  assert.equal(refused.body.refused, "adapter-unavailable");
+  assert.match(refused.body.why, /voicebox-a74y-no-such-adapter/);
+});
+
+test("boundary: an UNIMPLEMENTED harness (codex) still refuses by name as adapter-not-configured", { timeout: 20000 }, async (t) => {
+  const f = await taskFixture(t, {
+    runtime: false,
+    env: {
+      VOICEBOX_HARNESS: "pi",
+      VOICEBOX_ACP_ADAPTER: adapterDir,
+      VOICEBOX_ACP_PI: piBinary,
+    },
+  });
+
+  const owner = await f.pair("codex-boundary-owner");
+  const base = f.server.base;
+
+  const refused = await freshExecute(base, owner, "delegate_task", {
+    agent: "codex",
+    task: "do something",
+  }, "codex-call");
+
+  assert.equal(refused.status, 403);
+  assert.equal(refused.body.ok, false);
   assert.equal(refused.body.refused, "adapter-not-configured");
-  assert.match(refused.body.why, /No Voicebox task adapter is configured for this CLI/);
+  assert.match(refused.body.why, /No Voicebox task adapter is implemented for 'codex'/);
 });
 
 test("boundary: unconfigured server (VOICEBOX_HARNESS unset) refuses with executor-unavailable", { timeout: 20000 }, async (t) => {
@@ -159,13 +216,16 @@ test("cancellation honesty: cancel_task aborts in-flight task and records cancel
 });
 
 
-test("multi-harness coexistence: pi selected, a claude-adapter agent configured — each answered by name (voicebox-beads-aaj)", { skip: skipRealPi, timeout: 90000 }, async (t) => {
+test("multi-harness coexistence: pi selected, a claude-adapter agent configured — each answered by its own adapter's name (voicebox-beads-aaj, a74y)", { skip: skipRealPi, timeout: 90000 }, async (t) => {
   const f = await taskFixture(t, {
     runtime: false,
     env: {
       VOICEBOX_HARNESS: "pi",
       VOICEBOX_ACP_ADAPTER: adapterDir,
       VOICEBOX_ACP_PI: piBinary,
+      // a74y: claude is implemented now, so its verdict comes from ITS adapter's install —
+      // pinned broken here so the test never reaches a real CLI/npx download.
+      VOICEBOX_CLAUDE_ACP_ADAPTER: "/nonexistent/voicebox-a74y-no-such-adapter",
     },
   });
 
@@ -206,7 +266,9 @@ test("multi-harness coexistence: pi selected, a claude-adapter agent configured 
   const claudeRow = byId["agent_claude_reviewer"];
   assert.ok(claudeRow, "the claude agent should be listed");
   assert.equal(claudeRow.admission.admitted, false);
-  assert.equal(claudeRow.admission.refused, "adapter-not-configured");
+  // a74y: the refusal is the CLAUDE adapter's own verdict (adapter-unavailable naming the
+  // claude path), never the generic 'not-configured' of a harness with no executor.
+  assert.equal(claudeRow.admission.refused, "adapter-unavailable");
 
   // Delegating to the claude agent refuses BY NAME at admission — the pi path is untouched.
   const refused = await freshExecute(base, owner, "delegate_task", {
@@ -214,8 +276,8 @@ test("multi-harness coexistence: pi selected, a claude-adapter agent configured 
     task: "review something",
   }, "claude-agent-call");
   assert.equal(refused.status, 403);
-  assert.equal(refused.body.refused, "adapter-not-configured");
-  assert.match(refused.body.why, /configured for this CLI/);
+  assert.equal(refused.body.refused, "adapter-unavailable");
+  assert.match(refused.body.why, /voicebox-a74y-no-such-adapter/);
 
   // The selected harness still executes for real through its own adapter.
   const admitted = await freshExecute(base, owner, "delegate_task", {

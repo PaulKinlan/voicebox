@@ -68,9 +68,9 @@ their adapter.
 
    ```
    [harness] ADMITTED pi (pi-acp @ 0.0.34)
-   [harness] REFUSED agent_claude_reviewer (claude-code) — adapter-not-configured: No Voicebox
-             task adapter is implemented for 'claude-code' on this host; the agent is
-             configured but cannot run.
+   [harness] REFUSED agent_claude_reviewer (claude-code) — adapter-unavailable: no local
+             @agentclientprotocol/claude-agent-acp install and no npx on this server's PATH;
+             install the adapter package or repair the PATH.
    ```
 
    `node server.mjs --doctor` renders the same verdicts as a table without starting the
@@ -78,8 +78,8 @@ their adapter.
 
 3. **Add more agents (optional).** Every configured agent lives in the registry:
    `POST /api/agents` with the host token (or edit `<host dir>/.agents.json`), for example
-   a second Pi instance with a different model, or a Claude agent prepared for the day an
-   adapter exists. `GET /api/agents` returns each agent WITH its current `admission` —
+   a second Pi instance with a different model, or a Claude agent through the claude-code
+   adapter (`lib/claude-acp.mjs`). `GET /api/agents` returns each agent WITH its current `admission` —
    `{ admitted: true }` or `{ admitted: false, refused, why }` — so the page and scripts
    can see what would happen before delegating.
 4. **Delegate.** From the page, or `delegate_task` with `agent: "pi"`. The task runs
@@ -87,7 +87,9 @@ their adapter.
    log like every other act.
 5. **Read the refusal, fix the cause.** If a delegation refuses, the name tells you where:
    `executor-unavailable` (no `VOICEBOX_HARNESS` selected), `adapter-not-configured`
-   (no adapter exists for that harness on this host), `adapter-version-unsupported`
+   (no adapter exists for that harness on this host), `adapter-unavailable` (the adapter
+   exists but is not installed/launchable here — its `why` names the missing piece),
+   `adapter-version-unsupported`
    (installed adapter is not the verified pin), `agent-environment-mismatch` (the agent
    belongs to another environment).
 
@@ -405,6 +407,8 @@ Every environment variable the server and its libraries read, and where:
 | `VOICEBOX_ACP_PI` | `lib/pi-acp.mjs` | path or command override for the `pi` coding agent CLI used by `lib/pi-acp.mjs` |
 | `VOICEBOX_BIND_DEADLINE_MS` | `server.mjs` | how long to keep retrying before giving up by name |
 | `VOICEBOX_BIND_RETRY_MS` | `server.mjs` | how often to retry a bind that lost the port race |
+| `VOICEBOX_CLAUDE_ACP_ADAPTER` | `lib/claude-acp.mjs` | explicit local install of the claude-code ACP adapter package in `lib/claude-acp.mjs` (unset: pi npm-prefix convention, then npx) |
+| `VOICEBOX_CLAUDE_KEEP_API_KEY` | `lib/claude-acp.mjs` | set '1' to let the claude-code adapter child inherit ANTHROPIC_API_KEY (default scopes it out — an inherited key overrides the claude.ai login and stalls the prompt) |
 | `VOICEBOX_EXTENSIONS_DIR` | `lib/state-dirs.mjs` | the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl`, and `.pairings.json` (the bearer custody store — outside every root) |
 | `VOICEBOX_HARNESS` | `server.mjs` | selects the host task adapter (`pi` enables the Pi ACP task adapter in `server.mjs`; unset leaves no default adapter configured) |
 | `VOICEBOX_HELLO_BOUND_MS` | `server.mjs` | how long to wait for a hello frame on /channel or /live before refusing (default 5000ms) |

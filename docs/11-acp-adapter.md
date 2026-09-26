@@ -40,8 +40,17 @@ VOICEBOX_HARNESS=pi npm run serve
 
 Run `npm run doctor` to inspect the admitted harness.
 Delegating a task via `delegate_task` with `agent: "pi"` runs through the ACP adapter.
-Delegating to an unconfigured CLI (such as Claude Code, which has no ACP adapter) is
-refused by name as `adapter-not-configured`. Delegating to a configured agent ID that is
+Delegating a task with `agent: "claude"` runs through the claude-code adapter
+(`lib/claude-acp.mjs`, voicebox-beads-a74y): **@agentclientprotocol/claude-agent-acp** version 0.78.0
+launched from a local install when present, else `npx -y` with an absolute npx path; the
+Claude CLI is taken from `CLAUDE_CODE_EXECUTABLE` or PATH when visible, else the adapter's
+bundled SDK binary runs and the mechanism string says so. `ANTHROPIC_API_KEY` is scoped out
+of the adapter child by default (an inherited key overrides the claude.ai login inside the
+adapter and stalls the prompt — measured A/B 2026-09-26); `VOICEBOX_CLAUDE_KEEP_API_KEY=1`
+opts back in. A CLI with no adapter executor at all (codex, gemini, opencode) is refused by
+name as `adapter-not-configured`; a claude agent whose adapter install is missing or
+mispinned refuses `adapter-unavailable` / `adapter-version-unsupported`. Delegating to a
+configured agent ID that is
 not in the host's agent registry is refused as `agent-not-configured`. An admitted task's
 record carries the frozen configured-agent snapshot (`agentConfig`) beside its `agentId`
 and `harness`, so what the delegation was told at admission is readable back later.
@@ -70,10 +79,13 @@ The installed-adapter tests explicitly skip when those paths are absent.
 
 ## Boundaries
 
-- **Claude Code**: Has no ACP adapter on this machine or in this repository. `discoverHarnesses()`
-  and `delegate_task` refuse with `adapter-not-configured`.
-- **Browser-only boundary**: `pi-acp` is a stdio subprocess. A browser environment cannot spawn
-  it directly; zero-server browser harnesses remain separate.
+- **Claude Code**: runs through `lib/claude-acp.mjs` (the pinned registry adapter, local install
+  or `npx`; see above). A host without the adapter package and without `npx` refuses
+  `adapter-unavailable` by name; a mispinned install refuses `adapter-version-unsupported`.
+- **Codex / Gemini / opencode**: no Voicebox task adapter exists for them here;
+  `discoverHarnesses()` and `delegate_task` refuse with `adapter-not-configured`.
+- **Browser-only boundary**: both stdio adapters are stdio subprocesses. A browser environment
+  cannot spawn them directly; zero-server browser harnesses remain separate.
 
 ## Interruption and durable readback
 

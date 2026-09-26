@@ -46,7 +46,11 @@ model access, cost, reliability and ACP support for ordinary CLIs remain unmeasu
 Pi/pi-acp rows expose the production adapter's admission precheck. The server selects
 that task executor when started with `VOICEBOX_HARNESS=pi` (or `pi-acp`); the inventory
 precheck alone does not establish that selection or successful model execution.
-Other CLI rows say `adapter-not-configured`, even when tool metadata is supplied.
+The claude row exposes the claude-code executor's precheck (`lib/claude-acp.mjs`): the
+adapter package's own verdict — installed-and-pinned, missing, or version-unsupported —
+and which CLI source would drive it (CLAUDE_CODE_EXECUTABLE, PATH, or the SDK's bundled
+fallback, named as such). Other CLI rows say `adapter-not-configured`, even when tool
+metadata is supplied.
 Inventory cards display the refusal's explanation, with its diagnostic identifier kept in
 `data-delegation-refusal`, not repeated as visible text.
 

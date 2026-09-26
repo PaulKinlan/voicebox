@@ -114,6 +114,12 @@ test("harness page: click lists host facts, cache does not spawn twice, lost ser
     if (row.id === "pi" || row.id === "pi-acp") {
       assert.equal(row.refusal, "none");
       assert.match(row.text, /stdio-acp-client: pi-acp adapter/);
+    } else if (row.id === "claude") {
+      // a74y: claude HAS an executor now — its verdict is the claude adapter's own (here: no
+      // local install and no npx in the fixture PATH), named adapter-unavailable, never the
+      // generic not-configured of a harness with no executor.
+      assert.equal(row.refusal, "adapter-unavailable");
+      assert.match(row.text, /no local .* install and no npx/);
     } else {
       assert.equal(row.refusal, "adapter-not-configured");
       assert.match(row.text, /No Voicebox task adapter is configured/);
@@ -186,7 +192,7 @@ test("native tool disclosures show only declared metadata, preserve refusals, an
   assert.equal(await page.evaluate(() => document.querySelector('[data-harness="claude"] dd').textContent), hostile);
   assert.equal(await page.evaluate(() => document.querySelectorAll("article img, article script").length), 0);
   assert.equal(await page.evaluate(() => globalThis.metadataRan === undefined), true);
-  assert.equal(await page.evaluate(() => document.querySelector('[data-harness="claude"]').dataset.delegationRefusal), "adapter-not-configured");
+  assert.equal(await page.evaluate(() => document.querySelector('[data-harness="claude"]').dataset.delegationRefusal), "adapter-unavailable");
   await page.click('[data-harness="gemini"] summary');
   assert.match(await page.evaluate(() => document.querySelector('[data-harness="gemini"] details').innerText), /host declared an empty list/i);
   assert.match(await page.evaluate(() => document.querySelector('[data-harness="codex"]').innerText), /Tools — unknown/);

@@ -84,6 +84,9 @@ test("delegate_task (ask) via turn: returns handle immediately and executes in b
       VOICEBOX_HARNESS: "pi",
       VOICEBOX_ACP_ADAPTER: adapterDir,
       VOICEBOX_ACP_PI: piBinary,
+      // a74y: claude has an adapter now — pin it to a broken install so this test never
+      // reaches a real CLI; the refusal it asserts is adapter-unavailable, named with the path.
+      VOICEBOX_CLAUDE_ACP_ADAPTER: "/nonexistent/voicebox-a74y-no-such-adapter",
     },
   });
   t.after(async () => {
@@ -119,7 +122,7 @@ test("delegate_task (ask) via turn: returns handle immediately and executes in b
   assert.equal(settled.state, "completed");
   assert.match(settled.answer, /221/);
 
-  // 3. Delegation to unconfigured agent refuses explicitly before execution
+  // 3. Delegation to a claude agent whose adapter install is broken refuses by name before execution
   const unconfiguredTurn = await fetch(`${base}/api/turn`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -128,6 +131,6 @@ test("delegate_task (ask) via turn: returns handle immediately and executes in b
   assert.equal(unconfiguredTurn.status, 200);
   const unconfiguredBody = await unconfiguredTurn.json();
   assert.equal(unconfiguredBody.result.ok, false);
-  assert.equal(unconfiguredBody.result.refused, "adapter-not-configured");
-  assert.match(unconfiguredBody.result.why, /No Voicebox task adapter is configured for this CLI/);
+  assert.equal(unconfiguredBody.result.refused, "adapter-unavailable");
+  assert.match(unconfiguredBody.result.why, /voicebox-a74y-no-such-adapter/);
 });
