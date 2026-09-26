@@ -68,7 +68,11 @@ never holds the port; it asks the host.
 `/srv/voicebox`, the one writable sandbox home, and `/bin` and `/lib` symlinked into the read-only
 `/usr` bind, so there is no host home to read and nothing outside `/usr`, `/etc` and the sandbox home
 to touch. The L1.5 composition adds seccomp, an empty capability set, `PrivateTmp` and
-`ProtectSystem=strict`. **What does not bound it**: the network is shared, and a process reads what its
+`ProtectSystem=strict`. Commands run under a minimal, measured child environment (`lib/fence-child-env.mjs`)
+containing only what Unix tools and Git require (`PATH`, `HOME`, `TMPDIR`, `USER`, `LOGNAME`, `SHELL`, `LANG`,
+`TERM`, `XDG_CONFIG_HOME`, `GIT_CONFIG_GLOBAL`, `VOICEBOX_FENCE`); ambient host credentials (API keys, tokens)
+and host repository bindings (`GIT_DIR`, `GIT_WORK_TREE`) are excluded by construction (`voicebox-beads-4uw0`).
+**What does not bound it**: the network is shared, and a process reads what its
 uid can read — the same two lines the fence's own boundary report carries; a command surface does not
 change either.
 
@@ -164,7 +168,7 @@ holding anything. Mechanics ([`lib/extensions.mjs`](../lib/extensions.mjs)):
 | the probe | `tools/sandbox-probe.mjs` |
 | boundary derivation | `lib/fence-provider.mjs` (`measureBoundary`) |
 | booting + serving | `lib/fence-provider.mjs`, `lib/unit-fence-provider.mjs`, `tools/env-serve.mjs` |
-| the command surface | `tools/env-serve.mjs` (`/exec`, `/git/config`, `/git/init`), `server.mjs` (`/api/environments/<key>/…`) |
+| the command surface | `tools/env-serve.mjs` (`/exec`, `/git/config`, `/git/init`), `server.mjs` (`/api/environments/<key>/…`), `lib/fence-child-env.mjs` |
 | wasm tools at the gate | `lib/wasm-shelf.mjs`, `lib/wasm-worker.mjs`, `core/extensions.ts` |
 | proposals + admission | `lib/extensions.mjs`, `core/extensions.ts` |
 | the probe cache route | `server.mjs` (`GET /api/probe`, `writeProbeCache`) |

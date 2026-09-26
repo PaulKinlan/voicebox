@@ -156,3 +156,113 @@ test("the host is the door: local authority is required, the command runs in the
   const unknown = await fetch(`${server.base}/api/environments/env_0000000000000000/exec`, { method: "POST", headers: hostHeaders, body: JSON.stringify({ command: "echo no" }) }).then((r) => r.json());
   assert.equal(unknown.refused, "unknown-environment");
 });
+
+test("fence child env: minimal measured whitelist excludes ambient secrets (voicebox-beads-4uw0)", async () => {
+  const { buildFenceChildEnv } = await import("../lib/fence-child-env.mjs");
+  const hostEnv = {
+    PATH: "/usr/bin:/bin",
+    HOME: "/home/user",
+    USER: "alice",
+    LOGNAME: "alice",
+    SHELL: "/bin/bash",
+    LANG: "en_US.UTF-8",
+    TERM: "xterm-256color",
+    ANTHROPIC_API_KEY: "sk-ant-secret",
+    GEMINI_API_KEY: "gem-secret",
+    OPENAI_API_KEY: "open-secret",
+    BRAVE_API_KEY: "brave-secret",
+    VOICEBOX_BEARER: "vbx_secret_bearer",
+    VOICEBOX_HOST_TOKEN: "host_token_secret",
+    VOICEBOX_BOOT_MARKER: "boot_marker_secret",
+    GIT_DIR: "/repo/.git",
+    GIT_WORK_TREE: "/repo",
+    GIT_AUTHOR_NAME: "Host User",
+    SSH_AUTH_SOCK: "/tmp/ssh.sock",
+    AWS_SECRET_ACCESS_KEY: "aws-secret",
+    GITHUB_TOKEN: "gh-secret",
+  };
+
+  const child = buildFenceChildEnv({ home: "/home/voice", hostEnv });
+
+  // Whitelisted variables are present with isolated values
+  assert.equal(child.PATH, "/usr/bin:/bin");
+  assert.equal(child.HOME, "/home/voice");
+  assert.equal(child.XDG_CONFIG_HOME, "/home/voice/.config");
+  assert.equal(child.GIT_CONFIG_GLOBAL, "/home/voice/.gitconfig");
+  assert.equal(child.USER, "alice");
+  assert.equal(child.SHELL, "/bin/bash");
+  assert.equal(child.LANG, "en_US.UTF-8");
+  assert.equal(child.TERM, "xterm-256color");
+  assert.equal(child.TMPDIR, "/tmp");
+  assert.equal(child.VOICEBOX_FENCE, "1");
+
+  // Every secret and host repository binding is strictly ABSENT (not undefined-valued)
+  for (const secret of [
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+    "OPENAI_API_KEY",
+    "BRAVE_API_KEY",
+    "VOICEBOX_BEARER",
+    "VOICEBOX_HOST_TOKEN",
+    "VOICEBOX_BOOT_MARKER",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_AUTHOR_NAME",
+    "SSH_AUTH_SOCK",
+    "AWS_SECRET_ACCESS_KEY",
+    "GITHUB_TOKEN",
+  ]) {
+    assert.equal(secret in child, false, `${secret} must be absent from fence child env`);
+  }
+
+  assert.equal(Object.isFrozen(child), true, "fence child env must be frozen");
+  assert.equal(hostEnv.ANTHROPIC_API_KEY, "sk-ant-secret", "hostEnv is never mutated");
+});
+
+test("env-serve /exec live: spawned command environment excludes ambient parent secrets (voicebox-beads-4uw0)", async (t) => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "4uw0-env-home-"));
+  mkdirSync(path.join(home, "workspace"), { recursive: true });
+
+  const child = spawn(process.execPath, [ENV_SERVE], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      HOME: home,
+      XDG_CONFIG_HOME: path.join(home, ".config"),
+      PORT: "0",
+      ANTHROPIC_API_KEY: "sk-ant-ambient-secret",
+      GEMINI_API_KEY: "gem-ambient-secret",
+      GIT_DIR: "/ambient/git/dir",
+      VOICEBOX_HOST_TOKEN: "ambient-host-token",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  const port = await new Promise((resolve, reject) => {
+    let buffer = "";
+    child.stdout.on("data", (chunk) => {
+      buffer += chunk;
+      const match = buffer.match(/127\.0\.0\.1:(\d+)/);
+      if (match) resolve(Number(match[1]));
+    });
+    child.stderr.on("data", (chunk) => process.stderr.write(chunk));
+    setTimeout(() => reject(new Error("env-serve printed no port")), 30000);
+  });
+  t.after(() => { try { child.kill("SIGKILL"); } catch {} rmSync(home, { recursive: true, force: true }); });
+
+  const origin = `http://127.0.0.1:${port}`;
+  const out = await ask(origin, "/exec", { command: "env" });
+  assert.equal(out.body.ok, true);
+
+  const envLines = out.body.stdout.split("\n").filter(Boolean);
+  const childKeys = new Set(envLines.map((l) => l.split("=")[0]));
+
+  assert.equal(childKeys.has("ANTHROPIC_API_KEY"), false, "ANTHROPIC_API_KEY must not leak into exec command");
+  assert.equal(childKeys.has("GEMINI_API_KEY"), false, "GEMINI_API_KEY must not leak into exec command");
+  assert.equal(childKeys.has("GIT_DIR"), false, "GIT_DIR must not leak into exec command");
+  assert.equal(childKeys.has("VOICEBOX_HOST_TOKEN"), false, "VOICEBOX_HOST_TOKEN must not leak into exec command");
+
+  assert.equal(childKeys.has("PATH"), true, "PATH must be present in child env");
+  assert.equal(childKeys.has("HOME"), true, "HOME must be present in child env");
+  assert.equal(childKeys.has("VOICEBOX_FENCE"), true, "VOICEBOX_FENCE marker must be present");
+});
