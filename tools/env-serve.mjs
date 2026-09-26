@@ -59,7 +59,7 @@ const CHILD_ENV = buildFenceChildEnv({ home: HOME, hostEnv: process.env });
 /** Run the probe against this environment; resolve the parsed report or the failure as data. */
 function selfProbe() {
   return new Promise((resolve) => {
-    execFile("/usr/bin/node", [PROBE], { timeout: 20000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+    execFile("/usr/bin/node", [PROBE], { timeout: 20000, maxBuffer: 8 * 1024 * 1024, env: CHILD_ENV }, (err, stdout) => {
       const text = String(stdout ?? "").trim();
       if (!text) return resolve({ probe: "sandbox-probe/1", when: new Date().toISOString(), error: `the probe printed nothing: ${err?.message ?? "unknown"}` });
       try {
