@@ -382,6 +382,46 @@ async function resolveEnvironment(envKey) {
   return { ok: true, label: env.label, origin: env.origin };
 }
 
+/**
+ * Forward one bounded request to a booted environment's OWN server (tools/env-serve.mjs) and
+ * audit the crossing attempt-first, like every other act that leaves this process. The route
+ * handlers write `{status, body}` through; the fence — not this function — bounds the child.
+ * (voicebox-beads-0vlp)
+ */
+async function callEnvironment(key, pathname, { method = "POST", body = null, timeoutMs = 15000 } = {}) {
+  const target = await resolveEnvironment(key);
+  if (!target.ok) return { status: 404, body: target };
+  if (!target.origin) {
+    return { status: 502, body: { ok: false, refused: "environment-unreachable", why: `'${key}' has no serving origin — a declared environment that was never booted is not a place to run anything` } };
+  }
+  const act = { kind: "execute", target: `${target.origin}${pathname}`, tool: `env${pathname.replace(/\//g, ".")}` };
+  const attempt = logAttempt(act, null);
+  try {
+    const answer = await fetch(`${target.origin}${pathname}`, {
+      method,
+      headers: { "content-type": "application/json" },
+      ...(body === null ? {} : { body: JSON.stringify(body) }),
+      signal: AbortSignal.timeout(Math.max(1000, Math.min(timeoutMs, 70000))),
+    });
+    const out = await answer.json().catch(() => null);
+    const refusedAnswer = !out || out.ok === false;
+    logAct(
+      act,
+      refusedAnswer ? "refuse" : "allow",
+      refusedAnswer ? (out?.refused ?? "bad-answer") : "executed",
+      refusedAnswer ? "refused" : "ok",
+      out && out.ok === true ? { exitCode: out.exitCode ?? null, durationMs: out.durationMs ?? null } : null,
+      null,
+      attempt?.seq ?? null,
+    );
+    return { status: 200, body: out ?? { ok: false, refused: "bad-answer", why: "the environment answered something that was not JSON" } };
+  } catch (err) {
+    const no = unreachable(target.label ?? key, target.origin);
+    logAct(act, "refuse", no.refused, "refused", null, null, attempt?.seq ?? null);
+    return { status: 502, body: { ok: false, refused: no.refused, why: no.why } };
+  }
+}
+
 function readProbeCache() {
   try {
     const parsed = JSON.parse(readFileSync(PROBE_FILE, "utf8"));
@@ -3173,6 +3213,37 @@ async function handle(req, res) {
       writeEnvironments(stored.environments.filter((e) => e.key !== key));
     }
     return json(res, 200, { ok: true, stopped: key });
+  }
+
+  // ── RUN SOMETHING INSIDE AN ENVIRONMENT (voicebox-beads-0vlp) ──────────────────────────────
+  // A booted environment serves its own work surface (tools/env-serve.mjs: /exec, /git/config,
+  // /git/init) on its loopback origin, INSIDE the fence: a read-only source tree, a writable
+  // sandbox home, no host home. The host is the door — it forwards the request and audits the
+  // crossing — and local authority is required, because a command handed to a sandbox is still
+  // an act. The fence bounds what the command can reach; this route never pretends to.
+  const envSurface = url.pathname.match(/^\/api\/environments\/([^/]+)\/(exec|git\/config|git\/init)$/);
+  if (envSurface) {
+    if (!hasExtensionAuthority(req)) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "running a command in an environment needs local authority (the host token, the room's session token, or the room's own origin)" });
+    }
+    const key = decodeURIComponent(envSurface[1]);
+    const surface = envSurface[2];
+    if (surface === "exec" && req.method === "POST") {
+      const body = await readJson(65536);
+      const requested = Number.isInteger(body?.timeoutMs) ? body.timeoutMs : 10000;
+      const result = await callEnvironment(key, "/exec", { method: "POST", body: body ?? {}, timeoutMs: Math.min(Math.max(requested, 100), 60000) + 2000 });
+      return json(res, result.status, result.body);
+    }
+    if (surface === "git/config" && (req.method === "GET" || req.method === "POST")) {
+      const body = req.method === "POST" ? await readJson(8192) : null;
+      const result = await callEnvironment(key, "/git/config", { method: req.method, body, timeoutMs: 12000 });
+      return json(res, result.status, result.body);
+    }
+    if (surface === "git/init" && req.method === "POST") {
+      const result = await callEnvironment(key, "/git/init", { method: "POST", body: {}, timeoutMs: 12000 });
+      return json(res, result.status, result.body);
+    }
+    return json(res, 405, { ok: false, refused: "bad-request", why: `/api/environments/<key>/${surface} does not answer ${req.method}` });
   }
 
   if (req.method === "DELETE" && url.pathname === "/api/pair") {

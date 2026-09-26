@@ -10,7 +10,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { startServer } from "./lib/server.mjs";
@@ -122,6 +122,54 @@ test("declared with fence:'l15', the environment is LISTED with its measured bou
     assert.equal(health.ok, true, "the LISTED origin answers — listed means reachable, not just recorded");
   } finally {
     if (declaredKey) await stopUnitFence(declaredKey).catch(() => {});
+    await server.stop();
+  }
+});
+
+test("inside the L1.5 sandbox a command runs and Git is configured — bounded by the fence, through the host's door (voicebox-beads-0vlp)", async (t) => {
+  if (needsUserManager(t)) return;
+  const ws = path.join(scratch, "exec-ws");
+  mkdirSync(ws, { recursive: true });
+  const server = await startServer({ env: { VOICEBOX_WORKSPACE: ws }, cwd: scratch });
+  let key = null;
+  try {
+    const declared = await fetch(`${server.base}/api/environments`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ label: "exec box", kind: "fence", fence: "l15" }),
+    }).then((r) => r.json());
+    assert.equal(declared.ok, true, `boot failed: ${JSON.stringify(declared)}`);
+    key = declared.environment.key;
+    const home = path.join(homes, key);
+    const door = `${server.base}/api/environments/${key}`;
+    const headers = { "content-type": "application/json", "x-voicebox-host-token": server.hostToken };
+
+    // THE COMMAND RUNS INSIDE THE FENCE: the sandbox HOME, a /home holding only the sandbox (the
+    // host's own home tree is not bound), and the code tree read-only.
+    const who = await fetch(`${door}/exec`, {
+      method: "POST", headers,
+      body: JSON.stringify({ command: "printf '%s|%s|%s' \"$HOME\" \"$(ls /home)\" \"$( [ -w /srv/voicebox ] && echo rw || echo ro )\"" }),
+    }).then((r) => r.json());
+    assert.equal(who.ok, true, JSON.stringify(who));
+    assert.equal(who.stdout, "/home/voice|voice|ro", "commands run with the sandbox HOME, a /home holding only the sandbox, and a read-only code tree");
+
+    // A write lands in the sandbox home ON THE HOST, at the bound path.
+    const write = await fetch(`${door}/exec`, { method: "POST", headers, body: JSON.stringify({ command: "printf inside > $HOME/inside.txt && cat $HOME/inside.txt" }) }).then((r) => r.json());
+    assert.equal(write.ok, true);
+    assert.equal(write.stdout, "inside");
+    assert.equal(readFileSync(path.join(home, "inside.txt"), "utf8"), "inside", "the write is visible in the sandbox home on the host");
+
+    // Git: configure, init, read back — all inside the sandbox, identity a file in its home.
+    const configured = await fetch(`${door}/git/config`, { method: "POST", headers, body: JSON.stringify({ name: "Sandbox Voice", email: "voice@example.invalid" }) }).then((r) => r.json());
+    assert.equal(configured.ok, true, JSON.stringify(configured));
+    assert.match(readFileSync(path.join(home, ".gitconfig"), "utf8"), /Sandbox Voice/, "the identity is a file in the sandbox home");
+    const init = await fetch(`${door}/git/init`, { method: "POST", headers, body: "{}" }).then((r) => r.json());
+    assert.equal(init.ok, true, JSON.stringify(init));
+    const status = await fetch(`${door}/exec`, { method: "POST", headers, body: JSON.stringify({ command: "git -C $HOME/workspace status --porcelain" }) }).then((r) => r.json());
+    assert.equal(status.ok, true);
+    assert.equal(status.stdout, "", "the workspace is a clean repository the sandbox can work in");
+  } finally {
+    if (key) await stopUnitFence(key).catch(() => {});
     await server.stop();
   }
 });
