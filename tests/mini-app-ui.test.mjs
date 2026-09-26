@@ -93,29 +93,39 @@ test("mini-app room UI: mounting, double-iframe sandbox, interactive controls, a
     window.__voiceboxMiniApp.mount(app);
   }, fixtureApp);
 
-  // Wait for outer iframe to appear and mount
+  // Wait for outer iframe to appear, and inner iframe to receive srcdoc
   await page.waitFor(() => {
     const c = document.querySelector("#mini-app-container");
-    const frame = document.querySelector("#mini-app-outer-frame");
-    return c && !c.hidden && frame;
-  }, { label: "mini-app mounting in room" });
+    const outer = document.querySelector("#mini-app-outer-frame");
+    const inner = outer?.contentDocument?.getElementById("inner-app");
+    const srcdoc = inner?.getAttribute("srcdoc");
+    return c && !c.hidden && outer && inner && srcdoc && srcdoc.includes("Scoreboard");
+  }, { label: "mini-app mounting in room and rendering inner srcdoc" });
 
   const mountState = await page.evaluate(() => {
     const c = document.querySelector("#mini-app-container");
     const title = document.querySelector("#mini-app-title")?.textContent;
     const outer = document.querySelector("#mini-app-outer-frame");
+    const inner = outer?.contentDocument?.getElementById("inner-app");
     return {
       containerHidden: c?.hidden,
       title,
-      outerSandbox: outer?.getAttribute("sandbox"),
+      outerOrigin: outer?.contentWindow?.location?.origin,
       outerSrc: outer?.getAttribute("src"),
+      innerFound: Boolean(inner),
+      innerSandbox: inner?.getAttribute("sandbox"),
+      innerSrcdoc: inner?.getAttribute("srcdoc"),
     };
   });
 
   assert.equal(mountState.containerHidden, false, "container must unhide on mount");
   assert.equal(mountState.title, "Scoreboard Widget");
-  assert.equal(mountState.outerSandbox, "allow-scripts", "outer iframe must enforce sandbox='allow-scripts' without allow-same-origin");
+  assert.equal(mountState.outerOrigin, server.base, "outer mediator frame is same-origin with the host");
   assert.match(mountState.outerSrc, /mini-app-bridge\.html\?appId=/);
+  assert.equal(mountState.innerFound, true, "inner app frame must exist inside the bridge");
+  assert.equal(mountState.innerSandbox, "allow-scripts", "inner app iframe must enforce sandbox='allow-scripts' without allow-same-origin");
+  assert.match(mountState.innerSrcdoc, /Scoreboard/);
+  assert.match(mountState.innerSrcdoc, /window\.webMcp/);
 
   // 3. Test collapse / expand toggle
   await page.evaluate(() => {
@@ -219,11 +229,14 @@ test("mini-app producer: conversational turn dynamically launches mini-app widge
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   });
 
-  // Wait for mini-app to mount dynamically
+  // Wait for mini-app to mount dynamically and render its inner app
   await page.waitFor(() => {
     const c = document.querySelector("#mini-app-container");
-    return c && !c.hidden && document.querySelector("#mini-app-title")?.textContent === "Counter";
-  }, { label: "mini-app launched from turn" });
+    const outer = document.querySelector("#mini-app-outer-frame");
+    const inner = outer?.contentDocument?.getElementById("inner-app");
+    const srcdoc = inner?.getAttribute("srcdoc");
+    return c && !c.hidden && document.querySelector("#mini-app-title")?.textContent === "Counter" && srcdoc && srcdoc.includes("counter-body");
+  }, { label: "mini-app launched from turn and rendered inner app" });
 
   const state = await page.evaluate(() => {
     const c = document.querySelector("#mini-app-container");
