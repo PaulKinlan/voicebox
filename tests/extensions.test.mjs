@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { startServer } from "./lib/server.mjs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createServer as spinWitness } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -731,4 +732,87 @@ test("HTTP: approval-request writes 0600 .pending-approval.json and code NEVER l
   });
   assert.equal(approveResp.status, 200);
   assert.equal(existsSync(pendingFilePath), false, ".pending-approval.json must be deleted upon consume");
+});
+
+// ── 15. n0n: a changed descriptor re-admitted through the real door updates the registry,
+//        and the network request proves it — the new URL and the query reach the wire ──
+test("n0n: re-admitting a changed descriptor updates the registry — the network request proves the new URL", async (t) => {
+  // A local witness records what was actually requested. The assertion is on the request the
+  // extension made, not on the server's own report.
+  const seen = [];
+  const witness = spinWitness((req, res) => {
+    seen.push(req.url);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ marker: req.url.split("?")[0], query: new URL(req.url, "http://witness").searchParams.get("q") }));
+  });
+  await new Promise((r) => witness.listen(0, "127.0.0.1", r));
+  const witnessPort = witness.address().port;
+  t.after(() => new Promise((r) => witness.close(r)));
+
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-n0n-"));
+  const ws = path.join(dir, "workspace");
+  mkdirSync(ws, { recursive: true });
+  const s = await startServer({ env: { VOICEBOX_WORKSPACE: ws, VOICEBOX_RESOLVER: "script" } });
+  t.after(async () => { await s.stop(); rmSync(dir, { recursive: true, force: true }); });
+
+  const hostHeaders = { "content-type": "application/json", "x-voicebox-host-token": s.hostToken };
+  // The tool is named web_search because the resolver's extension verb for "web search for …"
+  // is web_search — the same name the catalogue's web-search entry carries.
+  const descriptor = (pathname) => ({
+    id: "witness-search", name: "Witness Search", description: "n0n witness",
+    source: "catalogue", runsIn: "host", capabilities: ["network"],
+    bounds: { hosts: ["127.0.0.1"], maxRequests: 6 },
+    tools: [{ name: "web_search", description: "x", primitive: "http-get", params: { url: `http://127.0.0.1:${witnessPort}${pathname}` } }],
+  });
+  const stage = (d) => fetch(`${s.base}/api/extensions/proposals`, {
+    method: "POST", headers: hostHeaders, body: JSON.stringify({ descriptor: d }),
+  }).then((r) => r.json());
+  const admit = () => fetch(`${s.base}/api/extensions/admit`, {
+    method: "POST", headers: hostHeaders, body: JSON.stringify({ id: "witness-search", confirm: true }),
+  }).then((r) => r.json());
+  const ask = (transcript) => fetch(`${s.base}/api/turn`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ transcript }),
+  }).then((r) => r.json());
+
+  // 1. First admission: the original endpoint.
+  assert.equal((await stage(descriptor("/original"))).state, "pending");
+  const first = await admit();
+  assert.equal(first.decision, "admitted", `first admission failed: ${JSON.stringify(first)}`);
+
+  // 2. The n0n act: stage the SAME id with a CHANGED descriptor, then re-admit. Before the fix
+  //    this refused 'duplicate-tool' — the loaded web_search counted as a collision with itself —
+  //    and the registry kept the stale URL.
+  assert.equal((await stage(descriptor("/updated"))).state, "pending");
+  const second = await admit();
+  assert.equal(second.decision, "admitted", `re-admission must pass the gate: ${JSON.stringify(second)}`);
+
+  // 3. A turn through the resolver → callTool → the network. The witness is the proof: the NEW
+  //    url served it, with the query on the wire.
+  const turnResult = await ask("web search for n0n words");
+  assert.equal(turnResult.result?.ok, true, `the re-admitted tool did not run: ${JSON.stringify(turnResult.result)}`);
+  assert.equal(turnResult.result.servedBy, `http://127.0.0.1:${witnessPort}/updated?q=n0n+words`);
+  assert.equal(JSON.parse(turnResult.result.body).query, "n0n words");
+  assert.deepEqual(seen, ["/updated?q=n0n+words"], "the witness must have seen exactly the re-admitted URL");
+  const ledger = readFileSync(path.join(s.extensionsDir, ".ledger.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.ok(ledger.some((e) => e.id === "witness-search" && e.decision === "reconfigured"), "the re-admission is recorded as a reconfiguration in the ledger");
+
+  // 4. The other update door: reconfigure params, addressed by tool name (tools[i].params is
+  //    what callHttp reads), changes the URL without a re-admission.
+  const reconfig = await fetch(`${s.base}/api/extensions/reconfigure`, {
+    method: "POST", headers: hostHeaders,
+    body: JSON.stringify({ id: "witness-search", params: { web_search: { url: `http://127.0.0.1:${witnessPort}/reconfigured` } }, confirm: true }),
+  }).then((r) => r.json());
+  assert.equal(reconfig.decision, "reconfigured", `params reconfigure failed: ${JSON.stringify(reconfig)}`);
+  const third = await ask("web search for third words");
+  assert.equal(third.result?.ok, true, `the reconfigured tool did not run: ${JSON.stringify(third.result)}`);
+  assert.equal(third.result.servedBy, `http://127.0.0.1:${witnessPort}/reconfigured?q=third+words`);
+
+  // 5. A params key that names no tool is refused BY NAME, not silently ignored.
+  const bogusResp = await fetch(`${s.base}/api/extensions/reconfigure`, {
+    method: "POST", headers: hostHeaders,
+    body: JSON.stringify({ id: "witness-search", params: { not_a_tool: { url: "http://127.0.0.1:1/" } }, confirm: true }),
+  });
+  assert.equal(bogusResp.status, 400);
+  const bogus = await bogusResp.json();
+  assert.equal(bogus.refused, "params-unknown-tool");
 });

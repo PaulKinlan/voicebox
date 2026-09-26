@@ -9,11 +9,12 @@
 // displays the pending plan details and single-use code.
 import { readFileSync, rmSync, existsSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+// The host extension directory has ONE owner (lib/state-dirs.mjs): this tool used to resolve its own
+// copy of the variable and the same fallback that lived in lib/extensions.mjs and server.mjs
+// (voicebox-beads-y5k).
+import { extensionsDir } from "../lib/state-dirs.mjs";
 
-const REPO = path.dirname(fileURLToPath(import.meta.url)) + "/..";
-const EXTENSIONS_DIR = process.env.VOICEBOX_EXTENSIONS_DIR ?? path.join(REPO, "extensions");
-const PENDING_FILE = path.join(EXTENSIONS_DIR, ".pending-approval.json");
+const PENDING_FILE = path.join(extensionsDir(), ".pending-approval.json");
 
 if (!existsSync(PENDING_FILE)) {
   console.log("No pending extension approval requests.");

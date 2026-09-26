@@ -122,6 +122,7 @@ test("a long capability report is contained and summarised, and never overwrites
     const listEl = cap?.querySelector(".env-cap-list");
     return {
       summary,
+      note: cap?.querySelector(".env-cap-note")?.textContent ?? null,
       isDetails: cap?.tagName === "DETAILS",
       listScrollable: listEl ? getComputedStyle(listEl).overflowY === "auto" : false,
       listBounded: listEl ? parseInt(getComputedStyle(listEl).maxHeight, 10) > 0 : false,
@@ -131,7 +132,12 @@ test("a long capability report is contained and summarised, and never overwrites
     };
   });
   assert.ok(report.isDetails, "the report is a <details> (collapsible)");
-  assert.match(report.summary, /^\d+ tools$/, `a long probe summarises to a count: ${report.summary}`);
+  // voicebox-beads-1jk: presence is not capability. The summary names PRESENCE (host programs
+  // present, not invocable) — never "tools", which in this product means invocable capability.
+  assert.match(report.summary, /^\d+ host programs — present, not invocable$/, `a long probe summarises to an honest presence count: ${report.summary}`);
+  assert.ok(!/^\d+ tools$/.test(report.summary), "the summary must not claim invocable 'tools'");
+  assert.ok(report.note?.includes("cannot run these programs"), "the expansion must say the programs are not invocable by tasks");
+  assert.ok(report.note?.includes("read, write, list, grep, edit, diff, delete"), "the expansion must name the surface tasks CAN use");
   assert.ok(report.listBounded && report.listScrollable, "the full list is bounded and scrolls inside it");
   assert.ok(report.nameVisible && report.addVisible, "the name and the add control are not overwritten");
 });

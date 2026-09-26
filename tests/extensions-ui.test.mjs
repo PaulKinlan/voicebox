@@ -71,6 +71,11 @@ const openExts = async () => {
       dot: li.querySelector(".env-dot")?.dataset.ok,
       text: li.textContent,
     })),
+    failed: [...document.querySelectorAll("#ext-failed .env-item")].map((li) => ({
+      name: li.querySelector(".env-label")?.textContent,
+      dot: li.querySelector(".env-dot")?.dataset.ok,
+      text: li.textContent,
+    })),
     catalogue: [...document.querySelectorAll("#ext-catalogue .env-item")].map((li) => ({
       name: li.querySelector(".env-label")?.textContent,
       text: li.textContent,
@@ -103,10 +108,11 @@ test.after(async () => {
 
 const INTERNAL_VOCAB = /present-not-admitted|environment-unreachable|host-token-required|unknown-environment|environment-list-unreadable|pairing-list-unreadable|not-admitted\b/;
 
-test("a clean machine shows four honest empty sections and no internal vocabulary", async () => {
+test("a clean machine shows five honest empty sections and no internal vocabulary", async () => {
   const view = await openExts();
   assert.match(view.count, /Extensions · 0 running · 0 waiting/);
   assert.match(view.running[0].text, /Nothing running yet\./);
+  assert.match(view.failed[0].text, /No approved extension is failing to load\./);
   assert.match(view.waiting[0].text, /Nothing is waiting for review\./);
   assert.match(view.present[0].text, /No unreviewed files here\./);
   assert.match(view.refused[0].text, /Nothing was refused\./);
@@ -281,4 +287,48 @@ test("REMOVE via dialog: seamless in-room authorization revokes extension withou
   // Verify on the server that the extension is revoked
   const inv = await fetch(`${server.base}/api/extensions`).then((r) => r.json());
   assert.equal(inv.extensions.length, 0);
+});
+
+test("APPROVED, NOT RUNNING: a deleted descriptor behind a live admission gets its own named row (voicebox-beads-qdo)", async () => {
+  // Self-contained staging: two admissions (the first will lose its file; the second is the
+  // reload trigger), then one more admission after the deletion so the reload sees the gap.
+  const descriptor = (id, tool) => ({
+    id, name: id, description: "init-error UI fixture", source: "model", runsIn: "host",
+    capabilities: [], bounds: {},
+    tools: [{ name: tool, description: "t", primitive: "now", params: {} }],
+  });
+  const stage = async (id, tool) => {
+    const r = await fetch(`${server.base}/api/extensions/proposals`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ descriptor: descriptor(id, tool) }),
+    }).then((r) => r.json());
+    assert.equal(r.state, "pending", `the proposal must stage: ${JSON.stringify(r)}`);
+    const adm = await hostAdmit(id);
+    assert.equal(adm.decision, "admitted", `the fixture must pass the real gate: ${JSON.stringify(adm)}`);
+  };
+  await stage("ui-victim", "ui_victim_tool");
+  await stage("ui-trigger", "ui_trigger_tool");
+  rmSync(path.join(extDir, "ui-victim.json")); // the file vanishes behind a live admission
+  await stage("ui-third", "ui_third_tool"); // any host act rebuilds the loaded set
+
+  // Server truth first: the inventory must carry the named failure.
+  const inv = await fetch(`${server.base}/api/extensions`).then((r) => r.json());
+  const apiEntry = (inv.failedLoads ?? []).find((f) => f.id === "ui-victim");
+  assert.ok(apiEntry, `the inventory must name ui-victim: ${JSON.stringify(inv.failedLoads)}`);
+  assert.equal(apiEntry.refused, "descriptor-missing");
+
+  // Force a fresh render: the dialog may be open from an earlier test, and openExts would
+  // otherwise skip the click that triggers renderExtensions.
+  await page.click("#exts-close");
+  await sleep(150);
+  const view = await openExts();
+  const row = view.failed.find((x) => x.name === "ui-victim");
+  assert(row, "the deleted-descriptor extension must have its own row — never silence");
+  assert.equal(row.dot, "false", "a failed load is never green");
+  assert.match(row.text, /Approved · not running/);
+  assert.match(row.text, /Next:/);
+  assert.match(row.text, /restore|revoke/);
+  assert.ok(!view.running.some((x) => x.name === "ui-victim"), "never mixed into Running");
+  assert.doesNotMatch(view.visible, INTERNAL_VOCAB, "internal state names leaked into the panel");
 });

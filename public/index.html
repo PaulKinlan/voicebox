@@ -82,6 +82,8 @@
           <div id="exts-list">
             <h3 class="ext-section">Running</h3>
             <ul class="env-list" id="ext-running"></ul>
+            <h3 class="ext-section">Approved, not running</h3>
+            <ul class="env-list" id="ext-failed"></ul>
             <h3 class="ext-section">Waiting for review</h3>
             <ul class="env-list" id="ext-waiting"></ul>
             <h3 class="ext-section">Found here, never reviewed</h3>
@@ -90,6 +92,24 @@
             <ul class="env-list" id="ext-refused"></ul>
             <h3 class="ext-section">Available to add</h3>
             <ul class="env-list" id="ext-catalogue"></ul>
+          </div>
+          <div class="env-add-block" id="ext-create-section">
+            <h3 class="env-add-title">Create local extension</h3>
+            <p class="env-hint">Define a local tool for this Voicebox server. Staging creates a pending proposal; the host reviews and admits it.</p>
+            <form class="env-add" id="ext-create-form">
+              <input id="ext-create-id" type="text" placeholder="ID (e.g. local-search)" aria-label="extension id" required pattern="[a-z0-9_-]+" />
+              <input id="ext-create-name" type="text" placeholder="Name (e.g. Local Search)" aria-label="extension name" required />
+              <input id="ext-create-desc" type="text" placeholder="Description of tool" aria-label="extension description" required />
+              <select id="ext-create-primitive" aria-label="tool primitive">
+                <option value="http-get">http-get (fetch JSON/text from allowed host)</option>
+                <option value="read-file">read-file (read project files)</option>
+                <option value="write-file">write-file (write project files)</option>
+                <option value="list-files">list-files (list project files)</option>
+                <option value="now">now (timestamp)</option>
+              </select>
+              <input id="ext-create-target" type="text" placeholder="Allowed host (e.g. 127.0.0.1)" aria-label="target host or parameter" />
+              <button id="ext-create-btn" type="submit">Create local extension</button>
+            </form>
           </div>
           <p class="env-note" id="ext-note" role="status"></p>
         </div>
@@ -249,13 +269,14 @@
       <section class="reader" id="reader" data-state="empty" aria-labelledby="reader-title">
         <div class="reader-head">
           <h2 id="reader-title">Nothing open</h2>
+          <button class="quiet" id="file-refresh" type="button" disabled aria-label="Reload file contents" title="Reload file contents">Reload</button>
           <button class="quiet" id="file-copy" type="button" disabled>Copy</button>
           <button class="icon-button" id="reader-close" type="button" aria-label="Close the file"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
         </div>
         <pre id="file-body" tabindex="0" role="region" aria-label="File contents"></pre>
         <details class="reader-details" id="reader-details">
           <summary>Details</summary>
-          <p id="file-facts"></p>
+          <p id="file-facts" role="status" aria-live="polite"></p>
         </details>
       </section>
 
@@ -265,13 +286,14 @@
         <div class="mic-stage" id="voice-ring-wrap" data-voice="off">
           <!-- the agent's voice: one radius per sample around the circle -->
           <svg class="output-ring" viewBox="0 0 240 240" aria-hidden="true"><path id="output-path"></path></svg>
-          <button class="mic" id="mic" type="button" aria-label="Speak a turn" aria-pressed="false" aria-describedby="voice-state">
+          <button class="mic" id="mic" type="button" aria-label="Speak a turn" aria-pressed="false" aria-describedby="voice-state" aria-keyshortcuts="M" title="Speak a turn (hotkey: M)">
             <svg class="mic-glyph icon" aria-hidden="true"><use href="#i-mic"/></svg>
             <!-- your voice: recent input energy at the microphone itself -->
             <svg class="input-wave" viewBox="0 0 100 100" aria-hidden="true">
               <defs><clipPath id="mic-inner"><circle cx="50" cy="50" r="46"/></clipPath></defs>
               <path id="input-path" clip-path="url(#mic-inner)"></path>
             </svg>
+            <kbd class="mic-hotkey-badge" id="mic-hotkey-badge" aria-hidden="true">M</kbd>
           </button>
         </div>
         <p class="voice-state" id="voice-state" role="status">Microphone off — press the circle to speak</p>
@@ -293,6 +315,11 @@
             <h3 id="mic-label">Microphone</h3>
             <select id="mic-select" aria-labelledby="mic-label"></select>
             <p class="device-state" id="mic-device-state">Mic off</p>
+          </div>
+          <div class="device-row">
+            <h3 id="mic-hotkey-label">Microphone hotkey</h3>
+            <input type="text" id="mic-hotkey" class="setting-input" aria-labelledby="mic-hotkey-label" maxlength="1" value="M" autocomplete="off" spellcheck="false">
+            <p class="device-state" id="mic-hotkey-state">Press 'M' to toggle mic</p>
           </div>
           <div class="device-row">
             <h3 id="out-label">Reply output</h3>
@@ -391,5 +418,17 @@
   </div>
 
   <noscript><p class="no-script">Voicebox needs JavaScript: the file list, the turns and the microphone are all driven by the page. Nothing here is a static picture of them.</p></noscript>
+
+  <!-- The docked microphone (voicebox-beads-dzd): the same control, one surface.
+       While the ring button is on screen this button is hidden — one mic in the
+       page and in the tab order; when scrolling takes the ring away the dock
+       appears, its click IS the ring button's click (pip-mic.mjs's rule:
+       delegate, never duplicate), and the ring button itself steps out of the
+       tab order and the a11y tree until it scrolls back (the handoff is wired
+       beside the observer in fused.js). Its state is painted by watching the
+       same attributes the ring answers to — one writer, two viewers. -->
+  <button class="mic-dock" id="mic-dock" type="button" aria-label="Speak a turn" aria-pressed="false" hidden>
+    <svg class="icon" aria-hidden="true"><use href="#i-mic"/></svg>
+  </button>
 </body>
 </html>

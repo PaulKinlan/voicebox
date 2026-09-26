@@ -155,3 +155,9 @@ pairing model used for remote hosts (`/api/pair`).
 - Keep `voicebox-beads-dv3` as the architectural rationale documenting why an HTML-minted token is omitted.
 - When `2gq` is prioritized for implementation, file a dedicated implementation bead:
   `[feat] launcher bootstrap ticket and session cookie for loopback HTTP/WS endpoints`.
+
+> **LANDED (2026-09-25, opt-in):** the implementation bead was filed as `voicebox-beads-kkc` and built to
+> this recommendation — `VOICEBOX_LOOPBACK_AUTH=1` turns on the host-token bootstrap ticket and the
+> HttpOnly session cookie across the page, the APIs, and the `/channel` + `/live` local-page
+> entitlement. Default off; the `5c1` surface is unchanged. What landed, and the proofs, are in
+> [18 — The loopback session gate](18-loopback-session-auth.md).

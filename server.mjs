@@ -25,7 +25,7 @@ import {
 } from "./core/agent-settings.ts";
 import { auditFileName, makeEntry, mergeAudit, nextSeq, parseEntry, resumeSeq, serializeEntry, sweepLostAttempts } from "./core/audit.ts";
 import { activityEntry } from "./core/shared-log.ts";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   ENV_UNREACHABLE,
   listUnreadable,
@@ -33,14 +33,16 @@ import {
   unreachable,
 } from "./core/environment.ts";
 import * as extensions from "./lib/extensions.mjs";
+import { sweepOrphanedProbeMarkers } from "./tools/sandbox-probe.mjs";
 import { createTaskHost, installTaskExecutor, protectedAuditPath, TASK_TOOLS } from "./lib/tasks.mjs";
 import { createPermissionPolicy } from "./lib/permission-policy.mjs";
-import { createPiAcpExecutor } from "./lib/pi-acp.mjs";
+import { createPiAcpExecutor, describeAdapterInstall } from "./lib/pi-acp.mjs";
 import { bootFence } from "./lib/fence-provider.mjs";
 import { SOURCE_DIRS } from "./lib/browser-sources.mjs";
 import { bootUnitFence, stopUnitFence } from "./lib/unit-fence-provider.mjs";
 import { createHarnessInventory } from "./lib/harness-inventory.mjs";
 import { createAgentRegistry, listHarnessesWithConfiguredAgents, publicAgentProjection } from "./lib/harness-config.mjs";
+import { validateHarnessAgents, renderHarnessTable, describeAgentAdmission, unimplementedAdapterWhy, CLAUDE_LEGACY_DELEGATE_WHY } from "./lib/harness-startup.mjs";
 import {
   createFleetManager,
   publicFleetProjection,
@@ -53,14 +55,18 @@ import { createLiveSession, LIVE_MODEL, inputRateRequiredBy } from "./lib/live-s
 import { commandToAction, functionDeclarations, liveSystemInstruction } from "./lib/commands.mjs";
 import { readProjectInstruction } from "./lib/project-instruction.mjs";
 import { installColorConsole } from "./lib/logger.mjs";
+// The state directories have ONE owner; this file no longer computes its own copy of any of them
+// (voicebox-beads-y5k: `VOICEBOX_WORKSPACE` and `VOICEBOX_EXTENSIONS_DIR` were each resolved here
+// AND in lib/extensions.mjs, with the same fallbacks written twice).
+import { workspaceDir, workspaceDeclared, extensionsDir } from "./lib/state-dirs.mjs";
 
 installColorConsole();
 
 // Module-relative, decoded: `new URL(...).pathname` percent-encodes spaces and
 // silently points every read at a directory that does not exist.
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-// Movable workspace (tests point it at scratch; see lib/extensions.mjs).
-const WORKSPACE = process.env.VOICEBOX_WORKSPACE ?? path.join(ROOT, "workspace");
+// Movable workspace (tests point it at scratch; the fact is owned by lib/state-dirs.mjs).
+const WORKSPACE = workspaceDir();
 
 // ── THE ACTIVE ROOT (core/root.ts is the seam) ────────────────────────────────────────────────
 // The loop does not invent a root, and it has NO DEFAULT. It acts on the ACTIVE PROJECT'S root,
@@ -130,10 +136,14 @@ const PROBE_SCRIPT = path.join(ROOT, "tools", "sandbox-probe.mjs");
 // a writable root is a credential the page can reach; 0600 and no-route are necessary but the
 // LOCATION is the defence. A corrupt store is a NAMED refusal (every credential is not "no
 // credentials"), in the family of environment-list-unreadable.
-const HOST_DIR = process.env.VOICEBOX_EXTENSIONS_DIR ?? path.join(ROOT, "extensions");
+const HOST_DIR = extensionsDir();
 const PAIRINGS_FILE = path.join(HOST_DIR, ".pairings.json");
 // Stale pending approval files must never survive a restart (voicebox-beads-62f).
 rmSync(path.join(HOST_DIR, ".pending-approval.json"), { force: true });
+
+// Stale sandbox probe markers from killed runs must never survive (voicebox-beads-ebq).
+sweepOrphanedProbeMarkers(ROOT);
+if (process.cwd() !== ROOT) sweepOrphanedProbeMarkers(process.cwd());
 
 // ── IN-ROOM SESSION AUTHORIZATION (voicebox-beads-5jl) ──────────────────────────
 // Minted per server process and embedded into the served index.html. Allows in-room UI actions
@@ -163,6 +173,57 @@ function hasExtensionAuthority(req) {
     return true;
   }
   return false;
+}
+
+// ── LOOPBACK SESSION AUTH (docs/13 §4 — voicebox-beads-kkc, epic 2gq) ─────────────────────────
+// The residual boundary 5c1 named but did not close: on loopback TCP any local process can write
+// `Origin: http://127.0.0.1:<port>` on a raw socket, so the Origin check distinguishes BROWSER
+// contexts but not which local PROCESS connects. docs/13 §1 rules out minting a token into the
+// openly-served HTML (anyone who can reach the port can fetch that HTML); §4 lands Option A, the
+// Jupyter/code-server pattern, phased as an OPT-IN gate:
+//
+//   VOICEBOX_LOOPBACK_AUTH=1  →  the page and every API/WS route answer only with a session
+//   cookie, and the only way in is a ONE-TIME bootstrap ticket the server mints and prints at
+//   startup (or mints on demand for a holder of the host token — the same 0600 authority as
+//   admission). The ticket redeems once, on the page route, into an HttpOnly SameSite=Strict
+//   cookie; a local process that cannot read the ticket output (a different UID, a container)
+//   can no longer fetch the page or take the executor chair by forging an Origin header.
+//
+// DEFAULT OFF: every check below asks LOOPBACK_AUTH first, so the default surface is byte-for-
+// byte the 5c1 behaviour and every existing suite runs unchanged. The secret is EPHEMERAL and
+// PER-PROCESS — a restart mints a new one and silently invalidates every issued cookie, which
+// is the honest failure mode: the remedy (open the URL the new process printed) is the launch.
+const LOOPBACK_AUTH = process.env.VOICEBOX_LOOPBACK_AUTH === "1";
+const SESSION_COOKIE = "vb_session";
+const LOOPBACK_SESSION = randomBytes(32).toString("hex");
+const outstandingBootstrapTickets = new Set(); // single-use: consumed on redemption
+function mintBootstrapTicket() {
+  const ticket = randomBytes(32).toString("hex");
+  outstandingBootstrapTickets.add(ticket);
+  return ticket;
+}
+function consumeBootstrapTicket(ticket) {
+  if (typeof ticket !== "string" || !outstandingBootstrapTickets.has(ticket)) return false;
+  outstandingBootstrapTickets.delete(ticket);
+  return true;
+}
+function sessionCookieOk(req) {
+  const header = req.headers.cookie;
+  if (typeof header !== "string") return false;
+  const match = header.split(/;\s*/).find((pair) => pair.startsWith(`${SESSION_COOKIE}=`));
+  if (!match) return false;
+  const provided = Buffer.from(match.slice(SESSION_COOKIE.length + 1));
+  const expected = Buffer.from(LOOPBACK_SESSION);
+  // Length differs → not ours; timingSafeEqual throws on length mismatch, so gate on it first.
+  return provided.length === expected.length && timingSafeEqual(provided, expected);
+}
+function claimsToBeTheLocalPage(req, localOrigins) {
+  const origin = typeof req.headers.origin === "string" ? req.headers.origin : null;
+  if (!origin || !localOrigins.has(origin)) return false;
+  // WITH the gate on, a matching Origin is no longer entitlement by itself — the browser proves
+  // the session by presenting the cookie the bootstrap ticket minted. A script that forges the
+  // header without the cookie falls through to the bearer-hello path and is refused there, by name.
+  return !LOOPBACK_AUTH || sessionCookieOk(req);
 }
 
 const PAIRINGS_UNREADABLE = "pairing-list-unreadable";
@@ -337,8 +398,12 @@ function writeProbeCache(report) {
 /** Run the probe in THIS process's environment. JSON on stdout; a non-zero exit is the boundary
  *  showing itself, and any stdout it produced is still the report. */
 function runProbe() {
+  sweepOrphanedProbeMarkers(ROOT);
+  if (process.cwd() !== ROOT) sweepOrphanedProbeMarkers(process.cwd());
   return new Promise((resolve, reject) => {
     execFile(process.execPath, [PROBE_SCRIPT], { timeout: 15000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+      sweepOrphanedProbeMarkers(ROOT);
+      if (process.cwd() !== ROOT) sweepOrphanedProbeMarkers(process.cwd());
       const text = String(stdout ?? "").trim();
       if (!text) return reject(err ?? new Error("the probe printed nothing"));
       try {
@@ -455,12 +520,13 @@ let boundPort = null;
 let liveSessionsCreated = 0;
 
 /** A declaration made by the operator at boot (VOICEBOX_WORKSPACE), which is a decision, not a default. */
-if (process.env.VOICEBOX_WORKSPACE) {
-  const declared = path.resolve(process.env.VOICEBOX_WORKSPACE);
+const bootRoot = workspaceDeclared();
+if (bootRoot) {
+  const declared = path.resolve(bootRoot);
   if (existsSync(declared) && statSync(declared).isDirectory()) {
     active = { project: path.basename(declared), root: { kind: "machine", path: realpathSync(declared), environment: SELF_ENVIRONMENT }, declaredAt: new Date().toISOString(), declaredBy: "VOICEBOX_WORKSPACE" };
   } else {
-    console.error(`[root] VOICEBOX_WORKSPACE='${process.env.VOICEBOX_WORKSPACE}' is not a directory — no root is declared`);
+    console.error(`[root] VOICEBOX_WORKSPACE='${bootRoot}' is not a directory — no root is declared`);
   }
 }
 
@@ -604,12 +670,55 @@ const fleetManager = createFleetManager({
 const permissions = createPermissionPolicy();
 
 const HARNESS = process.env.VOICEBOX_HARNESS ?? null;
-if (HARNESS === "pi" || HARNESS === "pi-acp") {
-  const piExecutor = createPiAcpExecutor({
-    decide: permissions.decide,
-    root: () => active?.root,
+
+// Multi-harness task execution (voicebox-beads-aaj): ONE dispatcher, many adapters.
+// A delegate_task names an agent; the registry resolves its adapter; the dispatcher hands
+// check/run to THAT adapter's executor. Adapters with no real implementation refuse by name
+// at admission — a configured harness that cannot run is a named fact, never a crash and
+// never a silent drop. The pi-acp executor is constructed unconditionally because its own
+// check() IS the honest answer when the machine lacks a verified adapter install.
+const piExecutor = createPiAcpExecutor({
+  decide: permissions.decide,
+  root: () => active?.root,
+});
+const adapterExecutors = new Map([["pi-acp", piExecutor]]);
+const UNIMPLEMENTED_ADAPTER_LABELS = new Map([
+  ["claude-code", "claude"],
+  ["codex-cli", "codex"],
+  ["gemini-cli", "gemini"],
+  ["opencode", "opencode"],
+]);
+function executorForAgent(agentConfig, harness) {
+  const adapter = agentConfig?.adapter ?? (harness === "pi" || harness === "pi-acp" ? "pi-acp" : harness);
+  const installed = adapterExecutors.get(adapter);
+  if (installed) return installed;
+  const label = UNIMPLEMENTED_ADAPTER_LABELS.get(adapter) ?? adapter ?? harness;
+  // The sentence comes from the ONE home (harness-startup.mjs); claude's delegate path keeps
+  // its long-standing, test-pinned sentence — the vantage rule lives with the constant.
+  const why = label === "claude" ? CLAUDE_LEGACY_DELEGATE_WHY : unimplementedAdapterWhy(label);
+  return {
+    check() {
+      return { ok: false, refused: "adapter-not-configured", why };
+    },
+    async run() {
+      throw Object.assign(new Error(why), { refused: "adapter-not-configured" });
+    },
+  };
+}
+if (HARNESS) {
+  // The delegating executor: check/run read the task's agentConfig and hand off to THAT
+  // adapter's executor, so admission carries the named refusal of the right adapter.
+  installTaskExecutor({
+    check(args = {}) {
+      return executorForAgent(args.agentConfig, args.harness ?? args.agent).check(args);
+    },
+    run(args = {}) {
+      const target = executorForAgent(args.agentConfig, args.harness ?? args.agent);
+      return target.run(args);
+    },
   });
-  installTaskExecutor(piExecutor);
+}
+if (HARNESS === "pi" || HARNESS === "pi-acp") {
   agentRegistry.register({
     id: "pi",
     name: "Pi",
@@ -619,14 +728,6 @@ if (HARNESS === "pi" || HARNESS === "pi-acp") {
     isDefault: true,
   });
 } else if (HARNESS === "claude") {
-  installTaskExecutor({
-    check({ input }) {
-      return { ok: false, refused: "adapter-not-configured", why: "No Voicebox task adapter is configured for this CLI; configure an adapter before delegating." };
-    },
-    async run() {
-      throw Object.assign(new Error("No Voicebox task adapter is configured for this CLI"), { refused: "adapter-not-configured" });
-    },
-  });
   agentRegistry.register({
     id: "claude",
     name: "Claude",
@@ -635,6 +736,25 @@ if (HARNESS === "pi" || HARNESS === "pi-acp") {
     environmentKey: SELF_ENVIRONMENT,
     isDefault: true,
   });
+}
+
+// Startup admission for every configured agent of this environment (voicebox-beads-aaj):
+// the table says what a delegation to each agent would do TODAY, before anyone delegates.
+const harnessAdmission = validateHarnessAgents({
+  registry: agentRegistry,
+  environment: SELF_ENVIRONMENT,
+  describeAdapter: () => describeAdapterInstall({}),
+  implementedAdapters: new Set(adapterExecutors.keys()),
+  executorSelected: Boolean(HARNESS),
+});
+// Refused agents are named in the normal startup log — a broken harness configuration is a
+// boot fact a person should meet WITHOUT running --doctor or a delegation that fails.
+for (const row of harnessAdmission.rows) {
+  if (!row.admitted) {
+    console.log(`  [harness] REFUSED ${row.agent.id} (${row.agent.adapter}) — ${row.refused}: ${row.why}`);
+  } else {
+    console.log(`  [harness] ADMITTED ${row.agent.id} (${row.agent.adapter}${row.installedVersion ? ` @ ${row.installedVersion}` : ""})`);
+  }
 }
 
 function callTool(tool, args, authority) {
@@ -1002,7 +1122,7 @@ voicebox doctor — what this process would do, and why.
 PATHS
 `);
   line("VOICEBOX_WORKSPACE", "(none declared)", "a root at boot; without it every write refuses");
-  line("VOICEBOX_EXTENSIONS_DIR", path.join(ROOT, "extensions"), "where extensions live");
+  line("VOICEBOX_EXTENSIONS_DIR", extensionsDir(), "where extensions live");
   line("VOICEBOX_SANDBOX_HOMES", "(default)", "sandbox home root");
   line("VOICEBOX_INSTANCE", "machine", "this instance's name");
 
@@ -1048,15 +1168,14 @@ VERDICT`);
   console.log(`  turn brain        ${wantResolver}`);
   console.log(`  live transport    ${wantLive}`);
   const wantHarness = process.env.VOICEBOX_HARNESS ?? "(none)";
-  const harnessVerdict = (wantHarness === "pi" || wantHarness === "pi-acp")
-    ? "pi (admitted via pi-acp)"
-    : wantHarness === "claude"
-    ? "claude (unrunnable: no Voicebox task adapter is configured for this CLI)"
-    : wantHarness === "(none)"
-    ? "none admitted (set VOICEBOX_HARNESS=pi to admit Pi)"
-    : `${wantHarness} (unsupported)`;
+  const harnessVerdict = wantHarness === "(none)"
+    ? "none selected (set VOICEBOX_HARNESS=pi to admit Pi; see the per-agent admission table below)"
+    : `${wantHarness} selected`;
   console.log(`  task harness      ${harnessVerdict}`);
-  console.log(`  root at boot      ${set(process.env.VOICEBOX_WORKSPACE) ? process.env.VOICEBOX_WORKSPACE : "none — declare one from the page, or set VOICEBOX_WORKSPACE"}`);
+  for (const admissionLine of renderHarnessTable(harnessAdmission.rows, { environment: SELF_ENVIRONMENT })) {
+    console.log(admissionLine);
+  }
+  console.log(`  root at boot      ${workspaceDeclared() ?? "none — declare one from the page, or set VOICEBOX_WORKSPACE"}`);
   if (missing.length === 0) {
     console.log(`  credentials       present for what is selected`);
   } else {
@@ -1098,19 +1217,19 @@ A SERVER ON :${port}`);
 // 2026-09-23: "I can't work out how to add a root or change the provider".)
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
   console.log(`
-voicebox server — the local room, its files and its live voice.
+voicebox server — the local project, its files and its live voice.
 
   npm run serve                     start on :8787 (reloads when a source file changes)
   npm run serve -- --help           this text
 
-A ROOT is the folder the room can read and write. There are three ways to get one:
+A ROOT is the folder voicebox can read and write. There are three ways to get one:
 
   1. From the page      the explorer's declare control (POST /api/root)
   2. At boot            VOICEBOX_WORKSPACE=/path/to/folder npm run serve
   3. From a worker      the browser worker declares one when it opens a project
 
 Without one, every write refuses with "root-not-declared" — that is the refusal
-naming its own remedy, not a broken room.
+naming its own remedy, not a fault.
 
 THE TURN BRAIN decides who answers a typed turn, and is chosen at boot:
 
@@ -1782,7 +1901,18 @@ const routes = {
   "GET /api/agents": (req, res, url) => {
     const environmentKey = url.searchParams.get("environment") || undefined;
     const harness = url.searchParams.get("harness") || undefined;
-    const agents = agentRegistry.list({ environmentKey, harness }).map(publicAgentProjection);
+    // Admission is the LIVE verdict for THIS environment (voicebox-beads-aaj): what a
+    // delegation to each agent would do today, refused by name when it would refuse.
+    // Live, not a boot snapshot: agents registered after boot get their verdict too.
+    const admissionContext = {
+      describeAdapter: () => describeAdapterInstall({}),
+      implementedAdapters: new Set(adapterExecutors.keys()),
+      executorSelected: Boolean(HARNESS),
+    };
+    const agents = agentRegistry.list({ environmentKey, harness }).map((a) => ({
+      ...publicAgentProjection(a),
+      admission: describeAgentAdmission(a, admissionContext),
+    }));
     return json(res, 200, { ok: true, agents });
   },
   "GET /api/fleet": async (req, res, url) => {
@@ -1938,7 +2068,23 @@ const routes = {
     });
   },
   "GET /": (req, res, url) => {
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    // THE BOOTSTRAP DOOR (docs/13 §4, opt-in): a valid one-time ticket is exchanged for the
+    // session cookie on this very response, so the page the person asked for is the page they
+    // get — no second navigation. An invalid or already-consumed ticket is a NAMED refusal with
+    // the remedy in it, because a ticket that silently 404s would read as the server being broken.
+    const bootstrapHeaders = {};
+    if (LOOPBACK_AUTH && url.searchParams.has("bootstrap")) {
+      if (!consumeBootstrapTicket(url.searchParams.get("bootstrap"))) {
+        res.writeHead(401, { "content-type": "text/plain; charset=utf-8" });
+        return res.end(
+          "401 bootstrap-ticket-refused — that bootstrap ticket is unknown or already used; one ticket opens one session. " +
+            "Open the bootstrap URL the server printed when it started, or mint a fresh one: " +
+            "POST /api/bootstrap with the x-voicebox-host-token header.",
+        );
+      }
+      bootstrapHeaders["set-cookie"] = `${SESSION_COOKIE}=${LOOPBACK_SESSION}; HttpOnly; SameSite=Strict; Path=/`;
+    }
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", ...bootstrapHeaders });
     const where = BUILD.ahead === null
       ? ` · no origin/${BUILD.branch} here, so the distance from a remote is unknown`
       : BUILD.ahead === 0
@@ -1981,6 +2127,40 @@ async function handle(req, res) {
   });
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   const key = `${req.method} ${url.pathname}`;
+  // THE WALL (opt-in, docs/13 §4): with the gate on, an unauthenticated request gets a named
+  // refusal and a remedy, before any route — including the static fallthrough below — answers.
+  // Self-authorising exemptions, each with its reason named:
+  //   · /api/health — the spawn-and-wait harness, supervisors and the currency gate heartbeat
+  //     read it before any session exists; it reports no root, no file and no credential.
+  //   · POST /api/bootstrap — it IS the authority check (host token) and the re-entry door.
+  //   · the page carrying ?bootstrap= — the route itself validates and consumes the ticket.
+  // The WebSocket upgrades (/channel, /live) do not pass through here: their local-page
+  // entitlement checks the session cookie in place, and every other peer still answers the
+  // pairing-bearer hello exactly as 5c1 built it.
+  if (LOOPBACK_AUTH && !sessionCookieOk(req)) {
+    const pageBootstrapping =
+      (url.pathname === "/" || url.pathname === "/index.html") && url.searchParams.has("bootstrap");
+    // The HOST TOKEN also passes the wall: it is the 0600 authority the person's shell already
+    // holds (admission, root declaration, pairing) — a process that can read it is inside the host
+    // boundary by definition (docs/13 §4), and the host's own acts must not need a browser.
+    const exempt =
+      url.pathname === "/api/health" ||
+      (req.method === "POST" && url.pathname === "/api/bootstrap") ||
+      pageBootstrapping ||
+      extensions.hostTokenOk(req.headers["x-voicebox-host-token"]);
+    if (!exempt) {
+      const why =
+        "this server was started with VOICEBOX_LOOPBACK_AUTH=1: open the bootstrap URL it printed at startup " +
+        "(one-time), or mint a fresh ticket with POST /api/bootstrap and the x-voicebox-host-token header. " +
+        "Requests carrying the host token pass directly. Everything else answers only with the session " +
+        "cookie that the bootstrap exchange mints.";
+      if (url.pathname.startsWith("/api/")) {
+        return json(res, 401, { ok: false, refused: "loopback-unauthenticated", why });
+      }
+      res.writeHead(401, { "content-type": "text/plain; charset=utf-8" });
+      return res.end(`401 loopback-unauthenticated — ${why}`);
+    }
+  }
   // Fall through to public/ for any other path the page requests.
   if (req.method === "GET" && !routes[key] && !url.pathname.startsWith("/api/")) {
     const file = resolvePublicFile(url.pathname);
@@ -2515,6 +2695,26 @@ async function handle(req, res) {
     const r = extensions.propose(body?.descriptor, body?.descriptor?.source ?? "model");
     return r.ok ? json(res, 200, { ...r, note: "staged as a pending proposal — NOT loaded; the host admits it" }) : json(res, 400, r);
   }
+  if (req.method === "POST" && ["/api/extensions/local", "/api/extensions/create"].includes(url.pathname)) {
+    // Create and locally add new extensions (voicebox-beads-b1p).
+    // Host-owned admission gate: staging creates a pending proposal with source "local".
+    // Direct admission requires the host token (x-voicebox-host-token); without it, direct admission is refused.
+    const body = await readJson();
+    const descriptor = body?.descriptor ?? body;
+    if (!descriptor || typeof descriptor !== "object") {
+      return json(res, 400, { ok: false, refused: "bad-request", why: "extension descriptor object required" });
+    }
+    const wantsAdmit = Boolean(body?.admit);
+    if (wantsAdmit) {
+      if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+        return json(res, 403, { ok: false, refused: "host-token-required", why: "direct admission is the host's act — this requires the host token (x-voicebox-host-token); stage as proposal first" });
+      }
+      const r = extensions.createAndAdmitExtension(descriptor, "host");
+      return json(res, r.ok ? 200 : 400, r);
+    }
+    const r = extensions.createExtension(descriptor, descriptor.source ?? "local");
+    return json(res, r.ok ? 200 : 400, r);
+  }
   const planMatch = url.pathname.match(/^\/api\/extensions\/(proposals|catalogue)\/([a-z0-9_-]+)\/plan$/);
   if (req.method === "GET" && planMatch) {
     const plan = planMatch[1] === "proposals" ? extensions.proposalPlan(planMatch[2]) : extensions.cataloguePlan(planMatch[2]);
@@ -2639,7 +2839,7 @@ async function handle(req, res) {
         note: "nothing decided — repeat with confirm:true to apply reconfiguration",
       });
     }
-    const r = extensions.reconfigureExtension(body.id, { bounds: body.bounds, tools: body.tools }, body.actor ?? "host");
+    const r = extensions.reconfigureExtension(body.id, { bounds: body.bounds, tools: body.tools, params: body.params }, body.actor ?? "host");
     return json(res, r.ok ? 200 : 400, r);
   }
 
@@ -2651,7 +2851,7 @@ async function handle(req, res) {
     }
     const id = patchExtMatch[1];
     const body = await readJson();
-    const r = extensions.reconfigureExtension(id, { bounds: body?.bounds, tools: body?.tools }, body?.actor ?? "host");
+    const r = extensions.reconfigureExtension(id, { bounds: body?.bounds, tools: body?.tools, params: body?.params }, body?.actor ?? "host");
     return json(res, r.ok ? 200 : 400, r);
   }
 
@@ -2744,6 +2944,21 @@ async function handle(req, res) {
     }
     const result = revokePairing(envKey);
     return json(res, result.ok ? 200 : 404, result);
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/bootstrap") {
+    // MINTING A TICKET IS THE HOST'S ACT — the same 0600 authority as admission (m2i) and root
+    // declaration (cfn). This is the re-entry door when the cookie is lost without a restart:
+    // the person's shell holds the host token, so the remedy is one curl away. The ticket is
+    // single-use like the startup one; the URL it names is this server's own bound address.
+    if (!LOOPBACK_AUTH) {
+      return json(res, 404, { ok: false, refused: "loopback-auth-disabled", why: "no bootstrap door exists when the server was not started with VOICEBOX_LOOPBACK_AUTH=1 — the page is served openly in that mode, which is the default" });
+    }
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, { ok: false, refused: "host-token-refused", why: "minting a bootstrap ticket requires the host token (x-voicebox-host-token) — the same authority that admits extensions and declares roots" });
+    }
+    const ticket = mintBootstrapTicket();
+    return json(res, 200, { ok: true, url: `http://127.0.0.1:${boundPort ?? PORT}/?bootstrap=${ticket}` });
   }
 
   if (req.method === "POST" && url.pathname === "/api/call") {
@@ -2871,10 +3086,12 @@ server.on("upgrade", (req, socket) => {
   //   · Unauthenticated or non-matching connections receive a named refusal with a remedy
   //     ("executor-unauthenticated" / "bearer-refused") and are closed before pageSocket is set.
   //
-  // WHAT THIS DOES NOT PROTECT AGAINST (same-machine non-browser processes are out of scope):
+  // WHAT THIS DOES NOT PROTECT AGAINST — and what now closes it (docs/13 §4, opt-in):
   // A non-browser process on the local machine (curl, script) can forge an Origin header on raw loopback TCP.
-  // Closing that requires a per-process session token minted into the served HTML (the environment-identity milestone);
-  // this gate closes Cross-Site WebSocket Hijacking from other browser tabs and unauthenticated remote peers.
+  // By default that residual stays open (5c1's documented boundary). With VOICEBOX_LOOPBACK_AUTH=1 the local-page
+  // entitlement ALSO requires the session cookie minted by the one-time bootstrap ticket, so a process that
+  // cannot read the ticket output cannot take the chair by forging the header — it falls to the bearer-hello
+  // path below and is refused there, by name. See the LOOPBACK SESSION AUTH block near the top of this file.
   if (url.pathname === "/channel") {
     const ws = wsUpgrade(req, socket);
     if (!ws) { socket.destroy(); return; }
@@ -2885,7 +3102,7 @@ server.on("upgrade", (req, socket) => {
       `http://localhost:${selfPort}`,
       `http://[::1]:${selfPort}`,
     ]);
-    const claimsToBeTheLocalPage = typeof req.headers.origin === "string" && localOrigins.has(req.headers.origin);
+    const claimsToBeTheLocalPageNow = claimsToBeTheLocalPage(req, localOrigins);
 
     const refuseChannel = (refused, why) => {
       try {
@@ -2922,7 +3139,7 @@ server.on("upgrade", (req, socket) => {
       ws.on("error", () => {});
     };
 
-    if (claimsToBeTheLocalPage) {
+    if (claimsToBeTheLocalPageNow) {
       attachExecutor("local environment page");
       return;
     }
@@ -2986,16 +3203,17 @@ server.on("upgrade", (req, socket) => {
   //
   // WHAT THIS DOES NOT CLAIM, stated here rather than discovered later: a non-browser client can send any
   // Origin it likes, so "same origin" is a claim the peer makes, not a proof. This gate stops an
-  // unauthenticated peer from costing a session and makes the PAIRED path enforceable; a per-process page
-  // token minted into the served HTML is what would close the claim itself, and it belongs with the
-  // environment-identity work rather than here.
+  // unauthenticated peer from costing a session and makes the PAIRED path enforceable. By default the claim
+  // itself stays open (5c1's boundary); with VOICEBOX_LOOPBACK_AUTH=1 the local-page branch below also
+  // requires the bootstrap-minted session cookie (docs/13 §4), which is what turns the claim into a proof
+  // for every local process that cannot read the ticket output.
   const selfPort = boundPort ?? PORT;
   const localOrigins = new Set([
     `http://127.0.0.1:${selfPort}`,
     `http://localhost:${selfPort}`,
     `http://[::1]:${selfPort}`,
   ]);
-  const claimsToBeTheLocalPage = typeof req.headers.origin === "string" && localOrigins.has(req.headers.origin);
+  const claimsToBeTheLocalPageNow = claimsToBeTheLocalPage(req, localOrigins);
 
   const refuseLive = (refused, why) => {
     try { ws.send(JSON.stringify({ type: "refused", refused, why })); } catch { /* the socket may be gone */ }
@@ -3181,7 +3399,7 @@ server.on("upgrade", (req, socket) => {
     ws.on("error", endSession);
   };
 
-  if (claimsToBeTheLocalPage) { beginSession(); return; }
+  if (claimsToBeTheLocalPageNow) { beginSession(); return; }
 
   const HELLO_BOUND_MS = 5000;
   const helloDeadline = setTimeout(
@@ -3284,6 +3502,15 @@ try {
   console.log(
     `voicebox on http://127.0.0.1:${bound} — provider: ${PROVIDER}, root: ${active ? active.root.path : "(none declared)"}`,
   );
+  if (LOOPBACK_AUTH) {
+    // The bootstrap URL is the ONLY way in while the gate is on (docs/13 §4): one-time ticket,
+    // redeemed by the first browser that opens it into the session cookie. Printed, not written
+    // to a file, for the same reason Jupyter prints its token: the terminal is the boundary.
+    const ticket = mintBootstrapTicket();
+    console.log(`bootstrap  http://127.0.0.1:${bound}/?bootstrap=${ticket}`);
+    console.log(`  the page and every API/WS route answer only with the session cookie that URL mints (one-time; HttpOnly; SameSite=Strict).`);
+    console.log(`  lost the cookie? mint another without restarting: curl -X POST -H "x-voicebox-host-token: $(cat "${HOST_DIR}/.host-token")" http://127.0.0.1:${bound}/api/bootstrap`);
+  }
 } catch (error) {
   console.error(
     `[bind] giving up after waiting ${BIND_DEADLINE_MS}ms for 127.0.0.1:${PORT} (${error?.code ?? error?.message}). ` +

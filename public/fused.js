@@ -22,21 +22,32 @@ const WANTED = {
   rootKind: "root-kind", madeHeading: "made-heading", emptyLink: "empty-link", listingRoot: "listing-root",
   listTools: "list-tools", fileFilter: "file-filter", showAll: "show-all", listBound: "list-bound",
   openFolder: "open-folder", closeFolder: "close-folder", roomFolderHint: "room-folder-hint",
-  stage: "voice-ring-wrap", mic: "mic", state: "voice-state",
+  stage: "voice-ring-wrap", mic: "mic", state: "voice-state", micDock: "mic-dock",
   session: "session", log: "session-log", form: "text-form", utterance: "utterance", send: "send",
   reader: "reader", readerTitle: "reader-title", readerFacts: "file-facts", readerBody: "file-body",
+  fileRefresh: "file-refresh",
   copy: "file-copy", close: "reader-close", about: "about-facts", readerDetails: "reader-details",
   settingsOpen: "settings-open", settings: "settings", settingsClose: "settings-close",
   micSelect: "mic-select", outSelect: "out-select",
   micDeviceState: "mic-device-state", outDeviceState: "out-device-state",
+  micHotkey: "mic-hotkey", micHotkeyState: "mic-hotkey-state", micHotkeyBadge: "mic-hotkey-badge",
   envs: "envs", envsOpen: "envs-open", envsClose: "envs-close", envList: "env-list", envCount: "envs-count", envNote: "env-note",
   envAdd: "env-add", envAddLabel: "env-add-label", envAddOrigin: "env-add-origin", envAddBtn: "env-add-btn",
   // The extension surface (voicebox-beads-vwb): one source (/api/extensions + /api/extensions/catalogue),
-  // four states in four sections, never mixed — a present-but-unreviewed extension is never green
-  // and never described as running.
+  // five states in five sections, never mixed — a present-but-unreviewed extension is never green
+  // and never described as running, and an admitted extension that failed to load is never silent
+  // (voicebox-beads-qdo: named error + next action, its own section).
   exts: "exts", extsOpen: "exts-open", extsClose: "exts-close", extCount: "exts-count", extNote: "ext-note",
-  extRunning: "ext-running", extWaiting: "ext-waiting", extPresent: "ext-present",
+  extRunning: "ext-running", extFailed: "ext-failed", extWaiting: "ext-waiting", extPresent: "ext-present",
   extRefused: "ext-refused", extCatalogue: "ext-catalogue",
+  // Extension creation section (voicebox-beads-b1p)
+  extCreateForm: "ext-create-form",
+  extCreateId: "ext-create-id",
+  extCreateName: "ext-create-name",
+  extCreateDesc: "ext-create-desc",
+  extCreatePrimitive: "ext-create-primitive",
+  extCreateTarget: "ext-create-target",
+  extCreateBtn: "ext-create-btn",
   // Extension reconfiguration and removal modal (voicebox-beads-ud5)
   extManageDialog: "ext-manage-dialog", extManageForm: "ext-manage-form",
   extManageTitle: "ext-manage-title", extManageClose: "ext-manage-close",
@@ -82,6 +93,7 @@ function on(el, type, handler) {
 }
 
 let shownFile = null; // the file currently in the reader panel
+let fileReadSeq = 0; // monotonic sequence token guarding in-flight reads against stale settlements
 let listedRoot = null; // the root the CURRENT entries were read from — not assumed to be the active one
 // WHICH FOLDER OF THE ROOT IS ON SCREEN (voicebox-beads-tee): "" is the root itself, and every listing
 // request carries it. The server's answer gives it back normalised, and the page adopts THAT as the
@@ -1359,6 +1371,14 @@ async function renderExtensions() {
       return row;
     }), "Nothing running yet.");
 
+    // APPROVED, NOT RUNNING (voicebox-beads-qdo): an approved extension that failed to load is
+    // named HERE, never silent — the row says what happened and what to do next, in the person's
+    // words. Never green, never mixed into Running: half-loaded is a state the person must SEE.
+    extSection(els.extFailed, (inv.failedLoads ?? []).map((f) =>
+      extRow({ name: f.name ?? f.id, dotState: "false", stateText: "Approved · not running",
+               detail: `${f.why} Next: ${f.next}` })
+    ), "No approved extension is failing to load.");
+
     extSection(els.extWaiting, waiting.map((p) =>
       extRow({ name: p.name, dotState: "pending", stateText: "Waiting for the host's review", disclose: extensionApproval(p.id) })
     ), "Nothing is waiting for review.");
@@ -1469,21 +1489,25 @@ async function renderEnvironments() {
       head.appendChild(state);
       li.appendChild(head);
       // The capability report is CONTAINED and SCROLLABLE, and it SUMMARISES: a long probe is a count
-      // with the full list behind an expansion, so it never overwrites the name or the actions. Its
-      // honesty is already right; that it fits is the point.
+      // with the full list behind an expansion, so it never overwrites the name or the actions.
+      // voicebox-beads-1jk: presence is not capability. The probe measured what the HOST has; the
+      // executor has no program-execution verb, so the row must not read as "my agent can use these".
       const tools = env.capability?.tools;
       if (tools && typeof tools === "object") {
         const present = Object.entries(tools).filter(([, v]) => v && v.value).map(([k]) => k);
         const cap = document.createElement("details");
         cap.className = "env-cap";
         const summary = document.createElement("summary");
-        summary.textContent = present.length ? `${present.length} tools` : "no tools found";
+        summary.textContent = present.length ? `${present.length} host programs — present, not invocable` : "no programs found on this host";
         cap.appendChild(summary);
         if (present.length) {
+          const note = document.createElement("p");
+          note.className = "env-cap-note";
+          note.textContent = "Present on this host when probed. Voicebox tasks act on files — read, write, list, grep, edit, diff, delete — they cannot run these programs. A delegated harness runs its own tools under its own grants.";
           const full = document.createElement("div");
           full.className = "env-cap-list";
           full.textContent = present.join(", ");
-          cap.appendChild(full);
+          cap.append(note, full);
         }
         cap.title = `probed ${env.capability.when ?? "at an unknown time"}`;
         li.appendChild(cap);
@@ -1632,28 +1656,53 @@ function readProvenance(via) {
 // The same reader, reading from the folder this tab opened: the facts say which
 // source and that it is read-only, because "read from disk" was already a lie
 // once for a source that was not the server's.
-async function showRoomFile(name) {
+async function showRoomFile(name, { reloading = false } = {}) {
+  const seq = ++fileReadSeq;
+  shownFile = name;
   els.copy.disabled = true;
-  els.reader.dataset.state = "empty";
+  if (els.fileRefresh) {
+    els.fileRefresh.disabled = true;
+    if (reloading) {
+      els.fileRefresh.setAttribute("aria-busy", "true");
+      els.fileRefresh.textContent = "Reloading…";
+    }
+  }
+  if (reloading && els.reader) els.reader.dataset.loading = "true";
+  if (!reloading) els.reader.dataset.state = "empty";
+  els.reader.dataset.error = "false";
   els.readerTitle.textContent = name;
-  els.readerFacts.textContent = "Reading…";
-  els.readerBody.textContent = "";
+  els.readerFacts.textContent = reloading ? "Reloading…" : "Reading…";
+  if (!reloading) els.readerBody.textContent = "";
   showFileSelection(name);
   try {
     const { text, bytes, truncated } = await readRoomFile(name);
+    if (seq !== fileReadSeq || shownFile !== name) return;
     const modeLabel = roomFolder.mode === "readwrite" ? "read/write" : "read-only";
     els.readerFacts.textContent = `${bytes} ${bytes === 1 ? "byte" : "bytes"}${truncated ? ` (showing the first ${Math.round(ROOM_FILE_MAX_BYTES / 1024)} KB)` : ""} · read from '${roomFolder.name}' in this tab (${modeLabel})`;
     els.readerFacts.title = "";
     els.readerBody.textContent = text;
     els.reader.dataset.state = "ready";
+    els.reader.dataset.error = "false";
     els.copy.disabled = text.length === 0;
     if (els.readerDetails) els.readerDetails.open = true;
   } catch (error) {
+    if (seq !== fileReadSeq || shownFile !== name) return;
     const sentence = `Could not read '${name}' in '${roomFolder.name}': ${error?.message ?? error}`;
     els.readerFacts.textContent = sentence;
     els.readerBody.textContent = sentence;
     els.reader.dataset.state = "ready";
+    els.reader.dataset.error = "true";
+    els.copy.disabled = true;
     if (els.readerDetails) els.readerDetails.open = true;
+  } finally {
+    if (seq === fileReadSeq && shownFile === name) {
+      if (els.fileRefresh) {
+        els.fileRefresh.disabled = false;
+        els.fileRefresh.removeAttribute("aria-busy");
+        els.fileRefresh.textContent = "Reload";
+      }
+      if (els.reader) els.reader.dataset.loading = "false";
+    }
   }
 }
 
@@ -1665,18 +1714,28 @@ function rootLabel() {
   return `${base.replace(/\/$/, "")}/`;
 }
 
-async function showFile(name) {
+async function showFile(name, { reloading = false } = {}) {
+  const seq = ++fileReadSeq;
   shownFile = name;
-  if (roomFolder) return showRoomFile(name);
+  if (roomFolder) return showRoomFile(name, { reloading });
   els.copy.disabled = true;
-  els.reader.dataset.state = "empty";
+  if (els.fileRefresh) {
+    els.fileRefresh.disabled = true;
+    if (reloading) {
+      els.fileRefresh.setAttribute("aria-busy", "true");
+      els.fileRefresh.textContent = "Reloading…";
+    }
+  }
+  if (reloading && els.reader) els.reader.dataset.loading = "true";
+  if (!reloading) els.reader.dataset.state = "empty";
+  els.reader.dataset.error = "false";
   els.readerTitle.textContent = name;
-  els.readerFacts.textContent = "Reading…";
-  els.readerBody.textContent = "";
-  els.reader.dataset.state = "empty";
+  els.readerFacts.textContent = reloading ? "Reloading…" : "Reading…";
+  if (!reloading) els.readerBody.textContent = "";
   showFileSelection(name);
   try {
     const answer = await request(`/api/file?name=${encodeURIComponent(name)}`);
+    if (seq !== fileReadSeq || shownFile !== name) return;
     if (answer.ok) {
       const content = answer.content ?? "";
       // One short line: on a phone the old facts wrapped to five lines above a
@@ -1685,6 +1744,7 @@ async function showFile(name) {
       els.readerFacts.title = `${rootLabel()}${name}, read just now`;
       els.readerBody.textContent = content;
       els.reader.dataset.state = "ready";
+      els.reader.dataset.error = "false";
       els.copy.disabled = content.length === 0;
     } else {
       // A FAILED read puts the reason where the file's text would have been.
@@ -1696,9 +1756,12 @@ async function showFile(name) {
       els.readerFacts.textContent = reason;
       els.readerBody.textContent = reason;
       els.reader.dataset.state = "ready";
+      els.reader.dataset.error = "true";
+      els.copy.disabled = true;
       if (els.readerDetails) els.readerDetails.open = true;
     }
   } catch (error) {
+    if (seq !== fileReadSeq || shownFile !== name) return;
     // Name the place the file is actually supposed to be. This said
     // "workspace/" long after the loop stopped having a root of its own —
     // driven to it by vb-e1m0 on 2026-09-20: with the root at /tmp/prose2 the
@@ -1709,9 +1772,31 @@ async function showFile(name) {
     els.readerFacts.textContent = sentence;
     els.readerBody.textContent = sentence;
     els.reader.dataset.state = "ready";
+    els.reader.dataset.error = "true";
+    els.copy.disabled = true;
     if (els.readerDetails) els.readerDetails.open = true;
+  } finally {
+    if (seq === fileReadSeq && shownFile === name) {
+      if (els.fileRefresh) {
+        els.fileRefresh.disabled = false;
+        els.fileRefresh.removeAttribute("aria-busy");
+        els.fileRefresh.textContent = "Reload";
+      }
+      if (els.reader) els.reader.dataset.loading = "false";
+    }
   }
 }
+
+async function refreshCurrentFile() {
+  if (!shownFile) return;
+  if (roomFolder) {
+    await showRoomFile(shownFile, { reloading: true });
+  } else {
+    await showFile(shownFile, { reloading: true });
+  }
+}
+
+on(els.fileRefresh, "click", refreshCurrentFile);
 
 on(els.copy, "click", async () => {
   try {
@@ -1723,10 +1808,19 @@ on(els.copy, "click", async () => {
 });
 
 on(els.close, "click", () => {
+  ++fileReadSeq;
   shownFile = null;
   els.reader.dataset.state = "empty";
+  els.reader.dataset.error = "false";
+  els.reader.dataset.loading = "false";
   els.readerBody.textContent = "";
   els.readerFacts.textContent = "";
+  els.copy.disabled = true;
+  if (els.fileRefresh) {
+    els.fileRefresh.disabled = true;
+    els.fileRefresh.removeAttribute("aria-busy");
+    els.fileRefresh.textContent = "Reload";
+  }
   showFileSelection(null);
   document.querySelector(".file-open")?.focus();
 });
@@ -1916,6 +2010,61 @@ function startListening() {
 }
 
 on(els.mic, "click", startListening);
+
+// ── the docked mic (voicebox-beads-dzd): the ring's delegate, not a rival ──
+// The ring scrolls with the page; the microphone must not. While the ring is on
+// screen the dock stays hidden (the ring button is the one mic, in the page and
+// in the tab order); the moment scrolling takes the button away the dock
+// appears and its click is els.mic's click — same handler, same verbs, the
+// pip-mic rule. Its
+// pressed/coloured state is painted by watching the same data-voice attribute
+// the ring's meters watch: one writer, two viewers, no drift.
+if (els.micDock && els.stage && els.mic) {
+  on(els.micDock, "click", () => els.mic?.click());
+  // ONE mic in the page and in the tab order — now enforced, not just claimed:
+  // while the ring button is off screen the dock stands in for it, and the real
+  // button steps out of the tab order and the a11y tree (tabIndex -1 +
+  // aria-hidden). The handback is exact: scrolling the ring into view restores
+  // both and retires the dock.
+  //
+  // Synced from the LIVE rect on scroll/resize, not from IntersectionObserver
+  // entries: the harness's headless window delivered a stale initial entry (the
+  // dock came up "docked" while the ring was on screen and never handed back),
+  // and a pin that depends on when an async callback lands is a pin that lies
+  // sometimes. The throttle is TIME-based, not rAF-based, on purpose — a
+  // headless page produces no frames unless watched, and a gated rAF then
+  // never runs; this handler always does.
+  let lastDockSync = 0;
+  const syncDock = (force) => {
+    const now = performance.now();
+    if (!force && now - lastDockSync < 66) return;
+    lastDockSync = now;
+    const r = els.mic.getBoundingClientRect();
+    const docked = r.bottom <= 0 || r.top >= innerHeight || r.width === 0;
+    els.micDock.hidden = !docked;
+    els.mic.tabIndex = docked ? -1 : 0;
+    if (docked) els.mic.setAttribute("aria-hidden", "true");
+    else els.mic.removeAttribute("aria-hidden");
+  };
+  addEventListener("scroll", () => syncDock(), { passive: true });
+  addEventListener("resize", () => syncDock(true));
+  syncDock(true);
+  // The dock shows the button's OWN pressed state, not a phase guessed from
+  // data-voice: live-voice.js writes aria-pressed=true while a live session
+  // captures even when the ring phase reads "speaking", so painting from
+  // data-voice alone showed a not-pressed dock for a mic that WAS live. Both
+  // writers the ring answers to are watched; the dock repaints from the same
+  // attributes the ring shows — one writer, mirrored viewers, no drift.
+  const paintDock = () => {
+    const pressed = els.mic.getAttribute("aria-pressed") === "true";
+    els.micDock.setAttribute("aria-pressed", String(pressed));
+    els.micDock.dataset.voice = pressed ? "listening"
+      : (els.stage.dataset.voice === "speaking" ? "speaking" : "off");
+  };
+  paintDock();
+  new MutationObserver(paintDock).observe(els.mic, { attributes: true, attributeFilter: ["aria-pressed"] });
+  new MutationObserver(paintDock).observe(els.stage, { attributes: true, attributeFilter: ["data-voice"] });
+}
 on(els.refresh, "click", load);
 on(els.deleteConfirmYes, "click", () => void confirmDelete());
 // CLOSING WITHOUT AN ANSWER KEEPS THE FILE. Keep, Esc, the X, and a click outside all arrive here;
@@ -2141,6 +2290,81 @@ on(els.outSelect, "change", async () => {
   renderDevices();
 });
 
+// ── Configurable microphone hotkey (voicebox-beads-ebu) ───────────────────
+const HOTKEY_KEY = "voicebox-mic-hotkey";
+let micHotkey = "M";
+
+function updateHotkeyUI() {
+  if (els.micHotkey && els.micHotkey.value !== micHotkey) {
+    els.micHotkey.value = micHotkey;
+  }
+  if (els.micHotkeyState) {
+    els.micHotkeyState.textContent = `Press '${micHotkey}' to toggle mic`;
+  }
+  if (els.micHotkeyBadge) {
+    els.micHotkeyBadge.textContent = micHotkey;
+  }
+  if (els.mic) {
+    els.mic.setAttribute("aria-keyshortcuts", micHotkey);
+    els.mic.title = `Speak a turn (hotkey: ${micHotkey})`;
+  }
+}
+
+function loadHotkey() {
+  try {
+    const saved = localStorage.getItem(HOTKEY_KEY);
+    if (saved && typeof saved === "string" && saved.trim()) {
+      micHotkey = saved.trim().charAt(0).toUpperCase();
+    }
+  } catch {}
+  updateHotkeyUI();
+}
+
+function setHotkey(key) {
+  const clean = (key || "M").trim().charAt(0).toUpperCase() || "M";
+  micHotkey = clean;
+  try { localStorage.setItem(HOTKEY_KEY, micHotkey); } catch {}
+  updateHotkeyUI();
+}
+
+on(els.micHotkey, "input", () => {
+  const val = (els.micHotkey?.value ?? "").trim();
+  if (val) {
+    setHotkey(val);
+  }
+});
+
+on(els.micHotkey, "keydown", (e) => {
+  if (e.key === "Escape" || e.key === "Tab") return;
+  if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    setHotkey(e.key);
+  }
+});
+
+window.addEventListener("keydown", (e) => {
+  if (e.defaultPrevented) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const active = document.activeElement;
+  if (active) {
+    const tag = active.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || active.isContentEditable) {
+      return;
+    }
+  }
+  if (document.querySelector("dialog[open]")) {
+    return;
+  }
+  if (e.key && e.key.toUpperCase() === micHotkey.toUpperCase()) {
+    e.preventDefault();
+    if (els.mic) {
+      els.mic.classList.add("hotkey-active");
+      setTimeout(() => els.mic?.classList.remove("hotkey-active"), 300);
+      els.mic.click();
+    }
+  }
+});
+
 // The "Add environment" control declares a server environment. It writes a descriptor to the
 // server-owned list; it never starts a service, and a host that is not running will say so by name
 // on the next read. (A button, not a form submit: the dialog's method="dialog" form would otherwise
@@ -2178,6 +2402,69 @@ on(els.extsClose, "click", () => els.exts?.close());
 on(els.exts, "close", () => {
   els.extsOpen?.setAttribute("aria-expanded", "false");
   els.extsOpen?.focus();
+});
+
+on(els.extCreateForm, "submit", async (event) => {
+  event.preventDefault();
+  const id = els.extCreateId?.value?.trim();
+  const name = els.extCreateName?.value?.trim();
+  const description = els.extCreateDesc?.value?.trim();
+  const primitive = els.extCreatePrimitive?.value ?? "http-get";
+  const target = els.extCreateTarget?.value?.trim() ?? "";
+  if (!id || !name || !description) return;
+
+  const capabilities = [];
+  const bounds = {};
+  const params = {};
+  if (primitive === "http-get") {
+    capabilities.push("network");
+    const host = target || "127.0.0.1";
+    bounds.hosts = [host];
+    bounds.maxRequests = 50;
+  } else if (primitive === "read-file" || primitive === "list-files") {
+    capabilities.push("read");
+  } else if (primitive === "write-file") {
+    capabilities.push("write");
+    bounds.maxBytes = 65536;
+  }
+
+  const descriptor = {
+    id,
+    name,
+    description,
+    source: "local",
+    runsIn: "host",
+    capabilities,
+    bounds,
+    tools: [
+      {
+        name: id.replace(/-/g, "_"),
+        description,
+        primitive,
+        params,
+      },
+    ],
+  };
+
+  if (els.extCreateBtn) els.extCreateBtn.disabled = true;
+  try {
+    const resp = await request("/api/extensions/local", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ descriptor }),
+    });
+    if (resp.ok) {
+      if (els.extNote) els.extNote.textContent = `Local extension '${id}' staged as pending proposal. Review and approve below.`;
+      els.extCreateForm.reset();
+      await renderExtensions();
+    } else {
+      if (els.extNote) els.extNote.textContent = resp.why ?? resp.error ?? "Failed to stage local extension";
+    }
+  } catch (err) {
+    if (els.extNote) els.extNote.textContent = err.message;
+  } finally {
+    if (els.extCreateBtn) els.extCreateBtn.disabled = false;
+  }
 });
 
 on(els.extManageClose, "click", () => els.extManageDialog?.close());
@@ -2671,6 +2958,8 @@ function startMeters() {
 stopMeters();
 
 loadPrefs();
+loadHotkey();
+window.__voiceboxHotkey = { get: () => micHotkey, set: setHotkey };
 window.__voiceboxDevices = {
   micId: () => devices.prefs.mic.id || null,
   outputId: () => devices.prefs.out.id || null,

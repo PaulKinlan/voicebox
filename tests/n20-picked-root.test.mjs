@@ -231,13 +231,15 @@ test("N20.5 The permission failure path says WHY, by name", { timeout: 90000 }, 
   assert.match(gone.why, /profile/, "handle-gone does not explain where the handle could be");
 
   // (c) A root that is gone from the disk is a third fact — and it is what a deleted folder is,
-  // not an empty folder.
+  // not an empty folder. It carries the same name the machine side uses for the same fact
+  // (journal-omr), and the why states the remedy.
   rmSync(folder, { recursive: true, force: true });
-  const unreachable = await send({ type: "listView", view: "picked" });
-  assert.equal(unreachable.code, "root-unreachable", `expected root-unreachable, saw ${JSON.stringify(unreachable)}`);
-  assert.match(unreachable.why, /gone, renamed, or on a volume/, "root-unreachable does not say what it means");
+  const vanished = await send({ type: "listView", view: "picked" });
+  assert.equal(vanished.code, "root-vanished", `expected root-vanished, saw ${JSON.stringify(vanished)}`);
+  assert.match(vanished.why, /gone, renamed, or on a volume/, "root-vanished does not say what it means");
+  assert.match(vanished.why, /open the project again|declare the root again/, "root-vanished does not state the remedy");
 
-  const codes = new Set([write.code, gone.code, unreachable.code]);
+  const codes = new Set([write.code, gone.code, vanished.code]);
   assert.equal(codes.size, 3, "the three failure modes are not distinguishable");
   for (const code of codes) assert.notEqual(code, undefined, "a failure arrived with no code at all");
 });

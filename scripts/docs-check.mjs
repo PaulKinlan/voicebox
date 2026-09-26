@@ -25,16 +25,17 @@
 import { spawn } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
-import { readFileSync, writeFileSync, existsSync, readdirSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative } from "node:path";
 import { registeredResolvers, resolveTurn } from "../lib/resolver.mjs";
+import { makeScratchDir } from "../tools/tree-dirt.mjs";
 import { admit, PRIMITIVES, PRIMITIVE_NEEDS, GETS } from "../core/extensions.ts";
 import { availableLiveProviders, resolvedLiveProviderName } from "../lib/live-session.mjs";
 import { createGeminiProvider } from "../lib/live-providers/gemini.mjs";
 import { createOpenAIProvider } from "../lib/live-providers/openai.mjs";
 import { functionDeclarations, liveSystemInstruction } from "../lib/commands.mjs";
+import { FACTS as STATE_DIR_FACTS } from "../lib/state-dirs.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WRITE = process.argv.includes("--write");
@@ -87,7 +88,10 @@ async function probeServer() {
   // extension audit land), the host's extension directory, and a project root to declare over /api/root.
   // Keeping the workspace and the declared root apart is what lets the loop drive below SEE whether an
   // admitted tool acts in the declared root or somewhere else — the same directory would hide the answer.
-  const scratch = mkdtempSync(join(tmpdir(), "voicebox-docs-check-"));
+  // bp8: the probe's scratch comes from the guard, which refuses a destination resolving inside
+  // the tree this check measures — a writer's output belongs outside anything another process
+  // measures, and that is asserted where the directory is made rather than assumed from os.tmpdir().
+  const scratch = makeScratchDir("voicebox-docs-check-", { tree: ROOT });
   const dirs = { workspace: join(scratch, "workspace"), extensions: join(scratch, "extensions"), root: join(scratch, "project"), shelf: join(scratch, "shelf") };
   for (const d of Object.values(dirs)) mkdirSync(d, { recursive: true });
   // THE PROBE MUST NOT INHERIT A ROOT FROM THE SHELL (248f6c6): with VOICEBOX_WORKSPACE in the operator's
@@ -357,6 +361,7 @@ const ENV_MEANING = {
   VOICEBOX_BIND_DEADLINE_MS: "how long to keep retrying before giving up by name",
   VOICEBOX_HELLO_BOUND_MS: "how long to wait for a hello frame on /channel or /live before refusing (default 5000ms)",
   VOICEBOX_LIVE_PROVIDER: "the live transport's fallback when the session passes no provider; `/live` passes the agent-settings provider explicitly — **not** the turn resolver",
+  VOICEBOX_LOOPBACK_AUTH: "set to `1` to turn on the loopback session gate (docs/13 §4, docs/18): the page and the APIs answer only with the HttpOnly `SameSite=Strict` session cookie that a one-time bootstrap ticket mints — the ticket's URL is printed at startup, or minted from the shell via `POST /api/bootstrap` with the host token. Default unset serves the page openly (the 5c1 surface). The session secret is per-process and in-memory: a restart invalidates every issued cookie, and the remedy is the URL the new process printed",
   LIVE_PROVIDER: "the OLD NAME of `VOICEBOX_LIVE_PROVIDER`, honoured for one release",
   GEMINI_API_KEY: "read by TWO things with different refusals: the live session refuses to start by name, and the gemini turn resolver answers `unresolved` saying it has no key",
   OPENAI_API_KEY: "the OpenAI Realtime key — without it that provider refuses to start, by name",
@@ -372,6 +377,16 @@ const ENV_MEANING = {
 function envVars() {
   const files = ["server.mjs", ...readdirSync(join(ROOT, "lib"), { recursive: true }).filter((f) => f.endsWith(".mjs")).map((f) => join("lib", f))];
   const where = new Map();
+  const remember = (name, file) => {
+    if (!where.has(name)) where.set(name, new Set());
+    where.get(name).add(file);
+  };
+  // THE DECLARED STATE FACTS COME FROM THEIR OWNER, imported rather than grepped. `lib/state-dirs.mjs`
+  // reads its variables through `process.env[env]` so that each name is written down once, which a text
+  // scan cannot see — and when that module took ownership, three rows silently VANISHED from this table
+  // (2026-09-25). A table that says where a variable is read must ask the thing that reads it; the
+  // declaration is the source, exactly as the provider list is imported rather than matched.
+  for (const fact of Object.values(STATE_DIR_FACTS ?? {})) remember(fact.env, "lib/state-dirs.mjs");
   for (const f of files) {
     // BOTH SHAPES, because one of them was invisible: `process.env.X` and the optional-chained
     // `globalThis.process?.env?.X` that `lib/resolver.mjs` uses to stay runnable off-host. The narrow
@@ -380,8 +395,7 @@ function envVars() {
     // (reviewer finding, voicebox-beads-smx). A derived table is only as wide as its pattern.
     const src = readFileSync(join(ROOT, f), "utf8");
     for (const m of src.matchAll(/(?:globalThis\s*\.\s*)?process\s*\??\.\s*env\s*\??\.\s*([A-Z][A-Z0-9_]*)/g)) {
-      if (!where.has(m[1])) where.set(m[1], new Set());
-      where.get(m[1]).add(f);
+      remember(m[1], f);
     }
   }
   return [...where.keys()].sort().map((name) => ({

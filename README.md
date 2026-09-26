@@ -18,7 +18,9 @@ act on your machine.
 ## Principles
 
 1. **Voice-first.** The interface is conversation, and it stays available — you can keep
-   talking to it while working on something else.
+   talking to it while working on something else. Literally: when scrolling takes the
+   mic button off screen, a docked copy of it appears in the corner (one control, in
+   the page and the tab order at a time — `voicebox-beads-dzd`).
 2. **A web front end to a real environment.** Not a sandbox demo: it drives a build
    system that can produce software.
 3. **Extensible models.** Gemini Live first, OpenAI Realtime alongside — swap the live
@@ -44,10 +46,53 @@ an absolute JSON file path to add host-declared tool names and descriptions, wit
 source and scope. Expand **Declared tools** on a row to read them. Missing or invalid
 metadata says **Tools — unknown**; an explicitly empty declaration is shown separately.
 These are declarations, not observed session tools or permissions. Listing a tool neither
-enables delegation nor checks authentication. Pi's task adapter can be selected with
-`VOICEBOX_HARNESS=pi`; other inventoried CLIs have no configured task adapter.
-No sandbox wrapping or local browser-to-CLI bridge is added. See
+enables delegation nor checks authentication. See
 [the catalogue format and limits](docs/12-harness-inventory.md).
+
+## Set up a task harness (five minutes, start to first delegation)
+
+A task harness is a host CLI that `delegate_task` can run work on. Today exactly one
+adapter is implemented — **pi-acp** (the Pi coding agent over ACP on stdio). Other
+inventoried CLIs (claude, codex, gemini, opencode) can be CONFIGURED as agents, and the
+server answers each one by name, but they refuse at delegation until someone builds
+their adapter.
+
+1. **Check what the machine has.** Open the **Harnesses** dialog and click
+   **Check installed harnesses** (or `node tools/list-harnesses.mjs`). You need a row
+   `pi-acp — present` (the adapter, `~/.pi/agent/npm/node_modules/pi-acp`) and a working
+   `pi` on PATH. The adapter must be the pinned version; the startup table names a
+   mismatch instead of failing silently.
+2. **Select the harness and start the server.** `VOICEBOX_HARNESS=pi` (default adapter
+   and binary locations; override with `VOICEBOX_ACP_ADAPTER` / `VOICEBOX_ACP_PI`).
+   The startup log names every configured agent's admission:
+
+   ```
+   [harness] ADMITTED pi (pi-acp @ 0.0.34)
+   [harness] REFUSED agent_claude_reviewer (claude-code) — adapter-not-configured: No Voicebox
+             task adapter is implemented for 'claude-code' on this host; the agent is
+             configured but cannot run.
+   ```
+
+   `node server.mjs --doctor` renders the same verdicts as a table without starting the
+   server — use it to check a configuration before committing to a boot.
+
+3. **Add more agents (optional).** Every configured agent lives in the registry:
+   `POST /api/agents` with the host token (or edit `<host dir>/.agents.json`), for example
+   a second Pi instance with a different model, or a Claude agent prepared for the day an
+   adapter exists. `GET /api/agents` returns each agent WITH its current `admission` —
+   `{ admitted: true }` or `{ admitted: false, refused, why }` — so the page and scripts
+   can see what would happen before delegating.
+4. **Delegate.** From the page, or `delegate_task` with `agent: "pi"`. The task runs
+   through the host → ACP client → pi-acp → Pi coding agent path, and lands in the audit
+   log like every other act.
+5. **Read the refusal, fix the cause.** If a delegation refuses, the name tells you where:
+   `executor-unavailable` (no `VOICEBOX_HARNESS` selected), `adapter-not-configured`
+   (no adapter exists for that harness on this host), `adapter-version-unsupported`
+   (installed adapter is not the verified pin), `agent-environment-mismatch` (the agent
+   belongs to another environment).
+
+The walkthrough above is the same one driven end to end against a real server and a real
+Pi delegation in `tests/configured-harness.test.mjs` (live lane).
 
 ## Status
 
@@ -83,6 +128,16 @@ timeout from a failing command; both output streams remain visible. See
 [gate measurements and regression drives](docs/12-pre-push-gate.md).
 Acceptance checks read idempotence on its private instance: three GETs per root/file
 route must return the seeded state and leave its file bytes and write metadata unchanged.
+It does not assert that another lane's shared server stays unchanged.
+The live-tools write check waits for both the file and its successful `write_file`
+websocket event within the same 60-second budget; file creation alone does not
+prove that the page has received the report.
+
+One of those tests is a rule rather than a feature: **each declared state-directory fact has exactly
+one computing site**, in `lib/state-dirs.mjs`. `scripts/single-owner.mjs` refuses a second read of the
+variable or a rebuilt default anywhere else, naming the file and the owner to ask instead, and
+`tests/single-owner.test.mjs` drives a fourth copy into a scratch tree to prove that refusal can
+happen (voicebox-beads-y5k).
 
 ## The top bar
 
@@ -93,17 +148,6 @@ tooltip. The icons come from the page's own SVG symbol set (`#i-list`,
 its symbol and its `aria-label`, nothing else. The live count lines
 (`#envs-count`, `#exts-count`) are screen-reader text, so runtime updates
 still reach assistive tech without cluttering the bar.
-
-The pre-push hook keeps the full test suite: 180 seconds for `npm test`, then
-45 seconds for `npm run accept`. Refusals name the stage and distinguish a
-timeout from a failing command; both output streams remain visible. See
-[gate measurements and regression drives](docs/12-pre-push-gate.md).
-Acceptance checks read idempotence on its private instance: three GETs per root/file
-route must return the seeded state and leave its file bytes and write metadata unchanged.
-It does not assert that another lane's shared server stays unchanged.
-The live-tools write check waits for both the file and its successful `write_file`
-websocket event within the same 60-second budget; file creation alone does not
-prove that the page has received the report.
 
 ## Debugging a transcript or tool call
 
@@ -271,11 +315,11 @@ for the argument and permission boundaries.
 
 **What it refuses, by name** — literal refusal declarations collected from these sources:
 * the gate (`core/extensions.ts`): `absent-capability`, `bad-tool-name`, `capability-unmediated`, `duplicate-tool`, `eval-not-a-tool-path`, `exec-absent`, `network-unbounded`, `no-tools`, `under-declared`, `unknown-capability`, `unknown-primitive`, `unsupported-abi`
-* the routes and the root seam (`server.mjs`, `core/root.ts`): `adapter-not-configured`, `approval-invalid-id`, `approval-json-required`, `audit-unreadable`, `bad-answer`, `bad-request`, `bearer-refused`, `bounds-invalid`, `cannot-delete-directory`, `cross-environment-unauthorized`, `dotfile-refused`, `environment-not-paired`, `environment-unknown`, `environment-unreachable`, `exec-threw`, `extension-not-admitted`, `host-token-required`, `missing-argument`, `missing-content`, `not-a-directory`, `not-found`, `outside-root`, `pairing-revoked`, `path-missing`, `pattern-not-found`, `pattern-not-unique`, `probe-failed`, `protected-audit`, `provider-not-configured`, `server-error`, `task-root-unavailable`, `unauthenticated-call`, `unknown-command`, `unknown-environment`, `unknown-root-kind`, `unreadable`, `write-error`
-* admitted tools at run time (`lib/extensions.mjs`): `approval-audit-unwritable`, `approval-no-proposal`, `approval-plan-changed`, `approval-unavailable`, `bad-redirect`, `bounds-invalid`, `extension-not-admitted`, `fetch-failed`, `outside-root`, `over-budget`, `protected-audit`, `redirect-host-not-allowed`, `redirect-without-location`, `too-many-redirects`
+* the routes and the root seam (`server.mjs`, `core/root.ts`): `adapter-not-configured`, `approval-invalid-id`, `approval-json-required`, `audit-unreadable`, `bad-answer`, `bad-request`, `bearer-refused`, `bounds-invalid`, `cannot-delete-directory`, `cross-environment-unauthorized`, `dotfile-refused`, `environment-not-paired`, `environment-unknown`, `environment-unreachable`, `exec-threw`, `extension-not-admitted`, `host-token-refused`, `host-token-required`, `loopback-auth-disabled`, `loopback-unauthenticated`, `missing-argument`, `missing-content`, `not-a-directory`, `not-found`, `outside-root`, `pairing-revoked`, `path-missing`, `pattern-not-found`, `pattern-not-unique`, `probe-failed`, `protected-audit`, `provider-not-configured`, `server-error`, `task-root-unavailable`, `unauthenticated-call`, `unknown-command`, `unknown-environment`, `unknown-root-kind`, `unreadable`, `write-error`
+* admitted tools at run time (`lib/extensions.mjs`): `approval-audit-unwritable`, `approval-no-proposal`, `approval-plan-changed`, `approval-unavailable`, `bad-descriptor`, `bad-redirect`, `bad-tool-name`, `bounds-invalid`, `descriptor-missing`, `extension-not-admitted`, `fetch-failed`, `gate-refused-at-load`, `invalid-id`, `missing-description`, `missing-name`, `no-tools`, `outside-root`, `over-budget`, `params-invalid`, `params-unknown-tool`, `protected-audit`, `redirect-host-not-allowed`, `redirect-without-location`, `too-many-redirects`, `unknown-primitive`, `unreadable`
 * task admission/readback (`core/tasks.ts`, `lib/tasks.mjs`): `agent-environment-mismatch`, `agent-not-configured`, `agent-required`, `executor-unavailable`, `invalid-task`, `invalid-task-address`, `invalid-task-context`, `task-audit-unavailable`, `task-authority-field`, `task-call-id-conflict`, `task-call-id-required`, `task-cancelled`, `task-capacity-exhausted`, `task-context-unavailable`, `task-deadline`, `task-environment-changed`, `task-environment-unverified`, `task-input-over-budget`, `task-invalid-result`, `task-not-found`, `task-not-running`, `task-output-over-budget`, `task-owner-mismatch`, `task-owner-unconfirmed`, `task-owner-unverified`, `task-persistence-failed`, `task-root-replaced`, `task-root-unavailable`, `unbounded-executor`, `unknown-tool`, `unsupported-runtime-capability`
 
-**Listable at run time** — `GET /api/extensions` answers `{ placement, extensions, proposals, present, catalogueCount }` (probed: placement `machine`, catalogueCount 5); `GET /api/extensions/catalogue` previews the gate's verdict on every stranger before anything is staged; `GET /api/extensions/{proposals|catalogue}/<id>/plan` is the disclosure — source, declared, enforced-by-which-mechanism, what it gets, what it cannot have — before any decision.
+**Listable at run time** — `GET /api/extensions` answers `{ placement, extensions, proposals, present, failedLoads, catalogueCount }` (probed: placement `machine`, catalogueCount 5); `GET /api/extensions/catalogue` previews the gate's verdict on every stranger before anything is staged; `GET /api/extensions/{proposals|catalogue}/<id>/plan` is the disclosure — source, declared, enforced-by-which-mechanism, what it gets, what it cannot have — before any decision.
 
 **What the process itself can reach** — `GET /api/probe` runs `tools/sandbox-probe.mjs` on this environment and answers an **observed** report (probed: HTTP 200, sections `identity`, `sandboxHints`, `filesystem`, `limits`, `tools`, `network`), cached with its `when` and recorded as an activity in the environment's own audit. It reports files, network and limits as facts with the method beside them — a different question from "which tools are admitted", answered by a different instrument.
 
@@ -290,8 +334,9 @@ A tool is a **descriptor** — data, never code — carrying `id`, `name`, `capa
 
 1. **Propose.** The model says *"create a tool called clock that tells the time"* (the `make-tool`
    verb), or anything POSTs a descriptor to `/api/extensions/proposals`, or you sideload a catalogue
-   entry with `POST /api/extensions/sideload {id, confirm: true}`. All three land as a **pending**
-   file in `proposals/` under the workspace. Nothing loads.
+   entry with `POST /api/extensions/sideload {id, confirm: true}`, or you create and locally add a new extension
+   via the room UI or `tools/create-extension.mjs` (`POST /api/extensions/local`). All land as a **pending**
+   file in `proposals/` under the workspace (or directly admit when run with host authority). Nothing loads without admission.
 2. **Read the plan.** `GET /api/extensions/proposals/<id>/plan` — what it declares, what would be
    enforced and by which mechanism, what it would be handed, what it cannot have.
 3. **Approve with a one-time host code.** In **Extensions → Waiting for review** (or **Found here**),
@@ -305,9 +350,15 @@ A tool is a **descriptor** — data, never code — carrying `id`, `name`, `capa
    extension directory. The page cannot read that file; your shell can. Admission re-runs the same
    `admit()` the plan showed, moves the descriptor into the host directory, records it in
    `.ledger.jsonl`, and rebuilds the registry. A file dropped into the directory by hand is
-   *present, not admitted* — visible in the inventory, never live.
+   *present, not admitted* — visible in the inventory, never live. And an **admitted** extension
+   that fails to load — at boot, or on a later reload after its descriptor changed under it — is
+   *admitted, not running*, never silent: the inventory's `failedLoads` list and the Extensions
+   panel's **Approved, not running** section name the refusal (`unreadable` for a file that no
+   longer parses; otherwise the gate's own rule, e.g. `exec-absent`, `no-tools`, `duplicate-tool`; `descriptor-missing` for a file deleted behind a live admission)
+   with the next action that fixes it. Its tools stay unloaded until the descriptor is fixed and
+   the extension is re-admitted.
 4. **Call it.** *"run the tool clock"* → the `tool` verb → `callTool()`. Only admitted tools answer.
-5. **Reconfigure or remove it.** Running extensions can be updated (`POST /api/extensions/reconfigure`, `PATCH /api/extensions/:id`) or withdrawn (`DELETE /api/extensions/:id`, `POST /api/extensions/revoke`) via the UI settings-style dialog directly in the room (authorized seamlessly via the in-room session token — which establishes local session context for the developer on this machine, not a remote secret; the boundary is local-vs-remote, and remote callers require the host token `x-voicebox-host-token`), updating bounds or revoking tools without discovering or supplying hidden `.token` files.
+5. **Reconfigure or remove it.** Running extensions can be updated (`POST /api/extensions/reconfigure`, `PATCH /api/extensions/:id`) or withdrawn (`DELETE /api/extensions/:id`, `POST /api/extensions/revoke`) via the UI settings-style dialog directly in the room (authorized seamlessly via the in-room session token — which establishes local session context for the developer on this machine, not a remote secret; the boundary is local-vs-remote, and remote callers require the host token `x-voicebox-host-token`), updating bounds, tool parameters (keyed by tool name — `tools[i].params` is what `callHttp` reads) or revoking tools without discovering or supplying hidden `.token` files. Re-admitting a changed descriptor for the same id is an update, not a no-op: the same gate re-runs, the descriptor is replaced, and the registry is rebuilt — so a corrected `params.url` is the URL the next call actually uses.
 
 Where an extension **may** act today is *driven* in the loop block above — through the root-scoped
 primitives in **the active project root**, the same root a turn writes into; and on the network only
@@ -354,16 +405,17 @@ Every environment variable the server and its libraries read, and where:
 | `VOICEBOX_ACP_PI` | `lib/pi-acp.mjs` | path or command override for the `pi` coding agent CLI used by `lib/pi-acp.mjs` |
 | `VOICEBOX_BIND_DEADLINE_MS` | `server.mjs` | how long to keep retrying before giving up by name |
 | `VOICEBOX_BIND_RETRY_MS` | `server.mjs` | how often to retry a bind that lost the port race |
-| `VOICEBOX_EXTENSIONS_DIR` | `lib/extensions.mjs`, `server.mjs` | the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl`, and `.pairings.json` (the bearer custody store — outside every root) |
+| `VOICEBOX_EXTENSIONS_DIR` | `lib/state-dirs.mjs` | the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl`, and `.pairings.json` (the bearer custody store — outside every root) |
 | `VOICEBOX_HARNESS` | `server.mjs` | selects the host task adapter (`pi` enables the Pi ACP task adapter in `server.mjs`; unset leaves no default adapter configured) |
 | `VOICEBOX_HELLO_BOUND_MS` | `server.mjs` | how long to wait for a hello frame on /channel or /live before refusing (default 5000ms) |
 | `VOICEBOX_INSTANCE` | `server.mjs` | this writer's name in the active root's shared log (default `machine`) |
 | `VOICEBOX_LIVE_PROVIDER` | `lib/live-session.mjs`, `server.mjs` | the live transport's fallback when the session passes no provider; `/live` passes the agent-settings provider explicitly — **not** the turn resolver |
+| `VOICEBOX_LOOPBACK_AUTH` | `server.mjs` | set to `1` to turn on the loopback session gate (docs/13 §4, docs/18): the page and the APIs answer only with the HttpOnly `SameSite=Strict` session cookie that a one-time bootstrap ticket mints — the ticket's URL is printed at startup, or minted from the shell via `POST /api/bootstrap` with the host token. Default unset serves the page openly (the 5c1 surface). The session secret is per-process and in-memory: a restart invalidates every issued cookie, and the remedy is the URL the new process printed |
 | `VOICEBOX_PROVIDER` | `server.mjs` | the OLD NAME of `VOICEBOX_RESOLVER`, honoured for one release: a shell that exports it keeps working and gets a line on stderr |
 | `VOICEBOX_RESOLVER` | `server.mjs` | which TURN resolver answers `POST /api/turn` (default `script`) — **not** the live provider, which is a different concept |
-| `VOICEBOX_SANDBOX_HOMES` | `lib/fence-provider.mjs`, `lib/unit-fence-provider.mjs` | where a fence's writable home is bound from (default `~/sandbox-homes/<key>`) — the one place a fenced environment may write. Must live OUTSIDE /tmp: an L1.5 unit's PrivateTmp hides /tmp in its namespace and a home there fails to bind (status 226/NAMESPACE) |
-| `VOICEBOX_WASM_SHELF_DIR` | `lib/extensions.mjs` | directory holding the digest-pinned WASM tool shelf (`manifest.json` and `.wasm` modules; default `~/.isocan/modules/wasm-tools`) |
-| `VOICEBOX_WORKSPACE` | `lib/extensions.mjs`, `server.mjs` | declares a machine root at boot — a decision, not a default — and is where the extension system keeps `proposals/` and `audit.jsonl` |
+| `VOICEBOX_SANDBOX_HOMES` | `lib/state-dirs.mjs` | where a fence's writable home is bound from (default `~/sandbox-homes/<key>`) — the one place a fenced environment may write. Must live OUTSIDE /tmp: an L1.5 unit's PrivateTmp hides /tmp in its namespace and a home there fails to bind (status 226/NAMESPACE) |
+| `VOICEBOX_WASM_SHELF_DIR` | `lib/state-dirs.mjs` | directory holding the digest-pinned WASM tool shelf (`manifest.json` and `.wasm` modules; default `~/.isocan/modules/wasm-tools`) |
+| `VOICEBOX_WORKSPACE` | `lib/state-dirs.mjs` | declares a machine root at boot — a decision, not a default — and is where the extension system keeps `proposals/` and `audit.jsonl` |
 <!-- END GENERATED: config -->
 
 There is no config file. What is on or off is decided by which provider is named, which key is
@@ -476,7 +528,7 @@ what makes "it cannot reach the network" structural instead of promised.
   root is deleted by the page that owns it) and is recorded in the root's own audit. Folders are not
   deleted — there is no recursive delete.
 - Failures have names: `needs-gesture`, `permission-denied`, `handle-gone`,
-  `root-unreachable`, `not-found`, `not-a-project`.
+  `root-vanished`, `root-unreachable`, `not-found`, `not-a-project`.
 - The room's folder handles (`#open-folder`) provide read/write handles persisted across reloads in IndexedDB, supporting several directories at once with a "Restore access" button when permission regresses to prompt.
 
 Checks: `npm run test:e1m0` <!-- docs-check: names the mechanism --> (25 acceptance checks, driven in a real headless Chromium).
@@ -496,6 +548,8 @@ The room frontend (`public/index.html`, `public/fused.js`, `public/style.css`) i
 - Keyboard-accessible scrollable code region (`<pre id="file-body" tabindex="0">`).
 - IME composition safety on utterance input and turn submissions.
 - Change log and commit links: build stamp commit hashes in `#build` link to GitHub commits; `public/changelog.html` and `GET /api/changelog` surface recent commits directly from the room.
+- Configurable microphone hotkey (default 'M', configurable in settings, persisted to local storage): keyboard-accessible toggle with visible feedback badge and aria-keyshortcuts on the mic button (tested in `tests/mic-hotkey.test.mjs`).
+- Refresh control in file view (`#file-refresh`): reloads the currently open file from disk, indicating loading state via `aria-busy` and error states when the file is removed, with retry capability (tested in `tests/file-view-refresh.test.mjs`).
 
 Next step: wire the first live model resolver behind the seam (Gemini Live),
 then grow the action set toward the build environment.

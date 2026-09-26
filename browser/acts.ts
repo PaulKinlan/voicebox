@@ -60,6 +60,12 @@ export interface ActsHooks {
   getStorage(): ActsStorage | null;
   /** The worker's write preconditions (needs-gesture / permission-denied), or null when writable. */
   checkWritable(): Promise<{ ok: false; code: string; why: string } | null>;
+  /**
+   * The worker's root probe — is the root still there? Returns a named failure
+   * (root-vanished / root-unreachable / needs-gesture / permission-denied) or null when it is.
+   * Asked before every verb, because browser writes are `create: true` all the way down.
+   */
+  checkReachable(): Promise<{ ok: false; code: string; why: string } | null>;
   /** The worker's audit writer — same entry shape as core/audit.ts. */
   recordAct(
     act: { kind: string; target: string; tool?: string },
@@ -118,6 +124,23 @@ async function performAct(call: { tool: string; args: Record<string, unknown> },
   const name = String(call.args?.name ?? "");
   const tool = call.tool;
 
+  // THE ROOT MUST STILL BE THERE (journal-omr), asked once and before every verb. Browser storage
+  // writes are `create: true` all the way down (browser/storage.ts), so without this a write into a
+  // cleared project REBUILDS the tree and reports success — the project comes back empty and the act
+  // says it landed. The probe is the root's own question, and a root that is gone refuses
+  // `root-vanished` with the remedy, the same name the machine side uses for the same fact.
+  //
+  // The refusal is not recorded when the root is VANISHED: the log lives inside the root, so writing
+  // an entry there would rebuild the very tree this refusal is about — the machine path reports
+  // `logged: null` for the same reason. Every other reachability refusal is recorded as usual.
+  const blocked = await hooks.checkReachable();
+  if (blocked) {
+    if (blocked.code !== "root-vanished") {
+      await hooks.recordAct({ kind: tool, target: name, tool: "turn" }, "refuse", blocked.code, "refused", { exists: false }, turnOf(call));
+    }
+    return { ok: false as const, refused: blocked.code, why: blocked.why };
+  }
+
   // A list never touches a path — but it still answers from the WORLD, with the platform's own
   // error naming a vanished root rather than an empty list that looks like an empty folder.
   if (tool === "list") {
@@ -140,7 +163,6 @@ async function performAct(call: { tool: string; args: Record<string, unknown> },
       return { ok: false as const, refused: target.rule, why: target.why };
     }
     try {
-      await storage.probe();
       const { entries, truncated } = await storage.listChildren(target.path, LIST_LIMIT, true);
       const visible = entries.filter((e) => !e.name.startsWith("."));
       return {

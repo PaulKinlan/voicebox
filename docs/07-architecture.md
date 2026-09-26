@@ -102,6 +102,16 @@ The log's SHAPE is derived too, not described: the write produced **2** entries 
 **One root**: the admitted tool listed `["hello.txt"]` — the same root the turn wrote `hello.txt` into.
 <!-- END GENERATED: loop -->
 
+If an admitted descriptor later fails to load (boot or reload — the gate re-runs at load, fail
+closed), it is never silently missing: the inventory answers with `failedLoads` — the id, the
+gate's own rule (`exec-absent`, `no-tools`, `bad-tool-name`, `duplicate-tool`), why, and the next
+action — and the Extensions panel shows an **Approved, not running** row for it. A file that no
+longer parses is `unreadable`; a recorded admission whose file was DELETED is `descriptor-missing`
+(the load walks the directory AND diffs the ledger, so no admitted id can fall out of every list).
+Fix the descriptor, re-admit, and the row leaves the inventory
+(`tests/extension-init-errors.test.mjs`); the panel itself is pinned by
+(`tests/extensions-ui.test.mjs`).
+
 ## The tool path — which words reach a tool
 
 <!-- BEGIN GENERATED: tool-path — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
@@ -149,11 +159,11 @@ Verbs the `script` resolver produces, driven: `"create a file called hello.txt w
 
 **What it refuses, by name** — literal refusal declarations collected from these sources:
 * the gate (`core/extensions.ts`): `absent-capability`, `bad-tool-name`, `capability-unmediated`, `duplicate-tool`, `eval-not-a-tool-path`, `exec-absent`, `network-unbounded`, `no-tools`, `under-declared`, `unknown-capability`, `unknown-primitive`, `unsupported-abi`
-* the routes and the root seam (`server.mjs`, `core/root.ts`): `adapter-not-configured`, `approval-invalid-id`, `approval-json-required`, `audit-unreadable`, `bad-answer`, `bad-request`, `bearer-refused`, `bounds-invalid`, `cannot-delete-directory`, `cross-environment-unauthorized`, `dotfile-refused`, `environment-not-paired`, `environment-unknown`, `environment-unreachable`, `exec-threw`, `extension-not-admitted`, `host-token-required`, `missing-argument`, `missing-content`, `not-a-directory`, `not-found`, `outside-root`, `pairing-revoked`, `path-missing`, `pattern-not-found`, `pattern-not-unique`, `probe-failed`, `protected-audit`, `provider-not-configured`, `server-error`, `task-root-unavailable`, `unauthenticated-call`, `unknown-command`, `unknown-environment`, `unknown-root-kind`, `unreadable`, `write-error`
-* admitted tools at run time (`lib/extensions.mjs`): `approval-audit-unwritable`, `approval-no-proposal`, `approval-plan-changed`, `approval-unavailable`, `bad-redirect`, `bounds-invalid`, `extension-not-admitted`, `fetch-failed`, `outside-root`, `over-budget`, `protected-audit`, `redirect-host-not-allowed`, `redirect-without-location`, `too-many-redirects`
+* the routes and the root seam (`server.mjs`, `core/root.ts`): `adapter-not-configured`, `approval-invalid-id`, `approval-json-required`, `audit-unreadable`, `bad-answer`, `bad-request`, `bearer-refused`, `bounds-invalid`, `cannot-delete-directory`, `cross-environment-unauthorized`, `dotfile-refused`, `environment-not-paired`, `environment-unknown`, `environment-unreachable`, `exec-threw`, `extension-not-admitted`, `host-token-refused`, `host-token-required`, `loopback-auth-disabled`, `loopback-unauthenticated`, `missing-argument`, `missing-content`, `not-a-directory`, `not-found`, `outside-root`, `pairing-revoked`, `path-missing`, `pattern-not-found`, `pattern-not-unique`, `probe-failed`, `protected-audit`, `provider-not-configured`, `server-error`, `task-root-unavailable`, `unauthenticated-call`, `unknown-command`, `unknown-environment`, `unknown-root-kind`, `unreadable`, `write-error`
+* admitted tools at run time (`lib/extensions.mjs`): `approval-audit-unwritable`, `approval-no-proposal`, `approval-plan-changed`, `approval-unavailable`, `bad-descriptor`, `bad-redirect`, `bad-tool-name`, `bounds-invalid`, `descriptor-missing`, `extension-not-admitted`, `fetch-failed`, `gate-refused-at-load`, `invalid-id`, `missing-description`, `missing-name`, `no-tools`, `outside-root`, `over-budget`, `params-invalid`, `params-unknown-tool`, `protected-audit`, `redirect-host-not-allowed`, `redirect-without-location`, `too-many-redirects`, `unknown-primitive`, `unreadable`
 * task admission/readback (`core/tasks.ts`, `lib/tasks.mjs`): `agent-environment-mismatch`, `agent-not-configured`, `agent-required`, `executor-unavailable`, `invalid-task`, `invalid-task-address`, `invalid-task-context`, `task-audit-unavailable`, `task-authority-field`, `task-call-id-conflict`, `task-call-id-required`, `task-cancelled`, `task-capacity-exhausted`, `task-context-unavailable`, `task-deadline`, `task-environment-changed`, `task-environment-unverified`, `task-input-over-budget`, `task-invalid-result`, `task-not-found`, `task-not-running`, `task-output-over-budget`, `task-owner-mismatch`, `task-owner-unconfirmed`, `task-owner-unverified`, `task-persistence-failed`, `task-root-replaced`, `task-root-unavailable`, `unbounded-executor`, `unknown-tool`, `unsupported-runtime-capability`
 
-**Listable at run time** — `GET /api/extensions` answers `{ placement, extensions, proposals, present, catalogueCount }` (probed: placement `machine`, catalogueCount 5); `GET /api/extensions/catalogue` previews the gate's verdict on every stranger before anything is staged; `GET /api/extensions/{proposals|catalogue}/<id>/plan` is the disclosure — source, declared, enforced-by-which-mechanism, what it gets, what it cannot have — before any decision.
+**Listable at run time** — `GET /api/extensions` answers `{ placement, extensions, proposals, present, failedLoads, catalogueCount }` (probed: placement `machine`, catalogueCount 5); `GET /api/extensions/catalogue` previews the gate's verdict on every stranger before anything is staged; `GET /api/extensions/{proposals|catalogue}/<id>/plan` is the disclosure — source, declared, enforced-by-which-mechanism, what it gets, what it cannot have — before any decision.
 
 **What the process itself can reach** — `GET /api/probe` runs `tools/sandbox-probe.mjs` on this environment and answers an **observed** report (probed: HTTP 200, sections `identity`, `sandboxHints`, `filesystem`, `limits`, `tools`, `network`), cached with its `when` and recorded as an activity in the environment's own audit. It reports files, network and limits as facts with the method beside them — a different question from "which tools are admitted", answered by a different instrument.
 
@@ -179,16 +189,17 @@ Every environment variable the server and its libraries read, and where:
 | `VOICEBOX_ACP_PI` | `lib/pi-acp.mjs` | path or command override for the `pi` coding agent CLI used by `lib/pi-acp.mjs` |
 | `VOICEBOX_BIND_DEADLINE_MS` | `server.mjs` | how long to keep retrying before giving up by name |
 | `VOICEBOX_BIND_RETRY_MS` | `server.mjs` | how often to retry a bind that lost the port race |
-| `VOICEBOX_EXTENSIONS_DIR` | `lib/extensions.mjs`, `server.mjs` | the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl`, and `.pairings.json` (the bearer custody store — outside every root) |
+| `VOICEBOX_EXTENSIONS_DIR` | `lib/state-dirs.mjs` | the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl`, and `.pairings.json` (the bearer custody store — outside every root) |
 | `VOICEBOX_HARNESS` | `server.mjs` | selects the host task adapter (`pi` enables the Pi ACP task adapter in `server.mjs`; unset leaves no default adapter configured) |
 | `VOICEBOX_HELLO_BOUND_MS` | `server.mjs` | how long to wait for a hello frame on /channel or /live before refusing (default 5000ms) |
 | `VOICEBOX_INSTANCE` | `server.mjs` | this writer's name in the active root's shared log (default `machine`) |
 | `VOICEBOX_LIVE_PROVIDER` | `lib/live-session.mjs`, `server.mjs` | the live transport's fallback when the session passes no provider; `/live` passes the agent-settings provider explicitly — **not** the turn resolver |
+| `VOICEBOX_LOOPBACK_AUTH` | `server.mjs` | set to `1` to turn on the loopback session gate (docs/13 §4, docs/18): the page and the APIs answer only with the HttpOnly `SameSite=Strict` session cookie that a one-time bootstrap ticket mints — the ticket's URL is printed at startup, or minted from the shell via `POST /api/bootstrap` with the host token. Default unset serves the page openly (the 5c1 surface). The session secret is per-process and in-memory: a restart invalidates every issued cookie, and the remedy is the URL the new process printed |
 | `VOICEBOX_PROVIDER` | `server.mjs` | the OLD NAME of `VOICEBOX_RESOLVER`, honoured for one release: a shell that exports it keeps working and gets a line on stderr |
 | `VOICEBOX_RESOLVER` | `server.mjs` | which TURN resolver answers `POST /api/turn` (default `script`) — **not** the live provider, which is a different concept |
-| `VOICEBOX_SANDBOX_HOMES` | `lib/fence-provider.mjs`, `lib/unit-fence-provider.mjs` | where a fence's writable home is bound from (default `~/sandbox-homes/<key>`) — the one place a fenced environment may write. Must live OUTSIDE /tmp: an L1.5 unit's PrivateTmp hides /tmp in its namespace and a home there fails to bind (status 226/NAMESPACE) |
-| `VOICEBOX_WASM_SHELF_DIR` | `lib/extensions.mjs` | directory holding the digest-pinned WASM tool shelf (`manifest.json` and `.wasm` modules; default `~/.isocan/modules/wasm-tools`) |
-| `VOICEBOX_WORKSPACE` | `lib/extensions.mjs`, `server.mjs` | declares a machine root at boot — a decision, not a default — and is where the extension system keeps `proposals/` and `audit.jsonl` |
+| `VOICEBOX_SANDBOX_HOMES` | `lib/state-dirs.mjs` | where a fence's writable home is bound from (default `~/sandbox-homes/<key>`) — the one place a fenced environment may write. Must live OUTSIDE /tmp: an L1.5 unit's PrivateTmp hides /tmp in its namespace and a home there fails to bind (status 226/NAMESPACE) |
+| `VOICEBOX_WASM_SHELF_DIR` | `lib/state-dirs.mjs` | directory holding the digest-pinned WASM tool shelf (`manifest.json` and `.wasm` modules; default `~/.isocan/modules/wasm-tools`) |
+| `VOICEBOX_WORKSPACE` | `lib/state-dirs.mjs` | declares a machine root at boot — a decision, not a default — and is where the extension system keeps `proposals/` and `audit.jsonl` |
 <!-- END GENERATED: config -->
 
 ## The routes, as they answer
@@ -232,6 +243,21 @@ Audio worklets loaded by that code: `pcm-worklet.js`.
 - **`core/`** is authoritative for the tier table, containment and the audit — and it is a **library**: it
   imports nothing outside `core/`, because two copies of it would drift silently (see the design's N18). <!-- docs-check: names the mechanism -->
 - **`core/harness-config.ts`** is authoritative for the pure, secret-free configured-agent contract, distinguishing runtime ("node" | "deno" | "browser"), configured agent instances (permanent ID, mutable name, model, reach, bounds), and executing environments. PURE: zero imports outside `core/` (self-contained core library).
+- **`lib/state-dirs.mjs`** is authoritative for the state-DIRECTORY facts — `VOICEBOX_WORKSPACE`,
+  `VOICEBOX_EXTENSIONS_DIR`, `VOICEBOX_WASM_SHELF_DIR`, `VOICEBOX_SANDBOX_HOMES` — each with its
+  default and its declaration (`workspaceDir()`, `workspaceDeclared()`, `extensionsDir()`,
+  `wasmShelfDir()`, `sandboxHomesDir()`). It exists because the tree answered them from more than one
+  copy (voicebox-beads-y5k): the extensions directory was resolved twice inside `lib/extensions.mjs`
+  — once as a constant, once as a getter five lines later — and again in `server.mjs` and
+  `tools/approval-code.mjs`; the wasm shelf default was written out three times in one file; and the
+  fence's home root was computed separately by `lib/fence-provider.mjs` and
+  `lib/unit-fence-provider.mjs` (both, rightly, resolved it lazily — the copy was the defect, not the
+  timing). `scripts/single-owner.mjs` derives the facts from this module's own `FACTS` declaration
+  and refuses any other site that reads the variable or rebuilds the default, naming the file and the
+  owner to ask. `tests/single-owner.test.mjs` drives both halves — it adds a fourth copy to a scratch
+  tree and watches the check refuse, then removes it and watches it pass — so "it is green" is not the
+  only thing anybody knows about it. The review question behind the rule: *is this component answering
+  about itself?*
 - **`lib/harness-config.mjs`** is authoritative for the agent registry and loader, supporting both server storage and zero-server browser-local placements, and feeding configured agents into harness discovery. Server storage writes are atomic (temp file + rename) so a failed write cannot truncate the registry; the host-token-gated `GET`/`POST /api/agents` and `PATCH /api/agents/:id` routes are its HTTP surface.
 - **`public/fused.js`** is authoritative for what the page shows, and it **labels its own simulations on the
   page**: files, the turn submission and the containment refusals are real; the shared view, seen-marks and

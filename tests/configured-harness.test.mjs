@@ -158,3 +158,72 @@ test("cancellation honesty: cancel_task aborts in-flight task and records cancel
   assert.equal(terminal.reason, "task-cancelled");
 });
 
+
+test("multi-harness coexistence: pi selected, a claude-adapter agent configured — each answered by name (voicebox-beads-aaj)", { skip: skipRealPi, timeout: 90000 }, async (t) => {
+  const f = await taskFixture(t, {
+    runtime: false,
+    env: {
+      VOICEBOX_HARNESS: "pi",
+      VOICEBOX_ACP_ADAPTER: adapterDir,
+      VOICEBOX_ACP_PI: piBinary,
+    },
+  });
+
+  const owner = await f.pair("coexistence-owner");
+  const base = f.server.base;
+
+  // The machine's own environment key is minted per host — read it from the product's own
+  // API: the server registers its own pi agent under the SELF environment at boot.
+  const listedBefore = await (await fetch(`${base}/api/agents`)).json();
+  const piExisting = listedBefore.agents.find((a) => a.id === "pi");
+  assert.ok(piExisting, `the server's own pi agent should be listed: ${JSON.stringify(listedBefore.agents.map((a) => [a.id, a.environmentKey]))}`);
+  const selfEnvironment = piExisting.environmentKey;
+
+  // Register a second agent whose adapter has no implementation on this host.
+  // Configuring an agent is the HOST's act (x-voicebox-host-token; the page cannot hold it).
+  const registered = await fetch(`${base}/api/agents`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-voicebox-host-token": f.server.hostToken },
+    body: JSON.stringify({
+      id: "agent_claude_reviewer",
+      name: "Claude Reviewer",
+      harness: "claude",
+      adapter: "claude-code",
+      transport: "stdio",
+      environmentKey: selfEnvironment,
+      model: { provider: "anthropic", model: "claude-3-5-haiku" },
+    }),
+  });
+  assert.equal(registered.status, 201, `registering the claude agent failed: ${JSON.stringify(await registered.json())}`);
+
+  // /api/agents carries the startup admission verdict per agent.
+  const listed = await fetch(`${base}/api/agents`);
+  const listedBody = await listed.json();
+  const byId = Object.fromEntries(listedBody.agents.map((a) => [a.id, a]));
+  const piRow = byId["pi"];
+  assert.ok(piRow, `the pi agent should be listed: ${JSON.stringify(Object.keys(byId))}`);
+  assert.equal(piRow.admission.admitted, true, `pi should be admitted: ${JSON.stringify(piRow.admission)}`);
+  const claudeRow = byId["agent_claude_reviewer"];
+  assert.ok(claudeRow, "the claude agent should be listed");
+  assert.equal(claudeRow.admission.admitted, false);
+  assert.equal(claudeRow.admission.refused, "adapter-not-configured");
+
+  // Delegating to the claude agent refuses BY NAME at admission — the pi path is untouched.
+  const refused = await freshExecute(base, owner, "delegate_task", {
+    agent: "agent_claude_reviewer",
+    task: "review something",
+  }, "claude-agent-call");
+  assert.equal(refused.status, 403);
+  assert.equal(refused.body.refused, "adapter-not-configured");
+  assert.match(refused.body.why, /configured for this CLI/);
+
+  // The selected harness still executes for real through its own adapter.
+  const admitted = await freshExecute(base, owner, "delegate_task", {
+    agent: "pi",
+    task: "Compute 2 * 3. Return only the final number.",
+  }, "pi-coexistence-call");
+  assert.equal(admitted.status, 200, `pi delegation should be admitted: ${JSON.stringify(admitted.body)}`);
+  const terminal = await pollStatus(base, owner, admitted.body.task.address);
+  assert.equal(terminal.state, "completed");
+  assert.match(terminal.answer, /6/, `expected '6' in answer, got: ${terminal.answer}`);
+});

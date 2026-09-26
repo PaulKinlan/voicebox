@@ -84,11 +84,17 @@ export async function startServer({ env = {}, cwd = ROOT, readyTimeoutMs = 20000
   });
 
   let noise = "";
+  let out = ""; // everything the server prints on stdout — a suite that needs the STARTUP LINES
+  // (e.g. the bootstrap URL the loopback-auth gate prints, voicebox-beads-kkc) reads them here
+  // instead of re-spawning the server by hand.
   // Registered the moment it exists: a test that never reaches stop() must still be reaped.
   LIVE_CHILDREN.add(child);
 
   child.stderr.on("data", (chunk) => {
     noise += String(chunk);
+  });
+  child.stdout.on("data", (chunk) => {
+    out += String(chunk);
   });
 
   const port = await new Promise((resolve, reject) => {
@@ -134,6 +140,8 @@ export async function startServer({ env = {}, cwd = ROOT, readyTimeoutMs = 20000
     child,
     hostToken,
     extensionsDir: scratchExtensions,
+    stdout: () => out,
+    stderr: () => noise,
     async stop() {
       reap(child);
     },

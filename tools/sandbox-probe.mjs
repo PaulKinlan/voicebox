@@ -28,6 +28,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const exec = promisify(execFile);
@@ -52,16 +53,57 @@ function readSoftly(p, maxChars = 4000) {
   }
 }
 
+export function isPidDead(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (err) {
+    return err.code === "ESRCH";
+  }
+}
+
+/** Sweep orphaned .sandbox-probe-<pid>-* markers left by killed processes (voicebox-beads-ebq). */
+export function sweepOrphanedProbeMarkers(dirPath) {
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+      const match = entry.name.match(/^\.sandbox-probe-(\d+)-/);
+      if (!match) continue;
+      const pid = parseInt(match[1], 10);
+      if (isPidDead(pid)) {
+        try {
+          fs.unlinkSync(path.join(dirPath, entry.name));
+        } catch {
+          /* ignore unlink failure (e.g. read-only or race) */
+        }
+      }
+    }
+  } catch {
+    /* dirPath may be unreadable, non-existent, or not a directory */
+  }
+}
+
 /** Does this path exist, and can this process write there? PROBE BY DOING:
  *  create and unlink a uniquely named file, so a read-only mount is
  *  discovered rather than guessed from mount flags. */
 function writeProbe(p) {
+  sweepOrphanedProbeMarkers(p);
   const file = path.join(p, `.sandbox-probe-${process.pid}-${WHEN.replace(/[^0-9]/g, "")}`);
+  let unlinked = false;
+  const cleanup = () => {
+    if (!unlinked) {
+      try { fs.unlinkSync(file); } catch {}
+      unlinked = true;
+    }
+  };
   try {
     fs.writeFileSync(file, "probe\n");
-    fs.unlinkSync(file);
+    cleanup();
     return { value: true };
   } catch (err) {
+    cleanup();
     return { value: false, error: `${err.code ?? err.message}` };
   }
 }
@@ -238,19 +280,32 @@ function limits() {
   };
 }
 
+export async function runProbe() {
+  const report = {
+    probe: "sandbox-probe/1",
+    when: WHEN,
+    identity: identity(),
+    sandboxHints: sandboxHints(),
+    filesystem: filesystem(),
+    limits: limits(),
+  };
+
+  report.tools = await tools();
+  report.network = await network();
+  return report;
+}
+
 // ------------------------------------------------------------------- main
 
-const report = {
-  probe: "sandbox-probe/1",
-  when: WHEN,
-  identity: identity(),
-  sandboxHints: sandboxHints(),
-  filesystem: filesystem(),
-  limits: limits(),
-};
+const isMain = !process.env.SANDBOX_PROBE_NO_MAIN && (
+  !process.argv[1] ||
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url) ||
+  path.basename(process.argv[1]) === "sandbox-probe.mjs"
+);
 
-report.tools = await tools();
-report.network = await network();
-
-const pretty = process.env.SANDBOX_PROBE_PRETTY === "1";
-process.stdout.write(JSON.stringify(report, null, pretty ? 2 : 0) + "\n");
+if (isMain) {
+  sweepOrphanedProbeMarkers(process.cwd());
+  const report = await runProbe();
+  const pretty = process.env.SANDBOX_PROBE_PRETTY === "1";
+  process.stdout.write(JSON.stringify(report, null, pretty ? 2 : 0) + "\n");
+}

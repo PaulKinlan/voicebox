@@ -1,0 +1,215 @@
+{
+  "started": "2026-09-25T17:57:13.776Z",
+  "question": "What is two plus two",
+  "events": [
+    {
+      "at": "2026-09-25T17:57:15.455Z",
+      "attempt": 1,
+      "event": "transport-open",
+      "provider": "openai"
+    },
+    {
+      "at": "2026-09-25T17:57:15.582Z",
+      "attempt": 1,
+      "event": "ready",
+      "gatedFrames": 0,
+      "provider": "openai"
+    },
+    {
+      "at": "2026-09-25T17:57:15.906Z",
+      "attempt": 1,
+      "event": "interrupt",
+      "provider": "openai"
+    },
+    {
+      "at": "2026-09-25T17:57:16.614Z",
+      "attempt": 1,
+      "event": "turn-complete",
+      "provider": "openai"
+    },
+    {
+      "at": "2026-09-25T17:57:18.178Z",
+      "attempt": 1,
+      "event": "upstream-closed",
+      "code": 1000,
+      "reason": "closed by the host",
+      "provider": "openai"
+    },
+    {
+      "at": "2026-09-25T17:57:20.570Z",
+      "attempt": 2,
+      "event": "transport-open",
+      "provider": "openai"
+    },
+    {
+      "at": "2026-09-25T17:57:20.709Z",
+      "attempt": 2,
+      "event": "ready",
+      "gatedFrames": 0,
+      "provider": "openai"
+    },
+    {
+      "at": "2026-09-25T17:57:21.039Z",
+      "attempt": 2,
+      "event": "interrupt",
+      "provider": "openai"
+    },
+    {
+      "at": "2026-09-25T17:57:21.905Z",
+      "attempt": 2,
+      "event": "turn-complete",
+      "provider": "openai"
+    },
+    {
+      "at": "2026-09-25T17:57:23.486Z",
+      "attempt": 2,
+      "event": "upstream-closed",
+      "code": 1000,
+      "reason": "closed by the host",
+      "provider": "openai"
+    }
+  ],
+  "attempts": [
+    {
+      "attempt": 1,
+      "started": "2026-09-25T17:57:13.777Z",
+      "tts": {
+        "bytes": 141600,
+        "seconds": 2.95
+      },
+      "output": {
+        "bytes": 57600,
+        "samples": 28800,
+        "secondsAt24000": 1.2,
+        "rates": [
+          24000
+        ],
+        "modelTranscript": "",
+        "inputTranscript": ""
+      },
+      "terminal": {
+        "code": 1000,
+        "reason": "closed by the host"
+      },
+      "refusedByTransport": {
+        "audioBeforeReady": 0,
+        "afterClose": 0
+      },
+      "checks": {
+        "V1-output-rate": {
+          "ok": true,
+          "detail": "output-audio mime rates: [24000] (want [24000])"
+        },
+        "V3-duration-positive": {
+          "ok": true,
+          "detail": "28800 samples = 1.20s at 24 kHz (a wrong-rate stream would shrink/stretch this)"
+        },
+        "V5-gate-quiet": {
+          "ok": true,
+          "detail": "refused={\"audioBeforeReady\":0,\"afterClose\":0}"
+        },
+        "V2-input-intelligible": {
+          "ok": false,
+          "detail": "spoken answer: \"you\""
+        },
+        "V3b-duration-natural": {
+          "ok": false,
+          "detail": "1.20s at 24 kHz for 3 heard chars = 2.5 chars/sec (natural range)"
+        },
+        "V4-whisper-hears-it": {
+          "ok": true,
+          "detail": "whisper transcribed 3 chars of the output at its declared 24 kHz"
+        }
+      },
+      "whisper": "you",
+      "notes": {
+        "modelTranscriptDeltas": "none arrived — audio + whisper prove the turn; recorded as an observation for the provider's owner (this deployment emits no output_audio_transcript.delta the provider sees, and session.update sets no input_audio_transcription)"
+      }
+    },
+    {
+      "attempt": 2,
+      "started": "2026-09-25T17:57:19.250Z",
+      "tts": {
+        "bytes": 108000,
+        "seconds": 2.25
+      },
+      "output": {
+        "bytes": 81600,
+        "samples": 40800,
+        "secondsAt24000": 1.7,
+        "rates": [
+          24000
+        ],
+        "modelTranscript": "",
+        "inputTranscript": ""
+      },
+      "terminal": {
+        "code": 1000,
+        "reason": "closed by the host"
+      },
+      "refusedByTransport": {
+        "audioBeforeReady": 0,
+        "afterClose": 0
+      },
+      "checks": {
+        "V1-output-rate": {
+          "ok": true,
+          "detail": "output-audio mime rates: [24000] (want [24000])"
+        },
+        "V3-duration-positive": {
+          "ok": true,
+          "detail": "40800 samples = 1.70s at 24 kHz (a wrong-rate stream would shrink/stretch this)"
+        },
+        "V5-gate-quiet": {
+          "ok": true,
+          "detail": "refused={\"audioBeforeReady\":0,\"afterClose\":0}"
+        },
+        "V2-input-intelligible": {
+          "ok": true,
+          "detail": "spoken answer: \"The answer is 4.\""
+        },
+        "V3b-duration-natural": {
+          "ok": true,
+          "detail": "1.70s at 24 kHz for 16 heard chars = 9.4 chars/sec (natural range)"
+        },
+        "V4-whisper-hears-it": {
+          "ok": true,
+          "detail": "whisper transcribed 16 chars of the output at its declared 24 kHz"
+        }
+      },
+      "whisper": "The answer is 4.",
+      "notes": {
+        "modelTranscriptDeltas": "none arrived — audio + whisper prove the turn; recorded as an observation for the provider's owner (this deployment emits no output_audio_transcript.delta the provider sees, and session.update sets no input_audio_transcription)"
+      }
+    }
+  ],
+  "checks": {
+    "V1-output-rate": {
+      "ok": true,
+      "detail": "output-audio mime rates: [24000] (want [24000])"
+    },
+    "V3-duration-positive": {
+      "ok": true,
+      "detail": "40800 samples = 1.70s at 24 kHz (a wrong-rate stream would shrink/stretch this)"
+    },
+    "V5-gate-quiet": {
+      "ok": true,
+      "detail": "refused={\"audioBeforeReady\":0,\"afterClose\":0}"
+    },
+    "V2-input-intelligible": {
+      "ok": true,
+      "detail": "spoken answer: \"The answer is 4.\""
+    },
+    "V3b-duration-natural": {
+      "ok": true,
+      "detail": "1.70s at 24 kHz for 16 heard chars = 9.4 chars/sec (natural range)"
+    },
+    "V4-whisper-hears-it": {
+      "ok": true,
+      "detail": "whisper transcribed 16 chars of the output at its declared 24 kHz"
+    }
+  },
+  "cleanAttempt": 2,
+  "finished": "2026-09-25T17:57:25.156Z",
+  "node": "v24.21.0"
+}

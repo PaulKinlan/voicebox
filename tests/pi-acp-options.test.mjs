@@ -15,10 +15,19 @@ import os from "node:os";
 import { createPiAcpExecutor } from "../lib/pi-acp.mjs";
 import { ACP_AGENT } from "../lib/acp-client.mjs";
 
-const DEFAULT_ADAPTER = path.join(os.homedir(), ".pi/agent/npm/node_modules/pi-acp");
+// HERMETIC BY DEFAULT (voicebox-beads-4iv, 2026-09-25): the unit lane must not depend on the
+// machine's installed adapter. This fixture PREFERRED the installed pi-acp when present, so
+// today's pi update (adapter 0.0.33 -> 0.0.34 on this box) silently moved these option-layer
+// tests onto the real adapter — whose version gate refuses every run() BEFORE the
+// model/thinking layers these tests exist to pin. Red for every lane, on pristine main too.
+// The stub matches the ACP_AGENT pin by construction, so what gets verified here is the
+// executor's layered refusal logic, on any machine, at any installed version. The real
+// adapter's version gate is the probe's and the live lane's business (and re-pinning
+// ACP_AGENT to 0.0.34 is the surface owner's verification decision, recorded on 4iv).
+// VOICEBOX_ACP_ADAPTER still overrides — a deliberate opt-in to machine dependence.
 const adapterDir = (() => {
-  const candidate = process.env.VOICEBOX_ACP_ADAPTER ?? DEFAULT_ADAPTER;
-  if (fs.existsSync(path.join(candidate, "package.json")) && fs.existsSync(path.join(candidate, "dist/index.js"))) return candidate;
+  const candidate = process.env.VOICEBOX_ACP_ADAPTER;
+  if (candidate && fs.existsSync(path.join(candidate, "package.json")) && fs.existsSync(path.join(candidate, "dist/index.js"))) return candidate;
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "voicebox-pi-acp-stub-")));
   fs.mkdirSync(path.join(dir, "dist"), { recursive: true });
   fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: ACP_AGENT.name, version: ACP_AGENT.version }));
