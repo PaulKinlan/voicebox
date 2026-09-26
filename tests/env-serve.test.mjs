@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { startServer } from "./lib/server.mjs";
@@ -265,4 +265,61 @@ test("env-serve /exec live: spawned command environment excludes ambient parent 
   assert.equal(childKeys.has("PATH"), true, "PATH must be present in child env");
   assert.equal(childKeys.has("HOME"), true, "HOME must be present in child env");
   assert.equal(childKeys.has("VOICEBOX_FENCE"), true, "VOICEBOX_FENCE marker must be present");
+});
+
+test("env-serve selfProbe(): probe child process runs on minimal whitelist and excludes ambient secrets (voicebox-beads-t9bm)", async (t) => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "t9bm-env-home-"));
+  mkdirSync(path.join(home, "workspace"), { recursive: true });
+
+  // Custom probe script that dumps process.env keys as JSON
+  const customProbe = path.join(home, "dump-probe.mjs");
+  writeFileSync(customProbe, `
+    const keys = Object.keys(process.env);
+    process.stdout.write(JSON.stringify({
+      probe: "sandbox-probe/1",
+      when: new Date().toISOString(),
+      keys,
+      hasAnthropic: "ANTHROPIC_API_KEY" in process.env,
+      hasGemini: "GEMINI_API_KEY" in process.env,
+      hasPoisoned: "VOICEBOX_POISONED" in process.env,
+      fence: process.env.VOICEBOX_FENCE,
+    }) + "\\n");
+  `);
+
+  const child = spawn(process.execPath, [ENV_SERVE], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      HOME: home,
+      XDG_CONFIG_HOME: path.join(home, ".config"),
+      PORT: "0",
+      SANDBOX_PROBE: customProbe,
+      ANTHROPIC_API_KEY: "sk-ant-probe-leak",
+      GEMINI_API_KEY: "gem-probe-leak",
+      VOICEBOX_POISONED: "leaked-into-probe",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  const port = await new Promise((resolve, reject) => {
+    let buffer = "";
+    child.stdout.on("data", (chunk) => {
+      buffer += chunk;
+      const match = buffer.match(/127\.0\.0\.1:(\d+)/);
+      if (match) resolve(Number(match[1]));
+    });
+    child.stderr.on("data", (chunk) => process.stderr.write(chunk));
+    setTimeout(() => reject(new Error("env-serve printed no port")), 30000);
+  });
+  t.after(() => { try { child.kill("SIGKILL"); } catch {} rmSync(home, { recursive: true, force: true }); });
+
+  const origin = `http://127.0.0.1:${port}`;
+  const res = await fetch(`${origin}/probe`);
+  assert.equal(res.status, 200);
+  const report = await res.json();
+
+  assert.equal(report.hasAnthropic, false, "ANTHROPIC_API_KEY must be absent from probe child env");
+  assert.equal(report.hasGemini, false, "GEMINI_API_KEY must be absent from probe child env");
+  assert.equal(report.hasPoisoned, false, "VOICEBOX_POISONED must be absent from probe child env");
+  assert.equal(report.fence, "1", "VOICEBOX_FENCE must be present in probe child env");
 });

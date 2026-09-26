@@ -68,10 +68,10 @@ never holds the port; it asks the host.
 `/srv/voicebox`, the one writable sandbox home, and `/bin` and `/lib` symlinked into the read-only
 `/usr` bind, so there is no host home to read and nothing outside `/usr`, `/etc` and the sandbox home
 to touch. The L1.5 composition adds seccomp, an empty capability set, `PrivateTmp` and
-`ProtectSystem=strict`. Commands run under a minimal, measured child environment (`lib/fence-child-env.mjs`)
+`ProtectSystem=strict`. Commands and the environment's own self-probe run under a minimal, measured child environment (`lib/fence-child-env.mjs`)
 containing only what Unix tools and Git require (`PATH`, `HOME`, `TMPDIR`, `USER`, `LOGNAME`, `SHELL`, `LANG`,
 `TERM`, `XDG_CONFIG_HOME`, `GIT_CONFIG_GLOBAL`, `VOICEBOX_FENCE`); ambient host credentials (API keys, tokens)
-and host repository bindings (`GIT_DIR`, `GIT_WORK_TREE`) are excluded by construction (`voicebox-beads-4uw0`).
+and host repository bindings (`GIT_DIR`, `GIT_WORK_TREE`) are excluded by construction (`voicebox-beads-4uw0`, `voicebox-beads-t9bm`).
 **What does not bound it**: the network is shared, and a process reads what its
 uid can read — the same two lines the fence's own boundary report carries; a command surface does not
 change either.
