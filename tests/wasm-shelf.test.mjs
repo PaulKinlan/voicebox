@@ -363,3 +363,36 @@ test("MBK concurrency semaphore: excess concurrent worker calls refuse over-budg
     _resetWasmWorkerStateForTest();
   }
 });
+
+test("MBK: invalid concurrency env values refuse bounds-invalid by name (voicebox-beads-mbk blocker B2)", async (t) => {
+  if (needsShelf(t)) return;
+  const { getWasmConcurrencyBounds, callWasmTool, descriptorFor, readShelf } = await import("../lib/wasm-shelf.mjs");
+  const shelfOut = readShelf(shelf);
+  const descriptor = descriptorFor(shelfOut.tools.find((x) => x.id === "hash"));
+  const tool = descriptor.tools[0];
+
+  const prevMax = process.env.VOICEBOX_WASM_MAX_CONCURRENT_WORKERS;
+  const prevQueue = process.env.VOICEBOX_WASM_MAX_QUEUE_SIZE;
+
+  try {
+    process.env.VOICEBOX_WASM_MAX_QUEUE_SIZE = "abc";
+    const bounds = getWasmConcurrencyBounds();
+    assert.equal(bounds.ok, false);
+    assert.equal(bounds.refused, "bounds-invalid");
+
+    const callRes = await callWasmTool(tool, { input: "test" });
+    assert.equal(callRes.ok, false);
+    assert.equal(callRes.refused, "bounds-invalid");
+
+    process.env.VOICEBOX_WASM_MAX_QUEUE_SIZE = "0";
+    process.env.VOICEBOX_WASM_MAX_CONCURRENT_WORKERS = "0";
+    const bounds2 = getWasmConcurrencyBounds();
+    assert.equal(bounds2.ok, false);
+    assert.equal(bounds2.refused, "bounds-invalid");
+  } finally {
+    if (prevMax !== undefined) process.env.VOICEBOX_WASM_MAX_CONCURRENT_WORKERS = prevMax;
+    else delete process.env.VOICEBOX_WASM_MAX_CONCURRENT_WORKERS;
+    if (prevQueue !== undefined) process.env.VOICEBOX_WASM_MAX_QUEUE_SIZE = prevQueue;
+    else delete process.env.VOICEBOX_WASM_MAX_QUEUE_SIZE;
+  }
+});
