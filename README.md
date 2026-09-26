@@ -91,7 +91,9 @@ their adapter.
    `executor-unavailable` (no `VOICEBOX_HARNESS` selected), `adapter-not-configured`
    (no adapter exists for that harness on this host), `adapter-version-unsupported`
    (installed adapter is not the verified pin), `agent-environment-mismatch` (the agent
-   belongs to another environment).
+   belongs to another environment). Deadlines are per-adapter and bounded: pi tasks run
+   with a 60s ceiling, claude-code tasks with 120s (`CLAUDE_ACP_TIMEOUT_CEILING_MS`) — a
+   warm Claude turn does not settle inside pi's clamp (voicebox-beads-hmco).
 
 The walkthrough above is the same one driven end to end against a real server and a real
 Pi delegation in `tests/configured-harness.test.mjs` (live lane).

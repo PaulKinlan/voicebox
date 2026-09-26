@@ -239,3 +239,27 @@ test("claude run: the spawned child env carries NO ANTHROPIC_API_KEY by default,
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("bounds: the claude ceiling admits a 120s deadline that pi's 60s clamp would refuse (voicebox-beads-hmco)", () => {
+  const dir = stubAdapterDir();
+  const executor = createClaudeAcpExecutor({ adapterDir: dir, claudeCli: process.execPath });
+  const admitted = executor.check({ input: { agent: "claude" }, bounds: { deadlineMs: 120000 } });
+  assert.equal(admitted.ok, true, JSON.stringify(admitted));
+  assert.equal(admitted.bounds.deadlineMs, 120000, "the claude ceiling admits the full 120s");
+});
+
+test("bounds: a claude run with a 120s deadline completes over the scripted harness — the ceiling plumbs to the client (voicebox-beads-hmco)", { timeout: 20000 }, async () => {
+  const dir = stubAdapterDir();
+  const harness = protocolHarness({ reply: "OK" });
+  const executor = createClaudeAcpExecutor({
+    adapterDir: dir,
+    claudeCli: process.execPath,
+    transportFactory: () => ({ transport: harness.transport, kill: () => {} }),
+  });
+  const text = await executor.run({
+    input: { task: "Reply with exactly: OK" },
+    bounds: { deadlineMs: 120000 },
+    agentConfig: { id: "agent_claude_ceiling", harness: "claude", adapter: "claude-code" },
+  });
+  assert.match(String(text), /OK/, "a 120s deadline must be admitted and run, not refused as unbounded");
+});

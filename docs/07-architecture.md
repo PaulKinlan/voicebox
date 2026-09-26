@@ -239,6 +239,8 @@ Audio worklets loaded by that code: `pcm-worklet.js`.
 
 ## Where each file's authority lies
 
+Hand-written addition (not generated; voicebox-beads-hmco): **the ACP timeout ceiling is per-adapter, named in the bounds contract.** `lib/acp-client.mjs` owns the client's bounds: pi-acp keeps its 60s ceiling; the claude-code adapter declares 120s (`CLAUDE_ACP_TIMEOUT_CEILING_MS` in `lib/claude-acp.mjs`) because a warm claude turn does not settle inside pi's clamp (measured). Requested deadlines clamp to the named ceiling, the ceiling itself is meta-capped at 600s, and a timeout above the ceiling refuses as unbounded — unbounded executors stay impossible at every layer.
+
 - **`server.mjs`** is authoritative for the routes and for what an action *does* (it executes verbs, it does
   not interpret them). It binds `127.0.0.1` only.
 - **`lib/resolver.mjs`** is authoritative for the provider list, and for what a transcript means. Its
