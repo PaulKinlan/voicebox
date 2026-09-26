@@ -207,11 +207,14 @@ test("POST /api/turn {action} validation: unknown command refused and forged tur
   const forgedJson = await forgedRes.json();
   assert.equal(forgedJson.result?.ok, true);
 
-  // Verify the audit log does NOT carry turn 424242
+  // Verify the entry produced by this request does NOT carry turn 424242
+  const loggedSeq = forgedJson.result?.logged;
+  assert.ok(loggedSeq, "forged request must produce an audit entry");
   const auditRes = await fetch(`${BASE}/api/audit`).then((r) => r.json());
-  const entry = (auditRes.entries ?? []).find((e) => e.act?.kind === "git_status");
-  assert.ok(entry, "audit must have git_status entry");
-  assert.notEqual(entry.turn, 424242, "caller cannot forge turn index in audit log");
+  const entry = (auditRes.entries ?? []).find((e) => e.seq === loggedSeq);
+  assert.ok(entry, "audit must have the entry produced by this request");
+  assert.equal(entry.turn, null, "audit entry turn must be null, never caller-forged turn 424242");
+  assert.equal(auditRes.entries?.some((e) => e.turn === 424242), false, "no audit entry may carry forged turn 424242");
 });
 
 test("inspect_environment: returns underlying machine platform, runtime, limits, and tools", async () => {
