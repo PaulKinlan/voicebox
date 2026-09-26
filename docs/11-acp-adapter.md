@@ -70,8 +70,17 @@ The installed-adapter tests explicitly skip when those paths are absent.
 
 ## Boundaries
 
-- **Claude Code**: Has no ACP adapter on this machine or in this repository. `discoverHarnesses()`
-  and `delegate_task` refuse with `adapter-not-configured`.
+- **Claude Code**: the task adapter LANDED — voicebox-beads-a74y, `lib/claude-acp.mjs`
+  (`@agentclientprotocol/claude-agent-acp` driven as a stdio ACP client through the shared
+  `runAcpTask` core, so pi and claude cannot drift silently). A host without the pinned adapter, or a
+  harness that is not `claude`/`claude-code`, still refuses by name (`adapter-not-configured`).
+- **The adapter child's environment (voicebox-beads-nz60)**: the child is spawned with a COPY of the
+  host environment, and `ANTHROPIC_API_KEY` is **deleted** from that copy by default — an inherited
+  key overrides claude.ai login inside the adapter and can stall the prompt, and this box carries the
+  key. The host's own `process.env` is never mutated. The explicit opt-back is
+  `VOICEBOX_CLAUDE_KEEP_API_KEY=1` (or `createClaudeAcpExecutor({ keepApiKey: true })`). Absence is
+  asserted with `in`, never with `=== undefined`: a key present with the value `undefined` is a
+  different child environment, and a spawn path that forwards it writes the string `"undefined"`.
 - **Browser-only boundary**: `pi-acp` is a stdio subprocess. A browser environment cannot spawn
   it directly; zero-server browser harnesses remain separate.
 

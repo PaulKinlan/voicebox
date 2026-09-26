@@ -410,13 +410,14 @@ Every environment variable the server and its libraries read, and where:
 | `NODE_DISABLE_COLORS` | `lib/logger.mjs` | Node's built-in colour disable flag — honoured by `lib/logger.mjs` alongside `NO_COLOR` |
 | `NO_COLOR` | `lib/logger.mjs` | standard terminal colour override — when set to a non-empty value, `lib/logger.mjs` strips ANSI colour sequences |
 | `OPENAI_API_KEY` | `lib/live-providers/openai.mjs`, `server.mjs` | the OpenAI Realtime key — without it that provider refuses to start, by name |
-| `PATH` | `lib/claude-acp.mjs` | (undocumented — add a line to ENV_MEANING in scripts/docs-check.mjs) |
+| `PATH` | `lib/claude-acp.mjs` | the executable search path — also inherited by task-adapter children (the claude adapter resolves its pinned `npx` through it) |
 | `PORT` | `server.mjs` | the port the server binds (default 8787) |
 | `VOICEBOX_ACP_ADAPTER` | `lib/pi-acp.mjs` | path or command override for the `pi-acp` stdio adapter binary in `lib/pi-acp.mjs` |
 | `VOICEBOX_ACP_PI` | `lib/pi-acp.mjs` | path or command override for the `pi` coding agent CLI used by `lib/pi-acp.mjs` |
 | `VOICEBOX_BIND_DEADLINE_MS` | `server.mjs` | how long to keep retrying before giving up by name |
 | `VOICEBOX_BIND_RETRY_MS` | `server.mjs` | how often to retry a bind that lost the port race |
-| `VOICEBOX_CLAUDE_CLI` | `lib/claude-acp.mjs` | (undocumented — add a line to ENV_MEANING in scripts/docs-check.mjs) |
+| `VOICEBOX_CLAUDE_CLI` | `lib/claude-acp.mjs` | the claude CLI the adapter child is told to execute (exported to it as `CLAUDE_CODE_EXECUTABLE`); unset resolves the user-installed CLI, else the adapter-bundled binary |
+| `VOICEBOX_CLAUDE_KEEP_API_KEY` | `lib/claude-acp.mjs` | opt-back for the claude-code adapter child env: set to `1` to keep the host's `ANTHROPIC_API_KEY`. By default that key is DELETED from the child — an inherited key overrides claude.ai login and can stall the prompt — the host's own environment is never mutated, and the test asserts the key is ABSENT rather than present-with-no-value, because those are different child environments (voicebox-beads-nz60) |
 | `VOICEBOX_EXTENSIONS_DIR` | `lib/state-dirs.mjs` | the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl`, and `.pairings.json` (the bearer custody store — outside every root) |
 | `VOICEBOX_HARNESS` | `server.mjs` | selects the host task adapter (`pi` enables the Pi ACP task adapter in `server.mjs`; unset leaves no default adapter configured) |
 | `VOICEBOX_HELLO_BOUND_MS` | `server.mjs` | how long to wait for a hello frame on /channel or /live before refusing (default 5000ms) |

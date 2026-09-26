@@ -371,6 +371,9 @@ const ENV_MEANING = {
   NODE_DISABLE_COLORS: "Node's built-in colour disable flag — honoured by `lib/logger.mjs` alongside `NO_COLOR`",
   VOICEBOX_ACP_ADAPTER: "path or command override for the `pi-acp` stdio adapter binary in `lib/pi-acp.mjs`",
   VOICEBOX_ACP_PI: "path or command override for the `pi` coding agent CLI used by `lib/pi-acp.mjs`",
+  PATH: "the executable search path — also inherited by task-adapter children (the claude adapter resolves its pinned `npx` through it)",
+  VOICEBOX_CLAUDE_CLI: "the claude CLI the adapter child is told to execute (exported to it as `CLAUDE_CODE_EXECUTABLE`); unset resolves the user-installed CLI, else the adapter-bundled binary",
+  VOICEBOX_CLAUDE_KEEP_API_KEY: "opt-back for the claude-code adapter child env: set to `1` to keep the host's `ANTHROPIC_API_KEY`. By default that key is DELETED from the child — an inherited key overrides claude.ai login and can stall the prompt — the host's own environment is never mutated, and the test asserts the key is ABSENT rather than present-with-no-value, because those are different child environments (voicebox-beads-nz60)",
   VOICEBOX_HARNESS: "selects the host task adapter (`pi` enables the Pi ACP task adapter in `server.mjs`; unset leaves no default adapter configured)",
   VOICEBOX_WASM_SHELF_DIR: "directory holding the digest-pinned WASM tool shelf (`manifest.json` and `.wasm` modules; default `~/.isocan/modules/wasm-tools`)",
 };
