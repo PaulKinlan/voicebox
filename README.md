@@ -51,9 +51,11 @@ enables delegation nor checks authentication. See
 
 ## Set up a task harness (five minutes, start to first delegation)
 
-A task harness is a host CLI that `delegate_task` can run work on. Today exactly one
-adapter is implemented — **pi-acp** (the Pi coding agent over ACP on stdio). Other
-inventoried CLIs (claude, codex, gemini, opencode) can be CONFIGURED as agents, and the
+A task harness is a host CLI that `delegate_task` can run work on. Two adapters are
+implemented — **pi-acp** (the Pi coding agent over ACP on stdio) and **claude-code**
+(`lib/claude-acp.mjs`: Claude Code over ACP via the pinned registry adapter, local install
+or npx; the Claude CLI from `CLAUDE_CODE_EXECUTABLE`/PATH or the SDK's bundled fallback).
+Other inventoried CLIs (codex, gemini, opencode) can be CONFIGURED as agents, and the
 server answers each one by name, but they refuse at delegation until someone builds
 their adapter.
 
