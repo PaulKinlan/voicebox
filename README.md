@@ -80,7 +80,9 @@ their adapter.
    `POST /api/agents` with the host token (or edit `<host dir>/.agents.json`), for example
    a second Pi instance with a different model, or a Claude agent prepared for the day an
    adapter exists. `GET /api/agents` returns each agent WITH its current `admission` —
-   `{ admitted: true }` or `{ admitted: false, refused, why }` — so the page and scripts
+   `{ admitted: true }` or `{ admitted: false, refused, why }` (non-local agents, such as
+   the in-browser worker agent, are marked `not-judged-here` since the host only judges
+   its own environment) — so the page and scripts
    can see what would happen before delegating.
 4. **Delegate.** From the page, or `delegate_task` with `agent: "pi"`. The task runs
    through the host → ACP client → pi-acp → Pi coding agent path, and lands in the audit

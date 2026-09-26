@@ -1904,10 +1904,12 @@ const routes = {
     // Admission is the LIVE verdict for THIS environment (voicebox-beads-aaj): what a
     // delegation to each agent would do today, refused by name when it would refuse.
     // Live, not a boot snapshot: agents registered after boot get their verdict too.
+    // Non-local environments are marked 'not-judged-here' (voicebox-beads-ufo).
     const admissionContext = {
       describeAdapter: () => describeAdapterInstall({}),
       implementedAdapters: new Set(adapterExecutors.keys()),
       executorSelected: Boolean(HARNESS),
+      hostEnvironment: SELF_ENVIRONMENT ?? "local",
     };
     const agents = agentRegistry.list({ environmentKey, harness }).map((a) => ({
       ...publicAgentProjection(a),
