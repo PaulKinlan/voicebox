@@ -31,6 +31,7 @@ import { createServer } from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { buildFenceChildEnv } from "../lib/fence-child-env.mjs";
 
 const PORT = Number(process.env.PORT ?? 0);
 const PROBE = process.env.SANDBOX_PROBE ?? "/probes/sandbox-probe.mjs";
@@ -47,21 +48,13 @@ const ARG_MAX = 64;
 const ARG_LEN_MAX = 4096;
 
 /**
- * The environment a command runs with: the fence's own, minus every HOST repository binding.
+ * The environment a command runs with: minimal, measured, and stripped of ambient secrets (voicebox-beads-4uw0).
  *
- * A git hook exports `GIT_DIR` / `GIT_WORK_TREE`; a sandbox must never inherit the host's
- * repository (the voicebox-beads-bbb class — driven: under a hook's GIT_DIR, `git init <workspace>`
- * reinitialized the HOST repo and left the workspace empty). Every `GIT_*` the process was given is
- * dropped, and the sandbox's own git identity is pinned to ITS home.
+ * An inherited process.env leaks host secrets (e.g. API keys, tokens, session credentials) into the
+ * sandbox child process. The child environment is pinned to the minimal set of variables that Unix
+ * commands and git actually require, with HOME/XDG pinned to the sandbox home.
  */
-const CHILD_ENV = (() => {
-  const env = { ...process.env };
-  for (const name of Object.keys(env)) if (name.startsWith("GIT_")) delete env[name];
-  env.HOME = HOME;
-  env.XDG_CONFIG_HOME = path.join(HOME, ".config");
-  env.GIT_CONFIG_GLOBAL = path.join(HOME, ".gitconfig");
-  return Object.freeze(env);
-})();
+const CHILD_ENV = buildFenceChildEnv({ home: HOME, hostEnv: process.env });
 
 /** Run the probe against this environment; resolve the parsed report or the failure as data. */
 function selfProbe() {
