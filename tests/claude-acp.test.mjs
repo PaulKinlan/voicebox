@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   createClaudeAcpExecutor,
+  claudeChildEnv,
   describeClaudeAdapterInstall,
   resolveClaudeCli,
   CLAUDE_ACP_AGENT,
@@ -171,4 +172,70 @@ test("live claude smoke (opt-in only): VOICEBOX_LIVE_CLAUDE=1 runs ONE trivial p
   assert.equal(admission.ok, true);
   const text = await executor.run({ input: { task: "Reply with exactly: OK" }, bounds: { deadlineMs: 60000 } });
   assert.match(String(text), /OK/);
+});
+
+// ── voicebox-beads-nz60: the host's ANTHROPIC_API_KEY must not reach the adapter child ───────────
+// WHY: an inherited key overrides claude.ai login inside the adapter and can stall the prompt
+// (measured on the sibling implementation's review; this box carries the key). The two tests below
+// split the question deliberately: the first is the pure rule (and pins ABSENCE, not
+// present-with-undefined, because those are different child environments), the second proves `run()`
+// actually builds the child env through that rule — captured from the transportFactory, which is the
+// same seam the child is spawned from, without spawning anything.
+test("claude child env: the key is ABSENT (not undefined-valued) by default, and only an explicit opt-back keeps it (voicebox-beads-nz60)", () => {
+  const hostEnv = { PATH: "/usr/bin", ANTHROPIC_API_KEY: "sk-ant-host", OTHER: "kept" };
+  const child = claudeChildEnv({ hostEnv, extraEnv: { CLAUDE_EXTRA: "y" } });
+  assert.equal("ANTHROPIC_API_KEY" in child, false, "the key must be ABSENT — present-with-undefined is a different child env");
+  assert.equal(child.PATH, "/usr/bin");
+  assert.equal(child.OTHER, "kept");
+  assert.equal(child.CLAUDE_EXTRA, "y");
+  assert.equal(hostEnv.ANTHROPIC_API_KEY, "sk-ant-host", "the host object is never mutated");
+
+  // A caller cannot re-add it through extraEnv without an opt-back.
+  const sneaky = claudeChildEnv({ hostEnv: {}, extraEnv: { ANTHROPIC_API_KEY: "sk-ant-caller" } });
+  assert.equal("ANTHROPIC_API_KEY" in sneaky, false, "extraEnv is not a second door for the key");
+
+  // The two opt-back forms, and the forms that must NOT work.
+  assert.equal(claudeChildEnv({ hostEnv: { ANTHROPIC_API_KEY: "k", VOICEBOX_CLAUDE_KEEP_API_KEY: "1" } }).ANTHROPIC_API_KEY, "k");
+  assert.equal(claudeChildEnv({ hostEnv: { ANTHROPIC_API_KEY: "k" }, keepApiKey: true }).ANTHROPIC_API_KEY, "k");
+  for (const flag of ["true", "0", "yes", ""]) {
+    assert.equal("ANTHROPIC_API_KEY" in claudeChildEnv({ hostEnv: { ANTHROPIC_API_KEY: "k", VOICEBOX_CLAUDE_KEEP_API_KEY: flag } }), false, `flag '${flag}' must not keep the key`);
+  }
+  assert.equal("ANTHROPIC_API_KEY" in claudeChildEnv({ hostEnv: { ANTHROPIC_API_KEY: "k" }, keepApiKey: false }), false);
+
+  // The CLI path still flows, and never re-adds the key.
+  const withCli = claudeChildEnv({ hostEnv: { ANTHROPIC_API_KEY: "k" }, cliPath: "/usr/bin/claude" });
+  assert.equal(withCli.CLAUDE_CODE_EXECUTABLE, "/usr/bin/claude");
+  assert.equal("ANTHROPIC_API_KEY" in withCli, false);
+});
+
+test("claude run: the spawned child env carries NO ANTHROPIC_API_KEY by default, and carries it only with the opt-back (voicebox-beads-nz60)", async () => {
+  const dir = stubAdapterDir();
+  const savedKey = process.env.ANTHROPIC_API_KEY;
+  const savedFlag = process.env.VOICEBOX_CLAUDE_KEEP_API_KEY;
+  const captured = [];
+  const capture = (harness) => (ctx) => { captured.push(ctx.env); return { transport: harness.transport, kill: () => {} }; };
+  try {
+    process.env.ANTHROPIC_API_KEY = "sk-ant-host-must-not-reach-the-child";
+    delete process.env.VOICEBOX_CLAUDE_KEEP_API_KEY;
+
+    const executor = createClaudeAcpExecutor({ adapterDir: dir, transportFactory: capture(protocolHarness({ reply: "ok" })) });
+    await executor.run({ input: { task: "hi" } });
+    assert.equal("ANTHROPIC_API_KEY" in captured[0], false, "run() must pass a child env with the key ABSENT");
+    assert.equal(process.env.ANTHROPIC_API_KEY, "sk-ant-host-must-not-reach-the-child", "the host's own environment is untouched");
+
+    // A caller that means it: the programmatic opt-back.
+    const keepExecutor = createClaudeAcpExecutor({ adapterDir: dir, keepApiKey: true, transportFactory: capture(protocolHarness({ reply: "ok" })) });
+    await keepExecutor.run({ input: { task: "hi" } });
+    assert.equal(captured[1].ANTHROPIC_API_KEY, "sk-ant-host-must-not-reach-the-child", "keepApiKey: true is an explicit opt-back");
+
+    // An owner's shell: the environment opt-back.
+    process.env.VOICEBOX_CLAUDE_KEEP_API_KEY = "1";
+    const flagExecutor = createClaudeAcpExecutor({ adapterDir: dir, transportFactory: capture(protocolHarness({ reply: "ok" })) });
+    await flagExecutor.run({ input: { task: "hi" } });
+    assert.equal(captured[2].ANTHROPIC_API_KEY, "sk-ant-host-must-not-reach-the-child", "VOICEBOX_CLAUDE_KEEP_API_KEY=1 is an explicit opt-back");
+  } finally {
+    if (savedKey === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = savedKey;
+    if (savedFlag === undefined) delete process.env.VOICEBOX_CLAUDE_KEEP_API_KEY; else process.env.VOICEBOX_CLAUDE_KEEP_API_KEY = savedFlag;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
