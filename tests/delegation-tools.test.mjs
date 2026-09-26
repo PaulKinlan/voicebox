@@ -128,6 +128,10 @@ test("delegate_task (ask) via turn: returns handle immediately and executes in b
   assert.equal(unconfiguredTurn.status, 200);
   const unconfiguredBody = await unconfiguredTurn.json();
   assert.equal(unconfiguredBody.result.ok, false);
-  assert.equal(unconfiguredBody.result.refused, "adapter-not-configured");
-  assert.match(unconfiguredBody.result.why, /No Voicebox task adapter is configured for this CLI/);
+  // voicebox-beads-a74y: the claude ADAPTER exists now; no agent named
+  // "claude" is in this fixture's registry, so the accurate refusal is
+  // agent-not-configured (adapter-refusal coverage: configured-harness /
+  // opencode).
+  assert.equal(unconfiguredBody.result.refused, "agent-not-configured");
+  assert.match(unconfiguredBody.result.why, /claude/i);
 });

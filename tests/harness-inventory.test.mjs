@@ -33,7 +33,7 @@ test("host inventory separates version-only presence, broken installs, unknown i
   const before = Date.now();
   const report = await discoverHarnesses({ env, timeoutMs: 500 });
   assert.ok(Date.now() - before < 5000);
-  assert.equal(report.entries.length, 7);
+  assert.equal(report.entries.length, 8); // + claude-agent-acp row (voicebox-beads-a74y)
   const rows = Object.fromEntries(report.entries.map((r) => [r.id, r]));
   assert.equal(rows.pi.state, "present");
   assert.equal(rows.pi.version, ACP_AGENT.piVersion);
@@ -50,6 +50,13 @@ test("host inventory separates version-only presence, broken installs, unknown i
   assert.equal(rows.aider.state, "absent");
   assert.equal(rows["pi-acp"].version, ACP_AGENT.version);
   assert.equal(rows["pi-acp"].state, "unknown");
+  // voicebox-beads-a74y: fixture env has no claude adapter and no npx in the
+  // fixture PATH — the row must say ABSENT with the named reason, never a
+  // fabricated admission, and the claude CLI row's delegation must not carry
+  // the generic unconfigured sentence.
+  assert.equal(rows["claude-agent-acp"].delegation.ok, false);
+  assert.match(rows["claude-agent-acp"].delegation.why, /npx|VOICEBOX_CLAUDE_ACP_ADAPTER/);
+  assert.equal(rows.claude.delegation?.refused !== "adapter-not-configured", true, "claude adapter is implemented");
   assert.ok(!JSON.stringify(report).includes("private-output"));
   assert.ok(!JSON.stringify(report).includes(env.PATH));
   await delay(1200);
@@ -101,7 +108,7 @@ test("harness page: click lists host facts, cache does not spawn twice, lost ser
   await page.goto(`${server.base}/harnesses.html`);
   assert.match(await page.evaluate(() => document.querySelector("#status").textContent), /Not checked/);
   await page.click("#check");
-  await page.waitFor(() => document.querySelectorAll("article").length === 7, { label: "seven inventory rows" });
+  await page.waitFor(() => document.querySelectorAll("article").length === 8, { label: "eight inventory rows" });
   const body = await page.evaluate(() => document.body.innerText);
   assert.match(body, new RegExp(`Pi coding agent — present \\(${ACP_AGENT.piVersion.replace(/\./g, "\\.")}\\)`));
   assert.match(body, /Claude Code — unrunnable/);
@@ -114,6 +121,12 @@ test("harness page: click lists host facts, cache does not spawn twice, lost ser
     if (row.id === "pi" || row.id === "pi-acp") {
       assert.equal(row.refusal, "none");
       assert.match(row.text, /stdio-acp-client: pi-acp adapter/);
+    } else if (row.id === "claude" || row.id === "claude-agent-acp") {
+      // voicebox-beads-a74y: the adapter IS implemented; this fixture host has
+      // no local package and no npx on its PATH, so the honest refusal is the
+      // machine-level one — never the generic unconfigured sentence.
+      assert.equal(row.refusal, "adapter-unavailable");
+      assert.match(row.text, /VOICEBOX_CLAUDE_ACP_ADAPTER|npx is not on PATH/);
     } else {
       assert.equal(row.refusal, "adapter-not-configured");
       assert.match(row.text, /No Voicebox task adapter is configured/);
@@ -154,7 +167,7 @@ test("native tool disclosures show only declared metadata, preserve refusals, an
   if (evidence) mkdirSync(evidence, { recursive: true });
   await page.goto(`${server.base}/harnesses.html`);
   await page.click("#check");
-  await page.waitFor(() => document.querySelectorAll("article").length === 7);
+  await page.waitFor(() => document.querySelectorAll("article").length === 8);
   const piSelector = '[data-harness="pi"] details';
   assert.equal(await page.evaluate((s) => document.querySelector(s).open, piSelector), false);
   if (evidence) await page.screenshot(path.join(evidence, "catalogues-collapsed.png"));
@@ -186,7 +199,10 @@ test("native tool disclosures show only declared metadata, preserve refusals, an
   assert.equal(await page.evaluate(() => document.querySelector('[data-harness="claude"] dd').textContent), hostile);
   assert.equal(await page.evaluate(() => document.querySelectorAll("article img, article script").length), 0);
   assert.equal(await page.evaluate(() => globalThis.metadataRan === undefined), true);
-  assert.equal(await page.evaluate(() => document.querySelector('[data-harness="claude"]').dataset.delegationRefusal), "adapter-not-configured");
+  // voicebox-beads-a74y: claude's adapter IS implemented; this fixture host has no
+  // install and no npx, so the preserved refusal is the machine-level one.
+  assert.equal(await page.evaluate(() => document.querySelector('[data-harness="claude"]').dataset.delegationRefusal), "adapter-unavailable");
+  assert.match(await page.evaluate(() => document.querySelector('[data-harness="claude"]').innerText), /VOICEBOX_CLAUDE_ACP_ADAPTER|npx is not on PATH/);
   await page.click('[data-harness="gemini"] summary');
   assert.match(await page.evaluate(() => document.querySelector('[data-harness="gemini"] details').innerText), /host declared an empty list/i);
   assert.match(await page.evaluate(() => document.querySelector('[data-harness="codex"]').innerText), /Tools — unknown/);
@@ -200,7 +216,7 @@ test("native tool disclosures show only declared metadata, preserve refusals, an
   server = await startServer({ env: serverEnv });
   await page.goto(`${server.base}/harnesses.html`);
   await page.click("#check");
-  await page.waitFor(() => document.querySelectorAll("article").length === 7);
+  await page.waitFor(() => document.querySelectorAll("article").length === 8);
   const invalid = await page.evaluate(() => document.querySelector('[data-harness="pi"]').innerText);
   assert.match(invalid, /Pi coding agent — present/);
   assert.match(invalid, /Tools — unknown/);

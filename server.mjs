@@ -38,6 +38,7 @@ import { sweepOrphanedProbeMarkers } from "./tools/sandbox-probe.mjs";
 import { createTaskHost, installTaskExecutor, protectedAuditPath, TASK_TOOLS } from "./lib/tasks.mjs";
 import { createPermissionPolicy } from "./lib/permission-policy.mjs";
 import { createPiAcpExecutor, describeAdapterInstall } from "./lib/pi-acp.mjs";
+import { createClaudeAcpExecutor, describeClaudeAdapterInstall } from "./lib/claude-acp.mjs";
 import { bootFence } from "./lib/fence-provider.mjs";
 import { SOURCE_DIRS } from "./lib/browser-sources.mjs";
 import { bootUnitFence, stopUnitFence } from "./lib/unit-fence-provider.mjs";
@@ -722,9 +723,12 @@ const piExecutor = createPiAcpExecutor({
   decide: permissions.decide,
   root: () => active?.root,
 });
-const adapterExecutors = new Map([["pi-acp", piExecutor]]);
+const claudeExecutor = createClaudeAcpExecutor();
+// 'claude' is registered too: executorForAgent derives adapter from the raw
+// harness name for agents that do not set agentConfig.adapter — one key short
+// would re-create today's half-refusal (voicebox-beads-a74y design note).
+const adapterExecutors = new Map([["pi-acp", piExecutor], ["claude-code", claudeExecutor], ["claude", claudeExecutor]]);
 const UNIMPLEMENTED_ADAPTER_LABELS = new Map([
-  ["claude-code", "claude"],
   ["codex-cli", "codex"],
   ["gemini-cli", "gemini"],
   ["opencode", "opencode"],
@@ -784,7 +788,12 @@ if (HARNESS === "pi" || HARNESS === "pi-acp") {
 const harnessAdmission = validateHarnessAgents({
   registry: agentRegistry,
   environment: SELF_ENVIRONMENT,
-  describeAdapter: () => describeAdapterInstall({}),
+  // voicebox-beads-a74y: describe per ADAPTER — one host fact was reported for
+  // every agent, so an admitted claude row wore pi's version. pi-acp keeps the
+  // default; claude gets its own install probe.
+  describeAdapter: (agent) => (agent?.adapter === "claude-code" || agent?.adapter === "claude")
+    ? describeClaudeAdapterInstall({})
+    : describeAdapterInstall({}),
   implementedAdapters: new Set(adapterExecutors.keys()),
   executorSelected: Boolean(HARNESS),
 });
@@ -2165,7 +2174,12 @@ const routes = {
     // Live, not a boot snapshot: agents registered after boot get their verdict too.
     // Non-local environments are marked 'not-judged-here' (voicebox-beads-ufo).
     const admissionContext = {
-      describeAdapter: () => describeAdapterInstall({}),
+      // voicebox-beads-a74y: describe per ADAPTER — one host fact was reported for
+  // every agent, so an admitted claude row wore pi's version. pi-acp keeps the
+  // default; claude gets its own install probe.
+  describeAdapter: (agent) => (agent?.adapter === "claude-code" || agent?.adapter === "claude")
+    ? describeClaudeAdapterInstall({})
+    : describeAdapterInstall({}),
       implementedAdapters: new Set(adapterExecutors.keys()),
       executorSelected: Boolean(HARNESS),
       hostEnvironment: SELF_ENVIRONMENT ?? "local",

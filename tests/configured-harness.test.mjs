@@ -102,8 +102,13 @@ test("boundary: unconfigured harness (Claude) refuses by name as adapter-not-con
 
   assert.equal(refused.status, 403);
   assert.equal(refused.body.ok, false);
-  assert.equal(refused.body.refused, "adapter-not-configured");
-  assert.match(refused.body.why, /No Voicebox task adapter is configured for this CLI/);
+  // voicebox-beads-a74y changed this truth: the claude ADAPTER now exists,
+  // so delegating to an agent named "claude" that is NOT in the registry
+  // refuses for the accurate reason — the agent is not configured. The
+  // adapter-not-configured sentence is pinned below via a still-unimplemented
+  // adapter (opencode) in the coexistence test.
+  assert.equal(refused.body.refused, "agent-not-configured");
+  assert.match(refused.body.why, /claude/i);
 });
 
 test("boundary: unconfigured server (VOICEBOX_HARNESS unset) refuses with executor-unavailable", { timeout: 20000 }, async (t) => {
@@ -179,16 +184,18 @@ test("multi-harness coexistence: pi selected, a claude-adapter agent configured 
   assert.ok(piExisting, `the server's own pi agent should be listed: ${JSON.stringify(listedBefore.agents.map((a) => [a.id, a.environmentKey]))}`);
   const selfEnvironment = piExisting.environmentKey;
 
-  // Register a second agent whose adapter has no implementation on this host.
+  // Register agents: one whose adapter STILL has no implementation (opencode —
+  // the refusal-by-name clause, voicebox-beads-a74y re-anchored), plus the real
+  // claude agent whose admission must now reflect the implemented adapter.
   // Configuring an agent is the HOST's act (x-voicebox-host-token; the page cannot hold it).
   const registered = await fetch(`${base}/api/agents`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-voicebox-host-token": f.server.hostToken },
     body: JSON.stringify({
-      id: "agent_claude_reviewer",
-      name: "Claude Reviewer",
-      harness: "claude",
-      adapter: "claude-code",
+      id: "agent_opencode_reviewer",
+      name: "Opencode Reviewer",
+      harness: "opencode",
+      adapter: "opencode",
       transport: "stdio",
       environmentKey: selfEnvironment,
       model: { provider: "anthropic", model: "claude-3-5-haiku" },
@@ -203,10 +210,10 @@ test("multi-harness coexistence: pi selected, a claude-adapter agent configured 
   const piRow = byId["pi"];
   assert.ok(piRow, `the pi agent should be listed: ${JSON.stringify(Object.keys(byId))}`);
   assert.equal(piRow.admission.admitted, true, `pi should be admitted: ${JSON.stringify(piRow.admission)}`);
-  const claudeRow = byId["agent_claude_reviewer"];
-  assert.ok(claudeRow, "the claude agent should be listed");
-  assert.equal(claudeRow.admission.admitted, false);
-  assert.equal(claudeRow.admission.refused, "adapter-not-configured");
+  const ocRow = byId["agent_opencode_reviewer"];
+  assert.ok(ocRow, "the opencode agent should be listed");
+  assert.equal(ocRow.admission.admitted, false);
+  assert.equal(ocRow.admission.refused, "adapter-not-configured");
 
   // Non-local environment agent (browser) is marked 'not-judged-here' (voicebox-beads-ufo)
   const browserRow = byId["agent_browser_default"];
@@ -215,15 +222,33 @@ test("multi-harness coexistence: pi selected, a claude-adapter agent configured 
     assert.equal(browserRow.admission.refused, "not-judged-here");
     assert.match(browserRow.admission.why, /not judged on this host/);
   }
-
-  // Delegating to the claude agent refuses BY NAME at admission — the pi path is untouched.
   const refused = await freshExecute(base, owner, "delegate_task", {
-    agent: "agent_claude_reviewer",
+    agent: "agent_opencode_reviewer",
     task: "review something",
-  }, "claude-agent-call");
+  }, "opencode-agent-call");
   assert.equal(refused.status, 403);
   assert.equal(refused.body.refused, "adapter-not-configured");
-  assert.match(refused.body.why, /configured for this CLI/);
+  assert.match(refused.body.why, /adapter is implemented for 'opencode'|configured for this CLI/i);
+
+  // voicebox-beads-a74y: the claude agent's admission must NO LONGER say
+  // adapter-not-configured — the adapter is implemented. Whether it admits
+  // depends on this host's adapter availability (local/npx); a machine-level
+  // named refusal (adapter-unavailable / version) is also honest. Either way
+  // NO delegation is executed here: live claude runs are the gated smoke's
+  // business, never the unit lane's.
+  await fetch(`${base}/api/agents`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-voicebox-host-token": f.server.hostToken },
+    body: JSON.stringify({ id: "agent_claude_reviewer", name: "Claude Reviewer", harness: "claude", adapter: "claude-code", transport: "stdio", environmentKey: selfEnvironment }),
+  });
+  const claudeRow = (await (await fetch(`${base}/api/agents`)).json()).agents.find((a) => a.id === "agent_claude_reviewer");
+  assert.ok(claudeRow, "the claude agent should be listed");
+  assert.notEqual(claudeRow.admission?.refused, "adapter-not-configured", "claude adapter is implemented; the generic sentence must not appear");
+  if (claudeRow.admission?.admitted) {
+    assert.equal(claudeRow.admission.installedVersion, "0.78.0", "admitted claude rows name the exact adapter version that would run (local manifest or npx pin)");
+  } else {
+    assert.ok(["adapter-unavailable", "adapter-version-unsupported"].includes(claudeRow.admission?.refused), `machine-level named refusal expected, got ${JSON.stringify(claudeRow.admission)}`);
+  }
 
   // The selected harness still executes for real through its own adapter.
   const admitted = await freshExecute(base, owner, "delegate_task", {
