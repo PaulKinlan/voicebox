@@ -3085,7 +3085,6 @@ if (els.miniAppContainer) {
 
     const outer = document.createElement("iframe");
     outer.src = bridgeUrl;
-    outer.setAttribute("sandbox", "allow-scripts");
     outer.className = "mini-app-frame";
     outer.id = "mini-app-outer-frame";
     outer.title = descriptor.title || "Interactive Mini-App";

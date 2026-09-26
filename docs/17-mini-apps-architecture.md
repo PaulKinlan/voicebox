@@ -120,7 +120,7 @@ All limits are enforced host-side by `core/mini-app.ts` and `public/mini-app-bri
 
 | Capability | Bound | Enforcement Location | Refusal / Behavior |
 |---|---|---|---|
-| **Sandbox Policy** | `allow-scripts` | Outer Bridge (`<iframe sandbox="...">`) | No same-origin, no top navigation, no modals |
+| **Sandbox Policy** | `allow-scripts` | Inner App Frame (`<iframe id="inner-app" sandbox="...">`) | No same-origin, no storage, no top navigation, no modals |
 | **Storage Access** | Strictly prohibited | Browser engine (`origin: "null"`) | Throws `SecurityError` |
 | **Max Tools** | 16 tools / app | Outer Bridge & MiniAppRegistry | Excess registrations refused with warning |
 | **Max Output Size** | 64 KB (65,536 bytes) | Outer Bridge mediator | Refused as `"output over budget (max 64KB)"` |
