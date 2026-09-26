@@ -40,6 +40,38 @@ driven, both of which bound *filesystem and processes* and deliberately do not b
   `/tmp`; a home under it fails to bind (`226/NAMESPACE`). Homes live outside `/tmp` — the default
   is `~/sandbox-homes/<key>` (`VOICEBOX_SANDBOX_HOMES`).
 
+## Running commands: /exec and the Git identity (voicebox-beads-0vlp)
+
+A booted environment is a place to work, not only to measure. Its server
+([`tools/env-serve.mjs`](../tools/env-serve.mjs)) exposes a command surface **on the loopback port the
+fence names**; the host is the door, and both halves are bounded:
+
+- **`POST /exec`** — `{ argv: [...] }` runs exactly that argv; `{ command: "…" }` runs it through
+  `/usr/bin/sh -c` for pipelines. `cwd` must resolve inside the environment's HOME; `timeoutMs`
+  (100–60000, default 10000) and `maxBytes` (1024–1048576, default 262144) bound the run. A
+  **non-zero exit is `ok:true`** with the code — the command ran; refusals are reserved for requests
+  that cannot run or that crossed a bound: `exec-bad-request`, `exec-cwd-outside-home`,
+  `exec-timeout`, `exec-output-over-budget`, `exec-spawn-failed`. A killed child is killed as a
+  process group, so a shell's grandchildren die with it.
+- **`GET`/`POST /git/config`** — the environment's Git identity (`user.name`, `user.email`). It is
+  written to `<sandbox home>/.gitconfig` (`GIT_CONFIG_GLOBAL` is pinned there), so the identity
+  belongs to the sandbox and never to the host's XDG config.
+- **`POST /git/init`** — idempotent `git init` of the environment's workspace.
+
+**The host's door** is `POST /api/environments/<key>/exec`, `GET|POST /api/environments/<key>/git/config`
+and `POST /api/environments/<key>/git/init`. Local authority is required (the host token, the room's
+session token, or the room's own origin), the request is forwarded to the environment's own origin,
+and the crossing is audited attempt-first like every other act that leaves the host process. The page
+never holds the port; it asks the host.
+
+**What bounds a command here**: the fence's own two axes — the read-only code tree at
+`/srv/voicebox`, the one writable sandbox home, and `/bin` and `/lib` symlinked into the read-only
+`/usr` bind, so there is no host home to read and nothing outside `/usr`, `/etc` and the sandbox home
+to touch. The L1.5 composition adds seccomp, an empty capability set, `PrivateTmp` and
+`ProtectSystem=strict`. **What does not bound it**: the network is shared, and a process reads what its
+uid can read — the same two lines the fence's own boundary report carries; a command surface does not
+change either.
+
 ## The boundary report: how a level is earned
 
 The registry row for a booted environment carries a `boundary` produced by `measureBoundary`
@@ -132,6 +164,7 @@ holding anything. Mechanics ([`lib/extensions.mjs`](../lib/extensions.mjs)):
 | the probe | `tools/sandbox-probe.mjs` |
 | boundary derivation | `lib/fence-provider.mjs` (`measureBoundary`) |
 | booting + serving | `lib/fence-provider.mjs`, `lib/unit-fence-provider.mjs`, `tools/env-serve.mjs` |
+| the command surface | `tools/env-serve.mjs` (`/exec`, `/git/config`, `/git/init`), `server.mjs` (`/api/environments/<key>/…`) |
 | wasm tools at the gate | `lib/wasm-shelf.mjs`, `lib/wasm-worker.mjs`, `core/extensions.ts` |
 | proposals + admission | `lib/extensions.mjs`, `core/extensions.ts` |
 | the probe cache route | `server.mjs` (`GET /api/probe`, `writeProbeCache`) |

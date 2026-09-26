@@ -18,6 +18,7 @@ mkdir -p "$SANDBOX_HOME/workspace"
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 exec /usr/bin/bwrap \
   --ro-bind /usr /usr \
+  --symlink usr/bin /bin \
   --symlink usr/lib /lib64 \
   --symlink usr/lib /lib \
   --ro-bind /etc /etc \
