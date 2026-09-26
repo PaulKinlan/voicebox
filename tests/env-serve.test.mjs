@@ -180,6 +180,7 @@ test("fence child env: minimal measured whitelist excludes ambient secrets (voic
     SSH_AUTH_SOCK: "/tmp/ssh.sock",
     AWS_SECRET_ACCESS_KEY: "aws-secret",
     GITHUB_TOKEN: "gh-secret",
+    INVOCATION_ID: "test-unit-invocation",
   };
 
   const child = buildFenceChildEnv({ home: "/home/voice", hostEnv });
@@ -195,6 +196,7 @@ test("fence child env: minimal measured whitelist excludes ambient secrets (voic
   assert.equal(child.TERM, "xterm-256color");
   assert.equal(child.TMPDIR, "/tmp");
   assert.equal(child.VOICEBOX_FENCE, "1");
+  assert.equal(child.INVOCATION_ID, "test-unit-invocation", "INVOCATION_ID must pass through for systemdEnv witness");
 
   // Every secret and host repository binding is strictly ABSENT (not undefined-valued)
   for (const secret of [
@@ -282,6 +284,7 @@ test("env-serve selfProbe(): probe child process runs on minimal whitelist and e
       hasAnthropic: "ANTHROPIC_API_KEY" in process.env,
       hasGemini: "GEMINI_API_KEY" in process.env,
       hasPoisoned: "VOICEBOX_POISONED" in process.env,
+      hasInvocation: process.env.INVOCATION_ID === "test-unit-invocation",
       fence: process.env.VOICEBOX_FENCE,
     }) + "\\n");
   `);
@@ -297,6 +300,7 @@ test("env-serve selfProbe(): probe child process runs on minimal whitelist and e
       ANTHROPIC_API_KEY: "sk-ant-probe-leak",
       GEMINI_API_KEY: "gem-probe-leak",
       VOICEBOX_POISONED: "leaked-into-probe",
+      INVOCATION_ID: "test-unit-invocation",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -321,5 +325,6 @@ test("env-serve selfProbe(): probe child process runs on minimal whitelist and e
   assert.equal(report.hasAnthropic, false, "ANTHROPIC_API_KEY must be absent from probe child env");
   assert.equal(report.hasGemini, false, "GEMINI_API_KEY must be absent from probe child env");
   assert.equal(report.hasPoisoned, false, "VOICEBOX_POISONED must be absent from probe child env");
+  assert.equal(report.hasInvocation, true, "INVOCATION_ID must pass through to probe child for systemdEnv witness");
   assert.equal(report.fence, "1", "VOICEBOX_FENCE must be present in probe child env");
 });
