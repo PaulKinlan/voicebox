@@ -27,6 +27,12 @@ test("D1 real HTTP: separate authenticated connections, private/pinned record, k
   assert.equal(unauthenticated.body.refused, "unauthenticated-call");
   const ambient = await post(base, "/api/call", { envKey: "local", tool: "delegate_task", args: { agent: "closed-fixture", task: "hold" } });
   assert.equal(ambient.body.refused, "task-owner-unverified");
+  // THE ROOM IS A REAL CALLER (sdxn): with local authority — the host token here; the room's own
+  // session token and the room's origin are the same authority — the call carries the durable
+  // local task owner, so the task card's status poll reaches the task layer instead of the 403
+  // Paul saw. The refusal below is about the ADDRESS, not about who is asking.
+  const roomCall = await post(base, "/api/call", { envKey: "local", tool: "task_status", args: { address: "not-an-address" } }, { "x-voicebox-host-token": f.server.hostToken });
+  assert.equal(roomCall.body.refused, "invalid-task-address", "a locally-authorized call is owned by the room, not refused");
   const unbounded = await freshExecute(base, owner, "delegate_task", { agent: "unbounded-cli", task: "hold" }, "raw-cli");
   assert.equal(unbounded.body.refused, "unbounded-executor");
   assert.equal(f.starts().length, 0);

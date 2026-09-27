@@ -21,6 +21,21 @@ import {
 } from "../core/task-card.ts";
 import type { TaskRecord, TaskState, TaskView } from "../core/tasks.ts";
 
+/**
+ * The room's own session token, when the page carries one (the served HTML embeds it). The
+ * task card is a room client, so it presents the room's local authority; without this, a
+ * loopback-authenticated server answers the status poll with 401/403 (voicebox-beads-sdxn).
+ */
+function roomSessionHeaders(): Record<string, string> {
+  try {
+    if (typeof document === "undefined") return {};
+    const token = document.querySelector('meta[name="voicebox-session-token"]')?.getAttribute("content");
+    return token && token !== "__VOICEBOX_SESSION_TOKEN__" ? { "x-voicebox-session-token": token } : {};
+  } catch {
+    return {};
+  }
+}
+
 export interface TaskCardClient {
   status(address: string): Promise<{ ok: true; task: TaskRecord | TaskView; stale?: boolean } | { ok: false; refused: string; why: string; stale?: boolean }>;
   cancel(address: string): Promise<{ ok: true; state: TaskState; observed: boolean } | { ok: false; refused: string; why: string }>;
@@ -60,7 +75,7 @@ export class RemoteTaskClient implements TaskCardClient {
     try {
       const response = await this.fetchImpl(this.callEndpoint, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...roomSessionHeaders() },
         body: JSON.stringify({ envKey: this.envKey, tool: "task_status", args: { address } }),
       });
       const data = await response.json();
@@ -84,7 +99,7 @@ export class RemoteTaskClient implements TaskCardClient {
     try {
       const response = await this.fetchImpl(this.callEndpoint, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...roomSessionHeaders() },
         body: JSON.stringify({ envKey: this.envKey, tool: "cancel_task", args: { address } }),
       });
       const data = await response.json();

@@ -16,7 +16,7 @@ The authenticated transport supplies `x-voicebox-call-id` separately. The proxy 
 
 `task_status` takes only `{"address":"<returned address>"}`. Success contains `task.address`, `task.environment`, `task.root`, `task.state`, timestamps, and any result/refusal reason. Model arguments cannot supply owner, environment, root, CLI command, endpoints, or bounds. Nonempty context references currently refuse as `task-context-unavailable`; no context snapshot is silently invented.
 
-Ambient local calls refuse as `task-owner-unverified`. The unauthenticated `/live` connection is not a delegation authority. These tools are not advertised in its file-command list; authenticated live delegation and agent discovery remain later work.
+Ambient local calls refuse as `task-owner-unverified`. The unauthenticated `/live` connection is not a delegation authority. These tools are not advertised in its file-command list; authenticated live delegation and agent discovery remain later work. A local call that DOES carry local authority (the host token, the room's session token, or the room's own origin) is owned by the durable local task owner — the same owner the turn path and `GET /api/task` use — so the room's task card can read and cancel the tasks the room created (voicebox-beads-sdxn).
 
 ## What is pinned
 

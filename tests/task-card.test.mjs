@@ -233,8 +233,8 @@ test("task-card browser: card renders each state and cancel works from the card 
     assert.match(sRunning.progress ?? "", /compiling assets/);
 
     // 3. CANCEL FROM THE CARD ALONE (Non-speech cancel)
-    // When the cancel button is clicked on the card with ambient client:
-    // Server refuses ambient access with named refusal, and feedback displays the refusal:
+    // The room's own call carries local authority (sdxn): the server no longer refuses it with
+    // task-owner-unverified — the refusal is about THIS fixture address, and the card renders it.
     await evaluate(() => {
       document.querySelector("#task-cancel-btn")?.click();
     });
@@ -244,7 +244,8 @@ test("task-card browser: card renders each state and cancel works from the card 
       const feedback = document.querySelector("#task-action-feedback")?.textContent;
       return { feedback };
     });
-    assert.match(sCancelRefusal.feedback ?? "", /authenticated paired caller/);
+    assert.match(sCancelRefusal.feedback ?? "", /address is malformed/);
+    assert.doesNotMatch(sCancelRefusal.feedback ?? "", /authenticated paired caller/, "the room is a real caller: the ownership 403 is gone");
 
     // Now test cancel from the card with a client that resolves cancellation:
     // (a) Observed cancellation -> transitions to Stopped
@@ -643,6 +644,15 @@ test("task-card browser: delegation turn automatically mounts task card without 
     const card = document.querySelector("#task-card");
     return card && !card.hidden && document.querySelector("#task-card-agent")?.textContent === "pi";
   }, { label: "task card appearing automatically" });
+
+  // sdxn: this is the exact request the card's status poll makes, run from the real page. It must
+  // carry local authority and reach the task layer — the refusal names the ADDRESS, never
+  // task-owner-unverified (the 403 in Paul's console).
+  const localCall = await page.evaluate(async () => {
+    const response = await fetch("/api/call", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ envKey: "local", tool: "task_status", args: { address: "not-an-address" } }) });
+    return { status: response.status, body: await response.json() };
+  });
+  assert.equal(localCall.body.refused, "invalid-task-address", `the room's own task call is authorized as the local owner: ${JSON.stringify(localCall.body)}`);
 
   const cardData = await page.evaluate(() => {
     const card = document.querySelector("#task-card");
