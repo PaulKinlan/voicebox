@@ -229,6 +229,18 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
       const node = document.querySelector(sel);
       if (!node) return null;
       node.scrollIntoView({ block: "center", inline: "center" });
+      // An inline element split across line fragments reports a UNION box, and the union's
+      // centre can fall on blank text outside any fragment — a real click there hits the
+      // PARENT (measured: the build-stamp "change log" anchor wrapped "change"/"log" at a
+      // 1000x800 window; the click hit P#build and the dialog never opened). Click a
+      // fragment whose centre actually contains the element; fall back to the union box.
+      const boxes = node.getClientRects().length ? [...node.getClientRects()] : [node.getBoundingClientRect()];
+      for (const fragment of boxes) {
+        const fx = fragment.x + fragment.width / 2;
+        const fy = fragment.y + fragment.height / 2;
+        const hit = document.elementFromPoint(fx, fy);
+        if (hit && (hit === node || node.contains(hit))) return { x: fx, y: fy };
+      }
       const box = node.getBoundingClientRect();
       return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
     }, selector);
