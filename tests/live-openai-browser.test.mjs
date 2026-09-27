@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
+import { liveToolDeclarations } from "../lib/wasm-shelf.mjs";
 import { startServer } from "./lib/server.mjs";
 import { launch } from "./lib/cdp.mjs";
 import { upgrade } from "../lib/ws-server.mjs";
@@ -102,7 +103,13 @@ test("OpenAI browser: real function call writes and answers; invalid calls refus
   const f = await fixture(t);
   assert.equal((await f.read()).controls.some(c => c.type === "debug"), false, "normal sessions do not transmit debug payloads");
   const setup = f.row.messages.find(msg => msg.type === "session.update").session;
-  assert.deepEqual(setup.tools, functionDeclarations().map(tool => ({ type: "function", ...tool })));
+  // DELIBERATE (voicebox-beads-ri4k): the shelf's admitted tools declare beside the fixed
+  // commands, so the vendor receives them too — the model must be able to call them by name.
+  const expectedTools = [
+    ...functionDeclarations(),
+    ...liveToolDeclarations(process.env.VOICEBOX_WASM_SHELF_DIR),
+  ].map(tool => ({ type: "function", ...tool }));
+  assert.deepEqual(setup.tools, expectedTools);
   // The instructions are LAYERED since the settings handoff: the composed agent instruction
   // (base + personality) first, the tools instruction beneath it — the base cannot be replaced,
   // and the tools text is still present in full.

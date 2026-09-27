@@ -199,7 +199,11 @@ test("pasted source is DATA, never code: it becomes a file, nothing evaluates it
   const content = readFileSync(path.join(WORKSPACE, "paste.js"), "utf8");
   assert.match(content, /stolen/);
   const inv = await getJson("/api/extensions");
-  assert.equal(inv.extensions.length, 1, "a paste produced a loaded tool");
+  // DELIBERATE (voicebox-beads-ri4k): the host's own digest-pinned shelf loads beside the paste —
+  // the paste's tool is the loaded one this test is about; the shelf's two are always there.
+  assert.equal(inv.extensions.filter((e) => e.source !== "wasm-shelf").length, 1, "a paste produced a loaded tool");
+  assert.deepEqual(inv.extensions.filter((e) => e.source === "wasm-shelf").map((e) => e.id).sort(),
+    ["wasm-shelf-diff", "wasm-shelf-hash"], "the shelf's two tools are loaded beside it");
 });
 
 // ── 5. rsj: web search — the vocabulary says network, bounds say HOW MUCH ─
