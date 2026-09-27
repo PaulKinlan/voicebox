@@ -94,6 +94,9 @@ input { caret-color: var(--accent); }
 .file-open:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--accent) 5%, var(--card)); }
 .file-open:active { background: color-mix(in srgb, var(--accent) 10%, var(--card)); }
 .file-name { flex: 1; min-inline-size: 0; overflow-wrap: anywhere; }
+/* The folder glyph (voicebox-beads-35eg): the ONE icon in a file row, so a folder is
+   recognizable at a glance and a file is, by contrast, plainly not one. */
+.file-icon { inline-size: 18px; block-size: 18px; flex: none; align-self: center; color: var(--accent); }
 .file-open[data-kind="directory"] .file-name { font-weight: 600; }
 .file-open[data-kind="directory"] .file-meta { color: var(--accent); }
 .file-meta { flex: none; font-size: .75rem; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }

@@ -70,7 +70,9 @@ Three things about the dev loop that are easy to get wrong and are therefore wri
 - **One frame makes the list move without the page asking.** The server sends `{type:"tool"}` when a live
   model runs a command; `public/live-voice.js` forwards it and `public/fused.js` re-reads the file list. That
   is the whole path from "the model wrote a file" to "the file is on screen": no polling, no refresh, and the
-  opening reader and scroll position survive the re-read (voicebox-beads-a93).
+  opening reader and scroll position survive the re-read (voicebox-beads-a93). The re-read also keeps the row
+  shapes: folder rows render the sprite's folder glyph in the accent colour and file rows carry none, so the
+  distinction survives every refresh (voicebox-beads-35eg).
 - **Live task frames mount the task card immediately.** The server sends `{type:"task"}` when a task is
   delegated; `public/live-voice.js` forwards it to `public/fused.js` which dynamically displays the task card
   with agent name, address, and live status without manual status checks (voicebox-beads-8fv.4).

@@ -702,10 +702,22 @@ function card(entry, { arrived = false, canDelete = false } = {}) {
   name.className = "file-name";
   // The name is the DISK'S name, verbatim — a page that renames things cannot be
   // reconciled with the folder it is showing, and the acceptance harness checks
-  // exactly that (api=[notes] vs page=[notes/] was the tell). The folder cue is
-  // the meta line plus a style on [data-kind="directory"], neither of which
-  // touches textContent.
+  // exactly that (api=[notes] vs page=[notes/] was the tell). The folder cues are
+  // the icon below, the meta line, and the style on [data-kind="directory"] — none
+  // of which touches textContent.
   name.textContent = entry.name;
+  if (entry.isDir) {
+    // A FOLDER LOOKS LIKE A FOLDER (voicebox-beads-35eg): the sprite's folder glyph rides
+    // the row, accent-styled in CSS. aria-hidden — the button's aria-label already says
+    // "folder", so the icon is decoration, not a second announcement.
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("class", "file-icon");
+    icon.setAttribute("aria-hidden", "true");
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", "#i-folder");
+    icon.append(use);
+    open.append(icon);
+  }
   const meta = document.createElement("span");
   meta.className = "file-meta";
   meta.textContent = entry.meta;

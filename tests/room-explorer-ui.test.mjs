@@ -146,3 +146,47 @@ test("room explorer: scannable rows, native actions, narrow containers and both 
     rmSync(scratch, { recursive: true, force: true });
   }
 });
+
+test("folders in the file list are visually distinct: folder glyph, accent styling, files plainly not (voicebox-beads-35eg)", { timeout: 60000 }, async () => {
+  const scratch = mkdtempSync(path.join(os.tmpdir(), "voicebox-35eg-folders-"));
+  const root = path.join(scratch, "project");
+  const extensions = path.join(scratch, "extensions");
+  mkdirSync(path.join(root, "projects"), { recursive: true });
+  mkdirSync(path.join(root, "archive"), { recursive: true });
+  writeFileSync(path.join(root, "readme.txt"), "A plain file.\n");
+  writeFileSync(path.join(root, "notes.md"), "# notes\n");
+  let server, page;
+  try {
+    server = await startServer({ extensionsDir: extensions, env: { VOICEBOX_WORKSPACE: root } });
+    page = await launch({ width: 1200, height: 900 });
+    await page.goto(server.base);
+    await page.waitFor(() => document.querySelectorAll(".file-open").length === 4);
+
+    const rows = await page.evaluate(() => [...document.querySelectorAll(".file-open")].map((row) => ({
+      file: row.dataset.file,
+      kind: row.dataset.kind ?? "file",
+      iconHref: row.querySelector(".file-icon use")?.getAttribute("href") ?? null,
+      iconVisible: (() => {
+        const icon = row.querySelector(".file-icon");
+        if (!icon) return false;
+        const box = icon.getBoundingClientRect();
+        const color = getComputedStyle(icon).color;
+        return box.width > 0 && box.height > 0 && color !== "rgba(0, 0, 0, 0)";
+      })(),
+    })));
+    const byFile = Object.fromEntries(rows.map((r) => [r.file, r]));
+    for (const folder of ["projects", "archive"]) {
+      assert.equal(byFile[folder].kind, "directory", `${folder} is a directory row`);
+      assert.equal(byFile[folder].iconHref, "#i-folder", `${folder} carries the folder glyph`);
+      assert.equal(byFile[folder].iconVisible, true, `${folder}'s glyph is visible and coloured`);
+    }
+    for (const file of ["readme.txt", "notes.md"]) {
+      assert.equal(byFile[file].iconHref, null, `${file} must NOT carry the folder glyph — the contrast is the point`);
+    }
+    await page.screenshot(path.join(scratch, "folders-distinct.png"));
+  } finally {
+    try { if (page) await page.close(); } catch {}
+    try { if (server) await server.stop(); } catch {}
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});

@@ -291,7 +291,9 @@ Zero-server browser delegation (`lib/task-placement.mjs`, `docs/16-zero-server-d
   so a populated list does not keep growing through the room. Selection, root provenance, arrival
   expiry and folder permissions remain controlled by the existing page logic; CSS changes only their
   presentation. A failed listing still reveals an explicit recovery link when the page provides one;
-  other failures do not expose file-creation samples. `tests/room-explorer-ui.test.mjs` drives the native
+  other failures do not expose file-creation samples. Directory rows carry the sprite's folder glyph
+  in the accent colour so a folder reads as a folder at a glance; file rows carry no glyph, and that contrast is
+  the design (voicebox-beads-35eg). `tests/room-explorer-ui.test.mjs` drives the native
   controls, layout boundaries and the visible no-project recovery link.
   **Deleting a file** (voicebox-beads-g8y) is offered on file rows in the room and in the explorer, and
   never on folders: a native dialog names the file and the root it will leave, closing it without an

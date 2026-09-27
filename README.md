@@ -597,7 +597,7 @@ The room frontend (`public/index.html`, `public/fused.js`, `public/style.css`) i
 - Native `<dialog>` elements with `closedby="any"` light-dismiss and unified geometry-check fallback.
 - `container: env-dialog / inline-size;` container queries for dialog-width responsive form layouts.
 - Semantic `<search>` landmark element enclosing file filtering.
-- The room's file list uses aligned, full-width buttons with separate name/size columns, a bounded scroll area, and a two-column layout only when its own container is wide enough. Folder chips use the same light/dark tokens; root labels, arrival marks and permission controls keep their existing behavior.
+- The room's file list uses aligned, full-width buttons with separate name/size columns, a bounded scroll area, and a two-column layout only when its own container is wide enough. Folder rows carry the sprite's folder glyph in the accent colour (voicebox-beads-35eg), so a directory is recognizable at a glance and a file is, by contrast, plainly not one. Folder chips use the same light/dark tokens; root labels, arrival marks and permission controls keep their existing behavior.
 - Each file row carries a **Delete** control that opens a native `<dialog>` confirmation naming the file and the root it will be deleted from; closing it without an answer keeps the file, and the room's report line states the outcome (including the server's own name for a refusal).
 - `node --test tests/room-explorer-ui.test.mjs` drives native read/filter/folder controls, keyboard activation, long filenames, empty/no-project states, and light/dark layouts at phone, desktop and narrow-container widths.
 - Scroll containment (`overscroll-behavior: contain`) and layout stabilization (`scrollbar-gutter: stable`).
