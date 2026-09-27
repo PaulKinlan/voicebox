@@ -38,7 +38,7 @@ const WANTED = {
   // and never described as running, and an admitted extension that failed to load is never silent
   // (voicebox-beads-qdo: named error + next action, its own section).
   exts: "exts", extsOpen: "exts-open", extsClose: "exts-close", extCount: "exts-count", extNote: "ext-note",
-  extRunning: "ext-running", extFailed: "ext-failed", extWaiting: "ext-waiting", extPresent: "ext-present",
+  extShelf: "ext-shelf", extRunning: "ext-running", extFailed: "ext-failed", extWaiting: "ext-waiting", extPresent: "ext-present",
   extRefused: "ext-refused", extCatalogue: "ext-catalogue",
   // Extension creation section (voicebox-beads-b1p)
   extCreateForm: "ext-create-form",
@@ -1353,6 +1353,10 @@ function openManageExt(ext, mode = "reconfigure") {
   els.extManageDialog.showModal();
 }
 
+// Execution status for the tools view (voicebox-beads-ri4k): the live socket's {type:"tool"}
+// frames land here via window.__voiceboxOnToolCalls, and the wasm shelf rows read it.
+const lastToolStatus = new Map();
+
 async function renderExtensions() {
   if (!els.extRunning) return;
   try {
@@ -1411,7 +1415,24 @@ async function renderExtensions() {
     extSection(els.extRefused, refused.map((p) =>
       extRow({ name: p.name, dotState: "false", stateText: "Refused", detail: p.refusal?.why ?? "The host declined this extension." })), "Nothing was refused.");
 
-    extSection(els.extCatalogue, catalogue.map((c) => {
+    // WASM SHELF (voicebox-beads-ri4k): these are NOT catalogue strangers awaiting review —
+    // they are digest-pinned, admitted and callable right now, so they render in their own
+    // section with their description and their last execution status (from the live tool
+    // frames), never as a "would run after review" maybe.
+    const isShelf = (c) => String(c.id ?? "").startsWith("wasm-shelf-");
+    const shelfTools = catalogue.filter(isShelf).map((c) => {
+      const toolId = String(c.id).replace(/^wasm-shelf-/, "");
+      const last = lastToolStatus.get(toolId);
+      const ago = last ? ` · ${Math.max(1, Math.round((Date.now() - last.at) / 1000))}s ago` : "";
+      const stateText = last
+        ? `Callable now · last run ${last.ok ? "ok" : "failed"}${ago}`
+        : "Callable now · digest-pinned wasm · not yet run in this session";
+      const detail = `${c.description ?? ""}${c.description ? " — " : ""}digest ${String(c.wasm?.digest ?? "").slice(0, 12)}…`;
+      return extRow({ name: c.name ?? c.id, dotState: "true", stateText, detail });
+    });
+    extSection(els.extShelf, shelfTools, "No wasm shelf tools admitted. Drop a digest-pinned manifest in the wasm shelf directory.");
+
+    extSection(els.extCatalogue, catalogue.filter((c) => !isShelf(c)).map((c) => {
       // The preview's ENFORCEMENT MAP is what separates "would run here" from "cannot": an
       // admitted preview names the mechanisms it would get; a refusal names why it would not.
       const wouldRun = c.preview != null && c.preview.enforced !== undefined;
@@ -3298,7 +3319,13 @@ health();
 // this list still showed the old folder — Paul's "files created by a tool do not appear in the UI
 // immediately". Re-listing on the frame is the whole fix: it is one GET, it preserves the open reader and
 // the scroll position, and the arrival mark then fires on the name that is new (data-arrived, ~3 s sweep).
-window.__voiceboxOnToolCalls = () => { void load(); };
+window.__voiceboxOnToolCalls = (calls) => {
+    for (const call of calls ?? []) {
+      lastToolStatus.set(call.name, { ok: Boolean(call.ok), at: Date.now() });
+    }
+    if (lastToolStatus.size && els.extShelf?.isConnected) void renderExtensions();
+    void load();
+  };
 window.__voiceboxOnTask = (task) => {
   if (task && taskCardController) {
     taskCardController.setTask(task);

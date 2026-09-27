@@ -40,6 +40,7 @@ import { sweepOrphanedProbeMarkers } from "./tools/sandbox-probe.mjs";
 import { createTaskHost, installTaskExecutor, protectedAuditPath, TASK_TOOLS } from "./lib/tasks.mjs";
 import { createPermissionPolicy } from "./lib/permission-policy.mjs";
 import { createPiAcpExecutor, describeAdapterInstall } from "./lib/pi-acp.mjs";
+import { liveToolDeclarations } from "./lib/wasm-shelf.mjs";
 import { createClaudeAcpExecutor, describeClaudeAdapterInstall } from "./lib/claude-acp.mjs";
 import { bootFence } from "./lib/fence-provider.mjs";
 import { SOURCE_DIRS } from "./lib/browser-sources.mjs";
@@ -62,7 +63,7 @@ import { installColorConsole } from "./lib/logger.mjs";
 // The state directories have ONE owner; this file no longer computes its own copy of any of them
 // (voicebox-beads-y5k: `VOICEBOX_WORKSPACE` and `VOICEBOX_EXTENSIONS_DIR` were each resolved here
 // AND in lib/extensions.mjs, with the same fallbacks written twice).
-import { workspaceDir, workspaceDeclared, extensionsDir } from "./lib/state-dirs.mjs";
+import { workspaceDir, workspaceDeclared, extensionsDir, wasmShelfDir } from "./lib/state-dirs.mjs";
 
 installColorConsole();
 
@@ -717,6 +718,20 @@ const fleetManager = createFleetManager({
 });
 
 const permissions = createPermissionPolicy();
+
+// Admitted wasm shelf tool names (voicebox-beads-ri4k): refreshed at boot and at each live
+// session start — the shelf directory is mutable, and a newly admitted tool must be callable
+// without a server restart.
+const shelfToolNames = new Set();
+function refreshShelfToolNames() {
+  shelfToolNames.clear();
+  try {
+    for (const declaration of liveToolDeclarations(wasmShelfDir())) shelfToolNames.add(declaration.name);
+  } catch (err) {
+    console.error(`[shelf] tool declarations unavailable: ${err?.message ?? err}`);
+  }
+}
+refreshShelfToolNames();
 
 const HARNESS = process.env.VOICEBOX_HARNESS ?? null;
 
@@ -3626,6 +3641,7 @@ server.on("upgrade", (req, socket) => {
       } else if (activeRootNow) {
         console.error(`[live] no project instruction: ${activeRootNow.root?.kind} roots live in the page, not on this machine`);
       }
+      refreshShelfToolNames(); // the shelf is mutable: newly admitted tools declare without a restart (voicebox-beads-ri4k)
       session = createLiveSession({
         // THE AGENT SETTINGS APPLY HERE, which is what stops them being dead controls: the provider a
         // person chose is the provider this session dials, and its model comes with it.
@@ -3645,7 +3661,10 @@ server.on("upgrade", (req, socket) => {
         // command list (lib/commands.mjs) — and each call runs through the SAME
         // executor, so containment, refusal names and the audit are identical
         // whichever path the words arrive on.
-        tools: functionDeclarations(),
+        // THE SHELF DECLARES BESIDE THE FIXED COMMANDS (voicebox-beads-ri4k): admitted, digest-pinned
+        // wasm tools are first-class functions in the room loop — the model calls them by name, and the
+        // same shared executor (below) runs them through the same refusal names and the same audit.
+        tools: (refreshShelfToolNames(), [...functionDeclarations(), ...liveToolDeclarations(wasmShelfDir())]),
         systemInstruction: liveSystemInstruction(),
         onToolCall: async (calls) => {
           const responses = [];
@@ -3657,7 +3676,7 @@ server.on("upgrade", (req, socket) => {
             // mapping is validated, the executor is wrapped, and a throw becomes a NAMED
             // refusal rather than a swallowed outcome.
             const started = performance.now();
-            const action = commandToAction(call.name, call.args);
+            const action = commandToAction(call.name, call.args, shelfToolNames);
             trace?.({ type: "tool.route", callId: call.id, name: call.name, action,
               route: !action || action.refused ? "refused-before-execution" : "shared-executor" });
             let result;

@@ -91,3 +91,16 @@ test("the system instruction names the tools AND the spoken refusals", () => {
   assert.match(text, /root-not-declared/, "the refusal vocabulary is in the instruction");
   assert.match(text, /never claim|Never claim/i, "the no-pretending rule is in the instruction");
 });
+
+test("commandToAction routes an ADMITTED extension/shelf tool by its own name (voicebox-beads-ri4k)", () => {
+  const admitted = new Set(["hash", "diff"]);
+  // The declaration is dynamic, the execution door is the extension callTool:
+  assert.deepEqual(
+    commandToAction("hash", { input: "abc" }, admitted),
+    { verb: "extension", name: "hash", args: { input: "abc" } },
+  );
+  // Without the admitted set (the old call shape), an unknown name is still null:
+  assert.equal(commandToAction("hash", { input: "abc" }), null);
+  // A name nobody admits is still null:
+  assert.equal(commandToAction("not-a-tool", {}, admitted), null);
+});

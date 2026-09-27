@@ -12,7 +12,7 @@ import { mkdtempSync, mkdirSync, rmSync, cpSync, writeFileSync, readFileSync, ex
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { readShelf, descriptorFor } from "../lib/wasm-shelf.mjs";
+import { readShelf, descriptorFor, liveToolDeclarations } from "../lib/wasm-shelf.mjs";
 import { admit } from "../core/extensions.ts";
 
 const REAL_SHELF = path.join(os.homedir(), ".isocan", "modules", "wasm-tools");
@@ -321,4 +321,22 @@ test("wasm shelf hookup: catalogue discovery surfaces shelf tools and callTool e
   assert.ok(Array.isArray(result.blocks));
   assert.equal(result.blocks.length, 3);
   assert.equal(result.blocks[1].op, "insert");
+});
+
+test("live tool declarations: admitted+driven tools declare with per-ABI schemas; undriven tools do not (voicebox-beads-ri4k)", (t) => {
+  if (needsShelf(t)) return;
+  const out = readShelf(shelf);
+  const declarations = liveToolDeclarations(shelf);
+  const byName = Object.fromEntries(declarations.map((d) => [d.name, d]));
+
+  const hash = out.tools.find((tool) => tool.id === "hash");
+  assert.ok(hash?.admitted, "fixture: hash is admitted");
+  assert.equal(byName.hash.name, "hash", "the declaration is named for direct calls");
+  assert.equal(byName.hash.parameters.required[0], "input", "buffer-abi/1 takes input");
+  assert.match(byName.hash.description, /digest-pinned/);
+
+  const diff = out.tools.find((tool) => tool.id === "diff");
+  assert.ok(diff?.admitted, "fixture: diff is admitted");
+  assert.deepEqual(byName.diff.parameters.required, ["a", "b"], "the diff ABI takes a and b");
+  assert.ok(byName.diff.parameters.properties.a && byName.diff.parameters.properties.b);
 });
