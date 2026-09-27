@@ -439,7 +439,7 @@ test("MBK S1: queued wasm calls drain in order as active workers complete", asyn
   }
 });
 
-test("MBK S2: releaseWorkerSlot asserts activeWorkers > 0 and prevents double-release underflow", async (t) => {
+test("MBK S2: releaseWorkerSlot asserts activeWorkers > 0 and prevents double-release underflow", { timeout: 10000 }, async (t) => {
   if (needsShelf(t)) return;
   const { callWasmTool, descriptorFor, readShelf, _resetWasmWorkerStateForTest, wasmWorkerConcurrency } = await import("../lib/wasm-shelf.mjs");
   const shelfOut = readShelf(shelf);
@@ -452,4 +452,48 @@ test("MBK S2: releaseWorkerSlot asserts activeWorkers > 0 and prevents double-re
 
   const status = wasmWorkerConcurrency();
   assert.equal(status.active, 0, "exactly one worker released, active is exactly 0");
+});
+
+test("MBK B1 regression: synchronous Worker constructor failure releases slot and refuses worker-spawn-failed", { timeout: 10000 }, async (t) => {
+  if (needsShelf(t)) return;
+  const { callWasmTool, descriptorFor, readShelf, _resetWasmWorkerStateForTest, wasmWorkerConcurrency } = await import("../lib/wasm-shelf.mjs");
+  const shelfOut = readShelf(shelf);
+  const descriptor = descriptorFor(shelfOut.tools.find((x) => x.id === "hash"));
+  const tool = descriptor.tools[0];
+
+  const prevMax = process.env.VOICEBOX_WASM_MAX_CONCURRENT_WORKERS;
+  const prevQueue = process.env.VOICEBOX_WASM_MAX_QUEUE_SIZE;
+  process.env.VOICEBOX_WASM_MAX_CONCURRENT_WORKERS = "1";
+  process.env.VOICEBOX_WASM_MAX_QUEUE_SIZE = "0";
+  _resetWasmWorkerStateForTest();
+
+  try {
+    // Uncloneable field (function) in wasm spec causes `new Worker(..., { workerData })` to throw DataCloneError synchronously
+    const uncloneableTool = {
+      ...tool,
+      wasm: {
+        ...tool.wasm,
+        poison: () => {},
+      },
+    };
+
+    const res = await callWasmTool(uncloneableTool, { input: "poison" });
+    assert.equal(res.ok, false);
+    assert.equal(res.refused, "worker-spawn-failed");
+    assert.match(res.why, /failed to spawn wasm worker/);
+
+    // Assert the slot was released: active workers must be 0, not stuck at 1
+    const status = wasmWorkerConcurrency();
+    assert.equal(status.active, 0, "active workers must be reset to 0 after constructor failure");
+
+    // A subsequent normal call succeeds immediately rather than refusing over-budget
+    const next = await callWasmTool(tool, { input: "after-spawn-failure" });
+    assert.equal(next.ok, true, "subsequent call must succeed after worker constructor failure releases slot");
+  } finally {
+    if (prevMax !== undefined) process.env.VOICEBOX_WASM_MAX_CONCURRENT_WORKERS = prevMax;
+    else delete process.env.VOICEBOX_WASM_MAX_CONCURRENT_WORKERS;
+    if (prevQueue !== undefined) process.env.VOICEBOX_WASM_MAX_QUEUE_SIZE = prevQueue;
+    else delete process.env.VOICEBOX_WASM_MAX_QUEUE_SIZE;
+    _resetWasmWorkerStateForTest();
+  }
 });
