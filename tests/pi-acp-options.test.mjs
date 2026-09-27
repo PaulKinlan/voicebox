@@ -427,3 +427,27 @@ test("refusal demonstration: unsupported thinking level returned by adapter fail
     }
   );
 });
+
+test("the pi child env DELIBERATELY carries ANTHROPIC_API_KEY (cpbr) — a passthrough pinned, never a blind inheritance", async (t) => {
+  // The measured record (voicebox-beads-cpbr, 2026-09-26): pi's anthropic provider has no other
+  // auth path when the auth store lacks an anthropic entry — scoping the key out breaks
+  // anthropic-model delegations (model-unsupported at set_config_option); with it they run.
+  // Unlike the claude adapter (nz60), the key is a FALLBACK for pi, not an override. This pin
+  // keeps the passthrough deliberate: a future "cleanup" that drops it reds this test.
+  const hostKey = process.env.ANTHROPIC_API_KEY;
+  process.env.ANTHROPIC_API_KEY = "sk-cpbr-fixture";
+  t.after(() => { if (hostKey === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = hostKey; });
+
+  let childEnv = null;
+  const executor = createPiAcpExecutor({
+    adapterDir,
+    transportFactory: ({ env }) => { childEnv = env; return { transport: createProtocolHarness().transport }; },
+  });
+  await executor.run({
+    input: { task: "ping" },
+    agentConfig: { harness: "pi", adapter: "pi-acp" },
+    root: { path: "/work" },
+  });
+  assert.equal(childEnv?.ANTHROPIC_API_KEY, "sk-cpbr-fixture", "the pi child keeps the ambient key — the measured decision, not an accident");
+  assert.equal(process.env.ANTHROPIC_API_KEY, "sk-cpbr-fixture", "the host's own env is never mutated by the child-env build");
+});

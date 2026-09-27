@@ -370,6 +370,7 @@ const ENV_MEANING = {
   NO_COLOR: "standard terminal colour override — when set to a non-empty value, `lib/logger.mjs` strips ANSI colour sequences",
   NODE_DISABLE_COLORS: "Node's built-in colour disable flag — honoured by `lib/logger.mjs` alongside `NO_COLOR`",
   VOICEBOX_ACP_ADAPTER: "path or command override for the `pi-acp` stdio adapter binary in `lib/pi-acp.mjs`",
+  ANTHROPIC_API_KEY: "the pi adapter child's DELIBERATE pass-through (voicebox-beads-cpbr, measured): pi's anthropic provider falls back to this ambient key when the auth store has no anthropic entry — the mechanism string in `lib/pi-acp.mjs` names it present/absent per host; scoping it out makes anthropic-model delegations refuse `model-unsupported` (unlike nz60's claude child, where the key is an override and is deleted)",
   VOICEBOX_ACP_PI: "path or command override for the `pi` coding agent CLI used by `lib/pi-acp.mjs`",
   PATH: "the executable search path — also inherited by task-adapter children (the claude adapter resolves its pinned `npx` through it)",
   VOICEBOX_CLAUDE_CLI: "the claude CLI the adapter child is told to execute (exported to it as `CLAUDE_CODE_EXECUTABLE`); unset resolves the user-installed CLI, else the adapter-bundled binary",
