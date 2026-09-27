@@ -166,19 +166,24 @@ test("folders in the file list are visually distinct: folder glyph, accent styli
       file: row.dataset.file,
       kind: row.dataset.kind ?? "file",
       iconHref: row.querySelector(".file-icon use")?.getAttribute("href") ?? null,
-      iconVisible: (() => {
+      iconPainted: (() => {
+        // The PAINT truth, not the inherited-colour truth: a sprite path with the SVG-default
+        // painting is a black blob (fill) with no outline — invisible on the dark card. The
+        // glyph must be an unfilled STROKE in the accent (e1m0's review of the first cut).
         const icon = row.querySelector(".file-icon");
-        if (!icon) return false;
+        if (!icon) return null;
         const box = icon.getBoundingClientRect();
-        const color = getComputedStyle(icon).color;
-        return box.width > 0 && box.height > 0 && color !== "rgba(0, 0, 0, 0)";
+        const s = getComputedStyle(icon);
+        return { fill: s.fill, stroke: s.stroke, width: box.width, height: box.height };
       })(),
     })));
     const byFile = Object.fromEntries(rows.map((r) => [r.file, r]));
     for (const folder of ["projects", "archive"]) {
       assert.equal(byFile[folder].kind, "directory", `${folder} is a directory row`);
       assert.equal(byFile[folder].iconHref, "#i-folder", `${folder} carries the folder glyph`);
-      assert.equal(byFile[folder].iconVisible, true, `${folder}'s glyph is visible and coloured`);
+      assert.equal(byFile[folder].iconPainted.fill, "none", `${folder}'s glyph must be an outline, not a filled blob`);
+      assert.notEqual(byFile[folder].iconPainted.stroke, "none", `${folder}'s glyph must be stroked`);
+      assert.ok(byFile[folder].iconPainted.width > 0 && byFile[folder].iconPainted.height > 0, `${folder}'s glyph has a box`);
     }
     for (const file of ["readme.txt", "notes.md"]) {
       assert.equal(byFile[file].iconHref, null, `${file} must NOT carry the folder glyph — the contrast is the point`);

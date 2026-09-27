@@ -708,10 +708,13 @@ function card(entry, { arrived = false, canDelete = false } = {}) {
   name.textContent = entry.name;
   if (entry.isDir) {
     // A FOLDER LOOKS LIKE A FOLDER (voicebox-beads-35eg): the sprite's folder glyph rides
-    // the row, accent-styled in CSS. aria-hidden — the button's aria-label already says
-    // "folder", so the icon is decoration, not a second announcement.
+    // the row. class="icon" carries the house STROKE PRESENTATION (fill:none, currentColor
+    // strokes — e1m0's review: without it the path paints as a black SVG-default blob that
+    // vanishes on the dark card); .file-icon sizes it and tints the stroke with the accent.
+    // aria-hidden — the button's aria-label already says "folder", so the icon is decoration,
+    // not a second announcement.
     const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    icon.setAttribute("class", "file-icon");
+    icon.setAttribute("class", "icon file-icon");
     icon.setAttribute("aria-hidden", "true");
     const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
     use.setAttribute("href", "#i-folder");
