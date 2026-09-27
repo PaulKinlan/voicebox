@@ -57,7 +57,7 @@ import {
 } from "./lib/fleet.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
 import { createLiveSession, LIVE_MODEL, inputRateRequiredBy } from "./lib/live-session.mjs";
-import { COMMAND_VERBS, commandToAction, functionDeclarations, liveSystemInstruction } from "./lib/commands.mjs";
+import { COMMANDS, COMMAND_VERBS, commandToAction, functionDeclarations, liveSystemInstruction } from "./lib/commands.mjs";
 import { readProjectInstruction } from "./lib/project-instruction.mjs";
 import { installColorConsole } from "./lib/logger.mjs";
 // The state directories have ONE owner; this file no longer computes its own copy of any of them
@@ -731,7 +731,6 @@ function refreshShelfToolNames() {
     console.error(`[shelf] tool declarations unavailable: ${err?.message ?? err}`);
   }
 }
-refreshShelfToolNames();
 
 const HARNESS = process.env.VOICEBOX_HARNESS ?? null;
 
@@ -3641,7 +3640,7 @@ server.on("upgrade", (req, socket) => {
       } else if (activeRootNow) {
         console.error(`[live] no project instruction: ${activeRootNow.root?.kind} roots live in the page, not on this machine`);
       }
-      refreshShelfToolNames(); // the shelf is mutable: newly admitted tools declare without a restart (voicebox-beads-ri4k)
+            refreshShelfToolNames(); // the shelf is mutable: newly admitted tools declare without a restart (voicebox-beads-ri4k)
       session = createLiveSession({
         // THE AGENT SETTINGS APPLY HERE, which is what stops them being dead controls: the provider a
         // person chose is the provider this session dials, and its model comes with it.
@@ -3664,7 +3663,7 @@ server.on("upgrade", (req, socket) => {
         // THE SHELF DECLARES BESIDE THE FIXED COMMANDS (voicebox-beads-ri4k): admitted, digest-pinned
         // wasm tools are first-class functions in the room loop — the model calls them by name, and the
         // same shared executor (below) runs them through the same refusal names and the same audit.
-        tools: (refreshShelfToolNames(), [...functionDeclarations(), ...liveToolDeclarations(wasmShelfDir())]),
+        tools: [...functionDeclarations(), ...liveToolDeclarations(wasmShelfDir(), new Set(COMMANDS.map((c) => c.name)))], // a shelf id never shadows a fixed command (hmco nit 3)
         systemInstruction: liveSystemInstruction(),
         onToolCall: async (calls) => {
           const responses = [];
@@ -3700,7 +3699,14 @@ server.on("upgrade", (req, socket) => {
               try { ws.send(JSON.stringify({ type: "mini_app", miniApp: result.miniApp })); } catch {}
             }
             responses.push({ id: call.id, name: call.name, response: { result } });
-            seen.push({ name: call.name, ok: result.ok, action: result.action ?? result.error });
+            // The frame carries a BOUNDED slice of the result's output (e1m0's ri4k review):
+            // execution status AND what the tool actually returned, so the room's tools view
+            // and tests can verify the product's answer — not just that a call happened.
+            seen.push({
+              name: call.name, ok: result.ok,
+              action: result.action ?? result.error,
+              ...(typeof result.output === "string" ? { output: result.output.slice(0, 256) } : {}),
+            });
           }
           const answered = session.sendToolResponse(responses);
           if (!answered) {

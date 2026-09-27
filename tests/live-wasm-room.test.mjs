@@ -15,20 +15,11 @@ import { mkdtempSync, mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
-import net from "node:net";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const HAVE_KEY = Boolean(process.env.GEMINI_API_KEY);
 const REAL_SHELF = path.join(os.homedir(), ".isocan", "modules", "wasm-tools");
 const SHA256_ABC = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
-
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const probe = new (require("node:net").Server)();
-    probe.on("error", reject);
-    probe.listen(0, "127.0.0.1", () => { const p = probe.address().port; probe.close(() => resolve(p)); });
-  });
-}
 
 test("live wasm room: the model calls the shelf hash tool by name and speaks the digest", { skip: (!HAVE_KEY || !existsSync(REAL_SHELF)) && "needs GEMINI_API_KEY and the isocan shelf", timeout: 180000 }, async () => {
   const port = await new Promise((resolve, reject) => {
@@ -70,17 +61,24 @@ test("live wasm room: the model calls the shelf hash tool by name and speaks the
     }
 
     ws.send(JSON.stringify({ type: "text", text: "Use the hash tool to compute the hash of the text abc. Tell me the hash." }));
-    const hashCalled = () => tools.some((t) => t.calls?.some((c) => c.name === "hash" && c.ok));
-    for (let i = 0; i < 300 && !hashCalled(); i++) await sleep(200);
-    assert(hashCalled(), `the model did not call the shelf hash tool — tools: ${JSON.stringify(tools.flatMap((t) => t.calls ?? []))}`);
+    // THE DETERMINISTIC WITNESS (e1m0's review): the {type:"tool"} frame carries the tool's
+    // returned output — the room loop's product — not the model's phrasing of it. sha256("abc")
+    // begins ba7816bf; the frame's bounded output slice must contain it.
+    const hashFrame = () => tools.flatMap((t) => t.calls ?? []).find((c) => c.name === "hash" && c.ok && typeof c.output === "string");
+    for (let i = 0; i < 300 && !hashFrame(); i++) await sleep(200);
+    const frame = hashFrame();
+    assert.ok(frame, `the model did not call the shelf hash tool successfully — tools: ${JSON.stringify(tools.flatMap((t) => t.calls ?? []))}`);
+    assert.match(frame.output, /ba7816bf/, `the frame's output must carry the computed digest: ${frame.output}`);
 
+    // The spoken answer is a LOG here, never an assertion — the model's phrasing varies
+    // (measured: one run said 'the hash of the text abc is ending in 0015ad').
     let said = "";
     for (let i = 0; i < 150; i++) {
       await sleep(200);
       said = texts.map((t) => t.text).join(" ").replace(/\s+/g, " ");
-      if (said.toLowerCase().includes("ba7816bf")) break;
+      if (said) break;
     }
-    assert.match(said.toLowerCase(), /ba7816bf/, `the digest did not come back spoken — heard: ${said.slice(0, 200)}`);
+    if (said) console.error("spoken answer (log only):", said.slice(0, 160));
     ws.close();
   } finally {
     server.kill("SIGKILL");
