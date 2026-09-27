@@ -83,7 +83,9 @@ test("the request is checked by name, and a provider change does not carry a for
     [{ provider: "anthropic" }, "unknown-provider"],
     [{ personality: "sarcastic" }, "unknown-personality"],
     [{ voice: "Kore", provider: "openai" }, "voice-not-offered-by-provider"],
-    [{ model: "gpt-5" }, "unknown-field"],
+    [{ model: "gpt-5" }, "model-not-offered-by-provider"],
+    [{ timbre: "robotic" }, "unknown-timbre"],
+    [{ unknownField: "test" }, "unknown-field"],
     [null, "bad-request"],
   ];
   for (const [input, refused] of cases) {
@@ -118,10 +120,12 @@ test("voices are per provider: no list contains another provider's voice", () =>
 test("the payload separates requested, applied and pending — and the base is not editable", async () => {
   const view = await settings();
   assert.equal(view.ok, true);
-  assert.deepEqual(Object.keys(view.requested).sort(), ["personality", "provider", "voice"]);
+  assert.deepEqual(Object.keys(view.requested).sort(), ["customInstruction", "model", "personality", "provider", "timbre", "voice"]);
   assert.equal(view.base.editable, false, "the surface claims the base instruction is editable");
   assert.equal(view.base.instruction, AGENT_BASE_INSTRUCTION, "the surface shows something other than the real base");
   assert.ok(view.personalities.length >= 2, "no personalities are offered");
+  assert.ok(view.timbres.length >= 4, "timbres are not offered");
+  assert.ok(view.capabilities.some((c) => c.id === "claude"), "claude provider must be listed");
   assert.ok(view.persisted.includes("memory"), "the payload implies durability it does not have");
 
   // Every provider says whether it can be used AT ALL, and one that cannot says why — the same rule as
@@ -133,22 +137,25 @@ test("the payload separates requested, applied and pending — and the base is n
 });
 
 test("a stored setting IS reported as applied once the session seam carries it — never as the request alone", async () => {
-  const put = await update({ voice: "Kore", personality: "warm" });
+  const put = await update({ voice: "Kore", personality: "warm", timbre: "deep", customInstruction: "Be concise." });
   assert.equal(put.status, 200, JSON.stringify(put.body));
-  assert.deepEqual(put.body.requested, { provider: "gemini", voice: "Kore", personality: "warm" });
+  assert.deepEqual(put.body.requested, { provider: "gemini", model: null, voice: "Kore", timbre: "deep", personality: "warm", customInstruction: "Be concise." });
 
   // THE TRAP-1 ASSERTION, INVERTED BY THE HANDOFF: since the provider seam carries both, a stored
   // voice/personality IS applied to the next session — and pending says NOTHING is pending (null,
   // so "nothing pending" is distinguishable from "the field is gone").
   assert.equal(put.body.applied.voice, "Kore", "a voice the session carries is not reported as applied");
+  assert.equal(put.body.applied.timbre, "deep", "timbre is not reported as applied");
   assert.equal(put.body.pending.voice, null, "a pending reason for a carried voice is a stale claim");
   assert.equal(put.body.applied.instruction, "warm", "a personality the session carries is not reported as applied");
+  assert.equal(put.body.applied.customInstruction, "Be concise.");
   assert.equal(put.body.pending.personality, null);
 
   // It survives a re-read (stored, not just echoed), and a fresh GET separates the two the same way.
   const view = await settings();
   assert.equal(view.requested.voice, "Kore");
   assert.equal(view.applied.voice, "Kore");
+  assert.equal(view.applied.timbre, "deep");
 });
 
 test("the provider IS applied — the setting reaches the session that starts next", async () => {

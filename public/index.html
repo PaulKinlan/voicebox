@@ -344,10 +344,18 @@
             <select id="out-select" aria-labelledby="out-label"></select>
             <p class="device-state" id="out-device-state">No reply playing</p>
           </div>
+          <div class="settings-section-divider">
+            <h3 class="settings-section-title">Agent Settings</h3>
+          </div>
           <div class="device-row">
             <h3 id="agent-provider-label">The agent</h3>
             <select id="agent-provider" aria-labelledby="agent-provider-label"></select>
             <p class="device-state" id="agent-provider-state">Not asked yet</p>
+          </div>
+          <div class="device-row">
+            <h3 id="agent-model-label">Model</h3>
+            <select id="agent-model" aria-labelledby="agent-model-label"></select>
+            <p class="device-state" id="agent-model-state">Not asked yet</p>
           </div>
           <div class="device-row">
             <h3 id="agent-voice-label">Its voice</h3>
@@ -355,9 +363,19 @@
             <p class="device-state" id="agent-voice-state">Not asked yet</p>
           </div>
           <div class="device-row">
+            <h3 id="agent-timbre-label">Voice timbre</h3>
+            <select id="agent-timbre" aria-labelledby="agent-timbre-label"></select>
+            <p class="device-state" id="agent-timbre-state">Not asked yet</p>
+          </div>
+          <div class="device-row">
             <h3 id="agent-personality-label">Its personality</h3>
             <select id="agent-personality" aria-labelledby="agent-personality-label"></select>
             <p class="device-state" id="agent-personality-state">Not asked yet</p>
+          </div>
+          <div class="device-row">
+            <h3 id="agent-custom-instruction-label">Custom prompt guidance</h3>
+            <textarea id="agent-custom-instruction" class="setting-input" rows="2" placeholder="Optional custom instructions to layer over the base rules..." aria-labelledby="agent-custom-instruction-label"></textarea>
+            <p class="device-state" id="agent-custom-instruction-state">Layered subordinate to the mandatory base rules</p>
           </div>
           <details class="about" id="agent-rules">
             <summary>What no personality can change</summary>

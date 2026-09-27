@@ -327,6 +327,8 @@ html:has(dialog.envs[open]) { overflow: hidden; }
 html:has(dialog.settings[open]) { overflow: hidden; }
 .settings-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .settings-head h2 { margin: 0; font-size: .9375rem; font-weight: 600; letter-spacing: -.02em; }
+.settings-section-divider { margin: 16px 0 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.settings-section-title { margin: 0; font-size: .75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink); }
 .device-row { padding: 10px 0; }
 .device-row + .device-row { border-top: 1px solid var(--line); }
 .device-row h3 { margin: 0 0 8px; font-size: .6875rem; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }

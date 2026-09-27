@@ -28,7 +28,7 @@ through `pcm-worklet.js`. The generated line below says what the model is; the *
 `script` placeholder, and those two facts are what an earlier version of this file managed to conflate.
 
 <!-- BEGIN GENERATED: live-session — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
-`lib/live-session.mjs` is present. Registered live providers, with the model each one's handshake names (captured from the provider against a recording transport — never dialed): `gemini` → `models/gemini-3.8-live`, `openai` → `gpt-realtime`. The library fallback is `gemini`, overridable by `VOICEBOX_LIVE_PROVIDER`; the server's `/live` route instead passes the agent-settings provider explicitly.
+`lib/live-session.mjs` is present. Registered live providers, with the model each one's handshake names (captured from the provider against a recording transport — never dialed): `claude` → `(registered, but this check has no capture for it)`, `gemini` → `models/gemini-3.8-live`, `openai` → `gpt-realtime`. The library fallback is `gemini`, overridable by `VOICEBOX_LIVE_PROVIDER`; the server's `/live` route instead passes the agent-settings provider explicitly.
 <!-- END GENERATED: live-session -->
 
 ## The turn path, in order
@@ -70,7 +70,7 @@ Registered resolvers: `gemini`, `script`
 * `registerResolver(name, fn)` is the seam; `resolveTurn(transcript, provider = "script")` picks one.
 * The **script** provider handles `write`, `read` and `list`: `"create a file called hello.txt with hi"` → `{"verb":"write","name":"hello.txt","content":"hi"}`.
 * The verbs it produces, driven one utterance each: `write`, `read`, `list`, `make-tool`, `tool`. An utterance matching **none** of them is **unresolved**, by design: `"book me a flight to Lisbon"` → `"the script resolver only knows create/read…"`. (This line used to say *"anything else is unresolved"*, which was a TYPED universal beside a derived example — false the moment `make-tool` and `tool` started resolving.)
-* The live voice providers (`gemini`, `openai`) live behind a **different** seam, `registerLiveProvider` in `lib/live-session.mjs`; none of them is a turn resolver — see the tool path below.
+* The live voice providers (`claude`, `gemini`, `openai`) live behind a **different** seam, `registerLiveProvider` in `lib/live-session.mjs`; none of them is a turn resolver — see the tool path below.
 <!-- END GENERATED: providers -->
 
 Hand-written addition (not generated): the project's own instruction file — `lib/project-instruction.mjs`, read at live-session start from the declared machine root (`AGENT.md`, then `AGENTS.md`; 32 KiB bound) — composes between the agent's instruction and the tools instruction; absence is normal, unreadable is named.
@@ -123,7 +123,7 @@ Fix the descriptor, re-admit, and the row leaves the inventory
 | dictated (browser `SpeechRecognition`, no key) | yes — the same route | `public/fused.js` → `POST /api/turn` | the same |
 | spoken to the live model | audio yes; tools **yes** | `public/live-voice.js` → `/live` → `lib/live-session.mjs` → the provider | provider tool call → `commandToAction()` → `execute()` → correlated tool response — and the server tells the page (`{type:"tool"}`), which re-reads the file list so a file the model wrote appears as it arrives |
 
-What each live handshake declares, captured from the provider with the server's shared command list: `gemini` → tools: `list_extensions`, `call_extension`, `write_file`, `read_file`, `list_files`, `delete_file`, `edit_file`, `diff_file`, `grep_files`, `list_agents`, `delegate_task`, `contact_agent`, `launch_mini_app`, `git_status`, `git_diff`, `git_log`, `inspect_environment`; `openai` → tools: `list_extensions`, `call_extension`, `write_file`, `read_file`, `list_files`, `delete_file`, `edit_file`, `diff_file`, `grep_files`, `list_agents`, `delegate_task`, `contact_agent`, `launch_mini_app`, `git_status`, `git_diff`, `git_log`, `inspect_environment`. Extension discovery reads the current registry; invocation goes through the existing admission and runtime bounds.
+What each live handshake declares, captured from the provider with the server's shared command list: `claude` → tools: (not captured); `gemini` → tools: `list_extensions`, `call_extension`, `write_file`, `read_file`, `list_files`, `delete_file`, `edit_file`, `diff_file`, `grep_files`, `list_agents`, `delegate_task`, `contact_agent`, `launch_mini_app`, `git_status`, `git_diff`, `git_log`, `inspect_environment`; `openai` → tools: `list_extensions`, `call_extension`, `write_file`, `read_file`, `list_files`, `delete_file`, `edit_file`, `diff_file`, `grep_files`, `list_agents`, `delegate_task`, `contact_agent`, `launch_mini_app`, `git_status`, `git_diff`, `git_log`, `inspect_environment`. Extension discovery reads the current registry; invocation goes through the existing admission and runtime bounds.
 
 Verbs the `script` resolver produces, driven: `"create a file called hello.txt with hi"` → `write`, `"read hello.txt"` → `read`, `"list files"` → `list`, `"create a tool called clock that tells the time"` → `make-tool`, `"run the tool clock"` → `tool`. `make-tool` **proposes** (a pending file the host must admit); `tool` calls an **admitted** tool and nothing else.
 <!-- END GENERATED: tool-path -->
@@ -177,7 +177,7 @@ Every environment variable the server and its libraries read, and where:
 
 | variable | read in | what it does |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | `lib/pi-acp.mjs` | the pi adapter child's DELIBERATE pass-through (voicebox-beads-cpbr, measured): pi's anthropic provider falls back to this ambient key when the auth store has no anthropic entry — the mechanism string in `lib/pi-acp.mjs` names it present/absent per host; scoping it out makes anthropic-model delegations refuse `model-unsupported` (unlike nz60's claude child, where the key is an override and is deleted) |
+| `ANTHROPIC_API_KEY` | `lib/live-providers/claude.mjs`, `lib/pi-acp.mjs` | the pi adapter child's DELIBERATE pass-through (voicebox-beads-cpbr, measured): pi's anthropic provider falls back to this ambient key when the auth store has no anthropic entry — the mechanism string in `lib/pi-acp.mjs` names it present/absent per host; scoping it out makes anthropic-model delegations refuse `model-unsupported` (unlike nz60's claude child, where the key is an override and is deleted) |
 | `BRAVE_API_KEY` | `lib/extensions.mjs` | the Brave Search API subscription token used by `callHttp` when an extension declares `api.search.brave.com` — without it that call refuses by name (`api-key-missing`) |
 | `FORCE_COLOR` | `lib/logger.mjs` | standard terminal colour override (`0` disables ANSI colours in `lib/logger.mjs`, non-zero enables them even when stdout is not a TTY) |
 | `GEMINI_API_KEY` | `lib/live-providers/gemini.mjs`, `lib/resolver.mjs`, `server.mjs` | read by TWO things with different refusals: the live session refuses to start by name, and the gemini turn resolver answers `unresolved` saying it has no key |
@@ -236,7 +236,7 @@ Audio worklets loaded by that code: `pcm-worklet.js`.
 ## The audio path, tonight
 
 <!-- BEGIN GENERATED: live-session — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
-`lib/live-session.mjs` is present. Registered live providers, with the model each one's handshake names (captured from the provider against a recording transport — never dialed): `gemini` → `models/gemini-3.8-live`, `openai` → `gpt-realtime`. The library fallback is `gemini`, overridable by `VOICEBOX_LIVE_PROVIDER`; the server's `/live` route instead passes the agent-settings provider explicitly.
+`lib/live-session.mjs` is present. Registered live providers, with the model each one's handshake names (captured from the provider against a recording transport — never dialed): `claude` → `(registered, but this check has no capture for it)`, `gemini` → `models/gemini-3.8-live`, `openai` → `gpt-realtime`. The library fallback is `gemini`, overridable by `VOICEBOX_LIVE_PROVIDER`; the server's `/live` route instead passes the agent-settings provider explicitly.
 <!-- END GENERATED: live-session -->
 
 ## Where each file's authority lies
