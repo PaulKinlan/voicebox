@@ -287,13 +287,19 @@ Zero-server browser delegation (`lib/task-placement.mjs`, `docs/16-zero-server-d
   associates placement (`browser`, `machine`, `remote`) with the environment rather than requiring a dedicated server broker;
   supports `opfs` and `handle` roots portably without hardcoded machine filesystem paths.
   The room's file list is a `file-explorer` inline-size container: one column by default, two from 36rem,
-  with long names wrapping independently of their sizes. Its scroll area is bounded to 40svh/24rem
-  so a populated list does not keep growing through the room. Selection, root provenance, arrival
-  expiry and folder permissions remain controlled by the existing page logic; CSS changes only their
-  presentation. A failed listing still reveals an explicit recovery link when the page provides one;
-  other failures do not expose file-creation samples. `tests/room-explorer-ui.test.mjs` drives the native
-  controls, layout boundaries and the visible no-project recovery link.
-  **Deleting a file** (voicebox-beads-g8y) is offered on file rows in the room and in the explorer, and
+  with long names TRUNCATED to one line (`white-space: nowrap` plus an ellipsis, voicebox-beads-y4c2) so a
+  name can never make its row taller than its neighbours — the disk's name stays verbatim in the
+  element's text and in the button's accessible name, so truncation is a rendering fact and never a data
+  one. Its scroll area is bounded to 40svh/24rem with `overflow-y: auto` (voicebox-beads-r2tn) so a
+  populated list does not keep growing through the room. Folders carry their own icon and a tinted card
+  (voicebox-beads-35eg) — cues that survive greyscale, unlike weight or colour alone. Selection, root
+  provenance, arrival expiry and folder permissions remain controlled by the existing page logic; CSS
+  changes only their presentation. A failed listing still reveals an explicit recovery link when the page
+  provides one; other failures do not expose file-creation samples. `tests/room-explorer-ui.test.mjs`
+  drives the native controls, layout boundaries and the visible no-project recovery link;
+  `tests/room-file-list-polish.test.mjs` measures the four list facts above on the real page.
+  **Deleting a file** (voicebox-beads-g8y; a compact trash icon inside the file's card since
+  voicebox-beads-io3a) is offered on file rows in the room and in the explorer, and
   never on folders: a native dialog names the file and the root it will leave, closing it without an
   answer keeps the file, and the act goes through `DELETE /api/file` → `execute()` → `dispatch()` so a
   page-owned root is deleted by the page that owns it and the root's own audit records it. The OPFS

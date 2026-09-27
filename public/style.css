@@ -71,8 +71,13 @@ input { caret-color: var(--accent); }
 .made h2 { margin: 0; font-size: 1rem; font-weight: 600; letter-spacing: -.015em; color: var(--ink); }
 .made-note { margin: 0; font-size: .8125rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .files { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; inline-size: 100%; max-block-size: min(40svh, 24rem); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; list-style: none; margin: 0; padding: 6px; }
-.files > li { display: flex; align-items: stretch; gap: 6px; min-inline-size: 0; }
-.file-delete { flex: 0 0 auto; align-self: center; }
+.files > li { display: flex; align-items: stretch; gap: 6px; min-inline-size: 0; position: relative; }
+/* The delete control lives INSIDE the file's card, at the end of its name line (voicebox-beads-io3a).
+   A button cannot nest inside .file-open — the card IS a button — so it is a sibling positioned into
+   the card's corner, and the card reserves that lane with padding. 40px is the page's own
+   .icon-button size, so the visible glyph stays compact while the hit target stays a real target. */
+.file-delete { position: absolute; inset-block-start: 50%; inset-inline-end: 4px; transform: translateY(-50%); }
+.files > li:has(.file-delete) .file-open { padding-inline-end: 52px; }
 .made[data-state="failed"] .files, .made[data-state="failed"] .empty, .made[data-state="empty"] .made-note { display: none; }
 .file-placeholder { grid-column: 1 / -1; padding: 14px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); font-size: .8125rem; }
 .made:not([data-state="empty"]) .empty { display: none; }
@@ -93,8 +98,12 @@ input { caret-color: var(--accent); }
 .file-open { display: flex; align-items: baseline; gap: 12px; inline-size: 100%; min-block-size: 48px; block-size: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--ink); font-size: .9375rem; text-align: start; }
 .file-open:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--accent) 5%, var(--card)); }
 .file-open:active { background: color-mix(in srgb, var(--accent) 10%, var(--card)); }
-.file-name { flex: 1; min-inline-size: 0; overflow-wrap: anywhere; }
+.file-name { flex: 1; min-inline-size: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .file-open[data-kind="directory"] .file-name { font-weight: 600; }
+/* Folder cues (voicebox-beads-35eg): an icon inside the name row plus a tinted card, so a folder is
+   recognisable in GREYSCALE as well as in colour — the weight and the meta line cannot do that alone. */
+.file-open[data-kind="directory"] { border-color: color-mix(in srgb, var(--accent) 25%, var(--line)); background: color-mix(in srgb, var(--accent) 5%, var(--card)); }
+.file-open[data-kind="directory"] .icon { align-self: center; color: var(--accent); }
 .file-open[data-kind="directory"] .file-meta { color: var(--accent); }
 .file-meta { flex: none; font-size: .75rem; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 /* The component's width, not the screen's: a narrow embedded list stays one column.
