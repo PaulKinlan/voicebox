@@ -698,6 +698,11 @@ function card(entry, { arrived = false, canDelete = false } = {}) {
   open.setAttribute("aria-label", entry.isDir ? `${entry.name}, folder` : `Read ${entry.name}`);
   if (arrived) open.dataset.arrived = "true";
 
+  // FOLDERS LOOK LIKE FOLDERS (voicebox-beads-35eg). The icon sits INSIDE the name row, and the name
+  // stays the DISK'S name verbatim — a page that renames things cannot be reconciled with the folder
+  // it is showing — so the cue is an icon plus the [data-kind="directory"] style, never text.
+  if (entry.isDir) open.append(icon("i-folder"));
+
   const name = document.createElement("span");
   name.className = "file-name";
   // The name is the DISK'S name, verbatim — a page that renames things cannot be
@@ -726,10 +731,16 @@ function card(entry, { arrived = false, canDelete = false } = {}) {
   if (canDelete && !entry.isDir) {
     const remove = document.createElement("button");
     remove.type = "button";
-    remove.className = "quiet danger file-delete";
+    // A COMPACT ICON, NOT A WIDE WORD (voicebox-beads-io3a): the page's own .icon-button, positioned
+    // inside the file's card at the end of its name line — a button cannot nest inside .file-open (the
+    // card IS a button), so the control is its sibling positioned into the card, and the card reserves
+    // the lane with padding. The class and data-file stay: they are how the delete tests and the g8y
+    // flow find it, and the aria-label carries the file's name for anyone not looking at an icon.
+    remove.className = "icon-button danger file-delete";
     remove.dataset.file = entry.name;
     remove.setAttribute("aria-label", `Delete ${entry.name}`);
-    remove.textContent = "Delete";
+    remove.title = `Delete ${entry.name}`;
+    remove.append(icon("i-trash"));
     remove.addEventListener("click", () => askDelete(open.dataset.path, entry.name));
     li.append(remove);
   }
