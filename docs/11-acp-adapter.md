@@ -81,6 +81,16 @@ The installed-adapter tests explicitly skip when those paths are absent.
   `VOICEBOX_CLAUDE_KEEP_API_KEY=1` (or `createClaudeAcpExecutor({ keepApiKey: true })`). Absence is
   asserted with `in`, never with `=== undefined`: a key present with the value `undefined` is a
   different child environment, and a spawn path that forwards it writes the string `"undefined"`.
+- **The pi child's environment is the OPPOSITE decision on purpose (voicebox-beads-cpbr)**: the pi
+  child keeps the ambient `ANTHROPIC_API_KEY` — measured on this box (2026-09-26): pi's anthropic
+  provider has no other auth path when the pi auth store lacks an anthropic entry, so a scoped-out
+  child makes an anthropic-model delegation refuse `model-unsupported` at `set_config_option`,
+  while the same delegation with the key runs. For pi the ambient key is a FALLBACK, not the
+  override it is for claude. The pass-through is deliberate and pinned
+  (`tests/pi-acp-options.test.mjs`), the host env is never mutated, and if a measured stall ever
+  appears on the pi path the remedy is the nz60 shape (delete + opt-back), not half-scoping.
+  (Observed and recorded, not fixed here: the anthropic-model run completes with EMPTY answer text
+  in the measured arms — a provider content-shape detail outside the credential question.)
 - **Browser-only boundary**: `pi-acp` is a stdio subprocess. A browser environment cannot spawn
   it directly; zero-server browser harnesses remain separate.
 

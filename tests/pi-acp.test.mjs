@@ -29,7 +29,7 @@ test("pi-acp real executor admits configured Pi and refuses unconfigured harness
   const piAdmission = executor.check({ input: { agent: "pi", task: "calculate" } });
   if (config.adapterDir && config.piBinary) {
     assert.equal(piAdmission.ok, true);
-    assert.equal(piAdmission.mechanism, "stdio-acp-client: pi-acp adapter with pi coding agent");
+    assert.match(piAdmission.mechanism, /^stdio-acp-client: pi-acp adapter with pi coding agent — ambient ANTHROPIC_API_KEY (present|absent)/, "the mechanism names the ambient-key state per host (cpbr)");
     assert.ok(piAdmission.bounds.deadlineMs > 0);
     assert.ok(piAdmission.bounds.maxOutputBytes > 0);
   }
