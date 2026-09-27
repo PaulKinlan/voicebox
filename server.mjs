@@ -3640,7 +3640,7 @@ server.on("upgrade", (req, socket) => {
       } else if (activeRootNow) {
         console.error(`[live] no project instruction: ${activeRootNow.root?.kind} roots live in the page, not on this machine`);
       }
-            refreshShelfToolNames(); // the shelf is mutable: newly admitted tools declare without a restart (voicebox-beads-ri4k)
+      refreshShelfToolNames(); // the shelf is mutable: newly admitted tools declare without a restart (voicebox-beads-ri4k)
       session = createLiveSession({
         // THE AGENT SETTINGS APPLY HERE, which is what stops them being dead controls: the provider a
         // person chose is the provider this session dials, and its model comes with it.

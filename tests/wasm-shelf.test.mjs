@@ -339,4 +339,7 @@ test("live tool declarations: admitted+driven tools declare with per-ABI schemas
   assert.ok(diff?.admitted, "fixture: diff is admitted");
   assert.deepEqual(byName.diff.parameters.required, ["a", "b"], "the diff ABI takes a and b");
   assert.ok(byName.diff.parameters.properties.a && byName.diff.parameters.properties.b);
+  // The reserved set pins the closure: a shelf id colliding with a fixed command never declares (hmco nit 3).
+  const withReserved = liveToolDeclarations(shelf, new Set(["hash"]));
+  assert.deepEqual(withReserved.map((d) => d.name), ["diff"], "a reserved shelf id is not declared");
 });
