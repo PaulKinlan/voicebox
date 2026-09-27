@@ -9,6 +9,7 @@
 const inner = document.getElementById("inner-app");
 let currentAppId = null;
 let appChannel = null;
+let appChannelTransferred = false;
 let roomPort = null;
 const registeredTools = new Map();
 const pendingCalls = new Map();
@@ -28,6 +29,33 @@ const BOUNDS = {
 
 const INJECTED_SDK = `<script>
 (function() {
+  // The inner frame is sandboxed WITHOUT allow-same-origin (opaque origin): touching
+  // localStorage / sessionStorage THROWS a SecurityError and the app dies with it. Install an
+  // in-memory Storage for that case, scoped to this document (voicebox-beads-sdxn).
+  function memoryStorage() {
+    var map = new Map();
+    return {
+      getItem: function(k) { k = String(k); return map.has(k) ? map.get(k) : null; },
+      setItem: function(k, v) { map.set(String(k), String(v)); },
+      removeItem: function(k) { map.delete(String(k)); },
+      clear: function() { map.clear(); },
+      key: function(i) { return i >= 0 && i < map.size ? Array.from(map.keys())[i] : null; },
+      get length() { return map.size; }
+    };
+  }
+  ["localStorage", "sessionStorage"].forEach(function(name) {
+    var usable = false;
+    try {
+      var store = window[name];                 // SecurityError in an opaque origin
+      var probe = "__voicebox_storage_probe__";
+      store.setItem(probe, "1");
+      store.removeItem(probe);
+      usable = true;
+    } catch (err) { usable = false; }
+    if (!usable) {
+      try { Object.defineProperty(window, name, { value: memoryStorage(), configurable: true }); } catch (err) {}
+    }
+  });
   const tools = new Map();
   let bridgePort = null;
   const pendingMessages = [];
@@ -197,12 +225,25 @@ function handleInnerMessage(event) {
 window.addEventListener("message", (event) => {
   // If message is from inner frame requesting handshake (origin is "null")
   if (event.data && event.data.type === "mini_app_ready") {
-    if (appChannel && inner && inner.contentWindow) {
-      inner.contentWindow.postMessage(
-        { type: "mini_app_handshake", appId: currentAppId },
-        "*",
-        [appChannel.port2],
-      );
+    // The inner frame announces readiness EVERY time its document (re)loads, and a transferred port
+    // is single-use: re-sending appChannel.port2 throws DataCloneError (Paul's console, 2026-09-27).
+    // Use the channel minted at load ONCE; on a repeat handshake mint a fresh one and wire it to
+    // the same mediator, so the inner always gets a live port (voicebox-beads-sdxn).
+    if (inner && inner.contentWindow) {
+      if (!appChannel || appChannelTransferred) {
+        appChannel = new MessageChannel();
+        appChannel.port1.onmessage = handleInnerMessage;
+      }
+      appChannelTransferred = true;
+      try {
+        inner.contentWindow.postMessage(
+          { type: "mini_app_handshake", appId: currentAppId },
+          "*",
+          [appChannel.port2],
+        );
+      } catch (err) {
+        postToHost({ type: "mini_app_bridge_error", appId: currentAppId, ok: false, error: `handshake failed: ${err?.message ?? String(err)}` });
+      }
     }
     return;
   }
@@ -225,6 +266,7 @@ window.addEventListener("message", (event) => {
 
         appChannel = new MessageChannel();
         appChannel.port1.onmessage = handleInnerMessage;
+        appChannelTransferred = false;
 
         const rawHtml = msg.html || "<!doctype html><html><body></body></html>";
         inner.srcdoc = INJECTED_SDK + "\n" + rawHtml;
@@ -240,6 +282,7 @@ window.addEventListener("message", (event) => {
 
     appChannel = new MessageChannel();
     appChannel.port1.onmessage = handleInnerMessage;
+    appChannelTransferred = false;
 
     // Inject SDK before app content
     const rawHtml = data.html || "<!doctype html><html><body></body></html>";

@@ -9,7 +9,7 @@ Because mini-app code is voice-generated or untrusted third-party code, it canno
 ## 1. Threat Model & Security Boundaries
 
 An interactive mini-app executes arbitrary HTML, CSS, and JavaScript. Without isolation, an untrusted script could:
-1. **Access Origin Storage**: Steal credentials, session tokens, host tokens, or stored files from `localStorage`, `sessionStorage`, `document.cookie`, `IndexedDB`, or the Private File System (OPFS).
+1. **Access Origin Storage**: Steal credentials, session tokens, host tokens, or stored files from `localStorage`, `sessionStorage`, `document.cookie`, `IndexedDB`, or the Private File System (OPFS). The inner document's origin is opaque, so the HOST's storage stays unreachable; the SDK installs an in-memory `Storage` shim scoped to the document, so an app that uses Web Storage runs (and its values die with the document) instead of crashing on a `SecurityError`.
 2. **Execute Origin APIs**: Issue HTTP requests (`fetch("/api/file")`, `fetch("/api/turn")`, `fetch("/api/execute")`) under the ambient host authority of the user's browser.
 3. **Hijack Navigation**: Redirect the host window via `window.top.location` or trap the user in prompt/alert modal loops.
 4. **Sniff or Spoof Ambient Messages**: Intercept ambient `window.postMessage` events exchanged between host components.
@@ -61,7 +61,7 @@ To completely eliminate these hazards, Voicebox adopts a strict **Double-Iframe 
 2. **Same-Origin Host Mediation**:
    The Outer Bridge is hosted directly on the Voicebox origin (`/mini-app-bridge.html`). Communication between the Host Room and the Outer Bridge uses standard same-origin checks (`event.origin === window.location.origin`).
 3. **Private Channel to Untrusted App**:
-   The Outer Bridge establishes a `MessageChannel` and transfers `port2` into the inner frame during the handshake. All subsequent RPC traffic travels over this private, point-to-point `MessagePort`, completely immune to ambient `window.postMessage` listeners or cross-frame spoofing.
+   The Outer Bridge establishes a `MessageChannel` and transfers `port2` into the inner frame during the handshake. All subsequent RPC traffic travels over this private, point-to-point `MessagePort`, completely immune to ambient `window.postMessage` listeners or cross-frame spoofing. A transferred port is single-use, and the inner frame re-announces readiness every time its document (re)loads: the bridge answers each announcement with a FRESH channel, because re-sending a neutered `port2` is the `DataCloneError` class this architecture was caught with (voicebox-beads-sdxn).
 
 ---
 
@@ -133,7 +133,7 @@ All limits are enforced host-side by `core/mini-app.ts` and `public/mini-app-bri
 
 The architecture is proven through negative test drives in `tests/mini-app-architecture.test.mjs`:
 1. **Opaque Origin Proof**: Inner iframe observes `window.location.origin === "null"`.
-2. **Storage Denial Proof**: Calling `localStorage.setItem()` inside the mini-app throws `SecurityError`.
-3. **Mutation Proof**: If `sandbox="allow-scripts allow-same-origin"` were applied, `origin` would leak the server host and `localStorage` would succeed; the test asserts this condition fails RED.
+2. **Storage Boundary Proof**: The inner origin is `"null"` and host storage stays unreachable; `localStorage.setItem()` succeeds against the SDK's DOCUMENT-LOCAL in-memory shim and the value round-trips there — it is never the host's storage, and it dies with the document.
+3. **Mutation Proof**: The inner iframe carries exactly `sandbox="allow-scripts"`; with `allow-same-origin` added, `origin` would leak the server host and storage would be the real one — the test asserts the attribute is exactly `allow-scripts`.
 4. **Output Bound Proof**: Tool returning 70,000 bytes is intercepted and refused with `"output over budget"`.
 5. **Real-time DOM Verification**: Calling tool via bridge updates inner DOM text synchronously before resolving the result.

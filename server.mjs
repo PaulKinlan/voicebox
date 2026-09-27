@@ -369,6 +369,11 @@ function selfEnvironmentKey() {
   return minted;
 }
 const SELF_ENVIRONMENT = selfEnvironmentKey();
+/**
+ * The durable owner of the tasks THIS room creates and reads — the turn path, GET /api/task and the
+ * room's local /api/call all ask for the same fact here, so the three cannot drift (y5k).
+ */
+const LOCAL_TASK_OWNER = createHash("sha256").update(`voicebox-task-owner\0${SELF_ENVIRONMENT}\0local`).digest("hex");
 
 async function resolveEnvironment(envKey) {
   if (envKey === "local") {
@@ -1907,7 +1912,7 @@ async function execute(action) {
     }
 
     const authority = {
-      owner: createHash("sha256").update(`voicebox-task-owner\0${SELF_ENVIRONMENT}\0local`).digest("hex"),
+      owner: LOCAL_TASK_OWNER,
       callId: `turn_${randomBytes(12).toString("hex")}`,
     };
     const admitted = tasks.call("delegate_task", {
@@ -2303,6 +2308,12 @@ const routes = {
     } catch (e) {
       return json(res, 500, { ok: false, error: e?.message ?? String(e), repo: "https://github.com/PaulKinlan/voicebox", commits: [] });
     }
+  },
+  // A HEAD is a liveness question too — the dev proxy and the currency gate probe with it, and
+  // without this entry a HEAD falls past the route table to the proxy's 500 (voicebox-beads-sdxn).
+  "HEAD /api/health": (req, res, url) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end();
   },
   "GET /api/health": (req, res, url) => json(res, 200, {
     ok: true,
@@ -2802,7 +2813,7 @@ async function handle(req, res) {
   if (req.method === "GET" && url.pathname === "/api/task") {
     const address = url.searchParams.get("address") ?? "";
     const authority = {
-      owner: createHash("sha256").update(`voicebox-task-owner\0${SELF_ENVIRONMENT}\0local`).digest("hex"),
+      owner: LOCAL_TASK_OWNER,
       callId: `status_${randomBytes(8).toString("hex")}`,
     };
     const resStatus = tasks.call("task_status", { address }, authority);
@@ -3300,9 +3311,15 @@ async function handle(req, res) {
       return json(res, 400, { ok: false, refused: "bad-request", why: "a proxied call names the environment key and the tool" });
     }
     // The local host is always callable and needs no pairing — saying "pair it" for it would name
-    // the wrong remedy.
+    // the wrong remedy. A caller with LOCAL authority (the host token, the room's session token,
+    // or the room's own origin) carries the durable local task owner, so the room can read and
+    // cancel the tasks it created; an ambient caller stays unauthorized and the task layer's own
+    // refusal (task-owner-unverified) is the answer (voicebox-beads-sdxn).
     if (envKey === "local") {
-      const result = await callTool(tool, args);
+      const authority = hasExtensionAuthority(req)
+        ? { owner: LOCAL_TASK_OWNER, callId: `call_${randomBytes(8).toString("hex")}` }
+        : undefined;
+      const result = await callTool(tool, args, authority);
       return json(res, result.ok === false ? 403 : 200, result);
     }
     const pairings = readPairings();

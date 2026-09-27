@@ -72,6 +72,13 @@ test("GET / answers regardless of the process cwd — the server does not die", 
   assert.equal((await get("/api/health")).status, 200, "the server is alive after GET /");
 });
 
+test("HEAD /api/health answers 200 exactly like GET — a liveness probe must not 500 (voicebox-beads-sdxn)", async () => {
+  const r = await fetch(`${BASE}/api/health`, { method: "HEAD" });
+  assert.equal(r.status, 200, "a HEAD fell past the route table; the dev proxy reports that as 500");
+  assert.match(r.headers.get("content-type") ?? "", /application\/json/);
+  assert.equal(await r.text(), "", "a HEAD carries no body");
+});
+
 // ── 2. the XSS payload renders as text, through every sink ────────────────
 test("the XSS payload crosses the API as data and is never turned into elements by the served app", async () => {
   const payload = `create a file called <img src=x onerror="document.title='XSS-EXECUTED-'+Date.now()"> with pwned`;

@@ -6,7 +6,8 @@
 //   3. Double-iframe security boundary:
 //      - Outer bridge is same-origin with host
 //      - Inner iframe is strictly sandbox="allow-scripts" (opaque null origin)
-//      - Inner iframe has ZERO access to host storage (localStorage/sessionStorage/cookies/IndexedDB)
+//      - Host storage (cookies, origin localStorage) is unreachable; the SDK installs a
+//        DOCUMENT-LOCAL in-memory Storage shim so apps that use Web Storage do not crash (sdxn)
 //      - Inner iframe cannot fetch host APIs (blocked by opaque origin)
 //   4. Web MCP tool lifecycle:
 //      - Inner app registers tool over MessagePort
@@ -142,14 +143,17 @@ test("browser: double-iframe sandboxed execution, opaque origin, and Web MCP too
                 parameters: { type: "object", properties: {} },
                 execute: async () => {
                   let storageError = null;
+                  let storedValue = null;
                   try {
                     localStorage.setItem("key", "val");
+                    storedValue = localStorage.getItem("key");
                   } catch (err) {
                     storageError = err.name;
                   }
                   return {
                     origin: window.location.origin,
                     storageError,
+                    storedValue,
                   };
                 }
               });
@@ -219,12 +223,69 @@ test("browser: double-iframe sandboxed execution, opaque origin, and Web MCP too
   assert.equal(results.probeResult.ok, true);
   assert.equal(results.probeResult.result.origin, "null");
 
-  // Inner frame threw SecurityError when attempting to touch origin storage
-  assert.equal(results.probeResult.result.storageError, "SecurityError");
+  // The opaque origin THROWS on host storage — so the SDK shimmed Web Storage in the document:
+  // the app never sees a SecurityError, and the value round-trips in-memory (voicebox-beads-sdxn).
+  assert.equal(results.probeResult.result.storageError, null, "no SecurityError: the SDK shimmed Web Storage for the sandboxed document");
+  assert.equal(results.probeResult.result.storedValue, "val", "the in-memory shim stores and returns the value");
 
   // Web MCP tool execution modified internal DOM and returned the updated state
   assert.equal(results.mutationResult.ok, true);
   assert.equal(results.mutationResult.result.nextValue, 35);
+});
+
+test("browser: a repeated mini_app_ready re-handshakes with a FRESH port — no DataCloneError, tools keep answering (voicebox-beads-sdxn)", { timeout: 25000 }, async (t) => {
+  const server = await startServer();
+  t.after(() => server.stop());
+
+  const page = await launch({ width: 1000, height: 800 });
+  t.after(() => page.close());
+
+  await page.goto(`${server.base}/`);
+
+  const results = await page.evaluate(async (base) => {
+    return new Promise((resolve, reject) => {
+      const outer = document.createElement("iframe");
+      outer.id = "outer-bridge";
+      outer.src = `${base}/mini-app-bridge.html`;
+      const errors = [];
+      let first = null;
+      let second = null;
+      let readySent = false;
+
+      window.addEventListener("message", (e) => {
+        if (e.origin !== window.location.origin) return;
+        if (e.data?.type === "bridge_ready") {
+          const appHtml = `<script>
+            window.webMcp.registerTool({ name: "echo", description: "echo", parameters: { type: "object", properties: {} }, execute: async (args) => ({ echo: args.value }) });
+            window.webMcp.ready();
+          <\/script>`;
+          outer.contentWindow.postMessage({ type: "load_app", appId: "sdxn-repeat", html: appHtml }, window.location.origin);
+        } else if (e.data?.type === "tools_updated" && !readySent) {
+          outer.contentWindow.postMessage({ type: "call_tool", callId: "first", name: "echo", args: { value: "one" } }, window.location.origin);
+        } else if (e.data?.type === "tool_result" && e.data?.callId === "first") {
+          first = e.data;
+          // THE REPEATED ANNOUNCEMENT: watch the bridge frame for the uncaught DataCloneError Paul
+          // saw, then handshake again — the inner must get a LIVE port through a fresh channel.
+          outer.contentWindow.addEventListener("error", (err) => errors.push(String(err.message || err)));
+          readySent = true;
+          outer.contentWindow.postMessage({ type: "mini_app_ready" }, "*");
+          setTimeout(() => {
+            outer.contentWindow.postMessage({ type: "call_tool", callId: "second", name: "echo", args: { value: "two" } }, window.location.origin);
+          }, 200);
+        } else if (e.data?.type === "tool_result" && e.data?.callId === "second") {
+          second = e.data;
+          resolve({ first, second, errors });
+        }
+      });
+      document.body.appendChild(outer);
+      setTimeout(() => reject(new Error("timed out waiting for the repeated handshake")), 12000);
+    });
+  }, server.base);
+
+  assert.equal(results.first.ok, true, `first call: ${JSON.stringify(results.first)}`);
+  assert.equal(results.second.ok, true, `the tool must answer through the FRESH port: ${JSON.stringify(results.second)}`);
+  assert.equal(results.second.result.echo, "two");
+  assert.deepEqual(results.errors, [], "no uncaught DataCloneError in the bridge on a repeated handshake");
 });
 
 test("browser: output bounds refusal for tool results > 64KB", { timeout: 25000 }, async (t) => {
