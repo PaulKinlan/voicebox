@@ -15,6 +15,7 @@ import { mkdtempSync, mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
+import net from "node:net";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const HAVE_KEY = Boolean(process.env.GEMINI_API_KEY);
