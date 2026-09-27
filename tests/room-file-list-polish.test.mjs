@@ -197,3 +197,16 @@ test("r2tn: the list is height-bounded and scrolls instead of pushing the room o
   assert.ok(bound.height <= bound.cap + 1, `the list is ${bound.height}px against a ${bound.cap}px bound`);
   assert.ok(bound.scrollHeight > bound.clientHeight, "with this many files the list must actually scroll — otherwise it grew, or it hid rows silently");
 });
+
+test("t3gq: every JS-built decorative glyph in the list is aria-hidden, matching the page's static convention", async () => {
+  const icons = await page.evaluate(() => {
+    const all = [...document.querySelectorAll("#files .icon")];
+    return {
+      total: all.length,
+      hidden: all.filter((el) => el.getAttribute("aria-hidden") === "true").length,
+      staticSpriteUses: [...document.querySelectorAll('svg[aria-hidden="true"] use')].length > 0,
+    };
+  });
+  assert.ok(icons.total > 0, "the fixture must render icons, or this test proves nothing");
+  assert.equal(icons.hidden, icons.total, "every glyph the icon() helper builds must be hidden from the accessibility tree");
+});

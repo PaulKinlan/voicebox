@@ -560,6 +560,10 @@ function setState(text, tone) {
 function icon(id) {
   const svg = document.createElementNS(SVG, "svg");
   svg.setAttribute("class", "icon");
+  // Decorative by convention (voicebox-beads-t3gq): every static sprite use in index.html carries
+  // aria-hidden="true" — a JS-built glyph must say the same thing, or the accessibility tree
+  // depends on WHERE a glyph was born instead of WHAT it is.
+  svg.setAttribute("aria-hidden", "true");
   const use = document.createElementNS(SVG, "use");
   use.setAttribute("href", `#${id}`);
   svg.append(use);
