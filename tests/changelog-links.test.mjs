@@ -50,7 +50,7 @@ test("static assets: changelog.html, css and js serve with correct mime types", 
   assert.match(jsRes.headers.get("content-type"), /text\/javascript/);
 });
 
-test("browser: room build stamp links commits to GitHub and provides quick link to changelog", async (t) => {
+test("browser: room build stamp links commits to GitHub and opens changelog as a modal dialog without navigating away", async (t) => {
   const server = await startServer();
   t.after(() => server.stop());
 
@@ -63,16 +63,35 @@ test("browser: room build stamp links commits to GitHub and provides quick link 
     timeout: 15000,
   });
 
-  // Verify header has Change log link
-  const headLink = await page.evaluate(() => {
-    const a = document.querySelector('header a[href="changelog.html"]');
-    return a ? { text: a.textContent.trim(), href: a.getAttribute("href") } : null;
-  });
-  assert.ok(headLink, "header must contain a link to changelog.html");
-  assert.equal(headLink.text, "Change log");
-  assert.equal(headLink.href, "changelog.html");
+  const initialUrl = await page.evaluate(() => location.href);
 
-  // Verify build line contains commit links to GitHub
+  // Verify header has Change log modal button (not a page navigation link)
+  const headBtn = await page.evaluate(() => {
+    const btn = document.getElementById("changelog-open");
+    const dialog = document.getElementById("changelog-dialog");
+    const navLink = document.querySelector('header a[href="changelog.html"]');
+    return btn ? {
+      tag: btn.tagName,
+      text: btn.textContent.trim(),
+      haspopup: btn.getAttribute("aria-haspopup"),
+      controls: btn.getAttribute("aria-controls"),
+      expanded: btn.getAttribute("aria-expanded"),
+      isDialog: dialog instanceof HTMLDialogElement,
+      dialogOpen: dialog?.open,
+      hasPageNavLink: Boolean(navLink),
+    } : null;
+  });
+  assert.ok(headBtn, "header must contain #changelog-open button");
+  assert.equal(headBtn.tag, "BUTTON");
+  assert.equal(headBtn.text, "Change log");
+  assert.equal(headBtn.haspopup, "dialog");
+  assert.equal(headBtn.controls, "changelog-dialog");
+  assert.equal(headBtn.expanded, "false");
+  assert.equal(headBtn.isDialog, true, "#changelog-dialog must be a native <dialog>");
+  assert.equal(headBtn.dialogOpen, false);
+  assert.equal(headBtn.hasPageNavLink, false, "header must not navigate away via a[href='changelog.html']");
+
+  // Verify build line contains commit links to GitHub and modal changelog trigger
   const buildLinks = await page.evaluate(() => {
     const buildEl = document.getElementById("build");
     if (!buildEl) return null;
@@ -80,6 +99,8 @@ test("browser: room build stamp links commits to GitHub and provides quick link 
       text: a.textContent.trim(),
       href: a.getAttribute("href"),
       target: a.getAttribute("target"),
+      haspopup: a.getAttribute("aria-haspopup"),
+      controls: a.getAttribute("aria-controls"),
     }));
     return {
       text: buildEl.textContent.trim(),
@@ -88,7 +109,7 @@ test("browser: room build stamp links commits to GitHub and provides quick link 
   });
 
   assert.ok(buildLinks, "#build must exist");
-  assert.ok(buildLinks.anchors.length >= 2, "build stamp must contain commit link(s) and changelog link");
+  assert.ok(buildLinks.anchors.length >= 2, "build stamp must contain commit link(s) and changelog trigger");
 
   // Verify commit link to GitHub
   const commitLink = buildLinks.anchors.find((a) => a.href.includes("github.com/PaulKinlan/voicebox/commit/"));
@@ -96,20 +117,28 @@ test("browser: room build stamp links commits to GitHub and provides quick link 
   assert.match(commitLink.href, /^https:\/\/github\.com\/PaulKinlan\/voicebox\/commit\/[0-9a-f]{7,40}$/);
   assert.equal(commitLink.target, "_blank");
 
-  // Verify changelog link in build stamp
-  const changelogLink = buildLinks.anchors.find((a) => a.href === "changelog.html");
-  assert.ok(changelogLink, "must link to changelog.html in build stamp");
-  assert.equal(changelogLink.text, "change log");
+  // Verify changelog trigger in build stamp targets #changelog-dialog
+  const changelogTrigger = buildLinks.anchors.find((a) => a.text === "change log");
+  assert.ok(changelogTrigger, "must include change log trigger in build stamp");
+  assert.equal(changelogTrigger.href, "#changelog-dialog");
+  assert.equal(changelogTrigger.haspopup, "dialog");
+  assert.equal(changelogTrigger.controls, "changelog-dialog");
 
-  // Navigate to changelog.html and verify commit list loads
-  await page.goto(`${server.base}/changelog.html`);
-  await page.waitFor(() => document.querySelectorAll("#commits li").length > 0, {
-    label: "changelog commits rendered",
+  // Click header #changelog-open button and verify modal opens in-room with commits loaded
+  await page.click("#changelog-open");
+  await page.waitFor(() => document.getElementById("changelog-dialog")?.open === true, {
+    label: "changelog dialog open",
+  });
+  await page.waitFor(() => document.querySelectorAll("#changelog-commits li").length > 0, {
+    label: "changelog commits rendered in dialog",
     timeout: 15000,
   });
 
+  const afterOpenUrl = await page.evaluate(() => location.href);
+  assert.equal(afterOpenUrl, initialUrl, "opening changelog dialog must not navigate away from the room");
+
   const changelogData = await page.evaluate(() => {
-    const items = [...document.querySelectorAll("#commits li")].map((li) => {
+    const items = [...document.querySelectorAll("#changelog-commits li")].map((li) => {
       const shaLink = li.querySelector(".commit-sha");
       const subject = li.querySelector(".commit-subject");
       const meta = li.querySelector(".commit-meta");
@@ -123,10 +152,27 @@ test("browser: room build stamp links commits to GitHub and provides quick link 
     return items;
   });
 
-  assert.ok(changelogData.length > 0, "changelog must display commits");
+  assert.ok(changelogData.length > 0, "changelog modal must display commits");
   const first = changelogData[0];
   assert.match(first.shaText, /^[0-9a-f]{7,}$/);
   assert.match(first.shaHref, /^https:\/\/github\.com\/PaulKinlan\/voicebox\/commit\/[0-9a-f]{40}$/);
   assert.ok(first.subject.length > 0);
   assert.ok(first.meta.length > 0);
+
+  // Close via close button and verify focus returns to #changelog-open
+  await page.click("#changelog-close");
+  await page.waitFor(() => document.getElementById("changelog-dialog")?.open === false, {
+    label: "changelog dialog closed",
+  });
+
+  // Also verify clicking the #build "change log" link opens the same modal without navigating
+  await page.click('#build a[href="#changelog-dialog"]');
+  await page.waitFor(() => document.getElementById("changelog-dialog")?.open === true, {
+    label: "changelog dialog opened from #build link",
+  });
+  const afterBuildClickUrl = await page.evaluate(() => location.href);
+  assert.equal(afterBuildClickUrl, initialUrl, "#build change log link must open dialog without changing URL");
+  await page.click("#changelog-close");
+  await page.waitFor(() => document.getElementById("changelog-dialog")?.open === false);
 });
+

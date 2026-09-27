@@ -275,7 +275,7 @@ Hand-written addition (not generated; voicebox-beads-hmco): **the ACP timeout ce
   platform primitives: native modal `<dialog>` (with `closedby="any"` and unified light-dismiss geometry fallbacks),
   `container: env-dialog / inline-size` container queries for component-isolated responsive layout, `<search>` landmark
   semantics, scroll containment (`overscroll-behavior: contain`, `scrollbar-gutter: stable`), keyboard-focusable
-  scrollable regions (`<pre tabindex="0">`), IME composition guards, and GitHub-linked commit references in `#build` alongside a quick link to `changelog.html` (`GET /api/changelog`).
+  scrollable regions (`<pre tabindex="0">`), IME composition guards, and GitHub-linked commit references in `#build` alongside an in-room Change log modal dialog (`#changelog-dialog`, backed by `GET /api/changelog` and standalone `changelog.html`).
   **Folders are navigable** (voicebox-beads-tee): a folder row opens that folder in the same list — the
   listing IS the navigation, and every row carries its path from the root. A crumb bar says where you are
   (`root / proposals / drafts`), every ancestor is a 44px button, a parent control leads back, and Enter

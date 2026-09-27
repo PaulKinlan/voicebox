@@ -606,7 +606,7 @@ The room frontend (`public/index.html`, `public/fused.js`, `public/style.css`) i
 - Scroll containment (`overscroll-behavior: contain`) and layout stabilization (`scrollbar-gutter: stable`).
 - Keyboard-accessible scrollable code region (`<pre id="file-body" tabindex="0">`).
 - IME composition safety on utterance input and turn submissions.
-- Change log and commit links: build stamp commit hashes in `#build` link to GitHub commits; `public/changelog.html` and `GET /api/changelog` surface recent commits directly from the room.
+- Change log and commit links: build stamp commit hashes in `#build` link to GitHub commits; `#changelog-open` in the header and `change log` in `#build` open the in-room `<dialog id="changelog-dialog">` modal (`GET /api/changelog`, with `public/changelog.html` also served directly).
 - Configurable microphone hotkey (default 'M', configurable in settings, persisted to local storage): keyboard-accessible toggle with visible feedback badge and aria-keyshortcuts on the mic button (tested in `tests/mic-hotkey.test.mjs`).
 - Refresh control in file view (`#file-refresh`): reloads the currently open file from disk, indicating loading state via `aria-busy` and error states when the file is removed, with retry capability (tested in `tests/file-view-refresh.test.mjs`).
 

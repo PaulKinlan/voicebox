@@ -55,6 +55,7 @@ for (const key of execFileSync('git', ['rev-parse', '--local-env-vars'], { encod
 // measuring itself under someone else's budget (voicebox-beads-67b). Strip them: the fixture
 // always exercises the defaults it is written against.
 for (const key of ['VOICEBOX_GATE_UNIT_SECS', 'VOICEBOX_GATE_LIVE_SECS', 'VOICEBOX_GATE_ACCEPT_SECS', 'VOICEBOX_PUSH_DESTINATIONS']) delete cleanEnv[key];
+const hasFlock = (() => { try { execFileSync('which', ['flock'], { stdio: 'ignore' }); return true; } catch { return false; } })();
 
 test('pre-push names the stage and cause, streams output, and refuses real failing tests', { timeout: 60000 }, () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-pre-push-'));
@@ -65,7 +66,7 @@ test('pre-push names the stage and cause, streams output, and refuses real faili
   const git = (...args) => execFileSync('git', args, { cwd: repo, stdio: 'pipe', env: cleanEnv });
   try {
     mkdirSync(repo); mkdirSync(bin);
-    git('init', '-q'); git('config', 'user.email', 'fixture@example.invalid'); git('config', 'user.name', 'Gate fixture');
+    git('init', '-q', '-b', 'trunk'); git('config', 'user.email', 'fixture@example.invalid'); git('config', 'user.name', 'Gate fixture');
     git('config', 'core.hooksPath', '.githooks');
     // Every file the gate RUNS, not just the gate script: a stage whose command is missing makes the
     // gate refuse at that stage (correctly — a check that cannot run is not a check that passed), and
@@ -185,8 +186,12 @@ exec '${timeout}' "$@"
       const remedyVars = { live: 'VOICEBOX_GATE_LIVE_SECS', acceptance: 'VOICEBOX_GATE_ACCEPT_SECS' };
       const cause = scenario.endsWith('timeout') ? 'TIMED OUT' : 'FAILED';
       // An UNCONTENDED lock acquires silently (the wait announcement is the contended branch);
-      // the lock file's existence is the evidence the landing took the gate lock.
-      assert.equal(existsSync(path.join(dir, 'fixture-gate.lock')), true, 'a landing to main takes the gate lock');
+      // the lock file's existence (or acquire_gate_lock's no-flock fallback on macOS) is the evidence the landing entered the gate lock path.
+      if (hasFlock) {
+        assert.equal(existsSync(path.join(dir, 'fixture-gate.lock')), true, 'a landing to main takes the gate lock');
+      } else {
+        assert.match(output, /flock command not found; running live stage without lock/, 'a landing to main enters acquire_gate_lock');
+      }
       assert.match(output, /LIVE OUTPUT BEFORE TERMINATION/);
       if (scenario === 'success') {
         assert.equal(result.status, 0, output);
@@ -390,8 +395,6 @@ test('a suite run inside a hook cannot move the repository it runs in (observer-
     rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
-
-const hasFlock = (() => { try { execFileSync('which', ['flock'], { stdio: 'ignore' }); return true; } catch { return false; } })();
 
 test('gate lock serializes concurrent pre-push runs and announces waiting holder (voicebox-beads-6qu)', { timeout: 30000, skip: !hasFlock && 'flock not installed on macOS' }, async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-gate-lock-'));

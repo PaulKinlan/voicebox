@@ -67,7 +67,21 @@
           <p class="env-hint">Pi coding agent is supported via the <code>pi-acp</code> adapter (start the server with <code>VOICEBOX_HARNESS=pi</code>). Other CLIs (like Claude Code) have no configured ACP adapter and cannot be delegated to directly.</p>
         </form>
       </dialog>
-      <a class="quiet icon-button" href="changelog.html" aria-label="Change log" title="Change log"><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg><span class="sr-only">Change log</span></a>
+      <button class="quiet icon-button" id="changelog-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="changelog-dialog" aria-label="Change log" title="Change log"><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg><span class="sr-only">Change log</span></button>
+      <dialog class="envs changelog-modal" id="changelog-dialog" closedby="any" aria-labelledby="changelog-dialog-title">
+        <form class="envs-form" method="dialog">
+          <div class="settings-head">
+            <h2 id="changelog-dialog-title">Change log</h2>
+            <button class="icon-button" id="changelog-close" type="submit" aria-label="Close change log"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+          </div>
+          <p class="env-hint">Recent commits and updates to Voicebox. Each change links to its commit on GitHub. <a href="https://github.com/PaulKinlan/voicebox/commits/main" target="_blank" rel="noopener noreferrer">View all commits on GitHub &rarr;</a></p>
+          <div class="harness-actions">
+            <button class="quiet" id="changelog-refresh" type="button">Refresh</button>
+            <span class="harness-status" id="changelog-status" role="status" aria-live="polite">Not loaded yet.</span>
+          </div>
+          <ol id="changelog-commits" class="commits" aria-label="Recent changes"></ol>
+        </form>
+      </dialog>
       <button class="quiet icon-button" id="envs-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="envs" aria-label="Environments" title="Environments"><svg class="icon" aria-hidden="true"><use href="#i-layers"/></svg><span class="sr-only" id="envs-count">Environments</span></button>
       <!-- The extension surface (voicebox-beads-vwb): the same registry the host enforces, read
            once and rendered in plain language. Four states a person must never confuse: RUNNING

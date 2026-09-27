@@ -24,14 +24,14 @@ function fixture(t) {
   command("claude", "exit 7");
   command("codex", "echo ignored", 0o600);
   command("gemini", "echo private-output-must-not-leak");
-  command("opencode", `(/bin/sleep 1; echo escaped > '${path.join(dir, "escaped")}') & wait`);
+  command("opencode", `(/bin/sleep 1.5; echo escaped > '${path.join(dir, "escaped")}') & wait`);
   return { env: { PATH: dir, VOICEBOX_ACP_ADAPTER: adapter, VOICEBOX_HARNESS_TOOLS: "" }, command, dir };
 }
 
 test("host inventory separates version-only presence, broken installs, unknown identity and absence", async (t) => {
   const { env, dir } = fixture(t);
   const before = Date.now();
-  const report = await discoverHarnesses({ env, timeoutMs: 500 });
+  const report = await discoverHarnesses({ env, timeoutMs: 1000 });
   assert.ok(Date.now() - before < 5000);
   assert.equal(report.entries.length, 8); // + claude-agent-acp row (voicebox-beads-a74y)
   const rows = Object.fromEntries(report.entries.map((r) => [r.id, r]));
@@ -46,7 +46,7 @@ test("host inventory separates version-only presence, broken installs, unknown i
   assert.equal(rows.codex.state, "unrunnable");
   assert.equal(rows.gemini.state, "unknown");
   assert.equal(rows.opencode.state, "unrunnable");
-  assert.match(rows.opencode.why, /exceeded 500ms/);
+  assert.match(rows.opencode.why, /exceeded 1000ms/);
   assert.equal(rows.aider.state, "absent");
   assert.equal(rows["pi-acp"].version, ACP_AGENT.version);
   assert.equal(rows["pi-acp"].state, "unknown");
@@ -59,7 +59,7 @@ test("host inventory separates version-only presence, broken installs, unknown i
   assert.equal(rows.claude.delegation?.refused !== "adapter-not-configured", true, "claude adapter is implemented");
   assert.ok(!JSON.stringify(report).includes("private-output"));
   assert.ok(!JSON.stringify(report).includes(env.PATH));
-  await delay(1200);
+  await delay(1700);
   assert.equal(existsSync(path.join(dir, "escaped")), false, "version-check descendants must be killed too");
 });
 

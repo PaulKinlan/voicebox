@@ -56,10 +56,12 @@ const ARG_LEN_MAX = 4096;
  */
 const CHILD_ENV = buildFenceChildEnv({ home: HOME, hostEnv: process.env });
 
+const SH_BIN = fs.existsSync("/usr/bin/sh") ? "/usr/bin/sh" : "/bin/sh";
+
 /** Run the probe against this environment; resolve the parsed report or the failure as data. */
 function selfProbe() {
   return new Promise((resolve) => {
-    execFile("/usr/bin/node", [PROBE], { timeout: 20000, maxBuffer: 8 * 1024 * 1024, env: CHILD_ENV }, (err, stdout) => {
+    execFile(process.execPath, [PROBE], { timeout: 20000, maxBuffer: 8 * 1024 * 1024, env: CHILD_ENV }, (err, stdout) => {
       const text = String(stdout ?? "").trim();
       if (!text) return resolve({ probe: "sandbox-probe/1", when: new Date().toISOString(), error: `the probe printed nothing: ${err?.message ?? "unknown"}` });
       try {
@@ -124,7 +126,7 @@ function parseExec(body) {
     argv = [...body.argv];
   } else if (typeof body.command === "string" && body.command.trim()) {
     if (body.command.length > 65536) return { ok: false, refused: "exec-bad-request", why: "command is bounded to 65536 characters" };
-    argv = ["/usr/bin/sh", "-c", body.command];
+    argv = [SH_BIN, "-c", body.command];
   } else {
     return { ok: false, refused: "exec-bad-request", why: "send { argv: [...] } or { command: \"...\" }" };
   }

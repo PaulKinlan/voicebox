@@ -45,6 +45,7 @@ test("modal panels: extensions, environments, and harnesses open as native modal
 
   const panels = [
     { name: "harnesses", triggerId: "harnesses-open", dialogId: "harnesses-dialog", closeId: "harnesses-close" },
+    { name: "changelog", triggerId: "changelog-open", dialogId: "changelog-dialog", closeId: "changelog-close" },
     { name: "environments", triggerId: "envs-open", dialogId: "envs", closeId: "envs-close" },
     { name: "extensions", triggerId: "exts-open", dialogId: "exts", closeId: "exts-close" },
   ];

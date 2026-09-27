@@ -73,6 +73,9 @@ const WANTED = {
   harnessesClose: "harnesses-close", harnessesCheck: "harnesses-check",
   harnessesStatus: "harnesses-status", harnessesList: "harnesses-list",
   harnessesScope: "harnesses-scope",
+  changelogOpen: "changelog-open", changelogDialog: "changelog-dialog",
+  changelogClose: "changelog-close", changelogRefresh: "changelog-refresh",
+  changelogStatus: "changelog-status", changelogCommits: "changelog-commits",
   folderPath: "folder-path",
 };
 const els = {};
@@ -2584,6 +2587,7 @@ installLightDismissFallback(els.exts);
 installLightDismissFallback(els.envs);
 installLightDismissFallback(els.settings);
 installLightDismissFallback(els.harnessesDialog);
+installLightDismissFallback(els.changelogDialog);
 
 // ── Harnesses modal dialog (voicebox-beads-f1o) ───────────────────────────
 function textNode(parent, tag, value) {
@@ -2661,6 +2665,86 @@ on(els.harnessesDialog, "close", () => {
   els.harnessesOpen?.focus();
 });
 on(els.harnessesCheck, "click", () => void checkHarnesses());
+
+// ── Change log modal dialog (voicebox-beads-n1pq) ─────────────────────────
+let lastChangelogTrigger = null;
+
+async function loadRoomChangelog() {
+  if (!els.changelogCommits || !els.changelogStatus) return;
+  if (els.changelogRefresh) els.changelogRefresh.disabled = true;
+  els.changelogStatus.textContent = "Loading changes…";
+  try {
+    const res = await fetch("/api/changelog", { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.ok || !Array.isArray(data.commits)) throw new Error("invalid changelog response");
+    els.changelogCommits.replaceChildren();
+    if (data.commits.length === 0) {
+      els.changelogStatus.textContent = "No recent commits found.";
+      return;
+    }
+    els.changelogStatus.textContent = `Showing ${data.commits.length} recent commits:`;
+    for (const c of data.commits) {
+      const li = document.createElement("li");
+      li.className = "commit-card";
+
+      const header = document.createElement("div");
+      header.className = "commit-header";
+
+      const link = document.createElement("a");
+      link.className = "commit-sha";
+      link.href = c.url || `https://github.com/PaulKinlan/voicebox/commit/${c.sha}`;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = c.shortSha || (c.sha ? c.sha.slice(0, 7) : "");
+      header.append(link);
+
+      const subject = document.createElement("span");
+      subject.className = "commit-subject";
+      subject.textContent = c.subject;
+      header.append(subject);
+
+      li.append(header);
+
+      const meta = document.createElement("div");
+      meta.className = "commit-meta";
+      meta.textContent = `${c.author || "Unknown"} · ${c.date || ""}`;
+      li.append(meta);
+
+      els.changelogCommits.append(li);
+    }
+  } catch (err) {
+    els.changelogStatus.replaceChildren();
+    els.changelogStatus.append(document.createTextNode(`Could not load local changelog (${err.message}). View `));
+    const gh = document.createElement("a");
+    gh.href = "https://github.com/PaulKinlan/voicebox/commits/main";
+    gh.target = "_blank";
+    gh.rel = "noopener noreferrer";
+    gh.textContent = "all commits on GitHub";
+    els.changelogStatus.append(gh, document.createTextNode("."));
+  } finally {
+    if (els.changelogRefresh) els.changelogRefresh.disabled = false;
+  }
+}
+
+function openChangelogDialog(triggerEl = els.changelogOpen) {
+  if (!els.changelogDialog || els.changelogDialog.open) return;
+  lastChangelogTrigger = triggerEl || els.changelogOpen;
+  els.changelogDialog.showModal();
+  els.changelogOpen?.setAttribute("aria-expanded", "true");
+  if (els.changelogCommits && els.changelogCommits.children.length === 0) {
+    void loadRoomChangelog();
+  }
+}
+
+on(els.changelogOpen, "click", () => openChangelogDialog(els.changelogOpen));
+on(els.changelogClose, "click", () => els.changelogDialog?.close());
+on(els.changelogDialog, "close", () => {
+  els.changelogOpen?.setAttribute("aria-expanded", "false");
+  (lastChangelogTrigger || els.changelogOpen)?.focus();
+  lastChangelogTrigger = null;
+});
+on(els.changelogRefresh, "click", () => void loadRoomChangelog());
 
 on(els.settingsOpen, "click", () => {
   if (!els.settings || els.settings.open) return;
@@ -3059,8 +3143,14 @@ function stampBuild(server) {
 
   if (hasPrev) addSep();
   const clLink = document.createElement("a");
-  clLink.href = "changelog.html";
+  clLink.href = "#changelog-dialog";
   clLink.textContent = "change log";
+  clLink.setAttribute("aria-haspopup", "dialog");
+  clLink.setAttribute("aria-controls", "changelog-dialog");
+  clLink.addEventListener("click", (event) => {
+    event.preventDefault();
+    openChangelogDialog(clLink);
+  });
   line.append(clLink);
 
   line.dataset.dirty = String(mismatch || Boolean(server?.dirty) || page.includes("uncommitted"));
