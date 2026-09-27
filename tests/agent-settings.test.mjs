@@ -26,7 +26,9 @@ import {
   DEFAULT_AGENT_SETTINGS,
   PERSONALITIES,
   PROVIDERS,
+  TIMBRES,
   composeAgentInstruction,
+  composeFullSystemInstruction,
   validateAgentSettings,
 } from "../core/agent-settings.ts";
 
@@ -180,4 +182,42 @@ test("the provider IS applied — the setting reaches the session that starts ne
   const back = await update({ provider: "gemini", voice: "Kore" });
   assert.equal(back.status, 200, JSON.stringify(back.body));
   assert.equal(back.body.applied.provider, "gemini");
+});
+
+test("F1: choosing a model applies to the next session and dials the chosen model", async () => {
+  const put = await update({ provider: "openai", model: "gpt-4o-realtime-preview" });
+  assert.equal(put.status, 200);
+  assert.equal(put.body.applied.model, "gpt-4o-realtime-preview");
+  assert.equal(put.body.requested.model, "gpt-4o-realtime-preview");
+
+  const view = await settings();
+  assert.equal(view.applied.model, "gpt-4o-realtime-preview");
+});
+
+test("F2: claude live provider emits claude-transport-unimplemented on audio/text attempts", async () => {
+  const { createClaudeProvider } = await import("../lib/live-providers/claude.mjs");
+  const events = [];
+  process.env.ANTHROPIC_API_KEY = "test-anthropic-key";
+  try {
+    const provider = createClaudeProvider({
+      emit: (e) => events.push(e),
+      log: () => {},
+    });
+    await provider.start();
+    const stateEvt = events.find((e) => e.type === "state");
+    assert.equal(stateEvt?.refused, "claude-transport-unimplemented");
+
+    provider.sendText("hello");
+    const errText = events.find((e) => e.type === "error");
+    assert.equal(errText?.refused, "claude-transport-unimplemented");
+  } finally {
+    delete process.env.ANTHROPIC_API_KEY;
+  }
+});
+
+test("F3: timbre is wired into composeFullSystemInstruction", () => {
+  const full = composeFullSystemInstruction("warm", "Custom line", "deep");
+  assert.match(full, /Voice tone and timbre: Deep/);
+  assert.match(full, /Custom line/);
+  assert.match(full, /Tone and guidance, subordinate to everything above/);
 });

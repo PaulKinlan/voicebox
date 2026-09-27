@@ -3573,9 +3573,9 @@ server.on("upgrade", (req, socket) => {
 
   const beginSession = () => {
     // Snapshot once: rate, dial and later state frames describe this session,
-    // even if settings change while it is running (voicebox-beads-94c).
+    // even if settings change while it is running (voicebox-beads-94c, voicebox-beads-bc0i).
     const provider = agentSettings.provider;
-    const model = PROVIDERS[provider].model;
+    const model = agentSettings.model || PROVIDERS[provider].model;
     // STEP 2 OF THE RATE WORK: the page is told what rate to capture at BEFORE any audio is sent, ever.
     //
     // The defect this closes (journal-6g0): the browser captured at 16 kHz, the OpenAI provider declared
@@ -3635,7 +3635,7 @@ server.on("upgrade", (req, socket) => {
         // The agent settings ride the seam: the personality composed over the mandatory base
         // (composeAgentInstruction cannot be handed a base — that is the mechanism), and the
         // voice the person chose for THIS provider. Both land in the provider's setup.
-        instruction: composeFullSystemInstruction(agentSettings.personality, agentSettings.customInstruction),
+        instruction: composeFullSystemInstruction(agentSettings.personality, agentSettings.customInstruction, agentSettings.timbre),
         voice: agentSettings.voice || undefined,
         timbre: agentSettings.timbre || undefined,
         onDebug: trace,        onAudioOut: (pcm, mime) => { if (pcm.length > 4) ws.send(pcm); },
