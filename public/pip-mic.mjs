@@ -42,6 +42,25 @@ function pageControls() {
 
 const client = () => window.__voiceboxLiveClient ?? null;
 
+/**
+ * THE PRESENCE STATE, read from the page's OWN painted truth (voicebox-beads-9i6u): the ring's
+ * data-voice plus the client's capture/ready — never a level heuristic and never a timer's
+ * optimism. The states a person reads at a glance from another app: is it hearing me
+ * (listening), is it working (waiting — the model is being reached, the page's own words),
+ * is it talking back (speaking), or is it off. A state that does not exist in the page's
+ * machine is never invented here.
+ */
+function readPresence() {
+  const voice = document.getElementById("voice-ring-wrap")?.dataset?.voice ?? "off";
+  const c = client();
+  const capturing = Boolean(c?.state?.capture);
+  const ready = c?.state?.ready !== false;
+  if (voice === "speaking") return "speaking";
+  if (capturing && !ready) return "waiting";
+  if (capturing || voice === "listening") return "listening";
+  return "off";
+}
+
 /** The one place a level is read, defensively: the meter is the client's, not ours. */
 function readLevel() {
   const c = client();
@@ -227,6 +246,18 @@ function buildPip(pip, controls) {
       50%      { box-shadow: 0 0 0 .6rem color-mix(in srgb, var(--good) 0%, transparent); }
     }
     @media (prefers-reduced-motion: reduce) { #pip-mic[data-listening="true"] { animation: none; } }
+    /* THE PRESENCE DOT (voicebox-beads-9i6u): one glance from another app answers which of the
+       four real states the room is in — still and grey when off, a slow pulse while the model is
+       being reached, the breathing ring while it listens, the accent wave while it speaks. */
+    #pip-presence { inline-size: .8rem; block-size: .8rem; border-radius: 50%; background: var(--muted);
+               transition: background 150ms ease; flex: none; }
+    #pip-presence[data-state="waiting"] { background: var(--warn); animation: pip-wait 1.4s ease-in-out infinite; }
+    #pip-presence[data-state="listening"] { background: var(--good); animation: pip-breathe 1.8s ease-in-out infinite; }
+    #pip-presence[data-state="speaking"] { background: var(--accent); animation: pip-speak .9s ease-in-out infinite; }
+    @keyframes pip-wait { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+    @keyframes pip-speak { 0%,100% { transform: scale(1); } 50% { transform: scale(1.35); } }
+    @media (prefers-reduced-motion: reduce) { #pip-presence { animation: none !important; } }
+    .presence { display: flex; align-items: center; gap: .45rem; justify-content: center; }
     #pip-state { font-weight: 600; }
     #pip-state[data-listening="false"] { color: var(--muted); font-weight: 400; }
     #pip-hint { color: var(--muted); font-size: 12px; }
@@ -237,7 +268,10 @@ function buildPip(pip, controls) {
     .meter.out > i { background: var(--accent); }
     #pip-log { flex: 1; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable;
                border: 1px solid var(--line); border-radius: 10px; padding: .55rem .65rem; background: var(--card);
-               white-space: pre-wrap; font-size: 13px; }
+               font-size: 13px; display: flex; flex-direction: column; gap: .35rem; }
+    #pip-log .turn { display: flex; flex-direction: column; gap: 1px; }
+    #pip-log .turn .said { font-weight: 600; }
+    #pip-log .turn .did { color: var(--muted); }
     form { display: flex; gap: .4rem; }
     input { flex: 1; min-inline-size: 0; padding: .5rem .6rem; border-radius: 8px; border: 1px solid var(--line);
             background: var(--card); color: var(--ink); font: inherit; }
@@ -274,11 +308,17 @@ function buildPip(pip, controls) {
   micButton.addEventListener("click", () => controls.mic?.click());
 
   const state = pip.document.createElement("div");
+  const presenceRow = pip.document.createElement("div");
+  presenceRow.className = "presence";
+  const presenceDot = pip.document.createElement("span");
+  presenceDot.id = "pip-presence";
+  presenceDot.setAttribute("aria-hidden", "true");
   const stateText = pip.document.createElement("div");
   stateText.id = "pip-state";
+  presenceRow.append(presenceDot, stateText);
   const hint = pip.document.createElement("div");
   hint.id = "pip-hint";
-  state.append(stateText, hint);
+  state.append(presenceRow, hint);
 
   lead.append(micButton, state);
 
@@ -355,7 +395,7 @@ function buildPip(pip, controls) {
   });
 
   body.append(lead, meters, actions, log, form);
-  return { micButton, stateText, hint, stop, inFill, outFill, log, input };
+  return { micButton, stateText, presenceDot, hint, stop, inFill, outFill, log, input };
 }
 
 async function openPipWindow() {
@@ -372,9 +412,29 @@ async function openPipWindow() {
   const ui = buildPip(pip, controls);
   window.__voiceboxPip = pip;
 
-  // Mirror the page's log as it grows, rather than taking a copy that goes stale.
+  // Mirror the page's log as it grows — STRUCTURE-preserving (voicebox-beads-9i6u): each turn is
+  // a row (what you said + what it did), not a flattened text blob. The source caps itself; the
+  // mirror just follows.
   const logSource = controls.sessionLog;
-  const syncLog = () => { ui.log.textContent = logSource?.textContent?.trim() || "No conversation yet."; };
+  const syncLog = () => {
+    const items = logSource ? [...logSource.children] : [];
+    if (!items.length) { ui.log.textContent = "No conversation yet."; return; }
+    const frag = pip.document.createDocumentFragment();
+    for (const li of items) {
+      const row = pip.document.createElement("div");
+      row.className = "turn";
+      const said = pip.document.createElement("span");
+      said.className = "said";
+      said.textContent = li.querySelector(".said")?.textContent ?? "";
+      const did = pip.document.createElement("span");
+      did.className = "did";
+      did.textContent = li.querySelector(".did")?.textContent ?? li.textContent ?? "";
+      row.append(said, did);
+      frag.append(row);
+    }
+    ui.log.replaceChildren(frag);
+  };
+  syncLog();
   const observer = logSource ? new MutationObserver(syncLog) : null;
   observer?.observe(logSource, { childList: true, subtree: true, characterData: true });
 
@@ -387,17 +447,20 @@ async function openPipWindow() {
   let lastText = "";
   const paint = () => {
     const { capturing, input, output } = readLevel();
+    const presence = readPresence();
     const listening = capturing && !(controls.voiceState?.dataset?.voice === "paused");
     ui.micButton.dataset.listening = String(listening);
     ui.micButton.setAttribute("aria-pressed", String(listening));
     ui.stop.disabled = !capturing;
-    const text = capturing
-      ? "Listening — the mic is live"
-      : "Not listening — the mic is off";
+    // THE PRESENCE DOT follows the page's own machine (never a heuristic): the state name is the
+    // dataset, the sentence is the page's own voice-state text — this window never invents one.
+    if (ui.presenceDot.dataset.state !== presence) ui.presenceDot.dataset.state = presence;
+    const pageText = controls.voiceState?.textContent?.trim() || "";
+    const text = pageText || (capturing ? "Listening — the mic is live" : "Not listening — the mic is off");
     if (text !== lastText) { ui.stateText.textContent = text; lastText = text; }
     ui.stateText.dataset.listening = String(capturing);
     ui.hint.textContent = capturing
-      ? (output > 0.02 ? "It is speaking." : "Speak whenever you like.")
+      ? (presence === "speaking" ? "It is speaking — interrupt any time." : presence === "waiting" ? "Reaching the model…" : "Speak whenever you like.")
       : "Press the mic to start. Text still works.";
     // A stale level would be a lie: when not capturing, zero, always.
     // A level that is not being measured is not a level: zero, always, when capture is off.
