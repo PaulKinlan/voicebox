@@ -175,3 +175,46 @@ test("with a provider that cannot run, the row NAMES the reason — and the voic
     await bare.stop();
   }
 });
+
+test("unified agent settings: model, voice timbre, custom prompt, and local storage persistence (voicebox-beads-bc0i)", { timeout: 90000 }, async () => {
+  // Test controls for model, timbre, and custom prompt
+  const models = await page.evaluate(() => [...document.getElementById("agent-model").options].map((o) => o.value));
+  assert.ok(models.length >= 2, "Gemini models must be populated");
+
+  const timbres = await page.evaluate(() => [...document.getElementById("agent-timbre").options].map((o) => o.value));
+  assert.ok(timbres.includes("warm") && timbres.includes("crisp"), "timbres must be populated");
+
+  // Select a timbre
+  await choose("agent-timbre", "warm");
+  await sleep(400);
+  const timbreState = await page.evaluate(() => document.getElementById("agent-timbre-state").textContent);
+  assert.match(timbreState, /Warm/);
+
+  // Set custom prompt instruction
+  await page.evaluate(() => {
+    const input = document.getElementById("agent-custom-instruction");
+    input.value = "Be brief and technical.";
+    input.dispatchEvent(new Event("change"));
+  });
+  await sleep(400);
+
+  // Assert local storage has persisted the unified settings
+  const localSaved = await page.evaluate(() => {
+    return JSON.parse(localStorage.getItem("voicebox.agent.settings.v1") ?? "null");
+  });
+  assert.ok(localSaved, "settings must be persisted in localStorage");
+  assert.equal(localSaved.timbre, "warm");
+  assert.equal(localSaved.customInstruction, "Be brief and technical.");
+
+  // Reload page and assert settings are restored from localStorage
+  await page.reload();
+  await page.waitFor(() => document.getElementById("settings-open") !== null);
+  await page.click("#settings-open");
+  await page.waitFor(() => document.getElementById("settings").open);
+  await sleep(500);
+
+  const reloadedTimbre = await page.evaluate(() => document.getElementById("agent-timbre").value);
+  const reloadedCustom = await page.evaluate(() => document.getElementById("agent-custom-instruction").value);
+  assert.equal(reloadedTimbre, "warm", "persisted timbre must be restored after reload");
+  assert.equal(reloadedCustom, "Be brief and technical.", "persisted custom instruction must be restored after reload");
+});

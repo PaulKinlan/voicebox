@@ -20,7 +20,9 @@ import {
   DEFAULT_AGENT_SETTINGS,
   PERSONALITIES,
   PROVIDERS,
+  TIMBRES,
   composeAgentInstruction,
+  composeFullSystemInstruction,
   validateAgentSettings,
 } from "./core/agent-settings.ts";
 import { auditFileName, makeEntry, mergeAudit, nextSeq, parseEntry, resumeSeq, serializeEntry, sweepLostAttempts } from "./core/audit.ts";
@@ -2125,6 +2127,7 @@ function agentSettingsPayload(extra = {}) {
     id: facts.id,
     label: facts.label,
     model: facts.model,
+    models: facts.models,
     voices: facts.voices,
     available: Boolean(process.env[facts.requires.env]),
     ...(process.env[facts.requires.env] ? {} : { refused: "provider-not-configured", why: `${facts.requires.env} is not set — ${facts.requires.why}` }),
@@ -2138,11 +2141,13 @@ function agentSettingsPayload(extra = {}) {
       // rather than a promise), and `running` says what a live session started with — a person asking
       // "did my change take effect?" is usually asking about that second one.
       provider: agentSettings.provider,
-      model: provider.model,
+      model: agentSettings.model || provider.model,
       // Carried into the session's setup since the settings handoff landed: the voice in the
       // provider's own field, the composed instruction as the session's system instruction.
       voice: agentSettings.voice || `${provider.label}'s default`,
+      timbre: agentSettings.timbre || "balanced",
       instruction: agentSettings.personality,
+      customInstruction: agentSettings.customInstruction,
     },
     pending: {
       // Nothing is pending any more: every setting the surface offers is carried into the session.
@@ -2158,6 +2163,7 @@ function agentSettingsPayload(extra = {}) {
       note: "personality appends a tone layer beneath these rules; it cannot replace them",
     },
     personalities: Object.values(PERSONALITIES).map((p) => ({ id: p.id, label: p.label })),
+    timbres: Object.values(TIMBRES).map((t) => ({ id: t.id, label: t.label, description: t.description })),
     // Which providers a person may choose AT ALL, and the ones that cannot run say why — the rule that
     // stops an option being offered that fails the moment it is chosen.
     capabilities,
@@ -3567,9 +3573,9 @@ server.on("upgrade", (req, socket) => {
 
   const beginSession = () => {
     // Snapshot once: rate, dial and later state frames describe this session,
-    // even if settings change while it is running (voicebox-beads-94c).
+    // even if settings change while it is running (voicebox-beads-94c, voicebox-beads-bc0i).
     const provider = agentSettings.provider;
-    const model = PROVIDERS[provider].model;
+    const model = agentSettings.model || PROVIDERS[provider].model;
     // STEP 2 OF THE RATE WORK: the page is told what rate to capture at BEFORE any audio is sent, ever.
     //
     // The defect this closes (journal-6g0): the browser captured at 16 kHz, the OpenAI provider declared
@@ -3629,8 +3635,9 @@ server.on("upgrade", (req, socket) => {
         // The agent settings ride the seam: the personality composed over the mandatory base
         // (composeAgentInstruction cannot be handed a base — that is the mechanism), and the
         // voice the person chose for THIS provider. Both land in the provider's setup.
-        instruction: composeAgentInstruction(agentSettings.personality),
+        instruction: composeFullSystemInstruction(agentSettings.personality, agentSettings.customInstruction, agentSettings.timbre),
         voice: agentSettings.voice || undefined,
+        timbre: agentSettings.timbre || undefined,
         onDebug: trace,        onAudioOut: (pcm, mime) => { if (pcm.length > 4) ws.send(pcm); },
         onText: (text, role) => ws.send(JSON.stringify({ type: "text", role, text })),
         onState: (state, detail) => ws.send(JSON.stringify({ type: "state", state, detail, model })),

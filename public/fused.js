@@ -2778,11 +2778,41 @@ on(els.settings, "close", () => {
 // `personality` say "stored, not applied" in words until a provider carries them.
 let agent = null; // the last payload, kept so a change can be rendered against it
 
-async function loadAgentSettings() {
+const AGENT_SETTINGS_KEY = "voicebox.agent.settings.v1";
+
+function readLocalAgentSettings() {
   try {
-    agent = await request("/api/agent-settings");
+    const raw = localStorage.getItem(AGENT_SETTINGS_KEY);
+    return raw ? JSON.parse(raw) : null;
   } catch {
-    agent = null;
+    return null;
+  }
+}
+
+function writeLocalAgentSettings(settings) {
+  try {
+    if (settings) localStorage.setItem(AGENT_SETTINGS_KEY, JSON.stringify(settings));
+  } catch { /* private mode */ }
+}
+
+async function loadAgentSettings() {
+  const local = readLocalAgentSettings();
+  if (local && typeof local === "object") {
+    try {
+      agent = await request("/api/agent-settings", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(local),
+      });
+    } catch {
+      try { agent = await request("/api/agent-settings"); } catch { agent = null; }
+    }
+  } else {
+    try {
+      agent = await request("/api/agent-settings");
+    } catch {
+      agent = null;
+    }
   }
   renderAgentSettings();
 }
@@ -2801,8 +2831,11 @@ function fillAgentPicker(picker, options, selected) {
 
 function renderAgentSettings() {
   const providerState = document.getElementById("agent-provider-state");
+  const modelState = document.getElementById("agent-model-state");
   const voiceState = document.getElementById("agent-voice-state");
+  const timbreState = document.getElementById("agent-timbre-state");
   const personalityState = document.getElementById("agent-personality-state");
+  const customState = document.getElementById("agent-custom-instruction-state");
   if (!providerState) return;
 
   if (!agent) {
@@ -2810,8 +2843,8 @@ function renderAgentSettings() {
     return;
   }
 
-  // PROVIDER — the one setting that is APPLIED, and the only one whose state names a live session.
-  const chosen = agent.capabilities.find((c) => c.id === agent.requested.provider);
+  // PROVIDER — applied
+  const chosen = agent.capabilities.find((c) => c.id === agent.requested.provider) || agent.capabilities[0];
   fillAgentPicker(
     document.getElementById("agent-provider"),
     agent.capabilities.map((c) => ({ value: c.id, label: c.available ? c.label : `${c.label} — not available` })),
@@ -2822,28 +2855,70 @@ function renderAgentSettings() {
     ? `Cannot be used: ${chosen.why}.`
     : `In use for the next session: ${chosen.label} · ${agent.applied.model}.${running}`;
 
-  // VOICE — per provider. APPLIED since the settings handoff: the choice rides the provider's
-  // setup, so the row says what the next session starts with. A provider with no voices says so.
+  // MODEL — per provider
+  const modelPicker = document.getElementById("agent-model");
+  const models = chosen.models ?? [{ id: chosen.model, label: chosen.model }];
+  fillAgentPicker(
+    modelPicker,
+    models.map((m) => ({ value: m.id, label: m.label })),
+    agent.requested.model ?? chosen.model,
+  );
+  if (modelState) {
+    modelState.textContent = agent.requested.model
+      ? `Applied model: ${agent.requested.model} — the next session starts with it.`
+      : `Applied default model: ${chosen.model} — the next session starts with it.`;
+  }
+
+  // VOICE — per provider
   const voicePicker = document.getElementById("agent-voice");
   fillAgentPicker(voicePicker, [
     { value: "", label: `${chosen.label}'s default` },
     ...chosen.voices.map((v) => ({ value: v.id, label: v.label })),
   ], agent.requested.voice ?? "");
-  voiceState.textContent = agent.pending.voice
-    ? (agent.requested.voice
-      ? `Chosen: ${agent.requested.voice}. ${agent.pending.voice}`
-      : `Using ${chosen.label}'s default voice. ${agent.pending.voice}`)
-    : (agent.requested.voice
-      ? `Applied: ${agent.requested.voice} — the next session starts with it.`
-      : `Applied: ${chosen.label}'s default voice — the next session starts with it.`);
+  if (voiceState) {
+    voiceState.textContent = agent.pending.voice
+      ? (agent.requested.voice
+        ? `Chosen: ${agent.requested.voice}. ${agent.pending.voice}`
+        : `Using ${chosen.label}'s default voice. ${agent.pending.voice}`)
+      : (agent.requested.voice
+        ? `Applied: ${agent.requested.voice} — the next session starts with it.`
+        : `Applied: ${chosen.label}'s default voice — the next session starts with it.`);
+  }
 
-  // PERSONALITY — APPLIED: the tone layer is composed over the base and carried into the session,
-  // and the base is shown so a person can see what a personality is layered ON.
+  // TIMBRE
+  const timbrePicker = document.getElementById("agent-timbre");
+  const timbres = agent.timbres ?? [
+    { id: "balanced", label: "Balanced (natural tone)", description: "Standard voice tone" },
+    { id: "warm", label: "Warm (softer, rounder)", description: "Gentle and rich resonance" },
+    { id: "bright", label: "Bright (clear, upfront)", description: "Elevated high-frequency presence" },
+    { id: "deep", label: "Deep (resonant bass)", description: "Grounded low-frequency emphasis" },
+    { id: "crisp", label: "Crisp (articulate)", description: "Sharp phonetic articulation" },
+  ];
+  fillAgentPicker(timbrePicker, timbres.map((t) => ({ value: t.id, label: t.label })), agent.requested.timbre ?? "balanced");
+  if (timbreState) {
+    const curTimbre = timbres.find((t) => t.id === (agent.requested.timbre ?? "balanced"));
+    timbreState.textContent = `Applied timbre: ${curTimbre?.label ?? "Balanced"}.`;
+  }
+
+  // PERSONALITY
   const personalityPicker = document.getElementById("agent-personality");
   fillAgentPicker(personalityPicker, agent.personalities.map((p) => ({ value: p.id, label: p.label })), agent.requested.personality);
-  personalityState.textContent = agent.pending.personality
-    ? `Chosen: ${agent.requested.personality}. ${agent.pending.personality}`
-    : `Applied: ${agent.requested.personality} — layered beneath the base rules for the next session.`;
+  if (personalityState) {
+    personalityState.textContent = agent.pending.personality
+      ? `Chosen: ${agent.requested.personality}. ${agent.pending.personality}`
+      : `Applied: ${agent.requested.personality} — layered beneath the base rules for the next session.`;
+  }
+
+  // CUSTOM INSTRUCTION PROMPT
+  const customInput = document.getElementById("agent-custom-instruction");
+  if (customInput && document.activeElement !== customInput) {
+    customInput.value = agent.requested.customInstruction ?? "";
+  }
+  if (customState) {
+    customState.textContent = agent.requested.customInstruction
+      ? "Custom prompt active: layered subordinate to the mandatory base rules."
+      : "Layered subordinate to the mandatory base rules.";
+  }
 
   const base = document.getElementById("agent-base");
   if (base) base.textContent = agent.base.instruction;
@@ -2855,23 +2930,38 @@ async function saveAgentSetting(patch) {
   const answer = await request("/api/agent-settings", { method: "PUT", body: JSON.stringify(patch) });
   if (!answer || answer.ok === false) {
     const why = answer?.why ?? "the server did not accept that";
-    for (const id of ["agent-provider-state", "agent-voice-state", "agent-personality-state"]) {
+    for (const id of [
+      "agent-provider-state",
+      "agent-model-state",
+      "agent-voice-state",
+      "agent-timbre-state",
+      "agent-personality-state",
+      "agent-custom-instruction-state",
+    ]) {
       const el = document.getElementById(id);
       if (el) el.textContent = `Refused (${answer?.refused ?? "unknown"}): ${why}`;
     }
     return;
   }
   agent = answer;
+  writeLocalAgentSettings(agent.requested);
   renderAgentSettings();
 }
 
 for (const [id, patch] of [
   ["agent-provider", (value) => ({ provider: value })],
+  ["agent-model", (value) => ({ model: value || null })],
   ["agent-voice", (value) => ({ voice: value || null })],
+  ["agent-timbre", (value) => ({ timbre: value || null })],
   ["agent-personality", (value) => ({ personality: value })],
 ]) {
   const el = document.getElementById(id);
   if (el) el.addEventListener("change", () => void saveAgentSetting(patch(el.value)));
+}
+
+const customEl = document.getElementById("agent-custom-instruction");
+if (customEl) {
+  customEl.addEventListener("change", () => void saveAgentSetting({ customInstruction: customEl.value || null }));
 }
 
 // ── the two meters: your voice, and the agent's ───────────────────────────
