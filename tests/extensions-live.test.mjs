@@ -71,13 +71,20 @@ for (const provider of ["gemini", "openai"]) {
           return answer && JSON.parse(answer.item.output).result;
         }, `correlated ${name} result`);
       }
-      assert.deepEqual((await call("list_extensions")).extensions, []);
+      // DELIBERATE CONTRACT CHANGE (voicebox-beads-ri4k, coord ruling): the host's own
+      // digest-pinned wasm shelf loads directly, so list_extensions reports its two tools as
+      // callable — the shelf is discoverable, not a stranger awaiting review.
+      const clean = await call("list_extensions");
+      const cleanIds = clean.extensions.map((e) => e.id).sort();
+      assert.deepEqual(cleanIds, ["wasm-shelf-diff", "wasm-shelf-hash"]);
       const descriptor = { id: "search", name: "Search", runsIn: "host", capabilities: ["network"], bounds: { hosts: ["127.0.0.1"], maxRequests: 1 }, tools: [
         { name: "search_fixture", description: "Search for a planet", primitive: "http-get", params: { url: `${origin}/?privateDefault=not-for-discovery` } },
       ] };
       assert.equal((await post("/api/extensions/proposals", { descriptor })).state, "pending");
       const pending = await call("list_extensions");
-      assert.equal(pending.extensions.length, 0);
+      // DELIBERATE (voicebox-beads-ri4k): the shelf's two callable tools remain listed —
+      // a pending proposal is reported in proposals, not by pretending the shelf is empty.
+      assert.equal(pending.extensions.filter((e) => e.id === "search").length, 0, "the pending fixture tool is not admitted yet");
       assert.equal(pending.proposals[0]?.state, "pending", "discovery must report the pending proposal");
       assert.equal((await call("call_extension", { name: "search_fixture" })).refused, "not-admitted");
       assert.equal(requests.length, 0);
@@ -85,9 +92,10 @@ for (const provider of ["gemini", "openai"]) {
       const code = await until(() => terminal.match(/approve "search": (\d{8}) /)?.[1], "host console code");
       assert.equal((await post("/api/extensions/approve", { id: "search", requestId: approval.requestId, code })).decision, "admitted");
       const listed = await call("list_extensions");
-      assert.equal(listed.extensions[0]?.id, "search", "discovery must refresh after admission");
-      assert.deepEqual(listed.extensions[0].tools, ["search_fixture"]);
-      assert.deepEqual(listed.extensions[0].toolDetails, [{ name: "search_fixture", description: "Search for a planet", primitive: "http-get", arguments: ["url"] }]);
+      const search = listed.extensions.find((e) => e.id === "search");
+      assert.ok(search, "discovery must refresh after admission");
+      assert.deepEqual(search.tools, ["search_fixture"]);
+      assert.deepEqual(search.toolDetails, [{ name: "search_fixture", description: "Search for a planet", primitive: "http-get", arguments: ["url"] }]);
       assert(!JSON.stringify(listed).includes("not-for-discovery"), "descriptor defaults leaked");
       assert(!JSON.stringify(listed).includes(server.hostToken), "host token leaked");
       assert.equal((await call("call_extension", { name: "search_fixture", url: "https://example.invalid/" })).refused, "host-not-allowed");

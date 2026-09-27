@@ -1361,7 +1361,12 @@ async function renderExtensions() {
   if (!els.extRunning) return;
   try {
     const [inv, cat] = await Promise.all([request("/api/extensions"), request("/api/extensions/catalogue")]);
-    const running = inv.extensions ?? [];
+    // WASM SHELF ROWS LIVE IN THEIR OWN SECTION (voicebox-beads-ri4k, coord ruling): the shelf's
+    // digest-pinned tools are callable NOW — reconfig/remove and the running count are about
+    // admitted-descriptor extensions, so shelf entries are excluded from both.
+    const runningAll = inv.extensions ?? [];
+    const running = runningAll.filter((e) => e.source !== "wasm-shelf");
+    const shelfRunning = runningAll.filter((e) => e.source === "wasm-shelf");
     lastRunningExtensions = running;
     const waiting = (inv.proposals ?? []).filter((p) => p.state === "pending");
     const refused = (inv.proposals ?? []).filter((p) => p.state === "refused");
@@ -1419,19 +1424,19 @@ async function renderExtensions() {
     // they are digest-pinned, admitted and callable right now, so they render in their own
     // section with their description and their last execution status (from the live tool
     // frames), never as a "would run after review" maybe.
-    const isShelf = (c) => String(c.id ?? "").startsWith("wasm-shelf-");
-    const shelfTools = catalogue.filter(isShelf).map((c) => {
-      const toolId = String(c.id).replace(/^wasm-shelf-/, "");
-      const last = lastToolStatus.get(toolId);
-      const ago = last ? ` · ${Math.max(1, Math.round((Date.now() - last.at) / 1000))}s ago` : "";
-      const stateText = last
-        ? `Callable now · last run ${last.ok ? "ok" : "failed"}${ago}`
-        : "Callable now · digest-pinned wasm · not yet run in this session";
-      const detail = `${c.description ?? ""}${c.description ? " — " : ""}digest ${String(c.wasm?.digest ?? "").slice(0, 12)}…`;
-      return extRow({ name: c.name ?? c.id, dotState: "true", stateText, detail });
+    const shelfRows = shelfRunning.flatMap((e) => {
+      const toolNames = e.tools ?? [];
+      return toolNames.map((toolName) => {
+        const last = lastToolStatus.get(toolName);
+        const ago = last ? ` · ${Math.max(1, Math.round((Date.now() - last.at) / 1000))}s ago` : "";
+        const stateText = `Callable now · ${toolName}${last ? ` · last run ${last.ok ? "ok" : "failed"}${ago}` : " · not yet run in this session"}`;
+        const detail = (e.toolDetails ?? []).find((td) => td.name === toolName)?.description ?? e.description ?? "";
+        return extRow({ name: e.name, dotState: "true", stateText, detail });
+      });
     });
-    extSection(els.extShelf, shelfTools, "No wasm shelf tools admitted. Drop a digest-pinned manifest in the wasm shelf directory.");
+    extSection(els.extShelf, shelfRows, "No wasm shelf tools are admitted. A digest-pinned manifest in the wasm shelf directory adds them here.");
 
+    const isShelf = (c) => String(c.id ?? "").startsWith("wasm-shelf-");
     extSection(els.extCatalogue, catalogue.filter((c) => !isShelf(c)).map((c) => {
       // The preview's ENFORCEMENT MAP is what separates "would run here" from "cannot": an
       // admitted preview names the mechanisms it would get; a refusal names why it would not.

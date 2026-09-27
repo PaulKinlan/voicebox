@@ -51,6 +51,7 @@ const openExts = async () => {
   await sleep(350); // the render fetches the registry
   return page.evaluate(() => ({
     count: document.getElementById("exts-count")?.textContent,
+    shelfText: document.getElementById("ext-shelf")?.innerText ?? "",
     running: [...document.querySelectorAll("#ext-running .env-item")].map((li) => ({
       name: li.querySelector(".env-label")?.textContent,
       dot: li.querySelector(".env-dot")?.dataset.ok,
@@ -108,9 +109,13 @@ test.after(async () => {
 
 const INTERNAL_VOCAB = /present-not-admitted|environment-unreachable|host-token-required|unknown-environment|environment-list-unreadable|pairing-list-unreadable|not-admitted\b/;
 
-test("a clean machine shows five honest empty sections and no internal vocabulary", async () => {
+test("a clean machine shows five honest empty sections plus the shelf's own, and no internal vocabulary", async () => {
+  // DELIBERATE CONTRACT CHANGE (voicebox-beads-ri4k, coord ruling): the host's digest-pinned
+  // wasm shelf loads directly and renders as its own sixth section — callable now, never a
+  // stranger awaiting review. The five review-lifecycle sections stay exactly as they were.
   const view = await openExts();
   assert.match(view.count, /Extensions · 0 running · 0 waiting/);
+  assert.match(view.shelfText, /Callable now/, "the shelf section renders its callable-now rows");
   assert.match(view.running[0].text, /Nothing running yet\./);
   assert.match(view.failed[0].text, /No approved extension is failing to load\./);
   assert.match(view.waiting[0].text, /Nothing is waiting for review\./);
@@ -284,9 +289,14 @@ test("REMOVE via dialog: seamless in-room authorization revokes extension withou
   const runningCount = await page.evaluate(() => document.querySelectorAll("#ext-running .env-item:not(.env-empty)").length);
   assert.equal(runningCount, 0, "no running extensions should remain");
 
-  // Verify on the server that the extension is revoked
+  // Verify on the server that the extension is revoked. The DELIBERATE contract change
+  // (voicebox-beads-ri4k, coord ruling): the host's own digest-pinned wasm shelf loads
+  // directly into the registry, so the two shelf entries remain — everything else must be gone.
   const inv = await fetch(`${server.base}/api/extensions`).then((r) => r.json());
-  assert.equal(inv.extensions.length, 0);
+  const nonShelf = inv.extensions.filter((e) => e.source !== "wasm-shelf");
+  assert.equal(nonShelf.length, 0, `only shelf tools may remain: ${JSON.stringify(inv.extensions.map((e) => e.id))}`);
+  assert.deepEqual(inv.extensions.filter((e) => e.source === "wasm-shelf").map((e) => e.id).sort(),
+    ["wasm-shelf-diff", "wasm-shelf-hash"], "the shelf's own tools stay admitted and callable");
 });
 
 test("APPROVED, NOT RUNNING: a deleted descriptor behind a live admission gets its own named row (voicebox-beads-qdo)", async () => {
