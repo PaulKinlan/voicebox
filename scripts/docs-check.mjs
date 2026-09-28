@@ -376,6 +376,7 @@ const ENV_MEANING = {
   VOICEBOX_CLAUDE_CLI: "the claude CLI the adapter child is told to execute (exported to it as `CLAUDE_CODE_EXECUTABLE`); unset resolves the user-installed CLI, else the adapter-bundled binary",
   VOICEBOX_CLAUDE_KEEP_API_KEY: "opt-back for the claude-code adapter child env: set to `1` to keep the host's `ANTHROPIC_API_KEY`. By default that key is DELETED from the child — an inherited key overrides claude.ai login and can stall the prompt — the host's own environment is never mutated, and the test asserts the key is ABSENT rather than present-with-no-value, because those are different child environments (voicebox-beads-nz60)",
   VOICEBOX_HARNESS: "selects the host task adapter (`pi` enables the Pi ACP task adapter in `server.mjs`; unset leaves no default adapter configured)",
+  VOICEBOX_OPENAI_INPUT_TRANSCRIPTION: "set to `1` (or pass `inputTranscription: true` to `createOpenAIProvider`) to enable `gpt-4o-mini-transcribe` input audio transcription in the OpenAI Realtime session handshake",
   VOICEBOX_WASM_SHELF_DIR: "directory holding the digest-pinned WASM tool shelf (`manifest.json` and `.wasm` modules; default `~/.isocan/modules/wasm-tools`)",
 };
 function envVars() {

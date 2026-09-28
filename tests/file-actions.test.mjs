@@ -152,7 +152,74 @@ test("file actions: delete, edit, diff, and grep execute with audit trails and c
   assert.equal(turnGrepBody.result.count, 1);
   assert.equal(turnGrepBody.result.matches[0].file, "notes.md");
 
-  // 6. Verify audit log contains delete and edit entries
+  // 6. Subdirectory paths, deep dotfile refusal, and undo stack (voicebox-beads-il54, voicebox-beads-4g9m)
+  const subWrite = await fetch(`${base}/api/file`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "src/components/Button.js", content: "export const Button = () => null;\n" }),
+  });
+  assert.equal(subWrite.status, 200);
+  assert.equal(fs.readFileSync(path.join(workspace, "src/components/Button.js"), "utf8"), "export const Button = () => null;\n");
+
+  // Nested dotfile is refused
+  const nestedDotWrite = await fetch(`${base}/api/file`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "src/.env", content: "SECRET=1" }),
+  });
+  assert.equal(nestedDotWrite.status, 400);
+  assert.equal((await nestedDotWrite.json()).refused, "dotfile-refused");
+
+  // Undo last action (reverts creation of src/components/Button.js)
+  const undoStatus1 = await (await fetch(`${base}/api/undo`)).json();
+  assert.equal(undoStatus1.ok, true);
+  assert.equal(undoStatus1.canUndo, true);
+  assert.equal(undoStatus1.last.name, "src/components/Button.js");
+
+  const undoRes1 = await fetch(`${base}/api/undo`, { method: "POST" });
+  assert.equal(undoRes1.status, 200);
+  const undoBody1 = await undoRes1.json();
+  assert.equal(undoBody1.ok, true);
+  assert.equal(undoBody1.revertedVerb, "write");
+  assert.equal(fs.existsSync(path.join(workspace, "src/components/Button.js")), false);
+
+  // Undo again (reverts delete of target.txt)
+  const undoRes2 = await fetch(`${base}/api/turn`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ transcript: "undo" }),
+  });
+  assert.equal(undoRes2.status, 200);
+  const undoBody2 = await undoRes2.json();
+  assert.equal(undoBody2.result.ok, true);
+  assert.equal(undoBody2.result.revertedVerb, "delete");
+  assert.equal(fs.readFileSync(path.join(workspace, "target.txt"), "utf8"), "hello world\nfinal line\nthird line\n");
+
+  // 7. Mini-app Web MCP tool registration & dispatch (voicebox-beads-7xbe)
+  const regRes = await fetch(`${base}/api/mini-app/tools`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      appId: "app_test_1",
+      tools: [{ name: "set_filter", description: "Filter items", inputSchema: { type: "object", properties: { q: { type: "string" } } } }],
+    }),
+  });
+  assert.equal(regRes.status, 200);
+  const toolsList = await (await fetch(`${base}/api/mini-app/tools`)).json();
+  assert.equal(toolsList.tools.length, 1);
+  assert.equal(toolsList.tools[0].name, "set_filter");
+
+  const callMiniTool = await fetch(`${base}/api/turn`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: { verb: "mini_app_tool", name: "set_filter", args: { q: "urgent" } } }),
+  });
+  assert.equal(callMiniTool.status, 200);
+  const callMiniBody = await callMiniTool.json();
+  assert.equal(callMiniBody.result.ok, true);
+  assert.deepEqual(callMiniBody.miniAppToolCall, { name: "set_filter", args: { q: "urgent" } });
+
+  // 8. Verify audit log contains delete, edit, and undo entries
   const auditDir = path.join(workspace, ".audit");
   assert.ok(fs.existsSync(auditDir), "audit directory must exist");
   const auditFiles = fs.readdirSync(auditDir).filter((f) => f.endsWith(".jsonl"));
@@ -160,6 +227,8 @@ test("file actions: delete, edit, diff, and grep execute with audit trails and c
   const entries = auditFiles.flatMap((f) => fs.readFileSync(path.join(auditDir, f), "utf8").trim().split("\n").map(JSON.parse));
   const deleteEntries = entries.filter((e) => e.act?.kind === "delete" && e.decision === "allow");
   const editEntries = entries.filter((e) => e.act?.kind === "edit" && e.decision === "allow");
+  const undoEntries = entries.filter((e) => e.act?.kind === "undo" && e.decision === "allow");
   assert.ok(deleteEntries.length >= 2, "must have logged delete actions in audit");
   assert.ok(editEntries.length >= 2, "must have logged edit actions in audit");
+  assert.ok(undoEntries.length >= 2, "must have logged undo actions in audit");
 });

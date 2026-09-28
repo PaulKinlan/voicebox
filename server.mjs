@@ -6,7 +6,11 @@
 import { createServer } from "node:http";
 import { execFile, execFileSync } from "node:child_process";
 import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { readdir as readdirAsync, readFile as readFileAsync, stat as statAsync } from "node:fs/promises";
+import { promisify } from "node:util";
 import { stripTypeScriptTypes } from "node:module";
+
+const execFileAsync = promisify(execFile);
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
@@ -41,6 +45,7 @@ import { createTaskHost, installTaskExecutor, protectedAuditPath, TASK_TOOLS } f
 import { createPermissionPolicy } from "./lib/permission-policy.mjs";
 import { createPiAcpExecutor, describeAdapterInstall } from "./lib/pi-acp.mjs";
 import { liveToolDeclarations } from "./lib/wasm-shelf.mjs";
+import { MiniAppRegistry } from "./lib/mini-app-host.mjs";
 import { createClaudeAcpExecutor, describeClaudeAdapterInstall } from "./lib/claude-acp.mjs";
 import { bootFence } from "./lib/fence-provider.mjs";
 import { SOURCE_DIRS } from "./lib/browser-sources.mjs";
@@ -522,8 +527,7 @@ async function environmentsWithStatus() {
     refused: null,
     why: null,
   };
-  const rows = [local];
-  for (const env of stored.environments) {
+  const probed = await Promise.all(stored.environments.map(async (env) => {
     // boundary/capability are OBSERVED, never inherited from the file: the probe is the ONLY writer
     // of those fields, so a hand-edited or stale descriptor cannot echo a claim as a measurement.
     // A stored row arrives here with both re-nulled — EXCEPT a report the probe itself wrote (a
@@ -535,34 +539,48 @@ async function environmentsWithStatus() {
       // A fence BOOTS, probes, and exits — it is a provider, not a standing service, so its row says
       // so rather than reading "unreachable" (which would look like a failure). A persistent fenced
       // service is the next slice; today the honest state is that the boundary was measured at boot.
-      rows.push({ ...declared, reachable: null, refused: null, why: "a fence boots, probes, and exits — its boundary was measured at boot; it is not a standing service" });
-      continue;
+      return { ...declared, reachable: null, refused: null, why: "a fence boots, probes, and exits — its boundary was measured at boot; it is not a standing service" };
     }
     if (env.kind !== "server" || !env.origin) {
-      rows.push({ ...declared, reachable: null, refused: null, why: "the browser environment is always present" });
-      continue;
+      return { ...declared, reachable: null, refused: null, why: "the browser environment is always present" };
     }
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 2500);
       const answer = await fetch(`${env.origin}/api/health`, { signal: controller.signal }).finally(() => clearTimeout(timer));
       const no = unreachable(env.label, env.origin);
-      rows.push({ ...declared, reachable: answer.ok, refused: answer.ok ? null : no.refused, why: answer.ok ? null : no.why });
+      return { ...declared, reachable: answer.ok, refused: answer.ok ? null : no.refused, why: answer.ok ? null : no.why };
     } catch {
       const no = unreachable(env.label, env.origin);
-      rows.push({ ...declared, reachable: false, refused: no.refused, why: no.why });
+      return { ...declared, reachable: false, refused: no.refused, why: no.why };
     }
-  }
-  return { ok: true, environments: rows, declared: true };
+  }));
+  return { ok: true, environments: [local, ...probed], declared: true };
 }
 
 // ── THE AGENT'S OWN SETTINGS (provider · voice · personality) ─────────────────────────────────
-// Kept in memory, and the payload SAYS SO rather than implying durability: a restart resets the
-// request, and a person can see that instead of discovering it.
-// (No type annotation here: this file is plain JS. The shapes live in core/agent-settings.ts, and
-// the module is imported for its values — a `type` import would be a syntax error in a .mjs file,
-// which is worth knowing because node --check is how you find that out.)
-let agentSettings = { ...DEFAULT_AGENT_SETTINGS };
+// Persisted in HOST_DIR (.agent-settings.json) so operator choices survive server restarts, while
+// keeping the in-memory copy authoritative during the process lifetime (voicebox-beads-xawn).
+const AGENT_SETTINGS_FILE = path.join(HOST_DIR, ".agent-settings.json");
+function readPersistedAgentSettings() {
+  try {
+    if (!existsSync(AGENT_SETTINGS_FILE)) return { ...DEFAULT_AGENT_SETTINGS };
+    const parsed = JSON.parse(readFileSync(AGENT_SETTINGS_FILE, "utf8"));
+    const checked = validateAgentSettings(parsed, DEFAULT_AGENT_SETTINGS);
+    return checked.ok ? checked.value : { ...DEFAULT_AGENT_SETTINGS };
+  } catch {
+    return { ...DEFAULT_AGENT_SETTINGS };
+  }
+}
+function writePersistedAgentSettings(value) {
+  try {
+    mkdirSync(HOST_DIR, { recursive: true });
+    const tmp = `${AGENT_SETTINGS_FILE}.tmp.${process.pid}.${Date.now()}`;
+    writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+    renameSync(tmp, AGENT_SETTINGS_FILE);
+  } catch {}
+}
+let agentSettings = readPersistedAgentSettings();
 
 /** What a LIVE session actually started with — the difference between "stored" and "in use". */
 let runningSession = null;
@@ -852,6 +870,17 @@ function auditPathFor(root) {
   return path.join(root.path, ".audit", auditFileName(INSTANCE, `machine:${root.path}`));
 }
 
+let lastAuditState = { file: null, size: -1, mtimeMs: -1 };
+
+function recordAuditStat(file) {
+  try {
+    const st = statSync(file);
+    lastAuditState = { file, size: st.size, mtimeMs: st.mtimeMs };
+  } catch {
+    lastAuditState = { file: null, size: -1, mtimeMs: -1 };
+  }
+}
+
 /** Read this writer's file back so `seq` continues instead of restarting on every restart. */
 function resumeLog() {
   // THE CONTINUITY RULE (found reviewing the attempted-and-lost wiring, 2026-09-20): ENOENT
@@ -861,6 +890,20 @@ function resumeLog() {
   // unknown is a NAMED throw (audit-unreadable), and the entry is not written — logged:null
   // on the response, the audit's absence visible, never a silent fork of the order.
   const file = auditPathFor(active.root);
+  try {
+    accessSync(file, constants.R_OK);
+    const st = statSync(file);
+    if (lastAuditState.file === file && lastAuditState.size === st.size && lastAuditState.mtimeMs === st.mtimeMs) {
+      return;
+    }
+  } catch (err) {
+    if (err?.code === "ENOENT") {
+      resumeSeq([], INSTANCE); // genuinely fresh
+      lastAuditState = { file, size: 0, mtimeMs: 0 };
+      return;
+    }
+    throw Object.assign(new Error(`the audit log exists but could not be read: ${err?.message ?? err} — appending with a reset sequence would corrupt the (instance, seq) order`), { refused: "audit-unreadable" });
+  }
   let entries;
   try {
     entries = readFileSync(file, "utf8").split("\n").map(parseEntry).filter(Boolean);
@@ -883,8 +926,9 @@ function resumeLog() {
       d.act, "lost", "attempted-and-lost", "lost", null);
     lost.attempt = d.attempt;
     lost.boot = BOOT;
-    appendFileSync(auditPathFor(active.root), `${serializeEntry(lost)}\n`);
+    appendFileSync(file, `${serializeEntry(lost)}\n`);
   }
+  recordAuditStat(file);
 }
 
 /** Append one entry. A refusal is an entry too: a log of successes cannot answer "what did it try". */
@@ -909,7 +953,6 @@ function logAct(act, decision, rule, result, observed, turn = null, attempt = nu
     const dir = path.join(active.root.path, ".audit");
     mkdirSync(dir, { recursive: true });
     const file = auditPathFor(active.root);
-    resumeLog();
     const entry = makeEntry(
       active.project,
       `machine:${active.root.path}`,
@@ -924,6 +967,7 @@ function logAct(act, decision, rule, result, observed, turn = null, attempt = nu
     );
     if (attempt !== null) entry.attempt = attempt;
     appendFileSync(file, `${serializeEntry(entry)}\n`);
+    recordAuditStat(file);
     return entry;
   } catch {
     // A log that cannot be written must not take the act with it — but the act's outcome is then
@@ -958,6 +1002,7 @@ function logAttempt(act, turn = null) {
     );
     entry.boot = BOOT;
     appendFileSync(file, `${serializeEntry(entry)}\n`);
+    recordAuditStat(file);
     return entry;
   } catch {
     return null; // no attempt record must take the act down — the outcome entry still lands
@@ -1406,14 +1451,17 @@ function machineRootReal() {
 function machineContained(candidate) {
   const rootReal = machineRootReal();
   let probe = candidate;
-  try {
-    realpathSync(candidate);
-  } catch (e) {
-    if (e.code !== "ENOENT") throw e;
-    probe = path.dirname(candidate); // a write to a file that does not exist yet: check its directory
+  while (true) {
+    try {
+      const real = realpathSync(probe);
+      return containedIn(rootReal, real) || real === rootReal;
+    } catch (e) {
+      if (e.code !== "ENOENT") throw e;
+      const parent = path.dirname(probe);
+      if (parent === probe) throw e;
+      probe = parent;
+    }
   }
-  const real = realpathSync(probe);
-  return containedIn(rootReal, real) || real === rootReal;
 }
 
 /**
@@ -1498,6 +1546,9 @@ const MIME_TYPES = {
 // The list lives in lib/browser-sources.mjs because the dev front must forward exactly these, and a
 // second copy is how it drifted once already (voicebox-beads-geq).
 
+const strippedSourceCache = new Map();
+const changelogCache = { key: null, commits: null };
+
 function serveSource(res, url) {
   const rel = url.pathname.replace(/^\/+/, "");
   const dir = rel.split("/")[0];
@@ -1513,9 +1564,19 @@ function serveSource(res, url) {
     res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
     return res.end("not found");
   }
-  const body = ext === ".ts"
-    ? stripTypeScriptTypes(readFileSync(file, "utf8"), { mode: "strip" })
-    : readFileSync(file);
+  let body;
+  if (ext === ".ts") {
+    const st = statSync(file);
+    const cached = strippedSourceCache.get(file);
+    if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
+      body = cached.body;
+    } else {
+      body = stripTypeScriptTypes(readFileSync(file, "utf8"), { mode: "strip" });
+      strippedSourceCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, body });
+    }
+  } else {
+    body = readFileSync(file);
+  }
   res.writeHead(200, { "content-type": type });
   res.end(body);
 }
@@ -1541,27 +1602,42 @@ function resolvePublicFile(pathname) {
   }
 }
 
-function isGitRepo(rootPath) {
+async function isGitRepo(rootPath) {
   if (!rootPath) return false;
   try {
-    const res = execFileSync("git", ["-C", rootPath, "rev-parse", "--is-inside-work-tree"], {
+    const { stdout } = await execFileAsync("git", ["-C", rootPath, "rev-parse", "--is-inside-work-tree"], {
       encoding: "utf8",
       env: gitEnv(),
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
-    return res === "true";
+    });
+    return stdout.trim() === "true";
   } catch {
     return false;
   }
 }
 
-function runProjectGit(rootPath, args) {
-  return execFileSync("git", ["-C", rootPath, ...args], {
+async function runProjectGit(rootPath, args) {
+  const { stdout } = await execFileAsync("git", ["-C", rootPath, ...args], {
     encoding: "utf8",
     env: gitEnv(),
-    stdio: ["ignore", "pipe", "pipe"],
     maxBuffer: 4 * 1024 * 1024,
-  }).trim();
+  });
+  return stdout.trim();
+}
+
+const IGNORED_GREP_DIRS = new Set(["node_modules", "dist", "build", "coverage", "target", "__pycache__", "vendor"]);
+const activeMiniAppRegistry = new MiniAppRegistry();
+const pendingLiveMiniAppCalls = new Map();
+const undoStackByRoot = new Map();
+
+function recordUndoSnapshot(rootPath, snap) {
+  if (!rootPath) return;
+  let stack = undoStackByRoot.get(rootPath);
+  if (!stack) {
+    stack = [];
+    undoStackByRoot.set(rootPath, stack);
+  }
+  stack.push(snap);
+  if (stack.length > 20) stack.shift();
 }
 
 // The executor: the one place that touches the build environment. It grows;
@@ -1577,6 +1653,84 @@ async function execute(action) {
     const r = extensions.propose(action.tool, "model");
     if (!r.ok) return r;
     return { ok: true, action: `proposed tool '${r.id}'`, state: r.state, note: "the proposal is NOT loaded — the host reviews and admits it (GET /api/extensions/proposals/<id>/plan, then POST /api/extensions/admit)" };
+  }
+  if (
+    action.verb === "mini_app_tool" ||
+    (action.verb === "tool" && !shelfToolNames.has(action.name) && activeMiniAppRegistry.getAllTools().some((t) => t.name === action.name))
+  ) {
+    const registeredTool = activeMiniAppRegistry.getAllTools().find((t) => t.name === action.name);
+    if (!registeredTool) {
+      return {
+        ok: false,
+        refused: "unknown-mini-app-tool",
+        error: "refused: unknown-mini-app-tool",
+        why: `mini-app tool '${action.name}' is not registered by an active mini-app`,
+        root: active?.root ?? null,
+      };
+    }
+    if (action.turn === "live" && runningSession?.socket) {
+      const callId = `mcall_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`;
+      try {
+        runningSession.socket.send(JSON.stringify({
+          type: "mini_app_call",
+          callId,
+          name: action.name,
+          args: action.args ?? {},
+        }));
+      } catch (err) {
+        return {
+          ok: false,
+          refused: "mini-app-unreachable",
+          error: "refused: mini-app-unreachable",
+          why: `could not reach live page for mini-app tool '${action.name}': ${err?.message ?? err}`,
+          root: active?.root ?? null,
+        };
+      }
+      const callResult = await new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          pendingLiveMiniAppCalls.delete(callId);
+          resolve({
+            ok: false,
+            refused: "mini-app-timeout",
+            error: "refused: mini-app-timeout",
+            why: `mini-app tool '${action.name}' timed out after 5.5s`,
+          });
+        }, 5500);
+        pendingLiveMiniAppCalls.set(callId, {
+          resolve: (res) => {
+            clearTimeout(timer);
+            pendingLiveMiniAppCalls.delete(callId);
+            resolve(res);
+          },
+        });
+      });
+      if (!callResult.ok) {
+        return {
+          ok: false,
+          refused: callResult.refused || "mini-app-tool-failed",
+          error: callResult.error || "refused: mini-app-tool-failed",
+          why: callResult.why || callResult.error || `mini-app tool '${action.name}' failed`,
+          root: active?.root ?? null,
+        };
+      }
+      const outputStr = typeof callResult.result === "string" ? callResult.result : JSON.stringify(callResult.result ?? null);
+      return {
+        ok: true,
+        action: `ran mini-app tool '${action.name}'`,
+        result: callResult.result,
+        output: outputStr,
+        root: active?.root ?? null,
+      };
+    }
+    return {
+      ok: true,
+      action: `dispatched mini-app tool '${action.name}'`,
+      miniAppToolCall: {
+        name: action.name,
+        args: action.args ?? {},
+      },
+      root: active?.root ?? null,
+    };
   }
   // tool: the ONLY way a tool runs — and only ADMITTED tools are here.
   if (action.verb === "tool") {
@@ -1623,27 +1777,28 @@ async function execute(action) {
     const matches = [];
     const MAX_MATCHES = 100;
     const MAX_FILE_BYTES = 524288;
-    function scanDir(dir, relDir = "") {
+    const lowerQuery = query.toLowerCase();
+    async function scanDir(dir, relDir = "") {
       if (matches.length >= MAX_MATCHES) return;
       let entries;
-      try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      try { entries = await readdirAsync(dir, { withFileTypes: true }); } catch { return; }
       for (const ent of entries) {
         if (matches.length >= MAX_MATCHES) break;
-        if (ent.name.startsWith(".") || ent.name === "node_modules") continue;
+        if (ent.name.startsWith(".") || IGNORED_GREP_DIRS.has(ent.name)) continue;
         const fullPath = path.join(dir, ent.name);
         const relPath = relDir ? `${relDir}/${ent.name}` : ent.name;
         if (ent.isDirectory()) {
-          scanDir(fullPath, relPath);
+          await scanDir(fullPath, relPath);
         } else if (ent.isFile()) {
           try {
-            const stat = statSync(fullPath);
+            const stat = await statAsync(fullPath);
             if (stat.size > MAX_FILE_BYTES) continue;
-            const text = readFileSync(fullPath, "utf8");
+            const text = await readFileAsync(fullPath, "utf8");
             const lines = text.split("\n");
             for (let idx = 0; idx < lines.length; idx++) {
               if (matches.length >= MAX_MATCHES) break;
               const line = lines[idx];
-              if (line.toLowerCase().includes(query.toLowerCase())) {
+              if (line.toLowerCase().includes(lowerQuery)) {
                 matches.push({ file: relPath, line: idx + 1, text: line.slice(0, 300) });
               }
             }
@@ -1651,7 +1806,7 @@ async function execute(action) {
         }
       }
     }
-    scanDir(active.root.path);
+    await scanDir(active.root.path);
     const entry = logAct({ kind: "grep", target: query, tool: "turn" }, "allow", "greps-inside", "ok", { count: matches.length }, action.turn ?? null);
     return {
       ok: true,
@@ -1665,7 +1820,7 @@ async function execute(action) {
     };
   }
   if (action.verb === "git_status") {
-    if (!isGitRepo(active.root.path)) {
+    if (!(await isGitRepo(active.root.path))) {
       return {
         ok: false,
         refused: "not-a-git-repo",
@@ -1675,7 +1830,7 @@ async function execute(action) {
       };
     }
     try {
-      const statusOutput = runProjectGit(active.root.path, ["status", "--porcelain=v1", "--branch", "-u"]);
+      const statusOutput = await runProjectGit(active.root.path, ["status", "--porcelain=v1", "--branch", "-u"]);
       const lines = statusOutput.split("\n").filter(Boolean);
       let branch = "unknown";
       let upstream = null;
@@ -1731,7 +1886,7 @@ async function execute(action) {
     }
   }
   if (action.verb === "git_diff") {
-    if (!isGitRepo(active.root.path)) {
+    if (!(await isGitRepo(active.root.path))) {
       return {
         ok: false,
         refused: "not-a-git-repo",
@@ -1750,7 +1905,7 @@ async function execute(action) {
       gitArgs.push("--", fileTarget.dir);
     }
     try {
-      const diffOutput = runProjectGit(active.root.path, gitArgs);
+      const diffOutput = await runProjectGit(active.root.path, gitArgs);
       const entry = logAct({ kind: "git_diff", target: action.file || active.project, tool: "turn" }, "allow", "git-inside", "ok", { bytes: diffOutput.length }, action.turn ?? null);
       return {
         ok: true,
@@ -1773,7 +1928,7 @@ async function execute(action) {
     }
   }
   if (action.verb === "git_log") {
-    if (!isGitRepo(active.root.path)) {
+    if (!(await isGitRepo(active.root.path))) {
       return {
         ok: false,
         refused: "not-a-git-repo",
@@ -1784,7 +1939,7 @@ async function execute(action) {
     }
     const limit = Math.min(Math.max(1, Number(action.limit) || 10), 50);
     try {
-      const logOutput = runProjectGit(active.root.path, ["log", `-n${limit}`, "--format=%H%x1f%an%x1f%aI%x1f%s"]);
+      const logOutput = await runProjectGit(active.root.path, ["log", `-n${limit}`, "--format=%H%x1f%an%x1f%aI%x1f%s"]);
       const commits = logOutput ? logOutput.split("\n").filter(Boolean).map((line) => {
         const [hash, author, date, message] = line.split("\x1f");
         return { hash, author, date, message };
@@ -1959,6 +2114,48 @@ async function execute(action) {
       root: active.root,
     };
   }
+  if (action.verb === "undo") {
+    const stack = undoStackByRoot.get(active.root.path);
+    if (!stack || stack.length === 0) {
+      return {
+        ok: false,
+        refused: "nothing-to-undo",
+        error: "refused: nothing-to-undo",
+        why: "no mutating file action (write, edit, delete) has been recorded in this root yet",
+        root: active.root,
+        logged: null,
+      };
+    }
+    const snap = stack.pop();
+    try {
+      if (snap.existedBefore) {
+        mkdirSync(path.dirname(snap.candidate), { recursive: true });
+        writeFileSync(snap.candidate, snap.previousContent ?? "", "utf8");
+      } else if (existsSync(snap.candidate)) {
+        unlinkSync(snap.candidate);
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        refused: "undo-failed",
+        error: "refused: undo-failed",
+        why: `could not revert ${snap.verb} on '${snap.name}': ${err?.message ?? err}`,
+        root: active.root,
+        logged: null,
+      };
+    }
+    const entry = logAct({ kind: "undo", target: snap.name, tool: "turn" }, "allow", "reverts-inside", "ok", observeUnderRoot(snap.name), action.turn ?? null);
+    return {
+      ok: true,
+      action: `reverted ${snap.verb} on ${snap.name}`,
+      file: snap.name,
+      revertedVerb: snap.verb,
+      remainingUndos: stack.length,
+      root: active.root,
+      logged: entry ? entry.seq : null,
+      auditLocation: `${active.root.path}/.audit/`,
+    };
+  }
   const name = String(action.name ?? "");
   if (!name) return { ok: false, error: "action has no name" };
   const resolved = resolveActive(name);
@@ -1984,8 +2181,8 @@ async function execute(action) {
   // through a read, or loses them to a write over it. Driven chain, 2026-09-20:
   // declare -> read .host-token -> admit.
   if (["read", "write", "delete", "edit", "diff"].includes(action.verb)) {
-    const base = path.basename(resolved.path);
-    if (base.startsWith(".")) {
+    const relSegments = path.relative(active.root.path, resolved.path).split(path.sep).filter(Boolean);
+    if (relSegments.some((seg) => seg.startsWith("."))) {
       const kind = ["read", "diff"].includes(action.verb) ? action.verb : ["write", "edit", "delete"].includes(action.verb) ? action.verb : "write";
       const entry = logAct({ kind, target: name, tool: "turn" }, "refuse", "dotfile-refused", "refused", null, action.turn ?? null);
       return { ok: false, refused: "dotfile-refused", logged: entry ? entry.seq : null, error: "refused: dotfile-refused", why: "dotfiles are neither readable nor writable through the loop — the listing hides them and so does this verb; host secrets live behind that line", root: active.root };
@@ -2013,9 +2210,15 @@ async function execute(action) {
     // ATTEMPT-FIRST (voicebox-beads-y69): past pre-flight, the trying is recorded BEFORE the
     // applying — so a crash between here and the outcome leaves a dangling attempt that the
     // next boot names "lost", instead of the act silently never having existed.
+    const existedBefore = existsSync(candidate);
+    let previousContent = null;
+    if (existedBefore) {
+      try { previousContent = readFileSync(candidate, "utf8"); } catch {}
+    }
     const att = logAttempt({ kind: "write", target: name, tool: "turn" }, action.turn ?? null);
     let entry;
     try {
+      mkdirSync(path.dirname(candidate), { recursive: true });
       writeFileSync(candidate, action.content);
     } catch (err) {
       entry = logAct({ kind: "write", target: name, tool: "turn" }, "refuse", "write-error", "error", null, action.turn ?? null, att?.seq ?? null);
@@ -2028,6 +2231,14 @@ async function execute(action) {
         root: active.root,
       };
     }
+    recordUndoSnapshot(active.root.path, {
+      verb: "write",
+      name,
+      candidate,
+      existedBefore,
+      previousContent,
+      at: new Date().toISOString(),
+    });
     entry = logAct({ kind: "write", target: name, tool: "turn" }, "allow", "writes-inside", "ok", observeUnderRoot(name), action.turn ?? null, att?.seq ?? null);
     return {
       ok: true,
@@ -2066,7 +2277,17 @@ async function execute(action) {
       const entry = logAct({ kind: "delete", target: name, tool: "turn" }, "refuse", "cannot-delete-directory", "refused", null, action.turn ?? null);
       return { ok: false, refused: "cannot-delete-directory", logged: entry ? entry.seq : null, error: "refused: cannot-delete-directory", why: `'${name}' is a directory; delete applies to files`, root: active.root };
     }
+    let previousContent = "";
+    try { previousContent = readFileSync(candidate, "utf8"); } catch {}
     unlinkSync(candidate);
+    recordUndoSnapshot(active.root.path, {
+      verb: "delete",
+      name,
+      candidate,
+      existedBefore: true,
+      previousContent,
+      at: new Date().toISOString(),
+    });
     const entry = logAct({ kind: "delete", target: name, tool: "turn" }, "allow", "deletes-inside", "ok", observeUnderRoot(name), action.turn ?? null, [{ path: name, bytes: stat.size }]);
     return {
       ok: true,
@@ -2099,6 +2320,14 @@ async function execute(action) {
     }
     const updated = original.slice(0, firstIdx) + action.newText + original.slice(firstIdx + action.oldText.length);
     writeFileSync(candidate, updated, "utf8");
+    recordUndoSnapshot(active.root.path, {
+      verb: "edit",
+      name,
+      candidate,
+      existedBefore: true,
+      previousContent: original,
+      at: new Date().toISOString(),
+    });
     const entry = logAct({ kind: "edit", target: name, tool: "turn" }, "allow", "edits-inside", "ok", observeUnderRoot(name), action.turn ?? null, [{ path: name, bytes: Buffer.byteLength(updated) }]);
     return {
       ok: true,
@@ -2187,10 +2416,16 @@ function agentSettingsPayload(extra = {}) {
     capabilities,
     runningSession,
     providerAvailable: keyPresent,
-    ...(keyPresent ? {} : { refused: "provider-not-configured", why: `${provider.requires.env} is not set — ${provider.requires.why}` }),
-    persisted: "memory (until this process restarts)",
+    ...(keyPresent ? {} : { refused: "provider-not-configured", why: `${provider.requires.env} is not set — ${facts_why(provider)}` }),
+    persisted: existsSync(AGENT_SETTINGS_FILE)
+      ? "memory and disk (.agent-settings.json across restarts)"
+      : "memory (until saved or this process restarts)",
     ...extra,
   };
+}
+
+function facts_why(provider) {
+  return provider.requires.why;
 }
 
 const harnessInventory = createHarnessInventory();
@@ -2274,6 +2509,7 @@ const routes = {
       // Changing the provider does NOT start a session: the next one this page opens will use it, and
       // the payload says the live session is untouched rather than implying the change took effect now.
       agentSettings = checked.value;
+      writePersistedAgentSettings(agentSettings);
       // THE NOTE HAS TO MATCH THE STATE, not the common case. It used to say "a session already running
       // keeps the provider it started with" to everybody, including a person with no session — a change
       // deferred to nothing. Now it says which of the two is true.
@@ -2311,9 +2547,25 @@ const routes = {
       why: noRootDeclared().why,
     });
   },
-  "GET /api/changelog": (req, res, url) => {
+  "GET /api/changelog": async (req, res, url) => {
     try {
-      const raw = execFileSync("git", ["log", "-n", "30", "--pretty=format:%H\t%h\t%s\t%an\t%aI\t%as"], {
+      const headPath = path.join(ROOT, ".git", "HEAD");
+      let cacheKey = null;
+      try {
+        const headRaw = readFileSync(headPath, "utf8").trim();
+        const headSt = statSync(headPath);
+        let refMtime = 0;
+        if (headRaw.startsWith("ref: ")) {
+          try {
+            refMtime = statSync(path.join(ROOT, ".git", headRaw.slice(5))).mtimeMs;
+          } catch {}
+        }
+        cacheKey = `${headRaw}:${headSt.mtimeMs}:${refMtime}`;
+      } catch {}
+      if (cacheKey && changelogCache.key === cacheKey && changelogCache.commits) {
+        return json(res, 200, { ok: true, repo: "https://github.com/PaulKinlan/voicebox", commits: changelogCache.commits });
+      }
+      const { stdout: raw } = await execFileAsync("git", ["log", "-n", "30", "--pretty=format:%H\t%h\t%s\t%an\t%aI\t%as"], {
         cwd: ROOT,
         encoding: "utf8",
       });
@@ -2328,6 +2580,10 @@ const routes = {
           url: `https://github.com/PaulKinlan/voicebox/commit/${sha}`,
         };
       });
+      if (cacheKey) {
+        changelogCache.key = cacheKey;
+        changelogCache.commits = commits;
+      }
       return json(res, 200, { ok: true, repo: "https://github.com/PaulKinlan/voicebox", commits });
     } catch (e) {
       return json(res, 500, { ok: false, error: e?.message ?? String(e), repo: "https://github.com/PaulKinlan/voicebox", commits: [] });
@@ -2764,7 +3020,8 @@ async function handle(req, res) {
     }
     try {
       const real = resolved.path;
-      if (path.basename(real).startsWith(".")) {
+      const relSegments = path.relative(active.root.path, real).split(path.sep).filter(Boolean);
+      if (relSegments.some((seg) => seg.startsWith("."))) {
         // Same line as the verbs: containment first, then a hidden file inside the
         // root is refused — the listing hides it, so the read does too.
         return json(res, 403, { ok: false, refused: "dotfile-refused", error: "refused: dotfile-refused", why: "dotfiles are not readable through the loop — the listing hides them and so does this read; host secrets live behind that line", root: active.root });
@@ -2799,9 +3056,65 @@ async function handle(req, res) {
     }
   }
 
+  if (req.method === "GET" && url.pathname === "/api/undo") {
+    if (!active) return json(res, 409, { ...noRootDeclared() });
+    const stack = undoStackByRoot.get(active.root.path) ?? [];
+    const last = stack.length > 0 ? stack[stack.length - 1] : null;
+    return json(res, 200, {
+      ok: true,
+      canUndo: stack.length > 0,
+      count: stack.length,
+      last: last ? { verb: last.verb, name: last.name, at: last.at } : null,
+      root: active.root,
+    });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/undo") {
+    const result = await execute({ verb: "undo" });
+    if (!result.ok) return json(res, 400, result);
+    return json(res, 200, result);
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/mini-app/tools") {
+    return json(res, 200, {
+      ok: true,
+      tools: activeMiniAppRegistry.getAllTools(),
+      declarations: activeMiniAppRegistry.getFunctionDeclarations(),
+    });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/mini-app/tools") {
+    const body = await readJson();
+    const appId = String(body?.appId ?? "").trim();
+    const tools = Array.isArray(body?.tools) ? body.tools : [];
+    for (const prevId of [...activeMiniAppRegistry.apps.keys()]) {
+      if (prevId !== appId) activeMiniAppRegistry.unregisterApp(prevId);
+    }
+    if (appId) {
+      if (tools.length === 0) {
+        activeMiniAppRegistry.unregisterApp(appId);
+      } else {
+        activeMiniAppRegistry.registerApp(appId, { title: body?.title });
+        activeMiniAppRegistry.updateTools(appId, tools);
+      }
+    }
+    return json(res, 200, {
+      ok: true,
+      appId: appId || null,
+      tools: activeMiniAppRegistry.getAllTools(),
+    });
+  }
+
   if (req.method === "DELETE" && url.pathname === "/api/file") {
     const name = url.searchParams.get("name") ?? "";
     const result = await execute({ verb: "delete", name });
+    if (!result.ok) return json(res, result.refused === "not-found" ? 404 : 400, result);
+    return json(res, 200, result);
+  }
+
+  if (req.method === "PUT" && url.pathname === "/api/file") {
+    const body = await readJson();
+    const result = await execute({ verb: "write", name: body?.name, content: body?.content });
     if (!result.ok) return json(res, result.refused === "not-found" ? 404 : 400, result);
     return json(res, 200, result);
   }
@@ -2862,8 +3175,9 @@ async function handle(req, res) {
    * is OBSERVED (the probe runs and reads), never a manifest, and it is cached with its `when` so a
    * stale one reads as stale. A probe that cannot run is a named refusal, not a blank.
    */
-  if (req.method === "GET" && url.pathname === "/api/probe") {
-    const cached = readProbeCache();
+  if ((req.method === "GET" || req.method === "POST") && url.pathname === "/api/probe") {
+    const force = req.method === "POST" || url.searchParams.get("refresh") === "1";
+    const cached = force ? null : readProbeCache();
     if (cached) return json(res, 200, { ok: true, probe: cached, cached: true });
     try {
       const report = await runProbe();
@@ -2949,7 +3263,7 @@ async function handle(req, res) {
           return json(res, 400, { ok: false, refused: "bad-request", error: "refused: bad-request", why: "action must be an object with a verb" });
         }
         const verb = parsed.action.verb;
-        if (typeof verb !== "string" || !COMMAND_VERBS.has(verb)) {
+        if (typeof verb !== "string" || (!COMMAND_VERBS.has(verb) && verb !== "mini_app_tool")) {
           return json(res, 400, {
             ok: false,
             refused: "unknown-command",
@@ -2975,6 +3289,9 @@ async function handle(req, res) {
       }
       if (executionResult?.miniApp) {
         responsePayload.miniApp = executionResult.miniApp;
+      }
+      if (executionResult?.miniAppToolCall) {
+        responsePayload.miniAppToolCall = executionResult.miniAppToolCall;
       }
       return json(res, 200, responsePayload);
     }));
@@ -3127,6 +3444,20 @@ async function handle(req, res) {
     return json(res, r.ok ? 200 : 404, r);
   }
 
+  // POST /api/extensions/refuse or POST /api/extensions/:id/refuse (voicebox-beads-36ul):
+  // Refuse a pending proposal without admitting anything — authorized via in-room session or host token.
+  const refuseExtMatch = req.method === "POST" && url.pathname.match(/^\/api\/extensions\/([a-z0-9_-]+)\/refuse$/);
+  if (refuseExtMatch || (req.method === "POST" && url.pathname === "/api/extensions/refuse")) {
+    if (!hasExtensionAuthority(req)) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "refusing a proposal requires an authorized in-room session or host token (x-voicebox-host-token)" });
+    }
+    const body = refuseExtMatch ? {} : await readJson();
+    const id = refuseExtMatch ? refuseExtMatch[1] : body?.id;
+    if (!id) return json(res, 400, { ok: false, refused: "bad-request", why: "refusing a proposal requires an id" });
+    const r = extensions.admitProposal(id, "deny");
+    return json(res, r.ok ? 200 : 404, r);
+  }
+
   // DELETE /api/extensions/:id (voicebox-beads-ud5, voicebox-beads-5jl) — REST revocation endpoint
   const deleteExtMatch = req.method === "DELETE" && url.pathname.match(/^\/api\/extensions\/([a-z0-9_-]+)$/);
   if (deleteExtMatch) {
@@ -3253,17 +3584,17 @@ async function handle(req, res) {
     return json(res, 200, { ok: true, envKey, paired: true });
   }
 
-  // DELETE /api/environments/<key> (voicebox-beads-4kp): stop what you minted. A booted fence
-  // unit is a systemd transient that outlives the process that asked for it by construction —
-  // without this route every declare-and-boot leaks a unit, a port and its RSS until reboot.
-  // Host-token gated (it stops a running environment); best-effort stop, then removal from the
-  // stored list so the registry cannot claim a running environment it no longer has.
+  // DELETE /api/environments/<key> (voicebox-beads-4kp, voicebox-beads-36ul): stop what you minted
+  // or remove a declared environment from the registry. Authorized via host token or room session.
   const envDelete = url.pathname.match(/^\/api\/environments\/([^/]+)$/);
   if (req.method === "DELETE" && envDelete) {
-    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+    if (!hasExtensionAuthority(req)) {
       return json(res, 403, { ok: false, refused: "host-token-required", why: "stopping a booted environment is a host act — supply the host token" });
     }
     const key = decodeURIComponent(envDelete[1]);
+    if (key === "local") {
+      return json(res, 400, { ok: false, refused: "cannot-delete-local", why: "the local host environment is built in and cannot be removed" });
+    }
     await stopUnitFence(key);
     const stored = readEnvironments();
     if (stored.ok) {
@@ -3675,7 +4006,13 @@ server.on("upgrade", (req, socket) => {
         // THE SHELF DECLARES BESIDE THE FIXED COMMANDS (voicebox-beads-ri4k): admitted, digest-pinned
         // wasm tools are first-class functions in the room loop — the model calls them by name, and the
         // same shared executor (below) runs them through the same refusal names and the same audit.
-        tools: [...functionDeclarations(), ...liveToolDeclarations(wasmShelfDir(), new Set(COMMANDS.map((c) => c.name)))], // a shelf id never shadows a fixed command (hmco nit 3)
+        tools: (() => {
+          const fixedNames = new Set(COMMANDS.map((c) => c.name));
+          const shelfDecls = liveToolDeclarations(wasmShelfDir(), fixedNames);
+          const reservedNames = new Set([...fixedNames, ...shelfDecls.map((d) => d.name)]);
+          const miniAppDecls = activeMiniAppRegistry.getFunctionDeclarations().filter((d) => !reservedNames.has(d.name));
+          return [...functionDeclarations(), ...shelfDecls, ...miniAppDecls];
+        })(), // a shelf or mini-app id never shadows a fixed command (hmco nit 3)
         systemInstruction: liveSystemInstruction(),
         onToolCall: async (calls) => {
           const responses = [];
@@ -3687,7 +4024,8 @@ server.on("upgrade", (req, socket) => {
             // mapping is validated, the executor is wrapped, and a throw becomes a NAMED
             // refusal rather than a swallowed outcome.
             const started = performance.now();
-            const action = commandToAction(call.name, call.args, shelfToolNames);
+            const miniAppToolNames = new Set(activeMiniAppRegistry.getAllTools().map((t) => t.name));
+            const action = commandToAction(call.name, call.args, shelfToolNames, miniAppToolNames);
             trace?.({ type: "tool.route", callId: call.id, name: call.name, action,
               route: !action || action.refused ? "refused-before-execution" : "shared-executor" });
             let result;
@@ -3752,6 +4090,18 @@ server.on("upgrade", (req, socket) => {
       if (typeof data === "string") {
         let msg = null;
         try { msg = JSON.parse(data); } catch { /* not JSON — ignore */ }
+        if (msg?.type === "mini_app_result" && typeof msg.callId === "string") {
+          const pending = pendingLiveMiniAppCalls.get(msg.callId);
+          if (pending) {
+            pending.resolve({
+              ok: Boolean(msg.ok),
+              result: msg.result,
+              error: msg.error,
+              why: msg.error,
+            });
+          }
+          return;
+        }
         if (msg?.type === "text" && typeof msg.text === "string") session.sendText(msg.text);
         if (msg?.type === "stop") { session.close(); ws.close(); }
         return;

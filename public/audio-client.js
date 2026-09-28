@@ -53,6 +53,7 @@ export function createAudioClient({
   onToolCalls = () => {},
   onTask = () => {},
   onMiniApp = () => {},
+  onMiniAppCall = () => ({ ok: false, error: "no mini-app handler" }),
   onError = () => {},
   onDiagnostic = () => {},
   onLevel = () => {},
@@ -283,7 +284,7 @@ export function createAudioClient({
       return;
     }
     if (msg?.type === "text") {
-      onText(String(msg.text ?? ""), msg.kind ?? "model");
+      onText(String(msg.text ?? ""), msg.role ?? msg.kind ?? "model");
       return;
     }
     if (msg?.type === "error") {
@@ -307,6 +308,20 @@ export function createAudioClient({
     }
     if (msg?.type === "mini_app") {
       onMiniApp(msg.miniApp ?? null, msg);
+      return;
+    }
+    if (msg?.type === "mini_app_call") {
+      Promise.resolve(onMiniAppCall(msg)).then((res) => {
+        try {
+          ws?.send(JSON.stringify({
+            type: "mini_app_result",
+            callId: msg.callId,
+            ok: Boolean(res?.ok),
+            result: res?.result ?? null,
+            error: res?.error ?? null,
+          }));
+        } catch {}
+      });
       return;
     }
     // AN UNKNOWN CONTROL TYPE IS NOT A MALFORMED FRAME. It parsed as JSON and it
@@ -603,6 +618,7 @@ export function createAudioClient({
   /** The user turns the microphone off (or the page unloads). */
   async function stopCapture() {
     state.capture = false;
+    try { captureNode?.port?.postMessage?.("flush"); } catch { /* already gone */ }
     try { captureNode?.disconnect(); } catch { /* already gone */ }
     try { captureSource?.disconnect(); } catch { /* already gone */ }
     for (const track of stream?.getTracks?.() ?? []) track.stop();

@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { COMMANDS, COMMAND_VERBS, commandToAction, functionDeclarations, liveSystemInstruction } from "../lib/commands.mjs";
 
 test("the list declares file and extension actions — the executor's verbs, once", () => {
-  assert.deepEqual([...COMMAND_VERBS].sort(), ["contact_agent", "delegate_task", "delete", "diff", "edit", "extension", "extensions", "git_diff", "git_log", "git_status", "grep", "inspect_environment", "list", "list_agents", "mini_app", "read", "write"]);
+  assert.deepEqual([...COMMAND_VERBS].sort(), ["contact_agent", "delegate_task", "delete", "diff", "edit", "extension", "extensions", "git_diff", "git_log", "git_status", "grep", "inspect_environment", "list", "list_agents", "mini_app", "read", "undo", "write"]);
   const names = COMMANDS.map((c) => c.name);
   assert.equal(new Set(names).size, names.length, "command names must be unique");
 });
@@ -46,6 +46,7 @@ test("commandToAction maps a tool call to the executor's action shape", () => {
   assert.deepEqual(commandToAction("git_diff", { staged: true, file: "src/app.js" }), { verb: "git_diff", name: "", staged: true, file: "src/app.js" });
   assert.deepEqual(commandToAction("git_log", { limit: 5 }), { verb: "git_log", name: "", limit: 5 });
   assert.deepEqual(commandToAction("inspect_environment"), { verb: "inspect_environment", name: "" });
+  assert.deepEqual(commandToAction("undo_last_action"), { verb: "undo", name: "" });
 });
 
 test("extension calls preserve arguments and refuse malformed values", () => {
@@ -103,4 +104,13 @@ test("commandToAction routes an ADMITTED extension/shelf tool by its own name (v
   assert.equal(commandToAction("hash", { input: "abc" }), null);
   // A name nobody admits is still null:
   assert.equal(commandToAction("not-a-tool", {}, admitted), null);
+});
+
+test("commandToAction routes a registered mini-app Web MCP tool by its own name (voicebox-beads-7xbe)", () => {
+  const miniAppTools = new Set(["set_filter", "roll_dice"]);
+  assert.deepEqual(
+    commandToAction("set_filter", { category: "active" }, null, miniAppTools),
+    { verb: "mini_app_tool", name: "set_filter", args: { category: "active" } },
+  );
+  assert.equal(commandToAction("set_filter", { category: "active" }, null, new Set()), null);
 });

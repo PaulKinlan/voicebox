@@ -4,7 +4,7 @@
 // missing argument into one (the review's coercion class, refused at this door too).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { makeGeminiResolver } from "../lib/resolver.mjs";
+import { makeGeminiResolver, makeOpenAIResolver, makeClaudeResolver } from "../lib/resolver.mjs";
 
 const jsonResponse = (payload, status = 200) => ({
   ok: status >= 200 && status < 300,
@@ -12,6 +12,8 @@ const jsonResponse = (payload, status = 200) => ({
   json: async () => payload,
 });
 const modelSays = (text) => jsonResponse({ candidates: [{ content: { parts: [{ text }] } }] });
+const openaiSays = (text) => jsonResponse({ choices: [{ message: { content: text } }] });
+const claudeSays = (text) => jsonResponse({ content: [{ type: "text", text }] });
 
 test("a write answer maps to the contract, byte-exact", async () => {
   const resolve = makeGeminiResolver({ key: "k", fetchImpl: async () => modelSays('{"verb":"write","name":"moon.txt","content":"the moon was bright"}') });
@@ -107,4 +109,28 @@ test("no key is unresolved immediately, without a network call", async () => {
   const action = await resolve("create a file");
   assert.equal(called, 0);
   assert.match(action.unresolved, /GEMINI_API_KEY/);
+});
+
+test("OpenAI and Claude text resolvers validate against the same contract (voicebox-beads-92z6)", async () => {
+  const resolveOpenAI = makeOpenAIResolver({
+    key: "sk-test",
+    fetchImpl: async () => openaiSays('{"verb":"write","name":"src/app.js","content":"console.log(1);"}'),
+  });
+  assert.deepEqual(await resolveOpenAI("write src/app.js"), {
+    verb: "write",
+    name: "src/app.js",
+    content: "console.log(1);",
+  });
+
+  const resolveOpenAINoKey = makeOpenAIResolver({ key: "", fetchImpl: async () => openaiSays("{}") });
+  assert.match((await resolveOpenAINoKey("write x")).unresolved, /OPENAI_API_KEY/);
+
+  const resolveClaude = makeClaudeResolver({
+    key: "sk-ant-test",
+    fetchImpl: async () => claudeSays("```json\n{\"verb\":\"undo\"}\n```"),
+  });
+  assert.deepEqual(await resolveClaude("undo last change"), { verb: "undo", name: "" });
+
+  const resolveClaudeNoKey = makeClaudeResolver({ key: "", fetchImpl: async () => claudeSays("{}") });
+  assert.match((await resolveClaudeNoKey("undo")).unresolved, /ANTHROPIC_API_KEY/);
 });

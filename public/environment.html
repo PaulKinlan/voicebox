@@ -15,76 +15,93 @@
   what to do when access has to be granted again.
 -->
 <style>
-  :root { color-scheme: dark; }
-  body { margin: 0; padding: 24px; background: #101014; color: #e8e8ee;
+  :root {
+    color-scheme: light dark;
+    --ground: light-dark(#fbfbf9, #101014);
+    --card: light-dark(#ffffff, #15151b);
+    --input-bg: light-dark(#f7f8fa, #17171d);
+    --btn-bg: light-dark(#eceef2, #23232c);
+    --btn-hover: light-dark(#e0e4eb, #2d2d38);
+    --line: light-dark(#d8dcdf, #33333f);
+    --ink: light-dark(#23262b, #e8e8ee);
+    --muted: light-dark(#59636d, #9a9aab);
+    --accent: light-dark(#1f3fd0, #69f);
+    --good: light-dark(#1d6b32, #8ee39a);
+    --bad: light-dark(#b3261e, #f0a6a0);
+  }
+  body { margin: 0; padding: 24px; background: var(--ground); color: var(--ink);
          font: 15px/1.5 ui-sans-serif, system-ui, sans-serif; }
+  .back-nav { margin: 0 0 12px; font-size: 13px; }
+  .back-nav a { color: var(--accent); text-decoration: none; font-weight: 500; }
+  .back-nav a:hover { text-decoration: underline; }
   h1 { font-size: 18px; margin: 0 0 4px; }
-  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: #9a9aab; margin: 24px 0 8px; }
-  .sub { color: #9a9aab; margin: 0 0 20px; font-size: 13px; max-width: 70ch; }
-  .chooser-note { color: #9a9aab; margin: -10px 0 14px; font-size: 12px; max-width: 70ch; }
-  .views-note { color: #9a9aab; margin: -4px 0 8px; font-size: 12px; max-width: 70ch; }
-  .protocol { color: #9a9aab; font-size: 12px; max-width: 70ch; margin: 8px 0 0; }
-  .protocol summary { cursor: pointer; color: #b9b9c9; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 24px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: 13px; max-width: 70ch; }
+  .chooser-note { color: var(--muted); margin: -10px 0 14px; font-size: 12px; max-width: 70ch; }
+  .views-note { color: var(--muted); margin: -4px 0 8px; font-size: 12px; max-width: 70ch; }
+  .protocol { color: var(--muted); font-size: 12px; max-width: 70ch; margin: 8px 0 0; }
+  .protocol summary { cursor: pointer; color: var(--ink); }
   .protocol p { margin: 6px 0 0; }
   .sr-only { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); overflow: hidden; white-space: nowrap; }
   #project { display: grid; gap: 2px; font: 13px/1.6 ui-monospace, monospace; }
-  #project .key { display: inline-block; min-width: 148px; color: #8b8b9c; }
+  #project .key { display: inline-block; min-width: 148px; color: var(--muted); }
   form { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-start; margin: 0 0 16px; }
   input, select, textarea, button { font: inherit; padding: 6px 8px; border-radius: 6px;
-    border: 1px solid #33333f; background: #17171d; color: inherit; }
+    border: 1px solid var(--line); background: var(--input-bg); color: inherit; }
   textarea { width: 100%; min-height: 68px; }
-  button { cursor: pointer; background: #23232c; }
-  button:hover { background: #2d2d38; }
+  button { cursor: pointer; background: var(--btn-bg); }
+  button:hover { background: var(--btn-hover); }
   ul#transcript { list-style: none; margin: 0; padding: 0; font: 13px/1.7 ui-monospace, monospace; }
   li.line { padding: 2px 0; }
-  li.ok { color: #8ee39a; }
-  li.refused { color: #f0a6a0; }
+  li.ok { color: var(--good); }
+  li.refused { color: var(--bad); }
   #gallery { display: flex; flex-wrap: wrap; gap: 12px; }
-  figure.asset { margin: 0; padding: 10px; border: 1px solid #2a2a34; border-radius: 8px;
-    background: #15151b; max-width: 320px; }
+  figure.asset { margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--card); max-width: 320px; }
   figure.asset img { max-width: 100%; background: #fff; border-radius: 4px; }
   figure.asset pre { white-space: pre-wrap; word-break: break-word; margin: 0 0 8px; font-size: 12px; }
-  figcaption { font: 12px/1.4 ui-monospace, monospace; color: #b9b9c8; word-break: break-all; margin-bottom: 6px; }
+  figcaption { font: 12px/1.4 ui-monospace, monospace; color: var(--muted); word-break: break-all; margin-bottom: 6px; }
   /* The tier-2 gate is a MODAL, like settings: a decision that appears off-screen is a decision
      nobody made. (Measured before this change: the panel appeared 1419px down an 820px viewport,
      2049px down a phone — 2.5 screens below the fold, with no scroll to it.) */
   #confirm { inset: 0; margin: auto; width: min(100% - 2rem, 560px); max-height: 85vh; max-height: 85dvh;
-    padding: 16px 18px calc(16px + env(safe-area-inset-bottom)); border: 1px solid #4b4b5a;
-    border-radius: 12px; background: #1b1b23; color: #e8e8ee; overflow: auto; overscroll-behavior: contain; }
-  #confirm h2 { margin: 0 0 10px; font-size: 14px; letter-spacing: .06em; text-transform: uppercase; color: #9a9aab; }
+    padding: 16px 18px calc(16px + env(safe-area-inset-bottom)); border: 1px solid var(--line);
+    border-radius: 12px; background: var(--card); color: var(--ink); overflow: auto; overscroll-behavior: contain; }
+  #confirm h2 { margin: 0 0 10px; font-size: 14px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
   #confirm p { margin: 0 0 10px; font: 13px/1.5 ui-monospace, monospace; word-break: break-all; }
-  #confirm .gate-note { color: #9a9aab; font-size: 12px; }
+  #confirm .gate-note { color: var(--muted); font-size: 12px; }
   #confirm button { margin-right: 8px; }
-  #confirm::backdrop { background: color-mix(in srgb, #101014 60%, transparent); backdrop-filter: blur(10px) saturate(120%); }
+  #confirm::backdrop { background: color-mix(in srgb, var(--ground) 60%, transparent); backdrop-filter: blur(10px) saturate(120%); }
   @supports not (backdrop-filter: blur(1px)) { #confirm::backdrop { background: #101014e6; } }
   html:has(dialog#confirm[open]) { overflow: hidden; }
   #declare { margin: 0.75rem 0 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
   #declare label { flex-basis: 100%; opacity: 0.8; }
-  #root-path { flex: 1 1 22rem; padding: 0.5rem 0.6rem; background: #101216; color: inherit; border: 1px solid #2a2f36; border-radius: 6px; font: inherit; }
-  #declare-root { padding: 0.5rem 0.8rem; background: #1b2026; color: inherit; border: 1px solid #2a2f36; border-radius: 6px; font: inherit; cursor: pointer; }
+  #root-path { flex: 1 1 22rem; padding: 0.5rem 0.6rem; background: var(--input-bg); color: inherit; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  #declare-root { padding: 0.5rem 0.8rem; background: var(--btn-bg); color: inherit; border: 1px solid var(--line); border-radius: 6px; font: inherit; cursor: pointer; }
   #declare-root[disabled] { opacity: 0.5; cursor: progress; }
   #declare-result { flex-basis: 100%; margin: 0; }
-  #declare-result[data-ok="true"] { color: #7fd18a; }
-  #declare-result[data-ok="false"] { color: #e2a1a1; }
-  #dropzone { border: 1px dashed #3b3b48; border-radius: 8px; padding: 12px; color: #9a9aab; font-size: 13px; }
-  #dropzone.over { border-color: #69f; color: #dcdcf5; }
-  .chooser { max-width: 78ch; font-size: 13px; line-height: 1.6; color: #b9b9c8; margin: 0 0 14px; }
-  .chooser strong { color: #e8e8ee; font-weight: 600; }
+  #declare-result[data-ok="true"] { color: var(--good); }
+  #declare-result[data-ok="false"] { color: var(--bad); }
+  #dropzone { border: 1px dashed var(--line); border-radius: 8px; padding: 12px; color: var(--muted); font-size: 13px; }
+  #dropzone.over { border-color: var(--accent); color: var(--ink); }
+  .chooser { max-width: 78ch; font-size: 13px; line-height: 1.6; color: var(--muted); margin: 0 0 14px; }
+  .chooser strong { color: var(--ink); font-weight: 600; }
   .tag { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 4px; font-size: 11px;
-         color: #b9b9c8; background: #23232c; border: 1px solid #33333f; }
-  .tag-good { color: #8ee39a; border-color: #2f5c3a; }
+         color: var(--muted); background: var(--btn-bg); border: 1px solid var(--line); }
+  .tag-good { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, var(--line)); }
   .views { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
-  .view { border: 1px solid #2a2a34; border-radius: 8px; padding: 12px; background: #15151b; min-height: 120px; }
+  .view { border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: var(--card); min-height: 120px; }
   .view h3 { margin: 0 0 6px; font-size: 13px; letter-spacing: .04em; }
-  .authority { color: #8b8b9c; font-size: 12px; line-height: 1.5; margin: 0 0 8px; }
-  .failure { color: #f0a6a0; font: 12px/1.6 ui-monospace, monospace; margin: 0; word-break: break-word; }
+  .authority { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0 0 8px; }
+  .failure { color: var(--bad); font: 12px/1.6 ui-monospace, monospace; margin: 0; word-break: break-word; }
   ul.entries { list-style: none; margin: 0; padding: 0; font: 12px/1.7 ui-monospace, monospace; }
   ul.entries li { display: flex; justify-content: space-between; gap: 8px; cursor: default; }
-  ul.entries li[data-kind="directory"] { cursor: pointer; color: #c8d8ff; }
-  ul.entries .size, ul.entries .empty, ul.entries .truncated { color: #6f6f80; }
+  ul.entries li[data-kind="directory"] { cursor: pointer; color: var(--accent); }
+  ul.entries .size, ul.entries .empty, ul.entries .truncated { color: var(--muted); }
 </style>
 </head>
 <body>
+  <nav class="back-nav" aria-label="Room navigation"><a href="/">← Back to the voice room</a></nav>
   <h1>voicebox — projects and folders</h1>
   <p class="sub">A project's files live in one of three places: the browser's own storage for this
     site, a folder you pick, or a folder on this machine. This page always says which one, and says
@@ -110,9 +127,10 @@
   <p class="chooser-note"><strong>New project in this browser</strong> keeps its files in <strong>this browser's own storage</strong> (origin storage, OPFS) — not a folder on your disk, and it asks for no host token and no path. This page lists and reads those files. A name you have used before opens that project instead of making a new one.</p>
   <form id="machine-form">
     <input id="machine-path" placeholder="/a/folder/on/this/machine" aria-label="machine folder path" style="min-width:22rem">
+    <input id="machine-host-token" type="password" placeholder="host token (from .host-token)" aria-label="host token" autocomplete="off" style="min-width:14rem">
     <button type="submit">Save turns into this folder <span class="tag tag-good">turns can write here</span></button>
   </form>
-  <p class="chooser-note">The path is a folder <strong>on this machine</strong> — type or paste its absolute path. The server (which runs turns) writes there, so this is the choice that lets turns save files you can open in your own editor.</p>
+  <p class="chooser-note">The path is a folder <strong>on this machine</strong> — type or paste its absolute path, and paste the host token from <code>workspace/.host/.host-token</code>. The server (which runs turns) writes there, so this is the choice that lets turns save files you can open in your own editor.</p>
   <!-- A dropped folder cannot become a project root: browsers do not expose a
        dropped folder's REAL path, and the server needs one to write into it.
        So the path is asked for in words, and the declaration posted is exactly
@@ -187,6 +205,7 @@
    * here would be a second vocabulary for one thing.
    */
   const pathInput = document.getElementById("root-path");
+  const hostTokenInput = document.getElementById("machine-host-token");
   const declareButton = document.getElementById("declare-root");
   const declareResult = document.getElementById("declare-result");
 
@@ -203,11 +222,14 @@
       return;
     }
     const name = path.split("/").filter(Boolean).pop() ?? "project";
+    const hostToken = hostTokenInput ? hostTokenInput.value.trim() : "";
+    const headers = { "content-type": "application/json" };
+    if (hostToken) headers["x-voicebox-host-token"] = hostToken;
     declareButton.disabled = true;
     try {
       const response = await fetch("/api/root", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers,
         body: JSON.stringify({ project: name, root: { kind: "machine", path } }),
       });
       const answer = await response.json();

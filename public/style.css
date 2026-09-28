@@ -7,12 +7,14 @@
   color-scheme: light dark;
   --ground: light-dark(#fbfbf9, #0e0f12);
   --card: light-dark(#fff, #17191e);
+  --shade: light-dark(#f3f4f6, #13151a);
   --line: light-dark(#d8dcdf, #2b3138);
   --ink: light-dark(#23262b, #e7e9ec);
   --muted: light-dark(#59636d, #9aa2ae);
   --accent: light-dark(#1f3fd0, #98adff);
   --good: light-dark(#1d6b32, #7cce97);
   --warn: light-dark(#8a4b00, #edb960);
+  --bad: light-dark(#b3261e, #e06c75);
   --shadow: 0 18px 40px -20px light-dark(#26303c33, #000a);
 }
 :root[data-theme="light"] { color-scheme: light; }
@@ -20,7 +22,7 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 body { margin: 0; min-block-size: 100svh; background: var(--ground); color: var(--ink); font: 14px/1.5 Inter, system-ui, sans-serif; letter-spacing: -.006em; }
-button, input { font: inherit; color: inherit; }
+button, input, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: default; }
 button, a, input, [tabindex] { -webkit-tap-highlight-color: transparent; }
@@ -353,7 +355,7 @@ html:has(dialog.settings[open]) { overflow: hidden; }
 .mic-dock[hidden] { display: none; }
 .composer { display: flex; align-items: center; gap: 4px; width: min(100%, 520px); margin-top: 20px; padding: 4px 4px 4px 6px; border: 1px solid color-mix(in srgb, var(--ink) 10%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--card) 55%, var(--ground)); transition: border-color 160ms ease-out, background 160ms ease-out; }
 .composer:focus-within { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--card) 85%, var(--ground)); }
-.composer input { flex: 1; min-width: 0; min-height: 38px; padding: 8px 14px; border: 0; border-radius: 999px; background: none; color: var(--ink); font-size: .875rem; text-overflow: ellipsis; }
+.composer input { flex: 1; min-width: 0; min-inline-size: 15ch; min-height: 38px; padding: 8px 14px; border: 0; border-radius: 999px; background: none; color: var(--ink); font-size: .875rem; text-overflow: ellipsis; field-sizing: content; }
 .composer input:focus { outline: none; }
 .composer input::placeholder { color: color-mix(in srgb, var(--muted) 62%, transparent); }
 .send { color: light-dark(#fff, #141c34); border: 0; border-radius: 999px; padding: 0 18px; min-height: 36px; font-weight: 500; background: var(--accent); }
@@ -369,17 +371,19 @@ html:has(dialog.settings[open]) { overflow: hidden; }
 .reader[data-state="empty"] { display: none; }
 .reader[data-loading="true"] #file-body { opacity: .5; pointer-events: none; }
 .reader[data-error="true"] #file-body { color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 30%, var(--line)); }
-.reader-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; }
-.reader-head h2 { margin: 0; font-size: .9375rem; font-weight: 500; }
+.reader-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 10px; }
+.reader-head h2 { margin: 0 auto 0 0; font-size: .9375rem; font-weight: 500; }
 .reader-facts { margin: 8px 0 0; font-size: .75rem; color: var(--muted); }
 .reader-details { margin-top: 10px; }
 .reader-details summary { font-size: .75rem; color: var(--muted); }
 #file-body { max-height: 34svh; margin: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 16px 18px; border-radius: 10px; background: color-mix(in srgb, var(--card) 60%, var(--ground)); font: .8125rem/1.7 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+#file-editor { width: 100%; min-height: 180px; max-height: 45svh; margin: 0; resize: vertical; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 16px 18px; border: 1px solid var(--accent); border-radius: 10px; background: var(--card); color: var(--ink); font: .8125rem/1.7 ui-monospace, monospace; white-space: pre; }
 
 /* ── what just happened: present, but never in the way ──────────────── */
 .session { width: min(100%, 720px); text-align: center; }
-.session h2 { margin: 0 0 8px; font-size: .6875rem; font-weight: 500; letter-spacing: .16em; text-transform: uppercase; color: color-mix(in srgb, var(--muted) 70%, var(--ink)); }
-#session-log { list-style: none; display: grid; gap: 6px; margin: 0; padding: 0; max-height: 132px; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.session-head { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 8px; }
+.session h2 { margin: 0; font-size: .6875rem; font-weight: 500; letter-spacing: .16em; text-transform: uppercase; color: color-mix(in srgb, var(--muted) 70%, var(--ink)); }
+#session-log { list-style: none; display: grid; gap: 6px; margin: 0; padding: 0; max-height: 220px; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 #session-log li { font-size: .8125rem; }
 .said { display: block; color: var(--ink); overflow-wrap: anywhere; }
 .did { display: block; color: var(--muted); overflow-wrap: anywhere; }
@@ -431,18 +435,18 @@ body:has(#reader[data-state="ready"]) #file-body { max-height: 26svh; }
 /* The extension surface (voicebox-beads-vwb): four states, four sections. "present" is its
    own dot state — visible, honest, and never green, because green means the host admitted it. */
 .env-dot[data-ok="present"] { background: var(--muted); box-shadow: 0 0 0 2px color-mix(in srgb, var(--muted) 40%, transparent); }
-.env-dot[data-ok="false"] { background: #b3563e; }
-.ext-section { margin: 14px 0 6px; font-size: 12px; letter-spacing: .05em; text-transform: uppercase; color: #9a9aab; }
-.ext-detail { margin: 4px 0 0; font-size: 12px; line-height: 1.5; color: #9a9aab; }
+.env-dot[data-ok="false"] { background: var(--bad); }
+.ext-section { margin: 14px 0 6px; font-size: 12px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.ext-detail { margin: 4px 0 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
 .ext-plan { margin: 6px 0 0; }
-.ext-plan summary { cursor: pointer; font-size: 12px; color: #9a9aab; }
+.ext-plan summary { cursor: pointer; font-size: 12px; color: var(--muted); }
 .ext-plan p { margin: 6px 0 0; font-size: 12px; line-height: 1.5; }
 .ext-plan pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .ext-plan form { display: grid; gap: 8px; margin-top: 8px; }
 .ext-plan form[hidden] { display: none; }
 .ext-plan input { max-width: 100%; box-sizing: border-box; }
 .ext-actions { display: flex; gap: 8px; margin-top: 6px; }
-.env-item.env-empty { color: #6f6f7c; font-size: 12px; }
+.env-item.env-empty { color: var(--muted); font-size: 12px; }
 
 /* ── Extension reconfigure & removal dialog (voicebox-beads-ud5) ─────────── */
 .setting-input {
@@ -560,7 +564,7 @@ dialog.changelog-modal .commit-meta {
   color: var(--ink);
 }
 .harness-article summary:hover {
-  color: #61afef;
+  color: var(--accent);
 }
 .harness-article dt {
   font-weight: 600;
@@ -643,8 +647,8 @@ dialog.changelog-modal .commit-meta {
   max-width: 640px;
   margin: 0 auto;
   padding: 16px 20px;
-  background: #15151b;
-  border: 1px solid #2a2a34;
+  background: var(--card);
+  border: 1px solid var(--line);
   border-radius: 10px;
   display: flex;
   flex-direction: column;
@@ -663,7 +667,7 @@ dialog.changelog-modal .commit-meta {
   margin: 0;
   font-size: 14px;
   font-weight: 600;
-  color: #e8e8ee;
+  color: var(--ink);
   word-break: break-all;
 }
 .task-badges {
@@ -678,32 +682,32 @@ dialog.changelog-modal .commit-meta {
   border-radius: 12px;
   text-transform: capitalize;
   font-weight: 500;
-  background: #23232c;
-  color: #b9b9c8;
+  background: var(--shade);
+  color: var(--muted);
 }
 .task-badge-outcome-working {
-  background: color-mix(in srgb, #61afef 25%, transparent);
-  color: #61afef;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
 }
 .task-badge-outcome-finished {
-  background: color-mix(in srgb, #98c379 25%, transparent);
-  color: #98c379;
+  background: color-mix(in srgb, var(--good) 18%, transparent);
+  color: var(--good);
 }
 .task-badge-outcome-finished-but-unconfirmed {
-  background: color-mix(in srgb, #e5c07b 25%, transparent);
-  color: #e5c07b;
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
 }
 .task-badge-stale {
-  background: color-mix(in srgb, #e06c75 25%, transparent);
-  color: #e06c75;
+  background: color-mix(in srgb, var(--bad) 18%, transparent);
+  color: var(--bad);
 }
 .task-stale-notice {
   margin: 0;
   padding: 6px 10px;
   font-size: 12px;
-  background: color-mix(in srgb, #e06c75 15%, transparent);
-  border-left: 3px solid #e06c75;
-  color: #e06c75;
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  border-left: 3px solid var(--bad);
+  color: var(--bad);
   border-radius: 4px;
 }
 .task-meta-grid {
@@ -715,23 +719,23 @@ dialog.changelog-modal .commit-meta {
   line-height: 1.5;
 }
 .task-meta-grid dt {
-  color: #8b8b9c;
+  color: var(--muted);
   font-weight: 500;
 }
 .task-meta-grid dd {
   margin: 0;
-  color: #e8e8ee;
+  color: var(--ink);
   word-break: break-word;
 }
 .task-meta-grid dd[data-silent="true"] {
-  color: #e5c07b;
+  color: var(--warn);
 }
 .task-progress-block {
   font-size: 12px;
   padding: 6px 10px;
-  background: #1c1c24;
+  background: var(--shade);
   border-radius: 6px;
-  color: #61afef;
+  color: var(--accent);
 }
 .task-answer-block, .task-partial-block, .task-reason-block {
   margin: 0;
@@ -744,13 +748,14 @@ dialog.changelog-modal .commit-meta {
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: .05em;
-  color: #9a9aab;
+  color: var(--muted);
 }
 .task-output-text {
   margin: 0;
   padding: 8px 10px;
-  background: #111116;
-  border: 1px solid #22222a;
+  background: var(--ground);
+  border: 1px solid var(--line);
+  color: var(--ink);
   border-radius: 6px;
   font: 12px/1.5 ui-monospace, monospace;
   white-space: pre-wrap;
@@ -760,7 +765,7 @@ dialog.changelog-modal .commit-meta {
 }
 .task-reason-block {
   font-size: 12px;
-  color: #e06c75;
+  color: var(--bad);
 }
 .task-card-actions {
   display: flex;
@@ -771,7 +776,7 @@ dialog.changelog-modal .commit-meta {
 }
 .task-action-feedback {
   font-size: 12px;
-  color: #9a9aab;
+  color: var(--muted);
 }
 
 /* ── Interactive Mini-App Container (voicebox-beads-5h1) ───────────────── */
@@ -786,6 +791,10 @@ dialog.changelog-modal .commit-meta {
   flex-direction: column;
   overflow: hidden;
   box-sizing: border-box;
+  transition: max-width 0.2s ease-out;
+}
+.mini-app-container[data-expanded="true"] {
+  max-width: 1100px;
 }
 .mini-app-container[hidden] { display: none !important; }
 .mini-app-header {
@@ -793,7 +802,7 @@ dialog.changelog-modal .commit-meta {
   justify-content: space-between;
   align-items: center;
   padding: 10px 14px;
-  background: color-mix(in srgb, var(--card, #17191e) 90%, black);
+  background: var(--shade, color-mix(in srgb, var(--card) 92%, var(--ink)));
   border-bottom: 1px solid var(--line, #2b3138);
 }
 .mini-app-title-group {
@@ -826,10 +835,16 @@ dialog.changelog-modal .commit-meta {
   width: 100%;
   height: 480px;
   min-height: 200px;
+  max-height: 85vh;
+  resize: vertical;
+  overflow: auto;
   display: flex;
   flex-direction: column;
   background: transparent;
   transition: height 0.2s ease-out;
+}
+.mini-app-container[data-expanded="true"] .mini-app-viewport {
+  height: min(76vh, 720px);
 }
 .mini-app-container[data-collapsed="true"] .mini-app-viewport {
   display: none !important;

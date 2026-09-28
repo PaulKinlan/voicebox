@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +20,20 @@ for (const provider of ["gemini", "openai"]) {
     const scratch = mkdtempSync(path.join(os.tmpdir(), "vb-ext-live-"));
     const workspace = path.join(scratch, "workspace");
     mkdirSync(workspace);
+    const shelfDir = path.join(scratch, "shelf");
+    mkdirSync(path.join(shelfDir, "assets"), { recursive: true });
+    const minWasm = Buffer.from([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+    const digest = "93a44bbb96c751218e4c00d479e4c14358122a389acca16205b1e4d0dc5f9476";
+    writeFileSync(path.join(shelfDir, "assets", "hash.wasm"), minWasm);
+    writeFileSync(path.join(shelfDir, "assets", "diff.wasm"), minWasm);
+    writeFileSync(path.join(shelfDir, "manifest.json"), JSON.stringify({
+      name: "wasm-tools",
+      version: "1",
+      tools: [
+        { id: "hash", wasm: "assets/hash.wasm", digest, description: "Compute SHA-256 digest", capability: "compute" },
+        { id: "diff", wasm: "assets/diff.wasm", digest, description: "Compute text diff", capability: "compute" },
+      ],
+    }));
     const messages = [], requests = [], sockets = [];
     let server, live, peer, terminal = "";
     const vendor = createServer((req, res) => {
@@ -43,6 +57,7 @@ for (const provider of ["gemini", "openai"]) {
       const origin = `http://127.0.0.1:${vendor.address().port}`;
       server = await startServer({ env: {
         VOICEBOX_WORKSPACE: workspace, VOICEBOX_EXTENSIONS_DIR: path.join(scratch, "host"),
+        VOICEBOX_WASM_SHELF_DIR: shelfDir,
         GEMINI_API_KEY: "synthetic-fixture-only", OPENAI_API_KEY: "synthetic-fixture-only",
         NODE_OPTIONS: `--import=${fileURLToPath(new URL("./fixtures/live-vendor-redirect.mjs", import.meta.url))}`,
         FIXTURE_VENDOR: origin.replace("http:", "ws:"),

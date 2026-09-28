@@ -56,10 +56,17 @@ const audioClient = createAudioClient({
     // THE MINI-APP CONTAINER: mount the interactive mini-app in the room (voicebox-beads-5h1)
     window.__voiceboxOnMiniApp?.(miniApp);
   },
-  onText: (text) => {
+  onMiniAppCall: async (msg) => {
+    if (window.__voiceboxMiniApp?.callTool) {
+      return await window.__voiceboxMiniApp.callTool(msg.name, msg.args ?? {});
+    }
+    return { ok: false, error: "no active mini-app in the room" };
+  },
+  onText: (text, role) => {
     // Live means live: the transcript replaces the scripted caption.
     const caption = $("caption");
     if (caption) caption.textContent = text;
+    window.__voiceboxOnLiveText?.(text, role);
   },
   onError: (error, info) => {
     recordDebug({ type: "audio.error", error: error.message, info });
@@ -67,7 +74,11 @@ const audioClient = createAudioClient({
   },
   onDiagnostic: (d) => {
     recordDebug({ type: "audio.diagnostic", detail: d });
+    if (d?.kind === "state" && (d?.state === "turn-complete" || d?.state === "interrupt")) {
+      window.__voiceboxOnLiveTurnComplete?.();
+    }
     if (d?.kind === "socket-closed" && voiceState) {
+      window.__voiceboxOnLiveTurnComplete?.();
       voiceState.textContent = capturing
         ? "Live voice disconnected: machine-closed · mic off"
         : "Live voice disconnected · mic off";
@@ -117,12 +128,17 @@ async function startLive() {
     socket.onopen = () => { clearTimeout(timer); resolve(); };
     socket.onerror = () => { clearTimeout(timer); reject(new Error("machine-unreachable (the /live upgrade failed)")); };
   }).then(
-    () => {
+    async () => {
       audioClient.attachSocket(socket);
       // The preferred microphone is read at press time, not at load: choosing a
       // device must not start capture, and a chosen device that has gone is a
       // refusal the page names rather than a silent switch to another one.
-      return audioClient.startCapture({ deviceId: window.__voiceboxDevices?.micId() ?? null });
+      await audioClient.startCapture({ deviceId: window.__voiceboxDevices?.micId() ?? null });
+      const preferredOutput = window.__voiceboxDevices?.outputId() ?? null;
+      if (preferredOutput) {
+        await audioClient.setOutputDevice?.(preferredOutput);
+      }
+      await window.__voiceboxDevices?.refresh?.();
     },
     async (error) => {
       // The socket is dead; do not leave it half-open.

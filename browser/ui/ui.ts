@@ -586,8 +586,9 @@ async function declareToLoop(project: Record<string, any>): Promise<void> {
  * cannot — but that the LOOP writes into THIS project's root instead of a folder of its own, which is
  * what makes it one root rather than two.
  */
-async function useMachineRoot(path: string, name = "loop-project"): Promise<Reply> {
-  const reply = await send({ type: "useMachineRoot", path, name });
+async function useMachineRoot(path: string, name = "loop-project", hostToken = ""): Promise<Reply> {
+  const token = hostToken || ((document.getElementById("machine-host-token") as HTMLInputElement | null)?.value.trim() ?? "");
+  const reply = await send({ type: "useMachineRoot", path, name, ...(token ? { hostToken: token } : {}) });
   if (!reply.ok) {
     line(failure(reply), "refused");
     return reply;
@@ -695,7 +696,8 @@ $("catch-up").addEventListener("click", () => void renderAgents(true));
 $("machine-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const path = ($("machine-path") as HTMLInputElement).value.trim();
-  if (path) void useMachineRoot(path, ($("project-name") as HTMLInputElement).value.trim() || "loop-project");
+  const token = (document.getElementById("machine-host-token") as HTMLInputElement | null)?.value.trim() ?? "";
+  if (path) void useMachineRoot(path, ($("project-name") as HTMLInputElement).value.trim() || "loop-project", token);
 });
 
 const api = { ready: send({ type: "hello" }), send, open, create, adopt, useMachineRoot, renderView, renderAgents, header, line };

@@ -73,7 +73,9 @@ function readLevel() {
     const capturing = Boolean(c?.state?.capture);
     const m = typeof c?.level === "function" ? c.level() : null;
     const newest = (v) => {
-      if (Array.isArray(v)) return Number(v[v.length - 1]) || 0;
+      if (Array.isArray(v) || (ArrayBuffer.isView(v) && typeof v.length === "number")) {
+        return v.length > 0 ? Number(v[v.length - 1]) || 0 : 0;
+      }
       if (v && typeof v === "object") {
         const keys = Object.keys(v).map(Number).filter((n) => !Number.isNaN(n)).sort((a, b) => a - b);
         if (keys.length) return Number(v[keys[keys.length - 1]]) || 0;

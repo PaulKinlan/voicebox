@@ -221,6 +221,45 @@ function handleInnerMessage(event) {
   }
 }
 
+function dispatchCallTool(data) {
+  const { callId, name, args } = data;
+  if (!appChannel) {
+    postToHost({
+      type: "tool_result",
+      callId,
+      appId: currentAppId,
+      ok: false,
+      error: "mini-app bridge is not connected to an app",
+    });
+    return;
+  }
+
+  const timer = setTimeout(() => {
+    pendingCalls.delete(callId);
+    postToHost({
+      type: "tool_result",
+      callId,
+      appId: currentAppId,
+      ok: false,
+      error: `tool execution timed out after ${BOUNDS.callTimeoutMs}ms`,
+    });
+  }, BOUNDS.callTimeoutMs);
+
+  pendingCalls.set(callId, {
+    timer,
+    resolve: () => {
+      clearTimeout(timer);
+    },
+  });
+
+  appChannel.port1.postMessage({
+    type: "call_tool",
+    callId,
+    name,
+    args,
+  });
+}
+
 // Listen for messages from Host Room and Inner Frame
 window.addEventListener("message", (event) => {
   // If message is from inner frame requesting handshake (origin is "null")
@@ -270,6 +309,8 @@ window.addEventListener("message", (event) => {
 
         const rawHtml = msg.html || "<!doctype html><html><body></body></html>";
         inner.srcdoc = INJECTED_SDK + "\n" + rawHtml;
+      } else if (msg.type === "call_tool") {
+        dispatchCallTool(msg);
       }
     };
     return;
@@ -288,42 +329,7 @@ window.addEventListener("message", (event) => {
     const rawHtml = data.html || "<!doctype html><html><body></body></html>";
     inner.srcdoc = INJECTED_SDK + "\n" + rawHtml;
   } else if (data.type === "call_tool") {
-    const { callId, name, args } = data;
-    if (!appChannel) {
-      postToHost({
-        type: "tool_result",
-        callId,
-        appId: currentAppId,
-        ok: false,
-        error: "mini-app bridge is not connected to an app",
-      });
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      pendingCalls.delete(callId);
-      postToHost({
-        type: "tool_result",
-        callId,
-        appId: currentAppId,
-        ok: false,
-        error: `tool execution timed out after ${BOUNDS.callTimeoutMs}ms`,
-      });
-    }, BOUNDS.callTimeoutMs);
-
-    pendingCalls.set(callId, {
-      timer,
-      resolve: (res) => {
-        clearTimeout(timer);
-      },
-    });
-
-    appChannel.port1.postMessage({
-      type: "call_tool",
-      callId,
-      name,
-      args,
-    });
+    dispatchCallTool(data);
   }
 });
 

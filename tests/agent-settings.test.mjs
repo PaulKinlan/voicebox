@@ -221,3 +221,27 @@ test("F3: timbre is wired into composeFullSystemInstruction", () => {
   assert.match(full, /Custom line/);
   assert.match(full, /Tone and guidance, subordinate to everything above/);
 });
+
+test("Q2: agentSettings persist to disk across server restarts (voicebox-beads-xawn)", async () => {
+  const put = await update({ provider: "gemini", voice: "Aoede", personality: "warm", timbre: "crisp", customInstruction: "Keep answers brief." });
+  assert.equal(put.status, 200);
+  assert.match(put.body.persisted, /disk/);
+
+  const second = await startServer({
+    cwd: ROOT,
+    extensionsDir: server.extensionsDir,
+    env: { VOICEBOX_WORKSPACE: undefined, VOICEBOX_INSTANCE: "agent-settings-restart-test" },
+  });
+  try {
+    const restored = await fetch(`${second.base}/api/agent-settings`).then((r) => r.json());
+    assert.equal(restored.ok, true);
+    assert.equal(restored.requested.voice, "Aoede");
+    assert.equal(restored.requested.personality, "warm");
+    assert.equal(restored.requested.timbre, "crisp");
+    assert.equal(restored.requested.customInstruction, "Keep answers brief.");
+    assert.match(restored.persisted, /disk/);
+  } finally {
+    await second.stop();
+  }
+});
+

@@ -80,10 +80,11 @@ export function validateWebMcpTool(raw: unknown): ValidationResult<WebMcpToolDec
   if (!description || description.length > MINI_APP_BOUNDS.maxDescriptionLength) {
     return refusal("invalid-tool-description", `tool description must be a string up to ${MINI_APP_BOUNDS.maxDescriptionLength} characters`);
   }
-  if (!t.parameters || typeof t.parameters !== "object" || Array.isArray(t.parameters)) {
+  const rawParams = t.parameters ?? t.inputSchema ?? { type: "object", properties: {} };
+  if (!rawParams || typeof rawParams !== "object" || Array.isArray(rawParams)) {
     return refusal("invalid-tool-parameters", "tool parameters must be a JSON schema object with type: 'object'");
   }
-  const p = t.parameters as Record<string, unknown>;
+  const p = rawParams as Record<string, unknown>;
   if (p.type !== "object") {
     return refusal("invalid-tool-parameters", "tool parameters schema must specify type: 'object'");
   }

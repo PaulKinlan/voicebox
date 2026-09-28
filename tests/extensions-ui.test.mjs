@@ -91,9 +91,23 @@ test.before(async () => {
   mkdirSync(path.join(scratch, "ws"), { recursive: true });
   extDir = path.join(scratch, "ext");
   mkdirSync(extDir, { recursive: true });
+  const shelfDir = path.join(scratch, "shelf");
+  mkdirSync(path.join(shelfDir, "assets"), { recursive: true });
+  const minWasm = Buffer.from([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+  const digest = "93a44bbb96c751218e4c00d479e4c14358122a389acca16205b1e4d0dc5f9476";
+  writeFileSync(path.join(shelfDir, "assets", "hash.wasm"), minWasm);
+  writeFileSync(path.join(shelfDir, "assets", "diff.wasm"), minWasm);
+  writeFileSync(path.join(shelfDir, "manifest.json"), JSON.stringify({
+    name: "wasm-tools",
+    version: "1",
+    tools: [
+      { id: "hash", wasm: "assets/hash.wasm", digest, description: "Compute SHA-256 digest", capability: "compute" },
+      { id: "diff", wasm: "assets/diff.wasm", digest, description: "Compute text diff", capability: "compute" },
+    ],
+  }));
   server = await startServer({
     cwd: ROOT,
-    env: { VOICEBOX_INSTANCE: "ext-ui-test", ...PINNED_ENV, VOICEBOX_EXTENSIONS_DIR: extDir },
+    env: { VOICEBOX_INSTANCE: "ext-ui-test", ...PINNED_ENV, VOICEBOX_EXTENSIONS_DIR: extDir, VOICEBOX_WASM_SHELF_DIR: shelfDir },
   });
   hostToken = (await import("node:fs")).readFileSync(path.join(extDir, ".host-token"), "utf8").trim();
   page = await launch();

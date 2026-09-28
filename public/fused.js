@@ -18,15 +18,16 @@ const SVG = "http://www.w3.org/2000/svg";
 const WANTED = {
   files: "files", made: "made-list", samples: "samples", samplesLabel: "samples-label", count: "file-count", empty: "empty",
   emptyHeadline: "empty-headline", emptyNext: "empty-next", emptyWhy: "empty-why", emptyAction: "empty-action",
-  where: "where-note", dot: "server-dot", refresh: "refresh", report: "turn-report", newFile: "new-file",
+  where: "where-note", dot: "server-dot", refresh: "refresh", report: "turn-report", newFile: "new-file", undoLast: "undo-last",
   rootKind: "root-kind", madeHeading: "made-heading", emptyLink: "empty-link", listingRoot: "listing-root",
   listTools: "list-tools", fileFilter: "file-filter", showAll: "show-all", listBound: "list-bound",
-  openFolder: "open-folder", closeFolder: "close-folder", roomFolderHint: "room-folder-hint",
+  openFolder: "open-folder", openOpfsFolder: "open-opfs-folder", closeFolder: "close-folder", roomFolderHint: "room-folder-hint",
   stage: "voice-ring-wrap", mic: "mic", state: "voice-state", micDock: "mic-dock",
-  session: "session", log: "session-log", form: "text-form", utterance: "utterance", send: "send",
+  session: "session", log: "session-log", sessionCopy: "session-copy", form: "text-form", utterance: "utterance", send: "send",
   reader: "reader", readerTitle: "reader-title", readerFacts: "file-facts", readerBody: "file-body",
   fileRefresh: "file-refresh",
-  copy: "file-copy", close: "reader-close", about: "about-facts", readerDetails: "reader-details",
+  fileEdit: "file-edit", fileSave: "file-save", fileCancelEdit: "file-cancel-edit", fileEditor: "file-editor",
+  copy: "file-copy", fileDownload: "file-download", close: "reader-close", about: "about-facts", readerDetails: "reader-details",
   settingsOpen: "settings-open", settings: "settings", settingsClose: "settings-close",
   micSelect: "mic-select", outSelect: "out-select",
   micDeviceState: "mic-device-state", outDeviceState: "out-device-state",
@@ -66,6 +67,7 @@ const WANTED = {
   miniAppTitle: "mini-app-title",
   miniAppViewport: "mini-app-viewport",
   miniAppReload: "mini-app-reload",
+  miniAppExpand: "mini-app-expand",
   miniAppToggle: "mini-app-toggle",
   miniAppClose: "mini-app-close",
   roomFoldersBar: "room-folders-bar", roomFoldersList: "room-folders-list",
@@ -215,26 +217,43 @@ async function openRoomFolder() {
   }
 }
 
+async function openOpfsScratchFolder(projectName = "scratchpad") {
+  if (!navigator.storage?.getDirectory) {
+    setReport("This browser does not support Origin Private File System (OPFS) storage.", "bad");
+    return;
+  }
+  try {
+    const opfsRoot = await navigator.storage.getDirectory();
+    const handle = await opfsRoot.getDirectoryHandle(projectName, { create: true });
+    await adoptRoomFolder(handle, { makeActive: true, persist: true });
+    setReport(`Opened '${projectName}' in browser storage (OPFS) — turns and edits save here.`, "good");
+  } catch (error) {
+    setReport(`Could not open browser scratchpad: ${error?.message ?? error}`, "bad");
+  }
+}
+
 async function adoptRoomFolder(handle, { makeActive = true, persist = true } = {}) {
   if (!handle || handle.kind !== "directory") return;
   const name = handle.name || "folder";
 
-  // Check readwrite and read permissions
-  let perm = "prompt";
-  let mode = "read";
-  try {
-    perm = await handle.queryPermission({ mode: "readwrite" });
-    if (perm === "granted") {
-      mode = "readwrite";
-    } else {
-      const readPerm = await handle.queryPermission({ mode: "read" });
-      if (readPerm === "granted") {
-        perm = "granted";
-        mode = "read";
+  // Check readwrite and read permissions (OPFS handles have implicit readwrite permission)
+  let perm = typeof handle.queryPermission === "function" ? "prompt" : "granted";
+  let mode = typeof handle.queryPermission === "function" ? "read" : "readwrite";
+  if (typeof handle.queryPermission === "function") {
+    try {
+      perm = await handle.queryPermission({ mode: "readwrite" });
+      if (perm === "granted") {
+        mode = "readwrite";
+      } else {
+        const readPerm = await handle.queryPermission({ mode: "read" });
+        if (readPerm === "granted") {
+          perm = "granted";
+          mode = "read";
+        }
       }
+    } catch {
+      perm = "prompt";
     }
-  } catch {
-    perm = "prompt";
   }
 
   const folder = { name, handle, permission: perm, mode };
@@ -440,11 +459,13 @@ async function durableFact() {
 
 async function writeRoomFile(name, content) {
   if (!roomFolder || !roomFolder.handle) throw new Error("No folder open");
-  let perm = "prompt";
-  try {
-    perm = await roomFolder.handle.queryPermission({ mode: "readwrite" });
-  } catch {
-    perm = "prompt";
+  let perm = typeof roomFolder.handle.queryPermission === "function" ? "prompt" : "granted";
+  if (typeof roomFolder.handle.queryPermission === "function") {
+    try {
+      perm = await roomFolder.handle.queryPermission({ mode: "readwrite" });
+    } catch {
+      perm = "prompt";
+    }
   }
   if (perm !== "granted") {
     throw new Error(`needs-gesture: write permission for '${roomFolder.name}' is ${perm} — click Restore access first`);
@@ -481,20 +502,22 @@ async function initRoomFolders() {
 
   for (const { name, handle } of saved) {
     if (!handle || handle.kind !== "directory") continue;
-    let perm = "prompt";
-    let mode = "read";
-    try {
-      perm = await handle.queryPermission({ mode: "readwrite" }).catch(() => "prompt");
-      mode = perm === "granted" ? "readwrite" : "read";
-      if (perm !== "granted") {
-        const readPerm = await handle.queryPermission({ mode: "read" }).catch(() => "prompt");
-        if (readPerm === "granted") {
-          perm = "granted";
-          mode = "read";
+    let perm = typeof handle.queryPermission === "function" ? "prompt" : "granted";
+    let mode = typeof handle.queryPermission === "function" ? "read" : "readwrite";
+    if (typeof handle.queryPermission === "function") {
+      try {
+        perm = await handle.queryPermission({ mode: "readwrite" }).catch(() => "prompt");
+        mode = perm === "granted" ? "readwrite" : "read";
+        if (perm !== "granted") {
+          const readPerm = await handle.queryPermission({ mode: "read" }).catch(() => "prompt");
+          if (readPerm === "granted") {
+            perm = "granted";
+            mode = "read";
+          }
         }
+      } catch {
+        perm = "prompt";
       }
-    } catch {
-      perm = "prompt";
     }
     roomFolders.set(name, { name, handle, permission: perm, mode });
   }
@@ -945,6 +968,8 @@ function renderListingRoot() {
     : `listed from ${where}`;
 }
 
+let lastRenderedFilesSig = null;
+
 function render() {
   const count = entries.length;
   if (!els.files || !els.made || !els.count) return;
@@ -981,7 +1006,12 @@ function render() {
   const nowMs = Date.now();
   for (const [name, until] of arrivedUntil) if (until <= nowMs || !namesNow.has(name)) arrivedUntil.delete(name);
   scheduleArrivalSweep();
-  els.files.replaceChildren(...(count === 0 ? (writable ? [placeholder()] : []) : shown.map((e) => card(e, { arrived: arrivedUntil.has(e.name), canDelete: writable && !roomFolder }))));
+  const canDelete = writable && !roomFolder;
+  const filesSig = `${count}:${writable}:${canDelete}:${listingDir}:${shown.map((e) => `${e.name}\0${e.isDir ? 1 : 0}\0${e.meta}\0${arrivedUntil.has(e.name) ? 1 : 0}`).join("\n")}`;
+  if (filesSig !== lastRenderedFilesSig) {
+    lastRenderedFilesSig = filesSig;
+    els.files.replaceChildren(...(count === 0 ? (writable ? [placeholder()] : []) : shown.map((e) => card(e, { arrived: arrivedUntil.has(e.name), canDelete }))));
+  }
   els.made.dataset.state = count === 0 ? "empty" : "ready";
   els.files.setAttribute("aria-busy", "false");
   els.count.textContent = count === 0 ? "" : `${count} ${count === 1 ? "file" : "files"}`;
@@ -1070,6 +1100,7 @@ function renderCrumbs() {
 
 // The first paint is a skeleton of the real thing — a quiet name, arriving.
 function showSkeleton() {
+  lastRenderedFilesSig = null;
   els.made.dataset.state = "loading";
   els.files.setAttribute("aria-busy", "true");
   els.count.textContent = "reading…";
@@ -1262,6 +1293,10 @@ function extensionApproval(id) {
   ask.type = "button";
   ask.className = "quiet";
   ask.textContent = "Request approval code";
+  const refuse = document.createElement("button");
+  refuse.type = "button";
+  refuse.className = "quiet danger ext-refuse-btn";
+  refuse.textContent = "Refuse proposal";
   const form = document.createElement("form");
   form.hidden = true;
   const label = document.createElement("label");
@@ -1297,6 +1332,18 @@ function extensionApproval(id) {
     } catch (err) { note.textContent = err.message; }
     finally { ask.disabled = false; }
   });
+  refuse.addEventListener("click", async () => {
+    refuse.disabled = true;
+    try {
+      await post("refuse", { id, why: "The host declined this extension from the room." });
+      if (els.extNote) els.extNote.textContent = "You declined this proposal. It has been moved to Refused.";
+      await renderExtensions();
+    } catch (err) {
+      note.textContent = err.message;
+    } finally {
+      refuse.disabled = false;
+    }
+  });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     approve.disabled = true;
@@ -1309,7 +1356,7 @@ function extensionApproval(id) {
     } catch (err) { note.textContent = err.message; }
     finally { approve.disabled = false; }
   });
-  details.append(summary, note, plan, ask, form);
+  details.append(summary, note, plan, ask, refuse, form);
   return details;
 }
 
@@ -1531,6 +1578,45 @@ async function renderEnvironments() {
         state.title = [env.refused, env.why].filter(Boolean).join(" — ");
       } else state.textContent = env.why ?? "always here";
       head.appendChild(state);
+      if (env.key === "local") {
+        const reprobeBtn = document.createElement("button");
+        reprobeBtn.type = "button";
+        reprobeBtn.className = "quiet env-reprobe-btn";
+        reprobeBtn.textContent = "Re-probe";
+        reprobeBtn.addEventListener("click", async () => {
+          reprobeBtn.disabled = true;
+          reprobeBtn.textContent = "Probing…";
+          try {
+            await request("/api/probe", { method: "POST" });
+            if (els.envNote) els.envNote.textContent = `Re-probed ${env.label ?? "this machine"}.`;
+            await renderEnvironments();
+          } catch (err) {
+            if (els.envNote) els.envNote.textContent = String(err?.message ?? "could not re-probe this machine");
+          } finally {
+            reprobeBtn.disabled = false;
+            reprobeBtn.textContent = "Re-probe";
+          }
+        });
+        head.appendChild(reprobeBtn);
+      } else if (env.key) {
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.className = "quiet danger env-remove-btn";
+        removeBtn.textContent = "Remove";
+        removeBtn.addEventListener("click", async () => {
+          removeBtn.disabled = true;
+          try {
+            await request(`/api/environments/${encodeURIComponent(env.key)}`, { method: "DELETE" });
+            if (els.envNote) els.envNote.textContent = `Removed '${env.label ?? env.key}'.`;
+            await renderEnvironments();
+          } catch (err) {
+            if (els.envNote) els.envNote.textContent = String(err?.message ?? "could not remove environment");
+          } finally {
+            removeBtn.disabled = false;
+          }
+        });
+        head.appendChild(removeBtn);
+      }
       li.appendChild(head);
       // The capability report is CONTAINED and SCROLLABLE, and it SUMMARISES: a long probe is a count
       // with the full list behind an expansion, so it never overwrites the name or the actions.
@@ -1680,6 +1766,7 @@ async function load() {
     render();
   } catch (error) {
     entries = [];
+    lastRenderedFilesSig = null;
     els.made.dataset.state = "failed";
     els.files.replaceChildren();
     els.files.setAttribute("aria-busy", "false");
@@ -1700,10 +1787,35 @@ function readProvenance(via) {
 // The same reader, reading from the folder this tab opened: the facts say which
 // source and that it is read-only, because "read from disk" was already a lie
 // once for a source that was not the server's.
+function isCurrentFileEditable() {
+  if (!shownFile || els.reader?.dataset.error === "true") return false;
+  if (roomFolder) {
+    return roomFolder.permission === "granted" && roomFolder.mode === "readwrite";
+  }
+  return activeRoot === undefined
+    || activeRoot?.reachableFromThisProcess === true
+    || (activeRoot?.actsVia === "page" && activeRoot?.executor?.connected === true);
+}
+
+function exitEditMode() {
+  if (els.reader) els.reader.dataset.editing = "false";
+  if (els.fileEditor) els.fileEditor.hidden = true;
+  if (els.readerBody) els.readerBody.hidden = false;
+  if (els.fileSave) els.fileSave.hidden = true;
+  if (els.fileCancelEdit) els.fileCancelEdit.hidden = true;
+  if (els.fileEdit) {
+    els.fileEdit.hidden = false;
+    els.fileEdit.disabled = !isCurrentFileEditable();
+  }
+}
+
 async function showRoomFile(name, { reloading = false } = {}) {
   const seq = ++fileReadSeq;
   shownFile = name;
+  exitEditMode();
   els.copy.disabled = true;
+  if (els.fileDownload) els.fileDownload.disabled = true;
+  if (els.fileEdit) els.fileEdit.disabled = true;
   if (els.fileRefresh) {
     els.fileRefresh.disabled = true;
     if (reloading) {
@@ -1728,6 +1840,8 @@ async function showRoomFile(name, { reloading = false } = {}) {
     els.reader.dataset.state = "ready";
     els.reader.dataset.error = "false";
     els.copy.disabled = text.length === 0;
+    if (els.fileDownload) els.fileDownload.disabled = text.length === 0;
+    if (els.fileEdit) els.fileEdit.disabled = !isCurrentFileEditable();
     if (els.readerDetails) els.readerDetails.open = true;
   } catch (error) {
     if (seq !== fileReadSeq || shownFile !== name) return;
@@ -1737,6 +1851,8 @@ async function showRoomFile(name, { reloading = false } = {}) {
     els.reader.dataset.state = "ready";
     els.reader.dataset.error = "true";
     els.copy.disabled = true;
+    if (els.fileDownload) els.fileDownload.disabled = true;
+    if (els.fileEdit) els.fileEdit.disabled = true;
     if (els.readerDetails) els.readerDetails.open = true;
   } finally {
     if (seq === fileReadSeq && shownFile === name) {
@@ -1761,8 +1877,11 @@ function rootLabel() {
 async function showFile(name, { reloading = false } = {}) {
   const seq = ++fileReadSeq;
   shownFile = name;
+  exitEditMode();
   if (roomFolder) return showRoomFile(name, { reloading });
   els.copy.disabled = true;
+  if (els.fileDownload) els.fileDownload.disabled = true;
+  if (els.fileEdit) els.fileEdit.disabled = true;
   if (els.fileRefresh) {
     els.fileRefresh.disabled = true;
     if (reloading) {
@@ -1790,6 +1909,8 @@ async function showFile(name, { reloading = false } = {}) {
       els.reader.dataset.state = "ready";
       els.reader.dataset.error = "false";
       els.copy.disabled = content.length === 0;
+      if (els.fileDownload) els.fileDownload.disabled = content.length === 0;
+      if (els.fileEdit) els.fileEdit.disabled = !isCurrentFileEditable();
     } else {
       // A FAILED read puts the reason where the file's text would have been.
       // The facts line lives behind the Details disclosure (right for a
@@ -1802,6 +1923,8 @@ async function showFile(name, { reloading = false } = {}) {
       els.reader.dataset.state = "ready";
       els.reader.dataset.error = "true";
       els.copy.disabled = true;
+      if (els.fileDownload) els.fileDownload.disabled = true;
+      if (els.fileEdit) els.fileEdit.disabled = true;
       if (els.readerDetails) els.readerDetails.open = true;
     }
   } catch (error) {
@@ -1818,6 +1941,8 @@ async function showFile(name, { reloading = false } = {}) {
     els.reader.dataset.state = "ready";
     els.reader.dataset.error = "true";
     els.copy.disabled = true;
+    if (els.fileDownload) els.fileDownload.disabled = true;
+    if (els.fileEdit) els.fileEdit.disabled = true;
     if (els.readerDetails) els.readerDetails.open = true;
   } finally {
     if (seq === fileReadSeq && shownFile === name) {
@@ -1842,24 +1967,155 @@ async function refreshCurrentFile() {
 
 on(els.fileRefresh, "click", refreshCurrentFile);
 
+on(els.fileEdit, "click", () => {
+  if (!isCurrentFileEditable() || !els.fileEditor) return;
+  els.fileEditor.value = els.readerBody?.textContent ?? "";
+  if (els.reader) els.reader.dataset.editing = "true";
+  if (els.readerBody) els.readerBody.hidden = true;
+  els.fileEditor.hidden = false;
+  if (els.fileEdit) els.fileEdit.hidden = true;
+  if (els.fileSave) {
+    els.fileSave.hidden = false;
+    els.fileSave.disabled = false;
+  }
+  if (els.fileCancelEdit) els.fileCancelEdit.hidden = false;
+  els.fileEditor.focus();
+});
+
+on(els.fileCancelEdit, "click", () => {
+  exitEditMode();
+});
+
+async function saveEditedFile() {
+  if (!shownFile || !els.fileEditor || els.reader?.dataset.editing !== "true") return;
+  const content = els.fileEditor.value;
+  if (els.fileSave) {
+    els.fileSave.disabled = true;
+    els.fileSave.textContent = "Saving…";
+  }
+  try {
+    if (roomFolder) {
+      const written = await writeRoomFile(shownFile, content);
+      const durable = await durableFact();
+      els.readerBody.textContent = content;
+      els.copy.disabled = content.length === 0;
+      if (els.fileDownload) els.fileDownload.disabled = content.length === 0;
+      const modeLabel = roomFolder.mode === "readwrite" ? "read/write" : "read-only";
+      els.readerFacts.textContent = `${written.bytes} ${written.bytes === 1 ? "byte" : "bytes"} · saved to '${roomFolder.name}' in this tab (${modeLabel})`;
+      exitEditMode();
+      finish(`save ${shownFile}`, `wrote ${shownFile} (${size(written.bytes)} observed) in ${roomFolder.name}${durable}`, "good");
+      await loadRoomFolder();
+      return;
+    }
+    const answer = await request("/api/file", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: shownFile, content }),
+    });
+    if (!answer.ok) {
+      const reason = reasonFrom(answer, answer.error ?? "the server refused the save");
+      els.readerFacts.textContent = reason;
+      if (els.readerDetails) els.readerDetails.open = true;
+      setReport(reason, "bad");
+      return;
+    }
+    els.readerBody.textContent = content;
+    els.copy.disabled = content.length === 0;
+    if (els.fileDownload) els.fileDownload.disabled = content.length === 0;
+    els.readerFacts.textContent = `${size(content)} · saved just now`;
+    exitEditMode();
+    const landed = answer.root?.path ?? answer.root?.name ?? answer.root?.label ?? "";
+    finish(`save ${shownFile}`, `${answer.action || `wrote ${shownFile}`}${landed ? ` in ${landed}` : ""}`, "good");
+    await load();
+  } catch (error) {
+    const reason = `Could not save ${shownFile}: ${error?.message ?? error}`;
+    els.readerFacts.textContent = reason;
+    if (els.readerDetails) els.readerDetails.open = true;
+    setReport(reason, "bad");
+  } finally {
+    if (els.fileSave) {
+      els.fileSave.disabled = false;
+      els.fileSave.textContent = "Save";
+    }
+  }
+}
+
+on(els.fileSave, "click", () => void saveEditedFile());
+
+on(els.fileEditor, "keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+    e.preventDefault();
+    void saveEditedFile();
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    exitEditMode();
+  }
+});
+
 on(els.copy, "click", async () => {
   try {
-    await navigator.clipboard.writeText(els.readerBody.textContent ?? "");
-    els.readerFacts.textContent = `Copied ${shownFile} to the clipboard.`;
+    const text = els.reader?.dataset.editing === "true" && els.fileEditor
+      ? els.fileEditor.value
+      : (els.readerBody.textContent ?? "");
+    await navigator.clipboard.writeText(text);
+    els.readerFacts.textContent = `Copied ${shownFile || els.readerTitle?.textContent || "contents"} to the clipboard.`;
   } catch (error) {
     els.readerFacts.textContent = `The clipboard refused: ${error.message}`;
+  }
+});
+
+on(els.fileDownload, "click", () => {
+  const text = els.reader?.dataset.editing === "true" && els.fileEditor
+    ? els.fileEditor.value
+    : (els.readerBody?.textContent ?? "");
+  if (!text) return;
+  const rawName = shownFile || els.readerTitle?.textContent || "voicebox-output.txt";
+  const fileName = String(rawName).split("/").pop()?.replace(/[^\w.-]+/g, "-") || "voicebox-output.txt";
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  if (els.readerFacts) els.readerFacts.textContent = `Downloaded ${fileName}.`;
+});
+
+on(els.sessionCopy, "click", async () => {
+  if (!els.log) return;
+  const items = [...els.log.querySelectorAll("li")].reverse();
+  const lines = items.map((li) => {
+    const said = li.querySelector(".said")?.textContent ?? "";
+    const did = li.querySelector(".did")?.textContent ?? "";
+    return `${said} → ${did}`;
+  });
+  if (lines.length === 0) return;
+  try {
+    await navigator.clipboard.writeText(lines.join("\n"));
+    if (els.sessionCopy) {
+      const prev = els.sessionCopy.textContent;
+      els.sessionCopy.textContent = "Copied";
+      setTimeout(() => { if (els.sessionCopy) els.sessionCopy.textContent = prev; }, 1400);
+    }
+  } catch (err) {
+    setReport(`The clipboard refused: ${err?.message ?? err}`, "bad");
   }
 });
 
 on(els.close, "click", () => {
   ++fileReadSeq;
   shownFile = null;
+  exitEditMode();
   els.reader.dataset.state = "empty";
   els.reader.dataset.error = "false";
   els.reader.dataset.loading = "false";
   els.readerBody.textContent = "";
   els.readerFacts.textContent = "";
   els.copy.disabled = true;
+  if (els.fileDownload) els.fileDownload.disabled = true;
+  if (els.fileEdit) els.fileEdit.disabled = true;
   if (els.fileRefresh) {
     els.fileRefresh.disabled = true;
     els.fileRefresh.removeAttribute("aria-busy");
@@ -1868,6 +2124,96 @@ on(els.close, "click", () => {
   showFileSelection(null);
   document.querySelector(".file-open")?.focus();
 });
+
+function presentInspectionInReader(verb, result, action) {
+  let title = "";
+  let facts = "";
+  let body = "";
+  if (verb === "grep") {
+    const q = result.query ?? action?.query ?? "";
+    const matches = Array.isArray(result.matches) ? result.matches : [];
+    const count = result.count ?? matches.length;
+    title = `Search for “${q}”`;
+    facts = `${count} ${count === 1 ? "match" : "matches"}${result.truncated ? " · showing the first 100" : ""}`;
+    body = matches.length === 0
+      ? `No matches for “${q}”.`
+      : matches.map((m) => `${m.file}:${m.line}: ${m.text}`).join("\n");
+  } else if (verb === "diff") {
+    const file = result.file ?? action?.name ?? "file";
+    title = `Diff of ${file}`;
+    facts = `${result.changed ? "Changes found" : "No changes"} · ${readProvenance(result.via)}`;
+    body = result.diff || (result.changed ? "" : "No differences.");
+  } else if (verb === "git_status") {
+    const files = Array.isArray(result.files) ? result.files : [];
+    title = `Git status (${result.branch || "current branch"})`;
+    const parts = [
+      result.dirty ? `${files.length} changed ${files.length === 1 ? "file" : "files"}` : "Clean working tree",
+      ...(result.upstream ? [`tracking ${result.upstream}`] : []),
+      ...(result.ahead ? [`${result.ahead} ahead`] : []),
+      ...(result.behind ? [`${result.behind} behind`] : []),
+    ];
+    facts = parts.join(" · ");
+    body = files.length === 0
+      ? "Working tree clean."
+      : files.map((f) => `${String(f.status || "?").padEnd(3, " ")}${f.path}${f.staged ? " (staged)" : ""}`).join("\n");
+  } else if (verb === "git_diff") {
+    title = `Git diff${result.staged ? " (staged)" : ""}${result.file ? ` — ${result.file}` : ""}`;
+    facts = result.empty ? "No differences" : size(result.diff ?? "");
+    body = result.empty ? "No differences." : (result.diff ?? "");
+  } else if (verb === "git_log") {
+    const commits = Array.isArray(result.commits) ? result.commits : [];
+    const count = result.count ?? commits.length;
+    title = "Git history";
+    facts = `${count} ${count === 1 ? "commit" : "commits"}`;
+    body = commits.length === 0
+      ? "No commits found."
+      : commits.map((c) => `${String(c.hash ?? "").slice(0, 7)}  ${c.date ? String(c.date).slice(0, 10) : ""}  ${c.author ?? ""} — ${c.message ?? ""}`).join("\n");
+  } else if (verb === "list_agents") {
+    const agents = Array.isArray(result.agents) ? result.agents : [];
+    const count = result.count ?? agents.length;
+    title = "Available agents";
+    facts = `${count} ${count === 1 ? "agent" : "agents"}`;
+    body = agents.length === 0
+      ? "No agents listed."
+      : agents.map((a) => `${a.name || a.id || a.targetKey || "agent"}${a.environmentKey ? ` (${a.environmentKey})` : ""}${a.status ? ` — ${a.status}` : ""}${a.description ? `\n  ${a.description}` : ""}`).join("\n");
+  } else if (verb === "inspect_environment" && result.environment) {
+    const env = result.environment;
+    title = "Environment details";
+    facts = env.platform || "current environment";
+    const toolLines = Object.entries(env.tools ?? {})
+      .filter(([, v]) => v)
+      .map(([k, v]) => `  ${k}: ${v}`);
+    body = [
+      `Platform: ${env.platform ?? "unknown"}`,
+      `Node: ${env.nodeVersion ?? "unknown"}`,
+      `Folder: ${env.cwd ?? "unknown"}`,
+      ...(env.limits?.cpuCount ? [`CPUs: ${env.limits.cpuCount}`] : []),
+      ...(toolLines.length ? ["Tools:", ...toolLines] : []),
+    ].join("\n");
+  } else {
+    return false;
+  }
+  ++fileReadSeq;
+  shownFile = null;
+  exitEditMode();
+  els.readerTitle.textContent = title;
+  els.readerFacts.textContent = facts;
+  els.readerFacts.title = "";
+  els.readerBody.textContent = body;
+  els.reader.dataset.state = "ready";
+  els.reader.dataset.error = "false";
+  els.reader.dataset.loading = "false";
+  els.copy.disabled = body.length === 0;
+  if (els.fileDownload) els.fileDownload.disabled = body.length === 0;
+  if (els.fileRefresh) {
+    els.fileRefresh.disabled = true;
+    els.fileRefresh.removeAttribute("aria-busy");
+    els.fileRefresh.textContent = "Reload";
+  }
+  if (els.fileEdit) els.fileEdit.disabled = true;
+  showFileSelection(null);
+  return true;
+}
 
 // ── the turns ──────────────────────────────────────────────────────────────
 function logTurn(said, outcome) {
@@ -1882,7 +2228,7 @@ function logTurn(said, outcome) {
   if (!els.log || !els.session) return;
   els.log.prepend(li);
   els.session.hidden = false;
-  while (els.log.children.length > 8) els.log.lastElementChild.remove();
+  while (els.log.children.length > 50) els.log.lastElementChild.remove();
 }
 
 function finish(said, outcome, tone) {
@@ -1983,16 +2329,42 @@ async function send(said) {
     if (miniApp && miniAppController) {
       miniAppController.mount(miniApp);
     }
+    if (result.miniAppToolCall && miniAppController?.callTool) {
+      const { name: toolName, args: toolArgs } = result.miniAppToolCall;
+      const appRes = await miniAppController.callTool(toolName, toolArgs);
+      if (!appRes?.ok) {
+        return finish(transcript, `mini-app tool '${toolName}' failed: ${appRes?.error ?? "unknown error"}`, "bad");
+      }
+      const preview = appRes.result !== undefined ? ` → ${JSON.stringify(appRes.result).slice(0, 120)}` : "";
+      finish(transcript, `called mini-app tool '${toolName}'${preview}`, "good");
+      await load();
+      return;
+    }
     const landed = result.root?.path ?? result.root?.name ?? result.root?.label ?? "";
     finish(transcript, result.action ? `${result.action}${landed ? ` in ${landed}` : ""}` : "done", "good");
-    if (answer.action?.verb === "read" && typeof result.content === "string") {
+    const verb = answer.action?.verb;
+    if (verb === "read" && typeof result.content === "string") {
+      shownFile = result.action;
+      exitEditMode();
       els.readerTitle.textContent = result.action;
       els.readerFacts.textContent = `${size(result.content)} · ${readProvenance(result.via)}`;
       els.readerFacts.title = `${rootLabel()}${result.action}, read just now`;
       els.readerBody.textContent = result.content;
       els.reader.dataset.state = "ready";
+      els.reader.dataset.error = "false";
       els.copy.disabled = result.content.length === 0;
+      if (els.fileDownload) els.fileDownload.disabled = result.content.length === 0;
+      if (els.fileRefresh) {
+        els.fileRefresh.disabled = false;
+        els.fileRefresh.removeAttribute("aria-busy");
+        els.fileRefresh.textContent = "Reload";
+      }
+      if (els.fileEdit) els.fileEdit.disabled = !isCurrentFileEditable();
       showFileSelection(result.action);
+    } else if (verb && presentInspectionInReader(verb, result, answer.action)) {
+      // Rich inspection output rendered in #reader (voicebox-beads-k7cz)
+    } else if ((verb === "edit" || verb === "write" || verb === "undo") && shownFile && (result.file === shownFile || answer.action?.name === shownFile)) {
+      await showFile(shownFile, { reloading: true });
     }
     await load();
   } catch (error) {
@@ -2110,6 +2482,7 @@ if (els.micDock && els.stage && els.mic) {
   new MutationObserver(paintDock).observe(els.stage, { attributes: true, attributeFilter: ["data-voice"] });
 }
 on(els.refresh, "click", load);
+on(els.undoLast, "click", () => void send("undo"));
 on(els.deleteConfirmYes, "click", () => void confirmDelete());
 // CLOSING WITHOUT AN ANSWER KEEPS THE FILE. Keep, Esc, the X, and a click outside all arrive here;
 // confirmDelete() clears pendingDelete before it closes the dialog, so a confirmed delete does not
@@ -2122,6 +2495,7 @@ els.deleteConfirm?.addEventListener("close", () => {
 });
 on(els.fileFilter, "input", () => { fileFilter = els.fileFilter.value.trim(); showAllFiles = false; render(); });
 on(els.openFolder, "click", openRoomFolder);
+on(els.openOpfsFolder, "click", () => void openOpfsScratchFolder());
 on(els.closeFolder, "click", closeRoomFolder);
 
 // DROP TO READ: the same handle a picker would give, and the path a headless
@@ -2314,6 +2688,12 @@ on(els.micSelect, "change", async () => {
   const choice = devices.inputs.find((d) => d.id === els.micSelect.value);
   devices.prefs.mic = { id: els.micSelect.value, name: choice?.name ?? "" };
   savePrefs();
+  if (window.__voiceboxLiveClient?.state?.capture) {
+    try {
+      await window.__voiceboxLiveClient.stopCapture?.();
+      await window.__voiceboxLiveClient.startCapture?.({ deviceId: devices.prefs.mic.id || null });
+    } catch { /* startCapture surfaces any error via onError */ }
+  }
   renderDevices();
 });
 
@@ -2388,6 +2768,20 @@ on(els.micHotkey, "keydown", (e) => {
 
 window.addEventListener("keydown", (e) => {
   if (e.defaultPrevented) return;
+  // Cmd/Ctrl+K focuses the composer input; Cmd/Ctrl+, opens Settings (voicebox-beads-r0sg)
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
+    if (e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      els.utterance?.focus();
+      els.utterance?.select?.();
+      return;
+    }
+    if (e.key === ",") {
+      e.preventDefault();
+      els.settingsOpen?.click();
+      return;
+    }
+  }
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const active = document.activeElement;
   if (active) {
@@ -2397,6 +2791,11 @@ window.addEventListener("keydown", (e) => {
     }
   }
   if (document.querySelector("dialog[open]")) {
+    return;
+  }
+  if (e.key === "/") {
+    e.preventDefault();
+    els.utterance?.focus();
     return;
   }
   if (e.key && e.key.toUpperCase() === micHotkey.toUpperCase()) {
@@ -3029,6 +3428,13 @@ function meterLevel(value) {
 // still arrives at the audio rate — the honest way to interpolate a coarse
 // signal rather than pretending it is faster than it is.
 const RENDER_POINTS = 160; // drawn points around the ring (was 64, straight-joined)
+const RING_COS = new Float64Array(RENDER_POINTS);
+const RING_SIN = new Float64Array(RENDER_POINTS);
+for (let i = 0; i < RENDER_POINTS; i++) {
+  const angle = (i / RENDER_POINTS) * Math.PI * 2 - Math.PI / 2;
+  RING_COS[i] = Math.cos(angle);
+  RING_SIN[i] = Math.sin(angle);
+}
 let ringPhase = 0;         // where we are rendering, in ring positions
 let ringTarget = 0;        // where the newest data has arrived, in ring positions
 let ringSeen = null;       // the newest sample we have already counted
@@ -3077,12 +3483,11 @@ function drawOutputRing(samples) {
   // Ease the render phase toward the data, so a step arrives as a movement.
   ringPhase += (ringTarget - ringPhase) * 0.18;
 
-  const points = [];
+  const points = new Array(RENDER_POINTS);
   for (let i = 0; i < RENDER_POINTS; i++) {
     const position = ringPhase + (i / RENDER_POINTS) * OUTPUT_SAMPLES;
-    const angle = (i / RENDER_POINTS) * Math.PI * 2 - Math.PI / 2;
     const radius = OUTPUT_BASE + meterLevel(ringAt(samples, position)) * OUTPUT_AMPLITUDE;
-    points.push([OUTPUT_CENTRE + Math.cos(angle) * radius, OUTPUT_CENTRE + Math.sin(angle) * radius]);
+    points[i] = [OUTPUT_CENTRE + RING_COS[i] * radius, OUTPUT_CENTRE + RING_SIN[i] * radius];
   }
   path.setAttribute("d", closedCurve(points));
 }
@@ -3179,6 +3584,7 @@ window.__voiceboxDevices = {
   micId: () => devices.prefs.mic.id || null,
   outputId: () => devices.prefs.out.id || null,
   state: () => ({ ...devices.prefs, policy: devices.policy }),
+  refresh: refreshDevices,
 };
 if (navigator.mediaDevices?.addEventListener) navigator.mediaDevices.addEventListener("devicechange", refreshDevices);
 refreshDevices();
@@ -3289,7 +3695,8 @@ if (els.taskCard) {
       client,
       onViewFiles: async () => {
         await load();
-        if (els.explorer) els.explorer.scrollIntoView({ behavior: "smooth" });
+        const target = els.made ?? els.files;
+        if (target) target.scrollIntoView({ behavior: "smooth" });
       },
       onDismiss: () => {
         taskCardController.setTask(null);
@@ -3324,13 +3731,43 @@ health();
 // this list still showed the old folder — Paul's "files created by a tool do not appear in the UI
 // immediately". Re-listing on the frame is the whole fix: it is one GET, it preserves the open reader and
 // the scroll position, and the arrival mark then fires on the name that is new (data-arrived, ~3 s sweep).
+let activeLiveTurnNode = null;
+let activeLiveTurnRole = null;
+
+window.__voiceboxOnLiveTurnComplete = () => {
+  activeLiveTurnNode = null;
+  activeLiveTurnRole = null;
+};
+
+window.__voiceboxOnLiveText = (text, role = "model") => {
+  const clean = String(text ?? "").trim();
+  if (!clean || !els.log || !els.session) return;
+  const label = role === "user" ? clean : `voice reply`;
+  const outcome = role === "user" ? "spoken turn" : clean;
+  if (activeLiveTurnNode && activeLiveTurnRole === role && activeLiveTurnNode.isConnected) {
+    const quote = activeLiveTurnNode.querySelector(".said");
+    const did = activeLiveTurnNode.querySelector(".did");
+    if (quote) quote.textContent = `“${label}”`;
+    if (did) did.textContent = outcome;
+    return;
+  }
+  logTurn(label, outcome);
+  activeLiveTurnNode = els.log.firstElementChild;
+  activeLiveTurnRole = role;
+};
+
 window.__voiceboxOnToolCalls = (calls) => {
-    for (const call of calls ?? []) {
-      lastToolStatus.set(call.name, { ok: Boolean(call.ok), at: Date.now() });
-    }
-    if (lastToolStatus.size && els.extShelf?.isConnected) void renderExtensions();
-    void load();
-  };
+  activeLiveTurnNode = null;
+  activeLiveTurnRole = null;
+  for (const call of calls ?? []) {
+    lastToolStatus.set(call.name, { ok: Boolean(call.ok), at: Date.now() });
+    const verbLabel = String(call.name ?? "tool").replace(/_/g, " ");
+    const outcome = call.action || (call.ok ? "done" : "the tool call was refused");
+    logTurn(`voice tool: ${verbLabel}`, outcome);
+  }
+  if (lastToolStatus.size && els.extShelf?.isConnected) void renderExtensions();
+  void load();
+};
 window.__voiceboxOnTask = (task) => {
   if (task && taskCardController) {
     taskCardController.setTask(task);
@@ -3342,21 +3779,100 @@ window.__voiceboxOnMiniApp = (miniApp) => {
   }
 };
 
-// ── the interactive mini-app surface (voicebox-beads-5h1) ─────────────────
+// ── the interactive mini-app surface (voicebox-beads-5h1, voicebox-beads-7xbe) ──
 let miniAppController = null;
 if (els.miniAppContainer) {
   let currentDescriptor = null;
   let currentChannel = null;
+  let currentTools = [];
   let isCollapsed = false;
+  let isExpanded = false;
+  const pendingToolCalls = new Map();
+  let nextToolCallId = 1;
+
+  async function syncMiniAppTools(appId, tools) {
+    try {
+      await request("/api/mini-app/tools", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          appId: appId || "active-room-app",
+          title: currentDescriptor?.title || "Interactive Mini-App",
+          tools: Array.isArray(tools) ? tools : [],
+        }),
+      });
+    } catch { /* best-effort sync */ }
+  }
+
+  function handleBridgeEvent(data) {
+    if (!data) return;
+    if ((data.type === "tools_updated" || data.type === "app_ready") && Array.isArray(data.tools)) {
+      currentTools = data.tools;
+      if (window.__voiceboxMiniAppRegistry) {
+        window.__voiceboxMiniAppRegistry.updateTools("active-room-app", data.tools);
+      }
+    } else if (data.type === "tool_result" && data.callId && pendingToolCalls.has(data.callId)) {
+      const entry = pendingToolCalls.get(data.callId);
+      pendingToolCalls.delete(data.callId);
+      clearTimeout(entry.timer);
+      entry.resolve({
+        ok: Boolean(data.ok),
+        result: data.result,
+        error: data.error,
+      });
+    }
+  }
+
+  function callTool(name, args = {}) {
+    if (!currentChannel) {
+      return Promise.resolve({ ok: false, error: "no active mini-app is mounted in the room" });
+    }
+    const callId = `room_call_${nextToolCallId++}_${Date.now().toString(36)}`;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        pendingToolCalls.delete(callId);
+        resolve({ ok: false, error: "mini-app tool execution timed out" });
+      }, 5500);
+      pendingToolCalls.set(callId, { resolve, timer });
+      try {
+        currentChannel.port1.postMessage({
+          type: "call_tool",
+          callId,
+          name,
+          args,
+        });
+      } catch (err) {
+        clearTimeout(timer);
+        pendingToolCalls.delete(callId);
+        resolve({ ok: false, error: err?.message ?? String(err) });
+      }
+    });
+  }
+
+  window.__voiceboxMiniAppRegistry = {
+    updateTools(appId, tools) {
+      currentTools = Array.isArray(tools) ? tools : [];
+      void syncMiniAppTools(appId, currentTools);
+    },
+    getAllTools: () => [...currentTools],
+    executeTool: (name, args) => callTool(name, args),
+  };
 
   function close() {
     els.miniAppContainer.hidden = true;
     if (els.miniAppViewport) els.miniAppViewport.replaceChildren();
+    for (const [callId, entry] of pendingToolCalls.entries()) {
+      clearTimeout(entry.timer);
+      entry.resolve({ ok: false, error: "mini-app closed before tool finished" });
+      pendingToolCalls.delete(callId);
+    }
     if (currentChannel) {
       try { currentChannel.port1.close(); } catch {}
       currentChannel = null;
     }
     currentDescriptor = null;
+    currentTools = [];
+    void syncMiniAppTools("active-room-app", []);
   }
 
   function toggle() {
@@ -3370,12 +3886,24 @@ if (els.miniAppContainer) {
     }
   }
 
+  function expandToggle() {
+    isExpanded = !isExpanded;
+    els.miniAppContainer.dataset.expanded = String(isExpanded);
+    if (els.miniAppExpand) {
+      els.miniAppExpand.setAttribute("aria-label", isExpanded ? "Standard width App" : "Full width App");
+      els.miniAppExpand.setAttribute("title", isExpanded ? "Standard width App" : "Full width App");
+      const use = els.miniAppExpand.querySelector("use");
+      if (use) use.setAttribute("href", isExpanded ? "#i-minimize" : "#i-maximize");
+    }
+  }
+
   function mount(descriptor) {
     if (!descriptor || typeof descriptor.html !== "string") {
       console.warn("[voicebox] mini-app mount requires an html string");
       return;
     }
     currentDescriptor = descriptor;
+    currentTools = [];
     isCollapsed = false;
     els.miniAppContainer.dataset.collapsed = "false";
     els.miniAppContainer.hidden = false;
@@ -3392,16 +3920,11 @@ if (els.miniAppContainer) {
     outer.id = "mini-app-outer-frame";
     outer.title = descriptor.title || "Interactive Mini-App";
 
+    if (currentChannel) {
+      try { currentChannel.port1.close(); } catch {}
+    }
     currentChannel = new MessageChannel();
-    currentChannel.port1.onmessage = (event) => {
-      const data = event.data;
-      if (!data) return;
-      if (data.type === "tools_updated" && Array.isArray(data.tools)) {
-        if (window.__voiceboxMiniAppRegistry) {
-          window.__voiceboxMiniAppRegistry.updateTools("active-room-app", data.tools);
-        }
-      }
-    };
+    currentChannel.port1.onmessage = (event) => handleBridgeEvent(event.data);
 
     const onBridgeHandshake = (e) => {
       if (e.origin !== window.location.origin) return;
@@ -3434,13 +3957,17 @@ if (els.miniAppContainer) {
 
   if (els.miniAppClose) els.miniAppClose.addEventListener("click", close);
   if (els.miniAppToggle) els.miniAppToggle.addEventListener("click", toggle);
+  if (els.miniAppExpand) els.miniAppExpand.addEventListener("click", expandToggle);
   if (els.miniAppReload) els.miniAppReload.addEventListener("click", reload);
 
   miniAppController = {
     mount,
     close,
     toggle,
+    expandToggle,
     reload,
+    callTool,
+    getTools: () => [...currentTools],
     getDescriptor: () => currentDescriptor,
     getContainer: () => els.miniAppContainer,
   };

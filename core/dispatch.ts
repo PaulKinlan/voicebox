@@ -59,9 +59,9 @@ export function dispatchFor(root: RootDescriptor, environment: string): Dispatch
  * write/read/list — the same set lib/commands.mjs declares for the model paths.
  */
 export const CORE_FS_DESCRIPTOR = "voicebox-core-fs";
-export const CORE_FS_VERBS = new Set(["write", "read", "list", "delete", "edit", "diff", "grep", "list_agents", "delegate_task", "contact_agent", "mini_app", "git_status", "git_diff", "git_log", "inspect_environment"]);
+export const CORE_FS_VERBS = new Set(["write", "read", "list", "delete", "edit", "diff", "undo", "grep", "list_agents", "delegate_task", "contact_agent", "mini_app", "git_status", "git_diff", "git_log", "inspect_environment"]);
 
-/** Compute a unified diff between two strings. */
+/** Compute a unified diff between two strings using prefix/suffix trimming and LCS. */
 export function createUnifiedDiff(filename: string, oldStr: string, newStr: string): string {
   if (oldStr === newStr) return "";
   const oldLines = oldStr ? oldStr.split("\n") : [];
@@ -71,23 +71,61 @@ export function createUnifiedDiff(filename: string, oldStr: string, newStr: stri
     `+++ b/${filename}`,
     `@@ -1,${oldLines.length} +1,${newLines.length} @@`,
   ];
-  let i = 0;
-  let j = 0;
-  while (i < oldLines.length || j < newLines.length) {
-    if (i < oldLines.length && j < newLines.length && oldLines[i] === newLines[j]) {
-      lines.push(` ${oldLines[i]}`);
-      i++;
-      j++;
-    } else if (i < oldLines.length && (j >= newLines.length || !newLines.includes(oldLines[i]))) {
-      lines.push(`-${oldLines[i]}`);
-      i++;
-    } else if (j < newLines.length) {
-      lines.push(`+${newLines[j]}`);
-      j++;
-    } else {
-      lines.push(`-${oldLines[i++]}`);
-      lines.push(`+${newLines[j++]}`);
-    }
+
+  let start = 0;
+  while (start < oldLines.length && start < newLines.length && oldLines[start] === newLines[start]) {
+    start++;
   }
+  let endOld = oldLines.length;
+  let endNew = newLines.length;
+  while (endOld > start && endNew > start && oldLines[endOld - 1] === newLines[endNew - 1]) {
+    endOld--;
+    endNew--;
+  }
+
+  for (let idx = 0; idx < start; idx++) {
+    lines.push(` ${oldLines[idx]}`);
+  }
+
+  const midOld = oldLines.slice(start, endOld);
+  const midNew = newLines.slice(start, endNew);
+  const m = midOld.length;
+  const n = midNew.length;
+
+  if (m * n <= 250_000) {
+    const dp = Array.from({ length: m + 1 }, () => new Int32Array(n + 1));
+    for (let i = m - 1; i >= 0; i--) {
+      for (let j = n - 1; j >= 0; j--) {
+        if (midOld[i] === midNew[j]) {
+          dp[i][j] = dp[i + 1][j + 1] + 1;
+        } else {
+          dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+        }
+      }
+    }
+    let i = 0;
+    let j = 0;
+    while (i < m || j < n) {
+      if (i < m && j < n && midOld[i] === midNew[j]) {
+        lines.push(` ${midOld[i]}`);
+        i++;
+        j++;
+      } else if (i < m && (j === n || dp[i + 1][j] >= dp[i][j + 1])) {
+        lines.push(`-${midOld[i]}`);
+        i++;
+      } else {
+        lines.push(`+${midNew[j]}`);
+        j++;
+      }
+    }
+  } else {
+    for (let i = 0; i < m; i++) lines.push(`-${midOld[i]}`);
+    for (let j = 0; j < n; j++) lines.push(`+${midNew[j]}`);
+  }
+
+  for (let idx = endOld; idx < oldLines.length; idx++) {
+    lines.push(` ${oldLines[idx]}`);
+  }
+
   return lines.join("\n");
 }

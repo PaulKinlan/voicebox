@@ -166,11 +166,14 @@ async function permission(
 async function useMachineRoot(message: Record<string, unknown>): Promise<unknown> {
   const requested = String(message.path ?? "").trim();
   const name = String(message.name ?? "").trim() || "project";
+  const hostToken = typeof message.hostToken === "string" ? message.hostToken.trim() : "";
   if (!requested) return fail("bad-request", "a machine root needs a path — the folder the loop should write into");
 
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (hostToken) headers["x-voicebox-host-token"] = hostToken;
   const response = await fetch("/api/root", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers,
     body: JSON.stringify({ project: name, root: { kind: "machine", path: requested } }),
   });
   const declared = (await response.json()) as Record<string, any>;
