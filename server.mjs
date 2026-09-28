@@ -403,12 +403,16 @@ async function callEnvironment(key, pathname, { method = "POST", body = null, ti
   if (!target.origin) {
     return { status: 502, body: { ok: false, refused: "environment-unreachable", why: `'${key}' has no serving origin — a declared environment that was never booted is not a place to run anything` } };
   }
+  // voicebox-beads-pehr: the door verifies the pairing bearer, so the host attaches the one it
+  // holds for this environment (the pairings store — the same credential fetchRemoteAgents uses).
+  // Unpaired: no bearer is attached and the environment's door answers exec-unpaired by name.
+  const callBearer = bearerFor(key);
   const act = { kind: "execute", target: `${target.origin}${pathname}`, tool: `env${pathname.replace(/\//g, ".")}` };
   const attempt = logAttempt(act, null);
   try {
     const answer = await fetch(`${target.origin}${pathname}`, {
       method,
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...(callBearer ? { authorization: `Bearer ${callBearer}` } : {}) },
       ...(body === null ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(Math.max(1000, Math.min(timeoutMs, 70000))),
     });
@@ -2897,7 +2901,15 @@ async function handle(req, res) {
         // fence:true boots the L1 bwrap fence; fence:"l15" boots the L1.5 composition — a transient
         // systemd --user unit whose Exec is the fence (voicebox-beads-8ny). Same declare-and-boot,
         // same rule: the boundary the row carries is measured by the environment's own probe.
-        const booted = parsed.fence === "l15" ? await bootUnitFence(candidate.value) : await bootFence(candidate.value);
+        //
+        // pehr: the boot carries the bearer the fence's door will verify. A fresh key has none
+        // yet — the host MINTS and records its own call bearer at boot (self-pairing: the host
+        // holds both sides of a fence it boots; booting is already the host's act). A remote
+        // re-pairing still goes through /api/pair* and takes effect on the next boot.
+        if (parsed.fence === "l15" && !bearerFor(candidate.value.key)) {
+          recordCallBearer(candidate.value.key, `vbx_${randomBytes(24).toString("hex")}`);
+        }
+        const booted = parsed.fence === "l15" ? await bootUnitFence(candidate.value, { bearer: bearerFor(candidate.value.key) }) : await bootFence(candidate.value);
         if (!booted.ok) return json(res, 502, { ok: false, refused: booted.refused, why: booted.why });
         if (parsed.fence === "l15") bootedUnitKeys.add(candidate.value.key);
         const descriptor = {

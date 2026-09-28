@@ -34,12 +34,17 @@ fi
 # BOOT IDENTITY (xqg's per-boot marker, carried in by the provider): when VOICEBOX_BOOT_MARKER is
 # set it rides the unit's environment through the fence's --setenv into env-serve, which must
 # answer with it — a stranger on a recycled port cannot. 32-hex, minted per boot by the caller.
-MARKER_PROPS=()
+# THE DOOR'S CREDENTIAL (voicebox-beads-pehr): VOICEBOX_BEARER rides the same channel — the
+# pairing bearer at boot time, which env-serve requires before its mutating doors open.
+AUTH_PROPS=()
 if [ -n "${VOICEBOX_BOOT_MARKER:-}" ]; then
-  MARKER_PROPS=(--property=Environment=VOICEBOX_BOOT_MARKER="$VOICEBOX_BOOT_MARKER")
+  AUTH_PROPS+=(--property=Environment=VOICEBOX_BOOT_MARKER="$VOICEBOX_BOOT_MARKER")
+fi
+if [ -n "${VOICEBOX_BEARER:-}" ]; then
+  AUTH_PROPS+=(--property=Environment=VOICEBOX_BEARER="$VOICEBOX_BEARER")
 fi
 exec /usr/bin/systemd-run --user --collect \
-  "${MARKER_PROPS[@]}" \
+  "${AUTH_PROPS[@]}" \
   --unit="$UNIT" \
   --property=ProtectSystem=strict \
   --property=ReadWritePaths="$SANDBOX_HOME" \

@@ -64,6 +64,18 @@ session token, or the room's own origin), the request is forwarded to the enviro
 and the crossing is audited attempt-first like every other act that leaves the host process. The page
 never holds the port; it asks the host.
 
+**The door's credential (voicebox-beads-pehr):** the environment's three mutating routes (`/exec`,
+`POST /git/config`, `POST /git/init`) answer only with the pairing bearer the boot was minted —
+`VOICEBOX_BEARER`, carried beside `VOICEBOX_BOOT_MARKER` through fence-unit.sh → fence.sh `--setenv`,
+verified timing-safe and never echoed in a refusal. Without the gate, any same-machine process that
+reached the loopback port could run commands inside the fence: the fence bounds WHAT a command
+touches; the bearer bounds WHO may ask. A fence the host boots self-pairs — the host mints and
+records its call bearer at boot when the key has none (booting is already the host's act) — and a
+boot minted no bearer keeps the doors closed with `exec-unpaired` (remedy: pair, then re-boot).
+`/health`, `/probe` and `GET /git/config` stay open either way: they are the boundary report, not
+the door. The host's proxy attaches the bearer it holds for the key; a host that holds none gets
+the same named refusal as any stranger.
+
 **What bounds a command here**: the fence's own two axes — the read-only code tree at
 `/srv/voicebox`, the one writable sandbox home, and `/bin` and `/lib` symlinked into the read-only
 `/usr` bind, so there is no host home to read and nothing outside `/usr`, `/etc` and the sandbox home

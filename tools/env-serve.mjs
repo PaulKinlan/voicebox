@@ -7,13 +7,21 @@
  * at boot (the same sandbox-probe the host would run), keeps that report, and
  * serves it on the loopback port the fence names in PORT.
  *
- *   GET  /health      → { ok:true } — liveness, no measurement
+ *   GET  /health      → { ok:true, serves, exec, bootMarker? } — liveness + whether the door is open
  *   GET  /probe       → the environment's own probe report, measured at boot
  *   GET  /            → the probe report (an environment's face is its boundary)
- *   POST /exec        → run a command INSIDE this environment, bounded
+ *   POST /exec        → run a command INSIDE this environment, bounded — PAIRING BEARER required
  *   GET  /git/config  → the global git identity inside this environment
- *   POST /git/config  → set it (name / email) — writes $HOME/.gitconfig, inside the sandbox
- *   POST /git/init    → make the workspace a git repository (idempotent)
+ *   POST /git/config  → set it (name / email) — PAIRING BEARER required
+ *   POST /git/init    → make the workspace a git repository (idempotent) — PAIRING BEARER required
+ *
+ * AUTH (voicebox-beads-pehr): the mutating doors answer only with the pairing bearer this boot
+ * was minted (VOICEBOX_BEARER, carried by the boot channel beside VOICEBOX_BOOT_MARKER). Without
+ * the gate, any same-machine process reaching this loopback port could run commands inside the
+ * fence — the fence bounds WHAT a command touches; nothing else bounds WHO asks. A boot minted
+ * no bearer keeps the doors closed with `exec-unpaired` — pair, then re-boot. /health, /probe
+ * and the git read stay open either way: they are the boundary report, not the door. The
+ * credential is verified timing-safe and never echoed in a refusal.
  *
  * THE COMMAND SURFACE IS INSIDE THE FENCE (voicebox-beads-0vlp). The caller names an argv, or a
  * shell command when it wants pipelines; the fence is what bounds the child — a read-only source
@@ -28,6 +36,7 @@
  */
 import { execFile, spawn } from "node:child_process";
 import { createServer } from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -41,6 +50,17 @@ const WORKSPACE = path.join(HOME, "workspace");
 // with it, so the host that minted it can tell THIS environment from a stranger that grabbed the
 // recycled port first — an open port answering 200 is not proof of who is answering.
 const BOOT_MARKER = process.env.VOICEBOX_BOOT_MARKER ?? null;
+// THE DOOR'S CREDENTIAL (voicebox-beads-pehr): the pairing bearer at boot time, held in memory
+// only. A re-pairing takes effect on the next boot — the same restart contract as the boot marker.
+const BEARER = process.env.VOICEBOX_BEARER ?? null;
+
+/** Length-gated timing-safe compare; the credential is never echoed back in a refusal. */
+function bearerOk(header) {
+  if (!BEARER || typeof header !== "string" || !header.startsWith("Bearer ")) return false;
+  const provided = Buffer.from(header.slice(7));
+  const expected = Buffer.from(BEARER);
+  return provided.length === expected.length && timingSafeEqual(provided, expected);
+}
 
 const EXEC_LIMITS = { timeoutMs: [100, 60000], maxBytes: [1024, 1048576] };
 const EXEC_DEFAULTS = { timeoutMs: 10000, maxBytes: 262144 };
@@ -239,10 +259,21 @@ const send = (res, code, body) => {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, "http://127.0.0.1");
   if (req.method === "GET" && url.pathname === "/health") {
-    return send(res, 200, { ok: true, serves: "env-serve/1", ...(BOOT_MARKER ? { bootMarker: BOOT_MARKER } : {}) });
+    return send(res, 200, { ok: true, serves: "env-serve/2", exec: Boolean(BEARER), ...(BOOT_MARKER ? { bootMarker: BOOT_MARKER } : {}) });
   }
   if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/probe")) {
     return send(res, 200, report);
+  }
+  // THE DOOR'S GATE (voicebox-beads-pehr): every mutating route requires the pairing bearer,
+  // checked before anything is read or run, never trusted from the body, never echoed back.
+  const isDoor = req.method === "POST" && ["/exec", "/git/config", "/git/init"].includes(url.pathname);
+  if (isDoor) {
+    if (!BEARER) {
+      return send(res, 403, { ok: false, refused: "exec-unpaired", why: "this environment booted unpaired, so its work surface is closed — pair it (host-token gated) and re-boot the environment" });
+    }
+    if (!bearerOk(req.headers.authorization)) {
+      return send(res, 403, { ok: false, refused: "unauthenticated", why: "the bearer does not match what this boot was minted — the host pairs, the environment verifies" });
+    }
   }
   if (req.method === "POST" && url.pathname === "/exec") {
     const body = await readJson(req);

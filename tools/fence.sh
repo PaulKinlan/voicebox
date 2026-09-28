@@ -39,6 +39,7 @@ exec /usr/bin/bwrap \
   --setenv PORT "$PORT" \
   --setenv HOME /home/voice \
   --setenv VOICEBOX_BOOT_MARKER "${VOICEBOX_BOOT_MARKER:-}" \
+  --setenv VOICEBOX_BEARER "${VOICEBOX_BEARER:-}" \
   --setenv SANDBOX_PROBE_PATHS /srv/voicebox:/home/voice/workspace \
   --chdir /home/voice \
   --unshare-pid --unshare-uts --die-with-parent --new-session \
