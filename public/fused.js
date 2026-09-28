@@ -1434,7 +1434,7 @@ async function renderExtensions() {
         return extRow({ name: e.name, dotState: "true", stateText, detail });
       });
     });
-    extSection(els.extShelf, shelfRows, "No wasm shelf tools are admitted. A digest-pinned manifest in the wasm shelf directory adds them here.");
+    extSection(els.extShelf, shelfRows, "No wasm shelf tools are allowed yet. A digest-pinned manifest in the wasm shelf directory adds them here.");
 
     const isShelf = (c) => String(c.id ?? "").startsWith("wasm-shelf-");
     extSection(els.extCatalogue, catalogue.filter((c) => !isShelf(c)).map((c) => {
