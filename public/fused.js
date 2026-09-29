@@ -22,6 +22,7 @@ const WANTED = {
   rootKind: "root-kind", madeHeading: "made-heading", emptyLink: "empty-link", listingRoot: "listing-root",
   listTools: "list-tools", fileFilter: "file-filter", showAll: "show-all", listBound: "list-bound",
   openFolder: "open-folder", openOpfsFolder: "open-opfs-folder", closeFolder: "close-folder", roomFolderHint: "room-folder-hint",
+  dropHint: "drop-hint",
   stage: "voice-ring-wrap", mic: "mic", state: "voice-state", micDock: "mic-dock",
   session: "session", log: "session-log", sessionCopy: "session-copy", form: "text-form", utterance: "utterance", send: "send",
   reader: "reader", readerTitle: "reader-title", readerFacts: "file-facts", readerBody: "file-body",
@@ -217,15 +218,28 @@ async function openRoomFolder() {
   }
 }
 
-async function openOpfsScratchFolder(projectName = "scratchpad") {
+// THE BROWSER'S OWN FOLDER, BY NAME (voicebox-beads-vnos): the button opens it and a file-creation turn
+// with no root to write into lands in it, so both go through this one function — the room cannot open one
+// directory and write into another. It mirrors `browser/opfs.ts`'s `opfsRoot()` contract (the same
+// `navigator.storage.getDirectory()` root); the page cannot import the worker's module, so the contract is
+// shared rather than the code.
+const SCRATCHPAD_NAME = "scratchpad";
+
+async function ensureScratchpadFolder(name = SCRATCHPAD_NAME) {
   if (!navigator.storage?.getDirectory) {
-    setReport("This browser does not support Origin Private File System (OPFS) storage.", "bad");
-    return;
+    throw new Error("this browser does not support Origin Private File System (OPFS) storage");
   }
+  const opfsRoot = await navigator.storage.getDirectory();
+  const handle = await opfsRoot.getDirectoryHandle(name, { create: true });
+  // ADOPTED, NOT MERELY HELD: the drawer, the count and the reader all speak about the ACTIVE folder, and a
+  // file written into a folder the page is not showing is a write the person cannot see.
+  await adoptRoomFolder(handle, { makeActive: true, persist: true });
+  return handle;
+}
+
+async function openOpfsScratchFolder(projectName = SCRATCHPAD_NAME) {
   try {
-    const opfsRoot = await navigator.storage.getDirectory();
-    const handle = await opfsRoot.getDirectoryHandle(projectName, { create: true });
-    await adoptRoomFolder(handle, { makeActive: true, persist: true });
+    await ensureScratchpadFolder(projectName);
     setReport(`Opened '${projectName}' in browser storage (OPFS) — turns and edits save here.`, "good");
   } catch (error) {
     setReport(`Could not open browser scratchpad: ${error?.message ?? error}`, "bad");
@@ -803,8 +817,14 @@ function renderEmptyState() {
 
   const sampleList = els.samples;
   // The label goes with the list it labels: a heading left behind over nothing is worse than none.
-  const showSamples = (allowed) => {
-    if (sampleList) sampleList.hidden = !allowed;
+  // `only` narrows the list to the samples that can actually land here (voicebox-beads-vnos): with no
+  // root declared the file-making samples work — the browser scratchpad takes them — while "list files"
+  // does not. Teaching a command the room will refuse is worse than showing nothing.
+  const showSamples = (allowed, only = null) => {
+    if (sampleList) {
+      sampleList.hidden = !allowed;
+      for (const item of sampleList.children) item.hidden = Boolean(only) && item.dataset.kind !== only;
+    }
     if (els.samplesLabel) els.samplesLabel.hidden = !allowed;
   };
 
@@ -831,13 +851,17 @@ function renderEmptyState() {
     // route is the first thing after the sentence — a real link, labelled with
     // where it goes.
     headline.textContent = "Open a project.";
-    // The chip already said the state. This line says only the route.
-    next.textContent = "The environment page is where you choose the folder that turns save into.";
+    // The chip already said the state. This line says only the route — plus the ONE command that lands with
+    // nothing declared, because a page that can honour "make me a file" and does not say so is withholding
+    // the affordance it already has (voicebox-beads-vnos).
+    next.textContent = "The environment page is where you choose the folder that turns save into — or say “create a file called notes.md with hello” and it lands in this browser's scratchpad.";
     if (els.emptyAction) els.emptyAction.hidden = false;
     if (els.emptyLink) els.emptyLink.textContent = "Open the environment page";
     if (els.emptyWhy) { els.emptyWhy.hidden = true; }
-    showSamples(false);
-    setComposerEnabled(false, "no project root is declared, so a turn has nothing to write into");
+    showSamples(true, "file");
+    // The composer is never disabled by capability, only titled by it — and here the honest title is not a
+    // refusal: a file-making turn lands in the browser's scratchpad, and anything else has nowhere to write.
+    setComposerEnabled(false, "a turn that makes a file lands in this browser's scratchpad; anything else needs a project folder", { lead: "" });
     return;
   }
 
@@ -910,7 +934,13 @@ function renderEmptyState() {
 // the empty state: it must not say "Try: create a file…" while the page says
 // nothing typed can land. (The cold read of the first version of this empty
 // state caught exactly that: samples hidden, placeholder still inviting.)
-function setComposerEnabled(canLand, why = "") {
+/**
+ * The composer is never disabled by capability — it is TITLED by it, so a person can still type and find
+ * out. `lead` exists for the one state where the warning is not about refusal (voicebox-beads-vnos): with
+ * no root declared a file-making turn lands in the browser's scratchpad, so a title that opened with "a
+ * turn would be refused here" would be half false, and a half-false warning is the defect itself.
+ */
+function setComposerEnabled(canLand, why = "", { lead = "a turn would be refused here: " } = {}) {
   const input = els.utterance;
   if (!input) return;
   if (canLand) {
@@ -919,7 +949,7 @@ function setComposerEnabled(canLand, why = "") {
     return;
   }
   input.placeholder = "Or type a turn…";
-  if (why) input.title = `a turn would be refused here: ${why}`;
+  if (why) input.title = `${lead}${why}`;
 }
 
 // WHERE IS THIS LIST FROM? The header chip names the ACTIVE root; this names the
@@ -935,7 +965,13 @@ function renderListingRoot() {
   if (roomFolder) {
     line.hidden = false;
     line.dataset.tone = "";
-    line.textContent = `Read-only view of “${roomFolder.name}”${roomTruncated ? ` (first ${ROOM_FOLDER_MAX})` : ""} — turns save to the folder in the header.`;
+    // WHETHER THIS VIEW CAN WRITE IS A FACT, NOT AN ASSUMPTION (voicebox-beads-vnos). The line said
+    // "read-only view" over every room folder, so the scratchpad a create command had just written into
+    // was called read-only by the line directly beneath the write. The folder's own mode is the answer.
+    const writable = roomFolder.permission === "granted" && roomFolder.mode === "readwrite";
+    line.textContent = writable
+      ? `In “${roomFolder.name}”${roomTruncated ? ` (first ${ROOM_FOLDER_MAX})` : ""} — turns save here.`
+      : `Read-only view of “${roomFolder.name}”${roomTruncated ? ` (first ${ROOM_FOLDER_MAX})` : ""} — turns need write access to save here.`;
     return;
   }
   if (listingRefusal) {
@@ -1158,7 +1194,9 @@ function renderAbout() {
   if (!box) return;
   const lines = [];
   if (activeRoot === undefined) lines.push("This server does not say which folder it saves into.");
-  else if (activeRoot === null) lines.push("No folder has been chosen yet, so a typed turn has nowhere to save.");
+  // The drawer's sentence must match the room's behaviour (voicebox-beads-vnos): a file-making turn HAS a
+  // place to save when nothing is declared — the browser scratchpad — and the old line denied it.
+  else if (activeRoot === null) lines.push("No folder has been chosen yet — a typed turn that makes a file goes to the browser scratchpad, and anything else has nowhere to save.");
   else {
     const root = activeRoot.root ?? {};
     const where = activeRoot.facts?.where ?? root.kind ?? "a root";
@@ -2237,6 +2275,35 @@ function finish(said, outcome, tone) {
   logTurn(said, outcome);
 }
 
+/**
+ * WHAT A FILE-CREATION COMMAND LOOKS LIKE — one regex, two callers (voicebox-beads-vnos): the room-folder
+ * branch reads it when a folder is open, and the scratchpad fallback reads it when nothing can take a
+ * write. It is the same shape `lib/resolver.mjs`'s script resolver parses, deliberately: the page and the
+ * loop must not disagree about what "create a file called X with Y" means.
+ */
+const FILE_WRITE_COMMAND = /(?:create|write|make)\s+(?:a\s+)?(?:file\s+)?(?:called\s+)?["']?([\w./-]+)["']?\s*(?:with|containing)?\s*(.*)/i;
+
+/** The name and content a file-creation command carries, stripped of its framing words and its quotes. */
+function readWriteCommand(match) {
+  const [, name, rest] = match;
+  return { name, content: rest.replace(/^(with|containing)\s+/i, "").replace(/^["']|["']$/g, "") };
+}
+
+/**
+ * IS THERE A DECLARED ROOT THAT CAN TAKE A WRITE FROM HERE? The page reads `/api/root` (`loadRoot`), so this
+ * is knowledge rather than a guess: `null` is "nobody has declared one", and a listing the server refused
+ * with `root-not-declared` is the same fact arriving by another route. `undefined` — the question has not
+ * been answered yet — is NOT a no: a turn in that window goes to the server exactly as before, which is the
+ * only answer that cannot be wrong about a root this page has not heard about yet.
+ *
+ * A root that EXISTS but cannot act is deliberately not a fallback case: the room keeps its named refusal
+ * ("the tab that holds this folder is not open"), because quietly writing the file into different storage
+ * would answer a question nobody asked, with a folder nobody chose.
+ */
+function noRootToWriteInto() {
+  return activeRoot === null || listingRefusal?.refused === "root-not-declared";
+}
+
 async function send(said) {
   const transcript = said.trim();
   if (!transcript) return;
@@ -2262,12 +2329,14 @@ async function send(said) {
   if (els.send) { els.send.disabled = true; els.send.textContent = "Sending…"; }
   setReport("Sending…");
 
+  // ONE READ OF WHAT WAS ASKED FOR (voicebox-beads-vnos): the room's own file command, parsed once for the
+  // folder branch and for the scratchpad fallback below, so the two cannot drift.
+  const writeMatch = transcript.match(FILE_WRITE_COMMAND);
+
   // If a room folder is currently active, turns act on that folder directly (voicebox-beads-69d)
   if (roomFolder) {
-    const writeMatch = transcript.match(/(?:create|write|make)\s+(?:a\s+)?(?:file\s+)?(?:called\s+)?["']?([\w./-]+)["']?\s*(?:with|containing)?\s*(.*)/i);
     if (writeMatch) {
-      const [, fileName, rest] = writeMatch;
-      const content = rest.replace(/^(with|containing)\s+/i, "").replace(/^["']|["']$/g, "");
+      const { name: fileName, content } = readWriteCommand(writeMatch);
       if (roomFolder.permission !== "granted" || roomFolder.mode !== "readwrite") {
         if (els.send) { els.send.textContent = "Send"; els.send.disabled = !els.utterance.value.trim(); }
         return finish(transcript, `needs-gesture: '${roomFolder.name}' needs write permission — click 'Restore access' first`, "bad");
@@ -2314,6 +2383,27 @@ async function send(said) {
       if (els.send) { els.send.textContent = "Send"; els.send.disabled = !els.utterance.value.trim(); }
       return;
     }
+  }
+
+  // NO FOLDER, NOTHING THAT CAN TAKE A WRITE, AND A FILE WAS ASKED FOR (voicebox-beads-vnos). This used to
+  // fall through to the server, which has no folder to write into and refuses by name — so the one
+  // affordance this page can always honour, the browser's own storage that the scratchpad button already
+  // opens, was not where "create a file called X" reached. It is the default target now, and the same
+  // `writeRoomFile` path does the work: it resolves the name, writes, reads the bytes back and re-lists, so
+  // the drawer and the count beside it update and the report quotes the size the file system answered with.
+  if (!roomFolder && writeMatch && noRootToWriteInto()) {
+    const { name: fileName, content } = readWriteCommand(writeMatch);
+    try {
+      await ensureScratchpadFolder();
+      const written = await writeRoomFile(fileName, content);
+      const durable = await durableFact();
+      finish(transcript, `wrote ${fileName} (${size(written.bytes)} observed) in Browser Scratchpad (OPFS)${durable}`, "good");
+    } catch (error) {
+      finish(transcript, `could not write '${fileName}': ${error?.message ?? error}`, "bad");
+    } finally {
+      if (els.send) { els.send.textContent = "Send"; els.send.disabled = !els.utterance.value.trim(); }
+    }
+    return;
   }
   try {
     const answer = await turn(transcript);
@@ -2503,11 +2593,35 @@ on(els.closeFolder, "click", closeRoomFolder);
 // directory). Nothing here writes, so a dropped folder is read-only in fact.
 if (els.made) {
   const stop = (event) => { event.preventDefault(); };
-  els.made.addEventListener("dragover", (event) => { stop(event); els.made.classList.add("dropping"); });
-  els.made.addEventListener("dragleave", () => els.made.classList.remove("dropping"));
+  // THE DRAG IS COUNTED, NOT GUESSED (voicebox-beads-n4kw). `dragleave` fires as the pointer crosses onto a
+  // CHILD of the panel, so the old one-line handler removed `dropping` — and the whole drop cue with it —
+  // while the folder was still over the page, then re-added it on the next `dragover`: a cue that flickered
+  // and a target that looked like it could not make up its mind. `enter`/`leave` are balanced per element,
+  // so the depth reaches zero only when the drag has really left the panel. `dragover` still marks the
+  // panel (it is the event that says a drop is allowed here), the drop resets the count because a drop
+  // delivers no matching leave, and `dragend` catches a drag abandoned outside the window.
+  let dragDepth = 0;
+  const paintDrop = () => {
+    const dropping = dragDepth > 0;
+    els.made.classList.toggle("dropping", dropping);
+    if (els.dropHint) els.dropHint.hidden = !dropping;
+  };
+  els.made.addEventListener("dragenter", (event) => { stop(event); dragDepth++; paintDrop(); });
+  els.made.addEventListener("dragover", (event) => { stop(event); dragDepth = Math.max(dragDepth, 1); paintDrop(); });
+  els.made.addEventListener("dragleave", (event) => {
+    stop(event);
+    // A LEAVE WITH NOWHERE TO GO IS A LEAVE FROM THE PANEL: `relatedTarget` is the element the pointer
+    // entered, and null means it left the document (or the drag ended). That fact does not need the
+    // count's opinion, so it resets — which is what makes the cue leave with the drag instead of waiting
+    // for the enters and leaves to balance exactly.
+    dragDepth = event.relatedTarget && els.made.contains(event.relatedTarget) ? Math.max(0, dragDepth - 1) : 0;
+    paintDrop();
+  });
+  els.made.addEventListener("dragend", () => { dragDepth = 0; paintDrop(); });
   els.made.addEventListener("drop", async (event) => {
     stop(event);
-    els.made.classList.remove("dropping");
+    dragDepth = 0;
+    paintDrop();
     const item = [...(event.dataTransfer?.items ?? [])].find((i) => i.kind === "file");
     const handle = await item?.getAsFileSystemHandle?.();
     if (handle?.kind === "directory") adoptRoomFolder(handle);
@@ -3727,14 +3841,17 @@ if (els.taskCard) {
   }
 }
 
-// The empty state teaches the loop with turns the resolver really answers.
+// The empty state teaches the loop with turns the resolver really answers. `kind` separates the commands
+// that MAKE something from the ones that only ask, because the no-project state can honour the first and
+// must not offer the second (voicebox-beads-vnos).
 const SAMPLES = [
-  "create a file called notes.md with the first thing I noticed today",
-  "create a file called ideas.txt with a sorter for walks and reading",
-  "list files",
+  { said: "create a file called notes.md with the first thing I noticed today", kind: "file" },
+  { said: "create a file called ideas.txt with a sorter for walks and reading", kind: "file" },
+  { said: "list files", kind: "ask" },
 ];
-for (const said of SAMPLES) {
+for (const { said, kind } of SAMPLES) {
   const li = document.createElement("li");
+  li.dataset.kind = kind;
   const button = document.createElement("button");
   button.type = "button";
   button.textContent = said;

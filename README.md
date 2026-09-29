@@ -588,6 +588,18 @@ what makes "it cannot reach the network" structural instead of promised.
 - Failures have names: `needs-gesture`, `permission-denied`, `handle-gone`,
   `root-vanished`, `root-unreachable`, `not-found`, `not-a-project`.
 - The room's folder handles (`#open-folder`) provide read/write handles persisted across reloads in IndexedDB, supporting several directories at once with a "Restore access" button when permission regresses to prompt.
+- **The browser's own storage is the room's default writer when nothing else is** (voicebox-beads-vnos):
+  with no folder open and no root declared, `create a file called X with Y` lands in this origin's OPFS
+  `scratchpad/` directory — the same directory `#open-opfs-folder` opens — and the drawer, the count
+  beside it and the turn's own line (`wrote X (N bytes observed) in Browser Scratchpad (OPFS)`) all
+  speak about that folder. The fallback is narrow on purpose: a declared root that simply cannot act
+  keeps its named refusal (writing into different storage would be an answer nobody asked for), and a
+  turn that is not a file command still goes to the server and still refuses by name.
+- The drawer's two folder doors wear the card surface the file rows beside them use, with the stroked
+  folder glyph in the page's own symbol set (voicebox-beads-9rua), and a folder dragged over the panel
+  gets a dashed ring, a backdrop tint and copy that says what dropping does — held by a COUNTED
+  enter/leave pair, so the cue survives the platform's leave-as-the-pointer-crosses-onto-a-child event
+  and clears when the drag really leaves (voicebox-beads-n4kw).
 
 Checks: `npm run test:e1m0` <!-- docs-check: names the mechanism --> (25 acceptance checks, driven in a real headless Chromium).
 Evidence, including what the platform actually does with a dropped folder and the two

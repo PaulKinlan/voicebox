@@ -272,6 +272,17 @@ Hand-written addition (not generated; voicebox-beads-hmco): **the ACP timeout ce
   admission are simulated and say so. A reader should trust that label over any prose, including this file.
   The room's folder handles (`#open-folder`, `#room-folders-bar`) provide read/write handles persisted in IndexedDB
   across reloads, supporting several directories at once with a "Restore access" button when permission drops to prompt.
+  **The browser's own storage is the room's default writer when nothing else is** (voicebox-beads-vnos): a
+  file-creation turn with no folder open and no root declared writes into this origin's OPFS `scratchpad/`
+  directory — the same directory `#open-opfs-folder` opens — and the drawer, the count and the turn's line
+  (`wrote X (N bytes observed) in Browser Scratchpad (OPFS)`) all follow it, through the same `writeRoomFile`
+  that reads the bytes back. The fallback fires only when the drawer has no root that can take a write
+  (nothing declared, or a `root-not-declared` listing refusal): a declared root that merely cannot act keeps
+  its named refusal, and a turn that is not a file command still goes to the server. The drawer's two folder
+  doors wear the card surface and the stroked folder glyph (voicebox-beads-9rua), and the drop target states
+  itself — ring, tint, copy — while a folder is over the panel, held by a counted enter/leave pair so the
+  platform's leave-onto-a-child event does not clear it, and cleared by the leave that leaves or the drop
+  itself (voicebox-beads-n4kw).
   The frontend interface (`public/index.html`, `public/fused.js`, `public/style.css`) is built with modern web
   platform primitives: native modal `<dialog>` (with `closedby="any"` and unified light-dismiss geometry fallbacks),
   `container: env-dialog / inline-size` container queries for component-isolated responsive layout, `<search>` landmark
