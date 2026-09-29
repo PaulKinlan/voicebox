@@ -429,6 +429,38 @@ test("passthrough-network: hanging resolver or uncoded DNS error refuses as brok
   assert.match(servfailDns.why, /broken DNS/i);
   assert.match(servfailDns.why, /resolver failure \(SERVFAIL\)/);
   assert.doesNotMatch(servfailDns.why, /ENOTFOUND/);
+
+  // Shape 5: both TCP controls refused + administrative dns error ("probe disabled by the fence")
+  // must stay DENIED and must NOT claim "name resolution" (pins isResolutionBreak on dnsFieldBroke)
+  const administrativeDnsWithDeniedTcp = decide(
+    fixture((r) => {
+      r.network.outboundTcp443IpLiteral = { ok: false, error: "TCP 443 IP-literal: refused (ECONNREFUSED)", ms: 2 };
+      r.network.outboundTcp80ByName = { ok: false, error: "TCP 80 by name: refused (ECONNREFUSED)", ms: 1 };
+      r.network.cloudMetadataService = { ok: false, error: "timed out after 1500ms", ms: 1501 };
+      r.network.dns = { error: "probe disabled by the fence" };
+    }),
+    netAct,
+  );
+  assert.equal(administrativeDnsWithDeniedTcp.ok, false);
+  assert.equal(administrativeDnsWithDeniedTcp.axis, "passthrough-network");
+  assert.match(administrativeDnsWithDeniedTcp.why, /egress is DENIED/i);
+  assert.doesNotMatch(administrativeDnsWithDeniedTcp.why, /name resolution/i);
+  assert.doesNotMatch(administrativeDnsWithDeniedTcp.why, /broken resolver/i);
+
+  // Shape 6: literal ok + by-name refused + administrative dns error
+  // must refuse as plain contradiction (REACHED out) and must NOT claim broken DNS
+  const administrativeDnsWithReachedLiteral = decide(
+    fixture((r) => {
+      r.network.outboundTcp443IpLiteral = { ok: true, ms: 15 };
+      r.network.outboundTcp80ByName = { ok: false, error: "TCP 80 by name: refused (ECONNREFUSED)", ms: 1 };
+      r.network.dns = { error: "probe disabled by the fence" };
+    }),
+    netAct,
+  );
+  assert.equal(administrativeDnsWithReachedLiteral.ok, false);
+  assert.equal(administrativeDnsWithReachedLiteral.axis, "passthrough-network");
+  assert.match(administrativeDnsWithReachedLiteral.why, /probe REACHED out: network\.outboundTcp443IpLiteral/);
+  assert.doesNotMatch(administrativeDnsWithReachedLiteral.why, /broken DNS/i);
 });
 
 test("FIX 2c (processes): a tool list that did not look for the mechanisms is unmeasured, not denial", () => {

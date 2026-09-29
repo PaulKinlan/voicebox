@@ -283,10 +283,14 @@ export function decide(report: BoundaryReport, act: Act): { ok: true; axis: Boun
       const detail = report.network?.[first];
       const nameError = String(report.network?.outboundTcp80ByName?.error ?? "");
       const dnsError = String(report.network?.dns?.error ?? "");
-      const dnsProblem = (str: string) => /EAI_AGAIN|ENOTFOUND|getaddrinfo|\bDNS\b|resolver/i.test(str);
-      const nameDnsBroke =
-        dnsProblem(nameError) ||
-        (report.network?.dns !== undefined && !report.network?.dns?.value && !!report.network?.dns?.error);
+      const isDnsResolutionBreak = (err: string) =>
+        /EAI_AGAIN|ENOTFOUND|getaddrinfo|\bDNS\b|resolver|ETIMEOUT|SERVFAIL|EAI_FAIL/i.test(err);
+      const dnsFieldBroke =
+        report.network?.dns !== undefined &&
+        !report.network?.dns?.value &&
+        !!report.network?.dns?.error &&
+        (/timed out/i.test(String(report.network.dns.error)) || isDnsResolutionBreak(String(report.network.dns.error)));
+      const nameDnsBroke = isDnsResolutionBreak(nameError) || dnsFieldBroke;
 
       // Separating broken DNS with open IP-literal egress (voicebox-beads-3ryb, a3zx):
       if (first === "outboundTcp443IpLiteral" && nameDnsBroke) {
@@ -372,16 +376,14 @@ export function decide(report: BoundaryReport, act: Act): { ok: true; axis: Boun
       ),
       ...(report.network?.dns ? [`dns: ${report.network.dns.error ?? `ok=${String(report.network.dns.value !== undefined)}`}`] : []),
     ].join("; ");
+    const isDnsResolutionBreak = (err: string) =>
+      /EAI_AGAIN|ENOTFOUND|getaddrinfo|\bDNS\b|resolver|ETIMEOUT|SERVFAIL|EAI_FAIL/i.test(err);
     const dnsFieldBroke =
       report.network?.dns !== undefined &&
       !report.network?.dns?.value &&
       !!report.network?.dns?.error &&
-      /EAI_AGAIN|ENOTFOUND|getaddrinfo|\bDNS\b|resolver|timed out|ETIMEOUT|SERVFAIL|EAI_FAIL/i.test(
-        String(report.network.dns.error),
-      );
-    const nameDnsBrokeInDead = /EAI_AGAIN|ENOTFOUND|getaddrinfo|\bDNS\b|resolver/i.test(
-      String(report.network?.outboundTcp80ByName?.error ?? ""),
-    );
+      (/timed out/i.test(String(report.network.dns.error)) || isDnsResolutionBreak(String(report.network.dns.error)));
+    const nameDnsBrokeInDead = isDnsResolutionBreak(String(report.network?.outboundTcp80ByName?.error ?? ""));
     const dnsBroke =
       dnsFieldBroke ||
       nameDnsBrokeInDead ||
