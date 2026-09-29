@@ -1,0 +1,60 @@
+[
+  {
+    "shot": "01-scratchpad-empty-state.png",
+    "rootChip": "no folder chosen yet",
+    "emptyNext": "The environment page is where you choose the folder that turns save into — or say “create a file called notes.md with hello” and it lands in this browser's scratchpad.",
+    "samples": [
+      "create a file called notes.md with the first thing I noticed today",
+      "create a file called ideas.txt with a sorter for walks and reading"
+    ],
+    "composerTitle": "a turn that makes a file lands in this browser's scratchpad; anything else needs a project folder"
+  },
+  {
+    "shot": "02-scratchpad-after-write.png",
+    "line": "wrote walk-notes.md (31 bytes observed) in Browser Scratchpad (OPFS) — this browser may evict it (storage here is best-effort)",
+    "count": "1 file",
+    "cards": [
+      "walk-notes.md"
+    ],
+    "listing": "In “scratchpad” — turns save here.",
+    "opfsText": "the tide was out past the point"
+  },
+  {
+    "shot": "03-folder-doors-hover.png",
+    "doors": [
+      {
+        "id": "open-folder",
+        "hidden": false,
+        "icons": [
+          "#i-folder"
+        ],
+        "border": "1px solid",
+        "height": 44
+      },
+      {
+        "id": "open-opfs-folder",
+        "hidden": false,
+        "icons": [
+          "#i-folder"
+        ],
+        "border": "1px solid",
+        "height": 44
+      },
+      {
+        "id": "close-folder",
+        "hidden": true,
+        "icons": [],
+        "border": "1px solid",
+        "height": 0
+      }
+    ]
+  },
+  {
+    "shot": "04-drop-cue.png",
+    "dropping": true,
+    "hint": "Drop the folder to open it here — the room reads it in this tab.",
+    "outline": "rgb(152, 173, 255) dashed 2px",
+    "background": "color(srgb 0.596078 0.678431 1 / 0.07)",
+    "shadow": "color(srgb 0.596078 0.678431 1 / 0.08) 0px 0px 0px 6px, color(srgb 0.596078 0.678431 1 / 0.55) 0px 0px 30px -6px"
+  }
+]
