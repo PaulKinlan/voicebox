@@ -69,7 +69,7 @@ input { caret-color: var(--accent); }
 .folder-path .crumb-up { font-weight: 600; font-size: .9375rem; }
 .folder-path .crumb-sep { color: var(--line); }
 
-.made { display: flex; flex-direction: column; align-items: stretch; gap: 8px; inline-size: min(100%, 720px); min-inline-size: 0; text-align: start; container: file-explorer / inline-size; }
+.made { display: flex; flex-direction: column; align-items: stretch; gap: 8px; inline-size: min(100%, 720px); min-inline-size: 0; text-align: start; container: file-explorer / inline-size; transition: background-color 140ms ease-out, box-shadow 140ms ease-out; }
 .made h2 { margin: 0; font-size: 1rem; font-weight: 600; letter-spacing: -.015em; color: var(--ink); }
 .made-note { margin: 0; font-size: .8125rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .files { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; inline-size: 100%; max-block-size: min(40svh, 24rem); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; list-style: none; margin: 0; padding: 6px; }
@@ -94,8 +94,30 @@ input { caret-color: var(--accent); }
 .list-tools input::placeholder { color: var(--muted); opacity: 1; }
 .room-folder { display: flex; align-items: center; gap: 4px 8px; flex-wrap: wrap; inline-size: 100%; margin: 0; }
 .room-folder-hint { font-size: .8125rem; color: var(--muted); }
+/* THE DRAWER'S DOORS ARE BUTTONS, NOT SENTENCES (voicebox-beads-9rua). `.quiet` is the page's resting
+   button — no chrome, muted, which is right in a header row and wrong beside a list of file cards: these
+   three are the affordances that decide what the list IS, and they read as stray text. They get the card
+   shape the file rows beside them already wear: a real edge, the card surface, the one hover tint, and
+   the page's own focus ring (`:focus-visible` above) unchanged. The edge is --line, never --accent — a
+   door is not the thing you came for; the accent arrives on hover and on the icon. */
+.room-folder .quiet { gap: 6px; padding-inline: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--ink); }
+.room-folder .quiet .icon { width: 18px; height: 18px; color: var(--muted); }
+.room-folder .quiet:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--accent) 5%, var(--card)); color: var(--accent); }
+.room-folder .quiet:hover:not(:disabled) .icon { color: var(--accent); }
 .made .quiet { min-block-size: 44px; }
-.made.dropping { outline: 1px dashed var(--accent); outline-offset: 6px; border-radius: 12px; }
+
+/* DROP A FOLDER (voicebox-beads-n4kw). While a drag is in flight the target must be unmistakable — a
+   dashed ring, a tint behind the list and a glow, so the cue survives greyscale and a dim screen — and it
+   must leave the moment the drag does. NOTHING HERE MOVES THE BOX: no padding or margin changes on
+   `dropping`, because a target that shifts under the pointer is how a drop lands on the wrong thing. The
+   copy below is the part that says what dropping will do, and fused.js shows it with the ring. */
+.made.dropping {
+  outline: 2px dashed var(--accent); outline-offset: 4px; border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 8%, transparent), 0 0 30px -6px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.made.dropping .file-open { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+.drop-hint { margin: 0; padding: 8px 10px; border: 1px dashed color-mix(in srgb, var(--accent) 50%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--accent) 6%, var(--card)); color: var(--ink); font-size: .8125rem; }
 .list-bound { margin: 0; padding-block: 8px; font-size: .8125rem; color: var(--muted); }
 .file-open { display: flex; align-items: baseline; gap: 12px; inline-size: 100%; min-block-size: 48px; block-size: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--ink); font-size: .9375rem; text-align: start; }
 .file-open:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--accent) 5%, var(--card)); }
