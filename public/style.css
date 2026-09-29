@@ -158,11 +158,14 @@ input { caret-color: var(--accent); }
    Paul, 2026-09-20 — "bigger and maybe kind of clipped to the inner circle". */
 .input-wave { display: none; position: absolute; inset: 6px; width: auto; height: auto; }
 .input-wave path { fill: var(--accent); opacity: .95; }
-[data-voice="listening"] .input-wave { display: block; }
+[data-voice="listening"] .input-wave,
+[data-voice="speaking"] .input-wave { display: block; }
+[data-voice="speaking"] .input-wave path { fill: var(--good); }
 /* Blue is yours, green is the agent's. Colour carries the distinction so the
    two meters never read as one. */
 [data-voice="listening"] .mic { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
-[data-voice="listening"] .mic-glyph { display: none; }
+[data-voice="listening"] .mic-glyph,
+[data-voice="speaking"] .mic-glyph { display: none; }
 [data-voice="speaking"] .mic { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, var(--line)); }
 .mic.hotkey-active {
   transform: scale(0.95);

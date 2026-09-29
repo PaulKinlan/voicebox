@@ -3501,7 +3501,7 @@ function drawOutputRing(samples) {
 // framing, with attack/decay so quiet speech still moves instead of sitting on
 // the floor (attack is fast, decay is slow — the eye reads movement, and a
 // meter that snaps back to nothing between syllables reads as broken).
-const inputDisplay = new Float32Array(INPUT_BARS_PAGE);
+let inputDisplay = new Float32Array(INPUT_BARS_PAGE);
 let inputInit = false;
 // A running peak, decaying slowly, so the wave uses the space it has at ANY
 // speaking level instead of sitting near the floor for quiet speech. Below a
@@ -3520,7 +3520,7 @@ function drawInputWave(samples) {
   }
   const n = samples.length;
   if (!inputInit || inputDisplay.length !== n) {
-    inputDisplay.fill(0);
+    inputDisplay = new Float32Array(n);
     inputInit = true;
   }
   const middle = 50;
@@ -3559,7 +3559,26 @@ function meters() {
   const voice = els.stage?.dataset.voice;
   if (client?.level && (voice === "listening" || voice === "speaking")) {
     const reading = client.level();
-    if (voice === "listening") drawInputWave(reading.input);
+    if (voice === "listening") {
+      drawInputWave(reading.input);
+    } else if (voice === "speaking") {
+      // During playback, animate the mic button waveform with the speech output energy.
+      // If user input is also captured (full-duplex / barge-in), blend both energies so the
+      // waveform dynamically reflects both Voicebox speech and active mic input.
+      if (reading.input && reading.capture > 0.02) {
+        const out = reading.output;
+        const inp = reading.input;
+        const n = out.length;
+        const blended = new Float32Array(n);
+        for (let i = 0; i < n; i++) {
+          const inputIdx = Math.floor((i / n) * inp.length);
+          blended[i] = Math.max(out[i], inp[inputIdx] ?? 0);
+        }
+        drawInputWave(blended);
+      } else {
+        drawInputWave(reading.output);
+      }
+    }
     drawOutputRing(reading.output);
     window.__voiceboxMeterFrame = requestAnimationFrame(meters);
     return;
