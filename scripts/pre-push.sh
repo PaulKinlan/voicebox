@@ -31,11 +31,16 @@ _refs_file="$(mktemp)"
 if [ -n "${VOICEBOX_PUSH_DESTINATIONS:-}" ]; then printf '%s' "$VOICEBOX_PUSH_DESTINATIONS" > "$_refs_file"; else cat > "$_refs_file" 2>/dev/null || true; fi
 _destination_is_main=0
 _had_destination=0
+_main_remote_sha=""
+_ref_count=0
 while read -r _local_ref _local_sha _remote_ref _remote_sha; do
+  [ -z "$_local_ref" ] && continue
   _had_destination=1
+  _ref_count=$(( _ref_count + 1 ))
   case "$_remote_ref" in
     refs/heads/main|refs/heads/master)
       _destination_is_main=1
+      _main_remote_sha="$_remote_sha"
       if [ "$_current_branch" != "main" ] && [ "$_current_branch" != "master" ]; then
         echo >&2 "[gate] pre-push REFUSED: non-main branch attempting to push to main ref"
         echo >&2 "[gate]   checked-out branch: ${_current_branch:-(detached HEAD)}  local ref offered: ${_local_ref:-?}  destination: ${_remote_ref}"
@@ -156,6 +161,35 @@ _docs_secs="${VOICEBOX_GATE_DOCS_SECS:-30}"
 # minutes to be told you forgot a sentence is a gate people learn to skip.
 run_stage docs-touched "$_docs_secs" node scripts/docs-touched.mjs
 
+# ── TREE-SHA RECEIPT CHECK (voicebox-beads-07b9) ──────────────────────────────
+# When the full gate has already succeeded on the exact same tree (e.g. after a commit
+# message amendment or re-tag without content changes), re-running the 6-minute
+# unit/live/acceptance suite is redundant. If the working tree is clean and the recorded
+# tree SHA matches HEAD^{tree}, skip re-running the test stages.
+_git_dir="$(git rev-parse --git-dir 2>/dev/null || echo ".git")"
+_receipt_file="$_git_dir/voicebox-gate-passed-tree"
+_current_tree="$(git rev-parse HEAD^{tree} 2>/dev/null || true)"
+_is_clean=0
+if [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+  _is_clean=1
+fi
+
+if [ "$_is_clean" = "1" ] && [ -f "$_receipt_file" ]; then
+  _passed_tree="$(cat "$_receipt_file" 2>/dev/null || true)"
+  if [ -n "$_passed_tree" ] && [ "$_passed_tree" = "$_current_tree" ]; then
+    echo "[gate] pre-push: verified tree-SHA receipt matches ($_current_tree) on clean tree — skipping unit/live/acceptance stages"
+    echo "[gate] pre-push: ALL GATES GREEN (tree-receipt)"
+    exit 0
+  fi
+fi
+
+if [ -f scripts/docs-check.mjs ]; then
+  run_stage docs-check "$_docs_secs" node scripts/docs-check.mjs
+fi
+if [ -f scripts/single-owner.mjs ]; then
+  run_stage single-owner "$_docs_secs" node scripts/single-owner.mjs
+fi
+
 node scripts/test-lanes.mjs --check
 run_stage unit "$_unit_secs" npm run test:unit
 
@@ -174,9 +208,9 @@ fi
 
 # ── GATE LOCK (voicebox-beads-6qu) ──────────────────────────────────────────
 # Serializes live browser test runs across concurrent lanes on this loaded box.
-# Unit tests run without the lock; the live and acceptance stages acquire the
-# lock so multiple lanes pushing at once wait their turn instead of launching
-# concurrent Chromium instances that starve each other.
+# Unit tests run without the lock; the live, acceptance, and doc-truth stages
+# acquire the lock so multiple lanes pushing at once wait their turn instead of
+# launching concurrent Chromium instances that starve each other.
 _gate_lock_held=0
 _lock_file="${VOICEBOX_GATE_LOCK:-/tmp/voicebox-gate.lock}"
 _holder_file="${VOICEBOX_GATE_HOLDER:-/tmp/voicebox-gate.holder.json}"
@@ -234,6 +268,52 @@ acquire_gate_lock() {
   _gate_lock_held=1
 }
 
+# ── DOCS-ONLY FAST PATH (voicebox-beads-07b9) ──────────────────────────────────
+# A push to main where only markdown documentation files (*.md) changed against the main remote ref.
+# Docs-touched, docs-check, single-owner, unit, and the doc-truth live tests verify the docs.
+# Must be a single-ref push so multi-ref pushes never skip full checks. Does NOT mint the tree
+# receipt since full live/acceptance did not run.
+_remote_base="origin/main"
+if ! git rev-parse --verify "origin/main^{commit}" >/dev/null 2>&1; then
+  if git rev-parse --verify "origin/master^{commit}" >/dev/null 2>&1; then
+    _remote_base="origin/master"
+  else
+    _remote_base=""
+  fi
+fi
+
+_diff_base=""
+if [ -n "$_main_remote_sha" ] && [ "$_main_remote_sha" != "0000000000000000000000000000000000000000" ] && git rev-parse --verify "$_main_remote_sha^{commit}" >/dev/null 2>&1; then
+  _diff_base="$_main_remote_sha"
+elif [ -n "$_remote_base" ]; then
+  _diff_base="$_remote_base"
+fi
+
+if [ "$_ref_count" -le 1 ] && [ -n "$_diff_base" ]; then
+  _changed_files=$(git diff --name-only "$_diff_base...HEAD" 2>/dev/null || true)
+  if [ -n "$_changed_files" ]; then
+    _non_docs=$(printf '%s\n' "$_changed_files" | grep -v '\.md$' || true)
+    if [ -z "$_non_docs" ]; then
+      # Run the doc-truth live checks on the fast path under the gate lock
+      # (voicebox.test.mjs, changelog-links.test.mjs, rendered-plain-language.test.mjs all drive Chromium):
+      _doc_truth_files=""
+      for _f in tests/voicebox.test.mjs tests/changelog-links.test.mjs tests/rendered-plain-language.test.mjs; do
+        if [ -f "$_f" ]; then
+          _doc_truth_files="$_doc_truth_files $_f"
+        fi
+      done
+      if [ -n "$_doc_truth_files" ]; then
+        acquire_gate_lock
+        run_stage doc-truth "$_unit_secs" node --test $_doc_truth_files
+        release_gate_lock
+      fi
+      echo "[gate] pre-push: docs-only push to main — docs, unit, and doc-truth passed; skipping live/acceptance stages"
+      echo "[gate] pre-push: ALL GATES GREEN (docs-only)"
+      exit 0
+    fi
+  fi
+fi
+
 acquire_gate_lock
 run_stage live "$_live_secs" npm run test:live
 
@@ -241,5 +321,11 @@ if [ "$VOICEBOX_SKIP_ACCEPT" != "1" ]; then
   run_stage acceptance "$_accept_secs" npm run accept
 fi
 release_gate_lock
+
+# ── RECORD VERIFIED TREE RECEIPT (voicebox-beads-07b9) ────────────────────────
+# Record tree SHA when all stages pass on a clean working tree
+if [ "$_is_clean" = "1" ] && [ -n "$_current_tree" ] && [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+  echo "$_current_tree" > "$_receipt_file" 2>/dev/null || true
+fi
 
 echo "[gate] pre-push: ALL GATES GREEN"
