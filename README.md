@@ -134,9 +134,14 @@ timeout from a failing command; both output streams remain visible. See
 Acceptance checks read idempotence on its private instance: three GETs per root/file
 route must return the seeded state and leave its file bytes and write metadata unchanged.
 It does not assert that another lane's shared server stays unchanged.
-The live-tools write check waits for both the file and its successful `write_file`
-websocket event within the same 60-second budget; file creation alone does not
-prove that the page has received the report.
+The live-tools check waits for both the file and its successful `write_file`
+websocket event before it claims a write landed; file creation alone does not
+prove that the page has received the report. It is asked again, bounded and
+corrected, when the model skips a tool call, and its READ half is proved by words
+only the test knows — three words written into a file the live session has never
+seen, two of which must come back spoken — because a model can answer a read
+request out of the conversation without reading anything (voicebox-beads-cx16,
+the instrument defect voicebox-beads-k6uu named in `tests/page-writes.test.mjs`).
 
 One of those tests is a rule rather than a feature: **each declared state-directory fact has exactly
 one computing site**, in `lib/state-dirs.mjs`. `scripts/single-owner.mjs` refuses a second read of the
