@@ -556,7 +556,8 @@ What does not work yet:
 
 - **No always-on conversation.** While a live session is open the mic streams
   continuously, the model replies, and **you can talk over it (voicebox-beads-ldxa)**: the page watches the
-  microphone's own energy and, on sustained speech clear of the audio playing at that moment, flushes
+  microphone's own energy and, on sustained speech clear of the microphone's own recent floor (an adaptive level, so an echo cannot keep
+  interrupting and a normal voice over a loud agent is still heard), flushes
   playback and asks the session to stop — so interrupting is speaking, not reaching for the button. The
   honest limit is named in [the audio path](docs/07-architecture.md): with echo cancellation off and the
   volume up, playback alone can clear those conditions and the page interrupts itself.

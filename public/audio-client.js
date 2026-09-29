@@ -23,21 +23,25 @@ import { floatToPcm16, pcm16ToFloat, isPcm16, energy } from "./pcm.js";
 // measures: `energy(frame)` is the mean absolute amplitude of every captured frame, the same input
 // number the waveform draws.
 //
-// SPEECH IS SUSTAINED AND CLEARER THAN WHATEVER IS PLAYING. Both conditions are required:
+// SPEECH IS SUSTAINED AND ABOVE THE MICROPHONE'S OWN FLOOR. Both conditions are required:
 //   · an absolute floor (`threshold`), so room tone, a fan or a chair creak never interrupts a model;
-//   · clearance over the audio PLAYING RIGHT NOW (`echoMargin`), because with speakers the agent's own
-//     voice arrives at the microphone. The browser's echo canceller is the first line of defence; this
-//     is the second, and it has to be a RATIO rather than a fixed level, because a person interrupting
-//     a loud passage is louder than one interrupting a quiet one.
-// A single frame never counts: `frames` consecutive qualifying frames do, so a click or a cough is not
-// a turn. And one utterance fires ONCE — the latch holds until something plays again — so a long
-// interruption sends one request, not a frame-by-frame storm.
+//   · clearance over the microphone's OWN recent quiet level (`inputFloor` × `floorMargin`), which is where
+//     echo actually lives. While the agent is audible in the room, the floor rises with what the
+//     microphone really receives, so a person must speak above the echo; under echo cancellation the floor
+//     stays at the room's own quiet level and a normal voice clears it easily.
+// THE EARLIER RULE COMPARED THE VOICE AGAINST THE AGENT'S SOURCE AMPLITUDE, and was wrong in the direction
+// that matters: the review (voicebox-astra, 2026-09-29) measured a loud passage (0.40 mean-abs) putting the
+// bar at 0.54 while a normal voice is ~0.13 per frame — so a person could not interrupt a loud agent, which
+// is exactly when interrupting matters most. The source amplitude is not the quantity that arrives at the
+// microphone; the microphone's own floor is.
+// A single frame never counts: `frames` consecutive qualifying frames do, so a click or a cough is not a
+// turn. And one utterance fires ONCE — see the note on the latch in `considerBargeIn`.
 //
-// HONEST LIMIT: with echo cancellation off and the volume up, playback alone can clear both conditions
-// and the page interrupts itself. That is named here (and in the bead) rather than hidden; a vendor VAD
-// would not have that failure mode but would be a second implementation of a thing the provider
-// already does.
-const BARGE_IN = Object.freeze({ threshold: 0.06, frames: 3, echoMargin: 1.35 });
+// HONEST LIMIT: with echo cancellation off and the volume up, the agent's own audio raises the floor and can
+// clear both conditions, and the page interrupts itself. That is named here (and in the bead) rather than
+// hidden; a vendor VAD would not have that failure mode but would be a second implementation of a thing the
+// provider already does.
+const BARGE_IN = Object.freeze({ threshold: 0.06, frames: 3, floorMargin: 3, floorMin: 0.005, floorRise: 0.004 });
 
 const PLAYBACK_RATE = 24000; // provider output, PCM16 (Gemini Live)
 
@@ -103,6 +107,7 @@ export function createAudioClient({
     providerInterrupts: 0,
     bargeInStreak: 0, // consecutive qualifying frames; reset by any frame that does not qualify
     bargeInArmed: true, // false once this speaking phase has been interrupted (one shot per phase)
+    inputFloor: 0.005, // the microphone's own recent quiet level; see considerBargeIn
     captureError: "", // sticky refusal: survives later state emits until the next user action
     captureErrorReason: "", // WHY it refused: "rate-not-declared" is not a device failure
     lastError: "",
@@ -689,28 +694,33 @@ export function createAudioClient({
   }
 
   /**
-   * The detector (voicebox-beads-ldxa). Runs on every captured frame; see BARGE_IN's comment for why
-   * these three conditions and what the honest limit is. Only agent speech is interruptible.
+   * The detector (voicebox-beads-ldxa). Runs on every captured frame; see BARGE_IN's comment for why these
+   * conditions and what the honest limit is. Only agent speech is interruptible.
    */
   function considerBargeIn(value) {
+    // THE MICROPHONE'S OWN FLOOR, updated every frame: down instantly (a quieter frame is evidence) and up
+    // slowly (a louder frame may be speech, not a new floor). This is the quantity echo inflates, and the
+    // reason the bar below is measured at the microphone rather than at the agent's source.
+    state.inputFloor = value < state.inputFloor
+      ? value
+      : Math.min(value, state.inputFloor + BARGE_IN.floorRise);
     if (!state.playbackActive) {
       state.bargeInStreak = 0;
       state.bargeInArmed = true;
       return;
     }
     if (!state.bargeInArmed) return;
-    // WHAT IS PLAYING, measured conservatively: the loudest chunk the playback timeline still holds.
-    // `meter.lastPlayed` (what is audible this instant) is null in the moment between scheduling and
-    // sounding — and in a harness whose clock does not advance — which would silently drop the echo
-    // guard exactly when playback starts, the moment the agent is loudest relative to the user.
-    const playing = meter.playing.reduce((max, entry) => Math.max(max, entry.value), 0);
-    const isSpeech = value >= BARGE_IN.threshold && value >= playing * BARGE_IN.echoMargin;
-    state.bargeInStreak = isSpeech ? state.bargeInStreak + 1 : 0;
+    const bar = Math.max(BARGE_IN.threshold, state.inputFloor * BARGE_IN.floorMargin, BARGE_IN.floorMin);
+    state.bargeInStreak = value >= bar ? state.bargeInStreak + 1 : 0;
     if (state.bargeInStreak < BARGE_IN.frames) return;
     state.bargeInStreak = 0;
-    state.bargeInArmed = false; // one interruption per speaking phase, never one per frame
+    // ONE INTERRUPTION PER SPEAKING PHASE. The reviewer's mutation run showed this latch is not what makes
+    // that true — the FLUSH ends the phase before another frame can qualify (M2, latch removed, stays
+    // green) — so it is recorded as a second guard that no fixture can distinguish rather than advertised
+    // as the mechanism. The property itself is pinned by the "one utterance sends ONE interrupt" test.
+    state.bargeInArmed = false;
     state.bargeIns += 1;
-    onDiagnostic({ kind: "barge-in", energy: value, playing, frames: BARGE_IN.frames });
+    onDiagnostic({ kind: "barge-in", energy: value, floor: state.inputFloor, bar, frames: BARGE_IN.frames });
     interruptSpeech("page");
   }
 

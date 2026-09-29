@@ -73,8 +73,9 @@ const snapshot = () => page.evaluate(() => window.__voiceboxLiveClient.snapshot(
 test.before(async () => {
   scratch = mkdtempSync(path.join(os.tmpdir(), "voicebox-ldxa-"));
   // THREE quiet seconds first, so the test can reach the speaking phase and assert the negative before
-  // the person starts. Then the spoken passage the detector has to act on.
-  const wav = writeWav(scratch, [[3, 0.01], [2.5, 0.5]]);
+  // the person starts; then a NORMAL voice (0.20 peak ≈ 0.13 mean-abs), which the review measured as the
+  // case a source-side margin made impossible to hear over a loud agent.
+  const wav = writeWav(scratch, [[3, 0.01], [2.5, 0.2]]);
   server = await startServer({ cwd: ROOT, env: { VOICEBOX_INSTANCE: "ldxa-barge-in" } });
   page = await launch({ fakeMedia: true, fakeAudioFile: wav });
   await page.goto(`${server.base}/`);
@@ -97,7 +98,22 @@ test("barge-in in the real audio path: quiet speech does not interrupt; speech o
       binaryType: "arraybuffer",
       send(data) {
         this.sent.push(data);
-        if (typeof data === "string" && data.includes('"type":"interrupt"')) this.paused = true;
+        if (typeof data === "string" && data.includes('"type":"interrupt"')) {
+          this.paused = true;
+          if (this.timer) clearInterval(this.timer);
+          return;
+        }
+        // THE AGENT'S LOUDNESS IS INJECTED, DECOUPLED FROM THE MICROPHONE (the review's probe shape): a loud
+        // passage plays regardless of what the person's voice is doing, so the detector is exercised on the
+        // case that matters — a normal voice over a loud agent — rather than on an echo of the same voice.
+        if (!this.timer && !this.paused) {
+          const loud = new ArrayBuffer(0x400);
+          const view = new DataView(loud);
+          for (let i = 0; i < 0x200; i += 1) view.setInt16(i * 2, i % 2 ? 13107 : -13107, true); // ±0.40
+          this.timer = setInterval(() => {
+            if (!this.paused) window.__voiceboxLiveClient.handleMessage(loud.slice(0));
+          }, 120);
+        }
         // Echo audio back, quieter, one playback tick later — the shape of an audible agent. Once an
         // interrupt has been asked for, the echo stops: otherwise the fixture would be a model that keeps
         // talking THROUGH an interruption, and every "playback flushed" assertion would race the echo.

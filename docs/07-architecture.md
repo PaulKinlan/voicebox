@@ -33,9 +33,13 @@ through `pcm-worklet.js`. The generated line below says what the model is; the *
 
 Hand-written addition (voicebox-beads-ldxa): **barge-in has two halves, and both are needed.** While the
 agent speaks the microphone stays open — `stopReply` has always flushed playback without touching capture —
-and the page watches the same per-frame input energy the waveform draws: SUSTAINED input above a floor AND
-clear of the audio playing at that moment (a ratio, so a person interrupting a loud passage still counts)
-flushes playback and sends `{type:"interrupt"}` on the live socket. `/live` answers that with
+and the page watches the same per-frame input energy the waveform draws: SUSTAINED input above an absolute
+floor AND clear of the **microphone's own recent quiet level** (an adaptive floor: a sustained echo raises
+the bar and cannot keep interrupting, while a normal voice over a loud agent still clears it) flushes
+playback and sends `{type:"interrupt"}` on the live socket. The floor is measured at the microphone rather
+than at the agent's source because the source amplitude is not what arrives there — the review measured an
+earlier source-side margin failing exactly where interruption matters most (a loud 0.40 passage put the bar
+at 0.54 against a normal voice's ~0.13 per frame). `/live` answers that with
 `session.interrupt()`: OpenAI cancels its response, **Gemini's barge-in is server-side and names this a no-op
 on purpose**, and the provider's own interrupt event then returns as `state:"interrupt"`, which flushes the
 audio the page had already buffered. Without that last step a server-side interruption stops generation

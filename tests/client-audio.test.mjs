@@ -583,18 +583,38 @@ test("barge-in: sustained speech flushes playback, asks the session to interrupt
   assert.ok(events.diagnostics.some((d) => d.kind === "barge-in"), "the interruption must be NAMED in the diagnostics");
 });
 
-test("barge-in: a quiet room, and the agent's own audio coming back, both change nothing", async () => {
+test("barge-in: room tone, and a SUSTAINED echo, both change nothing (the guard is the microphone's own floor)", async () => {
   const { client, node } = await speakingClient();
 
-  speak(node.port, 0.01, 5); // below the floor: room tone
+  speak(node.port, 0.01, 5); // below the absolute floor: room tone
   assert.equal(client.snapshot().bargeIns, 0, "room tone must not interrupt the model");
 
-  // The echo case: the agent is playing at 0.5, and 0.5 arrives from the microphone — above the floor, but
-  // it does NOT clear the playing level by the margin, which is exactly the speaker-bleed shape.
-  client.handleMessage(chunk(0.5));
-  speak(node.port, 0.5, 5);
-  assert.equal(client.snapshot().bargeIns, 0, "playback bleeding into the microphone must not interrupt the model");
-  assert.equal(client.snapshot().playbackActive, true, "and playback must still be running");
+  // THE ECHO CASE, and the property is the honest one a microphone-side guard can have: the floor LEARNS
+  // the echo. A steady residual may cross the bar once at its onset (nothing measured at the microphone can
+  // tell a loud echo from a loud voice on the first frames), and then the floor has risen to it and the echo
+  // cannot interrupt again — including in later speaking phases, because the floor is not reset.
+  // (An earlier version compared against the agent's SOURCE amplitude instead of the microphone's floor; the
+  // review measured its cost: a normal voice could not interrupt a loud passage at all.)
+  client.handleMessage(chunk(0.4));
+  speak(node.port, 0.2, 60); // ~0.5s of sustained echo
+  const snap = client.snapshot();
+  assert.ok(snap.bargeIns <= 1, `a sustained echo may fire at most once, saw ${snap.bargeIns}`);
+  assert.ok(snap.inputFloor >= 0.19, `the floor must have learned the echo's level, saw ${snap.inputFloor}`);
+});
+
+test("barge-in: a NORMAL voice interrupts a LOUD agent — the case the source-side margin made impossible", async () => {
+  const { client, socket, node } = await speakingClient();
+  // The agent's SOURCE is loud (0.40 mean-abs) while the microphone's floor is the room's own quiet level,
+  // because echo cancellation is the first line of defence — the source/echo divergence the review measured
+  // through the real path, and the acceptance case: a person speaking normally must be heard.
+  client.handleMessage(chunk(0.4));
+  speak(node.port, 0.006, 5); // the room's quiet level, which seeds the floor
+  speak(node.port, 0.13, 3); // a normal voice: ~0.13 mean-abs per frame, far below the old 0.54 bar
+
+  const snap = client.snapshot();
+  assert.equal(snap.bargeIns, 1, `a normal voice must interrupt a loud agent (floor ${snap.inputFloor})`);
+  assert.equal(snap.playbackActive, false, "and playback must be flushed");
+  assert.equal(interruptsSent(socket).length, 1, "with exactly one interrupt frame");
 });
 
 test("barge-in: one utterance sends ONE interrupt, and a new speaking phase arms the detector again", async () => {
