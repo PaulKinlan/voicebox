@@ -3686,7 +3686,13 @@ function meters() {
         const blended = new Float32Array(n);
         for (let i = 0; i < n; i++) {
           const inputIdx = Math.floor((i / n) * inp.length);
-          blended[i] = Math.max(out[i], inp[inputIdx] ?? 0);
+          const outVal = out[i] ?? 0;
+          const inVal = inp[inputIdx] ?? 0;
+          // Avoid raw Math.max which merges peak sets and flattens valleys, saturating
+          // all bars to maxHalf (voicebox-beads-6vs4).
+          // If mic input is active above the gate, blend with output rather than taking max;
+          // otherwise keep the clean speech output contour.
+          blended[i] = inVal > INPUT_GATE ? (outVal * 0.45 + inVal * 0.55) : outVal;
         }
         drawInputWave(blended);
       } else {
