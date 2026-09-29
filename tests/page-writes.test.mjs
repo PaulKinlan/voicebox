@@ -194,16 +194,29 @@ test("the live leg: a spoken write into a page-owned root lands through the chan
   assert.equal(direct.ok, true, JSON.stringify(direct));
   assert.equal(direct.text, "spoken and routed", "the file in the page's root does not match the spoken write, byte for byte");
 
+  // Wait for the write turn to complete so its spoken tail does not bleed into the read turn
+  // (voicebox-beads-k6uu: awaitingToolTurnComplete queues the read turn while turn 1 is speaking,
+  // and turn 1's trailing speech previously caused premature loop exit before read_file was called):
+  for (let i = 0; i < 150 && !states.some((s) => s.state === "turn-complete"); i++) await sleep(200);
+  assert(states.some((s) => s.state === "turn-complete"), "the write turn did not settle");
+
   // And a spoken READ routes the same way and the model hears the content:
   const spokenBefore = texts.length;
+  const toolsBefore = tools.length;
   ws.send(JSON.stringify({ type: "text", text: "Read voice-wrote-this.txt back to me." }));
+
+  // Wait explicitly for the model to issue the read_file tool call:
+  for (let i = 0; i < 300 && !tools.slice(toolsBefore).some((t) => t.calls.some((c) => c.name === "read_file")); i++) await sleep(200);
+  const readCall = tools.slice(toolsBefore).flatMap((t) => t.calls).find((c) => c.name === "read_file");
+  assert(readCall, "the model did not call read_file");
+  assert.equal(readCall.ok, true, `the routed read was refused: ${JSON.stringify(readCall)}`);
+
   let said = "";
   for (let i = 0; i < 300; i++) {
     await sleep(200);
     said = texts.slice(spokenBefore).map((t) => t.text).join(" ").replace(/\s+/g, " ");
     if (/spoken and routed/i.test(said)) break;
   }
-  assert(tools.flatMap((t) => t.calls).some((c) => c.name === "read_file" && c.ok), "the model did not call read_file");
   assert.match(said, /spoken and routed/i, `the model did not speak the page-routed content — heard: ${said.slice(0, 160)}`);
 
   ws.close();
