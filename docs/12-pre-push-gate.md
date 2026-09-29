@@ -36,7 +36,10 @@ not an unbounded run. The lanes are derived from each file's code by
 and helper-mediated browser launches like `page-acceptance.mjs`, and server
 processes like `server.mjs`, `task-fixture.mjs` and `createServer`), so a new test
 cannot escape them the way it could escape a hand-kept list, and `npm test` still
-runs the whole suite for humans and CI. Each file is lexed, not pattern-stripped
+runs the whole suite for humans and CI. Live tests further partition into a concurrent
+server lane (`--lane server`, run with bounded `--test-concurrency=4`) and a serial
+browser lane (`--lane browser`, run with `--test-concurrency=1`), cutting runtime while
+keeping browser launches isolated (`voicebox-beads-ku4f`). Each file is lexed, not pattern-stripped
 (`voicebox-beads-k96l`): a comment is not code, and neither is the source a test
 writes — fixture text in the content of a writeFileSync/writeFile/appendFile call
 is data, which is why the classifier's own test is a unit test. A helper counts by

@@ -10,7 +10,7 @@
     "start": "node server.mjs",
     "test": "node --test tests/*.mjs",
     "test:unit": "node --test $(node scripts/test-lanes.mjs --lane unit)",
-    "test:live": "node --test --test-concurrency=1 $(node scripts/test-lanes.mjs --lane live)",
+    "test:live": "node --test --test-concurrency=4 $(node scripts/test-lanes.mjs --lane server) && node --test --test-concurrency=1 $(node scripts/test-lanes.mjs --lane browser)",
     "accept": "node tools/page-acceptance.mjs",
     "gate": "sh scripts/pre-push.sh",
     "prepare": "git config core.hooksPath .githooks 2>/dev/null || true",

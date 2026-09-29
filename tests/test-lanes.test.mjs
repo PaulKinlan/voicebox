@@ -81,11 +81,38 @@ test("classification detects browser/server helper launches: page-acceptance, ta
 test("the lane scripts exist and swap out at the same files npm test runs", () => {
   const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
   assert.match(pkg.scripts["test:unit"], /test-lanes\.mjs --lane unit/);
-  assert.match(pkg.scripts["test:live"], /--test-concurrency=1/);
-  assert.match(pkg.scripts["test:live"], /--lane live/);
+  assert.match(pkg.scripts["test:live"], /--test-concurrency=4.*--lane server/);
+  assert.match(pkg.scripts["test:live"], /--test-concurrency=1.*--lane browser/);
   // `npm test` stays the whole suite for humans and CI: the split is the GATE's,
   // not a redefinition of what the repository's test command means.
   assert.equal(pkg.scripts.test, "node --test tests/*.mjs");
+});
+
+test("server and browser lanes partition the live suite cleanly (voicebox-beads-ku4f)", () => {
+  const serverFiles = new Set(execFileSync(process.execPath, [path.join(root, "scripts/test-lanes.mjs"), "--lane", "server"], { cwd: root, encoding: "utf8" }).trim().split(/\s+/));
+  const browserFiles = new Set(execFileSync(process.execPath, [path.join(root, "scripts/test-lanes.mjs"), "--lane", "browser"], { cwd: root, encoding: "utf8" }).trim().split(/\s+/));
+  const liveFiles = new Set(execFileSync(process.execPath, [path.join(root, "scripts/test-lanes.mjs"), "--lane", "live"], { cwd: root, encoding: "utf8" }).trim().split(/\s+/));
+
+  // Disjoint sets:
+  for (const file of serverFiles) {
+    assert.equal(browserFiles.has(file), false, `${file} is in both server and browser lanes`);
+  }
+
+  // Union equals live:
+  assert.equal(serverFiles.size + browserFiles.size, liveFiles.size, "server + browser size must equal live size");
+  for (const file of liveFiles) {
+    assert.ok(serverFiles.has(file) || browserFiles.has(file), `${file} is in live but neither server nor browser`);
+  }
+
+  // Known browser tests are in browser lane:
+  assert.ok(browserFiles.has("tests/extension-approval-ui.test.mjs"), "CDP browser test must be in browser lane");
+  assert.ok(browserFiles.has("tests/pre-push.test.mjs"), "page-acceptance test must be in browser lane");
+  assert.ok(browserFiles.has("tests/voicebox.test.mjs"), "direct Chromium spawn test must be in browser lane");
+
+  // Known server tests are in server lane:
+  assert.ok(serverFiles.has("tests/environment-probe.test.mjs"), "server process test must be in server lane");
+  assert.ok(serverFiles.has("tests/tasks-http.test.mjs"), "task-fixture server test must be in server lane");
+  assert.ok(serverFiles.has("tests/wasm-shelf.test.mjs"), "wasm-shelf worker test must be in server lane");
 });
 
 // ── voicebox-beads-k96l: the classifier reads CODE, not the DATA a test writes ──────────

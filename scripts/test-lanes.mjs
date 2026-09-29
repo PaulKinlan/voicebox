@@ -58,22 +58,20 @@ const TESTS = path.join(ROOT, "tests");
  * NAME signal (`name: true`) counts only where its code uses the identifier
  * (voicebox-beads-k96l, the header above).
  */
-const LAUNCHES = [
+const BROWSER_SIGNALS = [
   { what: "a browser over CDP", re: /["'`][^"'`]*\bcdp\.mjs["'`]/ },
   { what: "a browser via page-acceptance", re: /\bpage-acceptance\.mjs\b/ },
-  // Covers tests/lib/server.mjs as well: the separate `from "…lib/server.mjs"` entry
-  // this replaced carried the same label and never matched a file this one missed.
+  { what: "a browser over raw CDP", re: /--remote-debugging-port|DevToolsActivePort/ },
+];
+
+const SERVER_SIGNALS = [
   { what: "a server process", re: /["'`][^"'`]*\bserver\.mjs["'`]/ },
   { what: "a server via task-fixture", re: /["'`][^"'`]*\btask-fixture\.mjs["'`]/ },
   { what: "a server via createServer", re: /\bcreateServer\b/, name: true },
-  // tests/wasm-shelf.test.mjs is LIVE for a leak, not a launch (voicebox-beads-6io;
-  // re-measured for voicebox-beads-k96l, 2026-09-28): its grow-attack worker outlives
-  // terminate() at the 5s deadline by ~52s at ~3 cores, so alone the file ran 63.7s
-  // (190s of CPU) for ~10s of tests — the hold that blew the unit lane's 90s budget
-  // on 2026-09-24 (150s+ on the fleet box). It belongs in the unit lane once
-  // lib/wasm-shelf.mjs's workers die at their deadline, and not before.
   { what: "worker threads or wasm execution", re: /\bcallWasmTool\b/, name: true },
 ];
+
+const LAUNCHES = [...BROWSER_SIGNALS, ...SERVER_SIGNALS];
 
 /** The calls whose CONTENT argument is data the test writes, not code it runs. */
 const WRITES = new Set(["writeFileSync", "writeFile", "appendFileSync", "appendFile"]);
@@ -274,6 +272,8 @@ function read(source) {
 export function classify(root = TESTS) {
   const unit = [];
   const live = [];
+  const server = [];
+  const browser = [];
   /**
    * A repository with no `tests/` classifies as empty rather than throwing:
    * the GATE FIXTURES drive this script inside a disposable repo to test the
@@ -290,14 +290,32 @@ export function classify(root = TESTS) {
     const source = readFileSync(path.join(root, file), "utf8");
     const views = read(source);
     const reading = ({ name }) => (!views ? source : name && !views.evaluates ? views.code : views.text);
-    const launched = LAUNCHES.find((signal) => signal.re.test(reading(signal)));
-    (launched ? live : unit).push({ file, why: launched?.what ?? null });
+
+    // Any browser launch puts the test in the browser lane (strictly serial, CDP contention):
+    const browserLaunch = BROWSER_SIGNALS.find((signal) => signal.re.test(reading(signal)));
+    if (browserLaunch) {
+      const entry = { file, why: browserLaunch.what };
+      browser.push(entry);
+      live.push(entry);
+      continue;
+    }
+
+    // Otherwise, any server or wasm launch puts it in the server lane (concurrent):
+    const serverLaunch = SERVER_SIGNALS.find((signal) => signal.re.test(reading(signal)));
+    if (serverLaunch) {
+      const entry = { file, why: serverLaunch.what };
+      server.push(entry);
+      live.push(entry);
+      continue;
+    }
+
+    unit.push({ file, why: null });
   }
-  return { unit, live };
+  return { unit, live, server, browser };
 }
 
 const laneArg = process.argv.includes("--lane") ? process.argv[process.argv.indexOf("--lane") + 1] : null;
-const { unit, live } = classify();
+const { unit, live, server, browser } = classify();
 
 if (process.argv.includes("--check")) {
   const seen = new Set();
@@ -307,6 +325,7 @@ if (process.argv.includes("--check")) {
     seen.add(file);
   }
   if (unit.length + live.length !== seen.size) problems.push("a file is in neither lane");
+  if (server.length + browser.length !== live.length) problems.push("server and browser do not partition live");
   if (problems.length > 0) {
     console.error(`[lanes] ${problems.join("; ")}`);
     process.exit(1);
@@ -319,8 +338,9 @@ if (process.argv.includes("--check")) {
   process.exit(0);
 }
 
-if (laneArg === "unit" || laneArg === "live") {
-  const files = (laneArg === "unit" ? unit : live).map(({ file }) => `tests/${file}`);
+if (laneArg === "unit" || laneArg === "live" || laneArg === "server" || laneArg === "browser") {
+  const map = { unit, live, server, browser };
+  const files = map[laneArg].map(({ file }) => `tests/${file}`);
   console.log(files.join(" "));
   process.exit(0);
 }
