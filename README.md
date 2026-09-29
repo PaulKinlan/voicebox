@@ -111,6 +111,7 @@ snapshot:
 | [`docs/00-brief.md`](docs/00-brief.md) | **spec** (Paul's words) | what this is meant to be |
 | [`docs/02-environment.md`](docs/02-environment.md), [`docs/05-harvest.md`](docs/05-harvest.md) | **design records** | systems that may not exist yet — allowed to describe the future |
 | [`docs/07-architecture.md`](docs/07-architecture.md), [`docs/08-how-it-runs.md`](docs/08-how-it-runs.md), this README | **snapshots** | what runs *now*; a claim here that the code contradicts is a bug in the document |
+| [`docs/20-webassembly-tools.md`](docs/20-webassembly-tools.md) | **developer guide** | authoring + compiling + admitting + executing WASM shelf tools; the buffer ABI contracts (voicebox-beads-rgvi) |
 
 The blocks marked `BEGIN GENERATED` are written by `scripts/docs-check.mjs` from the code itself, and
 `tests/docs-drift.test.mjs` fails when they drift. The prose **around** them is watched too:
