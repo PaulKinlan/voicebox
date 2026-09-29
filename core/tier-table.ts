@@ -170,11 +170,9 @@ const OUTBOUND_FIELDS = ["outboundTcp443IpLiteral", "outboundTcp80ByName", "clou
  *
  *   · passthrough-network CANNOT BE VERIFIED TODAY, only contradicted. Egress that is ALIVE is refused (the
  *     claim is contradicted). Egress that is DEAD is refused TOO, and that is the point: "did not reach"
- *     conflates DENIED-BY-BOUNDARY with BROKEN-AND-DIDN'T-REACH. Measured on the only real fence we have —
- *     its DNS was broken at probe time (EAI_AGAIN), so the report could not tell a closed door from a
- *     missing resolver, and the same fence reached out on port 80 BY NAME once DNS worked. A network pass
- *     needs a probe that distinguishes denied from broken (an IP-literal control beside the name lookup);
- *     until one exists this axis refuses in both directions and says which one it saw.
+ *     conflates DENIED-BY-BOUNDARY with BROKEN-AND-DIDN'T-REACH. The IP-literal control (outboundTcp443IpLiteral,
+ *     voicebox-beads-4wez, 3ryb) separates 'denied' (literal and by-name both time out) from 'broken DNS'
+ *     (literal ok, by-name EAI_AGAIN / dns error), naming the difference in its refusal text.
  *
  * Every branch below is therefore a statement about a MEASUREMENT, and the refusal quotes the field that
  * fired — never a different field that happens to be in the same report.
@@ -283,6 +281,30 @@ export function decide(report: BoundaryReport, act: Act): { ok: true; axis: Boun
     if (reached.length > 0) {
       const first = reached[0];
       const detail = report.network?.[first];
+      const nameError = String(report.network?.outboundTcp80ByName?.error ?? "");
+      const nameDnsBroke = /EAI_AGAIN|ENOTFOUND|getaddrinfo/i.test(nameError);
+
+      // Separating broken DNS with open IP-literal egress (voicebox-beads-3ryb):
+      if (first === "outboundTcp443IpLiteral" && nameDnsBroke) {
+        const isTransient = /EAI_AGAIN/i.test(nameError);
+        const dnsNature = isTransient
+          ? "transient resolver failure (EAI_AGAIN)"
+          : "authoritative resolver failure (ENOTFOUND)";
+        return {
+          ok: false,
+          refused: "absent-capability",
+          axis,
+          why:
+            `this environment claims the network is bounded, and its own probe REACHED out via the IP-literal control: ` +
+            `network.outboundTcp443IpLiteral = ${JSON.stringify({ ok: detail?.ok, ms: detail?.ms })}, while name lookup failed ` +
+            `due to broken DNS (${dnsNature}: network.outboundTcp80ByName = ${JSON.stringify(report.network?.outboundTcp80ByName?.error)}). ` +
+            `A TCP route to the IP-literal control is alive, not denied, and the resolver failed.`,
+          remedy:
+            "an egress policy, not a hint: deny egress at the fence (including IP-literal destinations) and fix or wait out the resolver, " +
+            "because reaching an IP-literal while DNS fails is an open network with a broken resolver, not a boundary.",
+        };
+      }
+
       return {
         ok: false,
         refused: "absent-capability",
@@ -305,27 +327,64 @@ export function decide(report: BoundaryReport, act: Act): { ok: true; axis: Boun
         remedy: "the self-probe must attempt the outbound checks and record them (ok: false with an error, or ok: true); re-probe before assuming a bounded network",
       };
     }
-    // FIX 3 — THE POLARITY, decided as CONTAINMENT (coord, 2026-09-21). "Did not reach anything" is NOT a
-    // network boundary: it conflates DENIED-BY-BOUNDARY with BROKEN-AND-DIDN'T-REACH. Measured on the only
-    // real fence we have: its DNS was BROKEN at probe time (EAI_AGAIN on the by-name check), and the same
-    // fence went on to REACH OUT on port 80 by name once DNS worked. A tier claiming a bounded network,
-    // meeting a dead egress, is therefore not verified — it is unmeasured by brokenness, and it says so.
+    // FIX 2a (passthrough-network): EVERY SUB-MEASUREMENT THE PASS-THROUGH VERDICT DEPENDS ON must exist.
+    // An axis-level "measuredAny" is not enough — a report carrying only outboundTcp80ByName or only
+    // outboundTcp443IpLiteral cannot substantiate a conclusion that egress is DENIED (which requires both
+    // the IP-literal control and name-based lookup). Unmeasured is not denied.
+    const missing = ["outboundTcp443IpLiteral", "outboundTcp80ByName"].filter(
+      (field) => report.network?.[field] === undefined,
+    );
+    if (missing.length > 0) {
+      return {
+        ok: false,
+        refused: "absent-capability",
+        axis,
+        why:
+          `this environment claims the network is bounded, and its probe never attempted ` +
+          `${missing.map((f) => `network.${f}`).join(" and ")}: ` +
+          `the pass-through verdict requires both the IP-literal control and name lookup — unmeasured is not denied.`,
+        remedy:
+          "re-probe with both the IP-literal control (network.outboundTcp443IpLiteral) and the by-name lookup (network.outboundTcp80ByName) " +
+          "so pass-through policy can be evaluated.",
+      };
+    }
+    // FIX 3 — THE POLARITY, decided as CONTAINMENT (coord, 2026-09-21; refined voicebox-beads-3ryb).
+    // The IP-literal control (outboundTcp443IpLiteral, voicebox-beads-4wez) now separates true 'denied'
+    // (both IP-literal and name lookup timed out / were refused) from 'broken DNS' (name resolution failed
+    // with EAI_AGAIN / ENOTFOUND).
     const deadEvidence = OUTBOUND_FIELDS.map(
       (field) => `${field}: ${report.network?.[field]?.error ?? `ok=${String(report.network?.[field]?.ok)}`}`,
     ).join("; ");
-    const dnsBroke = OUTBOUND_FIELDS.some((field) => /EAI_AGAIN|ENOTFOUND|getaddrinfo|DNS/i.test(String(report.network?.[field]?.error ?? "")));
+    const dnsBroke = OUTBOUND_FIELDS.some((field) => /EAI_AGAIN|ENOTFOUND|getaddrinfo/i.test(String(report.network?.[field]?.error ?? "")));
+
+    if (dnsBroke) {
+      return {
+        ok: false,
+        refused: "absent-capability",
+        axis,
+        why:
+          `this environment claims the network is bounded, and its own probe could not tell a closed door from a ` +
+          `broken resolver: nothing was reached (${deadEvidence}), so the claim is UNVERIFIED rather than ` +
+          `satisfied — and the failure is name resolution, which is brokenness, not a fence: the same fence reached out by name once DNS worked.`,
+        remedy:
+          "re-probe with a working resolver AND an IP-literal control beside the name lookup, so 'denied' and " +
+          "'broken' are distinguishable; until a probe can tell them apart this axis is not verifiable and the " +
+          "act belongs where a fence's egress policy is measured directly.",
+      };
+    }
+
+    // Both IP-literal and name lookup failed without DNS resolution error — egress is genuinely denied:
     return {
       ok: false,
       refused: "absent-capability",
       axis,
       why:
-        `this environment claims the network is bounded, and its own probe could not tell a closed door from a ` +
-        `broken resolver: nothing was reached (${deadEvidence}), so the claim is UNVERIFIED rather than ` +
-        `satisfied${dnsBroke ? " — and the failure is name resolution, which is brokenness, not a fence: the same fence reached out by name once DNS worked" : ""}.`,
+        `this environment claims the network is bounded, and its probe shows egress is DENIED: ` +
+        `both the IP-literal control (network.outboundTcp443IpLiteral) and name lookup (network.outboundTcp80ByName) timed out or were refused (${deadEvidence}), ` +
+        `so the claim is UNVERIFIED by pass-through policy (egress denied).`,
       remedy:
-        "re-probe with a working resolver AND an IP-literal control beside the name lookup, so 'denied' and " +
-        "'broken' are distinguishable; until a probe can tell them apart this axis is not verifiable and the " +
-        "act belongs where a fence's egress policy is measured directly.",
+        "run network acts where egress is permitted: the measured fence successfully denies both " +
+        "IP-literal and name-based outbound connections (IP-literal control confirmed).",
     };
   }
 

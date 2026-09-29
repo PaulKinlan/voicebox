@@ -293,6 +293,66 @@ test("FIX 3: a DNS-broken egress is refused as BROKENNESS, with the field eviden
   assert.match(verdict.why, /reached out by name once DNS worked/i, "the remedy narration is present and must stay unmatched");
 });
 
+test("passthrough-network: separates broken DNS with open egress from egress denied (voicebox-beads-3ryb)", () => {
+  // Case A: broken DNS with working IP-literal control (literal ok, by-name EAI_AGAIN)
+  const brokenDnsWithEgress = decide(
+    fixture((r) => {
+      r.network.outboundTcp443IpLiteral = { ok: true, ms: 15 };
+      r.network.outboundTcp80ByName = { ok: false, error: "EAI_AGAIN", ms: 5 };
+      r.network.cloudMetadataService = { ok: false, error: "timed out", ms: 1500 };
+    }),
+    netAct,
+  );
+  assert.equal(brokenDnsWithEgress.ok, false);
+  assert.equal(brokenDnsWithEgress.axis, "passthrough-network");
+  assert.match(brokenDnsWithEgress.why, /broken DNS/i);
+  assert.match(brokenDnsWithEgress.why, /alive, not denied/i);
+  assert.match(brokenDnsWithEgress.why, /outboundTcp443IpLiteral/);
+  assert.match(brokenDnsWithEgress.why, /EAI_AGAIN/);
+  assert.match(brokenDnsWithEgress.remedy, /deny egress at the fence/i);
+
+  // Case B: egress denied (both IP-literal control and by-name time out without DNS error)
+  const egressDenied = decide(
+    fixture((r) => {
+      r.network.outboundTcp443IpLiteral = { ok: false, error: "timed out after 4000ms", ms: 4002 };
+      r.network.outboundTcp80ByName = { ok: false, error: "timed out after 4000ms", ms: 4001 };
+      r.network.cloudMetadataService = { ok: false, error: "timed out after 1500ms", ms: 1501 };
+    }),
+    netAct,
+  );
+  assert.equal(egressDenied.ok, false);
+  assert.equal(egressDenied.axis, "passthrough-network");
+  assert.match(egressDenied.why, /egress is DENIED/i);
+  assert.match(egressDenied.why, /outboundTcp443IpLiteral/);
+  assert.match(egressDenied.why, /outboundTcp80ByName/);
+  assert.match(egressDenied.remedy, /IP-literal control confirmed/i);
+  assert.doesNotMatch(egressDenied.why, /broken resolver/i);
+});
+
+test("passthrough-network: partial reports refuse as unmeasured and never claim DENIED (FIX 2a, voicebox-beads-3ryb)", () => {
+  // Partial report 1: only outboundTcp80ByName present (refused, no DNS error)
+  const onlyName = decide(
+    { network: { outboundTcp80ByName: { ok: false, error: "refused (ECONNREFUSED)" } } },
+    netAct,
+  );
+  assert.equal(onlyName.ok, false);
+  assert.equal(onlyName.axis, "passthrough-network");
+  assert.match(onlyName.why, /unmeasured is not denied/i);
+  assert.match(onlyName.why, /network\.outboundTcp443IpLiteral/);
+  assert.doesNotMatch(onlyName.why, /egress is DENIED/i);
+
+  // Partial report 2: only outboundTcp443IpLiteral present (dead)
+  const onlyLiteral = decide(
+    { network: { outboundTcp443IpLiteral: { ok: false, error: "timed out after 3000ms" } } },
+    netAct,
+  );
+  assert.equal(onlyLiteral.ok, false);
+  assert.equal(onlyLiteral.axis, "passthrough-network");
+  assert.match(onlyLiteral.why, /unmeasured is not denied/i);
+  assert.match(onlyLiteral.why, /network\.outboundTcp80ByName/);
+  assert.doesNotMatch(onlyLiteral.why, /egress is DENIED/i);
+});
+
 test("FIX 2c (processes): a tool list that did not look for the mechanisms is unmeasured, not denial", () => {
   const verdict = decide({ tools: { curl: { value: "curl 8.1" } } }, execAct);
   assert.equal(verdict.ok, false);
