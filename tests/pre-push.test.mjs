@@ -548,7 +548,7 @@ test('pre-push fast-paths docs-only pushes to main without running live or accep
     assert.match(docsOutput, /DOC TRUTH RAN/, 'doc-truth live checks must run on docs-only fast path');
     assert.doesNotMatch(docsOutput, /LIVE PASS/, 'full live suite must not run for docs-only push to main');
     assert.doesNotMatch(docsOutput, /ACCEPT PASS/, 'acceptance must not run for docs-only push to main');
-    assert.equal(existsSync(lockFile), false, 'gate lock must not be acquired for docs-only push');
+    assert.equal(existsSync(holderFile), false, 'gate lock holder file must be released after docs-only doc-truth');
     assert.equal(existsSync(receiptFile), false, 'docs-only push must not mint tree receipt since live/acceptance did not run');
 
     // Multi-ref push: pushing main + a branch must NOT take docs-only fast path even if only *.md changed

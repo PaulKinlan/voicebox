@@ -206,55 +206,11 @@ if [ "$_had_destination" = "1" ] && [ "$_destination_is_main" != "1" ]; then
   exit 0
 fi
 
-# ── DOCS-ONLY FAST PATH (voicebox-beads-07b9) ──────────────────────────────────
-# A push to main where only markdown documentation files (*.md) changed against the main remote ref.
-# Docs-touched, docs-check, single-owner, unit, and the doc-truth live tests verify the docs.
-# Must be a single-ref push so multi-ref pushes never skip full checks. Does NOT mint the tree
-# receipt since full live/acceptance did not run.
-_remote_base="origin/main"
-if ! git rev-parse --verify "origin/main^{commit}" >/dev/null 2>&1; then
-  if git rev-parse --verify "origin/master^{commit}" >/dev/null 2>&1; then
-    _remote_base="origin/master"
-  else
-    _remote_base=""
-  fi
-fi
-
-_diff_base=""
-if [ -n "$_main_remote_sha" ] && [ "$_main_remote_sha" != "0000000000000000000000000000000000000000" ] && git rev-parse --verify "$_main_remote_sha^{commit}" >/dev/null 2>&1; then
-  _diff_base="$_main_remote_sha"
-elif [ -n "$_remote_base" ]; then
-  _diff_base="$_remote_base"
-fi
-
-if [ "$_ref_count" -le 1 ] && [ -n "$_diff_base" ]; then
-  _changed_files=$(git diff --name-only "$_diff_base...HEAD" 2>/dev/null || true)
-  if [ -n "$_changed_files" ]; then
-    _non_docs=$(printf '%s\n' "$_changed_files" | grep -v '\.md$' || true)
-    if [ -z "$_non_docs" ]; then
-      # Run the doc-truth live checks on the fast path (lock-free, like unit):
-      # voicebox.test.mjs (prose sweep), changelog-links.test.mjs, rendered-plain-language.test.mjs
-      _doc_truth_files=""
-      for _f in tests/voicebox.test.mjs tests/changelog-links.test.mjs tests/rendered-plain-language.test.mjs; do
-        if [ -f "$_f" ]; then
-          _doc_truth_files="$_doc_truth_files $_f"
-        fi
-      done
-      if [ -n "$_doc_truth_files" ]; then
-        run_stage doc-truth "$_unit_secs" node --test $_doc_truth_files
-      fi
-      echo "[gate] pre-push: docs-only push to main — docs, unit, and doc-truth passed; skipping live/acceptance stages"
-      echo "[gate] pre-push: ALL GATES GREEN (docs-only)"
-      exit 0
-    fi
-  fi
-fi
-
 # ── GATE LOCK (voicebox-beads-6qu) ──────────────────────────────────────────
 # Serializes live browser test runs across concurrent lanes on this loaded box.
-# Unit tests run without the lock; the live and acceptance stages acquire the
-# lock so multiple lanes pushing at once wait their turn instead of launching
-# concurrent Chromium instances that starve each other.
+# Unit tests run without the lock; the live, acceptance, and doc-truth stages
+# acquire the lock so multiple lanes pushing at once wait their turn instead of
+# launching concurrent Chromium instances that starve each other.
 _gate_lock_held=0
 _lock_file="${VOICEBOX_GATE_LOCK:-/tmp/voicebox-gate.lock}"
 _holder_file="${VOICEBOX_GATE_HOLDER:-/tmp/voicebox-gate.holder.json}"
@@ -311,6 +267,52 @@ acquire_gate_lock() {
   echo "{\"pid\":$$,\"branch\":\"$_curr_branch\",\"startedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > "$_holder_file" 2>/dev/null || true
   _gate_lock_held=1
 }
+
+# ── DOCS-ONLY FAST PATH (voicebox-beads-07b9) ──────────────────────────────────
+# A push to main where only markdown documentation files (*.md) changed against the main remote ref.
+# Docs-touched, docs-check, single-owner, unit, and the doc-truth live tests verify the docs.
+# Must be a single-ref push so multi-ref pushes never skip full checks. Does NOT mint the tree
+# receipt since full live/acceptance did not run.
+_remote_base="origin/main"
+if ! git rev-parse --verify "origin/main^{commit}" >/dev/null 2>&1; then
+  if git rev-parse --verify "origin/master^{commit}" >/dev/null 2>&1; then
+    _remote_base="origin/master"
+  else
+    _remote_base=""
+  fi
+fi
+
+_diff_base=""
+if [ -n "$_main_remote_sha" ] && [ "$_main_remote_sha" != "0000000000000000000000000000000000000000" ] && git rev-parse --verify "$_main_remote_sha^{commit}" >/dev/null 2>&1; then
+  _diff_base="$_main_remote_sha"
+elif [ -n "$_remote_base" ]; then
+  _diff_base="$_remote_base"
+fi
+
+if [ "$_ref_count" -le 1 ] && [ -n "$_diff_base" ]; then
+  _changed_files=$(git diff --name-only "$_diff_base...HEAD" 2>/dev/null || true)
+  if [ -n "$_changed_files" ]; then
+    _non_docs=$(printf '%s\n' "$_changed_files" | grep -v '\.md$' || true)
+    if [ -z "$_non_docs" ]; then
+      # Run the doc-truth live checks on the fast path under the gate lock
+      # (voicebox.test.mjs, changelog-links.test.mjs, rendered-plain-language.test.mjs all drive Chromium):
+      _doc_truth_files=""
+      for _f in tests/voicebox.test.mjs tests/changelog-links.test.mjs tests/rendered-plain-language.test.mjs; do
+        if [ -f "$_f" ]; then
+          _doc_truth_files="$_doc_truth_files $_f"
+        fi
+      done
+      if [ -n "$_doc_truth_files" ]; then
+        acquire_gate_lock
+        run_stage doc-truth "$_unit_secs" node --test $_doc_truth_files
+        release_gate_lock
+      fi
+      echo "[gate] pre-push: docs-only push to main — docs, unit, and doc-truth passed; skipping live/acceptance stages"
+      echo "[gate] pre-push: ALL GATES GREEN (docs-only)"
+      exit 0
+    fi
+  fi
+fi
 
 acquire_gate_lock
 run_stage live "$_live_secs" npm run test:live
