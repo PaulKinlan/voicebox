@@ -244,6 +244,72 @@ test("LGW follow-up: a module file over the host's read bound is refused BEFORE 
   assert.match(out.why, /the module file is \d+ bytes; the host reads and hashes at most \d+/, "the refusal shows both sizes — and the read never happened");
 });
 
+test("u2lx advisory: child-side watchdog terminates orphan process when stdin is held open", async () => {
+  const { spawn } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const wasmChildPath = fileURLToPath(new URL("../lib/wasm-worker.mjs", import.meta.url));
+  const { WASM_CHILD_WATCHDOG_MS } = await import("../lib/wasm-worker.mjs");
+  assert.equal(typeof WASM_CHILD_WATCHDOG_MS, "number");
+  assert.ok(WASM_CHILD_WATCHDOG_MS >= 5000);
+
+  // Spawn child with a 150ms watchdog and leave stdin open (simulating an orphaned child with unclosed stdin)
+  const started = Date.now();
+  const child = spawn(process.execPath, [wasmChildPath, "150"], {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  const code = await new Promise((resolve, reject) => {
+    const hangTimer = setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch {}
+      reject(new Error("child hung past watchdog deadline — watchdog failed to terminate orphan"));
+    }, 2500);
+    child.once("close", (c) => {
+      clearTimeout(hangTimer);
+      resolve(c);
+    });
+  });
+  const elapsed = Date.now() - started;
+
+  assert.equal(code, 1, "child self-terminates with non-zero exit code on watchdog expiry");
+  assert.ok(elapsed >= 140 && elapsed < 2000, `watchdog fired in expected window (${elapsed}ms)`);
+});
+
+test("u2lx advisory: child stdout exceeding host bound is refused as resource-exceeded and killed with SIGKILL", async () => {
+  const { callWasmTool, WASM_CHILD_MAX_STDOUT_BYTES } = await import("../lib/wasm-shelf.mjs");
+  assert.equal(typeof WASM_CHILD_MAX_STDOUT_BYTES, "number");
+  assert.ok(WASM_CHILD_MAX_STDOUT_BYTES > 0);
+
+  // Module with 40 pages (2.5MB) of initial memory returning 32 and allocating a large output region
+  const BIG_OUTPUT_MODULE = Buffer.from([
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+    ...section(1, [...leb(1), 0x60, 0x01, 0x7f, 0x01, 0x7f]), // type: (i32) -> i32
+    ...section(3, [...leb(1), 0x00]), // one function, type 0
+    ...section(5, [...leb(1), 0x00, 0x28]), // one memory, min 40 pages (2.5MB)
+    ...section(7, [...leb(2), ...name("memory"), 0x02, 0x00, ...name("sha256"), 0x00, 0x00]), // exports
+    ...section(10, [...leb(1), ...leb(4), 0x00, 0x41, 0x20, 0x0b]), // 0 locals, i32.const 32, end
+  ]);
+
+  const file = path.join(scratch, "big-output.wasm");
+  writeFileSync(file, BIG_OUTPUT_MODULE);
+  const tool = {
+    name: "big-output",
+    wasm: {
+      path: file,
+      digest: createHash("sha256").update(BIG_OUTPUT_MODULE).digest("hex"),
+      abi: "buffer-abi/1",
+      input: { addr: 0x400, maxBytes: 8192 },
+      output: { addr: 0x1000, bytes: 1.5 * 1024 * 1024 }, // 1.5MB bytes -> 3MB hex on stdout (> 2MB bound)
+      call: { export: "sha256" },
+    },
+  };
+
+  const out = await callWasmTool(tool, { input: "abc" });
+  assert.equal(out.ok, false);
+  assert.equal(out.refused, "resource-exceeded");
+  assert.match(out.why, /stdout bound/);
+  assert.match(out.why, new RegExp(String(WASM_CHILD_MAX_STDOUT_BYTES)));
+});
+
 test("the REAL shelf on this box, if present, admits hash and answers the KAT through the driver", async (t) => {
   if (!existsSync(REAL_SHELF)) return t.skip("no isocan shelf installed on this box");
   const out = readShelf(REAL_SHELF);

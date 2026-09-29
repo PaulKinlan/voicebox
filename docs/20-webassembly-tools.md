@@ -103,6 +103,8 @@ host constants that no descriptor can raise:
 | worker young-generation heap | 16 MB | `resource-exceeded` |
 | module file size | 16 MB | never read onto the event loop |
 | per-ABI buffer sizes | the table in §2 | written within the ABI's stated maximum |
+| stdout buffer bound | `WASM_CHILD_MAX_STDOUT_BYTES` = 2 MB | `resource-exceeded` (worker killed) |
+| child watchdog ceiling | `WASM_CHILD_WATCHDOG_MS` = 6000ms | child self-exits on orphan window |
 
 The digest binds **bytes, never behavior** — the bounds above bound behavior's *cost*, and they
 are host constants. There is no fuel/instruction metering today, and no concurrency cap on
