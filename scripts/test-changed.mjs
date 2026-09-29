@@ -13,6 +13,9 @@ import { gitEnv } from "../lib/git-env.mjs";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TESTS_DIR = path.join(ROOT, "tests");
 
+const SOURCE_PREFIXES = ["core/", "lib/", "public/", "tools/", "scripts/", "server.mjs"];
+export const isSourceFile = (f) => SOURCE_PREFIXES.some((prefix) => f === prefix || f.startsWith(prefix));
+
 const git = (args, options = {}) => {
   try {
     return execFileSync("git", args, { cwd: ROOT, env: gitEnv(), encoding: "utf8", ...options }).trim();
@@ -83,12 +86,57 @@ export function checkStaticRelevance(changedFiles) {
   return { singleOwner, docsCheck, docsTouched };
 }
 
+/** Find internal modules in lib/tools/core/server that import or reference a file */
+export function getIntermediateImporters(changedFile) {
+  const norm = changedFile.replace(/^\.\//, "");
+  const baseName = path.basename(norm);
+  const ext = path.extname(norm);
+  const stem = path.basename(norm, ext);
+  const importers = new Set();
+
+  const scanDirs = ["lib", "tools", "core"];
+  for (const dir of scanDirs) {
+    const fullDir = path.join(ROOT, dir);
+    if (!existsSync(fullDir)) continue;
+    try {
+      for (const f of readdirSync(fullDir, { recursive: true })) {
+        if (!f.endsWith(".mjs") && !f.endsWith(".js") && !f.endsWith(".ts")) continue;
+        const relPath = path.join(dir, f);
+        if (relPath === norm) continue;
+        try {
+          const content = readFileSync(path.join(ROOT, relPath), "utf8");
+          if (content.includes(baseName) || content.includes(norm) || content.includes(`/${stem}.`) || content.includes(`/${stem}"`) || content.includes(`/${stem}'`)) {
+            importers.add(relPath);
+          }
+        } catch {}
+      }
+    } catch {}
+  }
+  const serverPath = path.join(ROOT, "server.mjs");
+  if (existsSync(serverPath) && norm !== "server.mjs") {
+    try {
+      const serverContent = readFileSync(serverPath, "utf8");
+      if (serverContent.includes(baseName) || serverContent.includes(norm) || serverContent.includes(`/${stem}.`)) {
+        importers.add("server.mjs");
+      }
+    } catch {}
+  }
+  return [...importers];
+}
+
 /** Map changed files to the test files that import or exercise them */
 export function mapToTests(changedFiles, allTestFiles = null) {
   const tests = allTestFiles ?? readdirSync(TESTS_DIR).filter((f) => f.endsWith(".test.mjs"));
   const matched = new Set();
+  const fileQueue = new Set(changedFiles);
 
-  for (const changed of changedFiles) {
+  for (const f of changedFiles) {
+    for (const importer of getIntermediateImporters(f)) {
+      fileQueue.add(importer);
+    }
+  }
+
+  for (const changed of fileQueue) {
     const norm = changed.replace(/^\.\//, "");
     const baseName = path.basename(norm);
     const ext = path.extname(norm);
@@ -101,8 +149,6 @@ export function mapToTests(changedFiles, allTestFiles = null) {
     }
 
     for (const tf of tests) {
-      const tfNorm = `tests/${tf}`;
-
       // Stem matching (e.g. lib/commands.mjs -> tests/commands.test.mjs, commands-*.test.mjs)
       if (tf === `${stem}.test.mjs` || tf.startsWith(`${stem}-`) || tf.startsWith(`${stem}.`)) {
         matched.add(tf);
@@ -132,41 +178,23 @@ export function mapToTests(changedFiles, allTestFiles = null) {
   return [...matched].sort();
 }
 
-/** Partition mapped tests into unit, server, and browser lanes */
+/** Partition mapped tests into unit, server, and browser lanes using test-lanes authority */
 export function partitionTests(matchedTests) {
   const getLane = (lane) => {
     try {
       const out = execFileSync(process.execPath, [path.join(ROOT, "scripts/test-lanes.mjs"), "--lane", lane], {
-        cwd: ROOT, env: gitEnv(), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+        cwd: ROOT, env: gitEnv(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
       }).trim();
       return new Set(out ? out.split(/\s+/).map((f) => path.basename(f)) : []);
-    } catch {
-      return new Set();
+    } catch (e) {
+      console.error(`[test:changed] failed to query test-lanes.mjs --lane ${lane}: ${e.message}`);
+      process.exit(1);
     }
   };
 
   const unitSet = getLane("unit");
-  let serverSet = getLane("server");
-  let browserSet = getLane("browser");
-
-  // Backward compatibility if test-lanes only provides unit and live (pre-ku4f):
-  if (serverSet.size === 0 && browserSet.size === 0) {
-    const liveSet = getLane("live");
-    for (const file of liveSet) {
-      const fullPath = path.join(TESTS_DIR, file);
-      let isBrowser = false;
-      if (existsSync(fullPath)) {
-        try {
-          const content = readFileSync(fullPath, "utf8");
-          if (content.includes("cdp.mjs") || content.includes("page-acceptance.mjs") || content.includes("--remote-debugging-port") || content.includes("DevToolsActivePort")) {
-            isBrowser = true;
-          }
-        } catch {}
-      }
-      if (isBrowser) browserSet.add(file);
-      else serverSet.add(file);
-    }
-  }
+  const serverSet = getLane("server");
+  const browserSet = getLane("browser");
 
   const matchedUnit = [];
   const matchedServer = [];
@@ -176,7 +204,7 @@ export function partitionTests(matchedTests) {
     if (unitSet.has(file)) matchedUnit.push(file);
     else if (browserSet.has(file)) matchedBrowser.push(file);
     else if (serverSet.has(file)) matchedServer.push(file);
-    else matchedUnit.push(file); // fallback
+    else matchedUnit.push(file); // fallback to unit
   }
 
   return { unit: matchedUnit, server: matchedServer, browser: matchedBrowser };
@@ -197,6 +225,7 @@ export function main() {
   const args = process.argv.slice(2);
   const dryRun = args.includes("--dry-run");
   const jsonOutput = args.includes("--json");
+  const allowUnmapped = args.includes("--allow-unmapped");
   let customBase = null;
 
   const filesArg = [];
@@ -212,20 +241,34 @@ export function main() {
 
   if (changedFiles.length === 0) {
     if (jsonOutput) {
-      console.log(JSON.stringify({ changed: [], tests: [], lanes: { unit: [], server: [], browser: [] } }));
+      console.log(JSON.stringify({ changed: [], tests: [], unmapped: [], lanes: { unit: [], server: [], browser: [] } }));
     } else {
       console.log("[test:changed] No changed files detected against git base.");
     }
     return 0;
   }
 
+  // F1 Guard: Ensure every modified source file maps to at least one test
+  const allTests = readdirSync(TESTS_DIR).filter((f) => f.endsWith(".test.mjs"));
+  const unmappedSources = changedFiles.filter((f) => isSourceFile(f) && mapToTests([f], allTests).length === 0);
+
+  if (unmappedSources.length > 0 && !allowUnmapped) {
+    console.error("[test:changed] REFUSED: unmapped-source-file");
+    console.error("The following changed source file(s) have no mapped tests:");
+    for (const f of unmappedSources) console.error(`  · ${f}`);
+    console.error("Every changed source file must map to at least one test. Refusing to report green on unverified code.");
+    console.error("Remedy: add a test for the changed file, pass --allow-unmapped, or run the full suite (npm test).");
+    process.exit(1);
+  }
+
   const relevant = checkStaticRelevance(changedFiles);
-  const matchedTests = mapToTests(changedFiles);
+  const matchedTests = mapToTests(changedFiles, allTests);
   const partitioned = partitionTests(matchedTests);
 
   if (jsonOutput) {
     console.log(JSON.stringify({
       changed: changedFiles,
+      unmapped: unmappedSources,
       tests: matchedTests,
       static: relevant,
       lanes: partitioned,
