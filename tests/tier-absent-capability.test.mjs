@@ -369,6 +369,100 @@ test("passthrough-network: partial reports refuse as unmeasured and never claim 
   assert.doesNotMatch(onlyLiteral.why, /egress is DENIED/i);
 });
 
+test("passthrough-network: hanging resolver or uncoded DNS error refuses as brokenness, not DENIED (voicebox-beads-a3zx)", () => {
+  // Shape 1: Hanging resolver in report.network.dns when both TCP controls time out
+  const hangingDns = decide(
+    fixture((r) => {
+      r.network.outboundTcp443IpLiteral = { ok: false, error: "timed out after 4000ms", ms: 4002 };
+      r.network.outboundTcp80ByName = { ok: false, error: "timed out after 4000ms", ms: 4001 };
+      r.network.cloudMetadataService = { ok: false, error: "timed out after 1500ms", ms: 1501 };
+      r.network.dns = { error: "timed out after 4000ms" };
+    }),
+    netAct,
+  );
+  assert.equal(hangingDns.ok, false);
+  assert.equal(hangingDns.axis, "passthrough-network");
+  assert.match(hangingDns.why, /broken resolver/i);
+  assert.match(hangingDns.why, /dns: timed out after 4000ms/);
+  assert.doesNotMatch(hangingDns.why, /egress is DENIED/i);
+
+  // Shape 2: Uncoded DNS-worded error on outboundTcp80ByName
+  const uncodedDnsWord = decide(
+    fixture((r) => {
+      r.network.outboundTcp443IpLiteral = { ok: false, error: "timed out after 4000ms", ms: 4002 };
+      r.network.outboundTcp80ByName = { ok: false, error: "DNS request timed out", ms: 4001 };
+      r.network.cloudMetadataService = { ok: false, error: "timed out after 1500ms", ms: 1501 };
+    }),
+    netAct,
+  );
+  assert.equal(uncodedDnsWord.ok, false);
+  assert.equal(uncodedDnsWord.axis, "passthrough-network");
+  assert.match(uncodedDnsWord.why, /broken resolver/i);
+  assert.doesNotMatch(uncodedDnsWord.why, /egress is DENIED/i);
+
+  // Shape 3: Hanging resolver with IP-literal control open (Case A with hanging DNS probe)
+  const openEgressHangingDns = decide(
+    fixture((r) => {
+      r.network.outboundTcp443IpLiteral = { ok: true, ms: 15 };
+      r.network.outboundTcp80ByName = { ok: false, error: "timed out after 4000ms", ms: 4001 };
+      r.network.dns = { error: "timed out after 4000ms" };
+    }),
+    netAct,
+  );
+  assert.equal(openEgressHangingDns.ok, false);
+  assert.equal(openEgressHangingDns.axis, "passthrough-network");
+  assert.match(openEgressHangingDns.why, /broken DNS/i);
+  assert.match(openEgressHangingDns.why, /alive, not denied/i);
+  assert.match(openEgressHangingDns.why, /network\.dns = "timed out after 4000ms"/);
+
+  // Shape 4: SERVFAIL dns error must refuse as brokenness and must NOT claim ENOTFOUND (voicebox-beads-a3zx)
+  const servfailDns = decide(
+    fixture((r) => {
+      r.network.outboundTcp443IpLiteral = { ok: true, ms: 15 };
+      r.network.outboundTcp80ByName = { ok: false, error: "timed out after 4000ms", ms: 4001 };
+      r.network.dns = { error: "SERVFAIL" };
+    }),
+    netAct,
+  );
+  assert.equal(servfailDns.ok, false);
+  assert.equal(servfailDns.axis, "passthrough-network");
+  assert.match(servfailDns.why, /broken DNS/i);
+  assert.match(servfailDns.why, /resolver failure \(SERVFAIL\)/);
+  assert.doesNotMatch(servfailDns.why, /ENOTFOUND/);
+
+  // Shape 5: both TCP controls refused + administrative dns error ("probe disabled by the fence")
+  // must stay DENIED and must NOT claim "name resolution" (pins isResolutionBreak on dnsFieldBroke)
+  const administrativeDnsWithDeniedTcp = decide(
+    fixture((r) => {
+      r.network.outboundTcp443IpLiteral = { ok: false, error: "TCP 443 IP-literal: refused (ECONNREFUSED)", ms: 2 };
+      r.network.outboundTcp80ByName = { ok: false, error: "TCP 80 by name: refused (ECONNREFUSED)", ms: 1 };
+      r.network.cloudMetadataService = { ok: false, error: "timed out after 1500ms", ms: 1501 };
+      r.network.dns = { error: "probe disabled by the fence" };
+    }),
+    netAct,
+  );
+  assert.equal(administrativeDnsWithDeniedTcp.ok, false);
+  assert.equal(administrativeDnsWithDeniedTcp.axis, "passthrough-network");
+  assert.match(administrativeDnsWithDeniedTcp.why, /egress is DENIED/i);
+  assert.doesNotMatch(administrativeDnsWithDeniedTcp.why, /name resolution/i);
+  assert.doesNotMatch(administrativeDnsWithDeniedTcp.why, /broken resolver/i);
+
+  // Shape 6: literal ok + by-name refused + administrative dns error
+  // must refuse as plain contradiction (REACHED out) and must NOT claim broken DNS
+  const administrativeDnsWithReachedLiteral = decide(
+    fixture((r) => {
+      r.network.outboundTcp443IpLiteral = { ok: true, ms: 15 };
+      r.network.outboundTcp80ByName = { ok: false, error: "TCP 80 by name: refused (ECONNREFUSED)", ms: 1 };
+      r.network.dns = { error: "probe disabled by the fence" };
+    }),
+    netAct,
+  );
+  assert.equal(administrativeDnsWithReachedLiteral.ok, false);
+  assert.equal(administrativeDnsWithReachedLiteral.axis, "passthrough-network");
+  assert.match(administrativeDnsWithReachedLiteral.why, /probe REACHED out: network\.outboundTcp443IpLiteral/);
+  assert.doesNotMatch(administrativeDnsWithReachedLiteral.why, /broken DNS/i);
+});
+
 test("FIX 2c (processes): a tool list that did not look for the mechanisms is unmeasured, not denial", () => {
   const verdict = decide({ tools: { curl: { value: "curl 8.1" } } }, execAct);
   assert.equal(verdict.ok, false);
