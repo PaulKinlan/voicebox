@@ -91,7 +91,7 @@ Registered resolvers: `claude`, `gemini`, `openai`, `script`
 * The live voice providers (`claude`, `gemini`, `openai`) live behind a **different** seam, `registerLiveProvider` in `lib/live-session.mjs`; none of them is a turn resolver — see the tool path below.
 <!-- END GENERATED: providers -->
 
-Hand-written addition (not generated): the project's own instruction file — `lib/project-instruction.mjs`, read at live-session start from the declared machine root (`AGENT.md`, then `AGENTS.md`; 32 KiB bound) — composes between the agent's instruction and the tools instruction; absence is normal, unreadable is named.
+Hand-written addition (not generated): the project's own instruction file — `lib/project-instruction.mjs`, read as the NEAREST `AGENT.md`/`AGENTS.md` from the folder the page has open up to the declared root (32 KiB bound; absence is normal, unreadable is named) — composes between the agent's instruction and the tools instruction. The page reports the folder it is listing; a room folder (opfs or a picked handle) is read by the PAGE, which sends the text, because those files are not on this machine. OpenAI Realtime takes a further `session.update`, so a folder change applies live; Gemini's `setup` is sent once per connection, so it returns a named refusal (`gemini-live-setup-is-once`) and the change applies at the next session.
 
 ## The agent loop — one turn, driven
 

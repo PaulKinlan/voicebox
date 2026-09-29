@@ -132,7 +132,10 @@ test("seam: THE BOUNDARY — the page holds no vendor handle, so the gate cannot
   }
   assert.deepEqual(
     exposed,
-    ["close", "gatedFrames", "interrupt", "provider", "ready", "refusedByTransport", "sendAudio", "sendText", "sendToolResponse"],
+    // `updateProjectInstruction` is the folder-change seam (voicebox-beads-0zi4): the page reports the
+    // folder, the host relays it, and the provider answers whether it could apply it. Still no vendor
+    // handle — same boundary, one more capability the page may ASK for.
+    ["close", "gatedFrames", "interrupt", "provider", "ready", "refusedByTransport", "sendAudio", "sendText", "sendToolResponse", "updateProjectInstruction"],
     `the page's surface must be exactly the contract: ${exposed.join(", ")}`,
   );
   // `refusedByTransport` was added in the REVISE so "the gate is host-side" is a NUMBER rather than a

@@ -105,6 +105,72 @@ let listedRoot = null; // the root the CURRENT entries were read from — not as
 // request carries it. The server's answer gives it back normalised, and the page adopts THAT as the
 // truth, so a path can never drift between what the button did and what the list shows.
 let listingDir = "";
+
+/**
+ * THE FOLDER'S OWN INSTRUCTIONS (voicebox-beads-0zi4).
+ *
+ * A repository keeps an AGENTS.md at its root; a monorepo keeps one per package, and a room is often
+ * opened ON a subfolder. The live session is told which folder is open so its prompt can carry the
+ * nearest AGENT.md/AGENTS.md — the server reads it for a machine root, and for a room folder the page
+ * (which holds the handle) reads it and sends the text, because the machine cannot see opfs/handles.
+ *
+ * The page does not decide what "applied" means: it reports and the server answers with a
+ * `project-instruction` state, including when the answer is "next session" (Gemini's setup is sent
+ * once). A page that assumed it had been applied would be the lie this feature exists to remove.
+ */
+let projectContextSender = null;
+const PROJECT_INSTRUCTION_NAMES = ["AGENT.md", "AGENTS.md"];
+const PROJECT_INSTRUCTION_MAX_BYTES = 32768;
+
+/** The payload for the CURRENT folder: page-held rooms send the text, everything else sends the path. */
+async function projectContextPayload() {
+  const dir = listingDir || "";
+  if (!roomFolder?.handle || roomFolder.permission !== "granted") {
+    return { type: "folder", dir };
+  }
+  for (const name of PROJECT_INSTRUCTION_NAMES) {
+    try {
+      const found = await readRoomFile(dir ? `${dir}/${name}` : name);
+      if (found?.text?.trim()) {
+        return {
+          type: "project_instruction",
+          file: name,
+          dir,
+          text: found.text.slice(0, PROJECT_INSTRUCTION_MAX_BYTES),
+        };
+      }
+    } catch { /* absent: try the next name, exactly as the server-side reader does */ }
+  }
+  return { type: "folder", dir };
+}
+
+/** Report the current folder. Safe to call when no live socket is attached (it is a no-op). */
+async function reportProjectContext() {
+  if (typeof projectContextSender !== "function") return null;
+  let payload;
+  try {
+    payload = await projectContextPayload();
+  } catch (error) {
+    payload = { type: "folder", dir: listingDir || "", error: String(error?.message ?? error) };
+  }
+  try { projectContextSender(payload); } catch { /* a disconnected socket is not a page failure */ }
+  return payload;
+}
+
+/** Called by the live-voice adapter when its socket is up (and again after a reconnect). */
+function setProjectContextSender(sender) {
+  projectContextSender = typeof sender === "function" ? sender : null;
+  if (projectContextSender) void reportProjectContext();
+}
+
+// THE ADAPTER REACHES THIS THROUGH THE WINDOW, not an import (voicebox-beads-0zi4). The live adapters are
+// loaded by proofs that serve a CLOSED file list (tests/live-rate-browser.test.mjs serves audio-client.js,
+// live-voice.js, debug-transcript.js, pcm.js, pcm-worklet.js and answers everything else 404), so an
+// `import "./fused.js"` from live-voice.js makes the whole module graph fail there and takes the rate
+// fixture down with it — measured: every live-rate-browser test went red in ~4s. The window hook is the
+// same seam the page already uses for `__voiceboxLiveClient`, `__voiceboxDevices` and
+// `__voiceboxServerBuild`, and it lets the adapter work when this file is not on the page at all.
+window.__voiceboxProjectContext = { report: reportProjectContext, setSender: setProjectContextSender };
 const joinDir = (dir, name) => (dir ? `${dir}/${name}` : name);
 let listingRefusal = null; // the server's refusal, when it could not list the active root at all
 // A lot of files must stay usable: filter by name, and never render an unbounded
@@ -425,6 +491,7 @@ async function loadRoomFolder() {
     listingRefusal = null;
     entries = listed.map(({ name, isDir }) => ({ name, isDir, meta: isDir ? "folder" : "file" }));
     render();
+    void reportProjectContext(); // a room folder carries its own AGENTS.md (voicebox-beads-0zi4)
   } catch (error) {
     listingRefusal = { refused: "folder-unreadable", why: `could not read '${listingDir || roomFolder.name}': ${error?.message ?? error}` };
     entries = [];
@@ -1077,6 +1144,7 @@ function showFileSelection(name) {
  */
 function goToDir(dir) {
   listingDir = dir ?? "";
+  void reportProjectContext(); // the voice learns which folder it is in (voicebox-beads-0zi4)
   // WHICH LISTING AM I NAVIGATING? A room folder picked in THIS tab is listed from its own handle, not
   // from the server; everything else goes through the server, which asks the page when the root is the
   // page's (voicebox-beads-tee). One path for the person, one request per source.
@@ -1779,6 +1847,7 @@ async function load() {
     // asked for: the server normalises it, so `proposals//drafts/` and `proposals/drafts` cannot leave the
     // crumb bar and the list describing different folders (voicebox-beads-tee).
     if (typeof answer.dir === "string") listingDir = answer.dir;
+    void reportProjectContext();
     // The server says which root it listed, so the page records it rather than
     // assuming it is the active one. When they differ, the cards are a listing of
     // somewhere else and the panel says so (acceptance 7cd.1: an explorer must
