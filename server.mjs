@@ -61,9 +61,17 @@ import {
   resolveFleetTarget,
 } from "./lib/fleet.mjs";
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
-import { createLiveSession, LIVE_MODEL, inputRateRequiredBy } from "./lib/live-session.mjs";
+import { createLiveSession, LIVE_MODEL, inputRateRequiredBy, registerLiveProvider } from "./lib/live-session.mjs";
 import { COMMANDS, COMMAND_VERBS, commandToAction, functionDeclarations, liveSystemInstruction } from "./lib/commands.mjs";
 import { readProjectInstruction } from "./lib/project-instruction.mjs";
+// A KEY-FREE LIVE PROVIDER FOR PROOFS (voicebox-beads-ldxa). The stub is the seam's own falsifier — no
+// vendor, no network, no key — and it is registered ONLY when an operator asks for it by name, so it can
+// never appear in the provider list a person chooses from. With the flag set, a test (or a human on a
+// machine with no vendor credentials) can drive a REAL /live session end to end; the barge-in proof uses
+// exactly that to show the client's own detector, the interrupt frame, and the provider's event coming
+// back as one round trip.
+import { createStubProvider } from "./lib/live-providers/stub.mjs";
+if (process.env.VOICEBOX_ENABLE_STUB_PROVIDER === "1") registerLiveProvider("stub", createStubProvider);
 import { installColorConsole } from "./lib/logger.mjs";
 // The state directories have ONE owner; this file no longer computes its own copy of any of them
 // (voicebox-beads-y5k: `VOICEBOX_WORKSPACE` and `VOICEBOX_EXTENSIONS_DIR` were each resolved here
@@ -4150,6 +4158,13 @@ server.on("upgrade", (req, socket) => {
           return;
         }
         if (msg?.type === "text" && typeof msg.text === "string") session.sendText(msg.text);
+        // BARGE-IN (voicebox-beads-ldxa): the page heard the person start talking over the model and asks
+        // the session to stop producing. The PROVIDER decides what that means — OpenAI sends
+        // `response.cancel`; Gemini's barge-in is already server-side and names this a no-op on purpose.
+        // Either way the provider's own `interrupt` event travels back to the page as
+        // `{type:"state", state:"interrupt"}`, which flushes the audio the page had already buffered —
+        // the half that makes an interruption audible rather than merely stopping generation upstream.
+        if (msg?.type === "interrupt") { session.interrupt(); return; }
         if (msg?.type === "stop") { session.close(); ws.close(); }
         return;
       }

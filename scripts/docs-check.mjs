@@ -438,6 +438,7 @@ const ENV_MEANING = {
   VOICEBOX_EXTENSIONS_DIR: "the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl`, and `.pairings.json` (the bearer custody store — outside every root)",
   VOICEBOX_SANDBOX_HOMES: "where a fence's writable home is bound from (default `~/sandbox-homes/<key>`) — the one place a fenced environment may write. Must live OUTSIDE /tmp: an L1.5 unit's PrivateTmp hides /tmp in its namespace and a home there fails to bind (status 226/NAMESPACE)",
   VOICEBOX_INSTANCE: "this writer's name in the active root's shared log (default `machine`)",
+  VOICEBOX_ENABLE_STUB_PROVIDER: "registers the key-free `stub` live provider for proofs (it echoes the microphone back at 0.3 gain; no vendor, no network, no key). OFF by default, so it is never offered in the provider list a person chooses from (voicebox-beads-ldxa)",
   VOICEBOX_BIND_RETRY_MS: "how often to retry a bind that lost the port race",
   VOICEBOX_BIND_DEADLINE_MS: "how long to keep retrying before giving up by name",
   VOICEBOX_HELLO_BOUND_MS: "how long to wait for a hello frame on /channel or /live before refusing (default 5000ms)",

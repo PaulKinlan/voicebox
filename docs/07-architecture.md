@@ -31,6 +31,24 @@ through `pcm-worklet.js`. The generated line below says what the model is; the *
 `lib/live-session.mjs` is present. Registered live providers, with the model each one's handshake names (captured from the provider against a recording transport — never dialed): `claude` → `(registered, but this check has no capture for it)`, `gemini` → `models/gemini-3.8-live`, `openai` → `gpt-realtime`. The library fallback is `gemini`, overridable by `VOICEBOX_LIVE_PROVIDER`; the server's `/live` route instead passes the agent-settings provider explicitly.
 <!-- END GENERATED: live-session -->
 
+Hand-written addition (voicebox-beads-ldxa): **barge-in has two halves, and both are needed.** While the
+agent speaks the microphone stays open — `stopReply` has always flushed playback without touching capture —
+and the page watches the same per-frame input energy the waveform draws: SUSTAINED input above an absolute
+floor AND clear of the **microphone's own recent quiet level** (an adaptive floor: a sustained echo raises
+the bar and cannot keep interrupting, while a normal voice over a loud agent still clears it) flushes
+playback and sends `{type:"interrupt"}` on the live socket. The floor is measured at the microphone rather
+than at the agent's source because the source amplitude is not what arrives there — the review measured an
+earlier source-side margin failing exactly where interruption matters most (a loud 0.40 passage put the bar
+at 0.54 against a normal voice's ~0.13 per frame). `/live` answers that with
+`session.interrupt()`: OpenAI cancels its response, **Gemini's barge-in is server-side and names this a no-op
+on purpose**, and the provider's own interrupt event then returns as `state:"interrupt"`, which flushes the
+audio the page had already buffered. Without that last step a server-side interruption stops generation
+while the person still hears the tail — which is the audible half of "I cannot interrupt it". One interruption
+fires per speaking phase (never one per frame), and the honest limit is stated where the detector lives: with
+echo cancellation off and the volume up, playback alone can clear both conditions and the page interrupts
+itself; a vendor VAD would not have that failure mode, but would be a second implementation of a thing the
+provider already does.
+
 ## The turn path, in order
 
 ```
@@ -193,6 +211,7 @@ Every environment variable the server and its libraries read, and where:
 | `VOICEBOX_BIND_RETRY_MS` | `server.mjs` | how often to retry a bind that lost the port race |
 | `VOICEBOX_CLAUDE_CLI` | `lib/claude-acp.mjs` | the claude CLI the adapter child is told to execute (exported to it as `CLAUDE_CODE_EXECUTABLE`); unset resolves the user-installed CLI, else the adapter-bundled binary |
 | `VOICEBOX_CLAUDE_KEEP_API_KEY` | `lib/claude-acp.mjs` | opt-back for the claude-code adapter child env: set to `1` to keep the host's `ANTHROPIC_API_KEY`. By default that key is DELETED from the child — an inherited key overrides claude.ai login and can stall the prompt — the host's own environment is never mutated, and the test asserts the key is ABSENT rather than present-with-no-value, because those are different child environments (voicebox-beads-nz60) |
+| `VOICEBOX_ENABLE_STUB_PROVIDER` | `server.mjs` | registers the key-free `stub` live provider for proofs (it echoes the microphone back at 0.3 gain; no vendor, no network, no key). OFF by default, so it is never offered in the provider list a person chooses from (voicebox-beads-ldxa) |
 | `VOICEBOX_EXTENSIONS_DIR` | `lib/state-dirs.mjs` | the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl`, and `.pairings.json` (the bearer custody store — outside every root) |
 | `VOICEBOX_HARNESS` | `server.mjs` | selects the host task adapter (`pi` enables the Pi ACP task adapter in `server.mjs`; unset leaves no default adapter configured) |
 | `VOICEBOX_HELLO_BOUND_MS` | `server.mjs` | how long to wait for a hello frame on /channel or /live before refusing (default 5000ms) |
