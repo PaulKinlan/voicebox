@@ -461,7 +461,134 @@ const ENV_MEANING = {
   VOICEBOX_OPENAI_INPUT_TRANSCRIPTION: "set to `1` (or pass `inputTranscription: true` to `createOpenAIProvider`) to enable `gpt-4o-mini-transcribe` input audio transcription in the OpenAI Realtime session handshake",
   VOICEBOX_WASM_SHELF_DIR: "directory holding the digest-pinned WASM tool shelf (`manifest.json` and `.wasm` modules; default `~/.isocan/modules/wasm-tools`)",
 };
-function envVars() {
+const BEFORE_REGEX = new Set(["return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await"]);
+const HEADS = new Set(["if", "for", "while", "with"]);
+const OPENS = { ")": "(", "]": "[", "}": "{" };
+const isIdStart = (c) => (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || c === "_" || c === "$" || (c > "\x7f" && /\p{ID_Start}/u.test(c));
+const isIdPart = (c) => isIdStart(c) || (c >= "0" && c <= "9") || (c > "\x7f" && /[\p{ID_Continue}\u200c\u200d]/u.test(c));
+
+function regexEnd(src, i) {
+  let inClass = false;
+  for (let j = i + 1; j < src.length && src[j] !== "\n"; j++) {
+    if (src[j] === "\\") j++;
+    else if (src[j] === "[") inClass = true;
+    else if (src[j] === "]") inClass = false;
+    else if (src[j] === "/" && !inClass) {
+      for (j++; j < src.length && isIdPart(src[j]); j++);
+      return j;
+    }
+  }
+  return -1;
+}
+
+export function lex(src) {
+  const tokens = [];
+  const open = [];
+  const n = src.length;
+  let i = 0;
+  let afterValue = false;
+  const push = (k, s, e, v) => tokens.push({ k, s, e, v });
+  const template = () => {
+    for (const s = i; i < n; i++) {
+      if (src[i] === "\\") {
+        i++;
+      } else if (src[i] === "`") {
+        push("tpl", s, i++);
+        afterValue = true;
+        return true;
+      } else if (src[i] === "$" && src[i + 1] === "{") {
+        push("tpl", s, i);
+        push("punct", i, i + 2, "${");
+        open.push("${");
+        i += 2;
+        afterValue = false;
+        return true;
+      }
+    }
+    return false;
+  };
+  if (src.startsWith("#!")) {
+    i = src.includes("\n") ? src.indexOf("\n") : n;
+    push("com", 0, i);
+  }
+  while (i < n) {
+    const c = src[i];
+    const s = i;
+    let end;
+    if (c === "/" && src[i + 1] === "/") {
+      i = src.indexOf("\n", i) < 0 ? n : src.indexOf("\n", i);
+      push("com", s, i);
+    } else if (c === "/" && src[i + 1] === "*") {
+      end = src.indexOf("*/", i + 2);
+      if (end < 0) return null;
+      i = end + 2;
+      push("com", s, i);
+    } else if (c === '"' || c === "'") {
+      for (i++; src[i] !== c; i++) {
+        if (i >= n || src[i] === "\n") return null;
+        if (src[i] === "\\") i += src[i + 1] === "\r" && src[i + 2] === "\n" ? 2 : 1;
+      }
+      push("str", s, ++i);
+      afterValue = true;
+    } else if (c === "`") {
+      i++;
+      if (!template()) return null;
+    } else if (c === "/" && !afterValue && (end = regexEnd(src, i)) > 0) {
+      i = end;
+      push("re", s, i);
+      afterValue = true;
+    } else if (isIdStart(c)) {
+      while (++i < n && isIdPart(src[i]));
+      const word = src.slice(s, i);
+      push("word", s, i, word);
+      afterValue = !BEFORE_REGEX.has(word);
+    } else if (c >= "0" && c <= "9") {
+      while (++i < n && (isIdPart(src[i]) || src[i] === "."));
+      push("num", s, i);
+      afterValue = true;
+    } else if (/\s/.test(c)) {
+      i++;
+    } else {
+      i++;
+      let value = false;
+      if (c === "(" || c === "[" || c === "{") open.push(c === "(" && HEADS.has(tokens.at(-1)?.v) ? "head" : c);
+      else if (c === ")" || c === "]" || c === "}") {
+        const top = open.pop();
+        if (c === "}" && top === "${") {
+          push("punct", s, i, "}");
+          if (!template()) return null;
+          continue;
+        }
+        if ((top === "head" ? "(" : top) !== OPENS[c]) return null;
+        value = top !== "head";
+      }
+      push("punct", s, i, c);
+      afterValue = value;
+    }
+  }
+  return open.length === 0 ? tokens : null;
+}
+
+/**
+ * Strip comments using the lexer (voicebox-beads-5qox), so comment-adjacent code
+ * (/* inside strings/regexes, // in templates) is not lost and phantom reads in real
+ * comments are eliminated.
+ */
+export function stripComments(source) {
+  const tokens = lex(source);
+  if (!tokens) return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^\:\\])\/\/.*$/gm, "$1");
+  const chars = source.split("");
+  for (const { k, s, e } of tokens) {
+    if (k === "com") {
+      for (let j = s; j < e; j++) {
+        if (chars[j] !== "\n") chars[j] = " ";
+      }
+    }
+  }
+  return chars.join("");
+}
+
+export function envVars() {
   const files = ["server.mjs", ...readdirSync(join(ROOT, "lib"), { recursive: true }).filter((f) => f.endsWith(".mjs")).map((f) => join("lib", f))];
   const where = new Map();
   const remember = (name, file) => {
@@ -474,18 +601,37 @@ function envVars() {
   // (2026-09-25). A table that says where a variable is read must ask the thing that reads it; the
   // declaration is the source, exactly as the provider list is imported rather than matched.
   for (const fact of Object.values(STATE_DIR_FACTS ?? {})) remember(fact.env, "lib/state-dirs.mjs");
-  // Extensions interpolate header values ($BRAVE_API_KEY) dynamically through process.env[envKey]
-  remember("BRAVE_API_KEY", "lib/extensions.mjs");
+
+  // EXTENSION HEADER INTERPOLATION (voicebox-beads-5qox): catalogue/*.json can declare headers
+  // like { "X-Subscription-Token": "$BRAVE_API_KEY" }, which lib/extensions.mjs interpolates
+  // from process.env. Scan the catalogue declarations so extension-declared variables are derived
+  // from their declarations rather than hardcoded.
+  const catalogueDir = join(ROOT, "catalogue");
+  if (existsSync(catalogueDir)) {
+    for (const f of readdirSync(catalogueDir).filter((f) => f.endsWith(".json"))) {
+      try {
+        const cat = JSON.parse(readFileSync(join(catalogueDir, f), "utf8"));
+        for (const tool of cat.tools ?? []) {
+          for (const val of Object.values(tool.params?.headers ?? {})) {
+            if (typeof val === "string" && val.startsWith("$")) {
+              remember(val.slice(1), "lib/extensions.mjs");
+            }
+          }
+        }
+      } catch {}
+    }
+  }
+
   for (const f of files) {
     // BOTH SHAPES, because one of them was invisible: `process.env.X` and the optional-chained
     // `globalThis.process?.env?.X` that `lib/resolver.mjs` uses to stay runnable off-host. The narrow
     // pattern omitted the resolver's own GEMINI_API_KEY read, so the generated table named the key
     // against the live provider only and a reader would not know the resolver wanted it too
     // (reviewer finding, voicebox-beads-smx). A derived table is only as wide as its pattern.
-    // Strip comments before scanning (voicebox-beads-5qox) so prose mentions like "process.env.X"
-    // in comments do not invent phantom environment variables in the generated table.
+    // Strip comments with the lexer before scanning (voicebox-beads-5qox) so prose mentions like
+    // "process.env.X" in comments do not invent phantom environment variables in the generated table.
     const src = readFileSync(join(ROOT, f), "utf8");
-    const stripped = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^\:\\])\/\/.*$/gm, "$1");
+    const stripped = stripComments(src);
     for (const m of stripped.matchAll(/(?:globalThis\s*\.\s*)?process\s*\??\.\s*env\s*\??\.\s*([A-Z][A-Z0-9_]*)/g)) {
       remember(m[1], f);
     }

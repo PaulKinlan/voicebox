@@ -164,3 +164,35 @@ test("every static refusal is reported in one run, before any server (qxy2)", ()
   assert.equal(usage.status, 2, `a missing --docs-root must exit 2:\n${usage.stdout}${usage.stderr}`);
   assert.match(usage.stderr, /--docs-root '.*no-such-docs-root-qxy2' is not a directory/);
 });
+
+test("stripComments preserves code in comment-adjacent forms and eliminates phantom env reads (voicebox-beads-5qox)", async () => {
+  const { stripComments, envVars } = await import("../scripts/docs-check.mjs");
+
+  // 1. Pinned forms where naive regex comment-strippers drop real code:
+  // Form A: /* inside a string with a read before the next */
+  const formA = 'const a = "/*";\nconst key = process.env.REAL_A;\nconst b = "*/";';
+  assert.match(stripComments(formA), /process\.env\.REAL_A/);
+
+  // Form B: /* inside a regex literal
+  const formB = 'const r = /\\/*\\//;\nconst key = process.env.REAL_B;';
+  assert.match(stripComments(formB), /process\.env\.REAL_B/);
+
+  // Form C: // inside a string with read on same line
+  const formC = 'const u = "http://example.com"; const key = process.env.REAL_C;';
+  assert.match(stripComments(formC), /process\.env\.REAL_C/);
+
+  // Form D: // inside a template literal
+  const formD = 'const t = `// text ${process.env.REAL_D}`;';
+  assert.match(stripComments(formD), /process\.env\.REAL_D/);
+
+  // Form E: Genuine line comment containing process.env.X must be stripped
+  const formE = '// docs-check only scans process.env.X\nconst key = process.env.REAL_E;';
+  const strippedE = stripComments(formE);
+  assert.doesNotMatch(strippedE, /process\.env\.X\b/);
+  assert.match(strippedE, /process\.env\.REAL_E/);
+
+  // 2. envVars() live verification:
+  const vars = envVars();
+  assert.equal(vars.some((v) => v.name === "X"), false, "phantom variable X must not be in envVars");
+  assert.equal(vars.some((v) => v.name === "BRAVE_API_KEY"), true, "BRAVE_API_KEY derived from catalogue declaration");
+});
