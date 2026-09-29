@@ -385,7 +385,12 @@ test("a socket that closed before the rate frame names the CONNECTION, not the r
   socket.readyState = 3;
   socket.onclose?.({ code: 1008, reason: "local-page-required" });
 
+  // AND IT SAYS SO AT ONCE (voicebox-beads-9jvs): this client is on the DEFAULT bound, and the loop must not
+  // wait it out for a frame that cannot arrive. Five seconds here was a real freeze — the person pressed the
+  // microphone on a connection refused for entitlement and the page sat silent before naming it.
+  const started = Date.now();
   await client.startCapture();
+  const elapsed = Date.now() - started;
   const s = client.snapshot();
   assert.equal(s.capture, false, "no capture on a dead socket");
   assert.equal(s.captureErrorReason, "socket-closed-before-rate", "the reason is not the connection");
@@ -393,9 +398,22 @@ test("a socket that closed before the rate frame names the CONNECTION, not the r
   assert.match(s.label, /1008/, "the close code is not named");
   assert.doesNotMatch(s.label, /has not said what audio rate/, "the rate was blamed for a closed socket");
   assert.equal(getUserMediaCalls, 0, "the microphone is never opened for a connection that is gone");
+  assert.ok(elapsed < 1000, `the refusal waited ${elapsed}ms on a socket that was already closed — the bound is for a frame in flight, not for a dead connection`);
 
-  // And the OTHER absence keeps its own sentence: a live socket that stays silent.
-  const live = makeClient();
+  // A SOCKET THAT IS CLOSING OR CLOSED WITHOUT A CLOSE EVENT IS JUST AS FAST. `onclose` is not guaranteed to
+  // have been delivered by the time a person presses the mic (the page can attach a socket the far end
+  // already closed), so the readyState is read too — and this drives the half the event does not cover.
+  const quiet = makeClient();
+  quiet.client.attachSocket(quiet.socket);
+  quiet.socket.readyState = 2; // CLOSING, and no onclose called
+  const closingStarted = Date.now();
+  await quiet.client.startCapture();
+  assert.equal(quiet.client.snapshot().captureErrorReason, "socket-closed-before-rate", "a CLOSING socket must be named as the connection, not waited on");
+  assert.ok(Date.now() - closingStarted < 1000, "a CLOSING socket was waited on for a rate");
+
+  // And the OTHER absence keeps its own sentence: a live socket that stays silent. Its bound is the
+  // fixture's (what is under test is the SENTENCE and the expiry, not the page's five seconds).
+  const live = makeClient({ rateWaitBoundMs: 40 });
   live.socket.readyState = 1;
   await live.client.startCapture();
   assert.equal(live.client.snapshot().captureErrorReason, "rate-not-declared",
@@ -404,7 +422,9 @@ test("a socket that closed before the rate frame names the CONNECTION, not the r
 });
 
 test("capture refuses without a declared rate, and names the RATE rather than the microphone", async () => {
-  const { client, contexts, media } = makeClient();
+  // The fixture's bound is 40ms: this test is about the REFUSAL (its reason and its sentence), not about how
+  // long the page waits for a frame that never comes — the wait itself is measured in its own test below.
+  const { client, contexts, media } = makeClient({ rateWaitBoundMs: 40 });
   let getUserMediaCalls = 0;
   const nativeGetUserMedia = media.mediaDevices.getUserMedia;
   media.mediaDevices.getUserMedia = (...args) => { getUserMediaCalls += 1; return nativeGetUserMedia(...args); };
@@ -522,7 +542,7 @@ test("rate: capture REFUSES without a declared rate — it RESOLVES, ends in the
   // RUNTIME, named deliberately: this witness ran under the Node named in the commit/report (v24.21.0 and
   // /usr/bin/node v26.8.1). The rate acceptance that drives a real browser lives in live-rate-browser.test.mjs,
   // and this repo's fence path invokes /usr/bin/node — a unit witness does not exercise that path.
-  const { client, contexts, events } = makeClient();
+  const { client, contexts, events } = makeClient({ rateWaitBoundMs: 40 });
   await client.startCapture(); // resolves; nothing is thrown
   assert.equal(contexts.length, 0, "no capture context may exist without a declared rate — the structural witness");
   // THE PHASE IS `idle`, NOT `error` — measured on current main, and it is the half I got wrong first: my probe
@@ -532,6 +552,30 @@ test("rate: capture REFUSES without a declared rate — it RESOLVES, ends in the
     events.states.some((s) => s.phase === "idle"),
     `the refusal is reported as a STATE, not a rejection: got ${JSON.stringify(events.states.map((s) => s.phase))}`,
   );
+});
+
+// ── the wait is BOUNDED, and its length is a constructor option (voicebox-beads-9jvs) ─────────
+test("rate: the wait for a declaration is bounded — the page keeps the 5s default, and the bound is an option", async () => {
+  // THE PRODUCTION DEFAULT IS WITNESSED BY VALUE, NOT BY WAITING IT OUT. A unit run that sits five seconds to
+  // learn that the bound is five seconds is the cost this bead removes; the wait's real behaviour on a live,
+  // OPEN socket is driven in tests/live-rate-browser.test.mjs (a native press before the rate arrives must sit
+  // in phase "starting", not refuse).
+  const pageDefault = makeClient();
+  assert.equal(
+    pageDefault.client.snapshot().rateWaitBoundMs,
+    5000,
+    "the page's default bound moved — every fixture below rides on this being the value production runs with",
+  );
+  assert.equal(pageDefault.contexts.length, 0, "witnessing the default must not have built a capture context");
+
+  // AND THE LOOP HONOURS WHATEVER BOUND IT IS GIVEN, measured — so a hardcoded 5000 inside the loop fails
+  // HERE and not five seconds at a time in the gate.
+  const fast = makeClient({ rateWaitBoundMs: 40 });
+  const started = Date.now();
+  await fast.client.startCapture();
+  const elapsed = Date.now() - started;
+  assert.equal(fast.client.snapshot().captureErrorReason, "rate-not-declared", "the fixture did not expire into the rate refusal");
+  assert.ok(elapsed < 1500, `a 40ms bound took ${elapsed}ms to expire`);
 });
 
 // ── barge-in: the person speaks, the page gets out of the way (voicebox-beads-ldxa) ───────────────
