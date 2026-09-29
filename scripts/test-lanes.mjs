@@ -61,6 +61,7 @@ const TESTS = path.join(ROOT, "tests");
 const BROWSER_SIGNALS = [
   { what: "a browser over CDP", re: /["'`][^"'`]*\bcdp\.mjs["'`]/ },
   { what: "a browser via page-acceptance", re: /\bpage-acceptance\.mjs\b/ },
+  { what: "a browser over raw CDP", re: /--remote-debugging-port|DevToolsActivePort/ },
 ];
 
 const SERVER_SIGNALS = [

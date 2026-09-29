@@ -107,6 +107,7 @@ test("server and browser lanes partition the live suite cleanly (voicebox-beads-
   // Known browser tests are in browser lane:
   assert.ok(browserFiles.has("tests/extension-approval-ui.test.mjs"), "CDP browser test must be in browser lane");
   assert.ok(browserFiles.has("tests/pre-push.test.mjs"), "page-acceptance test must be in browser lane");
+  assert.ok(browserFiles.has("tests/voicebox.test.mjs"), "direct Chromium spawn test must be in browser lane");
 
   // Known server tests are in server lane:
   assert.ok(serverFiles.has("tests/environment-probe.test.mjs"), "server process test must be in server lane");
