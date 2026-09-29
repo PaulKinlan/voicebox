@@ -162,6 +162,21 @@ const PROCESS_MECHANISMS = [...INTERPRETERS, ...WRAPPERS];
 const OUTBOUND_FIELDS = ["outboundTcp443IpLiteral", "outboundTcp80ByName", "cloudMetadataService"];
 
 /**
+ * Coded DNS failures vs general resolution break patterns.
+ * Anchored to prevent proxy/hostnames containing words like 'resolver' from triggering broken DNS.
+ */
+const DNS_ERROR_CODES = /\b(EAI_AGAIN|ENOTFOUND|EAI_FAIL|SERVFAIL|NXDOMAIN|ETIMEOUT|getaddrinfo)\b/i;
+const DNS_WORD_PHRASES = /\bDNS\s+(request\s+)?timed\s+out\b|\bresolver\s+(failure|error|timeout|failed)\b/i;
+
+function isDnsResolutionBreak(err: string): boolean {
+  return DNS_ERROR_CODES.test(err) || DNS_WORD_PHRASES.test(err);
+}
+
+function isCodedDnsFailure(err: string): boolean {
+  return DNS_ERROR_CODES.test(err);
+}
+
+/**
  * WHAT A PASS MEANS, PER AXIS — the caller is entitled to know before it trusts `ok: true`.
  *
  *   · deny-files and deny-processes VERIFY THE DENY. A claimed deny meeting a path that was READ, or a
@@ -283,14 +298,12 @@ export function decide(report: BoundaryReport, act: Act): { ok: true; axis: Boun
       const detail = report.network?.[first];
       const nameError = String(report.network?.outboundTcp80ByName?.error ?? "");
       const dnsError = String(report.network?.dns?.error ?? "");
-      const isDnsResolutionBreak = (err: string) =>
-        /EAI_AGAIN|ENOTFOUND|getaddrinfo|\bDNS\b|resolver|ETIMEOUT|SERVFAIL|EAI_FAIL/i.test(err);
-      const dnsFieldBroke =
+      const dnsFieldBrokeInReached =
         report.network?.dns !== undefined &&
         !report.network?.dns?.value &&
-        !!report.network?.dns?.error &&
-        (/timed out/i.test(String(report.network.dns.error)) || isDnsResolutionBreak(String(report.network.dns.error)));
-      const nameDnsBroke = isDnsResolutionBreak(nameError) || dnsFieldBroke;
+        Boolean(report.network?.dns?.error) &&
+        (/timed out/i.test(dnsError) || isDnsResolutionBreak(dnsError));
+      const nameDnsBroke = isDnsResolutionBreak(nameError) || dnsFieldBrokeInReached;
 
       // Separating broken DNS with open IP-literal egress (voicebox-beads-3ryb, a3zx):
       if (first === "outboundTcp443IpLiteral" && nameDnsBroke) {
@@ -370,24 +383,25 @@ export function decide(report: BoundaryReport, act: Act): { ok: true; axis: Boun
     // The IP-literal control (outboundTcp443IpLiteral, voicebox-beads-4wez) now separates true 'denied'
     // (both IP-literal and name lookup timed out / were refused) from 'broken DNS' (name resolution failed
     // with EAI_AGAIN / ENOTFOUND or hanging resolver).
+    // In a dead-egress report, a bare timeout on network.dns is expected when egress is blocked at the fence,
+    // so only CODED resolver failures (SERVFAIL, EAI_FAIL, ENOTFOUND, etc.) prove the resolver broke rather
+    // than egress being denied.
     const deadEvidence = [
       ...OUTBOUND_FIELDS.map(
         (field) => `${field}: ${report.network?.[field]?.error ?? `ok=${String(report.network?.[field]?.ok)}`}`,
       ),
       ...(report.network?.dns ? [`dns: ${report.network.dns.error ?? `ok=${String(report.network.dns.value !== undefined)}`}`] : []),
     ].join("; ");
-    const isDnsResolutionBreak = (err: string) =>
-      /EAI_AGAIN|ENOTFOUND|getaddrinfo|\bDNS\b|resolver|ETIMEOUT|SERVFAIL|EAI_FAIL/i.test(err);
     const dnsFieldBroke =
       report.network?.dns !== undefined &&
       !report.network?.dns?.value &&
-      !!report.network?.dns?.error &&
-      (/timed out/i.test(String(report.network.dns.error)) || isDnsResolutionBreak(String(report.network.dns.error)));
+      Boolean(report.network?.dns?.error) &&
+      isCodedDnsFailure(String(report.network.dns.error));
     const nameDnsBrokeInDead = isDnsResolutionBreak(String(report.network?.outboundTcp80ByName?.error ?? ""));
     const dnsBroke =
       dnsFieldBroke ||
       nameDnsBrokeInDead ||
-      OUTBOUND_FIELDS.some((field) => /EAI_AGAIN|ENOTFOUND|getaddrinfo/i.test(String(report.network?.[field]?.error ?? "")));
+      OUTBOUND_FIELDS.some((field) => isCodedDnsFailure(String(report.network?.[field]?.error ?? "")));
 
     if (dnsBroke) {
       return {

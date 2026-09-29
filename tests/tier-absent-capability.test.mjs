@@ -370,8 +370,9 @@ test("passthrough-network: partial reports refuse as unmeasured and never claim 
 });
 
 test("passthrough-network: hanging resolver or uncoded DNS error refuses as brokenness, not DENIED (voicebox-beads-a3zx)", () => {
-  // Shape 1: Hanging resolver in report.network.dns when both TCP controls time out
-  const hangingDns = decide(
+  // Shape 1 (F2 negative pin): Closed fence where both TCP controls timed out AND dns probe timed out
+  // (the closed egress blocked DNS too) must stay DENIED and must NOT claim broken resolver
+  const closedFenceWithDnsTimeout = decide(
     fixture((r) => {
       r.network.outboundTcp443IpLiteral = { ok: false, error: "timed out after 4000ms", ms: 4002 };
       r.network.outboundTcp80ByName = { ok: false, error: "timed out after 4000ms", ms: 4001 };
@@ -380,11 +381,28 @@ test("passthrough-network: hanging resolver or uncoded DNS error refuses as brok
     }),
     netAct,
   );
-  assert.equal(hangingDns.ok, false);
-  assert.equal(hangingDns.axis, "passthrough-network");
-  assert.match(hangingDns.why, /broken resolver/i);
-  assert.match(hangingDns.why, /dns: timed out after 4000ms/);
-  assert.doesNotMatch(hangingDns.why, /egress is DENIED/i);
+  assert.equal(closedFenceWithDnsTimeout.ok, false);
+  assert.equal(closedFenceWithDnsTimeout.axis, "passthrough-network");
+  assert.match(closedFenceWithDnsTimeout.why, /egress is DENIED/i);
+  assert.doesNotMatch(closedFenceWithDnsTimeout.why, /broken resolver/i);
+  assert.doesNotMatch(closedFenceWithDnsTimeout.why, /name resolution/i);
+
+  // Shape 1b: Coded resolver failure (SERVFAIL) on dns probe when both TCP controls are dead
+  // proves the resolver answered with an error code -> broken resolver / UNVERIFIED
+  const codedDnsFailureInDead = decide(
+    fixture((r) => {
+      r.network.outboundTcp443IpLiteral = { ok: false, error: "timed out after 4000ms", ms: 4002 };
+      r.network.outboundTcp80ByName = { ok: false, error: "timed out after 4000ms", ms: 4001 };
+      r.network.cloudMetadataService = { ok: false, error: "timed out after 1500ms", ms: 1501 };
+      r.network.dns = { error: "SERVFAIL" };
+    }),
+    netAct,
+  );
+  assert.equal(codedDnsFailureInDead.ok, false);
+  assert.equal(codedDnsFailureInDead.axis, "passthrough-network");
+  assert.match(codedDnsFailureInDead.why, /broken resolver/i);
+  assert.match(codedDnsFailureInDead.why, /dns: SERVFAIL/);
+  assert.doesNotMatch(codedDnsFailureInDead.why, /egress is DENIED/i);
 
   // Shape 2: Uncoded DNS-worded error on outboundTcp80ByName
   const uncodedDnsWord = decide(
@@ -461,6 +479,34 @@ test("passthrough-network: hanging resolver or uncoded DNS error refuses as brok
   assert.equal(administrativeDnsWithReachedLiteral.axis, "passthrough-network");
   assert.match(administrativeDnsWithReachedLiteral.why, /probe REACHED out: network\.outboundTcp443IpLiteral/);
   assert.doesNotMatch(administrativeDnsWithReachedLiteral.why, /broken DNS/i);
+
+  // Shape 7 (F1 negative pin): refused proxy to 'resolver-proxy.local' must NOT trigger broken DNS in Case A
+  const refusedProxyInReached = decide(
+    fixture((r) => {
+      r.network.outboundTcp443IpLiteral = { ok: true, ms: 15 };
+      r.network.outboundTcp80ByName = { ok: false, error: "connect ECONNREFUSED resolver-proxy.local:53", ms: 1 };
+    }),
+    netAct,
+  );
+  assert.equal(refusedProxyInReached.ok, false);
+  assert.equal(refusedProxyInReached.axis, "passthrough-network");
+  assert.match(refusedProxyInReached.why, /probe REACHED out: network\.outboundTcp443IpLiteral/);
+  assert.doesNotMatch(refusedProxyInReached.why, /broken DNS/i);
+
+  // Shape 8 (F1 negative pin): refused proxy to 'resolver-proxy.local' in dead branch must stay DENIED
+  const refusedProxyInDead = decide(
+    fixture((r) => {
+      r.network.outboundTcp443IpLiteral = { ok: false, error: "TCP 443 IP-literal: refused (ECONNREFUSED)", ms: 2 };
+      r.network.outboundTcp80ByName = { ok: false, error: "connect ECONNREFUSED resolver-proxy.local:53", ms: 1 };
+      r.network.cloudMetadataService = { ok: false, error: "timed out after 1500ms", ms: 1501 };
+    }),
+    netAct,
+  );
+  assert.equal(refusedProxyInDead.ok, false);
+  assert.equal(refusedProxyInDead.axis, "passthrough-network");
+  assert.match(refusedProxyInDead.why, /egress is DENIED/i);
+  assert.doesNotMatch(refusedProxyInDead.why, /broken resolver/i);
+  assert.doesNotMatch(refusedProxyInDead.why, /name resolution/i);
 });
 
 test("FIX 2c (processes): a tool list that did not look for the mechanisms is unmeasured, not denial", () => {
