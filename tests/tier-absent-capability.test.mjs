@@ -414,6 +414,21 @@ test("passthrough-network: hanging resolver or uncoded DNS error refuses as brok
   assert.match(openEgressHangingDns.why, /broken DNS/i);
   assert.match(openEgressHangingDns.why, /alive, not denied/i);
   assert.match(openEgressHangingDns.why, /network\.dns = "timed out after 4000ms"/);
+
+  // Shape 4: SERVFAIL dns error must refuse as brokenness and must NOT claim ENOTFOUND (voicebox-beads-a3zx)
+  const servfailDns = decide(
+    fixture((r) => {
+      r.network.outboundTcp443IpLiteral = { ok: true, ms: 15 };
+      r.network.outboundTcp80ByName = { ok: false, error: "timed out after 4000ms", ms: 4001 };
+      r.network.dns = { error: "SERVFAIL" };
+    }),
+    netAct,
+  );
+  assert.equal(servfailDns.ok, false);
+  assert.equal(servfailDns.axis, "passthrough-network");
+  assert.match(servfailDns.why, /broken DNS/i);
+  assert.match(servfailDns.why, /resolver failure \(SERVFAIL\)/);
+  assert.doesNotMatch(servfailDns.why, /ENOTFOUND/);
 });
 
 test("FIX 2c (processes): a tool list that did not look for the mechanisms is unmeasured, not denial", () => {

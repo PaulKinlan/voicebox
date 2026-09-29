@@ -290,10 +290,17 @@ export function decide(report: BoundaryReport, act: Act): { ok: true; axis: Boun
 
       // Separating broken DNS with open IP-literal egress (voicebox-beads-3ryb, a3zx):
       if (first === "outboundTcp443IpLiteral" && nameDnsBroke) {
-        const isTransient = /EAI_AGAIN/i.test(nameError) || /timed out/i.test(dnsError) || /timed out/i.test(nameError);
-        const dnsNature = isTransient
+        const text = `${nameError} ${dnsError}`;
+        const transient =
+          /EAI_AGAIN|ETIMEOUT/i.test(text) ||
+          /timed out/i.test(dnsError) ||
+          /getaddrinfo.*timed out|DNS.*timed out/i.test(nameError);
+        const authoritative = /ENOTFOUND|NXDOMAIN/i.test(text);
+        const dnsNature = transient
           ? "transient resolver failure (timeout or EAI_AGAIN)"
-          : "authoritative resolver failure (ENOTFOUND)";
+          : authoritative
+            ? "authoritative resolver failure (ENOTFOUND)"
+            : `resolver failure (${(dnsError || nameError).slice(0, 60)})`;
         const dnsEvidence = report.network?.dns?.error
           ? `; network.dns = ${JSON.stringify(report.network.dns.error)}`
           : "";
@@ -366,7 +373,12 @@ export function decide(report: BoundaryReport, act: Act): { ok: true; axis: Boun
       ...(report.network?.dns ? [`dns: ${report.network.dns.error ?? `ok=${String(report.network.dns.value !== undefined)}`}`] : []),
     ].join("; ");
     const dnsFieldBroke =
-      report.network?.dns !== undefined && !report.network?.dns?.value && !!report.network?.dns?.error;
+      report.network?.dns !== undefined &&
+      !report.network?.dns?.value &&
+      !!report.network?.dns?.error &&
+      /EAI_AGAIN|ENOTFOUND|getaddrinfo|\bDNS\b|resolver|timed out|ETIMEOUT|SERVFAIL|EAI_FAIL/i.test(
+        String(report.network.dns.error),
+      );
     const nameDnsBrokeInDead = /EAI_AGAIN|ENOTFOUND|getaddrinfo|\bDNS\b|resolver/i.test(
       String(report.network?.outboundTcp80ByName?.error ?? ""),
     );
