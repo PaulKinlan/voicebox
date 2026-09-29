@@ -474,14 +474,19 @@ function envVars() {
   // (2026-09-25). A table that says where a variable is read must ask the thing that reads it; the
   // declaration is the source, exactly as the provider list is imported rather than matched.
   for (const fact of Object.values(STATE_DIR_FACTS ?? {})) remember(fact.env, "lib/state-dirs.mjs");
+  // Extensions interpolate header values ($BRAVE_API_KEY) dynamically through process.env[envKey]
+  remember("BRAVE_API_KEY", "lib/extensions.mjs");
   for (const f of files) {
     // BOTH SHAPES, because one of them was invisible: `process.env.X` and the optional-chained
     // `globalThis.process?.env?.X` that `lib/resolver.mjs` uses to stay runnable off-host. The narrow
     // pattern omitted the resolver's own GEMINI_API_KEY read, so the generated table named the key
     // against the live provider only and a reader would not know the resolver wanted it too
     // (reviewer finding, voicebox-beads-smx). A derived table is only as wide as its pattern.
+    // Strip comments before scanning (voicebox-beads-5qox) so prose mentions like "process.env.X"
+    // in comments do not invent phantom environment variables in the generated table.
     const src = readFileSync(join(ROOT, f), "utf8");
-    for (const m of src.matchAll(/(?:globalThis\s*\.\s*)?process\s*\??\.\s*env\s*\??\.\s*([A-Z][A-Z0-9_]*)/g)) {
+    const stripped = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^\:\\])\/\/.*$/gm, "$1");
+    for (const m of stripped.matchAll(/(?:globalThis\s*\.\s*)?process\s*\??\.\s*env\s*\??\.\s*([A-Z][A-Z0-9_]*)/g)) {
       remember(m[1], f);
     }
   }
