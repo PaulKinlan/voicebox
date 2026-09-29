@@ -26,7 +26,7 @@ as help. Create worktrees with **`--no-track`**, or clear it afterwards with
 | stage | what it runs | concurrency | default budget |
 | --- | --- | --- | --- |
 | `unit` | `npm run test:unit` — every `tests/*.test.mjs` that launches no browser and no server of its own | files in parallel | 90s |
-| `live` | `npm run test:live` — tests that launch Chromium over CDP or a server process, or hold worker threads past their last test (the wasm-shelf suite, until voicebox-beads-u2lx) | **one file at a time** | 400s |
+| `live` | `npm run test:live` — tests that launch Chromium over CDP or a server process | **one file at a time** | 400s |
 | `acceptance` | `npm run accept` | — | 45s |
 
 Each stage inherits stdout and stderr: partial output remains visible when it
