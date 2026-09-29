@@ -152,8 +152,9 @@ and `refused` are three different words. Fields:
 - **`network`** — DNS and outbound TCP attempts, each `ok` with a timing or a named error.
   *Read as:* **attempted is not carried** — `ok: true` means a connection completed. Inside the
   fence this is expected: the network is shared, and this axis is how the report says so. The
-  attempts run together, each on its own deadline, so the section costs its slowest attempt; each
-  `ms` is that attempt's own, timed from its own dial (it can carry a few ms of waiting on its
+  attempts run together, each on its own deadline, so the section costs its slowest attempt; DNS
+  resolution runs on its own 4s deadline (`voicebox-beads-zaj8`) so a black-holed resolver cannot hang probe boot;
+  each `ms` is that attempt's own, timed from its own dial (it can carry a few ms of waiting on its
   neighbours — verdicts read `ok`/`error`, never `ms`). `outboundTcp443IpLiteral` dials `1.1.1.1:443`
   — no DNS in its path — beside the by-name `example.com:80`, so a closed route and a missing resolver
   read differently; until `voicebox-beads-4wez` it dialled example.com's retired `93.184.216.34`,
