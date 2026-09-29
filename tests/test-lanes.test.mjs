@@ -112,7 +112,12 @@ test("server and browser lanes partition the live suite cleanly (voicebox-beads-
   // Known server tests are in server lane:
   assert.ok(serverFiles.has("tests/environment-probe.test.mjs"), "server process test must be in server lane");
   assert.ok(serverFiles.has("tests/tasks-http.test.mjs"), "task-fixture server test must be in server lane");
-  assert.ok(serverFiles.has("tests/wasm-shelf.test.mjs"), "wasm-shelf worker test must be in server lane");
+
+  // wasm-shelf is UNIT since voicebox-beads-0i14: it launches no browser and no server of its own, and
+  // the reason it was held out (a worker outliving its test) died with u2lx's killable child process.
+  const unitFiles = new Set(execFileSync(process.execPath, [path.join(root, "scripts/test-lanes.mjs"), "--lane", "unit"], { cwd: root, encoding: "utf8" }).trim().split(/\s+/));
+  assert.ok(unitFiles.has("tests/wasm-shelf.test.mjs"), "wasm-shelf.test.mjs belongs in the unit lane now (voicebox-beads-0i14)");
+  assert.equal(serverFiles.has("tests/wasm-shelf.test.mjs"), false, "and it must not also sit in the server lane");
 });
 
 // ── voicebox-beads-k96l: the classifier reads CODE, not the DATA a test writes ──────────
@@ -191,7 +196,16 @@ test("the launch forms this suite really uses stay LIVE, each for its own reason
     writeFileSync(path.join(dir, "writes-to-helper.test.mjs"), 'writeFileSync(path.join(repo, "tools", "page-acceptance.mjs"), "process.exit(0)\\n");\n');
     writeFileSync(path.join(dir, "staged-fixture.test.mjs"), 'const FIXTURE = `import { launch } from "./lib/cdp.mjs";\\n`;\nwriteFileSync(file, FIXTURE);\n');
     const { unit, live } = classify(dir);
-    assert.deepEqual(unit, [], `every launch form must stay LIVE — these escaped to the concurrent lane: ${unit.map(({ file }) => file).join(", ")}`);
+    // ONE form deliberately left the live lane (voicebox-beads-0i14): the wasm call. It is still in the
+    // survey below — dropping the fixture would lose the coverage — but it is now asserted to be UNIT,
+    // because u2lx (6ffe613) made the wasm cell a child process SIGKILLed at its deadline: a file that
+    // calls a wasm tool launches no browser and no server, and the hold that kept it out of the
+    // concurrent lane (a worker outliving its test by ~52s, voicebox-beads-6io) is gone.
+    assert.deepEqual(
+      unit,
+      [{ file: "wasm-call.test.mjs", why: null }],
+      `the wasm form is UNIT now; every OTHER launch form must stay LIVE — these escaped: ${unit.map(({ file }) => file).join(", ")}`,
+    );
     assert.deepEqual(Object.fromEntries(live.map(({ file, why }) => [file, why])), {
       "acceptance-joined.test.mjs": "a browser via page-acceptance",
       "cdp-dynamic.test.mjs": "a browser over CDP",
@@ -211,7 +225,6 @@ test("the launch forms this suite really uses stay LIVE, each for its own reason
       "task-dynamic.test.mjs": "a server via task-fixture",
       "task-helper.test.mjs": "a server via task-fixture",
       "task-joined.test.mjs": "a server via task-fixture",
-      "wasm-call.test.mjs": "worker threads or wasm execution",
       "writes-in-callback.test.mjs": "a server process",
       "writes-spawn-output.test.mjs": "a server process",
       "writes-then-serves.test.mjs": "a server via createServer",
@@ -249,12 +262,17 @@ test("comments are read as a lexer reads them — a glob in a string or a regex 
   }
 });
 
-test("this file is UNIT, and wasm-shelf stays LIVE for the worker it holds (voicebox-beads-k96l)", () => {
+test("this file is UNIT, and wasm-shelf is UNIT now that its cell is deadline-killable (voicebox-beads-k96l, 0i14)", () => {
   const unit = new Set(run("--lane", "unit").trim().split(/\s+/));
   assert.ok(unit.has("tests/test-lanes.test.mjs"), "the classifier's own test launches nothing: every helper it names is fixture text it writes, or prose");
-  const live = new Set(run("--lane", "live").trim().split(/\s+/));
+  // The old pin here required wasm-shelf to stay LIVE, because its grow worker outlived terminate() by
+  // ~52s at ~3 cores (voicebox-beads-6io), the hold that blew the 90s unit budget. u2lx (6ffe613) made
+  // the cell a child process SIGKILLed at the deadline, so 0i14 moved the file: unit lane 20.7s → 31.4s
+  // with it included, comfortably inside the 90s budget, and the measurement is on the bead.
   assert.ok(
-    live.has("tests/wasm-shelf.test.mjs"),
-    "wasm-shelf.test.mjs holds its process ~50s past its last test (its grow worker outlives terminate()), the hold that blew the 90s unit budget (voicebox-beads-6io) — it stays live until that worker dies at its deadline",
+    unit.has("tests/wasm-shelf.test.mjs"),
+    "wasm-shelf.test.mjs launches no browser and no server, and its cell now dies at its 5s deadline — it belongs in the unit lane (voicebox-beads-0i14)",
   );
+  const live = new Set(run("--lane", "live").trim().split(/\s+/));
+  assert.equal(live.has("tests/wasm-shelf.test.mjs"), false, "it is no longer live at all: the lane it left is not a second home");
 });
