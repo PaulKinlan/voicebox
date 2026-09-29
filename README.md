@@ -421,6 +421,7 @@ Every environment variable the server and its libraries read, and where:
 | `VOICEBOX_BIND_RETRY_MS` | `server.mjs` | how often to retry a bind that lost the port race |
 | `VOICEBOX_CLAUDE_CLI` | `lib/claude-acp.mjs` | the claude CLI the adapter child is told to execute (exported to it as `CLAUDE_CODE_EXECUTABLE`); unset resolves the user-installed CLI, else the adapter-bundled binary |
 | `VOICEBOX_CLAUDE_KEEP_API_KEY` | `lib/claude-acp.mjs` | opt-back for the claude-code adapter child env: set to `1` to keep the host's `ANTHROPIC_API_KEY`. By default that key is DELETED from the child — an inherited key overrides claude.ai login and can stall the prompt — the host's own environment is never mutated, and the test asserts the key is ABSENT rather than present-with-no-value, because those are different child environments (voicebox-beads-nz60) |
+| `VOICEBOX_ENABLE_STUB_PROVIDER` | `server.mjs` | registers the key-free `stub` live provider for proofs (it echoes the microphone back at 0.3 gain; no vendor, no network, no key). OFF by default, so it is never offered in the provider list a person chooses from (voicebox-beads-ldxa) |
 | `VOICEBOX_EXTENSIONS_DIR` | `lib/state-dirs.mjs` | the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl`, and `.pairings.json` (the bearer custody store — outside every root) |
 | `VOICEBOX_HARNESS` | `server.mjs` | selects the host task adapter (`pi` enables the Pi ACP task adapter in `server.mjs`; unset leaves no default adapter configured) |
 | `VOICEBOX_HELLO_BOUND_MS` | `server.mjs` | how long to wait for a hello frame on /channel or /live before refusing (default 5000ms) |
@@ -554,7 +555,11 @@ What works today:
 What does not work yet:
 
 - **No always-on conversation.** While a live session is open the mic streams
-  continuously, the model replies, and you can interrupt it — that part landed.
+  continuously, the model replies, and **you can talk over it (voicebox-beads-ldxa)**: the page watches the
+  microphone's own energy and, on sustained speech clear of the audio playing at that moment, flushes
+  playback and asks the session to stop — so interrupting is speaking, not reaching for the button. The
+  honest limit is named in [the audio path](docs/07-architecture.md): with echo cancellation off and the
+  volume up, playback alone can clear those conditions and the page interrupts itself.
   What is missing is the version with **no press at all** (a wake word or a
   standing session), which is what the brief's "always-on" means.
 - **The loop has no root of its own.** It writes into the active project root, which the

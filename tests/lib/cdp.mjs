@@ -35,7 +35,7 @@ const BROWSERS = [
   "/Applications/Chromium.app/Contents/MacOS/Chromium",
 ].filter(Boolean);
 
-export async function launch({ width = 1000, height = 800, profile = null, fakeMedia = false } = {}) {
+export async function launch({ width = 1000, height = 800, profile = null, fakeMedia = false, fakeAudioFile = null } = {}) {
   const binary = BROWSERS.find((b) => existsSync(b));
   if (!binary) throw new Error("no Chromium/Chrome binary found; set VOICEBOX_CHROME");
 
@@ -48,6 +48,10 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
     [
       "--headless=new",
       ...(fakeMedia ? ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"] : []),
+      // A wav file the fake microphone PLAYS (voicebox-beads-ldxa): the only way to give the page real,
+      // deterministic mic input — a quiet passage and then a spoken one — so a detector can be driven
+      // through the REAL capture worklet instead of a synthetic frame.
+      ...(fakeAudioFile ? [`--use-file-for-fake-audio-capture=${fakeAudioFile}`] : []),
       "--disable-gpu",
       "--no-first-run",
       "--no-default-browser-check",

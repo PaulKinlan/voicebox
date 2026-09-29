@@ -533,3 +533,94 @@ test("rate: capture REFUSES without a declared rate — it RESOLVES, ends in the
     `the refusal is reported as a STATE, not a rejection: got ${JSON.stringify(events.states.map((s) => s.phase))}`,
   );
 });
+
+// ── barge-in: the person speaks, the page gets out of the way (voicebox-beads-ldxa) ───────────────
+// The microphone never stops during agent speech (the boundary above), so the page hears the user start
+// talking. These drive the detector on its own terms: sustained speech that clears the audio PLAYING at
+// that moment flushes playback and asks the session to stop; everything else must change nothing.
+function wiredClient(overrides = {}) {
+  let wired = null;
+  class Worklet extends FakeWorkletNode { constructor() { super(); wired = this; } }
+  const made = makeClient({ AudioWorkletNodeCtor: Worklet, ...overrides });
+  return { ...made, node: () => wired };
+}
+
+/** A playing chunk with the given amplitude — this is what the echo margin is measured against. */
+const chunk = (amplitude) => floatToPcm16(Float32Array.from({ length: 64 }, (_, i) => (i % 2 ? amplitude : -amplitude)));
+
+/** One captured mic frame at the given amplitude. */
+const speak = (port, amplitude, frames = 1) => {
+  for (let i = 0; i < frames; i += 1) port.onmessage({ data: Float32Array.from({ length: 64 }, (_, j) => (j % 2 ? amplitude : -amplitude)) });
+};
+
+const interruptsSent = (socket) => socket.sent.filter((s) => typeof s === "string" && s.includes('"type":"interrupt"'));
+
+async function speakingClient() {
+  const made = wiredClient();
+  const { client, socket } = made;
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
+  await client.startCapture();
+  client.handleMessage(JSON.stringify({ type: "state", state: "ready", model: "models/gemini-3.8-live" }));
+  client.handleMessage(chunk(0.2)); // the agent is audible: playback is live, so the phase is agent-speaking
+  assert.equal(client.snapshot().phase, "agent-speaking", "the fixture must actually be in the speaking phase");
+  return { ...made, node: made.node() };
+}
+
+test("barge-in: sustained speech flushes playback, asks the session to interrupt, and leaves capture running", async () => {
+  const { client, socket, node, events } = await speakingClient();
+  speak(node.port, 0.5, 3); // above the 0.06 floor AND above 0.2 * 1.35 — the person, not the echo
+
+  const snap = client.snapshot();
+  assert.equal(snap.bargeIns, 1, "the detector must count the interruption it asked for");
+  assert.equal(snap.playbackActive, false, "playback must be flushed, not merely masked");
+  assert.equal(snap.phase, "listening", "the phase must leave agent-speaking");
+  assert.equal(snap.capture, true, "capture must NOT stop — the boundary `stopReply` has always had");
+  assert.equal(client.label(), "Listening — speak now");
+
+  const sent = interruptsSent(socket);
+  assert.equal(sent.length, 1, "exactly one interrupt frame, and it must be the one the page asked for");
+  assert.match(sent[0], /"source":"page"/);
+  assert.ok(events.diagnostics.some((d) => d.kind === "barge-in"), "the interruption must be NAMED in the diagnostics");
+});
+
+test("barge-in: a quiet room, and the agent's own audio coming back, both change nothing", async () => {
+  const { client, node } = await speakingClient();
+
+  speak(node.port, 0.01, 5); // below the floor: room tone
+  assert.equal(client.snapshot().bargeIns, 0, "room tone must not interrupt the model");
+
+  // The echo case: the agent is playing at 0.5, and 0.5 arrives from the microphone — above the floor, but
+  // it does NOT clear the playing level by the margin, which is exactly the speaker-bleed shape.
+  client.handleMessage(chunk(0.5));
+  speak(node.port, 0.5, 5);
+  assert.equal(client.snapshot().bargeIns, 0, "playback bleeding into the microphone must not interrupt the model");
+  assert.equal(client.snapshot().playbackActive, true, "and playback must still be running");
+});
+
+test("barge-in: one utterance sends ONE interrupt, and a new speaking phase arms the detector again", async () => {
+  const { client, socket, node } = await speakingClient();
+  speak(node.port, 0.5, 3);
+  assert.equal(client.snapshot().bargeIns, 1, "the first utterance interrupts");
+  speak(node.port, 0.5, 10);
+  assert.equal(client.snapshot().bargeIns, 1, "the rest of the same utterance must not storm the socket");
+  assert.equal(interruptsSent(socket).length, 1, "one interruption, one frame");
+
+  client.handleMessage(chunk(0.2)); // the model speaks again
+  assert.equal(client.snapshot().phase, "agent-speaking");
+  speak(node.port, 0.5, 3);
+  assert.equal(client.snapshot().bargeIns, 2, "a new speaking phase is interruptible again");
+  assert.equal(interruptsSent(socket).length, 2);
+});
+
+test("barge-in: the MODEL's own interrupt flushes the buffered tail without asking again (the provider round trip)", async () => {
+  const { client, socket } = await speakingClient();
+  // What Gemini's server-side barge-in and OpenAI's cancellation both produce, forwarded by /live.
+  client.handleMessage(JSON.stringify({ type: "state", state: "interrupt", detail: { provider: "stub" } }));
+
+  const snap = client.snapshot();
+  assert.equal(snap.providerInterrupts, 1, "the provider's own interrupt must be counted as its own");
+  assert.equal(snap.playbackActive, false, "the already-buffered audio must be flushed — this is the audible half");
+  assert.equal(snap.phase, "listening", "and the phase must leave agent-speaking");
+  assert.equal(snap.capture, true, "capture keeps running");
+  assert.equal(interruptsSent(socket).length, 0, "the model already stopped: the page must not ask it to stop again");
+});

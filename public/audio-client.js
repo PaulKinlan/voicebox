@@ -16,6 +16,29 @@
 //     is live. Two true statements beat one convenient false one.
 import { floatToPcm16, pcm16ToFloat, isPcm16, energy } from "./pcm.js";
 
+// ── BARGE-IN (voicebox-beads-ldxa) ──────────────────────────────────────────────────────────────────
+// The microphone stays open while the agent speaks — that is the tested boundary (`stopReply` flushes
+// playback and NEVER touches capture) — so the page can hear a person start talking and get out of the
+// way. What follows is that detector. It is energy-based because that is what this client already
+// measures: `energy(frame)` is the mean absolute amplitude of every captured frame, the same input
+// number the waveform draws.
+//
+// SPEECH IS SUSTAINED AND CLEARER THAN WHATEVER IS PLAYING. Both conditions are required:
+//   · an absolute floor (`threshold`), so room tone, a fan or a chair creak never interrupts a model;
+//   · clearance over the audio PLAYING RIGHT NOW (`echoMargin`), because with speakers the agent's own
+//     voice arrives at the microphone. The browser's echo canceller is the first line of defence; this
+//     is the second, and it has to be a RATIO rather than a fixed level, because a person interrupting
+//     a loud passage is louder than one interrupting a quiet one.
+// A single frame never counts: `frames` consecutive qualifying frames do, so a click or a cough is not
+// a turn. And one utterance fires ONCE — the latch holds until something plays again — so a long
+// interruption sends one request, not a frame-by-frame storm.
+//
+// HONEST LIMIT: with echo cancellation off and the volume up, playback alone can clear both conditions
+// and the page interrupts itself. That is named here (and in the bead) rather than hidden; a vendor VAD
+// would not have that failure mode but would be a second implementation of a thing the provider
+// already does.
+const BARGE_IN = Object.freeze({ threshold: 0.06, frames: 3, echoMargin: 1.35 });
+
 const PLAYBACK_RATE = 24000; // provider output, PCM16 (Gemini Live)
 
 // THE RATE THE PROVIDER REQUIRES, TOLD TO US BY THE SERVER on the first frame of the /live socket
@@ -73,6 +96,13 @@ export function createAudioClient({
     framesReceived: 0,
     framesRejected: 0,
     framesIgnoredAfterEnd: 0,
+    // Barge-in (voicebox-beads-ldxa). `bargeIns` counts interruptions the PAGE asked for (its own
+    // detector); `providerInterrupts` counts the ones the MODEL's side reported — kept apart so the
+    // round trip is visible in a snapshot rather than inferred: page → server → provider → back here.
+    bargeIns: 0,
+    providerInterrupts: 0,
+    bargeInStreak: 0, // consecutive qualifying frames; reset by any frame that does not qualify
+    bargeInArmed: true, // false once this speaking phase has been interrupted (one shot per phase)
     captureError: "", // sticky refusal: survives later state emits until the next user action
     captureErrorReason: "", // WHY it refused: "rate-not-declared" is not a device failure
     lastError: "",
@@ -280,6 +310,17 @@ export function createAudioClient({
         emit(state.playbackActive ? "agent-speaking" : state.capture ? "listening" : "idle", { providerError: true, reason });
         return;
       }
+      if (msg.state === "interrupt") {
+        // THE MODEL ALREADY STOPPED (voicebox-beads-ldxa). Gemini's barge-in is handled server-side, and
+        // OpenAI fires this beside its own cancel — but the PAGE still holds the audio it has already
+        // buffered, so without this flush the user hears the tail of a turn that has ended. That tail is
+        // the audible half of "I cannot interrupt it". Counted separately from the page-triggered
+        // barge-in above so the round trip is visible: page → server → provider → back here.
+        state.providerInterrupts += 1;
+        interruptSpeech("provider");
+        onDiagnostic({ kind: "state", state: msg.state, detail: msg.detail });
+        return;
+      }
       onDiagnostic({ kind: "state", state: msg.state, detail: msg.detail });
       return;
     }
@@ -370,6 +411,8 @@ export function createAudioClient({
     };
     if (!state.playbackActive) {
       state.playbackActive = true;
+      state.bargeInArmed = true; // a new speaking phase is interruptible again
+      state.bargeInStreak = 0;
       emit("agent-speaking");
     }
   }
@@ -566,7 +609,9 @@ export function createAudioClient({
         const frame = event.data;
         if (!(frame instanceof Float32Array) || frame.length === 0) return;
         try {
-          noteInput(energy(frame));
+          const frameEnergy = energy(frame);
+          noteInput(frameEnergy);
+          considerBargeIn(frameEnergy); // ONE reading, used by both the meter and the detector
           ws?.send(floatToPcm16(frame));
           state.framesSent += 1;
         } catch (error) {
@@ -641,6 +686,50 @@ export function createAudioClient({
     state.playbackActive = false;
     emit(state.capture ? "listening" : "idle", { flushed: true });
     return { flushed: true, captureRunning: state.capture };
+  }
+
+  /**
+   * The detector (voicebox-beads-ldxa). Runs on every captured frame; see BARGE_IN's comment for why
+   * these three conditions and what the honest limit is. Only agent speech is interruptible.
+   */
+  function considerBargeIn(value) {
+    if (!state.playbackActive) {
+      state.bargeInStreak = 0;
+      state.bargeInArmed = true;
+      return;
+    }
+    if (!state.bargeInArmed) return;
+    // WHAT IS PLAYING, measured conservatively: the loudest chunk the playback timeline still holds.
+    // `meter.lastPlayed` (what is audible this instant) is null in the moment between scheduling and
+    // sounding — and in a harness whose clock does not advance — which would silently drop the echo
+    // guard exactly when playback starts, the moment the agent is loudest relative to the user.
+    const playing = meter.playing.reduce((max, entry) => Math.max(max, entry.value), 0);
+    const isSpeech = value >= BARGE_IN.threshold && value >= playing * BARGE_IN.echoMargin;
+    state.bargeInStreak = isSpeech ? state.bargeInStreak + 1 : 0;
+    if (state.bargeInStreak < BARGE_IN.frames) return;
+    state.bargeInStreak = 0;
+    state.bargeInArmed = false; // one interruption per speaking phase, never one per frame
+    state.bargeIns += 1;
+    onDiagnostic({ kind: "barge-in", energy: value, playing, frames: BARGE_IN.frames });
+    interruptSpeech("page");
+  }
+
+  /**
+   * Flush playback AND ask the live session to stop generating — one act, two halves, because either
+   * alone leaves the user talking into something that is still talking back (voicebox-beads-ldxa).
+   * `stopReply()` silences what is buffered here; the control frame asks the provider to stop producing
+   * more (OpenAI sends `response.cancel`; Gemini's barge-in is server-side and names this a no-op). A
+   * socket that is already gone costs the flush nothing — the local silence has happened either way.
+   */
+  function interruptSpeech(source) {
+    const flushed = stopReply();
+    // Only the PAGE's own interruption asks the model to stop. When the model's side reported the
+    // interrupt, it has already stopped, and asking again would put a second cancel on the wire for no
+    // reason. The flush is unconditional either way — the buffered tail is the page's to silence.
+    if (source === "page") {
+      try { ws?.send(JSON.stringify({ type: "interrupt", source })); } catch { /* the socket is gone */ }
+    }
+    return flushed;
   }
 
   return {
