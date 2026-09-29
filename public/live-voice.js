@@ -42,11 +42,13 @@ const audioClient = createAudioClient({
     renderMic(snap);
     if (interrupt) interrupt.disabled = phase !== "agent-speaking";
   },
-  onToolCalls: (calls) => {
+  onToolCalls: (calls, frame) => {
     // THE ROOM OWNS THE LISTING, so the frame goes to a hook rather than to an import — and the hook is
     // called at FRAME TIME, so whichever of these two scripts loads first does not matter. A tool call is
     // the only event that can change the folder without the page asking (voicebox-beads-a93).
-    window.__voiceboxOnToolCalls?.(calls);
+    // The RESULT frame (type "tool") rides the second argument: it carries the execution latency the
+    // room's shelf rows show (voicebox-beads-rgvi).
+    window.__voiceboxOnToolCalls?.(calls, frame);
   },
   onTask: (task) => {
     // THE TASK CARD: forward the live task handle to the room component (voicebox-beads-8fv.4)

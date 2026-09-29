@@ -1514,7 +1514,10 @@ async function renderExtensions() {
       return toolNames.map((toolName) => {
         const last = lastToolStatus.get(toolName);
         const ago = last ? ` · ${Math.max(1, Math.round((Date.now() - last.at) / 1000))}s ago` : "";
-        const stateText = `Callable now · ${toolName}${last ? ` · last run ${last.ok ? "ok" : "failed"}${ago}` : " · not yet run in this session"}`;
+        // THE EXECUTION LATENCY (voicebox-beads-rgvi): how long the host executor ran the tool,
+        // shown beside the ok/failed fact — a number measured at the executor, not a guess.
+        const latency = Number.isFinite(last?.durationMs) ? ` · ${last.durationMs}ms` : "";
+        const stateText = `Callable now · ${toolName}${last ? ` · last run ${last.ok ? "ok" : "failed"}${latency}${ago}` : " · not yet run in this session"}`;
         const detail = (e.toolDetails ?? []).find((td) => td.name === toolName)?.description ?? e.description ?? "";
         return extRow({ name: e.name, dotState: "true", stateText, detail });
       });
@@ -3892,11 +3895,21 @@ window.__voiceboxOnLiveText = (text, role = "model") => {
   activeLiveTurnRole = role;
 };
 
-window.__voiceboxOnToolCalls = (calls) => {
+window.__voiceboxOnToolCalls = (calls, frame) => {
   activeLiveTurnNode = null;
   activeLiveTurnRole = null;
+  // EXECUTION LATENCY (voicebox-beads-rgvi): the result frame carries how long the host executor
+  // ran each call; merge it by name so the shelf row can say "21ms" instead of only "last run".
+  const latencyByName = new Map(
+    (frame?.calls ?? []).filter((c) => Number.isFinite(c?.durationMs)).map((c) => [c.name, c.durationMs]),
+  );
   for (const call of calls ?? []) {
-    lastToolStatus.set(call.name, { ok: Boolean(call.ok), at: Date.now() });
+    const previous = lastToolStatus.get(call.name);
+    lastToolStatus.set(call.name, {
+      ok: Boolean(call.ok),
+      at: Date.now(),
+      durationMs: latencyByName.get(call.name) ?? previous?.durationMs ?? null,
+    });
     const verbLabel = String(call.name ?? "tool").replace(/_/g, " ");
     const outcome = call.action || (call.ok ? "done" : "the tool call was refused");
     logTurn(`voice tool: ${verbLabel}`, outcome);

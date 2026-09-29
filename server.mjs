@@ -4101,6 +4101,9 @@ server.on("upgrade", (req, socket) => {
             // and tests can verify the product's answer — not just that a call happened.
             seen.push({
               name: call.name, ok: result.ok,
+              // THE LATENCY, measured where the execution happened (voicebox-beads-rgvi): the room's
+              // shelf row reads this and shows the person how long the tool took.
+              durationMs: Math.round(performance.now() - started),
               action: result.action ?? result.error,
               ...(typeof result.output === "string" ? { output: result.output.slice(0, 256) } : {}),
             });

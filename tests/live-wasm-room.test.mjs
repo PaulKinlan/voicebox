@@ -70,6 +70,10 @@ test("live wasm room: the model calls the shelf hash tool by name and speaks the
     const frame = hashFrame();
     assert.ok(frame, `the model did not call the shelf hash tool successfully — tools: ${JSON.stringify(tools.flatMap((t) => t.calls ?? []))}`);
     assert.match(frame.output, /ba7816bf/, `the frame's output must carry the computed digest: ${frame.output}`);
+    // THE LATENCY RIDES THE FRAME (voicebox-beads-rgvi): the room's shelf row renders it, so the
+    // host must measure it — a finite, non-negative number, present on every executed call.
+    assert.equal(typeof frame.durationMs, "number", `the frame must carry the execution latency: ${JSON.stringify(frame)}`);
+    assert.ok(Number.isFinite(frame.durationMs) && frame.durationMs >= 0, `latency must be a sane number, got ${frame.durationMs}`);
 
     // The spoken answer is a LOG here, never an assertion — the model's phrasing varies
     // (measured: one run said 'the hash of the text abc is ending in 0015ad').

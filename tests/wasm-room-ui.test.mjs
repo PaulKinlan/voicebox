@@ -41,6 +41,22 @@ test("wasm room ui: the shelf renders callable-now rows with descriptions, disti
     const catalogueText = await page.evaluate(() => document.querySelector("#ext-catalogue")?.innerText ?? "");
     assert.doesNotMatch(catalogueText, /wasm-shelf-/, "the shelf must not be double-listed as catalogue strangers");
 
+    // EXECUTION LATENCY (voicebox-beads-rgvi): the room loop's result frame, driven through the
+    // page's own hook (the seam live-voice.js forwards to), must land on the shelf row as a
+    // measured "Nms" readout — the same path a real voice-tool call takes.
+    await page.evaluate(() => {
+      window.__voiceboxOnToolCalls(
+        [{ name: "hash", ok: true }],
+        { calls: [{ name: "hash", ok: true, durationMs: 21 }] },
+      );
+    });
+    await page.waitFor(() => /21ms/.test(document.querySelector("#ext-shelf")?.innerText ?? ""), { label: "the latency readout" });
+    const latencyRow = await page.evaluate(() => {
+      const row = [...document.querySelectorAll("#ext-shelf li")].find((r) => /hash/.test(r.innerText));
+      return row?.innerText.replace(/\s+/g, " ") ?? "";
+    });
+    assert.match(latencyRow, /21ms/, `the shelf row must show the measured latency: ${latencyRow}`);
+
     await page.screenshot(path.join(scratch, "shelf-section.png"));
   } finally {
     try { if (page) await page.close(); } catch {}
