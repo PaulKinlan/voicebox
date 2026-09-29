@@ -29,7 +29,7 @@
 //     argument of writeFileSync/writeFile/appendFileSync/appendFile is not read
 //     for a launch. The PATH it writes to still is, and so is ${…} code inside it
 //     and any literal inside a call or a function among its arguments;
-//   · a launch NAME (createServer, callWasmTool) counts where the code uses it,
+//   · a launch NAME (createServer) counts where the code uses it,
 //     not in a test title or an assertion message — unless the file hands source
 //     text to an evaluator (node -e/-p, a shell, eval/Function/vm, an eval
 //     Worker), and then every literal it keeps is read as code, as before;
@@ -68,7 +68,11 @@ const SERVER_SIGNALS = [
   { what: "a server process", re: /["'`][^"'`]*\bserver\.mjs["'`]/ },
   { what: "a server via task-fixture", re: /["'`][^"'`]*\btask-fixture\.mjs["'`]/ },
   { what: "a server via createServer", re: /\bcreateServer\b/, name: true },
-  { what: "worker threads or wasm execution", re: /\bcallWasmTool\b/, name: true },
+  // `callWasmTool` used to be a live signal because the wasm cell was a worker that could outlive its
+  // test by ~52s at ~3 cores (voicebox-beads-6io), which is why tests/wasm-shelf.test.mjs stayed out of
+  // the concurrent unit lane. u2lx (6ffe613) made the cell a child process SIGKILLed at the deadline
+  // (measured: dies at 5031ms, suite 65.5s → 10.3s), so the reason is gone and voicebox-beads-0i14
+  // moved the file to the unit lane it belongs in. The NAME rule above (`createServer`) is unchanged.
 ];
 
 const LAUNCHES = [...BROWSER_SIGNALS, ...SERVER_SIGNALS];
@@ -300,7 +304,7 @@ export function classify(root = TESTS) {
       continue;
     }
 
-    // Otherwise, any server or wasm launch puts it in the server lane (concurrent):
+    // Otherwise, any server launch puts it in the server lane (concurrent):
     const serverLaunch = SERVER_SIGNALS.find((signal) => signal.re.test(reading(signal)));
     if (serverLaunch) {
       const entry = { file, why: serverLaunch.what };

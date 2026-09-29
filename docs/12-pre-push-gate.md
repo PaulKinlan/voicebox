@@ -44,8 +44,8 @@ keeping browser launches isolated (`voicebox-beads-ku4f`). Each file is lexed, n
 writes — fixture text in the content of a writeFileSync/writeFile/appendFile call
 is data, which is why the classifier's own test is a unit test. A helper counts by
 its file name in any other string (a static or dynamic import, a spawn argument, a
-path.join segment, a template-built path); `createServer` and `callWasmTool` count
-only where code calls them, unless the file hands source text to an evaluator
+path.join segment, a template-built path); `createServer` counts
+only where code calls it, unless the file hands source text to an evaluator
 (node -e, a shell, eval/vm). Every doubt resolves to live: a file the lexer cannot
 read to its end is read raw, because a live test misfiled as unit is the flake
 this split exists to stop, while a unit test misfiled as live costs seconds.
@@ -66,6 +66,11 @@ rather than guessed:
   `live` **186s serial** (182 tests). The budgets above are headroom over those
   numbers, not estimates; changing concurrency without raising the budget would
   convert a flake into a timeout, which is why both moved together.
+- Re-measured on 2026-09-29 (`voicebox-beads-0i14`): `tests/wasm-shelf.test.mjs`
+  moved from the server lane into the `unit` lane once u2lx (`6ffe613`) made the
+  wasm cell a child process SIGKILLed at its deadline — the file alone is 10.5s
+  (19.1s CPU), the unit lane went **20.7s → 31.4s** with it included, and the old
+  signal that held it out (`callWasmTool`) is gone because its reason is fixed.
 - Re-measured on 2026-09-29 after the suite grew to 120 test files (`40 unit`,
   `80 live`) and the six-lane harness pass landed (`voicebox-beads-4wez`,
   `qxy2`, `4oj6`, `9mqc`, `g667`, `k96l`): `unit` **20.1s concurrent** (322
