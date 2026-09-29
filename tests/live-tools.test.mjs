@@ -1,7 +1,8 @@
 // tests/live-tools.test.mjs — THE ACCEPTANCE PAUL RUNS, automated:
 // ask the live voice to write a file, then read that file from disk and
-// compare byte for byte; then ask it to read the file back, and hear the
-// content spoken (via the output transcription).
+// compare byte for byte; then ask it to read a file ONLY THE TEST KNOWS and hear
+// its words spoken (via the output transcription) — the read half is proved by
+// words no turn ever told the session (voicebox-beads-cx16).
 //
 // Real Gemini Live, real executor, real filesystem. No stubs. Skipped only
 // when there is no key — a green run here IS the driven evidence.
@@ -11,7 +12,7 @@ import { spawn } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -86,37 +87,99 @@ async function liveSocket(port) {
   return { ws, states, texts, tools, audio: () => audioBytes };
 }
 
-test("live tools: the model writes a file we read byte-for-byte, then reads it back aloud", { skip: !HAVE_KEY && "GEMINI_API_KEY not set", timeout: 120000 }, async () => {
+/**
+ * THE MODEL IS NOT THE THING UNDER TEST (voicebox-beads-cx16 — the same instrument defect k6uu fixed in
+ * tests/page-writes.test.mjs, and this file's sibling of that fix). This suite proves the LIVE TOOL PATH:
+ * the model calls a tool, the server executes it against the machine root, and the answer comes back. The
+ * model in the middle is nondeterministic: it can skip a tool call, or answer a read request out of the
+ * conversation instead of reading, and a test that waits for it to SAY something it already knew then
+ * asserts a tool call that was never made — a pass that can happen without the behaviour, and a red that
+ * says "the model did not read" when the truth is "the model did not read THIS WAY".
+ *
+ * The read half is therefore proved by words the session has never seen (below), and every leg that hinges
+ * on the model choosing a tool is asked again in a CORRECTED form, bounded, with the ask count in the
+ * failure message — so a reviewer can tell a language model's mood from a broken route.
+ */
+const LIVE_ASKS = 3;
+const LIVE_ASK_MS = 15000;
+
+/** Words a speech transcriber handles, and a model reading a file cannot guess. */
+const READ_WORDS = ["saffron", "pelican", "quartz", "walnut", "lantern", "cobalt", "tundra", "meadow", "harbour", "marble"];
+const pickWords = (count) => {
+  const pool = [...READ_WORDS];
+  const picked = [];
+  while (picked.length < count) picked.push(...pool.splice(Math.floor(Math.random() * pool.length), 1));
+  return picked;
+};
+
+/** One live text turn, waited on for a NAMED condition the caller states. */
+async function liveAsk(ws, text, settled, ms = LIVE_ASK_MS) {
+  ws.send(JSON.stringify({ type: "text", text }));
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    await sleep(200);
+    if (settled()) return true;
+  }
+  return settled();
+}
+
+test("live tools: the model writes a file we read byte-for-byte, then reads back words it never saw", { skip: !HAVE_KEY && "GEMINI_API_KEY not set", timeout: 180000 }, async () => {
   const port = await freePort();
   const server = startServer(port, { VOICEBOX_WORKSPACE: WORKSPACE });
   try {
     await waitForServer(server);
     const { ws, texts, tools, audio } = await liveSocket(port);
 
-    // 1. WRITE — the model must choose write_file and the file must land.
-    ws.send(JSON.stringify({ type: "text", text: "Please create a file called live-note.txt with the exact content: the live path wrote this" }));
+    // 1. WRITE — the model must choose write_file and the file must land. A skipped tool call is asked
+    // again in a corrected form (bounded): the thing under test is the tool path, not one model turn.
     const target = path.join(WORKSPACE, "live-note.txt");
-    // The file can land before its websocket event. Wait for BOTH within the
-    // same 60s budget, including the specific successful write we assert below.
-    const writeReported = () => tools.some((t) => t.calls.some((c) => c.name === "write_file" && c.ok));
-    for (let i = 0; i < 300 && (!existsSync(target) || !writeReported()); i++) await sleep(200);
-    assert(existsSync(target), "the live turn produced no file — the tool was not called");
+    const writeCall = () => tools.flatMap((t) => t.calls).find((c) => c.name === "write_file" && c.ok);
+    const writePrompt = (attempt) => attempt === 0
+      ? "Please create a file called live-note.txt with the exact content: the live path wrote this"
+      : 'Call the write_file tool with name "live-note.txt" and content "the live path wrote this" — create the file itself.';
+    const wrote = () => Boolean(writeCall()) && existsSync(target);
+    let writeAsks = 0;
+    for (; writeAsks < LIVE_ASKS && !wrote(); writeAsks++) await liveAsk(ws, writePrompt(writeAsks), wrote);
+    assert(existsSync(target), `the live turn produced no file in ${writeAsks} ask(s) — the tool was not called`);
     const onDisk = readFileSync(target, "utf8");
     assert.equal(onDisk, "the live path wrote this", `byte-for-byte compare failed: ${JSON.stringify(onDisk)}`);
-    assert(writeReported(), "the page-visible tool event did not report the write");
+    assert(writeCall(), "the page-visible tool event did not report the write");
 
-    // 2. READ — the model must call read_file and SPEAK the content.
-    const spokenBefore = texts.length;
-    ws.send(JSON.stringify({ type: "text", text: "Read live-note.txt back to me." }));
-    let said = "";
-    for (let i = 0; i < 150; i++) {
-      await sleep(200);
-      said = texts.slice(spokenBefore).map((t) => t.text).join(" ").replace(/\s+/g, " ");
-      if (/live path wrote this/i.test(said)) break;
-    }
-    assert(tools.some((t) => t.calls.some((c) => c.name === "read_file" && c.ok)), "the model did not call read_file");
-    assert.match(said, /live path wrote this/i, `the model did not speak the file's content — heard: ${said.slice(0, 160)}`);
-    assert(audio() > 0, "no audio came back — the answer was not spoken");
+    // 2. READ — the model must call read_file and SPEAK words the session has never seen. The first version
+    // of this leg waited for the model to say "the live path wrote this" — a phrase step 1 handed it — and a
+    // model that answered from the conversation satisfied that wait WITHOUT reading, so the read_file
+    // assertion that followed went red: a flake whose cause was the instrument. The fixture below is written
+    // by the test into the workspace the server acts on, with three words drawn at random, so the only way
+    // the model can speak them is a real read of a real file.
+    const [wordA, wordB, wordC] = pickWords(3);
+    const fixtureName = "read-back-proof.txt";
+    writeFileSync(path.join(WORKSPACE, fixtureName), `the ${fixtureName} says ${wordA} ${wordB} ${wordC}`);
+
+    const readCall = () => tools.flatMap((t) => t.calls).find((c) => c.name === "read_file" && c.ok);
+    const heard = () => texts.map((t) => t.text).join(" ").replace(/\s+/g, " ");
+    const heardWords = () => [wordA, wordB, wordC].filter((w) => new RegExp(`\\b${w}\\b`, "i").test(heard()));
+    // A CORRECTED ASK, NOT A REPEAT (and a PLAIN NAME, because the tool's own contract is "Use a plain file
+    // name, no directories"): a model that reached for the wrong argument rarely reaches for the right one
+    // because it was asked the same way twice.
+    const readPrompt = (attempt) => {
+      if (attempt === 0) return `Read ${fixtureName} back to me and tell me exactly what it says — do not guess.`;
+      const refused = tools.flatMap((t) => t.calls).filter((c) => c.name === "read_file" && !c.ok).at(-1);
+      return refused
+        ? `The read_file call for ${fixtureName} was refused (${refused.action ?? "refused"}). Call read_file with the plain file name "${fixtureName}" — and tell me what the file says.`
+        : `Call the read_file tool with the plain file name "${fixtureName}" — and tell me what the file says.`;
+    };
+    const audioBefore = audio();
+    const answered = () => Boolean(readCall()) && heardWords().length >= 2;
+    let readAsks = 0;
+    for (; readAsks < LIVE_ASKS && !answered(); readAsks++) await liveAsk(ws, readPrompt(readAsks), answered);
+    // The spoken words are the WITNESS: they cannot be produced by an answer from context, so a route that
+    // broke shows up here as words that never came — and the message says how many asks were spent.
+    assert(
+      heardWords().length >= 2,
+      `the model spoke ${heardWords().length} of the fixture's own words after ${readAsks} ask(s), so no read can be claimed (wanted 2+) — heard: ${heard().slice(-200)}`,
+    );
+    assert(readCall(), `the model did not call read_file with an ok answer in ${readAsks} ask(s) — calls seen: ${JSON.stringify(tools.flatMap((t) => t.calls).map((c) => [c.name, c.ok]))}`);
+    assert(audio() > audioBefore, "no audio came back for the read answer — the answer was not spoken");
 
     ws.close();
   } finally {
