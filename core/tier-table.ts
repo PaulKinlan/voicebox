@@ -282,14 +282,21 @@ export function decide(report: BoundaryReport, act: Act): { ok: true; axis: Boun
       const first = reached[0];
       const detail = report.network?.[first];
       const nameError = String(report.network?.outboundTcp80ByName?.error ?? "");
-      const nameDnsBroke = /EAI_AGAIN|ENOTFOUND|getaddrinfo/i.test(nameError);
+      const dnsError = String(report.network?.dns?.error ?? "");
+      const dnsProblem = (str: string) => /EAI_AGAIN|ENOTFOUND|getaddrinfo|\bDNS\b|resolver/i.test(str);
+      const nameDnsBroke =
+        dnsProblem(nameError) ||
+        (report.network?.dns !== undefined && !report.network?.dns?.value && !!report.network?.dns?.error);
 
-      // Separating broken DNS with open IP-literal egress (voicebox-beads-3ryb):
+      // Separating broken DNS with open IP-literal egress (voicebox-beads-3ryb, a3zx):
       if (first === "outboundTcp443IpLiteral" && nameDnsBroke) {
-        const isTransient = /EAI_AGAIN/i.test(nameError);
+        const isTransient = /EAI_AGAIN/i.test(nameError) || /timed out/i.test(dnsError) || /timed out/i.test(nameError);
         const dnsNature = isTransient
-          ? "transient resolver failure (EAI_AGAIN)"
+          ? "transient resolver failure (timeout or EAI_AGAIN)"
           : "authoritative resolver failure (ENOTFOUND)";
+        const dnsEvidence = report.network?.dns?.error
+          ? `; network.dns = ${JSON.stringify(report.network.dns.error)}`
+          : "";
         return {
           ok: false,
           refused: "absent-capability",
@@ -297,7 +304,7 @@ export function decide(report: BoundaryReport, act: Act): { ok: true; axis: Boun
           why:
             `this environment claims the network is bounded, and its own probe REACHED out via the IP-literal control: ` +
             `network.outboundTcp443IpLiteral = ${JSON.stringify({ ok: detail?.ok, ms: detail?.ms })}, while name lookup failed ` +
-            `due to broken DNS (${dnsNature}: network.outboundTcp80ByName = ${JSON.stringify(report.network?.outboundTcp80ByName?.error)}). ` +
+            `due to broken DNS (${dnsNature}: network.outboundTcp80ByName = ${JSON.stringify(report.network?.outboundTcp80ByName?.error)}${dnsEvidence}). ` +
             `A TCP route to the IP-literal control is alive, not denied, and the resolver failed.`,
           remedy:
             "an egress policy, not a hint: deny egress at the fence (including IP-literal destinations) and fix or wait out the resolver, " +
@@ -348,14 +355,25 @@ export function decide(report: BoundaryReport, act: Act): { ok: true; axis: Boun
           "so pass-through policy can be evaluated.",
       };
     }
-    // FIX 3 — THE POLARITY, decided as CONTAINMENT (coord, 2026-09-21; refined voicebox-beads-3ryb).
+    // FIX 3 — THE POLARITY, decided as CONTAINMENT (coord, 2026-09-21; refined voicebox-beads-3ryb, a3zx).
     // The IP-literal control (outboundTcp443IpLiteral, voicebox-beads-4wez) now separates true 'denied'
     // (both IP-literal and name lookup timed out / were refused) from 'broken DNS' (name resolution failed
-    // with EAI_AGAIN / ENOTFOUND).
-    const deadEvidence = OUTBOUND_FIELDS.map(
-      (field) => `${field}: ${report.network?.[field]?.error ?? `ok=${String(report.network?.[field]?.ok)}`}`,
-    ).join("; ");
-    const dnsBroke = OUTBOUND_FIELDS.some((field) => /EAI_AGAIN|ENOTFOUND|getaddrinfo/i.test(String(report.network?.[field]?.error ?? "")));
+    // with EAI_AGAIN / ENOTFOUND or hanging resolver).
+    const deadEvidence = [
+      ...OUTBOUND_FIELDS.map(
+        (field) => `${field}: ${report.network?.[field]?.error ?? `ok=${String(report.network?.[field]?.ok)}`}`,
+      ),
+      ...(report.network?.dns ? [`dns: ${report.network.dns.error ?? `ok=${String(report.network.dns.value !== undefined)}`}`] : []),
+    ].join("; ");
+    const dnsFieldBroke =
+      report.network?.dns !== undefined && !report.network?.dns?.value && !!report.network?.dns?.error;
+    const nameDnsBrokeInDead = /EAI_AGAIN|ENOTFOUND|getaddrinfo|\bDNS\b|resolver/i.test(
+      String(report.network?.outboundTcp80ByName?.error ?? ""),
+    );
+    const dnsBroke =
+      dnsFieldBroke ||
+      nameDnsBrokeInDead ||
+      OUTBOUND_FIELDS.some((field) => /EAI_AGAIN|ENOTFOUND|getaddrinfo/i.test(String(report.network?.[field]?.error ?? "")));
 
     if (dnsBroke) {
       return {
