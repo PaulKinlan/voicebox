@@ -206,7 +206,7 @@ That trailer is the checklist item, made auditable. Use it when the prose is gen
 not to get green.
 
 All three run automatically on `git push`: `.githooks/pre-push` (tracked, installed by `npm run prepare`)
-hands over to `scripts/pre-push.sh`, which bounds each stage and names its own timeout. The harness
+hands over to `scripts/pre-push.sh`, which bounds each stage and names its own timeout. For pushes to main, `scripts/pre-push.sh` fast-paths docs-only changes (`*.md` files only) past the live and acceptance stages, runs `docs-check` and `single-owner` statically, and caches the verified `HEAD^{tree}` SHA in `.git/voicebox-gate-passed-tree` to avoid redundant back-to-back gate runs on an identical clean tree (voicebox-beads-07b9). The harness
 needs the environment up: `voicebox-serve` first (it also restarts a stale API
 server — if `server.mjs` changed since the process started, the old process is
 serving old routes). To acceptance-test a CANDIDATE branch, run its own server

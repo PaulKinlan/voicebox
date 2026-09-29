@@ -463,3 +463,211 @@ test('gate lock serializes concurrent pre-push runs and announces waiting holder
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('pre-push fast-paths docs-only pushes to main without running live or acceptance (voicebox-beads-07b9)', { timeout: 60000 }, () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-pre-push-docs-fastpath-'));
+  const repo = path.join(dir, 'repo');
+  const remote = path.join(dir, 'remote.git');
+  const git = (...args) => execFileSync('git', args, { cwd: repo, stdio: 'pipe', env: cleanEnv });
+
+  try {
+    mkdirSync(repo);
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 'fixture@example.invalid');
+    git('config', 'user.name', 'Gate fixture');
+    git('config', 'core.hooksPath', '.githooks');
+
+    for (const file of ['.githooks/pre-push', 'scripts/pre-push.sh', 'scripts/test-lanes.mjs', 'scripts/docs-touched.mjs', 'lib/git-env.mjs']) {
+      mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
+      copyFileSync(path.join(root, file), path.join(repo, file));
+    }
+    chmodSync(path.join(repo, '.githooks/pre-push'), 0o755);
+
+    writeFileSync(path.join(repo, 'package.json'), JSON.stringify({
+      scripts: {
+        'test:unit': 'echo "UNIT PASS"',
+        'test:live': 'echo "LIVE PASS"',
+        accept: 'echo "ACCEPT PASS"',
+      },
+    }));
+    writeFileSync(path.join(repo, 'README.md'), '# Initial README\n');
+    git('add', '.');
+    git('commit', '-qm', 'initial');
+    git('init', '--bare', '-q', remote);
+
+    const lockFile = path.join(dir, 'fixture-gate.lock');
+    const holderFile = path.join(dir, 'fixture-gate.holder.json');
+
+    // Initial push to main sets up the remote branch (runs full gate)
+    const initPush = spawnSync('git', ['push', remote, 'HEAD:refs/heads/main'], {
+      cwd: repo, encoding: 'utf8', timeout: 30000,
+      env: {
+        ...cleanEnv,
+        PATH: process.env.PATH,
+        BD_GIT_HOOK: '1',
+        VOICEBOX_GATE_LOCK: lockFile,
+        VOICEBOX_GATE_HOLDER: holderFile,
+        VOICEBOX_SKIP_ACCEPT: '1',
+      },
+    });
+    assert.equal(initPush.status, 0, initPush.stdout + initPush.stderr);
+    assert.match(initPush.stdout + initPush.stderr, /ALL GATES GREEN/);
+
+    // Now make a docs-only change (*.md only)
+    rmSync(lockFile, { force: true });
+    rmSync(holderFile, { force: true });
+    writeFileSync(path.join(repo, 'README.md'), '# Updated README with docs only\n');
+    mkdirSync(path.join(repo, 'docs'), { recursive: true });
+    writeFileSync(path.join(repo, 'docs', 'guide.md'), '# Guide\n');
+    git('add', 'README.md', 'docs/guide.md');
+    git('commit', '-qm', 'docs: update guide and readme');
+
+    const docsPush = spawnSync('git', ['push', remote, 'HEAD:refs/heads/main'], {
+      cwd: repo, encoding: 'utf8', timeout: 30000,
+      env: {
+        ...cleanEnv,
+        PATH: process.env.PATH,
+        BD_GIT_HOOK: '1',
+        VOICEBOX_GATE_LOCK: lockFile,
+        VOICEBOX_GATE_HOLDER: holderFile,
+        VOICEBOX_SKIP_ACCEPT: '1',
+      },
+    });
+
+    const docsOutput = docsPush.stdout + docsPush.stderr;
+    assert.equal(docsPush.status, 0, docsOutput);
+    assert.match(docsOutput, /docs-only push to main — docs and unit passed; skipping live\/acceptance stages/);
+    assert.match(docsOutput, /ALL GATES GREEN \(docs-only\)/);
+    assert.doesNotMatch(docsOutput, /LIVE PASS/, 'live tests must not run for docs-only push to main');
+    assert.doesNotMatch(docsOutput, /ACCEPT PASS/, 'acceptance must not run for docs-only push to main');
+    assert.equal(existsSync(lockFile), false, 'gate lock must not be acquired for docs-only push');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('pre-push re-uses verified tree-SHA receipt on identical tree and invalidates on change or dirt (voicebox-beads-07b9)', { timeout: 60000 }, () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-pre-push-receipt-'));
+  const repo = path.join(dir, 'repo');
+  const remote = path.join(dir, 'remote.git');
+  const git = (...args) => execFileSync('git', args, { cwd: repo, stdio: 'pipe', env: cleanEnv });
+
+  try {
+    mkdirSync(repo);
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 'fixture@example.invalid');
+    git('config', 'user.name', 'Gate fixture');
+    git('config', 'core.hooksPath', '.githooks');
+
+    for (const file of ['.githooks/pre-push', 'scripts/pre-push.sh', 'scripts/test-lanes.mjs', 'scripts/docs-touched.mjs', 'lib/git-env.mjs']) {
+      mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
+      copyFileSync(path.join(root, file), path.join(repo, file));
+    }
+    chmodSync(path.join(repo, '.githooks/pre-push'), 0o755);
+
+    writeFileSync(path.join(repo, 'package.json'), JSON.stringify({
+      scripts: {
+        'test:unit': 'echo "UNIT RAN"',
+        'test:live': 'echo "LIVE RAN"',
+        accept: 'echo "ACCEPT RAN"',
+      },
+    }));
+    git('add', '.');
+    git('commit', '-qm', 'initial codebase');
+    git('init', '--bare', '-q', remote);
+
+    const receiptFile = path.join(repo, '.git', 'voicebox-gate-passed-tree');
+
+    const lockFile = path.join(dir, 'fixture-gate.lock');
+    const holderFile = path.join(dir, 'fixture-gate.holder.json');
+
+    // 1. Initial push to main: runs full gate and creates receipt
+    const push1 = spawnSync('git', ['push', remote, 'HEAD:refs/heads/main'], {
+      cwd: repo, encoding: 'utf8', timeout: 30000,
+      env: {
+        ...cleanEnv,
+        PATH: process.env.PATH,
+        BD_GIT_HOOK: '1',
+        VOICEBOX_GATE_LOCK: lockFile,
+        VOICEBOX_GATE_HOLDER: holderFile,
+        VOICEBOX_SKIP_ACCEPT: '1',
+      },
+    });
+    assert.equal(push1.status, 0, push1.stdout + push1.stderr);
+    assert.match(push1.stdout + push1.stderr, /UNIT RAN/);
+    assert.match(push1.stdout + push1.stderr, /LIVE RAN/);
+    assert.match(push1.stdout + push1.stderr, /ALL GATES GREEN/);
+    assert.equal(existsSync(receiptFile), true, 'receipt file must exist after full gate on clean tree');
+    const tree1 = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd: repo, encoding: 'utf8', env: cleanEnv }).trim();
+    assert.equal(execFileSync('cat', [receiptFile], { encoding: 'utf8' }).trim(), tree1);
+
+    // 2. Amend commit message without changing files (tree SHA remains identical)
+    git('commit', '--amend', '-qm', 'initial codebase (amended message)');
+    const tree2 = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd: repo, encoding: 'utf8', env: cleanEnv }).trim();
+    assert.equal(tree2, tree1, 'amended commit has identical tree SHA');
+
+    // Push with force: must match tree receipt and skip unit/live/acceptance
+    const push2 = spawnSync('git', ['push', '--force', remote, 'HEAD:refs/heads/main'], {
+      cwd: repo, encoding: 'utf8', timeout: 30000,
+      env: {
+        ...cleanEnv,
+        PATH: process.env.PATH,
+        BD_GIT_HOOK: '1',
+        VOICEBOX_GATE_LOCK: lockFile,
+        VOICEBOX_GATE_HOLDER: holderFile,
+        VOICEBOX_SKIP_ACCEPT: '1',
+      },
+    });
+    const out2 = push2.stdout + push2.stderr;
+    assert.equal(push2.status, 0, out2);
+    assert.match(out2, /verified tree-SHA receipt matches \([0-9a-f]+\) on clean tree — skipping unit\/live\/acceptance stages/);
+    assert.match(out2, /ALL GATES GREEN \(tree-receipt\)/);
+    assert.doesNotMatch(out2, /UNIT RAN/, 'unit must be skipped on tree-receipt match');
+    assert.doesNotMatch(out2, /LIVE RAN/, 'live must be skipped on tree-receipt match');
+
+    // 3. Invalidation when working tree is dirty
+    // Make an empty commit (same tree SHA, but new commit so git push invokes the hook)
+    git('commit', '--allow-empty', '-qm', 'empty commit with dirty tree');
+    writeFileSync(path.join(repo, 'dirty.txt'), 'uncommitted changes');
+    const pushDirty = spawnSync('git', ['push', remote, 'HEAD:refs/heads/main'], {
+      cwd: repo, encoding: 'utf8', timeout: 30000,
+      env: {
+        ...cleanEnv,
+        PATH: process.env.PATH,
+        BD_GIT_HOOK: '1',
+        VOICEBOX_GATE_LOCK: lockFile,
+        VOICEBOX_GATE_HOLDER: holderFile,
+        VOICEBOX_SKIP_ACCEPT: '1',
+      },
+    });
+    const outDirty = pushDirty.stdout + pushDirty.stderr;
+    assert.equal(pushDirty.status, 0, outDirty);
+    assert.match(outDirty, /UNIT RAN/, 'dirty working tree invalidates receipt and runs tests');
+    rmSync(path.join(repo, 'dirty.txt'));
+
+    // 4. Invalidation when tree SHA changes (code modified and committed)
+    writeFileSync(path.join(repo, 'code.js'), 'console.log("new code");');
+    git('add', 'code.js');
+    git('commit', '-qm', 'feat: add code');
+    const tree3 = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd: repo, encoding: 'utf8', env: cleanEnv }).trim();
+    assert.notEqual(tree3, tree1, 'new code commit produces different tree SHA');
+
+    const push3 = spawnSync('git', ['push', remote, 'HEAD:refs/heads/main'], {
+      cwd: repo, encoding: 'utf8', timeout: 30000,
+      env: {
+        ...cleanEnv,
+        PATH: process.env.PATH,
+        BD_GIT_HOOK: '1',
+        VOICEBOX_GATE_LOCK: lockFile,
+        VOICEBOX_GATE_HOLDER: holderFile,
+        VOICEBOX_SKIP_ACCEPT: '1',
+      },
+    });
+    const out3 = push3.stdout + push3.stderr;
+    assert.equal(push3.status, 0, out3);
+    assert.match(out3, /LIVE RAN/, 'tree SHA change invalidates receipt and runs full gate');
+    assert.equal(execFileSync('cat', [receiptFile], { encoding: 'utf8' }).trim(), tree3, 'receipt updated to new tree SHA');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
