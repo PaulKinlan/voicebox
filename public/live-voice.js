@@ -123,9 +123,35 @@ async function startLive() {
     if (voiceState) voiceState.textContent = `Live voice unavailable: ${error.message}`;
     return;
   }
+  // The server's answer about the folder's instruction. It is a STATE, not speech: record it for the
+  // debug transcript and put it on the document so the acceptance harness can read what was applied
+  // without inferring it from the file on disk.
+  socket.addEventListener("message", (event) => {
+    if (typeof event.data !== "string") return;
+    let msg;
+    try { msg = JSON.parse(event.data); } catch { return; }
+    if (msg?.type !== "state" || msg.state !== "project-instruction") return;
+    const detail = msg.detail ?? {};
+    document.documentElement.dataset.projectInstruction = detail.file ?? "none";
+    document.documentElement.dataset.projectInstructionDir = detail.dir ?? "";
+    document.documentElement.dataset.projectInstructionApplied = detail.applied ? "live" : (detail.applies ?? "next-session");
+    recordDebug({ type: "project-instruction", ...detail });
+  });
+
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("machine-timeout (no response to the /live upgrade within 4s)")), 4000);
-    socket.onopen = () => { clearTimeout(timer); resolve(); };
+    socket.onopen = () => {
+      clearTimeout(timer);
+      // THE FOLDER THE VOICE IS WORKING IN (voicebox-beads-0zi4): the page owns navigation, so it
+      // reports; the server answers with a `project-instruction` state naming which file it read and
+      // whether it could apply it. Re-registered on every connection, so a reconnect re-reports.
+      // The folder reporter lives in fused.js; the window hook keeps this file loadable on pages that do
+      // not include it (the rate fixtures, for one), which is why it is not an import (voicebox-beads-0zi4).
+      window.__voiceboxProjectContext?.setSender((payload) => {
+        if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
+      });
+      resolve();
+    };
     socket.onerror = () => { clearTimeout(timer); reject(new Error("machine-unreachable (the /live upgrade failed)")); };
   }).then(
     async () => {

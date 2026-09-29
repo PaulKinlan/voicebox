@@ -217,7 +217,7 @@ Registered resolvers: `claude`, `gemini`, `openai`, `script`
 <!-- BEGIN GENERATED: live-session — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 `lib/live-session.mjs` is present. Registered live providers, with the model each one's handshake names (captured from the provider against a recording transport — never dialed): `claude` → `(registered, but this check has no capture for it)`, `gemini` → `models/gemini-3.8-live`, `openai` → `gpt-realtime`. The library fallback is `gemini`, overridable by `VOICEBOX_LIVE_PROVIDER`; the server's `/live` route instead passes the agent-settings provider explicitly.
 <!-- END GENERATED: live-session -->
-| `AGENT.md` / `AGENTS.md` at the declared root | `lib/project-instruction.mjs` | read once per live session as project context for the system prompt — bounded at 32 KiB; absence is normal, unreadable is named |
+| `AGENT.md` / `AGENTS.md` | `lib/project-instruction.mjs` | read as project context for the system prompt: the NEAREST file from the folder the page has open, up to the declared root — bounded at 32 KiB; absence is normal, unreadable is named. A room folder's file is read by the PAGE (opfs and picked handles are not on this machine) and sent as text. OpenAI applies a folder change live (`session.update`); Gemini's `setup` is sent once, so there the change applies at the next session — and says so rather than pretending |
 
 ## Tool calling: how words become an act, and what tools exist
 
