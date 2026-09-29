@@ -31,15 +31,16 @@ _refs_file="$(mktemp)"
 if [ -n "${VOICEBOX_PUSH_DESTINATIONS:-}" ]; then printf '%s' "$VOICEBOX_PUSH_DESTINATIONS" > "$_refs_file"; else cat > "$_refs_file" 2>/dev/null || true; fi
 _destination_is_main=0
 _had_destination=0
-_first_remote_sha=""
+_main_remote_sha=""
+_ref_count=0
 while read -r _local_ref _local_sha _remote_ref _remote_sha; do
+  [ -z "$_local_ref" ] && continue
   _had_destination=1
-  if [ -z "$_first_remote_sha" ]; then
-    _first_remote_sha="$_remote_sha"
-  fi
+  _ref_count=$(( _ref_count + 1 ))
   case "$_remote_ref" in
     refs/heads/main|refs/heads/master)
       _destination_is_main=1
+      _main_remote_sha="$_remote_sha"
       if [ "$_current_branch" != "main" ] && [ "$_current_branch" != "master" ]; then
         echo >&2 "[gate] pre-push REFUSED: non-main branch attempting to push to main ref"
         echo >&2 "[gate]   checked-out branch: ${_current_branch:-(detached HEAD)}  local ref offered: ${_local_ref:-?}  destination: ${_remote_ref}"
@@ -206,9 +207,10 @@ if [ "$_had_destination" = "1" ] && [ "$_destination_is_main" != "1" ]; then
 fi
 
 # ── DOCS-ONLY FAST PATH (voicebox-beads-07b9) ──────────────────────────────────
-# A push to main where only markdown documentation files (*.md) changed against origin/main.
-# Docs-touched, docs-check, single-owner, and unit already verified the tree; live browser
-# and acceptance runs test UI/server execution paths that docs changes cannot affect.
+# A push to main where only markdown documentation files (*.md) changed against the main remote ref.
+# Docs-touched, docs-check, single-owner, unit, and the doc-truth live tests verify the docs.
+# Must be a single-ref push so multi-ref pushes never skip full checks. Does NOT mint the tree
+# receipt since full live/acceptance did not run.
 _remote_base="origin/main"
 if ! git rev-parse --verify "origin/main^{commit}" >/dev/null 2>&1; then
   if git rev-parse --verify "origin/master^{commit}" >/dev/null 2>&1; then
@@ -219,21 +221,29 @@ if ! git rev-parse --verify "origin/main^{commit}" >/dev/null 2>&1; then
 fi
 
 _diff_base=""
-if [ -n "$_first_remote_sha" ] && [ "$_first_remote_sha" != "0000000000000000000000000000000000000000" ] && git rev-parse --verify "$_first_remote_sha^{commit}" >/dev/null 2>&1; then
-  _diff_base="$_first_remote_sha"
+if [ -n "$_main_remote_sha" ] && [ "$_main_remote_sha" != "0000000000000000000000000000000000000000" ] && git rev-parse --verify "$_main_remote_sha^{commit}" >/dev/null 2>&1; then
+  _diff_base="$_main_remote_sha"
 elif [ -n "$_remote_base" ]; then
   _diff_base="$_remote_base"
 fi
 
-if [ -n "$_diff_base" ]; then
+if [ "$_ref_count" -le 1 ] && [ -n "$_diff_base" ]; then
   _changed_files=$(git diff --name-only "$_diff_base...HEAD" 2>/dev/null || true)
   if [ -n "$_changed_files" ]; then
     _non_docs=$(printf '%s\n' "$_changed_files" | grep -v '\.md$' || true)
     if [ -z "$_non_docs" ]; then
-      echo "[gate] pre-push: docs-only push to main — docs and unit passed; skipping live/acceptance stages"
-      if [ "$_is_clean" = "1" ] && [ -n "$_current_tree" ]; then
-        echo "$_current_tree" > "$_receipt_file" 2>/dev/null || true
+      # Run the doc-truth live checks on the fast path (lock-free, like unit):
+      # voicebox.test.mjs (prose sweep), changelog-links.test.mjs, rendered-plain-language.test.mjs
+      _doc_truth_files=""
+      for _f in tests/voicebox.test.mjs tests/changelog-links.test.mjs tests/rendered-plain-language.test.mjs; do
+        if [ -f "$_f" ]; then
+          _doc_truth_files="$_doc_truth_files $_f"
+        fi
+      done
+      if [ -n "$_doc_truth_files" ]; then
+        run_stage doc-truth "$_unit_secs" node --test $_doc_truth_files
       fi
+      echo "[gate] pre-push: docs-only push to main — docs, unit, and doc-truth passed; skipping live/acceptance stages"
       echo "[gate] pre-push: ALL GATES GREEN (docs-only)"
       exit 0
     fi

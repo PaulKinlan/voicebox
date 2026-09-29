@@ -497,6 +497,11 @@ test('pre-push fast-paths docs-only pushes to main without running live or accep
 
     const lockFile = path.join(dir, 'fixture-gate.lock');
     const holderFile = path.join(dir, 'fixture-gate.holder.json');
+    const receiptFile = path.join(repo, '.git', 'voicebox-gate-passed-tree');
+
+    // Add a doc-truth test file so we verify doc-truth runs lock-free on the fast path
+    mkdirSync(path.join(repo, 'tests'), { recursive: true });
+    writeFileSync(path.join(repo, 'tests', 'voicebox.test.mjs'), 'import test from "node:test"; test("doc truth prose check", () => { console.log("DOC TRUTH RAN"); });\n');
 
     // Initial push to main sets up the remote branch (runs full gate)
     const initPush = spawnSync('git', ['push', remote, 'HEAD:refs/heads/main'], {
@@ -516,6 +521,7 @@ test('pre-push fast-paths docs-only pushes to main without running live or accep
     // Now make a docs-only change (*.md only)
     rmSync(lockFile, { force: true });
     rmSync(holderFile, { force: true });
+    rmSync(receiptFile, { force: true });
     writeFileSync(path.join(repo, 'README.md'), '# Updated README with docs only\n');
     mkdirSync(path.join(repo, 'docs'), { recursive: true });
     writeFileSync(path.join(repo, 'docs', 'guide.md'), '# Guide\n');
@@ -526,6 +532,7 @@ test('pre-push fast-paths docs-only pushes to main without running live or accep
       cwd: repo, encoding: 'utf8', timeout: 30000,
       env: {
         ...cleanEnv,
+        NODE_TEST_CONTEXT: undefined,
         PATH: process.env.PATH,
         BD_GIT_HOOK: '1',
         VOICEBOX_GATE_LOCK: lockFile,
@@ -536,11 +543,34 @@ test('pre-push fast-paths docs-only pushes to main without running live or accep
 
     const docsOutput = docsPush.stdout + docsPush.stderr;
     assert.equal(docsPush.status, 0, docsOutput);
-    assert.match(docsOutput, /docs-only push to main — docs and unit passed; skipping live\/acceptance stages/);
+    assert.match(docsOutput, /docs-only push to main — docs, unit, and doc-truth passed; skipping live\/acceptance stages/);
     assert.match(docsOutput, /ALL GATES GREEN \(docs-only\)/);
-    assert.doesNotMatch(docsOutput, /LIVE PASS/, 'live tests must not run for docs-only push to main');
+    assert.match(docsOutput, /DOC TRUTH RAN/, 'doc-truth live checks must run on docs-only fast path');
+    assert.doesNotMatch(docsOutput, /LIVE PASS/, 'full live suite must not run for docs-only push to main');
     assert.doesNotMatch(docsOutput, /ACCEPT PASS/, 'acceptance must not run for docs-only push to main');
     assert.equal(existsSync(lockFile), false, 'gate lock must not be acquired for docs-only push');
+    assert.equal(existsSync(receiptFile), false, 'docs-only push must not mint tree receipt since live/acceptance did not run');
+
+    // Multi-ref push: pushing main + a branch must NOT take docs-only fast path even if only *.md changed
+    writeFileSync(path.join(repo, 'README.md'), '# Multi-ref README update\n');
+    git('add', 'README.md');
+    git('commit', '-qm', 'docs: multi-ref update');
+
+    const multiPush = spawnSync('git', ['push', remote, 'HEAD:refs/heads/main', 'HEAD:refs/heads/candidate'], {
+      cwd: repo, encoding: 'utf8', timeout: 30000,
+      env: {
+        ...cleanEnv,
+        PATH: process.env.PATH,
+        BD_GIT_HOOK: '1',
+        VOICEBOX_GATE_LOCK: lockFile,
+        VOICEBOX_GATE_HOLDER: holderFile,
+        VOICEBOX_SKIP_ACCEPT: '1',
+      },
+    });
+    const multiOut = multiPush.stdout + multiPush.stderr;
+    assert.equal(multiPush.status, 0, multiOut);
+    assert.doesNotMatch(multiOut, /ALL GATES GREEN \(docs-only\)/, 'multi-ref push must not take docs-only fast path');
+    assert.match(multiOut, /LIVE PASS/, 'multi-ref push must run full live stage');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
