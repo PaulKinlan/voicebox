@@ -14,7 +14,6 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { launch } from "./lib/cdp.mjs";
 import { startServer } from "./lib/server.mjs";
 
@@ -39,16 +38,37 @@ const hostAdmit = (id, decision = "admit") =>
     body: JSON.stringify({ id, confirm: true, decision }),
   }).then((r) => r.json());
 
+// THE PANEL HAS BEEN DRAWN (voicebox-beads-g667), where 120-700ms sleeps were. Every render of the panel
+// (fused.js renderExtensions: fetch the registry and the catalogue, then redraw every section) ends by
+// writing #exts-count — the sections first and the count last, in one synchronous step, in the failure
+// path too — so a write to the count IS a finished render, whichever way it went. The count of writes is
+// zeroed just before the act that starts a render, and every render this file starts is waited for before
+// the next act (the room's own boot-time render in test.before), so the write counted is that act's.
+const zeroRenders = () =>
+  page.evaluate(() => {
+    if (!window.__extRenderObserved) {
+      new MutationObserver(() => { window.__extRenders += 1; })
+        .observe(document.getElementById("exts-count"), { childList: true, characterData: true, subtree: true });
+      window.__extRenderObserved = true;
+    }
+    window.__extRenders = 0;
+  });
+const rendered = (label) => page.waitFor(() => window.__extRenders >= 1, { label });
+const closedExts = () => page.waitFor(() => !document.getElementById("exts")?.open, { label: "the extensions dialog to close" });
+
 const openExts = async () => {
   // The dialog light-dismisses on backdrop clicks, and a CDP click on a button BEHIND the modal
   // lands on the backdrop — so opening is only attempted when actually closed.
   const alreadyOpen = await page.evaluate(() => document.getElementById("exts")?.open ?? false);
   if (!alreadyOpen) {
+    await zeroRenders();
     await page.click("#exts-open");
     await page.waitFor(() => document.getElementById("exts")?.open, { label: "the extensions dialog" });
   }
   await page.waitFor(() => document.getElementById("exts")?.open, { label: "the extensions dialog" });
-  await sleep(350); // the render fetches the registry
+  // the render fetches the registry — the one this click started (voicebox-beads-g667; a 350ms sleep was
+  // here). An already-open dialog started none, and the act before it waited for its own.
+  if (!alreadyOpen) await rendered("the panel render the dialog's opening started");
   return page.evaluate(() => ({
     count: document.getElementById("exts-count")?.textContent,
     shelfText: document.getElementById("ext-shelf")?.innerText ?? "",
@@ -113,6 +133,15 @@ test.before(async () => {
   page = await launch();
   await page.goto(`${server.base}/`);
   await page.waitFor(() => document.getElementById("exts-open") !== null, { label: "the room" });
+  // THE ROOM'S OWN BOOT-TIME RENDER, waited out (voicebox-beads-g667): health() ends in renderExtensions,
+  // and a boot render still in flight would be counted as the first act's. It ends one of three ways: the
+  // panel drawn, the panel's failure written into the note, or health() itself failing (the dot reads
+  // false, and no render was started).
+  await page.waitFor(() =>
+    document.getElementById("ext-running")?.childElementCount > 0 ||
+    (document.getElementById("ext-note")?.textContent ?? "") !== "" ||
+    document.getElementById("server-dot")?.dataset.ok === "false",
+  { label: "the room's boot-time extension render to finish" });
 });
 
 test.after(async () => {
@@ -156,16 +185,19 @@ test("DISCOVER: the catalogue lists strangers with a plain verdict — and the o
 test("SIDELOAD through the page: adding goes to WAITING, through the same review as everything else", async () => {
   const before = await openExts();
   const row = before.catalogue.find((c) => c.name === "Web Search");
+  await zeroRenders();
   await page.evaluate((id) => {
     const li = [...document.querySelectorAll("#ext-catalogue .env-item")]
       .find((x) => x.querySelector(".env-label")?.textContent === "Web Search");
     li.querySelector("button").click();
   }, row?.name);
-  await sleep(700);
+  // where a 700ms sleep was (voicebox-beads-g667): the Add answers the sideload, THEN redraws the panel
+  await rendered("the Add to review to be answered and the panel redrawn");
   await page.click("#exts-close");
-  await sleep(150);
+  await closedExts(); // where a 150ms sleep was (voicebox-beads-g667)
+  await zeroRenders();
   await page.click("#exts-open");
-  await sleep(600);
+  await rendered("the reopened panel to be drawn"); // where a 600ms sleep was (voicebox-beads-g667)
   const after = await openExts();
   assert.equal(after.count.includes("1 waiting"), true, `the waiting count did not move: ${after.count}`);
   const waitingRow = after.waiting.find((w) => w.name === "Web Search");
@@ -184,7 +216,7 @@ test("the host admits; the page shows it RUNNING with what it may do, in plain w
   const r = await hostAdmit(pending.id);
   assert.equal(r.decision, "admitted");
   await page.click("#exts-close");
-  await sleep(150);
+  await closedExts(); // where a 150ms sleep was (voicebox-beads-g667)
   const view = await openExts();
   const row = view.running.find((x) => x.name === "Web Search");
   assert(row, "the admitted extension is not shown as running");
@@ -201,7 +233,7 @@ test("FOUND, NEVER RUNNING: a dropped file is visible, never green, and says it 
     tools: [{ name: "dropped_tool", description: "x", primitive: "read-file", params: { path: "notes.md" } }],
   }));
   await page.click("#exts-close");
-  await sleep(120);
+  await closedExts(); // where a 120ms sleep was (voicebox-beads-g667)
   const view = await openExts();
   const row = view.present.find((p) => p.name === "Dropped Thing");
   assert(row, "the dropped file is invisible — a person cannot review what the page hides");
@@ -217,7 +249,7 @@ test("REFUSED: denying a present file keeps it present and never live — decide
   const r = await hostAdmit("dropped", "deny");
   assert.equal(r.decision, "refused");
   await page.click("#exts-close");
-  await sleep(120);
+  await closedExts(); // where a 120ms sleep was (voicebox-beads-g667)
   const view = await openExts();
   // A denied PRESENT file stays in "Found here" — the ledger records the denial, and the page
   // must still refuse to show it as running or ready:
@@ -253,7 +285,10 @@ test("RECONFIGURE via dialog: seamless in-room authorization updates bounds with
     document.getElementById("ext-manage-max-requests").value = "-15";
     document.getElementById("ext-manage-form").requestSubmit();
   });
-  await sleep(150);
+  // where a 150ms sleep was (voicebox-beads-g667): the submit writes "Applying..." at once and the server's
+  // answer when it comes, so the status moving off "Applying..." is the answer — whichever it was.
+  await page.waitFor(() => !["", "Applying..."].includes(document.getElementById("ext-manage-status")?.textContent ?? ""),
+    { label: "the manage dialog's answer to the invalid bounds" });
   const statusInvalidBounds = await page.evaluate(() => document.getElementById("ext-manage-status")?.textContent);
   assert.match(statusInvalidBounds, /maxRequests must be a non-negative integer|bounds-invalid/);
 
@@ -345,7 +380,7 @@ test("APPROVED, NOT RUNNING: a deleted descriptor behind a live admission gets i
   // Force a fresh render: the dialog may be open from an earlier test, and openExts would
   // otherwise skip the click that triggers renderExtensions.
   await page.click("#exts-close");
-  await sleep(150);
+  await closedExts(); // where a 150ms sleep was (voicebox-beads-g667)
   const view = await openExts();
   const row = view.failed.find((x) => x.name === "ui-victim");
   assert(row, "the deleted-descriptor extension must have its own row — never silence");

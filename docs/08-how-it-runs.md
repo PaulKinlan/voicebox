@@ -109,13 +109,21 @@ These are the things that must stay true; each is checkable, and the first three
 ## Keeping this document true
 
 ```bash
-node scripts/docs-check.mjs           # exit 1 when a generated block has drifted; prints which documents
-node scripts/docs-check.mjs --write   # regenerate them in place
+node scripts/docs-check.mjs                     # exit 1 when a document has drifted; names every problem it can see
+node scripts/docs-check.mjs --write             # regenerate the generated blocks in place
+node scripts/docs-check.mjs --docs-root <dir>   # either, on a copy of README.md and docs/ under <dir>
 ```
 
 `tests/docs-drift.test.mjs` runs the same check inside the suite, so drift **fails a test** rather than
 waiting for someone to remember. The generated blocks are marked `BEGIN GENERATED:` / `END GENERATED:` in
 this file, in `07-architecture.md` and in `README.md`; everything outside them is written by a person.
+
+**The cheap half refuses first** (`voicebox-beads-qxy2`). Every document present with its markers, no blank
+block, no hand-written path to a file that is gone, no retired literal, `docs/claims.json` holding: all of it
+is checked before the scratch server boots, every failure is named in one run, and the run says the
+generated blocks were not compared. The test plants its refusals in a copy of the documents
+(`--docs-root`), never in the checkout; the code, the server and every path a document names still come
+from the tree.
 
 **What this check cannot see**, stated so nobody trusts it further than it goes: it derives the provider
 list, the probed routes, the page's scripts and the presence of a live-session file. It cannot tell whether

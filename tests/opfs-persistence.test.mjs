@@ -53,14 +53,34 @@ test("a folder the room holds keeps its data across real reloads, and a write la
 
     // ── the write: a bare name, made while standing inside `proposals` ──────
     const wrote = await page.evaluate(async () => {
+      // BOUNDED WAITS FOR NAMED CONDITIONS, not sleeps (voicebox-beads-g667): the 1200ms after the folder
+      // click and the 2200ms after the turn stood in for "the folder is listed" and "the turn has settled",
+      // and cost the same on a fast run as on a slow one. Each now waits for exactly that, and a miss says
+      // what it was waiting for.
+      const until = async (label, ready, ms = 15000) => {
+        const deadline = Date.now() + ms;
+        while (!ready()) {
+          if (Date.now() > deadline) throw new Error(`timed out after ${ms}ms waiting for ${label}`);
+          await new Promise((r) => setTimeout(r, 40));
+        }
+      };
       const say = async (text) => {
         document.getElementById("utterance").value = text;
         document.getElementById("text-form").requestSubmit();
-        await new Promise((r) => setTimeout(r, 2200));
+        // THE TURN HAS SETTLED: its line heads the session log (finish → logTurn) AND Send reads "Send" again,
+        // which send() restores only in `finally` — after the post-write re-listing. Outcome-blind on purpose:
+        // a refused write settles too, and the assertions below then report what the line said.
+        await until(`the turn “${text}” to settle`, () =>
+          (document.querySelector("#session-log li .said")?.textContent ?? "").includes(text) &&
+          document.getElementById("send")?.textContent === "Send");
         return document.getElementById("session-log")?.textContent ?? "";
       };
       [...document.querySelectorAll("#files .file-open")].find((b) => b.dataset.file === "proposals")?.click();
-      await new Promise((r) => setTimeout(r, 1200));
+      // STANDING INSIDE `proposals`: render() draws the crumb for the folder it listed and clears aria-busy in
+      // the same pass, so the two together mean that folder's listing is on screen — not merely asked for.
+      await until("the proposals folder to be listed", () =>
+        document.querySelector('#folder-path [aria-current="page"]')?.textContent === "proposals" &&
+        document.getElementById("files")?.getAttribute("aria-busy") === "false");
       const log = await say("create a file called kept.txt with saved inside a folder");
       return { log: log.slice(-240), rows: [...document.querySelectorAll("#files .file-open")].map((b) => b.dataset.path) };
     });
@@ -72,6 +92,10 @@ test("a folder the room holds keeps its data across real reloads, and a write la
     // ── RELOAD 2: the data is still there, byte-for-byte ────────────────────
     await page.reload();
     await page.waitFor(() => document.getElementById("files"), { label: "the room after the second reload" });
+    // THE FOLDER IS BACK before anything clicks it (voicebox-beads-g667): `#files` is in the static markup, so
+    // the wait above is met as soon as the new document parses — and the click below is a silent no-op while
+    // the room folders are still being restored. The same condition as the first reload.
+    await page.waitFor(() => [...document.querySelectorAll("#files .file-open")].some((b) => b.dataset.file === "proposals"), { label: "the restored folder after the second reload" });
     const after = await page.evaluate(async () => {
       const root = await navigator.storage.getDirectory();
       const folder = await root.getDirectoryHandle("persistence");
@@ -80,7 +104,14 @@ test("a folder the room holds keeps its data across real reloads, and a write la
       const text = await (await file.getFile()).text();
       // and it is reachable through the UI again, one level in
       [...document.querySelectorAll("#files .file-open")].find((b) => b.dataset.file === "proposals")?.click();
-      await new Promise((r) => setTimeout(r, 1200));
+      // STANDING INSIDE `proposals` again — the same bounded condition as the write above, where a 1200ms
+      // sleep used to be (voicebox-beads-g667): the crumb names the folder AND the listing is no longer busy.
+      const deadline = Date.now() + 15000;
+      while (!(document.querySelector('#folder-path [aria-current="page"]')?.textContent === "proposals" &&
+        document.getElementById("files")?.getAttribute("aria-busy") === "false")) {
+        if (Date.now() > deadline) throw new Error("timed out after 15000ms waiting for the proposals folder to be listed after the second reload");
+        await new Promise((r) => setTimeout(r, 40));
+      }
       return { text, rows: [...document.querySelectorAll("#files .file-open")].map((b) => b.dataset.path) };
     });
     assert.equal(after.text, "saved inside a folder", "the saved bytes must survive the reload exactly");

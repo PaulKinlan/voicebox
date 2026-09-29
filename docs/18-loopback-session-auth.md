@@ -36,8 +36,10 @@ not a boundary.
 - **The wall.** With the gate on, `handle()` refuses every request that carries neither the session
   cookie nor the host token with a named `401 loopback-unauthenticated` refusal carrying the remedy —
   before any route, including the static fallthrough. Three self-authorising exemptions, each with a
-  reason: `/api/health` (the spawn-and-wait harness and supervisors read it before any session
-  exists; it reports no root, no file, no credential), `POST /api/bootstrap` (it *is* the authority
+  reason: `/api/health` (supervisors and suites that spawn a server and poll it, such as
+  `tests/server-bind-resilience.test.mjs`, read it before any session exists; it reports no root, no
+  file, no credential — the shared `tests/lib/server.mjs` harness no longer polls it: its readiness is
+  the startup banner, `voicebox-beads-4oj6`), `POST /api/bootstrap` (it *is* the authority
   check and the re-entry door), and the page route carrying `?bootstrap=` (the route itself validates
   and consumes the ticket). Requests carrying a valid `x-voicebox-host-token` pass directly — the
   shell's 0600 authority (the one that admits extensions, declares roots, pairs environments) is

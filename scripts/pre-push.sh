@@ -221,7 +221,7 @@ acquire_gate_lock() {
 
     echo "[gate] pre-push: Waiting for gate lock $_holder_info [$_lock_file]..."
     _lock_wait_secs="${VOICEBOX_GATE_LOCK_WAIT_SECS:-600}"
-    if ! timeout "${_lock_wait_secs}s" flock 9; then
+    if ! flock -w "$_lock_wait_secs" 9; then
       echo >&2 "[gate] pre-push REFUSED: timed out waiting for gate lock after ${_lock_wait_secs}s ($_holder_info)."
       exit 1
     fi

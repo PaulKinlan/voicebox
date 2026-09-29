@@ -26,6 +26,22 @@ let server;
 const readRoot = (s) => fetch(`${s.base}/api/root`).then((r) => r.json());
 const declare = (s, body, headers = {}) =>
   fetch(`${s.base}/api/root`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, body: await r.json() }));
+// THE PAGE HAS TAKEN THE EXECUTOR'S CHAIR (voicebox-beads-g667). The fixed sleeps after the environment page
+// loaded stood in for this: a routed listing needs a page on /channel to ask, and without one the answer is
+// root-not-declared (nothing declared) or no-page (a page-owned root declared) — not the no-project and
+// root-not-mine these tests are about. The server says so itself: GET /api/root carries `executor.connected`
+// (server.mjs pageExecutorConnected) whether or not a root is declared, so the wait asks it, bounded, and a
+// miss prints the server's last answer.
+const pageConnected = async (s, label, timeout = 10000) => {
+  const deadline = Date.now() + timeout;
+  let last;
+  while (Date.now() < deadline) {
+    last = await readRoot(s);
+    if (last?.executor?.connected === true) return last;
+    await sleep(50);
+  }
+  throw new Error(`timed out after ${timeout}ms waiting for ${label}; GET /api/root last said executor=${JSON.stringify(last?.executor ?? null)}`);
+};
 
 test.before(async () => { server = await startServer({ env: { VOICEBOX_INSTANCE: "opfs-fqq" } }); });
 test.after(async () => { await server?.stop?.(); });
@@ -40,7 +56,13 @@ test("a fresh room, a browser project made from the page, and a room that lists 
   try {
     await page.goto(`${server.base}/environment.html`);
     await page.waitFor(() => window.e1m0 !== undefined, { label: "the environment page's host API" });
-    await sleep(800);
+    // Where an 800ms settle was (voicebox-beads-g667): the page's worker has answered its hello, and the
+    // page holds the executor's chair — the listing and read at the end of this test go through it. The
+    // hello is waited for BOUNDED rather than awaited bare: vite.config.js records two ways e1m0.ready stays
+    // pending forever, and a bare await would sit out the whole test timeout without naming what it wanted.
+    await page.evaluate(() => { window.e1m0.ready.then(() => { window.__e1m0HelloAnswered = true; }); });
+    await page.waitFor(() => window.__e1m0HelloAnswered === true, { label: "the environment page's worker to answer its hello (e1m0.ready)" });
+    await pageConnected(server, "the environment page to connect on /channel");
 
     // ── THE AFFORDANCE: a control a person uses, with no token and no path ──
     await page.type("#project-name", "scratch-fqq-test");
@@ -86,7 +108,8 @@ test("with NO root declared, the page is still the source — and a page that ho
     try {
       await page.goto(`${s.base}/environment.html`);
       await page.waitFor(() => window.e1m0 !== undefined, { label: "the environment page" });
-      await sleep(600);
+      // Where a 600ms settle was (voicebox-beads-g667): exactly what the next comment says — the page is connected.
+      await pageConnected(s, "the environment page to connect on /channel");
 
       // The page is connected but holds NO project: the listing is a NAMED refusal with a route, not an
       // empty folder that looks like a project with nothing in it.
@@ -97,9 +120,15 @@ test("with NO root declared, the page is still the source — and a page that ho
 
       // Now the page makes a project WITHOUT declaring it to the server at all: open it through the
       // worker directly (e1m0.send), so the server never hears about a root — the pure fqq case.
-      await page.evaluate(() => window.e1m0.send({ type: "openProject", name: "undeclared-room" }));
-      await sleep(600);
-      await page.evaluate(() => window.e1m0.create("nothing-declared.txt", "text", "this file exists with no root declared anywhere\n"));
+      // THE REPLIES ARE THE CONDITIONS (voicebox-beads-g667): the worker answers openProject only after the
+      // project is its current one, and createAsset only after the file is written — so the 600ms settle
+      // between them waited for something already true. Both replies are asserted instead of slept on.
+      const opened = await page.evaluate(() => window.e1m0.send({ type: "openProject", name: "undeclared-room" }));
+      assert.equal(opened?.ok, true, `the page must open the project — got ${JSON.stringify(opened)}`);
+      const created = await page.evaluate(() => window.e1m0.create("nothing-declared.txt", "text", "this file exists with no root declared anywhere\n"));
+      assert.equal(created?.ok, true, `the page must write the file — got ${JSON.stringify(created)}`);
+      // Kept fixed (voicebox-beads-g667): the next line proves a NEGATIVE — no declaration reached the server —
+      // and there is no event for "nothing happened"; this is the window a stray declaration would land in.
       await sleep(800);
       assert.equal((await readRoot(s)).declared, false, "the server STILL has nothing declared");
 
@@ -146,8 +175,12 @@ test("a call naming a root the page does not hold is STILL refused — an unname
     try {
       await page.goto(`${s.base}/environment.html`);
       await page.waitFor(() => window.e1m0 !== undefined, { label: "the environment page" });
-      await page.evaluate(() => window.e1m0.send({ type: "openProject", name: "mine" }));
-      await sleep(600);
+      const opened = await page.evaluate(() => window.e1m0.send({ type: "openProject", name: "mine" }));
+      // Where a 600ms settle was (voicebox-beads-g667): the reply means `mine` is already the page's current
+      // project, and the page must be on /channel — root-not-mine is the PAGE's refusal, and with no page to
+      // ask the listing below would answer no-page instead.
+      assert.equal(opened?.ok, true, `the page must open its own project — got ${JSON.stringify(opened)}`);
+      await pageConnected(s, "the environment page to connect on /channel");
 
       // The HOST declares a page-owned root with a path this page does NOT hold. The server will name it
       // when it routes the act, and the page must refuse — that check is what stops the server aiming the

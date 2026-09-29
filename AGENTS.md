@@ -127,6 +127,59 @@ bd prime                # Refresh Beads context
 **Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
 <!-- END BEADS CODEX SETUP -->
 
+## Development Lifecycle & Multi-Agent Architecture
+
+To support rapid iteration, high concurrency across multiple agents, and an always-responsive primary agent, all work in this repository follows a strict **Worktree + Sub-Agent + Merger Lane** lifecycle.
+
+### 1. Standing Priorities (Goal Order)
+
+Every plan, task decomposition, implementation, and review must optimize for these priorities in order:
+
+1. **Performance**: Fast startup, low-latency voice/turn loops, non-blocking I/O, fast builds, and fast test/merge execution.
+2. **UX & UI Quality**: Responsive, accessible, plain-language interfaces with zero layout shift, clear visual states, and minimal interaction friction.
+3. **Quality of Life (QoL)**: Smooth operator and developer ergonomics, self-diagnosing refusals, and low cognitive overhead.
+4. **Features**: New capabilities built on measured boundaries and clean component seams.
+
+### 2. Main Agent Responsiveness & Massive Delegation
+
+- **Main Agent = Orchestrator & Planner**: The main agent must remain responsive to the user at all times. Do not tie up the main agent with long-running coding or test loops.
+- **Delegate every feature, fix, and task to sub-agents**: Use sub-agents (`invoke_subagent` with `Workspace: "share"` or `"branch"`) or cross-agent delegation (`agentapi` / task harnesses) for all implementation, debugging, and verification tasks.
+- **Parallel non-overlapping waves**: Decompose multi-part work into parallel sub-agent lanes with explicit file ownership (`OWNED FILES`) so multiple agents iterate simultaneously with minimal merge conflicts.
+
+### 3. Worktree Isolation & Dedicated Merger Lane
+
+- **Develop on worktrees, never directly on `main`**:
+  - Every feature, bugfix, or task must be developed in an isolated git worktree (`git worktree add --no-track -b <branch> <dir> origin/main` or sub-agent `Workspace: "share"`). Using `--no-track` prevents a worktree branch from tracking `origin/main` and accidentally offering `HEAD:main` on push; pushing a candidate branch runs only the fast `docs-touched` + `unit` gate, while the Merger Lane runs the full `live` + `acceptance` gate on landing to `main`.
+  - If `node_modules` is needed in a worktree on macOS/APFS, clone it via copy-on-write (`cp -Rc /Users/paulkinlan/Code/voicebox/node_modules ./node_modules`). **Never symlink `node_modules`**: `.gitignore` specifies `node_modules/` (with trailing slash), which does not match a symlink and fails tree-cleanliness checks.
+  - **Never use `git stash`** in any worktree: `refs/stash` is shared across all worktrees of the repository, so concurrent lanes will collide.
+- **Dedicated Merger Lane**:
+  - Feature/task sub-agents do **not** push directly to `main`, edit shared documentation blocks, or move the live served tree. Each feature lane verifies its scoped tests and outputs a clean patch or worktree branch.
+  - A single **Merger Lane** (the orchestrator or a dedicated Merger sub-agent) is responsible for:
+    1. Applying/merging verified worktree branches or patches into `main` in dependency order.
+    2. Centralizing documentation updates and running `npm run docs:write` / `node scripts/docs-check.mjs` once per wave so lanes never conflict on generated blocks.
+    3. Running the landing gates and advancing the served tree (`main`).
+
+### 4. Componentization & Scoped Testing for Fast Builds and Merges
+
+- **Architect for componentization and narrow seams**:
+  - Keep modules small, cohesive, and single-purpose (`core/` for runtime-agnostic pure logic, `lib/` for isolated host capabilities, `public/` for modular UI components).
+  - Prefer extracting new features or UI surfaces into dedicated modules with narrow interfaces rather than growing monolithic files (such as the main server or room entry points). Smaller components eliminate cross-agent merge conflicts and allow fast, isolated testing.
+  - Enforce **one fact, one computing site** (`node scripts/single-owner.mjs`).
+- **Test only what changed during inner-loop iteration**:
+  - While developing in a worktree, sub-agents must run **only the scoped test file(s) covering the touched component** (`node --test tests/<component>.test.mjs`) plus fast static checks (`node scripts/single-owner.mjs`, `node scripts/docs-check.mjs`). Do not run the full serial `live` suite inside every sub-agent worktree unless changing a shared harness/server primitive.
+  - Write new tests in the **concurrent `unit` lane** (`npm run test:unit`) whenever behavior can be verified without launching Chromium or a full server process; reserve the serial `live` lane for true end-to-end integration boundaries.
+  - Never introduce fixed multi-second `sleep()` calls for positive conditions — always wait on events or bounded condition predicates (`page.waitFor`).
+
+### 5. Active Planning & Beads (`bd`) Handoff Discipline
+
+- **Beads is the shared source of truth across all agents**:
+  - Before launching sub-agents, create or update Beads issues (`bd create`, `bd update <id> --claim`, `bd dep add`) capturing the full decomposition.
+  - Every bead must be written so another agent can pick it up cold and continue without prior conversation context. Include:
+    1. **Goal & Priority**: What user/system problem it solves and why (`P0`–`P4`, aligned with Perf → UX/UI → QoL → Features).
+    2. **Scope & Owned Seams**: Exact files/modules owned by the task and boundaries not to cross.
+    3. **Scoped Verification**: The exact fast test command(s) that prove the task is done.
+    4. **Progress & Follow-ups**: When pausing, handing off, or completing a task, record current status in Beads and file new beads (`bd create`) for any discovered out-of-scope defects or follow-up work rather than expanding lane scope.
+
 ## Before you land (2026-09-19)
 
 A landing to `main` runs the gates BEFORE pushing — the push itself is the gate:

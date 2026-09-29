@@ -26,17 +26,26 @@ as help. Create worktrees with **`--no-track`**, or clear it afterwards with
 | stage | what it runs | concurrency | default budget |
 | --- | --- | --- | --- |
 | `unit` | `npm run test:unit` — every `tests/*.test.mjs` that launches no browser and no server of its own | files in parallel | 90s |
-| `live` | `npm run test:live` — tests that launch Chromium over CDP or a server process | **one file at a time** | 400s |
+| `live` | `npm run test:live` — tests that launch Chromium over CDP or a server process, or hold worker threads past their last test (the wasm-shelf suite, until voicebox-beads-u2lx) | **one file at a time** | 400s |
 | `acceptance` | `npm run accept` | — | 45s |
 
 Each stage inherits stdout and stderr: partial output remains visible when it
 times out. GNU coreutils `timeout` is required; its absence is a named refusal,
 not an unbounded run. The lanes are derived from each file's code by
-`scripts/test-lanes.mjs` (comments stripped; every file lands in exactly one
-lane; detecting direct and helper-mediated browser launches like `page-acceptance.mjs`,
-and server processes like `server.mjs`, `task-fixture.mjs` and `createServer`),
-so a new test cannot escape them the way it could escape a hand-kept
-list, and `npm test` still runs the whole suite for humans and CI.
+`scripts/test-lanes.mjs` (every file lands in exactly one lane; detecting direct
+and helper-mediated browser launches like `page-acceptance.mjs`, and server
+processes like `server.mjs`, `task-fixture.mjs` and `createServer`), so a new test
+cannot escape them the way it could escape a hand-kept list, and `npm test` still
+runs the whole suite for humans and CI. Each file is lexed, not pattern-stripped
+(`voicebox-beads-k96l`): a comment is not code, and neither is the source a test
+writes — fixture text in the content of a writeFileSync/writeFile/appendFile call
+is data, which is why the classifier's own test is a unit test. A helper counts by
+its file name in any other string (a static or dynamic import, a spawn argument, a
+path.join segment, a template-built path); `createServer` and `callWasmTool` count
+only where code calls them, unless the file hands source text to an evaluator
+(node -e, a shell, eval/vm). Every doubt resolves to live: a file the lexer cannot
+read to its end is read raw, because a live test misfiled as unit is the flake
+this split exists to stop, while a unit test misfiled as live costs seconds.
 
 ## Why two lanes — 2026-09-23 (`voicebox-beads-6qu`)
 
@@ -54,6 +63,12 @@ rather than guessed:
   `live` **186s serial** (182 tests). The budgets above are headroom over those
   numbers, not estimates; changing concurrency without raising the budget would
   convert a flake into a timeout, which is why both moved together.
+- Re-measured on 2026-09-29 after the suite grew to 120 test files (`40 unit`,
+  `80 live`) and the six-lane harness pass landed (`voicebox-beads-4wez`,
+  `qxy2`, `4oj6`, `9mqc`, `g667`, `k96l`): `unit` **20.1s concurrent** (322
+  tests; `docs-drift.test.mjs` alone **15.2s → 2.5s**), `live` **503.8s →
+  389.3s serial** (376 tests, 351 pass, 0 fail, 25 skipped — back inside the
+  400s stage budget), `accept` **15.6s**.
 
 ## Gate lock and serialization across lanes — 2026-09-24 (`voicebox-beads-6qu`)
 

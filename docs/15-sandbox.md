@@ -146,10 +146,18 @@ and `refused` are three different words. Fields:
   bounds (those are the host constants above).
 - **`tools`** — which binaries actually ran (`node`, `git`, …), each `{value}` or `{error}`.
   *Read as:* what a turn here can invoke. "not present" and "present but refused" are different
-  answers, and this is the field the environment list shows as its tool count.
+  answers, and this is the field the environment list shows as its tool count. Asked at most eight at
+  a time — a fence's process limit must not turn a present tool into an `EAGAIN` "absent" — and keyed
+  in a fixed order whatever order they answer in (`voicebox-beads-4wez`).
 - **`network`** — DNS and outbound TCP attempts, each `ok` with a timing or a named error.
   *Read as:* **attempted is not carried** — `ok: true` means a connection completed. Inside the
-  fence this is expected: the network is shared, and this axis is how the report says so.
+  fence this is expected: the network is shared, and this axis is how the report says so. The
+  attempts run together, each on its own deadline, so the section costs its slowest attempt; each
+  `ms` is that attempt's own, timed from its own dial (it can carry a few ms of waiting on its
+  neighbours — verdicts read `ok`/`error`, never `ms`). `outboundTcp443IpLiteral` dials `1.1.1.1:443`
+  — no DNS in its path — beside the by-name `example.com:80`, so a closed route and a missing resolver
+  read differently; until `voicebox-beads-4wez` it dialled example.com's retired `93.184.216.34`,
+  which timed out everywhere.
 
 ## The proposals folder: `<workspace>/proposals/`
 

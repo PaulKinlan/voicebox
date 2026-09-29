@@ -9,11 +9,10 @@
 // Nothing here is browser-specific: it is the shared spawn-and-wait that every HTTP suite in this repo
 // was hand-rolling, with the port made correct rather than constant.
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { setTimeout as sleep } from "node:timers/promises";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -52,12 +51,71 @@ process.on("exit", () => {
   for (const child of LIVE_CHILDREN) reap(child);
 });
 
+/**
+ * READY IS THE STARTUP BANNER — `voicebox on http://127.0.0.1:<port>` (voicebox-beads-4oj6).
+ *
+ * server.mjs prints that line only once `listen()` has succeeded (bindWithRetry resolves on
+ * 'listening'), and every route and upgrade handler is attached before listen() is called, so the line
+ * is already proof of what a suite needs: the socket is bound, and a request sent now is answered. The
+ * `/api/health` poll that used to follow it guarded nothing further — it was the readiness check of the
+ * hand-rolled spawns this helper replaced (b9282b1), which pinned a port and ignored stdout, and so could
+ * only knock until something answered. It had also stopped being free: the build identity /api/health
+ * reports is now answered off the boot path, and a health poll here would put those git subprocesses
+ * back on every boot. scripts/docs-check.mjs already keeps the same rule for its own probe server:
+ * readiness is the server's own stdout line, not a route.
+ *
+ * The pattern demands a NON-DIGIT after the port, so a banner split across two stdout chunks is never
+ * read as a truncated port (`:518` of `:51883`). The poll would have turned that misread into a loud
+ * failure; without it, the parse itself has to be exact.
+ *
+ * Lines printed AFTER the banner — the bootstrap URL under VOICEBOX_LOOPBACK_AUTH=1 (voicebox-beads-kkc)
+ * — may arrive in a later chunk than the banner: `stdout()` is a live read of everything received so
+ * far, and a suite that needs such a line waits for it (tests/loopback-auth.test.mjs polls for it).
+ */
+const BANNER = /voicebox on http:\/\/127\.0\.0\.1:(\d+)\D/;
+
+/**
+ * STOP RETURNS ONCE THE CHILD HAS EXITED (voicebox-beads-4oj6). It used to return the moment the signal
+ * was SENT, so a caller's cleanup — `rmSync` of the directories it handed the server — raced a process
+ * still alive for a few more milliseconds, and still able to write into them. The kill itself is
+ * unchanged: the whole group, SIGKILL, through the one reaper above. What is new is the wait for `exit`,
+ * BOUNDED so a wedged process cannot hang a suite: past STOP_BOUND_MS the group is sent SIGKILL again and
+ * stop() returns without deleting anything — a leaked directory is recoverable, a delete that races a
+ * live writer is not.
+ *
+ * Then the scratch extensions directory THIS HELPER made (only ever when the caller supplied none) is
+ * removed: one was left in the temp dir per startServer() call — 855 of them on the machine that
+ * measured this. A directory the caller supplied (`extensionsDir`, or env.VOICEBOX_EXTENSIONS_DIR) stays
+ * the caller's and is never touched: suites start a second server on the same directory to prove that
+ * state persists.
+ */
+const STOP_BOUND_MS = 2000;
+
+/** Resolves true once `child` has exited, or false if it has not within `boundMs`. */
+function exitOf(child, boundMs) {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const onExit = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      child.off("exit", onExit);
+      resolve(false);
+    }, boundMs);
+    child.once("exit", onExit);
+  });
+}
+
 export async function startServer({ env = {}, cwd = ROOT, readyTimeoutMs = 20000, extensionsDir = null } = {}) {
   // A SCRATCH EXTENSIONS DIRECTORY PER SERVER, because that is where the HOST TOKEN lives (mode 0600,
   // host-generated, served by no route — voicebox-beads-m2i). Two things follow: a suite never touches
   // Paul's real one, and a suite that spawns the server IS the host, so it can read the token and act
   // with host authority — which is what declaring a root now requires (voicebox-beads-cfn).
-  const scratchExtensions = extensionsDir ?? env.VOICEBOX_EXTENSIONS_DIR ?? mkdtempSync(path.join(os.tmpdir(), "voicebox-ext-"));
+  const suppliedExtensions = extensionsDir ?? env.VOICEBOX_EXTENSIONS_DIR ?? null;
+  // Made here only when the caller supplied none — and then it is this helper's to remove, in stop().
+  const ownedScratch = suppliedExtensions === null ? mkdtempSync(path.join(os.tmpdir(), "voicebox-ext-")) : null;
+  const scratchExtensions = suppliedExtensions ?? ownedScratch;
   const child = spawn(process.execPath, [path.join(ROOT, "server.mjs")], {
     cwd,
     // THE DEFAULTS LIVE HERE, so a lane cannot forget them. Spreading `process.env` means a developer's
@@ -97,37 +155,54 @@ export async function startServer({ env = {}, cwd = ROOT, readyTimeoutMs = 20000
     out += String(chunk);
   });
 
-  const port = await new Promise((resolve, reject) => {
-    let buffer = "";
-    const timer = setTimeout(
-      () => reject(new Error(`the server printed no port within ${readyTimeoutMs}ms${noise ? `\n${noise}` : ""}`)),
-      readyTimeoutMs,
-    );
-    child.stdout.on("data", (chunk) => {
-      buffer += String(chunk);
-      const match = buffer.match(/http:\/\/127\.0\.0\.1:(\d+)/);
-      if (match) {
-        clearTimeout(timer);
-        resolve(Number(match[1]));
+  // One way a child dies (the reaper, voicebox-beads-6io) and now one way it is waited for: the caller's
+  // stop(), and the failure path below, which has no caller to hand a stop() to.
+  const stop = async () => {
+    reap(child);
+    if (!(await exitOf(child, STOP_BOUND_MS))) {
+      reap(child); // still not gone: SIGKILL the group once more, and leave the directory standing
+      return;
+    }
+    if (ownedScratch) {
+      try {
+        rmSync(ownedScratch, { recursive: true, force: true });
+      } catch {
+        /* best effort: a directory left behind is a leak, never a failed test */
       }
+    }
+  };
+
+  let port;
+  try {
+    port = await new Promise((resolve, reject) => {
+      let buffer = "";
+      const timer = setTimeout(
+        () => settle(reject, new Error(`the server printed no port within ${readyTimeoutMs}ms${noise ? `\n${noise}` : ""}`)),
+        readyTimeoutMs,
+      );
+      function onData(chunk) {
+        buffer += String(chunk);
+        const match = buffer.match(BANNER);
+        if (match) settle(resolve, Number(match[1]));
+      }
+      function onExit(code) {
+        settle(reject, new Error(`the server exited before binding (code ${code})${noise ? `\n${noise}` : ""}`));
+      }
+      function settle(done, value) {
+        clearTimeout(timer);
+        child.stdout.off("data", onData);
+        child.off("exit", onExit);
+        done(value);
+      }
+      child.stdout.on("data", onData);
+      child.on("exit", onExit);
     });
-    child.on("exit", (code) => {
-      clearTimeout(timer);
-      reject(new Error(`the server exited before binding (code ${code})${noise ? `\n${noise}` : ""}`));
-    });
-  });
+  } catch (error) {
+    await stop(); // it never became ready, and the caller never receives a stop() to call
+    throw error;
+  }
 
   const base = `http://127.0.0.1:${port}`;
-  let up = false;
-  for (let i = 0; i < 100 && !up; i++) {
-    try {
-      up = (await fetch(`${base}/api/health`)).ok;
-    } catch {
-      /* not up yet */
-    }
-    if (!up) await sleep(50);
-  }
-  if (!up) throw new Error(`the server bound ${port} but never answered /api/health`);
 
   // The host token, read the way the person's shell reads it: from the host's own directory. A suite
   // that declares a root sends this header; a suite that impersonates the PAGE does not.
@@ -142,8 +217,6 @@ export async function startServer({ env = {}, cwd = ROOT, readyTimeoutMs = 20000
     extensionsDir: scratchExtensions,
     stdout: () => out,
     stderr: () => noise,
-    async stop() {
-      reap(child);
-    },
+    stop,
   };
 }

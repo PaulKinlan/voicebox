@@ -168,7 +168,7 @@ test("gate ON: an unauthenticated request is refused by name, with the remedy, b
   }
 });
 
-test("gate ON: /api/health stays open — the spawn-and-wait harness reads it before any session exists", async () => {
+test("gate ON: /api/health stays open — supervisors and spawn-and-poll suites read it before any session exists", async () => {
   const server = await scratchServer(GATE_ON);
   try {
     const res = await fetch(`${server.base}/api/health`);

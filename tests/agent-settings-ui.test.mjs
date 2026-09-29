@@ -20,7 +20,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { setTimeout as sleep } from "node:timers/promises";
 import { launch } from "./lib/cdp.mjs";
 import { startServer } from "./lib/server.mjs";
 
@@ -68,11 +67,42 @@ const choose = (id, value) =>
     picker.dispatchEvent(new Event("change"));
   }, id, value);
 
+// THE DIALOG'S OWN LOAD, WAITED FOR RATHER THAN SLEPT PAST (voicebox-beads-g667), where 400-500ms sleeps
+// were. Opening the dialog starts a load of the agent settings (fused.js: the settings-open click →
+// loadAgentSettings), and every load ends in one redraw of #agent-provider-state — a rewrite even when the
+// text is the same, so a MutationObserver sees it. The room's boot-time load is waited out FIRST, so the
+// count that follows is the dialog's alone: a boot-time answer can then neither stand in for the dialog's
+// load nor land on top of a change made after it.
+async function beforeOpeningSettings(p, label) {
+  await p.waitFor(() => (document.getElementById("agent-provider-state")?.textContent ?? "Not asked yet") !== "Not asked yet",
+    { label: `${label}: the boot-time agent settings to be drawn` });
+  await p.evaluate(() => {
+    window.__agentSettingsDraws = 0;
+    new MutationObserver(() => { window.__agentSettingsDraws += 1; })
+      .observe(document.getElementById("agent-provider-state"), { childList: true, characterData: true, subtree: true });
+  });
+}
+const settingsLoadDrawn = (p, label) =>
+  p.waitFor(() => window.__agentSettingsDraws >= 1, { label: `${label}: the settings dialog's own load to be answered and drawn` });
+
+// THE CHANGE HAS BEEN ANSWERED (voicebox-beads-g667), where 400-500ms sleeps were. A picker's change PUTs
+// the setting, and the page takes the server's answer in ONE synchronous step — it stores what the server
+// says is requested (localStorage) and redraws every row (fused.js saveAgentSetting) — so the stored value
+// moving to the one just chosen means the rows read next are the answer's. A refusal answered with
+// ok:false writes "Refused (…)" into every row instead: an answer too, and the assertions then report it.
+// (One sent as a 4xx throws inside request() and draws nothing; the wait then times out naming the change.)
+const answered = (key, value) =>
+  page.waitFor((k, v) =>
+    JSON.parse(localStorage.getItem("voicebox.agent.settings.v1") ?? "null")?.[k] === v ||
+    (document.getElementById("agent-provider-state")?.textContent ?? "").startsWith("Refused"),
+  { label: `the ${key} change to ${JSON.stringify(value)} to be answered`, args: [key, value] });
+
 test.before(async () => {
   server = await startServer({ cwd: ROOT, env: { VOICEBOX_INSTANCE: "agent-ui-test", ...PINNED_ENV } });
   page = await launch();
   await page.goto(`${server.base}/`);
   await page.waitFor(() => document.getElementById("settings-open") !== null, { label: "the room" });
+  await beforeOpeningSettings(page, "the room");
   await page.click("#settings-open");
   await page.waitFor(() => document.getElementById("settings").open, { label: "the settings dialog" });
 });
@@ -84,7 +114,7 @@ test.after(async () => {
 
 test("the dialog shows what is APPLIED, and says where the request and the reality differ", { timeout: 90000 }, async () => {
   await page.evaluate(() => void window.__voiceboxLoadAgent?.());
-  await sleep(400);
+  await settingsLoadDrawn(page, "the room"); // where a 400ms sleep was (voicebox-beads-g667)
   const view = await state();
 
   // PROVIDER: applied, and the only row that can say what a session is using.
@@ -113,7 +143,7 @@ test("voices follow the provider — a Gemini voice is never offered to an OpenA
   assert.equal(gemini.voiceOptions.includes("verse"), false, "a Gemini session is offered an OpenAI voice");
 
   await choose("agent-provider", "openai");
-  await sleep(500);
+  await answered("provider", "openai"); // where a 500ms sleep was (voicebox-beads-g667)
   const openai = await state();
   assert.ok(openai.voiceOptions.includes("verse"), `the OpenAI voices are missing: ${JSON.stringify(openai.voiceOptions)}`);
   assert.equal(openai.voiceOptions.includes("Kore"), false, "an OpenAI session is offered a Gemini voice");
@@ -131,7 +161,7 @@ test("voices follow the provider — a Gemini voice is never offered to an OpenA
   assert.match(refused.why, /alloy|verse|shimmer/, "the refusal does not name the voices that provider offers");
 
   await choose("agent-provider", "gemini");
-  await sleep(400);
+  await answered("provider", "gemini"); // where a 400ms sleep was (voicebox-beads-g667)
   const back = await state();
   assert.ok(back.voiceOptions.includes("Kore"), "switching back did not restore the Gemini voices");
 });
@@ -146,9 +176,10 @@ test("with a provider that cannot run, the row NAMES the reason — and the voic
     barePage = await launch();
     await barePage.goto(`${bare.base}/`);
     await barePage.waitFor(() => document.getElementById("settings-open") !== null, { label: "the room (no keys)" });
+    await beforeOpeningSettings(barePage, "the room (no keys)");
     await barePage.click("#settings-open");
     await barePage.waitFor(() => document.getElementById("settings").open, { label: "the settings dialog (no keys)" });
-    await sleep(500);
+    await settingsLoadDrawn(barePage, "the room (no keys)"); // where a 500ms sleep was (voicebox-beads-g667)
 
     const view = await barePage.evaluate(() => ({
       provider: document.getElementById("agent-provider-state").textContent,
@@ -186,7 +217,7 @@ test("unified agent settings: model, voice timbre, custom prompt, and local stor
 
   // Select a timbre
   await choose("agent-timbre", "warm");
-  await sleep(400);
+  await answered("timbre", "warm"); // where a 400ms sleep was (voicebox-beads-g667)
   const timbreState = await page.evaluate(() => document.getElementById("agent-timbre-state").textContent);
   assert.match(timbreState, /Warm/);
 
@@ -196,7 +227,10 @@ test("unified agent settings: model, voice timbre, custom prompt, and local stor
     input.value = "Be brief and technical.";
     input.dispatchEvent(new Event("change"));
   });
-  await sleep(400);
+  // Where a 400ms sleep was (voicebox-beads-g667): the row the answer redraws, read rather than the stored
+  // value — the stored value is what the lines below assert, so it cannot also be what is waited for.
+  await page.waitFor(() => /^(Custom prompt active|Refused)/.test(document.getElementById("agent-custom-instruction-state")?.textContent ?? ""),
+    { label: "the custom instruction change to be answered and drawn" });
 
   // Assert local storage has persisted the unified settings
   const localSaved = await page.evaluate(() => {
@@ -207,11 +241,16 @@ test("unified agent settings: model, voice timbre, custom prompt, and local stor
   assert.equal(localSaved.customInstruction, "Be brief and technical.");
 
   // Reload page and assert settings are restored from localStorage
+  // THE RELOADED DOCUMENT, not the old one (voicebox-beads-g667): page.reload() returns after a fixed 600ms
+  // without waiting for the new document, and the old one still shows what was just chosen — every read
+  // below would pass against it. So the old document carries a marker, and the reloaded one must not.
+  await page.evaluate(() => { window.__beforeReload = true; });
   await page.reload();
-  await page.waitFor(() => document.getElementById("settings-open") !== null);
+  await page.waitFor(() => !window.__beforeReload && document.getElementById("settings-open") !== null, { label: "the reloaded room" });
+  await beforeOpeningSettings(page, "the reloaded room");
   await page.click("#settings-open");
   await page.waitFor(() => document.getElementById("settings").open);
-  await sleep(500);
+  await settingsLoadDrawn(page, "the reloaded room"); // where a 500ms sleep was (voicebox-beads-g667)
 
   const reloadedTimbre = await page.evaluate(() => document.getElementById("agent-timbre").value);
   const reloadedCustom = await page.evaluate(() => document.getElementById("agent-custom-instruction").value);

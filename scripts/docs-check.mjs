@@ -1,7 +1,12 @@
 // scripts/docs-check.mjs — the mechanism that keeps the descriptions of this system true.
 //
-//   node scripts/docs-check.mjs            # check: exit 1 when a doc has drifted from the code
-//   node scripts/docs-check.mjs --write    # regenerate the generated blocks in place
+//   node scripts/docs-check.mjs                     # check: exit 1 when a doc has drifted from the code
+//   node scripts/docs-check.mjs --write             # regenerate the generated blocks in place
+//   node scripts/docs-check.mjs --docs-root <dir>   # either of the above, on the documents under <dir>
+//                                                   # (README.md, docs/) instead of this checkout's — see DOCS_ROOT
+//
+// Exit 0: the documents describe the code. Exit 1: a refusal, named on stderr. Exit 2: the command line
+// itself is wrong (`--docs-root` without a directory) — nothing was checked.
 //
 // WHY THIS EXISTS. A README claimed "streamed as PCM16 over /live to models/gemini-3.8-live" four lines
 // above "No live model. The resolver is scripted; nothing calls Gemini Live." Both were true of different
@@ -21,13 +26,21 @@
 // A check that cannot fail is a description of the code, not a check on it — which is why the suite runs
 // this in check mode (`tests/docs-drift.test.mjs`) and why the receipt for it includes a perturbation that
 // turns it red.
+//
+// THE CHEAP HALF REFUSES FIRST (voicebox-beads-qxy2). In check mode the static passes — every document
+// present with its markers, no blank block, no hand-written path to a file that is gone, no retired literal,
+// docs/claims.json holding — run BEFORE the scratch server boots. When any of them fails, the run refuses
+// with ALL of them and says the generated blocks were not compared; it used to wait ~7s for a server and
+// /api/probe whose answers could not change that verdict, and then name only the first problem. When they
+// pass, the full pass runs exactly as before. `--write` keeps its old order: it regenerates first, because
+// regenerating is what it is for.
 
 import { spawn } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
-import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { registeredResolvers, resolveTurn } from "../lib/resolver.mjs";
 import { makeScratchDir } from "../tools/tree-dirt.mjs";
 import { admit, PRIMITIVES, PRIMITIVE_NEEDS, GETS } from "../core/extensions.ts";
@@ -39,6 +52,42 @@ import { FACTS as STATE_DIR_FACTS } from "../lib/state-dirs.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WRITE = process.argv.includes("--write");
+
+/**
+ * WHERE THE DOCUMENTS ARE READ FROM: this checkout, or `--docs-root <dir>` (voicebox-beads-qxy2).
+ *
+ * The drift test used to prove the denylist by rewriting the TRACKED docs/08-how-it-runs.md IN PLACE for
+ * the length of a run — a writer inside a measured tree (voicebox-beads-bp8): a concurrent `git status`
+ * saw a modification nobody authored, and a killed test left the document modified. Now the test copies
+ * the documents into scratch and points this check at the copy; the checkout is never written.
+ *
+ * WHAT MOVES AND WHAT DOES NOT. `<dir>` is laid out like this repository's documentation — `README.md`,
+ * `docs/*.md`, `docs/claims.json` — and every DOCUMENT this script reads (or, with --write, writes)
+ * resolves under it: the three documents that carry generated blocks, every markdown file the
+ * hand-written passes scan, and the claims policy that governs them. Everything a document is CHECKED
+ * AGAINST stays in this checkout: the code, the page, the scratch server, and every file path a document
+ * names — a path claim is a claim about the TREE, and resolving it against the copy would be checking the
+ * copy against itself.
+ */
+const DOCS_ROOT = (() => {
+  const args = process.argv.slice(2);
+  const at = args.findIndex((a) => a === "--docs-root" || a.startsWith("--docs-root="));
+  if (at < 0) return ROOT;
+  const value = args[at].startsWith("--docs-root=") ? args[at].slice("--docs-root=".length) : args[at + 1];
+  if (!value || value.startsWith("--")) {
+    console.error("docs-check: --docs-root needs a directory: node scripts/docs-check.mjs --docs-root <dir>");
+    process.exit(2);
+  }
+  const dir = resolve(value);
+  if (!existsSync(dir) || !statSync(dir).isDirectory()) {
+    console.error(`docs-check: --docs-root '${value}' is not a directory`);
+    process.exit(2);
+  }
+  return dir;
+})();
+/** A document's path: `rel` is the name it has in the repository ("docs/07-architecture.md"). */
+const docPath = (rel) => join(DOCS_ROOT, rel);
+if (DOCS_ROOT !== ROOT) console.log(`docs-check: documents from ${DOCS_ROOT}; code, server and every path they name from ${ROOT}`);
 
 // This check describes the TREE, not the shell it runs in: a provider chosen by this machine's
 // environment would print itself into a committed document.
@@ -104,30 +153,45 @@ async function probeServer() {
   // provider refuse by name after the 101 — which is the only fact the line reports.
   const env = { ...process.env, PORT: String(port), VOICEBOX_EXTENSIONS_DIR: dirs.extensions, VOICEBOX_WORKSPACE: dirs.workspace, VOICEBOX_WASM_SHELF_DIR: dirs.shelf, GEMINI_API_KEY: "", OPENAI_API_KEY: "" };
   for (const k of ["LIVE_PROVIDER", "VOICEBOX_LIVE_PROVIDER", "VOICEBOX_PROVIDER", "VOICEBOX_RESOLVER", "VOICEBOX_INSTANCE"]) delete env[k];
-  const child = spawn(process.execPath, ["server.mjs"], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
+  // ITS CWD IS THE SCRATCH, NOT THE CHECKOUT (voicebox-beads-qxy2, the bp8 rule again): /api/probe runs
+  // tools/sandbox-probe.mjs, which proves each directory writable by creating and unlinking a marker file IN
+  // it — its own cwd among them. With `cwd: ROOT` that marker existed in the checkout for the instant between
+  // write and unlink, so a `git status` racing a docs check could list a file nobody authored. The server and
+  // the probe resolve everything else from their own module location (`server.mjs` has no relative reads),
+  // and the block reports the probe's SECTION NAMES, not its paths — so the rendered blocks are byte-identical
+  // (dumped and diffed when this moved); only where that write lands has changed.
+  const child = spawn(process.execPath, [join(ROOT, "server.mjs")], { cwd: scratch, env, stdio: ["ignore", "pipe", "pipe"] });
   let out = "";
   let errOut = "";
   child.stdout.on("data", (d) => (out += d));
   child.stderr.on("data", (d) => (errOut += d)); // read it, or a chatty server fills the pipe and stalls
-  const until = Date.now() + 8000;
   try {
-    let health = null;
-    while (Date.now() < until) {
-      // Readiness is the server's OWN stdout line ("voicebox on http://…"), not a route:
-      // probing /api/health here would couple the instrument to the very claim it checks, and a
-      // perturbed health route crashed the check instead of reporting drift. Found by perturbing it.
-      if (out.includes("voicebox on http")) break;
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    if (!out.includes("voicebox on http")) throw new Error(`server did not start on ${port}: ${out.slice(0, 200)}`);
+    // Readiness is the server's OWN stdout line ("voicebox on http://…"), not a route:
+    // probing /api/health here would couple the instrument to the very claim it checks, and a
+    // perturbed health route crashed the check instead of reporting drift. Found by perturbing it.
+    // AWAITED, NOT POLLED (voicebox-beads-qxy2): the line is seen the moment it arrives rather than on the
+    // next 100ms tick, and a server that EXITS before printing it fails the check at once instead of after
+    // the whole 8s budget.
+    await new Promise((ready, fail) => {
+      const settle = (err) => {
+        clearTimeout(timer);
+        child.stdout.off("data", onData);
+        child.off("exit", onExit);
+        if (err) fail(err);
+        else ready();
+      };
+      const onData = () => { if (out.includes("voicebox on http")) settle(); };
+      const onExit = (code, signal) => settle(new Error(`server exited (${signal ?? `code ${code}`}) before it was ready on ${port}: ${out.slice(0, 200)}`));
+      const timer = setTimeout(() => settle(new Error(`server did not start on ${port}: ${out.slice(0, 200)}`)), 8000);
+      child.stdout.on("data", onData); // after the accumulator above, so `out` already holds the chunk
+      child.on("exit", onExit);
+      onData();
+    });
     const token = readFileSync(join(dirs.extensions, ".host-token"), "utf8").trim();
+    const base = `http://127.0.0.1:${port}`;
     // VOICEBOX_WORKSPACE declared a root at boot; un-declare it so the routes are probed in the state a
     // fresh server is in, and so the loop drive below can show `root-not-declared` and the declaration.
-    await fetch(`http://127.0.0.1:${port}/api/root`, { method: "DELETE", headers: { "x-voicebox-host-token": token } });
-    {
-      const r = await fetch(`http://127.0.0.1:${port}/api/health`);
-      health = r.ok ? await r.json() : { provider: "(no /api/health answer)", workspace: "?" };
-    }
+    await fetch(`${base}/api/root`, { method: "DELETE", headers: { "x-voicebox-host-token": token } });
     // The routes the doc may claim, probed for real. A method mismatch is a fact about the route.
     const probes = [
       ["GET", "/", 200],
@@ -135,20 +199,31 @@ async function probeServer() {
       ["GET", "/api/files", 200],
       ["POST", "/api/turn", 200],
     ];
-    const routes = [];
-    for (const [method, path, expect] of probes) {
-      const r = await fetch(`http://127.0.0.1:${port}${path}`, {
-        method,
-        ...(method === "POST" ? { body: JSON.stringify({ transcript: "list files" }), headers: { "content-type": "application/json" } } : {}),
-      });
-      routes.push({ method, path, status: r.status, matches_documented_expectation: r.status === expect });
-    }
+    // THE READ-ONLY PROBES RUN TOGETHER (voicebox-beads-qxy2): health, the four routes, the /live upgrade and
+    // the extension surface ran one after another, and each only READS the state the un-declare above left —
+    // `POST /api/turn` included: with no root declared it is refused by name and logs nothing, because there
+    // is nowhere to hold a log. None of them changes what another answers, so they are asked at once; their
+    // results land in the same slots (Promise.all keeps order), so the rendered blocks are byte-identical.
+    // Two things keep their order, because they are not reads: the un-declare runs BEFORE them (they
+    // describe a fresh server), and the loop drive runs AFTER them (it declares a root, writes, proposes and
+    // admits — and /api/probe, the slow one, must not still be running once a root exists: see
+    // probeExtensionSurface).
     // ORDER MATTERS: everything that needs the server runs HERE, before `finally` kills it. The /live line
     // used to be probed AFTER this function returned — against a port nobody was listening on — and the
     // document said "closed without an HTTP response" about a server that answers 101. Found by probing
     // the line's own claim by hand (2026-09-20).
-    const liveUpgradeLine = await probeLiveUpgrade(port);
-    const surface = await probeExtensionSurface(port);
+    const [health, routes, liveUpgradeLine, surface] = await Promise.all([
+      fetch(`${base}/api/health`).then(async (r) => (r.ok ? await r.json() : { provider: "(no /api/health answer)", workspace: "?" })),
+      Promise.all(probes.map(async ([method, path, expect]) => {
+        const r = await fetch(`${base}${path}`, {
+          method,
+          ...(method === "POST" ? { body: JSON.stringify({ transcript: "list files" }), headers: { "content-type": "application/json" } } : {}),
+        });
+        return { method, path, status: r.status, matches_documented_expectation: r.status === expect };
+      })),
+      probeLiveUpgrade(port),
+      probeExtensionSurface(port),
+    ]);
     const loop = await driveLoop(port, dirs, token);
     return { health, routes, liveUpgradeLine, surface, loop };
   } catch (e) {
@@ -204,16 +279,22 @@ async function driveLoop(port, dirs, token) {
 /** The extension surface, asked over HTTP — including the host's act attempted from where the page stands. */
 async function probeExtensionSurface(port) {
   const base = `http://127.0.0.1:${port}`;
-  const inventory = await (await fetch(`${base}/api/extensions`)).json();
-  const catalogue = await (await fetch(`${base}/api/extensions/catalogue`)).json();
-  const admitAttempt = await fetch(`${base}/api/extensions/admit`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: "anything" }),
-  });
-  const admitNoToken = { status: admitAttempt.status, ...(await admitAttempt.json()) };
-  // The environment's self-report (GET /api/probe): the process runs tools/sandbox-probe.mjs on itself and
-  // caches the report in ITS workspace — the scratch one here, so a docs check never writes into the repo.
-  const probeRes = await fetch(`${base}/api/probe`);
-  const probe = { status: probeRes.status, ...(await probeRes.json()) };
+  // FOUR READS AT ONCE (voicebox-beads-qxy2). The inventory and the catalogue are reads; the token-less admit
+  // is refused (403) before it reaches anything that decides; /api/probe writes only its own cache (in the
+  // scratch workspace) and SKIPS its audit entry while no root is declared (`recordProbeAct` in server.mjs
+  // returns early without a loggable root). That last fact is why all four finish BEFORE driveLoop, which
+  // declares a root: a probe still running then would append an `activity` entry, with its own seq, to the
+  // very log the loop block counts — and /api/probe is the slow one (seconds; everything else is ms).
+  const [inventory, catalogue, admitNoToken, probe] = await Promise.all([
+    fetch(`${base}/api/extensions`).then((r) => r.json()),
+    fetch(`${base}/api/extensions/catalogue`).then((r) => r.json()),
+    fetch(`${base}/api/extensions/admit`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: "anything" }),
+    }).then(async (r) => ({ status: r.status, ...(await r.json()) })),
+    // The environment's self-report (GET /api/probe): the process runs tools/sandbox-probe.mjs on itself and
+    // caches the report in ITS workspace — the scratch one here, so a docs check never writes into the repo.
+    fetch(`${base}/api/probe`).then(async (r) => ({ status: r.status, ...(await r.json()) })),
+  ]);
   return {
     probe: { status: probe.status, ok: probe.ok, refused: probe.refused ?? null, sections: Object.keys(probe.probe ?? {}).filter((k) => !["probe", "when"].includes(k)) },
     inventoryKeys: Object.keys(inventory),
@@ -470,7 +551,10 @@ async function blocks() {
   const refusalEntries = (loop.audit.entries ?? []).slice(writeEntries.length);
   const linkedAttempt = writeEntries.some((e) => e.attempt != null);
 
-  if (process.env.DOCS_DEBUG) console.error("DEBUG live =", JSON.stringify(live), "| ROOT =", ROOT, "| tags =", JSON.stringify(tags));
+  // DOCS_DEBUG printed `live` — a variable c95e101 removed — so setting it crashed the check with a
+  // ReferenceError before anything was generated (found reaching for it in voicebox-beads-qxy2). It names
+  // what exists now: the captured live handshakes, and both roots.
+  if (process.env.DOCS_DEBUG) console.error("DEBUG handshakes =", JSON.stringify(handshakes), "| ROOT =", ROOT, "| DOCS_ROOT =", DOCS_ROOT, "| tags =", JSON.stringify(tags));
 
   return {
     providers: block("providers", [
@@ -650,11 +734,12 @@ const DOCS = [
   { rel: join("docs", "07-architecture.md"), blocks: ["providers", "routes", "page", "live-session", "loop", "tool-path", "tools", "config"] },
   { rel: join("docs", "08-how-it-runs.md"), blocks: [] },
 ];
-const generated = await blocks();
 
 /** Every backticked file path a document names must exist — the hand-written regions are the ones that rot. */
 function missingPaths(text) {
   const named = new Set([...text.matchAll(/`((?:[\w.-]+\/)+[\w-]+\.[a-z]+)`/g)].map((m) => m[1]));
+  // ROOT, not DOCS_ROOT (voicebox-beads-qxy2): a path a document names is a claim about the TREE, wherever
+  // the document itself was read from.
   return [...named].filter((p) => !existsSync(join(ROOT, p))).sort();
 }
 
@@ -670,71 +755,54 @@ function replaceBlock(text, name, body) {
   return { text: text.replace(re, body), found: true };
 }
 
-let drifted = [];
-let missing = [];
-for (const { rel, blocks: wanted } of DOCS) {
-  const p = join(ROOT, rel);
-  if (!existsSync(p)) { missing.push(rel); continue; }
-  let text = readFileSync(p, "utf8");
-  let changed = false;
-  for (const [name, body] of Object.entries(generated)) {
-    if (!wanted.includes(name)) continue;
-    const r = replaceBlock(text, name, body);
-    // A MISSING MARKER IS AN ERROR, not a skip. The first version `continue`d silently, which meant a
-    // document could carry no generated block at all and the check would call it current — a check that
-    // cannot fail, which is a description of the code rather than a check on it.
-    if (!r.found) {
-      console.error(`docs-check: ${rel} has no generated block named '${name}' — add the markers:`);
-      console.error(`  <!-- BEGIN GENERATED: ${name} --> … <!-- END GENERATED: ${name} -->   (the note after the name is added by --write)`);
-      process.exit(1);
-    }
-    if (process.env.DOCS_DEBUG) console.error(`DEBUG ${rel} block=${name} found=${r.found} changed=${r.text !== text} bodyLen=${String(body).length}`);
-    // THE FILE'S block, after the replacement — not the generated body, which is never empty. My first
-    // version of this guard watched the wrong side and passed while the document carried a blank block.
-    const after = text.slice(text.search(new RegExp(`<!-- BEGIN GENERATED: ${name}(?:[^>]*)?-->`)));
-    const inner = after.slice(after.indexOf("-->") + 3, after.indexOf(`<!-- END GENERATED: ${name} -->`));
-    // In WRITE mode a blank block is the thing being seeded — a new marker pair starts empty by
-    // definition, and refusing to fill it made every new block impossible to add (2026-09-20).
-    if (!WRITE && inner.trim() === "") {
-      console.error(`docs-check: the generated block '${name}' in ${rel} is EMPTY after the replace —`);
-      console.error("  a block that says nothing is not a block that says something, and this one is blank.");
-      process.exit(1);
-    }
-    if (String(body).includes("undefined")) {
-      console.error(`docs-check: the generated block '${name}' for ${rel} contains the word 'undefined' —`);
-      console.error("  that is a template that did not interpolate, and it reached a document once already (07-architecture.md:80).");
-      process.exit(1);
-    }
-    if (/\/(home|tmp|Users)\//.test(String(body))) {
-      console.error(`docs-check: the generated block '${name}' for ${rel} contains an absolute path — a committed document cannot carry one.`);
-      process.exit(1);
-    }
-    if (r.text !== text) { changed = true; text = r.text; }
-  }
-  const gone = missingPaths(text);
-  if (gone.length) {
-    console.error(`docs-check: ${rel} names files that do not exist in this tree — a renamed or deleted file left the prose behind:`);
-    for (const g of gone) console.error(`  - ${g}`);
-    process.exit(1);
-  }
-  const retired = retiredHits(text);
-  if (retired.length) {
-    console.error(`docs-check: ${rel} carries retired literals in its hand-written regions — these name things that no longer exist:`);
-    for (const r of retired) console.error(`  - ${r}`);
-    console.error("  a line that must name the mechanism marks itself: <!-- docs-check: names the mechanism -->");
-    process.exit(1);
-  }
-  if (!changed) continue;
-  if (WRITE) { writeFileSync(p, text); console.log(`  wrote ${rel}`); }
-  else drifted.push(rel);
+/**
+ * The text between a block's markers AS THE DOCUMENT CARRIES IT (the first occurrence) — the side the
+ * blank-block guard has to watch. One computing site for the full pass and the static pre-pass (qxy2).
+ */
+function blockInner(text, name) {
+  const after = text.slice(text.search(new RegExp(`<!-- BEGIN GENERATED: ${name}(?:[^>]*)?-->`)));
+  return after.slice(after.indexOf("-->") + 3, after.indexOf(`<!-- END GENERATED: ${name} -->`));
 }
 
-if (missing.length) {
-  console.error("docs-check: a document this check is responsible for is missing:");
-  for (const m of missing) console.error(`  - ${m}`);
+// ── the refusals, worded once ────────────────────────────────────────────────
+//
+// The static pre-pass and the full pass refuse for the same reasons, and a reason worded in two places is
+// two sentences that will drift apart — in the one script whose job is catching exactly that
+// (voicebox-beads-qxy2). Each entry returns the lines of ONE refusal: the full pass prints one and stops,
+// the pre-pass collects every one it finds. The words are the ones this script has always printed.
+const REFUSE = {
+  noMarker: (rel, name) => [
+    `docs-check: ${rel} has no generated block named '${name}' — add the markers:`,
+    `  <!-- BEGIN GENERATED: ${name} --> … <!-- END GENERATED: ${name} -->   (the note after the name is added by --write)`,
+  ],
+  emptyBlock: (rel, name) => [
+    `docs-check: the generated block '${name}' in ${rel} is EMPTY after the replace —`,
+    "  a block that says nothing is not a block that says something, and this one is blank.",
+  ],
+  missingPaths: (rel, gone) => [
+    `docs-check: ${rel} names files that do not exist in this tree — a renamed or deleted file left the prose behind:`,
+    ...gone.map((g) => `  - ${g}`),
+  ],
+  retired: (rel, hits) => [
+    `docs-check: ${rel} carries retired literals in its hand-written regions — these name things that no longer exist:`,
+    ...hits.map((r) => `  - ${r}`),
+    "  a line that must name the mechanism marks itself: <!-- docs-check: names the mechanism -->",
+  ],
+  missingDocs: (rels) => ["docs-check: a document this check is responsible for is missing:", ...rels.map((m) => `  - ${m}`)],
+  noClaimsFile: () => [`docs-check: ${relative(DOCS_ROOT, CLAIMS_FILE)} is missing — the hand-written claims pass has no policy to run.`],
+  claims: (failures) => [
+    `docs-check: FAILED — ${failures.length} hand-written claim(s) do not hold:`,
+    ...failures.map((f) => `  - ${f}`),
+    "",
+    "Hand-written claims are checked for EXISTENCE and RETIREMENT, not truth — docs/claims.json is the policy",
+    "and every entry carries its why. Fix the doc, or fix the claims file, and say which in the commit.",
+  ],
+};
+/** The full pass's way with a refusal: print it, stop. */
+function refuse(lines) {
+  console.error(lines.join("\n"));
   process.exit(1);
 }
-
 
 // ── the hand-written claims ──────────────────────────────────────────────────
 //
@@ -754,77 +822,182 @@ if (missing.length) {
 //   not lose. A denylist catches RETIREMENT, not ROT — f0b's own named limit, kept here so nobody
 //   mistakes the check for completeness. What neither pass can do is read a sentence for truth;
 //   the inventory printed below is the honest size of that gap.
+//
+// A FUNCTION since voicebox-beads-qxy2, because two callers need the same answer: the static pre-pass
+// (check mode, before any server) and the full pass (after the generated blocks — and in --write mode after
+// they are written, as it always ran). The policy is a document too, so it is read from DOCS_ROOT; every
+// path it judges is judged against ROOT.
 
-const CLAIMS_FILE = join(ROOT, "docs", "claims.json");
-if (!existsSync(CLAIMS_FILE)) {
-  console.error(`docs-check: ${relative(ROOT, CLAIMS_FILE)} is missing — the hand-written claims pass has no policy to run.`);
-  process.exit(1);
-}
-const claims = JSON.parse(readFileSync(CLAIMS_FILE, "utf8"));
-const pathIgnores = (claims.pathIgnorePrefixes ?? []).map((p) => p.prefix);
+const CLAIMS_FILE = docPath(join("docs", "claims.json"));
 
-// THE HAND-WRITTEN SET IS EVERY MARKDOWN DOCUMENT, not only the three the generated blocks live in.
-// The first version of this pass iterated the DOCS list and a mutation appended to an uncovered doc
-// stayed green — the exact "a check that watches part of the thing will report clean about the whole
-// of it" defect f0b was filed for, rebuilt by me in miniature. Path claims need no markers, so they
-// are checked everywhere markdown exists; evidence receipts are exempt as history (their paths
-// describe the tree as it was). Curated claims stay scoped to the documents their entries name.
-const HANDWRITTEN_DOCS = [
-  ...new Set([
-    ...DOCS.map((d) => d.rel),
-    ...readdirSync(join(ROOT, "docs"))
-      .filter((f) => f.endsWith(".md"))
-      .map((f) => join("docs", f)),
-    "README.md",
-  ]),
-].filter((rel) => existsSync(join(ROOT, rel)) && !pathIgnores.some((p) => rel.startsWith(p)));
+/** Both hand-written passes. Returns the refusal (null when every claim holds) and the counts the closing line reports. */
+function claimsPass() {
+  if (!existsSync(CLAIMS_FILE)) return { refusal: REFUSE.noClaimsFile(), pathClaimsChecked: 0, curatedClaims: 0 };
+  const claims = JSON.parse(readFileSync(CLAIMS_FILE, "utf8"));
+  const pathIgnores = (claims.pathIgnorePrefixes ?? []).map((p) => p.prefix);
 
-const claimFailures = [];
-let pathClaimsChecked = 0;
-for (const rel of HANDWRITTEN_DOCS) {
-  const text = readFileSync(join(ROOT, rel), "utf8");
-  const lines = text.split("\n");
-  lines.forEach((line, index) => {
-    for (const m of line.matchAll(/`([^`\n]+)`/g)) {
-      let token = m[1].trim();
-      token = token.replace(/:\d+$/, ""); // a :line suffix is an anchor; existence is checked, the line is not
-      token = token.replace(/[.,;]+$/, "");
-      if (!token.includes("/") || !/\.[a-z0-9]+$/i.test(token)) continue; // paths with an extension, not verbs or flags
-      if (/[\s<>*=]/.test(token)) continue; // globs (`catalogue/*.json`), shape placeholders (`<root>/…`), and command lines are not existence claims
-      if (/^(https?:|npm:|~|\.\.?\/|\/)/.test(token)) continue; // URLs, package specs, homes, site-absolute paths, and relative prose are outside this tree's claim
-      if (pathIgnores.some((p) => token.startsWith(p))) continue;
-      const allowed = (claims.allowPaths ?? []).some((a) => (a.doc === "*" || a.doc === rel) && a.path === token);
-      if (allowed) continue;
-      pathClaimsChecked++;
-      if (!existsSync(join(ROOT, token))) claimFailures.push(`${rel}:${index + 1} — backtick path \`${token}\` does not exist in this tree`);
-    }
-  });
-}
+  // THE HAND-WRITTEN SET IS EVERY MARKDOWN DOCUMENT, not only the three the generated blocks live in.
+  // The first version of this pass iterated the DOCS list and a mutation appended to an uncovered doc
+  // stayed green — the exact "a check that watches part of the thing will report clean about the whole
+  // of it" defect f0b was filed for, rebuilt by me in miniature. Path claims need no markers, so they
+  // are checked everywhere markdown exists; evidence receipts are exempt as history (their paths
+  // describe the tree as it was). Curated claims stay scoped to the documents their entries name.
+  const HANDWRITTEN_DOCS = [
+    ...new Set([
+      ...DOCS.map((d) => d.rel),
+      ...readdirSync(docPath("docs"))
+        .filter((f) => f.endsWith(".md"))
+        .map((f) => join("docs", f)),
+      "README.md",
+    ]),
+  ].filter((rel) => existsSync(docPath(rel)) && !pathIgnores.some((p) => rel.startsWith(p)));
 
-for (const f of claims.forbid ?? []) {
-  const targets = f.docs ?? DOCS.map((d) => d.rel);
-  for (const rel of targets) {
-    const lines = readFileSync(join(ROOT, rel), "utf8").split("\n");
-    lines.forEach((line, i) => {
-      if (line.includes(f.literal)) claimFailures.push(`${rel}:${i + 1} — FORBIDDEN literal "${f.literal}": ${f.why}`);
+  const claimFailures = [];
+  let pathClaimsChecked = 0;
+  for (const rel of HANDWRITTEN_DOCS) {
+    const text = readFileSync(docPath(rel), "utf8");
+    const lines = text.split("\n");
+    lines.forEach((line, index) => {
+      for (const m of line.matchAll(/`([^`\n]+)`/g)) {
+        let token = m[1].trim();
+        token = token.replace(/:\d+$/, ""); // a :line suffix is an anchor; existence is checked, the line is not
+        token = token.replace(/[.,;]+$/, "");
+        if (!token.includes("/") || !/\.[a-z0-9]+$/i.test(token)) continue; // paths with an extension, not verbs or flags
+        if (/[\s<>*=]/.test(token)) continue; // globs (`catalogue/*.json`), shape placeholders (`<root>/…`), and command lines are not existence claims
+        if (/^(https?:|npm:|~|\.\.?\/|\/)/.test(token)) continue; // URLs, package specs, homes, site-absolute paths, and relative prose are outside this tree's claim
+        if (pathIgnores.some((p) => token.startsWith(p))) continue;
+        const allowed = (claims.allowPaths ?? []).some((a) => (a.doc === "*" || a.doc === rel) && a.path === token);
+        if (allowed) continue;
+        pathClaimsChecked++;
+        if (!existsSync(join(ROOT, token))) claimFailures.push(`${rel}:${index + 1} — backtick path \`${token}\` does not exist in this tree`);
+      }
     });
+  }
+
+  // A forbid entry's document that is not there is NAMED, once, rather than read (which threw): the
+  // pre-pass runs these while a missing document is still only a finding, and a check that crashes on
+  // the second problem cannot report the first. `require` already worked this way.
+  const forbidTargetsMissing = new Set();
+  for (const f of claims.forbid ?? []) {
+    const targets = f.docs ?? DOCS.map((d) => d.rel);
+    for (const rel of targets) {
+      if (!existsSync(docPath(rel))) { forbidTargetsMissing.add(rel); continue; }
+      const lines = readFileSync(docPath(rel), "utf8").split("\n");
+      lines.forEach((line, i) => {
+        if (line.includes(f.literal)) claimFailures.push(`${rel}:${i + 1} — FORBIDDEN literal "${f.literal}": ${f.why}`);
+      });
+    }
+  }
+  for (const rel of forbidTargetsMissing) claimFailures.push(`${rel} — named by a forbid entry in claims.json but the document is missing`);
+
+  for (const r of claims.require ?? []) {
+    const p = docPath(r.doc);
+    if (!existsSync(p)) { claimFailures.push(`${r.doc} — required by claims.json but the document is missing`); continue; }
+    if (!readFileSync(p, "utf8").includes(r.contains)) claimFailures.push(`${r.doc} — REQUIRED literal "${r.contains}" is gone: ${r.why}`);
+  }
+
+  return {
+    refusal: claimFailures.length ? REFUSE.claims(claimFailures) : null,
+    pathClaimsChecked,
+    curatedClaims: (claims.forbid ?? []).length + (claims.require ?? []).length,
+  };
+}
+
+// ── the static pre-pass: the cheap half refuses first ────────────────────────
+//
+// Everything below reads the documents and the tree, and nothing needs the scratch server: whether each
+// document exists and carries its markers, whether a block is blank, whether a hand-written path names a
+// file that is gone, whether a retired literal is back, whether docs/claims.json holds. These used to run
+// only AFTER blocks() — after a server had booted and /api/probe had run, ~7s on 2026-09-28, most of a
+// unit-lane run — and each refused alone, so a document with three problems took three runs to learn them.
+// In check mode they now run FIRST, every one of them, and the run stops without booting anything.
+//
+// It is a SUBSET of the full pass, not a second opinion: the same predicates on the same documents,
+// worded by the same REFUSE lines, so it cannot refuse anything the full pass would have let through.
+// Two reads differ, deliberately. Paths are taken from the HAND-WRITTEN regions only here — the full pass
+// also reads the paths inside the regenerated blocks, which needs the blocks. And a line number here is the
+// document's own, the line a person opens, even when a block above it has drifted in length. When the
+// pre-pass is clean the full pass runs exactly as it always has — which is what keeps every refusal the
+// default invocation made before, including the ones only a live server can find.
+function staticRefusals() {
+  const refusals = [];
+  const missing = [];
+  for (const { rel, blocks: wanted } of DOCS) {
+    if (!existsSync(docPath(rel))) { missing.push(rel); continue; }
+    const text = readFileSync(docPath(rel), "utf8");
+    for (const name of wanted) {
+      if (!replaceBlock(text, name, "").found) refusals.push(REFUSE.noMarker(rel, name));
+      else if (blockInner(text, name).trim() === "") refusals.push(REFUSE.emptyBlock(rel, name));
+    }
+    const gone = missingPaths(stripGenerated(text));
+    if (gone.length) refusals.push(REFUSE.missingPaths(rel, gone));
+    const retired = retiredHits(text);
+    if (retired.length) refusals.push(REFUSE.retired(rel, retired));
+  }
+  if (missing.length) refusals.push(REFUSE.missingDocs(missing));
+  const { refusal } = claimsPass();
+  if (refusal) refusals.push(refusal);
+  return refusals;
+}
+
+if (!WRITE) {
+  const refusals = staticRefusals();
+  if (refusals.length) {
+    for (const lines of refusals) console.error(lines.join("\n"));
+    console.error("docs-check: generated blocks were not compared — fix the failures above, then re-run.");
+    process.exit(1);
   }
 }
 
-for (const r of claims.require ?? []) {
-  const p = join(ROOT, r.doc);
-  if (!existsSync(p)) { claimFailures.push(`${r.doc} — required by claims.json but the document is missing`); continue; }
-  if (!readFileSync(p, "utf8").includes(r.contains)) claimFailures.push(`${r.doc} — REQUIRED literal "${r.contains}" is gone: ${r.why}`);
+// ── the full pass: generate, compare (or write), and every check again ───────
+
+const generated = await blocks();
+
+let drifted = [];
+let missing = [];
+for (const { rel, blocks: wanted } of DOCS) {
+  const p = docPath(rel);
+  if (!existsSync(p)) { missing.push(rel); continue; }
+  let text = readFileSync(p, "utf8");
+  let changed = false;
+  for (const [name, body] of Object.entries(generated)) {
+    if (!wanted.includes(name)) continue;
+    const r = replaceBlock(text, name, body);
+    // A MISSING MARKER IS AN ERROR, not a skip. The first version `continue`d silently, which meant a
+    // document could carry no generated block at all and the check would call it current — a check that
+    // cannot fail, which is a description of the code rather than a check on it.
+    if (!r.found) refuse(REFUSE.noMarker(rel, name));
+    if (process.env.DOCS_DEBUG) console.error(`DEBUG ${rel} block=${name} found=${r.found} changed=${r.text !== text} bodyLen=${String(body).length}`);
+    // THE FILE'S block, after the replacement — not the generated body, which is never empty. My first
+    // version of this guard watched the wrong side and passed while the document carried a blank block.
+    const inner = blockInner(text, name);
+    // In WRITE mode a blank block is the thing being seeded — a new marker pair starts empty by
+    // definition, and refusing to fill it made every new block impossible to add (2026-09-20).
+    if (!WRITE && inner.trim() === "") refuse(REFUSE.emptyBlock(rel, name));
+    if (String(body).includes("undefined")) {
+      console.error(`docs-check: the generated block '${name}' for ${rel} contains the word 'undefined' —`);
+      console.error("  that is a template that did not interpolate, and it reached a document once already (07-architecture.md:80).");
+      process.exit(1);
+    }
+    if (/\/(home|tmp|Users)\//.test(String(body))) {
+      console.error(`docs-check: the generated block '${name}' for ${rel} contains an absolute path — a committed document cannot carry one.`);
+      process.exit(1);
+    }
+    if (r.text !== text) { changed = true; text = r.text; }
+  }
+  const gone = missingPaths(text);
+  if (gone.length) refuse(REFUSE.missingPaths(rel, gone));
+  const retired = retiredHits(text);
+  if (retired.length) refuse(REFUSE.retired(rel, retired));
+  if (!changed) continue;
+  if (WRITE) { writeFileSync(p, text); console.log(`  wrote ${rel}`); }
+  else drifted.push(rel);
 }
 
-if (claimFailures.length) {
-  console.error(`docs-check: FAILED — ${claimFailures.length} hand-written claim(s) do not hold:`);
-  for (const f of claimFailures) console.error(`  - ${f}`);
-  console.error("");
-  console.error("Hand-written claims are checked for EXISTENCE and RETIREMENT, not truth — docs/claims.json is the policy");
-  console.error("and every entry carries its why. Fix the doc, or fix the claims file, and say which in the commit.");
-  process.exit(1);
-}
+if (missing.length) refuse(REFUSE.missingDocs(missing));
+
+const claimed = claimsPass();
+if (claimed.refusal) refuse(claimed.refusal);
 
 if (drifted.length && !WRITE) {
   console.error("docs-check: FAILED — these documents no longer describe the code:");
@@ -832,10 +1005,12 @@ if (drifted.length && !WRITE) {
   console.error("");
   console.error("The system answers for itself: providers come from lib/resolver.mjs, routes from a live");
   console.error("server on a scratch port, the page's scripts from public/index.html. Fix the docs, or run:");
-  console.error("  node scripts/docs-check.mjs --write");
+  // The hint regenerates the documents that DRIFTED: from a --docs-root copy, a bare `--write` would
+  // rewrite the checkout's instead — the one tree the flag exists to leave alone (voicebox-beads-qxy2).
+  console.error(`  node scripts/docs-check.mjs --write${DOCS_ROOT === ROOT ? "" : ` --docs-root ${DOCS_ROOT}`}`);
   process.exit(1);
 }
 
 console.log(
-  `docs-check: ${WRITE ? "regenerated" : "OK"} — ${DOCS.reduce((n, d) => n + d.blocks.length, 0)} generated blocks across ${DOCS.length} documents, ${pathClaimsChecked} hand-written path claims and ${(claims.forbid ?? []).length + (claims.require ?? []).length} curated claims checked`,
+  `docs-check: ${WRITE ? "regenerated" : "OK"} — ${DOCS.reduce((n, d) => n + d.blocks.length, 0)} generated blocks across ${DOCS.length} documents, ${claimed.pathClaimsChecked} hand-written path claims and ${claimed.curatedClaims} curated claims checked`,
 );

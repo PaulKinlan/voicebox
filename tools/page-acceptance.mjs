@@ -109,12 +109,20 @@ const chromium = spawn(CHROME_BIN, [
 ], { stdio: ["ignore", "pipe", "pipe"] });
 
 let wsUrl = "";
+// THE ENDPOINT IS AN EVENT (voicebox-beads-9mqc): this was a 200ms re-check of `wsUrl`, so every run
+// paid up to 200ms (100 on average) after the browser had already printed its address. Now the wait
+// settles on the stderr chunk that carries it — or on the browser exiting, which the re-check sat out
+// for the full 10s. Same 10s bound, same FAIL line, same exit.
+let endpointSettled = () => {};
+const endpoint = new Promise((resolve) => { endpointSettled = resolve; });
 chromium.stderr.on("data", (d) => {
   const m = String(d).match(/ws:\/\/[^\s]+\/devtools\/browser\/[^\s]+/);
-  if (m && !wsUrl) wsUrl = m[0];
+  if (m && !wsUrl) { wsUrl = m[0]; endpointSettled(); }
 });
-const t0 = Date.now();
-while (!wsUrl && Date.now() - t0 < 10000) await sleep(200);
+chromium.on("exit", () => endpointSettled());
+const endpointBound = setTimeout(() => endpointSettled(), 10000);
+await endpoint;
+clearTimeout(endpointBound);
 if (!wsUrl) { console.log("FAIL  harness could not start a browser — is chromium present?"); chromium.kill(); process.exit(1); }
 
 const ws = new WebSocket(wsUrl);
@@ -141,7 +149,9 @@ ws.onmessage = (e) => {
 await new Promise((r) => (ws.onopen = r));
 const { targetId } = await send("Target.createTarget", { url: "about:blank" });
 const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
-for (const d of ["Runtime", "Log", "Page", "Network"]) await send(`${d}.enable`, {}, sessionId);
+// Sent together (voicebox-beads-9mqc): the session applies them in the order written either way, and
+// all four are answered before anything navigates — four round trips in series bought nothing.
+await Promise.all(["Runtime", "Log", "Page", "Network"].map((d) => send(`${d}.enable`, {}, sessionId)));
 const ev = async (expr) =>
   (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId))?.result?.value;
 
@@ -158,6 +168,9 @@ async function renderedPlainLanguage(group, vocabulary, label) {
   // The settings surface is on screen only when it is open, so open it: coverage that skips a whole
   // surface is coverage that reports green while the surface is unread (0ye's own lesson, one level up).
   await ev(`(() => { const d = document.getElementById("settings"); if (d && !d.open) { try { d.showModal(); } catch {} } return Boolean(d); })()`);
+  // KEPT (voicebox-beads-9mqc): showModal is synchronous, but the text inside the dialog comes from the
+  // page's own responses (the environment rows, for one), which may still be landing; this read is a
+  // coverage claim over that text, and no single signal says "the text is complete". The settle stays.
   await sleep(200);
   const text = String((await ev(READ_VISIBLE_TEXT)) ?? "");
   const hits = identifiersInRenderedText(text, vocabulary);
@@ -355,6 +368,9 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   // — a green line that covered nothing, which is the whole class this session keeps finding. A rendered
   // check that can report zero text is not a check, so zero text is a FAILURE here.
   await send("Page.navigate", { url: SHARED_UI }, sessionId);
+  // KEPT (voicebox-beads-9mqc): `load` is not the answer here — the file list and environment rows render
+  // from the page's own fetches, which `load` does not wait for, on a front shared with other lanes; the
+  // read below claims coverage of what rendered. Waiting for less would read less, so this settle stays.
   await sleep(1200);
   await renderedPlainLanguage("shared-front", sharedVocabulary, "the shared front, as served");
 
@@ -445,6 +461,10 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
 
   consoleMsgs = []; turnPosts = [];
   await send("Page.navigate", { url: SHARED_UI }, sessionId);
+  // KEPT (voicebox-beads-9mqc): not a settle but an OBSERVATION WINDOW. "Console clean on load" and "zero
+  // POST /api/turn on load" are claims that something did NOT happen, and a claim of absence is only as
+  // strong as the time it watched for; no event marks "nothing more will happen". Shortening this would
+  // weaken both checks, so it stays at 4s.
   await sleep(4000);
 
   report("shared-front", "console clean on load", consoleMsgs.length === 0,
@@ -503,8 +523,9 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   console.log(`── phase B: private instance ${PRIVATE_ORIGIN} (spawned by this run; killed at exit)`);
   // F3/F4 resolved by REUSE: tests/lib/server.mjs (vb-e1m0's helper, taken
   // verbatim into this landing) binds PORT=0, reads the real port off the
-  // server's own startup line, health-waits, and its stop() kills the whole
-  // process group — an EADDRINUSE can no longer hide, and nothing self-collides.
+  // server's own startup line (printed only once the socket is listening),
+  // and its stop() kills the whole process group and waits for it to exit —
+  // an EADDRINUSE can no longer hide, and nothing self-collides.
   const started = await startServer({ cwd: TREE });
   privateServer = started.child;
   privateStop = started.stop;
@@ -579,6 +600,10 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   consoleMsgs = []; turnPosts = [];
   pageOrigin = PRIVATE_ORIGIN;
   await send("Page.navigate", { url: `${PRIVATE_ORIGIN}/` }, sessionId);
+  // KEPT (voicebox-beads-9mqc): a settle AND an observation window. The list checks below read what the
+  // page rendered from its own fetches, and `turnPosts` counts from the navigation on, so these 3s are
+  // also the window in which a phantom turn on load would be counted by "exactly one POST" — the ONLY
+  // such window when phase A is skipped (the shared front down or flapping, which is common). It stays.
   await sleep(3000);
 
   const pApiFiles = (await (await fetch(`${PRIVATE_ORIGIN}/api/files`)).json()).files.sort();
@@ -672,6 +697,11 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
     true;
   `);
   let appeared = false;
+  // KEPT at 400ms (voicebox-beads-9mqc): the time this loop takes is also the only time in which a
+  // DUPLICATE POST would be counted by "exactly one POST /api/turn" below. Measured over 10 timed runs,
+  // that is ~5ms when the file is there on the first fetch (8 runs) and ~400ms when it is not (2 runs);
+  // a finer step would narrow the window in exactly the slow case, so it is not shortened here (the
+  // price of keeping it: up to ~300ms in a run where the first fetch misses).
   for (let i = 0; i < 20 && !appeared; i++) {
     appeared = (await (await fetch(`${PRIVATE_ORIGIN}/api/files`)).json()).files.includes(NAME);
     if (!appeared) await sleep(400);
@@ -685,9 +715,12 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   const typedTurns = turnPosts.filter((p) => p.origin === PRIVATE_ORIGIN).length - (turnPosts.filter((p) => p.origin === PRIVATE_ORIGIN && p.body?.includes("should-refuse")).length);
   report("private", "a typed turn produces exactly one POST /api/turn", typedTurns === 1, `${typedTurns} posts`);
   let pageShowsIt = false;
-  for (let i = 0; i < 15 && !pageShowsIt; i++) {
+  // Every 100ms for the same 6s bound (60 x 100, was 15 x 400 — voicebox-beads-9mqc): a positive
+  // condition, and nothing is counted while it is polled, so a finer step only stops paying up to 400ms
+  // after the list has refreshed (measured, 3 interleaved pairs: 403-404ms before, 102-106ms after).
+  for (let i = 0; i < 60 && !pageShowsIt; i++) {
     pageShowsIt = (await ev(`[...document.querySelectorAll('.file-name')].some(e => e.textContent === ${JSON.stringify(NAME)})`)) === true;
-    if (!pageShowsIt) await sleep(400);
+    if (!pageShowsIt) await sleep(100);
   }
   report("private", "the page's list shows the new file", pageShowsIt, pageShowsIt ? "" : "the list never refreshed to include it");
 
@@ -698,6 +731,9 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
     document.getElementById('send').click();
     true;
   `);
+  // KEPT (voicebox-beads-9mqc): "nothing lands outside the declared root" is a claim of ABSENCE, so this
+  // is its observation window, not a settle. Waiting for the turn's response instead would end the watch
+  // exactly when a server that wrote late — after answering — would be doing the damage.
   await sleep(1500);
   const evilOutside = existsSync(path.join(path.dirname(scratchRoot), "evil.sh"));
   const stillListed = (await (await fetch(`${PRIVATE_ORIGIN}/api/files`)).json()).files.includes("../evil.sh");

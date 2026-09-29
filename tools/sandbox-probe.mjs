@@ -17,6 +17,11 @@
  *  - Sandbox KIND is a hint list, never a conclusion: the evidence that
  *    would distinguish bubblewrap / container / systemd unit / bare host is
  *    reported and the reader decides.
+ *  - Independent checks run TOGETHER, each on its own deadline, so a report
+ *    costs its slowest check rather than the sum of them — and every result
+ *    still means what it meant one at a time: its `ms` is its own attempt's,
+ *    timed from its own start (so it can carry a few ms of waiting behind its
+ *    neighbours), its timeout its own deadline passing (voicebox-beads-4wez).
  *
  * Zero dependencies. `node sandbox-probe.mjs` — JSON on stdout, pretty
  * with SANDBOX_PROBE_PRETTY=1. The fence host may append its owned loopback
@@ -211,44 +216,90 @@ function filesystem() {
   };
 }
 
+/** How many `<bin> --version` children may be in flight at once — BOUNDED on purpose
+ *  (voicebox-beads-4wez). This probe runs inside the fences and units it measures
+ *  (lib/fence-provider.mjs, lib/unit-fence-provider.mjs, the bwrap path in lib/pi-acp.mjs),
+ *  where a process limit (RLIMIT_NPROC, a unit's TasksMax, a container's pids.max) can be
+ *  low; a spawn refused with EAGAIN because the probe fanned out too wide would read as a
+ *  tool that is absent — a measurement the probe invented about itself. Eight keeps the
+ *  section near the cost of its slowest few binaries without starting all of them at once. */
+const TOOL_SPAWN_WIDTH = 8;
+
+/** Map `items` through `fn` with at most `width` calls in flight. Results come back in
+ *  INPUT order whatever order they finish in. `fn` must not throw — every caller here
+ *  returns its failure as data. */
+async function mapBounded(items, width, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  const lane = async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, lane));
+  return results;
+}
+
 async function tools() {
   const wanted = [
     "sh", "bash", "node", "python3", "pip", "deno", "bun", "git", "curl", "wget",
     "ssh", "gcc", "cc", "make", "docker", "podman", "bwrap", "systemctl",
     "ps", "ls", "cat", "cp", "mv", "rm", "sudo", "su", "mount", "iptables", "nft",
   ];
+  // Each child keeps its own 5s timeout, started when IT spawns — waiting for a free lane
+  // never spends a tool's budget. The object is built in `wanted` order, not finish order,
+  // so the key order readers see (the runtime axis lists these keys) stays stable.
+  const answers = await mapBounded(wanted, TOOL_SPAWN_WIDTH, (bin) => softly(bin, ["--version"], { maxChars: 80 }));
   const found = {};
-  for (const bin of wanted) found[bin] = await softly(bin, ["--version"], { maxChars: 80 });
+  wanted.forEach((bin, i) => { found[bin] = answers[i]; });
   return found;
 }
 
 async function network() {
   const [witnessPort, marker] = process.argv.slice(2);
-  let parentLoopback;
+  // TOGETHER, NOT IN TURN (voicebox-beads-4wez): each attempt below owns its socket and its
+  // deadline, and none reads another's answer — so all of them are dialled at once and the
+  // section costs its slowest attempt, not the sum (it was 4–5.5s of serial waits, 4s of them
+  // on a dead address). Each field is the object it was when they ran one after another.
+  let parentWitness; // no witness named → nothing attempted, and `parentLoopback` stays undefined
   if (witnessPort !== undefined || marker !== undefined) {
     const valid = /^\d+$/.test(witnessPort ?? "") && Number(witnessPort) > 0 && Number(witnessPort) <= 65535
       && /^[a-f0-9]{32}$/.test(marker ?? "");
-    parentLoopback = valid
-      ? { ...await tcpConnect("127.0.0.1", Number(witnessPort), 1500, marker), endpoint: `127.0.0.1:${witnessPort}`, method: "exact parent marker through EOF" }
+    parentWitness = valid
+      ? tcpConnect("127.0.0.1", Number(witnessPort), 1500, marker)
+        .then((r) => ({ ...r, endpoint: `127.0.0.1:${witnessPort}`, method: "exact parent marker through EOF" }))
       : { error: "invalid parent witness arguments — no connection attempted" };
   }
-  const loopback = await tcpConnect("127.0.0.1", 1, 1500).then((r) => ({
-    reachable: r.ok || r.error === "ECONNREFUSED",
-    note: r.ok ? "connected (something listens on port 1)" : r.error === "ECONNREFUSED" ? "ECONNREFUSED — loopback UP, nothing on port 1 (normal)" : r.error,
-  }));
-  // DNS: resolve a name that must exist. Failure here is egress facts, not
-  // necessarily a rule — a sandbox with no resolver reads differently from
-  // one with a dropped socket.
-  let dnsResult;
-  try {
-    const addresses = await dns.resolve("example.com");
-    dnsResult = { value: `resolved via ${addresses[0]}` };
-  } catch (err) {
-    dnsResult = { error: `${err.code ?? err.message}` };
-  }
-  const outbound443 = await tcpConnect("93.184.216.34", 443, 4000); // example.com, IP literal: no DNS in the path
-  const outbound80 = await tcpConnect("example.com", 80, 4000);
-  const privateRange = await tcpConnect("169.254.169.254", 80, 1500); // cloud metadata: interesting either way
+  const [parentLoopback, loopback, dnsResult, outbound443, outbound80, privateRange] = await Promise.all([
+    parentWitness,
+    tcpConnect("127.0.0.1", 1, 1500).then((r) => ({
+      reachable: r.ok || r.error === "ECONNREFUSED",
+      note: r.ok ? "connected (something listens on port 1)" : r.error === "ECONNREFUSED" ? "ECONNREFUSED — loopback UP, nothing on port 1 (normal)" : r.error,
+    })),
+    // DNS: resolve a name that must exist. Failure here is egress facts, not
+    // necessarily a rule — a sandbox with no resolver reads differently from
+    // one with a dropped socket.
+    (async () => {
+      try {
+        const addresses = await dns.resolve("example.com");
+        return { value: `resolved via ${addresses[0]}` };
+      } catch (err) {
+        return { error: `${err.code ?? err.message}` };
+      }
+    })(),
+    // IP literal: NO DNS in the path, so this is the control beside the by-name check below —
+    // a closed route and a missing resolver read differently. 1.1.1.1 is Cloudflare's published
+    // public-resolver address: anycast, and it accepts TCP on 443 (DNS-over-HTTPS). It replaced
+    // 93.184.216.34 (voicebox-beads-4wez), example.com's retired Edgecast address: example.com
+    // moved to Cloudflare, the old literal stopped answering, and this field read "timed out after
+    // 4000ms" — no egress — on machines that had egress, while the by-name check to example.com
+    // connected in tens of milliseconds in the same report. The 4s deadline stays: a timeout is
+    // "no egress".
+    tcpConnect("1.1.1.1", 443, 4000),
+    tcpConnect("example.com", 80, 4000),
+    tcpConnect("169.254.169.254", 80, 1500), // cloud metadata: interesting either way
+  ]);
   const interfaces = os.networkInterfaces();
   return {
     parentLoopback,
@@ -290,8 +341,20 @@ export async function runProbe() {
     limits: limits(),
   };
 
-  report.tools = await tools();
-  report.network = await network();
+  // The two slow sections share nothing — children on one side, sockets on the other — so they
+  // run at the same time (voicebox-beads-4wez), after the synchronous sections above have taken
+  // their moment (limits' free memory and load are read BEFORE any child starts, as before).
+  // tools() is called first because its first wave of spawns is synchronous: every network
+  // attempt stamps its start after that wave, so no attempt's `ms` carries that fan-out. A later
+  // spawn (a lane refilling as a child exits) does hold the one event loop for a moment, so an
+  // attempt settling behind it reads a little longer: measured on a loaded Mac, the parent
+  // witness that reads ~1ms alone read ~5ms beside its sibling dials and ~17ms (median) with the
+  // children beside it too. Verdicts are taken on `ok`/`error`, never on `ms` — core/tier-table.ts
+  // quotes it, lib/fence-provider.mjs carries it. Assigned in this order, so the report's keys
+  // read tools-then-network exactly as they always have.
+  const [found, reach] = await Promise.all([tools(), network()]);
+  report.tools = found;
+  report.network = reach;
   return report;
 }
 

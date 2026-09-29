@@ -45,6 +45,18 @@ test("GET /api/probe returns an OBSERVED report (identity, tools, network), with
   assert.ok(probe.identity?.platform, "the report observed the platform it ran on");
   assert.ok(probe.tools && typeof probe.tools === "object", "the report lists tools as data");
   assert.ok(probe.network && typeof probe.network === "object", "the report lists the network axes as data");
+  // The outbound fields arrive in the shape their readers take them in (core/tier-table.ts
+  // OUTBOUND_FIELDS, lib/fence-provider.mjs measureBoundary) — whatever this machine's egress is.
+  // Since the attempts run together (voicebox-beads-4wez), each `ms` must still be that attempt's
+  // own, and a failure must still name its error rather than read as a bare false.
+  for (const field of ["outboundTcp443IpLiteral", "outboundTcp80ByName", "cloudMetadataService"]) {
+    const m = probe.network[field];
+    assert.equal(typeof m?.ok, "boolean", `network.${field}.ok is a measured boolean`);
+    assert.ok(Number.isInteger(m.ms) && m.ms >= 0, `network.${field}.ms is a duration, got ${m.ms}`);
+    if (!m.ok) assert.equal(typeof m.error, "string", `network.${field} failed, so it names the error`);
+  }
+  assert.equal(typeof probe.network.loopback?.reachable, "boolean", "loopback reads reachable or not");
+  assert.ok(typeof probe.network.dns?.value === "string" || typeof probe.network.dns?.error === "string", "dns is a value or a named error");
   // Cached with its when: a second read does not re-run the probe.
   const again = await (await fetch(`${BASE}/api/probe`)).json();
   assert.equal(again.cached, true, "a repeat read serves the cached report rather than re-running code");

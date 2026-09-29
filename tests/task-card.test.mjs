@@ -25,7 +25,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ACP_AGENT } from "../lib/acp-client.mjs";
-import { setTimeout as sleep } from "node:timers/promises";
 import { startServer } from "./lib/server.mjs";
 import { launch } from "./lib/cdp.mjs";
 import {
@@ -168,6 +167,24 @@ test("task-card browser: card renders each state and cancel works from the card 
     // Helper to evaluate in page
     const evaluate = (fn, ...args) => page.evaluate(fn, ...args);
 
+    // WAITS FOR WHAT EACH STEP DID, where a 200ms (once 300ms) sleep followed every step (voicebox-beads-g667).
+    // The card draws synchronously (browser/task-card.ts: setTask → update → renderTaskCard), so most of these
+    // hold on the first look; they stay bounded waits so a render that moves off the call stack is waited for
+    // rather than read half-way, and a miss names the step.
+    //   · every task below has its own address, so the title naming it is THIS render, not the last one;
+    const cardShows = (address) => page.waitFor((a) => document.querySelector("#task-card-title")?.textContent === `Task: ${a}`,
+      { label: `the card to draw ${address}`, args: [address] });
+    //   · a cancel click writes "Cancel requested…" at once and the reply's own words when the client answers,
+    //     so the feedback moving off it means the reply was drawn — whichever reply it was;
+    const cancelAnswered = () => page.waitFor(() => {
+      const said = document.querySelector("#task-action-feedback")?.textContent ?? "";
+      return said !== "" && said !== "Cancel requested…";
+    }, { label: "the card's cancel to be answered" });
+    //   · clearing empties the card in the same call that hides it (update: hidden + replaceChildren), so the
+    //     emptied card is the step done, and whether it is HIDDEN stays the assertion's question.
+    const cardCleared = () => page.waitFor(() => document.querySelector("#task-card")?.childElementCount === 0,
+      { label: "the card to be cleared" });
+
     // 1. QUEUED STATE
     await evaluate(() => {
       window.__voiceboxTaskCard.setTask({
@@ -180,7 +197,7 @@ test("task-card browser: card renders each state and cancel works from the card 
         updatedAt: new Date().toISOString(),
       });
     });
-    await sleep(200);
+    await cardShows("task_test_queued_123");
 
     const sQueued = await evaluate(() => {
       const card = document.querySelector("#task-card");
@@ -218,7 +235,7 @@ test("task-card browser: card renders each state and cancel works from the card 
         updatedAt: new Date().toISOString(),
       });
     });
-    await sleep(200);
+    await cardShows("task_test_running_123");
 
     const sRunning = await evaluate(() => {
       const card = document.querySelector("#task-card");
@@ -238,7 +255,7 @@ test("task-card browser: card renders each state and cancel works from the card 
     await evaluate(() => {
       document.querySelector("#task-cancel-btn")?.click();
     });
-    await sleep(200);
+    await cancelAnswered();
 
     const sCancelRefusal = await evaluate(() => {
       const feedback = document.querySelector("#task-action-feedback")?.textContent;
@@ -269,7 +286,7 @@ test("task-card browser: card renders each state and cancel works from the card 
       // Click cancel button on card alone:
       document.querySelector("#task-cancel-btn")?.click();
     });
-    await sleep(200);
+    await cancelAnswered();
 
     const sObservedCancel = await evaluate(() => {
       const stateBadge = document.querySelector("#task-card-state-badge")?.textContent;
@@ -304,7 +321,7 @@ test("task-card browser: card renders each state and cancel works from the card 
       // Click cancel button on card alone:
       document.querySelector("#task-cancel-btn")?.click();
     });
-    await sleep(200);
+    await cancelAnswered();
 
     const sUnconfirmedCancel = await evaluate(() => {
       const stateBadge = document.querySelector("#task-card-state-badge")?.textContent;
@@ -329,7 +346,7 @@ test("task-card browser: card renders each state and cancel works from the card 
         updatedAt: new Date().toISOString(),
       });
     });
-    await sleep(200);
+    await cardShows("task_test_cancelled_123");
 
     const sCancelled = await evaluate(() => {
       const card = document.querySelector("#task-card");
@@ -358,7 +375,7 @@ test("task-card browser: card renders each state and cancel works from the card 
         updatedAt: new Date().toISOString(),
       });
     });
-    await sleep(200);
+    await cardShows("task_test_unconfirmed_123");
 
     const sUnconfirmed = await evaluate(() => {
       const card = document.querySelector("#task-card");
@@ -385,7 +402,7 @@ test("task-card browser: card renders each state and cancel works from the card 
         updatedAt: new Date().toISOString(),
       });
     });
-    await sleep(200);
+    await cardShows("task_test_completed_123");
 
     const sCompleted = await evaluate(() => {
       const card = document.querySelector("#task-card");
@@ -416,7 +433,7 @@ test("task-card browser: card renders each state and cancel works from the card 
     await evaluate(() => {
       document.querySelector("#task-dismiss-btn")?.click();
     });
-    await sleep(200);
+    await cardCleared();
     const sDismissed = await evaluate(() => document.querySelector("#task-card")?.hidden);
     assert.equal(sDismissed, true, "clicking dismiss button must hide the card");
 
@@ -434,7 +451,7 @@ test("task-card browser: card renders each state and cancel works from the card 
         updatedAt: new Date().toISOString(),
       });
     });
-    await sleep(200);
+    await cardShows("task_test_failed_123");
 
     const sFailed = await evaluate(() => {
       const card = document.querySelector("#task-card");
@@ -463,7 +480,7 @@ test("task-card browser: card renders each state and cancel works from the card 
         updatedAt: new Date().toISOString(),
       });
     });
-    await sleep(200);
+    await cardShows("task_test_interrupted_123");
 
     const sInterrupted = await evaluate(() => {
       const card = document.querySelector("#task-card");
@@ -490,7 +507,7 @@ test("task-card browser: card renders each state and cancel works from the card 
         updatedAt: tenSecsAgo,
       });
     });
-    await sleep(200);
+    await cardShows("task_test_silent_123");
 
     const sSilent = await evaluate(() => {
       const card = document.querySelector("#task-card");
@@ -513,7 +530,7 @@ test("task-card browser: card renders each state and cancel works from the card 
         updatedAt: new Date().toISOString(),
       }, { stale: true });
     });
-    await sleep(200);
+    await cardShows("task_test_stale_123");
 
     const sStale = await evaluate(() => {
       const card = document.querySelector("#task-card");
@@ -542,7 +559,10 @@ test("task-card browser: card renders each state and cancel works from the card 
         form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       }
     });
-    await sleep(300);
+    // Where a 300ms sleep was (voicebox-beads-g667): the command ends in finish(), which sets the report and
+    // then logs the turn — so the turn in the session log means the report below is the command's answer.
+    await page.waitFor(() => (document.querySelector("#session-log li .said")?.textContent ?? "").includes("status task_test_stale_123"),
+      { label: "the status command's turn to be logged" });
 
     const turnReport = await evaluate(() => document.querySelector("#turn-report")?.textContent);
     assert.match(turnReport ?? "", /checked task status/);
@@ -552,7 +572,7 @@ test("task-card browser: card renders each state and cancel works from the card 
     await evaluate(() => {
       window.__voiceboxTaskCard.setTask(null);
     });
-    await sleep(200);
+    await cardCleared();
     const beforeLive = await evaluate(() => document.querySelector("#task-card")?.hidden);
     assert.equal(beforeLive, true, "card must start hidden");
 
@@ -569,7 +589,7 @@ test("task-card browser: card renders each state and cancel works from the card 
         updatedAt: new Date().toISOString(),
       });
     });
-    await sleep(200);
+    await cardShows("task_dynamic_live_789");
 
     const afterLive = await evaluate(() => {
       const card = document.querySelector("#task-card");

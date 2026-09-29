@@ -4,7 +4,7 @@
 // Zero dependencies: node:http for the server, node:fs for the workspace.
 // The resolver is a provider seam (lib/resolver.mjs) — swap it, don't rewrite the server.
 import { createServer } from "node:http";
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { readdir as readdirAsync, readFile as readFileAsync, stat as statAsync } from "node:fs/promises";
 import { promisify } from "node:util";
@@ -1400,30 +1400,65 @@ const json = (res, code, body) => {
 // nothing about the server's. Vite reloads the page on every edit; this process
 // never does. So the server is the half that goes stale, and it is the half that
 // was invisible. It now names itself, at startup, in its own health response.
-const git = (args, fallback) => {
+//
+// ASKED AT STARTUP, ANSWERED OFF THE BOOT PATH (voicebox-beads-4oj6, 2026-09-28). These five `git`
+// questions used to run SYNCHRONOUSLY at module load — ~150-190ms of every boot, measured, in a file the
+// test suite boots about a hundred times a run. They are now asked through the async execFile, the three
+// independent ones in parallel (`remote` needs the branch, `ahead` needs `remote`), started once, right
+// after the startup banner (see the bind at the bottom of this file); BOTH readers — GET /api/health and
+// the page's build stamp — await the ONE memoized answer, so each reports exactly what it reported
+// before. Two things are deliberately NOT lazy, because laziness would bring the incident above back:
+//   · the questions are asked at startup, not on first read. A first-read answer would name whatever
+//     the tree says when somebody first asks — hours later, on a long-running server — which is the
+//     stale-server lie this block exists to expose;
+//   · `startedAt` is stamped here, synchronously, at module load: when the process started, not when
+//     somebody first asked.
+const BUILD_STARTED_AT = new Date().toISOString();
+const gitAnswer = async (args, fallback) => {
   try {
-    return execFileSync("git", args, { cwd: ROOT, encoding: "utf8" }).trim() || fallback;
+    const { stdout } = await execFileAsync("git", args, { cwd: ROOT, encoding: "utf8" });
+    return stdout.trim() || fallback;
   } catch {
     return fallback;
   }
 };
-const BUILD = (() => {
-  const branch = git(["branch", "--show-current"], "(detached)");
-  // --quiet --verify: the IDIOMATIC existence test for a ref. Without them, `git rev-parse` prints
-  // "fatal: Needed a single revision" to stderr on EVERY call in a worktree whose branch has no upstream
-  // — which is every lane worktree before its first push, so the line appeared in server logs and in a
-  // test's captured stderr next to unrelated failures (voicebox-beads-8js). Same result, no noise: exit 1
-  // and empty stderr when the ref is absent, which the default below already handles.
-  const remote = git(["rev-parse", "--quiet", "--verify", "--short", `origin/${branch}`], "");
-  return {
-    branch,
-    commit: git(["rev-parse", "--short", "HEAD"], "unknown"),
-    remote: remote || null,
-    ahead: remote ? Number(git(["rev-list", "--count", `origin/${branch}..HEAD`], "0")) : null,
-    dirty: git(["status", "--porcelain", "--untracked-files=no"], "") !== "",
-    startedAt: new Date().toISOString(),
-  };
-})();
+let buildAnswer = null;
+/** This process's revision: one memoized promise, started once and never recomputed. It never
+ *  rejects — every question has a fallback — so a reader can always await it. */
+function buildIdentity() {
+  buildAnswer ??= (async () => {
+    const branchAsked = gitAnswer(["branch", "--show-current"], "(detached)");
+    const commitAsked = gitAnswer(["rev-parse", "--short", "HEAD"], "unknown");
+    // --no-optional-locks, because this `status` now runs while the process is live and killable (the
+    // test helper SIGKILLs the whole process group): a plain `git status` takes index.lock while it
+    // works, opportunistically, so it can write its index refresh back — one killed mid-run leaves the
+    // lock behind, and every command that writes the index in that worktree then refuses ("index.lock:
+    // File exists"); a live one can collide with somebody's `git commit` in the same tree. Git's own
+    // name for this is an optional lock, and its documented use is a background reader like this one.
+    // The question needs no write, and the answer — tracked changes only — is unchanged
+    // (voicebox-beads-4oj6).
+    const dirtyAsked = gitAnswer(["--no-optional-locks", "status", "--porcelain", "--untracked-files=no"], "");
+    const branch = await branchAsked;
+    // --quiet --verify: the IDIOMATIC existence test for a ref. Without them, `git rev-parse` prints
+    // "fatal: Needed a single revision" to stderr on EVERY call in a worktree whose branch has no upstream
+    // — which is every lane worktree before its first push, so the line appeared in server logs and in a
+    // test's captured stderr next to unrelated failures (voicebox-beads-8js). Same result, no noise: exit 1
+    // and empty stderr when the ref is absent, which the default below already handles. (The async
+    // execFile also captures a child's stderr instead of inheriting it, so nothing could reach the log now
+    // anyway; the flags stay because they are the right question to ask.)
+    const remote = await gitAnswer(["rev-parse", "--quiet", "--verify", "--short", `origin/${branch}`], "");
+    const ahead = remote ? Number(await gitAnswer(["rev-list", "--count", `origin/${branch}..HEAD`], "0")) : null;
+    return {
+      branch,
+      commit: await commitAsked,
+      remote: remote || null,
+      ahead,
+      dirty: (await dirtyAsked) !== "",
+      startedAt: BUILD_STARTED_AT,
+    };
+  })();
+  return buildAnswer;
+}
 
 // Normalising is not checking: `resolve` collapses `..`, then the answer is
 // yes-or-no — is the candidate inside the workspace? (chrome-agent-platform-0j1a
@@ -2595,20 +2630,26 @@ const routes = {
     res.writeHead(200, { "content-type": "application/json" });
     res.end();
   },
-  "GET /api/health": (req, res, url) => json(res, 200, {
-    ok: true,
+  "GET /api/health": async (req, res, url) => {
+    // Every field but `build` is read the moment the request arrives, as it always was; `build` is the
+    // ONE memoized answer (voicebox-beads-4oj6) — settled on any request that comes more than a moment
+    // after the bind, and awaited, never recomputed, by one that comes sooner. Same keys, same order.
+    const health = {
+      ok: true,
       // `created` is the count the live-auth tests assert on: a refusal that still created a session is
       // the defect this number exists to catch (a refusal is not proof that nothing was spent).
       live: { created: liveSessionsCreated, running: Boolean(runningSession) },
-    provider: PROVIDER,
-    // There is no default root to report; `declared` says whether one exists at all.
-    declared: Boolean(active),
-    root: active ? active.root : null,
-    project: active ? active.project : null,
-    refused: active ? null : ROOT_NOT_DECLARED,
-    why: active ? null : noRootDeclared().why,
-    build: BUILD,
-  }),
+      provider: PROVIDER,
+      // There is no default root to report; `declared` says whether one exists at all.
+      declared: Boolean(active),
+      root: active ? active.root : null,
+      project: active ? active.project : null,
+      refused: active ? null : ROOT_NOT_DECLARED,
+      why: active ? null : noRootDeclared().why,
+    };
+    health.build = await buildIdentity();
+    return json(res, 200, health);
+  },
   // THE SEAM, read side: which root is the loop writing into, and may this process act on it?
   "GET /api/root": (req, res, url) => {
     if (!active) {
@@ -2633,7 +2674,7 @@ const routes = {
       declaredAt: active.declaredAt,
     });
   },
-  "GET /": (req, res, url) => {
+  "GET /": async (req, res, url) => {
     // THE BOOTSTRAP DOOR (docs/13 §4, opt-in): a valid one-time ticket is exchanged for the
     // session cookie on this very response, so the page the person asked for is the page they
     // get — no second navigation. An invalid or already-consumed ticket is a NAMED refusal with
@@ -2650,13 +2691,17 @@ const routes = {
       }
       bootstrapHeaders["set-cookie"] = `${SESSION_COOKIE}=${LOOPBACK_SESSION}; HttpOnly; SameSite=Strict; Path=/`;
     }
+    // The stamp names THIS process's revision: the one memoized answer taken at startup
+    // (voicebox-beads-4oj6), awaited BEFORE the head is written so a page is never sent half-stamped.
+    // The ticket above is consumed before this await, so one ticket still opens exactly one session.
+    const build = await buildIdentity();
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", ...bootstrapHeaders });
-    const where = BUILD.ahead === null
-      ? ` · no origin/${BUILD.branch} here, so the distance from a remote is unknown`
-      : BUILD.ahead === 0
+    const where = build.ahead === null
+      ? ` · no origin/${build.branch} here, so the distance from a remote is unknown`
+      : build.ahead === 0
       ? ""
-      : ` · ${BUILD.ahead} commit${BUILD.ahead === 1 ? "" : "s"} ahead of origin/${BUILD.branch} (not landed)`;
-    const stamp = `${BUILD.branch} @ ${BUILD.commit}${where}${BUILD.dirty ? " · uncommitted changes" : ""}`;
+      : ` · ${build.ahead} commit${build.ahead === 1 ? "" : "s"} ahead of origin/${build.branch} (not landed)`;
+    const stamp = `${build.branch} @ ${build.commit}${where}${build.dirty ? " · uncommitted changes" : ""}`;
     const html = readFileSync(path.join(PUBLIC, "index.html"), "utf8")
       .replace("__VOICEBOX_BUILD_STAMP__", stamp)
       .replace("__VOICEBOX_SESSION_TOKEN__", ROOM_SESSION_TOKEN);
@@ -2696,8 +2741,10 @@ async function handle(req, res) {
   // THE WALL (opt-in, docs/13 §4): with the gate on, an unauthenticated request gets a named
   // refusal and a remedy, before any route — including the static fallthrough below — answers.
   // Self-authorising exemptions, each with its reason named:
-  //   · /api/health — the spawn-and-wait harness, supervisors and the currency gate heartbeat
-  //     read it before any session exists; it reports no root, no file and no credential.
+  //   · /api/health — supervisors, the currency gate heartbeat and the suites that spawn a server and
+  //     wait on it (tests/server-bind-resilience.test.mjs) read it before any session exists; it
+  //     reports no root, no file and no credential. (The shared tests/lib/server.mjs harness no
+  //     longer polls it — its readiness is the startup banner, voicebox-beads-4oj6.)
   //   · POST /api/bootstrap — it IS the authority check (host token) and the re-entry door.
   //   · the page carrying ?bootstrap= — the route itself validates and consumes the ticket.
   // The WebSocket upgrades (/channel, /live) do not pass through here: their local-page
@@ -4257,6 +4304,12 @@ try {
   );
   process.exit(1);
 }
+
+// WHICH REVISION THIS SERVER IS gets asked NOW, and not before (voicebox-beads-4oj6): after the banner,
+// so no git subprocess stands between spawn and a bound, announced socket; and at startup rather than on
+// first read, so the answer is the revision this process started on. Both readers await this one answer
+// (buildIdentity(), above the routes).
+void buildIdentity();
 
 // AND THE OUTGOING PROCESS LETS GO. A supervisor restarts by signalling the child; exiting on the
 // signal releases the socket immediately, instead of leaving the next process to collide with a

@@ -25,23 +25,51 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { startServer } from "./lib/server.mjs";
 import { launch } from "./lib/cdp.mjs";
-import { setTimeout as sleep } from "node:timers/promises";
 
 let server;
 test.before(async () => { server = await startServer({ env: { VOICEBOX_INSTANCE: "pip-styling" } }); });
 test.after(async () => { await server?.stop?.(); });
+
+// KEEP ON TOP IS LIVE AND STILL — where a 1200ms settle was (voicebox-beads-g667). A real click lands at the
+// coordinates measured a moment before it, so what it needs is: every module has run (live-voice.js is the
+// last, and it owns #mic and the client the PiP painter reads), the button is enabled, the fonts are in (a
+// font swap reflows), and the button has not moved since the previous look. Measured 2026-09-28: all of it
+// holds ~60ms after navigation starts, before page.goto has even returned.
+async function keepOnTopIsStill(page) {
+  await page.evaluate(async () => {
+    const deadline = Date.now() + 10000;
+    let last = "";
+    for (;;) {
+      const b = document.getElementById("pip-open");
+      const r = b?.getBoundingClientRect();
+      const now = b && !b.disabled && window.__voiceboxLiveClient && document.fonts.status === "loaded"
+        ? `${Math.round(r.left + scrollX)},${Math.round(r.top + scrollY)} ${Math.round(r.width)}x${Math.round(r.height)}`
+        : "";
+      if (now && now === last) return;
+      if (Date.now() > deadline) throw new Error(`timed out after 10000ms waiting for Keep on top to be live and still (last: ${now || "not live yet"})`);
+      last = now;
+      await new Promise((res) => setTimeout(res, 100));
+    }
+  });
+}
 
 test("the PiP window opens styled: tokens, base, real icon, pulse, meters, composer", { timeout: 120000 }, async () => {
   const page = await launch({ width: 1280, height: 900, fakeMedia: true });
   try {
     await page.goto(`${server.base}/`);
     await page.waitFor(() => Boolean(window.__voiceboxPipOpen), { label: "the PiP module" });
-    await sleep(1200);
+    await keepOnTopIsStill(page);
 
     // A REAL CLICK: documentPictureInPicture.requestWindow needs transient activation, and a dispatch
     // would not have it — the window must open the way a person opens it.
     await page.click("#pip-open");
-    await sleep(1500);
+    // Where a 1500ms settle was (voicebox-beads-g667): the window exists, and every stylesheet it copied from
+    // the opener has LOADED (`link.sheet`) — the token, background and font facts below are computed from it.
+    await page.waitFor(() => Boolean(window.__voiceboxPip), { label: "the PiP window to open from the room's own Keep on top button" });
+    await page.waitFor(() => {
+      const links = [...window.__voiceboxPip.document.querySelectorAll('link[rel="stylesheet"]')];
+      return links.length > 0 && links.every((l) => l.sheet);
+    }, { label: "the PiP window's copied stylesheets to load" });
     const pip = await page.evaluate(() => Boolean(window.__voiceboxPip));
     assert.equal(pip, true, "the PiP window did not open from the room's own Keep on top button");
 
@@ -81,7 +109,14 @@ test("the PiP window opens styled: tokens, base, real icon, pulse, meters, compo
 
     // ── the live state: a real capture, so the pulse and the painter are the product's own ──
     await page.click("#mic");
-    await sleep(2000);
+    // Where a 2000ms settle was (voicebox-beads-g667): the painter (a 200ms timer) has painted the capture as
+    // live, AND live-voice.js's start handler has finished — its own `capturing` flag is set only after the
+    // device rows re-render ("Listening through …", the last step of startLive), and until then the next
+    // click on #mic would START a second capture instead of stopping this one.
+    await page.waitFor(() =>
+      window.__voiceboxPip.document.getElementById("pip-mic")?.dataset.listening === "true" &&
+      (document.getElementById("mic-device-state")?.textContent ?? "").startsWith("Listening through"),
+    { label: "the PiP window to paint the live capture, and live-voice's start to finish" });
     const live = await page.evaluate(() => {
       const d = window.__voiceboxPip.document;
       const mic = d.getElementById("pip-mic");
@@ -95,7 +130,9 @@ test("the PiP window opens styled: tokens, base, real icon, pulse, meters, compo
     assert.notEqual(live.written, "", "the level painter never wrote a width — the meter is frozen");
 
     await page.click("#mic");
-    await sleep(1000);
+    // Where a 1000ms settle was (voicebox-beads-g667): the painter has repainted the stopped capture.
+    await page.waitFor(() => window.__voiceboxPip.document.getElementById("pip-mic")?.dataset.listening === "false",
+      { label: "the PiP window to paint the stopped capture" });
     const off = await page.evaluate(() => {
       const mic = window.__voiceboxPip.document.getElementById("pip-mic");
       return { listening: mic?.dataset.listening ?? null, animation: getComputedStyle(mic).animationName };
