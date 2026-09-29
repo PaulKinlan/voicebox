@@ -90,6 +90,35 @@ export function sweepOrphanedProbeMarkers(dirPath) {
   }
 }
 
+/** Resolve a DNS name with a bounded deadline (voicebox-beads-zaj8).
+ *  Failure or timeout is an egress observation, never an uncaught error or infinite wait. */
+export function resolveDns(name, ms = 4000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve({ error: `timed out after ${ms}ms` });
+    }, ms);
+    timer.unref();
+
+    dns.resolve(name).then(
+      (addresses) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ value: `resolved via ${addresses[0]}` });
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ error: `${err.code ?? err.message}` });
+      }
+    );
+  });
+}
+
 /** Does this path exist, and can this process write there? PROBE BY DOING:
  *  create and unlink a uniquely named file, so a read-only mount is
  *  discovered rather than guessed from mount flags. */
@@ -279,15 +308,9 @@ async function network() {
     })),
     // DNS: resolve a name that must exist. Failure here is egress facts, not
     // necessarily a rule — a sandbox with no resolver reads differently from
-    // one with a dropped socket.
-    (async () => {
-      try {
-        const addresses = await dns.resolve("example.com");
-        return { value: `resolved via ${addresses[0]}` };
-      } catch (err) {
-        return { error: `${err.code ?? err.message}` };
-      }
-    })(),
+    // one with a dropped socket. Has its own deadline so a black-holed resolver
+    // cannot hang probe execution (voicebox-beads-zaj8).
+    resolveDns("example.com", 4000),
     // IP literal: NO DNS in the path, so this is the control beside the by-name check below —
     // a closed route and a missing resolver read differently. 1.1.1.1 is Cloudflare's published
     // public-resolver address: anycast, and it accepts TCP on 443 (DNS-over-HTTPS). It replaced

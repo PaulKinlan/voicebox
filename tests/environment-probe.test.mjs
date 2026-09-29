@@ -135,3 +135,23 @@ test("server boot sweeps dead-PID probe marker in server cwd (voicebox-beads-ebq
     rmSync(bootDir, { recursive: true, force: true });
   }
 });
+
+test("resolveDns has a bounded deadline and reports timed out honestly (voicebox-beads-zaj8)", async (t) => {
+  const { resolveDns } = await import("../tools/sandbox-probe.mjs");
+  const dns = (await import("node:dns/promises")).default;
+
+  // 1. Successful resolution returns value
+  t.mock.method(dns, "resolve", () => new Promise((res) => setTimeout(() => res(["192.0.2.1"]), 10)));
+  const mockedOk = await resolveDns("example.com", 1000);
+  assert.deepEqual(mockedOk, { value: "resolved via 192.0.2.1" });
+
+  // 2. Slow resolution exceeding deadline returns timed out error
+  t.mock.method(dns, "resolve", () => new Promise((res) => setTimeout(() => res(["192.0.2.1"]), 2000)));
+  const timedOut = await resolveDns("example.com", 50);
+  assert.deepEqual(timedOut, { error: "timed out after 50ms" });
+
+  // 3. DNS resolution error (e.g. ENOTFOUND) returns named error
+  t.mock.method(dns, "resolve", () => Promise.reject(Object.assign(new Error("queryA ENOTFOUND missing.invalid"), { code: "ENOTFOUND" })));
+  const rejected = await resolveDns("missing.invalid", 1000);
+  assert.equal(rejected.error, "ENOTFOUND");
+});
