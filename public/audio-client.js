@@ -85,6 +85,11 @@ export function createAudioClient({
   onDiagnostic = () => {},
   onLevel = () => {},
   logger = console,
+  // HOW LONG A CAPTURE WAITS FOR THE RATE FRAME, in milliseconds (voicebox-beads-9jvs). 5000 in the page —
+  // the production default, unchanged — and a few dozen ms in the unit fixtures that are measuring the
+  // BOUND rather than the duration. The wait is a promise to a frame already in flight on this socket; it is
+  // not a stall, and a caller that knows no frame is coming should not have to sit it out to prove so.
+  rateWaitBoundMs = 5000,
 } = {}) {
   const state = {
     phase: "idle", // idle | starting | listening | agent-speaking | error
@@ -112,6 +117,10 @@ export function createAudioClient({
     captureErrorReason: "", // WHY it refused: "rate-not-declared" is not a device failure
     lastError: "",
     inputRate: null, // declared by the server on this socket; there is no default
+    // The bound this client waits for that declaration — a constructor option, kept in the snapshot so the
+    // PRODUCTION default (5000) is witnessable without paying its five seconds in the unit lane
+    // (voicebox-beads-9jvs).
+    rateWaitBoundMs,
     provider: "",
   };
   // What the socket is doing, when a refusal needs to name it rather than guess.
@@ -545,9 +554,16 @@ export function createAudioClient({
         // behaviour here, not refusing: the frame is already in flight on this socket, and the design's whole
         // point is that the rate arrives before the audio it describes. Bounded, so a server that never
         // declares one still gets the refusal below rather than a hang.
+        //
+        // AND A SOCKET THAT IS GONE CANNOT DECLARE ANYTHING (voicebox-beads-9jvs). Waiting the full bound on
+        // a connection that has already ended — the /live upgrade refused with 1008, or the page's own
+        // socket closed — was a real freeze: the person pressed the microphone and the page sat for five
+        // seconds before saying the connection had ended. The refusal below already knows which of the two
+        // absences it is; now it can say so at once. A socket that is OPEN, or one that was never attached
+        // (-1), has not ended and keeps the wait (the same two-state rule the sentence below uses).
         const rateWaitStarted = Date.now();
-        const rateWaitBoundMs = 5000;
         while (!Number.isFinite(state.inputRate) && Date.now() - rateWaitStarted < rateWaitBoundMs) {
+          if (state.sessionEnded || socketReadyState() >= 2) break;
           await new Promise((r) => setTimeout(r, 25));
         }
         if (Number.isFinite(state.inputRate)) {
