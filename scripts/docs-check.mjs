@@ -1092,77 +1092,83 @@ function staticRefusals() {
   return refusals;
 }
 
-if (!WRITE) {
-  const refusals = staticRefusals();
-  if (refusals.length) {
-    for (const lines of refusals) console.error(lines.join("\n"));
-    console.error("docs-check: generated blocks were not compared — fix the failures above, then re-run.");
+export async function runDocsCheck() {
+  if (!WRITE) {
+    const refusals = staticRefusals();
+    if (refusals.length) {
+      for (const lines of refusals) console.error(lines.join("\n"));
+      console.error("docs-check: generated blocks were not compared — fix the failures above, then re-run.");
+      process.exit(1);
+    }
+  }
+
+  // ── the full pass: generate, compare (or write), and every check again ───────
+
+  const generated = await blocks();
+
+  let drifted = [];
+  let missing = [];
+  for (const { rel, blocks: wanted } of DOCS) {
+    const p = docPath(rel);
+    if (!existsSync(p)) { missing.push(rel); continue; }
+    let text = readFileSync(p, "utf8");
+    let changed = false;
+    for (const [name, body] of Object.entries(generated)) {
+      if (!wanted.includes(name)) continue;
+      const r = replaceBlock(text, name, body);
+      // A MISSING MARKER IS AN ERROR, not a skip. The first version `continue`d silently, which meant a
+      // document could carry no generated block at all and the check would call it current — a check that
+      // cannot fail, which is a description of the code rather than a check on it.
+      if (!r.found) refuse(REFUSE.noMarker(rel, name));
+      if (process.env.DOCS_DEBUG) console.error(`DEBUG ${rel} block=${name} found=${r.found} changed=${r.text !== text} bodyLen=${String(body).length}`);
+      // THE FILE'S block, after the replacement — not the generated body, which is never empty. My first
+      // version of this guard watched the wrong side and passed while the document carried a blank block.
+      const inner = blockInner(text, name);
+      // In WRITE mode a blank block is the thing being seeded — a new marker pair starts empty by
+      // definition, and refusing to fill it made every new block impossible to add (2026-09-20).
+      if (!WRITE && inner.trim() === "") refuse(REFUSE.emptyBlock(rel, name));
+      if (String(body).includes("undefined")) {
+        console.error(`docs-check: the generated block '${name}' for ${rel} contains the word 'undefined' —`);
+        console.error("  that is a template that did not interpolate, and it reached a document once already (07-architecture.md:80).");
+        process.exit(1);
+      }
+      if (/\/(home|tmp|Users)\//.test(String(body))) {
+        console.error(`docs-check: the generated block '${name}' for ${rel} contains an absolute path — a committed document cannot carry one.`);
+        process.exit(1);
+      }
+      if (r.text !== text) { changed = true; text = r.text; }
+    }
+    const gone = missingPaths(text);
+    if (gone.length) refuse(REFUSE.missingPaths(rel, gone));
+    const retired = retiredHits(text);
+    if (retired.length) refuse(REFUSE.retired(rel, retired));
+    if (!changed) continue;
+    if (WRITE) { writeFileSync(p, text); console.log(`  wrote ${rel}`); }
+    else drifted.push(rel);
+  }
+
+  if (missing.length) refuse(REFUSE.missingDocs(missing));
+
+  const claimed = claimsPass();
+  if (claimed.refusal) refuse(claimed.refusal);
+
+  if (drifted.length && !WRITE) {
+    console.error("docs-check: FAILED — these documents no longer describe the code:");
+    for (const d of drifted) console.error(`  - ${d}`);
+    console.error("");
+    console.error("The system answers for itself: providers come from lib/resolver.mjs, routes from a live");
+    console.error("server on a scratch port, the page's scripts from public/index.html. Fix the docs, or run:");
+    // The hint regenerates the documents that DRIFTED: from a --docs-root copy, a bare `--write` would
+    // rewrite the checkout's instead — the one tree the flag exists to leave alone (voicebox-beads-qxy2).
+    console.error(`  node scripts/docs-check.mjs --write${DOCS_ROOT === ROOT ? "" : ` --docs-root ${DOCS_ROOT}`}`);
     process.exit(1);
   }
+
+  console.log(
+    `docs-check: ${WRITE ? "regenerated" : "OK"} — ${DOCS.reduce((n, d) => n + d.blocks.length, 0)} generated blocks across ${DOCS.length} documents, ${claimed.pathClaimsChecked} hand-written path claims and ${claimed.curatedClaims} curated claims checked`,
+  );
 }
 
-// ── the full pass: generate, compare (or write), and every check again ───────
-
-const generated = await blocks();
-
-let drifted = [];
-let missing = [];
-for (const { rel, blocks: wanted } of DOCS) {
-  const p = docPath(rel);
-  if (!existsSync(p)) { missing.push(rel); continue; }
-  let text = readFileSync(p, "utf8");
-  let changed = false;
-  for (const [name, body] of Object.entries(generated)) {
-    if (!wanted.includes(name)) continue;
-    const r = replaceBlock(text, name, body);
-    // A MISSING MARKER IS AN ERROR, not a skip. The first version `continue`d silently, which meant a
-    // document could carry no generated block at all and the check would call it current — a check that
-    // cannot fail, which is a description of the code rather than a check on it.
-    if (!r.found) refuse(REFUSE.noMarker(rel, name));
-    if (process.env.DOCS_DEBUG) console.error(`DEBUG ${rel} block=${name} found=${r.found} changed=${r.text !== text} bodyLen=${String(body).length}`);
-    // THE FILE'S block, after the replacement — not the generated body, which is never empty. My first
-    // version of this guard watched the wrong side and passed while the document carried a blank block.
-    const inner = blockInner(text, name);
-    // In WRITE mode a blank block is the thing being seeded — a new marker pair starts empty by
-    // definition, and refusing to fill it made every new block impossible to add (2026-09-20).
-    if (!WRITE && inner.trim() === "") refuse(REFUSE.emptyBlock(rel, name));
-    if (String(body).includes("undefined")) {
-      console.error(`docs-check: the generated block '${name}' for ${rel} contains the word 'undefined' —`);
-      console.error("  that is a template that did not interpolate, and it reached a document once already (07-architecture.md:80).");
-      process.exit(1);
-    }
-    if (/\/(home|tmp|Users)\//.test(String(body))) {
-      console.error(`docs-check: the generated block '${name}' for ${rel} contains an absolute path — a committed document cannot carry one.`);
-      process.exit(1);
-    }
-    if (r.text !== text) { changed = true; text = r.text; }
-  }
-  const gone = missingPaths(text);
-  if (gone.length) refuse(REFUSE.missingPaths(rel, gone));
-  const retired = retiredHits(text);
-  if (retired.length) refuse(REFUSE.retired(rel, retired));
-  if (!changed) continue;
-  if (WRITE) { writeFileSync(p, text); console.log(`  wrote ${rel}`); }
-  else drifted.push(rel);
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  await runDocsCheck();
 }
-
-if (missing.length) refuse(REFUSE.missingDocs(missing));
-
-const claimed = claimsPass();
-if (claimed.refusal) refuse(claimed.refusal);
-
-if (drifted.length && !WRITE) {
-  console.error("docs-check: FAILED — these documents no longer describe the code:");
-  for (const d of drifted) console.error(`  - ${d}`);
-  console.error("");
-  console.error("The system answers for itself: providers come from lib/resolver.mjs, routes from a live");
-  console.error("server on a scratch port, the page's scripts from public/index.html. Fix the docs, or run:");
-  // The hint regenerates the documents that DRIFTED: from a --docs-root copy, a bare `--write` would
-  // rewrite the checkout's instead — the one tree the flag exists to leave alone (voicebox-beads-qxy2).
-  console.error(`  node scripts/docs-check.mjs --write${DOCS_ROOT === ROOT ? "" : ` --docs-root ${DOCS_ROOT}`}`);
-  process.exit(1);
-}
-
-console.log(
-  `docs-check: ${WRITE ? "regenerated" : "OK"} — ${DOCS.reduce((n, d) => n + d.blocks.length, 0)} generated blocks across ${DOCS.length} documents, ${claimed.pathClaimsChecked} hand-written path claims and ${claimed.curatedClaims} curated claims checked`,
-);
