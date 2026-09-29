@@ -311,6 +311,22 @@ test("passthrough-network: separates broken DNS with open egress from egress den
   assert.match(brokenDnsWithEgress.why, /EAI_AGAIN/);
   assert.match(brokenDnsWithEgress.remedy, /deny egress at the fence/i);
 
+  // Case A negative pin (voicebox-beads-v78u): literal ok + name timed out WITHOUT DNS error
+  // must refuse as plain contradiction (probe REACHED out) and must NOT claim broken DNS
+  const literalReachedWithoutDnsBreak = decide(
+    fixture((r) => {
+      r.network.outboundTcp443IpLiteral = { ok: true, ms: 15 };
+      r.network.outboundTcp80ByName = { ok: false, error: "timed out after 4000ms", ms: 4001 };
+      r.network.cloudMetadataService = { ok: false, error: "timed out after 1500ms", ms: 1500 };
+    }),
+    netAct,
+  );
+  assert.equal(literalReachedWithoutDnsBreak.ok, false);
+  assert.equal(literalReachedWithoutDnsBreak.axis, "passthrough-network");
+  assert.match(literalReachedWithoutDnsBreak.why, /probe REACHED out: network\.outboundTcp443IpLiteral/);
+  assert.doesNotMatch(literalReachedWithoutDnsBreak.why, /broken DNS/i);
+  assert.doesNotMatch(literalReachedWithoutDnsBreak.why, /resolver failed/i);
+
   // Case B: egress denied (both IP-literal control and by-name time out without DNS error)
   const egressDenied = decide(
     fixture((r) => {
