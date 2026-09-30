@@ -15,9 +15,12 @@ name: 'Agent Factory Audit'
 # against the pin and REFUSES on mismatch: there is no fallback to a branch, tag or default.
 
 on:
-  schedule:
-    # Daily at 04:00 UTC
-    - cron: '0 4 * * *'
+  # NO SCHEDULE. Landing this workflow must not arm a paid run that nobody asked for: the
+  # nightly trigger was removed on 2026-09-30 as a cost gate until Paul rules, and re-arming
+  # is this one block. Nothing else here depends on it — the dispatch is the full entry point.
+  #
+  #   schedule:
+  #     - cron: '0 4 * * *'
   workflow_dispatch:
     inputs:
       agents:
@@ -50,12 +53,28 @@ jobs:
         id: plan
         shell: bash
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          # Dispatch values are taken VERBATIM below. They must not fall back: GitHub normalises
+          # a whitespace-only input to an empty string, and a `||` default would then turn a
+          # typed-but-blank agent into every agent. That is not hypothetical — dispatch
+          # 36708984621 passed `agents= ` and ran the whole matrix to success, at cost, because
+          # the fallback silently chose 'all' (voicebox-beads-xsjw). A blank value now refuses.
+          INPUT_AGENTS: ${{ inputs.agents }}
+          INPUT_REF: ${{ inputs.factory_ref }}
           # Must equal the ref in the `uses:` of the audit job below.
           FACTORY_PIN: 'c7363b49d2957323b3ae8b60560d44a93379c316'
-          REQUESTED_REF: ${{ inputs.factory_ref || 'c7363b49d2957323b3ae8b60560d44a93379c316' }}
-          REQUESTED_AGENTS: ${{ inputs.agents || 'all' }}
         run: |
           set -euo pipefail
+
+          # A dispatch carries exactly what was asked for, blanks included. A scheduled run has
+          # no inputs at all, which is the only case that takes the defaults.
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            REQUESTED_AGENTS="$INPUT_AGENTS"
+            REQUESTED_REF="$INPUT_REF"
+          else
+            REQUESTED_AGENTS='all'
+            REQUESTED_REF="$FACTORY_PIN"
+          fi
 
           # A pin is a pin: a dispatch naming another commit refuses here rather than falling
           # back, and the action's fetch_factory.sh refuses again on the fetched SHA.
