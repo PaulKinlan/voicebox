@@ -6,8 +6,9 @@ name: 'Agent Factory Audit'
 # Same pins and same guards. Two deliberate differences:
 #   1. the agent list is data-driven (.github/factory-agents.json) — adding an agent is a
 #      config change, not a workflow change;
-#   2. one job per agent (max-parallel 1): each agent gets its own report artifact and its
-#      own loud failure, while beads writes stay serialised (each job pulls, creates, pushes).
+#   2. one job per agent (max-parallel 1): each agent gets its own loud failure and its own
+#      report artifact (the pinned action uploads the findings directory itself), while beads
+#      writes stay serialised (each job pulls, creates, pushes).
 #
 # The factory commit appears twice on purpose — in `uses:` and in FACTORY_PIN. Only a full
 # 40-hex commit is accepted, and the action's own fetch_factory.sh checks the fetched commit
@@ -90,6 +91,13 @@ jobs:
               fi
               SELECTED="$(jq -c --arg a "$agent" '. + [$a]' <<<"$SELECTED")"
             done
+          fi
+
+          # A whitespace-only or comma-only input selects nothing above; without this the matrix
+          # would be empty and the only thing refusing it would be GitHub's own matrix validation.
+          if [ "$(jq 'length' <<<"$SELECTED")" -lt 1 ]; then
+            echo "::error::no agents selected from '$REQUESTED_AGENTS' (known: $(jq -r 'join(", ")' <<<"$ALL"))."
+            exit 1
           fi
 
           echo "Factory pin:  $REQUESTED_REF"
