@@ -1,215 +1,87 @@
 # Voicebox
 
-**A voice-first web front end to a build environment.** You talk to it; it makes things.
+Voicebox is a real-time, voice-first coding environment in the browser. You speak to an AI model over low-latency full-duplex audio; it speaks back while directly creating and editing files, running build tools, executing isolated WebAssembly modules, and driving coding agents on your machine.
 
-**Start with [docs/README.md](docs/README.md)** — the map: what to read first, which document is
-authority for what, and what you can safely ignore. Then [docs/00-brief.md](docs/00-brief.md), which
-is Paul's own words.
+---
 
-> Working name. Rename is cheap — see [docs/00-brief.md](docs/00-brief.md).
+## Getting Started
 
-## The idea
+### 1. Prerequisites
+- **Node.js**: v22.0.0 or higher
+- **Microphone**: Working audio input for voice interaction
+- **API Key**: A Google Gemini API key (for Gemini Multimodal Live, default) or an OpenAI API key (for OpenAI Realtime)
 
-An agent you speak to, in a browser, that can create anything you ask for — because it
-has a real build environment behind it and a tool surface you can extend. Not a chat box
-with a voice bolted on: the voice *is* the interface, and the thing on the other end can
-act on your machine.
+### 2. Installation
+Clone the repository and install dependencies:
 
-## Principles
+```bash
+git clone https://github.com/PaulKinlan/voicebox.git
+cd voicebox
+npm install
+```
 
-1. **Voice-first.** The interface is conversation, and it stays available — you can keep
-   talking to it while working on something else. Literally: when scrolling takes the
-   mic button off screen, a docked copy of it appears in the corner (one control, in
-   the page and the tab order at a time — `voicebox-beads-dzd`).
-2. **A web front end to a real environment.** Not a sandbox demo: it drives a build
-   system that can produce software.
-3. **Extensible models.** Gemini Live first, OpenAI Realtime alongside — swap the live
-   model without rewriting the harness.
-4. **Extensible platform.** Give it new tools and skills when you need them; extensions
-   can add tools into the agent loop.
-5. **Light, not a framework.** Inspired by minimal single-harness designs rather than by
-   heavyweight agent frameworks.
-6. **Local project files.** A project on disk is the unit of work.
+### 3. Configure API Credentials
+Voicebox connects directly to multimodal speech-to-speech providers over WebSockets. Export your provider key:
 
-## Lineage
+```bash
+# For Gemini Multimodal Live (default: models/gemini-3.8-live):
+export GEMINI_API_KEY="your-gemini-api-key"
 
-Built from parts of projects that already work — see [docs/00-brief.md](docs/00-brief.md)
-for what is borrowed from where, and [docs/01-questions.md](docs/01-questions.md) for what
-is still undecided.
+# Or for OpenAI Realtime (gpt-realtime):
+export OPENAI_API_KEY="your-openai-api-key"
+export VOICEBOX_LIVE_PROVIDER="openai"
+```
 
-## Installed harnesses
+### 4. Start the Server
+```bash
+npm start
+```
+The server boots on `http://localhost:8787` (override via `PORT=...`).
 
-Open **Harnesses** from the voice page (which opens the modal dialog without navigating away) and click **Check installed harnesses**, or run
-`node tools/list-harnesses.mjs`. This lists known host CLIs with descriptions, observed
-versions and present/unrunnable/unknown/absent states. Set `VOICEBOX_HARNESS_TOOLS` to
-an absolute JSON file path to add host-declared tool names and descriptions, with their
-source and scope. Expand **Declared tools** on a row to read them. Missing or invalid
-metadata says **Tools — unknown**; an explicitly empty declaration is shown separately.
-These are declarations, not observed session tools or permissions. Listing a tool neither
-enables delegation nor checks authentication. See
-[the catalogue format and limits](docs/12-harness-inventory.md).
+To verify installed host harnesses and environment diagnostics without starting the network listener:
+```bash
+node server.mjs --doctor
+```
 
-## Set up a task harness (five minutes, start to first delegation)
+---
 
-A task harness is a host CLI that `delegate_task` can run work on. Today exactly one
-adapter is implemented — **pi-acp** (the Pi coding agent over ACP on stdio). Other
-inventoried CLIs (claude, codex, gemini, opencode) can be CONFIGURED as agents, and the
-server answers each one by name, but they refuse at delegation until someone builds
-their adapter.
+## First Run Walkthrough
 
-1. **Check what the machine has.** Open the **Harnesses** dialog and click
-   **Check installed harnesses** (or `node tools/list-harnesses.mjs`). You need a row
-   `pi-acp — present` (the adapter, `~/.pi/agent/npm/node_modules/pi-acp`) and a working
-   `pi` on PATH. The adapter must be the pinned version; the startup table names a
-   mismatch instead of failing silently.
-2. **Select the harness and start the server.** `VOICEBOX_HARNESS=pi` (default adapter
-   and binary locations; override with `VOICEBOX_ACP_ADAPTER` / `VOICEBOX_ACP_PI`).
-   The startup log names every configured agent's admission:
+1. **Open the Interface**: Navigate to `http://localhost:8787` in a Chromium browser (Chrome or Edge).
+2. **Grant Microphone Access**: Allow audio recording when prompted. The client boots an AudioWorklet streaming raw 16kHz PCM.
+3. **Select a Workspace**:
+   - **Local Directory**: Click the **Folder** icon in the header to open a local repository using the File System Access API.
+   - **Browser Scratchpad**: If no local folder is open, Voicebox defaults to the in-browser OPFS (Origin Private File System) scratchpad. Files created here persist across browser reloads.
+4. **Speak a Request**:
+   - Click the central circular microphone button (or hold the `Space` bar).
+   - Say: *"Create an index.html file with a responsive dark-mode counter and a button to increment it."*
+   - The circular waveform reacts dynamically to your mic energy.
+5. **Live Turn Execution**:
+   - The model streams synthesized speech back through your speakers.
+   - Concurrently, the server executes the tool call (`write_file`), writing `index.html` to the workspace.
+   - The project file tree on the left refreshes in real time as the file lands.
+6. **Barge-in Interruption**:
+   - Speak while the model is talking to interrupt it. The audio engine detects your voice energy, stops agent playback, and listens for your correction.
+7. **Text Composer Fallback**:
+   - In quiet environments or when testing without an API key, use the text composer at the bottom. Submitting dispatches to `POST /api/turn` via the deterministic script resolver.
 
-   ```
-   [harness] ADMITTED pi (pi-acp @ 0.0.34)
-   [harness] REFUSED agent_claude_reviewer (claude-code) — adapter-not-configured: No Voicebox
-             task adapter is implemented for 'claude-code' on this host; the agent is
-             configured but cannot run.
-   ```
+---
 
-   `node server.mjs --doctor` renders the same verdicts as a table without starting the
-   server — use it to check a configuration before committing to a boot.
+## Architecture Deep Dive
 
-3. **Add more agents (optional).** Every configured agent lives in the registry:
-   `POST /api/agents` with the host token (or edit `<host dir>/.agents.json`), for example
-   a second Pi instance with a different model, or a Claude agent prepared for the day an
-   adapter exists. `GET /api/agents` returns each agent WITH its current `admission` —
-   `{ admitted: true }` or `{ admitted: false, refused, why }` (non-local agents, such as
-   the in-browser worker agent, are marked `not-judged-here` since the host only judges
-   its own environment) — so the page and scripts
-   can see what would happen before delegating.
-4. **Delegate.** From the page, or `delegate_task` with `agent: "pi"`. The task runs
-   through the host → ACP client → pi-acp → Pi coding agent path, and lands in the audit
-   log like every other act.
-5. **Read the refusal, fix the cause.** If a delegation refuses, the name tells you where:
-   `executor-unavailable` (no `VOICEBOX_HARNESS` selected), `adapter-not-configured`
-   (no adapter exists for that harness on this host), `adapter-version-unsupported`
-   (installed adapter is not the verified pin), `agent-environment-mismatch` (the agent
-   belongs to another environment). Deadlines are per-adapter and bounded: pi tasks run
-   with a 60s ceiling, claude-code tasks with 120s (`CLAUDE_ACP_TIMEOUT_CEILING_MS`) — a
-   warm Claude turn does not settle inside pi's clamp (voicebox-beads-hmco).
+Voicebox combines low-latency full-duplex audio transport with sandboxed, audited tool execution.
 
-The walkthrough above is the same one driven end to end against a real server and a real
-Pi delegation in `tests/configured-harness.test.mjs` (live lane).
+### 1. Frontend Audio Engine (`public/live-voice.js`, `public/fused.js`)
+- **AudioWorklet Streaming**: Microphone input is captured at 16kHz or 24kHz linear PCM and streamed over WebSocket in raw binary frames.
+- **Waveform Rendering (`drawInputWave`)**: Draws a circular oscilloscope that blends microphone input and agent playback energies on a fixed full scale without ceiling saturation.
+- **Barge-In Energy Detection**: Compares microphone energy against background thresholds. Detecting user speech during playback stops agent audio immediately and transmits an `interrupt` event.
+- **Docked Microphone Widget (`#docked-mic`)**: When scrolling through long file trees moves the central button out of view, a docked control appears in the viewport, ensuring voice controls remain accessible.
 
-## Status
-
-Seeded 2026-09-19 from a spoken brief. Design in progress — and **the descriptions below are a
-snapshot**: what this tree does tonight, placeholders included.
-
-**Which documents are which**, because a reader needs to know whether they are holding a spec or a
-snapshot:
-
-| document | kind | authority for |
-|---|---|---|
-| [`docs/00-brief.md`](docs/00-brief.md) | **spec** (Paul's words) | what this is meant to be |
-| [`docs/02-environment.md`](docs/02-environment.md), [`docs/05-harvest.md`](docs/05-harvest.md) | **design records** | systems that may not exist yet — allowed to describe the future |
-| [`docs/07-architecture.md`](docs/07-architecture.md), [`docs/08-how-it-runs.md`](docs/08-how-it-runs.md), this README | **snapshots** | what runs *now*; a claim here that the code contradicts is a bug in the document |
-| [`docs/20-webassembly-tools.md`](docs/20-webassembly-tools.md) | **developer guide** | authoring + compiling + admitting + executing WASM shelf tools; the buffer ABI contracts (voicebox-beads-rgvi) |
-
-The blocks marked `BEGIN GENERATED` are written by `scripts/docs-check.mjs` from the code itself, and
-`tests/docs-drift.test.mjs` fails when they drift. The prose **around** them is watched too:
-`scripts/docs-touched.mjs` refuses a push that moves a file a document describes without touching a
-document — Paul's rule, *every update updates the docs and the README in the same change*. See
-[`docs/08-how-it-runs.md`](docs/08-how-it-runs.md) for the mechanism and its recorded way past.
-
-Task admission's API, evidence boundaries and unfinished execution work are documented in
-[D1: authenticated task admission and durable handles](docs/10-delegate-task-d1.md).
-[ACP adapter diagnostics](docs/11-acp-adapter.md) now verify one real pi-acp/pi version pair (pi-acp 0.0.34 / pi 0.87.1)
-without credentials. Actual delegated model tasks still refuse pending bounded provider access;
-this is not browser-only delegation acceptance.
-
-## Before pushing
-
-The pre-push hook keeps the full test suite: 180 seconds for `npm test`, then
-45 seconds for `npm run accept`. Refusals name the stage and distinguish a
-timeout from a failing command; both output streams remain visible. See
-[gate measurements and regression drives](docs/12-pre-push-gate.md).
-Acceptance checks read idempotence on its private instance: three GETs per root/file
-route must return the seeded state and leave its file bytes and write metadata unchanged.
-It does not assert that another lane's shared server stays unchanged.
-The live-tools check waits for both the file and its successful `write_file`
-websocket event before it claims a write landed; file creation alone does not
-prove that the page has received the report. It is asked again, bounded and
-corrected, when the model skips a tool call, and its READ half is proved by words
-only the test knows — three words written into a file the live session has never
-seen, two of which must come back spoken — because a model can answer a read
-request out of the conversation without reading anything (voicebox-beads-cx16,
-the instrument defect voicebox-beads-k6uu named in `tests/page-writes.test.mjs`).
-
-One of those tests is a rule rather than a feature: **each declared state-directory fact has exactly
-one computing site**, in `lib/state-dirs.mjs`. `scripts/single-owner.mjs` refuses a second read of the
-variable or a rebuilt default anywhere else, naming the file and the owner to ask instead, and
-`tests/single-owner.test.mjs` drives a fourth copy into a scratch tree to prove that refusal can
-happen (voicebox-beads-y5k).
-
-## The top bar
-
-The header carries the surface controls as icon buttons — Harnesses, Change
-log, Environments, Extensions and Settings — each with `aria-label` and
-tooltip. The icons come from the page's own SVG symbol set (`#i-list`,
-`#i-book`, `#i-layers`, `#i-box`, `#i-gear`); adding a control means adding
-its symbol and its `aria-label`, nothing else. The live count lines
-(`#envs-count`, `#exts-count`) are screen-reader text, so runtime updates
-still reach assistive tech without cluttering the bar.
-
-## Debugging a transcript or tool call
-
-Open the main app with **`?debug=1`** (for example `http://localhost:5173/?debug=1`),
-then reproduce the problem. A **Debug transcript** panel below the conversation records
-this tab from page load, including every emitted text fragment and typed turn, not just
-the eight recent turns. Use **Next error** to open and focus a failure, then **Copy all
-events (redacted JSONL)** to paste the entire timeline into an agent chat. Each line is
-one event with a timestamp, sequence and elapsed time. Copy does not depend on which
-rows are expanded. If clipboard permission fails, a selected, redacted text box is the
-manual fallback.
-
-The panel stays in the main app so it observes the actual conversation, not a second
-page's session. It is hidden and does not collect events without `?debug=1`. Capture is
-memory-only: **copy before reloading or closing the tab**. Previous visits, other tabs,
-audio recordings and server console history are not included. Debug does **not** enable
-input transcription or change provider configuration: spoken words are absent unless
-the provider already emits their transcription. The export carries that disclosure too.
-
-For live tools, follow the same `callId` through `tool.wire-request` (original provider
-arguments), `tool.request` (normalized arguments), `tool.route` (shared executor or
-pre-execution refusal), `tool.result` (complete result/error and execution duration),
-and `tool.delivery`. Approval, containment and environment refusals remain in the
-executor's result, not a summary substituted for it. Malformed/early calls are marked
-refused or dropped. **`transport-accepted` means the local transport accepted a send;
-it does not prove provider acknowledgement or model consumption.** `not-sent` is a
-known refusal; `unknown` means a send threw. Missing result/delivery events mean pending
-or unknown, not success. Session and connection identifiers distinguish reconnects.
-Typed turns carry their full HTTP response and displayed outcome; their resolver does
-not receive execution results back. Server and page timestamps come from their own
-clocks; execution duration is measured on the server. The start/health events identify
-the page/server build and provider when available.
-
-Details on screen are **unredacted**. Only the copy/export path strips sensitive field
-values (including credentials, cookies and headers), embedded credential assignments,
-private keys and long opaque strings. Repeated opaque values get consistent redaction
-aliases so call correlation survives. Results are otherwise verbatim, without clipping
-or summarizing. Redaction deliberately over-matches some identifiers and paths; it
-cannot recognize every short secret hidden in arbitrary prose. **Review before sharing**:
-ordinary personal information, file contents and paths may remain. There is no automatic
-upload and no extra paid transcription. This feature needs the updated API server as
-well as a refreshed page; an older server cannot supply detailed tool-boundary events.
-
-Checks: `node --test tests/debug-transcript.test.mjs tests/live-openai-browser.test.mjs`.
-The browser checks drive real missing-file failures through both providers' adapters,
-the real server/executor and the native clipboard, using a loopback vendor fixture and
-synthetic media/credentials. They do not claim an authenticated model round-trip.
-
-## The two paths, stated separately
-
-The largest gap in this product was invisible because one word — *live* — covered two different things:
-the **audio** path and the **turn** path. They are not the same, so they are not written as one:
+### 2. Live Session Gateway (`/live`, `lib/live-session.mjs`)
+The server acts as an authenticated full-duplex gateway between browser WebSockets and upstream speech-to-speech providers.
+- **Providers**: Supports Gemini Multimodal Live (`models/gemini-3.8-live`) and OpenAI Realtime (`gpt-realtime`).
+- **Project Context (`AGENTS.md`)**: On session boot, `lib/project-instruction.mjs` scans upward from the active workspace folder to locate the nearest `AGENTS.md` or `AGENT.md` (bounded at 32 KiB) and injects it into system instructions.
+- **Tool Protocol**: Function call requests from the model are mapped by `commandToAction()` into the unified server executor, returning correlated results back to the model turn.
 
 <!-- BEGIN GENERATED: providers — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 Registered resolvers: `claude`, `gemini`, `openai`, `script`
@@ -223,27 +95,20 @@ Registered resolvers: `claude`, `gemini`, `openai`, `script`
 <!-- BEGIN GENERATED: live-session — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 `lib/live-session.mjs` is present. Registered live providers, with the model each one's handshake names (captured from the provider against a recording transport — never dialed): `claude` → `(registered, but this check has no capture for it)`, `gemini` → `models/gemini-3.8-live`, `openai` → `gpt-realtime`. The library fallback is `gemini`, overridable by `VOICEBOX_LIVE_PROVIDER`; the server's `/live` route instead passes the agent-settings provider explicitly.
 <!-- END GENERATED: live-session -->
-| `AGENT.md` / `AGENTS.md` | `lib/project-instruction.mjs` | read as project context for the system prompt: the NEAREST file from the folder the page has open, up to the declared root — bounded at 32 KiB; absence is normal, unreadable is named. A room folder's file is read by the PAGE (opfs and picked handles are not on this machine) and sent as text. OpenAI applies a folder change live (`session.update`); Gemini's `setup` is sent once, so there the change applies at the next session — and says so rather than pretending |
 
-## Tool calling: how words become an act, and what tools exist
-
-OpenAI Realtime carries the same command declarations and instruction as Gemini.
-Its function calls run through the shared executor and return correlated results or
-named refusals; after generation and all tool results finish, it requests the spoken
-continuation. Synthetic browser/vendor verification and its withheld-handler negative
-control are recorded in [the live fixes report](docs/live-fixes.md).
-
-Everything in this section is one of three things, and says which: **exists-and-driven** (the
-generated blocks — produced by `scripts/docs-check.mjs` from the code and a real server, and red in
-`npm test` when they drift), **designed-not-built** (marked), or **neither**. A hand-written tool
-list is a lie with a delay on it; these blocks are regenerated with `npm run docs:write`.
-
-### The agent loop (exists-and-driven)
-
-What runs when you speak or type: **a turn starts → something decides → something acts → the
-result returns → the act is recorded.** The table is regenerated by driving one real turn, so the
-values in it are what the server answered, and a step that stops being wired goes red rather than
-stale.
+### 3. Tool Execution & Sandboxing (`server.mjs`, `core/extensions.ts`)
+Tool execution is strictly partitioned and mediated:
+- **Built-in Workspace Tools**: Root-scoped operations (`read_file`, `write_file`, `list_files`, `delete_file`, `edit_file`, `diff_file`, `grep_files`). Paths are constrained to the active project root; directory traversal attempts (`../`) are refused.
+- **WebAssembly Tool Shelf (`lib/wasm-shelf.mjs`, `lib/wasm-worker.mjs`)**:
+  - Standalone `.wasm` modules executed in isolated worker processes.
+  - Linear memory caps (`--wasm-max-mem-pages=4096`), stdout buffer limits (2 MB), and child-side watchdogs (6,000ms) guarantee that misbehaving or looping WASM tools terminate cleanly without blocking the server.
+  - See [`docs/20-webassembly-tools.md`](docs/20-webassembly-tools.md) for the buffer ABI contracts and compiler guidelines.
+- **Agent Client Protocol (ACP) Delegation (`lib/pi-acp.mjs`, `lib/claude-acp.mjs`)**:
+  - Delegates complex, long-running engineering tasks out-of-process via ACP over stdio.
+  - Supports host coding agents including Pi and Claude Code with bounded execution ceilings.
+- **Fencing & Security Boundaries (`lib/fence-provider.mjs`, `core/tier-table.ts`)**:
+  - Mediated network fetch with strict host allowlisting and hop-bounded redirect tracking.
+  - Every action, tool call, and refusal is recorded in an immutable, append-only audit trail (`audit.jsonl`).
 
 <!-- BEGIN GENERATED: loop — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 **One turn, driven end to end on a scratch root while this document was generated.** Every value in the last column was read back from the server, not typed.
@@ -270,8 +135,6 @@ The log's SHAPE is derived too, not described: the write produced **2** entries 
 **One root**: the admitted tool listed `["hello.txt"]` — the same root the turn wrote `hello.txt` into.
 <!-- END GENERATED: loop -->
 
-### How tool calling works (exists-and-driven)
-
 <!-- BEGIN GENERATED: tool-path — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 **Three ways words reach this server; all reach the shared executor.**
 
@@ -285,16 +148,6 @@ What each live handshake declares, captured from the provider with the server's 
 
 Verbs the `script` resolver produces, driven: `"create a file called hello.txt with hi"` → `write`, `"read hello.txt"` → `read`, `"list files"` → `list`, `"create a tool called clock that tells the time"` → `make-tool`, `"run the tool clock"` → `tool`. `make-tool` **proposes** (a pending file the host must admit); `tool` calls an **admitted** tool and nothing else.
 <!-- END GENERATED: tool-path -->
-
-**The live voice can discover and use approved extensions.** Ask “list extensions”, then
-“use Web Search to search for Saturn”. `list_extensions` reads the current inventory;
-`call_extension` invokes its exact tool name with optional `url`, `path`, or `content`.
-An extension approved during a conversation is discoverable without reconnecting. Pending,
-refused and merely present extensions remain non-runnable; the model cannot approve them.
-See [extension discovery and use](docs/07-extension-admission.md#model-discovery-and-use)
-for the argument and permission boundaries.
-
-### What exists by default, and what it refuses (exists-and-driven)
 
 <!-- BEGIN GENERATED: tools — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 **The default tools are a closed set of 6 primitives** (`PRIMITIVES` in `core/extensions.ts`). A model authors a descriptor that *parameterises* one; it never authors a body, so nothing in the runtime evaluates model-written code.
@@ -336,75 +189,9 @@ for the argument and permission boundaries.
 **Admission is the host's act**, probed from where the page stands: `POST /api/extensions/admit` with no token → HTTP 403, `host-token-required`.
 <!-- END GENERATED: tools -->
 
-**Direct code management and environment inspection tools (voicebox-beads-lpol):**
-The shared command catalogue provides direct tools for interacting with the active machine project's repository and underlying environment:
-- `git_status`: inspect working tree branch, dirty status, and changed files;
-- `git_diff`: inspect unstaged or staged (`staged: true`) diffs, optionally scoped to a file;
-- `git_log`: query recent commit history (`limit: 10`);
-- `inspect_environment`: query underlying machine runtime, platform, resource limits, and tool availability;
-- Refuses `not-a-git-repo` when the active root is not a git repository, and `not-supported-in-browser` when executed on browser-owned roots (tested in `tests/code-mgmt-tools.test.mjs`).
+---
 
-### How to add one (exists-and-driven, with one designed-not-built step)
-
-A tool is a **descriptor** — data, never code — carrying `id`, `name`, `capabilities`, `bounds` and a
-`tools` array whose entries each name one primitive from the table above (shape:
-`ExtensionDescriptor` in `core/extensions.ts`). Two doors, one gate:
-
-1. **Propose.** The model says *"create a tool called clock that tells the time"* (the `make-tool`
-   verb), or anything POSTs a descriptor to `/api/extensions/proposals`, or you sideload a catalogue
-   entry with `POST /api/extensions/sideload {id, confirm: true}`, or you create and locally add a new extension
-   via the room UI or `tools/create-extension.mjs` (`POST /api/extensions/local`). All land as a **pending**
-   file in `proposals/` under the workspace (or directly admit when run with host authority). Nothing loads without admission.
-2. **Read the plan.** `GET /api/extensions/proposals/<id>/plan` — what it declares, what would be
-   enforced and by which mechanism, what it would be handed, what it cannot have.
-3. **Approve with a one-time host code.** In **Extensions → Waiting for review** (or **Found here**),
-   open **Review and approve on the host**, then **Request approval code**. Review the exact plan
-   in the server terminal (or run `node tools/approval-code.mjs` on the host) and enter its eight-digit code in the page. It expires after two minutes,
-   works once, and cannot approve a changed plan. The human decision is recorded before admission;
-   the page never receives the host token. Keep server output private: anyone reading it can use
-   an unexpired code. Restarting the server invalidates outstanding codes.
-   The existing shell alternative remains: `POST /api/extensions/admit {id, confirm: true, decision: "admit"}`
-   with the `x-voicebox-host-token` header, whose value is the file `.host-token` (mode 0600) in the
-   extension directory. The page cannot read that file; your shell can. Admission re-runs the same
-   `admit()` the plan showed, moves the descriptor into the host directory, records it in
-   `.ledger.jsonl`, and rebuilds the registry. A file dropped into the directory by hand is
-   *present, not admitted* — visible in the inventory, never live. And an **admitted** extension
-   that fails to load — at boot, or on a later reload after its descriptor changed under it — is
-   *admitted, not running*, never silent: the inventory's `failedLoads` list and the Extensions
-   panel's **Approved, not running** section name the refusal (`unreadable` for a file that no
-   longer parses; otherwise the gate's own rule, e.g. `exec-absent`, `no-tools`, `duplicate-tool`; `descriptor-missing` for a file deleted behind a live admission)
-   with the next action that fixes it. Its tools stay unloaded until the descriptor is fixed and
-   the extension is re-admitted.
-4. **Call it.** *"run the tool clock"* → the `tool` verb → `callTool()`. Only admitted tools answer.
-5. **Reconfigure or remove it.** Running extensions can be updated (`POST /api/extensions/reconfigure`, `PATCH /api/extensions/:id`) or withdrawn (`DELETE /api/extensions/:id`, `POST /api/extensions/revoke`) via the UI settings-style dialog directly in the room (authorized seamlessly via the in-room session token — which establishes local session context for the developer on this machine, not a remote secret; the boundary is local-vs-remote, and remote callers require the host token `x-voicebox-host-token`), updating bounds, tool parameters (keyed by tool name — `tools[i].params` is what `callHttp` reads) or revoking tools without discovering or supplying hidden `.token` files. Re-admitting a changed descriptor for the same id is an update, not a no-op: the same gate re-runs, the descriptor is replaced, and the registry is rebuilt — so a corrected `params.url` is the URL the next call actually uses.
-
-Where an extension **may** act today is *driven* in the loop block above — through the root-scoped
-primitives in **the active project root**, the same root a turn writes into; and on the network only
-at the hosts in `bounds.hosts`, at most `bounds.maxRequests` times, redirects included. Where it
-**may not**: spawn a process, evaluate code, import code, leave that root — each refused by name,
-never silently; the generated list above is the authority for which names exist.
-
-> This paragraph said the opposite until 2026-09-23 — that a tool acted in a separate extension
-> workspace rather than the declared root. That was true when written and stopped being true when
-> the roots were unified; **the generated block above corrected itself and this sentence did not**,
-> because nothing watches prose. It is the limit in [`docs/08-how-it-runs.md`](docs/08-how-it-runs.md)
-> demonstrated on this page.
-
-*Designed-not-built:* a tool that runs **in the page** rather than on this server
-(`docs/02-environment.md` §1.7's browser placement — the `handle-scope` / `csp-connect-src`
-mechanisms in `MECHANISMS.browser`). The gate can already decide for that placement; no page-side
-executor exists yet.
-
-### How to see what is available at run time (exists-and-driven)
-
-Ask the server, not the source. The two questions have two instruments, both probed in the
-generated block above: **which tools are admitted** (`GET /api/extensions`, plus the catalogue
-preview and the per-proposal plan) and **what the process itself can reach** (`GET /api/probe`,
-which runs the sandbox probe on the environment and reports observed facts). The primitives
-themselves are the exported `PRIMITIVES` — there is no route for them because they are not a
-runtime fact, they are the code.
-
-### How it is configured (exists-and-driven)
+## Configuration Reference
 
 <!-- BEGIN GENERATED: config — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 Every environment variable the server and its libraries read, and where:
@@ -442,198 +229,21 @@ Every environment variable the server and its libraries read, and where:
 | `VOICEBOX_WORKSPACE` | `lib/state-dirs.mjs` | declares a machine root at boot — a decision, not a default — and is where the extension system keeps `proposals/` and `audit.jsonl` |
 <!-- END GENERATED: config -->
 
-There is no config file. What is on or off is decided by which provider is named, which key is
-present, and which descriptors the host has admitted — the ledger is the switch.
+There is no configuration file. Runtime behavior is controlled by environment variables, selected provider keys, and admitted extensions.
 
-### Configured agents and harness distinction (exists-and-driven)
+---
 
-The architecture distinguishes the **runtime** (node, deno, browser), the **configured agent** (named instance with permanent ID, model, prompt, reach and bounds), and the **execution environment** (filesystem root, sandboxing, and reach). See `core/harness-config.ts` and `lib/harness-config.mjs`.
-- One harness engine (e.g. Pi) can have multiple configured agent instances in the same environment.
-- Stable agent IDs are permanent; renaming an agent's display label updates its title without retargeting tasks.
-- Stdio CLI adapters are explicitly refused in browser runtimes (`unsupported-runtime-capability`).
-- Configured agent records are secret-free; credentials belong to the environment owner, never agent configs.
-- Browser-local registries run entirely in-browser with zero server dependency.
-- Endpoints: `GET /api/agents`, `POST /api/agents`, `PATCH /api/agents/:id`, and `GET /api/harnesses` (combines host discovery with matching configured agents, feeding D3).
+## Development & Quality Gates
 
-## The sandbox: what bounds an environment, and what deliberately does not
+Voicebox uses multi-tier automated test gates:
 
-Voicebox's sandbox story is a **measured boundary, never a configured label**. Two rungs are
-built and driven, and both bound **filesystem and processes** while deliberately leaving **the
-network shared**:
-
-- **L1 — the fence** (`tools/fence.sh`): bubblewrap with the system mounts read-only, fresh
-  tmpfs on the writable spots, **one** writable home bound in from the host, and the pid
-  namespace isolated. No root, no daemon, nothing installed.
-- **L1.5 — the composition** (`tools/fence-unit.sh`): the same fence inside a transient
-  `systemd-run --user` unit that adds the kernel half the fence lacks — a seccomp filter, an
-  empty capability set, `ProtectSystem=strict` with the sandbox home as the one writable
-  exception. Units are bounded in time (`VOICEBOX_FENCE_MAX_SEC`, default 1800s) and stopped
-  by name or on server exit, so a forgotten sandbox cannot leak resources forever.
-
-What it does **not** do — stated plainly, because each of these is someone's assumption:
-
-- **The network is shared.** The boundary report says `passes` with the measurement that showed
-  it. Reaching outbound 443 from inside a fence is the design working, not a bug.
-- **Ambient credentials are not fenced.** A process inside reads what its uid can read; the
-  report's credentials axis says exactly this.
-- **A digest binds bytes, never behaviour.** A wasm tool's module is re-verified at admission
-  and at every call, but what those bytes *do* is bounded only by host constants — a call
-  deadline, worker memory limits, a file-read bound. Nothing in a descriptor buys more.
-- **`/tmp` is not a home.** A sandbox home must live outside `/tmp` (`VOICEBOX_SANDBOX_HOMES`,
-  default `~/sandbox-homes/<key>`): the L1.5 unit's PrivateTmp hides `/tmp`, and a home there
-  fails to bind.
-
-**How a level is earned, and how to read a report.** Every axis of a booted environment's
-boundary is **tri-state** — `fenced`, `not-fenced` (with the violations named), `passes`
-(deliberately unbounded), or `not measured` (never read as denied) — and the level (`L1.5`,
-`L1`, `not-earned`, `unmeasured`) is **derived from those measurements, never stamped by a
-caller**. `GET /api/probe` runs the probe **on the environment itself**, unprompted, and caches
-the report at `<workspace>/probe.json` (mode 0600): facts with the method beside them, never
-verdicts — and `false`, `absent` and `refused` are three different words.
-
-The field-by-field reading — what each probe field entitles you to conclude, the proposals
-folder, and where every piece lives — is [`docs/15-sandbox.md`](docs/15-sandbox.md), which
-also carries the standing rule: where this documentation and a live report disagree, **the
-report is the fact and the page has a bug**.
-
-## The agent loop
-
-Separate from both of those paths, and the thing that actually runs when a turn arrives: the loop from
-**speech or typing → a decision → an execution → a result → a record**.
-
-The loop operates across two execution paths:
-- **Typed turns**: submitted via the composer on **`POST /api/turn`**, which carries `{ transcript }`, asks the registered resolver seam (`lib/resolver.mjs`), and passes the resulting action to the executor.
-- **Live turns**: streamed over the **`/live`** WebSocket, where model tool calls (`toolCall`) are mapped via `commandToAction()` directly into the shared executor, returning tool outputs over the wire.
-
-Key invariants:
-- **What decides** is a **resolver seam** — a provider registered by name that turns a transcript into an
-  **action**, or into an explicit *unresolved* sentence. The server never parses language itself; that is what
-  the seam is for. Four resolvers are registered: the deterministic `script` provider (create/read/list/tools)
-  and the model-backed `gemini` (`GEMINI_API_KEY`), `openai` (`OPENAI_API_KEY`), and `claude` (`ANTHROPIC_API_KEY`) providers.
-- **Who executes** is **the executor the server calls** — the one place that touches the build environment. It
-  resolves every path *inside the active root* (including nested subdirectory paths while refusing `..`, symlink escapes, and protected `.audit` / dotfile segments) before touching it, computes LCS-based unified hunks on `diff_file` (`core/dispatch.ts`), records a per-root undo snapshot before mutating actions (`write`, `edit`, `delete`) that `undo_last_action` / `POST /api/undo` can revert, records a tool *proposal* without loading
-  it, and invokes tools through the runtime's admission, bounds and budget.
-- **Loading a tool** is an explicit host-authorized admission step (`POST /api/extensions/admit` with the host token, or a single-use console code via `POST /api/extensions/approve` / `node tools/approval-code.mjs`).
-- **Where the result goes** is back on the turn response (or live tool response frame), and into the active root for the verbs that write. A
-  tool that declines answers **refused with a reason** — a result, not an exception.
-- **What gets recorded** is the **audit in the active root**: a write records an attempt entry and a completed outcome entry; pre-flight refusals record a single refusal entry.
-- **Where it fails** is named: no root declared, the root vanishing, a path outside the root, nothing to do,
-  a tool declining, and a proposal that is recorded but **not loaded**. Each has its own sentence, because a
-  refusal that names the wrong cause is worse than no refusal.
-
-**The full section — including what is wired today and how to check each claim in a minute — is
-[`docs/09-agent-loop.md`](docs/09-agent-loop.md).** That page is the one to read before changing the resolver,
-the executor or the audit, and it is written to be checked against the running server rather than believed.
-
-## Running (the skeleton loop)
-
-```sh
-node server.mjs            # serves the page on http://127.0.0.1:8787
-```
-
-Open the page in Chrome, press the mic, and speak — e.g. *"create a file called
-hello.txt with hello world"*, *"read hello.txt"*, *"list files"*. A text field
-does the same without a mic. Every turn is captured, resolved to an action, and
-the result is written into **the active project root** — a real directory on
-disk, declared by the page (`POST /api/root`) rather than assumed.
-
-`VOICEBOX_WORKSPACE=/some/folder node server.mjs` declares one at boot, which is
-how you run the loop against a folder without opening the page. With no
-declaration the loop refuses every act by name — `root-not-declared` — because a
-default is a decision nobody made, and `workspace/` was exactly that. <!-- docs-check: names the mechanism -->
-
-What works today:
-
-- **Speech capture** — a live `AudioContext` at 16 kHz (using `AudioWorkletNode` off the main thread with a `ScriptProcessorNode` fallback, and chunked `String.fromCharCode.apply` PCM16 encoding) streamed as PCM16 over `/live` to
-  **models/gemini-3.8-live** via the Gemini Live API, **with thinking**. The
-  model's 24 kHz audio streams back and plays. Browser `SpeechRecognition`
-  dictation remains only as a no-key fallback for one-shot turns — it is not
-  the product path.
-- **Turn resolution** — a deterministic script resolver (`lib/resolver.mjs`)
-  that knows create/read/list/tools, plus the registered model-backed resolvers (`gemini`, `openai`, `claude`).
-  The resolver is a provider seam (`registerResolver(name, fn)`).
-- **The action executor** — writes/reads/lists/edits/diffs/undoes files in **the active project root** on disk, which the
-  environment page declares (or `VOICEBOX_WORKSPACE` at boot). It used to say `workspace/`, <!-- docs-check: names the mechanism --> which
-  stopped being true the moment the default root was retired: the loop has no root of its own, and a
-  sentence naming one was the last piece of the second root left standing in the docs.
-
-What does not work yet:
-
-- **No always-on conversation.** While a live session is open the mic streams
-  continuously, the model replies, and **you can talk over it (voicebox-beads-ldxa)**: the page watches the
-  microphone's own energy and, on sustained speech clear of the microphone's own recent floor (an adaptive level, so an echo cannot keep
-  interrupting and a normal voice over a loud agent is still heard), flushes
-  playback and asks the session to stop — so interrupting is speaking, not reaching for the button. The
-  honest limit is named in [the audio path](docs/07-architecture.md): with echo cancellation off and the
-  volume up, playback alone can clear those conditions and the page interrupts itself.
-  What is missing is the version with **no press at all** (a wake word or a
-  standing session), which is what the brief's "always-on" means.
-- **The loop has no root of its own.** It writes into the active project root, which the
-  environment declares — OPFS, a folder you picked, or a folder on this machine — and it
-  refuses by name when the root belongs to another placement (see the environment page
-  below, and `docs/evidence/one-root-20260920/RECEIPT.md`). There is no `workspace/` <!-- docs-check: names the mechanism -->
-  default any more: what used to be two roots is one.
-
-## The browser environment (projects that live in this browser)
-
-```sh
-node server.mjs            # then open http://127.0.0.1:8787/environment.html
-```
-
-A page with a **working environment** behind it rather than a chat box: an environment
-page at `/environment.html` where a project is a real root — either this origin's private
-OPFS storage, or **a folder you pick or drop** — held by a persisted directory handle, with
-an append-only audit beside the files, a tier table as data, and one tool (`create an asset`)
-running as a **Wasm module whose only two imports are the ones the host hands it**, which is
-what makes "it cannot reach the network" structural instead of promised.
-
-- The page always says **which kind of root** it is showing, whether it is held
-  persistently, which undo it has, and where its audit lives.
-- An **explorer over three roots** — origin storage, the picked folder, the server's
-  `workspace/` — each labelled <!-- docs-check: names the mechanism --> with its own authority, each a single bounded listing.
-- Files can be **deleted from the page**: the room's list and the environment explorer give a file a
-  Delete control, the confirmation names the file AND the root it will leave, closing it without an
-  answer keeps the file, and the deletion goes through the same route a write takes (a page-owned
-  root is deleted by the page that owns it) and is recorded in the root's own audit. Folders are not
-  deleted — there is no recursive delete.
-- Failures have names: `needs-gesture`, `permission-denied`, `handle-gone`,
-  `root-vanished`, `root-unreachable`, `not-found`, `not-a-project`.
-- The room's folder handles (`#open-folder`) provide read/write handles persisted across reloads in IndexedDB, supporting several directories at once with a "Restore access" button when permission regresses to prompt.
-- **The browser's own storage is the room's default writer when nothing else is** (voicebox-beads-vnos):
-  with no folder open and no root declared, `create a file called X with Y` lands in this origin's OPFS
-  `scratchpad/` directory — the same directory `#open-opfs-folder` opens — and the drawer, the count
-  beside it and the turn's own line (`wrote X (N bytes observed) in Browser Scratchpad (OPFS)`) all
-  speak about that folder. The fallback is narrow on purpose: a declared root that simply cannot act
-  keeps its named refusal (writing into different storage would be an answer nobody asked for), and a
-  turn that is not a file command still goes to the server and still refuses by name.
-- The drawer's two folder doors wear the card surface the file rows beside them use, with the stroked
-  folder glyph in the page's own symbol set (voicebox-beads-9rua), and a folder dragged over the panel
-  gets a dashed ring, a backdrop tint and copy that says what dropping does — held by a COUNTED
-  enter/leave pair, so the cue survives the platform's leave-as-the-pointer-crosses-onto-a-child event
-  and clears when the drag really leaves (voicebox-beads-n4kw).
-
-Checks: `npm run test:e1m0` <!-- docs-check: names the mechanism --> (25 acceptance checks, driven in a real headless Chromium).
-Evidence, including what the platform actually does with a dropped folder and the two
-behaviours that cannot be driven headlessly: [docs/evidence/picked-root-20260919/RECEIPT.md](docs/evidence/picked-root-20260919/RECEIPT.md).
-
-### Room interface construction
-
-The room frontend (`public/index.html`, `public/fused.js`, `public/style.css`) is built with modern web platform primitives:
-- Native `<dialog>` elements with `closedby="any"` light-dismiss and unified geometry-check fallback.
-- `container: env-dialog / inline-size;` container queries for dialog-width responsive form layouts.
-- Semantic `<search>` landmark element enclosing file filtering.
-- The room's file list uses aligned, full-width buttons with separate name/size columns, a bounded scroll area (`max-block-size: min(40svh, 24rem)`, `overflow-y: auto`), and a two-column layout only when its own container is wide enough. **A name never wraps** (voicebox-beads-y4c2): it stays on one line and truncates with an ellipsis, so a long name cannot make its row taller than its neighbours — the full name stays in the element's text and in the button's accessible name. **A folder looks like a folder** (voicebox-beads-35eg): its own icon plus a tinted card, cues that survive greyscale. Folder chips use the same light/dark tokens; root labels, arrival marks and permission controls keep their existing behavior.
-- Each file row carries a compact **trash icon inside its card** (voicebox-beads-io3a; previously a wide "Delete" word beside it) that opens a native `<dialog>` confirmation naming the file and the root it will be deleted from; closing it without an answer keeps the file, and the room's report line states the outcome (including the server's own name for a refusal).
-- `node --test tests/room-file-list-polish.test.mjs` measures those four list facts on the real page — one-line truncation against a neighbouring row's height, the icon's box inside the card, the folder cue a file must not wear, and the scroll bound that keeps a full folder from pushing the room off screen. Every glyph on the list — static or JS-built — is decorative and hidden from the accessibility tree (`aria-hidden="true"`, voicebox-beads-t3gq); the buttons' accessible names carry the meaning.
-- `node --test tests/room-explorer-ui.test.mjs` drives native read/filter/folder controls, keyboard activation, long filenames, empty/no-project states, and light/dark layouts at phone, desktop and narrow-container widths.
-- Scroll containment (`overscroll-behavior: contain`) and layout stabilization (`scrollbar-gutter: stable`).
-- Keyboard-accessible scrollable code region (`<pre id="file-body" tabindex="0">`), plus inline file creation (`#new-file-open`), editing/saving (`#file-edit`, `#file-save`, `#file-cancel`), syntax-colored diff toggling (`#file-diff`), downloading (`#file-download`), and one-click undo (`#undo-last`, `GET /api/undo`, `POST /api/undo`).
-- Expandable recent turns with search (`#turns-filter`), one-click copy (`#turns-copy`), JSONL export (`#turns-export`), and contextual refusal recovery buttons (`Declare project root`, `Open Extensions`, `Open Harnesses`).
-- Sandboxed mini-app container (`#mini-app-container`) with maximize/reload controls and bidirectional Web MCP tool registration (`navigator.modelContext.provideContext`, `POST /api/mini-app/tools`, `GET /api/mini-app/tools`) and live invocation (`mini_app_call` / `mini_app_result`, `window.__voiceboxMiniApp.callTool`).
-- Workspace root switcher (`#recent-roots-list`, `#declare-machine-root`) with an inline git branch and dirty-count badge (`#git-badge`) that opens the change log modal on click.
-- Audio input (`#agent-audio-input`) and output (`#agent-audio-output`, via `setSinkId`) device selectors in Agent Settings, plus a keyboard shortcuts cheatsheet (`#shortcuts-open`, `?` key).
-- IME composition safety on utterance input and turn submissions.
-- Change log and commit links: build stamp commit hashes in `#build` link to GitHub commits; `#changelog-open` in the header and `change log` in `#build` open the in-room `<dialog id="changelog-dialog">` modal (`GET /api/changelog`, with `public/changelog.html` also served directly).
-- Configurable microphone hotkey (default 'M', configurable in settings, persisted to local storage): keyboard-accessible toggle with visible feedback badge and aria-keyshortcuts on the mic button (tested in `tests/mic-hotkey.test.mjs`).
-- Real-time microphone button audio waveform animation (`#input-path`): dynamically tracks active speech output energy during playback and mic input during listening with color-coded distinction (green for agent voice output, accent for user input), dynamically blending barge-in without ceiling saturation and smoothly updating in the render loop without freezing (tested in `tests/mic-waveform-animation.test.mjs`, voicebox-beads-5i2i, 6vs4).
-- Refresh control in file view (`#file-refresh`): reloads the currently open file from disk, indicating loading state via `aria-busy` and error states when the file is removed, with retry capability (tested in `tests/file-view-refresh.test.mjs`).
+- **Scoped Test Runner (`npm run test:changed`)**:
+  Inspects git diffs against `origin/main`, maps modified source files to their exercising test suites, and runs only relevant tests. Essential for fast inner-loop iteration.
+- **Unit Suite (`npm run test:unit`)**:
+  Executes fast unit tests across core, lib, and browser logic in ~5 seconds.
+- **Full Test Suite (`npm test`)**:
+  Executes unit tests, concurrent server live tests (`--test-concurrency=4`), and serial browser CDP tests.
+- **Acceptance Gate (`npm run accept`)**:
+  Runs end-to-end verification asserting read idempotence, file write event verification, and headless browser proofs.
+- **Documentation Drift Check (`npm run docs:check`)**:
+  Verifies that generated capability tables in `README.md` remain synchronized with the runtime implementation. To regenerate blocks after code changes, run `npm run docs:write`.
