@@ -14,11 +14,18 @@ name: 'Agent Factory Audit'
 # 40-hex commit is accepted, and the action's own fetch_factory.sh checks the fetched commit
 # against the pin and REFUSES on mismatch: there is no fallback to a branch, tag or default.
 #
-# Inputs are STRICT. A dispatch is taken verbatim — a blank `agents` or `factory_ref` refuses by
-# name rather than falling back to a default — and only a scheduled run, which carries no inputs
-# at all, takes 'all' and the pinned commit. Do not reintroduce `${{ inputs.x || default }}`:
-# GitHub normalises a whitespace-only input to empty, so that pattern turns a typed-but-blank
-# request into the widest possible run (measured: dispatch 36708984621 ran the whole matrix).
+# Inputs are STRICT. A dispatch is taken verbatim: a `factory_ref` that is blank or not the pin
+# refuses by name, and an agent list that selects nothing refuses rather than widening. Do not
+# reintroduce `${{ inputs.x || default }}` — a fallback is how a narrow request silently becomes a
+# wide one.
+#
+# What GitHub actually does with a blank, measured on the runner 2026-09-30:
+#   `-f agents=,`     -> refuses by name, audit skipped (run 36710849452)
+#   `-f agents=bogus` -> names the unknown agent, audit skipped (run 36710964417)
+#   `-f 'agents= '`   -> ARRIVES AS THE DECLARED DEFAULT ('all') and runs everything (36710631726),
+#                        because a whitespace-only value is indistinguishable from an omitted one.
+# So the declared defaults below are part of the blast radius: keep them narrow, and never treat
+# 'blank' as a refusal that the shell will see — it is a value the runner never delivers.
 
 on:
   # NO SCHEDULE. Landing this workflow must not arm a paid run that nobody asked for: the
@@ -60,11 +67,12 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          # Dispatch values are taken VERBATIM below. They must not fall back: GitHub normalises
-          # a whitespace-only input to an empty string, and a `||` default would then turn a
-          # typed-but-blank agent into every agent. That is not hypothetical — dispatch
-          # 36708984621 passed `agents= ` and ran the whole matrix to success, at cost, because
-          # the fallback silently chose 'all' (voicebox-beads-xsjw). A blank value now refuses.
+          # Dispatch values are taken VERBATIM below: what the dispatch says is what runs, and a
+          # blank `factory_ref` refuses rather than silently falling back to the pin. Do not
+          # reintroduce `${{ inputs.x || default }}` — a fallback is how a narrow request becomes a
+          # wide one. A whitespace-only `agents` is NOT delivered as empty: GitHub substitutes the
+          # input's declared default, so it arrives as 'all' (run 36710631726 ran the whole matrix).
+          # The guard below therefore covers comma-only and similar non-whitespace values.
           INPUT_AGENTS: ${{ inputs.agents }}
           INPUT_REF: ${{ inputs.factory_ref }}
           # Must equal the ref in the `uses:` of the audit job below.
@@ -118,8 +126,10 @@ jobs:
             done
           fi
 
-          # A whitespace-only or comma-only input selects nothing above; without this the matrix
-          # would be empty and the only thing refusing it would be GitHub's own matrix validation.
+          # A comma-only or otherwise empty selection reaches here and refuses; a whitespace-only
+          # input does not (GitHub substitutes the declared default before the shell sees it).
+          # Without this the matrix would be empty and the only thing refusing it would be
+          # GitHub's own matrix validation.
           if [ "$(jq 'length' <<<"$SELECTED")" -lt 1 ]; then
             echo "::error::no agents selected from '$REQUESTED_AGENTS' (known: $(jq -r 'join(", ")' <<<"$ALL"))."
             exit 1
