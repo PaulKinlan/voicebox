@@ -14,10 +14,13 @@ name: 'Agent Factory Audit'
 # 40-hex commit is accepted, and the action's own fetch_factory.sh checks the fetched commit
 # against the pin and REFUSES on mismatch: there is no fallback to a branch, tag or default.
 #
-# Inputs are STRICT. A dispatch is taken verbatim: a `factory_ref` that is blank or not the pin
-# refuses by name, and an agent list that selects nothing refuses rather than widening. Do not
-# reintroduce `${{ inputs.x || default }}` — a fallback is how a narrow request silently becomes a
-# wide one.
+# Inputs are STRICT. A dispatch is taken verbatim: a `factory_ref` that is NOT the pin refuses by
+# name, and an agent list that selects nothing refuses rather than widening. Do not reintroduce
+# `${{ inputs.x || default }}` — a fallback is how a narrow request silently becomes a wide one.
+#
+# A blank input is not a refusal case, and must not be described as one: it never reaches the
+# shell. GitHub substitutes the input's DECLARED default for a whitespace-only or empty value, so
+# a blank `factory_ref` runs the pin (its default) and a blank `agents` runs 'all' — see below.
 #
 # What GitHub actually does with a blank, measured on the runner 2026-09-30:
 #   `-f agents=,`     -> refuses by name, audit skipped (run 36710849452)
@@ -68,9 +71,11 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           # Dispatch values are taken VERBATIM below: what the dispatch says is what runs, and a
-          # blank `factory_ref` refuses rather than silently falling back to the pin. Do not
-          # reintroduce `${{ inputs.x || default }}` — a fallback is how a narrow request becomes a
-          # wide one. A whitespace-only `agents` is NOT delivered as empty: GitHub substitutes the
+          # `factory_ref` that is not the pin refuses rather than being accepted. A blank value does
+          # not arrive blank at all — GitHub substitutes the declared default — so the refusal here
+          # covers wrong values, not empty ones (see the header, and the runner evidence in it).
+          # Do not reintroduce `${{ inputs.x || default }}` — a fallback is how a narrow request
+          # becomes a wide one. A whitespace-only `agents` is NOT delivered as empty: GitHub substitutes the
           # input's declared default, so it arrives as 'all' (run 36710631726 ran the whole matrix).
           # The guard below therefore covers comma-only and similar non-whitespace values.
           INPUT_AGENTS: ${{ inputs.agents }}
