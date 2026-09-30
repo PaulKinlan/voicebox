@@ -13,6 +13,12 @@ name: 'Agent Factory Audit'
 # The factory commit appears twice on purpose — in `uses:` and in FACTORY_PIN. Only a full
 # 40-hex commit is accepted, and the action's own fetch_factory.sh checks the fetched commit
 # against the pin and REFUSES on mismatch: there is no fallback to a branch, tag or default.
+#
+# Inputs are STRICT. A dispatch is taken verbatim — a blank `agents` or `factory_ref` refuses by
+# name rather than falling back to a default — and only a scheduled run, which carries no inputs
+# at all, takes 'all' and the pinned commit. Do not reintroduce `${{ inputs.x || default }}`:
+# GitHub normalises a whitespace-only input to empty, so that pattern turns a typed-but-blank
+# request into the widest possible run (measured: dispatch 36708984621 ran the whole matrix).
 
 on:
   # NO SCHEDULE. Landing this workflow must not arm a paid run that nobody asked for: the
