@@ -806,31 +806,53 @@ dialog.changelog-modal .commit-meta {
   color: var(--muted);
 }
 
-/* ── Interactive Mini-App Container (voicebox-beads-5h1) ───────────────── */
+/* ── Interactive Mini-App Popover & Anchored Bubble Dock (voicebox-beads-2twm) ── */
 .mini-app-container {
-  width: 100%;
-  max-width: 640px;
-  margin: 16px auto;
-  background: var(--card, #17191e);
-  border: 1px solid var(--line, #2b3138);
-  border-radius: 12px;
+  position: fixed;
+  inset-block-end: 24px;
+  inset-inline-end: 24px;
+  inline-size: min(540px, calc(100vw - 32px));
+  max-block-size: min(720px, calc(100vh - 80px));
+  margin: 0;
+  z-index: 120;
+  background: rgba(15, 23, 42, 0.94);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   box-sizing: border-box;
-  transition: max-width 0.2s ease-out;
+  transform-origin: bottom right;
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease, inline-size 0.2s ease, max-block-size 0.2s ease;
 }
+
 .mini-app-container[data-expanded="true"] {
-  max-width: 1100px;
+  inline-size: min(920px, calc(100vw - 48px));
+  max-block-size: min(800px, calc(100vh - 60px));
 }
+
+.mini-app-container[data-collapsed="true"] {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(16px) scale(0.95);
+}
+
 .mini-app-container[hidden] { display: none !important; }
+
+.mini-app-sheet-handle {
+  display: none;
+}
+
 .mini-app-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 10px 14px;
-  background: var(--shade, color-mix(in srgb, var(--card) 92%, var(--ink)));
-  border-bottom: 1px solid var(--line, #2b3138);
+  background: rgba(30, 41, 59, 0.85);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 .mini-app-title-group {
   display: flex;
@@ -882,6 +904,124 @@ dialog.changelog-modal .commit-meta {
   border: 0;
   display: block;
   background: transparent;
+}
+
+/* ── Anchored Mini-App Floating Bubble Dock ──────────────────────────── */
+.mini-app-dock {
+  position: fixed;
+  inset-block-end: max(16px, env(safe-area-inset-bottom));
+  inset-inline-end: calc(max(16px, env(safe-area-inset-right)) + 70px);
+  z-index: 110;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.mini-app-dock[hidden] {
+  display: none !important;
+}
+
+.mini-app-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  background: rgba(15, 23, 42, 0.92);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 9999px;
+  color: var(--ink, #e7e9ec);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.mini-app-bubble:hover {
+  background: rgba(30, 41, 59, 0.95);
+  border-color: color-mix(in srgb, var(--accent, #38bdf8) 50%, rgba(255, 255, 255, 0.2));
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px -4px rgba(0, 0, 0, 0.6), 0 0 12px color-mix(in srgb, var(--accent, #38bdf8) 30%, transparent);
+}
+
+.mini-app-bubble[aria-expanded="true"] {
+  border-color: color-mix(in srgb, var(--accent, #38bdf8) 60%, rgba(255, 255, 255, 0.3));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #38bdf8) 30%, transparent), 0 8px 24px -4px rgba(0, 0, 0, 0.6);
+}
+
+.mini-app-bubble-badge {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent, #38bdf8) 25%, transparent);
+  color: var(--accent, #38bdf8);
+  border: 1px solid color-mix(in srgb, var(--accent, #38bdf8) 40%, transparent);
+}
+
+.mini-app-bubble-title {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mini-app-bubble-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 8px #22c55e;
+}
+
+@media (max-width: 768px) {
+  .mini-app-container {
+    inset-block-start: auto;
+    inset-block-end: 0;
+    inset-inline-start: 0;
+    inset-inline-end: 0;
+    inline-size: 100%;
+    max-inline-size: 100%;
+    max-block-size: 82svh;
+    border-radius: 20px 20px 0 0;
+    border-inline: 0;
+    border-block-end: 0;
+    box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.7);
+    transform-origin: bottom center;
+  }
+
+  .mini-app-container[data-collapsed="true"] {
+    transform: translateY(100%);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .mini-app-sheet-handle {
+    display: block;
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.28);
+    margin: 8px auto 2px;
+  }
+
+  .mini-app-dock {
+    inset-block-end: calc(max(16px, env(safe-area-inset-bottom)) + 70px);
+    inset-inline-end: max(16px, env(safe-area-inset-right));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mini-app-container,
+  .mini-app-bubble {
+    transition: none !important;
+  }
 }
 
 /* Debugging stays in the room, but only an explicit ?debug=1 reveals it. */

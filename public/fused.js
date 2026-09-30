@@ -66,12 +66,16 @@ const WANTED = {
   deleteConfirmYes: "delete-confirm-yes", deleteConfirmNo: "delete-confirm-no",
   taskCard: "task-card",
   miniAppContainer: "mini-app-container",
+  miniAppSheetHandle: "mini-app-sheet-handle",
   miniAppTitle: "mini-app-title",
   miniAppViewport: "mini-app-viewport",
   miniAppReload: "mini-app-reload",
   miniAppExpand: "mini-app-expand",
   miniAppToggle: "mini-app-toggle",
   miniAppClose: "mini-app-close",
+  miniAppDock: "mini-app-dock",
+  miniAppBubble: "mini-app-bubble",
+  miniAppBubbleTitle: "mini-app-bubble-title",
   roomFoldersBar: "room-folders-bar", roomFoldersList: "room-folders-list",
   harnessesOpen: "harnesses-open", harnessesDialog: "harnesses-dialog",
   harnessesClose: "harnesses-close", harnessesCheck: "harnesses-check",
@@ -4199,6 +4203,8 @@ if (els.miniAppContainer) {
 
   function close() {
     els.miniAppContainer.hidden = true;
+    if (els.miniAppDock) els.miniAppDock.hidden = true;
+    if (els.miniAppBubble) els.miniAppBubble.setAttribute("aria-expanded", "false");
     if (els.miniAppViewport) els.miniAppViewport.replaceChildren();
     for (const [callId, entry] of pendingToolCalls.entries()) {
       clearTimeout(entry.timer);
@@ -4217,6 +4223,9 @@ if (els.miniAppContainer) {
   function toggle() {
     isCollapsed = !isCollapsed;
     els.miniAppContainer.dataset.collapsed = String(isCollapsed);
+    if (els.miniAppBubble) {
+      els.miniAppBubble.setAttribute("aria-expanded", isCollapsed ? "false" : "true");
+    }
     if (els.miniAppToggle) {
       els.miniAppToggle.setAttribute("aria-label", isCollapsed ? "Expand App" : "Collapse App");
       els.miniAppToggle.setAttribute("title", isCollapsed ? "Expand App" : "Collapse App");
@@ -4246,8 +4255,18 @@ if (els.miniAppContainer) {
     isCollapsed = false;
     els.miniAppContainer.dataset.collapsed = "false";
     els.miniAppContainer.hidden = false;
+    const title = descriptor.title || "Interactive Mini-App";
     if (els.miniAppTitle) {
-      els.miniAppTitle.textContent = descriptor.title || "Interactive Mini-App";
+      els.miniAppTitle.textContent = title;
+    }
+    if (els.miniAppDock) {
+      els.miniAppDock.hidden = false;
+    }
+    if (els.miniAppBubbleTitle) {
+      els.miniAppBubbleTitle.textContent = title;
+    }
+    if (els.miniAppBubble) {
+      els.miniAppBubble.setAttribute("aria-expanded", "true");
     }
 
     const appId = descriptor.appId || `app_${Date.now().toString(36)}`;
@@ -4298,6 +4317,28 @@ if (els.miniAppContainer) {
   if (els.miniAppToggle) els.miniAppToggle.addEventListener("click", toggle);
   if (els.miniAppExpand) els.miniAppExpand.addEventListener("click", expandToggle);
   if (els.miniAppReload) els.miniAppReload.addEventListener("click", reload);
+  if (els.miniAppBubble) els.miniAppBubble.addEventListener("click", toggle);
+
+  // Quick light-dismiss when clicking outside the popover card and dock
+  document.addEventListener("pointerdown", (e) => {
+    if (els.miniAppContainer && !els.miniAppContainer.hidden && els.miniAppContainer.dataset.collapsed !== "true") {
+      const target = e.target;
+      if (!els.miniAppContainer.contains(target) && (!els.miniAppDock || !els.miniAppDock.contains(target))) {
+        toggle();
+      }
+    }
+  });
+
+  // Quick dismiss on Escape key unless an open modal dialog is handling it
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && els.miniAppContainer && !els.miniAppContainer.hidden && els.miniAppContainer.dataset.collapsed !== "true") {
+      const anyModal = document.querySelector("dialog[open]");
+      if (!anyModal) {
+        toggle();
+        e.stopPropagation();
+      }
+    }
+  });
 
   miniAppController = {
     mount,

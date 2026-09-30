@@ -403,6 +403,7 @@
       <section class="task-card" id="task-card" hidden aria-labelledby="task-card-title"></section>
 
       <section class="mini-app-container card" id="mini-app-container" hidden aria-labelledby="mini-app-title">
+        <div class="mini-app-sheet-handle" id="mini-app-sheet-handle" aria-hidden="true"></div>
         <header class="mini-app-header">
           <div class="mini-app-title-group">
             <span class="mini-app-badge">App</span>
@@ -429,6 +430,15 @@
         </header>
         <div class="mini-app-viewport" id="mini-app-viewport"></div>
       </section>
+
+      <!-- Anchored Mini-App floating bubble launcher dock (voicebox-beads-2twm) -->
+      <aside class="mini-app-dock" id="mini-app-dock" hidden aria-label="Active Mini-App">
+        <button class="mini-app-bubble" id="mini-app-bubble" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="mini-app-container" title="Toggle Mini-App">
+          <span class="mini-app-bubble-badge" aria-hidden="true">App</span>
+          <span class="mini-app-bubble-title" id="mini-app-bubble-title">Interactive Mini-App</span>
+          <span class="mini-app-bubble-dot" aria-hidden="true"></span>
+        </button>
+      </aside>
 
       <section class="session" id="session" hidden aria-labelledby="session-heading">
         <div class="session-head">
