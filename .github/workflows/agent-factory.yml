@@ -1,0 +1,230 @@
+name: 'Agent Factory Audit'
+
+# Ported from the proven audio-feed workflow:
+#   audio-feed/.github/workflows/agent-factory-modern-web.yml @ main
+#   (landed 03e1d98, hardened by 1d93393; live run 36643628317 all green)
+# Same pins and same guards. Two deliberate differences:
+#   1. the agent list is data-driven (.github/factory-agents.json) — adding an agent is a
+#      config change, not a workflow change;
+#   2. one job per agent (max-parallel 1): each agent gets its own report artifact and its
+#      own loud failure, while beads writes stay serialised (each job pulls, creates, pushes).
+#
+# The factory commit appears twice on purpose — in `uses:` and in FACTORY_PIN. Only a full
+# 40-hex commit is accepted, and the action's own fetch_factory.sh checks the fetched commit
+# against the pin and REFUSES on mismatch: there is no fallback to a branch, tag or default.
+
+on:
+  schedule:
+    # Daily at 04:00 UTC
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      agents:
+        description: 'Agents to run: "all" (default) or a comma-separated subset of .github/factory-agents.json'
+        required: false
+        default: 'all'
+      factory_ref:
+        description: 'Factory commit to run. Must equal the pin in this workflow; any other value refuses.'
+        required: false
+        default: 'c7363b49d2957323b3ae8b60560d44a93379c316'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: 'Plan agents and factory pin'
+    runs-on: ubuntu-latest
+    outputs:
+      agents: ${{ steps.plan.outputs.agents }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve agents and verify the factory pin
+        id: plan
+        shell: bash
+        env:
+          # Must equal the ref in the `uses:` of the audit job below.
+          FACTORY_PIN: 'c7363b49d2957323b3ae8b60560d44a93379c316'
+          REQUESTED_REF: ${{ inputs.factory_ref || 'c7363b49d2957323b3ae8b60560d44a93379c316' }}
+          REQUESTED_AGENTS: ${{ inputs.agents || 'all' }}
+        run: |
+          set -euo pipefail
+
+          # A pin is a pin: a dispatch naming another commit refuses here rather than falling
+          # back, and the action's fetch_factory.sh refuses again on the fetched SHA.
+          if ! [[ "$REQUESTED_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::factory_ref '$REQUESTED_REF' is not a full 40-character commit SHA."
+            exit 1
+          fi
+          if [ "$REQUESTED_REF" != "$FACTORY_PIN" ]; then
+            echo "::error::factory_ref '$REQUESTED_REF' is not the pinned factory commit '$FACTORY_PIN'. Refusing rather than falling back."
+            exit 1
+          fi
+
+          CONFIG=".github/factory-agents.json"
+          if [ ! -f "$CONFIG" ]; then
+            echo "::error::$CONFIG is missing: the agent list has no source."
+            exit 1
+          fi
+
+          ALL="$(jq -c '.agents' "$CONFIG")"
+          if [ "$(jq 'length' <<<"$ALL")" -lt 1 ]; then
+            echo "::error::$CONFIG lists no agents."
+            exit 1
+          fi
+
+          if [ "$REQUESTED_AGENTS" = "all" ]; then
+            SELECTED="$ALL"
+          else
+            SELECTED="[]"
+            for agent in $(tr ',' ' ' <<<"$REQUESTED_AGENTS"); do
+              if ! jq -e --arg a "$agent" 'index($a) != null' <<<"$ALL" >/dev/null; then
+                echo "::error::agent '$agent' is not in $CONFIG (known: $(jq -r 'join(", ")' <<<"$ALL"))."
+                exit 1
+              fi
+              SELECTED="$(jq -c --arg a "$agent" '. + [$a]' <<<"$SELECTED")"
+            done
+          fi
+
+          echo "Factory pin:  $REQUESTED_REF"
+          echo "Agents:       $SELECTED"
+          echo "agents=$SELECTED" >> "$GITHUB_OUTPUT"
+
+  audit:
+    name: 'Audit: ${{ matrix.agent }}'
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # One beads writer at a time: each job pulls the Dolt DB, creates its findings, pushes.
+      max-parallel: 1
+      matrix:
+        agent: ${{ fromJSON(needs.plan.outputs.agents) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Verify DeepSeek API Key Secret
+        shell: bash
+        env:
+          KEY: ${{ secrets.DEEPSEEK_API_KEY || secrets.deepseek_api_key }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::DEEPSEEK_API_KEY secret is not configured in repository secrets; the audit cannot run without a model key."
+            exit 1
+          fi
+
+      - name: Install Beads CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Installing bd (Beads CLI v1.3.0)..."
+          EXPECTED_SHA256="2f92b904ecf35b607e44dc5c39229173af69c54f1183e8d709f1773540cdcf3b"
+          TARBALL="$RUNNER_TEMP/beads_1.3.0_linux_amd64.tar.gz"
+          curl -fsSL "https://github.com/gastownhall/beads/releases/download/v1.3.0/beads_1.3.0_linux_amd64.tar.gz" -o "$TARBALL"
+          echo "${EXPECTED_SHA256}  ${TARBALL}" | sha256sum -c -
+          sudo tar -xz -C /usr/local/bin -f "$TARBALL" bd
+          sudo chmod +x /usr/local/bin/bd
+          rm -f "$TARBALL"
+          bd --version
+
+      - name: Set up Beads Database
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "Initializing and restoring Beads Dolt database..."
+          git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+          git fetch origin refs/dolt/data:refs/dolt/data || true
+          bd init --prefix voicebox || true
+          bd dolt pull origin
+          bd list >/dev/null
+          bd ready || true
+
+      - name: Drop the Dolt URL rewrite before third-party code is fetched
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The bootstrap above rewrote github.com to an x-access-token URL globally so that
+          # `bd dolt pull` could authenticate. That rewrite is global git config, so it would
+          # also supply the token to the action's own factory fetch — the step the action
+          # deliberately scrubs credentials for. The factory is fetched at a pinned SHA and its
+          # commit is checked, but there is no reason to hand it a token: drop the rewrite here
+          # and let the Sync step put it back for the dolt push.
+          git config --global --remove-section "url.https://x-access-token:${GH_TOKEN}@github.com/" || true
+
+      - name: Run Factory Agent (${{ matrix.agent }})
+        id: factory_agent
+        uses: PaulKinlan/agents/.github/actions/factory@c7363b49d2957323b3ae8b60560d44a93379c316
+        with:
+          agent: ${{ matrix.agent }}
+          target: '.'
+          engine: deepseek
+          # The file sink is not listed because it always runs: it writes the delta report this
+          # job asserts on. beads takes medium findings only — voicebox is public, so the
+          # factory's own embargo withholds critical and high from any synced tracker.
+          sink: 'beads'
+          deepseek_api_key: ${{ secrets.DEEPSEEK_API_KEY || secrets.deepseek_api_key }}
+          deepseek_model: 'deepseek-chat'
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          factory_ref: 'c7363b49d2957323b3ae8b60560d44a93379c316'
+
+      - name: Verify Audit Report Production
+        shell: bash
+        env:
+          DELTA_REPORT: ${{ steps.factory_agent.outputs.delta_report }}
+        run: |
+          set -euo pipefail
+          echo "Verifying ${{ matrix.agent }} produced a findings report..."
+          if [ -z "$DELTA_REPORT" ]; then
+            echo "::error::Factory agent completed with no report output (silent no-op)."
+            exit 1
+          fi
+          if [ ! -s "$DELTA_REPORT" ]; then
+            echo "::error::Report '$DELTA_REPORT' was declared but does not exist on disk or is empty."
+            exit 1
+          fi
+          LINES="$(wc -l < "$DELTA_REPORT")"
+          if [ "$LINES" -lt 1 ]; then
+            echo "::error::Report '$DELTA_REPORT' is empty."
+            exit 1
+          fi
+          echo "Report verified: $DELTA_REPORT ($LINES lines)"
+
+      - name: Sync Beads Database
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -d ".beads" ] && command -v bd >/dev/null 2>&1; then
+            echo "Syncing Beads Dolt database to origin..."
+            git config --global user.name "github-actions[bot]"
+            git config --global user.email "github-actions[bot]@users.noreply.github.com"
+            git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+            # voicebox's beads DB has other writers (the fleet lanes), so a push can be
+            # rejected as non-fast-forward between the bootstrap pull and here. Merge and
+            # retry once; a genuine auth or transport failure still fails this step loudly.
+            if ! bd dolt push origin; then
+              echo "::warning::dolt push rejected; pulling and retrying once."
+              bd dolt pull origin
+              bd dolt push origin
+            fi
+          fi
