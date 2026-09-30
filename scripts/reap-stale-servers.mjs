@@ -9,14 +9,24 @@
 // 29Gi of swap and hours of a core. cap-reap-chrome.sh is the same class of
 // fix for browsers; this is the one for voicebox servers.
 //
+// SCOPE (decided 2026-09-30, Paul's directive was box-wide): this reaper is
+// FLEET-WIDE. ~/worktrees is the whole fleet's worktree root (cap, audiofeed,
+// isocan, webai, sotw, uplift, voicebox...), and the incident that motivated
+// this script was box-wide — leaked servers from ANY project's lane. The
+// scope is declared here and pinned in tests, not left as an accident of the
+// roots list (astra's rmgq review blocker).
+//
 // CONTRACT (a process is a victim only if EVERY clause of isVictim holds);
 // the clauses are a pure predicate, unit-tested in tests/reap-stale-servers.test.mjs:
 //   1. node or deno, running a server/preview shape.
-//   2. cwd inside voicebox's world (~/worktrees, ~/voicebox-wt, ~/voicebox,
-//      /tmp/voicebox-*, or a stale /vb-<id>/ fragment whose worktree was removed).
-//   3. older than the age floor: 4h worktree/tmp, 24h canonical checkout.
+//   2. cwd inside the fleet's world (~/worktrees — all projects, ~/voicebox-wt,
+//      ~/voicebox, /tmp/voicebox-*, or a stale /vb-<id>/ fragment whose
+//      worktree was removed).
+//   3. older than the age floor: 4h for fleet worktrees, 24h for the canonical
+//      voicebox checkout (a deliberate front lives there).
 //   4. not pinned: no VOICEBOX_PINNED=1 in environ, no .pinned-server marker in cwd.
-//   5. the gate lock (/tmp/voicebox-gate.lock) not held — else skip the whole round.
+//   5. the gate lock (/tmp/voicebox-gate.lock) not freshly held (<1h) — a live
+//      gate's servers are untouchable while it runs.
 //   6. not this script or its parent.
 // /tmp sweep: voicebox-cdp-* and vb-accept-* fixture dirs older than 6h.
 //

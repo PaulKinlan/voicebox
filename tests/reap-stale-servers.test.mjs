@@ -62,6 +62,15 @@ test("scope: /tmp/voicebox-* fixtures are in scope; stale /vb-<id>/ fragments ar
   assert.equal(victim({ cwd: "/tmp", ageSec: 99 * HOUR }), false);
 });
 
+test("FLEET-WIDE by declaration: a cap worktree server is a victim (astra's blocker pin)", () => {
+  assert.equal(victim({ cwd: "/home/paulkinlan/worktrees/cap-x", ageSec: 99 * HOUR }), true);
+  assert.equal(
+    victim({ cwd: "/home/paulkinlan/worktrees/audiofeed-ds-flash-review-rqp", ageSec: 127 * HOUR }),
+    true,
+    "the audiofeed process that motivated the fleet-wide declaration must stay a victim",
+  );
+});
+
 // ── selectVictims: the ps-lines layer ────────────────────────────────────────
 
 const line = (pid, args, ageSec, ppid = 1) => `${pid} ${ppid} ${ageSec} node ${args}`;
