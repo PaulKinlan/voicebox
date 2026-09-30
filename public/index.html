@@ -54,17 +54,16 @@
             <h2 id="harnesses-dialog-title">Harnesses</h2>
             <button class="icon-button" id="harnesses-close" type="submit" aria-label="Close harnesses"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
           </div>
-          <p class="env-hint">Programs on this Voicebox server's machine, not necessarily your browser's machine. Checks run <code>--version</code>, not model tasks. Expand a declared tool catalogue to read host-supplied tools.</p>
+          <p class="env-hint">Coding agents and CLI tools detected on the Voicebox host.</p>
           <div class="harness-actions">
             <button class="quiet" id="harnesses-check" type="button">Check installed harnesses</button>
             <span class="harness-status" id="harnesses-status" role="status" aria-live="polite">Not checked yet.</span>
           </div>
           <div class="harnesses-list" id="harnesses-list"></div>
-          <h3 class="ext-section">Scope and limits</h3>
+          <h3 class="ext-section">Task Delegation</h3>
           <p class="env-note" id="harnesses-scope"></p>
-          <p class="env-hint">Each harness keeps its own security and configuration; this does not wrap it in a Voicebox sandbox.</p>
-          <p class="env-hint">This is installed-program inventory with optional host-declared tool metadata, not configured agents, a default selection, or fleet/session addressing. Metadata does not prove active tools or permissions. Cost, model access and task readiness are unknown.</p>
-          <p class="env-hint">Pi coding agent is supported via the <code>pi-acp</code> adapter (start the server with <code>VOICEBOX_HARNESS=pi</code>). Other CLIs (like Claude Code) have no configured ACP adapter and cannot be delegated to directly.</p>
+          <p class="env-hint">Delegation to the Pi coding agent is enabled when the server is started with <code>VOICEBOX_HARNESS=pi</code>.</p>
+          <p class="env-hint">Each harness runs under its own host permissions and credentials.</p>
         </form>
       </dialog>
       <button class="quiet icon-button" id="changelog-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="changelog-dialog" aria-label="Change log" title="Change log"><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg><span class="sr-only">Change log</span></button>
@@ -74,7 +73,7 @@
             <h2 id="changelog-dialog-title">Change log</h2>
             <button class="icon-button" id="changelog-close" type="submit" aria-label="Close change log"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
           </div>
-          <p class="env-hint">Recent commits and updates to Voicebox. Each change links to its commit on GitHub. <a href="https://github.com/PaulKinlan/voicebox/commits/main" target="_blank" rel="noopener noreferrer">View all commits on GitHub &rarr;</a></p>
+          <p class="env-hint">Recent updates and commit log. <a href="https://github.com/PaulKinlan/voicebox/commits/main" target="_blank" rel="noopener noreferrer">View all commits on GitHub &rarr;</a></p>
           <div class="harness-actions">
             <button class="quiet" id="changelog-refresh" type="button">Refresh</button>
             <span class="harness-status" id="changelog-status" role="status" aria-live="polite">Not loaded yet.</span>
@@ -96,9 +95,9 @@
             <h2 id="exts-title">Extensions</h2>
             <button class="icon-button" id="exts-close" type="button" aria-label="Close extensions"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
           </div>
-          <p class="env-hint">Extensions give the agent new abilities. The machine that runs the server decides what is allowed; this page shows what is here and what each one would get.</p>
+          <p class="env-hint">Tools and abilities available to the voice agent.</p>
           <div id="exts-list">
-            <h3 class="ext-section">Wasm shelf — digest-pinned, callable now</h3>
+            <h3 class="ext-section">WebAssembly Tools</h3>
             <ul class="env-list" id="ext-shelf"></ul>
             <h3 class="ext-section">Running</h3>
             <ul class="env-list" id="ext-running"></ul>
@@ -115,7 +114,7 @@
           </div>
           <div class="env-add-block" id="ext-create-section">
             <h3 class="env-add-title">Create local extension</h3>
-            <p class="env-hint">Define a local tool for this Voicebox server. Staging creates a pending proposal; the host reviews and admits it.</p>
+            <p class="env-hint">Create a local tool definition. Admitting it makes it callable by the agent.</p>
             <form class="env-add" id="ext-create-form">
               <input id="ext-create-id" type="text" placeholder="ID (e.g. local-search)" aria-label="extension id" required pattern="[a-z0-9_-]+" />
               <input id="ext-create-name" type="text" placeholder="Name (e.g. Local Search)" aria-label="extension name" required />
@@ -141,19 +140,19 @@
             <h2 id="ext-manage-title">Reconfigure extension</h2>
             <button class="icon-button" id="ext-manage-close" type="button" aria-label="Close extension settings"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
           </div>
-          <p class="env-hint" id="ext-manage-hint">Update bounds or remove this extension to restore tool access.</p>
+          <p class="env-hint" id="ext-manage-hint">Update network limits or remove this extension.</p>
           <input type="hidden" id="ext-manage-id" value="">
           <input type="hidden" id="ext-manage-mode" value="reconfigure">
 
           <div id="ext-manage-fields">
             <label class="device-row" id="ext-manage-hosts-group">
               <h3>Allowed network hosts</h3>
-              <p class="device-state">Comma-separated domains this extension may fetch.</p>
+              <p class="device-state">Allowed domains (comma-separated).</p>
               <input type="text" id="ext-manage-hosts" placeholder="api.example.com" class="setting-input">
             </label>
             <label class="device-row" id="ext-manage-requests-group">
               <h3>Max requests</h3>
-              <p class="device-state">Maximum number of outbound requests allowed.</p>
+              <p class="device-state">Maximum outbound requests.</p>
               <input type="number" id="ext-manage-max-requests" placeholder="20" class="setting-input">
             </label>
           </div>
@@ -185,7 +184,7 @@
           </div>
           <p class="device-note" id="delete-confirm-what"></p>
           <p class="device-state" id="delete-confirm-where"></p>
-          <p class="device-note" id="delete-confirm-warning">The root's own log records the deletion. Esc or a click outside keeps the file — an unanswered question is never a yes.</p>
+          <p class="device-note" id="delete-confirm-warning">This action removes the file from your workspace. Esc or clicking outside cancels.</p>
           <div class="settings-actions">
             <button type="submit" class="quiet" id="delete-confirm-no">Keep it</button>
             <button type="button" class="quiet danger" id="delete-confirm-yes">Delete file</button>
@@ -209,12 +208,12 @@
                  drift apart. -->
             <button class="icon-button" id="envs-help" type="button" aria-label="What these options mean" aria-describedby="envs-help-text">?</button>
             <button class="icon-button" id="envs-close" type="submit" aria-label="Close environments"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
-            <p class="sr-only" id="envs-help-text">An environment is a place your project can live and turns can run: this browser, a server on this machine, or a server on another machine you can reach. The first box is what you will call it in the list; the second is how to reach that machine's server — the same address you would open in a browser, for example http://127.0.0.1:8787. Turns run on a server environment while that server is answering, and a server that is not answering says so when you look.</p>
+            <p class="sr-only" id="envs-help-text">Environments are where your project files live and where commands run: this browser (OPFS), your local machine, or a remote server.</p>
           </div>
           <ul class="env-list" id="env-list"></ul>
           <div class="env-add-block">
             <h3 class="env-add-title">Add an environment</h3>
-            <p class="env-hint" id="env-hint">Records where to reach a server — it does not start anything.</p>
+            <p class="env-hint" id="env-hint">Add a server connection by URL. It does not start a service.</p>
             <div class="env-add" id="env-add">
               <input id="env-add-label" type="text" placeholder="Name (e.g. atlas box)" aria-label="environment name" autocomplete="off" />
               <input id="env-add-origin" type="text" placeholder="http://127.0.0.1:8787" aria-label="environment origin" autocomplete="off" />
@@ -265,21 +264,18 @@
                the control does. The way back is a route, not a folder, and stays a word. -->
           <button class="quiet" id="open-folder" type="button"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg>Open a folder…</button>
           <button class="quiet" id="open-opfs-folder" type="button" title="Open a persistent workspace in this browser's own storage (OPFS)"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg>Browser scratchpad</button>
-          <button class="quiet" id="close-folder" type="button" hidden>Back to the server's folder</button>
-          <span class="room-folder-hint" id="room-folder-hint" hidden>or drop a folder here</span>
+          <button class="quiet" id="close-folder" type="button" hidden>Back to server folder</button>
+          <span class="room-folder-hint" id="room-folder-hint" hidden>or drop folder here</span>
         </div>
         <div class="room-folders-bar" id="room-folders-bar" hidden>
           <div class="room-folders-list" id="room-folders-list" role="tablist" aria-label="Opened folders"></div>
         </div>
         <p class="list-bound" id="list-bound" role="status" hidden></p>
-        <!-- DROP COPY (voicebox-beads-n4kw): the visible half of the drop target, shown by the drag handlers
-             in fused.js only while a folder is over the panel. It says what dropping does — the room reads
-             the folder in this tab; nothing here writes, so a dropped folder is read-only in fact. -->
-        <p class="drop-hint" id="drop-hint" hidden>Drop the folder to open it here — the room reads it in this tab.</p>
+        <p class="drop-hint" id="drop-hint" hidden>Drop the folder to open it read-only in this tab.</p>
         <ul class="files" id="files" role="list" aria-busy="true"></ul>
         <div class="empty" id="empty">
-          <h3 id="empty-headline">Nothing made yet.</h3>
-          <p id="empty-next">Say or type something that names a file and it lands here.</p>
+          <h3 id="empty-headline">Say or type something that names a file.</h3>
+          <p id="empty-next">Speak or type a request to create or edit files in this workspace.</p>
           <p class="empty-why" id="empty-why" hidden></p>
           <p class="empty-action" id="empty-action" hidden><a class="small-button" id="empty-link" href="/environment.html">Open a project</a></p>
           <!-- A LABEL, because these sit inside the "Made while we talk" section: without one, a count of
@@ -330,15 +326,10 @@
             <kbd class="mic-hotkey-badge" id="mic-hotkey-badge" aria-hidden="true">M</kbd>
           </button>
         </div>
-        <p class="voice-state" id="voice-state" role="status">Microphone off — press the circle to speak</p>
+        <p class="voice-state" id="voice-state" role="status">Microphone off. Tap circle to speak or press M.</p>
         <div class="voice-actions">
           <button class="quiet interrupt" id="interrupt" type="button" disabled>Stop reply</button>
         </div>
-        <!-- A REAL MODAL: <dialog> + showModal(). The platform gives modality, focus trapping, an
-             inert background and Esc-to-cancel; ::backdrop gives the frosting. It used to be a block in
-             the flow, which is why opening it pushed the page down and a phone had to scroll to it.
-             closedby="any" is native light-dismiss (close-on-backdrop-click); fused.js carries the
-             documented fallback for browsers that do not support it yet. -->
         <dialog class="settings" id="settings" closedby="any" aria-labelledby="settings-title">
           <form class="settings-form" method="dialog">
           <div class="settings-head">
@@ -364,7 +355,7 @@
             <h3 class="settings-section-title">Agent Settings</h3>
           </div>
           <div class="device-row">
-            <h3 id="agent-provider-label">The agent</h3>
+            <h3 id="agent-provider-label">Provider</h3>
             <select id="agent-provider" aria-labelledby="agent-provider-label"></select>
             <p class="device-state" id="agent-provider-state">Not asked yet</p>
           </div>
@@ -374,7 +365,7 @@
             <p class="device-state" id="agent-model-state">Not asked yet</p>
           </div>
           <div class="device-row">
-            <h3 id="agent-voice-label">Its voice</h3>
+            <h3 id="agent-voice-label">Voice</h3>
             <select id="agent-voice" aria-labelledby="agent-voice-label"></select>
             <p class="device-state" id="agent-voice-state">Not asked yet</p>
           </div>
@@ -384,28 +375,21 @@
             <p class="device-state" id="agent-timbre-state">Not asked yet</p>
           </div>
           <div class="device-row">
-            <h3 id="agent-personality-label">Its personality</h3>
+            <h3 id="agent-personality-label">Persona</h3>
             <select id="agent-personality" aria-labelledby="agent-personality-label"></select>
             <p class="device-state" id="agent-personality-state">Not asked yet</p>
           </div>
           <div class="device-row">
             <h3 id="agent-custom-instruction-label">Custom prompt guidance</h3>
             <textarea id="agent-custom-instruction" class="setting-input" rows="2" placeholder="Optional custom instructions to layer over the base rules..." aria-labelledby="agent-custom-instruction-label"></textarea>
-            <p class="device-state" id="agent-custom-instruction-state">Layered subordinate to the mandatory base rules</p>
+            <p class="device-state" id="agent-custom-instruction-state">Custom instructions layered over base rules</p>
           </div>
           <details class="about" id="agent-rules">
-            <summary>What no personality can change</summary>
+            <summary>Safety & System Rules</summary>
             <p id="agent-base"></p>
             <p class="device-state" id="agent-base-note"></p>
           </details>
-          <!-- "This window", not "this room": the system has no rooms — no room
-               object, no room state — and a word that names a concept the
-               software does not have makes a person doubt what they are looking
-               at. The drawer also used to open onto NOTHING (the paragraph was
-               never written), so it now carries the two facts that exist and
-               are worth having here: where turns write, and which revisions are
-               on each side. -->
-          <details class="about"><summary>This window</summary><p id="about-facts"></p></details>
+          <details class="about"><summary>Workspace Details</summary><p id="about-facts"></p></details>
           </form>
         </dialog>
         <form class="composer" id="text-form">
@@ -459,7 +443,7 @@
             <h2 id="transcript-dialog-title">Session transcript</h2>
             <button class="icon-button" id="transcript-dialog-close" type="submit" aria-label="Close transcript"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
           </div>
-          <p class="env-hint">Copy what was said and done in this tab, or copy the redacted debug log for troubleshooting. Review before sharing; transcripts can include personal text.</p>
+          <p class="env-hint">Copy conversation turns or redacted diagnostic logs for troubleshooting.</p>
           <p class="harness-status" id="transcript-dialog-summary" role="status" aria-live="polite">0 turns · 0 debug events · 0 errors (redacted)</p>
           <div class="transcript-section">
             <div class="transcript-section-head">
@@ -501,7 +485,7 @@
     </footer>
   </div>
 
-  <noscript><p class="no-script">Voicebox needs JavaScript: the file list, the turns and the microphone are all driven by the page. Nothing here is a static picture of them.</p></noscript>
+  <noscript><p class="no-script">Voicebox requires JavaScript for real-time voice, file browsing, and agent interaction.</p></noscript>
 
   <!-- The docked microphone (voicebox-beads-dzd): the same control, one surface.
        While the ring button is on screen this button is hidden — one mic in the

@@ -921,8 +921,8 @@ function renderEmptyState() {
   // 1. no answer from the server: nothing can be written, and saying so is the
   //    useful sentence.
   if (els.dot?.dataset.ok === "false") {
-    headline.textContent = "Start the local server.";
-    next.textContent = "It is not answering, so nothing can be written yet — start it, then press Refresh.";
+    headline.textContent = "Server disconnected.";
+    next.textContent = "The Voicebox server is not responding. Ensure it is running and click Refresh.";
     if (els.emptyWhy) { els.emptyWhy.hidden = true; }
     if (els.emptyAction) els.emptyAction.hidden = true;
     if (els.emptyLink) els.emptyLink.textContent = "Open the environment page";
@@ -934,17 +934,8 @@ function renderEmptyState() {
   // 2. no root declared: the next action is to open a project, and that is a
   //    different page, so the page points at it.
   if (activeRoot === null) {
-    // A remedy with no route is worse than a bare refusal: it reads as though
-    // the way exists and you simply cannot find it. Paul asked "How do I set the
-    // project root? I don't see any configuration" while looking at a sentence
-    // that named the remedy and offered no way to reach it (2026-09-20), so the
-    // route is the first thing after the sentence — a real link, labelled with
-    // where it goes.
     headline.textContent = "Open a project.";
-    // The chip already said the state. This line says only the route — plus the ONE command that lands with
-    // nothing declared, because a page that can honour "make me a file" and does not say so is withholding
-    // the affordance it already has (voicebox-beads-vnos).
-    next.textContent = "The environment page is where you choose the folder that turns save into — or say “create a file called notes.md with hello” and it lands in this browser's scratchpad.";
+    next.textContent = "Open a folder above to save files locally, or speak to create files in the browser scratchpad.";
     if (els.emptyAction) els.emptyAction.hidden = false;
     if (els.emptyLink) els.emptyLink.textContent = "Open the environment page";
     if (els.emptyWhy) { els.emptyWhy.hidden = true; }
