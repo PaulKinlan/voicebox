@@ -112,6 +112,7 @@ snapshot:
 | [`docs/02-environment.md`](docs/02-environment.md), [`docs/05-harvest.md`](docs/05-harvest.md) | **design records** | systems that may not exist yet — allowed to describe the future |
 | [`docs/07-architecture.md`](docs/07-architecture.md), [`docs/08-how-it-runs.md`](docs/08-how-it-runs.md), this README | **snapshots** | what runs *now*; a claim here that the code contradicts is a bug in the document |
 | [`docs/20-webassembly-tools.md`](docs/20-webassembly-tools.md) | **developer guide** | authoring + compiling + admitting + executing WASM shelf tools; the buffer ABI contracts (voicebox-beads-rgvi) |
+| [`docs/21-factory-agent-proposal.md`](docs/21-factory-agent-proposal.md) | **proposal** | which Software Factory agents this project's own history justifies enabling first, which it rejects with reasons, the cadence, and how findings reach beads (voicebox-beads-h0nv) |
 
 The blocks marked `BEGIN GENERATED` are written by `scripts/docs-check.mjs` from the code itself, and
 `tests/docs-drift.test.mjs` fails when they drift. The prose **around** them is watched too:
