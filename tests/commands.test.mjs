@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { COMMANDS, COMMAND_VERBS, commandToAction, functionDeclarations, liveSystemInstruction } from "../lib/commands.mjs";
 
 test("the list declares file and extension actions — the executor's verbs, once", () => {
-  assert.deepEqual([...COMMAND_VERBS].sort(), ["contact_agent", "delegate_task", "delete", "diff", "edit", "extension", "extensions", "git_diff", "git_log", "git_status", "grep", "inspect_environment", "list", "list_agents", "mini_app", "read", "undo", "write"]);
+  assert.deepEqual([...COMMAND_VERBS].sort(), ["contact_agent", "delegate_task", "delete", "diff", "edit", "extension", "extensions", "git_diff", "git_log", "git_status", "grep", "inspect_environment", "list", "list_agents", "mini_app", "propose_extension", "read", "undo", "write"]);
   const names = COMMANDS.map((c) => c.name);
   assert.equal(new Set(names).size, names.length, "command names must be unique");
 });

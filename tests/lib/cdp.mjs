@@ -51,7 +51,9 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
       // A wav file the fake microphone PLAYS (voicebox-beads-ldxa): the only way to give the page real,
       // deterministic mic input — a quiet passage and then a spoken one — so a detector can be driven
       // through the REAL capture worklet instead of a synthetic frame.
-      ...(fakeAudioFile ? [`--use-file-for-fake-audio-capture=${fakeAudioFile}`] : []),
+      ...(fakeAudioFile
+        ? [`--use-file-for-fake-audio-capture=${fakeAudioFile}`, "--disable-features=AudioServiceOutOfProcess,AudioServiceSandbox"]
+        : []),
       "--disable-gpu",
       "--no-first-run",
       "--no-default-browser-check",

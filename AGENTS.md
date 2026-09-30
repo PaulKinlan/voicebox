@@ -158,6 +158,7 @@ Every plan, task decomposition, implementation, and review must optimize for the
     1. Applying/merging verified worktree branches or patches into `main` in dependency order.
     2. Centralizing documentation updates and running `npm run docs:write` / `node scripts/docs-check.mjs` once per wave so lanes never conflict on generated blocks.
     3. Running the landing gates and advancing the served tree (`main`).
+    4. Automatically committing, syncing Beads (`bd dolt push`), and pushing `main` (`git push origin main`) once the wave is verified (Team-maintainer active profile).
 
 ### 4. Componentization & Scoped Testing for Fast Builds and Merges
 

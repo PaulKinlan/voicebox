@@ -268,7 +268,8 @@ dialog.envs {
 /* The frosting, shared by both dialogs (one rule, so the blur and its solid fallback cannot drift
    apart). `::backdrop` is the browser's own layer behind a modal, so nothing has to be positioned. */
 dialog.settings::backdrop,
-dialog.envs::backdrop {
+dialog.envs::backdrop,
+dialog.transcript-dialog::backdrop {
   background: color-mix(in srgb, var(--ground) 55%, transparent);
   backdrop-filter: blur(10px) saturate(120%);
 }
@@ -276,7 +277,8 @@ dialog.envs::backdrop {
    dimming still says "the room is behind this", which is the part that matters. */
 @supports not (backdrop-filter: blur(1px)) {
   dialog.settings::backdrop,
-  dialog.envs::backdrop { background: light-dark(#fbfbf9e6, #0e0f12e6); }
+  dialog.envs::backdrop,
+  dialog.transcript-dialog::backdrop { background: light-dark(#fbfbf9e6, #0e0f12e6); }
 }
 html:has(dialog.envs[open]) { overflow: hidden; }
 .env-list { list-style: none; margin: 0; padding: 0; }
@@ -893,3 +895,62 @@ dialog.changelog-modal .commit-meta {
 #debug-events [data-error="true"] summary { color: var(--warn); font-weight: 600; }
 #debug-events pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8125rem; }
 #debug-export { width: 100%; min-height: 160px; padding: 12px; background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; }
+
+/* ── Session transcript & diagnostic dialog (voicebox-beads-qab1) ────────── */
+dialog.transcript-dialog {
+  inset: 0;
+  margin: auto;
+  width: min(100% - 2rem, 640px);
+  max-height: 85vh;
+  max-height: 85dvh;
+  padding: 0;
+  border: 1px solid var(--hair, var(--line));
+  border-radius: 14px;
+  background: var(--surface, var(--card));
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
+.transcript-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+.transcript-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.transcript-section-head .ext-section {
+  margin: 0;
+}
+.transcript-box {
+  width: 100%;
+  min-height: 96px;
+  max-height: 28svh;
+  padding: 10px 12px;
+  border: 1px solid var(--hair, var(--line));
+  border-radius: 8px;
+  background: var(--shade, var(--ground));
+  color: var(--ink);
+  font: .8125rem/1.55 Inter, system-ui, sans-serif;
+  resize: vertical;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.transcript-box-mono {
+  min-height: 140px;
+  font: .75rem/1.55 var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  white-space: pre;
+}
+.transcript-copy-status:empty {
+  display: none;
+}
+.transcript-copy-status {
+  margin: 10px 0 0;
+}
+

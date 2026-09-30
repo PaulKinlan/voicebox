@@ -449,10 +449,35 @@
       <section class="session" id="session" hidden aria-labelledby="session-heading">
         <div class="session-head">
           <h2 id="session-heading">Recent turns</h2>
-          <button class="quiet" id="session-copy" type="button" aria-label="Copy session transcript">Copy transcript</button>
+          <button class="quiet" id="session-copy" type="button" aria-haspopup="dialog" aria-controls="transcript-dialog" aria-label="Copy session transcript">Copy transcript</button>
         </div>
         <ol id="session-log"></ol>
       </section>
+      <dialog class="modal transcript-dialog" id="transcript-dialog" closedby="any" aria-labelledby="transcript-dialog-title">
+        <form class="envs-form transcript-dialog-form" method="dialog">
+          <div class="settings-head">
+            <h2 id="transcript-dialog-title">Session transcript</h2>
+            <button class="icon-button" id="transcript-dialog-close" type="submit" aria-label="Close transcript"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+          </div>
+          <p class="env-hint">Copy what was said and done in this tab, or copy the redacted debug log for troubleshooting. Review before sharing; transcripts can include personal text.</p>
+          <p class="harness-status" id="transcript-dialog-summary" role="status" aria-live="polite">0 turns · 0 debug events · 0 errors (redacted)</p>
+          <div class="transcript-section">
+            <div class="transcript-section-head">
+              <h3 class="ext-section" id="transcript-turns-heading">Recent turns</h3>
+              <button class="quiet" id="transcript-copy-turns" type="button">Copy turns</button>
+            </div>
+            <textarea class="transcript-box" id="transcript-dialog-turns" readonly spellcheck="false" rows="5" placeholder="No turns recorded in this tab yet." aria-labelledby="transcript-turns-heading"></textarea>
+          </div>
+          <div class="transcript-section">
+            <div class="transcript-section-head">
+              <h3 class="ext-section" id="transcript-debug-heading">Diagnostic timeline (redacted JSONL)</h3>
+              <button class="quiet" id="transcript-copy-debug" type="button">Copy debug JSONL</button>
+            </div>
+            <textarea class="transcript-box transcript-box-mono" id="transcript-dialog-debug" readonly spellcheck="false" rows="8" placeholder="No diagnostic events recorded yet." aria-labelledby="transcript-debug-heading"></textarea>
+          </div>
+          <p class="env-hint transcript-copy-status" id="transcript-copy-status" role="status" aria-live="polite"></p>
+        </form>
+      </dialog>
     </main>
 
     <section id="debug-panel" class="debug-panel" hidden aria-labelledby="debug-title">

@@ -5,7 +5,8 @@
 // reading its bytes back. There is no seeded content, no timer that fakes a
 // state, and no claim the server has not made. Strings are rendered with
 // textContent only.
-import { debugEnabled, recordDebug } from "./debug-transcript.js";
+import { debugEnabled, openTranscriptDialog, recordDebug } from "./debug-transcript.js";
+import { createRoomUndoStack, deleteHandleFile, diffHandleFile, editHandleFile, grepHandleFolder, parseRoomFolderTurn } from "./room-folder-ops.js";
 
 const $ = (id) => document.getElementById(id);
 const SVG = "http://www.w3.org/2000/svg";
@@ -538,6 +539,17 @@ async function durableFact() {
   return durableAnswer ? "" : " — this browser may evict it (storage here is best-effort)";
 }
 
+const roomUndoStacks = new Map();
+function undoStackForRoomFolder(folderName = roomFolder?.name) {
+  if (!folderName) return null;
+  let stack = roomUndoStacks.get(folderName);
+  if (!stack) {
+    stack = createRoomUndoStack(20);
+    roomUndoStacks.set(folderName, stack);
+  }
+  return stack;
+}
+
 async function writeRoomFile(name, content) {
   if (!roomFolder || !roomFolder.handle) throw new Error("No folder open");
   let perm = typeof roomFolder.handle.queryPermission === "function" ? "prompt" : "granted";
@@ -558,6 +570,16 @@ async function writeRoomFile(name, content) {
   const fileName = parts.pop() ?? "";
   if (!fileName) throw new Error(`'${name}' names no file to write`);
   const dir = await roomDirHandle(parts.join("/"));
+  let existed = false;
+  let previousContent = null;
+  try {
+    const existingHandle = await dir.getFileHandle(fileName, { create: false });
+    previousContent = await (await existingHandle.getFile()).text();
+    existed = true;
+  } catch {
+    existed = false;
+    previousContent = null;
+  }
   const fileHandle = await dir.getFileHandle(fileName, { create: true });
   const writable = await fileHandle.createWritable();
   await writable.write(content);
@@ -573,6 +595,7 @@ async function writeRoomFile(name, content) {
       `the file did not read back what was written (wrote ${expected} bytes, read ${observed} back) — it is not saved`,
     );
   }
+  undoStackForRoomFolder()?.push({ kind: "write", path: name, existed, previousContent });
   await loadRoomFolder();
   return { bytes: observed };
 }
@@ -2193,25 +2216,8 @@ on(els.fileDownload, "click", () => {
   if (els.readerFacts) els.readerFacts.textContent = `Downloaded ${fileName}.`;
 });
 
-on(els.sessionCopy, "click", async () => {
-  if (!els.log) return;
-  const items = [...els.log.querySelectorAll("li")].reverse();
-  const lines = items.map((li) => {
-    const said = li.querySelector(".said")?.textContent ?? "";
-    const did = li.querySelector(".did")?.textContent ?? "";
-    return `${said} → ${did}`;
-  });
-  if (lines.length === 0) return;
-  try {
-    await navigator.clipboard.writeText(lines.join("\n"));
-    if (els.sessionCopy) {
-      const prev = els.sessionCopy.textContent;
-      els.sessionCopy.textContent = "Copied";
-      setTimeout(() => { if (els.sessionCopy) els.sessionCopy.textContent = prev; }, 1400);
-    }
-  } catch (err) {
-    setReport(`The clipboard refused: ${err?.message ?? err}`, "bad");
-  }
+on(els.sessionCopy, "click", () => {
+  openTranscriptDialog({ logElement: els.log });
 });
 
 on(els.close, "click", () => {
@@ -2402,10 +2408,12 @@ async function send(said) {
   setReport("Sending…");
 
   // ONE READ OF WHAT WAS ASKED FOR (voicebox-beads-vnos): the room's own file command, parsed once for the
-  // folder branch and for the scratchpad fallback below, so the two cannot drift.
-  const writeMatch = transcript.match(FILE_WRITE_COMMAND);
+  // folder branch and for the scratchpad fallback below, so the two cannot drift. Tool and extension creation
+  // phrasings ("create a tool...", "create an extension...") always belong to the server turn route.
+  const isToolOrExtensionTurn = /^(?:create|write|make|propose|build|install|load|enable|stage|add)\s+(?:an?\s+|the\s+)?(?:catalogue\s+)?(?:tool|extension)\b/i.test(transcript);
+  const writeMatch = isToolOrExtensionTurn ? null : transcript.match(FILE_WRITE_COMMAND);
 
-  // If a room folder is currently active, turns act on that folder directly (voicebox-beads-69d)
+  // If a room folder is currently active, turns act on that folder directly (voicebox-beads-69d, voicebox-beads-0eza)
   if (roomFolder) {
     if (writeMatch) {
       const { name: fileName, content } = readWriteCommand(writeMatch);
@@ -2444,6 +2452,73 @@ async function send(said) {
         finish(transcript, `read ${fileName} in ${roomFolder.name}`, "good");
       } catch (err) {
         finish(transcript, `could not read '${fileName}': ${err?.message ?? err}`, "bad");
+      } finally {
+        if (els.send) { els.send.textContent = "Send"; els.send.disabled = !els.utterance.value.trim(); }
+      }
+      return;
+    }
+    const localOp = parseRoomFolderTurn(transcript);
+    if (localOp) {
+      const needsWrite = localOp.verb === "delete" || localOp.verb === "edit" || localOp.verb === "undo";
+      if (needsWrite && (roomFolder.permission !== "granted" || roomFolder.mode !== "readwrite")) {
+        if (els.send) { els.send.textContent = "Send"; els.send.disabled = !els.utterance.value.trim(); }
+        return finish(transcript, `needs-gesture: '${roomFolder.name}' needs write permission — click 'Restore access' first`, "bad");
+      }
+      try {
+        if (localOp.verb === "delete") {
+          const target = localOp.name.includes("/") ? localOp.name : joinDir(listingDir, localOp.name);
+          const delRes = await deleteHandleFile(roomFolder.handle, target);
+          if (!delRes.ok) {
+            finish(transcript, reasonFrom(delRes, delRes.why ?? `could not delete '${target}'`), "bad");
+          } else {
+            undoStackForRoomFolder()?.push({ kind: "delete", path: delRes.deleted, existed: true, previousContent: delRes.previousContent });
+            if (shownFile === delRes.deleted) shownFile = null;
+            finish(transcript, `deleted ${delRes.deleted} in ${roomFolder.name}`, "good");
+            await loadRoomFolder();
+          }
+        } else if (localOp.verb === "edit") {
+          const target = localOp.name.includes("/") ? localOp.name : joinDir(listingDir, localOp.name);
+          const editRes = await editHandleFile(roomFolder.handle, target, localOp.oldText, localOp.newText);
+          if (!editRes.ok) {
+            finish(transcript, reasonFrom(editRes, editRes.why ?? `could not edit '${target}'`), "bad");
+          } else {
+            undoStackForRoomFolder()?.push({ kind: "edit", path: editRes.file, existed: true, previousContent: editRes.previousContent });
+            finish(transcript, `edited ${editRes.file} (${size(editRes.bytes)} observed) in ${roomFolder.name}`, "good");
+            if (shownFile === editRes.file) await showFile(shownFile, { reloading: true });
+            await loadRoomFolder();
+          }
+        } else if (localOp.verb === "diff") {
+          const target = localOp.name.includes("/") ? localOp.name : joinDir(listingDir, localOp.name);
+          const diffRes = await diffHandleFile(roomFolder.handle, target, localOp.content);
+          if (!diffRes.ok) {
+            finish(transcript, reasonFrom(diffRes, diffRes.why ?? `could not diff '${target}'`), "bad");
+          } else {
+            presentInspectionInReader("diff", diffRes, localOp);
+            finish(transcript, `diff ${diffRes.file} in ${roomFolder.name}`, "good");
+          }
+        } else if (localOp.verb === "grep") {
+          const grepRes = await grepHandleFolder(roomFolder.handle, localOp.query);
+          if (!grepRes.ok) {
+            finish(transcript, reasonFrom(grepRes, grepRes.why ?? "could not search folder"), "bad");
+          } else {
+            presentInspectionInReader("grep", grepRes, localOp);
+            finish(transcript, `grep "${grepRes.query}" (${grepRes.count} matches) in ${roomFolder.name}`, "good");
+          }
+        } else if (localOp.verb === "undo") {
+          const stack = undoStackForRoomFolder();
+          const undoRes = stack
+            ? await stack.undo(roomFolder.handle)
+            : { ok: false, refused: "nothing-to-undo", why: "no mutating file action has been recorded in this folder yet" };
+          if (!undoRes.ok) {
+            finish(transcript, reasonFrom(undoRes, undoRes.why ?? "nothing to undo"), "bad");
+          } else {
+            finish(transcript, `${undoRes.action} in ${roomFolder.name}`, "good");
+            if (shownFile && shownFile === undoRes.file) await showFile(shownFile, { reloading: true });
+            await loadRoomFolder();
+          }
+        }
+      } catch (err) {
+        finish(transcript, `could not run ${localOp.verb} in '${roomFolder.name}': ${err?.message ?? err}`, "bad");
       } finally {
         if (els.send) { els.send.textContent = "Send"; els.send.disabled = !els.utterance.value.trim(); }
       }
@@ -2505,7 +2580,13 @@ async function send(said) {
     const landed = result.root?.path ?? result.root?.name ?? result.root?.label ?? "";
     finish(transcript, result.action ? `${result.action}${landed ? ` in ${landed}` : ""}` : "done", "good");
     const verb = answer.action?.verb;
-    if (verb === "read" && typeof result.content === "string") {
+    if (verb === "propose_extension") {
+      await renderExtensions();
+      if (els.exts && !els.exts.open && typeof els.exts.showModal === "function") {
+        els.exts.showModal();
+        els.extsOpen?.setAttribute("aria-expanded", "true");
+      }
+    } else if (verb === "read" && typeof result.content === "string") {
       shownFile = result.action;
       exitEditMode();
       els.readerTitle.textContent = result.action;
@@ -3695,8 +3776,19 @@ let inputInit = false;
 // which is the difference between a normalised meter and a lie.
 let inputPeak = 0;
 const INPUT_GATE = 0.12;
+/**
+ * THE WAVE'S OWN SPREAD — the same square-root curve as meterLevel, WITHOUT its clamp.
+ *
+ * The clamp is right for the outer ring and wrong here, and it is the second half of voicebox-beads-korz: it
+ * saturates at an energy of 0.277 while a played-back chunk's energy is routinely above that, so every bar of a
+ * real agent-speech envelope arrived as exactly 1 and the wave was drawn as a solid bar across the clipper —
+ * the "flat-topped" picture, which no blend could show through. A wave that is normalised by its own running
+ * peak does not need a hard ceiling to stay inside the circle (the peak does that), and a monotone curve keeps
+ * the SHAPE of loud audio instead of flattening it.
+ */
+const waveLevel = (value) => Math.sqrt(Math.max(0, Number(value) || 0)) * 1.9;
 
-function drawInputWave(samples) {
+function drawInputWave(samples, { gain: givenGain = null } = {}) {
   const path = document.getElementById("input-path");
   if (!path) return;
   if (!samples) {
@@ -3711,14 +3803,21 @@ function drawInputWave(samples) {
   }
   const middle = 50;
   const maxHalf = 46; // the clip circle's radius: the wave fills it, the circle trims it
-  let peak = 0;
-  for (let i = 0; i < n; i++) peak = Math.max(peak, meterLevel(samples[i]));
-  inputPeak = Math.max(peak, inputPeak * 0.94);
-  const gain = inputPeak >= INPUT_GATE ? 1 / inputPeak : 1;
+  // A CALLER THAT HAS ALREADY SCALED FOR ITSELF passes its gain — see mixSpeechAndMic for why the blended wave
+  // must not be re-normalised here — and the running peak that drives the single-source paths is left alone.
+  // Everything else keeps the AGC described above (a decaying running peak, and no amplification below the
+  // gate).
+  let gain = givenGain;
+  if (gain === null) {
+    let peak = 0;
+    for (let i = 0; i < n; i++) peak = Math.max(peak, waveLevel(samples[i]));
+    inputPeak = Math.max(peak, inputPeak * 0.94);
+    gain = inputPeak >= INPUT_GATE ? 1 / inputPeak : 1;
+  }
   let top = "";
   let bottom = "";
   for (let i = 0; i < n; i++) {
-    const target = Math.min(maxHalf, meterLevel(samples[i]) * gain * maxHalf * 0.85);
+    const target = Math.min(maxHalf, waveLevel(samples[i]) * gain * maxHalf * 0.85);
     // attack fast, decay slow
     inputDisplay[i] += (target - inputDisplay[i]) * (target > inputDisplay[i] ? 0.6 : 0.12);
     const half = Math.max(0.8, inputDisplay[i]);
@@ -3728,6 +3827,44 @@ function drawInputWave(samples) {
     bottom = `L${x},${(middle + half).toFixed(2)}` + bottom;
   }
   path.setAttribute("d", `${top}${bottom}Z`);
+}
+
+// ── the wave while the agent speaks AND the microphone is open (voicebox-beads-korz) ──────────────────
+//
+// WHAT WAS WRONG. The first version of this blend was `Math.max(output[i], input[i])` handed to the function
+// above, which re-scaled every frame to its OWN peak. Two things followed, and both were visible on the real
+// page: the quieter side DISAPPEARED — max keeps the louder contribution bar by bar, so a microphone quieter
+// than the playback never showed at all — and every frame landed at the same height, because the frame's own
+// peak is always drawn at the top. Four frames of a steady envelope rendered as ONE distinct path: a solid bar
+// across the clipper, frozen. (Measured: a full-duplex passage at output 0.5 and one at 0.25, with the mic
+// open at 0.05, drew byte-identical paths at 39.1 units on every bar.)
+//
+// WHAT IT IS NOW. The two energies are ADDED — no fudge factor is needed, because both are `energy()` from the
+// same module (public/pcm.js: the mean absolute amplitude of a frame), so the sum is what the room is carrying:
+// the agent's syllables plus the person's voice, in one number per bar. Neither can erase the other; a voice
+// over the agent lifts the wave on its own bars. And the scale is FIXED, not self-normalised: a wave that re-fits
+// itself to each frame's own peak cannot show that a voice joined the agent, because the added energy raises the
+// peak, the gain falls, and the difference cancels (measured while writing this: opening the microphone on the
+// same playback moved the mean height by −0.5 units). MIX_FULL_SCALE is the mixed energy that fills the circle —
+// the agent at its own loud level with a voice over it — so everything below it draws in proportion, a quiet
+// room draws a small wave, and a voice arriving is a rise you can see. The listening path keeps its own AGC:
+// there the wave is the only cue there is, and a whisper must not sit on the floor.
+const MIX_FULL_SCALE = 0.5;
+const MIX_GAIN = 1 / waveLevel(MIX_FULL_SCALE);
+
+/**
+ * The blended wave's samples and its own gain — one array of energies, both sides visible, level intact.
+ * Exported on `window.__voiceboxMeters` so the blend can be driven and compared frame by frame.
+ */
+function mixSpeechAndMic(output, input) {
+  const n = output.length;
+  const samples = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    // The 28 microphone bars are stretched across the 64 wave bars — the same shape the ring has on screen.
+    const at = Math.min(input.length - 1, Math.floor((i / n) * input.length));
+    samples[i] = output[i] + (input[at] ?? 0);
+  }
+  return { samples, gain: MIX_GAIN };
 }
 
 // The animation handle lives on the window, not in a module variable: after a
@@ -3748,25 +3885,12 @@ function meters() {
     if (voice === "listening") {
       drawInputWave(reading.input);
     } else if (voice === "speaking") {
-      // During playback, animate the mic button waveform with the speech output energy.
-      // If user input is also captured (full-duplex / barge-in), blend both energies so the
-      // waveform dynamically reflects both Voicebox speech and active mic input.
+      // During playback, animate the mic button waveform with the speech output energy. If the microphone is
+      // ALSO open (full duplex / barge-in), blend the two so the wave shows BOTH — an addition, scaled by the
+      // mix's own slow peak, and never re-normalised per frame (voicebox-beads-korz: see mixSpeechAndMic).
       if (reading.input && reading.capture > 0.02) {
-        const out = reading.output;
-        const inp = reading.input;
-        const n = out.length;
-        const blended = new Float32Array(n);
-        for (let i = 0; i < n; i++) {
-          const inputIdx = Math.floor((i / n) * inp.length);
-          const outVal = out[i] ?? 0;
-          const inVal = inp[inputIdx] ?? 0;
-          // Avoid raw Math.max which merges peak sets and flattens valleys, saturating
-          // all bars to maxHalf (voicebox-beads-6vs4).
-          // If mic input is active above the gate, blend with output rather than taking max;
-          // otherwise keep the clean speech output contour.
-          blended[i] = inVal > INPUT_GATE ? (outVal * 0.45 + inVal * 0.55) : outVal;
-        }
-        drawInputWave(blended);
+        const mix = mixSpeechAndMic(reading.output, reading.input);
+        drawInputWave(mix.samples, { gain: mix.gain });
       } else {
         drawInputWave(reading.output);
       }
@@ -3805,7 +3929,7 @@ refreshDevices();
 // the same arrays the client produces. The live path above is unchanged and
 // still reads real PCM from the client; this is how the verifier proves the
 // picture responds to data rather than being decoration.
-window.__voiceboxMeters = { drawInputWave, drawOutputRing, startMeters };
+window.__voiceboxMeters = { drawInputWave, drawOutputRing, startMeters, mixSpeechAndMic };
 
 // ── which revision is this? ───────────────────────────────────────────────
 // The dev server bakes the identity of its own checkout into this document at

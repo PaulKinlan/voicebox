@@ -68,6 +68,7 @@ import {
   instructionFromPage,
   readProjectInstructionFor,
 } from "./lib/project-instruction.mjs";
+import { exportWorkspaceBundle, importWorkspaceBundle } from "./lib/env-transport.mjs";
 // A KEY-FREE LIVE PROVIDER FOR PROOFS (voicebox-beads-ldxa). The stub is the seam's own falsifier — no
 // vendor, no network, no key — and it is registered ONLY when an operator asks for it by name, so it can
 // never appear in the provider list a person chooses from. With the flag set, a test (or a human on a
@@ -1777,6 +1778,19 @@ async function execute(action) {
     if (!r.ok) return r;
     return { ok: true, action: `proposed tool '${r.id}'`, state: r.state, note: "the proposal is NOT loaded — the host reviews and admits it (GET /api/extensions/proposals/<id>/plan, then POST /api/extensions/admit)" };
   }
+  if (action.verb === "propose_extension") {
+    const r = extensions.proposeExtensionFromTurn(action.args ?? action);
+    if (!r.ok) {
+      return { ok: false, refused: r.refused ?? "bad-descriptor", error: `refused: ${r.refused ?? "bad-descriptor"}`, why: r.why ?? r.error };
+    }
+    return {
+      ok: true,
+      action: r.action,
+      proposal: r.proposal,
+      descriptor: r.descriptor,
+      note: "staged as a pending proposal — NOT loaded; review and approve it in Extensions",
+    };
+  }
   if (
     action.verb === "mini_app_tool" ||
     (action.verb === "tool" && !shelfToolNames.has(action.name) && activeMiniAppRegistry.getAllTools().some((t) => t.name === action.name))
@@ -3283,6 +3297,46 @@ async function handle(req, res) {
     const result = await execute({ verb: "delegate_task", agent: body?.agent, task: body?.task });
     if (!result.ok) return json(res, 400, result);
     return json(res, 200, result);
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/transport/export") {
+    if (!active) return json(res, 400, { ...noRootDeclared(), root: null });
+    if (active.root.kind !== "machine" || !active.root.path) {
+      return json(res, 400, {
+        ok: false,
+        refused: "root-not-reachable-from-here",
+        why: `transport export from the server requires a machine root (active root kind is '${active.root.kind}')`,
+        root: active.root,
+      });
+    }
+    const rawFiles = url.searchParams.get("files");
+    const files = rawFiles ? rawFiles.split(",").map((s) => s.trim()).filter(Boolean) : null;
+    const exported = exportWorkspaceBundle(active.root.path, {
+      files,
+      sourceEnvironment: SELF_ENVIRONMENT,
+      sourceKind: "machine",
+    });
+    if (!exported.ok) return json(res, 400, { ...exported, root: active.root });
+    return json(res, 200, { ok: true, bundle: exported.bundle, root: active.root });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/transport/import") {
+    if (!active) return json(res, 400, { ...noRootDeclared(), root: null });
+    if (active.root.kind !== "machine" || !active.root.path) {
+      return json(res, 400, {
+        ok: false,
+        refused: "root-not-reachable-from-here",
+        why: `transport import on the server requires a machine root (active root kind is '${active.root.kind}')`,
+        root: active.root,
+      });
+    }
+    const body = await readJson(8 * 1024 * 1024);
+    const rawBundle = body?.bundle ?? body;
+    const imported = importWorkspaceBundle(active.root.path, rawBundle, {
+      overwrite: body?.overwrite !== false,
+    });
+    if (!imported.ok) return json(res, 400, { ...imported, root: active.root });
+    return json(res, 200, { ...imported, root: active.root });
   }
 
   if (req.method === "GET" && url.pathname === "/api/task") {
