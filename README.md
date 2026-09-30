@@ -233,6 +233,12 @@ There is no configuration file. Runtime behavior is controlled by environment va
 
 ---
 
+## Documentation
+
+For architectural specifications, security designs, and protocol contracts, start with [`docs/README.md`](docs/README.md) — the index and documentation map across all 21 topics.
+
+---
+
 ## Development & Quality Gates
 
 Voicebox uses multi-tier automated test gates:
