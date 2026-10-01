@@ -4,21 +4,47 @@
 @font-face { font-family: Inter; font-style: normal; font-weight: 100 900; font-display: swap; src: url("fonts/inter-latin.woff2") format("woff2"); }
 
 :root {
-  color-scheme: light dark;
-  --ground: light-dark(#fbfbf9, #0e0f12);
-  --card: light-dark(#fff, #17191e);
-  --shade: light-dark(#f3f4f6, #13151a);
-  --line: light-dark(#d8dcdf, #2b3138);
-  --ink: light-dark(#23262b, #e7e9ec);
-  --muted: light-dark(#59636d, #9aa2ae);
-  --accent: light-dark(#1f3fd0, #98adff);
-  --good: light-dark(#1d6b32, #7cce97);
-  --warn: light-dark(#8a4b00, #edb960);
-  --bad: light-dark(#b3261e, #e06c75);
-  --shadow: 0 18px 40px -20px light-dark(#26303c33, #000a);
+  color-scheme: dark;
+  --ground: #0b0f19;
+  --card: #151d2f;
+  --shade: #1e293b;
+  --line: rgba(255, 255, 255, 0.12);
+  --ink: #f8fafc;
+  --muted: #94a3b8;
+  --accent: #38bdf8;
+  --good: #34d399;
+  --warn: #fbbf24;
+  --bad: #f87171;
+  --shadow: 0 18px 40px -20px rgba(0, 0, 0, 0.7);
 }
-:root[data-theme="light"] { color-scheme: light; }
-:root[data-theme="dark"] { color-scheme: dark; }
+:root[data-theme="light"] {
+  color-scheme: light;
+  --ground: #fbfbf9;
+  --card: #ffffff;
+  --shade: #f3f4f6;
+  --line: #d8dcdf;
+  --ink: #23262b;
+  --muted: #59636d;
+  --accent: #1f3fd0;
+  --good: #1d6b32;
+  --warn: #8a4b00;
+  --bad: #b3261e;
+  --shadow: 0 18px 40px -20px rgba(38, 48, 60, 0.2);
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #0b0f19;
+  --card: #151d2f;
+  --shade: #1e293b;
+  --line: rgba(255, 255, 255, 0.12);
+  --ink: #f8fafc;
+  --muted: #94a3b8;
+  --accent: #38bdf8;
+  --good: #34d399;
+  --warn: #fbbf24;
+  --bad: #f87171;
+  --shadow: 0 18px 40px -20px rgba(0, 0, 0, 0.7);
+}
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 body { margin: 0; min-block-size: 100svh; background: var(--ground); color: var(--ink); font: 14px/1.5 Inter, system-ui, sans-serif; letter-spacing: -.006em; }
@@ -1110,7 +1136,7 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
 html[data-theme="dark"] body { background: var(--sqeh-slate); }
 html:not([data-theme]) body { background: var(--sqeh-slate); }
 
-.room, .head, .card {
+.card {
   background: var(--sqeh-glass);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
@@ -1149,7 +1175,26 @@ html:not([data-theme]) body { background: var(--sqeh-slate); }
 
 /* ── the dock ── */
 .sqeh-dock { position: fixed; inset-inline: 0; inset-block-end: 0; display: flex; align-items: center; justify-content: center; gap: 26px; padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px)); border-block-start: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line)); background: var(--sqeh-glass); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); z-index: 40; }
-.sqeh-dock-btn { display: grid; place-items: center; inline-size: 44px; block-size: 44px; border: 0; border-radius: 12px; background: transparent; color: var(--muted); cursor: pointer; }
+.sqeh-dock-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  inline-size: 54px;
+  block-size: 50px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.sqeh-dock-label {
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1;
+}
 .sqeh-dock-btn:hover { color: var(--ink); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .sqeh-dock-mic { display: grid; place-items: center; inline-size: 62px; block-size: 62px; margin-block-end: 14px; border: 0; border-radius: 50%; background: radial-gradient(circle at 50% 35%, var(--accent), color-mix(in srgb, var(--accent) 55%, #000)); color: var(--sqeh-slate); cursor: pointer; box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent), 0 0 34px color-mix(in srgb, var(--accent) 45%, transparent); }
 .sqeh-dock-mic:hover { box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 24%, transparent), 0 0 48px color-mix(in srgb, var(--accent) 60%, transparent); }
@@ -1184,16 +1229,14 @@ body[data-sqeh-state="history"] .voice { opacity: 0.6; }
   .sqeh-dock { gap: 16px; }
 }
 
-/* ── the three states: each state curates what leads ── */
-body[data-sqeh-state="deck"] .made,
-body[data-sqeh-state="deck"] .reader { display: none; }
-body[data-sqeh-state="history"] .made,
-body[data-sqeh-state="history"] .reader,
-body[data-sqeh-state="history"] .voice,
-body[data-sqeh-state="history"] .sqeh-deck { display: none; }
-body[data-sqeh-state="files"] .voice,
-body[data-sqeh-state="files"] .sqeh-deck,
-body[data-sqeh-state="files"] #session { display: none; }
+/* ── the three states: curate views cleanly ── */
+@media (max-width: 768px) {
+  body[data-sqeh-state="history"] .made,
+  body[data-sqeh-state="history"] .reader,
+  body[data-sqeh-state="history"] .voice { display: none; }
+  body[data-sqeh-state="files"] .voice,
+  body[data-sqeh-state="files"] .sqeh-deck { display: none; }
+}
 
 /* The arcs glow past the mic stage; clip the SECTION's horizontal overflow so a phone
    never gains a horizontal scrollbar from decoration (voicebox-beads-35eg's own lesson). */
@@ -1210,3 +1253,42 @@ body[data-sqeh-state="files"] #session { display: none; }
    caught by changelog-links.test.mjs). Only the buttons/FAB take pointer events. */
 .sqeh-dock { pointer-events: none; }
 .sqeh-dock > * { pointer-events: auto; }
+
+/* ══ 2meg repair: the seven root causes from the Opus audit ═══════════════ */
+
+/* (1)+(2) THE DARK TOKENS ACTUALLY RESOLVE: html carries data-theme="dark" (set in the
+   markup — nothing set it before, so light-dark() resolved the LIGHT values: white cards
+   on the slate canvas, #23262b ink at 1.07:1 on navy). The dark values are the sqeh palette. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --card: #1e293b;
+  --ink: #e7e9ec;
+}
+
+/* (3) ONE MIC: the stage #mic is THE mic — in sqeh states it renders as the dock's central
+   FAB instead of also sitting on the stage. The waveform arcs stay on the stage as the
+   visualizer; the button is the same element (every contract, test and hotkey intact). */
+body[data-sqeh-state] .mic {
+  position: fixed;
+  inset-inline-start: 50%;
+  inset-block-end: calc(10px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  inline-size: 62px;
+  block-size: 62px;
+  margin: 0;
+  border-radius: 50%;
+  border: 0;
+  background: radial-gradient(circle at 50% 35%, var(--accent), color-mix(in srgb, var(--accent) 55%, #000));
+  color: var(--sqeh-slate, #0f172a);
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent), 0 0 34px color-mix(in srgb, var(--accent) 45%, transparent);
+  z-index: 45;
+  display: grid;
+  place-items: center;
+}
+body[data-sqeh-state] .mic-dock .icon { inline-size: 26px; block-size: 26px; }
+
+/* Artifact chips (State B): a tool-written file becomes an inline chip on the turn. */
+.sqeh-chip { display: inline-flex; align-items: center; gap: 6px; margin-block-start: 8px; padding: 5px 10px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--accent) 10%, var(--card)); color: var(--ink); font-size: 0.75rem; cursor: pointer; }
+.sqeh-chip:hover { border-color: var(--accent); }
+.sqeh-chip .icon { inline-size: 14px; block-size: 14px; color: var(--accent); }
+.sqeh-chip-open { font-weight: 700; color: var(--accent); }

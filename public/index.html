@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -36,6 +36,7 @@
       <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></symbol>
       <symbol id="i-minimize" viewBox="0 0 24 24"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></symbol>
       <symbol id="i-maximize" viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></symbol>
+      <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
     </defs>
   </svg>
 
@@ -358,68 +359,6 @@
       </div>
     </div>
   </section>
-        <dialog class="settings" id="settings" closedby="any" aria-labelledby="settings-title">
-          <form class="settings-form" method="dialog">
-          <div class="settings-head">
-            <h2 id="settings-title">Settings</h2>
-            <button class="icon-button" id="settings-close" type="submit" aria-label="Close settings"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
-          </div>
-          <div class="device-row">
-            <h3 id="mic-label">Microphone</h3>
-            <select id="mic-select" aria-labelledby="mic-label"></select>
-            <p class="device-state" id="mic-device-state">Mic off</p>
-          </div>
-          <div class="device-row">
-            <h3 id="mic-hotkey-label">Microphone hotkey</h3>
-            <input type="text" id="mic-hotkey" class="setting-input" aria-labelledby="mic-hotkey-label" maxlength="1" value="M" autocomplete="off" spellcheck="false">
-            <p class="device-state" id="mic-hotkey-state">Press 'M' to toggle mic</p>
-          </div>
-          <div class="device-row">
-            <h3 id="out-label">Reply output</h3>
-            <select id="out-select" aria-labelledby="out-label"></select>
-            <p class="device-state" id="out-device-state">No reply playing</p>
-          </div>
-          <div class="settings-section-divider">
-            <h3 class="settings-section-title">Agent Settings</h3>
-          </div>
-          <div class="device-row">
-            <h3 id="agent-provider-label">Provider</h3>
-            <select id="agent-provider" aria-labelledby="agent-provider-label"></select>
-            <p class="device-state" id="agent-provider-state">Not asked yet</p>
-          </div>
-          <div class="device-row">
-            <h3 id="agent-model-label">Model</h3>
-            <select id="agent-model" aria-labelledby="agent-model-label"></select>
-            <p class="device-state" id="agent-model-state">Not asked yet</p>
-          </div>
-          <div class="device-row">
-            <h3 id="agent-voice-label">Voice</h3>
-            <select id="agent-voice" aria-labelledby="agent-voice-label"></select>
-            <p class="device-state" id="agent-voice-state">Not asked yet</p>
-          </div>
-          <div class="device-row">
-            <h3 id="agent-timbre-label">Voice timbre</h3>
-            <select id="agent-timbre" aria-labelledby="agent-timbre-label"></select>
-            <p class="device-state" id="agent-timbre-state">Not asked yet</p>
-          </div>
-          <div class="device-row">
-            <h3 id="agent-personality-label">Persona</h3>
-            <select id="agent-personality" aria-labelledby="agent-personality-label"></select>
-            <p class="device-state" id="agent-personality-state">Not asked yet</p>
-          </div>
-          <div class="device-row">
-            <h3 id="agent-custom-instruction-label">Custom prompt guidance</h3>
-            <textarea id="agent-custom-instruction" class="setting-input" rows="2" placeholder="Optional custom instructions to layer over the base rules..." aria-labelledby="agent-custom-instruction-label"></textarea>
-            <p class="device-state" id="agent-custom-instruction-state">Custom instructions layered over base rules</p>
-          </div>
-          <details class="about" id="agent-rules">
-            <summary>Safety & System Rules</summary>
-            <p id="agent-base"></p>
-            <p class="device-state" id="agent-base-note"></p>
-          </details>
-          <details class="about"><summary>Workspace Details</summary><p id="about-facts"></p></details>
-          </form>
-        </dialog>
         <form class="composer" id="text-form">
           <label class="sr-only" for="utterance">Your turn</label>
           <input id="utterance" name="utterance" type="text" autocomplete="off" spellcheck="false" required placeholder="Try: create a file called notes.md">
@@ -543,11 +482,23 @@
        State C (systems): this sheet, over the page, never displacing layout.
        Every existing id and contract is preserved; this layer only adds. -->
   <nav class="sqeh-dock" id="sqeh-dock" aria-label="Quick deck">
-    <button class="sqeh-dock-btn" id="sqeh-dock-home" type="button" aria-label="Quick deck" title="Quick deck"><svg class="icon" aria-hidden="true"><use href="#i-layers"/></svg></button>
-    <button class="sqeh-dock-btn" id="sqeh-dock-files" type="button" aria-label="Files" title="Files"><svg class="icon" aria-hidden="true"><use href="#i-list"/></svg></button>
-    <button class="sqeh-dock-mic" id="sqeh-dock-mic" type="button" aria-label="Speak a turn" title="Speak a turn (hotkey: M)" aria-describedby="voice-state"><svg class="icon" aria-hidden="true"><use href="#i-mic"/></svg></button>
-    <button class="sqeh-dock-btn" id="sqeh-dock-systems" type="button" aria-label="Systems quick access" aria-expanded="false" aria-controls="sqeh-sheet" title="Systems quick access"><svg class="icon" aria-hidden="true"><use href="#i-gear"/></svg></button>
-    <button class="sqeh-dock-btn" id="sqeh-dock-settings" type="button" aria-label="Settings" title="Settings"><svg class="icon" aria-hidden="true"><use href="#i-gear"/></svg></button>
+    <button class="sqeh-dock-btn" id="sqeh-dock-home" type="button" aria-label="Quick deck" title="Quick deck">
+      <svg class="icon" aria-hidden="true"><use href="#i-layers"/></svg>
+      <span class="sqeh-dock-label">Home</span>
+    </button>
+    <button class="sqeh-dock-btn" id="sqeh-dock-files" type="button" aria-label="Files" title="Files">
+      <svg class="icon" aria-hidden="true"><use href="#i-list"/></svg>
+      <span class="sqeh-dock-label">Files</span>
+    </button>
+    <!-- the central mic FAB IS the stage #mic, repositioned here by CSS (one mic, voicebox-beads-2meg) -->
+    <button class="sqeh-dock-btn" id="sqeh-dock-systems" type="button" aria-label="Systems quick access" aria-expanded="false" aria-controls="sqeh-sheet" title="Systems quick access">
+      <svg class="icon" aria-hidden="true"><use href="#i-sliders"/></svg>
+      <span class="sqeh-dock-label">Controls</span>
+    </button>
+    <button class="sqeh-dock-btn" id="sqeh-dock-settings" type="button" aria-label="Settings" title="Settings">
+      <svg class="icon" aria-hidden="true"><use href="#i-gear"/></svg>
+      <span class="sqeh-dock-label">Settings</span>
+    </button>
   </nav>
 
 
@@ -560,5 +511,67 @@
     </header>
     <div class="sqeh-sheet-body" id="sqeh-sheet-body"></div>
   </div>
+        <dialog class="settings" id="settings" closedby="any" aria-labelledby="settings-title">
+          <form class="settings-form" method="dialog">
+          <div class="settings-head">
+            <h2 id="settings-title">Settings</h2>
+            <button class="icon-button" id="settings-close" type="submit" aria-label="Close settings"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+          </div>
+          <div class="device-row">
+            <h3 id="mic-label">Microphone</h3>
+            <select id="mic-select" aria-labelledby="mic-label"></select>
+            <p class="device-state" id="mic-device-state">Mic off</p>
+          </div>
+          <div class="device-row">
+            <h3 id="mic-hotkey-label">Microphone hotkey</h3>
+            <input type="text" id="mic-hotkey" class="setting-input" aria-labelledby="mic-hotkey-label" maxlength="1" value="M" autocomplete="off" spellcheck="false">
+            <p class="device-state" id="mic-hotkey-state">Press 'M' to toggle mic</p>
+          </div>
+          <div class="device-row">
+            <h3 id="out-label">Reply output</h3>
+            <select id="out-select" aria-labelledby="out-label"></select>
+            <p class="device-state" id="out-device-state">No reply playing</p>
+          </div>
+          <div class="settings-section-divider">
+            <h3 class="settings-section-title">Agent Settings</h3>
+          </div>
+          <div class="device-row">
+            <h3 id="agent-provider-label">Provider</h3>
+            <select id="agent-provider" aria-labelledby="agent-provider-label"></select>
+            <p class="device-state" id="agent-provider-state">Not asked yet</p>
+          </div>
+          <div class="device-row">
+            <h3 id="agent-model-label">Model</h3>
+            <select id="agent-model" aria-labelledby="agent-model-label"></select>
+            <p class="device-state" id="agent-model-state">Not asked yet</p>
+          </div>
+          <div class="device-row">
+            <h3 id="agent-voice-label">Voice</h3>
+            <select id="agent-voice" aria-labelledby="agent-voice-label"></select>
+            <p class="device-state" id="agent-voice-state">Not asked yet</p>
+          </div>
+          <div class="device-row">
+            <h3 id="agent-timbre-label">Voice timbre</h3>
+            <select id="agent-timbre" aria-labelledby="agent-timbre-label"></select>
+            <p class="device-state" id="agent-timbre-state">Not asked yet</p>
+          </div>
+          <div class="device-row">
+            <h3 id="agent-personality-label">Persona</h3>
+            <select id="agent-personality" aria-labelledby="agent-personality-label"></select>
+            <p class="device-state" id="agent-personality-state">Not asked yet</p>
+          </div>
+          <div class="device-row">
+            <h3 id="agent-custom-instruction-label">Custom prompt guidance</h3>
+            <textarea id="agent-custom-instruction" class="setting-input" rows="2" placeholder="Optional custom instructions to layer over the base rules..." aria-labelledby="agent-custom-instruction-label"></textarea>
+            <p class="device-state" id="agent-custom-instruction-state">Custom instructions layered over base rules</p>
+          </div>
+          <details class="about" id="agent-rules">
+            <summary>Safety & System Rules</summary>
+            <p id="agent-base"></p>
+            <p class="device-state" id="agent-base-note"></p>
+          </details>
+          <details class="about"><summary>Workspace Details</summary><p id="about-facts"></p></details>
+          </form>
+        </dialog>
 </body>
 </html>

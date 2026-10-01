@@ -70,8 +70,10 @@ Three things about the dev loop that are easy to get wrong and are therefore wri
 - **One frame makes the list move without the page asking.** The server sends `{type:"tool"}` when a live
   model runs a command; `public/live-voice.js` forwards it and `public/fused.js` re-reads the file list. That
   is the whole path from "the model wrote a file" to "the file is on screen": no polling, no refresh, and the
+  The same frame now also feeds the artifact chips (voicebox-beads-2meg): `public/fused.js` renders a written file as an inline chip on the turn that produced it.
   opening reader and scroll position survive the re-read (voicebox-beads-a93).
 - **The 3-state system interface leads the room (voicebox-beads-sqeh).** Deck state: the voice stage plus the Quick Deck card (Quick Files tiles mirrored from the live file list; Mini-Apps quick actions — mute, volume, explorer wired, Spotify honestly disabled). History state: the session feed leads. Systems state: a slide-up/anchored sheet the deck body physically moves into — the same nodes, live data in both homes. The persistent dock (home, files, mic FAB, systems, settings) and the radial arcs carry the states; `body[data-sqeh-state]` curates which section leads via CSS, and nothing `lib`-side changes.
+- **Artifact chips land on the turn (voicebox-beads-2meg).** A successful write/edit in the voice loop leaves an inline chip on that turn — the file's name and an Open action driving the room's own reader; the tool frame carries the written file's name from the executor's result. The playback path carries a real gain (clamped) behind the Volume tile, and the mic is ONE button: the stage's, rendered as the dock's central FAB.
 - **Live task frames mount the task card immediately.** The server sends `{type:"task"}` when a task is
   delegated; `public/live-voice.js` forwards it to `public/fused.js` which dynamically displays the task card
   with agent name, address, and live status without manual status checks (voicebox-beads-8fv.4).

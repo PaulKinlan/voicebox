@@ -4260,6 +4260,9 @@ server.on("upgrade", (req, socket) => {
               durationMs: Math.round(performance.now() - started),
               action: result.action ?? result.error,
               ...(typeof result.output === "string" ? { output: result.output.slice(0, 256) } : {}),
+              // The written/edited FILE identity (voicebox-beads-2meg): artifact chips need
+              // the file's name, and the tool frame is the only place that has it.
+              ...(typeof result.file === "string" && result.file ? { file: result.file.slice(0, 200) } : {}),
             });
           }
           const answered = session.sendToolResponse(responses);

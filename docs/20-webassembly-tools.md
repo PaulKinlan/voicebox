@@ -118,7 +118,8 @@ justifies it).
    answered by the **same shared executor** as every other verb: same containment, same refusal
    names, same audit.
 2. **The measurement:** the executor times the call; the result frame (`type: "tool"`) carries
-   `durationMs` per call.
+   `durationMs` per call — and, for writes and edits, the written file's name (`file`), which is
+   what the room's artifact chips render (voicebox-beads-2meg).
 3. **The room UI:** the Extensions → WASM shelf section renders one row per tool — "Callable now",
    the last run's ok/failed, **the measured latency in ms**, and how long ago; driven through the
    page's own tool-frame hook, so a call that happened in the voice loop is visible without a

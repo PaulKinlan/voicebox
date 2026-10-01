@@ -217,3 +217,4 @@ interrupt?.addEventListener("click", () => {
 });
 
 window.__voiceboxLiveClient = audioClient;
+window.__voiceboxSetPlaybackVolume = (v) => audioClient.setPlaybackVolume(v);

@@ -134,6 +134,25 @@ export function createAudioClient({
   let captureSource = null;
   let stream = null;
   let playCtx = null;
+  let playGain = null;
+  let playbackVolume = 0.8;
+
+  function buildGain(ctx) {
+    // A fake AudioContext may not implement createGain — fall back to the destination
+    // so the DOM-free test contract keeps holding.
+    if (typeof ctx.createGain !== "function") return ctx.destination;
+    const gain = ctx.createGain();
+    gain.gain.value = playbackVolume;
+    gain.connect(ctx.destination);
+    return gain;
+  }
+
+  /** Playback volume for the agent's voice — clamped, applied whenever the context exists. */
+  function setPlaybackVolume(value) {
+    playbackVolume = Math.min(1, Math.max(0, Number(value) || 0));
+    if (playGain) playGain.gain.value = playbackVolume;
+    return playbackVolume;
+  }
   let nextStart = 0;
   const sources = new Set();
   // Meter state. `capture` is the newest input energy; `output` is one energy
@@ -405,12 +424,13 @@ export function createAudioClient({
     }
     state.framesReceived += 1;
     playCtx ??= new AudioContextCtor({ sampleRate: PLAYBACK_RATE });
+    playGain ??= buildGain(playCtx);
     const floats = pcm16ToFloat(bytes);
     const buffer = playCtx.createBuffer(1, floats.length, PLAYBACK_RATE);
     buffer.copyToChannel(floats, 0);
     const source = playCtx.createBufferSource();
     source.buffer = buffer;
-    source.connect(playCtx.destination);
+    source.connect(playGain);
     const when = Math.max(playCtx.currentTime + 0.02, nextStart);
     source.start(when);
     nextStart = when + buffer.duration;
@@ -759,6 +779,7 @@ export function createAudioClient({
   }
 
   return {
+    setPlaybackVolume,
     attachSocket,
     handleMessage,
     startCapture,

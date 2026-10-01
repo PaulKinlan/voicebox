@@ -1528,6 +1528,37 @@ function openManageExt(ext, mode = "reconfigure") {
 // frames land here via window.__voiceboxOnToolCalls, and the wasm shelf rows read it.
 const lastToolStatus = new Map();
 
+/** ARTIFACT CHIP (voicebox-beads-2meg): a file a tool wrote becomes an inline chip on the
+ *  live turn — Open drives the room's own reader through the real file row. No chip without
+ *  a turn to live in: a chip is evidence ABOUT a turn, never a turn of its own. */
+function sqehArtifactChip(name) {
+  const turn = els.log?.lastElementChild;
+  if (!turn) return;
+  const chip = document.createElement("button");
+  chip.type = "button";
+  chip.className = "sqeh-chip";
+  chip.setAttribute("aria-label", `Open ${name}`);
+  const glyph = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  glyph.setAttribute("class", "icon");
+  glyph.setAttribute("aria-hidden", "true");
+  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  use.setAttribute("href", "#i-folder");
+  glyph.append(use);
+  const label = document.createElement("span");
+  label.className = "sqeh-chip-name";
+  label.textContent = name;
+  const open = document.createElement("span");
+  open.className = "sqeh-chip-open";
+  open.textContent = "Open";
+  chip.append(glyph, label, open);
+  chip.addEventListener("click", () => {
+    sqehSetState("files");
+    const row = [...document.querySelectorAll("#files .file-open")].find((r) => (r.dataset.file ?? "").endsWith(name));
+    row?.click();
+  });
+  turn.querySelector(".did")?.before(chip);
+}
+
 async function renderExtensions() {
   if (!els.extRunning) return;
   try {
@@ -4389,7 +4420,7 @@ const sqeh = {
   lastToolStatus: new Map(),
 };
 
-function sqehSetState(state) {
+function sqehSetState(state, { scroll = false } = {}) {
   // deck: voice + Quick Deck hero. history: the session feed. files: the explorer.
   // The systems sheet overlays whichever is live — it never displaces layout.
   sqeh.state = state;
@@ -4398,12 +4429,10 @@ function sqehSetState(state) {
   const hist = document.getElementById("sqeh-toggle-history");
   if (pop) pop.setAttribute("aria-selected", String(state === "deck"));
   if (hist) hist.setAttribute("aria-selected", String(state === "history"));
-  if (state === "history") {
+  if (scroll && state === "history") {
     const session = document.getElementById("session");
     if (session) session.hidden = false;
-    session?.scrollIntoView({ behavior: "smooth", block: "start" });
-  } else if (state === "deck") {
-    document.getElementById("sqeh-deck")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    session?.scrollIntoView({ block: "start" });
   }
 }
 
@@ -4456,20 +4485,18 @@ function sqehWire() {
   });
   document.getElementById("sqeh-sheet-close")?.addEventListener("click", () => sqehOpenSheet(false));
   document.getElementById("sqeh-dock-settings")?.addEventListener("click", () => document.getElementById("settings")?.showModal?.());
-  document.getElementById("sqeh-dock-mic")?.addEventListener("click", () => document.getElementById("mic")?.click());
   document.getElementById("sqeh-act-mute")?.addEventListener("click", () => {
+    // THE MIC BUTTON OWNS THE TRUTH and one click toggles capture. Mute means STOP:
+    // only click when capture is actually live, so the tile can never double-toggle
+    // (the old if/else clicked in both branches — a no-op test and a real hazard).
     const mic = document.getElementById("mic");
-    const pressed = mic?.getAttribute("aria-pressed") === "true";
-    // Mute = stop an active capture; unmute = start one. The mic button owns the truth.
-    if (pressed) mic?.click();
-    else mic?.click();
+    const capturing = mic?.getAttribute("aria-pressed") === "true";
+    if (capturing) { mic?.click(); sqehSetState("deck"); }
   });
+  let sqehVolume = 0.8;
   document.getElementById("sqeh-act-volume")?.addEventListener("click", () => {
-    const out = document.getElementById("out-select");
-    if (out) out.dispatchEvent(new Event("change", { bubbles: true }));
-    const audio = window.__voiceboxLiveClient;
-    const el = document.querySelector("audio");
-    if (el) el.volume = Math.min(1, (Number(el.volume) || 0.8) + 0.2);
+    sqehVolume = Math.min(1, sqehVolume + 0.25);
+    window.__voiceboxSetPlaybackVolume?.(sqehVolume);
   });
   document.getElementById("sqeh-act-explorer")?.addEventListener("click", () => sqehSetState("files"));
   document.getElementById("sqeh-dock-files")?.addEventListener("click", () => sqehSetState("files"));
@@ -4493,8 +4520,18 @@ function sqehWire() {
     // lastToolStatus — dropping the frame silently kills the latency readout
     // (the wasm-room-ui regression, voicebox-beads-sqeh landing gate).
     prev?.(calls, frame);
+    // ARTIFACT CHIPS (State B, voicebox-beads-2meg): a successful write/edit leaves a chip
+    // on the live turn — the file's name and an Open action driving the room's own reader.
+    for (const call of calls ?? []) {
+      if (!call?.ok || !(call.name === "write_file" || call.name === "edit_file")) continue;
+      // The frame carries the file identity (the server's seen entries add result.file).
+      const name = String(call.file ?? call.args?.name ?? "");
+      if (name) sqehArtifactChip(name);
+    }
     sqehSyncQuickFiles();
   };
+  // Ensure the initial state is always applied cleanly on first paint
+  sqehSetState("deck");
 }
 
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", sqehWire);
