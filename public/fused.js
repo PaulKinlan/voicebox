@@ -4488,8 +4488,11 @@ function sqehWire() {
   sqehSyncQuickFiles();
   // Tool frames refresh the tiles too (a tool write is a touched file).
   const prev = window.__voiceboxOnToolCalls;
-  window.__voiceboxOnToolCalls = (calls) => {
-    prev?.(calls);
+  window.__voiceboxOnToolCalls = (calls, frame) => {
+    // FORWARD BOTH ARGUMENTS: the landed handler merges frame.calls' durationMs into
+    // lastToolStatus — dropping the frame silently kills the latency readout
+    // (the wasm-room-ui regression, voicebox-beads-sqeh landing gate).
+    prev?.(calls, frame);
     sqehSyncQuickFiles();
   };
 }

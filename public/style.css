@@ -1203,3 +1203,10 @@ body[data-sqeh-state="files"] #session { display: none; }
    phone viewport once the deck moved in — pin it to the container (voicebox-beads-sqeh). */
 .voice { width: 100%; max-width: 100%; min-width: 0; }
 .sqeh-deck { inline-size: 100%; max-inline-size: 720px; min-width: 0; }
+
+/* The dock is a floating strip: its EMPTY areas must never eat page clicks — a mouse
+   click meant for content under the dock band (e.g. the #build change-log anchor
+   scrolled to viewport centre) has to pass through to the page (voicebox-beads-sqeh,
+   caught by changelog-links.test.mjs). Only the buttons/FAB take pointer events. */
+.sqeh-dock { pointer-events: none; }
+.sqeh-dock > * { pointer-events: auto; }
