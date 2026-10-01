@@ -1254,25 +1254,30 @@ body[data-sqeh-state="history"] .voice { opacity: 0.6; }
 
 /* ══ 2meg repair: the seven root causes from the Opus audit ═══════════════ */
 
-/* (3) ONE MIC: the stage #mic is THE mic — in sqeh states it renders as the dock's central
-   FAB instead of also sitting on the stage. The waveform arcs stay on the stage as the
-   visualizer; the button is the same element (every contract, test and hotkey intact). */
-body[data-sqeh-state] .mic {
+/* (3) ONE MIC (voicebox-beads-2meg, landing-gate refined): the duplicate dock BUTTON is gone
+   and the stage #mic scrolls WITH the page — the 2twm stand-in contract depends on that
+   (ring up: the stand-in is hidden; the stage scrolls away: the stand-in APPEARS, and the
+   real button steps out of the a11y tree while docked). The stand-in is styled as the
+   mockup's central glowing FAB while it stands in. */
+/* :not([hidden]) is the CONTRACT: the stand-in exists only while the stage mic is docked
+   (scrolled away) — while the ring is up the attribute keeps it display:none, and the ring
+   itself is the only mic on screen (voicebox-beads-2meg landing-gate repair). */
+body[data-sqeh-state] .mic-dock:not([hidden]) {
   position: fixed;
   inset-inline-start: 50%;
-  inset-block-end: calc(10px + env(safe-area-inset-bottom, 0px));
   transform: translateX(-50%);
+  inset-block-end: calc(10px + env(safe-area-inset-bottom, 0px));
   inline-size: 62px;
   block-size: 62px;
-  margin: 0;
-  border-radius: 50%;
+  padding: 0;
   border: 0;
+  border-radius: 50%;
   background: radial-gradient(circle at 50% 35%, var(--accent), color-mix(in srgb, var(--accent) 55%, #000));
-  color: var(--sqeh-slate, #0f172a);
+  color: var(--ground, #0b0f19);
   box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent), 0 0 34px color-mix(in srgb, var(--accent) 45%, transparent);
-  z-index: 45;
   display: grid;
   place-items: center;
+  cursor: pointer;
 }
 body[data-sqeh-state] .mic-dock .icon { inline-size: 26px; block-size: 26px; }
 
