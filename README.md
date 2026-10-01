@@ -76,6 +76,7 @@ Voicebox combines low-latency full-duplex audio transport with sandboxed, audite
 - **Waveform Rendering (`drawInputWave`)**: Draws a circular oscilloscope that blends microphone input and agent playback energies on a fixed full scale without ceiling saturation.
 - **Barge-In Energy Detection**: Compares microphone energy against background thresholds. Detecting user speech during playback stops agent audio immediately and transmits an `interrupt` event.
 - **Docked Microphone Widget (`#docked-mic`)**: When scrolling through long file trees moves the central button out of view, a docked control appears in the viewport, ensuring voice controls remain accessible.
+- **3-State System Interface (`#sqeh-deck`, `#sqeh-sheet`, `#sqeh-dock`)**: the room leads with different sections per state — the deck (voice stage + Quick Files tiles mirrored from the live file list + Mini-Apps quick actions; the Spotify tile is honestly disabled, no integration exists), the session history, and a SYSTEMS QUICK ACCESS sheet the deck body physically moves into (the same nodes, live data in both homes). A persistent dock (home, files, mic FAB, systems, settings) switches states; layered radial arcs glow behind the mic while voice is active (voicebox-beads-sqeh).
 
 ### 2. Live Session Gateway (`/live`, `lib/live-session.mjs`)
 The server acts as an authenticated full-duplex gateway between browser WebSockets and upstream speech-to-speech providers.

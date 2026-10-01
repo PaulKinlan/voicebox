@@ -1094,3 +1094,112 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
   margin: 10px 0 0;
 }
 
+
+/* ══ sqeh — the 3-state system interface (voicebox-beads-sqeh) ═══════════════
+   Deep slate depth, translucent glass surfaces, and the state layer:
+   State A (deck): the voice view + the Quick Deck card.
+   State B (history): the session feed.
+   State C (systems): the slide-up/popover sheet over the page. */
+
+:root {
+  --sqeh-slate: #0f172a;
+  --sqeh-slate-2: #1e293b;
+  --sqeh-glass: color-mix(in srgb, #1e293b 72%, transparent);
+}
+
+html[data-theme="dark"] body { background: var(--sqeh-slate); }
+html:not([data-theme]) body { background: var(--sqeh-slate); }
+
+.room, .head, .card {
+  background: var(--sqeh-glass);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+/* ── State A: the Quick Deck card ── */
+.sqeh-deck {
+  margin: 16px auto;
+  max-inline-size: 720px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line));
+  border-radius: 20px;
+  background: var(--sqeh-glass);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 18px 50px rgb(0 0 0 / 35%);
+}
+.sqeh-deck-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.sqeh-status { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
+.sqeh-conn { margin: 0; font-size: 0.75rem; color: var(--muted); }
+.sqeh-toggle { display: inline-flex; margin: 12px 0; padding: 3px; border: 1px solid var(--line); border-radius: 999px; background: color-mix(in srgb, var(--sqeh-slate-2) 60%, transparent); }
+.sqeh-toggle-btn { padding: 6px 14px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; cursor: pointer; }
+.sqeh-toggle-btn[aria-selected="true"] { background: var(--accent); color: var(--sqeh-slate); }
+.sqeh-group { margin-block: 10px; }
+.sqeh-group-title { margin: 0 0 8px; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.sqeh-quick-files { display: flex; gap: 10px; overflow-x: auto; padding-block: 2px 6px; }
+.sqeh-quick-files:empty::after { content: "files you touch appear here"; font-size: 0.8rem; color: var(--muted); }
+.sqeh-file-tile { flex: none; inline-size: 128px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--sqeh-slate-2) 65%, transparent); font-size: 0.78rem; text-align: start; cursor: pointer; }
+.sqeh-file-tile:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.sqeh-file-tile .sqeh-tile-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.sqeh-file-tile .sqeh-tile-when { display: block; margin-block-start: 4px; font-size: 0.68rem; color: var(--muted); }
+.sqeh-actions { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; }
+.sqeh-action { display: grid; gap: 6px; justify-items: center; padding: 12px 8px; border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--sqeh-slate-2) 65%, transparent); color: var(--ink); font-size: 0.72rem; cursor: pointer; }
+.sqeh-action:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.sqeh-action:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ── the dock ── */
+.sqeh-dock { position: fixed; inset-inline: 0; inset-block-end: 0; display: flex; align-items: center; justify-content: center; gap: 26px; padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px)); border-block-start: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line)); background: var(--sqeh-glass); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); z-index: 40; }
+.sqeh-dock-btn { display: grid; place-items: center; inline-size: 44px; block-size: 44px; border: 0; border-radius: 12px; background: transparent; color: var(--muted); cursor: pointer; }
+.sqeh-dock-btn:hover { color: var(--ink); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.sqeh-dock-mic { display: grid; place-items: center; inline-size: 62px; block-size: 62px; margin-block-end: 14px; border: 0; border-radius: 50%; background: radial-gradient(circle at 50% 35%, var(--accent), color-mix(in srgb, var(--accent) 55%, #000)); color: var(--sqeh-slate); cursor: pointer; box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent), 0 0 34px color-mix(in srgb, var(--accent) 45%, transparent); }
+.sqeh-dock-mic:hover { box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 24%, transparent), 0 0 48px color-mix(in srgb, var(--accent) 60%, transparent); }
+
+/* ── layered radial arcs on the mic stage ── */
+.mic-stage { position: relative; }
+.sqeh-arcs { position: absolute; inset: -26px; display: grid; place-items: center; pointer-events: none; }
+.sqeh-arcs i { position: absolute; inline-size: 210px; block-size: 210px; border-radius: 50%; border: 1.5px solid color-mix(in srgb, var(--accent) 55%, transparent); opacity: 0; }
+.mic-stage[data-voice="on"] .sqeh-arcs i { animation: sqeh-arc 2.4s ease-out infinite; }
+.mic-stage[data-voice="on"] .sqeh-arcs i:nth-child(2) { animation-delay: 0.8s; }
+.mic-stage[data-voice="on"] .sqeh-arcs i:nth-child(3) { animation-delay: 1.6s; }
+@keyframes sqeh-arc { 0% { transform: scale(0.72); opacity: 0.85; } 100% { transform: scale(1.45); opacity: 0; } }
+
+/* ── State C: systems sheet (mobile slide-up; desktop anchored popover) ── */
+.sqeh-sheet { position: fixed; inset-inline: 0; inset-block-end: 0; z-index: 60; max-block-size: 70svh; padding: 14px 18px calc(18px + env(safe-area-inset-bottom, 0px)); border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line)); border-radius: 22px 22px 0 0; background: var(--sqeh-glass); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); box-shadow: 0 -18px 50px rgb(0 0 0 / 40%); overflow: auto; }
+.sqeh-sheet[hidden] { display: none; }
+.sqeh-sheet-handle { inline-size: 44px; block-size: 4px; margin: 0 auto 10px; border-radius: 2px; background: var(--muted); }
+.sqeh-sheet-head { display: flex; align-items: center; justify-content: space-between; }
+.sqeh-sheet-title { margin: 0; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.12em; color: var(--muted); }
+.sqeh-sheet-body .sqeh-deck-body { margin-block: 8px; }
+
+@media (min-width: 769px) {
+  .sqeh-sheet { inset-block-end: auto; inset-block-start: 76px; inset-inline-start: auto; inset-inline-end: 24px; inline-size: 420px; max-block-size: 70svh; border-radius: 20px; }
+}
+
+/* ── State B: history mode — the session feed leads, the deck steps back ── */
+body[data-sqeh-state="history"] .sqeh-deck { opacity: 0.45; }
+body[data-sqeh-state="history"] .voice { opacity: 0.6; }
+
+@media (max-width: 768px) {
+  .sqeh-deck { margin: 10px; }
+  .sqeh-dock { gap: 16px; }
+}
+
+/* ── the three states: each state curates what leads ── */
+body[data-sqeh-state="deck"] .made,
+body[data-sqeh-state="deck"] .reader { display: none; }
+body[data-sqeh-state="history"] .made,
+body[data-sqeh-state="history"] .reader,
+body[data-sqeh-state="history"] .voice,
+body[data-sqeh-state="history"] .sqeh-deck { display: none; }
+body[data-sqeh-state="files"] .voice,
+body[data-sqeh-state="files"] .sqeh-deck,
+body[data-sqeh-state="files"] #session { display: none; }
+
+/* The arcs glow past the mic stage; clip the SECTION's horizontal overflow so a phone
+   never gains a horizontal scrollbar from decoration (voicebox-beads-35eg's own lesson). */
+.voice { overflow-x: clip; }
+
+/* The voice section is a centered flex item whose fit-content width used to exceed a
+   phone viewport once the deck moved in — pin it to the container (voicebox-beads-sqeh). */
+.voice { width: 100%; max-width: 100%; min-width: 0; }
+.sqeh-deck { inline-size: 100%; max-inline-size: 720px; min-width: 0; }

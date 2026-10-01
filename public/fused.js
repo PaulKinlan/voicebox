@@ -4377,3 +4377,122 @@ setInterval(() => {
   health(); // GETs only: root facts, environments, health — never a turn
 }, ROOT_POLL_MS);
 loadAgentSettings(); // the dialog has real state before anyone opens it
+
+// ── sqeh: the 3-state system interface controller (voicebox-beads-sqeh) ──
+// State A (deck): the voice view plus the Quick Deck card. State B (history): the session feed.
+// State C (systems): the slide-up/popover sheet over the page. Everything here is ADDITIVE:
+// existing ids, contracts and the room's own section management are untouched — the controller
+// only adds a state attribute, mirrors the server/root status, syncs Quick Files tiles, and
+// owns the new buttons.
+const sqeh = {
+  state: "deck",
+  lastToolStatus: new Map(),
+};
+
+function sqehSetState(state) {
+  // deck: voice + Quick Deck hero. history: the session feed. files: the explorer.
+  // The systems sheet overlays whichever is live — it never displaces layout.
+  sqeh.state = state;
+  document.body.dataset.sqehState = state;
+  const pop = document.getElementById("sqeh-toggle-popovers");
+  const hist = document.getElementById("sqeh-toggle-history");
+  if (pop) pop.setAttribute("aria-selected", String(state === "deck"));
+  if (hist) hist.setAttribute("aria-selected", String(state === "history"));
+  if (state === "history") {
+    const session = document.getElementById("session");
+    if (session) session.hidden = false;
+    session?.scrollIntoView({ behavior: "smooth", block: "start" });
+  } else if (state === "deck") {
+    document.getElementById("sqeh-deck")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+}
+
+function sqehSyncQuickFiles() {
+  const host = document.getElementById("sqeh-quick-files");
+  if (!host) return;
+  const rows = [...document.querySelectorAll("#files .file-open")].slice(0, 8);
+  host.replaceChildren(...rows.map((row) => {
+    const tile = document.createElement("button");
+    tile.type = "button";
+    tile.className = "sqeh-file-tile";
+    tile.dataset.file = row.dataset.file ?? "";
+    const name = document.createElement("span");
+    name.className = "sqeh-tile-name";
+    name.textContent = row.dataset.file ?? "(file)";
+    const when = document.createElement("span");
+    when.className = "sqeh-tile-when";
+    when.textContent = row.dataset.kind === "directory" ? "folder" : "file";
+    tile.append(name, when);
+    tile.addEventListener("click", () => { sqehSetState("files"); row.click(); });
+    return tile;
+  }));
+}
+
+function sqehOpenSheet(open) {
+  const sheet = document.getElementById("sqeh-sheet");
+  if (!sheet) return;
+  sheet.hidden = !open;
+  const sys = document.getElementById("sqeh-dock-systems");
+  if (sys) sys.setAttribute("aria-expanded", String(open));
+  const body = document.getElementById("sqeh-sheet-body");
+  const deckBody = document.getElementById("sqeh-deck-body");
+  if (body && deckBody) {
+    // ONE source of truth: the deck body MOVES between homes, so the sheet shows live
+    // data (the same nodes), never a stale copy.
+    if (open) body.appendChild(deckBody);
+    else document.getElementById("sqeh-deck")?.querySelector(".sqeh-deck-head")?.after(deckBody);
+  }
+}
+
+function sqehWire() {
+  const pop = document.getElementById("sqeh-toggle-popovers");
+  const hist = document.getElementById("sqeh-toggle-history");
+  pop?.addEventListener("click", () => sqehSetState("deck"));
+  hist?.addEventListener("click", () => sqehSetState("history"));
+  document.getElementById("sqeh-dock-home")?.addEventListener("click", () => sqehSetState("deck"));
+  document.getElementById("sqeh-dock-systems")?.addEventListener("click", () => {
+    const sheet = document.getElementById("sqeh-sheet");
+    sqehOpenSheet(sheet?.hidden !== false);
+  });
+  document.getElementById("sqeh-sheet-close")?.addEventListener("click", () => sqehOpenSheet(false));
+  document.getElementById("sqeh-dock-settings")?.addEventListener("click", () => document.getElementById("settings")?.showModal?.());
+  document.getElementById("sqeh-dock-mic")?.addEventListener("click", () => document.getElementById("mic")?.click());
+  document.getElementById("sqeh-act-mute")?.addEventListener("click", () => {
+    const mic = document.getElementById("mic");
+    const pressed = mic?.getAttribute("aria-pressed") === "true";
+    // Mute = stop an active capture; unmute = start one. The mic button owns the truth.
+    if (pressed) mic?.click();
+    else mic?.click();
+  });
+  document.getElementById("sqeh-act-volume")?.addEventListener("click", () => {
+    const out = document.getElementById("out-select");
+    if (out) out.dispatchEvent(new Event("change", { bubbles: true }));
+    const audio = window.__voiceboxLiveClient;
+    const el = document.querySelector("audio");
+    if (el) el.volume = Math.min(1, (Number(el.volume) || 0.8) + 0.2);
+  });
+  document.getElementById("sqeh-act-explorer")?.addEventListener("click", () => sqehSetState("files"));
+  document.getElementById("sqeh-dock-files")?.addEventListener("click", () => sqehSetState("files"));
+  // Status mirror: the server dot and the declared root, copied from the facts the room owns.
+  const mirror = () => {
+    const conn = document.getElementById("sqeh-conn");
+    const dot = document.getElementById("server-dot");
+    const rootKind = document.getElementById("root-kind");
+    if (conn && dot) conn.textContent = `server ${dot.textContent || dot.dataset.ok || "unknown"}${rootKind ? ` · root ${rootKind.textContent}` : ""}`;
+  };
+  mirror();
+  setInterval(mirror, 2000);
+  // Quick Files sync: the file list is the source of truth; refresh the tiles when it changes.
+  const files = document.getElementById("files");
+  if (files) new MutationObserver(() => sqehSyncQuickFiles()).observe(files, { childList: true, subtree: true });
+  sqehSyncQuickFiles();
+  // Tool frames refresh the tiles too (a tool write is a touched file).
+  const prev = window.__voiceboxOnToolCalls;
+  window.__voiceboxOnToolCalls = (calls) => {
+    prev?.(calls);
+    sqehSyncQuickFiles();
+  };
+}
+
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", sqehWire);
+else sqehWire();

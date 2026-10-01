@@ -14,7 +14,7 @@ what runs, and a claim in them that the code contradicts is a bug in the documen
 
 | component | file | authority for | state |
 |---|---|---|---|
-| the page | `public/index.html`, `public/fused.js`, `public/style.css`, `public/live-voice.js` | the interface: objects on a canvas, the turn box, the transcript, native modal dialogs for settings, environments, extensions, and harnesses — and the handlers for `{type:"tool"}` (re-reads file list) and `{type:"task"}` (mounts and updates the task card) | real, with labelled simulations |
+| the page | `public/index.html`, `public/fused.js`, `public/style.css`, `public/live-voice.js` | the interface: objects on a canvas, the turn box, the transcript, native modal dialogs for settings, environments, extensions, and harnesses — the handlers for `{type:"tool"}` (re-reads file list) and `{type:"task"}` (mounts and updates the task card), and the 3-state system interface (voicebox-beads-sqeh): deck/history states, the systems sheet, the persistent dock, and the radial arcs | real, with labelled simulations |
 | the server | `server.mjs` | routes, static serving, running actions, the workspace | **zero dependencies** (`node:http`) |
 | the fleet | `lib/fleet.mjs`, `core/fleet.ts` | multi-environment agent discovery, target keys (`env/agent`), and session contact routing | addressable across environments |
 | the turn resolver | `lib/resolver.mjs` | turning a transcript into an action `{ verb, name, content? }` | **one provider, three verbs — a placeholder** |

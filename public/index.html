@@ -314,6 +314,9 @@
         <h2 class="sr-only" id="talk-heading">Talk to it</h2>
         <div class="caption-space"><p class="caption" id="caption" role="status" aria-live="polite"></p></div>
         <div class="mic-stage" id="voice-ring-wrap" data-voice="off">
+          <!-- sqeh (voicebox-beads-sqeh): layered radial frequency arcs behind the mic — glowing
+               rings that answer to the same data-voice state the ring answers to. Decoration only. -->
+          <div class="sqeh-arcs" id="sqeh-arcs" aria-hidden="true"><i></i><i></i><i></i></div>
           <!-- the agent's voice: one radius per sample around the circle -->
           <svg class="output-ring" viewBox="0 0 240 240" aria-hidden="true"><path id="output-path"></path></svg>
           <button class="mic" id="mic" type="button" aria-label="Speak a turn" aria-pressed="false" aria-describedby="voice-state" aria-keyshortcuts="M" title="Speak a turn (hotkey: M)">
@@ -330,6 +333,31 @@
         <div class="voice-actions">
           <button class="quiet interrupt" id="interrupt" type="button" disabled>Stop reply</button>
         </div>
+  <section class="sqeh-deck card" id="sqeh-deck" aria-labelledby="sqeh-deck-title">
+    <header class="sqeh-deck-head">
+      <p class="sqeh-status" id="sqeh-status">Voicebox — Voice Assistant</p>
+      <p class="sqeh-conn" id="sqeh-conn" aria-label="Server and root status"></p>
+    </header>
+    <div class="sqeh-toggle" role="tablist" aria-label="Deck view">
+      <button class="sqeh-toggle-btn" id="sqeh-toggle-popovers" role="tab" aria-selected="true" type="button">POP-OVERS</button>
+      <button class="sqeh-toggle-btn" id="sqeh-toggle-history" role="tab" aria-selected="false" type="button">HISTORY</button>
+    </div>
+    <div class="sqeh-deck-body" id="sqeh-deck-body">
+      <div class="sqeh-group">
+        <h3 class="sqeh-group-title">Quick Files</h3>
+        <div class="sqeh-quick-files" id="sqeh-quick-files" aria-label="Recently touched files"></div>
+      </div>
+      <div class="sqeh-group">
+        <h3 class="sqeh-group-title">Mini-Apps</h3>
+        <div class="sqeh-actions" id="sqeh-actions" aria-label="Quick actions">
+          <button class="sqeh-action" id="sqeh-act-mute" type="button"><svg class="icon" aria-hidden="true"><use href="#i-mic"/></svg><span>Mute Mic</span></button>
+          <button class="sqeh-action" id="sqeh-act-volume" type="button"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg><span>Volume Up</span></button>
+          <button class="sqeh-action" id="sqeh-act-spotify" type="button" disabled title="No Spotify integration is wired yet — the tile is honest about it"><svg class="icon" aria-hidden="true"><use href="#i-layers"/></svg><span>Spotify</span></button>
+          <button class="sqeh-action" id="sqeh-act-explorer" type="button"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg><span>File Explorer</span></button>
+        </div>
+      </div>
+    </div>
+  </section>
         <dialog class="settings" id="settings" closedby="any" aria-labelledby="settings-title">
           <form class="settings-form" method="dialog">
           <div class="settings-head">
@@ -508,5 +536,29 @@
   <button class="mic-dock" id="mic-dock" type="button" aria-label="Speak a turn" aria-pressed="false" hidden>
     <svg class="icon" aria-hidden="true"><use href="#i-mic"/></svg>
   </button>
+
+  <!-- ══ sqeh: the 3-state system interface (voicebox-beads-sqeh) ══
+       State A (deck): the voice view plus the Quick Deck card below.
+       State B (history): the session feed, scrolled into view.
+       State C (systems): this sheet, over the page, never displacing layout.
+       Every existing id and contract is preserved; this layer only adds. -->
+  <nav class="sqeh-dock" id="sqeh-dock" aria-label="Quick deck">
+    <button class="sqeh-dock-btn" id="sqeh-dock-home" type="button" aria-label="Quick deck" title="Quick deck"><svg class="icon" aria-hidden="true"><use href="#i-layers"/></svg></button>
+    <button class="sqeh-dock-btn" id="sqeh-dock-files" type="button" aria-label="Files" title="Files"><svg class="icon" aria-hidden="true"><use href="#i-list"/></svg></button>
+    <button class="sqeh-dock-mic" id="sqeh-dock-mic" type="button" aria-label="Speak a turn" title="Speak a turn (hotkey: M)" aria-describedby="voice-state"><svg class="icon" aria-hidden="true"><use href="#i-mic"/></svg></button>
+    <button class="sqeh-dock-btn" id="sqeh-dock-systems" type="button" aria-label="Systems quick access" aria-expanded="false" aria-controls="sqeh-sheet" title="Systems quick access"><svg class="icon" aria-hidden="true"><use href="#i-gear"/></svg></button>
+    <button class="sqeh-dock-btn" id="sqeh-dock-settings" type="button" aria-label="Settings" title="Settings"><svg class="icon" aria-hidden="true"><use href="#i-gear"/></svg></button>
+  </nav>
+
+
+
+  <div class="sqeh-sheet" id="sqeh-sheet" role="dialog" aria-modal="false" aria-labelledby="sqeh-sheet-title" hidden>
+    <div class="sqeh-sheet-handle" aria-hidden="true"></div>
+    <header class="sqeh-sheet-head">
+      <h2 class="sqeh-sheet-title" id="sqeh-sheet-title">SYSTEMS QUICK ACCESS</h2>
+      <button class="icon-button" id="sqeh-sheet-close" type="button" aria-label="Close systems quick access"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+    </header>
+    <div class="sqeh-sheet-body" id="sqeh-sheet-body"></div>
+  </div>
 </body>
 </html>
