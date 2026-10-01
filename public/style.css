@@ -1133,8 +1133,6 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
   --sqeh-glass: color-mix(in srgb, #1e293b 72%, transparent);
 }
 
-html[data-theme="dark"] body { background: var(--sqeh-slate); }
-html:not([data-theme]) body { background: var(--sqeh-slate); }
 
 .card {
   background: var(--sqeh-glass);
@@ -1255,15 +1253,6 @@ body[data-sqeh-state="history"] .voice { opacity: 0.6; }
 .sqeh-dock > * { pointer-events: auto; }
 
 /* ══ 2meg repair: the seven root causes from the Opus audit ═══════════════ */
-
-/* (1)+(2) THE DARK TOKENS ACTUALLY RESOLVE: html carries data-theme="dark" (set in the
-   markup — nothing set it before, so light-dark() resolved the LIGHT values: white cards
-   on the slate canvas, #23262b ink at 1.07:1 on navy). The dark values are the sqeh palette. */
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --card: #1e293b;
-  --ink: #e7e9ec;
-}
 
 /* (3) ONE MIC: the stage #mic is THE mic — in sqeh states it renders as the dock's central
    FAB instead of also sitting on the stage. The waveform arcs stay on the stage as the
