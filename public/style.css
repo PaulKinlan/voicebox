@@ -3,20 +3,7 @@
    this file is self-contained and is the only stylesheet the page loads. */
 @font-face { font-family: Inter; font-style: normal; font-weight: 100 900; font-display: swap; src: url("fonts/inter-latin.woff2") format("woff2"); }
 
-:root {
-  color-scheme: dark;
-  --ground: #0b0f19;
-  --card: #151d2f;
-  --shade: #1e293b;
-  --line: rgba(255, 255, 255, 0.12);
-  --ink: #f8fafc;
-  --muted: #94a3b8;
-  --accent: #38bdf8;
-  --good: #34d399;
-  --warn: #fbbf24;
-  --bad: #f87171;
-  --shadow: 0 18px 40px -20px rgba(0, 0, 0, 0.7);
-}
+:root,
 :root[data-theme="light"] {
   color-scheme: light;
   --ground: #fbfbf9;
@@ -68,7 +55,7 @@ input { caret-color: var(--accent); }
 .icon-button:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
 
 /* ── the room: one column, air around everything ──────────────────────── */
-.room { display: flex; flex-direction: column; min-block-size: 100svh; padding: 18px 32px 14px; }
+.room { display: flex; flex-direction: column; min-block-size: 100svh; padding: 18px 32px 84px; }
 .head { display: flex; align-items: center; gap: 16px; max-width: 1100px; width: 100%; margin: 0 auto; }
 .wordmark { margin: 0; font-size: 1rem; font-weight: 600; letter-spacing: -.035em; }
 .wordmark a { display: inline-flex; align-items: center; min-height: 40px; color: var(--ink); text-decoration: none; }
@@ -76,7 +63,7 @@ input { caret-color: var(--accent); }
 .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
 .dot[data-ok="true"] { background: var(--good); }
 .dot[data-ok="false"] { background: var(--warn); }
-.stage { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; width: 100%; max-width: 1100px; margin: 0 auto; padding: 18px 0; }
+.stage { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 28px; width: 100%; max-width: 1100px; margin: 0 auto; padding: 18px 0; }
 
 /* ── what was made: aligned names, with size kept secondary ──────────── */
 /* ── where in the root we are (voicebox-beads-tee) ─────────────────────────
@@ -96,6 +83,8 @@ input { caret-color: var(--accent); }
 .folder-path .crumb-sep { color: var(--line); }
 
 .made { display: flex; flex-direction: column; align-items: stretch; gap: 8px; inline-size: min(100%, 720px); min-inline-size: 0; text-align: start; container: file-explorer / inline-size; transition: background-color 140ms ease-out, box-shadow 140ms ease-out; }
+.made-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.made-close { display: none; }
 .made h2 { margin: 0; font-size: 1rem; font-weight: 600; letter-spacing: -.015em; color: var(--ink); }
 .made-note { margin: 0; font-size: .8125rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .files { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; inline-size: 100%; max-block-size: min(40svh, 24rem); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; list-style: none; margin: 0; padding: 6px; }
@@ -187,7 +176,7 @@ input { caret-color: var(--accent); }
 .made-actions #new-file { color: var(--accent); }
 
 /* ── the voice stage: concentric hairlines, one soft accent ──────────── */
-.voice { display: flex; flex-direction: column; align-items: center; }
+.voice { display: flex; flex-direction: column; align-items: center; justify-content: center; min-block-size: min(64svh, 520px); }
 .mic-stage { position: relative; display: grid; place-items: center; width: 268px; aspect-ratio: 1; }
 /* The circle is the output meter, not decoration: each sample around the ring
    sets that radius. It is invisible until the agent actually speaks. */
@@ -841,11 +830,11 @@ dialog.changelog-modal .commit-meta {
   max-block-size: min(720px, calc(100vh - 80px));
   margin: 0;
   z-index: 120;
-  background: rgba(15, 23, 42, 0.94);
+  background: color-mix(in srgb, var(--card) 94%, transparent);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
   border-radius: 16px;
   display: flex;
   flex-direction: column;
@@ -877,8 +866,8 @@ dialog.changelog-modal .commit-meta {
   justify-content: space-between;
   align-items: center;
   padding: 10px 14px;
-  background: rgba(30, 41, 59, 0.85);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--shade) 85%, transparent);
+  border-bottom: 1px solid var(--line);
 }
 .mini-app-title-group {
   display: flex;
@@ -892,14 +881,14 @@ dialog.changelog-modal .commit-meta {
   padding: 2px 6px;
   border-radius: 4px;
   background: color-mix(in srgb, var(--accent, #3b82f6) 20%, transparent);
-  color: var(--accent, #60a5fa);
+  color: var(--accent, #2563eb);
   border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 30%, transparent);
 }
 .mini-app-title {
   margin: 0;
   font-size: 14px;
   font-weight: 600;
-  color: var(--ink, #e7e9ec);
+  color: var(--ink);
 }
 .mini-app-actions {
   display: flex;
@@ -913,8 +902,10 @@ dialog.changelog-modal .commit-meta {
   max-height: 85vh;
   resize: vertical;
   overflow: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
+  flex: 1;
   background: transparent;
   transition: height 0.2s ease-out;
 }
@@ -927,6 +918,8 @@ dialog.changelog-modal .commit-meta {
 .mini-app-frame {
   width: 100%;
   height: 100%;
+  flex: 1;
+  min-height: 0;
   border: 0;
   display: block;
   background: transparent;
@@ -953,30 +946,29 @@ dialog.changelog-modal .commit-meta {
   align-items: center;
   gap: 8px;
   padding: 7px 14px;
-  background: rgba(15, 23, 42, 0.92);
+  background: color-mix(in srgb, var(--card) 92%, transparent);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border: 1px solid var(--line);
   border-radius: 9999px;
-  color: var(--ink, #e7e9ec);
+  color: var(--ink);
   font-family: inherit;
   font-size: 0.8125rem;
   font-weight: 500;
   cursor: pointer;
-  box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  box-shadow: var(--shadow);
   transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .mini-app-bubble:hover {
-  background: rgba(30, 41, 59, 0.95);
-  border-color: color-mix(in srgb, var(--accent, #38bdf8) 50%, rgba(255, 255, 255, 0.2));
+  background: var(--card);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
   transform: translateY(-2px);
-  box-shadow: 0 12px 28px -4px rgba(0, 0, 0, 0.6), 0 0 12px color-mix(in srgb, var(--accent, #38bdf8) 30%, transparent);
 }
 
 .mini-app-bubble[aria-expanded="true"] {
-  border-color: color-mix(in srgb, var(--accent, #38bdf8) 60%, rgba(255, 255, 255, 0.3));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #38bdf8) 30%, transparent), 0 8px 24px -4px rgba(0, 0, 0, 0.6);
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent), var(--shadow);
 }
 
 .mini-app-bubble-badge {
@@ -986,9 +978,9 @@ dialog.changelog-modal .commit-meta {
   letter-spacing: 0.05em;
   padding: 2px 6px;
   border-radius: 6px;
-  background: color-mix(in srgb, var(--accent, #38bdf8) 25%, transparent);
-  color: var(--accent, #38bdf8);
-  border: 1px solid color-mix(in srgb, var(--accent, #38bdf8) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 .mini-app-bubble-title {
@@ -1018,7 +1010,7 @@ dialog.changelog-modal .commit-meta {
     border-radius: 20px 20px 0 0;
     border-inline: 0;
     border-block-end: 0;
-    box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.7);
+    box-shadow: var(--shadow);
     transform-origin: bottom center;
   }
 
@@ -1033,7 +1025,7 @@ dialog.changelog-modal .commit-meta {
     width: 36px;
     height: 4px;
     border-radius: 2px;
-    background: rgba(255, 255, 255, 0.28);
+    background: var(--muted);
     margin: 8px auto 2px;
   }
 
@@ -1122,15 +1114,15 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
 
 
 /* ══ sqeh — the 3-state system interface (voicebox-beads-sqeh) ═══════════════
-   Deep slate depth, translucent glass surfaces, and the state layer:
+   Theme-aware surfaces and the state layer:
    State A (deck): the voice view + the Quick Deck card.
    State B (history): the session feed.
    State C (systems): the slide-up/popover sheet over the page. */
 
 :root {
-  --sqeh-slate: #0f172a;
-  --sqeh-slate-2: #1e293b;
-  --sqeh-glass: color-mix(in srgb, #1e293b 72%, transparent);
+  --sqeh-slate: var(--card);
+  --sqeh-slate-2: var(--shade);
+  --sqeh-glass: color-mix(in srgb, var(--card) 82%, transparent);
 }
 
 
@@ -1142,31 +1134,127 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
 
 /* ── State A: the Quick Deck card ── */
 .sqeh-deck {
-  margin: 16px auto;
-  max-inline-size: 720px;
-  padding: 16px;
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line));
+  margin: 8px auto 0;
+  max-inline-size: 680px;
+  padding: 14px 18px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));
   border-radius: 20px;
   background: var(--sqeh-glass);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  box-shadow: 0 18px 50px rgb(0 0 0 / 35%);
+  box-shadow: var(--shadow);
 }
 .sqeh-deck-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .sqeh-status { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
 .sqeh-conn { margin: 0; font-size: 0.75rem; color: var(--muted); }
-.sqeh-toggle { display: inline-flex; margin: 12px 0; padding: 3px; border: 1px solid var(--line); border-radius: 999px; background: color-mix(in srgb, var(--sqeh-slate-2) 60%, transparent); }
-.sqeh-toggle-btn { padding: 6px 14px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; cursor: pointer; }
-.sqeh-toggle-btn[aria-selected="true"] { background: var(--accent); color: var(--sqeh-slate); }
+.sqeh-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin: 10px 0;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sqeh-slate-2) 65%, transparent);
+}
+.sqeh-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+.sqeh-toggle-btn[aria-selected="true"],
+.sqeh-toggle-btn[aria-expanded="true"] {
+  background: var(--accent);
+  color: #ffffff;
+}
+.sqeh-files-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-inline-size: 18px;
+  block-size: 18px;
+  padding-inline: 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
+  color: inherit;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0;
+}
 .sqeh-group { margin-block: 10px; }
 .sqeh-group-title { margin: 0 0 8px; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
-.sqeh-quick-files { display: flex; gap: 10px; overflow-x: auto; padding-block: 2px 6px; }
+.sqeh-quick-files { display: flex; flex-wrap: wrap; gap: 8px; padding-block: 2px 4px; }
 .sqeh-quick-files:empty::after { content: "files you touch appear here"; font-size: 0.8rem; color: var(--muted); }
-.sqeh-file-tile { flex: none; inline-size: 128px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--sqeh-slate-2) 65%, transparent); font-size: 0.78rem; text-align: start; cursor: pointer; }
-.sqeh-file-tile:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.sqeh-file-tile {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-inline-size: 200px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sqeh-slate-2) 65%, transparent);
+  color: var(--ink);
+  font-size: 0.78rem;
+  text-align: start;
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.sqeh-file-tile:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); transform: translateY(-1px); }
 .sqeh-file-tile .sqeh-tile-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.sqeh-file-tile .sqeh-tile-when { display: block; margin-block-start: 4px; font-size: 0.68rem; color: var(--muted); }
-.sqeh-actions { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; }
+.sqeh-file-tile .sqeh-tile-when { display: none; }
+
+/* ── Mini-Apps bubble strip inside Quick Deck ── */
+.sqeh-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.sqeh-actions:empty::after { content: "Interactive HTML apps you create appear here as bubbles"; font-size: 0.8rem; color: var(--muted); }
+.sqeh-miniapp-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--card));
+  color: var(--ink);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.sqeh-miniapp-bubble:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.sqeh-miniapp-bubble-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+.sqeh-miniapp-bubble-title {
+  max-inline-size: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── System actions inside the Systems sheet ── */
+.sqeh-system-actions { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; margin-block-start: 10px; }
 .sqeh-action { display: grid; gap: 6px; justify-items: center; padding: 12px 8px; border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--sqeh-slate-2) 65%, transparent); color: var(--ink); font-size: 0.72rem; cursor: pointer; }
 .sqeh-action:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .sqeh-action:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -1194,7 +1282,7 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
   line-height: 1;
 }
 .sqeh-dock-btn:hover { color: var(--ink); background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.sqeh-dock-mic { display: grid; place-items: center; inline-size: 62px; block-size: 62px; margin-block-end: 14px; border: 0; border-radius: 50%; background: radial-gradient(circle at 50% 35%, var(--accent), color-mix(in srgb, var(--accent) 55%, #000)); color: var(--sqeh-slate); cursor: pointer; box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent), 0 0 34px color-mix(in srgb, var(--accent) 45%, transparent); }
+.sqeh-dock-mic { display: grid; place-items: center; inline-size: 62px; block-size: 62px; margin-block-end: 14px; border: 0; border-radius: 50%; background: radial-gradient(circle at 50% 35%, var(--accent), color-mix(in srgb, var(--accent) 55%, #000)); color: #ffffff; cursor: pointer; box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent), 0 0 34px color-mix(in srgb, var(--accent) 45%, transparent); }
 .sqeh-dock-mic:hover { box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 24%, transparent), 0 0 48px color-mix(in srgb, var(--accent) 60%, transparent); }
 
 /* ── layered radial arcs on the mic stage ── */
@@ -1207,7 +1295,7 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
 @keyframes sqeh-arc { 0% { transform: scale(0.72); opacity: 0.85; } 100% { transform: scale(1.45); opacity: 0; } }
 
 /* ── State C: systems sheet (mobile slide-up; desktop anchored popover) ── */
-.sqeh-sheet { position: fixed; inset-inline: 0; inset-block-end: 0; z-index: 60; max-block-size: 70svh; padding: 14px 18px calc(18px + env(safe-area-inset-bottom, 0px)); border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line)); border-radius: 22px 22px 0 0; background: var(--sqeh-glass); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); box-shadow: 0 -18px 50px rgb(0 0 0 / 40%); overflow: auto; }
+.sqeh-sheet { position: fixed; inset-inline: 0; inset-block-end: 0; z-index: 60; max-block-size: 70svh; padding: 14px 18px calc(18px + env(safe-area-inset-bottom, 0px)); border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line)); border-radius: 22px 22px 0 0; background: var(--sqeh-glass); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); box-shadow: var(--shadow); overflow: auto; }
 .sqeh-sheet[hidden] { display: none; }
 .sqeh-sheet-handle { inline-size: 44px; block-size: 4px; margin: 0 auto 10px; border-radius: 2px; background: var(--muted); }
 .sqeh-sheet-head { display: flex; align-items: center; justify-content: space-between; }
@@ -1216,6 +1304,40 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
 
 @media (min-width: 769px) {
   .sqeh-sheet { inset-block-end: auto; inset-block-start: 76px; inset-inline-start: auto; inset-inline-end: 24px; inline-size: 420px; max-block-size: 70svh; border-radius: 20px; }
+}
+
+/* ── Files popover state (body[data-sqeh-state="files"]) ── */
+body[data-sqeh-state="files"] .made {
+  position: fixed;
+  inset-block-start: 72px;
+  inset-inline-start: 50%;
+  transform: translateX(-50%);
+  inline-size: min(560px, calc(100vw - 32px));
+  max-block-size: min(72svh, 580px);
+  z-index: 80;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 16px 20px;
+  box-shadow: var(--shadow);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+body[data-sqeh-state="files"] .made-close {
+  display: inline-grid;
+}
+body[data-sqeh-state="files"] .reader:not([hidden]) {
+  position: fixed;
+  inset-block-start: 84px;
+  inset-inline-start: 50%;
+  transform: translateX(-50%);
+  inline-size: min(640px, calc(100vw - 24px));
+  max-block-size: min(78svh, 640px);
+  z-index: 88;
+  margin: 0;
+  box-shadow: var(--shadow);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 /* ── State B: history mode — the session feed leads, the deck steps back ── */
@@ -1232,8 +1354,6 @@ body[data-sqeh-state="history"] .voice { opacity: 0.6; }
   body[data-sqeh-state="history"] .made,
   body[data-sqeh-state="history"] .reader,
   body[data-sqeh-state="history"] .voice { display: none; }
-  body[data-sqeh-state="files"] .voice,
-  body[data-sqeh-state="files"] .sqeh-deck { display: none; }
 }
 
 /* The arcs glow past the mic stage; clip the SECTION's horizontal overflow so a phone
@@ -1243,7 +1363,7 @@ body[data-sqeh-state="history"] .voice { opacity: 0.6; }
 /* The voice section is a centered flex item whose fit-content width used to exceed a
    phone viewport once the deck moved in — pin it to the container (voicebox-beads-sqeh). */
 .voice { width: 100%; max-width: 100%; min-width: 0; }
-.sqeh-deck { inline-size: 100%; max-inline-size: 720px; min-width: 0; }
+.sqeh-deck { inline-size: 100%; max-inline-size: 680px; min-width: 0; }
 
 /* The dock is a floating strip: its EMPTY areas must never eat page clicks — a mouse
    click meant for content under the dock band (e.g. the #build change-log anchor
@@ -1273,7 +1393,7 @@ body[data-sqeh-state] .mic-dock:not([hidden]) {
   border: 0;
   border-radius: 50%;
   background: radial-gradient(circle at 50% 35%, var(--accent), color-mix(in srgb, var(--accent) 55%, #000));
-  color: var(--ground, #0b0f19);
+  color: #ffffff;
   box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent), 0 0 34px color-mix(in srgb, var(--accent) 45%, transparent);
   display: grid;
   place-items: center;
@@ -1286,3 +1406,4 @@ body[data-sqeh-state] .mic-dock .icon { inline-size: 26px; block-size: 26px; }
 .sqeh-chip:hover { border-color: var(--accent); }
 .sqeh-chip .icon { inline-size: 14px; block-size: 14px; color: var(--accent); }
 .sqeh-chip-open { font-weight: 700; color: var(--accent); }
+

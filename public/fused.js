@@ -85,6 +85,9 @@ const WANTED = {
   changelogClose: "changelog-close", changelogRefresh: "changelog-refresh",
   changelogStatus: "changelog-status", changelogCommits: "changelog-commits",
   folderPath: "folder-path",
+  themeToggle: "theme-toggle",
+  fileRunApp: "file-run-app",
+  madeClose: "made-close",
 };
 const els = {};
 const missing = [];
@@ -101,6 +104,37 @@ if (missing.length) {
 function on(el, type, handler) {
   if (el) return el.addEventListener(type, handler);
   return null;
+}
+
+// ── Theme toggle (voicebox-beads-3rcy): light mode by default, persisted to localStorage ──
+const THEME_KEY = "voicebox:theme";
+function applyTheme(theme, { persist = false } = {}) {
+  const resolved = theme === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = resolved;
+  if (persist) {
+    try { localStorage.setItem(THEME_KEY, resolved); } catch { /* private mode */ }
+  }
+  if (els.themeToggle) {
+    const isDark = resolved === "dark";
+    const label = isDark ? "Switch to light mode" : "Switch to dark mode";
+    els.themeToggle.setAttribute("aria-label", label);
+    els.themeToggle.setAttribute("title", label);
+    els.themeToggle.setAttribute("aria-pressed", String(isDark));
+    const use = els.themeToggle.querySelector("use");
+    if (use) use.setAttribute("href", isDark ? "#i-sun" : "#i-moon");
+  }
+}
+{
+  let initialTheme = "light";
+  try {
+    const savedTheme = localStorage.getItem(THEME_KEY);
+    if (savedTheme === "dark" || savedTheme === "light") initialTheme = savedTheme;
+  } catch { /* ignore */ }
+  applyTheme(initialTheme);
+  on(els.themeToggle, "click", () => {
+    const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    applyTheme(next, { persist: true });
+  });
 }
 
 let shownFile = null; // the file currently in the reader panel
@@ -1956,6 +1990,40 @@ function isCurrentFileEditable() {
     || (activeRoot?.actsVia === "page" && activeRoot?.executor?.connected === true);
 }
 
+const isHtmlFileName = (name) => /\.html?$/i.test(String(name ?? "").trim());
+
+function syncFileRunAppButton() {
+  if (!els.fileRunApp) return;
+  const canRun = Boolean(shownFile && isHtmlFileName(shownFile) && els.reader?.dataset.state === "ready" && els.reader?.dataset.error !== "true");
+  els.fileRunApp.hidden = !canRun;
+  els.fileRunApp.disabled = !canRun;
+}
+
+async function launchWorkspaceHtmlMiniApp(name) {
+  if (!name || !miniAppController) return;
+  try {
+    let html = "";
+    if (roomFolder) {
+      const read = await readRoomFile(name);
+      html = read?.text ?? "";
+    } else {
+      const answer = await request(`/api/file?name=${encodeURIComponent(name)}`);
+      if (!answer?.ok) {
+        setReport(reasonFrom(answer, `could not open mini-app '${name}'`), "bad");
+        return;
+      }
+      html = answer.content ?? "";
+    }
+    miniAppController.mount({
+      appId: `file_${name.replace(/[^a-zA-Z0-9_-]/g, "_")}`,
+      title: name,
+      html,
+    });
+  } catch (error) {
+    setReport(`Could not launch mini-app '${name}': ${error?.message ?? error}`, "bad");
+  }
+}
+
 function exitEditMode() {
   if (els.reader) els.reader.dataset.editing = "false";
   if (els.fileEditor) els.fileEditor.hidden = true;
@@ -1988,6 +2056,7 @@ async function showRoomFile(name, { reloading = false } = {}) {
   els.readerTitle.textContent = name;
   els.readerFacts.textContent = reloading ? "Reloading…" : "Reading…";
   if (!reloading) els.readerBody.textContent = "";
+  syncFileRunAppButton();
   showFileSelection(name);
   try {
     const { text, bytes, truncated } = await readRoomFile(name);
@@ -2021,6 +2090,7 @@ async function showRoomFile(name, { reloading = false } = {}) {
         els.fileRefresh.textContent = "Reload";
       }
       if (els.reader) els.reader.dataset.loading = "false";
+      syncFileRunAppButton();
     }
   }
 }
@@ -2054,6 +2124,7 @@ async function showFile(name, { reloading = false } = {}) {
   els.readerTitle.textContent = name;
   els.readerFacts.textContent = reloading ? "Reloading…" : "Reading…";
   if (!reloading) els.readerBody.textContent = "";
+  syncFileRunAppButton();
   showFileSelection(name);
   try {
     const answer = await request(`/api/file?name=${encodeURIComponent(name)}`);
@@ -2111,6 +2182,7 @@ async function showFile(name, { reloading = false } = {}) {
         els.fileRefresh.textContent = "Reload";
       }
       if (els.reader) els.reader.dataset.loading = "false";
+      syncFileRunAppButton();
     }
   }
 }
@@ -2125,6 +2197,19 @@ async function refreshCurrentFile() {
 }
 
 on(els.fileRefresh, "click", refreshCurrentFile);
+
+on(els.fileRunApp, "click", () => {
+  if (!shownFile || !miniAppController) return;
+  const html = els.reader?.dataset.editing === "true" && els.fileEditor
+    ? els.fileEditor.value
+    : (els.readerBody?.textContent ?? "");
+  if (!html.trim()) return;
+  miniAppController.mount({
+    appId: `file_${shownFile.replace(/[^a-zA-Z0-9_-]/g, "_")}`,
+    title: shownFile,
+    html,
+  });
+});
 
 on(els.fileEdit, "click", () => {
   if (!isCurrentFileEditable() || !els.fileEditor) return;
@@ -2263,6 +2348,7 @@ on(els.close, "click", () => {
     els.fileRefresh.removeAttribute("aria-busy");
     els.fileRefresh.textContent = "Reload";
   }
+  syncFileRunAppButton();
   showFileSelection(null);
   document.querySelector(".file-open")?.focus();
 });
@@ -2353,6 +2439,7 @@ function presentInspectionInReader(verb, result, action) {
     els.fileRefresh.textContent = "Reload";
   }
   if (els.fileEdit) els.fileEdit.disabled = true;
+  syncFileRunAppButton();
   showFileSelection(null);
   return true;
 }
@@ -2629,6 +2716,7 @@ async function send(said) {
         els.fileRefresh.textContent = "Reload";
       }
       if (els.fileEdit) els.fileEdit.disabled = !isCurrentFileEditable();
+      syncFileRunAppButton();
       showFileSelection(result.action);
     } else if (verb && presentInspectionInReader(verb, result, answer.action)) {
       // Rich inspection output rendered in #reader (voicebox-beads-k7cz)
@@ -4155,6 +4243,7 @@ window.__voiceboxOnMiniApp = (miniApp) => {
 
 // ── the interactive mini-app surface (voicebox-beads-5h1, voicebox-beads-7xbe) ──
 let miniAppController = null;
+const launchedMiniApps = new Map();
 if (els.miniAppContainer) {
   let currentDescriptor = null;
   let currentChannel = null;
@@ -4281,12 +4370,14 @@ if (els.miniAppContainer) {
       console.warn("[voicebox] mini-app mount requires an html string");
       return;
     }
-    currentDescriptor = descriptor;
+    const appId = descriptor.appId || `app_${Date.now().toString(36)}`;
+    const title = descriptor.title || "Interactive Mini-App";
+    currentDescriptor = { ...descriptor, appId, title };
+    launchedMiniApps.set(appId, { appId, title, html: descriptor.html });
     currentTools = [];
     isCollapsed = false;
     els.miniAppContainer.dataset.collapsed = "false";
     els.miniAppContainer.hidden = false;
-    const title = descriptor.title || "Interactive Mini-App";
     if (els.miniAppTitle) {
       els.miniAppTitle.textContent = title;
     }
@@ -4300,14 +4391,13 @@ if (els.miniAppContainer) {
       els.miniAppBubble.setAttribute("aria-expanded", "true");
     }
 
-    const appId = descriptor.appId || `app_${Date.now().toString(36)}`;
     const bridgeUrl = `/mini-app-bridge.html?appId=${encodeURIComponent(appId)}`;
 
     const outer = document.createElement("iframe");
     outer.src = bridgeUrl;
     outer.className = "mini-app-frame";
     outer.id = "mini-app-outer-frame";
-    outer.title = descriptor.title || "Interactive Mini-App";
+    outer.title = title;
 
     if (currentChannel) {
       try { currentChannel.port1.close(); } catch {}
@@ -4325,7 +4415,7 @@ if (els.miniAppContainer) {
           [currentChannel.port2],
         );
         outer.contentWindow.postMessage(
-          { type: "load_app", appId, html: descriptor.html, title: descriptor.title },
+          { type: "load_app", appId, html: descriptor.html, title },
           window.location.origin,
         );
         currentChannel.port1.postMessage({
@@ -4338,6 +4428,7 @@ if (els.miniAppContainer) {
     window.addEventListener("message", onBridgeHandshake);
 
     if (els.miniAppViewport) els.miniAppViewport.replaceChildren(outer);
+    sqehSyncMiniApps();
   }
 
   function reload() {
@@ -4350,11 +4441,12 @@ if (els.miniAppContainer) {
   if (els.miniAppReload) els.miniAppReload.addEventListener("click", reload);
   if (els.miniAppBubble) els.miniAppBubble.addEventListener("click", toggle);
 
-  // Quick light-dismiss when clicking outside the popover card and dock
+  // Quick light-dismiss when clicking outside the popover card, dock, and mini-app bubble triggers
   document.addEventListener("pointerdown", (e) => {
     if (els.miniAppContainer && !els.miniAppContainer.hidden && els.miniAppContainer.dataset.collapsed !== "true") {
       const target = e.target;
-      if (!els.miniAppContainer.contains(target) && (!els.miniAppDock || !els.miniAppDock.contains(target))) {
+      const inTrigger = target?.closest?.("#sqeh-actions, #file-run-app");
+      if (!els.miniAppContainer.contains(target) && (!els.miniAppDock || !els.miniAppDock.contains(target)) && !inTrigger) {
         toggle();
       }
     }
@@ -4421,14 +4513,24 @@ const sqeh = {
 };
 
 function sqehSetState(state, { scroll = false } = {}) {
-  // deck: voice + Quick Deck hero. history: the session feed. files: the explorer.
+  // deck: voice + Quick Deck hero. history: the session feed. files: the floating explorer popover.
   // The systems sheet overlays whichever is live — it never displaces layout.
   sqeh.state = state;
   document.body.dataset.sqehState = state;
   const pop = document.getElementById("sqeh-toggle-popovers");
   const hist = document.getElementById("sqeh-toggle-history");
+  const filesBubble = document.getElementById("sqeh-files-bubble");
+  const dockFiles = document.getElementById("sqeh-dock-files");
+  const isFiles = state === "files";
   if (pop) pop.setAttribute("aria-selected", String(state === "deck"));
   if (hist) hist.setAttribute("aria-selected", String(state === "history"));
+  if (filesBubble) {
+    filesBubble.setAttribute("aria-selected", String(isFiles));
+    filesBubble.setAttribute("aria-expanded", String(isFiles));
+  }
+  if (dockFiles) {
+    dockFiles.setAttribute("aria-expanded", String(isFiles));
+  }
   if (scroll && state === "history") {
     const session = document.getElementById("session");
     if (session) session.hidden = false;
@@ -4436,25 +4538,92 @@ function sqehSetState(state, { scroll = false } = {}) {
   }
 }
 
+function sqehSyncMiniApps() {
+  const host = document.getElementById("sqeh-actions");
+  if (!host) return;
+  const htmlRows = [...document.querySelectorAll("#files .file-open")].filter((row) => isHtmlFileName(row.dataset.file));
+  const seenAppIds = new Set();
+  const seenTitles = new Set();
+  const buttons = [];
+
+  for (const row of htmlRows) {
+    const fileName = row.dataset.file ?? "";
+    const fileAppId = `file_${fileName.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+    seenAppIds.add(fileAppId);
+    seenTitles.add(fileName);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "sqeh-miniapp-bubble";
+    btn.dataset.miniAppFile = fileName;
+    btn.dataset.miniAppId = fileAppId;
+    const badge = document.createElement("span");
+    badge.className = "sqeh-miniapp-bubble-badge";
+    badge.textContent = "App";
+    const title = document.createElement("span");
+    title.className = "sqeh-miniapp-bubble-title";
+    title.textContent = fileName;
+    btn.append(badge, title);
+    btn.addEventListener("click", () => {
+      void launchWorkspaceHtmlMiniApp(fileName);
+    });
+    buttons.push(btn);
+  }
+
+  for (const [appId, desc] of launchedMiniApps.entries()) {
+    if (seenAppIds.has(appId) || seenTitles.has(desc.title)) continue;
+    seenAppIds.add(appId);
+    seenTitles.add(desc.title);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "sqeh-miniapp-bubble";
+    btn.dataset.miniAppId = appId;
+    const badge = document.createElement("span");
+    badge.className = "sqeh-miniapp-bubble-badge";
+    badge.textContent = "App";
+    const title = document.createElement("span");
+    title.className = "sqeh-miniapp-bubble-title";
+    title.textContent = desc.title;
+    btn.append(badge, title);
+    btn.addEventListener("click", () => {
+      if (!miniAppController) return;
+      const current = miniAppController.getDescriptor();
+      const container = miniAppController.getContainer();
+      if (current?.appId === appId && container && !container.hidden) {
+        if (container.dataset.collapsed === "true") miniAppController.toggle();
+      } else {
+        miniAppController.mount(desc);
+      }
+    });
+    buttons.push(btn);
+  }
+
+  host.replaceChildren(...buttons);
+}
+
 function sqehSyncQuickFiles() {
   const host = document.getElementById("sqeh-quick-files");
-  if (!host) return;
-  const rows = [...document.querySelectorAll("#files .file-open")].slice(0, 8);
-  host.replaceChildren(...rows.map((row) => {
-    const tile = document.createElement("button");
-    tile.type = "button";
-    tile.className = "sqeh-file-tile";
-    tile.dataset.file = row.dataset.file ?? "";
-    const name = document.createElement("span");
-    name.className = "sqeh-tile-name";
-    name.textContent = row.dataset.file ?? "(file)";
-    const when = document.createElement("span");
-    when.className = "sqeh-tile-when";
-    when.textContent = row.dataset.kind === "directory" ? "folder" : "file";
-    tile.append(name, when);
-    tile.addEventListener("click", () => { sqehSetState("files"); row.click(); });
-    return tile;
-  }));
+  const allRows = [...document.querySelectorAll("#files .file-open")];
+  const badge = document.getElementById("sqeh-files-badge");
+  if (badge) badge.textContent = String(allRows.length);
+  if (host) {
+    const rows = allRows.slice(0, 8);
+    host.replaceChildren(...rows.map((row) => {
+      const tile = document.createElement("button");
+      tile.type = "button";
+      tile.className = "sqeh-file-tile";
+      tile.dataset.file = row.dataset.file ?? "";
+      const name = document.createElement("span");
+      name.className = "sqeh-tile-name";
+      name.textContent = row.dataset.file ?? "(file)";
+      const when = document.createElement("span");
+      when.className = "sqeh-tile-when";
+      when.textContent = row.dataset.kind === "directory" ? "folder" : "file";
+      tile.append(name, when);
+      tile.addEventListener("click", () => { sqehSetState("files"); row.click(); });
+      return tile;
+    }));
+  }
+  sqehSyncMiniApps();
 }
 
 function sqehOpenSheet(open) {
@@ -4463,21 +4632,17 @@ function sqehOpenSheet(open) {
   sheet.hidden = !open;
   const sys = document.getElementById("sqeh-dock-systems");
   if (sys) sys.setAttribute("aria-expanded", String(open));
-  const body = document.getElementById("sqeh-sheet-body");
-  const deckBody = document.getElementById("sqeh-deck-body");
-  if (body && deckBody) {
-    // ONE source of truth: the deck body MOVES between homes, so the sheet shows live
-    // data (the same nodes), never a stale copy.
-    if (open) body.appendChild(deckBody);
-    else document.getElementById("sqeh-deck")?.querySelector(".sqeh-deck-head")?.after(deckBody);
-  }
 }
 
 function sqehWire() {
   const pop = document.getElementById("sqeh-toggle-popovers");
   const hist = document.getElementById("sqeh-toggle-history");
+  const filesBubble = document.getElementById("sqeh-files-bubble");
+  const toggleFilesPopover = () => sqehSetState(sqeh.state === "files" ? "deck" : "files");
   pop?.addEventListener("click", () => sqehSetState("deck"));
   hist?.addEventListener("click", () => sqehSetState("history"));
+  filesBubble?.addEventListener("click", toggleFilesPopover);
+  document.getElementById("made-close")?.addEventListener("click", () => sqehSetState("deck"));
   document.getElementById("sqeh-dock-home")?.addEventListener("click", () => sqehSetState("deck"));
   document.getElementById("sqeh-dock-systems")?.addEventListener("click", () => {
     const sheet = document.getElementById("sqeh-sheet");
@@ -4498,8 +4663,23 @@ function sqehWire() {
     sqehVolume = Math.min(1, sqehVolume + 0.25);
     window.__voiceboxSetPlaybackVolume?.(sqehVolume);
   });
-  document.getElementById("sqeh-act-explorer")?.addEventListener("click", () => sqehSetState("files"));
-  document.getElementById("sqeh-dock-files")?.addEventListener("click", () => sqehSetState("files"));
+  document.getElementById("sqeh-act-explorer")?.addEventListener("click", toggleFilesPopover);
+  document.getElementById("sqeh-dock-files")?.addEventListener("click", toggleFilesPopover);
+
+  // Light-dismiss the floating Files popover on Escape or outside click
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && sqeh.state === "files") {
+      const anyModal = document.querySelector("dialog[open]");
+      if (!anyModal) sqehSetState("deck");
+    }
+  });
+  document.addEventListener("pointerdown", (e) => {
+    if (sqeh.state !== "files") return;
+    const target = e.target;
+    const insideAllowed = target?.closest?.("#made-list, #reader, #sqeh-files-bubble, #sqeh-dock-files, #sqeh-act-explorer, #sqeh-quick-files, dialog[open]");
+    if (!insideAllowed) sqehSetState("deck");
+  });
+
   // Status mirror: the server dot and the declared root, copied from the facts the room owns.
   const mirror = () => {
     const conn = document.getElementById("sqeh-conn");

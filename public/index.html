@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="light dark">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>Voicebox</title>
   <!-- the revision this page was served from; Vite fills it in (vite.config.js).
@@ -37,6 +37,8 @@
       <symbol id="i-minimize" viewBox="0 0 24 24"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></symbol>
       <symbol id="i-maximize" viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></symbol>
       <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></symbol>
     </defs>
   </svg>
 
@@ -48,6 +50,7 @@
            server the person has declared. The list is SERVER-OWNED so it is the same from every
            browser, and a host that is listed but not running says so by name rather than reading as
            ready. The "+" declares a descriptor; it never starts a service. -->
+      <button class="icon-button" id="theme-toggle" type="button" aria-label="Switch to dark theme" title="Switch to dark theme"><svg class="icon" aria-hidden="true"><use href="#i-moon"/></svg></button>
       <button class="quiet icon-button" id="harnesses-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="harnesses-dialog" aria-label="Harnesses" title="Harnesses"><svg class="icon" aria-hidden="true"><use href="#i-list"/></svg><span class="sr-only" id="envs-count-wrap">Harnesses</span></button>
       <dialog class="envs harnesses-modal" id="harnesses-dialog" closedby="any" aria-labelledby="harnesses-dialog-title">
         <form class="envs-form" method="dialog">
@@ -233,8 +236,63 @@
          server's full description for anyone who asks for it. -->
 
     <main class="stage" id="made" tabindex="-1">
+      <section class="voice" aria-labelledby="talk-heading">
+        <h2 class="sr-only" id="talk-heading">Talk to it</h2>
+        <div class="caption-space"><p class="caption" id="caption" role="status" aria-live="polite"></p></div>
+        <div class="mic-stage" id="voice-ring-wrap" data-voice="off">
+          <!-- sqeh (voicebox-beads-sqeh): layered radial frequency arcs behind the mic — glowing
+               rings that answer to the same data-voice state the ring answers to. Decoration only. -->
+          <div class="sqeh-arcs" id="sqeh-arcs" aria-hidden="true"><i></i><i></i><i></i></div>
+          <!-- the agent's voice: one radius per sample around the circle -->
+          <svg class="output-ring" viewBox="0 0 240 240" aria-hidden="true"><path id="output-path"></path></svg>
+          <button class="mic" id="mic" type="button" aria-label="Speak a turn" aria-pressed="false" aria-describedby="voice-state" aria-keyshortcuts="M" title="Speak a turn (hotkey: M)">
+            <svg class="mic-glyph icon" aria-hidden="true"><use href="#i-mic"/></svg>
+            <!-- your voice: recent input energy at the microphone itself -->
+            <svg class="input-wave" viewBox="0 0 100 100" aria-hidden="true">
+              <defs><clipPath id="mic-inner"><circle cx="50" cy="50" r="46"/></clipPath></defs>
+              <path id="input-path" clip-path="url(#mic-inner)"></path>
+            </svg>
+            <kbd class="mic-hotkey-badge" id="mic-hotkey-badge" aria-hidden="true">M</kbd>
+          </button>
+        </div>
+        <p class="voice-state" id="voice-state" role="status">Microphone off. Tap circle to speak or press M.</p>
+        <div class="voice-actions">
+          <button class="quiet interrupt" id="interrupt" type="button" disabled>Stop reply</button>
+        </div>
+        <form class="composer" id="text-form">
+          <label class="sr-only" for="utterance">Your turn</label>
+          <input id="utterance" name="utterance" type="text" autocomplete="off" spellcheck="false" required placeholder="Try: create a file called notes.md">
+          <button class="quiet send" id="send" type="submit" disabled>Send</button>
+        </form>
+        <p class="turn-report" id="turn-report" role="status" data-tone=""></p>
+        <section class="sqeh-deck card" id="sqeh-deck" aria-labelledby="sqeh-status">
+          <header class="sqeh-deck-head">
+            <p class="sqeh-status" id="sqeh-status">Voicebox — Voice Assistant</p>
+            <p class="sqeh-conn" id="sqeh-conn" aria-label="Server and root status"></p>
+          </header>
+          <div class="sqeh-toggle" role="tablist" aria-label="Deck view">
+            <button class="sqeh-toggle-btn" id="sqeh-toggle-popovers" role="tab" aria-selected="true" type="button">Home</button>
+            <button class="sqeh-toggle-btn sqeh-files-bubble" id="sqeh-files-bubble" role="tab" aria-selected="false" aria-expanded="false" type="button"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg><span>Files</span><span class="sqeh-files-badge" id="sqeh-files-badge">0</span></button>
+            <button class="sqeh-toggle-btn" id="sqeh-toggle-history" role="tab" aria-selected="false" type="button">History</button>
+          </div>
+          <div class="sqeh-deck-body" id="sqeh-deck-body">
+            <div class="sqeh-group">
+              <h3 class="sqeh-group-title">Quick Files</h3>
+              <div class="sqeh-quick-files" id="sqeh-quick-files" aria-label="Recently touched files"></div>
+            </div>
+            <div class="sqeh-group">
+              <h3 class="sqeh-group-title">Mini-Apps</h3>
+              <div class="sqeh-actions" id="sqeh-actions" aria-label="Mini-Apps"></div>
+            </div>
+          </div>
+        </section>
+      </section>
+
       <section class="made" id="made-list" data-state="loading" aria-labelledby="made-heading">
-        <h2 id="made-heading">Made while we talk</h2>
+        <div class="made-head">
+          <h2 id="made-heading">Made while we talk</h2>
+          <button class="icon-button made-close" id="made-close" type="button" aria-label="Close files" title="Close files"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+        </div>
         <p class="made-note" id="file-count">reading…</p>
         <!-- WHICH ROOT THIS LISTING CAME FROM. The chip in the header names the
              ACTIVE root; this names the root these cards were read from. They are
@@ -295,6 +353,7 @@
       <section class="reader" id="reader" data-state="empty" aria-labelledby="reader-title">
         <div class="reader-head">
           <h2 id="reader-title">Nothing open</h2>
+          <button class="quiet" id="file-run-app" type="button" hidden aria-label="Open as Mini-App" title="Open as Mini-App">Open as Mini-App</button>
           <button class="quiet" id="file-refresh" type="button" disabled aria-label="Reload file contents" title="Reload file contents">Reload</button>
           <button class="quiet" id="file-edit" type="button" disabled aria-label="Edit file contents" title="Edit file contents">Edit</button>
           <button class="quiet" id="file-save" type="button" hidden aria-label="Save file contents" title="Save file contents">Save</button>
@@ -309,62 +368,6 @@
           <summary>Details</summary>
           <p id="file-facts" role="status" aria-live="polite"></p>
         </details>
-      </section>
-
-      <section class="voice" aria-labelledby="talk-heading">
-        <h2 class="sr-only" id="talk-heading">Talk to it</h2>
-        <div class="caption-space"><p class="caption" id="caption" role="status" aria-live="polite"></p></div>
-        <div class="mic-stage" id="voice-ring-wrap" data-voice="off">
-          <!-- sqeh (voicebox-beads-sqeh): layered radial frequency arcs behind the mic — glowing
-               rings that answer to the same data-voice state the ring answers to. Decoration only. -->
-          <div class="sqeh-arcs" id="sqeh-arcs" aria-hidden="true"><i></i><i></i><i></i></div>
-          <!-- the agent's voice: one radius per sample around the circle -->
-          <svg class="output-ring" viewBox="0 0 240 240" aria-hidden="true"><path id="output-path"></path></svg>
-          <button class="mic" id="mic" type="button" aria-label="Speak a turn" aria-pressed="false" aria-describedby="voice-state" aria-keyshortcuts="M" title="Speak a turn (hotkey: M)">
-            <svg class="mic-glyph icon" aria-hidden="true"><use href="#i-mic"/></svg>
-            <!-- your voice: recent input energy at the microphone itself -->
-            <svg class="input-wave" viewBox="0 0 100 100" aria-hidden="true">
-              <defs><clipPath id="mic-inner"><circle cx="50" cy="50" r="46"/></clipPath></defs>
-              <path id="input-path" clip-path="url(#mic-inner)"></path>
-            </svg>
-            <kbd class="mic-hotkey-badge" id="mic-hotkey-badge" aria-hidden="true">M</kbd>
-          </button>
-        </div>
-        <p class="voice-state" id="voice-state" role="status">Microphone off. Tap circle to speak or press M.</p>
-        <div class="voice-actions">
-          <button class="quiet interrupt" id="interrupt" type="button" disabled>Stop reply</button>
-        </div>
-  <section class="sqeh-deck card" id="sqeh-deck" aria-labelledby="sqeh-deck-title">
-    <header class="sqeh-deck-head">
-      <p class="sqeh-status" id="sqeh-status">Voicebox — Voice Assistant</p>
-      <p class="sqeh-conn" id="sqeh-conn" aria-label="Server and root status"></p>
-    </header>
-    <div class="sqeh-toggle" role="tablist" aria-label="Deck view">
-      <button class="sqeh-toggle-btn" id="sqeh-toggle-popovers" role="tab" aria-selected="true" type="button">POP-OVERS</button>
-      <button class="sqeh-toggle-btn" id="sqeh-toggle-history" role="tab" aria-selected="false" type="button">HISTORY</button>
-    </div>
-    <div class="sqeh-deck-body" id="sqeh-deck-body">
-      <div class="sqeh-group">
-        <h3 class="sqeh-group-title">Quick Files</h3>
-        <div class="sqeh-quick-files" id="sqeh-quick-files" aria-label="Recently touched files"></div>
-      </div>
-      <div class="sqeh-group">
-        <h3 class="sqeh-group-title">Mini-Apps</h3>
-        <div class="sqeh-actions" id="sqeh-actions" aria-label="Quick actions">
-          <button class="sqeh-action" id="sqeh-act-mute" type="button"><svg class="icon" aria-hidden="true"><use href="#i-mic"/></svg><span>Mute Mic</span></button>
-          <button class="sqeh-action" id="sqeh-act-volume" type="button"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg><span>Volume Up</span></button>
-          <button class="sqeh-action" id="sqeh-act-spotify" type="button" disabled title="No Spotify integration is wired yet — the tile is honest about it"><svg class="icon" aria-hidden="true"><use href="#i-layers"/></svg><span>Spotify</span></button>
-          <button class="sqeh-action" id="sqeh-act-explorer" type="button"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg><span>File Explorer</span></button>
-        </div>
-      </div>
-    </div>
-  </section>
-        <form class="composer" id="text-form">
-          <label class="sr-only" for="utterance">Your turn</label>
-          <input id="utterance" name="utterance" type="text" autocomplete="off" spellcheck="false" required placeholder="Try: create a file called notes.md">
-          <button class="quiet send" id="send" type="submit" disabled>Send</button>
-        </form>
-        <p class="turn-report" id="turn-report" role="status" data-tone=""></p>
       </section>
 
       <section class="task-card" id="task-card" hidden aria-labelledby="task-card-title"></section>
@@ -509,7 +512,14 @@
       <h2 class="sqeh-sheet-title" id="sqeh-sheet-title">SYSTEMS QUICK ACCESS</h2>
       <button class="icon-button" id="sqeh-sheet-close" type="button" aria-label="Close systems quick access"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
     </header>
-    <div class="sqeh-sheet-body" id="sqeh-sheet-body"></div>
+    <div class="sqeh-sheet-body" id="sqeh-sheet-body">
+      <div class="sqeh-system-actions" aria-label="System controls">
+        <button class="sqeh-action" id="sqeh-act-mute" type="button"><svg class="icon" aria-hidden="true"><use href="#i-mic"/></svg><span>Mute Mic</span></button>
+        <button class="sqeh-action" id="sqeh-act-volume" type="button"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg><span>Volume Up</span></button>
+        <button class="sqeh-action" id="sqeh-act-explorer" type="button"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg><span>File Explorer</span></button>
+        <button class="sqeh-action" id="sqeh-act-spotify" type="button" disabled title="No Spotify integration is wired yet — the tile is honest about it"><svg class="icon" aria-hidden="true"><use href="#i-layers"/></svg><span>Spotify</span></button>
+      </div>
+    </div>
   </div>
         <dialog class="settings" id="settings" closedby="any" aria-labelledby="settings-title">
           <form class="settings-form" method="dialog">
