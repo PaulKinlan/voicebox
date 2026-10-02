@@ -1,0 +1,1272 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-active-popover="none">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Voicebox — UX Prototype (Warm Light Hero + Floating Bubble Tray)</title>
+  <style>
+    :root,
+    html[data-theme="light"] {
+      --ground: #fbfbf9;
+      --ground-subtle: #f3f2ee;
+      --card: #ffffff;
+      --card-elevated: rgba(255, 255, 255, 0.96);
+      --ink: #23262b;
+      --muted: #5a6069;
+      --line: rgba(35, 38, 43, 0.11);
+      --line-strong: rgba(35, 38, 43, 0.20);
+      --accent: #1f3fd0;
+      --accent-soft: rgba(31, 63, 208, 0.09);
+      --good: #1d6b32;
+      --good-soft: rgba(29, 107, 50, 0.11);
+      --warn: #b45309;
+      --shadow-sm: 0 2px 8px rgba(20, 22, 26, 0.05);
+      --shadow-md: 0 12px 32px rgba(20, 22, 26, 0.09), 0 2px 6px rgba(20, 22, 26, 0.04);
+      --shadow-lg: 0 24px 60px rgba(15, 18, 24, 0.16), 0 4px 16px rgba(15, 18, 24, 0.06);
+      --backdrop: rgba(35, 38, 43, 0.18);
+      --font: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+      --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    }
+
+    html[data-theme="dark"] {
+      --ground: #111318;
+      --ground-subtle: #1a1d24;
+      --card: #181b22;
+      --card-elevated: rgba(24, 27, 34, 0.96);
+      --ink: #f3f4f6;
+      --muted: #9ca3af;
+      --line: rgba(255, 255, 255, 0.11);
+      --line-strong: rgba(255, 255, 255, 0.22);
+      --accent: #60a5fa;
+      --accent-soft: rgba(96, 165, 250, 0.14);
+      --good: #34d399;
+      --good-soft: rgba(52, 211, 153, 0.15);
+      --warn: #fbbf24;
+      --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+      --shadow-md: 0 12px 32px rgba(0, 0, 0, 0.45);
+      --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.65);
+      --backdrop: rgba(0, 0, 0, 0.48);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+      background: var(--ground);
+      color: var(--ink);
+      font-family: var(--font);
+      -webkit-font-smoothing: antialiased;
+      transition: background-color 0.2s ease, color 0.2s ease;
+    }
+
+    /* Subtle tactile paper radial warmth */
+    body {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      background-image: radial-gradient(circle at 50% 34%, var(--accent-soft) 0%, transparent 56%);
+      padding-bottom: 84px;
+    }
+
+    /* Top Header Bar */
+    .room-header {
+      max-width: 1040px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 18px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand-dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: var(--good);
+      box-shadow: 0 0 0 4px var(--good-soft);
+    }
+
+    .brand-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin: 0;
+    }
+
+    .brand-tag {
+      font-size: 0.75rem;
+      font-family: var(--mono);
+      color: var(--muted);
+      background: var(--ground-subtle);
+      border: 1px solid var(--line);
+      padding: 3px 8px;
+      border-radius: 999px;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .pill-btn {
+      appearance: none;
+      border: 1px solid var(--line);
+      background: var(--card);
+      color: var(--ink);
+      font-family: var(--font);
+      font-size: 0.82rem;
+      font-weight: 500;
+      padding: 7px 13px;
+      border-radius: 999px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      box-shadow: var(--shadow-sm);
+      transition: transform 0.12s ease, border-color 0.15s ease, background 0.15s ease;
+    }
+
+    .pill-btn:hover {
+      border-color: var(--line-strong);
+      transform: translateY(-1px);
+    }
+
+    /* Centered Hero Stage */
+    .hero-stage {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px 20px 32px;
+      max-width: 720px;
+      width: 100%;
+      margin: 0 auto;
+      text-align: center;
+    }
+
+    /* Mic Centerpiece */
+    .mic-halo-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 18px;
+    }
+
+    .mic-ring {
+      position: absolute;
+      width: 148px;
+      height: 148px;
+      border-radius: 50%;
+      border: 1.5px solid var(--line-strong);
+      opacity: 0.55;
+      pointer-events: none;
+      transition: all 0.3s ease;
+    }
+
+    .mic-ring-outer {
+      position: absolute;
+      width: 178px;
+      height: 178px;
+      border-radius: 50%;
+      border: 1px dashed var(--line);
+      pointer-events: none;
+      transition: all 0.3s ease;
+    }
+
+    .mic-btn {
+      position: relative;
+      width: 118px;
+      height: 118px;
+      border-radius: 50%;
+      border: 2px solid var(--line-strong);
+      background: var(--card);
+      color: var(--ink);
+      box-shadow: var(--shadow-md);
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: transform 0.16s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .mic-btn:hover {
+      transform: scale(1.04);
+      border-color: var(--accent);
+    }
+
+    .mic-btn:active {
+      transform: scale(0.97);
+    }
+
+    .mic-btn svg {
+      width: 36px;
+      height: 36px;
+      stroke: currentColor;
+      stroke-width: 2;
+      fill: none;
+    }
+
+    .mic-kbd {
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: var(--ground-subtle);
+      color: var(--muted);
+      border: 1px solid var(--line);
+    }
+
+    /* Listening state */
+    .hero-stage[data-mic-state="listening"] .mic-btn {
+      border-color: var(--good);
+      color: var(--good);
+      box-shadow: 0 0 0 10px var(--good-soft), var(--shadow-md);
+    }
+
+    .hero-stage[data-mic-state="listening"] .mic-ring {
+      border-color: var(--good);
+      animation: pulseRing 1.8s infinite ease-out;
+    }
+
+    /* Speaking state */
+    .hero-stage[data-mic-state="speaking"] .mic-btn {
+      border-color: var(--accent);
+      color: var(--accent);
+      box-shadow: 0 0 0 10px var(--accent-soft), var(--shadow-md);
+    }
+
+    .hero-stage[data-mic-state="speaking"] .mic-ring {
+      border-color: var(--accent);
+      animation: pulseRing 1.2s infinite ease-in-out;
+    }
+
+    @keyframes pulseRing {
+      0% { transform: scale(0.92); opacity: 0.85; }
+      100% { transform: scale(1.24); opacity: 0; }
+    }
+
+    .mic-status {
+      font-size: 0.95rem;
+      font-weight: 600;
+      margin: 0 0 4px;
+      letter-spacing: -0.01em;
+    }
+
+    .mic-substatus {
+      font-size: 0.82rem;
+      color: var(--muted);
+      margin: 0 0 22px;
+    }
+
+    /* Pill Composer */
+    .composer-form {
+      width: 100%;
+      max-width: 560px;
+      display: flex;
+      align-items: center;
+      background: var(--card);
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      padding: 6px 8px 6px 18px;
+      box-shadow: var(--shadow-md);
+      margin-bottom: 22px;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .composer-form:focus-within {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 4px var(--accent-soft), var(--shadow-md);
+    }
+
+    .composer-input {
+      flex: 1;
+      border: none;
+      background: transparent;
+      color: var(--ink);
+      font-family: var(--font);
+      font-size: 0.94rem;
+      outline: none;
+      padding: 6px 0;
+    }
+
+    .composer-input::placeholder {
+      color: var(--muted);
+    }
+
+    .composer-send {
+      appearance: none;
+      border: none;
+      background: var(--ink);
+      color: var(--card);
+      font-weight: 600;
+      font-size: 0.82rem;
+      padding: 9px 18px;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: opacity 0.15s ease, transform 0.1s ease;
+    }
+
+    .composer-send:hover {
+      opacity: 0.9;
+    }
+
+    /* Floating Bubble Tray */
+    .bubble-tray-label {
+      font-size: 0.72rem;
+      font-family: var(--mono);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    .bubble-tray {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      max-width: 640px;
+    }
+
+    .bubble-pill {
+      appearance: none;
+      border: 1px solid var(--line);
+      background: var(--card);
+      color: var(--ink);
+      padding: 9px 15px;
+      border-radius: 999px;
+      font-family: var(--font);
+      font-size: 0.85rem;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      box-shadow: var(--shadow-sm);
+      transition: all 0.15s ease;
+    }
+
+    .bubble-pill:hover {
+      border-color: var(--accent);
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-md);
+    }
+
+    .bubble-pill[aria-expanded="true"] {
+      background: var(--accent);
+      color: #ffffff;
+      border-color: var(--accent);
+    }
+
+    .bubble-pill .bubble-badge {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: var(--ground-subtle);
+      color: var(--muted);
+    }
+
+    .bubble-pill[aria-expanded="true"] .bubble-badge {
+      background: rgba(255, 255, 255, 0.22);
+      color: #ffffff;
+    }
+
+    .bubble-pill.is-miniapp {
+      border-color: rgba(31, 63, 208, 0.26);
+      background: var(--card);
+    }
+
+    .bubble-live-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--good);
+    }
+
+    /* Popover Scrim & Floating Popover Cards */
+    .popover-scrim {
+      position: fixed;
+      inset: 0;
+      background: var(--backdrop);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.18s ease;
+      z-index: 40;
+    }
+
+    html:not([data-active-popover="none"]) .popover-scrim {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .popover-card {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -47%) scale(0.97);
+      width: min(92vw, 680px);
+      max-height: 74vh;
+      background: var(--card-elevated);
+      border: 1px solid var(--line-strong);
+      border-radius: 22px;
+      box-shadow: var(--shadow-lg);
+      display: flex;
+      flex-direction: column;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.18s ease, transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      z-index: 50;
+      overflow: hidden;
+    }
+
+    .popover-card.is-open {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translate(-50%, -50%) scale(1);
+    }
+
+    .popover-card.is-expanded {
+      width: min(96vw, 940px);
+      max-height: 84vh;
+    }
+
+    .popover-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 15px 20px;
+      border-bottom: 1px solid var(--line);
+      background: var(--card);
+    }
+
+    .popover-title-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .popover-title {
+      font-size: 0.98rem;
+      font-weight: 700;
+      margin: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .popover-subtitle {
+      font-family: var(--mono);
+      font-size: 0.74rem;
+      color: var(--muted);
+    }
+
+    .popover-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .icon-btn {
+      appearance: none;
+      border: 1px solid var(--line);
+      background: var(--ground-subtle);
+      color: var(--ink);
+      width: 32px;
+      height: 32px;
+      border-radius: 999px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.88rem;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+
+    .icon-btn:hover {
+      border-color: var(--line-strong);
+      background: var(--card);
+    }
+
+    .popover-body {
+      padding: 18px 20px;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    /* Files Popover Specifics */
+    .files-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+
+    .breadcrumbs {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .crumb-chip {
+      appearance: none;
+      border: 1px solid var(--line);
+      background: var(--ground-subtle);
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 0.76rem;
+      padding: 5px 10px;
+      border-radius: 999px;
+      cursor: pointer;
+    }
+
+    .crumb-chip.is-active {
+      background: var(--ink);
+      color: var(--card);
+      border-color: var(--ink);
+    }
+
+    .files-search {
+      border: 1px solid var(--line);
+      background: var(--ground-subtle);
+      color: var(--ink);
+      font-size: 0.82rem;
+      padding: 6px 12px;
+      border-radius: 999px;
+      outline: none;
+      min-width: 190px;
+    }
+
+    .files-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 10px;
+    }
+
+    .file-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 11px 14px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: var(--ground);
+      transition: border-color 0.15s ease, transform 0.12s ease;
+    }
+
+    .file-item:hover {
+      border-color: var(--accent);
+      transform: translateY(-1px);
+    }
+
+    .file-info {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .file-icon {
+      font-size: 1.15rem;
+    }
+
+    .file-name {
+      font-size: 0.86rem;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .file-meta {
+      font-family: var(--mono);
+      font-size: 0.71rem;
+      color: var(--muted);
+    }
+
+    .file-run-btn {
+      appearance: none;
+      border: 1px solid var(--accent);
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 0.74rem;
+      font-weight: 600;
+      padding: 5px 10px;
+      border-radius: 999px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .file-run-btn:hover {
+      background: var(--accent);
+      color: #ffffff;
+    }
+
+    /* Mini-App Popover Stage */
+    .miniapp-canvas-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+
+    canvas#flappy-canvas {
+      background: linear-gradient(180deg, #dbeafe 0%, #eff6ff 75%, #dcfce7 100%);
+      border-radius: 14px;
+      border: 1px solid var(--line-strong);
+      width: 100%;
+      max-width: 560px;
+      height: 300px;
+      cursor: pointer;
+      box-shadow: inset 0 2px 6px rgba(0,0,0,0.05);
+    }
+
+    .miniapp-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      max-width: 560px;
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+
+    /* Recent Turns List */
+    .turn-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .turn-card {
+      padding: 12px 15px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: var(--ground);
+    }
+
+    .turn-role {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+
+    .turn-text {
+      font-size: 0.88rem;
+      line-height: 1.45;
+      margin: 0;
+    }
+
+    /* Minimized Corner Mini-App Bubble */
+    .minimized-app-pill {
+      position: fixed;
+      right: 22px;
+      bottom: 84px;
+      z-index: 45;
+      background: var(--accent);
+      color: #ffffff;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 999px;
+      font-weight: 600;
+      font-size: 0.84rem;
+      box-shadow: var(--shadow-lg);
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .minimized-app-pill.is-visible {
+      display: inline-flex;
+    }
+
+    /* Bottom Floating Pill Dock */
+    .bottom-dock {
+      position: fixed;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--card-elevated);
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      padding: 5px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      box-shadow: var(--shadow-md);
+      z-index: 60;
+      backdrop-filter: blur(10px);
+    }
+
+    .dock-btn {
+      appearance: none;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-family: var(--font);
+      font-size: 0.82rem;
+      font-weight: 600;
+      padding: 8px 16px;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .dock-btn:hover {
+      color: var(--ink);
+    }
+
+    .dock-btn.is-active {
+      background: var(--ink);
+      color: var(--card);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="room-header">
+    <div class="brand">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <h1 class="brand-title">Voicebox</h1>
+      <span class="brand-tag">~/Work · 8 files</span>
+    </div>
+    <div class="header-actions">
+      <button type="button" class="pill-btn" id="theme-toggle" title="Toggle Light / Dark Mode">
+        <span id="theme-icon">☀️</span>
+        <span id="theme-label">Warm Paper</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Centered Hero Voice Stage -->
+  <main class="hero-stage" id="hero-stage" data-mic-state="ready">
+    <div class="mic-halo-wrap">
+      <div class="mic-ring-outer" aria-hidden="true"></div>
+      <div class="mic-ring" aria-hidden="true"></div>
+      <button type="button" class="mic-btn" id="mic-btn" aria-label="Toggle Microphone (Shortcut M)">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" y1="19" x2="12" y2="22"/>
+        </svg>
+        <span class="mic-kbd">M</span>
+      </button>
+    </div>
+
+    <p class="mic-status" id="mic-status">Ready — tap or press M to talk</p>
+    <p class="mic-substatus" id="mic-substatus">Voice stage stays front &amp; center. Open files or mini-apps as popovers below.</p>
+
+    <!-- Pill Composer -->
+    <form class="composer-form" id="composer-form">
+      <input
+        type="text"
+        class="composer-input"
+        id="composer-input"
+        placeholder="Or type a request, e.g. 'Open Flappy Bird'..."
+        autocomplete="off"
+      >
+      <button type="submit" class="composer-send">Send</button>
+    </form>
+
+    <!-- Floating Bubble Tray -->
+    <div class="bubble-tray-label">Workspace &amp; Mini-App Bubbles</div>
+    <div class="bubble-tray" role="toolbar" aria-label="Floating Bubble Tray">
+      <button type="button" class="bubble-pill" data-popover-target="files" aria-expanded="false">
+        <span>📁 Files</span>
+        <span class="bubble-badge" id="files-count-badge">8</span>
+      </button>
+
+      <button type="button" class="bubble-pill is-miniapp" data-miniapp="flappy" aria-expanded="false">
+        <span class="bubble-live-dot" aria-hidden="true"></span>
+        <span>🕹️ Flappy Bird</span>
+        <span class="bubble-badge">App</span>
+      </button>
+
+      <button type="button" class="bubble-pill is-miniapp" data-miniapp="scoreboard" aria-expanded="false">
+        <span class="bubble-live-dot" aria-hidden="true"></span>
+        <span>📊 Scoreboard</span>
+        <span class="bubble-badge">App</span>
+      </button>
+
+      <button type="button" class="bubble-pill" data-popover-target="history" aria-expanded="false">
+        <span>💬 Recent Turns</span>
+        <span class="bubble-badge" id="turns-count-badge">4</span>
+      </button>
+
+      <button type="button" class="bubble-pill" data-popover-target="controls" aria-expanded="false">
+        <span>🎛️ Controls</span>
+      </button>
+    </div>
+  </main>
+
+  <!-- Popover Scrim -->
+  <div class="popover-scrim" id="popover-scrim"></div>
+
+  <!-- 1. FILES POPOVER CARD -->
+  <section class="popover-card" id="popover-files" aria-label="Workspace Files">
+    <header class="popover-header">
+      <div class="popover-title-wrap">
+        <span>📁</span>
+        <div>
+          <h2 class="popover-title">Workspace Files</h2>
+          <div class="popover-subtitle" id="current-folder-label">~/Work (root)</div>
+        </div>
+      </div>
+      <div class="popover-actions">
+        <button type="button" class="icon-btn" data-close-popover title="Close (Esc)">✕</button>
+      </div>
+    </header>
+    <div class="popover-body">
+      <div class="files-toolbar">
+        <div class="breadcrumbs" id="folder-chips">
+          <button type="button" class="crumb-chip is-active" data-folder="all">All (8)</button>
+          <button type="button" class="crumb-chip" data-folder="apps">Mini-Apps (2)</button>
+          <button type="button" class="crumb-chip" data-folder="docs">Notes &amp; Data (6)</button>
+        </div>
+        <input type="search" class="files-search" id="files-search" placeholder="Filter files...">
+      </div>
+      <div class="files-grid" id="files-grid"></div>
+    </div>
+  </section>
+
+  <!-- 2. MINI-APP POPOVER WINDOW -->
+  <section class="popover-card" id="popover-miniapp" aria-label="Mini-App Window">
+    <header class="popover-header">
+      <div class="popover-title-wrap">
+        <span id="miniapp-icon">🕹️</span>
+        <div>
+          <h2 class="popover-title" id="miniapp-title">Flappy Bird Mini-App</h2>
+          <div class="popover-subtitle" id="miniapp-path">/Work/flappy_bird.html · Standards Mode</div>
+        </div>
+      </div>
+      <div class="popover-actions">
+        <button type="button" class="icon-btn" id="miniapp-reload" title="Reload Mini-App">↻</button>
+        <button type="button" class="icon-btn" id="miniapp-expand" title="Toggle Expanded Width">⤢</button>
+        <button type="button" class="icon-btn" id="miniapp-minimize" title="Collapse to Bubble">—</button>
+        <button type="button" class="icon-btn" data-close-popover title="Close (Esc)">✕</button>
+      </div>
+    </header>
+    <div class="popover-body">
+      <div class="miniapp-canvas-wrap" id="miniapp-flappy-view">
+        <canvas id="flappy-canvas" width="560" height="300"></canvas>
+        <div class="miniapp-bar">
+          <span>Click canvas or press <strong>Space</strong> to flap</span>
+          <strong id="flappy-score">Score: 0 · Best: 0</strong>
+        </div>
+      </div>
+      <div id="miniapp-scoreboard-view" style="display:none;">
+        <p style="margin-top:0;color:var(--muted);font-size:0.86rem;">
+          Live session scoreboard synced with <code>window.voicebox.sendPrompt()</code>:
+        </p>
+        <div class="files-grid">
+          <div class="file-item">
+            <div class="file-info">
+              <span class="file-icon">🥇</span>
+              <div>
+                <div class="file-name">Paul</div>
+                <div class="file-meta">Flappy Bird High Score</div>
+              </div>
+            </div>
+            <strong>14 pts</strong>
+          </div>
+          <div class="file-item">
+            <div class="file-info">
+              <span class="file-icon">🤖</span>
+              <div>
+                <div class="file-name">Voicebox Agent</div>
+                <div class="file-meta">Automated Run</div>
+              </div>
+            </div>
+            <strong>9 pts</strong>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. RECENT TURNS (HISTORY) POPOVER CARD -->
+  <section class="popover-card" id="popover-history" aria-label="Recent Turns">
+    <header class="popover-header">
+      <div class="popover-title-wrap">
+        <span>💬</span>
+        <div>
+          <h2 class="popover-title">Recent Turns</h2>
+          <div class="popover-subtitle">Session conversation &amp; created files</div>
+        </div>
+      </div>
+      <div class="popover-actions">
+        <button type="button" class="icon-btn" data-close-popover title="Close (Esc)">✕</button>
+      </div>
+    </header>
+    <div class="popover-body">
+      <div class="turn-list" id="turn-list">
+        <div class="turn-card">
+          <div class="turn-role">You</div>
+          <p class="turn-text">Build me a playable Flappy Bird mini-app in my workspace and launch it.</p>
+        </div>
+        <div class="turn-card">
+          <div class="turn-role">Voicebox</div>
+          <p class="turn-text">I've created <code>flappy_bird.html</code> in <code>~/Work</code> and added its bubble to your tray.</p>
+        </div>
+        <div class="turn-card">
+          <div class="turn-role">You</div>
+          <p class="turn-text">Keep the microphone centered and put the file list in a popover bubble.</p>
+        </div>
+        <div class="turn-card">
+          <div class="turn-role">Voicebox</div>
+          <p class="turn-text">Done! The voice stage is now front-and-center in Warm Paper light mode.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. CONTROLS POPOVER CARD -->
+  <section class="popover-card" id="popover-controls" aria-label="Audio & Room Controls">
+    <header class="popover-header">
+      <div class="popover-title-wrap">
+        <span>🎛️</span>
+        <div>
+          <h2 class="popover-title">Audio &amp; Room Controls</h2>
+          <div class="popover-subtitle">Real hardware &amp; session settings</div>
+        </div>
+      </div>
+      <div class="popover-actions">
+        <button type="button" class="icon-btn" data-close-popover title="Close (Esc)">✕</button>
+      </div>
+    </header>
+    <div class="popover-body">
+      <div class="files-grid">
+        <div class="file-item">
+          <div class="file-info">
+            <span class="file-icon">🎙️</span>
+            <div>
+              <div class="file-name">Microphone Input</div>
+              <div class="file-meta" id="controls-mic-label">Unmuted · Default Input</div>
+            </div>
+          </div>
+          <button type="button" class="file-run-btn" id="toggle-mute-btn">Mute</button>
+        </div>
+        <div class="file-item">
+          <div class="file-info">
+            <span class="file-icon">🔊</span>
+            <div>
+              <div class="file-name">Voice Output Volume</div>
+              <div class="file-meta" id="volume-label">85%</div>
+            </div>
+          </div>
+          <input type="range" id="volume-slider" min="0" max="100" value="85">
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Minimized Mini-App Corner Bubble -->
+  <button type="button" class="minimized-app-pill" id="minimized-app-pill">
+    <span>🕹️ Restore Mini-App</span>
+  </button>
+
+  <!-- Bottom Floating Pill Dock -->
+  <nav class="bottom-dock" aria-label="Room Views">
+    <button type="button" class="dock-btn is-active" data-dock-view="none">Home</button>
+    <button type="button" class="dock-btn" data-dock-view="files">Files</button>
+    <button type="button" class="dock-btn" data-dock-view="history">History</button>
+    <button type="button" class="dock-btn" data-dock-view="controls">Controls</button>
+  </nav>
+
+  <script>
+    const WORKSPACE_FILES = [
+      { name: 'flappy_bird.html', folder: 'apps', size: '6.4 KB', isApp: true, appKey: 'flappy' },
+      { name: 'scoreboard.html', folder: 'apps', size: '4.1 KB', isApp: true, appKey: 'scoreboard' },
+      { name: 'q3-product-roadmap.md', folder: 'docs', size: '12.8 KB', isApp: false },
+      { name: 'voice-latency-notes.md', folder: 'docs', size: '5.2 KB', isApp: false },
+      { name: 'budget-2026.csv', folder: 'docs', size: '18.0 KB', isApp: false },
+      { name: 'architecture-diagram.svg', folder: 'docs', size: '9.3 KB', isApp: false },
+      { name: 'meeting-summary.txt', folder: 'docs', size: '3.1 KB', isApp: false },
+      { name: 'session-config.json', folder: 'docs', size: '1.4 KB', isApp: false }
+    ];
+
+    const htmlEl = document.documentElement;
+    const heroStage = document.getElementById('hero-stage');
+    const micBtn = document.getElementById('mic-btn');
+    const micStatus = document.getElementById('mic-status');
+    const themeToggle = document.getElementById('theme-toggle');
+    const themeIcon = document.getElementById('theme-icon');
+    const themeLabel = document.getElementById('theme-label');
+    const filesGrid = document.getElementById('files-grid');
+    const filesSearch = document.getElementById('files-search');
+    const minimizedPill = document.getElementById('minimized-app-pill');
+
+    let activeFolder = 'all';
+    let lastMiniAppKey = 'flappy';
+
+    // Theme Toggle
+    themeToggle.addEventListener('click', () => {
+      const next = htmlEl.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      htmlEl.setAttribute('data-theme', next);
+      themeIcon.textContent = next === 'light' ? '☀️' : '🌙';
+      themeLabel.textContent = next === 'light' ? 'Warm Paper' : 'Dark Slate';
+    });
+
+    // Mic State Cycle (Ready -> Listening -> Speaking)
+    const MIC_STATES = [
+      { state: 'ready', text: 'Ready — tap or press M to talk' },
+      { state: 'listening', text: 'Listening — speak naturally…' },
+      { state: 'speaking', text: 'Voicebox is replying…' }
+    ];
+    let micIndex = 0;
+
+    function toggleMic() {
+      micIndex = (micIndex + 1) % MIC_STATES.length;
+      const next = MIC_STATES[micIndex];
+      heroStage.setAttribute('data-mic-state', next.state);
+      micStatus.textContent = next.text;
+    }
+
+    micBtn.addEventListener('click', toggleMic);
+    window.addEventListener('keydown', (e) => {
+      if (e.key.toLowerCase() === 'm' && document.activeElement.tagName !== 'INPUT') {
+        e.preventDefault();
+        toggleMic();
+      } else if (e.key === 'Escape') {
+        setActivePopover('none');
+      }
+    });
+
+    // Popover & Dock State Management
+    function setActivePopover(name) {
+      htmlEl.setAttribute('data-active-popover', name);
+      document.querySelectorAll('.popover-card').forEach((card) => {
+        card.classList.toggle('is-open', card.id === `popover-${name}`);
+      });
+      document.querySelectorAll('[data-popover-target]').forEach((btn) => {
+        btn.setAttribute('aria-expanded', String(btn.getAttribute('data-popover-target') === name));
+      });
+      document.querySelectorAll('[data-dock-view]').forEach((btn) => {
+        btn.classList.toggle('is-active', btn.getAttribute('data-dock-view') === name);
+      });
+    }
+
+    document.querySelectorAll('[data-popover-target]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const target = btn.getAttribute('data-popover-target');
+        const current = htmlEl.getAttribute('data-active-popover');
+        setActivePopover(current === target ? 'none' : target);
+      });
+    });
+
+    document.querySelectorAll('[data-dock-view]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        setActivePopover(btn.getAttribute('data-dock-view'));
+      });
+    });
+
+    document.querySelectorAll('[data-close-popover]').forEach((btn) => {
+      btn.addEventListener('click', () => setActivePopover('none'));
+    });
+
+    document.getElementById('popover-scrim').addEventListener('click', () => {
+      setActivePopover('none');
+    });
+
+    // Mini-App Launcher
+    function openMiniApp(appKey) {
+      lastMiniAppKey = appKey;
+      minimizedPill.classList.remove('is-visible');
+      const titleEl = document.getElementById('miniapp-title');
+      const pathEl = document.getElementById('miniapp-path');
+      const iconEl = document.getElementById('miniapp-icon');
+      const flappyView = document.getElementById('miniapp-flappy-view');
+      const scoreView = document.getElementById('miniapp-scoreboard-view');
+
+      if (appKey === 'scoreboard') {
+        iconEl.textContent = '📊';
+        titleEl.textContent = 'Scoreboard Mini-App';
+        pathEl.textContent = '/Work/scoreboard.html · Standards Mode';
+        flappyView.style.display = 'none';
+        scoreView.style.display = 'block';
+      } else {
+        iconEl.textContent = '🕹️';
+        titleEl.textContent = 'Flappy Bird Mini-App';
+        pathEl.textContent = '/Work/flappy_bird.html · Standards Mode';
+        flappyView.style.display = 'flex';
+        scoreView.style.display = 'none';
+      }
+      setActivePopover('miniapp');
+    }
+
+    document.querySelectorAll('[data-miniapp]').forEach((btn) => {
+      btn.addEventListener('click', () => openMiniApp(btn.getAttribute('data-miniapp')));
+    });
+
+    document.getElementById('miniapp-expand').addEventListener('click', () => {
+      document.getElementById('popover-miniapp').classList.toggle('is-expanded');
+    });
+
+    document.getElementById('miniapp-minimize').addEventListener('click', () => {
+      setActivePopover('none');
+      minimizedPill.classList.add('is-visible');
+    });
+
+    minimizedPill.addEventListener('click', () => openMiniApp(lastMiniAppKey));
+
+    // Render Workspace Files Grid
+    function renderFiles() {
+      const query = filesSearch.value.trim().toLowerCase();
+      const filtered = WORKSPACE_FILES.filter((f) => {
+        const matchesFolder = activeFolder === 'all' || f.folder === activeFolder;
+        const matchesQuery = !query || f.name.toLowerCase().includes(query);
+        return matchesFolder && matchesQuery;
+      });
+
+      filesGrid.innerHTML = filtered.map((file) => `
+        <div class="file-item">
+          <div class="file-info">
+            <span class="file-icon">${file.isApp ? '🕹️' : '📄'}</span>
+            <div>
+              <div class="file-name">${file.name}</div>
+              <div class="file-meta">${file.size}</div>
+            </div>
+          </div>
+          ${file.isApp
+            ? `<button type="button" class="file-run-btn" data-run-app="${file.appKey}">Run App</button>`
+            : `<span class="file-meta">~/Work</span>`}
+        </div>
+      `).join('');
+
+      filesGrid.querySelectorAll('[data-run-app]').forEach((btn) => {
+        btn.addEventListener('click', () => openMiniApp(btn.getAttribute('data-run-app')));
+      });
+    }
+
+    document.querySelectorAll('[data-folder]').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        activeFolder = chip.getAttribute('data-folder');
+        document.querySelectorAll('[data-folder]').forEach((c) => c.classList.toggle('is-active', c === chip));
+        renderFiles();
+      });
+    });
+
+    filesSearch.addEventListener('input', renderFiles);
+    renderFiles();
+
+    // Composer Submit
+    document.getElementById('composer-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const input = document.getElementById('composer-input');
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = '';
+      if (text.toLowerCase().includes('flappy')) {
+        openMiniApp('flappy');
+      } else if (text.toLowerCase().includes('file')) {
+        setActivePopover('files');
+      } else {
+        setActivePopover('history');
+      }
+    });
+
+    // Playable Mini Flappy Bird Canvas inside the Mini-App Popover
+    const canvas = document.getElementById('flappy-canvas');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('flappy-score');
+    let birdY = 140;
+    let birdV = 0;
+    let pipeX = 480;
+    let gapY = 90;
+    let score = 0;
+    let best = 0;
+
+    function resetGame() {
+      birdY = 140;
+      birdV = 0;
+      pipeX = 520;
+      score = 0;
+      scoreEl.textContent = `Score: ${score} · Best: ${best}`;
+    }
+
+    function flap() {
+      birdV = -5.2;
+    }
+
+    canvas.addEventListener('click', flap);
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Space' && htmlEl.getAttribute('data-active-popover') === 'miniapp') {
+        e.preventDefault();
+        flap();
+      }
+    });
+    document.getElementById('miniapp-reload').addEventListener('click', resetGame);
+
+    function stepFlappy() {
+      if (htmlEl.getAttribute('data-active-popover') === 'miniapp') {
+        birdV += 0.26;
+        birdY += birdV;
+        pipeX -= 2.6;
+
+        if (pipeX < -50) {
+          pipeX = canvas.width;
+          gapY = 50 + Math.random() * 120;
+          score += 1;
+          best = Math.max(best, score);
+          scoreEl.textContent = `Score: ${score} · Best: ${best}`;
+        }
+
+        // Collision check
+        const hitPipe = pipeX < 116 && pipeX + 44 > 84 && (birdY - 12 < gapY || birdY + 12 > gapY + 92);
+        if (birdY > canvas.height - 14 || birdY < 10 || hitPipe) {
+          resetGame();
+        }
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Pipes
+        ctx.fillStyle = '#1d6b32';
+        ctx.fillRect(pipeX, 0, 44, gapY);
+        ctx.fillRect(pipeX, gapY + 92, 44, canvas.height - (gapY + 92));
+
+        // Bird
+        ctx.beginPath();
+        ctx.arc(100, birdY, 13, 0, Math.PI * 2);
+        ctx.fillStyle = '#1f3fd0';
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+      requestAnimationFrame(stepFlappy);
+    }
+    requestAnimationFrame(stepFlappy);
+  </script>
+</body>
+</html>
