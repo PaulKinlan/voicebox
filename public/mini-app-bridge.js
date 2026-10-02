@@ -260,6 +260,25 @@ function dispatchCallTool(data) {
   });
 }
 
+function injectSdkIntoHtml(rawHtml) {
+  const src = typeof rawHtml === "string" && rawHtml.trim()
+    ? rawHtml
+    : "<!doctype html><html><head></head><body></body></html>";
+  const baseStyle = `<style id="voicebox-mini-app-base">html, body { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }</style>`;
+  const payload = baseStyle + "\n" + INJECTED_SDK;
+  const doctypeMatch = src.match(/^\s*<!doctype\s+[^>]*>/i);
+  if (doctypeMatch) {
+    const afterDoctype = src.slice(doctypeMatch[0].length);
+    const headMatch = afterDoctype.match(/<head(?:\s[^>]*)?>/i);
+    if (headMatch) {
+      const insertAt = doctypeMatch[0].length + headMatch.index + headMatch[0].length;
+      return src.slice(0, insertAt) + "\n" + payload + "\n" + src.slice(insertAt);
+    }
+    return doctypeMatch[0] + "\n" + payload + "\n" + afterDoctype;
+  }
+  return "<!doctype html>\n" + payload + "\n" + src;
+}
+
 // Listen for messages from Host Room and Inner Frame
 window.addEventListener("message", (event) => {
   // If message is from inner frame requesting handshake (origin is "null")
@@ -308,7 +327,7 @@ window.addEventListener("message", (event) => {
         appChannelTransferred = false;
 
         const rawHtml = msg.html || "<!doctype html><html><body></body></html>";
-        inner.srcdoc = INJECTED_SDK + "\n" + rawHtml;
+        inner.srcdoc = injectSdkIntoHtml(rawHtml);
       } else if (msg.type === "call_tool") {
         dispatchCallTool(msg);
       }
@@ -325,9 +344,9 @@ window.addEventListener("message", (event) => {
     appChannel.port1.onmessage = handleInnerMessage;
     appChannelTransferred = false;
 
-    // Inject SDK before app content
+    // Inject SDK while preserving Standards Mode doctype
     const rawHtml = data.html || "<!doctype html><html><body></body></html>";
-    inner.srcdoc = INJECTED_SDK + "\n" + rawHtml;
+    inner.srcdoc = injectSdkIntoHtml(rawHtml);
   } else if (data.type === "call_tool") {
     dispatchCallTool(data);
   }
