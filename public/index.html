@@ -273,12 +273,13 @@
           <div class="sqeh-toggle" role="tablist" aria-label="Deck view">
             <button class="sqeh-toggle-btn" id="sqeh-toggle-popovers" role="tab" aria-selected="true" type="button">Home</button>
             <button class="sqeh-toggle-btn sqeh-files-bubble" id="sqeh-files-bubble" role="tab" aria-selected="false" aria-expanded="false" type="button"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg><span>Files</span><span class="sqeh-files-badge" id="sqeh-files-badge">0</span></button>
+            <button class="sqeh-toggle-btn sqeh-reader-bubble" id="sqeh-reader-bubble" type="button" hidden aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="#i-spark"/></svg><span class="sqeh-reader-bubble-name" id="sqeh-reader-bubble-name">File</span></button>
             <button class="sqeh-toggle-btn" id="sqeh-toggle-history" role="tab" aria-selected="false" type="button">History</button>
           </div>
           <div class="sqeh-deck-body" id="sqeh-deck-body">
-            <div class="sqeh-group">
+            <div class="sqeh-group" hidden>
               <h3 class="sqeh-group-title">Quick Files</h3>
-              <div class="sqeh-quick-files" id="sqeh-quick-files" aria-label="Recently touched files"></div>
+              <div class="sqeh-quick-files" id="sqeh-quick-files" aria-label="Recently touched files" hidden></div>
             </div>
             <div class="sqeh-group">
               <h3 class="sqeh-group-title">Mini-Apps</h3>
@@ -352,6 +353,7 @@
 
       <section class="reader" id="reader" data-state="empty" aria-labelledby="reader-title">
         <div class="reader-head">
+          <button class="quiet" id="reader-back-files" type="button" aria-label="Back to files" title="Back to files">Files</button>
           <h2 id="reader-title">Nothing open</h2>
           <button class="quiet" id="file-run-app" type="button" hidden aria-label="Open as Mini-App" title="Open as Mini-App">Open as Mini-App</button>
           <button class="quiet" id="file-refresh" type="button" disabled aria-label="Reload file contents" title="Reload file contents">Reload</button>
@@ -360,6 +362,7 @@
           <button class="quiet" id="file-cancel-edit" type="button" hidden aria-label="Discard edits" title="Discard edits">Cancel</button>
           <button class="quiet" id="file-copy" type="button" disabled>Copy</button>
           <button class="quiet" id="file-download" type="button" disabled aria-label="Download file" title="Download file">Download</button>
+          <button class="icon-button" id="reader-minimize" type="button" aria-label="Minimize file to bubble" title="Minimize file to bubble"><svg class="icon" aria-hidden="true"><use href="#i-minimize"/></svg></button>
           <button class="icon-button" id="reader-close" type="button" aria-label="Close the file"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
         </div>
         <pre id="file-body" tabindex="0" role="region" aria-label="File contents"></pre>

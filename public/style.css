@@ -1190,9 +1190,20 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
   font-weight: 700;
   letter-spacing: 0;
 }
+.sqeh-reader-bubble[hidden] {
+  display: none !important;
+}
+.sqeh-reader-bubble-name {
+  max-inline-size: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .sqeh-group { margin-block: 10px; }
+.sqeh-group[hidden] { display: none !important; }
 .sqeh-group-title { margin: 0 0 8px; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
 .sqeh-quick-files { display: flex; flex-wrap: wrap; gap: 8px; padding-block: 2px 4px; }
+.sqeh-quick-files[hidden] { display: none !important; }
 .sqeh-quick-files:empty::after { content: 'files you touch appear here'; font-size: 0.8rem; color: var(--muted); }
 .sqeh-file-tile {
   flex: none;
@@ -1306,38 +1317,66 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
   .sqeh-sheet { inset-block-end: auto; inset-block-start: 76px; inset-inline-start: auto; inset-inline-end: 24px; inline-size: 420px; max-block-size: 70svh; border-radius: 20px; }
 }
 
-/* ── Files popover state (body[data-sqeh-state="files"]) ── */
+/* ── Pure bubble + popover behavior for #made-list and #reader (voicebox-beads-wc8c) ── */
+body:not([data-sqeh-state="files"]) .made:not(.dropping) {
+  display: none;
+}
 body[data-sqeh-state="files"] .made {
   position: fixed;
   inset-block-start: 72px;
   inset-inline-start: 50%;
   transform: translateX(-50%);
-  inline-size: min(560px, calc(100vw - 32px));
-  max-block-size: min(72svh, 580px);
+  inline-size: min(720px, calc(100vw - 24px));
+  max-block-size: min(78svh, 640px);
+  box-sizing: border-box;
   z-index: 80;
+  background: transparent;
+  border-radius: 20px;
+  padding: 16px 20px;
+  overflow: visible;
+}
+body[data-sqeh-state="files"] .made::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: 20px;
-  padding: 16px 20px;
-  box-shadow: var(--shadow);
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  box-shadow: var(--shadow), 0 0 0 100vmax rgba(15, 23, 42, 0.22);
+  pointer-events: none;
+}
+body[data-sqeh-state="files"] .made.dropping {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
 body[data-sqeh-state="files"] .made-close {
   display: inline-grid;
 }
-body[data-sqeh-state="files"] .reader:not([hidden]) {
+
+.reader[data-state="empty"],
+.reader[data-collapsed="true"] {
+  display: none;
+}
+.reader:not([data-state="empty"]):not([data-collapsed="true"]) {
   position: fixed;
-  inset-block-start: 84px;
+  inset-block-start: 76px;
   inset-inline-start: 50%;
   transform: translateX(-50%);
-  inline-size: min(640px, calc(100vw - 24px));
-  max-block-size: min(78svh, 640px);
+  inline-size: min(680px, calc(100vw - 24px));
+  max-block-size: min(80svh, 660px);
+  box-sizing: border-box;
   z-index: 88;
   margin: 0;
-  box-shadow: var(--shadow);
+  padding: 16px 20px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  box-shadow: var(--shadow), 0 0 0 100vmax rgba(15, 23, 42, 0.24);
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+body:has(#reader:not([data-state="empty"]):not([data-collapsed="true"])) .made:not(.dropping) {
+  display: none;
 }
 
 /* ── State B: history mode — the session feed leads, the deck steps back ── */

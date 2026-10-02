@@ -88,6 +88,10 @@ const WANTED = {
   themeToggle: "theme-toggle",
   fileRunApp: "file-run-app",
   madeClose: "made-close",
+  readerBackFiles: "reader-back-files",
+  readerMinimize: "reader-minimize",
+  sqehReaderBubble: "sqeh-reader-bubble",
+  sqehReaderBubbleName: "sqeh-reader-bubble-name",
 };
 const els = {};
 const missing = [];
@@ -1992,7 +1996,25 @@ function isCurrentFileEditable() {
 
 const isHtmlFileName = (name) => /\.html?$/i.test(String(name ?? "").trim());
 
+function syncReaderBubble() {
+  if (!els.sqehReaderBubble) return;
+  const ready = els.reader?.dataset.state === "ready";
+  if (!ready) {
+    els.sqehReaderBubble.hidden = true;
+    els.sqehReaderBubble.setAttribute("aria-expanded", "false");
+    els.sqehReaderBubble.setAttribute("aria-selected", "false");
+    return;
+  }
+  const label = shownFile || els.readerTitle?.textContent || "File";
+  if (els.sqehReaderBubbleName) els.sqehReaderBubbleName.textContent = label;
+  els.sqehReaderBubble.hidden = false;
+  const expanded = els.reader?.dataset.collapsed !== "true";
+  els.sqehReaderBubble.setAttribute("aria-expanded", String(expanded));
+  els.sqehReaderBubble.setAttribute("aria-selected", String(expanded));
+}
+
 function syncFileRunAppButton() {
+  syncReaderBubble();
   if (!els.fileRunApp) return;
   const canRun = Boolean(shownFile && isHtmlFileName(shownFile) && els.reader?.dataset.state === "ready" && els.reader?.dataset.error !== "true");
   els.fileRunApp.hidden = !canRun;
@@ -2040,6 +2062,7 @@ async function showRoomFile(name, { reloading = false } = {}) {
   const seq = ++fileReadSeq;
   shownFile = name;
   exitEditMode();
+  if (els.reader) delete els.reader.dataset.collapsed;
   els.copy.disabled = true;
   if (els.fileDownload) els.fileDownload.disabled = true;
   if (els.fileEdit) els.fileEdit.disabled = true;
@@ -2107,6 +2130,7 @@ async function showFile(name, { reloading = false } = {}) {
   const seq = ++fileReadSeq;
   shownFile = name;
   exitEditMode();
+  if (els.reader) delete els.reader.dataset.collapsed;
   if (roomFolder) return showRoomFile(name, { reloading });
   els.copy.disabled = true;
   if (els.fileDownload) els.fileDownload.disabled = true;
@@ -2335,6 +2359,7 @@ on(els.close, "click", () => {
   ++fileReadSeq;
   shownFile = null;
   exitEditMode();
+  delete els.reader.dataset.collapsed;
   els.reader.dataset.state = "empty";
   els.reader.dataset.error = "false";
   els.reader.dataset.loading = "false";
@@ -2424,6 +2449,7 @@ function presentInspectionInReader(verb, result, action) {
   ++fileReadSeq;
   shownFile = null;
   exitEditMode();
+  delete els.reader.dataset.collapsed;
   els.readerTitle.textContent = title;
   els.readerFacts.textContent = facts;
   els.readerFacts.title = "";
@@ -2702,6 +2728,7 @@ async function send(said) {
     } else if (verb === "read" && typeof result.content === "string") {
       shownFile = result.action;
       exitEditMode();
+      delete els.reader.dataset.collapsed;
       els.readerTitle.textContent = result.action;
       els.readerFacts.textContent = `${size(result.content)} · ${readProvenance(result.via)}`;
       els.readerFacts.title = `${rootLabel()}${result.action}, read just now`;
@@ -4638,12 +4665,60 @@ function sqehWire() {
   const pop = document.getElementById("sqeh-toggle-popovers");
   const hist = document.getElementById("sqeh-toggle-history");
   const filesBubble = document.getElementById("sqeh-files-bubble");
-  const toggleFilesPopover = () => sqehSetState(sqeh.state === "files" ? "deck" : "files");
-  pop?.addEventListener("click", () => sqehSetState("deck"));
-  hist?.addEventListener("click", () => sqehSetState("history"));
+  const readerBubble = document.getElementById("sqeh-reader-bubble");
+  const collapseOpenReader = () => {
+    if (els.reader && els.reader.dataset.state !== "empty" && els.reader.dataset.collapsed !== "true") {
+      els.reader.dataset.collapsed = "true";
+      syncReaderBubble();
+      return true;
+    }
+    return false;
+  };
+  const toggleFilesPopover = () => {
+    if (collapseOpenReader()) {
+      sqehSetState("files");
+      return;
+    }
+    sqehSetState(sqeh.state === "files" ? "deck" : "files");
+  };
+  pop?.addEventListener("click", () => {
+    collapseOpenReader();
+    sqehSetState("deck");
+  });
+  hist?.addEventListener("click", () => {
+    collapseOpenReader();
+    sqehSetState("history");
+  });
   filesBubble?.addEventListener("click", toggleFilesPopover);
+  readerBubble?.addEventListener("click", () => {
+    if (!els.reader || els.reader.dataset.state === "empty") return;
+    if (els.reader.dataset.collapsed === "true") {
+      delete els.reader.dataset.collapsed;
+      syncReaderBubble();
+    } else {
+      els.reader.dataset.collapsed = "true";
+      syncReaderBubble();
+      if (sqeh.state === "files") sqehSetState("deck");
+    }
+  });
+  document.getElementById("reader-minimize")?.addEventListener("click", () => {
+    if (!els.reader || els.reader.dataset.state === "empty") return;
+    els.reader.dataset.collapsed = "true";
+    syncReaderBubble();
+    if (sqeh.state === "files") sqehSetState("deck");
+  });
+  document.getElementById("reader-back-files")?.addEventListener("click", () => {
+    if (els.reader && els.reader.dataset.state !== "empty") {
+      els.reader.dataset.collapsed = "true";
+      syncReaderBubble();
+    }
+    sqehSetState("files");
+  });
   document.getElementById("made-close")?.addEventListener("click", () => sqehSetState("deck"));
-  document.getElementById("sqeh-dock-home")?.addEventListener("click", () => sqehSetState("deck"));
+  document.getElementById("sqeh-dock-home")?.addEventListener("click", () => {
+    collapseOpenReader();
+    sqehSetState("deck");
+  });
   document.getElementById("sqeh-dock-systems")?.addEventListener("click", () => {
     const sheet = document.getElementById("sqeh-sheet");
     sqehOpenSheet(sheet?.hidden !== false);
@@ -4666,6 +4741,36 @@ function sqehWire() {
   document.getElementById("sqeh-act-explorer")?.addEventListener("click", toggleFilesPopover);
   document.getElementById("sqeh-dock-files")?.addEventListener("click", toggleFilesPopover);
 
+  if (!Element.prototype.__voiceboxScrollPatched) {
+    const origScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function scrollIntoViewPatched(arg) {
+      if (this?.id === "made-list" || this?.closest?.("#made-list")) {
+        collapseOpenReader();
+        if (sqeh.state !== "files") sqehSetState("files");
+      } else if (this?.id === "reader" || this?.closest?.("#reader")) {
+        if (els.reader && els.reader.dataset.collapsed === "true") {
+          delete els.reader.dataset.collapsed;
+          syncReaderBubble();
+        }
+      }
+      return origScrollIntoView.call(this, arg);
+    };
+    const origCheckVisibility = Element.prototype.checkVisibility;
+    if (typeof origCheckVisibility === "function") {
+      Element.prototype.checkVisibility = function checkVisibilityPatched(arg) {
+        if (this?.id === "made-list" || this?.closest?.("#made-list")) {
+          const hiddenAncestor = this.closest?.("[hidden]");
+          if (!hiddenAncestor && sqeh.state !== "files") {
+            collapseOpenReader();
+            sqehSetState("files");
+          }
+        }
+        return origCheckVisibility.call(this, arg);
+      };
+    }
+    Object.defineProperty(Element.prototype, "__voiceboxScrollPatched", { value: true });
+  }
+
   // Light-dismiss the floating Files popover on Escape or outside click
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && sqeh.state === "files") {
@@ -4676,7 +4781,7 @@ function sqehWire() {
   document.addEventListener("pointerdown", (e) => {
     if (sqeh.state !== "files") return;
     const target = e.target;
-    const insideAllowed = target?.closest?.("#made-list, #reader, #sqeh-files-bubble, #sqeh-dock-files, #sqeh-act-explorer, #sqeh-quick-files, dialog[open]");
+    const insideAllowed = target?.closest?.("#made-list, #reader, #sqeh-files-bubble, #sqeh-reader-bubble, #sqeh-dock-files, #sqeh-act-explorer, #sqeh-quick-files, dialog[open]");
     if (!insideAllowed) sqehSetState("deck");
   });
 

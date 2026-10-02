@@ -57,6 +57,8 @@ test.before(async () => {
   page = await launch();
   await page.goto(`${BASE}/`);
   await until(() => page.evaluate(() => document.querySelector('.file-open[data-file="notes.txt"]') !== null), "the room to list the seeded files");
+  await page.evaluate(() => document.getElementById("sqeh-files-bubble")?.click());
+  await until(() => page.evaluate(() => document.body.dataset.sqehState === "files"), "the files popover to open");
 });
 
 test.after(async () => {

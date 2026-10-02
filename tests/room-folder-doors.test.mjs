@@ -58,6 +58,7 @@ test("the folder doors wear the card shape and the folder glyph, and stay usable
   try {
     await page.goto(`${server.base}/`);
     await page.waitFor(() => document.querySelector(".file-open[data-file='notes.txt']"), { label: "the room's listing" });
+    await page.evaluate(() => document.getElementById("sqeh-files-bubble")?.click());
 
     // ── THE GLYPH AND THE CLASS, as the DOM and as the paint ──────────────────
     const doors = await page.evaluate(() => {
@@ -142,6 +143,7 @@ test("the drop target glows while a folder is over the panel, survives a move on
   try {
     await page.goto(`${server.base}/`);
     await page.waitFor(() => document.querySelector(".file-open[data-file='notes.txt']"), { label: "the room's listing" });
+    await page.evaluate(() => document.getElementById("sqeh-files-bubble")?.click());
 
     // A REAL drag enters the panel (CDP's platform drag path; no drop yet, so the folder is not adopted).
     const at = await centreOf(page, "made-list");

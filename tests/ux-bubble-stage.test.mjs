@@ -121,14 +121,16 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
   assert.equal(restoredLight.dataTheme, "light", "clicking #theme-toggle again restores light mode");
   assert.equal(restoredLight.stored, "light", "persists 'light' in localStorage");
 
-  // ── 2. Centered Hero Mic & Compact Stage ─────────────────────────────────
+  // ── 2. Centered Hero Mic, Compact Stage & Deduplicated File Lists ────────
   const heroGeometry = await page.evaluate(() => {
     const mic = document.getElementById("mic");
     const deck = document.getElementById("sqeh-deck");
     const made = document.getElementById("made-list");
+    const reader = document.getElementById("reader");
+    const quickFiles = document.getElementById("sqeh-quick-files");
+    const readerBubble = document.getElementById("sqeh-reader-bubble");
     const micRect = mic.getBoundingClientRect();
     const deckRect = deck.getBoundingClientRect();
-    const madeRect = made.getBoundingClientRect();
     return {
       viewportWidth: window.innerWidth,
       viewportHeight: window.innerHeight,
@@ -136,7 +138,10 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
       micTop: micRect.top,
       deckTop: deckRect.top,
       deckBottom: deckRect.bottom,
-      madeTop: madeRect.top,
+      madeDisplay: getComputedStyle(made).display,
+      readerDisplay: getComputedStyle(reader).display,
+      quickFilesHidden: Boolean(quickFiles?.hidden || getComputedStyle(quickFiles).display === "none"),
+      readerBubbleHidden: Boolean(readerBubble?.hidden),
       sqehState: document.body.dataset.sqehState,
     };
   });
@@ -153,12 +158,12 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
     heroGeometry.deckTop < heroGeometry.viewportHeight,
     `expected #sqeh-deck visible without scrolling (deckTop=${heroGeometry.deckTop}, viewportHeight=${heroGeometry.viewportHeight})`,
   );
-  assert.ok(
-    heroGeometry.madeTop > heroGeometry.micTop,
-    `#made-list must not occupy vertical stage flow above #mic (madeTop=${heroGeometry.madeTop}, micTop=${heroGeometry.micTop})`,
-  );
+  assert.equal(heroGeometry.madeDisplay, "none", "#made-list is hidden in 'deck' state (not rendered inline)");
+  assert.equal(heroGeometry.readerDisplay, "none", "#reader is hidden when empty");
+  assert.equal(heroGeometry.quickFilesHidden, true, "#sqeh-quick-files duplicate grid is hidden");
+  assert.equal(heroGeometry.readerBubbleHidden, true, "#sqeh-reader-bubble starts hidden when no file is open");
 
-  // ── 3. Files Bubble Popover ──────────────────────────────────────────────
+  // ── 3. Files Bubble Popover & Reader Bubble Popover ──────────────────────
   const filesBubbleInfo = await page.evaluate(() => {
     const bubble = document.getElementById("sqeh-files-bubble");
     const badge = document.getElementById("sqeh-files-badge");
@@ -173,7 +178,7 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
   assert.equal(filesBubbleInfo.bubblePresent, true, "#sqeh-files-bubble exists");
   assert.equal(filesBubbleInfo.badgeText, "2", "#sqeh-files-badge shows count of workspace files");
   assert.equal(filesBubbleInfo.ariaExpanded, "false", "files bubble starts collapsed");
-  assert.deepEqual(filesBubbleInfo.pills.sort(), ["counter.html", "notes.md"], "quick files pills list workspace files");
+  assert.deepEqual(filesBubbleInfo.pills.sort(), ["counter.html", "notes.md"], "quick files pills stay synced in DOM");
 
   // Click #sqeh-files-bubble to open the floating #made-list popover
   await page.evaluate(() => {
@@ -186,6 +191,7 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
     return {
       sqehState: document.body.dataset.sqehState,
       ariaExpanded: document.getElementById("sqeh-files-bubble")?.getAttribute("aria-expanded"),
+      display: style.display,
       position: style.position,
       zIndex: Number(style.zIndex),
       visibleInViewport: rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.top < window.innerHeight,
@@ -193,20 +199,101 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
   });
   assert.equal(openedPopover.sqehState, "files", "clicking files bubble enters 'files' state");
   assert.equal(openedPopover.ariaExpanded, "true", "files bubble sets aria-expanded='true'");
+  assert.equal(openedPopover.display, "flex", "#made-list is displayed when in 'files' state");
   assert.equal(openedPopover.position, "fixed", "#made-list becomes a fixed popover card in 'files' state");
   assert.ok(openedPopover.zIndex >= 70, "#made-list popover sits above stage");
   assert.equal(openedPopover.visibleInViewport, true, "#made-list popover is visible in viewport");
 
-  // Click #sqeh-files-bubble again to toggle it closed
+  // Click a file card (notes.md) inside #made-list: #reader opens as a fixed popover, #made-list hides, and #sqeh-reader-bubble appears
   await page.evaluate(() => {
-    document.getElementById("sqeh-files-bubble")?.click();
+    document.querySelector('#files .file-open[data-file="notes.md"]')?.click();
   });
-  const closedPopover = await page.evaluate(() => ({
+  await page.waitFor(
+    () => document.getElementById("reader")?.dataset.state === "ready",
+    { label: "#reader opened notes.md" },
+  );
+  const readerOpenState = await page.evaluate(() => {
+    const reader = document.getElementById("reader");
+    const made = document.getElementById("made-list");
+    const readerBubble = document.getElementById("sqeh-reader-bubble");
+    const readerBubbleName = document.getElementById("sqeh-reader-bubble-name");
+    const rStyle = getComputedStyle(reader);
+    const rRect = reader.getBoundingClientRect();
+    return {
+      readerDisplay: rStyle.display,
+      readerPosition: rStyle.position,
+      readerVisible: rRect.width > 0 && rRect.height > 0,
+      madeDisplay: getComputedStyle(made).display,
+      bubbleHidden: Boolean(readerBubble?.hidden),
+      bubbleExpanded: readerBubble?.getAttribute("aria-expanded"),
+      bubbleName: readerBubbleName?.textContent?.trim(),
+    };
+  });
+  assert.equal(readerOpenState.readerDisplay, "flex", "#reader is visible when open");
+  assert.equal(readerOpenState.readerPosition, "fixed", "#reader is a fixed popover card");
+  assert.equal(readerOpenState.readerVisible, true, "#reader has positive dimensions");
+  assert.equal(readerOpenState.madeDisplay, "none", "#made-list hides while #reader popover is open so only one popover shows at once");
+  assert.equal(readerOpenState.bubbleHidden, false, "#sqeh-reader-bubble is visible while a file is open");
+  assert.equal(readerOpenState.bubbleExpanded, "true", "#sqeh-reader-bubble is aria-expanded='true' while #reader is expanded");
+  assert.equal(readerOpenState.bubbleName, "notes.md", "#sqeh-reader-bubble shows active file name");
+
+  // Click #reader-back-files ("Files" button in reader header) -> collapses #reader to bubble and shows #made-list
+  await page.evaluate(() => {
+    document.getElementById("reader-back-files")?.click();
+  });
+  const backToFilesState = await page.evaluate(() => ({
     sqehState: document.body.dataset.sqehState,
-    ariaExpanded: document.getElementById("sqeh-files-bubble")?.getAttribute("aria-expanded"),
+    readerCollapsed: document.getElementById("reader")?.dataset.collapsed,
+    readerDisplay: getComputedStyle(document.getElementById("reader")).display,
+    madeDisplay: getComputedStyle(document.getElementById("made-list")).display,
+    bubbleHidden: Boolean(document.getElementById("sqeh-reader-bubble")?.hidden),
+    bubbleExpanded: document.getElementById("sqeh-reader-bubble")?.getAttribute("aria-expanded"),
   }));
-  assert.equal(closedPopover.sqehState, "deck", "clicking files bubble again returns to 'deck' state");
-  assert.equal(closedPopover.ariaExpanded, "false", "files bubble sets aria-expanded='false'");
+  assert.equal(backToFilesState.sqehState, "files", "#reader-back-files keeps/sets 'files' state");
+  assert.equal(backToFilesState.readerCollapsed, "true", "#reader is collapsed");
+  assert.equal(backToFilesState.readerDisplay, "none", "collapsed #reader is hidden");
+  assert.equal(backToFilesState.madeDisplay, "flex", "#made-list popover is visible again");
+  assert.equal(backToFilesState.bubbleHidden, false, "#sqeh-reader-bubble remains visible when #reader is minimized");
+  assert.equal(backToFilesState.bubbleExpanded, "false", "#sqeh-reader-bubble has aria-expanded='false' when minimized");
+
+  // Click #sqeh-reader-bubble to re-expand #reader, then click #reader-minimize to collapse to deck
+  await page.evaluate(() => {
+    document.getElementById("sqeh-reader-bubble")?.click();
+  });
+  const reExpandedReader = await page.evaluate(() => ({
+    readerDisplay: getComputedStyle(document.getElementById("reader")).display,
+    bubbleExpanded: document.getElementById("sqeh-reader-bubble")?.getAttribute("aria-expanded"),
+  }));
+  assert.equal(reExpandedReader.readerDisplay, "flex", "clicking #sqeh-reader-bubble re-opens #reader popover");
+  assert.equal(reExpandedReader.bubbleExpanded, "true", "#sqeh-reader-bubble has aria-expanded='true'");
+
+  await page.evaluate(() => {
+    document.getElementById("reader-minimize")?.click();
+  });
+  const minimizedToDeck = await page.evaluate(() => ({
+    sqehState: document.body.dataset.sqehState,
+    readerDisplay: getComputedStyle(document.getElementById("reader")).display,
+    madeDisplay: getComputedStyle(document.getElementById("made-list")).display,
+    bubbleHidden: Boolean(document.getElementById("sqeh-reader-bubble")?.hidden),
+  }));
+  assert.equal(minimizedToDeck.sqehState, "deck", "minimizing #reader returns to 'deck' state");
+  assert.equal(minimizedToDeck.readerDisplay, "none", "#reader is hidden when minimized");
+  assert.equal(minimizedToDeck.madeDisplay, "none", "#made-list is hidden in 'deck' state");
+  assert.equal(minimizedToDeck.bubbleHidden, false, "#sqeh-reader-bubble stays visible in top bar");
+
+  // Re-open #reader via bubble and close it via #reader-close
+  await page.evaluate(() => {
+    document.getElementById("sqeh-reader-bubble")?.click();
+    document.getElementById("reader-close")?.click();
+  });
+  const closedReader = await page.evaluate(() => ({
+    readerState: document.getElementById("reader")?.dataset.state,
+    readerDisplay: getComputedStyle(document.getElementById("reader")).display,
+    bubbleHidden: Boolean(document.getElementById("sqeh-reader-bubble")?.hidden),
+  }));
+  assert.equal(closedReader.readerState, "empty", "#reader-close resets data-state='empty'");
+  assert.equal(closedReader.readerDisplay, "none", "#reader is hidden after close");
+  assert.equal(closedReader.bubbleHidden, true, "#sqeh-reader-bubble hides after #reader-close");
 
   // ── 4. Real Mini-App Bubbles & Inner Iframe Scrolling ────────────────────
   const miniAppBubbles = await page.evaluate(() => {

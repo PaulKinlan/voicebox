@@ -90,6 +90,7 @@ test("a machine root: clicking a folder opens it, crumbs and the parent control 
   try {
     await page.goto(`${server.base}/`);
     await page.waitFor(() => document.querySelector("#files .file-open"), { label: "the file list" });
+    await page.evaluate(() => document.getElementById("sqeh-files-bubble")?.click());
 
     const state = () => {
       const rows = [...document.querySelectorAll("#files .file-open")].map((b) => ({ name: b.dataset.file, path: b.dataset.path, dir: b.dataset.kind === "directory" }));
@@ -172,6 +173,7 @@ test("a page-owned (OPFS) root: the same click navigates, listed through the pag
 
     await room.goto(`${s.base}/`);
     await room.waitFor(() => document.querySelector('#files .file-open[data-file="assets"]'), { label: "the page's assets folder" });
+    await room.evaluate(() => document.getElementById("sqeh-files-bubble")?.click());
     const listing = await fetch(`${s.base}/api/files`).then((r) => r.json());
     assert.equal(listing.via, "page", "the listing says whose it is");
     assert.equal(listing.dir, "", "and which folder of that root");
