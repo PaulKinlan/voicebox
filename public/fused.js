@@ -25,7 +25,7 @@ const WANTED = {
   openFolder: "open-folder", openOpfsFolder: "open-opfs-folder", closeFolder: "close-folder", roomFolderHint: "room-folder-hint",
   dropHint: "drop-hint",
   stage: "voice-ring-wrap", mic: "mic", state: "voice-state", micDock: "mic-dock",
-  session: "session", log: "session-log", sessionCopy: "session-copy", form: "text-form", utterance: "utterance", send: "send",
+  session: "session", log: "session-log", sessionCopy: "session-copy", sessionClose: "session-close", sessionEmpty: "session-empty", form: "text-form", utterance: "utterance", send: "send",
   reader: "reader", readerTitle: "reader-title", readerFacts: "file-facts", readerBody: "file-body",
   fileRefresh: "file-refresh",
   fileEdit: "file-edit", fileSave: "file-save", fileCancelEdit: "file-cancel-edit", fileEditor: "file-editor",
@@ -67,6 +67,7 @@ const WANTED = {
   taskCard: "task-card",
   miniAppContainer: "mini-app-container",
   miniAppSheetHandle: "mini-app-sheet-handle",
+  miniAppDragHandle: "mini-app-drag-handle",
   miniAppTitle: "mini-app-title",
   miniAppViewport: "mini-app-viewport",
   miniAppReload: "mini-app-reload",
@@ -81,6 +82,9 @@ const WANTED = {
   harnessesClose: "harnesses-close", harnessesCheck: "harnesses-check",
   harnessesStatus: "harnesses-status", harnessesList: "harnesses-list",
   harnessesScope: "harnesses-scope",
+  harnessAgentName: "harness-agent-name", harnessAgentSelect: "harness-agent-select",
+  harnessAgentModel: "harness-agent-model", harnessConfigSave: "harness-config-save",
+  harnessConfigNote: "harness-config-note",
   changelogOpen: "changelog-open", changelogDialog: "changelog-dialog",
   changelogClose: "changelog-close", changelogRefresh: "changelog-refresh",
   changelogStatus: "changelog-status", changelogCommits: "changelog-commits",
@@ -92,6 +96,9 @@ const WANTED = {
   readerMinimize: "reader-minimize",
   sqehReaderBubble: "sqeh-reader-bubble",
   sqehReaderBubbleName: "sqeh-reader-bubble-name",
+  apiKeyGemini: "api-key-gemini", apiKeyOpenai: "api-key-openai", apiKeyAnthropic: "api-key-anthropic",
+  apiKeyGeminiStatus: "api-key-gemini-status", apiKeyOpenaiStatus: "api-key-openai-status", apiKeyAnthropicStatus: "api-key-anthropic-status",
+  apiKeysSave: "api-keys-save", apiKeysStatus: "api-keys-status",
 };
 const els = {};
 const missing = [];
@@ -1566,35 +1573,70 @@ function openManageExt(ext, mode = "reconfigure") {
 // frames land here via window.__voiceboxOnToolCalls, and the wasm shelf rows read it.
 const lastToolStatus = new Map();
 
-/** ARTIFACT CHIP (voicebox-beads-2meg): a file a tool wrote becomes an inline chip on the
- *  live turn — Open drives the room's own reader through the real file row. No chip without
- *  a turn to live in: a chip is evidence ABOUT a turn, never a turn of its own. */
-function sqehArtifactChip(name) {
-  const turn = els.log?.lastElementChild;
-  if (!turn) return;
+/** ARTIFACT CHIP (voicebox-beads-2meg, voicebox-beads-np3f): a file a turn or tool wrote/edited
+ *  becomes a rich inline chip on the newest turn with action badge, byte size, and content preview. */
+function sqehArtifactChip(name, details = {}) {
+  const turn = els.log?.firstElementChild ?? els.log?.lastElementChild;
+  if (!turn || !name) return;
+  const existing = [...turn.querySelectorAll(".sqeh-artifact-chip")].find((el) => el.dataset.file === name);
+  if (existing) existing.remove();
   const chip = document.createElement("button");
   chip.type = "button";
-  chip.className = "sqeh-chip";
+  chip.className = "sqeh-chip sqeh-artifact-chip";
+  chip.dataset.file = name;
   chip.setAttribute("aria-label", `Open ${name}`);
+
+  const metaRow = document.createElement("span");
+  metaRow.className = "sqeh-artifact-meta";
+
   const glyph = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   glyph.setAttribute("class", "icon");
   glyph.setAttribute("aria-hidden", "true");
   const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
   use.setAttribute("href", "#i-folder");
   glyph.append(use);
+
+  const badge = document.createElement("span");
+  badge.className = "sqeh-artifact-badge";
+  badge.textContent = details.verb === "edit" ? "Edited" : "Wrote";
+
   const label = document.createElement("span");
-  label.className = "sqeh-chip-name";
+  label.className = "sqeh-chip-name sqeh-artifact-name";
   label.textContent = name;
+
   const open = document.createElement("span");
-  open.className = "sqeh-chip-open";
+  open.className = "sqeh-chip-open sqeh-artifact-open";
   open.textContent = "Open";
-  chip.append(glyph, label, open);
+
+  metaRow.append(glyph, badge, label);
+  if (details.bytes !== undefined || typeof details.content === "string") {
+    const sizeSpan = document.createElement("span");
+    sizeSpan.className = "sqeh-artifact-size";
+    const byteLen = typeof details.bytes === "number"
+      ? details.bytes
+      : new TextEncoder().encode(String(details.content ?? "")).length;
+    sizeSpan.textContent = `${byteLen} ${byteLen === 1 ? "byte" : "bytes"}`;
+    metaRow.append(sizeSpan);
+  }
+  metaRow.append(open);
+  chip.append(metaRow);
+
+  const rawPreview = String(details.content ?? details.preview ?? "").trim();
+  if (rawPreview) {
+    const previewEl = document.createElement("pre");
+    previewEl.className = "sqeh-artifact-preview";
+    const codeEl = document.createElement("code");
+    const lines = rawPreview.split(/\r?\n/).slice(0, 3);
+    const snippet = lines.join("\n").slice(0, 180);
+    codeEl.textContent = snippet + (rawPreview.length > snippet.length ? "…" : "");
+    previewEl.append(codeEl);
+    chip.append(previewEl);
+  }
+
   chip.addEventListener("click", () => {
-    sqehSetState("files");
-    const row = [...document.querySelectorAll("#files .file-open")].find((r) => (r.dataset.file ?? "").endsWith(name));
-    row?.click();
+    void showFile(name);
   });
-  turn.querySelector(".did")?.before(chip);
+  turn.append(chip);
 }
 
 async function renderExtensions() {
@@ -2272,6 +2314,7 @@ async function saveEditedFile() {
       els.readerFacts.textContent = `${written.bytes} ${written.bytes === 1 ? "byte" : "bytes"} · saved to '${roomFolder.name}' in this tab (${modeLabel})`;
       exitEditMode();
       finish(`save ${shownFile}`, `wrote ${shownFile} (${size(written.bytes)} observed) in ${roomFolder.name}${durable}`, "good");
+      sqehArtifactChip(shownFile, { verb: "edit", content, bytes: written.bytes });
       await loadRoomFolder();
       return;
     }
@@ -2294,6 +2337,7 @@ async function saveEditedFile() {
     exitEditMode();
     const landed = answer.root?.path ?? answer.root?.name ?? answer.root?.label ?? "";
     finish(`save ${shownFile}`, `${answer.action || `wrote ${shownFile}`}${landed ? ` in ${landed}` : ""}`, "good");
+    sqehArtifactChip(shownFile, { verb: "edit", content });
     await load();
   } catch (error) {
     const reason = `Could not save ${shownFile}: ${error?.message ?? error}`;
@@ -2470,6 +2514,30 @@ function presentInspectionInReader(verb, result, action) {
   return true;
 }
 
+function renderRead(fileName, content, via) {
+  ++fileReadSeq;
+  shownFile = fileName;
+  exitEditMode();
+  if (els.reader) delete els.reader.dataset.collapsed;
+  els.readerTitle.textContent = fileName;
+  els.readerFacts.textContent = `${size(content)} · ${readProvenance(via)}`;
+  els.readerFacts.title = `${rootLabel()}${fileName}, read just now`;
+  els.readerBody.textContent = content;
+  els.reader.dataset.state = "ready";
+  els.reader.dataset.error = "false";
+  els.reader.dataset.loading = "false";
+  els.copy.disabled = content.length === 0;
+  if (els.fileDownload) els.fileDownload.disabled = content.length === 0;
+  if (els.fileRefresh) {
+    els.fileRefresh.disabled = false;
+    els.fileRefresh.removeAttribute("aria-busy");
+    els.fileRefresh.textContent = "Reload";
+  }
+  if (els.fileEdit) els.fileEdit.disabled = !isCurrentFileEditable();
+  syncFileRunAppButton();
+  showFileSelection(fileName);
+}
+
 // ── the turns ──────────────────────────────────────────────────────────────
 function logTurn(said, outcome) {
   const li = document.createElement("li");
@@ -2573,6 +2641,7 @@ async function send(said) {
         // the number 12 counted the two characters of "12" — a line reporting "2 observed" for a 12-byte
         // write, which is worse than no line (found by reading the file back and comparing).
         finish(transcript, `wrote ${target} (${size(written.bytes)} observed) in ${roomFolder.name}${durable}`, "good");
+        sqehArtifactChip(target, { verb: "write", content, bytes: written.bytes });
         await loadRoomFolder();
       } catch (err) {
         finish(transcript, `could not write '${target}': ${err?.message ?? err}`, "bad");
@@ -2623,6 +2692,7 @@ async function send(said) {
           } else {
             undoStackForRoomFolder()?.push({ kind: "edit", path: editRes.file, existed: true, previousContent: editRes.previousContent });
             finish(transcript, `edited ${editRes.file} (${size(editRes.bytes)} observed) in ${roomFolder.name}`, "good");
+            sqehArtifactChip(editRes.file, { verb: "edit", content: localOp.newText, bytes: editRes.bytes });
             if (shownFile === editRes.file) await showFile(shownFile, { reloading: true });
             await loadRoomFolder();
           }
@@ -2684,6 +2754,7 @@ async function send(said) {
       const written = await writeRoomFile(fileName, content);
       const durable = await durableFact();
       finish(transcript, `wrote ${fileName} (${size(written.bytes)} observed) in Browser Scratchpad (OPFS)${durable}`, "good");
+      sqehArtifactChip(fileName, { verb: "write", content, bytes: written.bytes });
     } catch (error) {
       finish(transcript, `could not write '${fileName}': ${error?.message ?? error}`, "bad");
     } finally {
@@ -2719,32 +2790,26 @@ async function send(said) {
     const landed = result.root?.path ?? result.root?.name ?? result.root?.label ?? "";
     finish(transcript, result.action ? `${result.action}${landed ? ` in ${landed}` : ""}` : "done", "good");
     const verb = answer.action?.verb;
+    if (verb === "write" || verb === "edit") {
+      const writtenName = result.file || answer.action?.name || String(result.action ?? "").replace(/^(?:wrote|edited)\s+/i, "").split(/\s+/)[0];
+      const previewContent = result.content ?? answer.action?.content ?? answer.action?.newText ?? "";
+      if (writtenName) {
+        sqehArtifactChip(writtenName, { verb, content: previewContent, bytes: result.bytes });
+      }
+    }
     if (verb === "propose_extension") {
       await renderExtensions();
       if (els.exts && !els.exts.open && typeof els.exts.showModal === "function") {
         els.exts.showModal();
         els.extsOpen?.setAttribute("aria-expanded", "true");
       }
-    } else if (verb === "read" && typeof result.content === "string") {
-      shownFile = result.action;
-      exitEditMode();
-      delete els.reader.dataset.collapsed;
-      els.readerTitle.textContent = result.action;
-      els.readerFacts.textContent = `${size(result.content)} · ${readProvenance(result.via)}`;
-      els.readerFacts.title = `${rootLabel()}${result.action}, read just now`;
-      els.readerBody.textContent = result.content;
-      els.reader.dataset.state = "ready";
-      els.reader.dataset.error = "false";
-      els.copy.disabled = result.content.length === 0;
-      if (els.fileDownload) els.fileDownload.disabled = result.content.length === 0;
-      if (els.fileRefresh) {
-        els.fileRefresh.disabled = false;
-        els.fileRefresh.removeAttribute("aria-busy");
-        els.fileRefresh.textContent = "Reload";
+    } else if (verb === "read") {
+      const readTarget = result.file || answer.action?.name || result.action;
+      if (typeof result.content === "string") {
+        renderRead(readTarget, result.content, result.via);
+      } else if (readTarget) {
+        await showFile(readTarget);
       }
-      if (els.fileEdit) els.fileEdit.disabled = !isCurrentFileEditable();
-      syncFileRunAppButton();
-      showFileSelection(result.action);
     } else if (verb && presentInspectionInReader(verb, result, answer.action)) {
       // Rich inspection output rendered in #reader (voicebox-beads-k7cz)
     } else if ((verb === "edit" || verb === "write" || verb === "undo") && shownFile && (result.file === shownFile || answer.action?.name === shownFile)) {
@@ -3456,6 +3521,38 @@ function renderModalToolCatalogue(article, catalogue) {
   article.append(details);
 }
 
+async function configureHarnessInUi(payload) {
+  if (els.harnessConfigStatus) els.harnessConfigStatus.textContent = "Saving host program setup…";
+  try {
+    let res = await fetch("/api/harnesses/configure", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (res.status === 404 && payload?.agentId && payload?.url) {
+      res = await fetch("/api/agents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: payload.agentId, url: payload.url }),
+      });
+    }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || body.ok === false) {
+      throw new Error(body.why || body.error || `HTTP ${res.status}`);
+    }
+    if (els.harnessConfigStatus) {
+      els.harnessConfigStatus.textContent = body.message || "Saved host program setup.";
+    }
+    await checkHarnesses();
+    return true;
+  } catch (err) {
+    if (els.harnessConfigStatus) {
+      els.harnessConfigStatus.textContent = `Could not save setup (${err?.message ?? String(err)}).`;
+    }
+    return false;
+  }
+}
+
 async function checkHarnesses() {
   if (!els.harnessesList || !els.harnessesStatus) return;
   if (els.harnessesCheck) els.harnessesCheck.disabled = true;
@@ -3476,6 +3573,18 @@ async function checkHarnesses() {
       textNode(article, "p", row.capabilities);
       article.dataset.delegationRefusal = row.delegation?.refused ?? "none";
       textNode(article, "p", row.delegation?.ok ? `Voicebox delegation: ${row.delegation?.mechanism ?? "allowed"}` : `Voicebox delegation: ${row.delegation?.why ?? "none"}`);
+      const actions = document.createElement("div");
+      actions.className = "harness-card-actions";
+      const activateBtn = document.createElement("button");
+      activateBtn.type = "button";
+      activateBtn.className = "harness-activate-btn";
+      activateBtn.dataset.harnessActivate = row.id;
+      activateBtn.textContent = row.delegation?.ok ? "Active for delegation" : `Use ${row.name}`;
+      activateBtn.addEventListener("click", () => {
+        void configureHarnessInUi({ id: row.id, active: true });
+      });
+      actions.append(activateBtn);
+      article.append(actions);
       renderModalToolCatalogue(article, row.toolCatalogue);
       els.harnessesList.append(article);
     }
@@ -3487,6 +3596,22 @@ async function checkHarnesses() {
     if (els.harnessesCheck) els.harnessesCheck.disabled = false;
   }
 }
+
+on(els.harnessConfigSave, "click", async () => {
+  const agentId = (els.harnessAgentId?.value ?? "").trim();
+  const url = (els.harnessAgentUrl?.value ?? "").trim();
+  if (!agentId || !url) {
+    if (els.harnessConfigStatus) {
+      els.harnessConfigStatus.textContent = "Enter both a nickname and an address URL to register a host agent.";
+    }
+    return;
+  }
+  const ok = await configureHarnessInUi({ id: "agentapi", agentId, url, active: true });
+  if (ok) {
+    if (els.harnessAgentId) els.harnessAgentId.value = "";
+    if (els.harnessAgentUrl) els.harnessAgentUrl.value = "";
+  }
+});
 
 on(els.harnessesOpen, "click", () => {
   if (!els.harnessesDialog || els.harnessesDialog.open) return;
@@ -3583,6 +3708,86 @@ on(els.changelogDialog, "close", () => {
 });
 on(els.changelogRefresh, "click", () => void loadRoomChangelog());
 
+// ── Provider API keys configuration (voicebox-beads-5drl) ─────────────────
+function describeProviderKeySlot(slot) {
+  if (!slot) return "Not configured";
+  if (typeof slot === "boolean") return slot ? "Configured" : "Not configured";
+  if (typeof slot === "object") {
+    const configured = Boolean(slot.configured || slot.present || slot.set);
+    if (!configured) return "Not configured";
+    const src = String(slot.source || "").toLowerCase();
+    if (src.includes("env")) return "Configured (from environment)";
+    if (src.includes("store") || src.includes("file") || src.includes("host") || src.includes("saved")) {
+      return "Configured (saved on this host)";
+    }
+    return "Configured";
+  }
+  return "Not configured";
+}
+
+async function loadApiKeysSettings() {
+  try {
+    const res = await fetch("/api/keys", { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return;
+    const body = await res.json();
+    const providers = body.providers || body.keys || body;
+    const mapping = [
+      ["gemini", els.apiKeyGeminiStatus, els.apiKeyGemini],
+      ["openai", els.apiKeyOpenaiStatus, els.apiKeyOpenai],
+      ["anthropic", els.apiKeyAnthropicStatus, els.apiKeyAnthropic],
+    ];
+    for (const [id, statusEl, inputEl] of mapping) {
+      const slot = providers?.[id];
+      const text = describeProviderKeySlot(slot);
+      const isConfigured = text.startsWith("Configured");
+      if (statusEl) statusEl.textContent = text;
+      if (inputEl && isConfigured && !inputEl.value) {
+        const masked = typeof slot === "object" && typeof slot.masked === "string" ? slot.masked : "";
+        inputEl.placeholder = masked ? `Saved (${masked}) — paste to replace` : "Saved — paste a new key to replace";
+      }
+    }
+  } catch {
+    // Endpoint may not be mounted yet; keep clean initial labels
+  }
+}
+
+on(els.apiKeysSave, "click", async () => {
+  const payload = {};
+  const gVal = (els.apiKeyGemini?.value ?? "").trim();
+  const oVal = (els.apiKeyOpenai?.value ?? "").trim();
+  const aVal = (els.apiKeyAnthropic?.value ?? "").trim();
+  if (gVal) payload.gemini = gVal;
+  if (oVal) payload.openai = oVal;
+  if (aVal) payload.anthropic = aVal;
+  if (Object.keys(payload).length === 0) {
+    if (els.apiKeysStatus) els.apiKeysStatus.textContent = "Paste at least one API key before saving.";
+    return;
+  }
+  if (els.apiKeysSave) els.apiKeysSave.disabled = true;
+  if (els.apiKeysStatus) els.apiKeysStatus.textContent = "Saving API keys…";
+  try {
+    const res = await fetch("/api/keys", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || body.ok === false) {
+      throw new Error(body.why || body.error || `HTTP ${res.status}`);
+    }
+    if (els.apiKeyGemini) els.apiKeyGemini.value = "";
+    if (els.apiKeyOpenai) els.apiKeyOpenai.value = "";
+    if (els.apiKeyAnthropic) els.apiKeyAnthropic.value = "";
+    if (els.apiKeysStatus) els.apiKeysStatus.textContent = "Saved API keys on this host.";
+    await loadApiKeysSettings();
+    await loadAgentSettings();
+  } catch (err) {
+    if (els.apiKeysStatus) els.apiKeysStatus.textContent = `Could not save API keys (${err?.message ?? String(err)}).`;
+  } finally {
+    if (els.apiKeysSave) els.apiKeysSave.disabled = false;
+  }
+});
+
 on(els.settingsOpen, "click", () => {
   if (!els.settings || els.settings.open) return;
   // Opening settings does not start capture, stop playback or end the session.
@@ -3594,6 +3799,7 @@ on(els.settingsOpen, "click", () => {
   els.settingsOpen.setAttribute("aria-expanded", "true");
   refreshDevices();
   void loadAgentSettings();
+  void loadApiKeysSettings();
 });
 
 // Every close path — the form's method="dialog" button, Esc, light dismiss, or a programmatic
@@ -4385,11 +4591,63 @@ if (els.miniAppContainer) {
     isExpanded = !isExpanded;
     els.miniAppContainer.dataset.expanded = String(isExpanded);
     if (els.miniAppExpand) {
-      els.miniAppExpand.setAttribute("aria-label", isExpanded ? "Standard width App" : "Full width App");
-      els.miniAppExpand.setAttribute("title", isExpanded ? "Standard width App" : "Full width App");
+      els.miniAppExpand.setAttribute("aria-label", isExpanded ? "Standard size App" : "Full screen App");
+      els.miniAppExpand.setAttribute("title", isExpanded ? "Standard size App" : "Full screen App");
       const use = els.miniAppExpand.querySelector("use");
       if (use) use.setAttribute("href", isExpanded ? "#i-minimize" : "#i-maximize");
     }
+  }
+
+  function attachMiniAppDragHandle(handleEl) {
+    if (!handleEl || !els.miniAppContainer) return;
+    let dragState = null;
+    handleEl.addEventListener("pointerdown", (e) => {
+      if (e.button !== undefined && e.button !== 0) return;
+      if (e.target?.closest?.("button, a, input, select, textarea")) return;
+      if (els.miniAppContainer.dataset.expanded === "true") return;
+      const rect = els.miniAppContainer.getBoundingClientRect();
+      dragState = {
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        startLeft: rect.left,
+        startTop: rect.top,
+        width: rect.width,
+      };
+      els.miniAppContainer.dataset.dragging = "true";
+      els.miniAppContainer.style.left = `${Math.round(rect.left)}px`;
+      els.miniAppContainer.style.top = `${Math.round(rect.top)}px`;
+      els.miniAppContainer.style.right = "auto";
+      els.miniAppContainer.style.bottom = "auto";
+      els.miniAppContainer.style.transform = "none";
+      try {
+        if (e.pointerId !== undefined) handleEl.setPointerCapture?.(e.pointerId);
+      } catch {}
+
+      const onMove = (ev) => {
+        if (!dragState) return;
+        const dx = ev.clientX - dragState.startX;
+        const dy = ev.clientY - dragState.startY;
+        const maxLeft = Math.max(8, window.innerWidth - Math.min(dragState.width || 320, 160));
+        const maxTop = Math.max(8, window.innerHeight - 48);
+        const nextLeft = Math.max(8, Math.min(maxLeft, dragState.startLeft + dx));
+        const nextTop = Math.max(8, Math.min(maxTop, dragState.startTop + dy));
+        els.miniAppContainer.style.left = `${Math.round(nextLeft)}px`;
+        els.miniAppContainer.style.top = `${Math.round(nextTop)}px`;
+      };
+
+      const onUp = () => {
+        dragState = null;
+        delete els.miniAppContainer.dataset.dragging;
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onUp);
+      };
+
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onUp);
+    });
   }
 
   function mount(descriptor) {
@@ -4467,6 +4725,8 @@ if (els.miniAppContainer) {
   if (els.miniAppExpand) els.miniAppExpand.addEventListener("click", expandToggle);
   if (els.miniAppReload) els.miniAppReload.addEventListener("click", reload);
   if (els.miniAppBubble) els.miniAppBubble.addEventListener("click", toggle);
+  attachMiniAppDragHandle(els.miniAppDragHandle);
+  attachMiniAppDragHandle(els.miniAppSheetHandle);
 
   // Quick light-dismiss when clicking outside the popover card, dock, and mini-app bubble triggers
   document.addEventListener("pointerdown", (e) => {
@@ -4527,6 +4787,7 @@ setInterval(() => {
   health(); // GETs only: root facts, environments, health — never a turn
 }, ROOT_POLL_MS);
 loadAgentSettings(); // the dialog has real state before anyone opens it
+void loadApiKeysSettings();
 
 // ── sqeh: the 3-state system interface controller (voicebox-beads-sqeh) ──
 // State A (deck): the voice view plus the Quick Deck card. State B (history): the session feed.
@@ -4540,17 +4801,23 @@ const sqeh = {
 };
 
 function sqehSetState(state, { scroll = false } = {}) {
-  // deck: voice + Quick Deck hero. history: the session feed. files: the floating explorer popover.
+  // deck: voice + Quick Deck hero. history: the floating session feed popover. files: the floating explorer popover.
   // The systems sheet overlays whichever is live — it never displaces layout.
+  const prevState = sqeh.state;
   sqeh.state = state;
   document.body.dataset.sqehState = state;
   const pop = document.getElementById("sqeh-toggle-popovers");
   const hist = document.getElementById("sqeh-toggle-history");
   const filesBubble = document.getElementById("sqeh-files-bubble");
   const dockFiles = document.getElementById("sqeh-dock-files");
+  const session = document.getElementById("session");
   const isFiles = state === "files";
+  const isHistory = state === "history";
   if (pop) pop.setAttribute("aria-selected", String(state === "deck"));
-  if (hist) hist.setAttribute("aria-selected", String(state === "history"));
+  if (hist) {
+    hist.setAttribute("aria-selected", String(isHistory));
+    hist.setAttribute("aria-expanded", String(isHistory));
+  }
   if (filesBubble) {
     filesBubble.setAttribute("aria-selected", String(isFiles));
     filesBubble.setAttribute("aria-expanded", String(isFiles));
@@ -4558,10 +4825,13 @@ function sqehSetState(state, { scroll = false } = {}) {
   if (dockFiles) {
     dockFiles.setAttribute("aria-expanded", String(isFiles));
   }
-  if (scroll && state === "history") {
-    const session = document.getElementById("session");
-    if (session) session.hidden = false;
-    session?.scrollIntoView({ block: "start" });
+  if (session) {
+    if (isHistory) {
+      session.hidden = false;
+      if (scroll) session.scrollIntoView({ block: "start" });
+    } else if (prevState === "history") {
+      session.hidden = true;
+    }
   }
 }
 
@@ -4687,7 +4957,12 @@ function sqehWire() {
   });
   hist?.addEventListener("click", () => {
     collapseOpenReader();
-    sqehSetState("history");
+    sqehSetState(sqeh.state === "history" ? "deck" : "history");
+  });
+  document.getElementById("session-close")?.addEventListener("click", () => {
+    const session = document.getElementById("session");
+    if (session) session.hidden = true;
+    sqehSetState("deck");
   });
   filesBubble?.addEventListener("click", toggleFilesPopover);
   readerBubble?.addEventListener("click", () => {
@@ -4771,9 +5046,9 @@ function sqehWire() {
     Object.defineProperty(Element.prototype, "__voiceboxScrollPatched", { value: true });
   }
 
-  // Light-dismiss the floating Files popover on Escape or outside click
+  // Light-dismiss the floating Files or History popover on Escape or outside click
   window.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && sqeh.state === "files") {
+    if (e.key === "Escape" && (sqeh.state === "files" || sqeh.state === "history")) {
       const anyModal = document.querySelector("dialog[open]");
       if (!anyModal) sqehSetState("deck");
     }
@@ -4805,13 +5080,29 @@ function sqehWire() {
     // lastToolStatus — dropping the frame silently kills the latency readout
     // (the wasm-room-ui regression, voicebox-beads-sqeh landing gate).
     prev?.(calls, frame);
-    // ARTIFACT CHIPS (State B, voicebox-beads-2meg): a successful write/edit leaves a chip
-    // on the live turn — the file's name and an Open action driving the room's own reader.
+    // ARTIFACT CHIPS & AUTO-READ (State B, voicebox-beads-2meg, np3f, 8ga5):
     for (const call of calls ?? []) {
-      if (!call?.ok || !(call.name === "write_file" || call.name === "edit_file")) continue;
-      // The frame carries the file identity (the server's seen entries add result.file).
+      if (!call?.ok) continue;
       const name = String(call.file ?? call.args?.name ?? "");
-      if (name) sqehArtifactChip(name);
+      if (!name) continue;
+      if (call.name === "write_file" || call.name === "edit_file") {
+        const previewText = typeof call.args?.content === "string"
+          ? call.args.content
+          : typeof call.args?.replace === "string"
+            ? call.args.replace
+            : "";
+        sqehArtifactChip(name, {
+          action: call.name === "edit_file" ? "edited" : "wrote",
+          bytes: Number.isFinite(call.bytes) ? call.bytes : (previewText ? previewText.length : undefined),
+          preview: previewText,
+        });
+      } else if (call.name === "read_file") {
+        if (typeof call.content === "string") {
+          renderRead(name, call.content, "voice");
+        } else {
+          void showFile(name);
+        }
+      }
     }
     sqehSyncQuickFiles();
   };

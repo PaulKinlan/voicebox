@@ -116,6 +116,16 @@ const INJECTED_SDK = `<script>
       postToBridge({ type: "app_ready" });
     }
   };
+  window.voicebox = window.webMcp;
+  try {
+    if (typeof navigator !== "undefined") {
+      if (!navigator.modelContext) {
+        Object.defineProperty(navigator, "modelContext", { value: window.webMcp, configurable: true });
+      } else if (typeof navigator.modelContext.registerTool !== "function") {
+        navigator.modelContext.registerTool = window.webMcp.registerTool;
+      }
+    }
+  } catch (err) {}
 
   // Signal to the outer mediator that inner frame script is loaded and ready for port transfer
   if (window.parent && window.parent !== window) {
