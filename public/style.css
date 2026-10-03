@@ -55,7 +55,7 @@ input { caret-color: var(--accent); }
 .icon-button:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
 
 /* ── the room: one column, air around everything ──────────────────────── */
-.room { display: flex; flex-direction: column; min-block-size: 100svh; padding: 18px 32px 84px; }
+.room { display: flex; flex-direction: column; min-block-size: 100svh; padding: 18px 32px 24px; }
 .head { display: flex; align-items: center; gap: 16px; max-width: 1100px; width: 100%; margin: 0 auto; }
 .wordmark { margin: 0; font-size: 1rem; font-weight: 600; letter-spacing: -.035em; }
 .wordmark a { display: inline-flex; align-items: center; min-height: 40px; color: var(--ink); text-decoration: none; }
@@ -277,7 +277,7 @@ dialog.envs {
   max-height: inherit;
   overflow: auto;              /* a long list scrolls INSIDE the dialog */
   overscroll-behavior: contain;
-  padding: 14px 16px calc(16px + env(safe-area-inset-bottom)); /* never under the home bar */
+  padding: 18px 20px calc(20px + env(safe-area-inset-bottom)); /* never under the home bar */
   text-align: left;
 }
 /* The frosting, shared by both dialogs (one rule, so the blur and its solid fallback cannot drift
@@ -299,12 +299,34 @@ html:has(dialog.envs[open]) { overflow: hidden; }
 .env-list { list-style: none; margin: 0; padding: 0; }
 .env-item { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; }
 .env-item + .env-item { border-top: 1px solid var(--line); }
-.env-head { display: flex; align-items: center; gap: 8px; }
+.env-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .env-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: none; }
 .env-dot[data-ok="true"] { background: var(--good); }
 .env-dot[data-ok="false"] { background: var(--warn); }
-.env-label { font-weight: 500; color: var(--ink); }
-.env-state { margin-left: auto; color: var(--muted); font-size: .75rem; }
+.env-label { font-weight: 500; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.env-state {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: .75rem;
+  white-space: nowrap;
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--shade);
+}
+.env-reprobe-btn,
+.env-remove-btn {
+  flex: none;
+  white-space: nowrap;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font-size: .75rem;
+  font-weight: 500;
+}
 /* The capability report is contained: it summarises to a count, and the full list scrolls inside a
    bounded box rather than pushing the name and the actions down. */
 .env-cap { margin-left: 14px; color: var(--muted); font-size: .75rem; }
@@ -316,17 +338,44 @@ html:has(dialog.envs[open]) { overflow: hidden; }
 .env-add-title { margin: 0 0 2px; font-size: .8125rem; font-weight: 600; }
 .env-hint { margin: 0 0 8px; color: var(--muted); font-size: .75rem; }
 .env-add { display: flex; flex-wrap: wrap; gap: 6px; }
-.env-add input { flex: 1 1 160px; min-width: 0; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
-.env-add button { flex: 0 0 auto; font: inherit; padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); cursor: pointer; }
+.env-add input,
+.env-add select {
+  flex: 1 1 160px;
+  min-width: 0;
+  min-height: 36px;
+  font: inherit;
+  font-size: .8125rem;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--ground);
+  color: var(--ink);
+}
+.env-add button {
+  flex: 0 0 auto;
+  min-height: 36px;
+  font: inherit;
+  font-size: .8125rem;
+  font-weight: 500;
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--shade);
+  color: var(--ink);
+  cursor: pointer;
+}
+.env-add button:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
 /* Container query: when the dialog itself is narrow, stack the fields rather than truncate */
 @container env-dialog (inline-size < 380px) {
   .env-add { flex-direction: column; }
-  .env-add input, .env-add button { flex: 1 1 auto; width: 100%; }
+  .env-add input, .env-add select, .env-add button { flex: 1 1 auto; width: 100%; }
 }
 @supports not (container-type: inline-size) {
   @media (max-width: 480px) {
     .env-add { flex-direction: column; }
-    .env-add input, .env-add button { flex: 1 1 auto; width: 100%; }
+    .env-add input, .env-add select, .env-add button { flex: 1 1 auto; width: 100%; }
   }
 }
 .env-note { margin: 8px 0 0; color: var(--warn); font-size: .75rem; }
@@ -361,7 +410,7 @@ html:has(dialog.envs[open]) { overflow: hidden; }
   max-height: inherit;
   overflow: auto;             /* a long device list scrolls INSIDE the dialog */
   overscroll-behavior: contain; /* and reaching the end does not scroll the page behind it */
-  padding: 14px 16px calc(16px + env(safe-area-inset-bottom)); /* never under the home bar */
+  padding: 18px 20px calc(20px + env(safe-area-inset-bottom)); /* never under the home bar */
   text-align: left;
 }
 /* The frosting for BOTH dialogs is the single shared rule below (with the environments dialog) —
@@ -369,8 +418,36 @@ html:has(dialog.envs[open]) { overflow: hidden; }
 /* A modal that leaves the page scrollable behind it is a modal you can lose. The platform makes the
    CONTENT inert; this is the scroll half, declaratively, with no listener and nothing to unlock. */
 html:has(dialog.settings[open]) { overflow: hidden; }
-.settings-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
-.settings-head h2 { margin: 0; font-size: .9375rem; font-weight: 600; letter-spacing: -.02em; }
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding-bottom: 10px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.settings-head h2 {
+  margin: 0 auto 0 0;
+  font-size: .9375rem;
+  font-weight: 600;
+  letter-spacing: -.02em;
+}
+#envs-help {
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--shade);
+  color: var(--muted);
+  font-size: .75rem;
+  font-weight: 600;
+}
+#envs-help:hover {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--ink) 25%, var(--line));
+}
 .settings-section-divider { margin: 16px 0 8px; padding-top: 12px; border-top: 1px solid var(--line); }
 .settings-section-title { margin: 0; font-size: .75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink); }
 .device-row { padding: 10px 0; }
@@ -563,6 +640,19 @@ body:has(#reader[data-state="ready"]) #file-body { max-height: 26svh; }
   gap: 8px;
   margin-top: 14px;
 }
+.harness-actions .quiet,
+.transcript-section-head .quiet,
+.settings-actions .quiet,
+.ext-actions .quiet,
+.ext-plan > .quiet {
+  border: 1px solid var(--line);
+  background: var(--shade);
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 8px;
+  color: var(--ink);
+  font-weight: 500;
+}
 .quiet.danger {
   color: var(--warn);
   border-color: color-mix(in srgb, var(--warn) 40%, var(--line));
@@ -589,19 +679,47 @@ dialog.harnesses-modal {
 .harnesses-list {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
   margin: 12px 0;
 }
 .harness-article {
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 14px 16px;
   background: var(--shade);
 }
+.harness-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
 .harness-article h3 {
-  margin: 0 0 6px;
+  margin: 0;
   font-size: 15px;
+  font-weight: 600;
   color: var(--ink);
+}
+.harness-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.harness-badge[data-status="active"] {
+  background: color-mix(in srgb, var(--good) 14%, var(--card));
+  border-color: color-mix(in srgb, var(--good) 45%, var(--line));
+  color: var(--good);
+}
+.harness-badge[data-status="ready"] {
+  background: color-mix(in srgb, var(--accent) 12%, var(--card));
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  color: var(--accent);
 }
 .harness-article p {
   margin: 4px 0;
@@ -609,10 +727,36 @@ dialog.harnesses-modal {
   line-height: 1.5;
   color: var(--muted);
 }
+.harness-activate-btn {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+.harness-activate-btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+}
+.harness-activate-btn[data-active="true"] {
+  background: color-mix(in srgb, var(--good) 14%, var(--card));
+  border-color: color-mix(in srgb, var(--good) 45%, var(--line));
+  color: var(--good);
+}
 .harness-article .tool-catalogue {
   border-top: 1px solid var(--line);
   margin-top: 12px;
   padding-top: 8px;
+}
+.sqeh-dock[hidden],
+.sqeh-sheet[hidden] {
+  display: none !important;
 }
 
 /* ── Change log modal dialog (voicebox-beads-n1pq) ───────────────────────── */

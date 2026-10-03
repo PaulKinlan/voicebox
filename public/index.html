@@ -72,8 +72,10 @@
               <select id="harness-agent-select" aria-label="Harness">
                 <option value="pi">Pi</option>
                 <option value="claude">Claude Code</option>
+                <option value="antigravity">Anti-Gravity</option>
                 <option value="codex">Codex</option>
                 <option value="gemini">Gemini CLI</option>
+                <option value="opencode">OpenCode</option>
               </select>
               <input id="harness-agent-model" type="text" placeholder="Model (optional)" aria-label="Agent model" autocomplete="off">
               <button class="quiet" id="harness-config-save" type="button">Save &amp; activate</button>
@@ -227,7 +229,7 @@
                  the paragraph below, and the button's tooltip is set from it at boot so the two cannot
                  drift apart. -->
             <button class="icon-button" id="envs-help" type="button" aria-label="What these options mean" aria-describedby="envs-help-text">?</button>
-            <button class="icon-button" id="envs-close" type="submit" aria-label="Close environments"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+            <button class="icon-button" id="envs-close" type="submit" aria-label="Close environments" autofocus><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
             <p class="sr-only" id="envs-help-text">Environments are where your project files live and where commands run: this browser (OPFS), your local machine, or a remote server.</p>
           </div>
           <ul class="env-list" id="env-list"></ul>
@@ -522,7 +524,7 @@
        State B (history): the session feed, scrolled into view.
        State C (systems): this sheet, over the page, never displacing layout.
        Every existing id and contract is preserved; this layer only adds. -->
-  <nav class="sqeh-dock" id="sqeh-dock" aria-label="Quick deck">
+  <nav class="sqeh-dock" id="sqeh-dock" aria-label="Quick deck" hidden>
     <button class="sqeh-dock-btn" id="sqeh-dock-home" type="button" aria-label="Quick deck" title="Quick deck">
       <svg class="icon" aria-hidden="true"><use href="#i-layers"/></svg>
       <span class="sqeh-dock-label">Home</span>
@@ -532,7 +534,7 @@
       <span class="sqeh-dock-label">Files</span>
     </button>
     <!-- the central mic FAB IS the stage #mic, repositioned here by CSS (one mic, voicebox-beads-2meg) -->
-    <button class="sqeh-dock-btn" id="sqeh-dock-systems" type="button" aria-label="Systems quick access" aria-expanded="false" aria-controls="sqeh-sheet" title="Systems quick access">
+    <button class="sqeh-dock-btn" id="sqeh-dock-systems" type="button" aria-label="Systems quick access" aria-expanded="false" aria-controls="sqeh-sheet" title="Systems quick access" hidden>
       <svg class="icon" aria-hidden="true"><use href="#i-sliders"/></svg>
       <span class="sqeh-dock-label">Controls</span>
     </button>
@@ -553,9 +555,7 @@
     <div class="sqeh-sheet-body" id="sqeh-sheet-body">
       <div class="sqeh-system-actions" aria-label="System controls">
         <button class="sqeh-action" id="sqeh-act-mute" type="button"><svg class="icon" aria-hidden="true"><use href="#i-mic"/></svg><span>Mute Mic</span></button>
-        <button class="sqeh-action" id="sqeh-act-volume" type="button"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg><span>Volume Up</span></button>
         <button class="sqeh-action" id="sqeh-act-explorer" type="button"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg><span>File Explorer</span></button>
-        <button class="sqeh-action" id="sqeh-act-spotify" type="button" disabled title="No Spotify integration is wired yet — the tile is honest about it"><svg class="icon" aria-hidden="true"><use href="#i-layers"/></svg><span>Spotify</span></button>
       </div>
     </div>
   </div>

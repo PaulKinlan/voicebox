@@ -1778,18 +1778,21 @@ async function renderEnvironments() {
     // machine's, which is exactly what the capability report exists to show.
     const browserRow = document.createElement("li");
     browserRow.className = "env-item";
+    const bHead = document.createElement("div");
+    bHead.className = "env-head";
     const bDot = document.createElement("span");
     bDot.className = "env-dot";
     bDot.dataset.ok = "true";
-    browserRow.appendChild(bDot);
+    bHead.appendChild(bDot);
     const bName = document.createElement("span");
     bName.className = "env-label";
     bName.textContent = "this browser";
-    browserRow.appendChild(bName);
+    bHead.appendChild(bName);
     const bState = document.createElement("span");
     bState.className = "env-state";
     bState.textContent = "this page";
-    browserRow.appendChild(bState);
+    bHead.appendChild(bState);
+    browserRow.appendChild(bHead);
     const bCap = document.createElement("span");
     bCap.className = "env-cap-none";
     bCap.textContent = "OPFS + picked folders";
@@ -3606,7 +3609,8 @@ function renderModalToolCatalogue(article, catalogue) {
 }
 
 async function configureHarnessInUi(payload) {
-  if (els.harnessConfigStatus) els.harnessConfigStatus.textContent = "Saving host program setup…";
+  if (els.harnessConfigNote) els.harnessConfigNote.textContent = "Saving host program setup…";
+  if (els.harnessesStatus) els.harnessesStatus.textContent = "Saving host program setup…";
   try {
     let res = await fetch("/api/harnesses/configure", {
       method: "POST",
@@ -3624,15 +3628,16 @@ async function configureHarnessInUi(payload) {
     if (!res.ok || body.ok === false) {
       throw new Error(body.why || body.error || `HTTP ${res.status}`);
     }
-    if (els.harnessConfigStatus) {
-      els.harnessConfigStatus.textContent = body.message || "Saved host program setup.";
-    }
     await checkHarnesses();
+    void health();
+    if (els.harnessConfigNote) {
+      els.harnessConfigNote.textContent = body.message || "Saved host program setup.";
+    }
     return true;
   } catch (err) {
-    if (els.harnessConfigStatus) {
-      els.harnessConfigStatus.textContent = `Could not save setup (${err?.message ?? String(err)}).`;
-    }
+    const msg = `Could not save setup (${err?.message ?? String(err)}).`;
+    if (els.harnessConfigNote) els.harnessConfigNote.textContent = msg;
+    if (els.harnessesStatus) els.harnessesStatus.textContent = msg;
     return false;
   }
 }
@@ -3651,22 +3656,50 @@ async function checkHarnesses() {
       const article = document.createElement("article");
       article.className = "harness-article";
       article.dataset.harness = row.id;
-      textNode(article, "h3", `${row.name} — ${row.state}${row.version ? ` (${row.version})` : ""}`);
-      textNode(article, "p", row.description);
-      textNode(article, "p", row.why);
-      textNode(article, "p", row.capabilities);
       article.dataset.delegationRefusal = row.delegation?.refused ?? "none";
-      textNode(article, "p", row.delegation?.ok ? `Voicebox delegation: ${row.delegation?.mechanism ?? "allowed"}` : `Voicebox delegation: ${row.delegation?.why ?? "none"}`);
+
+      const isActive = report.activeHarness === row.id
+        || (report.activeHarness === "pi" && row.id === "pi-acp")
+        || (report.activeHarness === "claude" && row.id === "claude-agent-acp")
+        || Boolean(row.delegation?.ok && (!report.activeHarness || report.activeHarness === row.id));
+      const isReady = Boolean(row.delegation?.ok || row.state === "present" || row.state === "configured");
+
+      const head = document.createElement("div");
+      head.className = "harness-card-head";
+      textNode(head, "h3", `${row.name}${row.version ? ` (${row.version})` : ""}`);
+      const badge = document.createElement("span");
+      badge.className = "harness-badge";
+      badge.dataset.status = isActive ? "active" : isReady ? "ready" : "absent";
+      badge.textContent = isActive ? "Active" : isReady ? "Ready" : "Not installed";
+      head.append(badge);
+      article.append(head);
+
+      if (row.description) {
+        const desc = textNode(article, "p", row.description);
+        desc.className = "harness-desc";
+      }
+
+      const meta = document.createElement("p");
+      meta.className = "harness-meta";
+      if (row.delegation?.ok) {
+        meta.textContent = "Ready to handle delegated coding tasks.";
+        if (row.delegation.mechanism) meta.title = row.delegation.mechanism;
+      } else if (row.state === "present" || row.state === "configured") {
+        meta.textContent = "Installed on this host.";
+      } else if (row.state === "absent") {
+        meta.textContent = "Not installed on this host.";
+      } else if (row.why) {
+        meta.textContent = row.why;
+      }
+      if (meta.textContent) article.append(meta);
+
       const actions = document.createElement("div");
       actions.className = "harness-card-actions";
       const activateBtn = document.createElement("button");
       activateBtn.type = "button";
       activateBtn.className = "harness-activate-btn";
       activateBtn.dataset.harnessActivate = row.id;
-      const isActive = report.activeHarness === row.id
-        || (report.activeHarness === "pi" && row.id === "pi-acp")
-        || (report.activeHarness === "claude" && row.id === "claude-agent-acp")
-        || Boolean(row.delegation?.ok && (!report.activeHarness || report.activeHarness === row.id));
+      activateBtn.dataset.active = String(isActive);
       activateBtn.textContent = isActive ? "Active for delegation" : `Use ${row.name}`;
       activateBtn.addEventListener("click", () => {
         void configureHarnessInUi({ harness: row.id, id: row.id, active: true });
@@ -3679,7 +3712,8 @@ async function checkHarnesses() {
     if (els.harnessesScope) {
       els.harnessesScope.textContent = "Select which installed coding agent handles delegated background tasks.";
     }
-    els.harnessesStatus.textContent = `Observed ${report.observedAt}. Snapshot reused for up to 60 seconds.`;
+    const readyCount = report.entries.filter((r) => r.delegation?.ok || r.state === "present" || r.state === "configured").length;
+    els.harnessesStatus.textContent = `${readyCount} of ${report.entries.length} harnesses ready on this host.`;
   } catch (error) {
     els.harnessesStatus.textContent = `Inventory unavailable (${error.message}). Check the Voicebox server connection and retry. Any previous entries below are stale, not a fresh observation.`;
   } finally {
@@ -3688,18 +3722,19 @@ async function checkHarnesses() {
 }
 
 on(els.harnessConfigSave, "click", async () => {
-  const agentId = (els.harnessAgentId?.value ?? "").trim();
-  const url = (els.harnessAgentUrl?.value ?? "").trim();
-  if (!agentId || !url) {
-    if (els.harnessConfigStatus) {
-      els.harnessConfigStatus.textContent = "Enter both a nickname and an address URL to register a host agent.";
-    }
-    return;
-  }
-  const ok = await configureHarnessInUi({ harness: "agentapi", id: "agentapi", agentId, url, active: true });
+  const harness = (els.harnessAgentSelect?.value ?? "pi").trim();
+  const name = (els.harnessAgentName?.value ?? "").trim();
+  const model = (els.harnessAgentModel?.value ?? "").trim();
+  const ok = await configureHarnessInUi({
+    harness,
+    id: harness,
+    ...(name ? { name } : {}),
+    ...(model ? { model } : {}),
+    active: true,
+  });
   if (ok) {
-    if (els.harnessAgentId) els.harnessAgentId.value = "";
-    if (els.harnessAgentUrl) els.harnessAgentUrl.value = "";
+    if (els.harnessAgentName) els.harnessAgentName.value = "";
+    if (els.harnessAgentModel) els.harnessAgentModel.value = "";
   }
 });
 
@@ -3871,6 +3906,7 @@ on(els.apiKeysSave, "click", async () => {
     if (els.apiKeysStatus) els.apiKeysStatus.textContent = "Saved API keys on this host.";
     await loadApiKeysSettings();
     await loadAgentSettings();
+    void health();
   } catch (err) {
     if (els.apiKeysStatus) els.apiKeysStatus.textContent = `Could not save API keys (${err?.message ?? String(err)}).`;
   } finally {
@@ -4075,6 +4111,7 @@ async function saveAgentSetting(patch) {
   agent = answer;
   writeLocalAgentSettings(agent.requested);
   renderAgentSettings();
+  void health();
 }
 
 for (const [id, patch] of [
@@ -5281,11 +5318,6 @@ function sqehWire() {
     const mic = document.getElementById("mic");
     const capturing = mic?.getAttribute("aria-pressed") === "true";
     if (capturing) { mic?.click(); sqehSetState("deck"); }
-  });
-  let sqehVolume = 0.8;
-  document.getElementById("sqeh-act-volume")?.addEventListener("click", () => {
-    sqehVolume = Math.min(1, sqehVolume + 0.25);
-    window.__voiceboxSetPlaybackVolume?.(sqehVolume);
   });
   document.getElementById("sqeh-act-explorer")?.addEventListener("click", toggleFilesPopover);
   document.getElementById("sqeh-dock-files")?.addEventListener("click", toggleFilesPopover);
