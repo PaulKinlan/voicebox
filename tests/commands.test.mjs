@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { COMMANDS, COMMAND_VERBS, commandToAction, functionDeclarations, liveSystemInstruction } from "../lib/commands.mjs";
 
 test("the list declares file and extension actions — the executor's verbs, once", () => {
-  assert.deepEqual([...COMMAND_VERBS].sort(), ["contact_agent", "delegate_task", "delete", "diff", "edit", "extension", "extensions", "git_diff", "git_log", "git_status", "grep", "inspect_environment", "list", "list_agents", "mini_app", "propose_extension", "read", "undo", "write"]);
+  assert.deepEqual([...COMMAND_VERBS].sort(), ["contact_agent", "delegate_task", "delete", "diff", "edit", "exec", "extension", "extensions", "git_diff", "git_log", "git_status", "grep", "inspect_environment", "list", "list_agents", "list_tools", "mini_app", "open_workspace", "propose_extension", "read", "search_tools", "undo", "write"]);
   const names = COMMANDS.map((c) => c.name);
   assert.equal(new Set(names).size, names.length, "command names must be unique");
 });
@@ -30,12 +30,17 @@ test("functionDeclarations are vendor-ready JSON-schema declarations", () => {
   assert.deepEqual(grep.parameters.required.sort(), ["query"]);
   const delegate = decls.find((d) => d.name === "delegate_task");
   assert.deepEqual(delegate.parameters.required.sort(), ["agent", "task"]);
+  const searchToolsDecl = decls.find((d) => d.name === "search_tools");
+  assert.deepEqual(searchToolsDecl.parameters.required.sort(), ["query"]);
+  const runCmdDecl = decls.find((d) => d.name === "run_command");
+  assert.deepEqual(runCmdDecl.parameters.required.sort(), ["command"]);
 });
 
 test("commandToAction maps a tool call to the executor's action shape", () => {
   assert.deepEqual(commandToAction("write_file", { name: "a.txt", content: "hi" }), { verb: "write", name: "a.txt", content: "hi" });
   assert.deepEqual(commandToAction("read_file", { name: "a.txt" }), { verb: "read", name: "a.txt" });
   assert.deepEqual(commandToAction("list_files"), { verb: "list", name: "" });
+  assert.deepEqual(commandToAction("list_files", { dir: "lib" }), { verb: "list", name: "lib" });
   assert.deepEqual(commandToAction("delete_file", { name: "a.txt" }), { verb: "delete", name: "a.txt" });
   assert.deepEqual(commandToAction("edit_file", { name: "a.txt", oldText: "foo", newText: "bar" }), { verb: "edit", name: "a.txt", oldText: "foo", newText: "bar" });
   assert.deepEqual(commandToAction("diff_file", { name: "a.txt", content: "new text" }), { verb: "diff", name: "a.txt", content: "new text" });
@@ -47,6 +52,10 @@ test("commandToAction maps a tool call to the executor's action shape", () => {
   assert.deepEqual(commandToAction("git_log", { limit: 5 }), { verb: "git_log", name: "", limit: 5 });
   assert.deepEqual(commandToAction("inspect_environment"), { verb: "inspect_environment", name: "" });
   assert.deepEqual(commandToAction("undo_last_action"), { verb: "undo", name: "" });
+  assert.deepEqual(commandToAction("list_tools", { kind: "system" }), { verb: "list_tools", name: "", kind: "system" });
+  assert.deepEqual(commandToAction("search_tools", { query: "beads", kind: "system", limit: 10 }), { verb: "search_tools", name: "", query: "beads", kind: "system", limit: 10 });
+  assert.deepEqual(commandToAction("run_command", { command: "bd --version", cwd: "lib" }), { verb: "exec", name: "", command: "bd --version", cwd: "lib" });
+  assert.deepEqual(commandToAction("open_workspace", { target: "self", project: "voicebox" }), { verb: "open_workspace", name: "", target: "self", project: "voicebox" });
 });
 
 test("extension calls preserve arguments and refuse malformed values", () => {

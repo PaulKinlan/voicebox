@@ -63,6 +63,7 @@ import {
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
 import { createLiveSession, LIVE_MODEL, inputRateRequiredBy, registerLiveProvider } from "./lib/live-session.mjs";
 import { COMMANDS, COMMAND_VERBS, commandToAction, functionDeclarations, liveSystemInstruction } from "./lib/commands.mjs";
+import { listTools, searchTools, runSystemCommand } from "./lib/tool-index.mjs";
 import {
   frameProjectInstruction,
   instructionFromPage,
@@ -1990,6 +1991,124 @@ async function execute(action) {
       root: active?.root ?? null,
     };
   }
+  if (action.verb === "list_tools") {
+    const miniAppTools = activeMiniAppRegistry.getAllTools();
+    let harnesses = [];
+    try {
+      const inv = await harnessInventory();
+      const combined = await listHarnessesWithConfiguredAgents(inv, agentRegistry);
+      harnesses = combined.harnesses ?? [];
+    } catch {}
+    const out = await listTools({
+      rootPath: active?.root?.kind === "machine" ? active.root.path : ROOT,
+      kind: action.kind,
+      miniAppTools,
+      harnesses,
+    });
+    return {
+      ok: true,
+      action: `listed ${out.count} tool(s)${action.kind ? ` (${action.kind})` : ""}`,
+      tools: out.tools,
+      count: out.count,
+      counts: out.counts,
+      root: active?.root ?? null,
+      logged: null,
+    };
+  }
+  if (action.verb === "search_tools") {
+    const query = String(action.query ?? action.name ?? "").trim();
+    if (!query) {
+      return {
+        ok: false,
+        refused: "missing-argument",
+        error: "refused: missing-argument",
+        why: "search_tools requires a search query",
+        root: active?.root ?? null,
+        logged: null,
+      };
+    }
+    const miniAppTools = activeMiniAppRegistry.getAllTools();
+    let harnesses = [];
+    try {
+      const inv = await harnessInventory();
+      const combined = await listHarnessesWithConfiguredAgents(inv, agentRegistry);
+      harnesses = combined.harnesses ?? [];
+    } catch {}
+    const out = await searchTools(query, {
+      rootPath: active?.root?.kind === "machine" ? active.root.path : ROOT,
+      kind: action.kind,
+      limit: action.limit,
+      miniAppTools,
+      harnesses,
+    });
+    return {
+      ok: true,
+      action: `found ${out.count} tool(s) matching "${query}"`,
+      query,
+      tools: out.tools,
+      count: out.count,
+      counts: out.counts,
+      root: active?.root ?? null,
+      logged: null,
+    };
+  }
+  if (action.verb === "open_workspace") {
+    const rawTarget = String(action.target || action.path || action.name || "self").trim();
+    const isSelf = !rawTarget || /^(?:self|voicebox|repo|repository|this\s+repo|own\s+codebase|codebase)$/i.test(rawTarget);
+    const requested = isSelf ? ROOT : rawTarget;
+    const candidate = path.resolve(requested);
+    if (!existsSync(candidate)) {
+      return {
+        ok: false,
+        refused: "path-missing",
+        error: "refused: path-missing",
+        why: `'${requested}' does not exist on this machine`,
+        root: active?.root ?? null,
+        logged: null,
+      };
+    }
+    let real;
+    try {
+      real = realpathSync(candidate);
+    } catch (e) {
+      return {
+        ok: false,
+        refused: "not-a-directory",
+        error: "refused: not-a-directory",
+        why: `'${requested}' could not be resolved: ${e.code}`,
+        root: active?.root ?? null,
+        logged: null,
+      };
+    }
+    if (!statSync(real).isDirectory()) {
+      return {
+        ok: false,
+        refused: "not-a-directory",
+        error: "refused: not-a-directory",
+        why: `'${requested}' is a file; a project root is a folder`,
+        root: active?.root ?? null,
+        logged: null,
+      };
+    }
+    const project = String(action.project ?? (isSelf ? "voicebox" : path.basename(real) || "workspace")).trim();
+    active = {
+      project,
+      root: { kind: "machine", path: real, environment: SELF_ENVIRONMENT },
+      declaredAt: new Date().toISOString(),
+    };
+    liveProjectContext = null;
+    const files = readdirSync(real).filter((f) => !f.startsWith("."));
+    return {
+      ok: true,
+      action: `opened workspace ${project} (${real})`,
+      project: active.project,
+      root: active.root,
+      files,
+      actsVia: "server",
+      reachableFromThisProcess: true,
+      logged: null,
+    };
+  }
   // `logged` is present as null rather than absent: "there is no entry" must be a fact on the
   // response, not something a reader has to notice the absence of.
   if (!active) return { ...noRootDeclared(), error: `refused: ${ROOT_NOT_DECLARED}`, root: null, logged: null };
@@ -2005,7 +2124,85 @@ async function execute(action) {
   if (action.verb === "list") {
     const reach = reachableFromEnvironment(active.root, { peer: "machine", environment: SELF_ENVIRONMENT });
     if (!reach.ok) return { ok: false, refused: reach.refused, error: `refused: ${reach.refused}`, why: reach.why, root: active.root };
-    return { ok: true, action: `listed ${active.project}`, files: readdirSync(active.root.path).filter((f) => !f.startsWith(".")), root: active.root };
+    const subDir = String(action.name ?? action.dir ?? "").trim().replace(/^\/+|\/+$/g, "");
+    if (!subDir || subDir === ".") {
+      return { ok: true, action: `listed ${active.project}`, files: readdirSync(active.root.path).filter((f) => !f.startsWith(".")), root: active.root };
+    }
+    const resolvedDir = resolveActive(subDir);
+    if (!resolvedDir.ok) {
+      return {
+        ok: false,
+        refused: resolvedDir.refused,
+        error: `refused: ${resolvedDir.refused === "outside-root" ? "path escapes the active project root" : resolvedDir.refused}`,
+        why: resolvedDir.why,
+        root: active.root,
+      };
+    }
+    const relSegments = path.relative(active.root.path, resolvedDir.path).split(path.sep).filter(Boolean);
+    if (relSegments.some((seg) => seg.startsWith("."))) {
+      return { ok: false, refused: "dotfile-refused", error: "refused: dotfile-refused", why: "dotfiles are neither readable nor writable through the loop", root: active.root };
+    }
+    if (!existsSync(resolvedDir.path)) {
+      return { ok: false, refused: "not-found", error: "refused: not-found", why: `'${subDir}' is not in ${active.project}`, root: active.root };
+    }
+    const stat = statSync(resolvedDir.path);
+    if (!stat.isDirectory()) {
+      return { ok: false, refused: "not-a-directory", error: "refused: not-a-directory", why: `'${subDir}' is a file; list applies to directories`, root: active.root };
+    }
+    const relNormalized = relSegments.join("/");
+    const files = readdirSync(resolvedDir.path)
+      .filter((f) => !f.startsWith("."))
+      .map((f) => `${relNormalized}/${f}`);
+    return {
+      ok: true,
+      action: `listed ${active.project}/${relNormalized}`,
+      dir: relNormalized,
+      files,
+      root: active.root,
+    };
+  }
+  if (action.verb === "exec") {
+    const reach = reachableFromEnvironment(active.root, { peer: "machine", environment: SELF_ENVIRONMENT });
+    if (!reach.ok) return { ok: false, refused: reach.refused, error: `refused: ${reach.refused}`, why: reach.why, root: active.root };
+    const cmdText = String(action.command ?? "").trim();
+    if (!cmdText) {
+      return {
+        ok: false,
+        refused: "missing-argument",
+        error: "refused: missing-argument",
+        why: "run_command requires a non-empty command string",
+        root: active.root,
+        logged: null,
+      };
+    }
+    const resExec = await runSystemCommand(active.root.path, {
+      command: cmdText,
+      cwd: action.cwd,
+    });
+    if (!resExec.ok && resExec.refused && resExec.refused !== "command-failed") {
+      const entry = logAct({ kind: "exec", target: cmdText, tool: "turn" }, "refuse", resExec.refused, "refused", null, action.turn ?? null);
+      return {
+        ...resExec,
+        root: active.root,
+        logged: entry ? entry.seq : null,
+      };
+    }
+    const entry = logAct(
+      { kind: "exec", target: cmdText, tool: "turn" },
+      "allow",
+      "exec-inside",
+      resExec.ok ? "ok" : "error",
+      { exitCode: resExec.exitCode, durationMs: resExec.durationMs },
+      action.turn ?? null,
+    );
+    return {
+      ...resExec,
+      action: resExec.ok
+        ? `ran "${cmdText}" (exit 0, ${resExec.durationMs}ms)`
+        : `command "${cmdText}" exited with code ${resExec.exitCode}`,
+      root: active.root,
+      logged: entry ? entry.seq : null,
+    };
   }
   if (action.verb === "grep") {
     const query = String(action.query ?? action.name ?? "").trim();
@@ -2760,6 +2957,24 @@ const routes = {
       return json(res, 200, { ok: true, activeHarness, ...combined });
     }));
   },
+  "GET /api/tools": async (req, res, url) => {
+    const q = (url.searchParams.get("q") ?? "").trim();
+    const kind = (url.searchParams.get("kind") ?? "").trim() || undefined;
+    const limitParam = url.searchParams.get("limit");
+    const limit = limitParam ? Number(limitParam) : undefined;
+    const miniAppTools = activeMiniAppRegistry.getAllTools();
+    let harnesses = [];
+    try {
+      const inv = await harnessInventory();
+      const combined = await listHarnessesWithConfiguredAgents(inv, agentRegistry);
+      harnesses = combined.harnesses ?? [];
+    } catch {}
+    const rootPath = active?.root?.kind === "machine" ? active.root.path : ROOT;
+    const result = q
+      ? await searchTools(q, { rootPath, kind, limit, miniAppTools, harnesses })
+      : await listTools({ rootPath, kind, miniAppTools, harnesses });
+    return json(res, 200, result);
+  },
   "GET /api/keys": (req, res) => json(res, 200, apiKeysStatusPayload()),
   "PUT /api/keys": (req, res) => {
     let body = "";
@@ -3103,8 +3318,14 @@ async function handle(req, res) {
       } catch {
         return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON: {project, root}" });
       }
-      const project = String(declared?.project ?? "").trim();
-      const root = declared?.root;
+      const isSelfRequest =
+        declared?.self === true ||
+        declared?.target === "self" ||
+        (declared?.root && typeof declared.root === "object" && (declared.root.self === true || declared.root.path === "self"));
+      const project = String(declared?.project ?? (isSelfRequest ? "voicebox" : "")).trim();
+      const root = isSelfRequest
+        ? { kind: "machine", path: ROOT }
+        : declared?.root;
       if (!project || !root || typeof root !== "object") {
         return json(res, 400, { ok: false, refused: "bad-request", why: "a declaration needs a project name and a root descriptor" });
       }
@@ -3113,9 +3334,11 @@ async function handle(req, res) {
       }
 
       // Who is asking? The token decides for a machine root; the page's own origin decides for a root
-      // only the page can act on. Both refusals name the rule they were refused by.
+      // only the page can act on, or for opening the server's own codebase (`self: true`).
       const pageOwned = root.kind === "opfs" || root.kind === "handle";
       const declaredByHost = extensions.hostTokenOk(req.headers["x-voicebox-host-token"]);
+      const sessionToken = req.headers["x-voicebox-session-token"];
+      const declaredByRoomSession = typeof sessionToken === "string" && sessionToken && sessionToken === ROOM_SESSION_TOKEN;
       const selfPort = boundPort ?? PORT;
       const ownOrigins = new Set([
         `http://127.0.0.1:${selfPort}`,
@@ -3123,7 +3346,8 @@ async function handle(req, res) {
         `http://[::1]:${selfPort}`,
       ]);
       const fromOwnPage = typeof req.headers.origin === "string" && ownOrigins.has(req.headers.origin);
-      if (!declaredByHost && !(pageOwned && fromOwnPage)) {
+      const allowedSelf = isSelfRequest && hasExtensionAuthority(req);
+      if (!declaredByHost && !declaredByRoomSession && !(pageOwned && fromOwnPage) && !allowedSelf) {
         return json(res, 403, {
           ok: false,
           refused: "host-token-required",
@@ -3135,7 +3359,7 @@ async function handle(req, res) {
       const declaredBy = declaredByHost ? "host" : "page";
 
       if (root.kind === "machine") {
-        const requested = String(root.path ?? "");
+        const requested = isSelfRequest ? ROOT : String(root.path ?? "");
         if (!requested.trim()) {
           return json(res, 400, { ok: false, refused: "bad-request", why: "a machine root needs a path" });
         }

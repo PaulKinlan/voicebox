@@ -630,7 +630,7 @@ export function parseRoomFolderTurn(transcript) {
   );
   if (
     readNatural &&
-    !/^(?:files|all\s+files|folder|directory|project|workspace|history|settings|harnesses|environments|extensions|agents|status|diff|log|commits)$/i.test(
+    !/^(?:files|all\s+files|folder|directory|project|workspace|voicebox|self|codebase|repo|repository|tools|all\s+tools|capabilities|commands|history|settings|harnesses|environments|extensions|agents|status|diff|log|commits)$/i.test(
       readNatural[1],
     )
   ) {
