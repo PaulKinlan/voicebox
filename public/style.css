@@ -56,10 +56,122 @@ input { caret-color: var(--accent); }
 
 /* ── the room: one column, air around everything ──────────────────────── */
 .room { display: flex; flex-direction: column; min-block-size: 100svh; padding: 18px 32px 24px; }
-.head { display: flex; align-items: center; gap: 16px; max-width: 1100px; width: 100%; margin: 0 auto; }
-.wordmark { margin: 0; font-size: 1rem; font-weight: 600; letter-spacing: -.035em; }
-.wordmark a { display: inline-flex; align-items: center; min-height: 40px; color: var(--ink); text-decoration: none; }
-.where { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 0 auto; font-size: .75rem; color: color-mix(in srgb, var(--muted) 82%, var(--ink)); }
+.head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 1040px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 6px 0 10px;
+}
+.wordmark {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.wordmark a {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  color: var(--ink);
+  text-decoration: none;
+}
+.wordmark-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--good);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 14%, transparent);
+  flex: none;
+}
+body:has(#server-dot[data-ok="false"]) .wordmark-dot {
+  background: var(--warn);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 16%, transparent);
+}
+.where {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 auto 0 4px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--shade) 75%, var(--card));
+  font-size: 0.75rem;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  color: var(--muted);
+  box-shadow: 0 1px 3px rgba(20, 22, 26, 0.04);
+}
+.head > .icon-button {
+  width: 38px;
+  min-height: 38px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: 0 2px 8px rgba(20, 22, 26, 0.05);
+  transition: transform 0.12s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.head > .icon-button:hover {
+  border-color: color-mix(in srgb, var(--ink) 24%, var(--line));
+  background: var(--card);
+  transform: translateY(-1px);
+}
+.sync-toast {
+  position: fixed;
+  inset-block-start: max(14px, env(safe-area-inset-top, 0px));
+  inset-inline-start: 50%;
+  transform: translateX(-50%);
+  z-index: 150;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 8px 14px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line));
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  max-inline-size: min(92vw, 620px);
+  font-size: 0.8125rem;
+}
+.sync-toast-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 18%, transparent);
+  flex: none;
+}
+.sync-toast-message {
+  flex: 1;
+  min-inline-size: 0;
+  font-weight: 500;
+}
+.sync-toast-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.sync-toast-reload {
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, var(--card));
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.sync-toast-dismiss {
+  width: 28px;
+  min-height: 28px;
+  border-radius: 999px;
+}
 .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
 .dot[data-ok="true"] { background: var(--good); }
 .dot[data-ok="false"] { background: var(--warn); }
@@ -185,7 +297,7 @@ input { caret-color: var(--accent); }
 [data-voice="speaking"] .output-ring path { opacity: .9; }
 /* No soft glow: at rest the button is a button, and the only thing that
    moves around it is the agent's real contour. A big halo reads as a radar. */
-.mic { position: relative; display: grid; place-items: center; width: 116px; height: 116px; border: 1px solid color-mix(in srgb, var(--ink) 12%, var(--line)); border-radius: 50%; color: var(--accent); background: var(--card); box-shadow: 0 8px 20px -16px color-mix(in srgb, var(--ink) 40%, transparent); transition: transform 200ms ease-out, color 200ms ease-out, border-color 200ms ease-out; }
+.mic { position: relative; display: grid; place-items: center; width: 116px; height: 116px; border: 2px solid color-mix(in srgb, var(--ink) 18%, var(--line)); border-radius: 50%; color: var(--accent); background: var(--card); box-shadow: 0 12px 32px rgba(20, 22, 26, 0.09), 0 2px 6px rgba(20, 22, 26, 0.04); transition: transform 200ms ease-out, color 200ms ease-out, border-color 200ms ease-out, box-shadow 200ms ease-out; }
 .mic:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
 .mic:active { transform: scale(.98); }
 .mic-glyph { width: 38px; height: 38px; }
@@ -200,10 +312,10 @@ input { caret-color: var(--accent); }
 [data-voice="speaking"] .input-wave path { fill: var(--good); }
 /* Blue is yours, green is the agent's. Colour carries the distinction so the
    two meters never read as one. */
-[data-voice="listening"] .mic { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+[data-voice="listening"] .mic { color: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 10px color-mix(in srgb, var(--accent) 10%, transparent), 0 12px 32px rgba(20, 22, 26, 0.09); }
 [data-voice="listening"] .mic-glyph,
 [data-voice="speaking"] .mic-glyph { display: none; }
-[data-voice="speaking"] .mic { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, var(--line)); }
+[data-voice="speaking"] .mic { color: var(--good); border-color: var(--good); box-shadow: 0 0 0 10px color-mix(in srgb, var(--good) 11%, transparent), 0 12px 32px rgba(20, 22, 26, 0.09); }
 .mic.hotkey-active {
   transform: scale(0.95);
   border-color: var(--accent);
@@ -1634,14 +1746,59 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
 .sqeh-dock-mic { display: grid; place-items: center; inline-size: 62px; block-size: 62px; margin-block-end: 14px; border: 0; border-radius: 50%; background: radial-gradient(circle at 50% 35%, var(--accent), color-mix(in srgb, var(--accent) 55%, #000)); color: #ffffff; cursor: pointer; box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent), 0 0 34px color-mix(in srgb, var(--accent) 45%, transparent); }
 .sqeh-dock-mic:hover { box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 24%, transparent), 0 0 48px color-mix(in srgb, var(--accent) 60%, transparent); }
 
-/* ── layered radial arcs on the mic stage ── */
+/* ── layered radial arcs on the mic stage (concentric outside rings) ── */
 .mic-stage { position: relative; }
 .sqeh-arcs { position: absolute; inset: -26px; display: grid; place-items: center; pointer-events: none; }
-.sqeh-arcs i { position: absolute; inline-size: 210px; block-size: 210px; border-radius: 50%; border: 1.5px solid color-mix(in srgb, var(--accent) 55%, transparent); opacity: 0; }
-.mic-stage[data-voice="on"] .sqeh-arcs i { animation: sqeh-arc 2.4s ease-out infinite; }
-.mic-stage[data-voice="on"] .sqeh-arcs i:nth-child(2) { animation-delay: 0.8s; }
-.mic-stage[data-voice="on"] .sqeh-arcs i:nth-child(3) { animation-delay: 1.6s; }
-@keyframes sqeh-arc { 0% { transform: scale(0.72); opacity: 0.85; } 100% { transform: scale(1.45); opacity: 0; } }
+.sqeh-arcs i { position: absolute; border-radius: 50%; pointer-events: none; }
+.sqeh-arcs i:nth-child(1) {
+  inline-size: 148px;
+  block-size: 148px;
+  border: 1.5px solid color-mix(in srgb, var(--ink) 22%, var(--line));
+  opacity: 0.65;
+  transition: transform 0.3s ease, border-color 0.3s ease, opacity 0.3s ease;
+}
+.sqeh-arcs i:nth-child(2) {
+  inline-size: 178px;
+  block-size: 178px;
+  border: 1px dashed color-mix(in srgb, var(--ink) 18%, var(--line));
+  opacity: 0.85;
+  transition: transform 0.3s ease, border-color 0.3s ease, opacity 0.3s ease;
+}
+.sqeh-arcs i:nth-child(3) {
+  inline-size: 148px;
+  block-size: 148px;
+  border: 1.5px solid var(--accent);
+  opacity: 0;
+}
+[data-voice="listening"] .sqeh-arcs i:nth-child(1),
+.mic-stage[data-voice="on"] .sqeh-arcs i:nth-child(1) {
+  border-color: var(--accent);
+  opacity: 0.9;
+}
+[data-voice="listening"] .sqeh-arcs i:nth-child(2),
+.mic-stage[data-voice="on"] .sqeh-arcs i:nth-child(2) {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+[data-voice="listening"] .sqeh-arcs i:nth-child(3),
+.mic-stage[data-voice="on"] .sqeh-arcs i:nth-child(3) {
+  border-color: var(--accent);
+  animation: pulseRing 1.8s infinite ease-out;
+}
+[data-voice="speaking"] .sqeh-arcs i:nth-child(1) {
+  border-color: var(--good);
+  opacity: 0.9;
+}
+[data-voice="speaking"] .sqeh-arcs i:nth-child(2) {
+  border-color: color-mix(in srgb, var(--good) 45%, var(--line));
+}
+[data-voice="speaking"] .sqeh-arcs i:nth-child(3) {
+  border-color: var(--good);
+  animation: pulseRing 1.2s infinite ease-in-out;
+}
+@keyframes pulseRing {
+  0% { transform: scale(0.94); opacity: 0.85; }
+  100% { transform: scale(1.26); opacity: 0; }
+}
 
 /* ── State C: systems sheet (mobile slide-up; desktop anchored popover) ── */
 .sqeh-sheet { position: fixed; inset-inline: 0; inset-block-end: 0; z-index: 60; max-block-size: 70svh; padding: 14px 18px calc(18px + env(safe-area-inset-bottom, 0px)); border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line)); border-radius: 22px 22px 0 0; background: var(--sqeh-glass); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); box-shadow: var(--shadow); overflow: auto; }
