@@ -31,6 +31,7 @@ import {
   deriveOutcome,
   deriveCancelOutcome,
   formatTaskState,
+  explainTaskReason,
   formatRoot,
   formatSilence,
   deriveCardData,
@@ -84,6 +85,7 @@ test("task-card core: formatters use plain language", () => {
   assert.equal(formatTaskState("failed"), "Failed");
   assert.equal(formatTaskState("interrupted"), "Interrupted");
 
+  assert.match(explainTaskReason("harness-ended-outcome-unknown"), /agent process exited unexpectedly/i);
   assert.equal(formatRoot({ kind: "machine", path: "/tmp/workspace" }), "machine: /tmp/workspace");
   assert.equal(formatRoot({ kind: "opfs", path: "v1/projects/atlas" }), "browser storage: v1/projects/atlas");
   assert.equal(formatRoot({ kind: "handle", id: "my-folder" }), "picked folder: my-folder");
@@ -467,7 +469,7 @@ test("task-card browser: card renders each state and cancel works from the card 
     assert.match(sFailed.reason ?? "", /build step failed/);
     assert.match(sFailed.partial ?? "", /intermediate build log/);
 
-    // 8. INTERRUPTED STATE
+    // 8. INTERRUPTED STATE WITH DIAGNOSTIC DETAIL
     await evaluate(() => {
       window.__voiceboxTaskCard.setTask({
         address: "task_test_interrupted_123",
@@ -476,6 +478,7 @@ test("task-card browser: card renders each state and cancel works from the card 
         root: { kind: "machine", path: "/tmp/test-project" },
         state: "interrupted",
         reason: "task deadline elapsed",
+        detail: "claude-code process exited with code 1 while initializing claude-code.\nStderr: npm error code ETARGET",
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
@@ -486,13 +489,17 @@ test("task-card browser: card renders each state and cancel works from the card 
       const card = document.querySelector("#task-card");
       const stateBadge = document.querySelector("#task-card-state-badge")?.textContent;
       const reason = document.querySelector("#task-card-reason")?.textContent;
-      return { dataset: { ...card?.dataset }, stateBadge, reason };
+      const detail = document.querySelector("#task-card-detail")?.textContent;
+      const hasDismiss = Boolean(document.querySelector("#task-dismiss-btn"));
+      return { dataset: { ...card?.dataset }, stateBadge, reason, detail, hasDismiss };
     });
 
     assert.equal(sInterrupted.dataset.state, "interrupted");
     assert.equal(sInterrupted.dataset.outcome, "finished");
     assert.equal(sInterrupted.stateBadge, "Interrupted");
     assert.match(sInterrupted.reason ?? "", /deadline elapsed/);
+    assert.match(sInterrupted.detail ?? "", /ETARGET/);
+    assert.equal(sInterrupted.hasDismiss, true, "interrupted task card must render dismiss button");
 
     // 9. SILENCE: "No update since …"
     await evaluate(() => {

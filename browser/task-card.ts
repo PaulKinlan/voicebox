@@ -258,17 +258,26 @@ export function renderTaskCard(
   }
 
   // Reason / Refusal
-  if (data.reason) {
+  if (data.reason || data.detail) {
     const reasonBlock = document.createElement("div");
     reasonBlock.className = "task-reason-block";
     reasonBlock.id = "task-card-reason";
-    const rLabel = document.createElement("span");
-    rLabel.className = "task-section-label";
-    rLabel.textContent = "Reason: ";
-    const rText = document.createElement("span");
-    rText.className = "task-reason-text";
-    rText.textContent = data.reason;
-    reasonBlock.append(rLabel, rText);
+    if (data.reason) {
+      const rLabel = document.createElement("span");
+      rLabel.className = "task-section-label";
+      rLabel.textContent = "Reason: ";
+      const rText = document.createElement("span");
+      rText.className = "task-reason-text";
+      rText.textContent = data.reason;
+      reasonBlock.append(rLabel, rText);
+    }
+    if (data.detail && data.detail !== data.reason) {
+      const detailPre = document.createElement("pre");
+      detailPre.className = "task-output-text task-reason-detail";
+      detailPre.id = "task-card-detail";
+      detailPre.textContent = data.detail;
+      reasonBlock.append(detailPre);
+    }
     container.append(reasonBlock);
   }
 
@@ -308,7 +317,9 @@ export function renderTaskCard(
       viewFilesBtn.addEventListener("click", () => actions.onViewFiles!());
     }
     actionsBlock.append(viewFilesBtn);
+  }
 
+  if (data.outcome !== "working") {
     const dismissBtn = document.createElement("button");
     dismissBtn.type = "button";
     dismissBtn.className = "quiet task-dismiss-btn";
