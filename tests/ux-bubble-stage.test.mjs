@@ -82,43 +82,77 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
     { label: "page and workspace files loaded" },
   );
 
-  // ── 1. Light Mode Default & Theme Toggle ─────────────────────────────────
+  // ── 1. Light Mode Default & Settings Theme Select (voicebox-beads-zc28) ──
   const initialThemeState = await page.evaluate(() => {
+    const toggle = document.getElementById("theme-toggle");
+    const select = document.getElementById("theme-select");
     return {
       dataTheme: document.documentElement.dataset.theme,
       bodyBg: getComputedStyle(document.body).backgroundColor,
-      togglePresent: Boolean(document.getElementById("theme-toggle")),
+      togglePresent: Boolean(toggle),
+      toggleHidden: Boolean(toggle?.hidden || (toggle && getComputedStyle(toggle).display === "none")),
+      selectPresent: Boolean(select),
+      selectOptions: select ? [...select.options].map((o) => o.value) : [],
     };
   });
   assert.equal(initialThemeState.dataTheme, "light", "defaults to data-theme='light'");
-  assert.equal(initialThemeState.togglePresent, true, "#theme-toggle button exists in header");
+  assert.equal(initialThemeState.togglePresent, true, "#theme-toggle button remains in DOM");
+  assert.equal(initialThemeState.toggleHidden, true, "#theme-toggle is hidden in the top header");
+  assert.equal(initialThemeState.selectPresent, true, "#theme-select exists inside #settings");
+  assert.deepEqual(initialThemeState.selectOptions, ["system", "light", "dark"], "#theme-select offers system, light, and dark options");
   assert.ok(
     initialThemeState.bodyBg === "rgb(251, 251, 249)" || initialThemeState.bodyBg === "rgb(248, 250, 252)",
     `expected light body background, got ${initialThemeState.bodyBg}`,
   );
 
-  // Click #theme-toggle to switch to dark mode
+  // Switch #theme-select in #settings to dark mode
   await page.evaluate(() => {
-    document.getElementById("theme-toggle")?.click();
+    const select = document.getElementById("theme-select");
+    if (select) {
+      select.value = "dark";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }
   });
   const darkThemeState = await page.evaluate(() => ({
     dataTheme: document.documentElement.dataset.theme,
+    themeMode: document.documentElement.dataset.themeMode,
     stored: localStorage.getItem("voicebox:theme"),
     bodyBg: getComputedStyle(document.body).backgroundColor,
+    stateText: document.getElementById("theme-select-state")?.textContent?.trim(),
   }));
-  assert.equal(darkThemeState.dataTheme, "dark", "clicking #theme-toggle switches to dark");
+  assert.equal(darkThemeState.dataTheme, "dark", "selecting 'dark' in #theme-select switches to dark");
+  assert.equal(darkThemeState.themeMode, "dark", "sets data-theme-mode='dark'");
   assert.equal(darkThemeState.stored, "dark", "persists 'dark' in localStorage");
+  assert.equal(darkThemeState.stateText, "Dark mode", "#theme-select-state reflects Dark mode");
   assert.notEqual(darkThemeState.bodyBg, initialThemeState.bodyBg, "background color updates in dark mode");
 
-  // Switch back to light mode for remaining checks
+  // Switch to system mode and then back to light mode for remaining checks
   await page.evaluate(() => {
-    document.getElementById("theme-toggle")?.click();
+    const select = document.getElementById("theme-select");
+    if (select) {
+      select.value = "system";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  });
+  const systemThemeState = await page.evaluate(() => ({
+    themeMode: document.documentElement.dataset.themeMode,
+    stored: localStorage.getItem("voicebox:theme"),
+  }));
+  assert.equal(systemThemeState.themeMode, "system", "selecting 'system' sets data-theme-mode='system'");
+  assert.equal(systemThemeState.stored, "system", "persists 'system' in localStorage");
+
+  await page.evaluate(() => {
+    const select = document.getElementById("theme-select");
+    if (select) {
+      select.value = "light";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }
   });
   const restoredLight = await page.evaluate(() => ({
     dataTheme: document.documentElement.dataset.theme,
     stored: localStorage.getItem("voicebox:theme"),
   }));
-  assert.equal(restoredLight.dataTheme, "light", "clicking #theme-toggle again restores light mode");
+  assert.equal(restoredLight.dataTheme, "light", "selecting 'light' in #theme-select restores light mode");
   assert.equal(restoredLight.stored, "light", "persists 'light' in localStorage");
 
   // ── 2. Centered Hero Mic, Compact Stage & Deduplicated File Lists ────────
@@ -449,7 +483,7 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
   assert.equal(toolEffects.readerState, "ready", "read_file tool call auto-opens #reader");
   assert.equal(toolEffects.readerName, "notes.md", "#reader displays read file name");
 
-  // ── 7. Dock Deduplication & Icon Padding (69ij), Harness Setup UI (a6jb), API Keys UI (5drl) ──
+  // ── 7. UI Polish & Popover Extensions (69ij, a6jb, 5drl, t6rk, 46rd, hq0v, okgg, tlec, je4i) ──
   const uiPolishState = await page.evaluate(() => {
     const dockSettings = document.getElementById("sqeh-dock-settings");
     const iconBtn = document.getElementById("settings-open");
@@ -458,6 +492,10 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
     const harnessSave = document.getElementById("harness-config-save");
     const apiKeysFieldset = document.getElementById("settings-api-keys");
     const apiKeysSave = document.getElementById("api-keys-save");
+    const gearPaths = [...document.querySelectorAll("#i-gear path")].map((p) => p.getAttribute("d") || "");
+    const textForm = document.getElementById("text-form");
+    const utterance = document.getElementById("utterance");
+    const sendBtn = document.getElementById("send");
     return {
       dockSettingsHidden: Boolean(dockSettings?.hidden || (dockSettings && getComputedStyle(dockSettings).display === "none")),
       iconPadding,
@@ -469,11 +507,139 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
         document.getElementById("api-key-openai") &&
         document.getElementById("api-key-anthropic"),
       ),
+      gearHasCogTeeth: gearPaths.some((d) => d.includes("M19.4 15")),
+      textFormHidden: Boolean(textForm?.hidden && getComputedStyle(textForm).display === "none"),
+      composerDomIntact: Boolean(textForm && utterance && sendBtn),
     };
   });
   assert.equal(uiPolishState.dockSettingsHidden, true, "duplicate #sqeh-dock-settings in bottom dock is hidden");
   assert.equal(uiPolishState.iconPadding, "0px", ".icon-button has 0px padding so icons are not clipped");
   assert.equal(uiPolishState.harnessFormPresent, true, "#harnesses-dialog includes #harness-add-agent setup controls");
   assert.equal(uiPolishState.apiKeysPresent, true, "#settings includes #settings-api-keys inputs and save button");
+  assert.equal(uiPolishState.gearHasCogTeeth, true, "#i-gear uses toothed cogwheel SVG path (t6rk)");
+  assert.equal(uiPolishState.textFormHidden, true, "#text-form is hidden on the main stage (46rd)");
+  assert.equal(uiPolishState.composerDomIntact, true, "#text-form, #utterance, and #send remain in the DOM (46rd)");
+
+  // Verify .env-label inside #exts does not squash into 1-char vertical columns when .env-state has long text (hq0v)
+  await page.evaluate(() => {
+    document.getElementById("exts-open")?.click();
+  });
+  await page.waitFor(
+    () => document.querySelectorAll("#exts .env-item .env-label").length > 0,
+    { label: "#exts rows rendered" },
+  );
+  const envLabelGeometry = await page.evaluate(() => {
+    const exts = document.getElementById("exts");
+    const row = document.querySelector("#exts .env-item:not(.env-empty)");
+    const labelEl = row?.querySelector(".env-label");
+    const stateEl = row?.querySelector(".env-state");
+    if (stateEl) {
+      stateEl.textContent = "unavailable — docker daemon is not running or socket was refused by host policy";
+    }
+    const rect = labelEl?.getBoundingClientRect();
+    exts?.close?.();
+    return {
+      labelWidth: rect?.width ?? 0,
+      labelHeight: rect?.height ?? 0,
+    };
+  });
+  assert.ok(
+    envLabelGeometry.labelWidth >= 100,
+    `expected .env-label to maintain horizontal width >= 100px even with long .env-state text, got ${envLabelGeometry.labelWidth}px (hq0v)`,
+  );
+
+  // Verify Work activity popover (#sqeh-toggle-activity & #activity-log-panel, okgg)
+  await page.evaluate(() => {
+    window.__voiceboxAppendActivity?.({
+      kind: "command",
+      label: "Command",
+      summary: "Ran: ls -la",
+      detail: "notes.md\ncounter.html",
+    });
+    document.getElementById("sqeh-toggle-activity")?.click();
+  });
+  const activityPopoverState = await page.evaluate(() => {
+    const panel = document.getElementById("activity-log-panel");
+    const items = [...document.querySelectorAll("#activity-log-list .activity-item")];
+    const pStyle = getComputedStyle(panel);
+    return {
+      sqehState: document.body.dataset.sqehState,
+      panelHidden: Boolean(panel?.hidden),
+      panelPosition: pStyle.position,
+      panelDisplay: pStyle.display,
+      itemCount: items.length,
+      summaries: items.map((el) => el.querySelector(".activity-summary")?.textContent?.trim() ?? ""),
+      details: items.map((el) => el.querySelector(".activity-detail")?.textContent?.trim() ?? "").filter(Boolean),
+    };
+  });
+  assert.equal(activityPopoverState.sqehState, "activity", "clicking #sqeh-toggle-activity enters 'activity' state (okgg)");
+  assert.equal(activityPopoverState.panelHidden, false, "#activity-log-panel unhides in 'activity' state (okgg)");
+  assert.equal(activityPopoverState.panelPosition, "fixed", "#activity-log-panel is a floating fixed popover card (okgg)");
+  assert.equal(activityPopoverState.panelDisplay, "flex", "#activity-log-panel renders as flex container (okgg)");
+  assert.ok(activityPopoverState.itemCount >= 2, "activity log records tool calls and command entries (okgg)");
+  assert.ok(
+    activityPopoverState.summaries.some((s) => s.includes("Ran: ls -la")),
+    "activity log displays command summary (okgg)",
+  );
+  assert.ok(
+    activityPopoverState.details.some((d) => d.includes("notes.md")),
+    "activity log displays command detail output (okgg)",
+  );
+
+  await page.evaluate(() => {
+    document.getElementById("activity-log-close")?.click();
+  });
+  assert.equal(
+    await page.evaluate(() => document.getElementById("activity-log-panel")?.hidden),
+    true,
+    "#activity-log-close hides #activity-log-panel",
+  );
+
+  // Verify Project Change Flash (tlec)
+  const flashState = await page.evaluate(() => {
+    window.__voiceboxFlashProjectChange?.("switched-root");
+    const whereEl = document.querySelector(".where");
+    return {
+      bodyFlash: document.body.dataset.projectFlash,
+      whereFlash: whereEl?.dataset.flash,
+      flashReason: document.body.dataset.projectFlashReason,
+    };
+  });
+  assert.equal(flashState.bodyFlash, "true", "project change sets body[data-project-flash='true'] (tlec)");
+  assert.equal(flashState.whereFlash, "true", "project change sets .where[data-flash='true'] (tlec)");
+  assert.equal(flashState.flashReason, "switched-root", "records project flash reason (tlec)");
+
+  // Verify Descriptive Changelog Commit Cards (je4i)
+  await page.evaluate(() => {
+    document.getElementById("changelog-open")?.click();
+  });
+  await page.waitFor(
+    () => document.querySelectorAll("#changelog-commits .commit-card").length > 0,
+    { label: "changelog commits loaded" },
+  );
+  const changelogCardsState = await page.evaluate(() => {
+    const firstCard = document.querySelector("#changelog-commits .commit-card");
+    const badge = firstCard?.querySelector(".commit-badge")?.textContent?.trim();
+    const subject = firstCard?.querySelector(".commit-subject")?.textContent?.trim();
+    const description = firstCard?.querySelector(".commit-description")?.textContent?.trim();
+    const sha = firstCard?.querySelector(".commit-sha")?.textContent?.trim();
+    document.getElementById("changelog-close")?.click();
+    return {
+      hasCard: Boolean(firstCard),
+      badge,
+      subject,
+      description,
+      sha,
+    };
+  });
+  assert.equal(changelogCardsState.hasCard, true, "#changelog-commits renders .commit-card items (je4i)");
+  assert.ok(Boolean(changelogCardsState.badge), "commit card includes descriptive .commit-badge (je4i)");
+  assert.ok(Boolean(changelogCardsState.subject), "commit card includes .commit-subject (je4i)");
+  assert.ok(
+    Boolean(changelogCardsState.description && changelogCardsState.description.length > 10),
+    `commit card includes plain-language .commit-description, got '${changelogCardsState.description}' (je4i)`,
+  );
+  assert.ok(Boolean(changelogCardsState.sha), "commit card preserves .commit-sha link (je4i)");
 });
+
 

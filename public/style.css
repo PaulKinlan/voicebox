@@ -299,19 +299,34 @@ html:has(dialog.envs[open]) { overflow: hidden; }
 .env-list { list-style: none; margin: 0; padding: 0; }
 .env-item { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; }
 .env-item + .env-item { border-top: 1px solid var(--line); }
-.env-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.env-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: none; }
+.env-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 10px;
+  min-width: 0;
+}
+.env-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: none; align-self: center; }
 .env-dot[data-ok="true"] { background: var(--good); }
 .env-dot[data-ok="false"] { background: var(--warn); }
-.env-label { font-weight: 500; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.env-label {
+  font-weight: 600;
+  color: var(--ink);
+  flex: 1 1 16ch;
+  min-width: min(100%, 16ch);
+  overflow-wrap: break-word;
+  word-break: normal;
+}
 .env-state {
   margin-left: auto;
   color: var(--muted);
-  font-size: .75rem;
-  white-space: nowrap;
-  flex: none;
+  font-size: var(--step--1, .75rem);
+  max-inline-size: 100%;
+  white-space: normal;
+  overflow-wrap: break-word;
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: 10px;
   background: var(--shade);
 }
 .env-reprobe-btn,
@@ -1818,3 +1833,175 @@ body[data-sqeh-state] .mic-dock .icon { inline-size: 26px; block-size: 26px; }
   text-transform: uppercase;
   color: var(--ink);
 }
+
+/* ── Project / folder change flash transition ── */
+@keyframes project-switch-flash {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+    border-color: var(--accent);
+  }
+  50% {
+    box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 18%, transparent), 0 0 28px color-mix(in srgb, var(--accent) 30%, transparent);
+    border-color: var(--accent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+.where[data-flash="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--card));
+  color: var(--ink);
+  animation: project-switch-flash 650ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+body[data-project-flash="true"] .stage {
+  animation: project-switch-flash 650ms cubic-bezier(0.16, 1, 0.3, 1);
+  border-radius: 20px;
+}
+
+/* ── Work activity log popover panel ── */
+.activity-panel {
+  position: fixed;
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 86;
+  inline-size: min(92vw, 680px);
+  max-block-size: min(78svh, 580px);
+  margin: 0;
+  padding: 0;
+  background: color-mix(in srgb, var(--card) 94%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  text-align: start;
+}
+.activity-panel[hidden] { display: none !important; }
+body[data-sqeh-state="activity"] .activity-panel {
+  position: fixed;
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 86;
+  inline-size: min(92vw, 680px);
+  max-block-size: min(78svh, 580px);
+  overflow-y: auto;
+}
+.activity-panel h2 {
+  margin: 0;
+  font-size: .875rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink);
+}
+.activity-panel:has(#activity-log-list li) #activity-log-empty { display: none; }
+.activity-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 12px 14px;
+  max-height: min(460px, 62svh);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.activity-list:empty { display: none; }
+.activity-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--shade) 45%, var(--card));
+  font-size: .8125rem;
+}
+.activity-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.activity-kind {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+.activity-time {
+  font-size: 0.7rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.activity-summary {
+  font-weight: 500;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.activity-detail {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ground) 75%, var(--card));
+  border: 1px solid var(--line);
+  font: 0.72rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted);
+  max-block-size: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.composer[hidden],
+#theme-toggle[hidden] {
+  display: none !important;
+}
+
+/* ── Descriptive Change log commit cards ── */
+dialog.changelog-modal .commit-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+dialog.changelog-modal .commit-description {
+  margin: 6px 0 8px;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--ink) 82%, var(--muted));
+}
+dialog.changelog-modal .commit-details {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+dialog.changelog-modal .commit-file {
+  padding: 1px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  font: 0.7rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--ink);
+}
+
