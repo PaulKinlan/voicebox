@@ -1,0 +1,22 @@
+{
+  "id": "/",
+  "name": "Voicebox",
+  "short_name": "Voicebox",
+  "description": "Voice-first AI workspace for talking through code, files, and live tasks.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#fbfbf9",
+  "theme_color": "#1f3fd0",
+  "categories": ["developer tools", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
