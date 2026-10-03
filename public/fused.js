@@ -105,6 +105,8 @@ const WANTED = {
   apiKeyGemini: "api-key-gemini", apiKeyOpenai: "api-key-openai", apiKeyAnthropic: "api-key-anthropic",
   apiKeyGeminiStatus: "api-key-gemini-status", apiKeyOpenaiStatus: "api-key-openai-status", apiKeyAnthropicStatus: "api-key-anthropic-status",
   apiKeysSave: "api-keys-save", apiKeysStatus: "api-keys-status",
+  syncToast: "sync-toast", syncToastMessage: "sync-toast-message",
+  syncToastReload: "sync-toast-reload", syncToastDismiss: "sync-toast-dismiss",
 };
 const els = {};
 const missing = [];
@@ -4824,6 +4826,40 @@ window.__voiceboxMeters = { drawInputWave, drawOutputRing, startMeters, mixSpeec
 // serve time (vite.config.js, transformIndexHtml). A server that did not stamp
 // the page leaves the marker empty and this line stays blank: naming a revision
 // the server never sent is the lie this whole line exists to prevent.
+let dismissedSyncKey = null;
+let currentSyncKey = "";
+let initialServerCommit = null;
+
+function updateSyncToast({ outOfSync = false, reason = "", key = "" } = {}) {
+  const toast = els.syncToast ?? document.getElementById("sync-toast");
+  const msgEl = els.syncToastMessage ?? document.getElementById("sync-toast-message");
+  if (!toast) return;
+  if (!outOfSync) {
+    currentSyncKey = "";
+    dismissedSyncKey = null;
+    toast.hidden = true;
+    delete toast.dataset.state;
+    return;
+  }
+  const effectiveKey = key || reason || "out-of-sync";
+  currentSyncKey = effectiveKey;
+  if (dismissedSyncKey && dismissedSyncKey === effectiveKey) {
+    toast.hidden = true;
+    return;
+  }
+  if (msgEl && reason) {
+    msgEl.textContent = reason;
+  }
+  toast.dataset.state = "out-of-sync";
+  toast.hidden = false;
+}
+window.__voiceboxSyncToast = { update: updateSyncToast };
+on(els.syncToastReload, "click", () => window.location.reload());
+on(els.syncToastDismiss, "click", () => {
+  dismissedSyncKey = currentSyncKey || "out-of-sync";
+  if (els.syncToast) els.syncToast.hidden = true;
+});
+
 function pageBuild() {
   const content = document.querySelector('meta[name="voicebox-build"]')?.getAttribute("content") ?? "";
   if (!content || content.includes("__VOICEBOX_BUILD_STAMP__")) return "";
@@ -4832,13 +4868,37 @@ function pageBuild() {
 
 function stampBuild(server) {
   const line = document.getElementById("build");
-  if (!line) return;
   const page = pageBuild();
+  const sha = (text) => (text.match(/@\s*([0-9a-f]{7,40})/) ?? [])[1] ?? null;
+  const pageSha = sha(page);
+
+  if (server?.commit && !initialServerCommit) {
+    initialServerCommit = server.commit;
+  }
+  const mismatch = Boolean(server?.commit) && pageSha !== null && server.commit !== pageSha;
+  const serverRestartedNewCommit = Boolean(server?.commit) && Boolean(initialServerCommit) && server.commit !== initialServerCommit;
+  const serverUnreachable = server === null && (pageSha !== null || initialServerCommit !== null);
+
+  if (mismatch || serverRestartedNewCommit) {
+    updateSyncToast({
+      outOfSync: true,
+      reason: "UI and server are on different revisions. Reload the page or restart the server.",
+      key: `rev:${pageSha || initialServerCommit}->${server.commit}`,
+    });
+  } else if (serverUnreachable) {
+    updateSyncToast({
+      outOfSync: true,
+      reason: "Local server is not responding — UI and server are out of sync.",
+      key: "offline",
+    });
+  } else if (server?.commit) {
+    updateSyncToast({ outOfSync: false, reason: "", key: "" });
+  }
+
+  if (!line) return;
   if (!page && !server?.commit) return;
 
   const repo = "https://github.com/PaulKinlan/voicebox";
-  const sha = (text) => (text.match(/@\s*([0-9a-f]{7,40})/) ?? [])[1] ?? null;
-  const pageSha = sha(page);
 
   line.replaceChildren();
 
@@ -4883,7 +4943,6 @@ function stampBuild(server) {
     hasPrev = true;
   }
 
-  const mismatch = Boolean(server?.commit) && pageSha !== null && server.commit !== pageSha;
   if (mismatch) {
     if (hasPrev) addSep();
     line.append(document.createTextNode("the server is a different revision — restart it"));

@@ -48,7 +48,7 @@
 
   <div class="room">
     <header class="head">
-      <h1 class="wordmark"><a href="./">voicebox</a></h1>
+      <h1 class="wordmark"><a href="./"><span class="wordmark-dot" aria-hidden="true"></span>Voicebox</a></h1>
       <p class="where"><span class="dot" id="server-dot" data-ok="pending" aria-hidden="true"></span><span id="where-note">checking the local server…</span><span class="where-sep" aria-hidden="true">·</span><span id="root-kind">checking which root…</span></p>
       <!-- The environments this page can act in: the browser by default, the local server, then any
            server the person has declared. The list is SERVER-OWNED so it is the same from every
@@ -256,6 +256,14 @@
         </form>
       </dialog>
     </header>
+    <div class="sync-toast" id="sync-toast" role="status" aria-live="polite" hidden>
+      <span class="sync-toast-dot" aria-hidden="true"></span>
+      <span class="sync-toast-message" id="sync-toast-message">UI and server are out of sync.</span>
+      <div class="sync-toast-actions">
+        <button class="quiet sync-toast-reload" id="sync-toast-reload" type="button">Reload page</button>
+        <button class="icon-button sync-toast-dismiss" id="sync-toast-dismiss" type="button" aria-label="Dismiss sync notice" title="Dismiss"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+      </div>
+    </div>
     <!-- The header states the state ONCE, in the chip beside the server dot, and
          says nothing else about it: "no root declared" is a status, not an
          explanation. The explanation and the remedy live in the empty state,

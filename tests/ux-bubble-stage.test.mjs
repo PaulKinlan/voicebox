@@ -789,4 +789,85 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
   assert.equal(clipboardResult.writtenText, "copied hello", "executeBrowserSystemCommand('copy') writes text to clipboard");
   assert.equal(clipboardResult.pasteOk, true, "executeBrowserSystemCommand('paste') succeeds");
   assert.equal(clipboardResult.utteranceValue, "pasted from clipboard", "executeBrowserSystemCommand('paste') populates #utterance");
+
+  // ── 9. Menu Bar Redesign (2eur), Microphone Outside Rings (c17u) & Sync Toast (rwtc) ──
+  const menuBarAndRings = await page.evaluate(() => {
+    const wordmarkDot = document.querySelector(".head .wordmark .wordmark-dot");
+    const whereEl = document.querySelector(".head .where");
+    const whereStyle = whereEl ? getComputedStyle(whereEl) : null;
+    const settingsBtn = document.getElementById("settings-open");
+    const settingsBtnStyle = settingsBtn ? getComputedStyle(settingsBtn) : null;
+    const ring1 = document.querySelector("#sqeh-arcs i:nth-child(1)");
+    const ring2 = document.querySelector("#sqeh-arcs i:nth-child(2)");
+    const ring3 = document.querySelector("#sqeh-arcs i:nth-child(3)");
+    const r1Style = ring1 ? getComputedStyle(ring1) : null;
+    const r2Style = ring2 ? getComputedStyle(ring2) : null;
+    const r3Style = ring3 ? getComputedStyle(ring3) : null;
+    return {
+      hasWordmarkDot: Boolean(wordmarkDot),
+      whereRadius: whereStyle?.borderRadius,
+      whereBorderWidth: whereStyle?.borderTopWidth,
+      iconBtnRadius: settingsBtnStyle?.borderRadius,
+      iconBtnBorderWidth: settingsBtnStyle?.borderTopWidth,
+      ring1Width: r1Style?.width,
+      ring1Opacity: Number(r1Style?.opacity ?? 0),
+      ring1BorderStyle: r1Style?.borderTopStyle,
+      ring2Width: r2Style?.width,
+      ring2Opacity: Number(r2Style?.opacity ?? 0),
+      ring2BorderStyle: r2Style?.borderTopStyle,
+      ring3OpacityAtRest: Number(r3Style?.opacity ?? 1),
+    };
+  });
+  assert.equal(menuBarAndRings.hasWordmarkDot, true, ".wordmark includes .wordmark-dot status dot (2eur)");
+  assert.equal(menuBarAndRings.whereRadius, "999px", ".where is styled as a rounded pill tag (2eur)");
+  assert.equal(menuBarAndRings.whereBorderWidth, "1px", ".where has a 1px pill border (2eur)");
+  assert.equal(menuBarAndRings.iconBtnRadius, "999px", ".head > .icon-button is a rounded circle button (2eur)");
+  assert.equal(menuBarAndRings.iconBtnBorderWidth, "1px", ".head > .icon-button has a 1px card border (2eur)");
+  assert.equal(menuBarAndRings.ring1Width, "148px", ".sqeh-arcs i:nth-child(1) is a 148px outside ring (c17u)");
+  assert.ok(menuBarAndRings.ring1Opacity > 0.5, `.sqeh-arcs i:nth-child(1) is visible at rest (opacity=${menuBarAndRings.ring1Opacity}) (c17u)`);
+  assert.equal(menuBarAndRings.ring1BorderStyle, "solid", ".sqeh-arcs i:nth-child(1) has a solid border (c17u)");
+  assert.equal(menuBarAndRings.ring2Width, "178px", ".sqeh-arcs i:nth-child(2) is a 178px outer ring (c17u)");
+  assert.ok(menuBarAndRings.ring2Opacity > 0.5, `.sqeh-arcs i:nth-child(2) is visible at rest (opacity=${menuBarAndRings.ring2Opacity}) (c17u)`);
+  assert.equal(menuBarAndRings.ring2BorderStyle, "dashed", ".sqeh-arcs i:nth-child(2) has a dashed border (c17u)");
+  assert.equal(menuBarAndRings.ring3OpacityAtRest, 0, ".sqeh-arcs i:nth-child(3) pulse ring is hidden at rest (c17u)");
+
+  // Verify Top-Level Out-of-Sync Toast Notification (#sync-toast, rwtc)
+  const syncToastCheck = await page.evaluate(() => {
+    const toast = document.getElementById("sync-toast");
+    const msg = document.getElementById("sync-toast-message");
+    const dismiss = document.getElementById("sync-toast-dismiss");
+    if (!toast || !msg || !dismiss) return null;
+    const initiallyHidden = toast.hidden;
+    window.__voiceboxSyncToast?.update({
+      outOfSync: true,
+      reason: "UI and server are on different revisions. Reload the page or restart the server.",
+      key: "rev:aaa->bbb",
+    });
+    const shownWhenOutOfSync = !toast.hidden && getComputedStyle(toast).display !== "none";
+    const shownText = msg.textContent?.trim();
+    dismiss.click();
+    const hiddenAfterDismiss = toast.hidden;
+    // Same key stays dismissed
+    window.__voiceboxSyncToast?.update({
+      outOfSync: true,
+      reason: "UI and server are on different revisions. Reload the page or restart the server.",
+      key: "rev:aaa->bbb",
+    });
+    const staysHiddenForSameKey = toast.hidden;
+    // Reset back in sync
+    window.__voiceboxSyncToast?.update({ outOfSync: false });
+    return {
+      initiallyHidden,
+      shownWhenOutOfSync,
+      shownText,
+      hiddenAfterDismiss,
+      staysHiddenForSameKey,
+    };
+  });
+  assert.ok(syncToastCheck, "#sync-toast, #sync-toast-message, and #sync-toast-dismiss exist (rwtc)");
+  assert.equal(syncToastCheck.initiallyHidden, true, "#sync-toast is hidden when UI and server are in sync (rwtc)");
+  assert.equal(syncToastCheck.shownWhenOutOfSync, true, "#sync-toast becomes visible when UI and server are out of sync (rwtc)");
+  assert.match(syncToastCheck.shownText ?? "", /different revisions/, "#sync-toast-message explains the revision mismatch (rwtc)");
+  assert.equal(syncToastCheck.hiddenAfterDismiss, true, "clicking #sync-toast-dismiss hides #sync-toast (rwtc)");
+  assert.equal(syncToastCheck.staysHiddenForSameKey, true, "#sync-toast stays hidden for the dismissed revision key (rwtc)");
 });
