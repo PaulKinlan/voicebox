@@ -1,4 +1,5 @@
 workspace/
 node_modules/
 extensions/
+.audit/
 .beads.gate.lock
