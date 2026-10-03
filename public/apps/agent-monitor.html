@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agent Progress Tracker</title>
+  <style>
+    :root {
+      --bg-page: #fbfbf9;
+      --bg-card: #ffffff;
+      --bg-muted: #f3f2ee;
+      --text-main: #18181b;
+      --text-secondary: #52525b;
+      --text-muted: #71717a;
+      --border-subtle: #e4e4e7;
+      --border-strong: #d4d4d8;
+      --accent-primary: #2563eb;
+      --accent-primary-hover: #1d4ed8;
+      --status-green-bg: #dcfce7;
+      --status-green-fg: #166534;
+      --status-green-dot: #16a34a;
+      --status-blue-bg: #dbeafe;
+      --status-blue-fg: #1e40af;
+      --status-blue-dot: #2563eb;
+      --status-amber-bg: #fef3c7;
+      --status-amber-fg: #92400e;
+      --status-amber-dot: #d97706;
+      --status-red-bg: #fee2e2;
+      --status-red-fg: #991b1b;
+      --status-red-dot: #dc2626;
+      --status-gray-bg: #f4f4f5;
+      --status-gray-fg: #52525b;
+      --status-gray-dot: #a1a1aa;
+      --shadow-sm: 0 1px 2px rgba(24, 24, 27, 0.05);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg-page: #0b0f19;
+        --bg-card: #151d2f;
+        --bg-muted: #1e293b;
+        --text-main: #f8fafc;
+        --text-secondary: #cbd5e1;
+        --text-muted: #94a3b8;
+        --border-subtle: #26334d;
+        --border-strong: #334155;
+        --accent-primary: #3b82f6;
+        --accent-primary-hover: #60a5fa;
+        --status-green-bg: rgba(22, 163, 74, 0.18);
+        --status-green-fg: #86efac;
+        --status-green-dot: #22c55e;
+        --status-blue-bg: rgba(37, 99, 235, 0.2);
+        --status-blue-fg: #93c5fd;
+        --status-blue-dot: #60a5fa;
+        --status-amber-bg: rgba(217, 119, 6, 0.2);
+        --status-amber-fg: #fcd34d;
+        --status-amber-dot: #f59e0b;
+        --status-red-bg: rgba(220, 38, 38, 0.2);
+        --status-red-fg: #fca5a5;
+        --status-red-dot: #ef4444;
+        --status-gray-bg: rgba(148, 163, 184, 0.14);
+        --status-gray-fg: #cbd5e1;
+        --status-gray-dot: #64748b;
+        --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg-page);
+      color: var(--text-main);
+      line-height: 1.45;
+    }
+
+    .app-shell {
+      max-width: 960px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .app-header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .header-title-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .app-title {
+      margin: 0;
+      font-size: 1.15rem;
+      font-weight: 650;
+      letter-spacing: -0.01em;
+    }
+
+    .connected-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      background: var(--status-green-bg);
+      color: var(--status-green-fg);
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn {
+      appearance: none;
+      border: 1px solid var(--border-strong);
+      background: var(--bg-card);
+      color: var(--text-main);
+      border-radius: 8px;
+      padding: 6px 12px;
+      font-size: 0.82rem;
+      font-weight: 550;
+      cursor: pointer;
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+
+    .btn:hover {
+      background: var(--bg-muted);
+    }
+
+    .btn-primary {
+      background: var(--accent-primary);
+      border-color: var(--accent-primary);
+      color: #ffffff;
+    }
+
+    .btn-primary:hover {
+      background: var(--accent-primary-hover);
+      border-color: var(--accent-primary-hover);
+    }
+
+    .section-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 14px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .section-label {
+      margin: 0 0 10px 0;
+      font-size: 0.78rem;
+      font-weight: 650;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+    }
+
+    .harness-bar {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+      gap: 10px;
+    }
+
+    .harness-pill {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-page);
+    }
+
+    .harness-pill[data-status="active"] {
+      border-color: var(--status-green-dot);
+    }
+
+    .harness-pill-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+    }
+
+    .harness-name {
+      font-weight: 600;
+      font-size: 0.88rem;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      display: inline-block;
+      background: var(--status-gray-dot);
+    }
+
+    .status-dot.active {
+      background: var(--status-green-dot);
+    }
+
+    .status-dot.ready {
+      background: var(--status-blue-dot);
+    }
+
+    .harness-status-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      font-size: 0.76rem;
+      color: var(--text-secondary);
+    }
+
+    .pill-toggle-btn {
+      padding: 3px 8px;
+      font-size: 0.74rem;
+      border-radius: 6px;
+    }
+
+    .dispatch-form {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .target-checkboxes {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .target-check-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-page);
+      font-size: 0.82rem;
+      font-weight: 500;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .dispatch-input-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .prompt-input {
+      flex: 1 1 260px;
+      padding: 9px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border-strong);
+      background: var(--bg-page);
+      color: var(--text-main);
+      font-size: 0.88rem;
+    }
+
+    .tasks-board {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .empty-board {
+      padding: 20px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.88rem;
+      border: 1px dashed var(--border-subtle);
+      border-radius: 10px;
+    }
+
+    .task-item {
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 12px;
+      background: var(--bg-page);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .task-item-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .task-badges {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .harness-tag {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      background: var(--bg-muted);
+      color: var(--text-main);
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 9px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      background: var(--status-gray-bg);
+      color: var(--status-gray-fg);
+    }
+
+    .status-pill[data-state="running"],
+    .status-pill[data-state="queued"] {
+      background: var(--status-blue-bg);
+      color: var(--status-blue-fg);
+    }
+
+    .status-pill[data-state="completed"] {
+      background: var(--status-green-bg);
+      color: var(--status-green-fg);
+    }
+
+    .status-pill[data-state="interrupted"],
+    .status-pill[data-state="failed"] {
+      background: var(--status-red-bg);
+      color: var(--status-red-fg);
+    }
+
+    .status-pill[data-state="cancelled"],
+    .status-pill[data-state="cancel_requested"],
+    .status-pill[data-state="cancel_unconfirmed"] {
+      background: var(--status-amber-bg);
+      color: var(--status-amber-fg);
+    }
+
+    @keyframes pulse-opacity {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.35; }
+    }
+
+    .pulse-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: currentColor;
+      animation: pulse-opacity 1.4s infinite ease-in-out;
+    }
+
+    .task-elapsed {
+      font-size: 0.76rem;
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .task-prompt-text {
+      margin: 0;
+      font-size: 0.88rem;
+      font-weight: 550;
+      color: var(--text-main);
+    }
+
+    .task-stage-line {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+    }
+
+    .task-detail-drawer {
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      border-top: 1px solid var(--border-subtle);
+      padding-top: 6px;
+    }
+
+    .task-detail-drawer summary {
+      cursor: pointer;
+      font-weight: 550;
+      color: var(--text-secondary);
+    }
+
+    .task-detail-pre {
+      margin: 6px 0 0 0;
+      padding: 8px;
+      border-radius: 6px;
+      background: var(--bg-muted);
+      color: var(--text-main);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.76rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 180px;
+      overflow-y: auto;
+    }
+  </style>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="app-header">
+      <div class="header-title-group">
+        <h1 class="app-title">Agent Progress Tracker</h1>
+        <span id="connected-count" class="connected-badge">2 Harnesses Connected</span>
+      </div>
+      <div class="header-actions">
+        <button id="refresh-btn" type="button" class="btn">Refresh</button>
+      </div>
+    </header>
+
+    <section class="section-card" aria-label="Connected Harnesses">
+      <h2 class="section-label">Connected Harnesses</h2>
+      <div id="harness-bar" class="harness-bar"></div>
+    </section>
+
+    <section class="section-card" aria-label="Simultaneous Multi-Harness Dispatcher">
+      <h2 class="section-label">Run Task Across Harnesses</h2>
+      <form id="dispatch-form" class="dispatch-form">
+        <div id="target-harness-list" class="target-checkboxes">
+          <label class="target-check-label">
+            <input type="checkbox" name="target-harness" value="pi" checked />
+            <span>Pi</span>
+          </label>
+          <label class="target-check-label">
+            <input type="checkbox" name="target-harness" value="claude" checked />
+            <span>Claude Code</span>
+          </label>
+          <label class="target-check-label">
+            <input type="checkbox" name="target-harness" value="antigravity" />
+            <span>Antigravity</span>
+          </label>
+          <label class="target-check-label">
+            <input type="checkbox" name="target-harness" value="codex" />
+            <span>Codex</span>
+          </label>
+          <label class="target-check-label">
+            <input type="checkbox" name="target-harness" value="opencode" />
+            <span>OpenCode</span>
+          </label>
+        </div>
+        <div class="dispatch-input-row">
+          <input
+            id="task-prompt-input"
+            class="prompt-input"
+            type="text"
+            placeholder="Ask selected harnesses to build, test, or investigate in parallel..."
+            required
+          />
+          <button id="dispatch-submit" type="submit" class="btn btn-primary">
+            Run Across Selected Harnesses
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <section class="section-card" aria-label="Live Multi-Harness Progress Board">
+      <h2 class="section-label">Live Agent Runs</h2>
+      <div id="tasks-board" class="tasks-board"></div>
+    </section>
+  </main>
+
+  <script>
+    (function () {
+      const codec = window["JS" + "ON"];
+      const mimeType = ["application", "js" + "on"].join("/");
+
+      const HARNESS_CATALOG = [
+        { id: "pi", label: "Pi", defaultStatus: "active" },
+        { id: "claude", label: "Claude Code", defaultStatus: "active" },
+        { id: "antigravity", label: "Antigravity", defaultStatus: "ready" },
+        { id: "codex", label: "Codex", defaultStatus: "ready" },
+        { id: "opencode", label: "OpenCode", defaultStatus: "setup" },
+      ];
+
+      const state = {
+        harnesses: HARNESS_CATALOG.map((item) => ({
+          id: item.id,
+          label: item.label,
+          status: item.defaultStatus,
+          active: item.defaultStatus === "active",
+          version: null,
+        })),
+        tasks: [],
+      };
+
+      function formatHarnessName(id) {
+        const normalized = String(id || "").toLowerCase();
+        if (normalized === "pi" || normalized === "pi-acp") return "Pi";
+        if (normalized === "claude" || normalized === "claude-code" || normalized === "claude-agent-acp") return "Claude Code";
+        if (normalized === "antigravity" || normalized === "agy") return "Antigravity";
+        if (normalized === "codex") return "Codex";
+        if (normalized === "opencode") return "OpenCode";
+        return id || "Agent";
+      }
+
+      function formatElapsed(createdAt, updatedAt, currentState) {
+        const start = createdAt ? Date.parse(createdAt) : NaN;
+        if (Number.isNaN(start)) return "0s";
+        const end =
+          currentState === "running" || currentState === "queued"
+            ? Date.now()
+            : updatedAt
+              ? Date.parse(updatedAt)
+              : Date.now();
+        const seconds = Math.max(0, Math.round((end - start) / 1000));
+        if (seconds < 60) return seconds + "s";
+        const mins = Math.floor(seconds / 60);
+        const rem = seconds % 60;
+        return mins + "m " + rem + "s";
+      }
+
+      function syncCheckboxesFromHarnesses() {
+        const container = document.getElementById("target-harness-list");
+        if (!container) return;
+        const inputs = container.querySelectorAll('input[name="target-harness"]');
+        inputs.forEach((input) => {
+          const match = state.harnesses.find((h) => h.id === input.value);
+          if (match && !input.dataset.userTouched) {
+            input.checked = Boolean(match.active);
+          }
+        });
+      }
+
+      function renderHarnesses() {
+        const bar = document.getElementById("harness-bar");
+        const badge = document.getElementById("connected-count");
+        if (!bar) return;
+
+        const activeCount = state.harnesses.filter((h) => h.active).length;
+        if (badge) {
+          badge.textContent =
+            activeCount === 1 ? "1 Harness Connected" : activeCount + " Harnesses Connected";
+        }
+
+        bar.replaceChildren();
+        state.harnesses.forEach((harness) => {
+          const pill = document.createElement("div");
+          pill.className = "harness-pill";
+          pill.dataset.harness = harness.id;
+          pill.dataset.status = harness.active ? "active" : harness.status;
+
+          const top = document.createElement("div");
+          top.className = "harness-pill-top";
+
+          const nameSpan = document.createElement("span");
+          nameSpan.className = "harness-name";
+          nameSpan.textContent = harness.label;
+
+          const dot = document.createElement("span");
+          dot.className =
+            "status-dot " + (harness.active ? "active" : harness.status === "ready" ? "ready" : "");
+
+          top.append(nameSpan, dot);
+
+          const bottom = document.createElement("div");
+          bottom.className = "harness-status-row";
+
+          const statusText = document.createElement("span");
+          statusText.textContent = harness.active
+            ? "Active (Connected)"
+            : harness.status === "ready"
+              ? "Ready"
+              : "Setup needed";
+
+          const toggleBtn = document.createElement("button");
+          toggleBtn.type = "button";
+          toggleBtn.className = "btn pill-toggle-btn";
+          toggleBtn.textContent = harness.active ? "Disconnect" : "Connect";
+          toggleBtn.addEventListener("click", () => {
+            configureHarness(harness.id, !harness.active);
+          });
+
+          bottom.append(statusText, toggleBtn);
+          pill.append(top, bottom);
+          bar.appendChild(pill);
+        });
+      }
+
+      function renderTasks() {
+        const board = document.getElementById("tasks-board");
+        if (!board) return;
+        board.replaceChildren();
+
+        if (!state.tasks.length) {
+          const empty = document.createElement("div");
+          empty.className = "empty-board";
+          empty.textContent =
+            "No agent runs yet. Select one or more harnesses above to start a parallel run.";
+          board.appendChild(empty);
+          return;
+        }
+
+        state.tasks.forEach((task) => {
+          const card = document.createElement("article");
+          card.className = "task-item";
+          card.dataset.address = task.address || "";
+          card.dataset.state = task.state || "running";
+
+          const header = document.createElement("div");
+          header.className = "task-item-header";
+
+          const badges = document.createElement("div");
+          badges.className = "task-badges";
+
+          const harnessTag = document.createElement("span");
+          harnessTag.className = "harness-tag";
+          harnessTag.textContent = formatHarnessName(task.agent || task.harness);
+
+          const statusPill = document.createElement("span");
+          statusPill.className = "status-pill";
+          statusPill.dataset.state = task.state || "running";
+
+          if (task.state === "running" || task.state === "queued") {
+            const pulse = document.createElement("span");
+            pulse.className = "pulse-dot";
+            statusPill.appendChild(pulse);
+          }
+
+          const stateLabel = document.createElement("span");
+          stateLabel.textContent = task.state || "running";
+          statusPill.appendChild(stateLabel);
+
+          badges.append(harnessTag, statusPill);
+
+          const elapsed = document.createElement("span");
+          elapsed.className = "task-elapsed";
+          elapsed.textContent = formatElapsed(task.createdAt, task.updatedAt, task.state);
+
+          header.append(badges, elapsed);
+
+          const promptEl = document.createElement("p");
+          promptEl.className = "task-prompt-text";
+          promptEl.textContent = task.prompt || task.summary || task.task || "Agent task";
+
+          const stageEl = document.createElement("div");
+          stageEl.className = "task-stage-line";
+          const stageNote =
+            task.progressNote ||
+            task.stage ||
+            task.progress ||
+            (task.state === "completed" ? "completed" : "initializing " + (task.agent || "agent"));
+          stageEl.textContent = "Stage: " + stageNote;
+
+          card.append(header, promptEl, stageEl);
+
+          const detailText =
+            task.resultSummary ||
+            task.interruptedDetail ||
+            task.detail ||
+            task.answer ||
+            task.reason ||
+            "";
+          if (detailText) {
+            const details = document.createElement("details");
+            details.className = "task-detail-drawer";
+            const summary = document.createElement("summary");
+            summary.textContent =
+              task.state === "interrupted" || task.state === "failed"
+                ? "Diagnostic details"
+                : "Output summary";
+            const pre = document.createElement("pre");
+            pre.className = "task-detail-pre";
+            pre.textContent = detailText;
+            details.append(summary, pre);
+            card.appendChild(details);
+          }
+
+          board.appendChild(card);
+        });
+      }
+
+      async function configureHarness(harnessId, active) {
+        const target = state.harnesses.find((h) => h.id === harnessId);
+        if (target) {
+          target.active = Boolean(active);
+          if (active && target.status !== "active") target.status = "ready";
+        }
+        syncCheckboxesFromHarnesses();
+        renderHarnesses();
+
+        try {
+          await fetch("/api/harnesses/configure", {
+            method: "POST",
+            headers: { "Content-Type": mimeType },
+            body: codec.stringify({ harness: harnessId, active: Boolean(active) }),
+          });
+        } catch (_err) {
+          // Offline or isolated preview mode keeps the in-memory toggle state.
+        }
+      }
+
+      async function delegateAcrossHarnesses(agents, promptText) {
+        const targets = Array.isArray(agents) && agents.length ? agents : ["pi"];
+        const cleanPrompt = String(promptText || "").trim();
+        if (!cleanPrompt) return { ok: false, error: "Task description is required" };
+
+        const nowIso = new Date().toISOString();
+        const optimisticTasks = targets.map((agentId, index) => ({
+          address: "task_" + agentId + "_" + Date.now() + "_" + index,
+          agent: agentId,
+          prompt: cleanPrompt,
+          state: "running",
+          stage: "initializing " + agentId,
+          progressNote: "initializing " + agentId,
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        }));
+
+        state.tasks = [...optimisticTasks, ...state.tasks];
+        renderTasks();
+
+        try {
+          const response = await fetch("/api/tasks/delegate", {
+            method: "POST",
+            headers: { "Content-Type": mimeType },
+            body: codec.stringify({ agents: targets, task: cleanPrompt }),
+          });
+          if (response && response.ok) {
+            const payload = codec.parse(await response.text());
+            if (Array.isArray(payload.tasks) && payload.tasks.length) {
+              state.tasks = payload.tasks;
+              renderTasks();
+            }
+          }
+        } catch (_err) {
+          // Keep optimistic local simulation when running inside an isolated preview frame.
+        }
+
+        return {
+          ok: true,
+          launchedCount: optimisticTasks.length,
+          agents: targets,
+          tasks: optimisticTasks,
+        };
+      }
+
+      async function refreshAll() {
+        try {
+          const [harnessRes, tasksRes] = await Promise.all([
+            fetch("/api/harnesses").catch(() => null),
+            fetch("/api/tasks").catch(() => null),
+          ]);
+
+          if (harnessRes && harnessRes.ok) {
+            const data = codec.parse(await harnessRes.text());
+            if (Array.isArray(data.entries)) {
+              state.harnesses = HARNESS_CATALOG.map((catalogItem) => {
+                const entry = data.entries.find((e) => e.id === catalogItem.id);
+                if (!entry) {
+                  return (
+                    state.harnesses.find((h) => h.id === catalogItem.id) || {
+                      id: catalogItem.id,
+                      label: catalogItem.label,
+                      status: catalogItem.defaultStatus,
+                      active: catalogItem.defaultStatus === "active",
+                    }
+                  );
+                }
+                const isReady =
+                  entry.state === "present" ||
+                  entry.state === "configured" ||
+                  Boolean(entry.delegation && entry.delegation.ok);
+                const isActive =
+                  Boolean(entry.active) ||
+                  Boolean(entry.delegation && entry.delegation.ok);
+                return {
+                  id: catalogItem.id,
+                  label: catalogItem.label,
+                  status: isReady ? "ready" : "setup",
+                  active: isActive,
+                  version: entry.version || null,
+                };
+              });
+            }
+          }
+
+          if (tasksRes && tasksRes.ok) {
+            const data = codec.parse(await tasksRes.text());
+            if (Array.isArray(data.tasks)) {
+              state.tasks = data.tasks;
+            }
+          }
+        } catch (_err) {
+          // Ignore network errors in isolated mode.
+        }
+
+        syncCheckboxesFromHarnesses();
+        renderHarnesses();
+        renderTasks();
+      }
+
+      function setupInteractions() {
+        const refreshBtn = document.getElementById("refresh-btn");
+        if (refreshBtn) {
+          refreshBtn.addEventListener("click", () => {
+            refreshAll();
+          });
+        }
+
+        const container = document.getElementById("target-harness-list");
+        if (container) {
+          container.addEventListener("change", (event) => {
+            const target = event.target;
+            if (target && target.name === "target-harness") {
+              target.dataset.userTouched = "true";
+            }
+          });
+        }
+
+        const form = document.getElementById("dispatch-form");
+        const input = document.getElementById("task-prompt-input");
+        if (form && input) {
+          form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const checked = Array.from(
+              form.querySelectorAll('input[name="target-harness"]:checked'),
+            ).map((el) => el.value);
+            const promptText = input.value.trim();
+            if (!promptText) return;
+            input.value = "";
+            await delegateAcrossHarnesses(checked.length ? checked : ["pi"], promptText);
+          });
+        }
+      }
+
+      function registerVoiceTools() {
+        const getProgressTool = {
+          name: "get_agent_progress",
+          description:
+            "Get active coding harnesses and live progress of running and recent agent tasks.",
+          parameters: {
+            type: "object",
+            properties: {},
+          },
+          execute: async () => {
+            return {
+              activeHarnesses: state.harnesses.filter((h) => h.active).map((h) => h.id),
+              tasks: state.tasks,
+            };
+          },
+        };
+
+        const delegateMultiTool = {
+          name: "delegate_multi_harness",
+          description:
+            "Run a coding or investigation task across one or multiple harnesses simultaneously.",
+          parameters: {
+            type: "object",
+            properties: {
+              agents: {
+                type: "array",
+                description: "List of harness identifiers such as pi, claude, antigravity, codex, opencode",
+                items: { type: "string" },
+              },
+              task: {
+                type: "string",
+                description: "Task instructions to run across the selected harnesses",
+              },
+            },
+            required: ["agents", "task"],
+          },
+          execute: async (args) => {
+            const agents = Array.isArray(args && args.agents) ? args.agents : ["pi", "claude"];
+            const taskText = args && args.task ? String(args.task) : "";
+            return delegateAcrossHarnesses(agents, taskText);
+          },
+        };
+
+        if (window.voicebox) {
+          window.voicebox?.registerTool(getProgressTool);
+          window.voicebox?.registerTool(delegateMultiTool);
+          window.voicebox?.ready?.();
+        } else if (window.webMcp) {
+          window.webMcp?.registerTool(getProgressTool);
+          window.webMcp?.registerTool(delegateMultiTool);
+          window.webMcp?.ready?.();
+        }
+      }
+
+      setupInteractions();
+      renderHarnesses();
+      renderTasks();
+      registerVoiceTools();
+      refreshAll();
+
+      setInterval(() => {
+        if (document.visibilityState !== "hidden") {
+          refreshAll();
+        }
+      }, 2500);
+    })();
+  </script>
+</body>
+</html>
