@@ -1,195 +1,86 @@
-# The sandbox: what bounds an environment, what it does not, and how to read the reports
+# Environment Sandboxing & Boundary Probes
 
-**This page is written by hand.** Its subject is machine-generated output — a probe report, a
-boundary report, a proposals folder — but none of its text is generated from that output. Where
-this page and a live report disagree, **the report is the fact and this page has a bug**; check
-the report's `when` first, then file against this page.
+Voicebox isolates execution environments using OS-level sandboxes and verifies every environment's isolation boundaries by running an in-sandbox diagnostic probe (`tools/sandbox-probe.mjs`) rather than trusting static configuration labels.
 
-## What the sandbox is
+---
 
-Voicebox runs work in **environments**, and an environment's security story is a **measured
-boundary**, never a configured label. The word "sandbox" here covers two rungs that are built and
-driven, both of which bound *filesystem and processes* and deliberately do not bound *the network*:
+## 1. Sandbox Isolation Tiers
 
-- **L1 — the fence** ([`tools/fence.sh`](../tools/fence.sh)): bubblewrap with `/usr` and `/etc`
-  read-only, fresh `tmpfs` on `/tmp /run /var /home`, **one** writable home bound in from the host,
-  `--unshare-pid --die-with-parent`. No root, no daemon, nothing installed.
-- **L1.5 — the composition** ([`tools/fence-unit.sh`](../tools/fence-unit.sh)): the same fence
-  launched inside a transient `systemd-run --user` unit that adds the kernel half the fence lacks —
-  a seccomp filter (`Seccomp: 2`), an empty capability set (`CapEff: 0`), `PrivateTmp`, and
-  `ProtectSystem=strict` with the one sandbox home as the writable exception. Units are transient
-  by design, so they are bounded in time: `RuntimeMaxSec` (default 1800s, `VOICEBOX_FENCE_MAX_SEC`
-  overrides) reaps a forgotten sandbox, the host stops one by name with
-  `DELETE /api/environments/<key>` (host-token gated), and the server stops the units it booted on
-  exit. Without these, every declare-and-boot leaks a unit, a port and its RSS until reboot —
-  measured at 42 orphaned units and ~2.8 GB in one night (voicebox-beads-4kp).
+Voicebox provides two Linux sandbox tiers for server environments:
 
-## What it does not do — say it plainly, because each of these is someone's assumption
+1. **L1 — Bubblewrap Fence (`tools/fence.sh`)**:
+   - Mounts `/usr` and `/etc` read-only (`EROFS`).
+   - Mounts fresh `tmpfs` instances over `/tmp`, `/run`, `/var`, and `/home`.
+   - Binds a single writable sandbox home directory from the host (`VOICEBOX_SANDBOX_HOMES`, default `~/sandbox-homes/<key>`).
+   - Isolates the process tree with `--unshare-pid --die-with-parent`.
+2. **L1.5 — Systemd + Bubblewrap Composition (`tools/fence-unit.sh`, `tools/voicebox-fence@.service`)**:
+   - Launches the L1 bubblewrap fence inside a transient `systemd-run --user` unit.
+   - Enforces kernel syscall filtering (`Seccomp: 2`), drops all effective capabilities (`CapEff: 0`), enables `PrivateTmp`, and sets `ProtectSystem=strict`.
+   - Enforces a finite unit lifetime (`RuntimeMaxSec`, default `1800s`, configurable via `VOICEBOX_FENCE_MAX_SEC`). Units can be stopped explicitly via `DELETE /api/environments/<key>` (gated by `x-voicebox-host-token`) and are cleaned up automatically on server exit.
 
-- **The network is shared.** The fence passes it through, and the boundary report's `network` axis
-  says `passes` with the measurement that showed it. A probe reaching outbound 443 from inside a
-  fence is the design working, not a bug. (The browser placement is the mirror: strong structural
-  containment, weaker egress — see `02-environment.md` §1.1b.)
-- **Ambient credentials are not fenced.** A process inside reads what its uid can read. The
-  `credentials` axis reports seccomp/CapEff, and its note says this.
-- **The digest binds bytes, never behavior.** A wasm tool's module is rehashed at admission and
-  again at every call, so the bytes that run are the bytes that were admitted — but what those
-  bytes *do* is bounded only by host constants: a call deadline, worker memory limits, a file-read
-  bound. No declaration inside a descriptor buys more of any of them.
-- **`/tmp` is not a place for a sandbox home.** The L1.5 unit's `PrivateTmp` hides the caller's
-  `/tmp`; a home under it fails to bind (`226/NAMESPACE`). Homes live outside `/tmp` — the default
-  is `~/sandbox-homes/<key>` (`VOICEBOX_SANDBOX_HOMES`).
+### Explicit Non-Goals of L1 / L1.5
+- **Shared Network**: Interactive environments share the host network namespace so they can connect to cloud speech-to-speech providers (see [`14-s3-l2-bridge-decision.md`](14-s3-l2-bridge-decision.md)). The boundary report explicitly records `network: "passes"`.
+- **Sandbox Home Outside `/tmp`**: Because L1.5 units enable `PrivateTmp`, sandbox home directories must reside outside `/tmp` (default `~/sandbox-homes/<key>`) so bind mounts succeed across namespaces.
 
-## Running commands: /exec and the Git identity (voicebox-beads-0vlp)
+---
 
-A booted environment is a place to work, not only to measure. Its server
-([`tools/env-serve.mjs`](../tools/env-serve.mjs)) exposes a command surface **on the loopback port the
-fence names**; the host is the door, and both halves are bounded:
+## 2. Fenced Command & Git Execution (`tools/env-serve.mjs`)
 
-- **`POST /exec`** — `{ argv: [...] }` runs exactly that argv; `{ command: "…" }` runs it through
-  `/usr/bin/sh -c` for pipelines. `cwd` must resolve inside the environment's HOME; `timeoutMs`
-  (100–60000, default 10000) and `maxBytes` (1024–1048576, default 262144) bound the run. A
-  **non-zero exit is `ok:true`** with the code — the command ran; refusals are reserved for requests
-  that cannot run or that crossed a bound: `exec-bad-request`, `exec-cwd-outside-home`,
-  `exec-timeout`, `exec-output-over-budget`, `exec-spawn-failed`. A killed child is killed as a
-  process group, so a shell's grandchildren die with it.
-- **`GET`/`POST /git/config`** — the environment's Git identity (`user.name`, `user.email`). It is
-  written to `<sandbox home>/.gitconfig` (`GIT_CONFIG_GLOBAL` is pinned there), so the identity
-  belongs to the sandbox and never to the host's XDG config.
-- **`POST /git/init`** — idempotent `git init` of the environment's workspace.
+Each booted sandbox runs `tools/env-serve.mjs` on its loopback port, mediated by the local host (`server.mjs`):
 
-**The host's door** is `POST /api/environments/<key>/exec`, `GET|POST /api/environments/<key>/git/config`
-and `POST /api/environments/<key>/git/init`. Local authority is required (the host token, the room's
-session token, or the room's own origin), the request is forwarded to the environment's own origin,
-and the crossing is audited attempt-first like every other act that leaves the host process. The page
-never holds the port; it asks the host.
+### Sandbox Endpoints
+- **`POST /exec`**: Executes `{ argv: [...] }` directly or `{ command: "..." }` via `/usr/bin/sh -c`.
+  - Requires `cwd` to resolve inside the sandbox `HOME` (`exec-cwd-outside-home`).
+  - Enforces wall-clock timeouts (`timeoutMs`: `100`–`60,000ms`, default `10,000ms` → `exec-timeout`) and output caps (`maxBytes`: `1,024`–`1,048,576`, default `256 KiB` → `exec-output-over-budget`). Timed-out commands terminate the entire process group.
+  - Commands run with a scrubbed child environment (`lib/fence-child-env.mjs`) containing only standard system variables (`PATH`, `HOME`, `TMPDIR`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `TERM`, `XDG_CONFIG_HOME`, `GIT_CONFIG_GLOBAL`, `VOICEBOX_FENCE`), excluding host API keys and host `GIT_DIR` / `GIT_WORK_TREE` variables.
+- **`GET` / `POST /git/config`**: Reads or writes the sandbox's isolated Git identity (`user.name`, `user.email`) in `<sandbox-home>/.gitconfig`.
+- **`POST /git/init`**: Initializes a Git repository inside the sandbox workspace.
 
-**The door's credential (voicebox-beads-pehr):** the environment's three mutating routes (`/exec`,
-`POST /git/config`, `POST /git/init`) answer only with the pairing bearer the boot was minted —
-`VOICEBOX_BEARER`, carried beside `VOICEBOX_BOOT_MARKER` through fence-unit.sh → fence.sh `--setenv`,
-verified timing-safe and never echoed in a refusal. Without the gate, any same-machine process that
-reached the loopback port could run commands inside the fence: the fence bounds WHAT a command
-touches; the bearer bounds WHO may ask. A fence the host boots self-pairs — the host mints and
-records its call bearer at boot when the key has none (booting is already the host's act) — and a
-boot minted no bearer keeps the doors closed with `exec-unpaired` (remedy: pair, then re-boot).
-`/health`, `/probe` and `GET /git/config` stay open either way: they are the boundary report, not
-the door. The host's proxy attaches the bearer it holds for the key; a host that holds none gets
-the same named refusal as any stranger.
+### Host Proxy & Bearer Authentication
+- The browser calls `POST /api/environments/<key>/exec`, `GET` / `POST /api/environments/<key>/git/config`, and `POST /api/environments/<key>/git/init` on `server.mjs`.
+- Mutating endpoints on `tools/env-serve.mjs` require the pairing bearer (`VOICEBOX_BEARER`) minted when the host booted the fence. Unpaired requests are refused with `exec-unpaired`.
 
-**What bounds a command here**: the fence's own two axes — the read-only code tree at
-`/srv/voicebox`, the one writable sandbox home, and `/bin` and `/lib` symlinked into the read-only
-`/usr` bind, so there is no host home to read and nothing outside `/usr`, `/etc` and the sandbox home
-to touch. The L1.5 composition adds seccomp, an empty capability set, `PrivateTmp` and
-`ProtectSystem=strict`. Commands and the environment's own self-probe run under a minimal, measured child environment (`lib/fence-child-env.mjs`)
-containing only what Unix tools and Git require (`PATH`, `HOME`, `TMPDIR`, `USER`, `LOGNAME`, `SHELL`, `LANG`,
-`TERM`, `XDG_CONFIG_HOME`, `GIT_CONFIG_GLOBAL`, `VOICEBOX_FENCE`); ambient host credentials (API keys, tokens)
-and host repository bindings (`GIT_DIR`, `GIT_WORK_TREE`) are excluded by construction (`voicebox-beads-4uw0`, `voicebox-beads-t9bm`).
-**What does not bound it**: the network is shared, and a process reads what its
-uid can read — the same two lines the fence's own boundary report carries; a command surface does not
-change either.
+---
 
-## The boundary report: how a level is earned
+## 3. Earned Boundary Levels (`measureBoundary`)
 
-The registry row for a booted environment carries a `boundary` produced by `measureBoundary`
-([`lib/fence-provider.mjs`](../lib/fence-provider.mjs)) from the environment's **own probe**, run
-inside it. Its provenance field is `measuredBy: "probe"` — a hand-written boundary in a descriptor
-is nulled on read, because the probe is its only writer.
+When an environment boots, `measureBoundary` in `lib/fence-provider.mjs` evaluates the environment's self-probe report (`measuredBy: "probe"`) across four axes:
 
-Every axis is **tri-state**, and the two absences are different facts:
-
-| verdict | means |
+| Verdict | Meaning |
 |---|---|
-| `fenced` | measured, and the bound holds |
-| `not-fenced` | measured, and the bound **does not** hold — `violations` names which |
-| `passes` | measured, and this axis deliberately does not bound (network; seccomp-off credentials) |
-| `not measured` | the probe never saw this axis — **never** read as denied |
+| `fenced` | Probe measured the boundary and confirmed isolation holds. |
+| `not-fenced` | Probe measured the boundary and detected a violation (listed in `violations`). |
+| `passes` | Axis is intentionally shared (such as outbound network access). |
+| `not measured` | Probe did not measure this axis. |
 
-The `level` is **derived from those measurements, never stamped by a caller**:
+From these axis verdicts, `measureBoundary` derives the overall `level`:
+- **`L1.5`**: Filesystem `fenced` + Processes `fenced` + `Seccomp: 2` + `CapEff: 0`.
+- **`L1`**: Filesystem `fenced` + Processes `fenced` (without kernel seccomp/capability lockdown).
+- **`not-earned`**: Probe ran and detected one or more boundary violations.
+- **`unmeasured`**: Probe has not yet run or lacked required sections.
 
-- **`L1.5`** — files fenced ∧ processes fenced ∧ `Seccomp: 2` ∧ CapEff all-zero.
-- **`L1`** — the fence's two axes fenced, without the kernel lockdown.
-- **`not-earned`** — measured, and something failed; the axes carry the violation names.
-- **`unmeasured`** — the probe never measured enough to say anything.
+---
 
-`not-earned` and `unmeasured` are **legitimate outcomes**, not errors: a unit that silently failed
-to apply seccomp reports `L1`, and a report that could not see the fence reports what it saw.
+## 4. Reading `probe.json` (`GET /api/probe`)
 
-## `probe.json`: the cache, field by field
+`GET /api/probe` runs `tools/sandbox-probe.mjs` inside the environment and caches the result at `<workspace>/probe.json` (mode `0600`):
 
-`GET /api/probe` runs [`tools/sandbox-probe.mjs`](../tools/sandbox-probe.mjs) **on the environment
-itself** — unprompted, the first time — and caches the report at **`<workspace>/probe.json`**
-(mode `0600`: it carries identity facts). The act is recorded in the environment's own audit,
-because it is the first time something ran somewhere unasked. A cached report is served with
-`cached: true` and its `when`; a probe that cannot run is the named refusal `probe-failed`, never
-a blank.
+- **`probe` & `when`**: Schema version (`sandbox-probe/1`) and ISO timestamp of the measurement.
+- **`identity`**: Process UID, GID, supplementary groups, working directory, and OS platform.
+- **`sandboxHints`**: Kernel status values from `/proc/self/status` (`seccomp`, `capEff`), mount table sample (`mountSample`), and systemd unit indicators.
+- **`filesystem`**: Tests path listability and writability by attempting to create and unlink a temporary marker file (`.sandbox-probe-<pid>-<when>`), reporting `EROFS` (read-only mount), `EACCES` (permission denied), or `ENOENT` (absent). Orphaned markers from interrupted probes are automatically cleaned up at startup.
+- **`limits`**: CPU count, system memory, and `/proc/self/limits` soft/hard rlimits.
+- **`tools`**: Probes availability of common developer binaries (`node`, `git`, etc.) with bounded concurrency (at most 8 at a time).
+- **`network`**: Tests DNS resolution (bounded to 4s) and outbound TCP connectivity (`1.1.1.1:443` and `example.com:80`).
 
-The probe's own rules: **facts with the method beside them, never verdicts**; `false`, `absent`
-and `refused` are three different words. Fields:
+---
 
-- **`probe`** — the schema name and version (`sandbox-probe/1`). A reader who knows one knows the other.
-- **`when`** — when it ran. Everything else is stale relative to this, not to your clock.
-- **`identity`** — user, uid/gid/groups, cwd, platform. *Read as:* whose eyes the rest of the
-  report is seen through.
-- **`sandboxHints`** — evidence about the *kind* of place, each entry naming where it was read.
-  `seccomp` is `0=off 1=strict 2=filter` from `/proc/self/status`; `capEff` is the capability mask;
-  `mountSample` shows the bwrap binds; `invocationId`/`systemdEnv` say a systemd unit is present.
-  *Read as:* hints, never a conclusion — these are the two numbers the L1.5 unit changes (0→2,
-  nonzero→zero), and the reader decides.
-- **`filesystem`** — per path: `listable`, and `writable` measured **by doing** (create a file,
-  unlink it). `writable.value: false` with `error: "EROFS"` is a read-only mount; `"EACCES"` is a
-  denial; `ENOENT` is absence. Probe writability checks create and unlink `.sandbox-probe-<pid>-<when>`;
-  orphaned markers left if a probe process is SIGKILL'd mid-write are swept at server boot and
-  on probe start by checking PID liveness (`kill -0`), preventing probe artefacts from polluting the tree (`voicebox-beads-ebq`).
-  *Read as:* absence is not refusal and neither is not-permitted.
-- **`limits`** — CPU count, total/free memory, and `/proc/self/limits` as `{soft, hard}` per name.
-  *Read as:* the OS's numbers for this process — a moment, not a promise, and not the sandbox's
-  bounds (those are the host constants above).
-- **`tools`** — which binaries actually ran (`node`, `git`, …), each `{value}` or `{error}`.
-  *Read as:* what a turn here can invoke. "not present" and "present but refused" are different
-  answers, and this is the field the environment list shows as its tool count. Asked at most eight at
-  a time — a fence's process limit must not turn a present tool into an `EAGAIN` "absent" — and keyed
-  in a fixed order whatever order they answer in (`voicebox-beads-4wez`).
-- **`network`** — DNS and outbound TCP attempts, each `ok` with a timing or a named error.
-  *Read as:* **attempted is not carried** — `ok: true` means a connection completed. Inside the
-  fence this is expected: the network is shared, and this axis is how the report says so. The
-  attempts run together, each on its own deadline, so the section costs its slowest attempt; DNS
-  resolution runs on its own 4s deadline (`voicebox-beads-zaj8`) so a black-holed resolver cannot hang probe boot;
-  each `ms` is that attempt's own, timed from its own dial (it can carry a few ms of waiting on its
-  neighbours — verdicts read `ok`/`error`, never `ms`). `outboundTcp443IpLiteral` dials `1.1.1.1:443`
-  — no DNS in its path — beside the by-name `example.com:80`, so a closed route and a missing resolver
-  read differently; until `voicebox-beads-4wez` it dialled example.com's retired `93.184.216.34`,
-  which timed out everywhere.
+## 5. Key Implementation Files
 
-## The proposals folder: `<workspace>/proposals/`
-
-The model's door to the tool surface — **inside its own root**, so a turn can knock without
-holding anything. Mechanics ([`lib/extensions.mjs`](../lib/extensions.mjs)):
-
-- **What lands:** a descriptor JSON per proposal (`<id>.json`), written by `propose()` — from the
-  `make-tool` verb, a `POST /api/extensions/proposals`, or a sideload. A proposal is **data**:
-  nothing loads, evaluates or registers because a file appeared.
-- **Who writes:** the proposing side only. The host decides: `admitProposal` runs the gate
-  (`core/extensions.ts` — the closed primitive set, declared capabilities, bounds), records
-  admission, and moves the state to `admitted` or `refused` **with the rule and the why** — a
-  refusal is the artefact, not a footnote. Approval needs a one-use code from the host console;
-  the page can disclose, never decide.
-- **The fourth state:** a file present in the host's directory with no recorded admission is
-  **present-not-admitted** — visible in the inventory as exactly that, never live, never swept in
-  by the next admission.
-- **Fail-closed at load:** the loader re-runs the gate on every admitted descriptor at every
-  server start. The loaded set is what passed both the admission *and* the gate — an edit to a
-  stored descriptor that breaks the rules means it simply does not load.
-
-## Where the code lives
-
-| thing | file |
+| Subsystem | Files |
 |---|---|
-| the fence (L1) | `tools/fence.sh` |
-| the composition (L1.5) | `tools/fence-unit.sh`, `tools/voicebox-fence@.service` |
-| the probe | `tools/sandbox-probe.mjs` |
-| boundary derivation | `lib/fence-provider.mjs` (`measureBoundary`) |
-| booting + serving | `lib/fence-provider.mjs`, `lib/unit-fence-provider.mjs`, `tools/env-serve.mjs` |
-| the command surface | `tools/env-serve.mjs` (`/exec`, `/git/config`, `/git/init`), `server.mjs` (`/api/environments/<key>/…`), `lib/fence-child-env.mjs` |
-| wasm tools at the gate | `lib/wasm-shelf.mjs`, `lib/wasm-worker.mjs`, `core/extensions.ts` |
-| proposals + admission | `lib/extensions.mjs`, `core/extensions.ts` |
-| the probe cache route | `server.mjs` (`GET /api/probe`, `writeProbeCache`) |
+| L1 & L1.5 Sandbox Launchers | `tools/fence.sh`, `tools/fence-unit.sh`, `tools/voicebox-fence@.service` |
+| Diagnostic Probe & Cache | `tools/sandbox-probe.mjs`, `server.mjs` (`GET /api/probe`) |
+| Boundary Evaluation & Lifecycle | `lib/fence-provider.mjs`, `lib/unit-fence-provider.mjs` |
+| Fenced Server & Child Environment | `tools/env-serve.mjs`, `lib/fence-child-env.mjs` |
+| WebAssembly & Extension Gates | `lib/wasm-shelf.mjs`, `lib/wasm-worker.mjs`, `lib/extensions.mjs`, `core/extensions.ts` |

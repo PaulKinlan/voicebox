@@ -1,141 +1,99 @@
-# 20 — WebAssembly tools: authoring, the buffer ABIs, compilation, admission, and execution
+# WebAssembly Tool Shelf Guide
 
-**This page is the developer guide for the WASM shelf** (`voicebox-beads-rgvi`): how a module is
-written, compiled, admitted, executed, and observed. The runtime facts here are read from
-[`lib/wasm-shelf.mjs`](../lib/wasm-shelf.mjs), [`lib/wasm-worker.mjs`](../lib/wasm-worker.mjs) and
-[`tools/build-wasm.mjs`](../tools/build-wasm.mjs) — where this page and the code disagree, the code
-wins. The boundary framing (digest binds bytes, never behavior) lives in
-[`docs/15-sandbox.md`](15-sandbox.md); the shelf's place in the running product lives in
-[`docs/08-how-it-runs.md`](08-how-it-runs.md).
+Voicebox includes a **WebAssembly Tool Shelf** (`lib/wasm-shelf.mjs`, `lib/wasm-worker.mjs`, `tools/build-wasm.mjs`) for executing standalone, zero-import `.wasm` binaries inside isolated worker processes with cryptographic digest verification and strict resource ceilings.
 
-## 1. What a shelf tool is
+---
 
-A shelf tool is a WebAssembly module plus a **digest-pinned manifest entry**, living in the shelf
-directory (default `~/.isocan/modules/wasm-tools`, `VOICEBOX_WASM_SHELF_DIR` overrides). Unlike an
-extension proposal, an admitted shelf tool is **callable immediately** — it was admitted by bytes,
-not by review: the manifest records the sha256 digest, the loader re-hashes the file at every read
-and again at every call, and the bytes that run are the bytes the digest names.
+## 1. Shelf Manifest & Digest Admission
 
-A manifest entry:
+WebAssembly shelf tools live in `VOICEBOX_WASM_SHELF_DIR` (default `~/.isocan/modules/wasm-tools`) alongside a `manifest.json` file that pins each module's expected SHA-256 digest:
 
 ```json
 {
   "id": "hash",
   "wasm": "hash.wasm",
-  "digest": "<sha256 of the .wasm bytes>",
-  "description": "SHA-256 of up to 8192 bytes",
+  "digest": "<sha256-hex-digest-of-wasm-bytes>",
+  "description": "Compute SHA-256 digest of up to 8192 bytes",
   "capability": "hash",
   "abi": "buffer-abi/1"
 }
 ```
 
-`readShelf()` (`lib/wasm-shelf.mjs`) reads the manifest and produces the admission verdict per
-tool: `admitted: true` when the on-disk bytes hash to the recorded digest, and named refusals
-otherwise — `wasm-unreadable` (no module at the path), `digest-mismatch` (the bytes changed under a
-pinned digest). An admission verdict is **admission-time only**: every call re-verifies, so editing
-a `.wasm` under a stale digest takes the tool offline at the next call, not at the next boot.
+### Continuous Digest Verification (`readShelf()`)
+Unlike extension proposals that require interactive approval, shelf tools are admitted by their cryptographic digest:
+- `readShelf()` in `lib/wasm-shelf.mjs` hashes the `.wasm` binary on disk and compares it against `manifest.json`.
+- If the file is missing (`wasm-unreadable`) or the bytes do not match the pinned digest (`digest-mismatch`), the tool is refused immediately.
+- The SHA-256 digest is re-verified on **every invocation**, so modifying a `.wasm` file on disk without updating `manifest.json` immediately blocks execution.
 
-## 2. The two buffer ABIs
+---
 
-The shelf manifest does not invent a calling convention — the conventions below were **measured by
-driving the modules** and are enforced by the loader (`MEASURED_ABI` in `lib/wasm-shelf.mjs`). A
-module that does not conform simply cannot be driven.
+## 2. Supported Buffer ABIs (`MEASURED_ABI`)
 
-### `buffer-abi/1` — zero imports, one buffer, one integer in, fixed digest out
+Every shelf module must export linear memory, declare **zero imports** (any import is refused with `import-undeclared`), and implement one of the two supported buffer ABIs:
 
+### 1. `buffer-abi/1` (Single Buffer Input → Fixed Digest Output)
 Used by `hash.wasm` (`sha256` export):
 
-| aspect | contract |
+| Parameter | Specification |
 |---|---|
-| imports | **zero** — the loader refuses any import with `import-undeclared` before the module is touched; a capability the descriptor never declared is not a capability |
-| input | bytes written at fixed address `0x400`, at most **8192** bytes |
-| call | the `sha256` export, called with the input **length** as its only argument |
-| output | **32** bytes (the digest) written at `0x2400`; the export returns `-1` if the input exceeded 8192 |
-| known-good vector | `sha256("abc")` starts `ba7816bf` — the room-loop test drives exactly this and asserts the digest in the tool frame |
+| **Imports** | `0` (refuses with `import-undeclared` if any import is present) |
+| **Input Buffer** | Written at linear memory offset `0x400`, up to **`8,192` bytes** |
+| **Exported Function** | `sha256(byteLength)` |
+| **Output Buffer** | `32` bytes read from offset `0x2400` (returns `-1` if input exceeds `8,192` bytes) |
 
-### `buffer-abi/diff` — two input buffers, one output buffer, structured diff out
+### 2. `buffer-abi/diff` (Two Input Buffers → Structured Diff Output)
+Used by `diff.wasm` (`diff` export), which `lib/wasm-shelf.mjs` decodes into structured Hirschberg line-diff blocks:
 
-Used by `diff.wasm` (`diff` export), decoded by the shelf into **Hirschberg line-diff blocks**
-(`voicebox-beads-9nk`):
-
-| aspect | contract |
+| Parameter | Specification |
 |---|---|
-| input A | at `0x10000`, at most **65536** bytes |
-| input B | at `0x20000`, at most **65536** bytes |
-| output | at `0x30000`, at most **262144** bytes |
-| call | the `diff` export |
+| **Input Buffer A** | Offset `0x10000`, up to **`65,536` bytes** |
+| **Input Buffer B** | Offset `0x20000`, up to **`65,536` bytes** |
+| **Output Buffer** | Offset `0x30000`, up to **`262,144` bytes** |
+| **Exported Function** | `diff(lenA, lenB)` |
 
-The output decode is the shelf's job, not the module's: `diff.wasm` returns raw comparison
-structure and `lib/wasm-shelf.mjs` turns it into the structured blocks the model sees. An ABI
-nobody drives is not a mechanism — that is why the decode ships with the ABI table rather than as
-a promise.
+### Pre-Flight Module Refusals
+- **`unsupported-abi`**: Module has zero linear memory pages or does not export the required ABI function.
+- **`import-undeclared`**: Module declares WASI or host imports.
+- **Oversized Module**: Files larger than `WASM_MODULE_MAX_BYTES` (`16 MB`) are rejected before loading.
 
-### What both ABIs refuse before a module runs
+---
 
-- a **zero-page memory** (`unsupported-abi`) — a module with no memory cannot hold a buffer;
-- an **undeclared import** (`import-undeclared`);
-- a module file over `WASM_MODULE_MAX_BYTES` (16 MB) is never read onto the host event loop at all.
+## 3. Compiling `.wat` Modules (`tools/build-wasm.mjs`)
 
-## 3. Compilation
+Voicebox compiles WebAssembly Text (`.wat`) files offline using `wabt`:
 
-The committed artefact is the `.wasm`; the `.wat` beside it is the readable source of truth.
+```bash
+npm run build:wasm
+```
 
-- **Toolchain:** `tools/build-wasm.mjs` compiles WebAssembly text with `wabt` — offline, no
-  toolchain install beyond that one devDependency.
-- **Build:** `npm run build:wasm` compiles the committed `.wat`/`.wasm` pairs (the shelf's
-  `create-asset` module and the test fixtures).
-- **In code:** `compile(watSource)` and `compileFile(path)` are exported for tests and tools.
-- **No drift:** `npm test` recompiles from the `.wat` and fails if the committed `.wasm` bytes
-  differ — the same silent-drift failure mode the digest pinning prevents, one level down.
-- **Any other toolchain works too:** the shelf consumes `.wasm` bytes and a digest; clang/rust
-  output is welcome as long as it satisfies the ABI and the zero-import (or declared-import) rules.
-  Recompute the digest in the manifest after every build — the digest is the admission.
+- `tools/build-wasm.mjs` exports `compile(watSource)` and `compileFile(path)` for tests and build scripts.
+- The test suite verifies that committed `.wasm` binaries match their `.wat` sources byte-for-byte.
+- You can also compile modules using Clang, Rust, or Zig (`wasm32-unknown-unknown`) provided the resulting `.wasm` binary has zero imports, conforms to the buffer ABI offsets above, and has its SHA-256 digest recorded in `manifest.json`.
 
-## 4. Execution: what bounds a call
+---
 
-Every call runs in a **fresh worker** (`lib/wasm-worker.mjs`), off the host's event loop, under
-host constants that no descriptor can raise:
+## 4. Isolated Worker Execution & Resource Bounds
 
-| bound | value | refusal when hit |
+Every WASM tool call executes in a fresh subprocess (`lib/wasm-worker.mjs`) governed by fixed host limits that a module cannot override:
+
+| Resource Bound | Host Constant | Refusal / Behavior |
 |---|---|---|
-| wall-clock deadline | `WASM_CALL_DEADLINE_MS` = 5000ms | `time-exceeded` (worker terminated) |
-| worker old-generation heap | 64 MB | `resource-exceeded` |
-| worker young-generation heap | 16 MB | `resource-exceeded` |
-| module file size | 16 MB | never read onto the event loop |
-| per-ABI buffer sizes | the table in §2 | written within the ABI's stated maximum |
-| stdout buffer bound | `WASM_CHILD_MAX_STDOUT_BYTES` = 2 MB | `resource-exceeded` (worker killed) |
-| child watchdog ceiling | `WASM_CHILD_WATCHDOG_MS` = 6000ms | child self-exits on orphan window |
+| **Wall-Clock Deadline** | `WASM_CALL_DEADLINE_MS` = `5,000ms` | Worker terminated; returns `time-exceeded` |
+| **Old-Generation Heap** | `64 MB` | Worker terminated; returns `resource-exceeded` |
+| **Young-Generation Heap** | `16 MB` | Worker terminated; returns `resource-exceeded` |
+| **Max Module File Size** | `WASM_MODULE_MAX_BYTES` = `16 MB` | Refused before reading into memory |
+| **Max Child Stdout** | `WASM_CHILD_MAX_STDOUT_BYTES` = `2 MB` | Worker killed; returns `resource-exceeded` |
+| **Child Watchdog Ceiling** | `WASM_CHILD_WATCHDOG_MS` = `6,000ms` | Child process self-exits if orphaned |
 
-The digest binds **bytes, never behavior** — the bounds above bound behavior's *cost*, and they
-are host constants. There is no fuel/instruction metering today, and no concurrency cap on
-parallel calls (`voicebox-beads-mbk` names the semaphore as the follow-up if turn volume ever
-justifies it).
+---
 
-## 5. How a call travels
+## 5. Live Voice & Extension Integration
 
-1. **The room loop (voice):** the model calls the tool **by name** — admitted shelf tools are
-   declared beside the fixed commands (`liveToolDeclarations(wasmShelfDir())` in `server.mjs`) and
-   answered by the **same shared executor** as every other verb: same containment, same refusal
-   names, same audit.
-2. **The measurement:** the executor times the call; the result frame (`type: "tool"`) carries
-   `durationMs` per call — and, for writes and edits, the written file's name (`file`), which is
-   what the room's artifact chips render (voicebox-beads-2meg).
-3. **The room UI:** the Extensions → WASM shelf section renders one row per tool — "Callable now",
-   the last run's ok/failed, **the measured latency in ms**, and how long ago; driven through the
-   page's own tool-frame hook, so a call that happened in the voice loop is visible without a
-   reload.
-4. **Extensions surface:** shelf tools also appear in `list_extensions` with their measured
-   boundary (zero imports, admitted digest, buffer ABI) and execute through `call_extension`.
+1. **Direct Voice Tool Declarations**: Admitted shelf tools are automatically included in live voice session handshakes (`liveToolDeclarations(wasmShelfDir())` in `server.mjs`) and execute through the shared server executor.
+2. **Measured Latency Readout (`durationMs`)**: Each execution measures wall-clock duration and emits `durationMs` on the `{ type: "tool" }` frame, updating the latency badge in the **Extensions → WASM Shelf** UI panel in real time.
+3. **Extension Discovery (`list_extensions` / `call_extension`)**: Shelf tools also appear in `list_extensions` with their verified ABI and digest metadata and can be invoked via `call_extension`.
 
-The pin for all of the above: `tests/live-wasm-room.test.mjs` (the model drives `hash` end to end
-and the frame carries the digest **and** the measured latency),
-`tests/wasm-room-ui.test.mjs` (the shelf row shows the latency readout through the page's own
-tool-frame hook), and `tests/wasm-shelf.test.mjs` (the ABIs, the bounds, the refusals).
-
-## 6. Designed, not built
-
-Named so nobody mistakes them for working parts: fuel/instruction metering (wall-clock only
-today), a concurrency semaphore for parallel calls (`voicebox-beads-mbk`), the `awasm-noble`
-crypto admission (`voicebox-beads-2uhx`, OPEN), and the Emscripten/pthreads runtime lane
-(`voicebox-beads-ltkj`, OPEN). The catalogue research (65 categories) lives in the rest of this
-file's siblings — the shelf admits what has a manifest and a matching digest, nothing else.
+### Verification Suites
+```bash
+node --test tests/wasm-shelf.test.mjs tests/live-wasm-room.test.mjs tests/wasm-room-ui.test.mjs
+```

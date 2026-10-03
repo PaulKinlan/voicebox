@@ -1,107 +1,89 @@
-# Proxied custody + envelope identity — design for review (NOT landed)
+# Proxied Custody & Multi-Environment Pairing
 
-Paul's decisions 3 and 4 (2026-09-20): **custody is via a server (proxied)** — *"we might need a proxy
-if we need to make fetch requests that can be done in a browser"* — and **identity lives at the
-envelope, not the vocabulary** (no rename of `page | machine`). This is a **security boundary**: a
-credential, a proxy, and an identity that decides who may act. **Per coord's rule it is reviewed
-BEFORE it lands.** This document is the reviewable artefact; the slice that accompanies it is
-`git diff` on the `feat/env-registry` worktree, uncommitted until review clears.
-
-**The gate coord set, and it is the load-bearing one: drive the REMOTE case, not the local one.**
-Tonight's failure was a firewall refusing the tailnet interface while every local check passed —
-the machine was reachable and one road to it was locked, and nothing said so. A credential that works
-locally and fails remotely, with the failure reading as "the remote is down", is the same shape. So
-every claim below is stated for the remote path first.
+Voicebox enables a single browser interface to interact with tools, files, and coding agents across multiple local and remote execution environments. To protect remote credentials from browser exposure, Voicebox enforces **proxied credential custody** and **envelope-level environment identity**.
 
 ---
 
-## 1. The two halves are one seam
+## 1. Overview & Security Model
 
-- **Proxied custody**: the page holds **no** remote credential. It asks its *local* host to make the
-  remote call; the local host originates the connection to the remote environment and holds the bearer.
-  The page's browser socket never carries a remote secret — which also removes the unproven
-  "can a browser WebSocket carry a header" direction entirely: the page→host leg is same-origin
-  loopback (ambient), and the host→remote leg is a server-side `fetch`/`WebSocket` that *can* carry a
-  header (astra drove it).
-- **Envelope identity**: the environment **key** (the stable self-issued id from `core/environment.ts`)
-  is carried as its **own validated field** on the call — NOT as the `descriptorId`. The first draft
-  proposed reusing `descriptorId`; review showed that overloads it, because `descriptorId` names an
-  *admission in a tool registry* and an environment key names a *host* — different namespaces, and
-  `unattributed-call` would conflate *"no such tool admission"* with *"no such host"*. So `envKey` is
-  validated against the environment registry, and the tool + bounds are validated against the remote's
-  own admission registry on the far side. Two registries, two checks, no conflation. (Reviewer over the
-  first draft's suggestion, because it is true.)
-- **The bearer is bound to the key, and the key must still exist.** `/api/execute` resolves `envKey`
-  against the *remote's* registry **before** `bearerOk`, so a re-created or re-keyed environment's old
-  credential refuses `unknown-environment` rather than silently reaching a different identity.
-  **Ordering for integrators:** declare the environment in the remote's registry *before* pairing —
-  pair-before-declare fails closed as `unknown-environment`, which is the intended order, not a bug.
-
-## 2. Custody: pairing, the bearer, and who holds it
-
-- **Pairing** (an explicit act): the person points the local host at a remote origin and confirms.
-  Pairing **creates a credential**, so it is the same authority class as admission and carries the same
-  gate: the **host token** on both `/api/pair` and `/api/pair/complete` (a page's two token-less fetches
-  cannot self-pair — the shape the host token closed for admission). The remote host issues a
-  **per-(user, environment) bearer**, stored on the *issuing* host's side and registered on the
-  *calling* host's side — both in the host's own directory (the `.host-token` sidecar pattern), 0600,
-  **outside every project root and served by no route**. A store inside a writable root is a credential
-  the page can read, so the location is the defence, not the file mode. The bearer is bound to the
-  environment's **key**, so a re-pointed origin does not inherit the credential. The bearer is the one
-  thing that never appears in a diagnostic — never logged, never in an error, never in a refusal's `why`.
-- **Who holds it**: the **local host**, never the page. The page's `POST /api/call` names the
-  environment by **key** and the tool + args; the local host looks up the bearer for that key, attaches
-  it, and forwards. The page cannot read the bearer and cannot be asked to.
-- **Revocation is an explicit host act (`DELETE /api/pair`)**:
-  Withdrawing a pairing is gated by the host token (`x-voicebox-host-token`) and applies immediately:
-  1. **Immediate active termination**: any currently open `/channel` executor socket and `/live` voice
-     session socket holding that authority is closed with WebSocket code 1008 and refusal `pairing-revoked`.
-     `pageSocket` is cleared and pending calls are abandoned; live sessions are ended (closing both the
-     door and the underlying provider session). A local-origin live session (admitted without a bearer,
-     since the hello gate waives same-origin) is NOT terminated by environment pairing revocation — it
-     holds no envKey or bearer, so revocation of a remote environment does not close the local user's
-     browser session.
-  2. **Durable revocation record**: the bearer is marked revoked in `.pairings.json` (`revokedBearers`), so
-     subsequent connection attempts refuse by name (`pairing-revoked`) rather than collapsing into
-     `bearer-refused` (preserving the difference between a revoked credential and a stranger's token).
-  3. **Proxy calls blocked**: `POST /api/call` to that environment and `POST /api/execute` presenting the
-     revoked bearer both refuse HTTP 403 `pairing-revoked`.
-  4. **Audit recorded**: when an active machine root is declared, the revocation is logged as
-     `act={kind:"pairing", target:envKey, tool:"pair"}, rule="pairing-revoked", result="ok"`. When no
-     machine root is declared, `logged: null` and `logRefused: "root-not-declared"` are reported on the
-     response, making the absence of logging visible rather than silently dropping it.
-
-## 3. The proxy route, and the remote drive
+- **Zero Browser Credential Custody**: The browser page never holds, stores, or transmits remote bearer tokens. Instead, the browser sends requests to its local Voicebox host (`server.mjs`), and the local host proxies calls to paired remote environments using host-held bearer tokens (`vbx_...`).
+- **Envelope Identity (`envKey`)**: Every environment has a stable, self-issued cryptographic identity key defined in `core/environment.ts`. Cross-environment requests carry `envKey` as a dedicated envelope field validated against the host's environment registry (`environments.json`), keeping environment identity separate from extension tool admission (`descriptorId` in `core/wire.ts`).
+- **Pre-Authentication Environment Resolution**: When a remote host receives an execution request (`POST /api/execute`), it resolves `envKey` against its own `environments.json` registry **before** checking the bearer token. If an environment was removed or re-keyed, stale credentials fail closed with `unknown-environment` rather than reaching a different environment identity.
 
 ```
-page ──POST /api/call {envKey, tool, args}──▶ local host ──(bearer)──▶ remote env: executes, answers
+Browser UI ──POST /api/call { envKey, tool, args }──▶ Local Host (server.mjs)
+                                                             │
+                                      Attaches host-held bearer (vbx_...)
+                                                             ▼
+                                              Remote Environment (/api/execute)
 ```
 
-- The local host validates the envelope against the *admitted* descriptor for that environment
-  (`parseCall`'s lookup), attaches the bearer, and forwards over TLS.
-- The remote host authenticates the bearer **before** creating anything (the `/live` hello-auth rule:
-  the provider session must not be built on an unauthenticated upgrade), executes inside its own root,
-  and answers with **observed facts or a named refusal** — never a grant (the wire schema enforces it).
-- **The driven case is the remote one**: the accompanying test runs **two real servers** (a local host
-  and a "remote" one on a second ephemeral port), pairs them, and drives a call across. The local-only
-  path is asserted to *refuse* (no bearer, no remote), so "it works on loopback" can never again stand
-  in for "it works across the wire".
+---
 
-## 4. What is NOT in this slice (named, so review does not have to find them)
+## 2. Host-Side Credential Custody (`HOST_DIR`)
 
-- TLS termination / certificates (the drive is loopback-to-loopback on two ports; real TLS is the
-  deployment shape, not the seam).
-- Multi-user (Paul: single user, many environments).
-- The remote `/live` audio path (the first-frame/hello auth gate) — the custody seam is proven on the
-  HTTP call path first; `/live` reuses the same bearer once this lands.
-- The proxy as a general browser-fetch relay (Paul's forward-looking reason) — this slice proves the
-  custody + identity seam on the call path; the general relay builds on it.
+All host credentials and pairing records live in the host state directory managed by `lib/state-dirs.mjs` (`VOICEBOX_EXTENSIONS_DIR`, outside every project workspace root and never served by static or file routes):
 
-## 5. The questions I want the reviewer to answer
+| File | Permissions | Purpose |
+|---|---|---|
+| `.host-token` | `0600` | Per-host secret required for administrative actions (`x-voicebox-host-token`). |
+| `.pairings.json` | `0600` | Stores issued and outbound pairing bearer tokens (`vbx_...`) and `revokedBearers` by `envKey`. |
+| `.api-keys.json` | `0600` | Stores provider API keys configured via the UI Settings dialog (`GET` / `PUT /api/keys`). |
+| `.harness-settings.json` | `0600` | Stores the active coding agent harness selection configured via `GET` / `PUT /api/harnesses/active`. |
 
-1. Does putting the environment key in `descriptorId` (rather than a new envelope field) keep the
-   authority boundary intact, or does it overload the field?
-2. Is bearer storage on both sides (0600, outside the root, no route) sufficient, or does the calling
-   host's copy need to be held only in memory?
-3. Does the refusal vocabulary cover the failure modes a person will hit — `environment-not-paired`,
-   `environment-unreachable`, `unattributed-call` — or is one of them collapsing two remedies?
+Bearer tokens are never logged, never returned to the browser, and never echoed in error or refusal messages.
+
+---
+
+## 3. Pairing & Revocation Lifecycle
+
+Pairing a local host with a remote environment is an explicit, host-authorized operation gated by `x-voicebox-host-token`:
+
+1. **Issue Pairing Bearer (`POST /api/pair`)**:
+   - Called on the remote host with `x-voicebox-host-token` and `{ envKey }`.
+   - The remote host verifies that `envKey` is declared in `environments.json`, generates a unique `vbx_...` bearer bound to `envKey`, and records it in `.pairings.json`.
+2. **Record Outbound Bearer (`POST /api/pair/complete`)**:
+   - Called on the local host with `x-voicebox-host-token` to store the remote's `vbx_...` call bearer for `envKey` in the local `.pairings.json`.
+3. **Revoke Pairing (`DELETE /api/pair`)**:
+   - Called with `x-voicebox-host-token` and `{ envKey }` to revoke a pairing immediately:
+     - **Immediate Socket Termination**: Any active `/channel` executor socket or `/live` voice socket authenticated with that environment's bearer is immediately closed with WebSocket code `1008` (`pairing-revoked`), and pending calls are abandoned. Local same-origin browser sessions are unaffected.
+     - **Durable Revocation**: The token is moved to `revokedBearers` in `.pairings.json` so subsequent calls return `pairing-revoked` (HTTP `403`) rather than a generic `bearer-refused`.
+     - **Audit Trail**: When a machine workspace root is active, the revocation is recorded in `.audit/` with `rule: "pairing-revoked"`. If no machine root is declared, the response reports `logged: null` and `logRefused: "root-not-declared"`.
+
+---
+
+## 4. Proxied Execution & WebSocket Entitlement Gates
+
+### HTTP Proxying & Fenced Environment Routes
+- **Tool Calls (`POST /api/call` → `POST /api/execute`)**: The browser posts `{ envKey, tool, descriptorId, args }` to `POST /api/call`. The local host validates the call envelope, looks up the stored bearer for `envKey`, and forwards the request to the remote environment's `POST /api/execute` endpoint.
+- **Sandboxed Environment Commands**: Host-mediated routes (`/api/environments/:key/exec`, `/api/environments/:key/git/config`, and `/api/environments/:key/git/init`) attach the environment's pairing bearer before forwarding commands to the fenced environment server (`tools/env-serve.mjs`).
+- **Fleet Discovery & Session Contact**: `GET /api/fleet` and `POST /api/fleet/contact` (`lib/fleet.mjs`, `core/fleet.ts`) route agent discovery and session messages across paired environments using `environmentKey/agentId` addressing.
+
+### WebSocket Upgrade Gates (`/live` and `/channel`)
+Both `/live` (voice session gateway) and `/channel` (routed action executor) authenticate connections before allocating sessions or registering an executor:
+1. **Local Same-Origin Browser**: Connections whose `Origin` matches the local server's bound loopback origin (`127.0.0.1`, `localhost`, or `[::1]`, plus the session cookie when `VOICEBOX_LOOPBACK_AUTH=1` is enabled) are admitted directly.
+2. **Paired Remote Peer**: Non-local connections must send an initial authentication frame within `VOICEBOX_HELLO_BOUND_MS` (default `5000ms`):
+   ```json
+   { "type": "hello", "role": "environment", "bearer": "vbx_..." }
+   ```
+   Connections that time out or present an invalid or revoked bearer are refused by name and closed with WebSocket code `1008`.
+
+---
+
+## 5. Refusal Codes & Verification
+
+| Refusal Code | HTTP / WS Status | Cause |
+|---|---|---|
+| `host-token-required` | HTTP `403` | Missing or invalid `x-voicebox-host-token` on `/api/pair`, `/api/pair/complete`, or `DELETE /api/pair`. |
+| `unknown-environment` | HTTP `404` | Target `envKey` does not exist in `environments.json`. |
+| `environment-not-paired` | HTTP `403` | Local host has no stored bearer for the requested `envKey`. |
+| `pairing-revoked` | HTTP `403` / WS `1008` | The bearer for `envKey` has been explicitly revoked via `DELETE /api/pair`. |
+| `bearer-refused` | HTTP `403` / WS `1008` | Presented `vbx_...` bearer is unrecognized or invalid for `envKey`. |
+| `unauthenticated-call` | HTTP `401` / WS `1008` | Missing bearer token on `/api/execute` or `/live`. |
+| `executor-unauthenticated` | WS `1008` | Unauthenticated non-local connection attempt on `/channel`. |
+| `environment-unreachable` | HTTP `502` | Paired remote environment could not be reached over the network. |
+
+### Verification Suites
+```bash
+node --test tests/proxied-custody.test.mjs tests/pairing-revocation.test.mjs tests/live-auth.test.mjs
+```

@@ -1,142 +1,71 @@
-# ACP adapter: real handshake and configured task execution
+# Agent Client Protocol (ACP) Adapters
 
+Voicebox integrates external coding agents—such as **Pi** (`lib/pi-acp.mjs`) and **Claude Code** (`lib/claude-acp.mjs`)—using the **Agent Client Protocol (ACP v1)** over stdio JSON-RPC (`lib/acp-client.mjs`).
 
-**Targeted adapter:** **pi-acp 0.0.34 with pi 0.87.1, ACP v1**.
-When configured with `VOICEBOX_HARNESS=pi`, the server installs `createPiAcpExecutor()`,
-connecting `delegate_task` to the Pi coding agent via ACP over stdio.
-The stock server (unset `VOICEBOX_HARNESS`) has no task executor installed and refuses `delegate_task`
-with `executor-unavailable`.
+---
 
-## What runs
+## 1. Activating a Coding Agent Harness
 
-`lib/acp-client.mjs` implements bounded JSON-RPC request correlation, `initialize`,
-`session/new`, text-only `session/prompt`, streamed text collection and `session/cancel`.
-**Cancellation has three states and three names** (`voicebox-beads-6co`): `cancel()` during a
-running turn sends `session/cancel` and returns what it DID (`{ ok: true, sent: true }`) rather
-than claiming termination; the TURN then settles as **`task-cancelled`** when the harness reports
-`stopReason: cancelled`, which is a different fact from `acp-turn-incomplete` (the harness answered
-something this client does not accept). Cancelling when nothing has run refuses **`task-not-found`**
-(the remedy is to start a task) and cancelling after a turn finished refuses **`task-not-running`**
-— the name `lib/tasks.mjs` already uses for a terminal task, so the client did not invent a second
-spelling of it. Sending cancellation is still not observing termination.
+You can activate a host coding agent harness in either of two ways:
 
-It sends no filesystem/terminal capabilities, relays permission requests to the host
-permission policy (or denies if none is configured), and refuses unsupported client requests.
+1. **In the Browser UI (Recommended)**:
+   - Click **Harnesses** in the top bar, inspect the detected coding agents on your machine, and click **Use Pi** or **Use Claude** (`PUT /api/harnesses/active`). The selection is saved in `.harness-settings.json` and activates the corresponding ACP executor immediately without restarting the server.
+2. **Via Environment Variable at Startup**:
+   ```bash
+   VOICEBOX_HARNESS=pi npm start
+   # or
+   VOICEBOX_HARNESS=claude npm start
+   ```
 
-`lib/pi-acp.mjs` supplies both:
-1. `createPiAcpExecutor(options)`: the production task executor that spawns `pi-acp` over stdio
-   in the project root, communicates via `createAcpClient`, enforces finite deadlines (<=60s)
-   and output bounds (<=64KB), and cancels cleanly when requested.
-2. `openPiAcpProbe(options)`: credential-free diagnostic probe in bubblewrap isolation for
-   verifying handshake and version parity without running model tasks.
-
-## Configured harness execution
-
-Start the server with the harness configured:
-
-```sh
-VOICEBOX_HARNESS=pi npm run serve
+To verify installed harness binaries and adapter readiness from the terminal:
+```bash
+npm run doctor
 ```
 
-Run `npm run doctor` to inspect the admitted harness.
-Delegating a task via `delegate_task` with `agent: "pi"` runs through the ACP adapter.
-Delegating to an unconfigured CLI (such as Claude Code, which has no ACP adapter) is
-refused by name as `adapter-not-configured`. Delegating to a configured agent ID that is
-not in the host's agent registry is refused as `agent-not-configured`. An admitted task's
-record carries the frozen configured-agent snapshot (`agentConfig`) beside its `agentId`
-and `harness`, so what the delegation was told at admission is readable back later.
+When no harness is active, calling `delegate_task` returns `executor-unavailable`.
 
-### Configured options consumption (voicebox-beads-ozf)
+---
 
-When an admitted task targets a configured agent record (`core/harness-config.ts`), `lib/pi-acp.mjs`
-validates and forwards supported options according to the `pi-acp` adapter contract:
-1. **Model selection**: Forwarded via ACP `session/set_config_option` with `configId: "model"` and `value: modelId` (e.g. `google/gemini-2.0-flash`, `openai/gpt-4o`). Unsupported models returned by the adapter refuse before prompt dispatch (`model-unsupported`).
-2. **Reasoning / thinking effort**: If `model.thinking` is specified, it is applied via ACP `session/set_config_option` with `configId: "thought_level"`. Unsupported levels refuse (`thinking-level-unsupported`).
-3. **Persona / system prompt**: Base persona text (`agentConfig.prompt`) is prepended as system instruction framing to the task prompt.
-4. **Needed reach vs granted effect authority**: If `agentConfig.reach.tools` is declared, the host decider refuses any tool outside the declared reach list before consulting outer host policy (`tool-not-in-agent-reach`). Needed reach is necessary but not sufficient: host authority must still independently grant the call.
-5. **Unsupported claims refusal**: Adapters other than `pi-acp`, pinned versions not matching the installed adapter, non-stdio transports, or custom model options refuse explicitly at preflight (`adapter-not-configured`, `adapter-version-unsupported`, `unsupported-runtime-capability`, `unsupported-model-options`).
+## 2. ACP Client & Executor Architecture
 
+### Shared ACP Client (`lib/acp-client.mjs`)
+`createAcpClient` manages the JSON-RPC stdio lifecycle for both Pi and Claude Code:
+- **Handshake & Session Setup**: Sends `initialize`, creates a workspace session via `session/new`, configures model and reasoning options via `session/set_config_option`, and dispatches tasks via `session/prompt`.
+- **Timeout Ceilings**: Enforces per-adapter wall-clock bounds (`60,000ms` ceiling for `pi-acp`; `120,000ms` `CLAUDE_ACP_TIMEOUT_CEILING_MS` for `claude-acp`, meta-capped at `600,000ms`) and a `64 KiB` output ceiling.
+- **Three-State Cancellation**:
+  - Calling `cancel()` during an active turn sends `session/cancel` (`{ ok: true, sent: true }`). When the adapter confirms `stopReason: "cancelled"`, the task settles as `task-cancelled`.
+  - Calling `cancel()` when no task exists returns `task-not-found`.
+  - Calling `cancel()` after a task has already settled returns `task-not-running`.
+- **Unexpected Process Exit**: If the adapter subprocess exits before returning a prompt result, the task records a typed `TaskInterrupted` (`lib/task-interrupted.mjs`) with reason `harness-ended-outcome-unknown`.
 
-## Diagnostic checks
+### Pi ACP Adapter (`lib/pi-acp.mjs`)
+- Targets `pi-acp` (`0.0.34`) with `pi` (`0.87.1`). Override binary paths via `VOICEBOX_ACP_ADAPTER` and `VOICEBOX_ACP_PI`.
+- Also provides `openPiAcpProbe()` for credential-free handshake verification inside bubblewrap isolation.
+- **Anthropic Key Fallback**: Passes `ANTHROPIC_API_KEY` through to the `pi-acp` child environment so Anthropic-backed model selections succeed when Pi's internal auth store has no separate credential (`tests/pi-acp-options.test.mjs`).
 
-For the runnable checks, including the real installed adapter rather than a stand-in:
+### Claude Code ACP Adapter (`lib/claude-acp.mjs`)
+- Drives `@agentclientprotocol/claude-agent-acp` over `runAcpTask`. Override the underlying CLI binary via `VOICEBOX_CLAUDE_CLI`.
+- **Clean Child Environment**: By default, `lib/claude-acp.mjs` omits `ANTHROPIC_API_KEY` from the spawned child environment so an ambient key does not override an authenticated `claude.ai` CLI login. Set `VOICEBOX_CLAUDE_KEEP_API_KEY=1` (or `keepApiKey: true`) to explicitly retain the environment variable in the child process.
 
-```sh
+---
+
+## 3. Configured Agent Options (`core/harness-config.ts`)
+
+When `delegate_task` targets a configured agent entry (`core/harness-config.ts`, `lib/harness-config.mjs`), the adapter applies and validates its settings before running the prompt:
+1. **Model Selection**: Forwarded via `session/set_config_option` (`configId: "model"`). Unsupported models fail pre-flight with `model-unsupported`.
+2. **Thinking / Reasoning Effort**: When `model.thinking` is specified, forwarded via `session/set_config_option` (`configId: "thought_level"`). Unsupported levels fail with `thinking-level-unsupported`.
+3. **System Persona (`agentConfig.prompt`)**: Prepended to the task prompt as system framing.
+4. **Tool Reach Enforcement (`agentConfig.reach.tools`)**: Any tool request outside the agent's declared reach list is refused with `tool-not-in-agent-reach` before consulting host policy.
+5. **Pre-Flight Validation**: Mismatched adapter versions, unsupported transports, or unconfigured harnesses fail closed with `adapter-not-configured`, `adapter-version-unsupported`, `unsupported-runtime-capability`, or `unsupported-model-options`.
+
+---
+
+## 4. Browser Placement Boundary
+
+Stdio ACP adapters (`lib/pi-acp.mjs`, `lib/claude-acp.mjs`) spawn local OS subprocesses and therefore run on `machine` and `remote` placements (`lib/tasks.mjs`). Zero-server browser environments (`tests/acp-browser.test.mjs`) use `createBrowserTaskHost()` in `lib/task-placement.mjs` (see [`16-zero-server-delegation.md`](16-zero-server-delegation.md)).
+
+### Verification Suites
+```bash
 VOICEBOX_ACP_ADAPTER="$PI_ACP_INSTALL_DIR" VOICEBOX_ACP_PI="$PI_BINARY" \
   node --test tests/acp-client.test.mjs tests/pi-acp.test.mjs tests/acp-browser.test.mjs tests/tasks.test.mjs tests/configured-harness.test.mjs
 ```
-
-The installed-adapter tests explicitly skip when those paths are absent.
-
-## Boundaries
-
-- **Claude Code**: the task adapter LANDED — voicebox-beads-a74y, `lib/claude-acp.mjs`
-  (`@agentclientprotocol/claude-agent-acp` driven as a stdio ACP client through the shared
-  `runAcpTask` core, so pi and claude cannot drift silently). A host without the pinned adapter, or a
-  harness that is not `claude`/`claude-code`, still refuses by name (`adapter-not-configured`).
-- **The adapter child's environment (voicebox-beads-nz60)**: the child is spawned with a COPY of the
-  host environment, and `ANTHROPIC_API_KEY` is **deleted** from that copy by default — an inherited
-  key overrides claude.ai login inside the adapter and can stall the prompt, and this box carries the
-  key. The host's own `process.env` is never mutated. The explicit opt-back is
-  `VOICEBOX_CLAUDE_KEEP_API_KEY=1` (or `createClaudeAcpExecutor({ keepApiKey: true })`). Absence is
-  asserted with `in`, never with `=== undefined`: a key present with the value `undefined` is a
-  different child environment, and a spawn path that forwards it writes the string `"undefined"`.
-- **The pi child's environment is the OPPOSITE decision on purpose (voicebox-beads-cpbr)**: the pi
-  child keeps the ambient `ANTHROPIC_API_KEY` — measured on this box (2026-09-26): pi's anthropic
-  provider has no other auth path when the pi auth store lacks an anthropic entry, so a scoped-out
-  child makes an anthropic-model delegation refuse `model-unsupported` at `set_config_option`,
-  while the same delegation with the key runs. For pi the ambient key is a FALLBACK, not the
-  override it is for claude. The pass-through is deliberate and pinned
-  (`tests/pi-acp-options.test.mjs`), the host env is never mutated, and if a measured stall ever
-  appears on the pi path the remedy is the nz60 shape (delete + opt-back), not half-scoping.
-  (Observed and recorded, not fixed here: the anthropic-model run completes with EMPTY answer text
-  in the measured arms — a provider content-shape detail outside the credential question.)
-- **Browser-only boundary**: `pi-acp` is a stdio subprocess. A browser environment cannot spawn
-  it directly; zero-server browser harnesses remain separate.
-
-## Interruption and durable readback
-
-`lib/task-interrupted.mjs` defines the shared `TaskInterrupted` outcome. D1 records that outcome
-as `interrupted` with its named reason; unrelated executor errors still become `failed`.
-The ACP transport reports `harness-ended-outcome-unknown` on observed process closure without
-a result. D1 never replays the admitted diagnostic and still fences late outcomes.
-
-The real TCP test deliberately installs **test-only diagnostic admission**, holds a real pi-acp
-handshake open, reads its D1 handle through a second authenticated connection, rejects another
-owner, SIGKILLs that real process, observes ESRCH and persists the typed interruption. Repeating
-the call returns the same handle with exactly one launch. This proves the interruption wiring,
-**not a killed mid-inference model task**. The admission exception lives only in a test fixture;
-normal pi-acp requests on that same fixture server still refuse before launch.
-
-## Browser-only boundary: blocked on the D1 placement design
-
-A harness is the runtime doing work; an environment is where it runs. A stdio-only adapter being
-unavailable in a browser does not prohibit browser-native harnesses. Zero-server operation remains
-a hard requirement, **not acceptance delivered by this machine diagnostic**.
-
-The real Chromium check imports the same portable ACP client, runs an explicitly labelled protocol
-fixture, writes its answer in a real IndexedDB transaction and reads it back. Its server serves
-static files only; there are no Voicebox API/bridge endpoints. This is not a browser-native harness,
-voice session, model call or durable browser task engine.
-
-It then attempts to import the actual D1 module. Chromium requests unsupported `node:fs`,
-`node:path` and `node:crypto` dependencies and fails. The test records those failed requests,
-not just a source-based assertion. TypeScript dependencies are served with types stripped so
-missing test routes are not the reason for the failure.
-
-**The seam cannot express a browser-only executor today:**
-
-- `installTaskExecutor()` lives only in `lib/tasks.mjs`, with unconditional Node imports.
-- `createTaskHost()` requires a machine root, synchronous filesystem flush/readback, inode locators
-  and process PID/liveness checks.
-- `core/tasks.ts` requires machine-root records in `reduceTask()`.
-
-`voicebox-beads-8fv.1` owns separating portable admission/lifecycle from environment storage,
-authority, addressing and liveness. Browser persistence needs asynchronous IndexedDB/OPFS, a
-browser-scoped authority/key custodian and honest document/worker death handling. This adapter
-adds no parallel browser engine or hidden local bridge. Direct browser provider authentication
-and real browser-only harness/voice acceptance are still unverified.
-
-**Smallest next step:** align trusted configured-harness admission with the independent-harness
-policy and verify a real task; separately finish the D1 browser-placement prerequisite. Keep D2
-open. [Installed harness inventory](12-harness-inventory.md) does not enable task execution.

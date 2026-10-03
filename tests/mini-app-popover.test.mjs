@@ -140,6 +140,72 @@ test("mini-app popover: anchored floating bubble, light-dismiss, and mobile draw
   assert.equal(afterBubbleClick.collapsed, "false", "clicking bubble re-expands popover");
   assert.equal(afterBubbleClick.bubbleAriaExpanded, "true", "bubble has aria-expanded='true'");
 
+  // 4b. Test full-screen expand (#mini-app-expand, voicebox-beads-3kqm) and drag handle (#mini-app-drag-handle, voicebox-beads-k7fq)
+  const beforeExpand = await page.evaluate(() => {
+    const c = document.querySelector("#mini-app-container");
+    const h = document.querySelector("#mini-app-drag-handle");
+    const rect = c.getBoundingClientRect();
+    return {
+      resize: getComputedStyle(c).resize,
+      handleCursor: h ? getComputedStyle(h).cursor : null,
+      width: rect.width,
+      height: rect.height,
+      left: rect.left,
+      top: rect.top,
+    };
+  });
+  assert.equal(beforeExpand.resize, "both", "mini-app container supports CSS resize: both");
+  assert.equal(beforeExpand.handleCursor, "grab", "#mini-app-drag-handle shows grab cursor");
+
+  // Drag #mini-app-drag-handle by (-120, -80)
+  const afterDrag = await page.evaluate(() => {
+    const c = document.querySelector("#mini-app-container");
+    const h = document.querySelector("#mini-app-drag-handle");
+    const r0 = c.getBoundingClientRect();
+    const startX = r0.left + 40;
+    const startY = r0.top + 16;
+    h.dispatchEvent(new PointerEvent("pointerdown", { clientX: startX, clientY: startY, button: 0, pointerId: 1, bubbles: true }));
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: startX - 120, clientY: startY - 80, pointerId: 1, bubbles: true }));
+    window.dispatchEvent(new PointerEvent("pointerup", { clientX: startX - 120, clientY: startY - 80, pointerId: 1, bubbles: true }));
+    const r1 = c.getBoundingClientRect();
+    return {
+      dx: Math.round(r1.left - r0.left),
+      dy: Math.round(r1.top - r0.top),
+      draggingAttr: c.dataset.dragging,
+    };
+  });
+  assert.ok(Math.abs(afterDrag.dx - -120) <= 2, `dragging header shifts left by ~-120px (got ${afterDrag.dx})`);
+  assert.ok(Math.abs(afterDrag.dy - -80) <= 2, `dragging header shifts top by ~-80px (got ${afterDrag.dy})`);
+  assert.equal(afterDrag.draggingAttr, undefined, "data-dragging attribute cleared on pointerup");
+
+  // Expand to full width and full height (#mini-app-expand)
+  await page.evaluate(() => {
+    document.querySelector("#mini-app-expand")?.click();
+  });
+  const expandedMetrics = await page.evaluate(() => {
+    const c = document.querySelector("#mini-app-container");
+    const rect = c.getBoundingClientRect();
+    return {
+      expanded: c.dataset.expanded,
+      widthRatio: rect.width / window.innerWidth,
+      heightRatio: rect.height / window.innerHeight,
+    };
+  });
+  assert.equal(expandedMetrics.expanded, "true", "clicking #mini-app-expand sets data-expanded='true'");
+  assert.ok(expandedMetrics.widthRatio >= 0.9, `expanded width covers >=90% of viewport width (got ${expandedMetrics.widthRatio})`);
+  assert.ok(expandedMetrics.heightRatio >= 0.85, `expanded height covers >=85% of viewport height (got ${expandedMetrics.heightRatio})`);
+
+  // Restore standard size before mobile check and clear inline drag styles so mobile CSS applies cleanly
+  await page.evaluate(() => {
+    document.querySelector("#mini-app-expand")?.click();
+    const c = document.querySelector("#mini-app-container");
+    c.style.left = "";
+    c.style.top = "";
+    c.style.right = "";
+    c.style.bottom = "";
+    c.style.transform = "";
+  });
+
   // 5. Dismiss via Escape key
   await page.evaluate(() => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));

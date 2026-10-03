@@ -339,4 +339,141 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
     scrollResult.scrollY > 0,
     `expected inner iframe to scroll (scrollY=${scrollResult.scrollY}, clientHeight=${scrollResult.clientHeight}, scrollHeight=${scrollResult.scrollHeight})`,
   );
+
+  // Close mini-app before testing history popover and live tool calls
+  await page.evaluate(() => {
+    document.getElementById("mini-app-close")?.click();
+  });
+
+  // ── 5. History Popover (#sqeh-toggle-history, #session) & No Dimming (hr9h, fuo6) ──
+  await page.evaluate(() => {
+    document.getElementById("sqeh-toggle-history")?.click();
+  });
+  const historyPopoverState = await page.evaluate(() => {
+    const session = document.getElementById("session");
+    const voice = document.querySelector(".voice");
+    const deck = document.getElementById("sqeh-deck");
+    const sStyle = getComputedStyle(session);
+    const sRect = session.getBoundingClientRect();
+    return {
+      sqehState: document.body.dataset.sqehState,
+      sessionHidden: session.hidden,
+      sessionPosition: sStyle.position,
+      sessionDisplay: sStyle.display,
+      sessionWidth: sRect.width,
+      voiceOpacity: getComputedStyle(voice).opacity,
+      deckOpacity: getComputedStyle(deck).opacity,
+      closePresent: Boolean(document.getElementById("session-close")),
+      emptyPresent: Boolean(document.getElementById("session-empty")),
+    };
+  });
+  assert.equal(historyPopoverState.sqehState, "history", "clicking #sqeh-toggle-history enters 'history' state");
+  assert.equal(historyPopoverState.sessionHidden, false, "#session unhides when history is toggled");
+  assert.equal(historyPopoverState.sessionPosition, "fixed", "#session is a floating fixed popover bubble");
+  assert.equal(historyPopoverState.sessionDisplay, "flex", "#session renders as flex card");
+  assert.ok(historyPopoverState.sessionWidth > 0 && historyPopoverState.sessionWidth <= 500, `expected compact #session popover width, got ${historyPopoverState.sessionWidth}`);
+  assert.equal(historyPopoverState.voiceOpacity, "1", ".voice stays at full opacity when history popover is open (no graying out)");
+  assert.equal(historyPopoverState.deckOpacity, "1", "#sqeh-deck stays at full opacity when history popover is open");
+  assert.equal(historyPopoverState.closePresent, true, "#session-close button exists");
+  assert.equal(historyPopoverState.emptyPresent, true, "#session-empty placeholder exists");
+
+  // Close #session via #session-close
+  await page.evaluate(() => {
+    document.getElementById("session-close")?.click();
+  });
+  assert.equal(
+    await page.evaluate(() => document.getElementById("session")?.hidden),
+    true,
+    "#session-close hides #session popover",
+  );
+
+  // ── 6. Rich Artifact Chip Preview (np3f) & Auto-Open on read_file (8ga5) ──
+  await page.evaluate(() => {
+    window.__voiceboxOnToolCalls?.(
+      [
+        {
+          ok: true,
+          name: "write_file",
+          file: "notes.md",
+          bytes: 28,
+          args: { name: "notes.md", content: "# Notes\nUpdated line 1\nLine 2" },
+        },
+        {
+          ok: true,
+          name: "read_file",
+          file: "notes.md",
+          content: "# Notes\nUpdated line 1\nLine 2",
+          args: { name: "notes.md" },
+        },
+      ],
+      { calls: [] },
+    );
+  });
+
+  await page.waitFor(
+    () => document.getElementById("reader")?.dataset.state === "ready",
+    { label: "#reader auto-opened on read_file tool call" },
+  );
+
+  await page.evaluate(() => {
+    window.__voiceboxOnLiveText?.("hello voicebox", "user");
+    window.__voiceboxOnLiveText?.("Hi there!", "model");
+  });
+
+  const toolEffects = await page.evaluate(() => {
+    const chip = document.querySelector("#session-log .sqeh-artifact-chip");
+    const badge = chip?.querySelector(".sqeh-artifact-badge")?.textContent?.trim();
+    const size = chip?.querySelector(".sqeh-artifact-size")?.textContent?.trim();
+    const preview = chip?.querySelector(".sqeh-artifact-preview code")?.textContent ?? "";
+    const readerState = document.getElementById("reader")?.dataset.state;
+    const readerName = document.getElementById("sqeh-reader-bubble-name")?.textContent?.trim();
+    const sessionHiddenAfterSpeechAndTools = document.getElementById("session")?.hidden;
+    const logItemCount = document.querySelectorAll("#session-log li").length;
+    return {
+      chipPresent: Boolean(chip),
+      badge,
+      size,
+      preview,
+      readerState,
+      readerName,
+      sessionHiddenAfterSpeechAndTools,
+      logItemCount,
+    };
+  });
+  assert.equal(toolEffects.sessionHiddenAfterSpeechAndTools, true, "#session stays closed when speaking, getting replies, or running tools until Recent turns is clicked");
+  assert.ok(toolEffects.logItemCount >= 3, "turns are still recorded in #session-log while #session is closed");
+  assert.equal(toolEffects.chipPresent, true, "write_file creates .sqeh-artifact-chip in #session-log");
+  assert.equal(toolEffects.badge, "Wrote", "artifact chip displays action badge");
+  assert.equal(toolEffects.size, "28 bytes", "artifact chip displays byte size");
+  assert.match(toolEffects.preview, /Updated line 1/, "artifact chip renders code preview snippet");
+  assert.equal(toolEffects.readerState, "ready", "read_file tool call auto-opens #reader");
+  assert.equal(toolEffects.readerName, "notes.md", "#reader displays read file name");
+
+  // ── 7. Dock Deduplication & Icon Padding (69ij), Harness Setup UI (a6jb), API Keys UI (5drl) ──
+  const uiPolishState = await page.evaluate(() => {
+    const dockSettings = document.getElementById("sqeh-dock-settings");
+    const iconBtn = document.getElementById("settings-open");
+    const iconPadding = iconBtn ? getComputedStyle(iconBtn).paddingTop : null;
+    const harnessForm = document.getElementById("harness-add-agent");
+    const harnessSave = document.getElementById("harness-config-save");
+    const apiKeysFieldset = document.getElementById("settings-api-keys");
+    const apiKeysSave = document.getElementById("api-keys-save");
+    return {
+      dockSettingsHidden: Boolean(dockSettings?.hidden || (dockSettings && getComputedStyle(dockSettings).display === "none")),
+      iconPadding,
+      harnessFormPresent: Boolean(harnessForm && harnessSave),
+      apiKeysPresent: Boolean(
+        apiKeysFieldset &&
+        apiKeysSave &&
+        document.getElementById("api-key-gemini") &&
+        document.getElementById("api-key-openai") &&
+        document.getElementById("api-key-anthropic"),
+      ),
+    };
+  });
+  assert.equal(uiPolishState.dockSettingsHidden, true, "duplicate #sqeh-dock-settings in bottom dock is hidden");
+  assert.equal(uiPolishState.iconPadding, "0px", ".icon-button has 0px padding so icons are not clipped");
+  assert.equal(uiPolishState.harnessFormPresent, true, "#harnesses-dialog includes #harness-add-agent setup controls");
+  assert.equal(uiPolishState.apiKeysPresent, true, "#settings includes #settings-api-keys inputs and save button");
 });
+

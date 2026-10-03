@@ -51,7 +51,7 @@ input { caret-color: var(--accent); }
 .quiet { display: inline-flex; align-items: center; gap: 7px; min-height: 40px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: .8125rem; }
 .quiet:hover:not(:disabled) { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
 .quiet:disabled { opacity: .5; }
-.icon-button { display: inline-grid; place-items: center; width: 40px; min-height: 40px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); }
+.icon-button { display: inline-grid; place-items: center; width: 40px; min-height: 40px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--muted); }
 .icon-button:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
 
 /* ── the room: one column, air around everything ──────────────────────── */
@@ -421,13 +421,67 @@ html:has(dialog.settings[open]) { overflow: hidden; }
 #file-body { max-height: 34svh; margin: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 16px 18px; border-radius: 10px; background: color-mix(in srgb, var(--card) 60%, var(--ground)); font: .8125rem/1.7 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 #file-editor { width: 100%; min-height: 180px; max-height: 45svh; margin: 0; resize: vertical; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 16px 18px; border: 1px solid var(--accent); border-radius: 10px; background: var(--card); color: var(--ink); font: .8125rem/1.7 ui-monospace, monospace; white-space: pre; }
 
-/* ── what just happened: present, but never in the way ──────────────── */
-.session { width: min(100%, 720px); text-align: center; }
-.session-head { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 8px; }
-.session h2 { margin: 0; font-size: .6875rem; font-weight: 500; letter-spacing: .16em; text-transform: uppercase; color: color-mix(in srgb, var(--muted) 70%, var(--ink)); }
-#session-log { list-style: none; display: grid; gap: 6px; margin: 0; padding: 0; max-height: 220px; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
-#session-log li { font-size: .8125rem; }
-.said { display: block; color: var(--ink); overflow-wrap: anywhere; }
+/* ── what just happened: pop-over bubble card (voicebox-beads-fuo6) ──── */
+.session {
+  position: fixed;
+  inset-inline-end: 24px;
+  inset-block-end: 24px;
+  inline-size: min(460px, calc(100vw - 32px));
+  max-block-size: min(560px, calc(100svh - 110px));
+  z-index: 115;
+  margin: 0;
+  padding: 0;
+  background: color-mix(in srgb, var(--card) 94%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  text-align: start;
+}
+.session[hidden] { display: none !important; }
+.session-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  margin: 0;
+  background: color-mix(in srgb, var(--shade) 85%, transparent);
+  border-bottom: 1px solid var(--line);
+}
+.session-title-group { display: flex; align-items: center; gap: 8px; }
+.session-actions { display: flex; align-items: center; gap: 4px; }
+.session h2 { margin: 0; font-size: .875rem; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--ink); }
+.session-empty { margin: 0; padding: 18px 16px; font-size: .8125rem; color: var(--muted); }
+.session:has(#session-log li) .session-empty { display: none; }
+#session-log {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 12px 14px;
+  max-height: min(440px, 60svh);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+#session-log:empty { display: none; }
+#session-log li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--shade) 45%, var(--card));
+  font-size: .8125rem;
+}
+.said { display: block; font-weight: 500; color: var(--ink); overflow-wrap: anywhere; }
 .did { display: block; color: var(--muted); overflow-wrap: anywhere; }
 
 .foot { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 18px; max-width: 1100px; width: 100%; margin: 0 auto; padding-top: 12px; }
@@ -827,7 +881,11 @@ dialog.changelog-modal .commit-meta {
   inset-block-end: 24px;
   inset-inline-end: 24px;
   inline-size: min(540px, calc(100vw - 32px));
-  max-block-size: min(720px, calc(100vh - 80px));
+  min-inline-size: 300px;
+  min-block-size: 260px;
+  max-inline-size: calc(100vw - 16px);
+  max-block-size: calc(100svh - 16px);
+  resize: both;
   margin: 0;
   z-index: 120;
   background: color-mix(in srgb, var(--card) 94%, transparent);
@@ -841,12 +899,18 @@ dialog.changelog-modal .commit-meta {
   overflow: hidden;
   box-sizing: border-box;
   transform-origin: bottom right;
-  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease, inline-size 0.2s ease, max-block-size 0.2s ease;
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease;
 }
 
 .mini-app-container[data-expanded="true"] {
-  inline-size: min(920px, calc(100vw - 48px));
-  max-block-size: min(800px, calc(100vh - 60px));
+  inset-block-start: 12px !important;
+  inset-inline-start: 2vw !important;
+  inset-block-end: auto !important;
+  inset-inline-end: auto !important;
+  inline-size: 96vw !important;
+  block-size: min(94svh, calc(100vh - 24px)) !important;
+  max-inline-size: 96vw !important;
+  max-block-size: 94svh !important;
 }
 
 .mini-app-container[data-collapsed="true"] {
@@ -858,16 +922,38 @@ dialog.changelog-modal .commit-meta {
 .mini-app-container[hidden] { display: none !important; }
 
 .mini-app-sheet-handle {
-  display: none;
+  display: block;
+  width: 42px;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--muted) 45%, transparent);
+  margin: 6px auto 2px;
+  cursor: grab;
+  flex: none;
 }
 
 .mini-app-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 14px;
+  padding: 8px 14px 10px;
   background: color-mix(in srgb, var(--shade) 85%, transparent);
   border-bottom: 1px solid var(--line);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.mini-app-header:active,
+.mini-app-container[data-dragging="true"] .mini-app-header,
+.mini-app-container[data-dragging="true"] .mini-app-sheet-handle {
+  cursor: grabbing;
+}
+.mini-app-container[data-dragging="true"] {
+  transition: none !important;
+  user-select: none;
+}
+.mini-app-container[data-dragging="true"] .mini-app-frame {
+  pointer-events: none;
 }
 .mini-app-title-group {
   display: flex;
@@ -899,18 +985,16 @@ dialog.changelog-modal .commit-meta {
   width: 100%;
   height: 480px;
   min-height: 200px;
-  max-height: 85vh;
-  resize: vertical;
   overflow: auto;
   overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
-  flex: 1;
+  flex: 1 1 auto;
   background: transparent;
-  transition: height 0.2s ease-out;
 }
 .mini-app-container[data-expanded="true"] .mini-app-viewport {
-  height: min(76vh, 720px);
+  height: 100%;
+  max-height: none;
 }
 .mini-app-container[data-collapsed="true"] .mini-app-viewport {
   display: none !important;
@@ -1317,17 +1401,18 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
   .sqeh-sheet { inset-block-end: auto; inset-block-start: 76px; inset-inline-start: auto; inset-inline-end: 24px; inline-size: 420px; max-block-size: 70svh; border-radius: 20px; }
 }
 
-/* ── Pure bubble + popover behavior for #made-list and #reader (voicebox-beads-wc8c) ── */
+/* ── Pure bubble + popover behavior for #made-list and #reader (voicebox-beads-wc8c, voicebox-beads-maeu) ── */
 body:not([data-sqeh-state="files"]) .made:not(.dropping) {
   display: none;
 }
 body[data-sqeh-state="files"] .made {
   position: fixed;
   inset-block-start: 72px;
-  inset-inline-start: 50%;
-  transform: translateX(-50%);
-  inline-size: min(720px, calc(100vw - 24px));
-  max-block-size: min(78svh, 640px);
+  inset-inline-end: 24px;
+  inset-inline-start: auto;
+  transform: none;
+  inline-size: min(560px, calc(100vw - 32px));
+  max-block-size: min(74svh, 580px);
   box-sizing: border-box;
   z-index: 80;
   background: transparent;
@@ -1340,10 +1425,12 @@ body[data-sqeh-state="files"] .made::before {
   position: absolute;
   inset: 0;
   z-index: -1;
-  background: var(--card);
+  background: color-mix(in srgb, var(--card) 94%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--line);
   border-radius: 20px;
-  box-shadow: var(--shadow), 0 0 0 100vmax rgba(15, 23, 42, 0.22);
+  box-shadow: var(--shadow);
   pointer-events: none;
 }
 body[data-sqeh-state="files"] .made.dropping {
@@ -1360,28 +1447,38 @@ body[data-sqeh-state="files"] .made-close {
 .reader:not([data-state="empty"]):not([data-collapsed="true"]) {
   position: fixed;
   inset-block-start: 76px;
-  inset-inline-start: 50%;
-  transform: translateX(-50%);
-  inline-size: min(680px, calc(100vw - 24px));
-  max-block-size: min(80svh, 660px);
+  inset-inline-end: 24px;
+  inset-inline-start: auto;
+  transform: none;
+  inline-size: min(600px, calc(100vw - 32px));
+  max-block-size: min(78svh, 620px);
   box-sizing: border-box;
   z-index: 88;
   margin: 0;
   padding: 16px 20px;
-  background: var(--card);
+  background: color-mix(in srgb, var(--card) 94%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--line);
   border-radius: 20px;
-  box-shadow: var(--shadow), 0 0 0 100vmax rgba(15, 23, 42, 0.24);
+  box-shadow: var(--shadow);
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+@media (max-width: 768px) {
+  body[data-sqeh-state="files"] .made,
+  .reader:not([data-state="empty"]):not([data-collapsed="true"]),
+  .session {
+    inset-inline-start: 12px;
+    inset-inline-end: 12px;
+    inline-size: auto;
+  }
 }
 body:has(#reader:not([data-state="empty"]):not([data-collapsed="true"])) .made:not(.dropping) {
   display: none;
 }
 
-/* ── State B: history mode — the session feed leads, the deck steps back ── */
-body[data-sqeh-state="history"] .sqeh-deck { opacity: 0.45; }
-body[data-sqeh-state="history"] .voice { opacity: 0.6; }
+/* ── State B: history mode — floating pop-over bubble without dimming the room (voicebox-beads-hr9h) ── */
 
 @media (max-width: 768px) {
   .sqeh-deck { margin: 10px; }
@@ -1391,8 +1488,7 @@ body[data-sqeh-state="history"] .voice { opacity: 0.6; }
 /* ── the three states: curate views cleanly ── */
 @media (max-width: 768px) {
   body[data-sqeh-state="history"] .made,
-  body[data-sqeh-state="history"] .reader,
-  body[data-sqeh-state="history"] .voice { display: none; }
+  body[data-sqeh-state="history"] .reader { display: none; }
 }
 
 /* The arcs glow past the mic stage; clip the SECTION's horizontal overflow so a phone
@@ -1440,9 +1536,123 @@ body[data-sqeh-state] .mic-dock:not([hidden]) {
 }
 body[data-sqeh-state] .mic-dock .icon { inline-size: 26px; block-size: 26px; }
 
-/* Artifact chips (State B): a tool-written file becomes an inline chip on the turn. */
+/* Artifact chips (State B): a tool-written file becomes an inline chip on the turn (voicebox-beads-np3f). */
 .sqeh-chip { display: inline-flex; align-items: center; gap: 6px; margin-block-start: 8px; padding: 5px 10px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--accent) 10%, var(--card)); color: var(--ink); font-size: 0.75rem; cursor: pointer; }
 .sqeh-chip:hover { border-color: var(--accent); }
 .sqeh-chip .icon { inline-size: 14px; block-size: 14px; color: var(--accent); }
 .sqeh-chip-open { font-weight: 700; color: var(--accent); }
+.sqeh-artifact-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  border-radius: 12px;
+  padding: 8px 10px;
+  text-align: start;
+  width: 100%;
+}
+.sqeh-artifact-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+.sqeh-artifact-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+.sqeh-artifact-name {
+  font-weight: 600;
+  color: var(--ink);
+}
+.sqeh-artifact-size {
+  font-size: 0.7rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.sqeh-artifact-open {
+  margin-inline-start: auto;
+  font-weight: 700;
+  color: var(--accent);
+}
+.sqeh-artifact-preview {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ground) 75%, var(--card));
+  border: 1px solid var(--line);
+  font: 0.72rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted);
+  max-block-size: 72px;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 
+/* ── Harness & API Keys UI configuration (voicebox-beads-a6jb, voicebox-beads-5drl) ── */
+.harness-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.harness-add-agent {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.harness-add-agent summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+.harness-add-grid {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 6px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.settings-group {
+  margin: 16px 0 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--shade) 40%, transparent);
+}
+.settings-group legend {
+  padding: 0 6px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+}

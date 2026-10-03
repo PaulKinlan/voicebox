@@ -1,191 +1,85 @@
-# How it runs — the operating model tonight
+# Operating Model & Development Workflow
 
-**A snapshot, not a spec.** [`07-architecture.md`](07-architecture.md) says what the pieces are; this says
-what starts what, on which ports, and what must stay true while it runs. `02-environment.md` is the design
-record for where this is going; this file is where it is.
+[`07-architecture.md`](07-architecture.md) describes Voicebox's components and data structures. This document explains how the server and development environment run, how ports and network boundaries are configured, and how runtime invariants and documentation checks work.
 
-## The operating model
+---
 
-There is **no service to install and nothing to keep running**. The system is one Node process serving a
-static page and three API routes, plus — in development only — a Vite process in front of it for HMR.
+## 1. Runtime Operating Model
+
+Voicebox runs as a single, zero-dependency Node.js process (`server.mjs`) that serves the static web interface from `public/` and exposes REST and WebSocket endpoints. During frontend development, an optional Vite server (`vite.config.js`) provides Hot Module Replacement (HMR) and proxies API and WebSocket traffic to `server.mjs`.
 
 ```
-developer ──browser──> Vite (dev only, :5173) ──proxy /api──> server.mjs (:8787)
-                             │                                   │
-                             └── serves public/ ──────────────────┴── reads/writes the active project root
+Browser ──▶ Vite Dev Server (:5173, dev only) ──proxy /api, /live, /channel──▶ server.mjs (127.0.0.1:8787)
+                    │                                                                    │
+                    └──────────────────── serves public/ ────────────────────────────────┴──▶ Active Workspace Root
 ```
 
-The active project root is wherever the environment declares it (or the boot-time workspace
-variable, which is a declaration too) — the server's `GET /api/root` answers where, so this
-diagram does not have to.
+In production (`npm start` or `npm run serve`), `node server.mjs` serves `public/` directly without Vite or external runtime dependencies.
 
-In production there is no Vite: `node server.mjs` serves the same `public/` directory itself, from disk (including `changelog.html` and `GET /api/changelog`).
+### Ports
 
-## Ports, and why
-
-| port | who | why |
+| Port | Process | Purpose |
 |---|---|---|
-| **8787** | `server.mjs` (`PORT` overrides) | the zero-dependency server. **Binds `127.0.0.1` only** — see the single-host rule. |
-| **5173** | Vite (`npm run dev`), `strictPort: true` | dev only. A server that silently lands on another port gets measured as the wrong server, so Vite **exits** rather than drifting. |
-| **8794 / 8790 / 8792 / 8796** | ad-hoc inspection servers | not part of the system; they are how a person looks at it from another machine. |
+| **`8787`** | `server.mjs` (`PORT` overrides) | Primary HTTP and WebSocket server. Always binds **`127.0.0.1`**. |
+| **`5173`** | Vite (`npm run dev`, `strictPort: true`) | Development server with HMR. Exits immediately if port `5173` is busy rather than drifting to another port. |
 
-## The single-host rule
+### The Loopback Binding Rule (`127.0.0.1`)
+`server.mjs` binds exclusively to loopback (`127.0.0.1`). The browser connects to its local host over loopback, and cross-machine operations are performed via authenticated host-to-host pairing ([`09-proxied-custody.md`](09-proxied-custody.md)) rather than exposing an unauthenticated server on `0.0.0.0`.
 
-**The server binds loopback and is reached from the same machine.** That is not a limitation to be worked
-around casually — it is the rule the whole environment design rests on (the design's §1.1b: *the host is
-wherever the files are, and the browser is always a client*). Two consequences worth stating:
+---
 
-- A page loaded from **another origin** is a client of this host only if it can reach loopback, which is why
-  the dev server proxies rather than the page fetching cross-origin.
-- **Serving this on `0.0.0.0` is a different product**, with a different trust story, and it is not this tree.
-
-## The dev environment
+## 2. Running in Development
 
 ```bash
-npm run serve      # node server.mjs — the real thing, no dependencies, port 8787
-npm run dev        # Vite in front: :5173, proxies /api, HMR as you edit
-npm run docs:check # the docs drift check (see below)
+npm start          # Start server.mjs on http://127.0.0.1:8787
+npm run dev        # Start Vite dev server on :5173 (proxies /api, /live, /channel to :8787)
+npm run docs:check # Verify that documentation blocks and file references match the codebase
+npm run docs:write # Regenerate live-probed documentation blocks in README.md and docs/07-architecture.md
 ```
 
-Three things about the dev loop that are easy to get wrong and are therefore written here:
+### Key Runtime Behaviors
+- **Real-Time UI Synchronization (`{ type: "tool" }`)**: When a live voice model executes a tool over `/live` (`lib/ws-server.mjs`, `lib/live-session.mjs`), the server sends a `{ type: "tool" }` frame to `public/live-voice.js`. `public/fused.js` automatically refreshes the file list, renders inline file chips on the conversation turn, and opens the floating File Viewer (`#reader`) when the user asks to view a file.
+- **Pop-Over Bubble Interface (`#sqeh-deck`)**: The workspace interface keeps the central voice microphone (`#mic`) and text composer (`#text-form`) front-and-center while organizing Files (`#sqeh-files-bubble`), the File Viewer (`#sqeh-reader-bubble`), interactive Mini-Apps (`#sqeh-actions`), and Recent Turns (`#sqeh-toggle-history`) into lightweight pop-over bubbles.
+- **Interactive Mini-Apps (`public/mini-app-bridge.js`)**: `.html` files in the workspace or apps launched via `launch_mini_app` run inside `#mini-app-container` using a double-iframe sandbox (`/mini-app-bridge.html` mediating an opaque-origin `sandbox="allow-scripts"` inner frame) and expose Web MCP tools to the voice session.
+- **WebAssembly Shelf Tools (`lib/wasm-shelf.mjs`)**: Digest-pinned `.wasm` tools (such as `hash.wasm` and `diff.wasm`) appear in `list_extensions`, execute via `call_extension`, and report execution latency (`durationMs`) to the UI (`tests/live-wasm-room.test.mjs`, `tests/wasm-room-ui.test.mjs`; see [`docs/20-webassembly-tools.md`](20-webassembly-tools.md)).
+- **Live Task Cards & Fleet Addressing (`core/fleet.ts`, `lib/fleet.mjs`)**: Delegated coding tasks emit `{ type: "task" }` events to update task progress cards in real time. Agents across environments are addressed as `environmentKey/agentId` or `environmentKey/agentId:sessionId`.
+- **Tailscale Serve Firewall Note**: When exposing the dev server over Tailscale Serve (`https://<node>.<tailnet>.ts.net/`), ensure the host firewall permits traffic on `tailscale0` (`sudo ufw allow in on tailscale0`) so remote tailnet peers do not hit `ERR_CONNECTION_ABORTED`.
 
-- **The tailnet door has a firewall half.** The dev front is also served over Tailscale Serve at
-  `https://<node>.<tailnet>.ts.net/` (vite.config.js allows the `.ts.net` Host). If a peer sees
-  `ERR_CONNECTION_ABORTED` on that URL **while every local check passes**, the cause is `ufw`
-  refusing incoming on `tailscale0` — a local test to the machine's own tailnet address never
-  crosses the interface the firewall is refusing, so "it works here" proves nothing. Fix:
-  `sudo ufw allow in on tailscale0`.
+---
 
-- **Vite is dev-only.** `server.mjs` stays zero-dependency and remains the production path; nothing in it
-  imports Vite, and it runs with no `node_modules` at all. That is verified by serving the page on a machine
-  with nothing installed.
-- **A write goes where you are standing, and says what was observed** (voicebox-beads-s61). The room's own
-  commands for a picked folder name a FILE, so a bare name means "here, in the folder on screen" — for the
-  write *and* the read — while a name that already carries a path is honoured as itself. This is the same
-  rule the listing and the reader follow, and it was not: standing in `proposals`, "create a file called x"
-  wrote x at the folder's root, quietly ignoring which folder the person was looking at. The write line then
-  reports the size the FILE SYSTEM reported (read back after `close()`), not the number of bytes the code
-  intended to write, and whether the storage is durable — because "saved" and "saved durably" are different
-  promises. If the read-back disagrees, the write is refused by name rather than reported as a success.
-- **One frame makes the list move without the page asking.** The server sends `{type:"tool"}` when a live
-  model runs a command; `public/live-voice.js` forwards it and `public/fused.js` re-reads the file list. That
-  is the whole path from "the model wrote a file" to "the file is on screen": no polling, no refresh, and the
-  The same frame now also feeds the artifact chips (voicebox-beads-2meg): `public/fused.js` renders a written file as an inline chip on the turn that produced it.
-  opening reader and scroll position survive the re-read (voicebox-beads-a93).
-- **The 3-state system interface and floating bubbles lead the room (voicebox-beads-sqeh, 3rcy, wc8c).** The room defaults to a warm paper light palette (`data-theme="light"`, toggleable via `#theme-toggle`) with the voice stage (`#mic` and `#text-form`) permanently front-and-centre at the top of `<main class="stage">`. Deck state shows the centered voice stage plus the compact Bubble Tray (`#sqeh-deck`) carrying the Files Bubble (`#sqeh-files-bubble`), the active File Viewer Bubble (`#sqeh-reader-bubble`), and real Mini-App bubbles (`#sqeh-actions` populated from folder `.html` files and session-launched apps), with `#made-list` tucked inside the Files bubble at rest rather than duplicated on stage. Files state (`data-sqeh-state="files"`) pops `#made-list` over the center of the viewport as a fixed popover card (`#made-close`), and opening any file pops `#reader` over the stage as a floating card (`#reader-minimize`, `#reader-back-files`) while hiding `#made-list` behind it so the list and viewer never stack simultaneously. History state (`data-sqeh-state="history"`) reveals the session feed (`#session`). Systems state opens `#sqeh-sheet` with audio/system controls (`#sqeh-act-mute`, `#sqeh-act-volume`, `#sqeh-act-explorer`).
-- **Artifact chips land on the turn (voicebox-beads-2meg).** A successful write/edit in the voice loop leaves an inline chip on that turn — the file's name and an Open action driving the room's own reader; the tool frame carries the written file's name from the executor's result. The playback path carries a real gain (clamped) behind the Volume tile, and the mic is ONE button: the stage's, with `#mic-dock` standing in only when scrolled away.
-- **Live task frames mount the task card immediately.** The server sends `{type:"task"}` when a task is
-  delegated; `public/live-voice.js` forwards it to `public/fused.js` which dynamically displays the task card
-  with agent name, address, and live status without manual status checks (voicebox-beads-8fv.4).
-- **Fleet addressability across environments.** Agents are addressed by `environmentKey/agentId` (e.g. `local/pi`, `env_b/worker`) or `environmentKey/agentId:sessionId` (`core/fleet.ts`, `lib/fleet.mjs`). If an environment is stopped or unreachable, requests to it refuse by name (`environment-unreachable`) without blind rerouting. Existing session contact reaches active interactive sessions without creating replacement sessions (voicebox-beads-8fv.3).
-- **WASM shelf tools discoverable and invocable via extensions.** Admitted shelf tools (e.g. `hash.wasm`, `diff.wasm`) surface in `list_extensions` with their measured boundary (zero imports, admitted digest, buffer-abi) and execute through `call_extension` via `lib/wasm-shelf.mjs`, decoding Hirschberg line diffs into structured blocks without separate wasm-specific tooling routes (voicebox-beads-9nk). Executions report their **measured latency** (`durationMs` on the room loop's `{type:"tool"}` frame, rendered as "21ms"-style readouts on the shelf rows — voicebox-beads-rgvi), and the developer guide for authoring, the buffer ABIs, compilation and admission is [`docs/20-webassembly-tools.md`](docs/20-webassembly-tools.md) (`tests/live-wasm-room.test.mjs` pins the frame's latency, `tests/wasm-room-ui.test.mjs` pins the row).
-- **Interactive mini-apps rendered within the room interface.** The room embeds `#mini-app-container` hosting an outer mediator iframe pointing to `/mini-app-bridge.html?appId=...`. The bridge (`public/mini-app-bridge.js`) establishes a private `MessageChannel` with the room, injects the Web MCP SDK after `<!doctype html>` so `#inner-app` stays in Standards Mode (`CSS1Compat`) with smooth scrolling, and sets up the untrusted inner app with `sandbox="allow-scripts"`. Conversational turns (`launch_mini_app`), `{type:"mini_app"}` frames, clicking a workspace `.html` Mini-App bubble in `#sqeh-actions`, or clicking `#file-run-app` in `#reader` dynamically mount and pop over the widget (voicebox-beads-5h1, 3rcy).
-- **Dynamic microphone button audio waveform animation.** The mic button waveform (`#input-path`) renders live energy during both listening (user voice in accent color) and speaking (agent voice playback in green), smoothly blending input and output so the waveform dynamically animates in real-time without flatlining or freezing (voicebox-beads-5i2i, 6vs4).
-- **The proxy's `/live` entry and the transport behind it.** Vite proxies `/live` with `ws: true`; the
-  zero-dependency server hands the upgrade to `lib/ws-server.mjs`, which runs the session in
-  `lib/live-session.mjs`. The proxy entry and the route are two halves of one path — and the route table
-  above is generated by probing the server, so if that ever stops being true, the doc changes rather than
-  the reader being misled.
+## 3. Core Architectural Invariants
 
-## Invariants
+1. **Separated Turn Resolution and Execution**: `server.mjs` executes structured actions and never parses natural language directly; all text turn parsing happens in registered resolvers (`lib/resolver.mjs`).
+2. **Verified Frontend Asset Set**: `scripts/docs-check.mjs` parses `public/index.html` (`public/fused.js`, `public/style.css`, `public/live-voice.js`) to ensure the documented script and AudioWorklet load set matches what the browser loads.
+3. **Live-Probed HTTP Routes**: Route documentation is verified by booting a real server instance on an ephemeral port and probing the endpoints over HTTP.
+4. **Self-Contained `core/` Library**: Modules in `core/` (`core/harness-config.ts`, etc.) have zero imports outside `core/`, allowing pure policy and state logic to be shared across Node and browser runtimes (`lib/harness-config.mjs`).
+5. **Strict Path Containment**: `resolveInsideRoot` rejects path traversal (`..`), leading slashes, and dotfile access; verified by `tests/containment-paths.test.mjs`.
+6. **Untrusted Transcript Rendering**: Transcripts and tool outputs are rendered via DOM text nodes and safe attributes in `public/`, preventing XSS injection.
 
-These are the things that must stay true; each is checkable, and the first three are checked.
+---
 
-1. **The turn path is exactly one seam.** The server executes actions and never parses language; every verb
-   comes from a registered resolver. (`docs-check` reads the provider list from the module that registers it.)
-2. **The page's load set is what the document says it is.** (`docs-check` reads `public/index.html`, including the room folders bar, and settings, environments, extensions, and harnesses modals.)
-   The room interface (`public/index.html`, `public/fused.js`, `public/style.css`) is built with modern web
-   standards: native `<dialog>` modals with `closedby="any"` and unified light-dismiss fallbacks, container queries
-   for component-scoped layouts, semantic `<search>` landmarks, and scroll containment (`overscroll-behavior: contain`).
-3. **A route a document claims is a route that answers.** (`docs-check` probes a live server on a scratch
-   port — the same thing the suite does, because "it serves" and "the doc says it serves" are different
-   claims.)
-4. **`core/` imports nothing outside `core/`.** (Checked in the test suite; the design's N18 explains why a <!-- docs-check: names the mechanism -->
-   second copy is worse than no copy.)
-5. **Containment resolves and refuses.** `resolveInsideRoot` rejects any `..` segment and absolute paths;
-   `tests/containment-paths.test.mjs` names the escaping case and carries a positive control.
-6. **Nothing in `public/` trusts a transcript.** The page's own note says so, and the suite drives an XSS
-   payload through the API and asserts it never becomes elements.
-7. **Harness configuration distinguishes runtime, agent, and environment.** (`core/harness-config.ts`,
-   `lib/harness-config.mjs`). Configured agent records are secret-free, permanent IDs are distinct from
-   mutable names and transient task addresses, and stdio CLI adapters are refused in browser runtimes.
+## 4. Automated Documentation Verification
 
-## Keeping this document true
+Voicebox uses two automated scripts to prevent documentation drift:
 
+### 1. Runtime & Claim Verification (`scripts/docs-check.mjs`)
 ```bash
-node scripts/docs-check.mjs                     # exit 1 when a document has drifted; names every problem it can see
-node scripts/docs-check.mjs --write             # regenerate the generated blocks in place
-node scripts/docs-check.mjs --docs-root <dir>   # either, on a copy of README.md and docs/ under <dir>
+node scripts/docs-check.mjs                     # Check mode: exits 1 on any drift or broken claim
+node scripts/docs-check.mjs --write             # Write mode: regenerates blocks in README.md and docs/07-architecture.md
+node scripts/docs-check.mjs --docs-root <dir>   # Run checks against a directory copy (used by tests/docs-drift.test.mjs)
 ```
+`scripts/docs-check.mjs` runs a fast static pre-pass before booting the probe server:
+- Verifies that all `<!-- BEGIN GENERATED: ... -->` markers exist and are non-empty.
+- Verifies that every backticked repository file path (such as `lib/extensions.mjs`) exists on disk.
+- Verifies that required and forbidden literals in `docs/claims.json` hold across `README.md` and `docs/*.md`.
 
-`tests/docs-drift.test.mjs` runs the same check inside the suite, so drift **fails a test** rather than
-waiting for someone to remember. The generated blocks are marked `BEGIN GENERATED:` / `END GENERATED:` in
-this file, in `07-architecture.md` and in `README.md`; everything outside them is written by a person.
-
-**The cheap half refuses first** (`voicebox-beads-qxy2`). Every document present with its markers, no blank
-block, no hand-written path to a file that is gone, no retired literal, `docs/claims.json` holding: all of it
-is checked before the scratch server boots, every failure is named in one run, and the run says the
-generated blocks were not compared. The test plants its refusals in a copy of the documents
-(`--docs-root`), never in the checkout; the code, the server and every path a document names still come
-from the tree.
-
-**What this check cannot see**, stated so nobody trusts it further than it goes: it derives the provider
-list, the probed routes, the page's scripts and the presence of a live-session file. It cannot tell whether
-a *sentence* in prose is still true, and it does not try.
-
-### The hand-written half
-
+### 2. Change-Coupled Documentation Gate (`scripts/docs-touched.mjs`)
 ```bash
-node scripts/docs-touched.mjs          # exit 1 when a change moves a described file and no document moves
+node scripts/docs-touched.mjs
 ```
+Every backticked file path in `README.md` or `docs/*.md` registers that file as documented. If a commit modifies a documented source file without updating any markdown document, `scripts/docs-touched.mjs` refuses the push and lists the modified file alongside the documents that reference it (`tests/docs-touched.test.mjs`).
 
-The rule is Paul's: **every update updates the docs and the README in the same change.** The generated
-blocks answer for themselves; the prose around them had nothing watching it — and on 2026-09-20 a
-hand-written paragraph in the README was false *within the hour*, because a route landed underneath it
-while the generated block beside it went red and was regenerated.
-
-So the documents' own declarations are the mechanism: **every file path a document names in backticks is a
-file that document describes.** Change one of those files and touch no document, and the push is refused,
-naming the file and every document that names it. It runs first in the pre-push gate, before the suite,
-because it costs one `git diff`.
-
-**It must not become a gate that always fails**, so there is an explicit way past, and it is a record
-rather than a shrug:
-
+When a code change genuinely does not alter any behavior described by the documentation (for example, an internal comment or refactor), record the check explicitly with a Git commit trailer:
 ```bash
-git commit --amend --trailer "Docs-checked: a comment — nothing a document describes changed"
+git commit --amend --trailer "Docs-checked: internal refactor — no documented behavior changed"
 ```
-
-That trailer is the checklist item (*"did this move something a document describes?"*) turned into
-something a later reader can audit. Git's own parser decides what counts: it must be a real trailer in
-the message's terminal block, and it must carry a non-empty reason. `tests/docs-touched.test.mjs` drives
-the gate against a real scratch repository — refusal, the document-in-the-change case, the trailer, an
-undescribed file, a docs-only change, and an unknown base — so the gate has checks that can fail.
-
-#### What this gate does NOT do
-
-**It is a prompt, not a proof, and the list below is measured rather than imagined** — every line was
-driven against a scratch repository by an independent reviewer (2026-09-23). Read it before trusting the
-gate for a job it was never given:
-
-- **It watches described files, not new ones.** A change that *adds* a file no document describes passes
-  untouched. Naming a file in a document is what puts it under the gate.
-- **Any document satisfies it.** Changing an unrelated markdown file — or editing only a *generated*
-  block in the README — counts as "a document moved", even when the prose that describes your change is
-  untouched. **The README is not mandatory**; the gate cannot tell which document *should* have moved.
-- **One trailer excuses the whole range.** A `Docs-checked:` reason written for a trivial change in one
-  commit also excuses a described-code change in another commit in the same push.
-- **It sees the paths documents actually write.** `lib/extensions.mjs` and `./lib/extensions.mjs` are
-  both understood; the same path with a trailing line number is not, and a path written in a document
-  **nested deeper than one level** is not read at all — the document set is the root markdown files plus
-  `docs/`, one level.
-- **A deleted file stops being described**, because existence is what makes a backticked string a path —
-  so removing a file a document names does not trip the gate, though the prose is now wrong.
-- **Existence is not absence of collision.** The bare-name pattern also matches prose that looks like a
-  filename (`result.ok`, `bounds.hosts`); those are discarded because no such file exists. If a real file
-  ever shares a name with a property a document discusses, the gate will treat edits to it as described.
-  No such collision exists in this tree today; the case was constructed to find the boundary.
-
-**So: it catches the common, boring mistake — moving code a document talks about and forgetting the
-document — and it does not enforce "the docs and the README are correct."** Closing any line above is a
-policy decision, not a bug fix, because each one trades a false green for a false red.
