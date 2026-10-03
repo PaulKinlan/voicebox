@@ -1,4 +1,4 @@
-# 21 · Voice System Commands & Catalogue (`voicebox-beads-2vza`, `voicebox-beads-von8`)
+# Voice System Commands & Catalogue
 
 Voicebox provides deterministic, zero-latency system voice commands for clipboard operations, room navigation, appearance switching, and audio/session controls alongside its generative live model and tool execution paths.
 
