@@ -268,4 +268,98 @@ test("mini-app popover: anchored floating bubble, light-dismiss, and mobile draw
   });
   assert.equal(closed.containerHidden, true, "container hidden after close");
   assert.equal(closed.dockHidden, true, "dock hidden after close");
+
+  // 8. In-place updates, #mini-app-edit, and #mini-app-delete (voicebox-beads-lkdd)
+  await page.send("Emulation.setDeviceMetricsOverride", {
+    width: 1280,
+    height: 800,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await sleep(100);
+
+  await page.evaluate(() => {
+    window.__voiceboxMiniApp.mount({
+      appId: "app_timer",
+      title: "Focus Timer",
+      fileName: "focus-timer.html",
+      html: "<!DOCTYPE html><html><body><h1 id='v'>v1 timer</h1></body></html>",
+      source: "workspace",
+      tools: [],
+    });
+    window.__voiceboxMiniApp.mount({
+      appId: "app_timer_v2",
+      title: "Focus Timer",
+      fileName: "focus-timer.html",
+      html: "<!DOCTYPE html><html><body><h1 id='v'>v2 timer</h1></body></html>",
+      source: "shelf",
+      tools: [],
+    });
+  });
+
+  await page.waitFor(() => {
+    const outer = document.querySelector("#mini-app-outer-frame");
+    const inner = outer?.contentDocument?.querySelector("#inner-app");
+    return Boolean(inner?.srcdoc?.includes("v2 timer"));
+  }, { label: "mini-app bridge inner iframe updated to v2 timer" });
+
+  const dedupedState = await page.evaluate(() => {
+    const c = document.querySelector("#mini-app-container");
+    const badge = document.querySelector("#mini-app-source-badge");
+    const outer = document.querySelector("#mini-app-outer-frame");
+    const inner = outer?.contentDocument?.querySelector("#inner-app");
+    const chips = [...document.querySelectorAll("#sqeh-actions .sqeh-miniapp-bubble")];
+    const timerChips = chips.filter((el) => el.textContent.toLowerCase().includes("focus timer"));
+    return {
+      hidden: c?.hidden,
+      badgeHidden: badge?.hidden,
+      badgeText: badge?.textContent?.trim(),
+      srcdoc: inner?.srcdoc ?? "",
+      timerChipCount: timerChips.length,
+    };
+  });
+
+  assert.equal(dedupedState.hidden, false, "mini-app container is visible after mounting Focus Timer");
+  assert.equal(dedupedState.timerChipCount, 1, "mounting updated mini-app with same title updates in place in #sqeh-actions (1 bubble, not 2)");
+  assert.ok(dedupedState.srcdoc.includes("v2 timer"), "live iframe content updates to v2 HTML");
+  assert.equal(dedupedState.badgeHidden, false, "mini-app source badge is visible");
+  assert.equal(dedupedState.badgeText, "Saved app", "mini-app source badge reflects updated source");
+
+  // Click #mini-app-edit -> opens mini-app HTML in #reader's #file-editor
+  await page.evaluate(() => {
+    document.querySelector("#mini-app-edit")?.click();
+  });
+  await sleep(150);
+
+  const editState = await page.evaluate(() => {
+    const reader = document.querySelector("#reader");
+    const editor = document.querySelector("#file-editor");
+    return {
+      readerEditing: reader?.dataset.editing,
+      editorHidden: editor?.hidden,
+      editorValue: editor?.value ?? "",
+    };
+  });
+  assert.equal(editState.readerEditing, "true", "clicking #mini-app-edit puts #reader into editing mode");
+  assert.equal(editState.editorHidden, false, "#file-editor is visible when editing mini-app source");
+  assert.ok(editState.editorValue.includes("v2 timer"), "#file-editor contains the active mini-app HTML source");
+
+  // Click #mini-app-delete -> removes mini-app and closes #mini-app-container
+  await page.evaluate(() => {
+    document.querySelector("#mini-app-delete")?.click();
+  });
+  await sleep(250);
+
+  const afterDelete = await page.evaluate(() => {
+    const c = document.querySelector("#mini-app-container");
+    const chips = [...document.querySelectorAll("#sqeh-actions .sqeh-miniapp-bubble")];
+    const timerChips = chips.filter((el) => el.textContent.toLowerCase().includes("focus timer"));
+    return {
+      containerHidden: c?.hidden,
+      timerChipCount: timerChips.length,
+    };
+  });
+  assert.equal(afterDelete.containerHidden, true, "#mini-app-container closes after clicking #mini-app-delete");
+  assert.equal(afterDelete.timerChipCount, 0, "deleted mini-app is removed from #sqeh-actions");
 });
+

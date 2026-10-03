@@ -69,7 +69,10 @@ const WANTED = {
   miniAppSheetHandle: "mini-app-sheet-handle",
   miniAppDragHandle: "mini-app-drag-handle",
   miniAppTitle: "mini-app-title",
+  miniAppSourceBadge: "mini-app-source-badge",
   miniAppViewport: "mini-app-viewport",
+  miniAppEdit: "mini-app-edit",
+  miniAppDelete: "mini-app-delete",
   miniAppReload: "mini-app-reload",
   miniAppExpand: "mini-app-expand",
   miniAppToggle: "mini-app-toggle",
@@ -777,7 +780,7 @@ const turn = async (transcript) => {
     return await request("/api/turn", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ transcript }),
+      body: JSON.stringify({ transcript, ...(listingDir ? { dir: listingDir } : {}) }),
     }, traceId);
   } catch (error) {
     recordDebug({ type: "turn.error", traceId, error: error.message, refused: error.refused, why: error.why });
@@ -2003,6 +2006,7 @@ async function load() {
       };
     });
     render();
+    void refreshCatalogMiniApps();
   } catch (error) {
     entries = [];
     lastRenderedFilesSig = null;
@@ -2037,6 +2041,62 @@ function isCurrentFileEditable() {
 }
 
 const isHtmlFileName = (name) => /\.html?$/i.test(String(name ?? "").trim());
+
+function normalizeMiniAppKey(raw) {
+  const cleaned = String(raw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\.html?$/i, "")
+    .replace(/^(?:app_|file_)/, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return cleaned ? `app_${cleaned}` : "";
+}
+
+let catalogMiniApps = [];
+
+async function refreshCatalogMiniApps() {
+  try {
+    const res = await fetch("/api/mini-apps", { signal: AbortSignal.timeout(6000) });
+    if (!res.ok) return;
+    const data = await res.json().catch(() => null);
+    if (data && Array.isArray(data.miniApps)) {
+      catalogMiniApps = data.miniApps;
+      if (typeof sqehSyncMiniApps === "function") sqehSyncMiniApps();
+    }
+  } catch {
+    // Optional endpoint; ignore when unavailable
+  }
+}
+
+function syncMiniAppAfterFileSave(fileName, content) {
+  if (!isHtmlFileName(fileName)) return;
+  const norm = normalizeMiniAppKey(fileName);
+  void fetch("/api/mini-apps", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ fileName, title: fileName, html: content }),
+  }).catch(() => {});
+  let matchedDesc = null;
+  for (const [k, v] of launchedMiniApps.entries()) {
+    const vNorm = normalizeMiniAppKey(v.fileName || v.title || k);
+    if (v.fileName === fileName || v.title === fileName || (norm && vNorm === norm)) {
+      v.html = content;
+      matchedDesc = v;
+    }
+  }
+  const current = miniAppController?.getDescriptor?.();
+  if (current) {
+    const curNorm = normalizeMiniAppKey(current.fileName || current.title || current.appId);
+    if (current.fileName === fileName || current.title === fileName || (norm && curNorm === norm)) {
+      miniAppController.mount({ ...current, fileName, html: content });
+      return;
+    }
+  }
+  if (matchedDesc && typeof sqehSyncMiniApps === "function") {
+    sqehSyncMiniApps();
+  }
+}
 
 function syncReaderBubble() {
   if (!els.sqehReaderBubble) return;
@@ -2081,6 +2141,8 @@ async function launchWorkspaceHtmlMiniApp(name) {
     miniAppController.mount({
       appId: `file_${name.replace(/[^a-zA-Z0-9_-]/g, "_")}`,
       title: name,
+      fileName: name,
+      source: "workspace",
       html,
     });
   } catch (error) {
@@ -2273,6 +2335,8 @@ on(els.fileRunApp, "click", () => {
   miniAppController.mount({
     appId: `file_${shownFile.replace(/[^a-zA-Z0-9_-]/g, "_")}`,
     title: shownFile,
+    fileName: shownFile,
+    source: "workspace",
     html,
   });
 });
@@ -2315,6 +2379,7 @@ async function saveEditedFile() {
       exitEditMode();
       finish(`save ${shownFile}`, `wrote ${shownFile} (${size(written.bytes)} observed) in ${roomFolder.name}${durable}`, "good");
       sqehArtifactChip(shownFile, { verb: "edit", content, bytes: written.bytes });
+      syncMiniAppAfterFileSave(shownFile, content);
       await loadRoomFolder();
       return;
     }
@@ -2338,6 +2403,7 @@ async function saveEditedFile() {
     const landed = answer.root?.path ?? answer.root?.name ?? answer.root?.label ?? "";
     finish(`save ${shownFile}`, `${answer.action || `wrote ${shownFile}`}${landed ? ` in ${landed}` : ""}`, "good");
     sqehArtifactChip(shownFile, { verb: "edit", content });
+    syncMiniAppAfterFileSave(shownFile, content);
     await load();
   } catch (error) {
     const reason = `Could not save ${shownFile}: ${error?.message ?? error}`;
@@ -2487,6 +2553,23 @@ function presentInspectionInReader(verb, result, action) {
       ...(env.limits?.cpuCount ? [`CPUs: ${env.limits.cpuCount}`] : []),
       ...(toolLines.length ? ["Tools:", ...toolLines] : []),
     ].join("\n");
+  } else if (verb === "exec") {
+    const cmd = result.command ?? action?.command ?? action?.name ?? "command";
+    const out = [result.stdout ?? result.output ?? "", result.stderr ?? ""].filter(Boolean).join("\n").trimEnd();
+    if (!out) return false;
+    title = `Output of ${cmd}`;
+    const code = result.exitCode ?? result.code ?? 0;
+    facts = `Exit ${code}${result.durationMs != null ? ` · ${result.durationMs} ms` : ""} · ${size(out)}`;
+    body = out;
+  } else if (verb === "list_tools" || verb === "search_tools") {
+    const tools = Array.isArray(result.tools) ? result.tools : (Array.isArray(result.matches) ? result.matches : []);
+    const count = result.count ?? tools.length;
+    const q = result.query ?? action?.query ?? action?.name ?? "";
+    title = verb === "search_tools" && q ? `Tools matching “${q}”` : "Available tools";
+    facts = `${count} ${count === 1 ? "tool" : "tools"}`;
+    body = tools.length === 0
+      ? (q ? `No tools matching “${q}”.` : "No tools available.")
+      : tools.map((t) => `${t.name || t.verb || t.id || "tool"}${t.category || t.kind ? ` [${t.category || t.kind}]` : ""}${t.description || t.summary ? ` — ${t.description || t.summary}` : ""}`).join("\n");
   } else {
     return false;
   }
@@ -2774,6 +2857,10 @@ async function send(said) {
     const miniApp = answer.miniApp ?? result.miniApp;
     if (miniApp && miniAppController) {
       miniAppController.mount(miniApp);
+    }
+    const miniAppDeleted = answer.miniAppDeleted ?? result.miniAppDeleted;
+    if (miniAppDeleted) {
+      window.__voiceboxOnMiniAppDeleted?.(miniAppDeleted);
     }
     if (result.miniAppToolCall && miniAppController?.callTool) {
       const { name: toolName, args: toolArgs } = result.miniAppToolCall;
@@ -4654,16 +4741,60 @@ if (els.miniAppContainer) {
       console.warn("[voicebox] mini-app mount requires an html string");
       return;
     }
-    const appId = descriptor.appId || `app_${Date.now().toString(36)}`;
-    const title = descriptor.title || "Interactive Mini-App";
-    currentDescriptor = { ...descriptor, appId, title };
-    launchedMiniApps.set(appId, { appId, title, html: descriptor.html });
+    const title = (descriptor.title || descriptor.fileName || "Interactive Mini-App").trim();
+    const normKey = normalizeMiniAppKey(descriptor.fileName || title || descriptor.appId);
+    const derivedFileName = descriptor.fileName || (isHtmlFileName(title) ? title : `${(normKey.replace(/^app_/, "") || "mini-app")}.html`);
+
+    let existingKey = null;
+    let existingEntry = null;
+    for (const [k, v] of launchedMiniApps.entries()) {
+      const vNorm = normalizeMiniAppKey(v.fileName || v.title || k);
+      if (
+        (descriptor.appId && (k === descriptor.appId || v.appId === descriptor.appId)) ||
+        (descriptor.fileName && v.fileName && v.fileName.toLowerCase() === String(descriptor.fileName).toLowerCase()) ||
+        (v.title && v.title.toLowerCase() === title.toLowerCase()) ||
+        (normKey && vNorm === normKey)
+      ) {
+        existingKey = k;
+        existingEntry = v;
+        break;
+      }
+    }
+
+    const appId = existingKey || descriptor.appId || normKey || `app_${Date.now().toString(36)}`;
+    if (existingKey && existingKey !== appId) {
+      launchedMiniApps.delete(existingKey);
+    }
+
+    const merged = {
+      ...(existingEntry || {}),
+      ...descriptor,
+      appId,
+      title,
+      fileName: derivedFileName,
+      html: descriptor.html,
+    };
+    currentDescriptor = merged;
+    launchedMiniApps.set(appId, merged);
+
     currentTools = [];
     isCollapsed = false;
     els.miniAppContainer.dataset.collapsed = "false";
     els.miniAppContainer.hidden = false;
     if (els.miniAppTitle) {
       els.miniAppTitle.textContent = title;
+    }
+    if (els.miniAppSourceBadge) {
+      let sourceLabel = "Workspace";
+      if (merged.sandbox) {
+        sourceLabel = `Environment · ${merged.sandbox}`;
+      } else if (merged.source === "host" || merged.source === "shelf") {
+        sourceLabel = "Saved app";
+      } else if (merged.fileName) {
+        sourceLabel = `Workspace · ${merged.fileName}`;
+      }
+      els.miniAppSourceBadge.textContent = sourceLabel;
+      els.miniAppSourceBadge.hidden = false;
     }
     if (els.miniAppDock) {
       els.miniAppDock.hidden = false;
@@ -4719,10 +4850,89 @@ if (els.miniAppContainer) {
     if (currentDescriptor) mount(currentDescriptor);
   }
 
+  function editCurrentMiniApp() {
+    if (!currentDescriptor) return;
+    const rawTitle = currentDescriptor.fileName || currentDescriptor.title || "mini-app.html";
+    const slug = normalizeMiniAppKey(rawTitle).replace(/^app_/, "") || "mini-app";
+    const fileName = currentDescriptor.fileName || (isHtmlFileName(rawTitle) ? rawTitle : `${slug}.html`);
+    const html = currentDescriptor.html ?? "";
+    renderRead(fileName, html, "disk");
+    if (els.fileEditor) {
+      els.fileEditor.value = html;
+      els.fileEditor.hidden = false;
+    }
+    if (els.reader) {
+      els.reader.dataset.editing = "true";
+      delete els.reader.dataset.collapsed;
+    }
+    if (els.readerBody) els.readerBody.hidden = true;
+    if (els.fileEdit) els.fileEdit.hidden = true;
+    if (els.fileSave) {
+      els.fileSave.hidden = false;
+      els.fileSave.disabled = false;
+    }
+    if (els.fileCancelEdit) els.fileCancelEdit.hidden = false;
+    syncReaderBubble();
+    els.fileEditor?.focus();
+  }
+
+  function removeMiniAppFromClientState(info = {}) {
+    const targetNorm = normalizeMiniAppKey(info.fileName || info.title || info.appId);
+    for (const [k, v] of [...launchedMiniApps.entries()]) {
+      const kNorm = normalizeMiniAppKey(v.fileName || v.title || k);
+      if (
+        (info.appId && (k === info.appId || v.appId === info.appId)) ||
+        (info.fileName && v.fileName === info.fileName) ||
+        (info.title && v.title?.toLowerCase() === String(info.title).toLowerCase()) ||
+        (targetNorm && kNorm === targetNorm)
+      ) {
+        launchedMiniApps.delete(k);
+      }
+    }
+    catalogMiniApps = catalogMiniApps.filter((item) => {
+      const cNorm = normalizeMiniAppKey(item.fileName || item.title || item.appId);
+      if (info.appId && item.appId === info.appId) return false;
+      if (info.fileName && item.fileName === info.fileName) return false;
+      if (targetNorm && cNorm === targetNorm) return false;
+      return true;
+    });
+    if (currentDescriptor) {
+      const curNorm = normalizeMiniAppKey(currentDescriptor.fileName || currentDescriptor.title || currentDescriptor.appId);
+      if (
+        (info.appId && currentDescriptor.appId === info.appId) ||
+        (info.fileName && currentDescriptor.fileName === info.fileName) ||
+        (targetNorm && curNorm === targetNorm)
+      ) {
+        close();
+      }
+    }
+    sqehSyncMiniApps();
+  }
+
+  async function deleteCurrentMiniApp() {
+    if (!currentDescriptor) return;
+    const target = { ...currentDescriptor };
+    const idParam = target.appId || target.fileName || target.title || "";
+    removeMiniAppFromClientState(target);
+    try {
+      await fetch(`/api/mini-apps?id=${encodeURIComponent(idParam)}`, { method: "DELETE" });
+    } catch {}
+    if (target.fileName && !target.sandbox) {
+      try {
+        await fetch(`/api/file?name=${encodeURIComponent(target.fileName)}`, { method: "DELETE" });
+      } catch {}
+    }
+    await load();
+  }
+
+  window.__voiceboxOnMiniAppDeleted = removeMiniAppFromClientState;
+
   if (els.miniAppClose) els.miniAppClose.addEventListener("click", close);
   if (els.miniAppToggle) els.miniAppToggle.addEventListener("click", toggle);
   if (els.miniAppExpand) els.miniAppExpand.addEventListener("click", expandToggle);
   if (els.miniAppReload) els.miniAppReload.addEventListener("click", reload);
+  if (els.miniAppEdit) els.miniAppEdit.addEventListener("click", editCurrentMiniApp);
+  if (els.miniAppDelete) els.miniAppDelete.addEventListener("click", () => void deleteCurrentMiniApp());
   if (els.miniAppBubble) els.miniAppBubble.addEventListener("click", toggle);
   attachMiniAppDragHandle(els.miniAppDragHandle);
   attachMiniAppDragHandle(els.miniAppSheetHandle);
@@ -4755,6 +4965,8 @@ if (els.miniAppContainer) {
     toggle,
     expandToggle,
     reload,
+    editCurrentMiniApp,
+    deleteCurrentMiniApp,
     callTool,
     getTools: () => [...currentTools],
     getDescriptor: () => currentDescriptor,
@@ -4840,13 +5052,30 @@ function sqehSyncMiniApps() {
   const htmlRows = [...document.querySelectorAll("#files .file-open")].filter((row) => isHtmlFileName(row.dataset.file));
   const seenAppIds = new Set();
   const seenTitles = new Set();
+  const seenNormKeys = new Set();
   const buttons = [];
+
+  const markSeen = (appId, title, fileName) => {
+    if (appId) seenAppIds.add(String(appId));
+    if (title) seenTitles.add(String(title).toLowerCase());
+    if (fileName) seenTitles.add(String(fileName).toLowerCase());
+    const n1 = normalizeMiniAppKey(fileName || title || appId);
+    if (n1) seenNormKeys.add(n1);
+  };
+
+  const isAlreadySeen = (appId, title, fileName) => {
+    if (appId && seenAppIds.has(String(appId))) return true;
+    if (title && seenTitles.has(String(title).toLowerCase())) return true;
+    if (fileName && seenTitles.has(String(fileName).toLowerCase())) return true;
+    const n1 = normalizeMiniAppKey(fileName || title || appId);
+    if (n1 && seenNormKeys.has(n1)) return true;
+    return false;
+  };
 
   for (const row of htmlRows) {
     const fileName = row.dataset.file ?? "";
     const fileAppId = `file_${fileName.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
-    seenAppIds.add(fileAppId);
-    seenTitles.add(fileName);
+    markSeen(fileAppId, fileName, fileName);
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "sqeh-miniapp-bubble";
@@ -4865,17 +5094,59 @@ function sqehSyncMiniApps() {
     buttons.push(btn);
   }
 
-  for (const [appId, desc] of launchedMiniApps.entries()) {
-    if (seenAppIds.has(appId) || seenTitles.has(desc.title)) continue;
-    seenAppIds.add(appId);
-    seenTitles.add(desc.title);
+  for (const item of catalogMiniApps) {
+    if (!item) continue;
+    const appId = item.appId || item.id || normalizeMiniAppKey(item.fileName || item.title);
+    const label = item.title || item.fileName || appId;
+    if (isAlreadySeen(appId, label, item.fileName)) continue;
+    markSeen(appId, label, item.fileName);
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "sqeh-miniapp-bubble";
     btn.dataset.miniAppId = appId;
+    if (item.fileName) btn.dataset.miniAppFile = item.fileName;
     const badge = document.createElement("span");
     badge.className = "sqeh-miniapp-bubble-badge";
-    badge.textContent = "App";
+    badge.textContent = item.sandbox ? String(item.sandbox) : "App";
+    const title = document.createElement("span");
+    title.className = "sqeh-miniapp-bubble-title";
+    title.textContent = label;
+    btn.append(badge, title);
+    btn.addEventListener("click", async () => {
+      if (!miniAppController) return;
+      if (typeof item.html === "string" && item.html) {
+        miniAppController.mount(item);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/mini-apps?id=${encodeURIComponent(appId)}`);
+        if (res.ok) {
+          const data = await res.json().catch(() => null);
+          const payload = data?.miniApp || data;
+          if (payload && typeof payload.html === "string") {
+            miniAppController.mount({ ...item, ...payload });
+            return;
+          }
+        }
+      } catch {}
+      if (item.fileName) {
+        await launchWorkspaceHtmlMiniApp(item.fileName);
+      }
+    });
+    buttons.push(btn);
+  }
+
+  for (const [appId, desc] of launchedMiniApps.entries()) {
+    if (isAlreadySeen(appId, desc.title, desc.fileName)) continue;
+    markSeen(appId, desc.title, desc.fileName);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "sqeh-miniapp-bubble";
+    btn.dataset.miniAppId = appId;
+    if (desc.fileName) btn.dataset.miniAppFile = desc.fileName;
+    const badge = document.createElement("span");
+    badge.className = "sqeh-miniapp-bubble-badge";
+    badge.textContent = desc.sandbox ? String(desc.sandbox) : "App";
     const title = document.createElement("span");
     title.className = "sqeh-miniapp-bubble-title";
     title.textContent = desc.title;

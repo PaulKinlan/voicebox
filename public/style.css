@@ -976,10 +976,28 @@ dialog.changelog-modal .commit-meta {
   font-weight: 600;
   color: var(--ink);
 }
+.mini-app-source-badge {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  white-space: nowrap;
+}
+.mini-app-source-badge[hidden] {
+  display: none !important;
+}
 .mini-app-actions {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+.mini-app-delete:hover {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
 }
 .mini-app-viewport {
   width: 100%;
