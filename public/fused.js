@@ -3587,8 +3587,6 @@ function textNode(parent, tag, value) {
 
 function renderModalToolCatalogue(article, catalogue) {
   if (catalogue?.status !== "declared") {
-    textNode(article, "h4", "Tools — unknown");
-    textNode(article, "p", catalogue?.why ?? "No tool catalogue was reported. Unknown does not mean this harness has no tools.");
     return;
   }
   const details = document.createElement("details");
@@ -3665,16 +3663,22 @@ async function checkHarnesses() {
       activateBtn.type = "button";
       activateBtn.className = "harness-activate-btn";
       activateBtn.dataset.harnessActivate = row.id;
-      activateBtn.textContent = row.delegation?.ok ? "Active for delegation" : `Use ${row.name}`;
+      const isActive = report.activeHarness === row.id
+        || (report.activeHarness === "pi" && row.id === "pi-acp")
+        || (report.activeHarness === "claude" && row.id === "claude-agent-acp")
+        || Boolean(row.delegation?.ok && (!report.activeHarness || report.activeHarness === row.id));
+      activateBtn.textContent = isActive ? "Active for delegation" : `Use ${row.name}`;
       activateBtn.addEventListener("click", () => {
-        void configureHarnessInUi({ id: row.id, active: true });
+        void configureHarnessInUi({ harness: row.id, id: row.id, active: true });
       });
       actions.append(activateBtn);
       article.append(actions);
       renderModalToolCatalogue(article, row.toolCatalogue);
       els.harnessesList.append(article);
     }
-    if (els.harnessesScope) els.harnessesScope.textContent = `${report.scope}. ${report.note}`;
+    if (els.harnessesScope) {
+      els.harnessesScope.textContent = "Select which installed coding agent handles delegated background tasks.";
+    }
     els.harnessesStatus.textContent = `Observed ${report.observedAt}. Snapshot reused for up to 60 seconds.`;
   } catch (error) {
     els.harnessesStatus.textContent = `Inventory unavailable (${error.message}). Check the Voicebox server connection and retry. Any previous entries below are stale, not a fresh observation.`;
@@ -3692,7 +3696,7 @@ on(els.harnessConfigSave, "click", async () => {
     }
     return;
   }
-  const ok = await configureHarnessInUi({ id: "agentapi", agentId, url, active: true });
+  const ok = await configureHarnessInUi({ harness: "agentapi", id: "agentapi", agentId, url, active: true });
   if (ok) {
     if (els.harnessAgentId) els.harnessAgentId.value = "";
     if (els.harnessAgentUrl) els.harnessAgentUrl.value = "";
