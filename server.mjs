@@ -46,7 +46,15 @@ import { createPermissionPolicy } from "./lib/permission-policy.mjs";
 import { createPiAcpExecutor, describeAdapterInstall } from "./lib/pi-acp.mjs";
 import { liveToolDeclarations } from "./lib/wasm-shelf.mjs";
 import { MiniAppRegistry } from "./lib/mini-app-host.mjs";
+import { saveMiniApp, discoverMiniApps, getMiniApp, deleteMiniApp } from "./lib/mini-app-store.mjs";
 import { createClaudeAcpExecutor, describeClaudeAdapterInstall } from "./lib/claude-acp.mjs";
+import {
+  createAntigravityExecutor,
+  createCodexExecutor,
+  createGeminiCliExecutor,
+  createOpenCodeExecutor,
+  describeCliAdapterInstall,
+} from "./lib/cli-harness-executor.mjs";
 import { bootFence } from "./lib/fence-provider.mjs";
 import { SOURCE_DIRS } from "./lib/browser-sources.mjs";
 import { bootUnitFence, stopUnitFence } from "./lib/unit-fence-provider.mjs";
@@ -82,7 +90,7 @@ import { installColorConsole } from "./lib/logger.mjs";
 // The state directories have ONE owner; this file no longer computes its own copy of any of them
 // (voicebox-beads-y5k: `VOICEBOX_WORKSPACE` and `VOICEBOX_EXTENSIONS_DIR` were each resolved here
 // AND in lib/extensions.mjs, with the same fallbacks written twice).
-import { workspaceDir, workspaceDeclared, extensionsDir, wasmShelfDir } from "./lib/state-dirs.mjs";
+import { workspaceDir, workspaceDeclared, extensionsDir, wasmShelfDir, sandboxHomesDir } from "./lib/state-dirs.mjs";
 
 installColorConsole();
 
@@ -909,10 +917,26 @@ const SUPPORTED_HARNESS_DEFAULTS = {
   pi: { id: "pi", name: "Pi", harness: "pi", adapter: "pi-acp" },
   "pi-acp": { id: "pi", name: "Pi", harness: "pi", adapter: "pi-acp" },
   claude: { id: "claude", name: "Claude", harness: "claude", adapter: "claude-code" },
+  "claude-code": { id: "claude", name: "Claude", harness: "claude", adapter: "claude-code" },
+  "claude-agent-acp": { id: "claude", name: "Claude", harness: "claude", adapter: "claude-code" },
+  antigravity: { id: "antigravity", name: "Anti-Gravity", harness: "antigravity", adapter: "antigravity" },
+  agy: { id: "antigravity", name: "Anti-Gravity", harness: "antigravity", adapter: "antigravity" },
+  agentapi: { id: "antigravity", name: "Anti-Gravity", harness: "antigravity", adapter: "antigravity" },
   codex: { id: "codex", name: "Codex", harness: "codex", adapter: "codex-cli" },
+  "codex-cli": { id: "codex", name: "Codex", harness: "codex", adapter: "codex-cli" },
   gemini: { id: "gemini", name: "Gemini CLI", harness: "gemini", adapter: "gemini-cli" },
+  "gemini-cli": { id: "gemini", name: "Gemini CLI", harness: "gemini", adapter: "gemini-cli" },
   opencode: { id: "opencode", name: "OpenCode", harness: "opencode", adapter: "opencode" },
+  aider: { id: "aider", name: "Aider", harness: "aider", adapter: "aider" },
 };
+function normalizeHarnessId(raw) {
+  if (raw === "pi-acp") return "pi";
+  if (raw === "claude-code" || raw === "claude-agent-acp") return "claude";
+  if (raw === "agy" || raw === "agentapi") return "antigravity";
+  if (raw === "codex-cli") return "codex";
+  if (raw === "gemini-cli") return "gemini";
+  return raw;
+}
 function readPersistedHarnessSettings() {
   try {
     if (!existsSync(HARNESS_SETTINGS_FILE)) return null;
@@ -948,15 +972,50 @@ const piExecutor = createPiAcpExecutor({
   root: () => active?.root,
 });
 const claudeExecutor = createClaudeAcpExecutor();
+const antigravityExecutor = createAntigravityExecutor({ root: () => active?.root });
+const codexExecutor = createCodexExecutor({ root: () => active?.root });
+const geminiCliExecutor = createGeminiCliExecutor({ root: () => active?.root });
+const openCodeExecutor = createOpenCodeExecutor({ root: () => active?.root });
 // 'claude' is registered too: executorForAgent derives adapter from the raw
 // harness name for agents that do not set agentConfig.adapter — one key short
 // would re-create today's half-refusal (voicebox-beads-a74y design note).
-const adapterExecutors = new Map([["pi-acp", piExecutor], ["claude-code", claudeExecutor], ["claude", claudeExecutor]]);
+const adapterExecutors = new Map([
+  ["pi-acp", piExecutor],
+  ["claude-code", claudeExecutor],
+  ["claude", claudeExecutor],
+  ["antigravity", antigravityExecutor],
+  ["agy", antigravityExecutor],
+  ["agentapi", antigravityExecutor],
+]);
+const OPTIONAL_CLI_ADAPTER_EXECUTORS = new Map([
+  ["codex-cli", codexExecutor],
+  ["codex", codexExecutor],
+  ["gemini-cli", geminiCliExecutor],
+  ["gemini", geminiCliExecutor],
+  ["opencode", openCodeExecutor],
+]);
 const UNIMPLEMENTED_ADAPTER_LABELS = new Map([
   ["codex-cli", "codex"],
   ["gemini-cli", "gemini"],
   ["opencode", "opencode"],
 ]);
+function describeConfiguredAdapter(agent) {
+  const ad = agent?.adapter;
+  if (ad === "claude-code" || ad === "claude") return describeClaudeAdapterInstall({});
+  if (
+    ad === "antigravity" ||
+    ad === "agy" ||
+    ad === "agentapi" ||
+    ad === "codex-cli" ||
+    ad === "codex" ||
+    ad === "gemini-cli" ||
+    ad === "gemini" ||
+    ad === "opencode"
+  ) {
+    return describeCliAdapterInstall(ad, {});
+  }
+  return describeAdapterInstall({});
+}
 function executorForAgent(agentConfig, harness) {
   const adapter = agentConfig?.adapter ?? (harness === "pi" || harness === "pi-acp" ? "pi-acp" : harness);
   const installed = adapterExecutors.get(adapter);
@@ -975,7 +1034,7 @@ function executorForAgent(agentConfig, harness) {
   };
 }
 function activateHarnessInProcess(harnessId, options = {}) {
-  const normalized = harnessId === "pi-acp" ? "pi" : harnessId;
+  const normalized = normalizeHarnessId(harnessId);
   activeHarness = normalized;
   installTaskExecutor({
     check(args = {}) {
@@ -988,7 +1047,18 @@ function activateHarnessInProcess(harnessId, options = {}) {
   });
   const preset = SUPPORTED_HARNESS_DEFAULTS[harnessId] ?? SUPPORTED_HARNESS_DEFAULTS[normalized];
   if (preset) {
-    const agentId = typeof options.id === "string" && options.id.trim() ? options.id.trim() : preset.id;
+    if (preset.adapter && OPTIONAL_CLI_ADAPTER_EXECUTORS.has(preset.adapter)) {
+      adapterExecutors.set(preset.adapter, OPTIONAL_CLI_ADAPTER_EXECUTORS.get(preset.adapter));
+    }
+    if (OPTIONAL_CLI_ADAPTER_EXECUTORS.has(normalized)) {
+      adapterExecutors.set(normalized, OPTIONAL_CLI_ADAPTER_EXECUTORS.get(normalized));
+    }
+    const isAliasId = typeof options.id === "string" && Boolean(SUPPORTED_HARNESS_DEFAULTS[options.id.trim()]);
+    const agentId = (typeof options.agentId === "string" && options.agentId.trim())
+      ? options.agentId.trim()
+      : (typeof options.id === "string" && options.id.trim() && !isAliasId
+          ? options.id.trim()
+          : preset.id);
     const agentSpec = {
       id: agentId,
       name: typeof options.name === "string" && options.name.trim() ? options.name.trim() : preset.name,
@@ -998,6 +1068,7 @@ function activateHarnessInProcess(harnessId, options = {}) {
       environmentKey: SELF_ENVIRONMENT,
       isDefault: options.isDefault !== false,
       ...(typeof options.description === "string" ? { description: options.description } : {}),
+      ...(typeof options.url === "string" && options.url.trim() ? { url: options.url.trim() } : {}),
     };
     if (agentRegistry.get(agentId)) {
       agentRegistry.update(agentId, agentSpec);
@@ -1019,9 +1090,7 @@ const harnessAdmission = validateHarnessAgents({
   // voicebox-beads-a74y: describe per ADAPTER — one host fact was reported for
   // every agent, so an admitted claude row wore pi's version. pi-acp keeps the
   // default; claude gets its own install probe.
-  describeAdapter: (agent) => (agent?.adapter === "claude-code" || agent?.adapter === "claude")
-    ? describeClaudeAdapterInstall({})
-    : describeAdapterInstall({}),
+  describeAdapter: describeConfiguredAdapter,
   implementedAdapters: new Set(adapterExecutors.keys()),
   executorSelected: Boolean(activeHarness),
 });
@@ -1227,6 +1296,17 @@ if (legacyResolverEnv) {
     : `[voicebox] VOICEBOX_PROVIDER is now VOICEBOX_RESOLVER (it selects the turn resolver, not the live provider) — honouring ${JSON.stringify(legacyResolverEnv)} for this release`);
 }
 const PROVIDER = process.env.VOICEBOX_RESOLVER ?? legacyResolverEnv ?? "script";
+function effectiveProvider() {
+  if (process.env.VOICEBOX_RESOLVER || legacyResolverEnv) return PROVIDER;
+  const selected = agentSettings?.provider;
+  if (selected === "gemini" && process.env.GEMINI_API_KEY) return "gemini";
+  if (selected === "openai" && process.env.OPENAI_API_KEY) return "openai";
+  if (selected === "claude" && process.env.ANTHROPIC_API_KEY) return "claude";
+  if (process.env.GEMINI_API_KEY) return "gemini";
+  if (process.env.OPENAI_API_KEY) return "openai";
+  if (process.env.ANTHROPIC_API_KEY) return "claude";
+  return PROVIDER;
+}
 
 // ── the routed-acts channel (core/dispatch.ts) ──────────────────────────────
 // The page is a PLACEMENT the server can ask to act. The channel is created once; the socket
@@ -1851,6 +1931,130 @@ async function runProjectGit(rootPath, args) {
 }
 
 const IGNORED_GREP_DIRS = new Set(["node_modules", "dist", "build", "coverage", "target", "__pycache__", "vendor"]);
+
+function resolveWorkSubdir(explicitDir) {
+  const reported = contextForRoot(active);
+  const raw = String(explicitDir ?? reported?.dir ?? "").trim().replace(/^\/+|\/+$/g, "");
+  if (!raw || raw === ".") {
+    return { ok: true, dir: "", path: active.root.path, label: active.project };
+  }
+  const norm = normaliseRelativeDir(raw);
+  if (!norm.ok) return norm;
+  const resolved = resolveActive(norm.dir);
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      refused: resolved.refused,
+      why: resolved.why,
+    };
+  }
+  if (!existsSync(resolved.path)) {
+    return { ok: false, refused: "not-found", why: `'${norm.dir}' is not in ${active.project}` };
+  }
+  if (!statSync(resolved.path).isDirectory()) {
+    return { ok: false, refused: "not-a-directory", why: `'${norm.dir}' is a file; expected a directory` };
+  }
+  return {
+    ok: true,
+    dir: norm.dir,
+    path: resolved.path,
+    label: `${active.project}/${norm.dir}`,
+  };
+}
+
+async function discoverGitSubrepos(rootPath, maxDepth = 2) {
+  const found = [];
+  async function walk(curr, relDir, depth) {
+    if (depth > maxDepth || found.length >= 15) return;
+    let dirents;
+    try {
+      dirents = await readdirAsync(curr, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const ent of dirents.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (!ent.isDirectory() || ent.name.startsWith(".") || IGNORED_GREP_DIRS.has(ent.name)) continue;
+      const full = path.join(curr, ent.name);
+      const rel = relDir ? `${relDir}/${ent.name}` : ent.name;
+      if (existsSync(path.join(full, ".git"))) {
+        found.push({ dir: rel, path: full });
+      } else if (depth < maxDepth) {
+        await walk(full, rel, depth + 1);
+      }
+    }
+  }
+  await walk(rootPath, "", 1);
+  return found;
+}
+
+async function resolveGitTargets(explicitDir) {
+  const sub = resolveWorkSubdir(explicitDir);
+  if (!sub.ok) return sub;
+  if (await isGitRepo(sub.path)) {
+    return {
+      ok: true,
+      primary: sub,
+      subrepos: [{ dir: sub.dir, path: sub.path, label: sub.label }],
+      discoveredFromSandbox: false,
+    };
+  }
+  const subrepos = await discoverGitSubrepos(sub.path);
+  if (subrepos.length > 0) {
+    const mapped = subrepos.map((r) => {
+      const relDir = sub.dir ? `${sub.dir}/${r.dir}` : r.dir;
+      return {
+        dir: relDir,
+        path: r.path,
+        label: `${active.project}/${relDir}`,
+      };
+    });
+    return {
+      ok: true,
+      primary: mapped[0],
+      subrepos: mapped,
+      discoveredFromSandbox: true,
+    };
+  }
+  return {
+    ok: false,
+    refused: "not-a-git-repo",
+    why: `'${sub.label}' is not a git repository`,
+  };
+}
+
+function parseGitStatusOutput(statusOutput) {
+  const lines = statusOutput.split("\n").filter(Boolean);
+  let branch = "unknown";
+  let upstream = null;
+  let ahead = 0;
+  let behind = 0;
+  const files = [];
+
+  for (const line of lines) {
+    if (line.startsWith("## ")) {
+      const header = line.slice(3).trim();
+      const match = header.match(/^([^\s]+?)(?:\.\.\.([^\s]+))?(?:\s+\[(?:ahead\s+(\d+))?(?:,\s*)?(?:behind\s+(\d+))?\])?$/);
+      if (match) {
+        branch = match[1];
+        upstream = match[2] ?? null;
+        ahead = Number(match[3] ?? 0);
+        behind = Number(match[4] ?? 0);
+      } else {
+        branch = header;
+      }
+    } else if (line.length >= 4) {
+      const x = line[0];
+      let filePath = line.slice(3).trim();
+      if (filePath.startsWith(".audit/") || filePath === ".audit") continue;
+      if (filePath.includes(" -> ")) {
+        filePath = filePath.split(" -> ").pop().trim();
+      }
+      files.push({ path: filePath, staged: x !== " " && x !== "?", status: line.slice(0, 2).trim() });
+    }
+  }
+  return { branch, upstream, ahead, behind, files, dirty: files.length > 0 };
+}
+
 const activeMiniAppRegistry = new MiniAppRegistry();
 const pendingLiveMiniAppCalls = new Map();
 const undoStackByRoot = new Map();
@@ -1976,18 +2180,35 @@ async function execute(action) {
     return callTool(action.name, action.args ?? {});
   }
   if (action.verb === "mini_app") {
-    const appId = `app_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`;
-    const miniApp = {
-      appId,
+    const rootPath = active?.root?.kind === "machine" ? active.root.path : WORKSPACE;
+    const saved = saveMiniApp({
+      appId: action.appId || action.id,
       title: action.title || "Interactive App",
       html: action.html || "<!doctype html><html><body></body></html>",
-    };
-    try { pageSocket?.send(JSON.stringify({ type: "mini_app", miniApp })); } catch {}
-    try { runningSession?.socket?.send(JSON.stringify({ type: "mini_app", miniApp })); } catch {}
+      fileName: action.fileName || action.name,
+      rootPath,
+    });
+    const miniApp = saved.ok
+      ? saved.miniApp
+      : {
+          appId: `app_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`,
+          title: action.title || "Interactive App",
+          html: action.html || "<!doctype html><html><body></body></html>",
+        };
+    const frame = JSON.stringify({
+      type: "mini_app",
+      miniApp,
+      created: saved.ok ? saved.created : true,
+      updated: saved.ok ? saved.updated : false,
+    });
+    try { pageSocket?.send(frame); } catch {}
+    try { runningSession?.socket?.send(frame); } catch {}
     return {
       ok: true,
-      action: `launched mini-app "${miniApp.title}" (${appId})`,
+      action: `${saved.updated ? "updated" : "launched"} mini-app "${miniApp.title}" (${miniApp.appId})`,
       miniApp,
+      created: saved.ok ? saved.created : true,
+      updated: saved.ok ? saved.updated : false,
       root: active?.root ?? null,
     };
   }
@@ -2053,10 +2274,23 @@ async function execute(action) {
     };
   }
   if (action.verb === "open_workspace") {
-    const rawTarget = String(action.target || action.path || action.name || "self").trim();
+    const rawTarget = String(action.target || action.path || action.name || action.dir || "self").trim();
     const isSelf = !rawTarget || /^(?:self|voicebox|repo|repository|this\s+repo|own\s+codebase|codebase)$/i.test(rawTarget);
-    const requested = isSelf ? ROOT : rawTarget;
-    const candidate = path.resolve(requested);
+    const isSandboxRoot = /^(?:sandbox|sandboxes)$/i.test(rawTarget);
+    const requested = isSelf ? ROOT : isSandboxRoot ? sandboxHomesDir() : rawTarget;
+    if (isSandboxRoot && !existsSync(requested)) {
+      mkdirSync(requested, { recursive: true });
+    }
+    let candidate;
+    if (isSelf || isSandboxRoot || path.isAbsolute(requested)) {
+      candidate = path.resolve(requested);
+    } else if (active?.root?.kind === "machine" && existsSync(path.resolve(active.root.path, requested))) {
+      candidate = path.resolve(active.root.path, requested);
+    } else if (existsSync(path.resolve(sandboxHomesDir(), requested))) {
+      candidate = path.resolve(sandboxHomesDir(), requested);
+    } else {
+      candidate = path.resolve(requested);
+    }
     if (!existsSync(candidate)) {
       return {
         ok: false,
@@ -2090,7 +2324,7 @@ async function execute(action) {
         logged: null,
       };
     }
-    const project = String(action.project ?? (isSelf ? "voicebox" : path.basename(real) || "workspace")).trim();
+    const project = String(action.project ?? (isSelf ? "voicebox" : isSandboxRoot ? "sandbox" : path.basename(real) || "workspace")).trim();
     active = {
       project,
       root: { kind: "machine", path: real, environment: SELF_ENVIRONMENT },
@@ -2098,12 +2332,14 @@ async function execute(action) {
     };
     liveProjectContext = null;
     const files = readdirSync(real).filter((f) => !f.startsWith("."));
+    const subrepos = (await isGitRepo(real)) ? [] : (await discoverGitSubrepos(real)).map((r) => r.dir);
     return {
       ok: true,
       action: `opened workspace ${project} (${real})`,
       project: active.project,
       root: active.root,
       files,
+      ...(subrepos.length > 0 ? { subrepositories: subrepos } : {}),
       actsVia: "server",
       reachableFromThisProcess: true,
       logged: null,
@@ -2175,9 +2411,11 @@ async function execute(action) {
         logged: null,
       };
     }
+    const reported = contextForRoot(active);
+    const effectiveCwd = action.cwd ?? action.dir ?? (reported?.dir || undefined);
     const resExec = await runSystemCommand(active.root.path, {
       command: cmdText,
-      cwd: action.cwd,
+      cwd: effectiveCwd,
     });
     if (!resExec.ok && resExec.refused && resExec.refused !== "command-failed") {
       const entry = logAct({ kind: "exec", target: cmdText, tool: "turn" }, "refuse", resExec.refused, "refused", null, action.turn ?? null);
@@ -2198,8 +2436,8 @@ async function execute(action) {
     return {
       ...resExec,
       action: resExec.ok
-        ? `ran "${cmdText}" (exit 0, ${resExec.durationMs}ms)`
-        : `command "${cmdText}" exited with code ${resExec.exitCode}`,
+        ? `ran "${cmdText}"${effectiveCwd ? ` in ${effectiveCwd}` : ""} (exit 0, ${resExec.durationMs}ms)`
+        : `command "${cmdText}"${effectiveCwd ? ` in ${effectiveCwd}` : ""} exited with code ${resExec.exitCode}`,
       root: active.root,
       logged: entry ? entry.seq : null,
     };
@@ -2208,6 +2446,16 @@ async function execute(action) {
     const query = String(action.query ?? action.name ?? "").trim();
     if (!query) {
       return { ok: false, refused: "missing-argument", error: "refused: missing-argument", why: "grep requires a search query", root: active.root };
+    }
+    const targetSub = resolveWorkSubdir(action.dir);
+    if (!targetSub.ok) {
+      return {
+        ok: false,
+        refused: targetSub.refused,
+        error: `refused: ${targetSub.refused === "outside-root" ? "path escapes the active project root" : targetSub.refused}`,
+        why: targetSub.why,
+        root: active.root,
+      };
     }
     const matches = [];
     const MAX_MATCHES = 100;
@@ -2241,12 +2489,13 @@ async function execute(action) {
         }
       }
     }
-    await scanDir(active.root.path);
-    const entry = logAct({ kind: "grep", target: query, tool: "turn" }, "allow", "greps-inside", "ok", { count: matches.length }, action.turn ?? null);
+    await scanDir(targetSub.path, targetSub.dir);
+    const entry = logAct({ kind: "grep", target: query, tool: "turn" }, "allow", "greps-inside", "ok", { count: matches.length, ...(targetSub.dir ? { dir: targetSub.dir } : {}) }, action.turn ?? null);
     return {
       ok: true,
-      action: `grep "${query}" (${matches.length} matches)`,
+      action: `grep "${query}"${targetSub.dir ? ` in ${targetSub.dir}` : ""} (${matches.length} matches)`,
       query,
+      ...(targetSub.dir ? { dir: targetSub.dir } : {}),
       matches,
       count: matches.length,
       truncated: matches.length >= MAX_MATCHES,
@@ -2255,58 +2504,50 @@ async function execute(action) {
     };
   }
   if (action.verb === "git_status") {
-    if (!(await isGitRepo(active.root.path))) {
+    const gitTargets = await resolveGitTargets(action.dir || action.name);
+    if (!gitTargets.ok) {
       return {
         ok: false,
-        refused: "not-a-git-repo",
-        error: "refused: not-a-git-repo",
-        why: `'${active.project}' is not a git repository`,
+        refused: gitTargets.refused,
+        error: `refused: ${gitTargets.refused === "outside-root" ? "path escapes the active project root" : gitTargets.refused}`,
+        why: gitTargets.why,
         root: active.root,
       };
     }
     try {
-      const statusOutput = await runProjectGit(active.root.path, ["status", "--porcelain=v1", "--branch", "-u"]);
-      const lines = statusOutput.split("\n").filter(Boolean);
-      let branch = "unknown";
-      let upstream = null;
-      let ahead = 0;
-      let behind = 0;
-      const files = [];
-
-      for (const line of lines) {
-        if (line.startsWith("## ")) {
-          const header = line.slice(3).trim();
-          const match = header.match(/^([^\s]+?)(?:\.\.\.([^\s]+))?(?:\s+\[(?:ahead\s+(\d+))?(?:,\s*)?(?:behind\s+(\d+))?\])?$/);
-          if (match) {
-            branch = match[1];
-            upstream = match[2] ?? null;
-            ahead = Number(match[3] ?? 0);
-            behind = Number(match[4] ?? 0);
-          } else {
-            branch = header;
-          }
-        } else if (line.length >= 4) {
-          const x = line[0];
-          let filePath = line.slice(3).trim();
-          if (filePath.startsWith(".audit/") || filePath === ".audit") continue;
-          if (filePath.includes(" -> ")) {
-            filePath = filePath.split(" -> ").pop().trim();
-          }
-          files.push({ path: filePath, staged: x !== " " && x !== "?", status: line.slice(0, 2).trim() });
+      const target = gitTargets.primary;
+      const statusOutput = await runProjectGit(target.path, ["status", "--porcelain=v1", "--branch", "-u"]);
+      const parsed = parseGitStatusOutput(statusOutput);
+      const subrepositories = [];
+      if (gitTargets.discoveredFromSandbox || gitTargets.subrepos.length > 1) {
+        for (const sub of gitTargets.subrepos) {
+          try {
+            const subOut = await runProjectGit(sub.path, ["status", "--porcelain=v1", "--branch", "-u"]);
+            const subParsed = parseGitStatusOutput(subOut);
+            subrepositories.push({
+              dir: sub.dir,
+              branch: subParsed.branch,
+              upstream: subParsed.upstream,
+              ahead: subParsed.ahead,
+              behind: subParsed.behind,
+              dirty: subParsed.dirty,
+              files: subParsed.files,
+            });
+          } catch {}
         }
       }
-
-      const dirty = files.length > 0;
-      const entry = logAct({ kind: "git_status", target: active.project, tool: "turn" }, "allow", "git-inside", "ok", { branch, filesCount: files.length, dirty }, action.turn ?? null);
+      const entry = logAct({ kind: "git_status", target: target.label, tool: "turn" }, "allow", "git-inside", "ok", { branch: parsed.branch, filesCount: parsed.files.length, dirty: parsed.dirty }, action.turn ?? null);
       return {
         ok: true,
-        action: `git status on ${active.project} (${branch}${dirty ? ", dirty" : ", clean"})`,
-        branch,
-        upstream,
-        ahead,
-        behind,
-        dirty,
-        files,
+        action: `git status on ${target.label} (${parsed.branch}${parsed.dirty ? ", dirty" : ", clean"})`,
+        branch: parsed.branch,
+        upstream: parsed.upstream,
+        ahead: parsed.ahead,
+        behind: parsed.behind,
+        dirty: parsed.dirty,
+        files: parsed.files,
+        ...(target.dir ? { dir: target.dir } : {}),
+        ...(subrepositories.length > 0 ? { subrepositories } : {}),
         root: active.root,
         logged: entry ? entry.seq : null,
       };
@@ -2321,15 +2562,17 @@ async function execute(action) {
     }
   }
   if (action.verb === "git_diff") {
-    if (!(await isGitRepo(active.root.path))) {
+    const gitTargets = await resolveGitTargets(action.dir);
+    if (!gitTargets.ok) {
       return {
         ok: false,
-        refused: "not-a-git-repo",
-        error: "refused: not-a-git-repo",
-        why: `'${active.project}' is not a git repository`,
+        refused: gitTargets.refused,
+        error: `refused: ${gitTargets.refused === "outside-root" ? "path escapes the active project root" : gitTargets.refused}`,
+        why: gitTargets.why,
         root: active.root,
       };
     }
+    const target = gitTargets.primary;
     const gitArgs = ["diff"];
     if (action.staged) gitArgs.push("--cached");
     if (action.file) {
@@ -2340,14 +2583,15 @@ async function execute(action) {
       gitArgs.push("--", fileTarget.dir);
     }
     try {
-      const diffOutput = await runProjectGit(active.root.path, gitArgs);
-      const entry = logAct({ kind: "git_diff", target: action.file || active.project, tool: "turn" }, "allow", "git-inside", "ok", { bytes: diffOutput.length }, action.turn ?? null);
+      const diffOutput = await runProjectGit(target.path, gitArgs);
+      const entry = logAct({ kind: "git_diff", target: action.file || target.label, tool: "turn" }, "allow", "git-inside", "ok", { bytes: diffOutput.length }, action.turn ?? null);
       return {
         ok: true,
-        action: `git diff${action.staged ? " --cached" : ""}${action.file ? ` -- ${action.file}` : ""}`,
+        action: `git diff${action.staged ? " --cached" : ""}${target.dir ? ` in ${target.dir}` : ""}${action.file ? ` -- ${action.file}` : ""}`,
         diff: diffOutput,
         staged: Boolean(action.staged),
         file: action.file ?? null,
+        ...(target.dir ? { dir: target.dir } : {}),
         empty: diffOutput.length === 0,
         root: active.root,
         logged: entry ? entry.seq : null,
@@ -2363,28 +2607,45 @@ async function execute(action) {
     }
   }
   if (action.verb === "git_log") {
-    if (!(await isGitRepo(active.root.path))) {
+    const gitTargets = await resolveGitTargets(action.dir || action.name);
+    if (!gitTargets.ok) {
       return {
         ok: false,
-        refused: "not-a-git-repo",
-        error: "refused: not-a-git-repo",
-        why: `'${active.project}' is not a git repository`,
+        refused: gitTargets.refused,
+        error: `refused: ${gitTargets.refused === "outside-root" ? "path escapes the active project root" : gitTargets.refused}`,
+        why: gitTargets.why,
         root: active.root,
       };
     }
+    const target = gitTargets.primary;
     const limit = Math.min(Math.max(1, Number(action.limit) || 10), 50);
     try {
-      const logOutput = await runProjectGit(active.root.path, ["log", `-n${limit}`, "--format=%H%x1f%an%x1f%aI%x1f%s"]);
+      const logOutput = await runProjectGit(target.path, ["log", `-n${limit}`, "--format=%H%x1f%an%x1f%aI%x1f%s"]);
       const commits = logOutput ? logOutput.split("\n").filter(Boolean).map((line) => {
         const [hash, author, date, message] = line.split("\x1f");
-        return { hash, author, date, message };
+        return { hash, author, date, message, ...(target.dir ? { dir: target.dir } : {}) };
       }) : [];
-      const entry = logAct({ kind: "git_log", target: active.project, tool: "turn" }, "allow", "git-inside", "ok", { count: commits.length }, action.turn ?? null);
+      const subrepositories = [];
+      if (gitTargets.discoveredFromSandbox || gitTargets.subrepos.length > 1) {
+        for (const sub of gitTargets.subrepos) {
+          try {
+            const subLog = await runProjectGit(sub.path, ["log", `-n${limit}`, "--format=%H%x1f%an%x1f%aI%x1f%s"]);
+            const subCommits = subLog ? subLog.split("\n").filter(Boolean).map((line) => {
+              const [hash, author, date, message] = line.split("\x1f");
+              return { hash, author, date, message, dir: sub.dir };
+            }) : [];
+            subrepositories.push({ dir: sub.dir, commits: subCommits, count: subCommits.length });
+          } catch {}
+        }
+      }
+      const entry = logAct({ kind: "git_log", target: target.label, tool: "turn" }, "allow", "git-inside", "ok", { count: commits.length }, action.turn ?? null);
       return {
         ok: true,
-        action: `git log (${commits.length} commit${commits.length === 1 ? "" : "s"})`,
+        action: `git log${target.dir ? ` in ${target.dir}` : ""} (${commits.length} commit${commits.length === 1 ? "" : "s"})`,
         commits,
         count: commits.length,
+        ...(target.dir ? { dir: target.dir } : {}),
+        ...(subrepositories.length > 0 ? { subrepositories } : {}),
         root: active.root,
         logged: entry ? entry.seq : null,
       };
@@ -2881,12 +3142,7 @@ const routes = {
     // Live, not a boot snapshot: agents registered after boot get their verdict too.
     // Non-local environments are marked 'not-judged-here' (voicebox-beads-ufo).
     const admissionContext = {
-      // voicebox-beads-a74y: describe per ADAPTER — one host fact was reported for
-  // every agent, so an admitted claude row wore pi's version. pi-acp keeps the
-  // default; claude gets its own install probe.
-  describeAdapter: (agent) => (agent?.adapter === "claude-code" || agent?.adapter === "claude")
-    ? describeClaudeAdapterInstall({})
-    : describeAdapterInstall({}),
+      describeAdapter: describeConfiguredAdapter,
       implementedAdapters: new Set(adapterExecutors.keys()),
       executorSelected: Boolean(activeHarness),
       hostEnvironment: SELF_ENVIRONMENT ?? "local",
@@ -2941,17 +3197,17 @@ const routes = {
       } catch {
         return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
       }
-      const harnessRaw = typeof parsed?.harness === "string" ? parsed.harness.trim() : "";
+      const harnessRaw = String(parsed?.harness ?? parsed?.id ?? "").trim();
       if (!harnessRaw || !SUPPORTED_HARNESS_DEFAULTS[harnessRaw]) {
         return json(res, 400, {
           ok: false,
           refused: "bad-request",
-          why: `harness must be one of: ${Object.keys(SUPPORTED_HARNESS_DEFAULTS).filter((k) => k !== "pi-acp").join(", ")}`,
+          why: `harness must be one of: ${["pi", "claude", "antigravity", "codex", "gemini", "opencode", "aider"].join(", ")}`,
         });
       }
-      const normalized = harnessRaw === "pi-acp" ? "pi" : harnessRaw;
+      const normalized = normalizeHarnessId(harnessRaw);
       writePersistedHarnessSettings({ harness: normalized });
-      activateHarnessInProcess(normalized, parsed);
+      activateHarnessInProcess(harnessRaw, parsed);
       const inv = await harnessInventory();
       const combined = await listHarnessesWithConfiguredAgents(inv, agentRegistry);
       return json(res, 200, { ok: true, activeHarness, ...combined });
@@ -3130,7 +3386,7 @@ const routes = {
       // `created` is the count the live-auth tests assert on: a refusal that still created a session is
       // the defect this number exists to catch (a refusal is not proof that nothing was spent).
       live: { created: liveSessionsCreated, running: Boolean(runningSession) },
-      provider: PROVIDER,
+      provider: effectiveProvider(),
       // There is no default root to report; `declared` says whether one exists at all.
       declared: Boolean(active),
       root: active ? active.root : null,
@@ -3624,6 +3880,46 @@ async function handle(req, res) {
     return json(res, 200, result);
   }
 
+  if (req.method === "GET" && url.pathname === "/api/mini-apps") {
+    const rootPath = active?.root?.kind === "machine" ? active.root.path : WORKSPACE;
+    const id = (url.searchParams.get("id") ?? url.searchParams.get("appId") ?? "").trim();
+    if (id) {
+      const found = getMiniApp(id, { rootPath });
+      return json(res, found.ok ? 200 : 404, found);
+    }
+    const discovered = discoverMiniApps({ rootPath });
+    const apps = discovered.miniApps ?? [];
+    return json(res, 200, { ok: true, apps, miniApps: apps, count: apps.length });
+  }
+
+  if ((req.method === "POST" || req.method === "PUT") && url.pathname === "/api/mini-apps") {
+    const body = await readJson();
+    if (!body || typeof body !== "object") {
+      return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
+    }
+    const rootPath = active?.root?.kind === "machine" ? active.root.path : WORKSPACE;
+    const saved = saveMiniApp({ ...body, rootPath });
+    if (!saved.ok) return json(res, 400, saved);
+    const frame = JSON.stringify({
+      type: "mini_app",
+      miniApp: saved.miniApp,
+      created: saved.created,
+      updated: saved.updated,
+    });
+    try { pageSocket?.send(frame); } catch {}
+    try { runningSession?.socket?.send(frame); } catch {}
+    return json(res, 200, saved);
+  }
+
+  if (req.method === "DELETE" && url.pathname === "/api/mini-apps") {
+    const body = await readJson().catch(() => ({}));
+    const id = String(body?.appId ?? body?.id ?? url.searchParams.get("id") ?? url.searchParams.get("appId") ?? "").trim();
+    const rootPath = active?.root?.kind === "machine" ? active.root.path : WORKSPACE;
+    const deleted = deleteMiniApp(id, { rootPath });
+    if (!deleted.ok) return json(res, deleted.refused === "mini-app-not-found" || deleted.refused === "not-found" ? 404 : 400, deleted);
+    return json(res, 200, deleted);
+  }
+
   if (req.method === "GET" && url.pathname === "/api/mini-app/tools") {
     return json(res, 200, {
       ok: true,
@@ -3684,7 +3980,8 @@ async function handle(req, res) {
 
   if (req.method === "GET" && url.pathname === "/api/grep") {
     const query = url.searchParams.get("q") ?? url.searchParams.get("query") ?? "";
-    const result = await execute({ verb: "grep", query });
+    const dir = url.searchParams.get("dir") ?? undefined;
+    const result = await execute({ verb: "grep", query, ...(dir ? { dir } : {}) });
     if (!result.ok) return json(res, 400, result);
     return json(res, 200, result);
   }
@@ -3864,11 +4161,18 @@ async function handle(req, res) {
         delete action.turn;
       } else {
         if (!transcript) return json(res, 400, { ok: false, error: "empty transcript or action required" });
-        action = await resolveTurn(transcript, PROVIDER);
+        action = await resolveTurn(transcript, effectiveProvider());
         if (action.unresolved) {
           return json(res, 200, { transcript, action: null, note: action.unresolved });
         }
         delete action.turn;
+      }
+
+      if (typeof parsed.dir === "string" && parsed.dir.trim()) {
+        const turnDir = parsed.dir.trim();
+        if (action.verb === "exec" && !action.cwd) action.cwd = turnDir;
+        if (["git_status", "git_diff", "git_log", "grep"].includes(action.verb) && !action.dir) action.dir = turnDir;
+        if (action.verb === "list" && !action.name && !action.dir) action.name = turnDir;
       }
 
       const executionResult = await execute(action);
