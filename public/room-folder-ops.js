@@ -625,5 +625,17 @@ export function parseRoomFolderTurn(transcript) {
     };
   }
 
+  const readNatural = raw.match(
+    /^(?:(?:please|can\s+you|could\s+you)\s+)?(?:read|open|show|display|view)(?:\s+up)?(?:\s+me)?(?:\s+the)?(?:\s+(?:content|contents)\s+of)?(?:\s+the)?(?:\s+file)?(?:\s+(?:called|named))?\s+["']?([\w./-]+)["']?(?:\s+(?:in|on)\s+(?:the\s+)?(?:ui|user\s+interface|reader|viewer|screen|page))?$/i,
+  );
+  if (
+    readNatural &&
+    !/^(?:files|all\s+files|folder|directory|project|workspace|voicebox|self|codebase|repo|repository|tools|all\s+tools|capabilities|commands|history|settings|harnesses|environments|extensions|agents|status|diff|log|commits)$/i.test(
+      readNatural[1],
+    )
+  ) {
+    return { verb: "read", name: readNatural[1] };
+  }
+
   return null;
 }

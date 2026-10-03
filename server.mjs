@@ -63,6 +63,7 @@ import {
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
 import { createLiveSession, LIVE_MODEL, inputRateRequiredBy, registerLiveProvider } from "./lib/live-session.mjs";
 import { COMMANDS, COMMAND_VERBS, commandToAction, functionDeclarations, liveSystemInstruction } from "./lib/commands.mjs";
+import { listTools, searchTools, runSystemCommand } from "./lib/tool-index.mjs";
 import {
   frameProjectInstruction,
   instructionFromPage,
@@ -671,6 +672,66 @@ function writePersistedAgentSettings(value) {
 }
 let agentSettings = readPersistedAgentSettings();
 
+// ── UI-CONFIGURED API KEYS (voicebox-beads-5drl) ──────────────────────────────────────────────
+// Persisted in HOST_DIR (.api-keys.json, 0600) outside every workspace root so keys configured
+// in the UI survive restarts without ever being reachable through static or workspace file routes.
+const API_KEYS_FILE = path.join(HOST_DIR, ".api-keys.json");
+const API_KEY_DESCRIPTORS = {
+  gemini: { id: "gemini", env: "GEMINI_API_KEY", label: "Gemini API Key" },
+  openai: { id: "openai", env: "OPENAI_API_KEY", label: "OpenAI API Key" },
+  anthropic: { id: "anthropic", env: "ANTHROPIC_API_KEY", label: "Anthropic API Key" },
+};
+function readPersistedApiKeys() {
+  try {
+    if (!existsSync(API_KEYS_FILE)) return {};
+    const parsed = JSON.parse(readFileSync(API_KEYS_FILE, "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out = {};
+    for (const [id] of Object.entries(API_KEY_DESCRIPTORS)) {
+      if (typeof parsed[id] === "string" && parsed[id].trim()) {
+        out[id] = parsed[id].trim();
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+function writePersistedApiKeys(keysMap) {
+  try {
+    mkdirSync(HOST_DIR, { recursive: true });
+    const tmp = `${API_KEYS_FILE}.tmp.${process.pid}.${Date.now()}`;
+    writeFileSync(tmp, `${JSON.stringify(keysMap, null, 2)}\n`, { mode: 0o600 });
+    renameSync(tmp, API_KEYS_FILE);
+  } catch {}
+}
+const persistedKeys = readPersistedApiKeys();
+for (const [id, desc] of Object.entries(API_KEY_DESCRIPTORS)) {
+  if (persistedKeys[id] && !process.env[desc.env]) {
+    process.env[desc.env] = persistedKeys[id];
+  }
+}
+function maskKey(val) {
+  const s = typeof val === "string" ? val.trim() : "";
+  if (!s) return null;
+  return `••••${s.slice(-4)}`;
+}
+function apiKeysStatusPayload() {
+  const keys = {};
+  for (const [id, desc] of Object.entries(API_KEY_DESCRIPTORS)) {
+    const val = process.env[desc.env];
+    const configured = Boolean(val && String(val).trim());
+    keys[id] = {
+      configured,
+      masked: maskKey(val),
+      env: desc.env,
+      label: desc.label,
+      source: persistedKeys[id] ? "ui" : (configured ? "env" : "none"),
+    };
+  }
+  return { ok: true, keys };
+}
+
 /** What a LIVE session actually started with — the difference between "stored" and "in use". */
 let runningSession = null;
 // THE REAL PORT, once it is known: `PORT` may be 0 (the OS picks), so anything that has to recognise this
@@ -843,7 +904,38 @@ function refreshShelfToolNames() {
   }
 }
 
+const HARNESS_SETTINGS_FILE = path.join(HOST_DIR, ".harness-settings.json");
+const SUPPORTED_HARNESS_DEFAULTS = {
+  pi: { id: "pi", name: "Pi", harness: "pi", adapter: "pi-acp" },
+  "pi-acp": { id: "pi", name: "Pi", harness: "pi", adapter: "pi-acp" },
+  claude: { id: "claude", name: "Claude", harness: "claude", adapter: "claude-code" },
+  codex: { id: "codex", name: "Codex", harness: "codex", adapter: "codex-cli" },
+  gemini: { id: "gemini", name: "Gemini CLI", harness: "gemini", adapter: "gemini-cli" },
+  opencode: { id: "opencode", name: "OpenCode", harness: "opencode", adapter: "opencode" },
+};
+function readPersistedHarnessSettings() {
+  try {
+    if (!existsSync(HARNESS_SETTINGS_FILE)) return null;
+    const parsed = JSON.parse(readFileSync(HARNESS_SETTINGS_FILE, "utf8"));
+    if (parsed && typeof parsed.harness === "string" && parsed.harness.trim()) {
+      return { harness: parsed.harness.trim() };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+function writePersistedHarnessSettings(value) {
+  try {
+    mkdirSync(HOST_DIR, { recursive: true });
+    const tmp = `${HARNESS_SETTINGS_FILE}.tmp.${process.pid}.${Date.now()}`;
+    writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+    renameSync(tmp, HARNESS_SETTINGS_FILE);
+  } catch {}
+}
+
 const HARNESS = process.env.VOICEBOX_HARNESS ?? null;
+let activeHarness = HARNESS ?? readPersistedHarnessSettings()?.harness ?? null;
 
 // Multi-harness task execution (voicebox-beads-aaj): ONE dispatcher, many adapters.
 // A delegate_task names an agent; the registry resolves its adapter; the dispatcher hands
@@ -882,9 +974,9 @@ function executorForAgent(agentConfig, harness) {
     },
   };
 }
-if (HARNESS) {
-  // The delegating executor: check/run read the task's agentConfig and hand off to THAT
-  // adapter's executor, so admission carries the named refusal of the right adapter.
+function activateHarnessInProcess(harnessId, options = {}) {
+  const normalized = harnessId === "pi-acp" ? "pi" : harnessId;
+  activeHarness = normalized;
   installTaskExecutor({
     check(args = {}) {
       return executorForAgent(args.agentConfig, args.harness ?? args.agent).check(args);
@@ -894,25 +986,29 @@ if (HARNESS) {
       return target.run(args);
     },
   });
+  const preset = SUPPORTED_HARNESS_DEFAULTS[harnessId] ?? SUPPORTED_HARNESS_DEFAULTS[normalized];
+  if (preset) {
+    const agentId = typeof options.id === "string" && options.id.trim() ? options.id.trim() : preset.id;
+    const agentSpec = {
+      id: agentId,
+      name: typeof options.name === "string" && options.name.trim() ? options.name.trim() : preset.name,
+      harness: preset.harness,
+      adapter: typeof options.adapter === "string" && options.adapter.trim() ? options.adapter.trim() : preset.adapter,
+      transport: "stdio",
+      environmentKey: SELF_ENVIRONMENT,
+      isDefault: options.isDefault !== false,
+      ...(typeof options.description === "string" ? { description: options.description } : {}),
+    };
+    if (agentRegistry.get(agentId)) {
+      agentRegistry.update(agentId, agentSpec);
+    } else {
+      agentRegistry.register(agentSpec);
+    }
+  }
+  return activeHarness;
 }
-if (HARNESS === "pi" || HARNESS === "pi-acp") {
-  agentRegistry.register({
-    id: "pi",
-    name: "Pi",
-    harness: "pi",
-    adapter: "pi-acp",
-    environmentKey: SELF_ENVIRONMENT,
-    isDefault: true,
-  });
-} else if (HARNESS === "claude") {
-  agentRegistry.register({
-    id: "claude",
-    name: "Claude",
-    harness: "claude",
-    adapter: "claude-code",
-    environmentKey: SELF_ENVIRONMENT,
-    isDefault: true,
-  });
+if (activeHarness) {
+  activateHarnessInProcess(activeHarness);
 }
 
 // Startup admission for every configured agent of this environment (voicebox-beads-aaj):
@@ -927,7 +1023,7 @@ const harnessAdmission = validateHarnessAgents({
     ? describeClaudeAdapterInstall({})
     : describeAdapterInstall({}),
   implementedAdapters: new Set(adapterExecutors.keys()),
-  executorSelected: Boolean(HARNESS),
+  executorSelected: Boolean(activeHarness),
 });
 // Refused agents are named in the normal startup log — a broken harness configuration is a
 // boot fact a person should meet WITHOUT running --doctor or a delegation that fails.
@@ -1270,13 +1366,16 @@ async function executeViaPage(action) {
     return { ok: true, action: `listed ${active.project}`, files: observed.files ?? [], entries: observed.entries ?? [], via: "page", root: active.root };
   }
   if (action.verb === "read") {
-    return { ok: true, action: observed.name ?? action.name, content: observed.content ?? "", via: "page", root: active.root, logged: observed.auditSeq ?? null };
+    const file = observed.name ?? action.name;
+    const content = observed.content ?? "";
+    return { ok: true, action: file, file, content, bytes: observed.bytes ?? Buffer.byteLength(content), via: "page", root: active.root, logged: observed.auditSeq ?? null };
   }
   if (action.verb === "delete") {
     return { ok: true, action: `deleted ${observed.name ?? action.name} — observed by the page`, file: observed.name ?? action.name, via: "page", root: active.root, logged: observed.auditSeq ?? null };
   }
   if (action.verb === "edit") {
-    return { ok: true, action: `edited ${observed.name ?? action.name} (${observed.bytes ?? 0} bytes) — observed by the page`, file: observed.name ?? action.name, via: "page", root: active.root, logged: observed.auditSeq ?? null };
+    const preview = String(action.newText ?? "").slice(0, 280);
+    return { ok: true, action: `edited ${observed.name ?? action.name} (${observed.bytes ?? 0} bytes) — observed by the page`, file: observed.name ?? action.name, bytes: observed.bytes ?? 0, ...(preview ? { preview } : {}), via: "page", root: active.root, logged: observed.auditSeq ?? null };
   }
   if (action.verb === "diff") {
     return { ok: true, action: `diff ${observed.name ?? action.name}`, file: observed.name ?? action.name, diff: observed.diff ?? "", changed: Boolean(observed.changed), via: "page", root: active.root };
@@ -1288,10 +1387,13 @@ async function executeViaPage(action) {
     return { ok: true, action: `delegated task to ${observed.agent ?? action.agent}`, task: observed.task, address: observed.address, via: "page", root: active?.root ?? null };
   }
   // write — the action line carries the provenance, because this line is what the room prints.
+  const writePreview = String(action.content ?? "").slice(0, 280);
   return {
     ok: true,
     action: `wrote ${observed.name ?? action.name} (${observed.bytes ?? 0} bytes) — observed by the page`,
     file: observed.name ?? action.name,
+    bytes: observed.bytes ?? Buffer.byteLength(String(action.content ?? "")),
+    ...(writePreview ? { preview: writePreview } : {}),
     via: "page",
     root: active.root,
     logged: observed.auditSeq ?? null,
@@ -1889,6 +1991,124 @@ async function execute(action) {
       root: active?.root ?? null,
     };
   }
+  if (action.verb === "list_tools") {
+    const miniAppTools = activeMiniAppRegistry.getAllTools();
+    let harnesses = [];
+    try {
+      const inv = await harnessInventory();
+      const combined = await listHarnessesWithConfiguredAgents(inv, agentRegistry);
+      harnesses = combined.harnesses ?? [];
+    } catch {}
+    const out = await listTools({
+      rootPath: active?.root?.kind === "machine" ? active.root.path : ROOT,
+      kind: action.kind,
+      miniAppTools,
+      harnesses,
+    });
+    return {
+      ok: true,
+      action: `listed ${out.count} tool(s)${action.kind ? ` (${action.kind})` : ""}`,
+      tools: out.tools,
+      count: out.count,
+      counts: out.counts,
+      root: active?.root ?? null,
+      logged: null,
+    };
+  }
+  if (action.verb === "search_tools") {
+    const query = String(action.query ?? action.name ?? "").trim();
+    if (!query) {
+      return {
+        ok: false,
+        refused: "missing-argument",
+        error: "refused: missing-argument",
+        why: "search_tools requires a search query",
+        root: active?.root ?? null,
+        logged: null,
+      };
+    }
+    const miniAppTools = activeMiniAppRegistry.getAllTools();
+    let harnesses = [];
+    try {
+      const inv = await harnessInventory();
+      const combined = await listHarnessesWithConfiguredAgents(inv, agentRegistry);
+      harnesses = combined.harnesses ?? [];
+    } catch {}
+    const out = await searchTools(query, {
+      rootPath: active?.root?.kind === "machine" ? active.root.path : ROOT,
+      kind: action.kind,
+      limit: action.limit,
+      miniAppTools,
+      harnesses,
+    });
+    return {
+      ok: true,
+      action: `found ${out.count} tool(s) matching "${query}"`,
+      query,
+      tools: out.tools,
+      count: out.count,
+      counts: out.counts,
+      root: active?.root ?? null,
+      logged: null,
+    };
+  }
+  if (action.verb === "open_workspace") {
+    const rawTarget = String(action.target || action.path || action.name || "self").trim();
+    const isSelf = !rawTarget || /^(?:self|voicebox|repo|repository|this\s+repo|own\s+codebase|codebase)$/i.test(rawTarget);
+    const requested = isSelf ? ROOT : rawTarget;
+    const candidate = path.resolve(requested);
+    if (!existsSync(candidate)) {
+      return {
+        ok: false,
+        refused: "path-missing",
+        error: "refused: path-missing",
+        why: `'${requested}' does not exist on this machine`,
+        root: active?.root ?? null,
+        logged: null,
+      };
+    }
+    let real;
+    try {
+      real = realpathSync(candidate);
+    } catch (e) {
+      return {
+        ok: false,
+        refused: "not-a-directory",
+        error: "refused: not-a-directory",
+        why: `'${requested}' could not be resolved: ${e.code}`,
+        root: active?.root ?? null,
+        logged: null,
+      };
+    }
+    if (!statSync(real).isDirectory()) {
+      return {
+        ok: false,
+        refused: "not-a-directory",
+        error: "refused: not-a-directory",
+        why: `'${requested}' is a file; a project root is a folder`,
+        root: active?.root ?? null,
+        logged: null,
+      };
+    }
+    const project = String(action.project ?? (isSelf ? "voicebox" : path.basename(real) || "workspace")).trim();
+    active = {
+      project,
+      root: { kind: "machine", path: real, environment: SELF_ENVIRONMENT },
+      declaredAt: new Date().toISOString(),
+    };
+    liveProjectContext = null;
+    const files = readdirSync(real).filter((f) => !f.startsWith("."));
+    return {
+      ok: true,
+      action: `opened workspace ${project} (${real})`,
+      project: active.project,
+      root: active.root,
+      files,
+      actsVia: "server",
+      reachableFromThisProcess: true,
+      logged: null,
+    };
+  }
   // `logged` is present as null rather than absent: "there is no entry" must be a fact on the
   // response, not something a reader has to notice the absence of.
   if (!active) return { ...noRootDeclared(), error: `refused: ${ROOT_NOT_DECLARED}`, root: null, logged: null };
@@ -1904,7 +2124,85 @@ async function execute(action) {
   if (action.verb === "list") {
     const reach = reachableFromEnvironment(active.root, { peer: "machine", environment: SELF_ENVIRONMENT });
     if (!reach.ok) return { ok: false, refused: reach.refused, error: `refused: ${reach.refused}`, why: reach.why, root: active.root };
-    return { ok: true, action: `listed ${active.project}`, files: readdirSync(active.root.path).filter((f) => !f.startsWith(".")), root: active.root };
+    const subDir = String(action.name ?? action.dir ?? "").trim().replace(/^\/+|\/+$/g, "");
+    if (!subDir || subDir === ".") {
+      return { ok: true, action: `listed ${active.project}`, files: readdirSync(active.root.path).filter((f) => !f.startsWith(".")), root: active.root };
+    }
+    const resolvedDir = resolveActive(subDir);
+    if (!resolvedDir.ok) {
+      return {
+        ok: false,
+        refused: resolvedDir.refused,
+        error: `refused: ${resolvedDir.refused === "outside-root" ? "path escapes the active project root" : resolvedDir.refused}`,
+        why: resolvedDir.why,
+        root: active.root,
+      };
+    }
+    const relSegments = path.relative(active.root.path, resolvedDir.path).split(path.sep).filter(Boolean);
+    if (relSegments.some((seg) => seg.startsWith("."))) {
+      return { ok: false, refused: "dotfile-refused", error: "refused: dotfile-refused", why: "dotfiles are neither readable nor writable through the loop", root: active.root };
+    }
+    if (!existsSync(resolvedDir.path)) {
+      return { ok: false, refused: "not-found", error: "refused: not-found", why: `'${subDir}' is not in ${active.project}`, root: active.root };
+    }
+    const stat = statSync(resolvedDir.path);
+    if (!stat.isDirectory()) {
+      return { ok: false, refused: "not-a-directory", error: "refused: not-a-directory", why: `'${subDir}' is a file; list applies to directories`, root: active.root };
+    }
+    const relNormalized = relSegments.join("/");
+    const files = readdirSync(resolvedDir.path)
+      .filter((f) => !f.startsWith("."))
+      .map((f) => `${relNormalized}/${f}`);
+    return {
+      ok: true,
+      action: `listed ${active.project}/${relNormalized}`,
+      dir: relNormalized,
+      files,
+      root: active.root,
+    };
+  }
+  if (action.verb === "exec") {
+    const reach = reachableFromEnvironment(active.root, { peer: "machine", environment: SELF_ENVIRONMENT });
+    if (!reach.ok) return { ok: false, refused: reach.refused, error: `refused: ${reach.refused}`, why: reach.why, root: active.root };
+    const cmdText = String(action.command ?? "").trim();
+    if (!cmdText) {
+      return {
+        ok: false,
+        refused: "missing-argument",
+        error: "refused: missing-argument",
+        why: "run_command requires a non-empty command string",
+        root: active.root,
+        logged: null,
+      };
+    }
+    const resExec = await runSystemCommand(active.root.path, {
+      command: cmdText,
+      cwd: action.cwd,
+    });
+    if (!resExec.ok && resExec.refused && resExec.refused !== "command-failed") {
+      const entry = logAct({ kind: "exec", target: cmdText, tool: "turn" }, "refuse", resExec.refused, "refused", null, action.turn ?? null);
+      return {
+        ...resExec,
+        root: active.root,
+        logged: entry ? entry.seq : null,
+      };
+    }
+    const entry = logAct(
+      { kind: "exec", target: cmdText, tool: "turn" },
+      "allow",
+      "exec-inside",
+      resExec.ok ? "ok" : "error",
+      { exitCode: resExec.exitCode, durationMs: resExec.durationMs },
+      action.turn ?? null,
+    );
+    return {
+      ...resExec,
+      action: resExec.ok
+        ? `ran "${cmdText}" (exit 0, ${resExec.durationMs}ms)`
+        : `command "${cmdText}" exited with code ${resExec.exitCode}`,
+      root: active.root,
+      logged: entry ? entry.seq : null,
+    };
   }
   if (action.verb === "grep") {
     const query = String(action.query ?? action.name ?? "").trim();
@@ -2376,11 +2674,15 @@ async function execute(action) {
       previousContent,
       at: new Date().toISOString(),
     });
+    const writeBytes = Buffer.byteLength(action.content);
+    const writePreview = String(action.content).slice(0, 280);
     entry = logAct({ kind: "write", target: name, tool: "turn" }, "allow", "writes-inside", "ok", observeUnderRoot(name), action.turn ?? null, att?.seq ?? null);
     return {
       ok: true,
       action: `wrote ${name} (${action.content.length} bytes)`,
       file: name,
+      bytes: writeBytes,
+      ...(writePreview ? { preview: writePreview } : {}),
       root: active.root,
       logged: entry ? entry.seq : null,
       ...(entry ? {} : lastLogRefusal ? { logRefused: lastLogRefusal.refused, logWhy: lastLogRefusal.why } : {}),
@@ -2401,8 +2703,9 @@ async function execute(action) {
       }
       throw e;
     }
-    const entry = logAct({ kind: "read", target: name, tool: "turn" }, "allow", "reads-inside", "ok", observeUnderRoot(name), action.turn ?? null, [{ path: name, bytes: Buffer.byteLength(content) }]);
-    return { ok: true, action: name, content, root: active.root, logged: entry ? entry.seq : null };
+    const readBytes = Buffer.byteLength(content);
+    const entry = logAct({ kind: "read", target: name, tool: "turn" }, "allow", "reads-inside", "ok", observeUnderRoot(name), action.turn ?? null, [{ path: name, bytes: readBytes }]);
+    return { ok: true, action: name, file: name, content, bytes: readBytes, root: active.root, logged: entry ? entry.seq : null };
   }
   if (action.verb === "delete") {
     if (!existsSync(candidate)) {
@@ -2465,12 +2768,15 @@ async function execute(action) {
       previousContent: original,
       at: new Date().toISOString(),
     });
-    const entry = logAct({ kind: "edit", target: name, tool: "turn" }, "allow", "edits-inside", "ok", observeUnderRoot(name), action.turn ?? null, [{ path: name, bytes: Buffer.byteLength(updated) }]);
+    const editBytes = Buffer.byteLength(updated);
+    const editPreview = String(updated || action.newText || "").slice(0, 280);
+    const entry = logAct({ kind: "edit", target: name, tool: "turn" }, "allow", "edits-inside", "ok", observeUnderRoot(name), action.turn ?? null, [{ path: name, bytes: editBytes }]);
     return {
       ok: true,
-      action: `edited ${name} (${Buffer.byteLength(updated)} bytes)`,
+      action: `edited ${name} (${editBytes} bytes)`,
       file: name,
-      bytes: Buffer.byteLength(updated),
+      bytes: editBytes,
+      ...(editPreview ? { preview: editPreview } : {}),
       root: active.root,
       logged: entry ? entry.seq : null,
       auditLocation: `${active.root.path}/.audit/`,
@@ -2582,7 +2888,7 @@ const routes = {
     ? describeClaudeAdapterInstall({})
     : describeAdapterInstall({}),
       implementedAdapters: new Set(adapterExecutors.keys()),
-      executorSelected: Boolean(HARNESS),
+      executorSelected: Boolean(activeHarness),
       hostEnvironment: SELF_ENVIRONMENT ?? "local",
     };
     const agents = agentRegistry.list({ environmentKey, harness }).map((a) => ({
@@ -2623,7 +2929,89 @@ const routes = {
   "GET /api/harnesses": async (req, res) => {
     const inv = await harnessInventory();
     const combined = await listHarnessesWithConfiguredAgents(inv, agentRegistry);
-    return json(res, 200, combined);
+    return json(res, 200, { ...combined, activeHarness });
+  },
+  "POST /api/harnesses/configure": (req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => answerOnce(res, async () => {
+      let parsed = {};
+      try {
+        parsed = JSON.parse(body || "{}");
+      } catch {
+        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
+      }
+      const harnessRaw = typeof parsed?.harness === "string" ? parsed.harness.trim() : "";
+      if (!harnessRaw || !SUPPORTED_HARNESS_DEFAULTS[harnessRaw]) {
+        return json(res, 400, {
+          ok: false,
+          refused: "bad-request",
+          why: `harness must be one of: ${Object.keys(SUPPORTED_HARNESS_DEFAULTS).filter((k) => k !== "pi-acp").join(", ")}`,
+        });
+      }
+      const normalized = harnessRaw === "pi-acp" ? "pi" : harnessRaw;
+      writePersistedHarnessSettings({ harness: normalized });
+      activateHarnessInProcess(normalized, parsed);
+      const inv = await harnessInventory();
+      const combined = await listHarnessesWithConfiguredAgents(inv, agentRegistry);
+      return json(res, 200, { ok: true, activeHarness, ...combined });
+    }));
+  },
+  "GET /api/tools": async (req, res, url) => {
+    const q = (url.searchParams.get("q") ?? "").trim();
+    const kind = (url.searchParams.get("kind") ?? "").trim() || undefined;
+    const limitParam = url.searchParams.get("limit");
+    const limit = limitParam ? Number(limitParam) : undefined;
+    const miniAppTools = activeMiniAppRegistry.getAllTools();
+    let harnesses = [];
+    try {
+      const inv = await harnessInventory();
+      const combined = await listHarnessesWithConfiguredAgents(inv, agentRegistry);
+      harnesses = combined.harnesses ?? [];
+    } catch {}
+    const rootPath = active?.root?.kind === "machine" ? active.root.path : ROOT;
+    const result = q
+      ? await searchTools(q, { rootPath, kind, limit, miniAppTools, harnesses })
+      : await listTools({ rootPath, kind, miniAppTools, harnesses });
+    return json(res, 200, result);
+  },
+  "GET /api/keys": (req, res) => json(res, 200, apiKeysStatusPayload()),
+  "PUT /api/keys": (req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => answerOnce(res, async () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(body || "{}");
+      } catch {
+        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be a JSON object" });
+      }
+      const updates = (parsed.keys && typeof parsed.keys === "object" && !Array.isArray(parsed.keys)) ? { ...parsed.keys } : { ...parsed };
+      if (typeof updates.provider === "string" && "key" in updates) {
+        const mappedProvider = updates.provider === "claude" ? "anthropic" : updates.provider;
+        if (mappedProvider in API_KEY_DESCRIPTORS) updates[mappedProvider] = updates.key;
+      }
+      if ("claude" in updates && !("anthropic" in updates)) {
+        updates.anthropic = updates.claude;
+      }
+      for (const [id, desc] of Object.entries(API_KEY_DESCRIPTORS)) {
+        if (!(id in updates)) continue;
+        const val = updates[id];
+        if (typeof val === "string" && val.trim()) {
+          const trimmed = val.trim();
+          persistedKeys[id] = trimmed;
+          process.env[desc.env] = trimmed;
+        } else if (val === "" || val === null) {
+          delete persistedKeys[id];
+          delete process.env[desc.env];
+        }
+      }
+      writePersistedApiKeys(persistedKeys);
+      return json(res, 200, { ...apiKeysStatusPayload(), agentSettings: agentSettingsPayload() });
+    }));
   },
   // THE AGENT'S SETTINGS, and the distinction this whole surface exists to keep:
   //   requested — what a person asked for, stored whether or not anything can use it yet
@@ -2930,8 +3318,14 @@ async function handle(req, res) {
       } catch {
         return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON: {project, root}" });
       }
-      const project = String(declared?.project ?? "").trim();
-      const root = declared?.root;
+      const isSelfRequest =
+        declared?.self === true ||
+        declared?.target === "self" ||
+        (declared?.root && typeof declared.root === "object" && (declared.root.self === true || declared.root.path === "self"));
+      const project = String(declared?.project ?? (isSelfRequest ? "voicebox" : "")).trim();
+      const root = isSelfRequest
+        ? { kind: "machine", path: ROOT }
+        : declared?.root;
       if (!project || !root || typeof root !== "object") {
         return json(res, 400, { ok: false, refused: "bad-request", why: "a declaration needs a project name and a root descriptor" });
       }
@@ -2940,9 +3334,11 @@ async function handle(req, res) {
       }
 
       // Who is asking? The token decides for a machine root; the page's own origin decides for a root
-      // only the page can act on. Both refusals name the rule they were refused by.
+      // only the page can act on, or for opening the server's own codebase (`self: true`).
       const pageOwned = root.kind === "opfs" || root.kind === "handle";
       const declaredByHost = extensions.hostTokenOk(req.headers["x-voicebox-host-token"]);
+      const sessionToken = req.headers["x-voicebox-session-token"];
+      const declaredByRoomSession = typeof sessionToken === "string" && sessionToken && sessionToken === ROOM_SESSION_TOKEN;
       const selfPort = boundPort ?? PORT;
       const ownOrigins = new Set([
         `http://127.0.0.1:${selfPort}`,
@@ -2950,7 +3346,8 @@ async function handle(req, res) {
         `http://[::1]:${selfPort}`,
       ]);
       const fromOwnPage = typeof req.headers.origin === "string" && ownOrigins.has(req.headers.origin);
-      if (!declaredByHost && !(pageOwned && fromOwnPage)) {
+      const allowedSelf = isSelfRequest && hasExtensionAuthority(req);
+      if (!declaredByHost && !declaredByRoomSession && !(pageOwned && fromOwnPage) && !allowedSelf) {
         return json(res, 403, {
           ok: false,
           refused: "host-token-required",
@@ -2962,7 +3359,7 @@ async function handle(req, res) {
       const declaredBy = declaredByHost ? "host" : "page";
 
       if (root.kind === "machine") {
-        const requested = String(root.path ?? "");
+        const requested = isSelfRequest ? ROOT : String(root.path ?? "");
         if (!requested.trim()) {
           return json(res, 400, { ok: false, refused: "bad-request", why: "a machine root needs a path" });
         }
@@ -3497,26 +3894,31 @@ async function handle(req, res) {
   // runs. The page (astra's bead) renders this; the API is the surface.
 
   if (req.method === "POST" && url.pathname === "/api/agents") {
-    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+    if (!hasExtensionAuthority(req)) {
       return json(res, 403, {
         ok: false,
         refused: "host-token-required",
-        why: "configuring an agent is the host's act and requires the host token (x-voicebox-host-token); the page cannot hold it",
+        why: "configuring an agent is the host's act and requires the host token (x-voicebox-host-token) or an authorized in-room session",
       });
     }
     const body = await readJson();
     const registered = agentRegistry.register(body);
     if (!registered.ok) return json(res, 400, registered);
-    return json(res, 201, { ok: true, agent: publicAgentProjection(registered.agent) });
+    if (!activeHarness && registered.agent?.harness && SUPPORTED_HARNESS_DEFAULTS[registered.agent.harness]) {
+      const normalized = registered.agent.harness === "pi-acp" ? "pi" : registered.agent.harness;
+      writePersistedHarnessSettings({ harness: normalized });
+      activateHarnessInProcess(normalized, registered.agent);
+    }
+    return json(res, 201, { ok: true, agent: publicAgentProjection(registered.agent), activeHarness });
   }
 
   const agentMatch = url.pathname.match(/^\/api\/agents\/([a-zA-Z0-9_-]+)$/);
   if (req.method === "PATCH" && agentMatch) {
-    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+    if (!hasExtensionAuthority(req)) {
       return json(res, 403, {
         ok: false,
         refused: "host-token-required",
-        why: "updating an agent is the host's act and requires the host token (x-voicebox-host-token); the page cannot hold it",
+        why: "updating an agent is the host's act and requires the host token (x-voicebox-host-token) or an authorized in-room session",
       });
     }
     const agentId = agentMatch[1];
@@ -4260,9 +4662,12 @@ server.on("upgrade", (req, socket) => {
               durationMs: Math.round(performance.now() - started),
               action: result.action ?? result.error,
               ...(typeof result.output === "string" ? { output: result.output.slice(0, 256) } : {}),
-              // The written/edited FILE identity (voicebox-beads-2meg): artifact chips need
-              // the file's name, and the tool frame is the only place that has it.
+              // The written/edited/read FILE identity (voicebox-beads-2meg, voicebox-beads-8ga5, voicebox-beads-np3f):
+              // artifact chips and the file reader need the file's name, bytes, preview, and content.
               ...(typeof result.file === "string" && result.file ? { file: result.file.slice(0, 200) } : {}),
+              ...(typeof result.bytes === "number" ? { bytes: result.bytes } : {}),
+              ...(typeof result.preview === "string" ? { preview: result.preview.slice(0, 280) } : {}),
+              ...(call.name === "read_file" && typeof result.content === "string" ? { content: result.content } : {}),
             });
           }
           const answered = session.sendToolResponse(responses);
