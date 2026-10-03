@@ -43,7 +43,32 @@ export interface TaskCardData {
   answer?: string;
   partial?: string;
   reason?: string;
+  detail?: string;
   staleReason?: string;
+}
+
+/**
+ * Provide a plain-language diagnostic explanation for bare reason codes when no
+ * stderr/process detail was attached to the task record.
+ */
+export function explainTaskReason(reason?: string, detail?: string): string | undefined {
+  if (typeof detail === "string" && detail.trim()) return detail.trim();
+  switch (reason) {
+    case "harness-ended-outcome-unknown":
+      return "The coding agent process exited unexpectedly before completing the task.";
+    case "environment-ended-outcome-unknown":
+      return "The execution environment stopped or restarted while the task was running.";
+    case "task-deadline":
+      return "The task exceeded its configured time limit and was stopped.";
+    case "acp-timeout":
+      return "The coding agent did not respond before the request timeout.";
+    case "acp-authentication-required":
+      return "The coding agent requires authentication (run login in your terminal or configure an API key).";
+    case "task-output-over-budget":
+      return "The coding agent output exceeded the maximum size limit.";
+    default:
+      return undefined;
+  }
 }
 
 /**
@@ -167,6 +192,11 @@ export function deriveCardData(options: {
       ? task.input.agent
       : "unknown";
 
+  const rawDetail = ("detail" in task && typeof task.detail === "string" && task.detail.trim())
+    ? task.detail.trim()
+    : undefined;
+  const detailText = explainTaskReason(task.reason, rawDetail);
+
   return {
     address: task.address,
     agent,
@@ -184,6 +214,7 @@ export function deriveCardData(options: {
     ...(task.answer !== undefined ? { answer: task.answer } : {}),
     ...(task.partial !== undefined ? { partial: task.partial } : {}),
     ...(task.reason ? { reason: task.reason } : {}),
+    ...(detailText ? { detail: detailText } : {}),
     ...(stale ? { staleReason: "Offline cached status: environment is unreachable. This is not evidence of continuing execution." } : {}),
   };
 }

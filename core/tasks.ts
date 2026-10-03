@@ -75,6 +75,7 @@ export interface TaskRecord {
   createdAt: string;
   updatedAt: string;
   reason?: string;
+  detail?: string;
   answer?: string;
   progress?: string;
   partial?: string;
@@ -123,6 +124,7 @@ export interface TaskEvent {
   state: TaskState;
   created?: TaskRecord;
   reason?: string;
+  detail?: string;
   answer?: string;
   progress?: string;
   partial?: string;
@@ -181,7 +183,7 @@ export function reduceTask(entries: LogEntry[], address: string): TaskRecord | n
         cancel_unconfirmed: ["cancelled", "completed", "failed", "interrupted"],
       };
       if (!allowed[record.state]?.includes(event.state)) throw new Error("invalid task transition");
-      record = { ...record, state: event.state, updatedAt: entry.at, ...(event.reason ? { reason: event.reason } : {}), ...(event.answer !== undefined ? { answer: event.answer } : {}), ...(event.progress !== undefined ? { progress: event.progress } : {}), ...(event.partial !== undefined ? { partial: event.partial } : {}) };
+      record = { ...record, state: event.state, updatedAt: entry.at, ...(event.reason ? { reason: event.reason } : {}), ...(event.detail ? { detail: event.detail } : {}), ...(event.answer !== undefined ? { answer: event.answer } : {}), ...(event.progress !== undefined ? { progress: event.progress } : {}), ...(event.partial !== undefined ? { partial: event.partial } : {}) };
     }
     const expectedRoot = record.root.kind === "handle"
       ? `picked:${record.root.id}`
@@ -212,7 +214,7 @@ export function taskDelivery(mode: "surface-notification" | "conversation-interj
 
 /** Readback intentionally excludes credential identity and the captured prompt. */
 export function taskView(record: TaskRecord) {
-  const { address, environment, placement, root, state, createdAt, updatedAt, reason, answer, progress, partial, outcome, agentId, harness } = record;
+  const { address, environment, placement, root, state, createdAt, updatedAt, reason, detail, answer, progress, partial, outcome, agentId, harness } = record;
   const resolvedPlacement = placement ?? placementForEnvironment(environment) ?? "machine";
   // The readable half of the record: the class and its basis, and NOTHING that ranks one delegation
   // against another — no score, no weight, no ordering (voicebox-beads-m9u, "no automatic ranking").
@@ -230,6 +232,7 @@ export function taskView(record: TaskRecord) {
     closurePolicy: closurePolicyFor(resolvedPlacement),
     delivery: taskDelivery("surface-notification", false),
     ...(reason ? { reason } : {}),
+    ...(detail ? { detail } : {}),
     ...(answer !== undefined ? { answer } : {}),
     ...(progress ? { progress } : {}),
     ...(partial ? { partial } : {}),

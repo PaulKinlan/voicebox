@@ -263,3 +263,24 @@ test("bounds: a claude run with a 120s deadline completes over the scripted harn
   });
   assert.match(String(text), /OK/, "a 120s deadline must be admitted and run, not refused as unbounded");
 });
+
+test("diagnostics: when the spawned ACP process writes to stderr and exits non-zero, TaskInterrupted carries exit code, stage, and stderr detail (voicebox-beads-6s7e)", async () => {
+  const dir = stubAdapterDir();
+  fs.writeFileSync(
+    path.join(dir, "dist/index.js"),
+    'process.stderr.write("npm error code ETARGET\\nnpm error notarget No matching version found for @agentclientprotocol/claude-agent-acp@0.78.0.\\n");\nprocess.exit(1);\n',
+  );
+  const executor = createClaudeAcpExecutor({ adapterDir: dir, claudeCli: process.execPath });
+  await assert.rejects(
+    executor.run({ input: { task: "hello" } }),
+    (err) => {
+      assert.equal(err.refused, "harness-ended-outcome-unknown");
+      assert.match(String(err.detail), /exited with code 1/);
+      assert.match(String(err.detail), /initializing claude-code/);
+      assert.match(String(err.detail), /ETARGET/);
+      return true;
+    },
+  );
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
