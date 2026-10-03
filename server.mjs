@@ -30,6 +30,7 @@ import {
   validateAgentSettings,
 } from "./core/agent-settings.ts";
 import { auditFileName, makeEntry, mergeAudit, nextSeq, parseEntry, resumeSeq, serializeEntry, sweepLostAttempts } from "./core/audit.ts";
+import { reduceTask, taskView } from "./core/tasks.ts";
 import { activityEntry } from "./core/shared-log.ts";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
@@ -828,12 +829,76 @@ function recordWorkActivity({ kind = "work", summary = "", detail = "", file = "
   return entry;
 }
 
+const recentTasks = new Map();
+
+function readWorkspaceTasks(rootPath) {
+  const byAddress = new Map();
+  for (const [addr, task] of recentTasks.entries()) {
+    byAddress.set(addr, { ...task });
+  }
+  if (rootPath && existsSync(rootPath)) {
+    const auditDir = path.join(rootPath, ".audit");
+    if (existsSync(auditDir)) {
+      try {
+        const files = readdirSync(auditDir).filter((f) => f.endsWith(".jsonl"));
+        for (const f of files) {
+          let raw = "";
+          try { raw = readFileSync(path.join(auditDir, f), "utf8"); } catch { continue; }
+          const entries = raw.split("\n").map(parseEntry).filter(Boolean);
+          const taskAddresses = new Set();
+          for (const e of entries) {
+            if (e.kind === "task" && e.task?.address) taskAddresses.add(e.task.address);
+          }
+          for (const addr of taskAddresses) {
+            try {
+              const reduced = reduceTask(entries, addr);
+              if (reduced) {
+                const view = taskView(reduced);
+                const prev = byAddress.get(addr);
+                byAddress.set(addr, {
+                  ...(prev ?? {}),
+                  ...view,
+                  task: prev?.task ?? reduced.input?.task ?? "",
+                });
+              }
+            } catch {}
+          }
+        }
+      } catch {}
+    }
+    const tasksDir = path.join(rootPath, ".tasks");
+    if (existsSync(tasksDir)) {
+      try {
+        const files = readdirSync(tasksDir).filter((f) => f.endsWith(".json"));
+        for (const f of files) {
+          try {
+            const parsed = JSON.parse(readFileSync(path.join(tasksDir, f), "utf8"));
+            const addr = parsed?.address ?? parsed?.id ?? f.replace(/\.json$/, "");
+            if (addr && !byAddress.has(addr)) {
+              byAddress.set(addr, parsed);
+            }
+          } catch {}
+        }
+      } catch {}
+    }
+  }
+  return [...byAddress.values()].sort((a, b) => {
+    const ta = Date.parse(a.updatedAt || a.createdAt || "") || 0;
+    const tb = Date.parse(b.updatedAt || b.createdAt || "") || 0;
+    return tb - ta;
+  });
+}
+
 const tasks = createTaskHost({
   environment: SELF_ENVIRONMENT, instance: INSTANCE, boot: BOOT,
   addressKey: readFileSync(path.join(HOST_DIR, ".host-token")),
   root: () => active,
   agentRegistry,
   onUpdate: (view) => {
+    if (view?.address) {
+      const prev = recentTasks.get(view.address) ?? {};
+      recentTasks.set(view.address, { ...prev, ...view });
+    }
     const status = view.state || view.status;
     if (status === "running") {
       recordWorkActivity({
@@ -1000,25 +1065,54 @@ function readPersistedHarnessSettings() {
   try {
     if (!existsSync(HARNESS_SETTINGS_FILE)) return null;
     const parsed = JSON.parse(readFileSync(HARNESS_SETTINGS_FILE, "utf8"));
-    if (parsed && typeof parsed.harness === "string" && parsed.harness.trim()) {
-      return { harness: parsed.harness.trim() };
+    if (!parsed || typeof parsed !== "object") return null;
+    const harness = typeof parsed.harness === "string" && parsed.harness.trim() ? normalizeHarnessId(parsed.harness.trim()) : null;
+    const harnesses = Array.isArray(parsed.harnesses)
+      ? parsed.harnesses
+          .filter((h) => typeof h === "string" && h.trim())
+          .map((h) => normalizeHarnessId(h.trim()))
+          .filter((h) => Boolean(SUPPORTED_HARNESS_DEFAULTS[h]))
+      : (harness ? [harness] : []);
+    if (harness || harnesses.length > 0) {
+      return { harness: harness ?? harnesses[0] ?? null, harnesses };
     }
     return null;
   } catch {
     return null;
   }
 }
-function writePersistedHarnessSettings(value) {
+function writePersistedHarnessSettings(harness, harnessesList) {
   try {
     mkdirSync(HOST_DIR, { recursive: true });
+    const payload =
+      harness && typeof harness === "object" && !Array.isArray(harness)
+        ? {
+            harness: harness.harness ?? null,
+            harnesses: Array.isArray(harness.harnesses) ? [...harness.harnesses] : (harness.harness ? [harness.harness] : []),
+            updatedAt: new Date().toISOString(),
+          }
+        : {
+            harness: harness ?? null,
+            harnesses: harnessesList ? [...harnessesList] : (harness ? [harness] : []),
+            updatedAt: new Date().toISOString(),
+          };
     const tmp = `${HARNESS_SETTINGS_FILE}.tmp.${process.pid}.${Date.now()}`;
-    writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+    writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
     renameSync(tmp, HARNESS_SETTINGS_FILE);
   } catch {}
 }
 
-const HARNESS = process.env.VOICEBOX_HARNESS ?? null;
-let activeHarness = HARNESS ?? readPersistedHarnessSettings()?.harness ?? null;
+const HARNESS = process.env.VOICEBOX_HARNESS ? normalizeHarnessId(process.env.VOICEBOX_HARNESS.trim()) : null;
+const persistedHarnessSettings = readPersistedHarnessSettings();
+let activeHarness = HARNESS ?? persistedHarnessSettings?.harness ?? null;
+const activeHarnesses = new Set();
+if (HARNESS) activeHarnesses.add(HARNESS);
+if (Array.isArray(persistedHarnessSettings?.harnesses)) {
+  for (const h of persistedHarnessSettings.harnesses) {
+    if (h) activeHarnesses.add(normalizeHarnessId(h));
+  }
+}
+if (activeHarness) activeHarnesses.add(activeHarness);
 
 // Multi-harness task execution (voicebox-beads-aaj): ONE dispatcher, many adapters.
 // A delegate_task names an agent; the registry resolves its adapter; the dispatcher hands
@@ -1094,7 +1188,11 @@ function executorForAgent(agentConfig, harness) {
 }
 function activateHarnessInProcess(harnessId, options = {}) {
   const normalized = normalizeHarnessId(harnessId);
-  activeHarness = normalized;
+  if (!normalized) return activeHarness;
+  activeHarnesses.add(normalized);
+  if (!(options.keepPrimary && activeHarness)) {
+    activeHarness = normalized;
+  }
   installTaskExecutor({
     check(args = {}) {
       return executorForAgent(args.agentConfig, args.harness ?? args.agent).check(args);
@@ -1148,7 +1246,24 @@ function activateHarnessInProcess(harnessId, options = {}) {
   }
   return activeHarness;
 }
-if (activeHarness) {
+function deactivateHarnessInProcess(harnessId) {
+  const normalized = normalizeHarnessId(harnessId);
+  activeHarnesses.delete(normalized);
+  if (activeHarness === normalized) {
+    activeHarness = [...activeHarnesses][0] ?? null;
+  }
+  if (activeHarnesses.size === 0) {
+    installTaskExecutor(null);
+  }
+  return activeHarness;
+}
+if (activeHarnesses.size > 0) {
+  const initialPrimary = activeHarness;
+  for (const h of [...activeHarnesses]) {
+    activateHarnessInProcess(h, { keepPrimary: true });
+  }
+  if (initialPrimary) activeHarness = initialPrimary;
+} else if (activeHarness) {
   activateHarnessInProcess(activeHarness);
 }
 
@@ -1162,7 +1277,7 @@ const harnessAdmission = validateHarnessAgents({
   // default; claude gets its own install probe.
   describeAdapter: describeConfiguredAdapter,
   implementedAdapters: new Set(adapterExecutors.keys()),
-  executorSelected: Boolean(activeHarness),
+  executorSelected: Boolean(activeHarness || activeHarnesses.size > 0),
 });
 // Refused agents are named in the normal startup log — a broken harness configuration is a
 // boot fact a person should meet WITHOUT running --doctor or a delegation that fails.
@@ -1921,6 +2036,7 @@ const MIME_TYPES = {
   ".ico": "image/x-icon",
   ".wasm": "application/wasm",
   ".wat": "text/plain; charset=utf-8",
+  ".webmanifest": "application/manifest+json; charset=utf-8",
 };
 
 // Source served as source: the E1-M0 page imports core/ and browser/ directly, so the browser
@@ -2151,6 +2267,44 @@ function recordUndoSnapshot(rootPath, snap) {
 // The executor: the one place that touches the build environment. It grows;
 // the resolver stays the same shape.
 async function execute(action) {
+  if (action.verb === "system") {
+    const systemCommand = {
+      command: action.command,
+      target: action.target ?? null,
+      text: action.text ?? null,
+      file: action.file ?? null,
+      mode: action.mode ?? null,
+    };
+    broadcastChannel({
+      type: "system_command",
+      ...systemCommand,
+    });
+    if (action.command === "clear_activity") {
+      workActivityLog.length = 0;
+    } else {
+      recordWorkActivity({
+        kind: "system",
+        summary: `system: ${action.command}${action.target ? ` (${action.target})` : ""}${action.file ? ` -> ${action.file}` : ""}${action.mode ? ` (${action.mode})` : ""}`,
+        detail: action.text || action.file || action.target || action.mode || "",
+        file: action.file || "",
+        status: "ok",
+      });
+    }
+    const say =
+      action.command === "copy"
+        ? "Copied to clipboard."
+        : action.command === "paste"
+          ? "Pasted from clipboard."
+          : `Ran ${action.command}.`;
+    return {
+      ok: true,
+      action: `system:${action.command}`,
+      systemCommand,
+      say,
+      root: active?.root ?? null,
+      logged: null,
+    };
+  }
   // Read the registry at call time, not live-session setup: approval can happen mid-conversation.
   if (action.verb === "extensions") return { ok: true, ...extensions.inventory() };
   if (action.verb === "extension") return extensions.callTool(action.name, action.args ?? {});
@@ -2896,6 +3050,7 @@ async function execute(action) {
         root: active.root,
       };
     }
+    recentTasks.set(admitted.task.address, { ...admitted.task, task: String(action.task ?? "") });
     recordWorkActivity({
       kind: "agent",
       summary: `${admitted.task.agent || "agent"}: working…`,
@@ -3291,7 +3446,7 @@ const routes = {
     const admissionContext = {
       describeAdapter: describeConfiguredAdapter,
       implementedAdapters: new Set(adapterExecutors.keys()),
-      executorSelected: Boolean(activeHarness),
+      executorSelected: Boolean(activeHarness || activeHarnesses.size > 0),
       hostEnvironment: SELF_ENVIRONMENT ?? "local",
     };
     const agents = agentRegistry.list({ environmentKey, harness }).map((a) => ({
@@ -3332,7 +3487,7 @@ const routes = {
   "GET /api/harnesses": async (req, res) => {
     const inv = await harnessInventory();
     const combined = await listHarnessesWithConfiguredAgents(inv, agentRegistry);
-    return json(res, 200, { ...combined, activeHarness });
+    return json(res, 200, { ...combined, activeHarness, activeHarnesses: [...activeHarnesses] });
   },
   "POST /api/harnesses/configure": (req, res) => {
     let body = "";
@@ -3344,20 +3499,155 @@ const routes = {
       } catch {
         return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
       }
-      const harnessRaw = String(parsed?.harness ?? parsed?.id ?? "").trim();
-      if (!harnessRaw || !SUPPORTED_HARNESS_DEFAULTS[harnessRaw]) {
-        return json(res, 400, {
-          ok: false,
-          refused: "bad-request",
-          why: `harness must be one of: ${["pi", "claude", "antigravity", "codex", "gemini", "opencode", "aider"].join(", ")}`,
+      if (Array.isArray(parsed?.harnesses)) {
+        const validList = [];
+        for (const h of parsed.harnesses) {
+          const trimmed = String(h ?? "").trim();
+          if (!trimmed || !SUPPORTED_HARNESS_DEFAULTS[trimmed]) {
+            return json(res, 400, {
+              ok: false,
+              refused: "bad-request",
+              why: `harness must be one of: ${["pi", "claude", "antigravity", "codex", "gemini", "opencode", "aider"].join(", ")}`,
+            });
+          }
+          validList.push(trimmed);
+        }
+        activeHarnesses.clear();
+        activeHarness = null;
+        for (const h of validList) {
+          activateHarnessInProcess(h);
+        }
+        if (typeof parsed.harness === "string" && SUPPORTED_HARNESS_DEFAULTS[parsed.harness.trim()]) {
+          activeHarness = normalizeHarnessId(parsed.harness.trim());
+        }
+        if (activeHarnesses.size === 0) {
+          installTaskExecutor(null);
+        }
+        writePersistedHarnessSettings(activeHarness, activeHarnesses);
+        recordWorkActivity({
+          kind: "harness",
+          summary: `Connected harnesses: ${[...activeHarnesses].join(", ") || "none"}`,
+          status: "ok",
         });
+      } else {
+        const harnessRaw = String(parsed?.harness ?? parsed?.id ?? "").trim();
+        if (!harnessRaw || !SUPPORTED_HARNESS_DEFAULTS[harnessRaw]) {
+          return json(res, 400, {
+            ok: false,
+            refused: "bad-request",
+            why: `harness must be one of: ${["pi", "claude", "antigravity", "codex", "gemini", "opencode", "aider"].join(", ")}`,
+          });
+        }
+        const normalized = normalizeHarnessId(harnessRaw);
+        if (parsed?.active === false) {
+          deactivateHarnessInProcess(normalized);
+          writePersistedHarnessSettings(activeHarness, activeHarnesses);
+          recordWorkActivity({
+            kind: "harness",
+            summary: `Disconnected harness ${normalized}`,
+            status: "info",
+          });
+        } else {
+          activateHarnessInProcess(harnessRaw, parsed);
+          writePersistedHarnessSettings(activeHarness, activeHarnesses);
+          recordWorkActivity({
+            kind: "harness",
+            summary: `Connected harness ${normalized}`,
+            status: "ok",
+          });
+        }
       }
-      const normalized = normalizeHarnessId(harnessRaw);
-      writePersistedHarnessSettings({ harness: normalized });
-      activateHarnessInProcess(harnessRaw, parsed);
       const inv = await harnessInventory();
       const combined = await listHarnessesWithConfiguredAgents(inv, agentRegistry);
-      return json(res, 200, { ok: true, activeHarness, ...combined });
+      return json(res, 200, { ok: true, activeHarness, activeHarnesses: [...activeHarnesses], ...combined });
+    }));
+  },
+  "GET /api/tasks": (req, res) => {
+    const rootPath = active?.root?.kind === "machine" ? active.root.path : WORKSPACE;
+    const taskList = readWorkspaceTasks(rootPath);
+    return json(res, 200, {
+      ok: true,
+      tasks: taskList,
+      activeHarness,
+      activeHarnesses: [...activeHarnesses],
+    });
+  },
+  "POST /api/tasks/delegate": (req, res) => {
+    if (!hasExtensionAuthority(req)) {
+      return json(res, 403, {
+        ok: false,
+        refused: "host-token-required",
+        why: "delegating tasks requires the host token (x-voicebox-host-token) or an authorized in-room session",
+      });
+    }
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => answerOnce(res, async () => {
+      let parsed = {};
+      try {
+        parsed = JSON.parse(body || "{}");
+      } catch {
+        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
+      }
+      const taskText = typeof parsed?.task === "string" ? parsed.task.trim() : "";
+      if (!taskText) {
+        return json(res, 400, { ok: false, refused: "invalid-task", why: "the task must contain text" });
+      }
+      let targetAgents = [];
+      if (Array.isArray(parsed?.agents) && parsed.agents.length > 0) {
+        targetAgents = parsed.agents.map((a) => String(a ?? "").trim()).filter(Boolean);
+      } else if (typeof parsed?.agent === "string" && parsed.agent.trim()) {
+        targetAgents = [parsed.agent.trim()];
+      } else if (activeHarnesses.size > 0) {
+        targetAgents = [...activeHarnesses];
+      }
+      if (targetAgents.length === 0) {
+        return json(res, 400, {
+          ok: false,
+          refused: "executor-unavailable",
+          why: "No active coding harness is connected.",
+        });
+      }
+      const results = await Promise.all(
+        targetAgents.map(async (rawAgent) => {
+          const norm = normalizeHarnessId(rawAgent);
+          if (SUPPORTED_HARNESS_DEFAULTS[rawAgent] || SUPPORTED_HARNESS_DEFAULTS[norm]) {
+            activateHarnessInProcess(rawAgent, { keepPrimary: true });
+          }
+          const authority = {
+            owner: LOCAL_TASK_OWNER,
+            callId: `delegate_${randomBytes(12).toString("hex")}`,
+          };
+          const admitted = tasks.call(
+            "delegate_task",
+            {
+              agent: norm || rawAgent,
+              task: taskText,
+              ...(Array.isArray(parsed?.context) && parsed.context.length > 0 ? { context: parsed.context } : {}),
+            },
+            authority,
+          );
+          if (admitted.ok && admitted.task) {
+            recentTasks.set(admitted.task.address, { ...admitted.task, task: taskText });
+            recordWorkActivity({
+              kind: "agent",
+              summary: `${admitted.task.agent || norm}: working…`,
+              detail: taskText.slice(0, 500),
+              status: "info",
+            });
+            broadcastChannel({ type: "task", task: admitted.task });
+          } else {
+            recordWorkActivity({
+              kind: "agent",
+              summary: `${norm || rawAgent} failed: ${admitted.refused || "stopped"}`,
+              detail: admitted.why || "",
+              status: "error",
+            });
+          }
+          return { agent: norm || rawAgent, ...admitted };
+        }),
+      );
+      return json(res, 200, { ok: true, delegated: results, results });
     }));
   },
   "GET /api/tools": async (req, res, url) => {
@@ -4392,7 +4682,7 @@ async function handle(req, res) {
           return json(res, 400, { ok: false, refused: "bad-request", error: "refused: bad-request", why: "action must be an object with a verb" });
         }
         const verb = parsed.action.verb;
-        if (typeof verb !== "string" || (!COMMAND_VERBS.has(verb) && verb !== "mini_app_tool")) {
+        if (typeof verb !== "string" || (!COMMAND_VERBS.has(verb) && verb !== "mini_app_tool" && verb !== "system")) {
           return json(res, 400, {
             ok: false,
             refused: "unknown-command",
@@ -4429,6 +4719,12 @@ async function handle(req, res) {
       if (executionResult?.miniAppToolCall) {
         responsePayload.miniAppToolCall = executionResult.miniAppToolCall;
       }
+      if (executionResult?.systemCommand) {
+        responsePayload.systemCommand = executionResult.systemCommand;
+      }
+      if (executionResult?.say) {
+        responsePayload.say = executionResult.say;
+      }
       return json(res, 200, responsePayload);
     }));
     return;
@@ -4452,11 +4748,11 @@ async function handle(req, res) {
     const registered = agentRegistry.register(body);
     if (!registered.ok) return json(res, 400, registered);
     if (!activeHarness && registered.agent?.harness && SUPPORTED_HARNESS_DEFAULTS[registered.agent.harness]) {
-      const normalized = registered.agent.harness === "pi-acp" ? "pi" : registered.agent.harness;
-      writePersistedHarnessSettings({ harness: normalized });
+      const normalized = normalizeHarnessId(registered.agent.harness);
       activateHarnessInProcess(normalized, registered.agent);
+      writePersistedHarnessSettings(activeHarness, activeHarnesses);
     }
-    return json(res, 201, { ok: true, agent: publicAgentProjection(registered.agent), activeHarness });
+    return json(res, 201, { ok: true, agent: publicAgentProjection(registered.agent), activeHarness, activeHarnesses: [...activeHarnesses] });
   }
 
   const agentMatch = url.pathname.match(/^\/api\/agents\/([a-zA-Z0-9_-]+)$/);
