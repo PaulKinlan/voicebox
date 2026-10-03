@@ -1,19 +1,22 @@
 # Voicebox Documentation Guide
 
-Welcome to the Voicebox technical documentation. This index organizes the architecture, runtime operations, security boundaries, and extension guides across the repository.
+Welcome to the Voicebox technical documentation. This index organizes the architectural overview, runtime operations, security boundaries, capability guides, and roadmap epics across the repository.
 
 ---
 
-## 1. Core Guides & Operations
+## 1. Core Architecture & Operations
 
 Start here to understand how Voicebox is structured, how the local server and browser interface run, and how turns execute end-to-end:
 
 | Document | Topic | Summary |
 |---|---|---|
-| [`07-architecture.md`](07-architecture.md) | **System Architecture** | Component map, live voice and text turn paths, UI pop-over bubbles, workspace roots (`core/root.ts`), and auto-generated runtime tables. |
+| [`00-architectural-overview.md`](00-architectural-overview.md) | **Architectural Overview** | High-level system architecture, Mermaid component and sequence diagrams, browser/host layers, multi-harness concurrency, and module ownership map. |
+| [`07-architecture.md`](07-architecture.md) | **Runtime Reference & Generated Tables** | Detailed component map, live voice and text turn paths, UI pop-over bubbles, workspace roots (`core/root.ts`), and auto-generated runtime tables. |
 | [`08-how-it-runs.md`](08-how-it-runs.md) | **Operating Model & Dev Workflow** | How `server.mjs` and Vite (`vite.config.js`) run on loopback (`127.0.0.1`), runtime invariants, and how documentation stays synchronized with code. |
 | [`09-agent-loop.md`](09-agent-loop.md) | **The Agent Loop** | End-to-end walkthrough of how a voice or text turn starts, resolves into an action, executes inside the active root, and records to the audit log. |
 | [`12-pre-push-gate.md`](12-pre-push-gate.md) | **Testing Lanes & Pre-Push Gate** | How tests are partitioned into concurrent `unit` and isolated `live` lanes, stage timeout budgets, and cross-worktree gate locking. |
+| [`21-voice-system-commands.md`](21-voice-system-commands.md) | **Voice System Commands & Catalogue** | Deterministic, zero-latency voice commands (`lib/system-commands.mjs`) for clipboard, theme switching, panel navigation, and audio/session control. |
+| [`22-roadmap-epics.md`](22-roadmap-epics.md) | **Roadmap & Unimplemented Epics** | Catalogue of the 6 major unimplemented platform epics (shared rooms, branch landing inspector, local STT/TTS, multi-harness diff comparison, OS hotkey bridge, and Wasm concurrency). |
 
 ---
 
@@ -48,19 +51,20 @@ Guides covering task delegation to external coding agents, interactive Web MCP M
 
 ---
 
-## 4. Early Design Records & Evidence Archive
+## 4. Historical Design Archive & Empirical Evidence
 
-Historical design notes, prior-art evaluations, and empirical test receipts retained for reference:
+Early pre-implementation spike notes (archived under `docs/archive/`) and empirical test receipts (under `docs/evidence/`):
 
-- **Foundational Design Records**:
-  - [`00-brief.md`](00-brief.md) — Initial product brief and core architectural principles.
-  - [`01-questions.md`](01-questions.md) — Early architectural questions and trade-offs.
-  - [`02-environment.md`](02-environment.md) — Environment execution model, project roots, concurrency, and capability tiers.
-  - [`03-architecture-k3.md`](03-architecture-k3.md) — Early harness transport and permission architecture.
-  - [`04-e1-m0-build-spec.md`](04-e1-m0-build-spec.md) — Initial milestone build specification.
-  - [`05-harvest.md`](05-harvest.md) & [`06-dynamic-tools.md`](06-dynamic-tools.md) — Prior-art surveys and dynamic tool evaluations (renumbered from `docs/03-harvest.md` and `docs/04-dynamic-tools.md` during initial merge; interface exploration tracked separately as `docs/interface.md`).
-  - [`live-fixes.md`](live-fixes.md) — Historical log of early live audio fixes.
-- **Empirical Evidence Receipts**:
+- **Archived Pre-Implementation Notes (`docs/archive/`)**:
+  - [`docs/archive/00-brief.md`](archive/00-brief.md) — Initial spoken product brief and foundational goals.
+  - [`docs/archive/01-questions.md`](archive/01-questions.md) — Early architectural questions and trade-offs.
+  - [`docs/archive/02-environment.md`](archive/02-environment.md) — Pre-implementation environment spike notes.
+  - [`docs/archive/03-architecture-k3.md`](archive/03-architecture-k3.md) — Early harness transport and permission exploration.
+  - [`docs/archive/04-e1-m0-build-spec.md`](archive/04-e1-m0-build-spec.md) — Initial milestone build specification.
+  - [`docs/archive/05-harvest.md`](archive/05-harvest.md) & [`docs/archive/06-dynamic-tools.md`](archive/06-dynamic-tools.md) — Prior-art surveys and dynamic tool evaluations.
+  - [`docs/archive/interface.md`](archive/interface.md) — Early studio/beside/return interface exploration.
+  - [`docs/archive/live-fixes.md`](archive/live-fixes.md) — Historical log of early live audio fixes.
+- **Empirical Evidence Receipts (`docs/evidence/`)**:
   - [`docs/evidence/substrate-20260919/RECEIPT.md`](evidence/substrate-20260919/RECEIPT.md) — Measurements of runtime permission flags, symlink resolution, and child process bounds.
   - [`docs/evidence/opfs-20260919/RECEIPT.md`](evidence/opfs-20260919/RECEIPT.md) — Browser Origin Private File System (OPFS) activation and persistence measurements.
   - [`docs/evidence/picked-dir-symlink/RECEIPT.md`](evidence/picked-dir-symlink/RECEIPT.md) — Probe instrument for symlink behavior inside user-picked browser directories.
@@ -71,6 +75,6 @@ Historical design notes, prior-art evaluations, and empirical test receipts reta
 
 `scripts/docs-check.mjs` automatically verifies the documentation against the live codebase on every test run (`tests/docs-drift.test.mjs`):
 
-1. **Generated Runtime Blocks**: Capabilities, routes, turn resolvers, live voice models, and environment variables between `<!-- BEGIN GENERATED: ... -->` and `<!-- END GENERATED: ... -->` markers in `README.md` and `docs/07-architecture.md` are derived directly from a live scratch server and source modules. Run `npm run docs:write` to update them.
+1. **Generated Runtime Blocks**: Capabilities, routes, turn resolvers, live voice models, and environment variables between `<!-- BEGIN GENERATED: ... -->` and `<!-- END GENERATED: ... -->` markers in `README.md`, `docs/07-architecture.md`, and `docs/08-how-it-runs.md` are derived directly from a live scratch server and source modules. Run `npm run docs:write` to update them.
 2. **File Path Existence**: Every backticked repository file path in `README.md` and `docs/*.md` is checked to ensure the referenced file exists on disk.
 3. **Policy Claims (`docs/claims.json`)**: Enforces required architectural invariants and blocks retired terminology from reappearing in hand-written prose.
