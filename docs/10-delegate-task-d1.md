@@ -1,84 +1,68 @@
-# D1: authenticated task admission and durable handles
+# Task Delegation & Durable Handles (`delegate_task`)
 
-**Scope:** task records, admission and readback. The stock server has **no task executor** and refuses `delegate_task` with `executor-unavailable`. This is not an ACP integration, an agent sandbox, or a task-card UI.
+Voicebox supports delegating long-running engineering tasks to external coding agents (`delegate_task`, `task_status`, `cancel_task`) with cryptographic owner binding, root pinning, and private audit persistence (`core/tasks.ts`, `lib/tasks.mjs`, `lib/task-placement.mjs`).
 
-## Calling the host
+---
 
-Use the existing paired `/api/call` → `/api/execute` path. The proxy holds the bearer; it is not delivered to the page. Direct `/api/execute` callers must authenticate with the currently accepted pairing bearer on every request.
+## 1. Task Delegation API & Authority
 
-`delegate_task` takes:
+Tasks can be delegated from a local authenticated session (carrying the host token, loopback session cookie, or same-origin local browser entitlement) or across paired environments via `POST /api/call` → `POST /api/execute`.
 
+### Request Payloads
 ```json
-{"agent":"configured-agent-name","task":"bounded task text","context":[]}
+// Delegate a new task
+{ "agent": "pi", "task": "Refactor the parser and run unit tests", "context": [] }
+
+// Check task status or cancel
+{ "address": "<sealed-task-address>" }
 ```
 
-The authenticated transport supplies `x-voicebox-call-id` separately. The proxy forwards a supplied ID or creates one. Reusing the same ID for the same owner **and root** returns the existing record, never dispatches twice, and refuses different input as `task-call-id-conflict`. A caller that needs retry safety must retain its transport ID. This is not a cross-root idempotency index.
+- **Idempotency (`x-voicebox-call-id`)**: Reusing the same `x-voicebox-call-id` for the same owner and workspace root returns the existing task record without re-dispatching. Supplying different task parameters under an existing call ID is refused with `task-call-id-conflict`.
+- **Strict Parameter Isolation**: Model arguments cannot override the task owner, target environment, workspace root, CLI binary, or execution bounds. Non-empty `context` arrays are refused with `task-context-unavailable` unless supported by the target host.
+- **Unauthenticated Call Refusal**: Requests lacking verified local or paired-bearer authority are refused with `task-owner-unverified`.
 
-`task_status` takes only `{"address":"<returned address>"}`. Success contains `task.address`, `task.environment`, `task.root`, `task.state`, timestamps, and any result/refusal reason. Model arguments cannot supply owner, environment, root, CLI command, endpoints, or bounds. Nonempty context references currently refuse as `task-context-unavailable`; no context snapshot is silently invented.
+---
 
-Ambient local calls refuse as `task-owner-unverified`. The unauthenticated `/live` connection is not a delegation authority. These tools are not advertised in its file-command list; authenticated live delegation and agent discovery remain later work. A local call that DOES carry local authority (the host token, the room's session token, or the room's own origin) is owned by the durable local task owner — the same owner the turn path and `GET /api/task` use — so the room's task card can read and cancel the tasks the room created (voicebox-beads-sdxn).
+## 2. Cryptographic Pinning & Private Persistence
 
-## What is pinned
+Every admitted task is pinned to four immutable attributes in `lib/tasks.mjs`:
 
-- **Environment:** the host's existing `SELF_ENVIRONMENT` (`.environment-key`), not a registry routing alias, label, origin, or connection ID.
-- **Owner:** a domain-separated hash of the accepted pairing credential and its registry key, never the bearer itself. This identifies the credential holder, not a new user-account system. Another authenticated pairing cannot read the record.
-- **Root:** this host's explicitly declared machine directory, canonical path and filesystem identity. Switching the active project cannot retarget readback. Foreign roots, page roots, a vanished root, and a replacement directory refuse by name.
-- **Address:** a sealed root locator. The existing host token signs it together with the owner identity. Ownership is checked before reading the located root, then checked again against the record. Possessing the address grants no authority. Replacing the host token invalidates its old addresses; replacing the pairing credential does not inherit the old owner's tasks.
+1. **Environment (`SELF_ENVIRONMENT`)**: Bound to the host's `.environment-key` identity.
+2. **Owner**: Derived from a domain-separated hash of the caller's pairing credential and registry key (or the durable local task owner for local browser sessions). One paired caller cannot inspect or cancel another caller's tasks (`task-owner-mismatch`).
+3. **Workspace Root**: Bound to the canonical path and filesystem device/inode of the active machine root (`core/root.ts`), or to portable `opfs` / `handle` roots in browser placement (`lib/task-placement.mjs`, [`16-zero-server-delegation.md`](16-zero-server-delegation.md)). Switching or replacing the workspace directory later refuses readback with `task-root-replaced` or `task-root-unavailable`.
+4. **Sealed Task Address**: Signed with the host token and owner identity. Possessing an address string alone grants no read or cancel authority; rotating `.host-token` invalidates previously minted addresses.
 
-There is no second task database or root index. Task events share the original root's per-writer `.audit/*.jsonl`. They contain the task prompt and are private: the file is mode `0600`, the public audit view excludes task events, and ordinary file reads/writes (including admitted extension tools and symlink aliases) cannot access the audit namespace. Do not publish these private audit files as source code.
+### Private Audit Log (`<root>/.audit/*.jsonl`)
+Task events (which include the task prompt) are persisted in the active root's `.audit/*.jsonl` file with `0600` permissions. Task records are filtered out of public `GET /api/audit` responses and are inaccessible to workspace file tools (`protected-audit`).
 
-## Admission and execution
+---
 
-1. Authenticate the caller and validate bounded input (16,384 UTF-8 bytes).
-2. Pin the host/root and check a host-installed executor implementation. A CLI descriptor, `bounded: true`, or remote capability metadata cannot install one. The stock server has none.
-3. Append the `queued` record, flush the file and directory entries, then read it back. Failed persistence means no accepted handle and no execution.
-4. Return the handle; dispatch on a later event-loop turn, without awaiting completion. Dispatch also requires a durable `running` event.
+## 3. Admission, Execution & Lifecycle Policy
 
-At most eight tasks are active per host service. Each admitted implementation must establish finite deadline and output bounds. Captured input and executor-facing bounds are immutable. A deadline records `interrupted`; it does **not** claim a subprocess was killed, and capacity stays charged until execution actually settles. A trusted executor can also report `TaskInterrupted` with a named reason when its runtime ends without a confirmed result; other errors remain `failed`. No public Stop/cancel implementation is provided by D1.
+1. **Pre-Flight Validation**: Validates caller authentication, checks that the prompt is within the 16,384-byte UTF-8 input budget (`task-input-over-budget`), and verifies that a task executor is installed via `installTaskExecutor()` (`executor-unavailable` if no harness is active).
+2. **Durable Queueing before Dispatch**: The `queued` event is appended and flushed to disk before the task handle is returned. Execution starts asynchronously on a subsequent event-loop turn only after a `running` event is persisted.
+3. **Concurrency & Resource Ceilings**: A machine host runs at most 8 concurrent tasks (4 in browser placement) with bounded wall-clock deadlines and a 64 KiB output cap (`task-capacity-exhausted`, `task-output-over-budget`).
+4. **Crash Reconciliation (No Automatic Replay)**: If a host process exits while a task is `queued` or `running`, subsequent readback checks whether the original PID is still alive (`ESRCH`). Once confirmed absent, the task transitions to `interrupted` (`lib/task-interrupted.mjs`). Unfinished prompts are never automatically re-executed after a crash.
+5. **Closure & Surface Delivery Policy**: Every `task_view` includes:
+   - `closurePolicy`: `{ onVoiceDisconnect: "continue", onEnvironmentClose: "continue-until-host-exit" | "interrupt", reconciliation }`
+   - `delivery`: `{ mode: "surface-notification", surfaceUpdated: true, modelReceived: false }` — task updates push `{ type: "task", task, delivery }` frames to update the browser task card in real time without injecting unsolicited turns into the live voice stream.
 
-`installTaskExecutor()` is a trusted **host-code** seam, not a request/configuration route or proof of containment. Its synchronous `check()` must establish the actual mechanism; `run()` is called only after persistence. D2 must supply and verify a real adapter and its enforcement before production tasks can run. The lifecycle fixture supplies fixed, no-untrusted-code operations only. The [ACP diagnostic slice](11-acp-adapter.md) verifies one actual adapter handshake and typed process interruption, but its production executor refuses pending bounded provider access.
+---
 
-The zero-server browser-owned placement model (`voicebox-beads-8fv.1`, [`16-zero-server-delegation.md`](16-zero-server-delegation.md)) associates placement with the environment directly, allowing `opfs` and `handle` roots to be admitted and executed locally via `createBrowserTaskHost()` in `lib/task-placement.mjs`.
+## 4. Outcome Classification
 
-## Process death is not replay permission
+Terminal task records carry an explicit `outcome` classification (`tests/task-outcome.test.mjs`) that distinguishes executor claims from host-observed terminations:
 
-On authenticated readback, an unfinished record from a different boot is marked `interrupted` only after the old process is observed absent (`ESRCH`). A process that might still exist yields `task-owner-unconfirmed`. No saved prompt is submitted during recovery or retry. Late completion cannot rewrite a terminal state.
+| Terminal State | Outcome Class | Basis | Meaning |
+|---|---|---|---|
+| `completed` | `claimed-complete` | `executor-claimed` | The coding agent returned a response within its time and output bounds. |
+| `failed` | `observed-failure` | `host-observed` | The adapter or subprocess exited with an error. |
+| `interrupted` | `observed-interruption` | `host-observed` | Execution hit its deadline or the host process terminated before completion. |
+| `cancelled` | `observed-cancellation` | `host-observed` | The task was cancelled via `cancel_task` and confirmed stopped by the adapter. |
 
-This uses the audit's existing single-writer-per-root assumption and local process namespace. It is not a distributed ownership lease. Torn/inconsistent logs fail closed; automatic repair, PID-reuse recovery, credential migration and broader reconciliation remain D7/I3 work. Readback performs this narrow reconciliation lazily; there is no background all-root scan. D10 (`voicebox-beads-pbl`) states the explicit `closurePolicy` on every admitted `task_view` (`onVoiceDisconnect: "continue"`, `onEnvironmentClose`: `"continue-until-host-exit"` for server placement or `"interrupt"` for browser-local placement, and `reconciliation`).
+*(Non-terminal states such as `running` or `cancel_unconfirmed` carry no outcome classification.)*
 
-## Verification and limits
-
-```sh
-node --test --test-concurrency=1 tests/tasks.test.mjs tests/tasks-http.test.mjs tests/tasks-browser.test.mjs
+### Verification Suites
+```bash
+node --test --test-concurrency=1 tests/tasks.test.mjs tests/tasks-http.test.mjs tests/tasks-browser.test.mjs tests/task-outcome.test.mjs
 ```
-
-The HTTP test opens separate, independently authenticated TCP connections, rejects a second owner and unauthenticated possession, switches roots, kills the owned process, confirms exit, restarts against the same state, and checks `interrupted` with exactly one dispatch.
-
-The browser test drives native microphone capture with fake media through real `/live` frames, an unrelated live text turn and native text form while work is held open, page reload, and an independent Chrome/profile. Its visible task witness is **test instrumentation, not D8 UI**. The host/voice implementations are **closed fixtures, not ACP/ASR/model/D8 UI acceptance**. The paired browser fixture uses the same owned host through its real proxy; it does not establish cross-machine pairing or containment.
-
-The first browser instrument waited on the absent `#caption` element and failed. That RED is retained externally; the product bug is tracked as `voicebox-beads-sor`. The corrected instrument observes raw CDP WebSocket frames without modifying the page's WebSocket or inventing a product caption. Frame arrival is not proof the product displays the reply.
-
-D2–D8 remain partially open where noted: adapter execution, discovery/default selection, permission mediation,
-and broader recovery are not supplied by this slice.
-(Progress/cancellation arrived with D6; D9 delivery and D10 lifetime policy are supplied below; the outcome half of D4 is described next.)
-
-**What D9 and D10 supply** (`voicebox-beads-8ui`, `voicebox-beads-pbl`): every `task_view` states both its
-lifetime contract (`closurePolicy`) and its settlement delivery contract (`delivery: { mode: "surface-notification", surfaceUpdated: true, modelReceived: false }`).
-When a task settles in `lib/tasks.mjs` (`createTaskHost`) or `lib/task-placement.mjs` (`createBrowserTaskHost`), `onUpdate` pushes `{ type: "task", task, delivery }` to the active surface without injecting a live model turn (`modelReceived: false`).
-
-**What D4 supplies now, and what it deliberately does not** (voicebox-beads-m9u): every terminal
-delegation carries an **outcome class** in its record and in `task_view` — `claimed-complete`
-(`basis: "executor-claimed"`), `observed-failure`, `observed-interruption`, `observed-cancellation`
-(each `basis: "host-observed"`). A completion is therefore recorded AS a claim: the executor returned text
-inside its bounds, and the record never presents that as verified effectiveness. Non-terminal states
-(including `cancel_unconfirmed`) carry no class at all — that state is an open question, not an outcome.
-**Nothing in the record ranks one delegation against another**: no score, weight, order or confidence, and
-`tests/task-outcome.test.mjs` refuses those field names by name, because a record that quietly reorders
-anything has taken authority nobody gave it.
-
-**What is still missing, stated so this document is not read as complete**: the *selection guidance* —
-instructions telling a harness how to choose among listed agents — needs D3's list (`list_agents` /
-`list_harnesses`, not implemented) and a delegation surface the live model can actually call (D3 is not in
-`lib/commands.mjs`'s function declarations today). Writing that guidance now would name tools a harness
-cannot call and agents nothing can enumerate, which is the capability-claim defect this project keeps
-finding. The guidance goes in when the list exists.

@@ -1,40 +1,32 @@
-# Zero-server browser-owned delegation: placement as an environment property
+# Zero-Server Browser Delegation & Task Placement
 
-**Bead:** `voicebox-beads-8fv.1` · **Parent:** `voicebox-beads-8fv` (delegate_task).
+Voicebox supports running task delegation (`delegate_task`, `task_status`, `cancel_task`) across browser-only, local machine, and remote server environments. Where a task executes is determined by the target environment's **placement** (`browser`, `machine`, or `remote`) rather than requiring a central server broker (`core/tasks.ts`, `lib/task-placement.mjs`).
 
-> “there is a world where there is zero server and it's all run locally on the client,
-> and that has to be a hard requirement.”
->
-> — Paul, 2026-09-21
+---
 
-Voicebox may execute on a server to reach Paul's machine, but **where execution runs is a property
-of the environment, not a fork of the harness design**. Delegating a task (`delegate_task`) associates
-placement with the executing environment rather than requiring a dedicated server broker.
+## 1. The Three Execution Placements
 
-## The Three Placements
-
-| Placement | Execution Runtime | Root Kinds Supported | Max Deadline | Max Active | Transport |
+| Placement | Execution Runtime | Supported Root Kinds | Max Deadline | Max Active Tasks | Transport |
 |---|---|---|---|---|---|
-| **`browser`** | In-page / Web Worker | `opfs`, `handle`, portable | 300s (5 min) | 4 | In-memory / MessagePort |
-| **`machine`** | Local host process / stdio | `machine` | 3600s (1 hr) | 8 | Local process / pipe |
-| **`remote`** | Remote paired server | `machine` (on remote) | 3600s (1 hr) | 8 | Paired HTTP / WebSocket |
+| **`browser`** | In-page / Web Worker | `opfs`, `handle` | `300s` (5 min) | `4` | In-memory / `MessagePort` |
+| **`machine`** | Local host process / stdio | `machine` | `3600s` (1 hr) | `8` | Local process / stdio pipe |
+| **`remote`** | Paired remote server | `machine` (on remote) | `3600s` (1 hr) | `8` | Paired HTTP / WebSocket |
 
-Placement is derived from the environment descriptor:
+Placement is derived automatically from the environment descriptor:
 - `kind: "browser"` → `placement: "browser"`
 - `kind: "server"` or `"fence"` → `placement: "machine"`
 - `reach: "paired"` → `placement: "remote"`
 
-## Core Architecture and Contracts
+---
 
-### 1. Portable Task Roots
+## 2. Core Contracts & Bounds
 
-Previously, `reduceTask` in `core/tasks.ts` hardcoded `root.kind === "machine"` and `entry.root === "machine:..."`.
-Under the zero-server model:
-- `opfs`: origin-private storage (`opfs:${root.path}`), readable in browser placement with zero server.
-- `handle`: user-picked folder (`picked:${root.id}`), addressable directly by the page.
-- `machine`: host filesystem path (`machine:${root.path}`).
+### 1. Portable Task Roots (`core/tasks.ts`)
+`reduceTask` in `core/tasks.ts` validates task log entries across all three workspace root types without assuming a local POSIX filesystem path:
+- **`opfs`**: Origin Private File System (`opfs:${root.path}`), accessible directly in browser placement with zero server.
+- **`handle`**: User-picked local directory via the File System Access API (`picked:${root.id}`).
+- **`machine`**: Host filesystem directory (`machine:${root.path}`).
 
-`reduceTask` matches roots portably:
 ```ts
 const expectedRoot = record.root.kind === "handle"
   ? `picked:${record.root.id}`
@@ -44,9 +36,9 @@ if (record.instance !== entry.instance || entry.root !== expectedRoot) {
 }
 ```
 
-### 2. Execution Bounds (`PLACEMENT_BOUNDS`)
+### 2. Placement Execution Bounds (`PLACEMENT_BOUNDS`)
+Defined in `core/tasks.ts` and enforced synchronously at admission via `validatePlacementBounds(placement, bounds)` in `lib/task-placement.mjs`:
 
-Defined in `core/tasks.ts` and enforced in `lib/task-placement.mjs`:
 ```ts
 export const PLACEMENT_BOUNDS: Record<TaskPlacement, TaskPlacementBounds> = {
   browser: { defaultDeadlineMs: 30000, maxDeadlineMs: 300000, maxOutputBytes: 65536, maxActiveTasks: 4 },
@@ -54,31 +46,25 @@ export const PLACEMENT_BOUNDS: Record<TaskPlacement, TaskPlacementBounds> = {
   remote:  { defaultDeadlineMs: 60000, maxDeadlineMs: 3600000, maxOutputBytes: 65536, maxActiveTasks: 8 },
 };
 ```
-Bounds must be validated synchronously at admission via `validatePlacementBounds(placement, bounds)`.
-Exceeding the placement limits refuses with `unbounded-executor`.
+Requests exceeding the target placement's deadline or output ceiling are refused at admission with `unbounded-executor`.
 
-### 3. Browser Task Host (`lib/task-placement.mjs`)
+---
 
-`createBrowserTaskHost(options)` provides zero-server delegation:
-- **Zero Node imports**: Uses standard Web Crypto (`globalThis.crypto.subtle`) for sealing task addresses rather than `node:crypto`.
-- **Zero process spawning**: Executes via web standards (`queueMicrotask`, `AbortController`, in-client model/Wasm executors).
-- **Same coordination invariants**:
-  - `delegate_task`: returns `{ ok: true, task: taskView(record) }` with `placement: "browser"`.
-  - `task_status`: verifies caller ownership and returns honest observations.
-  - `cancel_task`: sends abort signal, bounds wait, and settles to `cancelled` or `cancel_unconfirmed`.
-  - Terminal fencing: late resolves cannot rewrite completed/failed/cancelled states.
+## 3. Browser Task Host (`lib/task-placement.mjs`)
 
-### 4. Zero Central Broker
+`createBrowserTaskHost(options)` implements full task admission, execution, and cancellation inside the browser runtime with zero Node.js dependencies:
+- **Web Crypto Sealing**: Uses `globalThis.crypto.subtle` (HMAC-SHA256) to sign and verify sealed task addresses without `node:crypto`.
+- **Browser-Native Execution**: Dispatches tasks via `queueMicrotask` and `AbortController` against in-browser model or WebAssembly executors.
+- **Unified Lifecycle Guarantees**:
+  - `delegate_task` returns `{ ok: true, task: taskView(record) }` with `placement: "browser"`.
+  - `task_status` verifies caller ownership and returns current state and outcome classifications.
+  - `cancel_task` triggers the task's `AbortController` and transitions to `cancelled` or `cancel_unconfirmed`.
+  - Terminal fencing prevents late completions from overwriting settled `completed`, `failed`, or `cancelled` states.
 
-`createPlacementDispatcher({ hosts })` routes task tools (`delegate_task`, `task_status`, `cancel_task`)
-directly to the host matching the target environment's placement. An in-page task communicates
-directly with the browser host, a machine task communicates with the machine host, and a remote
-task communicates with the remote paired host. No centralized broker or mandatory proxy is required.
+### Direct Placement Dispatch (`createPlacementDispatcher`)
+`createPlacementDispatcher({ hosts })` routes `delegate_task`, `task_status`, and `cancel_task` directly to the host responsible for the target environment's placement (`browser`, `machine`, or `remote`), avoiding any mandatory server round-trip for browser-local tasks.
 
-## Verification
-
-Unit test suite in `tests/task-placement.test.mjs`:
-- Verifies placement derivation across environment kinds and reach states.
-- Verifies placement bounds enforcement (rejection of excessive deadlines/outputs).
-- Drives browser task admission, OPFS root execution, handle root cancellation honesty, and capacity limits.
-- Verifies portable root reduction across `opfs`, `handle`, and `machine` descriptors.
+### Verification Suite
+```bash
+node --test tests/task-placement.test.mjs
+```

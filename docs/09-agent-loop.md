@@ -1,117 +1,84 @@
-# The agent loop
+# The Agent Loop
 
-What actually runs when a person speaks or types a turn. Six questions, in the order they happen:
-**what starts a turn → what decides → who executes → where the result goes → what gets recorded → where it can fail.**
+This document traces how a user turn flows through Voicebox from initial speech or text input to action resolution, workspace execution, UI updates, and audit logging.
 
-> **Reading rule for this page.** It names the *mechanism* (`the resolver seam`, `the executor the server calls`),
-> and gives paths only where the path is the stable identifier. Paths move; the seam does not. Where the reader
-> needs to check a claim, the check is a **route** or a **file in the active root**, not a line number.
+---
 
-## 1. What starts a turn
+## 1. Starting a Turn
 
-Two doors, two paths:
+A turn can start from two entry points, both converging on the same server-side action executor:
 
-- the **composer** in the page (typed, or sent from the picture-in-picture window) — lands on **`POST /api/turn`**, which carries **`{ transcript }`** and returns the action and execution result;
-- the **live voice session** (`/live`), which streams PCM audio back and forth with the model (Gemini Live or OpenAI Realtime). When the live model requests an action, its tool calls (`toolCall`) are mapped via `commandToAction()` directly into the shared executor on the server, and tool responses stream back to the model over the socket.
+1. **Text Composer & Dictation (`POST /api/turn`)**:
+   - Submitting text from the stage composer (`#text-form`), browser `SpeechRecognition` dictation, or the Picture-in-Picture widget sends `{ transcript }` (or a schema-validated `{ action: { verb, ... } }` from `COMMAND_VERBS`) to `POST /api/turn`.
+   - `POST /api/turn` is stateless: it resolves the transcript, executes the resulting action in the active workspace root, records the audit trail, and returns `{ transcript, action, result }`:
+     ```json
+     {
+       "transcript": "create a file called hello.txt with hi",
+       "action": { "verb": "write", "name": "hello.txt", "content": "hi" },
+       "result": { "ok": true, "action": "wrote hello.txt (2 bytes)", "file": "hello.txt", "root": { "kind": "machine", "path": "..." } }
+     }
+     ```
+2. **Live Voice Session (`/live`)**:
+   - `public/live-voice.js` streams full-duplex PCM audio over `/live` (`lib/live-session.mjs`) to Gemini Live (`models/gemini-3.8-live`) or OpenAI Realtime (`gpt-realtime`).
+   - When the model invokes a tool (`toolCall`), the server maps the tool call via `commandToAction()` (`lib/commands.mjs`) directly into the shared `execute(action)` pipeline, returns the structured result to the model, and emits a `{ type: "tool" }` event to update the browser UI in real time.
 
-A turn on `POST /api/turn` takes `{ transcript }` (resolved via `lib/resolver.mjs`), or optionally a direct schema-validated action `{ action: { verb, ... } }` from the allow-listed command catalogue (`COMMAND_VERBS`). An unknown verb refuses `unknown-command`, and any caller-supplied `turn` index is ignored to protect audit integrity:
+---
 
-```json
-{ "transcript": "create a file called hello.txt with hi",
-  "action":  { "verb": "write", "name": "hello.txt", "content": "hi" },
-  "result":  { "ok": true, "action": "wrote hello.txt (2 bytes)", "file": "hello.txt", "root": { … } } }
+## 2. Turn Resolution (`lib/resolver.mjs`)
+
+For text turns on `POST /api/turn`, `resolveTurn(transcript, provider)` in `lib/resolver.mjs` converts natural language into a structured action:
+
+```js
+{ verb, name, content? }   // Resolved action to execute
+{ unresolved: "reason" }   // Explicit explanation when no action matches
 ```
 
-There is no session id, no conversation history and no per-connection state in the turn route: **a turn is stateless by construction**, and the state that persists is the audit and the files in the root.
+- **Registered Resolvers**:
+  - **`script`**: Deterministic, zero-key pattern resolver supporting `write`, `read`, `list`, `delete`, `edit`, `diff`, `grep`, `make-tool`, and `tool`.
+  - **`gemini` / `openai` / `claude`**: LLM-backed turn resolvers using the corresponding provider API key (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) configured via environment variables or the UI Settings dialog (`GET` / `PUT /api/keys`).
+- **Clean Separation**: `server.mjs` never parses natural language directly; swapping or adding a turn resolver via `registerResolver(name, fn)` requires no changes to the executor or browser client.
 
-*(Driven: a command typed in the picture-in-picture composer reaches this route and its refusal text arrives back on the page — that is what the "list files" case shows when no root is declared.)*
+---
 
-The live voice session and the typed turn route share the same executor; they differ in how actions are prompted and resolved.
+## 3. Action Execution (`execute(action)` in `server.mjs`)
 
-## 2. What decides
+All resolved actions and live voice tool calls execute through `execute(action)`:
+- **Workspace File Operations (`list`, `read`, `write`, `delete`, `edit`, `diff`, `grep`)**: Verified against the active workspace root (`core/root.ts`) before touching the filesystem or routing to a browser-owned root (`opfs` or `handle`). Path traversal (`../`) and dotfile access are refused by name (`outside-root`, `dotfile-refused`).
+- **Extension Proposals (`make-tool` / `propose_extension`)**: Writes a pending JSON descriptor under `proposals/<id>.json` without loading or executing code.
+- **Extension Admission**: Performed exclusively via host-authorized endpoints (`POST /api/extensions/admit` with `x-voicebox-host-token` or `POST /api/extensions/approve` with a single-use code from `tools/approval-code.mjs`).
+- **Extension & WASM Invocation (`tool` / `call_extension`)**: Executes admitted extensions (`lib/extensions.mjs`) or digest-pinned WebAssembly shelf tools (`lib/wasm-shelf.mjs`) within their declared host bounds.
 
-**The resolver seam** — `lib/resolver.mjs`. A resolver turns a transcript into an **action**:
+---
 
-```
-{ verb, name, content? }        // something to do
-{ unresolved: "why not" }       // nothing to do, and the reason
-```
+## 4. Audit Logging (`<root>/.audit/<writer>.jsonl`)
 
-- resolvers are **registered by name** (`registerResolver`), and `resolveTurn(transcript, provider)` asks one;
-- the provider defaults to the one configured on the server, and an unknown name is an **explicit** unresolved
-  answer rather than a silent fallback;
-- **the server never parses language itself.** That is the point of the seam: swap the decider, keep the
-  executor.
+Every action and refusal inside an active workspace root is recorded to an append-only JSONL log in `<root>/.audit/` (`core/shared-log.ts`, readable via `GET /api/audit`):
+- **Attempt-First Recording**: A mutating operation (such as `write`) records **two** linked entries:
+  1. An `attempt` entry (`decision: "attempt"`, `result: "pending"`) before execution begins.
+  2. An outcome entry (`decision: "allow"`, `result: "ok"`, `attempt: <seq>`) referencing the attempt's sequence number after the write completes and is verified on disk.
+- **Pre-Flight Refusals**: Requests rejected before execution (such as `outside-root`) record a single `refuse` entry naming the violated rule.
 
-**Registered resolvers today:**
-- the deterministic **`script`** resolver — handles `write`, `read`, `list`, `make-tool`, `tool`, `delete`, `edit`, `diff`, `grep`.
-- the model-backed **`gemini`** resolver — turns arbitrary language into structured actions via the Gemini API (`GEMINI_API_KEY`). When the key is missing, it returns an explicit unresolved answer (`"the gemini resolver has no GEMINI_API_KEY"`).
+---
 
-## 3. Who executes
+## 5. Failure Modes & Refusal Handling
 
-**The executor in the server** — the one place that touches the build environment. Both the typed turn route (`POST /api/turn`) and the live voice session (`/live`) dispatch actions through this shared executor (`execute(action)`):
-
-- a **tool proposal** is recorded as a *proposal* under `proposals/` — and is **not loaded**; loading is a separate admission step;
-- **loading an extension** is an explicit host-authorized admission step (`POST /api/extensions/admit` with the host token, or `POST /api/extensions/approve` with a single-use console code from `tools/approval-code.mjs`);
-- an **invocation** goes to the extension runtime (admission, bounds, budget), which may answer **refused** with a reason;
-- **list / read / write / delete / edit / grep** are resolved **inside the active root** first — the path is checked against the root before anything is touched.
-
-## 4. Where the result goes
-
-- back on the **turn response** (`{ ok, action, … }`, or a refusal with `refused` and `why`);
-- into the **active root** as a file, for the verbs that write;
-- and when a call goes to a tool, through the **channel contract** (`lib/channel.mjs`), whose answer shape
-  includes a **refusal with a reason** — a tool that declines is a result, not an exception.
-
-## 5. What gets recorded
-
-**The audit**, written into the **active root** (not into the product's own tree, and not into whatever
-directory the process happened to start in). It lands in **`.audit/`**, one file per root kind —
-`.audit/machine-<hash>.jsonl` (or the page-owned log).
-
-A successful write records **two entries**:
-1. an `attempt` entry (`decision: "attempt"`, `result: "pending"`);
-2. an `allow` outcome entry (`decision: "allow"`, `result: "ok"`), linking back to the attempt's sequence number (`attempt: 1`).
-
-Pre-flight refusals (such as `outside-root` or `root-not-declared`) record a single refusal entry without an applying attempt.
-
-Entries are built by the audit module's constructor, serialized, and merged by sequence number, so a resumed
-process continues the numbering rather than restarting it.
-
-Refusals are recorded too, where the attempt had a target — the record is what happened, not only what
-succeeded.
-
-## 6. Where it can fail — and what the failure looks like
-
-| failure | what the person sees |
+| Condition | Server Behavior |
 |---|---|
-| no root declared | a refusal naming the root as the cause, with a `declared: false` fact on the health route |
-| the root vanished mid-session | a refusal naming the root, distinct from "no root declared" |
-| a path outside the root | a refusal from the reachability check, before anything is touched |
-| nothing to do | the resolver's own `unresolved` sentence |
-| a tool declines | a refusal with a reason, through the channel contract |
-| a tool proposal | recorded, **not loaded** — and it says so |
+| No workspace root declared | Returns `refused: "root-not-declared"`, `logged: null` (`declared: false` on `GET /api/health`). |
+| Workspace directory removed mid-session | Returns `refused: "root-unreachable"`, distinct from an undeclared root. |
+| Path escapes active workspace (`../`) | Refused pre-flight with `refused: "outside-root"` and recorded in `.audit/`. |
+| Transcript matches no known command | Returns `action: null` with the resolver's `unresolved` message. |
+| Extension tool exceeds bounds or host list | Returns structured refusal (`host-not-allowed`, `budget-exhausted`) via `lib/channel.mjs`. |
+| Extension proposed by model | Saved as `state: "pending"` under `proposals/`; cannot be called until admitted by the host. |
 
-## Wired today, at a glance
+---
 
-| part | state |
-|---|---|
-| `POST /api/turn` → resolver → executor | **wired** |
-| the `script` deterministic resolver | **wired** |
-| the model-backed `gemini` resolver | **registered** (requires `GEMINI_API_KEY`) |
-| `/live` provider tool calls → shared executor | **wired** (Gemini Live & OpenAI Realtime) |
-| audit of attempts, outcomes, and refusals into the active root | **wired** |
-| tool proposal (`make-tool`) | **wired** (staged under `proposals/`) |
-| host-authorized tool admission | **wired** (token-gated or one-time code via `tools/approval-code.mjs`) |
-| tool invocation through the extension runtime | **wired** |
+## 6. Quick Verification
 
-## How to check any of this in a minute
-
-- `GET /api/health` — the root facts the refusals are built from.
-- **The whole loop in three requests** (measured, on a declared root):
-  - `{"transcript":"list files"}` → `action {verb:"list"}` → `result {ok:true, files:[…], root:{…}}`
-  - `{"transcript":"create a file called hello.txt with hi"}` → `{verb:"write"}` → the file in the root
-  - `{"transcript":"book me a flight to Lisbon"}` → **`action: null`**, and the resolver's own sentence:
-    *"the script resolver only knows create/read/list — got: … Wire a model resolver to go further."*
-- The `.audit/` file in the root — the same turns, as they were recorded.
-- The active root's audit — the same turn, as it was recorded.
+You can inspect and verify the turn loop at any time against a running server:
+1. Check active resolver and root status: `GET /api/health`
+2. Run sample turns via `POST /api/turn`:
+   - `{"transcript": "list files"}` → `{"verb": "list"}`
+   - `{"transcript": "create a file called hello.txt with hi"}` → `{"verb": "write"}`
+   - `{"transcript": "book me a flight to Lisbon"}` → `action: null` (`unresolved`)
+3. Inspect the recorded audit entries: `GET /api/audit`

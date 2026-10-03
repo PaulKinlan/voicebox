@@ -1,79 +1,67 @@
-# 17. Double-Iframe Sandboxed Architecture for Interactive Mini-Web Apps
+# Interactive Mini-Apps Architecture (Web MCP)
 
-Interactive mini-web apps generated or served by Voicebox allow the voice model to construct live user interfaces—calculators, game boards, data visualizers, interactive forms, and task planners—and dynamically manipulate them in real time as the user speaks.
+Voicebox can launch interactive HTML mini-apps—calculators, games, visualizers, dashboards, and custom UI tools—directly inside the workspace and allow the voice assistant to control them in real time through **Web MCP (Web Model Context Protocol)**.
 
-Because mini-app code is voice-generated or untrusted third-party code, it cannot be executed with ambient host authority. This document defines the **Double-Iframe Sandboxed Architecture** and the **Web MCP (Web Model Context Protocol)** bridge that isolates untrusted code while enabling low-latency voice-driven interaction.
-
----
-
-## 1. Threat Model & Security Boundaries
-
-An interactive mini-app executes arbitrary HTML, CSS, and JavaScript. Without isolation, an untrusted script could:
-1. **Access Origin Storage**: Steal credentials, session tokens, host tokens, or stored files from `localStorage`, `sessionStorage`, `document.cookie`, `IndexedDB`, or the Private File System (OPFS). The inner document's origin is opaque, so the HOST's storage stays unreachable; the SDK installs an in-memory `Storage` shim scoped to the document, so an app that uses Web Storage runs (and its values die with the document) instead of crashing on a `SecurityError`.
-2. **Execute Origin APIs**: Issue HTTP requests (`fetch("/api/file")`, `fetch("/api/turn")`, `fetch("/api/execute")`) under the ambient host authority of the user's browser.
-3. **Hijack Navigation**: Redirect the host window via `window.top.location` or trap the user in prompt/alert modal loops.
-4. **Sniff or Spoof Ambient Messages**: Intercept ambient `window.postMessage` events exchanged between host components.
-5. **Denial of Service**: Produce unbounded outputs (memory exhaustion) or hang execution indefinitely (freezing UI loops).
+Because mini-app code may be model-generated or third-party HTML/JavaScript, Voicebox isolates every mini-app inside a **Double-Iframe Sandbox** (`core/mini-app.ts`, `public/mini-app-bridge.js`, `public/mini-app-sdk.js`).
 
 ---
 
-## 2. Double-Iframe Isolation Architecture
+## 1. Threat Model & Isolation Goals
 
-To completely eliminate these hazards, Voicebox adopts a strict **Double-Iframe Architecture**:
+An untrusted mini-app executes arbitrary HTML, CSS, and JavaScript. The sandbox prevents it from:
+1. **Reading Host Origin Storage**: Cannot access the Voicebox host's `localStorage`, `sessionStorage`, `document.cookie`, `IndexedDB`, or Origin Private File System (OPFS). (The injected SDK provides a transient, document-local in-memory `Storage` shim so apps that call `localStorage.getItem`/`setItem` work without throwing a `SecurityError`.)
+2. **Calling Host APIs**: Because the inner iframe has an opaque `"null"` origin, browser CORS policies block direct `fetch()` calls to `/api/file`, `/api/turn`, or `/api/execute`.
+3. **Hijacking Navigation or Modals**: Top-level navigation, popups, and blocking `alert()`/`prompt()` dialogs are disabled by the iframe `sandbox` attribute.
+4. **Spoofing Ambient `postMessage` Events**: All communication travels over a private, transferred `MessagePort` rather than ambient window messages.
+5. **Hanging or Exhausting the Host**: Tool calls are bounded by a 5,000ms timeout and a 64 KiB output limit.
+
+---
+
+## 2. Double-Iframe Architecture
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│ Voicebox Host Room (Origin: e.g. http://127.0.0.1:8787)                │
+│ Voicebox Host Room (Same Origin: http://127.0.0.1:8787)                │
 │                                                                        │
-│ • Live Voice Session (Gemini / OpenAI Realtime)                        │
-│ • MiniAppRegistry: registers active apps and exposes Web MCP tools    │
-│ • Communicates with Outer Bridge via same-origin postMessage          │
+│ • Live Voice Session (Gemini Live / OpenAI Realtime)                   │
+│ • MiniAppRegistry: tracks active apps and exposes Web MCP tools        │
+│ • Pop-over container (#mini-app-container) & launcher (#sqeh-actions)  │
 │                                                                        │
 │ ┌────────────────────────────────────────────────────────────────────┐ │
-│ │ Outer Mediator Bridge                                              │ │
-│ │ URL: http://127.0.0.1:8787/mini-app-bridge.html (Same Origin)       │ │
+│ │ Outer Mediator Bridge (/mini-app-bridge.html, Same Origin)         │ │
 │ │                                                                    │ │
-│ │ • Enforces event.origin === window.location.origin on host line    │ │
-│ │ • Validates tool schemas (alphanumeric names, JSON Schema objects) │ │
-│ │ • Enforces execution bounds (64KB output cap, 5000ms call timeout) │ │
-│ │ • Owns MessageChannel and transfers port2 to inner frame          │ │
+│ │ • Verifies event.origin === window.location.origin on host messages│ │
+│ │ • Validates Web MCP tool schemas (validateWebMcpTool)              │ │
+│ │ • Enforces 64 KiB output cap and 5,000ms execution timeout         │ │
+│ │ • Creates fresh MessageChannel on each inner load and transfers    │ │
+│ │   port2 to the inner sandboxed frame                               │ │
 │ │                                                                    │ │
 │ │ ┌────────────────────────────────────────────────────────────────┐ │ │
-│ │ │ Inner Sandboxed Mini-App                                       │ │ │
-│ │ │ URL / srcdoc: Untrusted Application HTML & Script              │ │ │
+│ │ │ Inner Sandboxed Mini-App (<iframe id="inner-app">)             │ │ │
 │ │ │ Attribute: sandbox="allow-scripts"                             │ │ │
-│ │ │ Origin: "null" (Opaque / Unique Sandbox Origin)                │ │ │
+│ │ │ Origin: "null" (Opaque Sandbox Origin)                         │ │ │
 │ │ │                                                                │ │ │
-│ │ │ • Storage access throws SecurityError (natively blocked)       │ │ │
-│ │ │ • Origin HTTP fetches blocked (CORS rejects null origin)       │ │ │
-│ │ │ • Top-navigation, modals, popups disabled by sandbox           │ │ │
-│ │ │ • Exposes tools via window.webMcp.registerTool(...)            │ │ │
-│ │ │ • Communicates EXCLUSIVELY over private transferred MessagePort│ │ │
+│ │ │ • Registers tools via window.webMcp.registerTool(...)          │ │ │
+│ │ │ • Communicates exclusively over transferred MessagePort        │ │ │
 │ │ └────────────────────────────────────────────────────────────────┘ │ │
 │ └────────────────────────────────────────────────────────────────────┘ │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Why Double-Iframe instead of a Single Iframe?
-
-1. **Clean Separation of Mediation vs Execution**:
-   If an untrusted app ran in a single sandboxed iframe (`sandbox="allow-scripts"`), its origin would be `"null"`. In `window.addEventListener("message")`, the host window would have to accept messages from `origin === "null"`. In browser security, `"null"` matches *all* opaque origins (including data: URIs, other sandboxed frames, and cross-site frames), opening the host to message spoofing unless complex cryptographic pairing is used.
-2. **Same-Origin Host Mediation**:
-   The Outer Bridge is hosted directly on the Voicebox origin (`/mini-app-bridge.html`). Communication between the Host Room and the Outer Bridge uses standard same-origin checks (`event.origin === window.location.origin`).
-3. **Private Channel to Untrusted App**:
-   The Outer Bridge establishes a `MessageChannel` and transfers `port2` into the inner frame during the handshake. All subsequent RPC traffic travels over this private, point-to-point `MessagePort`, completely immune to ambient `window.postMessage` listeners or cross-frame spoofing. A transferred port is single-use, and the inner frame re-announces readiness every time its document (re)loads: the bridge answers each announcement with a FRESH channel, because re-sending a neutered `port2` is the `DataCloneError` class this architecture was caught with (voicebox-beads-sdxn).
+### Why Two Nested Iframes?
+- **Outer Mediator Bridge (`/mini-app-bridge.html`)**: Runs on the same origin as the Voicebox room so the host window can verify `event.origin === window.location.origin`.
+- **Inner Sandboxed Frame (`sandbox="allow-scripts"`)**: Runs in a unique opaque origin (`"null"`). On every load or reload of the inner document, the outer bridge creates a fresh `MessageChannel` and transfers `port2` into the inner frame, establishing an isolated point-to-point channel that other frames cannot intercept or spoof.
 
 ---
 
-## 3. Web MCP (Web Model Context Protocol)
+## 3. Authoring Mini-Apps with Web MCP (`window.webMcp`)
 
-The mini-app environment provides a lightweight, standards-compliant Web MCP SDK (`public/mini-app-sdk.js` or inlined automatically by the bridge):
+The bridge automatically injects `public/mini-app-sdk.js` into the inner frame right after `<!doctype html>` (preserving `CSS1Compat` Standards Mode). Mini-apps expose interactive tools to the voice assistant using `window.webMcp.registerTool()`:
 
-### Tool Registration
 ```javascript
 window.webMcp.registerTool({
   name: "set_score",
-  description: "Update the score on the interactive scoreboard",
+  description: "Add points to a team on the scoreboard",
   parameters: {
     type: "object",
     properties: {
@@ -89,51 +77,29 @@ window.webMcp.registerTool({
   }
 });
 
-// Signal that initialization is complete
+// Signal that tool registration is complete
 window.webMcp.ready();
 ```
 
-### Execution Protocol
-
-1. **Declaration Relay**: When the app registers a tool, the inner SDK sends `{ type: "register_tool", tool }` across `MessagePort`.
-2. **Validation & Filtering**: The Outer Bridge validates the tool declaration against `validateWebMcpTool()`:
-   - Tool name must match `^[a-zA-Z0-9_-]{1,64}$`.
-   - Description must be non-empty string <= 1024 characters.
-   - Parameters must be a JSON Schema object (`type: "object"`).
-   - Tool count per mini-app is capped at `MINI_APP_BOUNDS.maxTools` (16).
-3. **Live Session Ingestion**: The Outer Bridge emits `tools_updated` to the host. The host's `MiniAppRegistry` translates them into live model function declarations (`toolsToFunctionDeclarations()`) for Gemini Live or OpenAI Realtime.
-4. **Voice-Driven Execution**:
-   - The user speaks: *"Add three points to home team."*
-   - The live voice model calls `set_score({ team: "home", points: 3 })`.
-   - The host dispatches the tool call to the bridge: `{ type: "call_tool", callId, name, args }`.
-   - The bridge starts a 5000ms deadline timer and forwards the call over the `MessagePort`.
-   - The mini-app executes `execute(args)` and updates its DOM/Canvas in real time.
-   - The result is posted back over the `MessagePort`.
-   - The bridge verifies output bounds (<= 64KB), cancels the timer, and returns the result to the host room.
-   - The live session sends the tool response back to the voice model, which confirms aloud: *"Added three points to home team."*
+### Tool Lifecycle during a Voice Session
+1. **Registration**: The inner app calls `window.webMcp.registerTool(...)`, sending `{ type: "register_tool", tool }` over the private `MessagePort`.
+2. **Schema Validation (`core/mini-app.ts`)**: `validateWebMcpTool()` verifies the tool name (`^[a-zA-Z0-9_-]{1,64}$`), description (≤ 1,024 chars), JSON Schema parameters (`type: "object"`), and per-app tool count (`maxTools: 16`).
+3. **Live Voice Exposure**: `MiniAppRegistry` converts registered tools into function declarations (`toolsToFunctionDeclarations()`) for the active live voice session.
+4. **Voice Execution**: When the user says *"Add three points to the home team"*, the model calls `set_score`, the bridge dispatches `{ type: "call_tool", callId, name, args }` to the inner app, enforces the 5,000ms timeout and 64 KiB response cap, and returns the result to the voice model.
 
 ---
 
-## 4. Capability Bounds & Enforcement
+## 4. Enforced Bounds (`core/mini-app.ts`, `public/mini-app-bridge.js`)
 
-All limits are enforced host-side by `core/mini-app.ts` and `public/mini-app-bridge.js`:
-
-| Capability | Bound | Enforcement Location | Refusal / Behavior |
+| Bound | Limit | Enforcement Point | Behavior When Exceeded |
 |---|---|---|---|
-| **Sandbox Policy** | `allow-scripts` | Inner App Frame (`<iframe id="inner-app" sandbox="...">`) | No same-origin, no storage, no top navigation, no modals |
-| **Storage Access** | Strictly prohibited | Browser engine (`origin: "null"`) | Throws `SecurityError` |
-| **Max Tools** | 16 tools / app | Outer Bridge & MiniAppRegistry | Excess registrations refused with warning |
-| **Max Output Size** | 64 KB (65,536 bytes) | Outer Bridge mediator | Refused as `"output over budget (max 64KB)"` |
-| **Call Timeout** | 5,000 ms | Outer Bridge mediator | Refused as `"tool execution timed out after 5000ms"` |
-| **Tool Name** | 1–64 alphanumeric / `_` / `-` | `validateWebMcpTool()` | Refused as `invalid-tool-name` |
+| **Iframe Sandbox** | `sandbox="allow-scripts"` | `<iframe id="inner-app">` | Blocks host storage, cookies, top navigation, and modals. |
+| **Max Tools per App** | `16` | Outer Bridge & `MiniAppRegistry` | Excess tool registrations are rejected. |
+| **Max Tool Output** | `64 KiB` (`65,536` bytes) | Outer Bridge | Refused with `"output over budget (max 64KB)"`. |
+| **Tool Execution Timeout** | `5,000ms` | Outer Bridge | Refused with `"tool execution timed out after 5000ms"`. |
+| **Tool Name Format** | `1–64` chars (`a-zA-Z0-9_-`) | `validateWebMcpTool()` | Refused with `invalid-tool-name`. |
 
----
-
-## 5. Negative Verification & Falsification Evidence
-
-The architecture is proven through negative test drives in `tests/mini-app-architecture.test.mjs`:
-1. **Opaque Origin Proof**: Inner iframe observes `window.location.origin === "null"`.
-2. **Storage Boundary Proof**: The inner origin is `"null"` and host storage stays unreachable; `localStorage.setItem()` succeeds against the SDK's DOCUMENT-LOCAL in-memory shim and the value round-trips there — it is never the host's storage, and it dies with the document.
-3. **Mutation Proof**: The inner iframe carries exactly `sandbox="allow-scripts"`; with `allow-same-origin` added, `origin` would leak the server host and storage would be the real one — the test asserts the attribute is exactly `allow-scripts`.
-4. **Output Bound Proof**: Tool returning 70,000 bytes is intercepted and refused with `"output over budget"`.
-5. **Real-time DOM Verification**: Calling tool via bridge updates inner DOM text synchronously before resolving the result.
+### Verification Suite
+```bash
+node --test tests/mini-app-architecture.test.mjs
+```

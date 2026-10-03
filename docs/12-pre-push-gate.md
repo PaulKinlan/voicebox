@@ -1,166 +1,56 @@
-# Pre-push gate: budgets and refusal causes
+# Testing Lanes & Pre-Push Gate
 
-The tracked hook runs the test suite in **two lanes**, then `npm run accept` — **for a push
-to main**. A push to any other branch runs `docs-touched` + the `unit` lane only and exits:
-the gate lock and the live/acceptance stages protect LANDINGS, and a candidate push is an
-announcement, not a landing (`voicebox-beads-uadl`). Measured without the split: five lanes
-pushing candidates serialized behind one flock, with waits of 398s-1058s before the live
-stage even started. A push whose destination cannot be read (direct script runs, exotic
-transports) keeps the full gate — an unseen destination might be a landing.
+Voicebox enforces a multi-stage verification gate on `git push` via `.githooks/pre-push` and `scripts/pre-push.sh`. Tests are automatically classified into fast concurrent unit tests and isolated live integration tests by `scripts/test-lanes.mjs`.
 
-## A push aimed at main from a branch (2026-09-24, `voicebox-beads-85w`)
+---
 
-The gate refuses, **by name and before any stage runs**:
+## 1. Branch vs. `main` Push Policy
 
-    [gate] pre-push REFUSED: non-main branch attempting to push to main ref
+- **Candidate Branch Pushes (`git push origin <branch>`)**:
+  Runs only `node scripts/docs-touched.mjs` and the fast `unit` test lane (`npm run test:unit`), then exits immediately. This keeps worktree branch pushes fast and lock-free.
+- **Landing on `main`**:
+  - Pushing to `main` from a non-`main` branch is refused immediately (`[gate] pre-push REFUSED: non-main branch attempting to push to main ref`). Always create worktrees with `--no-track` (`git worktree add --no-track -b <branch> <dir> origin/main`) so worktree branches do not track `origin/main`.
+  - Pushing from `main` to `origin/main` runs the full verification pipeline (or fast-paths docs-only `*.md` changes through `docs-check` and `single-owner`), caching the verified `HEAD^{tree}` SHA in `.git/voicebox-gate-passed-tree`.
 
-Git hands the hook its destination refs on stdin, so the check is about where the push
-is GOING, not where it came from. It exists because
-`git worktree add -b <branch> <dir> origin/main` sets the new branch's UPSTREAM to
-`origin/main`: a bare `git push` in that worktree then offers `HEAD:main`, and git's own
-remedy line suggests `git push origin HEAD:main` — the worst available outcome, offered
-as help. Create worktrees with **`--no-track`**, or clear it afterwards with
-**`git branch --unset-upstream`**; a lane that means to land names its refspec anyway
-(`git push -u origin <branch>`).
+---
 
-| stage | what it runs | concurrency | default budget |
-| --- | --- | --- | --- |
-| `unit` | `npm run test:unit` — every `tests/*.test.mjs` that launches no browser and no server of its own | files in parallel | 90s |
-| `live` | `npm run test:live` — tests that launch Chromium over CDP or a server process | **one file at a time** | 400s |
-| `acceptance` | `npm run accept` | — | 45s |
+## 2. Gate Stages & Timeouts
 
-Each stage inherits stdout and stderr: partial output remains visible when it
-times out. GNU coreutils `timeout` is required; its absence is a named refusal,
-not an unbounded run. The lanes are derived from each file's code by
-`scripts/test-lanes.mjs` (every file lands in exactly one lane; detecting direct
-and helper-mediated browser launches like `page-acceptance.mjs`, and server
-processes like `server.mjs`, `task-fixture.mjs` and `createServer`), so a new test
-cannot escape them the way it could escape a hand-kept list, and `npm test` still
-runs the whole suite for humans and CI. Live tests further partition into a concurrent
-server lane (`--lane server`, run with bounded `--test-concurrency=4`) and a serial
-browser lane (`--lane browser`, run with `--test-concurrency=1`), cutting runtime while
-keeping browser launches isolated (`voicebox-beads-ku4f`). Each file is lexed, not pattern-stripped
-(`voicebox-beads-k96l`): a comment is not code, and neither is the source a test
-writes — fixture text in the content of a writeFileSync/writeFile/appendFile call
-is data, which is why the classifier's own test is a unit test. A helper counts by
-its file name in any other string (a static or dynamic import, a spawn argument, a
-path.join segment, a template-built path); `createServer` counts
-only where code calls it, unless the file hands source text to an evaluator
-(node -e, a shell, eval/vm). Every doubt resolves to live: a file the lexer cannot
-read to its end is read raw, because a live test misfiled as unit is the flake
-this split exists to stop, while a unit test misfiled as live costs seconds.
+| Stage | Command | Execution Mode | Default Timeout |
+|---|---|---|---|
+| **Docs Touched** | `node scripts/docs-touched.mjs` | Static `git diff` check | Immediate |
+| **Unit Suite** | `npm run test:unit` | Concurrent across files | `90s` |
+| **Live Suite** | `npm run test:live` | Server lane (`--test-concurrency=4`) + Browser CDP lane (`--test-concurrency=1`) | `400s` |
+| **Acceptance** | `npm run accept` | End-to-end headless Chromium verification (`page-acceptance.mjs`) | `45s` |
 
-## Why two lanes — 2026-09-23 (`voicebox-beads-6qu`)
+### Automatic Test Lane Classification (`scripts/test-lanes.mjs`)
+`scripts/test-lanes.mjs` lexes every `tests/*.test.mjs` file (ignoring comments and fixture string writes) to classify it into the appropriate lane:
+- **`unit` lane**: Pure logic, state machine, and worker tests (including `tests/wasm-shelf.test.mjs` and `tests/docs-drift.test.mjs`) that do not spawn `server.mjs`, `createServer`, `task-fixture.mjs`, or headless Chromium.
+- **`live` lane**:
+  - **Server sub-lane (`--lane server`)**: Spawns `server.mjs` or HTTP servers without launching a browser; runs with `--test-concurrency=4`.
+  - **Browser sub-lane (`--lane browser`)**: Launches headless Chromium over CDP; runs serially (`--test-concurrency=1`) to prevent browser CPU contention.
 
-The single full-suite stage refused good branches, and the cause was measured
-rather than guessed:
+---
 
-- `extension-approval-ui.test.mjs` failed **inside** the suite twice at ~20.5s
-  (`timed out waiting for host code requested`), and `environment-probe.test.mjs`
-  once — **each passing alone** (3/3 and 1/1), and each passing when the suite
-  ran serially.
-- That serial run passed **357 tests, 354 pass, 0 fail, 3 skipped at load
-  average 36.31** — higher than during any refusal. So the interference is
-  between test FILES (node runs them concurrently), not the machine.
-- Lane costs, measured at load 19.5: `unit` **15s concurrent** (175 tests),
-  `live` **186s serial** (182 tests). The budgets above are headroom over those
-  numbers, not estimates; changing concurrency without raising the budget would
-  convert a flake into a timeout, which is why both moved together.
-- Re-measured on 2026-09-29 (`voicebox-beads-0i14`): `tests/wasm-shelf.test.mjs`
-  moved from the server lane into the `unit` lane once u2lx (`6ffe613`) made the
-  wasm cell a child process SIGKILLed at its deadline — the file alone is 10.5s
-  (19.1s CPU), the unit lane went **20.7s → 31.4s** with it included, and the old
-  signal that held it out (`callWasmTool`) is gone because its reason is fixed.
-- Re-measured on 2026-09-29 after the suite grew to 120 test files (`40 unit`,
-  `80 live`) and the six-lane harness pass landed (`voicebox-beads-4wez`,
-  `qxy2`, `4oj6`, `9mqc`, `g667`, `k96l`): `unit` **20.1s concurrent** (322
-  tests; `docs-drift.test.mjs` alone **15.2s → 2.5s**), `live` **503.8s →
-  389.3s serial** (376 tests, 351 pass, 0 fail, 25 skipped — back inside the
-  400s stage budget), `accept` **15.6s**.
+## 3. Cross-Worktree Gate Locking & Exit Diagnostics
 
-## Gate lock and serialization across lanes — 2026-09-24 (`voicebox-beads-6qu`)
+Before entering the `live` and `acceptance` stages on `main`, `scripts/pre-push.sh` acquires a host-wide file lock (`VOICEBOX_GATE_LOCK`, default `/tmp/voicebox-gate.lock`) and writes holder metadata to `VOICEBOX_GATE_HOLDER` (`/tmp/voicebox-gate.holder.json`). Concurrent landings wait for the lock rather than competing for Chromium instances (configurable via `VOICEBOX_GATE_LOCK_WAIT_SECS` or `VOICEBOX_GATE_LOCK_DISABLE=1`).
 
-The fast `unit` stage runs concurrently across lanes without locking.
-Before starting `live` (`npm run test:live`) and `acceptance` (`npm run accept`),
-the pre-push hook acquires a fleet-wide file lock (`VOICEBOX_GATE_LOCK`, default
-`/tmp/voicebox-gate.lock`) with a sidecar announcement (`VOICEBOX_GATE_HOLDER`,
-default `/tmp/voicebox-gate.holder.json`). When another lane is currently running
-its live/browser stage, subsequent push attempts wait their turn with an announced
-message (`Waiting for gate lock held by PID ...`) rather than launching concurrent
-Chromium processes that starve each other. The lock is released on exit or failure.
-Override with `VOICEBOX_GATE_LOCK_DISABLE=1` or `VOICEBOX_GATE_LOCK_WAIT_SECS=<n>`.
+Each stage is bounded by GNU `timeout` with a 5-second kill grace period:
+- **Exit `124` (`TIMED OUT`)**: Reports the stage name, command, and budget without mislabeling an unfinished run as a test assertion failure.
+- **Exit `137` (`KILLED`)**: Reports that the process received `SIGKILL`.
+- **Non-zero Exit (`FAILED`)**: Preserves full stdout/stderr and underlying network error codes (such as `ECONNREFUSED` or `UND_ERR_SOCKET`).
 
-A timeout reports the stage, command, budget and exit 124, and says completion
-is unknown rather than claiming tests failed. An ordinary nonzero exit reports
-FAILED with the stage and exit code; the test or harness output above gives the
-specific cause. Exit 137 is reported as KILLED: it can be timeout escalation or
-an external SIGKILL, so it is not labelled a proven test failure. GNU timeout's
-signal diagnostics also remain visible. Acceptance fetch exceptions retain
-their underlying network error code (for example ECONNREFUSED or UND_ERR_SOCKET).
+---
 
-The old hook-wide 120-second timer is removed: it could terminate the gate
-before the stage printed its diagnosis. The two stage timers remain bounded,
-with up to five seconds of kill grace each. The existing Beads hook runs
-separately before these stages. Existing explicit skip flags are unchanged.
+## 4. Acceptance Read Idempotence Check
 
-## Private read idempotence
+During `npm run accept`, the acceptance harness verifies that read endpoints are strictly idempotent:
+1. Declares an isolated workspace root and seeds a known file before loading the browser page.
+2. Issues three sequential `GET` requests to `/api/root` and `/api/files`, verifying that all responses match and report the exact file byte count.
+3. Stat-checks the workspace directory afterward to verify that file contents, permissions, and nanosecond `mtime`/`ctime` timestamps were not mutated by read requests.
 
-Phase B declares an owned root and seeds a nonempty file before navigating the
-private page, so page polling does not compete with the measurement. It makes
-three sequential GETs each to `/api/root` and `/api/files`. Every response must
-succeed, identify the declared project/root and include the known file with its
-correct byte count; all three response pairs must agree. Zero requests, empty
-responses and identical refusals cannot pass.
-
-The directory must still contain exactly the seeded file, with its original
-bytes, mode, nanosecond mtime and ctime. This catches hidden file creation and
-same-byte rewrites even when API responses remain identical. Access time is not
-compared: a legitimate read may update it. The seed is removed before the later
-page/turn checks. This measures the declared state and this flat private fixture,
-not every internal server field or side effects outside its root. Phase A does
-not compare shared-server state across a window another lane can write to.
-
-## Measurement — 2026-09-21, worker-gzm
-
-Baseline revision: 984aad95f16d1fbe42d37efeea23125ff50b396d. Node 24.21.0,
-32 logical CPUs. Three full-suite runs shared CPUs 0–3 with four owned busy-loop
-processes pinned to the same CPUs. This is **controlled contention**, not an
-estimate of an idle run or a measurement of the whole fleet's p95. Other lanes
-were not pinned or stopped.
-
-| Run | Wall time | Tests | Passed | Failed | Skipped |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 1 | 74.570s | 305 | 303 | 0 | 2 |
-| 2 | 73.599s | 305 | 303 | 0 | 2 |
-| 3 | 73.469s | 305 | 303 | 0 | 2 |
-
-Median 73.599s; observed maximum 74.570s. All exceeded 60s while passing.
-180s allows over twice this observed maximum; it is headroom, not a guarantee
-against arbitrary overload. **No fast subset was introduced**: these runs fit
-a modest full-suite budget, so they do not justify dropping pre-push coverage
-or adding a second full-suite signal.
-
-A diagnostic copy of the new gate with *only* the unit budget restored to 60s
-was driven against the real full suite under the same contention. At 60.026s
-it exited 1 and printed `REFUSED: tests (npm test) — TIMED OUT after 60s (exit 124)`
-alongside the suite's partial stdout/stderr. Termination cancelled an unfinished
-test; that is not relabelled as a completed failing suite.
-
-Raw baseline logs, JSON timings and the old-budget drive are retained outside
-the source tree at /home/paulkinlan/cap-evidence/voicebox-gzm/.
-
-## Regression drives
-
-`node --test tests/pre-push.test.mjs` makes real pushes from a fresh linked
-worktree to a disposable local bare repository. It checks both stage timeouts,
-a genuinely failing arithmetic test, an acceptance refusal and a successful
-push. A fixture wrapper accelerates only the selected timeout to two seconds;
-it still runs GNU timeout and the actual tracked hook. Failed pushes leave no
-remote ref. Both output streams survive timeout and retain the original cause.
-Fixture subprocesses clear Git's repository-local environment variables so a
-real pre-push hook cannot redirect fixture writes into the pushed repository.
-This was caught by the first actual push, repaired, and rechecked with explicit
-GIT_DIR/GIT_WORK_TREE inheritance; direct gate execution alone did not expose it.
-A second check runs the real Chromium acceptance harness against an ephemeral
-HTTP front which answers the probes, then drops the page fetch; the failure
-must include UND_ERR_SOCKET, not just “fetch failed”.
+### Verification Suites
+```bash
+node --test tests/pre-push.test.mjs tests/test-changed.test.mjs
+```

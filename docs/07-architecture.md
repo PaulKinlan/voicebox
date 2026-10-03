@@ -1,173 +1,130 @@
-# Architecture — what this system is tonight
+# System Architecture
 
-**This is a snapshot, not a spec.** It describes the tree it sits in, including the parts that are
-placeholders, and `scripts/docs-check.mjs` fails when the enumerable claims below drift from the code. For
-what voicebox is *meant* to be, read [`00-brief.md`](00-brief.md) (Paul's words), [`02-environment.md`](02-environment.md)
-(the environment design — a **design record**, not a description of this tree) and [`01-questions.md`](01-questions.md).
+This document describes the runtime architecture of Voicebox as implemented in the repository. All generated sections below are verified against the live codebase and server by `scripts/docs-check.mjs` (`npm run docs:check`).
 
-The distinction matters more here than in most repositories: `02-environment.md` and
-[`05-harvest.md`](05-harvest.md) are **design records** — they describe systems that may not exist yet, and
-they are allowed to. This file and [`08-how-it-runs.md`](08-how-it-runs.md) are **snapshots** — they describe
-what runs, and a claim in them that the code contradicts is a bug in the document.
+---
 
-## Components
+## 1. Component Overview
 
-| component | file | authority for | state |
-|---|---|---|---|
-| the page | `public/index.html`, `public/fused.js`, `public/style.css`, `public/live-voice.js` | the interface: warm paper light mode default (`#theme-toggle`), centered hero voice stage (`#mic`, `#text-form`), floating bubble tray (`#sqeh-deck`) with Files bubble popover (`#sqeh-files-bubble`, `#made-list`), File Viewer bubble popover (`#sqeh-reader-bubble`, `#reader`, `#reader-minimize`, `#reader-back-files`), and real folder and session Mini-App bubbles (`#sqeh-actions`, `#file-run-app` mounting `#mini-app-container`), native modal dialogs for settings, environments, extensions, and harnesses, handlers for `{type:"tool"}` and `{type:"task"}`, artifact chips on tool writes, and real playback gain in `#sqeh-sheet` (voicebox-beads-sqeh, 2meg, 3rcy, wc8c) | real, with labelled simulations |
-| the server | `server.mjs` | routes, static serving, running actions, the workspace | **zero dependencies** (`node:http`) |
-| the fleet | `lib/fleet.mjs`, `core/fleet.ts` | multi-environment agent discovery, target keys (`env/agent`), and session contact routing | addressable across environments |
-| the turn resolver | `lib/resolver.mjs` | turning a transcript into an action `{ verb, name, content? }` | **one provider, three verbs — a placeholder** |
-| the environment core | `core/*.ts` | the tier table, policy, containment, the audit, project records | the E1-M0 library; not yet wired to the page | <!-- docs-check: names the mechanism -->
-| the tool | `tools/create-asset.wat` | the one tool E1-M0 runs, as a Wasm module | present, exercised by `tests/` | <!-- docs-check: names the mechanism -->
-| the dev server | `vite.config.js` | HMR, and forwarding everything the page needs from the server: `/api`, `/live`, the executor channel `/channel`, and **the browser's whole module graph** — the five directories in `lib/browser-sources.mjs` (`core`, `browser`, `tools`, `tests`, `lib`), generated from that one list so the front cannot hold a stale copy of it | dev only — never the production path |
+| Component | Key Files | Responsibility |
+|---|---|---|
+| **Browser Interface** | `public/index.html`, `public/fused.js`, `public/style.css`, `public/live-voice.js`, `public/pip-mic.mjs` | Renders the centered voice stage (`#mic`, `#text-form`), floating pop-over bubble tray (`#sqeh-deck`) for Files (`#sqeh-files-bubble`, `#made-list`), File Viewer (`#sqeh-reader-bubble`, `#reader`), Mini-Apps (`#sqeh-actions`, `#mini-app-container`), and Recent Turns (`#sqeh-toggle-history`, `#session`), plus top-bar dialogs for Settings, Harnesses, Environments, and Extensions. |
+| **HTTP & WebSocket Server** | `server.mjs`, `lib/ws-server.mjs` | Zero-dependency (`node:http`) loopback server binding `127.0.0.1`, serving static assets, REST API routes, `/live` voice WebSockets, and `/channel` routed-action sockets. |
+| **Live Voice Gateway** | `lib/live-session.mjs`, `lib/commands.mjs`, `lib/project-instruction.mjs` | Manages full-duplex streaming audio and tool-call execution with Gemini Multimodal Live and OpenAI Realtime. |
+| **Turn Resolver** | `lib/resolver.mjs` | Translates text transcripts from `POST /api/turn` into structured actions (`write`, `read`, `list`, `make-tool`, `tool`, etc.). |
+| **Policy & Domain Core** | `core/root.ts`, `core/extensions.ts`, `core/tasks.ts`, `core/wire.ts`, `core/fleet.ts`, `core/harness-config.ts`, `core/mini-app.ts`, `core/paths.ts`, `core/tier-table.ts` | Runtime-agnostic pure TypeScript modules defining workspace roots, capability admission rules, task state machines, wire envelopes, and path normalization. Imports nothing outside `core/`. |
+| **Host Capabilities** | `lib/state-dirs.mjs`, `lib/extensions.mjs`, `lib/wasm-shelf.mjs`, `lib/tasks.mjs`, `lib/task-placement.mjs`, `lib/fleet.mjs`, `lib/harness-config.mjs` | Server-side implementations of extension admission, digest-pinned WebAssembly execution (`tools/create-asset.wat`), ACP task delegation, and multi-environment fleet routing. |
+| **Dev Proxy** | `vite.config.js`, `lib/browser-sources.mjs` | Development-only HMR front-end server on port `5173` that proxies `/api`, `/live`, `/channel`, and browser module graphs (`core`, `browser`, `tools`, `tests`, `lib`) to `server.mjs`. |
 
-**What is here tonight:** `lib/live-session.mjs` (the upstream live session) and `lib/ws-server.mjs` (the
-WebSocket transport) have landed, and the page loads `live-voice.js`, which opens `/live` and streams PCM
-through `pcm-worklet.js`. The generated line below says what the model is; the *turn* path is still the
-`script` placeholder, and those two facts are what an earlier version of this file managed to conflate.
+---
+
+## 2. Live Voice Architecture & Barge-In
+
+`public/live-voice.js` captures microphone audio through the `pcm-worklet.js` AudioWorklet and streams PCM frames over `/live` to `lib/live-session.mjs`.
 
 <!-- BEGIN GENERATED: live-session — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
-`lib/live-session.mjs` is present. Registered live providers, with the model each one's handshake names (captured from the provider against a recording transport — never dialed): `claude` → `(registered, but this check has no capture for it)`, `gemini` → `models/gemini-3.8-live`, `openai` → `gpt-realtime`. The library fallback is `gemini`, overridable by `VOICEBOX_LIVE_PROVIDER`; the server's `/live` route instead passes the agent-settings provider explicitly.
+**Live Voice Providers (`lib/live-session.mjs`)**: `claude` (`(registered, but this check has no capture for it)`), `gemini` (`models/gemini-3.8-live`), `openai` (`gpt-realtime`). The default fallback provider is `gemini` (configurable via `VOICEBOX_LIVE_PROVIDER` or selected per session in the UI Settings dialog).
 <!-- END GENERATED: live-session -->
 
-Hand-written addition (voicebox-beads-ldxa): **barge-in has two halves, and both are needed.** While the
-agent speaks the microphone stays open — `stopReply` has always flushed playback without touching capture —
-and the page watches the same per-frame input energy the waveform draws: SUSTAINED input above an absolute
-floor AND clear of the **microphone's own recent quiet level** (an adaptive floor: a sustained echo raises
-the bar and cannot keep interrupting, while a normal voice over a loud agent still clears it) flushes
-playback and sends `{type:"interrupt"}` on the live socket. The floor is measured at the microphone rather
-than at the agent's source because the source amplitude is not what arrives there — the review measured an
-earlier source-side margin failing exactly where interruption matters most (a loud 0.40 passage put the bar
-at 0.54 against a normal voice's ~0.13 per frame). `/live` answers that with
-`session.interrupt()`: OpenAI cancels its response, **Gemini's barge-in is server-side and names this a no-op
-on purpose**, and the provider's own interrupt event then returns as `state:"interrupt"`, which flushes the
-audio the page had already buffered. Without that last step a server-side interruption stops generation
-while the person still hears the tail — which is the audible half of "I cannot interrupt it". One interruption
-fires per speaking phase (never one per frame), and the honest limit is stated where the detector lives: with
-echo cancellation off and the volume up, playback alone can clear both conditions and the page interrupts
-itself; a vendor VAD would not have that failure mode, but would be a second implementation of a thing the
-provider already does.
+### Full-Duplex Barge-In Detection
+While the assistant is speaking, microphone capture remains active so you can interrupt naturally at any time:
+1. **Adaptive Client Energy Detection**: `public/live-voice.js` monitors incoming microphone frame energy against both an absolute floor and an adaptive quiet baseline measured at the microphone. Sustained voice energy above the threshold immediately flushes local audio playback and sends `{ type: "interrupt" }` over `/live`.
+2. **Upstream Cancellation & Buffer Flush**: On receiving `{ type: "interrupt" }`, `/live` invokes `session.interrupt()` (canceling active OpenAI Realtime generation; Gemini Live detects barge-in server-side). When the upstream provider emits an interrupt event, the server forwards `state: "interrupt"` to the browser to flush any remaining buffered audio frames.
 
-## The turn path, in order
+---
+
+## 3. Workspace Roots & Turn Resolution
 
 ```
-page  --POST /api/turn {transcript}-->  server.mjs  --resolveTurn(transcript, provider)-->  lib/resolver.mjs
-        <--- {transcript, action, result} ---  server executes the action in the active project root
+Browser UI ──POST /api/turn { transcript }──▶ server.mjs ──resolveTurn()──▶ lib/resolver.mjs
+           ◀── { transcript, action, result } ── Executes action in active project root
 ```
 
-The active project root is wherever the environment declares it (or the boot-time workspace
-variable, which is a declaration too) — the path is the server's answer to `GET /api/root`, not a
-fixed location this diagram names.
-
-**Who may declare, and why the token is scoped the way it is** (voicebox-beads-fqq). `POST /api/root`
-needed the host token for every kind of root, and the page cannot hold one — so a browser-stored project
-could never be declared, and a fresh room could not list or write anything at all. The token now guards
-what it was actually defending: a **machine** root re-points every file route the *server itself* serves,
-so that declaration stays the host's act (403 `host-token-required` without it). A **page-owned** root
-(`opfs`, `handle`) grants the server no file-route power — `core/root.ts` `ROOT_FACTS.opfs.reachableFrom
-= ["page"]`, every act routes back to the page, and the page refuses any root that is not its own
-(`browser/acts.ts`: `root-not-mine`) — so the page may declare it, authorized by the same rule `/channel`
-already uses to decide who the local page is: the request's `Origin` is one of this server's own bound
-origins. The response says which of the two acts it was (`declaredBy: "host" | "page"`). A request from
-any other origin is refused, and the refusal names the rule that would have allowed it.
-
-**A room with no root declared, and a page that holds one.** When nothing is declared at all, the room's
-listing and read routes ask the page that holds its own project (`GET /api/files`, `GET /api/file` →
-`via: "page"`), and the page answers for its project: the server stores nothing and declares nothing,
-and the answer carries the page's descriptor so the room can name whose files these are. A call that
-names **no** root means "the project this page holds"; a call that names a *different* root is still
-refused `root-not-mine`, and a page with no project open answers `no-project` rather than an empty list.
-
-The server **never parses language itself**: `resolveTurn` returns an action, and the server runs it. That
-is the whole seam, and it is why swapping the brain does not touch the page or the server.
+Voicebox supports both **machine-owned** filesystem roots (`kind: "machine"`) and **browser-owned** roots (`kind: "opfs"` for Origin Private File System or `kind: "handle"` for directories opened via the File System Access API, defined in `core/root.ts`):
+- **Declaring a Machine Root**: Re-points server-side file operations on the host machine and therefore requires `x-voicebox-host-token` on `POST /api/root` (`declaredBy: "host"`).
+- **Declaring a Browser Root**: `opfs` and `handle` roots reside in the browser (`ROOT_FACTS.opfs.reachableFrom = ["page"]` in `core/root.ts`). Same-origin browser requests can declare page-owned roots directly (`declaredBy: "page"`), and routed file operations execute in the browser via `browser/acts.ts` (refusing mismatched roots with `root-not-mine`).
+- **Default Browser Scratchpad Fallback**: When no machine root is declared and no local folder is open, file creation turns in the browser default to the origin's OPFS `scratchpad/` directory so users can create and inspect files immediately on first launch.
+- **Project Instructions (`AGENTS.md`)**: `lib/project-instruction.mjs` locates the nearest `AGENT.md` or `AGENTS.md` file (bounded to 32 KiB) from the active folder up to the root and includes it in the model's system instructions.
 
 <!-- BEGIN GENERATED: providers — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
-Registered resolvers: `claude`, `gemini`, `openai`, `script`
+**Registered turn resolvers** (`lib/resolver.mjs`): `claude`, `gemini`, `openai`, `script`
 
-* `registerResolver(name, fn)` is the seam; `resolveTurn(transcript, provider = "script")` picks one.
-* The **script** provider handles `write`, `read` and `list`: `"create a file called hello.txt with hi"` → `{"verb":"write","name":"hello.txt","content":"hi"}`.
-* The verbs it produces, driven one utterance each: `write`, `read`, `list`, `make-tool`, `tool`. An utterance matching **none** of them is **unresolved**, by design: `"book me a flight to Lisbon"` → `"the script resolver only knows create/read…"`. (This line used to say *"anything else is unresolved"*, which was a TYPED universal beside a derived example — false the moment `make-tool` and `tool` started resolving.)
-* The live voice providers (`claude`, `gemini`, `openai`) live behind a **different** seam, `registerLiveProvider` in `lib/live-session.mjs`; none of them is a turn resolver — see the tool path below.
+* **Registration & Dispatch**: `registerResolver(name, fn)` registers a text turn resolver; `resolveTurn(transcript, provider = "script")` resolves a user transcript into a structured action.
+* **Deterministic Script Resolver (`script`)**: Maps common file and tool commands without requiring an external API key (for example, `"create a file called hello.txt with hi"` → `{"verb":"write","name":"hello.txt","content":"hi"}`).
+* **Supported Verbs**: `write`, `read`, `list`, `make-tool`, `tool`. Prompts outside the deterministic grammar return an explicit `unresolved` response (for example, `"book me a flight to Lisbon"` → `"the script resolver only knows create/read…"`).
+* **Live Voice Providers**: Full-duplex audio providers (`claude`, `gemini`, `openai`) are registered separately via `registerLiveProvider` in `lib/live-session.mjs` and stream audio and tool calls over `/live`.
 <!-- END GENERATED: providers -->
 
-Hand-written addition (not generated): the project's own instruction file — `lib/project-instruction.mjs`, read as the NEAREST `AGENT.md`/`AGENTS.md` from the folder the page has open up to the declared root (32 KiB bound; absence is normal, unreadable is named) — composes between the agent's instruction and the tools instruction. The page reports the folder it is listing; a room folder (opfs or a picked handle) is read by the PAGE, which sends the text, because those files are not on this machine. OpenAI Realtime takes a further `session.update`, so a folder change applies live; Gemini's `setup` is sent once per connection, so it returns a named refusal (`gemini-live-setup-is-once`) and the change applies at the next session.
+---
 
-## The agent loop — one turn, driven
+## 4. The Agent Loop
 
 <!-- BEGIN GENERATED: loop — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
-**One turn, driven end to end on a scratch root while this document was generated.** Every value in the last column was read back from the server, not typed.
+The table below traces a complete turn executed against a temporary workspace during documentation generation:
 
-The log's SHAPE is derived too, not described: the write produced **2** entries and the refusal **1**, counted from `GET /api/audit` either side of each act. Row 5 used to say *"one entry per act"* as TYPED prose inside this generated block, and it stayed there after the shape changed (attempt-first, `voicebox-beads-y69`) because nothing about that sentence was derived — the marker on this block's opening comment says which half you can trust.
-
-| step | what happens | the mechanism | driven |
+| Step | Stage | Mechanism | Verified Output |
 |---|---|---|---|
-| **1 · a turn starts** | words arrive | `POST /api/turn {transcript}` — from the composer or browser dictation; the live model's words do **not** arrive here yet (see *the tool path*) | `"create a file called hello.txt with hi"` |
-| **2 · something decides** | the resolver turns words into an action, or says it cannot (`unresolved`) | `resolveTurn(transcript, "script")` in `lib/resolver.mjs` — the server never parses language itself | → `{"verb":"write","name":"hello.txt","content":"hi"}` |
-| **3 · something acts** | the executor runs the verb in the **active root** — the one declared over `POST /api/root`; none is assumed | `execute(action)` in `server.mjs` | → `wrote hello.txt (2 bytes)` in a root of kind `machine` |
-| **4 · the result returns** | the page gets the whole story in one response | `{transcript, action, result}` — `result.ok`, `result.action`, `result.root`, `result.logged` | → `ok: true`, `logged: 2` |
-| **5 · the act is recorded** | **2 entries** for that one write — `attempt`/`attempted` then `allow`/`writes-inside` — the outcome carrying the attempt's own seq; a pre-flight refusal records one | `<root>/.audit/<writer>.jsonl` (`core/shared-log.ts`), `GET /api/audit` | → seq 1 `attempt`, seq 2 `allow`; then seq 3 `refuse`/`outside-root` |
+| **1. Turn Request** | Client submits transcript | `POST /api/turn { transcript }` | `"create a file called hello.txt with hi"` |
+| **2. Turn Resolution** | Resolver parses transcript into an action | `resolveTurn(transcript, "script")` in `lib/resolver.mjs` | `{"verb":"write","name":"hello.txt","content":"hi"}` |
+| **3. Action Execution** | Executor runs action inside the active root | `execute(action)` in `server.mjs` (`POST /api/root`) | `wrote hello.txt (2 bytes)` (`root.kind: "machine"`) |
+| **4. Turn Response** | Server returns structured result to client | `{ transcript, action, result }` | `ok: true`, `logged: 2` |
+| **5. Audit Trail** | Append-only log records **2 entries** (`attempt`/`attempted` → `allow`/`writes-inside`, linking outcome to attempt sequence) and 1 entry for pre-flight refusal | `<root>/.audit/<writer>.jsonl` (`core/shared-log.ts`), `GET /api/audit` | seq 1 `attempt`, seq 2 `allow`; refusal: seq 3 `refuse`/`outside-root` |
 
-**Where it fails, by name** (driven): the same turn **before any root is declared** → `refused: root-not-declared`, `logged: null` (no root, so nowhere to hold a log — the response says so rather than omitting the field); `"read .."` → `refused: outside-root`, and the refusal is itself logged as entry seq 3. Declaring the root answered `ok: true`, `reachableFromThisProcess: true`, and the turn that was refused a moment earlier then succeeded.
+**Boundary & Admission Guarantees (Verified Against Live Server):**
+* **Undeclared Root Refusal**: Running the turn before declaring a project root returns `refused: "root-not-declared"` (`logged: null`). Once declared via `POST /api/root` (`ok: true`, `reachableFromThisProcess: true`), the turn succeeds.
+* **Path Containment**: Attempting to read outside the workspace (`"read .."`) is refused with `refused: "outside-root"` and logged at audit sequence `3`.
+* **Extension Lifecycle (`make-tool` → `admit` → `tool`)**:
+  1. **Propose**: `"create a tool called peek that lists files"` resolves to `make-tool` and writes a pending descriptor (`proposed tool 'peek-tool'`, state `pending`) under `proposals/` without loading code.
+  2. **Inspect Plan**: `GET /api/extensions/proposals/peek-tool/plan` previews the admission verdict (`admitted`; enforced: read via `host-primitive-scope`).
+  3. **Host Admission**: `POST /api/extensions/admit` with `x-voicebox-host-token` admits the descriptor (`admitted`); requests without the host token fail with HTTP 403 (`host-token-required`).
+  4. **Invoke**: `"run the tool peek"` dispatches `tool` → `callTool("peek")` in `lib/extensions.mjs` (`ok: true`, files `["hello.txt"]`).
+  5. **Inventory**: `GET /api/extensions` lists `peek-tool` with declared capabilities `[read]`, enforcement `{"read":"host-primitive-scope"}`, and tools `[peek]`.
 
-**The same loop, making a tool and then calling it** (driven, in this order):
-1. `"create a tool called peek that lists files"` → verb `make-tool` → `proposed tool 'peek-tool'`, state `pending` — a **file** under the extension workspace's `proposals/`, not loaded.
-2. `GET /api/extensions/proposals/peek-tool/plan` → the gate would say `admitted`; enforced: read via `host-primitive-scope`.
-3. `POST /api/extensions/admit {id, confirm: true, decision: "admit"}` **with the host token** (the 0600 file in the host's extension directory) → `admitted`. Without the token → HTTP 403 `host-token-required`.
-4. `"run the tool peek"` → verb `tool` → `callTool("peek")` in `lib/extensions.mjs` → `ok: true`, files `["hello.txt"]`.
-5. `GET /api/extensions` now lists `peek-tool`: declared `read`, enforced `{"read":"host-primitive-scope"}`, tools `peek`.
-
-**One root**: the admitted tool listed `["hello.txt"]` — the same root the turn wrote `hello.txt` into.
+**Unified Workspace Root**: Admitted file extensions operate on the active project root (`["hello.txt"]`).
 <!-- END GENERATED: loop -->
 
-If an admitted descriptor later fails to load (boot or reload — the gate re-runs at load, fail
-closed), it is never silently missing: the inventory answers with `failedLoads` — the id, the
-gate's own rule (`exec-absent`, `no-tools`, `bad-tool-name`, `duplicate-tool`), why, and the next
-action — and the Extensions panel shows an **Approved, not running** row for it. A file that no
-longer parses is `unreadable`; a recorded admission whose file was DELETED is `descriptor-missing`
-(the load walks the directory AND diffs the ledger, so no admitted id can fall out of every list).
-Fix the descriptor, re-admit, and the row leaves the inventory
-(`tests/extension-init-errors.test.mjs`); the panel itself is pinned by
-(`tests/extensions-ui.test.mjs`).
+### Extension Registry Integrity at Startup
+When the server starts or reloads the extension registry, `lib/extensions.mjs` re-runs the admission gate (`core/extensions.ts`) on every admitted descriptor and cross-checks `.ledger.jsonl`:
+- Any admitted descriptor that fails validation, fails JSON parsing (`unreadable`), or was deleted from disk (`descriptor-missing`) is reported in `failedLoads` on `GET /api/extensions` and displayed in the Extensions UI as **Approved, not running** (`tests/extension-init-errors.test.mjs`, `tests/extensions-ui.test.mjs`).
 
-## The tool path — which words reach a tool
+---
+
+## 5. Input Paths & Tool Surface
 
 <!-- BEGIN GENERATED: tool-path — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
-**Three ways words reach this server; all reach the shared executor.**
+User input reaches the shared action executor through three paths:
 
-| path | wired today | what carries the words | what runs |
+| Input Path | Active | Transport | Execution Pipeline |
 |---|---|---|---|
-| typed in the composer | yes | `public/fused.js` → `POST /api/turn` | `resolveTurn()` (`lib/resolver.mjs`, provider `script`) → `execute()` (`server.mjs`) → for tools, `callTool()` (`lib/extensions.mjs`) |
-| dictated (browser `SpeechRecognition`, no key) | yes — the same route | `public/fused.js` → `POST /api/turn` | the same |
-| spoken to the live model | audio yes; tools **yes** | `public/live-voice.js` → `/live` → `lib/live-session.mjs` → the provider | provider tool call → `commandToAction()` → `execute()` → correlated tool response — and the server tells the page (`{type:"tool"}`), which re-reads the file list so a file the model wrote appears as it arrives |
+| **Text Composer** | Yes | `public/fused.js` → `POST /api/turn` | `resolveTurn()` (`lib/resolver.mjs`, default `script`) → `execute()` (`server.mjs`) → `callTool()` (`lib/extensions.mjs`) |
+| **Browser Dictation** (`SpeechRecognition`) | Yes | `public/fused.js` → `POST /api/turn` | Same pipeline as Text Composer |
+| **Live Voice Audio** | Audio: Yes; Tools: **Yes** | `public/live-voice.js` → `/live` → `lib/live-session.mjs` | Provider tool call → `commandToAction()` → `execute()` → correlated tool response + `{type:"tool"}` UI notification |
 
-What each live handshake declares, captured from the provider with the server's shared command list: `claude` → tools: (not captured); `gemini` → tools: `list_extensions`, `call_extension`, `propose_extension`, `write_file`, `read_file`, `list_files`, `delete_file`, `edit_file`, `diff_file`, `grep_files`, `list_agents`, `delegate_task`, `contact_agent`, `launch_mini_app`, `git_status`, `git_diff`, `git_log`, `inspect_environment`, `undo_last_action`; `openai` → tools: `list_extensions`, `call_extension`, `propose_extension`, `write_file`, `read_file`, `list_files`, `delete_file`, `edit_file`, `diff_file`, `grep_files`, `list_agents`, `delegate_task`, `contact_agent`, `launch_mini_app`, `git_status`, `git_diff`, `git_log`, `inspect_environment`, `undo_last_action`. Extension discovery reads the current registry; invocation goes through the existing admission and runtime bounds.
+**Live Session Tool Declarations**: `claude` declares: (not captured); `gemini` declares: `list_extensions`, `call_extension`, `propose_extension`, `write_file`, `read_file`, `list_files`, `delete_file`, `edit_file`, `diff_file`, `grep_files`, `list_agents`, `delegate_task`, `contact_agent`, `launch_mini_app`, `git_status`, `git_diff`, `git_log`, `inspect_environment`, `undo_last_action`; `openai` declares: `list_extensions`, `call_extension`, `propose_extension`, `write_file`, `read_file`, `list_files`, `delete_file`, `edit_file`, `diff_file`, `grep_files`, `list_agents`, `delegate_task`, `contact_agent`, `launch_mini_app`, `git_status`, `git_diff`, `git_log`, `inspect_environment`, `undo_last_action`.
 
-Verbs the `script` resolver produces, driven: `"create a file called hello.txt with hi"` → `write`, `"read hello.txt"` → `read`, `"list files"` → `list`, `"create a tool called clock that tells the time"` → `make-tool`, `"run the tool clock"` → `tool`. `make-tool` **proposes** (a pending file the host must admit); `tool` calls an **admitted** tool and nothing else.
+**Script Resolver Sample Utterances**: `"create a file called hello.txt with hi"` → `write`, `"read hello.txt"` → `read`, `"list files"` → `list`, `"create a tool called clock that tells the time"` → `make-tool`, `"run the tool clock"` → `tool`.
 <!-- END GENERATED: tool-path -->
 
-## The tool surface — what exists, what it refuses, how to list it
-
 <!-- BEGIN GENERATED: tools — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
-**The default tools are a closed set of 6 primitives** (`PRIMITIVES` in `core/extensions.ts`). A model authors a descriptor that *parameterises* one; it never authors a body, so nothing in the runtime evaluates model-written code.
+**Built-In Extension Primitives** (`6` closed primitives in `core/extensions.ts`; extensions parameterize primitives as pure JSON descriptors rather than executing arbitrary model-authored code):
 
-| primitive | consumes | what the host hands the tool |
+| Primitive | Capability Required | Host-Mediated Interface |
 |---|---|---|
-| `now` | — | nothing — it answers with the clock |
+| `now` | — | Returns current host timestamp |
 | `read-file` | read | a root-scoped read function: paths resolve inside the project root or refuse |
 | `write-file` | write | a root-scoped write function: paths resolve inside the project root, writes are reported and revertible |
 | `list-files` | read | a root-scoped read function: paths resolve inside the project root or refuse |
 | `http-get` | network | a mediated fetch: hosts outside bounds.hosts are refused by name — INCLUDING across redirects, every hop charged to bounds.maxRequests — and the audit records the URL that actually served the bytes |
-| `wasm` | — | nothing — the module closes its own CAPABILITIES (linear memory, zero imports); its bytes are verified at admission and rehashed at every call, and its time and memory are bounded by HOST constants, never by the module's declaration |
+| `wasm` | — | Isolated WebAssembly module verified by SHA-256 digest at admission and invocation under strict host memory and timeout ceilings |
 
-**What no tool can have on the `machine` placement**, asked of the gate itself:
+**Capabilities Prohibited on `machine` Placement**:
 * exec — absent: no mechanism on this placement bounds a spawned child: --allow-run bounds which binary, never what it can do, and a child does not inherit the parent's flags. Admission requires a container that bounds the child.
 * eval — absent: eval is not a tool path (design §1.7): the evaluator bypasses whatever the substrate would otherwise enforce.
 * import — absent: no import boundary on this placement: dynamic import executes fetched code with no flags by default.
 
-**The catalogue** — `catalogue/*.json`, 5 tracked descriptors (strangers' extensions you can sideload). **None is loaded until the host admits it**; the last column is what `admit()` says today:
+**Extension Catalogue (`catalogue/*.json`, 5 descriptors)**:
 
-| id | tools | declares | bounds | the gate's verdict |
+| Extension ID | Tools | Declared Capabilities | Bounds | Admission Verdict |
 |---|---|---|---|---|
 | `brave-search` | `brave_search` → `http-get` | network | hosts: api.search.brave.com; maxRequests: 20 | admitted — network via `mediated-fetch` |
 | `mcp-server-local` | `mcp_list_tools` → `process` | exec | command: npx -y @modelcontextprotocol/server-filesystem /tmp | **refused** `exec-absent` |
@@ -175,165 +132,94 @@ Verbs the `script` resolver produces, driven: `"create a file called hello.txt w
 | `notes` | `read_notes` → `read-file` | read | — | admitted — read via `host-primitive-scope` |
 | `web-search` | `web_search` → `http-get` | network | hosts: api.duckduckgo.com; maxRequests: 5 | admitted — network via `mediated-fetch` |
 
-**What it refuses, by name** — literal refusal declarations collected from these sources:
-* the gate (`core/extensions.ts`): `absent-capability`, `bad-tool-name`, `capability-unmediated`, `duplicate-tool`, `eval-not-a-tool-path`, `exec-absent`, `network-unbounded`, `no-tools`, `under-declared`, `unknown-capability`, `unknown-primitive`, `unsupported-abi`
-* the routes and the root seam (`server.mjs`, `core/root.ts`, `browser/acts.ts`): `adapter-not-configured`, `approval-invalid-id`, `approval-json-required`, `audit-unreadable`, `bad-answer`, `bad-request`, `bearer-refused`, `bounds-invalid`, `cannot-delete-directory`, `cannot-delete-local`, `cross-environment-unauthorized`, `dotfile-refused`, `environment-not-paired`, `environment-unknown`, `environment-unreachable`, `exec-threw`, `extension-not-admitted`, `git-failed`, `host-token-refused`, `host-token-required`, `loopback-auth-disabled`, `loopback-unauthenticated`, `mini-app-timeout`, `mini-app-unreachable`, `missing-argument`, `missing-content`, `no-project`, `not-a-directory`, `not-a-git-repo`, `not-found`, `not-supported-in-browser`, `nothing-to-undo`, `outside-root`, `pairing-revoked`, `path-missing`, `pattern-not-found`, `pattern-not-unique`, `probe-failed`, `protected-audit`, `provider-not-configured`, `root-not-mine`, `root-not-reachable-from-here`, `root-unreachable`, `server-error`, `task-root-unavailable`, `unauthenticated-call`, `undo-failed`, `unknown-command`, `unknown-environment`, `unknown-mini-app-tool`, `unknown-root-kind`, `unknown-verb`, `unreadable`, `write-error`
-* admitted tools at run time (`lib/extensions.mjs`): `approval-audit-unwritable`, `approval-no-proposal`, `approval-plan-changed`, `approval-unavailable`, `bad-descriptor`, `bad-redirect`, `bad-tool-name`, `bounds-invalid`, `descriptor-missing`, `extension-not-admitted`, `fetch-failed`, `gate-refused-at-load`, `invalid-id`, `missing-description`, `missing-name`, `network-unbounded`, `no-tools`, `outside-root`, `over-budget`, `params-invalid`, `params-unknown-tool`, `protected-audit`, `redirect-host-not-allowed`, `redirect-without-location`, `too-many-redirects`, `unknown-primitive`, `unreadable`
-* task admission/readback (`core/tasks.ts`, `lib/tasks.mjs`): `agent-environment-mismatch`, `agent-not-configured`, `agent-required`, `executor-unavailable`, `invalid-task`, `invalid-task-address`, `invalid-task-context`, `task-audit-unavailable`, `task-authority-field`, `task-call-id-conflict`, `task-call-id-required`, `task-cancelled`, `task-capacity-exhausted`, `task-context-unavailable`, `task-deadline`, `task-environment-changed`, `task-environment-unverified`, `task-input-over-budget`, `task-invalid-result`, `task-not-found`, `task-not-running`, `task-output-over-budget`, `task-owner-mismatch`, `task-owner-unconfirmed`, `task-owner-unverified`, `task-persistence-failed`, `task-root-replaced`, `task-root-unavailable`, `unbounded-executor`, `unknown-tool`, `unsupported-runtime-capability`
+**Named Refusal Codes by Subsystem**:
+* **Extension admission gate (`core/extensions.ts`)**: `absent-capability`, `bad-tool-name`, `capability-unmediated`, `duplicate-tool`, `eval-not-a-tool-path`, `exec-absent`, `network-unbounded`, `no-tools`, `under-declared`, `unknown-capability`, `unknown-primitive`, `unsupported-abi`
+* **HTTP routes and workspace root boundary (`server.mjs`, `core/root.ts`, `browser/acts.ts`)**: `adapter-not-configured`, `approval-invalid-id`, `approval-json-required`, `audit-unreadable`, `bad-answer`, `bad-request`, `bearer-refused`, `bounds-invalid`, `cannot-delete-directory`, `cannot-delete-local`, `cross-environment-unauthorized`, `dotfile-refused`, `environment-not-paired`, `environment-unknown`, `environment-unreachable`, `exec-threw`, `extension-not-admitted`, `git-failed`, `host-token-refused`, `host-token-required`, `loopback-auth-disabled`, `loopback-unauthenticated`, `mini-app-timeout`, `mini-app-unreachable`, `missing-argument`, `missing-content`, `no-project`, `not-a-directory`, `not-a-git-repo`, `not-found`, `not-supported-in-browser`, `nothing-to-undo`, `outside-root`, `pairing-revoked`, `path-missing`, `pattern-not-found`, `pattern-not-unique`, `probe-failed`, `protected-audit`, `provider-not-configured`, `root-not-mine`, `root-not-reachable-from-here`, `root-unreachable`, `server-error`, `task-root-unavailable`, `unauthenticated-call`, `undo-failed`, `unknown-command`, `unknown-environment`, `unknown-mini-app-tool`, `unknown-root-kind`, `unknown-verb`, `unreadable`, `write-error`
+* **Extension runtime (`lib/extensions.mjs`)**: `approval-audit-unwritable`, `approval-no-proposal`, `approval-plan-changed`, `approval-unavailable`, `bad-descriptor`, `bad-redirect`, `bad-tool-name`, `bounds-invalid`, `descriptor-missing`, `extension-not-admitted`, `fetch-failed`, `gate-refused-at-load`, `invalid-id`, `missing-description`, `missing-name`, `network-unbounded`, `no-tools`, `outside-root`, `over-budget`, `params-invalid`, `params-unknown-tool`, `protected-audit`, `redirect-host-not-allowed`, `redirect-without-location`, `too-many-redirects`, `unknown-primitive`, `unreadable`
+* **Task delegation and lifecycle (`core/tasks.ts`, `lib/tasks.mjs`)**: `agent-environment-mismatch`, `agent-not-configured`, `agent-required`, `executor-unavailable`, `invalid-task`, `invalid-task-address`, `invalid-task-context`, `task-audit-unavailable`, `task-authority-field`, `task-call-id-conflict`, `task-call-id-required`, `task-cancelled`, `task-capacity-exhausted`, `task-context-unavailable`, `task-deadline`, `task-environment-changed`, `task-environment-unverified`, `task-input-over-budget`, `task-invalid-result`, `task-not-found`, `task-not-running`, `task-output-over-budget`, `task-owner-mismatch`, `task-owner-unconfirmed`, `task-owner-unverified`, `task-persistence-failed`, `task-root-replaced`, `task-root-unavailable`, `unbounded-executor`, `unknown-tool`, `unsupported-runtime-capability`
 
-**Listable at run time** — `GET /api/extensions` answers `{ placement, extensions, proposals, present, failedLoads, catalogueCount }` (probed: placement `machine`, catalogueCount 5); `GET /api/extensions/catalogue` previews the gate's verdict on every stranger before anything is staged; `GET /api/extensions/{proposals|catalogue}/<id>/plan` is the disclosure — source, declared, enforced-by-which-mechanism, what it gets, what it cannot have — before any decision.
-
-**What the process itself can reach** — `GET /api/probe` runs `tools/sandbox-probe.mjs` on this environment and answers an **observed** report (probed: HTTP 200, sections `identity`, `sandboxHints`, `filesystem`, `limits`, `tools`, `network`), cached with its `when` and recorded as an activity in the environment's own audit. It reports files, network and limits as facts with the method beside them — a different question from "which tools are admitted", answered by a different instrument.
-
-**Admission is the host's act**, probed from where the page stands: `POST /api/extensions/admit` with no token → HTTP 403, `host-token-required`.
+**Runtime Inspection & Admission Endpoints**:
+* `GET /api/extensions`: Returns `{ placement, extensions, proposals, present, failedLoads, catalogueCount }` (placement: `machine`, catalogueCount: 5).
+* `GET /api/extensions/catalogue`: Previews admission verdicts for all catalogue descriptors.
+* `GET /api/extensions/{proposals|catalogue}/<id>/plan`: Returns capability and enforcement disclosure prior to admission.
+* `GET /api/probe`: Runs `tools/sandbox-probe.mjs` and returns an observed environment report (HTTP 200; sections: `identity`, `sandboxHints`, `filesystem`, `limits`, `tools`, `network`).
+* `POST /api/extensions/admit`: Requires `x-voicebox-host-token` (unauthenticated requests fail with HTTP 403 `host-token-required`).
 <!-- END GENERATED: tools -->
 
-## Configuration — every variable the process reads
+---
+
+## 6. Environment Variables & Configuration
 
 <!-- BEGIN GENERATED: config — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
-Every environment variable the server and its libraries read, and where:
+Environment variables read by the server and runtime libraries:
 
-| variable | read in | what it does |
+| Variable | Read In | Description |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | `lib/live-providers/claude.mjs`, `lib/pi-acp.mjs`, `lib/resolver.mjs` | the pi adapter child's DELIBERATE pass-through (voicebox-beads-cpbr, measured): pi's anthropic provider falls back to this ambient key when the auth store has no anthropic entry — the mechanism string in `lib/pi-acp.mjs` names it present/absent per host; scoping it out makes anthropic-model delegations refuse `model-unsupported` (unlike nz60's claude child, where the key is an override and is deleted) |
-| `BRAVE_API_KEY` | `lib/extensions.mjs` | the Brave Search API subscription token used by `callHttp` when an extension declares `api.search.brave.com` — without it that call refuses by name (`api-key-missing`) |
-| `FORCE_COLOR` | `lib/logger.mjs` | standard terminal colour override (`0` disables ANSI colours in `lib/logger.mjs`, non-zero enables them even when stdout is not a TTY) |
-| `GEMINI_API_KEY` | `lib/live-providers/gemini.mjs`, `lib/resolver.mjs`, `server.mjs` | read by TWO things with different refusals: the live session refuses to start by name, and the gemini turn resolver answers `unresolved` saying it has no key |
-| `LIVE_PROVIDER` | `lib/live-session.mjs`, `server.mjs` | the OLD NAME of `VOICEBOX_LIVE_PROVIDER`, honoured for one release |
-| `NODE_DISABLE_COLORS` | `lib/logger.mjs` | Node's built-in colour disable flag — honoured by `lib/logger.mjs` alongside `NO_COLOR` |
-| `NO_COLOR` | `lib/logger.mjs` | standard terminal colour override — when set to a non-empty value, `lib/logger.mjs` strips ANSI colour sequences |
-| `OPENAI_API_KEY` | `lib/live-providers/openai.mjs`, `lib/resolver.mjs`, `server.mjs` | the OpenAI Realtime key — without it that provider refuses to start, by name |
-| `PATH` | `lib/claude-acp.mjs` | the executable search path — also inherited by task-adapter children (the claude adapter resolves its pinned `npx` through it) |
-| `PORT` | `server.mjs` | the port the server binds (default 8787) |
-| `VOICEBOX_ACP_ADAPTER` | `lib/pi-acp.mjs` | path or command override for the `pi-acp` stdio adapter binary in `lib/pi-acp.mjs` |
-| `VOICEBOX_ACP_PI` | `lib/pi-acp.mjs` | path or command override for the `pi` coding agent CLI used by `lib/pi-acp.mjs` |
-| `VOICEBOX_BIND_DEADLINE_MS` | `server.mjs` | how long to keep retrying before giving up by name |
-| `VOICEBOX_BIND_RETRY_MS` | `server.mjs` | how often to retry a bind that lost the port race |
-| `VOICEBOX_CLAUDE_CLI` | `lib/claude-acp.mjs` | the claude CLI the adapter child is told to execute (exported to it as `CLAUDE_CODE_EXECUTABLE`); unset resolves the user-installed CLI, else the adapter-bundled binary |
-| `VOICEBOX_CLAUDE_KEEP_API_KEY` | `lib/claude-acp.mjs` | opt-back for the claude-code adapter child env: set to `1` to keep the host's `ANTHROPIC_API_KEY`. By default that key is DELETED from the child — an inherited key overrides claude.ai login and can stall the prompt — the host's own environment is never mutated, and the test asserts the key is ABSENT rather than present-with-no-value, because those are different child environments (voicebox-beads-nz60) |
-| `VOICEBOX_ENABLE_STUB_PROVIDER` | `server.mjs` | registers the key-free `stub` live provider for proofs (it echoes the microphone back at 0.3 gain; no vendor, no network, no key). OFF by default, so it is never offered in the provider list a person chooses from (voicebox-beads-ldxa) |
-| `VOICEBOX_EXTENSIONS_DIR` | `lib/state-dirs.mjs` | the host's extension directory: admitted descriptors, `.host-token` (0600), `.ledger.jsonl`, and `.pairings.json` (the bearer custody store — outside every root) |
-| `VOICEBOX_HARNESS` | `server.mjs` | selects the host task adapter (`pi` enables the Pi ACP task adapter in `server.mjs`; unset leaves no default adapter configured) |
-| `VOICEBOX_HELLO_BOUND_MS` | `server.mjs` | how long to wait for a hello frame on /channel or /live before refusing (default 5000ms) |
-| `VOICEBOX_INSTANCE` | `server.mjs` | this writer's name in the active root's shared log (default `machine`) |
-| `VOICEBOX_LIVE_PROVIDER` | `lib/live-session.mjs`, `server.mjs` | the live transport's fallback when the session passes no provider; `/live` passes the agent-settings provider explicitly — **not** the turn resolver |
-| `VOICEBOX_LOOPBACK_AUTH` | `server.mjs` | set to `1` to turn on the loopback session gate (docs/13 §4, docs/18): the page and the APIs answer only with the HttpOnly `SameSite=Strict` session cookie that a one-time bootstrap ticket mints — the ticket's URL is printed at startup, or minted from the shell via `POST /api/bootstrap` with the host token. Default unset serves the page openly (the 5c1 surface). The session secret is per-process and in-memory: a restart invalidates every issued cookie, and the remedy is the URL the new process printed |
-| `VOICEBOX_OPENAI_INPUT_TRANSCRIPTION` | `lib/live-providers/openai.mjs` | set to `1` (or pass `inputTranscription: true` to `createOpenAIProvider`) to enable `gpt-4o-mini-transcribe` input audio transcription in the OpenAI Realtime session handshake |
-| `VOICEBOX_PROVIDER` | `server.mjs` | the OLD NAME of `VOICEBOX_RESOLVER`, honoured for one release: a shell that exports it keeps working and gets a line on stderr |
-| `VOICEBOX_RESOLVER` | `server.mjs` | which TURN resolver answers `POST /api/turn` (default `script`) — **not** the live provider, which is a different concept |
-| `VOICEBOX_SANDBOX_HOMES` | `lib/state-dirs.mjs` | where a fence's writable home is bound from (default `~/sandbox-homes/<key>`) — the one place a fenced environment may write. Must live OUTSIDE /tmp: an L1.5 unit's PrivateTmp hides /tmp in its namespace and a home there fails to bind (status 226/NAMESPACE) |
-| `VOICEBOX_WASM_SHELF_DIR` | `lib/state-dirs.mjs` | directory holding the digest-pinned WASM tool shelf (`manifest.json` and `.wasm` modules; default `~/.isocan/modules/wasm-tools`) |
-| `VOICEBOX_WORKSPACE` | `lib/state-dirs.mjs` | declares a machine root at boot — a decision, not a default — and is where the extension system keeps `proposals/` and `audit.jsonl` |
+| `ANTHROPIC_API_KEY` | `lib/live-providers/claude.mjs`, `lib/pi-acp.mjs`, `lib/resolver.mjs` | Anthropic API key used by the `claude` resolver/provider and forwarded to the `pi-acp` adapter as a fallback when no store credential exists (can also be configured in the UI Settings dialog). |
+| `BRAVE_API_KEY` | `lib/extensions.mjs` | Brave Search API subscription token used by `http-get` extensions targeting `api.search.brave.com`. |
+| `FORCE_COLOR` | `lib/logger.mjs` | Terminal color override (`0` disables ANSI colors in `lib/logger.mjs`; non-zero enables them when stdout is not a TTY). |
+| `GEMINI_API_KEY` | `lib/live-providers/gemini.mjs`, `lib/resolver.mjs`, `server.mjs` | Google Gemini API key for Gemini Live voice sessions and the `gemini` text turn resolver (can also be configured in the UI Settings dialog). |
+| `LIVE_PROVIDER` | `lib/live-session.mjs`, `server.mjs` | Deprecated alias for `VOICEBOX_LIVE_PROVIDER`, retained for backward compatibility. |
+| `NODE_DISABLE_COLORS` | `lib/logger.mjs` | Node.js built-in flag that disables ANSI terminal colors alongside `NO_COLOR`. |
+| `NO_COLOR` | `lib/logger.mjs` | Disables ANSI color sequences in `lib/logger.mjs` when set to a non-empty value. |
+| `OPENAI_API_KEY` | `lib/live-providers/openai.mjs`, `lib/resolver.mjs`, `server.mjs` | OpenAI API key for OpenAI Realtime voice sessions and the `openai` text turn resolver (can also be configured in the UI Settings dialog). |
+| `PATH` | `lib/claude-acp.mjs` | System executable search path, also inherited by task-adapter child processes. |
+| `PORT` | `server.mjs` | HTTP server port bound on `127.0.0.1` (default `8787`). |
+| `VOICEBOX_ACP_ADAPTER` | `lib/pi-acp.mjs` | Path or command override for the `pi-acp` stdio adapter binary in `lib/pi-acp.mjs`. |
+| `VOICEBOX_ACP_PI` | `lib/pi-acp.mjs` | Path or command override for the `pi` coding agent CLI used by `lib/pi-acp.mjs`. |
+| `VOICEBOX_BIND_DEADLINE_MS` | `server.mjs` | Maximum duration in milliseconds to retry binding the server port before failing. |
+| `VOICEBOX_BIND_RETRY_MS` | `server.mjs` | Interval in milliseconds between port bind retries at startup. |
+| `VOICEBOX_CLAUDE_CLI` | `lib/claude-acp.mjs` | Path override for the Claude Code CLI executable (`CLAUDE_CODE_EXECUTABLE`) used by `lib/claude-acp.mjs`. |
+| `VOICEBOX_CLAUDE_KEEP_API_KEY` | `lib/claude-acp.mjs` | Set to `1` to retain `ANTHROPIC_API_KEY` in the Claude Code adapter child environment (omitted by default so CLI login takes precedence). |
+| `VOICEBOX_ENABLE_STUB_PROVIDER` | `server.mjs` | Set to `1` to register the key-free `stub` live voice provider for local audio testing. |
+| `VOICEBOX_EXTENSIONS_DIR` | `lib/state-dirs.mjs` | Host state directory storing admitted extensions, `.host-token`, `.ledger.jsonl`, `.pairings.json`, `.api-keys.json`, and `.harness-settings.json` (mode `0600`). |
+| `VOICEBOX_HARNESS` | `server.mjs` | Default host coding agent harness (`pi` or `claude`; can also be switched at runtime in the Harnesses UI dialog). |
+| `VOICEBOX_HELLO_BOUND_MS` | `server.mjs` | Timeout in milliseconds to receive an authentication `hello` frame on `/channel` or `/live` (default `5000`). |
+| `VOICEBOX_INSTANCE` | `server.mjs` | Writer identifier recorded in the active workspace's `.audit/<writer>.jsonl` log (default `machine`). |
+| `VOICEBOX_LIVE_PROVIDER` | `lib/live-session.mjs`, `server.mjs` | Fallback live voice provider (`gemini`, `openai`, or `claude`) when the client session does not specify one. |
+| `VOICEBOX_LOOPBACK_AUTH` | `server.mjs` | Set to `1` to require a single-use bootstrap ticket (`?bootstrap=<ticket>`) and `HttpOnly` session cookie for local browser access. |
+| `VOICEBOX_OPENAI_INPUT_TRANSCRIPTION` | `lib/live-providers/openai.mjs` | Set to `1` to enable `gpt-4o-mini-transcribe` input audio transcription in the OpenAI Realtime session handshake. |
+| `VOICEBOX_PROVIDER` | `server.mjs` | Deprecated alias for `VOICEBOX_RESOLVER`, retained for backward compatibility. |
+| `VOICEBOX_RESOLVER` | `server.mjs` | Default text turn resolver used by `POST /api/turn` (`script`, `gemini`, `openai`, or `claude`; default `script`). |
+| `VOICEBOX_SANDBOX_HOMES` | `lib/state-dirs.mjs` | Base directory for fenced sandbox home directories (default `~/sandbox-homes/<key>`, located outside `/tmp` for `PrivateTmp` compatibility). |
+| `VOICEBOX_WASM_SHELF_DIR` | `lib/state-dirs.mjs` | Directory containing the digest-pinned WebAssembly tool shelf (`manifest.json` and `.wasm` binaries; default `~/.isocan/modules/wasm-tools`). |
+| `VOICEBOX_WORKSPACE` | `lib/state-dirs.mjs` | Declares an active machine project root at startup and stores extension proposals (`proposals/`) and extension audit logs (`audit.jsonl`). |
 <!-- END GENERATED: config -->
 
-## The routes, as they answer
+---
+
+## 7. HTTP Routes & Frontend Scripts
 
 <!-- BEGIN GENERATED: routes — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
-The zero-dependency server (`server.mjs`, `node:http`) binds **127.0.0.1** and serves:
+The HTTP server (`server.mjs`, built on `node:http`) binds **127.0.0.1** and serves the core routes below:
 
-| method | path | probed status |
+| Method | Route | Probed Status |
 |---|---|---|
 | `GET` | `/` | 200 |
 | `GET` | `/api/health` | 200 |
 | `GET` | `/api/files` | 200 |
 | `POST` | `/api/turn` | 200 |
 
-Anything else that exists under `public/` is served from there (`GET /static` and a fall-through), which is how the page, its scripts and the styles arrive. `/api/health` answers `provider: "script"`, `declared: false` and `root: { kind, path }` for the ACTIVE project root — which the environment declares (`POST /api/root`); the loop has no root of its own, and refuses by name (`root-not-declared`) until one is declared.
+Static frontend assets are served from `public/`. `GET /api/health` reports the active turn resolver (`provider: "script"`), whether a workspace root is declared (`declared: false`), and the active `root: { kind, path }` configured via `POST /api/root`. Before a root is declared, root-scoped file operations return `root-not-declared`.
 
 A WEBSOCKET UPGRADE ON /live IS ACCEPTED (101) — the zero-dependency server owns it.
 <!-- END GENERATED: routes -->
 
-## What the page actually loads
-
 <!-- BEGIN GENERATED: page — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
-The page loads `fused.js` and `pip-mic.mjs` and `live-voice.js` from `public/`.
-Audio worklets loaded by that code: `pcm-worklet.js`.
+`public/index.html` loads `fused.js`, `pip-mic.mjs`, `live-voice.js` from `public/`.
+AudioWorklet modules loaded by the frontend audio engine: `pcm-worklet.js`.
 
-`verify.mjs` sits in `public/` but is **not** loaded by `index.html`; it is a support script, not part of the page's load set.
+`verify.mjs` resides in `public/` as a standalone verification utility and is not loaded by `index.html`.
 <!-- END GENERATED: page -->
 
-## The audio path, tonight
+---
 
-<!-- BEGIN GENERATED: live-session — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
-`lib/live-session.mjs` is present. Registered live providers, with the model each one's handshake names (captured from the provider against a recording transport — never dialed): `claude` → `(registered, but this check has no capture for it)`, `gemini` → `models/gemini-3.8-live`, `openai` → `gpt-realtime`. The library fallback is `gemini`, overridable by `VOICEBOX_LIVE_PROVIDER`; the server's `/live` route instead passes the agent-settings provider explicitly.
-<!-- END GENERATED: live-session -->
+## 8. Subsystem Ownership & Boundaries
 
-## Where each file's authority lies
-
-Hand-written addition (not generated; voicebox-beads-hmco): **the ACP timeout ceiling is per-adapter, named in the bounds contract.** `lib/acp-client.mjs` owns the client's bounds: pi-acp keeps its 60s ceiling; the claude-code adapter declares 120s (`CLAUDE_ACP_TIMEOUT_CEILING_MS` in `lib/claude-acp.mjs`) because a warm claude turn does not settle inside pi's clamp (measured). Requested deadlines clamp to the named ceiling, the ceiling itself is meta-capped at 600s, and a timeout above the ceiling refuses as unbounded — unbounded executors stay impossible at every layer.
-
-- **`server.mjs`** is authoritative for the routes and for what an action *does* (it executes verbs, it does
-  not interpret them). It binds `127.0.0.1` only.
-- **`lib/resolver.mjs`** is authoritative for the provider list, and for what a transcript means. Its
-  contract is one function; a new brain is a `registerResolver` call.
-- **`core/`** is authoritative for the tier table, containment and the audit — and it is a **library**: it
-  imports nothing outside `core/`, because two copies of it would drift silently (see the design's N18). <!-- docs-check: names the mechanism -->
-- **`core/harness-config.ts`** is authoritative for the pure, secret-free configured-agent contract, distinguishing runtime ("node" | "deno" | "browser"), configured agent instances (permanent ID, mutable name, model, reach, bounds), and executing environments. PURE: zero imports outside `core/` (self-contained core library).
-- **`lib/state-dirs.mjs`** is authoritative for the state-DIRECTORY facts — `VOICEBOX_WORKSPACE`,
-  `VOICEBOX_EXTENSIONS_DIR`, `VOICEBOX_WASM_SHELF_DIR`, `VOICEBOX_SANDBOX_HOMES` — each with its
-  default and its declaration (`workspaceDir()`, `workspaceDeclared()`, `extensionsDir()`,
-  `wasmShelfDir()`, `sandboxHomesDir()`). It exists because the tree answered them from more than one
-  copy (voicebox-beads-y5k): the extensions directory was resolved twice inside `lib/extensions.mjs`
-  — once as a constant, once as a getter five lines later — and again in `server.mjs` and
-  `tools/approval-code.mjs`; the wasm shelf default was written out three times in one file; and the
-  fence's home root was computed separately by `lib/fence-provider.mjs` and
-  `lib/unit-fence-provider.mjs` (both, rightly, resolved it lazily — the copy was the defect, not the
-  timing). `scripts/single-owner.mjs` derives the facts from this module's own `FACTS` declaration
-  and refuses any other site that reads the variable or rebuilds the default, naming the file and the
-  owner to ask. `tests/single-owner.test.mjs` drives both halves — it adds a fourth copy to a scratch
-  tree and watches the check refuse, then removes it and watches it pass — so "it is green" is not the
-  only thing anybody knows about it. The review question behind the rule: *is this component answering
-  about itself?*
-- **`lib/harness-config.mjs`** is authoritative for the agent registry and loader, supporting both server storage and zero-server browser-local placements, and feeding configured agents into harness discovery. Server storage writes are atomic (temp file + rename) so a failed write cannot truncate the registry; the host-token-gated `GET`/`POST /api/agents` and `PATCH /api/agents/:id` routes are its HTTP surface.
-- **`public/fused.js`** is authoritative for what the page shows, and it **labels its own simulations on the
-  page**: files, the turn submission and the containment refusals are real; the shared view, seen-marks and
-  admission are simulated and say so. A reader should trust that label over any prose, including this file.
-  The room's folder handles (`#open-folder`, `#room-folders-bar`) provide read/write handles persisted in IndexedDB
-  across reloads, supporting several directories at once with a "Restore access" button when permission drops to prompt.
-  **The browser's own storage is the room's default writer when nothing else is** (voicebox-beads-vnos): a
-  file-creation turn with no folder open and no root declared writes into this origin's OPFS `scratchpad/`
-  directory — the same directory `#open-opfs-folder` opens — and the drawer, the count and the turn's line
-  (`wrote X (N bytes observed) in Browser Scratchpad (OPFS)`) all follow it, through the same `writeRoomFile`
-  that reads the bytes back. The fallback fires only when the drawer has no root that can take a write
-  (nothing declared, or a `root-not-declared` listing refusal): a declared root that merely cannot act keeps
-  its named refusal, and a turn that is not a file command still goes to the server. The drawer's two folder
-  doors wear the card surface and the stroked folder glyph (voicebox-beads-9rua), and the drop target states
-  itself — ring, tint, copy — while a folder is over the panel, held by a counted enter/leave pair so the
-  platform's leave-onto-a-child event does not clear it, and cleared by the leave that leaves or the drop
-  itself (voicebox-beads-n4kw).
-  The frontend interface (`public/index.html`, `public/fused.js`, `public/style.css`) is built with modern web
-  platform primitives: native modal `<dialog>` (with `closedby="any"` and unified light-dismiss geometry fallbacks),
-  `container: env-dialog / inline-size` container queries for component-isolated responsive layout, `<search>` landmark
-  semantics, scroll containment (`overscroll-behavior: contain`, `scrollbar-gutter: stable`), keyboard-focusable
-  scrollable regions (`<pre tabindex="0">`), IME composition guards, and GitHub-linked commit references in `#build` alongside an in-room Change log modal dialog (`#changelog-dialog`, backed by `GET /api/changelog` and standalone `changelog.html`).
-  **Folders are navigable** (voicebox-beads-tee): a folder row opens that folder in the same list — the
-  listing IS the navigation, and every row carries its path from the root. A crumb bar says where you are
-  (`root / proposals / drafts`), every ancestor is a 44px button, a parent control leads back, and Enter
-  opens a focused folder row. ONE shared helper (`core/paths.ts` `normaliseRelativeDir`) normalises the
-  path for the server and the page alike, so `proposals//drafts/` is the same folder to both while `..`, a
-  leading slash and any dotfile segment are refused by name; the root itself is answered directly, because
-  a root is not a file name (handing `""` to the file resolver refuses the root — found by driving, on
-  both sides). It holds across root kinds: a machine root is listed by the server, a page-owned root (OPFS
-  or a picked folder) is listed through the page, which resolves the subpath against its own descriptor.
-Zero-server browser delegation (`lib/task-placement.mjs`, `docs/16-zero-server-delegation.md`, `voicebox-beads-8fv.1`)
-  associates placement (`browser`, `machine`, `remote`) with the environment rather than requiring a dedicated server broker;
-  supports `opfs` and `handle` roots portably without hardcoded machine filesystem paths.
-  The room's file list is a `file-explorer` inline-size container: one column by default, two from 36rem,
-  with long names TRUNCATED to one line (`white-space: nowrap` plus an ellipsis, voicebox-beads-y4c2) so a
-  name can never make its row taller than its neighbours — the disk's name stays verbatim in the
-  element's text and in the button's accessible name, so truncation is a rendering fact and never a data
-  one. Its scroll area is bounded to 40svh/24rem with `overflow-y: auto` (voicebox-beads-r2tn) so a
-  populated list does not keep growing through the room. Folders carry their own icon and a tinted card
-  (voicebox-beads-35eg) — cues that survive greyscale, unlike weight or colour alone. Selection, root
-  provenance, arrival expiry and folder permissions remain controlled by the existing page logic; CSS
-  changes only their presentation. A failed listing still reveals an explicit recovery link when the page
-  provides one; other failures do not expose file-creation samples. `tests/room-explorer-ui.test.mjs`
-  drives the native controls, layout boundaries and the visible no-project recovery link;
-  `tests/room-file-list-polish.test.mjs` measures the four list facts above on the real page.
-  **Deleting a file** (voicebox-beads-g8y; a compact trash icon inside the file's card since
-  voicebox-beads-io3a) is offered on file rows in the room and in the explorer, and
-  never on folders: a native dialog names the file and the root it will leave, closing it without an
-  answer keeps the file, and the act goes through `DELETE /api/file` → `execute()` → `dispatch()` so a
-  page-owned root is deleted by the page that owns it and the root's own audit records it. The OPFS
-  explorer is the origin's tree, not the project's, so it offers the control only for entries inside the
-  open project and its rows now navigate past the first level (`renderViewAt` had no click wiring).
+- **`server.mjs`**: Owns HTTP routing, WebSocket upgrade gates, and the central action executor (`execute()`). Always binds `127.0.0.1`.
+- **`lib/state-dirs.mjs`**: Single owner for host state directory resolution (`VOICEBOX_WORKSPACE`, `VOICEBOX_EXTENSIONS_DIR`, `VOICEBOX_WASM_SHELF_DIR`, `VOICEBOX_SANDBOX_HOMES`), enforced statically by `scripts/single-owner.mjs` and `tests/single-owner.test.mjs`. Used across `lib/extensions.mjs`, `tools/approval-code.mjs`, `lib/fence-provider.mjs`, and `lib/unit-fence-provider.mjs`.
+- **`lib/acp-client.mjs`, `lib/pi-acp.mjs`, `lib/claude-acp.mjs`**: Own the Agent Client Protocol (ACP) client and stdio adapters. Each adapter enforces bounded execution timeouts (60s default ceiling for Pi; 120s `CLAUDE_ACP_TIMEOUT_CEILING_MS` for Claude Code, meta-capped at 600s).
+- **`core/harness-config.ts` & `lib/harness-config.mjs`**: Own the configured-agent schema and atomic registry persistence (`GET` / `POST /api/agents`, `PATCH /api/agents/:id`), supporting both server and zero-server browser placements (`lib/task-placement.mjs`, [`docs/16-zero-server-delegation.md`](16-zero-server-delegation.md)).
+- **`public/fused.js`**: Owns the browser workspace UI, including:
+  - **Pop-Over Bubble Tray (`#sqeh-deck`)**: Toggles the Files popover (`#sqeh-files-bubble`, `#made-list`), floating File Viewer (`#sqeh-reader-bubble`, `#reader`), Mini-App launcher bubbles (`#sqeh-actions`), and Recent Turns popover (`#sqeh-toggle-history`, `#session`).
+  - **Directory Navigation & File Management**: Uses `normaliseRelativeDir` in `core/paths.ts` for breadcrumb folder navigation (`tests/room-explorer-ui.test.mjs`, `tests/room-file-list-polish.test.mjs`) and confirmation-gated file deletion via `DELETE /api/file`.
