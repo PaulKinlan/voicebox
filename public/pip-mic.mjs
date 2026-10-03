@@ -88,6 +88,19 @@ function readLevel() {
   }
 }
 
+/** Keep Media Session capture and playback state aligned with live voice so automatic PiP can fire on tab hide. */
+function syncMediaSessionCaptureState() {
+  const { capturing } = readLevel();
+  const presence = readPresence();
+  try {
+    navigator.mediaSession?.setMicrophoneActive?.(Boolean(capturing));
+    navigator.mediaSession?.setCameraActive?.(false);
+    if (navigator.mediaSession) {
+      navigator.mediaSession.playbackState = (capturing || presence === "speaking") ? "playing" : "none";
+    }
+  } catch {}
+}
+
 function addKeepOnTopButton(controls) {
   if (!controls.mic || document.getElementById("pip-open")) return;
   const button = document.createElement("button");
@@ -400,7 +413,7 @@ function buildPip(pip, controls) {
   return { micButton, stateText, presenceDot, hint, stop, inFill, outFill, log, input };
 }
 
-async function openPipWindow() {
+async function openPipWindow(options = {}) {
   const controls = pageControls();
   if (!SUPPORTED) {
     controls.voiceState && (controls.voiceState.textContent =
@@ -409,8 +422,15 @@ async function openPipWindow() {
   }
   if (window.__voiceboxPip) { window.__voiceboxPip.focus?.(); return window.__voiceboxPip; }
 
-  // Transient activation comes from the user's click on "Keep on top" — the call is lawful by construction.
-  const pip = await window.documentPictureInPicture.requestWindow({ width: 400, height: 560 });
+  // Transient activation comes from the user's click on "Keep on top" or the browser's auto-PiP/page-hide transition.
+  let pip;
+  try {
+    pip = await window.documentPictureInPicture.requestWindow({ width: 400, height: 560 });
+  } catch (err) {
+    if (options?.reason === "page-hide") return null;
+    throw err;
+  }
+  pip.__openedOnPageHide = Boolean(options?.reason === "page-hide");
   const ui = buildPip(pip, controls);
   window.__voiceboxPip = pip;
 
@@ -450,6 +470,7 @@ async function openPipWindow() {
   const paint = () => {
     const { capturing, input, output } = readLevel();
     const presence = readPresence();
+    syncMediaSessionCaptureState();
     const listening = capturing && !(controls.voiceState?.dataset?.voice === "paused");
     ui.micButton.dataset.listening = String(listening);
     ui.micButton.setAttribute("aria-pressed", String(listening));
@@ -489,10 +510,11 @@ function registerMediaSession() {
   try {
     // If the platform decides we are eligible for automatic PiP, this is what it calls. Registering it
     // makes us a participant; it does NOT make us eligible, and nothing here claims it does.
-    navigator.mediaSession.setActionHandler("enterpictureinpicture", () => { void openPipWindow(); });
+    navigator.mediaSession.setActionHandler("enterpictureinpicture", () => { void openPipWindow({ reason: "page-hide" }); });
     // Mute/unmute in the OS media controls are the natural quick-off — SAME handler as the mic button.
     navigator.mediaSession.setActionHandler("mute", () => { const c = pageControls(); if (readLevel().capturing) c.mic?.click(); });
     navigator.mediaSession.setActionHandler("unmute", () => { const c = pageControls(); if (!readLevel().capturing) c.mic?.click(); });
+    syncMediaSessionCaptureState();
   } catch { /* a browser that does not know an action throws; that is not an error worth surfacing */ }
 }
 
@@ -501,6 +523,20 @@ function start() {
   if (!controls.mic) return;
   addKeepOnTopButton(controls);
   registerMediaSession();
+  controls.mic.addEventListener("click", () => { setTimeout(syncMediaSessionCaptureState, 0); });
+  const ringWrap = document.getElementById("voice-ring-wrap");
+  if (ringWrap) {
+    const ringObserver = new MutationObserver(syncMediaSessionCaptureState);
+    ringObserver.observe(ringWrap, { attributes: true, attributeFilter: ["data-voice"] });
+  }
+  const onPageHidePopOut = (event) => {
+    if (event?.type === "visibilitychange" && document.visibilityState !== "hidden") return;
+    if (!SUPPORTED || window.__voiceboxPip) return;
+    syncMediaSessionCaptureState();
+    void openPipWindow({ reason: "page-hide" });
+  };
+  document.addEventListener("visibilitychange", onPageHidePopOut);
+  window.addEventListener("pagehide", onPageHidePopOut);
 }
 
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
@@ -509,3 +545,4 @@ else start();
 // Exported for the acceptance drive: it must be able to open the window without hunting for a button.
 window.__voiceboxPip = null;
 window.__voiceboxPipOpen = openPipWindow;
+window.__voiceboxPipOnPageHide = () => openPipWindow({ reason: "page-hide" });
