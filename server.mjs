@@ -790,15 +790,74 @@ const serverAgentStorage = {
 };
 const agentRegistry = createAgentRegistry({ storage: serverAgentStorage });
 
+// ── WORK ACTIVITY RING BUFFER & LIVE STREAM (voicebox-beads-okgg, voicebox-beads-5319) ────────
+const MAX_ACTIVITY_ENTRIES = 200;
+const workActivityLog = [];
+let workActivitySeq = 0;
+const channelSockets = new Set();
+
+function broadcastChannel(payload) {
+  const frame = typeof payload === "string" ? payload : JSON.stringify(payload);
+  for (const s of channelSockets) {
+    try { s.send(frame); } catch {}
+  }
+  if (pageSocket && !channelSockets.has(pageSocket)) {
+    try { pageSocket.send(frame); } catch {}
+  }
+  try { runningSession?.socket?.send(frame); } catch {}
+}
+
+function recordWorkActivity({ kind = "work", summary = "", detail = "", file = "", status = "info" } = {}) {
+  if (!summary) return null;
+  const entry = {
+    id: `act_${++workActivitySeq}`,
+    at: new Date().toISOString(),
+    kind: String(kind),
+    summary: String(summary).slice(0, 500),
+    status: String(status),
+    ...(detail ? { detail: String(detail).slice(0, 4000) } : {}),
+    ...(file ? { file: String(file).slice(0, 240) } : {}),
+  };
+  workActivityLog.push(entry);
+  if (workActivityLog.length > MAX_ACTIVITY_ENTRIES) {
+    workActivityLog.splice(0, workActivityLog.length - MAX_ACTIVITY_ENTRIES);
+  }
+  try {
+    broadcastChannel({ type: "activity", entry });
+  } catch {}
+  return entry;
+}
+
 const tasks = createTaskHost({
   environment: SELF_ENVIRONMENT, instance: INSTANCE, boot: BOOT,
   addressKey: readFileSync(path.join(HOST_DIR, ".host-token")),
   root: () => active,
   agentRegistry,
   onUpdate: (view) => {
-    const frame = JSON.stringify({ type: "task", task: view, delivery: view.delivery });
-    try { pageSocket?.send(frame); } catch {}
-    try { runningSession?.socket?.send(frame); } catch {}
+    const status = view.state || view.status;
+    if (status === "running") {
+      recordWorkActivity({
+        kind: "agent",
+        summary: `${view.agent || "agent"}: ${view.progress || "working…"}`,
+        detail: view.output || view.partial || "",
+        status: "info",
+      });
+    } else if (status === "completed") {
+      recordWorkActivity({
+        kind: "agent",
+        summary: `${view.agent || "agent"} completed task`,
+        detail: view.answer || view.summary || view.output || view.progress || "",
+        status: "ok",
+      });
+    } else if (status === "interrupted" || status === "failed" || status === "cancelled") {
+      recordWorkActivity({
+        kind: "agent",
+        summary: `${view.agent || "agent"} ${status}: ${view.refused || view.reason || "stopped"}`,
+        detail: view.detail || view.partial || view.output || view.progress || "",
+        status: "error",
+      });
+    }
+    broadcastChannel({ type: "task", task: view, delivery: view.delivery });
   },
 });
 
@@ -1042,7 +1101,18 @@ function activateHarnessInProcess(harnessId, options = {}) {
     },
     run(args = {}) {
       const target = executorForAgent(args.agentConfig, args.harness ?? args.agent);
-      return target.run(args);
+      const agentLabel = args.agentConfig?.id ?? args.input?.agent ?? args.harness ?? "agent";
+      const wrappedReport = (note) => {
+        try { args.report?.(note); } catch {}
+        if (typeof note === "string" && note.trim()) {
+          recordWorkActivity({
+            kind: "agent",
+            summary: `${agentLabel}: ${note.trim()}`,
+            status: "info",
+          });
+        }
+      };
+      return target.run({ ...args, report: wrappedReport });
     },
   });
   const preset = SUPPORTED_HARNESS_DEFAULTS[harnessId] ?? SUPPORTED_HARNESS_DEFAULTS[normalized];
@@ -1359,6 +1429,7 @@ function revokePairing(envKey) {
       }));
       pageSocket.close(1008, "pairing-revoked");
     } catch {}
+    channelSockets.delete(pageSocket);
     pageSocket = null;
     pageChannel.abandon();
     console.error(`[channel] pairing revoked for '${envKey}' — executor socket closed and calls abandoned`);
@@ -1448,14 +1519,19 @@ async function executeViaPage(action) {
   if (action.verb === "read") {
     const file = observed.name ?? action.name;
     const content = observed.content ?? "";
+    recordWorkActivity({ kind: "file", summary: `read: ${file}`, file, detail: String(content).slice(0, 280), status: "ok" });
     return { ok: true, action: file, file, content, bytes: observed.bytes ?? Buffer.byteLength(content), via: "page", root: active.root, logged: observed.auditSeq ?? null };
   }
   if (action.verb === "delete") {
-    return { ok: true, action: `deleted ${observed.name ?? action.name} — observed by the page`, file: observed.name ?? action.name, via: "page", root: active.root, logged: observed.auditSeq ?? null };
+    const file = observed.name ?? action.name;
+    recordWorkActivity({ kind: "file", summary: `delete: ${file}`, file, detail: "", status: "ok" });
+    return { ok: true, action: `deleted ${file} — observed by the page`, file, via: "page", root: active.root, logged: observed.auditSeq ?? null };
   }
   if (action.verb === "edit") {
+    const file = observed.name ?? action.name;
     const preview = String(action.newText ?? "").slice(0, 280);
-    return { ok: true, action: `edited ${observed.name ?? action.name} (${observed.bytes ?? 0} bytes) — observed by the page`, file: observed.name ?? action.name, bytes: observed.bytes ?? 0, ...(preview ? { preview } : {}), via: "page", root: active.root, logged: observed.auditSeq ?? null };
+    recordWorkActivity({ kind: "file", summary: `edit: ${file}`, file, detail: preview || "", status: "ok" });
+    return { ok: true, action: `edited ${file} (${observed.bytes ?? 0} bytes) — observed by the page`, file, bytes: observed.bytes ?? 0, ...(preview ? { preview } : {}), via: "page", root: active.root, logged: observed.auditSeq ?? null };
   }
   if (action.verb === "diff") {
     return { ok: true, action: `diff ${observed.name ?? action.name}`, file: observed.name ?? action.name, diff: observed.diff ?? "", changed: Boolean(observed.changed), via: "page", root: active.root };
@@ -1467,11 +1543,13 @@ async function executeViaPage(action) {
     return { ok: true, action: `delegated task to ${observed.agent ?? action.agent}`, task: observed.task, address: observed.address, via: "page", root: active?.root ?? null };
   }
   // write — the action line carries the provenance, because this line is what the room prints.
+  const writeFile = observed.name ?? action.name;
   const writePreview = String(action.content ?? "").slice(0, 280);
+  recordWorkActivity({ kind: "file", summary: `${action.verb || "write"}: ${writeFile}`, file: writeFile, detail: writePreview || "", status: "ok" });
   return {
     ok: true,
-    action: `wrote ${observed.name ?? action.name} (${observed.bytes ?? 0} bytes) — observed by the page`,
-    file: observed.name ?? action.name,
+    action: `wrote ${writeFile} (${observed.bytes ?? 0} bytes) — observed by the page`,
+    file: writeFile,
     bytes: observed.bytes ?? Buffer.byteLength(String(action.content ?? "")),
     ...(writePreview ? { preview: writePreview } : {}),
     via: "page",
@@ -2331,6 +2409,12 @@ async function execute(action) {
       declaredAt: new Date().toISOString(),
     };
     liveProjectContext = null;
+    recordWorkActivity({
+      kind: "project",
+      summary: `Active project root set to ${real}`,
+      detail: active.project,
+      status: "ok",
+    });
     const files = readdirSync(real).filter((f) => !f.startsWith("."));
     const subrepos = (await isGitRepo(real)) ? [] : (await discoverGitSubrepos(real)).map((r) => r.dir);
     return {
@@ -2416,6 +2500,13 @@ async function execute(action) {
     const resExec = await runSystemCommand(active.root.path, {
       command: cmdText,
       cwd: effectiveCwd,
+    });
+    const cmdDetail = [resExec.stdout, resExec.stderr, resExec.why].filter(Boolean).join("\n").trim();
+    recordWorkActivity({
+      kind: "command",
+      summary: `$ ${cmdText}`,
+      detail: cmdDetail,
+      status: resExec.ok && resExec.exitCode === 0 ? "ok" : "error",
     });
     if (!resExec.ok && resExec.refused && resExec.refused !== "command-failed") {
       const entry = logAct({ kind: "exec", target: cmdText, tool: "turn" }, "refuse", resExec.refused, "refused", null, action.turn ?? null);
@@ -2791,6 +2882,12 @@ async function execute(action) {
       task: action.task ?? "",
     }, authority);
     if (!admitted.ok) {
+      recordWorkActivity({
+        kind: "agent",
+        summary: `${target.agentId || "agent"} failed: ${admitted.refused || "stopped"}`,
+        detail: admitted.why || "",
+        status: "error",
+      });
       return {
         ok: false,
         refused: admitted.refused,
@@ -2799,8 +2896,13 @@ async function execute(action) {
         root: active.root,
       };
     }
-    try { pageSocket?.send(JSON.stringify({ type: "task", task: admitted.task })); } catch {}
-    try { runningSession?.socket?.send(JSON.stringify({ type: "task", task: admitted.task })); } catch {}
+    recordWorkActivity({
+      kind: "agent",
+      summary: `${admitted.task.agent || "agent"}: working…`,
+      detail: String(action.task ?? "").slice(0, 500),
+      status: "info",
+    });
+    broadcastChannel({ type: "task", task: admitted.task });
     return {
       ok: true,
       action: `delegated task to ${admitted.task.agent} (${admitted.task.address})`,
@@ -2876,7 +2978,7 @@ async function execute(action) {
   // own extensions dir) hands over its secrets — including the admission token —
   // through a read, or loses them to a write over it. Driven chain, 2026-09-20:
   // declare -> read .host-token -> admit.
-  if (["read", "write", "delete", "edit", "diff"].includes(action.verb)) {
+  if (["read", "write", "delete", "edit", "diff", "mkdir"].includes(action.verb)) {
     const relSegments = path.relative(active.root.path, resolved.path).split(path.sep).filter(Boolean);
     if (relSegments.some((seg) => seg.startsWith("."))) {
       const kind = ["read", "diff"].includes(action.verb) ? action.verb : ["write", "edit", "delete"].includes(action.verb) ? action.verb : "write";
@@ -2885,6 +2987,23 @@ async function execute(action) {
     }
   }
   const candidate = resolved.path;
+  if (action.verb === "mkdir") {
+    mkdirSync(candidate, { recursive: true });
+    recordWorkActivity({
+      kind: "file",
+      summary: `mkdir: ${name}`,
+      file: name,
+      detail: "",
+      status: "ok",
+    });
+    return {
+      ok: true,
+      action: `created directory ${name}`,
+      file: name,
+      root: active.root,
+      logged: null,
+    };
+  }
   if (action.verb === "write") {
     // THE WORST OUTCOME THIS SYSTEM CAN PRODUCE, refused here: a write with ABSENT content
     // used to fall into `?? ""` — the existing file was EMPTIED and the result said ok:true,
@@ -2937,6 +3056,13 @@ async function execute(action) {
     });
     const writeBytes = Buffer.byteLength(action.content);
     const writePreview = String(action.content).slice(0, 280);
+    recordWorkActivity({
+      kind: "file",
+      summary: `write: ${name}`,
+      file: name,
+      detail: writePreview || "",
+      status: "ok",
+    });
     entry = logAct({ kind: "write", target: name, tool: "turn" }, "allow", "writes-inside", "ok", observeUnderRoot(name), action.turn ?? null, att?.seq ?? null);
     return {
       ok: true,
@@ -2965,6 +3091,13 @@ async function execute(action) {
       throw e;
     }
     const readBytes = Buffer.byteLength(content);
+    recordWorkActivity({
+      kind: "file",
+      summary: `read: ${name}`,
+      file: name,
+      detail: String(content).slice(0, 280),
+      status: "ok",
+    });
     const entry = logAct({ kind: "read", target: name, tool: "turn" }, "allow", "reads-inside", "ok", observeUnderRoot(name), action.turn ?? null, [{ path: name, bytes: readBytes }]);
     return { ok: true, action: name, file: name, content, bytes: readBytes, root: active.root, logged: entry ? entry.seq : null };
   }
@@ -2988,6 +3121,13 @@ async function execute(action) {
       existedBefore: true,
       previousContent,
       at: new Date().toISOString(),
+    });
+    recordWorkActivity({
+      kind: "file",
+      summary: `delete: ${name}`,
+      file: name,
+      detail: "",
+      status: "ok",
     });
     const entry = logAct({ kind: "delete", target: name, tool: "turn" }, "allow", "deletes-inside", "ok", observeUnderRoot(name), action.turn ?? null, [{ path: name, bytes: stat.size }]);
     return {
@@ -3031,6 +3171,13 @@ async function execute(action) {
     });
     const editBytes = Buffer.byteLength(updated);
     const editPreview = String(updated || action.newText || "").slice(0, 280);
+    recordWorkActivity({
+      kind: "file",
+      summary: `edit: ${name}`,
+      file: name,
+      detail: editPreview || "",
+      status: "ok",
+    });
     const entry = logAct({ kind: "edit", target: name, tool: "turn" }, "allow", "edits-inside", "ok", observeUnderRoot(name), action.turn ?? null, [{ path: name, bytes: editBytes }]);
     return {
       ok: true,
@@ -3303,6 +3450,12 @@ const routes = {
     return;
   },
 
+  "GET /api/activity": (req, res, url) => json(res, 200, { ok: true, entries: workActivityLog }),
+  "DELETE /api/activity": (req, res, url) => {
+    workActivityLog.length = 0;
+    return json(res, 200, { ok: true, entries: [] });
+  },
+
   // UN-DECLARE: back to `root-not-declared`, deliberately and by request. The gate asserts that
   // state positively, and a state you cannot return to is one you can only test once per process —
   // and for a person, "close the project" has to have an expression that is not "restart the server".
@@ -3321,6 +3474,12 @@ const routes = {
     const previous = active;
     active = null;
     liveProjectContext = null;
+    recordWorkActivity({
+      kind: "project",
+      summary: "Cleared active project root",
+      detail: previous ? `${previous.project} (${previous.root?.path ?? previous.root?.kind ?? ""})` : null,
+      status: "ok",
+    });
     return json(res, 200, {
       ok: true,
       declared: false,
@@ -3342,26 +3501,79 @@ const routes = {
             refMtime = statSync(path.join(ROOT, ".git", headRaw.slice(5))).mtimeMs;
           } catch {}
         }
-        cacheKey = `${headRaw}:${headSt.mtimeMs}:${refMtime}`;
+        cacheKey = `${headRaw}:${headSt.mtimeMs}:${refMtime}:v2`;
       } catch {}
       if (cacheKey && changelogCache.key === cacheKey && changelogCache.commits) {
         return json(res, 200, { ok: true, repo: "https://github.com/PaulKinlan/voicebox", commits: changelogCache.commits });
       }
-      const { stdout: raw } = await execFileAsync("git", ["log", "-n", "30", "--pretty=format:%H\t%h\t%s\t%an\t%aI\t%as"], {
-        cwd: ROOT,
-        encoding: "utf8",
-      });
-      const commits = raw.trim().split("\n").filter(Boolean).map((line) => {
-        const [sha, shortSha, subject, author, isoDate, date] = line.split("\t");
-        return {
-          sha,
-          shortSha,
-          subject,
-          author,
-          date,
-          url: `https://github.com/PaulKinlan/voicebox/commit/${sha}`,
-        };
-      });
+      const { stdout: raw } = await execFileAsync(
+        "git",
+        ["log", "-n", "30", "--pretty=format:%x1e%H%x1f%h%x1f%s%x1f%an%x1f%aI%x1f%as%x1f%b%x1f", "--numstat"],
+        {
+          cwd: ROOT,
+          encoding: "utf8",
+          maxBuffer: 4 * 1024 * 1024,
+        },
+      );
+      const commits = raw
+        .split("\x1e")
+        .map((chunk) => chunk.trim())
+        .filter(Boolean)
+        .map((chunk) => {
+          const [sha = "", shortSha = "", subject = "", author = "", isoDate = "", date = "", rawBody = "", rawStat = ""] = chunk.split("\x1f");
+          const bodyLines = rawBody
+            .split(/\r?\n/)
+            .map((line) => line.trimEnd())
+            .filter((line) => !/^(Docs-checked|Co-authored-by|Signed-off-by):/i.test(line.trim()));
+          const body = bodyLines.join("\n").trim();
+          const statLines = rawStat
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean);
+          let filesChanged = 0;
+          let insertions = 0;
+          let deletions = 0;
+          const files = [];
+          for (const sLine of statLines) {
+            const parts = sLine.split("\t");
+            if (parts.length < 3) continue;
+            const ins = Number.parseInt(parts[0], 10);
+            const del = Number.parseInt(parts[1], 10);
+            const filePath = parts.slice(2).join("\t").trim();
+            filesChanged += 1;
+            if (Number.isFinite(ins)) insertions += ins;
+            if (Number.isFinite(del)) deletions += del;
+            if (filePath && files.length < 12) files.push(filePath);
+          }
+          const prefixMatch = subject.match(/^([a-zA-Z]+)(?:\([^)]+\))?!?:\s*(.+)$/);
+          const rawType = prefixMatch ? prefixMatch[1].toLowerCase() : "";
+          const category =
+            rawType === "feat" ? "feature"
+            : rawType === "fix" ? "fix"
+            : rawType === "perf" ? "performance"
+            : rawType === "docs" ? "docs"
+            : rawType === "refactor" ? "refactor"
+            : rawType === "test" || rawType === "chore" ? "maintenance"
+            : /\b(fix|bug|repair|resolve)\b/i.test(subject) ? "fix"
+            : /\b(add|introduce|support|enable|implement|enrich|make)\b/i.test(subject) ? "feature"
+            : "update";
+          const firstParagraph = body.split(/\n\s*\n/)[0]?.trim() || "";
+          const description = firstParagraph || (files.length > 0 ? `Updated ${files.slice(0, 4).join(", ")}${files.length > 4 ? ` (+${files.length - 4} more)` : ""}` : subject);
+          return {
+            sha,
+            shortSha,
+            subject,
+            author,
+            date,
+            isoDate,
+            category,
+            body,
+            description,
+            stats: { filesChanged, insertions, deletions },
+            files,
+            url: `https://github.com/PaulKinlan/voicebox/commit/${sha}`,
+          };
+        });
       if (cacheKey) {
         changelogCache.key = cacheKey;
         changelogCache.commits = commits;
@@ -3634,6 +3846,12 @@ async function handle(req, res) {
         }
         active = { project, root: { kind: "machine", path: real, environment: SELF_ENVIRONMENT }, declaredAt: new Date().toISOString() };
         liveProjectContext = null; // a folder path means nothing across roots
+        recordWorkActivity({
+          kind: "project",
+          summary: `Active project root set to ${active.root.path}`,
+          detail: active.project,
+          status: "ok",
+        });
         return json(res, 200, {
           ok: true,
           project: active.project,
@@ -3653,6 +3871,12 @@ async function handle(req, res) {
       // response says so, and whether the page that owns them is connected right now.
       active = { project, root: { kind: root.kind, environment: SELF_ENVIRONMENT, ...(root.path ? { path: String(root.path) } : {}), ...(root.id ? { id: String(root.id) } : {}) }, declaredAt: new Date().toISOString() };
       liveProjectContext = null; // a folder path means nothing across roots
+      recordWorkActivity({
+        kind: "project",
+        summary: `Active project root set to ${active.root.kind}:${active.root.path || active.root.id || active.project}`,
+        detail: active.project,
+        status: "ok",
+      });
       const reach = reachableFromEnvironment(active.root, { peer: "machine", environment: SELF_ENVIRONMENT });
       return json(res, 200, {
         ok: true,
@@ -3990,6 +4214,25 @@ async function handle(req, res) {
     const body = await readJson();
     const result = await execute({ verb: "delegate_task", agent: body?.agent, task: body?.task });
     if (!result.ok) return json(res, 400, result);
+    return json(res, 200, result);
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/exec") {
+    const body = await readJson();
+    const command = typeof body?.command === "string" ? body.command : "";
+    const cwd = typeof body?.cwd === "string" && body.cwd.trim() ? body.cwd.trim() : undefined;
+    const result = await execute({ verb: "exec", command, ...(cwd ? { cwd } : {}) });
+    if (!result.ok) {
+      if (result.refused !== "command-refused" && result.refused !== "command-failed" && result.refused !== "command-timed-out") {
+        recordWorkActivity({
+          kind: "command",
+          summary: command ? `exec: ${command}` : "exec",
+          detail: result.why ?? result.refused ?? "Refused",
+          status: "error",
+        });
+      }
+      return json(res, 400, result);
+    }
     return json(res, 200, result);
   }
 
@@ -4520,6 +4763,13 @@ async function handle(req, res) {
       const body = await readJson(65536);
       const requested = Number.isInteger(body?.timeoutMs) ? body.timeoutMs : 10000;
       const result = await callEnvironment(key, "/exec", { method: "POST", body: body ?? {}, timeoutMs: Math.min(Math.max(requested, 100), 60000) + 2000 });
+      const cmdStr = typeof body?.command === "string" ? body.command : Array.isArray(body?.argv) ? body.argv.join(" ") : "/exec";
+      recordWorkActivity({
+        kind: "command",
+        summary: `env(${key}) exec: ${cmdStr}`,
+        detail: [result.body?.stdout, result.body?.stderr, result.body?.why].filter(Boolean).join("\n").slice(0, 600) || null,
+        status: result.body?.ok ? "ok" : "error",
+      });
       return json(res, result.status, result.body);
     }
     if (surface === "git/config" && (req.method === "GET" || req.method === "POST")) {
@@ -4724,6 +4974,7 @@ server.on("upgrade", (req, socket) => {
         console.error(`[channel] a second page connected (${label}) — replacing the first (root-not-mine guards every act)`);
       }
       pageSocket = ws;
+      channelSockets.add(ws);
       console.error(`[channel] the ${label} connected — routed acts have someone to ask`);
       ws.on("message", (data) => {
         if (typeof data !== "string") return; // the channel speaks JSON text; anything else is noise
@@ -4735,6 +4986,7 @@ server.on("upgrade", (req, socket) => {
         pageChannel.deliver(data);
       });
       ws.on("close", () => {
+        channelSockets.delete(ws);
         // Only the CURRENT socket's close empties the chair — an older tab closing must not
         // abandon calls a newer tab could answer.
         if (pageSocket === ws) {
@@ -4744,7 +4996,9 @@ server.on("upgrade", (req, socket) => {
           console.error("[channel] the page disconnected — routed acts will answer no-page until it returns");
         }
       });
-      ws.on("error", () => {});
+      ws.on("error", () => {
+        channelSockets.delete(ws);
+      });
     };
 
     if (claimsToBeTheLocalPageNow) {
