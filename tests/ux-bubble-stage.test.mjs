@@ -347,8 +347,15 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
       `#sqeh-actions must not contain fake placeholder button '${fakeLabel}'`,
     );
   }
-  assert.equal(miniAppBubbles.htmlBubbles.length, 1, "workspace counter.html appears as a real Mini-App bubble in #sqeh-actions");
-  assert.equal(miniAppBubbles.htmlBubbles[0].file, "counter.html", "bubble targets counter.html");
+  assert.ok(
+    miniAppBubbles.htmlBubbles.some((b) => b.file === "counter.html"),
+    "workspace counter.html appears as a real Mini-App bubble in #sqeh-actions",
+  );
+  assert.ok(
+    miniAppBubbles.htmlBubbles.some((b) => b.id === "agent-progress-tracker"),
+    "built-in Agent Progress bubble appears in #sqeh-actions",
+  );
+  assert.equal(miniAppBubbles.htmlBubbles[0].file, "counter.html", "first bubble targets counter.html");
 
   // Click the counter.html Mini-App bubble in #sqeh-actions and verify it mounts #mini-app-container
   await page.evaluate(() => {
@@ -640,6 +647,146 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
     `commit card includes plain-language .commit-description, got '${changelogCardsState.description}' (je4i)`,
   );
   assert.ok(Boolean(changelogCardsState.sha), "commit card preserves .commit-sha link (je4i)");
+
+  // ── 8. Mic Dock Styling/Spacing, Harnesses Dialog, PWA Hooks & Clipboard Commands ──
+  const micDockComparison = await page.evaluate(() => {
+    const mic = document.getElementById("mic");
+    const dock = document.getElementById("mic-dock");
+    if (!mic || !dock) return null;
+    const prevHidden = dock.hidden;
+    dock.hidden = false;
+    const micStyle = getComputedStyle(mic);
+    const dockStyle = getComputedStyle(dock);
+    const dockRect = dock.getBoundingClientRect();
+    const bottomGap = window.innerHeight - dockRect.bottom;
+    dock.hidden = prevHidden;
+    return {
+      micBg: micStyle.backgroundColor,
+      dockBg: dockStyle.backgroundColor,
+      dockBgImage: dockStyle.backgroundImage,
+      micColor: micStyle.color,
+      dockColor: dockStyle.color,
+      bottomGap,
+    };
+  });
+  assert.ok(micDockComparison, "#mic and #mic-dock exist");
+  assert.equal(
+    micDockComparison.dockBg,
+    micDockComparison.micBg,
+    ".mic-dock uses the same var(--card) background color as .mic",
+  );
+  assert.equal(
+    micDockComparison.dockBgImage,
+    "none",
+    ".mic-dock does not use a dark #000 radial-gradient override",
+  );
+  assert.equal(
+    micDockComparison.dockColor,
+    micDockComparison.micColor,
+    ".mic-dock uses the same accent icon color as .mic",
+  );
+  assert.ok(
+    micDockComparison.bottomGap >= 28,
+    `expected .mic-dock at least 28px from bottom edge, got ${micDockComparison.bottomGap}px`,
+  );
+
+  // Verify Harnesses Dialog: no Gemini CLI, includes Antigravity, state legend, Connect/Disconnect buttons, and Agent Progress Tracker
+  await page.evaluate(() => {
+    document.getElementById("harnesses-open")?.click();
+  });
+  await page.waitFor(
+    () => document.querySelectorAll("#harnesses-list .harness-article").length > 0,
+    { label: "harnesses list populated" },
+  );
+  const harnessesAudit = await page.evaluate(() => {
+    const select = document.getElementById("harness-agent-select");
+    const options = select ? [...select.options].map((o) => ({ value: o.value, text: o.textContent?.trim() })) : [];
+    const legend = document.getElementById("harnesses-state-legend");
+    const trackerBtn = document.getElementById("harnesses-open-tracker");
+    const rows = [...document.querySelectorAll("#harnesses-list .harness-article")].map((a) => ({
+      id: a.dataset.harness,
+      title: a.querySelector("h3")?.textContent?.trim(),
+      status: a.querySelector(".harness-badge")?.dataset.status,
+      badgeText: a.querySelector(".harness-badge")?.textContent?.trim(),
+      actionText: a.querySelector(".harness-activate-btn")?.textContent?.trim(),
+    }));
+    document.getElementById("harnesses-close")?.click();
+    return {
+      options,
+      hasLegend: Boolean(legend && legend.querySelectorAll(".harness-legend-item").length >= 3),
+      hasTrackerBtn: Boolean(trackerBtn),
+      rows,
+    };
+  });
+  assert.ok(
+    !harnessesAudit.options.some((o) => o.value === "gemini" || /gemini cli/i.test(o.text ?? "")),
+    "#harness-agent-select must not include Gemini CLI",
+  );
+  assert.ok(
+    harnessesAudit.options.some((o) => o.value === "antigravity" && o.text === "Antigravity"),
+    "#harness-agent-select includes Antigravity",
+  );
+  assert.equal(harnessesAudit.hasLegend, true, "#harnesses-state-legend explains Active, Ready, and Setup needed states");
+  assert.equal(harnessesAudit.hasTrackerBtn, true, "#harnesses-open-tracker button exists inside #harnesses-dialog");
+  assert.ok(
+    !harnessesAudit.rows.some((r) => r.id === "gemini"),
+    "#harnesses-list must not render a gemini row",
+  );
+  assert.ok(
+    harnessesAudit.rows.some((r) => r.id === "antigravity" && /Antigravity/i.test(r.title ?? "")),
+    "#harnesses-list renders Antigravity row",
+  );
+  assert.ok(
+    harnessesAudit.rows.some((r) => r.actionText === "Connect" || r.actionText === "Disconnect"),
+    "#harnesses-list rows provide Connect / Disconnect buttons",
+  );
+
+  // Verify PWA manifest link and Service Worker registration hook
+  const pwaCheck = await page.evaluate(async () => {
+    const manifestLink = document.querySelector('link[rel="manifest"]');
+    const themeMeta = document.querySelector('meta[name="theme-color"]');
+    const fusedRes = await fetch("/fused.js");
+    const fusedSrc = await fusedRes.text();
+    return {
+      manifestHref: manifestLink?.getAttribute("href"),
+      themeColor: themeMeta?.getAttribute("content"),
+      hasSwRegister: fusedSrc.includes('serviceWorker.register("/sw.js")'),
+    };
+  });
+  assert.equal(pwaCheck.manifestHref, "manifest.webmanifest", "index.html includes <link rel='manifest' href='manifest.webmanifest'>");
+  assert.equal(pwaCheck.themeColor, "#1f3fd0", "index.html includes <meta name='theme-color' content='#1f3fd0'>");
+  assert.equal(pwaCheck.hasSwRegister, true, "fused.js registers /sw.js via navigator.serviceWorker.register");
+
+  // Verify executeBrowserSystemCommand handles copy and paste
+  const clipboardResult = await page.evaluate(async () => {
+    let writtenText = null;
+    const origClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (t) => { writtenText = t; },
+        readText: async () => "pasted from clipboard",
+      },
+    });
+    try {
+      const utterance = document.getElementById("utterance");
+      if (utterance) utterance.value = "";
+      const copyRes = await window.executeBrowserSystemCommand({ command: "copy", text: "copied hello" });
+      const pasteRes = await window.executeBrowserSystemCommand({ command: "paste" });
+      return {
+        copyOk: copyRes?.ok,
+        writtenText,
+        pasteOk: pasteRes?.ok,
+        utteranceValue: utterance?.value,
+      };
+    } finally {
+      if (origClipboard !== undefined) {
+        Object.defineProperty(navigator, "clipboard", { configurable: true, value: origClipboard });
+      }
+    }
+  });
+  assert.equal(clipboardResult.copyOk, true, "executeBrowserSystemCommand('copy') succeeds");
+  assert.equal(clipboardResult.writtenText, "copied hello", "executeBrowserSystemCommand('copy') writes text to clipboard");
+  assert.equal(clipboardResult.pasteOk, true, "executeBrowserSystemCommand('paste') succeeds");
+  assert.equal(clipboardResult.utteranceValue, "pasted from clipboard", "executeBrowserSystemCommand('paste') populates #utterance");
 });
-
-

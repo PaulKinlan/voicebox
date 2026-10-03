@@ -12,6 +12,8 @@
   <!-- per-process in-room session token for seamless in-room authorization (voicebox-beads-5jl) -->
   <meta name="voicebox-session-token" content="__VOICEBOX_SESSION_TOKEN__">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#1f3fd0">
   <link rel="stylesheet" href="style.css">
   <script type="module" src="fused.js"></script>
   <script type="module" src="pip-mic.mjs"></script>
@@ -61,6 +63,14 @@
             <button class="icon-button" id="harnesses-close" type="submit" aria-label="Close harnesses"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
           </div>
           <p class="env-hint">Coding agents and CLI tools detected on the Voicebox host.</p>
+          <div class="harness-legend" id="harnesses-state-legend" aria-label="Harness state definitions">
+            <span class="harness-legend-item"><span class="env-state" data-status="active">Active</span> Connected &amp; receiving delegated tasks (multiple harnesses can be active at once)</span>
+            <span class="harness-legend-item"><span class="env-state" data-status="ready">Ready</span> Installed &amp; verified on this machine — click Connect to activate</span>
+            <span class="harness-legend-item"><span class="env-state" data-status="setup">Setup needed</span> Installed, but adapter or sign-in needs attention</span>
+          </div>
+          <div class="modal-actions" style="margin-block-end: 8px; justify-content: flex-start;">
+            <button class="quiet" id="harnesses-open-tracker" type="button">Open Agent Progress Tracker</button>
+          </div>
           <div class="harness-actions">
             <button class="quiet" id="harnesses-check" type="button">Check installed harnesses</button>
             <span class="harness-status" id="harnesses-status" role="status" aria-live="polite">Not checked yet.</span>
@@ -73,9 +83,8 @@
               <select id="harness-agent-select" aria-label="Harness">
                 <option value="pi">Pi</option>
                 <option value="claude">Claude Code</option>
-                <option value="antigravity">Anti-Gravity</option>
+                <option value="antigravity">Antigravity</option>
                 <option value="codex">Codex</option>
-                <option value="gemini">Gemini CLI</option>
                 <option value="opencode">OpenCode</option>
               </select>
               <input id="harness-agent-model" type="text" placeholder="Model (optional)" aria-label="Agent model" autocomplete="off">
