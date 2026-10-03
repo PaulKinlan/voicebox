@@ -2550,7 +2550,6 @@ function logTurn(said, outcome) {
   li.append(quote, did);
   if (!els.log || !els.session) return;
   els.log.prepend(li);
-  els.session.hidden = false;
   while (els.log.children.length > 50) els.log.lastElementChild.remove();
 }
 
@@ -4829,7 +4828,7 @@ function sqehSetState(state, { scroll = false } = {}) {
     if (isHistory) {
       session.hidden = false;
       if (scroll) session.scrollIntoView({ block: "start" });
-    } else if (prevState === "history") {
+    } else {
       session.hidden = true;
     }
   }

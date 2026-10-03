@@ -415,6 +415,11 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
     { label: "#reader auto-opened on read_file tool call" },
   );
 
+  await page.evaluate(() => {
+    window.__voiceboxOnLiveText?.("hello voicebox", "user");
+    window.__voiceboxOnLiveText?.("Hi there!", "model");
+  });
+
   const toolEffects = await page.evaluate(() => {
     const chip = document.querySelector("#session-log .sqeh-artifact-chip");
     const badge = chip?.querySelector(".sqeh-artifact-badge")?.textContent?.trim();
@@ -422,6 +427,8 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
     const preview = chip?.querySelector(".sqeh-artifact-preview code")?.textContent ?? "";
     const readerState = document.getElementById("reader")?.dataset.state;
     const readerName = document.getElementById("sqeh-reader-bubble-name")?.textContent?.trim();
+    const sessionHiddenAfterSpeechAndTools = document.getElementById("session")?.hidden;
+    const logItemCount = document.querySelectorAll("#session-log li").length;
     return {
       chipPresent: Boolean(chip),
       badge,
@@ -429,8 +436,12 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
       preview,
       readerState,
       readerName,
+      sessionHiddenAfterSpeechAndTools,
+      logItemCount,
     };
   });
+  assert.equal(toolEffects.sessionHiddenAfterSpeechAndTools, true, "#session stays closed when speaking, getting replies, or running tools until Recent turns is clicked");
+  assert.ok(toolEffects.logItemCount >= 3, "turns are still recorded in #session-log while #session is closed");
   assert.equal(toolEffects.chipPresent, true, "write_file creates .sqeh-artifact-chip in #session-log");
   assert.equal(toolEffects.badge, "Wrote", "artifact chip displays action badge");
   assert.equal(toolEffects.size, "28 bytes", "artifact chip displays byte size");
