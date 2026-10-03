@@ -85,6 +85,7 @@ const WANTED = {
   harnessesClose: "harnesses-close", harnessesCheck: "harnesses-check",
   harnessesStatus: "harnesses-status", harnessesList: "harnesses-list",
   harnessesScope: "harnesses-scope",
+  harnessesStateLegend: "harnesses-state-legend", harnessesOpenTracker: "harnesses-open-tracker",
   harnessAgentName: "harness-agent-name", harnessAgentSelect: "harness-agent-select",
   harnessAgentModel: "harness-agent-model", harnessConfigSave: "harness-config-save",
   harnessConfigNote: "harness-config-note",
@@ -171,6 +172,71 @@ function applyTheme(mode, { persist = false } = {}) {
     if (document.documentElement.dataset.themeMode === "system") applyTheme("system");
   });
 }
+
+// ── Progressive Web App Service Worker registration ──
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}
+
+// ── Browser System Commands (copy / paste / theme / panel) ──
+async function executeBrowserSystemCommand(cmd) {
+  if (!cmd || typeof cmd !== "object") return { ok: false };
+  if (cmd.command === "copy") {
+    const sel = window.getSelection?.()?.toString?.() ?? "";
+    const textToCopy = cmd.text || sel || els.readerBody?.textContent || els.log?.firstElementChild?.textContent || "";
+    if (textToCopy && navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(textToCopy);
+        return { ok: true, copied: textToCopy };
+      } catch {
+        return { ok: false, error: "Clipboard permission denied" };
+      }
+    }
+    return { ok: false, error: "Nothing to copy" };
+  }
+  if (cmd.command === "paste") {
+    if (navigator.clipboard?.readText) {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (els.utterance) {
+          if (els.form?.hidden) els.form.hidden = false;
+          els.utterance.value = (els.utterance.value ? `${els.utterance.value} ` : "") + text;
+          if (els.send) els.send.disabled = !els.utterance.value.trim();
+          els.utterance.focus();
+        }
+        return { ok: true, pasted: text };
+      } catch {
+        return { ok: false, error: "Clipboard read permission denied" };
+      }
+    }
+    return { ok: false, error: "Clipboard unavailable" };
+  }
+  if (cmd.command === "switch_theme" && cmd.theme) {
+    applyTheme(cmd.theme, { persist: true });
+    return { ok: true, theme: cmd.theme };
+  }
+  if (cmd.command === "open_panel" && cmd.panel) {
+    const p = String(cmd.panel).toLowerCase();
+    if (p === "settings") els.settings?.showModal?.();
+    else if (p === "harnesses") els.harnessesOpen?.click?.();
+    else if (p === "extensions") els.extsOpen?.click?.();
+    else if (p === "environments") els.envsOpen?.click?.();
+    else if (p === "changelog") els.changelogOpen?.click?.();
+    else if (p === "files" || p === "history" || p === "activity" || p === "deck") sqehSetState(p);
+    return { ok: true, panel: p };
+  }
+  return { ok: false };
+}
+window.executeBrowserSystemCommand = executeBrowserSystemCommand;
+window.__voiceboxOnSystemCommand = executeBrowserSystemCommand;
+window.addEventListener("message", (e) => {
+  if (e.origin && e.origin !== window.location.origin) return;
+  if (e.data?.type === "system_command") {
+    void executeBrowserSystemCommand(e.data.systemCommand ?? e.data);
+  }
+});
 
 // ── Project / folder change flash & Work Activity Log ──
 let projectFlashTimer = null;
@@ -3043,6 +3109,10 @@ async function send(said) {
     if (miniAppDeleted) {
       window.__voiceboxOnMiniAppDeleted?.(miniAppDeleted);
     }
+    const sysCmd = answer.systemCommand ?? result.systemCommand;
+    if (sysCmd) {
+      await executeBrowserSystemCommand(sysCmd);
+    }
     if (result.miniAppToolCall && miniAppController?.callTool) {
       const { name: toolName, args: toolArgs } = result.miniAppToolCall;
       const appRes = await miniAppController.callTool(toolName, toolArgs);
@@ -3828,6 +3898,8 @@ async function configureHarnessInUi(payload) {
   }
 }
 
+const CAN_ACTIVATE = new Set(["pi", "claude", "antigravity", "codex", "opencode"]);
+
 async function checkHarnesses() {
   if (!els.harnessesList || !els.harnessesStatus) return;
   if (els.harnessesCheck) els.harnessesCheck.disabled = true;
@@ -3837,26 +3909,83 @@ async function checkHarnesses() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const report = await response.json();
     if (!report.ok || !Array.isArray(report.entries)) throw new Error("invalid inventory response");
+
+    const hasAntigravity = report.entries.some((r) => r.id === "antigravity");
+    const entries = [];
+    for (const rawRow of report.entries) {
+      if (rawRow.id === "gemini") {
+        if (!hasAntigravity) {
+          entries.push({
+            ...rawRow,
+            id: "antigravity",
+            name: "Antigravity",
+            description: "Antigravity local agent bridge for multi-agent delegation",
+          });
+        }
+        continue;
+      }
+      if (rawRow.id === "antigravity") {
+        entries.push({
+          ...rawRow,
+          name: "Antigravity",
+        });
+        continue;
+      }
+      entries.push(rawRow);
+    }
+    if (!entries.some((r) => r.id === "antigravity")) {
+      entries.push({
+        id: "antigravity",
+        name: "Antigravity",
+        state: "present",
+        description: "Antigravity local agent bridge for multi-agent delegation",
+        delegation: { ok: false, refused: "not-configured" },
+      });
+    }
+
+    const activeList = Array.isArray(report.activeHarnesses)
+      ? report.activeHarnesses
+      : (report.activeHarness ? [report.activeHarness] : []);
+    const activeSet = new Set(activeList.map((id) => (id === "gemini" ? "antigravity" : id)));
+
     els.harnessesList.replaceChildren();
-    for (const row of report.entries) {
+    for (const row of entries) {
       const article = document.createElement("article");
       article.className = "harness-article";
       article.dataset.harness = row.id;
       article.dataset.delegationRefusal = row.delegation?.refused ?? "none";
 
-      const isActive = report.activeHarness === row.id
-        || (report.activeHarness === "pi" && row.id === "pi-acp")
-        || (report.activeHarness === "claude" && row.id === "claude-agent-acp")
-        || Boolean(row.delegation?.ok && (!report.activeHarness || report.activeHarness === row.id));
-      const isReady = Boolean(row.delegation?.ok || row.state === "present" || row.state === "configured");
+      const isActive = activeSet.has(row.id)
+        || (activeSet.has("pi") && row.id === "pi-acp")
+        || (activeSet.has("claude") && row.id === "claude-agent-acp")
+        || Boolean(row.delegation?.ok && (activeSet.size === 0 || activeSet.has(row.id)));
+      const needsSetup = Boolean(
+        !isActive && (row.delegation?.refused === "not-configured" || row.state === "unconfigured"),
+      );
+      const isReady = Boolean(
+        !isActive && !needsSetup && (row.delegation?.ok || row.state === "present" || row.state === "configured"),
+      );
+
+      let statusKey = "missing";
+      let statusLabel = "Not installed";
+      if (isActive) {
+        statusKey = "active";
+        statusLabel = "Active";
+      } else if (isReady) {
+        statusKey = "ready";
+        statusLabel = "Ready";
+      } else if (needsSetup) {
+        statusKey = "setup";
+        statusLabel = "Setup needed";
+      }
 
       const head = document.createElement("div");
       head.className = "harness-card-head";
       textNode(head, "h3", `${row.name}${row.version ? ` (${row.version})` : ""}`);
       const badge = document.createElement("span");
-      badge.className = "harness-badge";
-      badge.dataset.status = isActive ? "active" : isReady ? "ready" : "absent";
-      badge.textContent = isActive ? "Active" : isReady ? "Ready" : "Not installed";
+      badge.className = "harness-badge env-state";
+      badge.dataset.status = statusKey;
+      badge.textContent = statusLabel;
       head.append(badge);
       article.append(head);
 
@@ -3867,11 +3996,13 @@ async function checkHarnesses() {
 
       const meta = document.createElement("p");
       meta.className = "harness-meta";
-      if (row.delegation?.ok) {
-        meta.textContent = "Ready to handle delegated coding tasks.";
-        if (row.delegation.mechanism) meta.title = row.delegation.mechanism;
-      } else if (row.state === "present" || row.state === "configured") {
-        meta.textContent = "Installed on this host.";
+      if (isActive) {
+        meta.textContent = "Connected and handling delegated coding tasks.";
+        if (row.delegation?.mechanism) meta.title = row.delegation.mechanism;
+      } else if (isReady) {
+        meta.textContent = "Installed on this host. Click Connect to route tasks here.";
+      } else if (needsSetup) {
+        meta.textContent = row.why || "Add setup details below or click Connect to configure.";
       } else if (row.state === "absent") {
         meta.textContent = "Not installed on this host.";
       } else if (row.why) {
@@ -3879,33 +4010,63 @@ async function checkHarnesses() {
       }
       if (meta.textContent) article.append(meta);
 
-      const actions = document.createElement("div");
-      actions.className = "harness-card-actions";
-      const activateBtn = document.createElement("button");
-      activateBtn.type = "button";
-      activateBtn.className = "harness-activate-btn";
-      activateBtn.dataset.harnessActivate = row.id;
-      activateBtn.dataset.active = String(isActive);
-      activateBtn.textContent = isActive ? "Active for delegation" : `Use ${row.name}`;
-      activateBtn.addEventListener("click", () => {
-        void configureHarnessInUi({ harness: row.id, id: row.id, active: true });
-      });
-      actions.append(activateBtn);
-      article.append(actions);
+      const canConnect = CAN_ACTIVATE.has(row.id) || isReady || isActive || needsSetup;
+      if (canConnect) {
+        const actions = document.createElement("div");
+        actions.className = "harness-card-actions";
+        const activateBtn = document.createElement("button");
+        activateBtn.type = "button";
+        activateBtn.className = "harness-activate-btn";
+        activateBtn.dataset.harnessActivate = row.id;
+        activateBtn.dataset.active = String(isActive);
+        if (isActive) {
+          activateBtn.textContent = "Disconnect";
+          activateBtn.addEventListener("click", () => {
+            void configureHarnessInUi({ harness: row.id, id: row.id, active: false });
+          });
+        } else {
+          activateBtn.textContent = "Connect";
+          activateBtn.addEventListener("click", () => {
+            void configureHarnessInUi({ harness: row.id, id: row.id, active: true });
+          });
+        }
+        actions.append(activateBtn);
+        article.append(actions);
+      }
       renderModalToolCatalogue(article, row.toolCatalogue);
       els.harnessesList.append(article);
     }
     if (els.harnessesScope) {
-      els.harnessesScope.textContent = "Select which installed coding agent handles delegated background tasks.";
+      els.harnessesScope.textContent = "Connect one or more installed coding agents to handle delegated background tasks.";
     }
-    const readyCount = report.entries.filter((r) => r.delegation?.ok || r.state === "present" || r.state === "configured").length;
-    els.harnessesStatus.textContent = `${readyCount} of ${report.entries.length} harnesses ready on this host.`;
+    const readyCount = entries.filter((r) => r.delegation?.ok || r.state === "present" || r.state === "configured").length;
+    els.harnessesStatus.textContent = `${readyCount} of ${entries.length} harnesses ready on this host.`;
   } catch (error) {
     els.harnessesStatus.textContent = `Inventory unavailable (${error.message}). Check the Voicebox server connection and retry. Any previous entries below are stale, not a fresh observation.`;
   } finally {
     if (els.harnessesCheck) els.harnessesCheck.disabled = false;
   }
 }
+
+async function openAgentProgressTracker() {
+  let html = "";
+  try {
+    const res = await fetch("/apps/agent-monitor.html");
+    if (res.ok) html = await res.text();
+  } catch { /* fallback below */ }
+  if (!html) {
+    html = `<!doctype html><html><body style="font-family:system-ui;padding:16px"><h2>Agent Progress Tracker</h2><p>Monitoring active agent harnesses and background tasks.</p></body></html>`;
+  }
+  if (els.harnessesDialog?.open) els.harnessesDialog.close();
+  if (miniAppController) {
+    miniAppController.mount({
+      appId: "agent-progress-tracker",
+      title: "Agent Progress Tracker",
+      html,
+    });
+  }
+}
+window.__voiceboxOpenAgentTracker = openAgentProgressTracker;
 
 on(els.harnessConfigSave, "click", async () => {
   const harness = (els.harnessAgentSelect?.value ?? "pi").trim();
@@ -3938,6 +4099,7 @@ on(els.harnessesDialog, "close", () => {
   els.harnessesOpen?.focus();
 });
 on(els.harnessesCheck, "click", () => void checkHarnesses());
+on(els.harnessesOpenTracker, "click", () => void openAgentProgressTracker());
 
 // ── Change log modal dialog (voicebox-beads-n1pq, voicebox-beads-je4i) ────
 let lastChangelogTrigger = null;
@@ -5487,6 +5649,26 @@ function sqehSyncMiniApps() {
       }
     });
     buttons.push(btn);
+  }
+
+  if (!isAlreadySeen("agent-progress-tracker", "Agent Progress Tracker", "agent-monitor.html")) {
+    markSeen("agent-progress-tracker", "Agent Progress Tracker", "agent-monitor.html");
+    const trackerBtn = document.createElement("button");
+    trackerBtn.type = "button";
+    trackerBtn.className = "sqeh-miniapp-bubble";
+    trackerBtn.dataset.appId = "agent-progress-tracker";
+    trackerBtn.dataset.miniAppId = "agent-progress-tracker";
+    const badge = document.createElement("span");
+    badge.className = "sqeh-miniapp-bubble-badge";
+    badge.textContent = "App";
+    const title = document.createElement("span");
+    title.className = "sqeh-miniapp-bubble-title";
+    title.textContent = "Agent Progress";
+    trackerBtn.append(badge, title);
+    trackerBtn.addEventListener("click", () => {
+      void openAgentProgressTracker();
+    });
+    buttons.push(trackerBtn);
   }
 
   host.replaceChildren(...buttons);
