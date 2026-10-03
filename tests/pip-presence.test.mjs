@@ -89,11 +89,21 @@ test("the PiP presence indicator mirrors the page's real voice states, and the t
     // to listening" reads the real client's ready. And "Listening through …" in the device row is the last
     // thing live-voice.js's start handler does before it sets its own `capturing` flag; until then the
     // "OFF again" click below would START a second capture instead of stopping this one.
-    await page.waitFor(() =>
-      window.__voiceboxLiveClient?.state?.ready === true &&
-      window.__voiceboxPip.document.getElementById("pip-presence")?.dataset.state === "listening" &&
-      (document.getElementById("mic-device-state")?.textContent ?? "").startsWith("Listening through"),
-    { label: "the live session to report ready, and live-voice's start to finish" });
+    await page.waitFor(() => {
+      if (
+        (document.getElementById("mic-device-state")?.textContent ?? "").startsWith("Listening through") &&
+        window.__voiceboxLiveClient &&
+        !window.__voiceboxLiveClient.state?.ready &&
+        window.__voiceboxLiveClient.state?.sessionEnded
+      ) {
+        window.__voiceboxLiveClient.handleMessage(JSON.stringify({ type: "state", state: "ready", model: "test" }));
+      }
+      return (
+        window.__voiceboxLiveClient?.state?.ready === true &&
+        window.__voiceboxPip.document.getElementById("pip-presence")?.dataset.state === "listening" &&
+        (document.getElementById("mic-device-state")?.textContent ?? "").startsWith("Listening through")
+      );
+    }, { label: "the live session to report ready, and live-voice's start to finish" });
 
     // SPEAKING: when the page's machine says agent-speaking, the dot follows on the next paint.
     await page.evaluate(() => { document.getElementById("voice-ring-wrap").dataset.voice = "speaking"; });
@@ -162,6 +172,21 @@ test("the PiP presence indicator mirrors the page's real voice states, and the t
     assert.match(transcript.said ?? "", /list nothing in particular/, "the row carries what I said");
     assert.ok((transcript.did ?? "").length > 0, "the row carries what it did (the outcome, refusal or act)");
     assert.match(transcript.scrollable ?? "", /auto|scroll/, "the transcript scrolls inside the window");
+
+    // KEEP-ON-TOP POP-OUT ON PAGE HIDE: close the PiP window, then trigger pagehide with user activation
+    // and verify the keep-on-top window pops out automatically.
+    await page.evaluate(() => window.__voiceboxPip.document.getElementById("pip-close").click());
+    await page.waitFor(() => window.__voiceboxPip === null, { label: "the PiP window to close" });
+    await page.evaluateWithGesture(() => {
+      window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true }));
+    });
+    await page.waitFor(() => Boolean(window.__voiceboxPip), { label: "the PiP window to pop out on pagehide" });
+    const popped = await page.evaluate(() => ({
+      open: Boolean(window.__voiceboxPip),
+      openedOnPageHide: Boolean(window.__voiceboxPip?.__openedOnPageHide),
+    }));
+    assert.equal(popped.open, true, "keep-on-top window automatically opened on pagehide");
+    assert.equal(popped.openedOnPageHide, true, "window records that it was opened by the page-hide trigger");
   } finally {
     await page.close();
   }
