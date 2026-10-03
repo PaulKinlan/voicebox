@@ -193,12 +193,13 @@ test("LGW: the loop module is terminated BY NAME at the host's deadline — and 
   const tool = attackTool(LOOP_MODULE);
   tool.wasm.path = file;
   const { callWasmTool, WASM_CALL_DEADLINE_MS } = await import("../lib/wasm-shelf.mjs");
+  assert.equal(WASM_CALL_DEADLINE_MS, 5000);
   const started = Date.now();
-  const out = await callWasmTool(tool, { input: "abc" });
+  const out = await callWasmTool(tool, { input: "abc" }, { deadlineMs: 200 });
   const elapsed = Date.now() - started;
   assert.equal(out.ok, false);
   assert.equal(out.refused, "time-exceeded", "the hang dies by name, not by someone's kill switch");
-  assert.ok(elapsed < WASM_CALL_DEADLINE_MS + 5000, `terminated near the deadline (${elapsed}ms), never hung`);
+  assert.ok(elapsed < 2000, `terminated near the deadline (${elapsed}ms), never hung`);
   assert.match(out.why, /bounded by the host/, "the refusal names whose bound it is");
 
   // The host's event loop never noticed: the KAT answers immediately after.
@@ -218,7 +219,7 @@ test("LGW: the grow module dies against the host's bounds, named — and the hos
   tool.wasm.path = file;
   const { callWasmTool } = await import("../lib/wasm-shelf.mjs");
   const hostBefore = process.memoryUsage().rss;
-  const out = await callWasmTool(tool, { input: "abc" });
+  const out = await callWasmTool(tool, { input: "abc" }, { deadlineMs: 200 });
   assert.equal(out.ok, false);
   assert.ok(["resource-exceeded", "time-exceeded"].includes(out.refused), `the grow dies by a named bound (got ${out.refused})`);
   const hostDelta = process.memoryUsage().rss - hostBefore;
