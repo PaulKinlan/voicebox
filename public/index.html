@@ -64,9 +64,24 @@
             <span class="harness-status" id="harnesses-status" role="status" aria-live="polite">Not checked yet.</span>
           </div>
           <div class="harnesses-list" id="harnesses-list"></div>
+          <details class="harness-add-agent" id="harness-add-agent">
+            <summary>Add or configure agent</summary>
+            <div class="env-add" id="harness-config-form">
+              <input id="harness-agent-name" type="text" placeholder="Agent name (e.g. Pi Coding Agent)" aria-label="Agent name" autocomplete="off">
+              <select id="harness-agent-select" aria-label="Harness">
+                <option value="pi">Pi</option>
+                <option value="claude">Claude Code</option>
+                <option value="codex">Codex</option>
+                <option value="gemini">Gemini CLI</option>
+              </select>
+              <input id="harness-agent-model" type="text" placeholder="Model (optional)" aria-label="Agent model" autocomplete="off">
+              <button class="quiet" id="harness-config-save" type="button">Save &amp; activate</button>
+            </div>
+            <p class="env-note" id="harness-config-note" role="status" aria-live="polite"></p>
+          </details>
           <h3 class="ext-section">Task Delegation</h3>
           <p class="env-note" id="harnesses-scope"></p>
-          <p class="env-hint">Delegation to the Pi coding agent is enabled when the server is started with <code>VOICEBOX_HARNESS=pi</code>.</p>
+          <p class="env-hint">Select a harness above or configure an agent directly in this dialog — no startup environment variables required.</p>
           <p class="env-hint">Each harness runs under its own host permissions and credentials.</p>
         </form>
       </dialog>
@@ -377,7 +392,7 @@
 
       <section class="mini-app-container card" id="mini-app-container" hidden aria-labelledby="mini-app-title">
         <div class="mini-app-sheet-handle" id="mini-app-sheet-handle" aria-hidden="true"></div>
-        <header class="mini-app-header">
+        <header class="mini-app-header" id="mini-app-drag-handle">
           <div class="mini-app-title-group">
             <span class="mini-app-badge">App</span>
             <h3 class="mini-app-title" id="mini-app-title">Interactive Mini-App</h3>
@@ -387,9 +402,9 @@
               <svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>
               <span class="sr-only">Reload</span>
             </button>
-            <button class="quiet icon-button mini-app-expand" id="mini-app-expand" type="button" aria-label="Full width App" title="Full width App">
+            <button class="quiet icon-button mini-app-expand" id="mini-app-expand" type="button" aria-label="Expand full screen" title="Expand full screen">
               <svg class="icon" aria-hidden="true"><use href="#i-maximize"/></svg>
-              <span class="sr-only">Full width</span>
+              <span class="sr-only">Expand</span>
             </button>
             <button class="quiet icon-button mini-app-toggle" id="mini-app-toggle" type="button" aria-label="Collapse App" title="Collapse App">
               <svg class="icon" aria-hidden="true"><use href="#i-minimize"/></svg>
@@ -413,12 +428,22 @@
         </button>
       </aside>
 
-      <section class="session" id="session" hidden aria-labelledby="session-heading">
-        <div class="session-head">
-          <h2 id="session-heading">Recent turns</h2>
-          <button class="quiet" id="session-copy" type="button" aria-haspopup="dialog" aria-controls="transcript-dialog" aria-label="Copy session transcript">Copy transcript</button>
-        </div>
-        <ol id="session-log"></ol>
+      <section class="session card" id="session" hidden aria-labelledby="session-heading">
+        <header class="session-head">
+          <div class="session-title-group">
+            <span class="mini-app-badge">History</span>
+            <h2 id="session-heading">Recent turns</h2>
+          </div>
+          <div class="session-actions">
+            <button class="quiet" id="session-copy" type="button" aria-haspopup="dialog" aria-controls="transcript-dialog" aria-label="Copy session transcript">Copy transcript</button>
+            <button class="quiet icon-button session-close" id="session-close" type="button" aria-label="Close recent turns" title="Close recent turns">
+              <svg class="icon" aria-hidden="true"><use href="#i-close"/></svg>
+              <span class="sr-only">Close</span>
+            </button>
+          </div>
+        </header>
+        <p class="session-empty" id="session-empty">No recent turns yet. Ask a question or speak a turn to see activity here.</p>
+        <ol class="log" id="session-log"></ol>
       </section>
       <dialog class="modal transcript-dialog" id="transcript-dialog" closedby="any" aria-labelledby="transcript-dialog-title">
         <form class="envs-form transcript-dialog-form" method="dialog">
@@ -501,7 +526,7 @@
       <svg class="icon" aria-hidden="true"><use href="#i-sliders"/></svg>
       <span class="sqeh-dock-label">Controls</span>
     </button>
-    <button class="sqeh-dock-btn" id="sqeh-dock-settings" type="button" aria-label="Settings" title="Settings">
+    <button class="sqeh-dock-btn" id="sqeh-dock-settings" type="button" aria-label="Settings" title="Settings" hidden>
       <svg class="icon" aria-hidden="true"><use href="#i-gear"/></svg>
       <span class="sqeh-dock-label">Settings</span>
     </button>
@@ -578,6 +603,29 @@
             <textarea id="agent-custom-instruction" class="setting-input" rows="2" placeholder="Optional custom instructions to layer over the base rules..." aria-labelledby="agent-custom-instruction-label"></textarea>
             <p class="device-state" id="agent-custom-instruction-state">Custom instructions layered over base rules</p>
           </div>
+          <fieldset class="settings-group" id="settings-api-keys">
+            <legend>Provider API Keys</legend>
+            <p class="device-state" id="api-keys-hint">Stored locally on this host so you do not need shell environment variables.</p>
+            <div class="device-row">
+              <h3 id="api-key-gemini-label">Gemini API Key</h3>
+              <input type="password" id="api-key-gemini" class="setting-input" aria-labelledby="api-key-gemini-label" placeholder="AIza..." autocomplete="off" spellcheck="false">
+              <p class="device-state" id="api-key-gemini-status">Not configured</p>
+            </div>
+            <div class="device-row">
+              <h3 id="api-key-openai-label">OpenAI API Key</h3>
+              <input type="password" id="api-key-openai" class="setting-input" aria-labelledby="api-key-openai-label" placeholder="sk-..." autocomplete="off" spellcheck="false">
+              <p class="device-state" id="api-key-openai-status">Not configured</p>
+            </div>
+            <div class="device-row">
+              <h3 id="api-key-anthropic-label">Anthropic API Key</h3>
+              <input type="password" id="api-key-anthropic" class="setting-input" aria-labelledby="api-key-anthropic-label" placeholder="sk-ant-..." autocomplete="off" spellcheck="false">
+              <p class="device-state" id="api-key-anthropic-status">Not configured</p>
+            </div>
+            <div class="settings-actions">
+              <button class="btn-primary" id="api-keys-save" type="button">Save API Keys</button>
+              <span class="device-state" id="api-keys-status" role="status" aria-live="polite"></span>
+            </div>
+          </fieldset>
           <details class="about" id="agent-rules">
             <summary>Safety & System Rules</summary>
             <p id="agent-base"></p>

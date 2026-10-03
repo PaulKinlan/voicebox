@@ -335,3 +335,57 @@ test("browser: output bounds refusal for tool results > 64KB", { timeout: 25000 
   assert.equal(result.ok, false);
   assert.match(result.error, /over budget/i);
 });
+
+test("browser: SDK aliases window.voicebox and navigator.modelContext alongside window.webMcp (voicebox-beads-0ul6)", { timeout: 25000 }, async (t) => {
+  const server = await startServer();
+  t.after(() => server.stop());
+
+  const page = await launch({ width: 1200, height: 900 });
+  t.after(() => page.close());
+
+  await page.goto(`${server.base}/`);
+
+  const result = await page.evaluate(async (base) => {
+    return new Promise((resolve, reject) => {
+      const outer = document.createElement("iframe");
+      outer.src = `${base}/mini-app-bridge.html`;
+
+      window.addEventListener("message", (e) => {
+        if (e.origin !== window.location.origin) return;
+
+        if (e.data?.type === "bridge_ready") {
+          const appHtml = `
+            <script>
+              window.voicebox.registerTool({
+                name: "via_voicebox",
+                description: "Registered via window.voicebox",
+                parameters: { type: "object", properties: {} },
+                execute: async () => ({ alias: "voicebox", hasModelContext: Boolean(navigator.modelContext?.registerTool) })
+              });
+              navigator.modelContext.registerTool({
+                name: "via_model_context",
+                description: "Registered via navigator.modelContext",
+                parameters: { type: "object", properties: {} },
+                execute: async () => ({ alias: "modelContext" })
+              });
+              window.voicebox.ready();
+            <\/script>
+          `;
+          outer.contentWindow.postMessage({ type: "load_app", appId: "alias-app", html: appHtml }, window.location.origin);
+        } else if (e.data?.type === "app_ready" && e.data?.appId === "alias-app") {
+          outer.contentWindow.postMessage({ type: "call_tool", callId: "c-vb", name: "via_voicebox", args: {} }, window.location.origin);
+        } else if (e.data?.type === "tool_result" && e.data?.callId === "c-vb") {
+          resolve(e.data);
+        }
+      });
+
+      document.body.appendChild(outer);
+      setTimeout(() => reject(new Error("timed out waiting for alias tool execution")), 10000);
+    });
+  }, server.base);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.result.alias, "voicebox");
+  assert.equal(result.result.hasModelContext, true);
+});
+
