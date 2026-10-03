@@ -24,7 +24,8 @@
       <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4"/></symbol>
       <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
       <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
-      <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v2M12 19v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M3 12h2M19 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+      <symbol id="i-terminal" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></symbol>
       <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/></symbol>
       <!-- voicebox-beads-io3a / 35eg: the file list's two new cues — a compact delete affordance and a
            folder that looks like a folder. Both are stroked line icons, matching every symbol above. -->
@@ -51,7 +52,7 @@
            server the person has declared. The list is SERVER-OWNED so it is the same from every
            browser, and a host that is listed but not running says so by name rather than reading as
            ready. The "+" declares a descriptor; it never starts a service. -->
-      <button class="icon-button" id="theme-toggle" type="button" aria-label="Switch to dark theme" title="Switch to dark theme"><svg class="icon" aria-hidden="true"><use href="#i-moon"/></svg></button>
+      <button class="icon-button" id="theme-toggle" type="button" aria-label="Switch to dark theme" title="Switch to dark theme" hidden><svg class="icon" aria-hidden="true"><use href="#i-moon"/></svg></button>
       <button class="quiet icon-button" id="harnesses-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="harnesses-dialog" aria-label="Harnesses" title="Harnesses"><svg class="icon" aria-hidden="true"><use href="#i-list"/></svg><span class="sr-only" id="envs-count-wrap">Harnesses</span></button>
       <dialog class="envs harnesses-modal" id="harnesses-dialog" closedby="any" aria-labelledby="harnesses-dialog-title">
         <form class="envs-form" method="dialog">
@@ -277,7 +278,7 @@
         <div class="voice-actions">
           <button class="quiet interrupt" id="interrupt" type="button" disabled>Stop reply</button>
         </div>
-        <form class="composer" id="text-form">
+        <form class="composer" id="text-form" hidden>
           <label class="sr-only" for="utterance">Your turn</label>
           <input id="utterance" name="utterance" type="text" autocomplete="off" spellcheck="false" required placeholder="Try: create a file called notes.md">
           <button class="quiet send" id="send" type="submit" disabled>Send</button>
@@ -293,6 +294,7 @@
             <button class="sqeh-toggle-btn sqeh-files-bubble" id="sqeh-files-bubble" role="tab" aria-selected="false" aria-expanded="false" type="button"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg><span>Files</span><span class="sqeh-files-badge" id="sqeh-files-badge">0</span></button>
             <button class="sqeh-toggle-btn sqeh-reader-bubble" id="sqeh-reader-bubble" type="button" hidden aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="#i-spark"/></svg><span class="sqeh-reader-bubble-name" id="sqeh-reader-bubble-name">File</span></button>
             <button class="sqeh-toggle-btn" id="sqeh-toggle-history" role="tab" aria-selected="false" type="button">History</button>
+            <button class="sqeh-toggle-btn" id="sqeh-toggle-activity" role="tab" aria-selected="false" aria-controls="activity-log-panel" type="button"><svg class="icon" aria-hidden="true"><use href="#i-terminal"/></svg><span>Activity</span><span class="sqeh-files-badge" id="sqeh-activity-badge" hidden>0</span></button>
           </div>
           <div class="sqeh-deck-body" id="sqeh-deck-body">
             <div class="sqeh-group" hidden>
@@ -457,6 +459,23 @@
         <p class="session-empty" id="session-empty">No recent turns yet. Ask a question or speak a turn to see activity here.</p>
         <ol class="log" id="session-log"></ol>
       </section>
+      <section class="activity-panel card" id="activity-log-panel" hidden aria-labelledby="activity-log-heading">
+        <header class="session-head">
+          <div class="session-title-group">
+            <span class="mini-app-badge">Live</span>
+            <h2 id="activity-log-heading">Work activity</h2>
+          </div>
+          <div class="session-actions">
+            <button class="quiet" id="activity-log-clear" type="button" aria-label="Clear work activity">Clear</button>
+            <button class="quiet icon-button session-close" id="activity-log-close" type="button" aria-label="Close work activity" title="Close work activity">
+              <svg class="icon" aria-hidden="true"><use href="#i-close"/></svg>
+              <span class="sr-only">Close</span>
+            </button>
+          </div>
+        </header>
+        <p class="session-empty" id="activity-log-empty">No workspace activity recorded yet. Commands, file edits, and agent progress appear here live.</p>
+        <ol class="log activity-list" id="activity-log-list" aria-live="polite"></ol>
+      </section>
       <dialog class="modal transcript-dialog" id="transcript-dialog" closedby="any" aria-labelledby="transcript-dialog-title">
         <form class="envs-form transcript-dialog-form" method="dialog">
           <div class="settings-head">
@@ -564,6 +583,15 @@
           <div class="settings-head">
             <h2 id="settings-title">Settings</h2>
             <button class="icon-button" id="settings-close" type="submit" aria-label="Close settings"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+          </div>
+          <div class="device-row" id="theme-settings-row">
+            <h3 id="theme-select-label">Appearance</h3>
+            <select id="theme-select" aria-labelledby="theme-select-label">
+              <option value="system">System (match device)</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+            <p class="device-state" id="theme-select-state">Light appearance</p>
           </div>
           <div class="device-row">
             <h3 id="mic-label">Microphone</h3>

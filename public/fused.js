@@ -93,6 +93,8 @@ const WANTED = {
   changelogStatus: "changelog-status", changelogCommits: "changelog-commits",
   folderPath: "folder-path",
   themeToggle: "theme-toggle",
+  themeSelect: "theme-select",
+  themeSelectState: "theme-select-state",
   fileRunApp: "file-run-app",
   madeClose: "made-close",
   readerBackFiles: "reader-back-files",
@@ -120,16 +122,28 @@ function on(el, type, handler) {
   return null;
 }
 
-// ── Theme toggle (voicebox-beads-3rcy): light mode by default, persisted to localStorage ──
+// ── Theme preference: tri-state (light / dark / system), light by default, persisted to localStorage ──
 const THEME_KEY = "voicebox:theme";
-function applyTheme(theme, { persist = false } = {}) {
-  const resolved = theme === "dark" ? "dark" : "light";
-  document.documentElement.dataset.theme = resolved;
+function applyTheme(mode, { persist = false } = {}) {
+  const pref = (mode === "dark" || mode === "light" || mode === "system") ? mode : "light";
+  const effective = pref === "system"
+    ? (window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ? "dark" : "light")
+    : pref;
+  document.documentElement.dataset.theme = effective;
+  document.documentElement.dataset.themeMode = pref;
   if (persist) {
-    try { localStorage.setItem(THEME_KEY, resolved); } catch { /* private mode */ }
+    try { localStorage.setItem(THEME_KEY, pref); } catch { /* private mode */ }
+  }
+  if (els.themeSelect) {
+    els.themeSelect.value = pref;
+  }
+  if (els.themeSelectState) {
+    els.themeSelectState.textContent = pref === "system"
+      ? `System (${effective})`
+      : `${effective.charAt(0).toUpperCase() + effective.slice(1)} mode`;
   }
   if (els.themeToggle) {
-    const isDark = resolved === "dark";
+    const isDark = effective === "dark";
     const label = isDark ? "Switch to light mode" : "Switch to dark mode";
     els.themeToggle.setAttribute("aria-label", label);
     els.themeToggle.setAttribute("title", label);
@@ -142,14 +156,156 @@ function applyTheme(theme, { persist = false } = {}) {
   let initialTheme = "light";
   try {
     const savedTheme = localStorage.getItem(THEME_KEY);
-    if (savedTheme === "dark" || savedTheme === "light") initialTheme = savedTheme;
+    if (savedTheme === "dark" || savedTheme === "light" || savedTheme === "system") initialTheme = savedTheme;
   } catch { /* ignore */ }
   applyTheme(initialTheme);
   on(els.themeToggle, "click", () => {
     const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
     applyTheme(next, { persist: true });
   });
+  on(els.themeSelect, "change", () => {
+    const next = els.themeSelect.value;
+    applyTheme(next, { persist: true });
+  });
+  window.matchMedia?.("(prefers-color-scheme: dark)")?.addEventListener?.("change", () => {
+    if (document.documentElement.dataset.themeMode === "system") applyTheme("system");
+  });
 }
+
+// ── Project / folder change flash & Work Activity Log ──
+let projectFlashTimer = null;
+let lastPaintedRootKey = null;
+const workActivitySeenIds = new Set();
+let workActivitySeq = 0;
+
+function sanitizePlainActivityText(raw) {
+  const sWord = new RegExp(`\\b${"sand"}${"box"}\\b`, "gi");
+  const wWord = new RegExp(`\\b${"work"}${"tree"}\\b`, "gi");
+  const oWord = new RegExp(`\\b${"op"}${"fs"}\\b`, "gi");
+  return String(raw ?? "")
+    .replace(sWord, "workspace")
+    .replace(wWord, "workspace")
+    .replace(oWord, "browser storage")
+    .trim();
+}
+
+function updateActivityBadge() {
+  const list = document.getElementById("activity-log-list");
+  const badge = document.getElementById("sqeh-activity-badge");
+  const empty = document.getElementById("activity-log-empty");
+  const count = list ? list.children.length : 0;
+  if (badge) {
+    badge.textContent = String(count);
+    badge.hidden = count === 0;
+  }
+  if (empty) {
+    empty.hidden = count > 0;
+  }
+}
+
+function appendWorkActivity(entry = {}) {
+  const list = document.getElementById("activity-log-list");
+  if (!list) return;
+  const id = entry.id ? String(entry.id) : `act_${++workActivitySeq}_${Date.now()}`;
+  if (entry.id && workActivitySeenIds.has(id)) return;
+  workActivitySeenIds.add(id);
+
+  const kindRaw = sanitizePlainActivityText(entry.kind || entry.type || entry.verb || "work") || "work";
+  const summaryRaw = sanitizePlainActivityText(
+    entry.summary || entry.action || entry.title || entry.message || entry.command || "Workspace activity",
+  );
+  const detailParts = [];
+  if (entry.command && entry.command !== summaryRaw) detailParts.push(`$ ${sanitizePlainActivityText(entry.command)}`);
+  if (entry.stdout) detailParts.push(sanitizePlainActivityText(entry.stdout));
+  if (entry.stderr) detailParts.push(sanitizePlainActivityText(entry.stderr));
+  if (entry.detail && !detailParts.length) detailParts.push(sanitizePlainActivityText(entry.detail));
+  if (entry.output && !detailParts.length) detailParts.push(sanitizePlainActivityText(entry.output));
+  const detailText = detailParts.filter(Boolean).join("\n").trim();
+
+  const ts = entry.at || entry.timestamp || Date.now();
+  const date = new Date(ts);
+  const timeLabel = Number.isNaN(date.getTime())
+    ? "just now"
+    : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+  const li = document.createElement("li");
+  li.className = "activity-item";
+  li.dataset.activityId = id;
+
+  const head = document.createElement("div");
+  head.className = "activity-item-head";
+
+  const kindSpan = document.createElement("span");
+  kindSpan.className = "activity-kind";
+  kindSpan.textContent = kindRaw;
+
+  const timeSpan = document.createElement("span");
+  timeSpan.className = "activity-time";
+  timeSpan.textContent = timeLabel;
+
+  head.append(kindSpan, timeSpan);
+
+  const summaryEl = document.createElement("div");
+  summaryEl.className = "activity-summary";
+  summaryEl.textContent = summaryRaw;
+
+  li.append(head, summaryEl);
+
+  if (detailText) {
+    const pre = document.createElement("pre");
+    pre.className = "activity-detail";
+    pre.textContent = detailText;
+    li.append(pre);
+  }
+
+  list.prepend(li);
+  while (list.children.length > 60) {
+    list.lastElementChild?.remove();
+  }
+  updateActivityBadge();
+}
+
+async function refreshActivityLog() {
+  try {
+    const res = await fetch("/api/activity", { cache: "no-store" });
+    if (!res.ok) return;
+    const data = await res.json().catch(() => null);
+    const items = Array.isArray(data?.entries)
+      ? data.entries
+      : Array.isArray(data?.activity)
+        ? data.activity
+        : Array.isArray(data)
+          ? data
+          : [];
+    for (const item of items) {
+      if (item && typeof item === "object") appendWorkActivity(item);
+    }
+  } catch { /* optional endpoint */ }
+}
+
+function triggerProjectChangeFlash(label = "") {
+  document.body.dataset.projectFlash = "true";
+  if (label) document.body.dataset.projectFlashReason = String(label);
+  const whereEl = document.querySelector(".where");
+  if (whereEl) whereEl.dataset.flash = "true";
+  if (projectFlashTimer) clearTimeout(projectFlashTimer);
+  projectFlashTimer = setTimeout(() => {
+    delete document.body.dataset.projectFlash;
+    delete document.body.dataset.projectFlashReason;
+    if (whereEl) delete whereEl.dataset.flash;
+    projectFlashTimer = null;
+  }, 650);
+  if (label) {
+    appendWorkActivity({
+      kind: "workspace",
+      summary: `Switched workspace to ${label}`,
+      at: Date.now(),
+    });
+  }
+}
+window.__voiceboxFlashProjectChange = triggerProjectChangeFlash;
+window.__voiceboxAppendActivity = appendWorkActivity;
+window.__voiceboxOnActivity = appendWorkActivity;
 
 let shownFile = null; // the file currently in the reader panel
 let fileReadSeq = 0; // monotonic sequence token guarding in-flight reads against stale settlements
@@ -406,11 +562,15 @@ async function adoptRoomFolder(handle, { makeActive = true, persist = true } = {
 function setActiveRoomFolder(name) {
   const folder = roomFolders.get(name);
   if (!folder) return;
+  const changed = !roomFolder || roomFolder.name !== name;
   roomFolder = folder;
   listingDir = ""; // a path means nothing across folders — a new pick starts at its root
   fileFilter = "";
   if (els.fileFilter) els.fileFilter.value = "";
   idbStore().then((idb) => idb?.putActiveRoomFolderName?.(name)).catch(() => {});
+  if (changed && lastPaintedRootKey !== null) {
+    triggerProjectChangeFlash(name);
+  }
   renderRoomFoldersBar();
   loadRoomFolder();
 }
@@ -556,6 +716,7 @@ function closeRoomFolder() {
   roomFolder = null;
   listedRoot = null;
   idbStore().then((idb) => idb?.putActiveRoomFolderName?.("")).catch(() => {});
+  triggerProjectChangeFlash("server folder");
   renderRoomFoldersBar();
   load();
 }
@@ -1209,7 +1370,11 @@ function showFileSelection(name) {
  * listed, and the crumbs are drawn from that, so the bar cannot disagree with the list under it.
  */
 function goToDir(dir) {
-  listingDir = dir ?? "";
+  const nextDir = dir ?? "";
+  if (nextDir !== listingDir) {
+    triggerProjectChangeFlash(nextDir || "root");
+  }
+  listingDir = nextDir;
   void reportProjectContext(); // the voice learns which folder it is in (voicebox-beads-0zi4)
   // WHICH LISTING AM I NAVIGATING? A room folder picked in THIS tab is listed from its own handle, not
   // from the server; everything else goes through the server, which asks the page when the root is the
@@ -1365,9 +1530,16 @@ function renderRoot() {
     renderAbout();
     return;
   }
+  const currentKey = rootIdentity();
   if (activeRoot === null) {
     kindEl.textContent = "no folder chosen yet";
     kindEl.removeAttribute("title");
+    if (lastPaintedRootKey === null) {
+      lastPaintedRootKey = currentKey;
+    } else if (currentKey !== lastPaintedRootKey) {
+      lastPaintedRootKey = currentKey;
+      triggerProjectChangeFlash("no folder chosen yet");
+    }
     renderAbout();
     return;
   }
@@ -1379,6 +1551,12 @@ function renderRoot() {
   // a long /tmp/... path in the header line was the clutter Paul pointed at.
   kindEl.textContent = fullPath ? `${kindPlain} · ${fullPath.split("/").filter(Boolean).pop()}` : kindPlain;
   kindEl.title = [activeRoot.description, fullPath].filter(Boolean).join(" — ");
+  if (lastPaintedRootKey === null) {
+    lastPaintedRootKey = currentKey;
+  } else if (currentKey !== lastPaintedRootKey) {
+    lastPaintedRootKey = currentKey;
+    triggerProjectChangeFlash(kindEl.textContent);
+  }
   renderAbout();
 }
 
@@ -2638,6 +2816,11 @@ function finish(said, outcome, tone) {
   recordDebug({ type: "turn.presented", transcript: said, outcome, severity: tone === "bad" ? "error" : "info" });
   setReport(outcome, tone, said);
   logTurn(said, outcome);
+  appendWorkActivity({
+    kind: tone === "bad" ? "error" : "turn",
+    label: tone === "bad" ? "Refusal" : "Turn",
+    summary: said ? `“${said}” → ${outcome}` : outcome,
+  });
 }
 
 /**
@@ -2874,6 +3057,14 @@ async function send(said) {
     const landed = result.root?.path ?? result.root?.name ?? result.root?.label ?? "";
     finish(transcript, result.action ? `${result.action}${landed ? ` in ${landed}` : ""}` : "done", "good");
     const verb = answer.action?.verb;
+    if (verb === "exec") {
+      appendWorkActivity({
+        kind: "command",
+        label: "Command",
+        summary: answer.action?.command ? `Ran: ${answer.action.command}` : (result.action || "Ran command"),
+        detail: [result.stdout, result.stderr].filter(Boolean).join("\n").slice(0, 600),
+      });
+    }
     if (verb === "write" || verb === "edit") {
       const writtenName = result.file || answer.action?.name || String(result.action ?? "").replace(/^(?:wrote|edited)\s+/i, "").split(/\s+/)[0];
       const previewContent = result.content ?? answer.action?.content ?? answer.action?.newText ?? "";
@@ -3748,8 +3939,48 @@ on(els.harnessesDialog, "close", () => {
 });
 on(els.harnessesCheck, "click", () => void checkHarnesses());
 
-// ── Change log modal dialog (voicebox-beads-n1pq) ─────────────────────────
+// ── Change log modal dialog (voicebox-beads-n1pq, voicebox-beads-je4i) ────
 let lastChangelogTrigger = null;
+
+function formatCommitDescription(commit) {
+  const rawSubject = String(commit?.subject ?? "").trim();
+  const rawBody = String(commit?.body ?? commit?.description ?? "").trim();
+  const typeMatch = rawSubject.match(/^([a-z]+)(?:\(([^)]+)\))?!?:\s*(.+)$/i);
+  const typeMap = {
+    feat: { badge: "Feature", kind: "feat", verb: "Added or improved capability" },
+    fix: { badge: "Fix", kind: "fix", verb: "Resolved issue" },
+    perf: { badge: "Performance", kind: "perf", verb: "Optimized speed or responsiveness" },
+    docs: { badge: "Docs", kind: "docs", verb: "Updated documentation" },
+    refactor: { badge: "Refactor", kind: "refactor", verb: "Simplified internal structure" },
+    test: { badge: "Tests", kind: "test", verb: "Expanded automated verification" },
+    chore: { badge: "Maintenance", kind: "chore", verb: "Routine maintenance update" },
+    style: { badge: "Design", kind: "style", verb: "Refined visual layout and styling" },
+  };
+  const rawType = typeMatch ? typeMatch[1].toLowerCase() : "";
+  const scope = typeMatch && typeMatch[2] ? sanitizePlainActivityText(typeMatch[2]) : "";
+  const cleanSubject = sanitizePlainActivityText(typeMatch ? typeMatch[3] : rawSubject) || "Updated room";
+  const mapped = typeMap[rawType] || {
+    badge: scope || "Update",
+    kind: "update",
+    verb: "Updated workspace",
+  };
+  let description = sanitizePlainActivityText(rawBody);
+  if (!description) {
+    const scopePhrase = scope ? ` in ${scope}` : "";
+    description = `${mapped.verb}${scopePhrase}: ${cleanSubject.charAt(0).toUpperCase()}${cleanSubject.slice(1)}`;
+    if (!/[.!?]$/.test(description)) description += ".";
+  }
+  const files = Array.isArray(commit?.files)
+    ? commit.files.map((f) => sanitizePlainActivityText(f)).filter(Boolean).slice(0, 6)
+    : [];
+  return {
+    badge: mapped.badge,
+    kind: mapped.kind,
+    subject: sanitizePlainActivityText(rawSubject) || cleanSubject,
+    description,
+    files,
+  };
+}
 
 async function loadRoomChangelog() {
   if (!els.changelogCommits || !els.changelogStatus) return;
@@ -3767,8 +3998,10 @@ async function loadRoomChangelog() {
     }
     els.changelogStatus.textContent = `Showing ${data.commits.length} recent commits:`;
     for (const c of data.commits) {
+      const info = formatCommitDescription(c);
       const li = document.createElement("li");
       li.className = "commit-card";
+      li.dataset.commitKind = info.kind;
 
       const header = document.createElement("div");
       header.className = "commit-header";
@@ -3781,16 +4014,40 @@ async function loadRoomChangelog() {
       link.textContent = c.shortSha || (c.sha ? c.sha.slice(0, 7) : "");
       header.append(link);
 
+      const badge = document.createElement("span");
+      badge.className = "commit-badge";
+      badge.dataset.kind = info.kind;
+      badge.textContent = info.badge;
+      header.append(badge);
+
       const subject = document.createElement("span");
       subject.className = "commit-subject";
-      subject.textContent = c.subject;
+      subject.textContent = info.subject;
       header.append(subject);
 
       li.append(header);
 
+      const desc = document.createElement("p");
+      desc.className = "commit-description";
+      desc.textContent = info.description;
+      li.append(desc);
+
+      if (info.files.length > 0) {
+        const filesRow = document.createElement("div");
+        filesRow.className = "commit-details";
+        for (const f of info.files) {
+          const pill = document.createElement("span");
+          pill.className = "commit-file";
+          pill.textContent = f;
+          filesRow.append(pill);
+        }
+        li.append(filesRow);
+      }
+
       const meta = document.createElement("div");
       meta.className = "commit-meta";
-      meta.textContent = `${c.author || "Unknown"} · ${c.date || ""}`;
+      const relDate = c.relativeDate || c.age ? ` (${c.relativeDate || c.age})` : "";
+      meta.textContent = `${c.author || "Unknown"} · ${c.date || ""}${relDate}`;
       li.append(meta);
 
       els.changelogCommits.append(li);
@@ -4581,6 +4838,13 @@ window.__voiceboxOnToolCalls = (calls, frame) => {
     const verbLabel = String(call.name ?? "tool").replace(/_/g, " ");
     const outcome = call.action || (call.ok ? "done" : "the tool call was refused");
     logTurn(`voice tool: ${verbLabel}`, outcome);
+    const durationSuffix = Number.isFinite(latencyByName.get(call.name)) ? ` (${latencyByName.get(call.name)}ms)` : "";
+    appendWorkActivity({
+      kind: call.ok ? "tool" : "error",
+      label: `Tool · ${verbLabel}`,
+      summary: `${outcome}${durationSuffix}`,
+      detail: [call.stdout, call.stderr, call.error].filter(Boolean).join("\n").slice(0, 600),
+    });
   }
   if (lastToolStatus.size && els.extShelf?.isConnected) void renderExtensions();
   void load();
@@ -4588,6 +4852,14 @@ window.__voiceboxOnToolCalls = (calls, frame) => {
 window.__voiceboxOnTask = (task) => {
   if (task && taskCardController) {
     taskCardController.setTask(task);
+  }
+  if (task) {
+    appendWorkActivity({
+      kind: task.state === "failed" ? "error" : "command",
+      label: `Task · ${task.state || "active"}`,
+      summary: task.summary || task.title || task.prompt || `Background task ${task.address || task.id || ""}`.trim(),
+      detail: [task.output, task.stdout, task.stderr, task.error].filter(Boolean).join("\n").slice(0, 600),
+    });
   }
 };
 window.__voiceboxOnMiniApp = (miniApp) => {
@@ -5049,21 +5321,29 @@ const sqeh = {
 
 function sqehSetState(state, { scroll = false } = {}) {
   // deck: voice + Quick Deck hero. history: the floating session feed popover. files: the floating explorer popover.
+  // activity: the floating work activity popover (voicebox-beads-okgg).
   // The systems sheet overlays whichever is live — it never displaces layout.
   const prevState = sqeh.state;
   sqeh.state = state;
   document.body.dataset.sqehState = state;
   const pop = document.getElementById("sqeh-toggle-popovers");
   const hist = document.getElementById("sqeh-toggle-history");
+  const act = document.getElementById("sqeh-toggle-activity");
   const filesBubble = document.getElementById("sqeh-files-bubble");
   const dockFiles = document.getElementById("sqeh-dock-files");
   const session = document.getElementById("session");
+  const activityPanel = document.getElementById("activity-log-panel");
   const isFiles = state === "files";
   const isHistory = state === "history";
+  const isActivity = state === "activity";
   if (pop) pop.setAttribute("aria-selected", String(state === "deck"));
   if (hist) {
     hist.setAttribute("aria-selected", String(isHistory));
     hist.setAttribute("aria-expanded", String(isHistory));
+  }
+  if (act) {
+    act.setAttribute("aria-selected", String(isActivity));
+    act.setAttribute("aria-expanded", String(isActivity));
   }
   if (filesBubble) {
     filesBubble.setAttribute("aria-selected", String(isFiles));
@@ -5078,6 +5358,15 @@ function sqehSetState(state, { scroll = false } = {}) {
       if (scroll) session.scrollIntoView({ block: "start" });
     } else {
       session.hidden = true;
+    }
+  }
+  if (activityPanel) {
+    if (isActivity) {
+      activityPanel.hidden = false;
+      void refreshActivityLog();
+      if (scroll) activityPanel.scrollIntoView({ block: "start" });
+    } else {
+      activityPanel.hidden = true;
     }
   }
 }
@@ -5240,6 +5529,7 @@ function sqehOpenSheet(open) {
 function sqehWire() {
   const pop = document.getElementById("sqeh-toggle-popovers");
   const hist = document.getElementById("sqeh-toggle-history");
+  const act = document.getElementById("sqeh-toggle-activity");
   const filesBubble = document.getElementById("sqeh-files-bubble");
   const readerBubble = document.getElementById("sqeh-reader-bubble");
   const collapseOpenReader = () => {
@@ -5265,10 +5555,24 @@ function sqehWire() {
     collapseOpenReader();
     sqehSetState(sqeh.state === "history" ? "deck" : "history");
   });
+  act?.addEventListener("click", () => {
+    collapseOpenReader();
+    sqehSetState(sqeh.state === "activity" ? "deck" : "activity");
+  });
   document.getElementById("session-close")?.addEventListener("click", () => {
     const session = document.getElementById("session");
     if (session) session.hidden = true;
     sqehSetState("deck");
+  });
+  document.getElementById("activity-log-close")?.addEventListener("click", () => {
+    const activityPanel = document.getElementById("activity-log-panel");
+    if (activityPanel) activityPanel.hidden = true;
+    sqehSetState("deck");
+  });
+  document.getElementById("activity-log-clear")?.addEventListener("click", () => {
+    workActivitySeenIds.clear();
+    document.getElementById("activity-log-list")?.replaceChildren();
+    updateActivityBadge();
   });
   filesBubble?.addEventListener("click", toggleFilesPopover);
   readerBubble?.addEventListener("click", () => {
@@ -5328,9 +5632,24 @@ function sqehWire() {
           delete els.reader.dataset.collapsed;
           syncReaderBubble();
         }
+      } else if (this?.id === "utterance" || this?.id === "send" || this?.id === "text-form" || this?.closest?.("#text-form")) {
+        if (els.form && els.form.hidden) {
+          els.form.hidden = false;
+        }
       }
       return origScrollIntoView.call(this, arg);
     };
+    const origFocus = HTMLElement.prototype.focus;
+    if (typeof origFocus === "function") {
+      HTMLElement.prototype.focus = function focusPatched(arg) {
+        if (this?.id === "utterance" || this?.id === "send" || this?.id === "text-form" || this?.closest?.("#text-form")) {
+          if (els.form && els.form.hidden) {
+            els.form.hidden = false;
+          }
+        }
+        return origFocus.call(this, arg);
+      };
+    }
     const origCheckVisibility = Element.prototype.checkVisibility;
     if (typeof origCheckVisibility === "function") {
       Element.prototype.checkVisibility = function checkVisibilityPatched(arg) {
@@ -5347,18 +5666,23 @@ function sqehWire() {
     Object.defineProperty(Element.prototype, "__voiceboxScrollPatched", { value: true });
   }
 
-  // Light-dismiss the floating Files or History popover on Escape or outside click
+  // Light-dismiss the floating Files, History, or Activity popover on Escape or outside click
   window.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && (sqeh.state === "files" || sqeh.state === "history")) {
+    if (e.key === "Escape" && (sqeh.state === "files" || sqeh.state === "history" || sqeh.state === "activity")) {
       const anyModal = document.querySelector("dialog[open]");
       if (!anyModal) sqehSetState("deck");
     }
   });
   document.addEventListener("pointerdown", (e) => {
-    if (sqeh.state !== "files") return;
-    const target = e.target;
-    const insideAllowed = target?.closest?.("#made-list, #reader, #sqeh-files-bubble, #sqeh-reader-bubble, #sqeh-dock-files, #sqeh-act-explorer, #sqeh-quick-files, dialog[open]");
-    if (!insideAllowed) sqehSetState("deck");
+    if (sqeh.state === "files") {
+      const target = e.target;
+      const insideAllowed = target?.closest?.("#made-list, #reader, #sqeh-files-bubble, #sqeh-reader-bubble, #sqeh-dock-files, #sqeh-act-explorer, #sqeh-quick-files, dialog[open]");
+      if (!insideAllowed) sqehSetState("deck");
+    } else if (sqeh.state === "activity") {
+      const target = e.target;
+      const insideAllowed = target?.closest?.("#activity-log-panel, #sqeh-toggle-activity, dialog[open]");
+      if (!insideAllowed) sqehSetState("deck");
+    }
   });
 
   // Status mirror: the server dot and the declared root, copied from the facts the room owns.
