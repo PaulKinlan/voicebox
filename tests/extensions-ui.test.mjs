@@ -226,7 +226,9 @@ test("the host admits; the page shows it RUNNING with what it may do, in plain w
   assert.match(row.text, /at most 5 requests/);
 });
 
-test("FOUND, NEVER RUNNING: a dropped file is visible, never green, and says it has never been reviewed", async () => {
+test("FOUND, NEVER RUNNING: a dropped file is visible, never green, says it has never been reviewed, and dotfiles are excluded", async () => {
+  writeFileSync(path.join(extDir, ".agents.json"), JSON.stringify({ id: ".agents", name: "Internal Agents Store" }));
+  writeFileSync(path.join(extDir, ".api-keys.json"), JSON.stringify({ id: ".api-keys", name: "Internal Keys Store" }));
   writeFileSync(path.join(extDir, "dropped.json"), JSON.stringify({
     id: "dropped", name: "Dropped Thing", description: "x", source: "model", runsIn: "host",
     capabilities: ["read"], bounds: {},
@@ -235,6 +237,7 @@ test("FOUND, NEVER RUNNING: a dropped file is visible, never green, and says it 
   await page.click("#exts-close");
   await closedExts(); // where a 120ms sleep was (voicebox-beads-g667)
   const view = await openExts();
+  assert(!view.present.some((p) => p.name.startsWith(".") || p.name.includes("Internal")), "dotfiles (.agents.json, .api-keys.json) must never appear in Found here, never reviewed");
   const row = view.present.find((p) => p.name === "Dropped Thing");
   assert(row, "the dropped file is invisible — a person cannot review what the page hides");
   assert.equal(row.dot, "present", "a never-reviewed file must not read as ready in any colour");

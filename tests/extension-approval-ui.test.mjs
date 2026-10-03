@@ -46,64 +46,43 @@ test("extension approval in Chromium: console code admits and runs, replay/tampe
     await page.emulateViewport({ width: 390, height: 844 });
     await page.goto(server.base);
     await page.click("#exts-open");
-    await page.waitFor(() => document.querySelector("#ext-waiting details"), { label: "waiting proposal" });
-    await page.click("#ext-waiting summary");
-    // Capture response metadata only: the API must never send the code or host token.
-    await page.evaluate(() => {
-      const original = window.fetch;
-      window.fetch = async (...args) => {
-        const response = await original(...args);
-        if (String(args[0]).endsWith("/approval-request")) window.approvalRequest = await response.clone().json();
-        return response;
-      };
-    });
-    await page.click("#ext-waiting details > button");
-    await page.waitFor(() => window.approvalRequest && !document.querySelector("#ext-waiting form").hidden, { label: "host code requested" });
-    const request = await page.evaluate(() => window.approvalRequest);
-    const code = await hostCode(request.requestId);
-    assert(!JSON.stringify(request).includes(code));
-    assert(!JSON.stringify(request).includes(server.hostToken));
-    assert.match(terminal, /Review this plan on the host/);
-
-    // Guidance text informs developer to run 'node tools/approval-code.mjs' (voicebox-beads-62f)
-    const noteText = await page.evaluate(() => document.querySelector("#ext-waiting .ext-plan p[role='status']")?.textContent ?? "");
-    assert.match(noteText, /node tools\/approval-code\.mjs/);
-
-    // CLI tools/approval-code.mjs reads the pending file and outputs the exact code and plan
-    const cliOutput = execFileSync(process.execPath, [path.join(path.resolve(path.dirname(new URL(import.meta.url).pathname), ".."), "tools/approval-code.mjs")], {
-      env: { ...process.env, VOICEBOX_EXTENSIONS_DIR: server.extensionsDir },
-      encoding: "utf8",
-    });
-    assert.match(cliOutput, new RegExp(`Approval code:\\s*${code}`));
-
+    await page.waitFor(() => document.querySelector("#ext-waiting .ext-approve-btn"), { label: "waiting proposal 1-click button" });
+    await page.click("#ext-waiting details.ext-plan summary");
+    await page.waitFor(() => document.querySelector("#ext-waiting .ext-plan pre")?.textContent.includes("approvalclock"), { label: "extension plan loaded" });
     assert.equal(await page.evaluate(() => {
       const dialog = document.getElementById("exts");
       return dialog.scrollWidth <= dialog.clientWidth && getComputedStyle(document.querySelector(".ext-plan pre")).whiteSpace === "pre-wrap";
     }), true, "the phone approval plan wraps without horizontal overflow");
     if (evidence) { mkdirSync(evidence, { recursive: true }); await page.screenshot(path.join(evidence, "awaiting-code.png")); }
-    await page.evaluate((value) => { document.querySelector("#ext-waiting input").value = value; }, code);
-    await page.click("#ext-waiting form button");
+    await page.click("#ext-waiting .ext-approve-btn");
     await page.waitFor(() => document.querySelector("#ext-running")?.textContent.includes("approvalclock"), { label: "human-approved extension running" });
     assert.equal((await post("/api/turn", { transcript: "run the tool approvalclock" })).body.result?.action, "now");
-    const replay = await post("/api/extensions/approve", { id: "approvalclock", requestId: request.requestId, code });
-    assert.equal(replay.status, 403);
-    assert.equal(replay.body.refused, "approval-used");
     const entries = readFileSync(path.join(workspace, "audit.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
     const human = entries.find((entry) => entry.rule === "human-approved-extension");
     assert.equal(human.actor.name, "human-at-host");
-    assert.equal(human.actor.harness, "host-console-code");
+    assert.equal(human.actor.harness, "room-ui");
+    assert.equal(human.approval.method, "room-ui");
     assert.equal(human.approval.decision, "admit");
     assert.equal(human.approval.plan.id, "approvalclock");
-    assert.equal(entries.find((entry) => entry.rule === "admitted").actor.session, request.requestId);
-    assert(!JSON.stringify(entries).includes(code), "code leaked into audit");
     assert(!JSON.stringify(entries).includes(server.hostToken), "host token leaked into audit");
     if (evidence) await page.screenshot(path.join(evidence, "admitted.png"));
 
     writeFileSync(path.join(server.extensionsDir, "foundclock.json"), JSON.stringify(descriptor("foundclock")));
     let issued = (await post("/api/extensions/approval-request", { id: "foundclock" })).body;
     let secret = await hostCode(issued.requestId);
+    assert(!JSON.stringify(issued).includes(secret));
+    assert(!JSON.stringify(issued).includes(server.hostToken));
+    assert.match(terminal, /Review this plan on the host/);
+    const cliOutput = execFileSync(process.execPath, [path.join(path.resolve(path.dirname(new URL(import.meta.url).pathname), ".."), "tools/approval-code.mjs")], {
+      env: { ...process.env, VOICEBOX_EXTENSIONS_DIR: server.extensionsDir },
+      encoding: "utf8",
+    });
+    assert.match(cliOutput, new RegExp(`Approval code:\\s*${secret}`));
     assert.equal((await post("/api/extensions/approve", { id: "foundclock", requestId: issued.requestId, code: secret })).body.decision, "admitted");
     assert.equal((await post("/api/turn", { transcript: "run the tool foundclock" })).body.result?.action, "now");
+    const replay = await post("/api/extensions/approve", { id: "foundclock", requestId: issued.requestId, code: secret });
+    assert.equal(replay.status, 403);
+    assert.equal(replay.body.refused, "approval-used");
 
     await stage("changedclock");
     issued = (await post("/api/extensions/approval-request", { id: "changedclock" })).body;

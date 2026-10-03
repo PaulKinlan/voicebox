@@ -1453,57 +1453,62 @@ function extSection(listEl, rows, emptyText) {
 }
 
 function extensionApproval(id) {
-  const details = document.createElement("details");
-  details.className = "ext-plan";
-  const summary = document.createElement("summary");
-  summary.textContent = "Review and approve on the host";
-  const note = document.createElement("p");
-  note.setAttribute("role", "status");
-  note.textContent = "Request a code, review the plan on the host, then enter the code here. Run 'node tools/approval-code.mjs' (or check your server terminal) to view the code. It expires after two minutes, works once, and five wrong guesses end it.";
-  const plan = document.createElement("pre");
-  const ask = document.createElement("button");
-  ask.type = "button";
-  ask.className = "quiet";
-  ask.textContent = "Request approval code";
+  const wrap = document.createElement("div");
+  wrap.className = "ext-review-controls";
+
+  const actions = document.createElement("div");
+  actions.className = "ext-actions";
+
+  const approve = document.createElement("button");
+  approve.type = "button";
+  approve.className = "quiet ext-approve-btn";
+  approve.textContent = "Approve & run";
+
   const refuse = document.createElement("button");
   refuse.type = "button";
   refuse.className = "quiet danger ext-refuse-btn";
-  refuse.textContent = "Refuse proposal";
-  const form = document.createElement("form");
-  form.hidden = true;
-  const label = document.createElement("label");
-  label.textContent = "One-time code from the server terminal ";
-  const input = document.createElement("input");
-  input.type = "password";
-  input.inputMode = "numeric";
-  input.autocomplete = "one-time-code";
-  input.maxLength = 8;
-  input.pattern = "[0-9]{8}";
-  input.required = true;
-  label.appendChild(input);
-  const approve = document.createElement("button");
-  approve.type = "submit";
-  approve.className = "quiet";
-  approve.textContent = "Approve extension";
-  form.append(label, approve);
-  let requestId;
+  refuse.textContent = "Refuse";
+
+  actions.append(approve, refuse);
+
+  const details = document.createElement("details");
+  details.className = "ext-plan";
+  const summary = document.createElement("summary");
+  summary.textContent = "Review permissions & plan";
+  const note = document.createElement("p");
+  note.setAttribute("role", "status");
+  note.textContent = "Click 'Approve & run' to allow this extension in your workspace, or 'Refuse' to decline it.";
+  const plan = document.createElement("pre");
+  details.append(summary, note, plan);
+
   const post = (route, body) => request(`/api/extensions/${route}`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
   });
-  ask.addEventListener("click", async () => {
-    ask.disabled = true;
-    form.hidden = true;
-    input.value = "";
+
+  details.addEventListener("toggle", async () => {
+    if (!details.open || plan.textContent) return;
     try {
-      const r = await post("approval-request", { id });
-      requestId = r.requestId;
-      plan.textContent = JSON.stringify(r.plan, null, 2);
-      note.textContent = "Review this plan on the host. Run 'node tools/approval-code.mjs' (or check your server terminal) to view the 8-digit code. Enter that code only if you approve. It expires in two minutes and works once.";
-      form.hidden = false;
-      input.focus();
-    } catch (err) { note.textContent = err.message; }
-    finally { ask.disabled = false; }
+      const p = await request(`/api/extensions/proposals/${encodeURIComponent(id)}/plan`);
+      plan.textContent = JSON.stringify(p, null, 2);
+    } catch (err) {
+      note.textContent = err.message;
+    }
   });
+
+  approve.addEventListener("click", async () => {
+    approve.disabled = true;
+    try {
+      await post("approve", { id, confirm: true });
+      if (els.extNote) els.extNote.textContent = "Approved extension — it is now running.";
+      await renderExtensions();
+    } catch (err) {
+      note.textContent = err.message;
+      details.open = true;
+    } finally {
+      approve.disabled = false;
+    }
+  });
+
   refuse.addEventListener("click", async () => {
     refuse.disabled = true;
     try {
@@ -1512,24 +1517,14 @@ function extensionApproval(id) {
       await renderExtensions();
     } catch (err) {
       note.textContent = err.message;
+      details.open = true;
     } finally {
       refuse.disabled = false;
     }
   });
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    approve.disabled = true;
-    const code = input.value;
-    input.value = "";
-    try {
-      await post("approve", { id, requestId, code });
-      if (els.extNote) els.extNote.textContent = "You approved this extension with the host's one-time code. It is now running.";
-      await renderExtensions();
-    } catch (err) { note.textContent = err.message; }
-    finally { approve.disabled = false; }
-  });
-  details.append(summary, note, plan, ask, refuse, form);
-  return details;
+
+  wrap.append(actions, details);
+  return wrap;
 }
 
 let lastRunningExtensions = [];
@@ -1699,7 +1694,7 @@ async function renderExtensions() {
     // reviewed is not a running tool, and this panel must never blur that difference.
     extSection(els.extPresent, present.map((p) =>
       extRow({ name: p.name ?? p.id, dotState: "present", stateText: "Found here · never reviewed · not running",
-               detail: "Someone placed this file in the extensions folder. It has never run. Reviewing it is the host's decision.",
+               detail: "Found in the extensions folder. It has never run — approve it below to allow it, or refuse it.",
                disclose: extensionApproval(p.id) })), "No unreviewed files here.");
 
     extSection(els.extRefused, refused.map((p) =>

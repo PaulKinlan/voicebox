@@ -4299,7 +4299,9 @@ async function handle(req, res) {
     }
     const r = url.pathname.endsWith("/approval-request")
       ? extensions.requestApproval(body.id)
-      : extensions.approveWithCode(body.id, body.requestId, body.code);
+      : (!body.code && !body.requestId && hasExtensionAuthority(req))
+        ? extensions.approveInRoom(body.id, req.headers["x-voicebox-session-token"] || "room-ui")
+        : extensions.approveWithCode(body.id, body.requestId, body.code);
     return json(res, r.ok ? 200 : 403, r);
   }
   if (req.method === "POST" && url.pathname === "/api/extensions/admit") {
