@@ -454,6 +454,50 @@ test("Draggable windows: dragging a window header moves the window while clickin
   cleanup();
 });
 
+test("Mobile responsive safety & mini-app delegation: opening or tapping without drag leaves inline offsets empty and does not double-bind .mini-app-header", () => {
+  const { documentObj, windowObj, elements } = createWindowFixture();
+  const wm = createWindowManager({ documentObj, windowObj });
+
+  wm.openWindow("files");
+  wm.openWindow("history");
+  wm.openWindow("activity");
+
+  // Default open must NOT write inline position/inset styles that would override mobile @media rules
+  assert.equal(elements.madeList.style.insetInlineStart, undefined);
+  assert.equal(elements.madeList.style.insetInlineEnd, undefined);
+  assert.equal(elements.session.style.insetInlineStart, undefined);
+  assert.equal(elements.activityPanel.style.insetInlineStart, undefined);
+
+  // Simple pointerdown + pointerup (or <2px jitter) on header must not lock inline position or mark moved
+  elements.sessionHead.dispatchEvent({
+    type: "pointerdown",
+    target: elements.sessionHead,
+    clientX: 100,
+    clientY: 100,
+    pointerId: 5,
+  });
+  windowObj.dispatchEvent({
+    type: "pointermove",
+    clientX: 101,
+    clientY: 100,
+    pointerId: 5,
+  });
+  windowObj.dispatchEvent({
+    type: "pointerup",
+    clientX: 101,
+    clientY: 100,
+    pointerId: 5,
+  });
+  assert.equal(elements.session.dataset.moved, undefined);
+  assert.equal(elements.session.style.insetInlineStart, undefined);
+
+  // .mini-app-header is owned by fused.js, so window-manager does not attach a duplicate drag handle
+  assert.equal(elements.miniAppHeader.dataset.draggableBound, undefined);
+  // Clicking #mini-app-container still focuses it in the z-index stack
+  elements.miniApp.dispatchEvent({ type: "pointerdown", target: elements.miniApp });
+  assert.equal(elements.miniApp.dataset.windowFocused, "true");
+});
+
 test("Plain-language gate: public/window-manager.mjs has zero identifier or jargon hits", () => {
   const raw = fs.readFileSync(WINDOW_MANAGER_PATH, "utf8");
   const hits = scanSourcePlainLanguage(raw);
@@ -463,3 +507,4 @@ test("Plain-language gate: public/window-manager.mjs has zero identifier or jarg
     `public/window-manager.mjs must not contain ticket ids or banned jargon in string literals: ${JSON.stringify(hits)}`,
   );
 });
+

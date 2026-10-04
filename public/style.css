@@ -2265,13 +2265,16 @@ body[data-sqeh-state="files"] .made-close,
   overscroll-behavior: contain;
 }
 @media (max-width: 768px) {
-  body[data-sqeh-state="files"] .made,
-  .made[data-window-open="true"],
-  .reader:not([data-state="empty"]):not([data-collapsed="true"]),
-  .session {
-    inset-inline-start: 12px;
-    inset-inline-end: 12px;
-    inline-size: auto;
+  body[data-sqeh-state="files"] .made:not([data-moved="true"]),
+  .made[data-window-open="true"]:not([data-moved="true"]),
+  .reader:not([data-state="empty"]):not([data-collapsed="true"]):not([data-moved="true"]),
+  .session:not([data-moved="true"]),
+  .activity-panel:not([data-moved="true"]) {
+    inset-inline-start: 12px !important;
+    inset-inline-end: 12px !important;
+    inline-size: auto !important;
+    max-inline-size: calc(100vw - 24px) !important;
+    transform: none !important;
   }
 }
 body:not([data-multi-window="true"]):has(#reader:not([data-state="empty"]):not([data-collapsed="true"])) .made:not(.dropping) {

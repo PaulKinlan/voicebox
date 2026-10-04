@@ -47,7 +47,7 @@ const MANAGED_WINDOWS = Object.freeze({
     panelId: "mini-app-container",
     toggleIds: Object.freeze([]),
     closeId: null,
-    handleSelector: ".mini-app-header",
+    handleSelector: null,
     defaultOffset: null,
   }),
 });
@@ -64,23 +64,9 @@ function ensureWindowManagerStyles(_documentObj) {
   // Styles live in public/style.css so Content-Security-Policy (style-src 'self') is respected.
 }
 
-function applyDefaultCascadePosition(panelEl, offset) {
-  if (!panelEl || !offset || panelEl.dataset?.moved === "true") return;
-  if (!panelEl.style) return;
-  panelEl.style.position = "fixed";
-  panelEl.style.transform = "none";
-  panelEl.style.margin = "0";
-  if (typeof offset.top === "number") {
-    panelEl.style.insetBlockStart = `${offset.top}px`;
-    panelEl.style.insetBlockEnd = "auto";
-  }
-  if (typeof offset.left === "number") {
-    panelEl.style.insetInlineStart = `${offset.left}px`;
-    panelEl.style.insetInlineEnd = "auto";
-  } else if (typeof offset.right === "number") {
-    panelEl.style.insetInlineEnd = `${offset.right}px`;
-    panelEl.style.insetInlineStart = "auto";
-  }
+function applyDefaultCascadePosition(_panelEl, _offset) {
+  // Default desktop and mobile responsive placement lives in public/style.css
+  // so inline styles never override mobile @media (max-width: 768px) rules.
 }
 
 export function makeWindowDraggable(
@@ -112,11 +98,14 @@ export function makeWindowDraggable(
 
   const onPointerMove = (event) => {
     if (!dragging) return;
+    const clientX = Number(event?.clientX ?? startX);
+    const clientY = Number(event?.clientY ?? startY);
+    if (Math.abs(clientX - startX) < 2 && Math.abs(clientY - startY) < 2) {
+      return;
+    }
     const viewportW = Number(windowObj?.innerWidth) || 1280;
     const viewportH = Number(windowObj?.innerHeight) || 800;
     const minVisibleWidth = Math.min(panelWidth || 320, 160);
-    const clientX = Number(event?.clientX ?? startX);
-    const clientY = Number(event?.clientY ?? startY);
     const nextLeft = Math.max(
       8,
       Math.min(viewportW - minVisibleWidth, origLeft + (clientX - startX)),
@@ -186,15 +175,6 @@ export function makeWindowDraggable(
     startY = Number(event?.clientY ?? origTop);
     dragging = true;
 
-    if (panelEl.style) {
-      panelEl.style.position = "fixed";
-      panelEl.style.insetInlineStart = `${Math.round(origLeft)}px`;
-      panelEl.style.insetBlockStart = `${Math.round(origTop)}px`;
-      panelEl.style.insetInlineEnd = "auto";
-      panelEl.style.insetBlockEnd = "auto";
-      panelEl.style.transform = "none";
-      panelEl.style.margin = "0";
-    }
     if (panelEl.dataset) {
       panelEl.dataset.dragging = "true";
     }
