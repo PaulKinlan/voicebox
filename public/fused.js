@@ -108,7 +108,6 @@ const WANTED = {
   apiKeysSave: "api-keys-save", apiKeysStatus: "api-keys-status",
   syncToast: "sync-toast", syncToastMessage: "sync-toast-message",
   syncToastReload: "sync-toast-reload", syncToastDismiss: "sync-toast-dismiss",
-  statusHelpToggle: "status-help-toggle", statusHelpPopover: "status-help-popover",
   visionCameraBtn: "vision-camera-btn", visionScreenBtn: "vision-screen-btn", visionPttBtn: "vision-ptt-btn",
   visionCoreCard: "vision-core-card", visionCoreVideo: "vision-core-video", visionCoreCanvas: "vision-core-canvas",
   visionCoreMeta: "vision-core-meta", visionSnapshotBtn: "vision-snapshot-btn", visionStopBtn: "vision-stop-btn",
@@ -6017,28 +6016,10 @@ function sqehWire() {
     const summary = `server ${dot?.textContent || dot?.dataset.ok || "unknown"}${rootKind ? ` · root ${rootKind.textContent}` : ""}`;
     if (conn && dot) conn.textContent = summary;
     const detail = `${whereNote?.textContent || summary}${rootKind ? ` · ${rootKind.textContent}` : ""}${voiceStateEl?.textContent ? ` · ${voiceStateEl.textContent}` : ""}`;
-    if (els.statusHelpToggle) els.statusHelpToggle.title = detail;
-    if (els.statusHelpPopover && !els.statusHelpPopover.hidden) {
-      els.statusHelpPopover.textContent = detail;
-    }
+    if (els.helpValue) els.helpValue.textContent = detail;
   };
   mirror();
   setInterval(mirror, 2000);
-
-  if (els.statusHelpToggle && els.statusHelpPopover) {
-    els.statusHelpToggle.addEventListener("click", () => {
-      const nextOpen = els.statusHelpPopover.hidden;
-      els.statusHelpPopover.hidden = !nextOpen;
-      els.statusHelpToggle.setAttribute("aria-expanded", String(nextOpen));
-      if (nextOpen) mirror();
-    });
-    document.addEventListener("pointerdown", (e) => {
-      if (!els.statusHelpPopover.hidden && !e.target?.closest?.("#status-help-toggle, #status-help-popover")) {
-        els.statusHelpPopover.hidden = true;
-        els.statusHelpToggle.setAttribute("aria-expanded", "false");
-      }
-    });
-  }
 
   // Core Live Vision & manual speech activity controls (camera, screen share, push-to-talk, settings)
   const VISION_PREFS_KEY = "voicebox:vision-prefs";
