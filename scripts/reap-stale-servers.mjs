@@ -36,6 +36,7 @@ import { readdirSync, existsSync, statSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { gitEnv } from "../lib/git-env.mjs";
 
 const HOME = os.homedir();
 const GATE_LOCK = process.env.VOICEBOX_GATE_LOCK ?? "/tmp/voicebox-gate.lock";
@@ -130,7 +131,7 @@ export function staleTmpDirs({ entries, now = Date.now() } = {}) {
  *   git -C <dir> config --unset core.worktree (if set)
  */
 export function checkAndRepairCanonicalGitConfig({ canonicalDir = CANONICAL, dryRun = false, execGit } = {}) {
-  const _git = execGit ?? ((args, opts) => execFileSync("git", args, { encoding: "utf8", ...opts }).trim());
+  const _git = execGit ?? ((args, opts) => execFileSync("git", args, { encoding: "utf8", env: gitEnv(), ...opts }).trim());
   if (!existsSync(canonicalDir) || !existsSync(path.join(canonicalDir, ".git"))) {
     return { ok: true, skipped: "canonical directory or .git missing" };
   }
