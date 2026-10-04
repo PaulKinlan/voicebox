@@ -75,7 +75,7 @@ The factory agent subset for Voicebox is justified by the defect classes the eng
 
 | Agent | Reason for Rejection |
 |---|---|
-| `resilience` | **0 findings** in history; offline/OPFS capabilities are tracked as explicit product epics (`lib/offline-speech.mjs`, `public/sw.js`). |
+| `resilience` | **0 findings** in history; offline/OPFS capabilities are tracked as explicit product epics (`lib/offline-speech.mjs`, `public/sw.js`). Large TTS text payloads are piped via stdin rather than passed as a command-line argument, avoiding E2BIG on large inputs (voicebox-beads-uck3). |
 | `memory-profile` | **0 heap/DOM leak findings**; recurring leaks in Voicebox were child process orphans (`scripts/reap-stale-servers.mjs`), which heap profiling does not detect. |
 | `bundle-size` | **0 findings**; Voicebox serves modular ESM directly without a monolithic client bundle budget. |
 | `release-notes` | **0 findings**; `/api/changelog` is an in-product endpoint, not a release-note generation pipeline. |
