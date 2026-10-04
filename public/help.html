@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Voicebox — Comprehensive Help &amp; User Guide</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="help-page">
+    <header class="help-page-header">
+      <div>
+        <h1 class="wordmark"><a href="/"><span class="wordmark-dot" aria-hidden="true"></span>Voicebox — Help &amp; User Guide</a></h1>
+        <p class="help-popover-subtitle">Complete reference for live voice conversation, camera and screen vision, extended thinking models, workspace files, interactive mini-apps, and coding harnesses.</p>
+      </div>
+      <div class="help-popover-actions">
+        <a class="help-full-link" href="/" id="help-back-room">&larr; Back to Voicebox</a>
+      </div>
+    </header>
+
+    <div class="help-search-row">
+      <input type="search" id="help-page-search" class="help-search-input" placeholder="Filter topics, voice commands, or keyboard shortcuts…" aria-label="Filter help topics" autocomplete="off">
+    </div>
+
+    <main class="help-page-grid" id="help-page-sections">
+      <section class="help-section" data-help-section>
+        <h3>1. Getting Started &amp; Live Voice Conversation</h3>
+        <p>Voicebox is a spoken and visual interface to a real project folder on your computer or in your browser. Every action is grounded in your declared project root.</p>
+        <ul>
+          <li><strong>Starting &amp; Stopping the Microphone:</strong> Click the centered <strong>Microphone</strong> button (or press <kbd>M</kbd> on your keyboard) to connect and start speaking. Press <kbd>M</kbd> again to disconnect and mute the microphone.</li>
+          <li><strong>Natural Barge-In &amp; Interruption:</strong> You can speak at any time while the assistant is talking to interrupt and redirect it, or click <strong>Stop reply</strong> to silence audio playback while keeping the microphone active.</li>
+          <li><strong>Text Turn Composer:</strong> When your microphone is off or you prefer typing, use the text input directly below the microphone to send any question or file command.</li>
+          <li><strong>Docked Microphone:</strong> When you scroll or open panels, a floating microphone button stays accessible in the bottom-right corner so you can toggle voice from anywhere.</li>
+        </ul>
+      </section>
+
+      <section class="help-section" data-help-section>
+        <h3>2. Live Vision: Camera &amp; Desktop Screen Sharing</h3>
+        <p>Give the voice assistant live visual context using the camera and screen controls right beside the microphone:</p>
+        <ul>
+          <li><strong>Camera Streaming:</strong> Click <strong>Camera</strong> to stream frames from your webcam into the active live session so the assistant can see physical objects, sketches, or devices.</li>
+          <li><strong>Screen &amp; Window Sharing:</strong> Click <strong>Share screen</strong> to share a browser tab, application window, or entire display so the assistant can inspect layouts, errors, or documents with you.</li>
+          <li><strong>Instant Frame &amp; Manual Speech Boundaries:</strong> Use <strong>Send frame</strong> inside the video preview card to capture an immediate frame, <strong>Push to talk</strong> to explicitly signal the start and end of your spoken turn, or <strong>Stop video</strong> to stop sharing at any time.</li>
+          <li><strong>Vision Settings:</strong> Open <strong>Settings</strong> in the top bar to adjust <strong>Video frame resolution</strong> (Low for fastest turn response, Medium for balanced detail, High for fine text and UI detail) and <strong>Video frame rate</strong> (0.5, 1, or 2 frames per second).</li>
+        </ul>
+      </section>
+
+      <section class="help-section" data-help-section>
+        <h3>3. Models, Extended Thinking &amp; Provider API Keys</h3>
+        <p>Open <strong>Settings</strong> in the top bar to choose your voice provider, model, reasoning depth, and voice persona:</p>
+        <ul>
+          <li><strong>Gemini 3.8 Live (Default):</strong> Tuned for low-latency, real-time spoken conversation and immediate tool calls.</li>
+          <li><strong>Gemini 3.8 Live Extended Thinking:</strong> Combines live spoken interaction with deep multi-step reasoning and non-blocking background tool execution. Configure <strong>Extended thinking depth</strong> (Low, Medium, or High) in Settings.</li>
+          <li><strong>Automatic Session Restart on Model Change:</strong> When you switch models or providers (Gemini Live, OpenAI Realtime, or Claude) in Settings while a live voice session is running, Voicebox automatically disconnects the previous session and reconnects using your new model.</li>
+          <li><strong>Provider API Keys:</strong> Enter and save your Gemini, OpenAI, and Anthropic API keys directly in Settings so they persist on your local host without needing shell environment variables.</li>
+          <li><strong>Voice Timbre &amp; Persona:</strong> Choose from Balanced, Warm, Bright, Deep, or Crisp voice timbres and layer a persona or custom prompt guidance beneath the mandatory safety rules.</li>
+        </ul>
+      </section>
+
+      <section class="help-section" data-help-section>
+        <h3>4. Workspace Files, File Viewer &amp; Interactive Mini-Apps</h3>
+        <p>Browse, read, edit, and run files from your active project folder:</p>
+        <ul>
+          <li><strong>Files Bubble &amp; Explorer:</strong> Click the <strong>Files</strong> bubble in the Home deck (or bottom dock) to open the project file list, navigate into subfolders, filter files by name, create a new file, or open a local folder from your computer.</li>
+          <li><strong>File Viewer &amp; In-Place Editor:</strong> Click any file card (or say <em>"open notes.md"</em>) to inspect its contents in the floating File Viewer. Click <strong>Edit</strong> to modify and save text directly, <strong>Copy</strong> to copy to your clipboard, or <strong>Download</strong> to save a copy.</li>
+          <li><strong>Interactive Mini-Apps:</strong> HTML applications in your workspace can be launched as live interactive Mini-Apps right inside the room. Use the Mini-App header bar to expand full-screen, reload, edit source, or minimize the app into the bottom-right bubble dock.</li>
+        </ul>
+      </section>
+
+      <section class="help-section" data-help-section>
+        <h3>5. Coding Harnesses, Environments &amp; Extensions</h3>
+        <p>Delegate complex engineering work and manage where your files live using the top-right header controls:</p>
+        <ul>
+          <li><strong>Harnesses (External Coding Agents):</strong> Open <strong>Harnesses</strong> to check and connect installed coding agents on your machine (<strong>Pi</strong>, <strong>Claude Code</strong>, <strong>Antigravity</strong>, <strong>Codex</strong>, <strong>OpenCode</strong>). Multiple harnesses can be active simultaneously, and delegated tasks report live progress in the Activity panel.</li>
+          <li><strong>Environments:</strong> Open <strong>Environments</strong> to switch between your browser workspace, your local machine folder, or a remote Voicebox server connection.</li>
+          <li><strong>Extensions:</strong> Open <strong>Extensions</strong> to inspect running tools, review waiting proposals, reconfigure network limits, or create a new local extension tool.</li>
+          <li><strong>Change Log &amp; Sync Notice:</strong> Open <strong>Change log</strong> in the top bar to review recent commits. If the browser UI and server ever drift out of sync after an update, a top banner offers a one-click <strong>Reload page</strong> action.</li>
+        </ul>
+      </section>
+
+      <section class="help-section" data-help-section>
+        <h3>6. Voice Commands &amp; Keyboard Shortcuts Reference</h3>
+        <div class="help-shortcuts-grid">
+          <div>
+            <h4>Keyboard Shortcuts</h4>
+            <ul>
+              <li><kbd>M</kbd> — Start or stop the live microphone (customizable in Settings)</li>
+              <li><kbd>?</kbd> — Open or close the in-room Help &amp; User Guide</li>
+              <li><kbd>Escape</kbd> — Close the active popover, file viewer, or modal dialog</li>
+              <li><kbd>Enter</kbd> — Submit a typed turn from the text composer</li>
+            </ul>
+          </div>
+          <div>
+            <h4>Spoken &amp; Typed Commands</h4>
+            <ul>
+              <li><em>"Open files"</em> / <em>"Close files"</em> — Toggle the Files explorer popover</li>
+              <li><em>"Show history"</em> / <em>"Show activity"</em> — Open turn history or agent activity log</li>
+              <li><em>"Open settings"</em> — Open the Settings dialog</li>
+              <li><em>"Switch to dark theme"</em> / <em>"Switch to light theme"</em> — Change room appearance</li>
+              <li><em>"Open &lt;filename&gt;"</em> — Open a project file in the File Viewer</li>
+              <li><em>"Create a file called &lt;name&gt;"</em> — Create a new file in the active folder</li>
+              <li><em>"Undo last change"</em> — Revert the most recent local folder edit</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="help-section" data-help-section>
+        <h3>7. Troubleshooting &amp; Common Questions</h3>
+        <ul>
+          <li><strong>Microphone is unavailable or permission denied:</strong> Check your browser address bar permissions for microphone access, or select a specific input device under <strong>Settings &rarr; Microphone</strong>. You can always use the text composer below the microphone while audio is off.</li>
+          <li><strong>Live voice says a model is unavailable:</strong> Open <strong>Settings &rarr; Model</strong> and select <strong>Gemini 3.8 Live (default)</strong> or <strong>Gemini 3.8 Live Extended Thinking</strong>, and verify your provider API key is configured under <strong>Provider API Keys</strong>.</li>
+          <li><strong>Folder access needs to be restored after reload:</strong> When using a browser-picked local directory, click <strong>Restore access</strong> in the folders bar so the browser re-grants read/write permission for the current session.</li>
+        </ul>
+      </section>
+    </main>
+  </div>
+  <script>
+    (() => {
+      try {
+        const savedTheme = localStorage.getItem("voicebox:theme");
+        if (savedTheme === "dark" || savedTheme === "light") {
+          document.documentElement.dataset.theme = savedTheme;
+        }
+      } catch {}
+      const search = document.querySelector(".help-search-input");
+      const sections = document.querySelectorAll(".help-section[data-help-section]");
+      search?.addEventListener("input", () => {
+        const q = (search.value || "").trim().toLowerCase();
+        for (const sec of sections) {
+          sec.hidden = Boolean(q) && !(sec.textContent || "").toLowerCase().includes(q);
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

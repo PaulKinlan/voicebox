@@ -121,8 +121,97 @@
            can stage and disclose; approval needs a one-use code from the host console. -->
       <button class="quiet icon-button" id="exts-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="exts" aria-label="Extensions" title="Extensions"><svg class="icon" aria-hidden="true"><use href="#i-box"/></svg><span class="sr-only" id="exts-count">Extensions</span></button>
       <button class="quiet icon-button" id="settings-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="settings" aria-label="Settings" title="Settings"><svg class="icon" aria-hidden="true"><use href="#i-gear"/></svg><span class="sr-only">Settings</span></button>
-      <button class="quiet icon-button" id="status-help-toggle" type="button" aria-label="Connection and voice status" aria-expanded="false" aria-controls="status-help-popover" title="Connection and voice status">?</button>
-      <div class="status-help-popover" id="status-help-popover" role="status" aria-live="polite" hidden></div>
+      <button class="quiet icon-button" id="status-help-toggle" type="button" aria-label="Help and user guide" aria-expanded="false" aria-controls="status-help-popover" title="Help, system status, and user guide (hotkey: ?)">?</button>
+      <div class="status-help-popover" id="status-help-popover" role="region" aria-labelledby="status-help-title" hidden>
+        <div class="help-popover-head">
+          <div class="help-popover-title-wrap">
+            <h2 class="help-popover-title" id="status-help-title">Voicebox Help &amp; User Guide</h2>
+            <p class="help-popover-subtitle">Everything you can do with live voice, camera, screen sharing, workspace files, mini-apps, and coding agents.</p>
+          </div>
+          <div class="help-popover-actions">
+            <a class="quiet help-full-link" href="/help.html" target="_blank" rel="noopener" id="help-open-full-page">Open Full Help Page</a>
+            <button class="icon-button" id="status-help-close" type="button" aria-label="Close help"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+          </div>
+        </div>
+        <div class="help-search-row">
+          <input type="search" id="help-search-input" class="help-search-input" placeholder="Search help topics, voice commands, or shortcuts…" aria-label="Search help topics" autocomplete="off">
+        </div>
+        <div class="help-status-banner" aria-label="Live system status">
+          <div class="help-status-pill"><span class="help-status-label">Server</span> <span id="help-server-val">checking…</span></div>
+          <div class="help-status-pill"><span class="help-status-label">Project Root</span> <span id="help-root-val">checking…</span></div>
+          <div class="help-status-pill"><span class="help-status-label">Live Voice</span> <span id="help-voice-val">Mic off</span></div>
+        </div>
+        <div class="help-sections" id="help-sections">
+          <section class="help-section" data-help-section>
+            <h3>1. Getting Started &amp; Voice Conversation</h3>
+            <p>Press the centered <strong>Microphone</strong> button (or press <kbd>M</kbd> on your keyboard) to start or stop a live two-way voice conversation with Voicebox.</p>
+            <ul>
+              <li><strong>Natural Barge-In:</strong> Speak at any time while the assistant is talking to interrupt and redirect the conversation, or click <strong>Stop reply</strong> to silence audio playback while keeping the microphone open.</li>
+              <li><strong>Text Turn Composer:</strong> Prefer typing or working in a quiet space? Use the text input below the microphone to send any question or file command directly.</li>
+            </ul>
+          </section>
+          <section class="help-section" data-help-section>
+            <h3>2. Live Vision: Camera &amp; Desktop Screen Sharing</h3>
+            <p>Share visual context with your live voice session using the controls right beside the microphone:</p>
+            <ul>
+              <li><strong>Camera &amp; Share screen:</strong> Click <strong>Camera</strong> to stream from your webcam or <strong>Share screen</strong> to share a window or display so the assistant can see what you are working on.</li>
+              <li><strong>Snapshots &amp; Activity Boundaries:</strong> Click <strong>Send frame</strong> to transmit an immediate still frame, use <strong>Push to talk</strong> to signal manual speech start and end boundaries, or click <strong>Stop video</strong> to end video capture.</li>
+              <li><strong>Resolution &amp; Frame Rate:</strong> Open <strong>Settings</strong> to choose Low, Medium, or High video frame resolution and 0.5, 1, or 2 frames per second.</li>
+            </ul>
+          </section>
+          <section class="help-section" data-help-section>
+            <h3>3. Models, Extended Thinking &amp; API Keys</h3>
+            <p>Open <strong>Settings</strong> in the top bar to configure your voice model, reasoning depth, and provider credentials:</p>
+            <ul>
+              <li><strong>Gemini 3.8 Live:</strong> Optimized for the fastest conversational turn response and lowest audio latency.</li>
+              <li><strong>Gemini 3.8 Live Extended Thinking:</strong> Enables deep multi-step reasoning with configurable thinking depth (<strong>Low</strong>, <strong>Medium</strong>, or <strong>High</strong>) and non-blocking background tool execution.</li>
+              <li><strong>Automatic Reconnect on Model Change:</strong> Switching your model or provider (Gemini Live, OpenAI Realtime, or Claude) while a live voice session is active automatically disconnects and restarts the session with the new selection.</li>
+              <li><strong>API Keys &amp; Voice Persona:</strong> Save your Gemini, OpenAI, and Anthropic keys on the host and customize voice timbre and assistant persona.</li>
+            </ul>
+          </section>
+          <section class="help-section" data-help-section>
+            <h3>4. Workspace Files, File Viewer &amp; Interactive Mini-Apps</h3>
+            <p>Everything you create or inspect lives in your active project folder:</p>
+            <ul>
+              <li><strong>Files Popover:</strong> Click the <strong>Files</strong> bubble in the Home deck (or bottom dock) to browse directories, filter files by name, create a new file, or open a folder from your computer.</li>
+              <li><strong>File Viewer &amp; In-Place Editor:</strong> Click any file (or say <em>"open notes.md"</em>) to view its contents, edit and save changes in place, copy text, or download the file.</li>
+              <li><strong>Interactive Mini-Apps:</strong> Any HTML application in your workspace can be launched as an interactive Mini-App right inside the room, with controls to expand, reload, edit, or minimize into the bottom-right bubble dock.</li>
+            </ul>
+          </section>
+          <section class="help-section" data-help-section>
+            <h3>5. Coding Harnesses, Paired Environments &amp; Extensions</h3>
+            <p>Connect external coding agents, switch workspaces, and expand assistant tools from the top bar:</p>
+            <ul>
+              <li><strong>Harnesses:</strong> Connect installed coding agents (<strong>Pi</strong>, <strong>Claude Code</strong>, <strong>Antigravity</strong>, <strong>Codex</strong>, <strong>OpenCode</strong>) to delegate complex multi-file engineering tasks by voice or text and track progress live.</li>
+              <li><strong>Environments:</strong> Switch between your browser workspace, a local folder on your computer, or a remote server connection.</li>
+              <li><strong>Extensions:</strong> Inspect running tools, review waiting proposals, or create custom local tool definitions for the assistant.</li>
+            </ul>
+          </section>
+          <section class="help-section" data-help-section>
+            <h3>6. Voice Commands &amp; Keyboard Shortcuts Reference</h3>
+            <div class="help-shortcuts-grid">
+              <div>
+                <h4>Keyboard Shortcuts</h4>
+                <ul>
+                  <li><kbd>M</kbd> — Start or stop the live microphone</li>
+                  <li><kbd>?</kbd> — Open or close this Help guide</li>
+                  <li><kbd>Escape</kbd> — Close the active popover or dialog</li>
+                  <li><kbd>Enter</kbd> — Send a typed turn from the text box</li>
+                </ul>
+              </div>
+              <div>
+                <h4>Spoken Commands</h4>
+                <ul>
+                  <li><em>"Open files"</em> / <em>"Show history"</em> / <em>"Open settings"</em></li>
+                  <li><em>"Switch to dark theme"</em> / <em>"Switch to light theme"</em></li>
+                  <li><em>"Open &lt;filename&gt;"</em> / <em>"Create a file called &lt;name&gt;"</em></li>
+                  <li><em>"Undo last change"</em> / <em>"Search for &lt;text&gt;"</em></li>
+                </ul>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
       <dialog class="envs" id="exts" closedby="any" aria-labelledby="exts-title">
         <div class="envs-form">
           <div class="settings-head">

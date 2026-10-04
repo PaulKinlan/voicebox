@@ -34,6 +34,15 @@ function renderMic(snap) {
   mic.setAttribute("aria-label", snap.capture ? "Stop listening (live voice)" : "Start listening (live voice)");
 }
 
+function formatLiveErrorMessage(raw) {
+  const msg = String(raw ?? "").trim();
+  if (!msg) return "Live voice encountered an unexpected error.";
+  if (/is not found for API version|not supported for bidiGenerateContent/i.test(msg)) {
+    return `Selected model is unavailable for live audio (${msg}). Open Settings to pick a supported live model.`;
+  }
+  return msg;
+}
+
 const audioClient = createAudioClient({
   workletUrl: "pcm-worklet.js",
   onState: (phase, snap) => {
@@ -71,8 +80,9 @@ const audioClient = createAudioClient({
     window.__voiceboxOnLiveText?.(text, role);
   },
   onError: (error, info) => {
-    recordDebug({ type: "audio.error", error: error.message, info });
-    if (voiceState) voiceState.textContent = info?.fatal ? `Live voice failed: ${error.message}` : `Ignored a malformed frame: ${error.message}`;
+    const friendly = formatLiveErrorMessage(error?.message ?? error);
+    recordDebug({ type: "audio.error", error: friendly, info });
+    if (voiceState) voiceState.textContent = info?.fatal ? `Live voice failed: ${friendly}` : `Ignored a malformed frame: ${friendly}`;
   },
   onDiagnostic: (d) => {
     recordDebug({ type: "audio.diagnostic", detail: d });
@@ -222,11 +232,28 @@ window.__voiceboxIsLiveSessionActive = () =>
   Boolean(capturing || (socket && socket.readyState === WebSocket.OPEN));
 window.__voiceboxRestartLiveSession = async () => {
   await audioClient.stopCapture();
-  try { socket?.close(); } catch { /* already closed */ }
+  try {
+    if (socket) {
+      socket.onclose = null;
+      socket.onerror = null;
+      socket.close();
+    }
+  } catch { /* already closed */ }
+  socket = null;
   capturing = false;
-  await startLive();
-  capturing = audioClient.snapshot().capture;
-  return { restarted: true, capturing };
+  try {
+    await startLive();
+    capturing = Boolean(audioClient.snapshot().capture);
+    return { restarted: true, capturing };
+  } catch (error) {
+    capturing = false;
+    setVoice("off");
+    renderMic(audioClient.snapshot());
+    if (voiceState) {
+      voiceState.textContent = `Live voice reconnect failed: ${formatLiveErrorMessage(error?.message ?? error)}`;
+    }
+    return { restarted: false, capturing: false, error: String(error?.message ?? error) };
+  }
 };
 window.__voiceboxSendLiveVideo = (jpegBase64, mimeType = "image/jpeg") => {
   if (socket && socket.readyState === WebSocket.OPEN && typeof jpegBase64 === "string" && jpegBase64) {
