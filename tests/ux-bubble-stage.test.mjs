@@ -929,6 +929,72 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
   assert.equal(helpCenterCheck.visibleAfterClear, helpCenterCheck.sectionCount, "clearing #help-search-input restores all help sections (7ua4)");
   assert.equal(helpCenterCheck.closedAfterCloseBtn, true, "clicking #status-help-close closes #status-help-popover (7ua4)");
 
+  // Verify Environments ? help button (#envs-help -> #envs-help-panel, voicebox-beads-esxf)
+  // and Harnesses Live Project Integration Loop (#harness-project-loop, voicebox-beads-b9oz / vv7i)
+  const envsAndHarnessCheck = await page.evaluate(() => {
+    const envsOpen = document.getElementById("envs-open");
+    const envsDialog = document.getElementById("envs");
+    const envsHelpBtn = document.getElementById("envs-help");
+    const envsHelpPanel = document.getElementById("envs-help-panel");
+    const envsClose = document.getElementById("envs-close");
+    if (!envsOpen || !envsDialog || !envsHelpBtn || !envsHelpPanel || !envsClose) return null;
+
+    envsOpen.click();
+    const envsHelpInitiallyHidden = envsHelpPanel.hidden;
+    envsHelpBtn.click();
+    const envsHelpShownAfterClick = !envsHelpPanel.hidden && envsHelpBtn.getAttribute("aria-expanded") === "true";
+    const envsHelpText = envsHelpPanel.textContent?.trim() ?? "";
+    envsHelpBtn.click();
+    const envsHelpHiddenOnSecondClick = envsHelpPanel.hidden && envsHelpBtn.getAttribute("aria-expanded") === "false";
+    envsDialog.close();
+
+    const harnessesOpen = document.getElementById("harnesses-open");
+    const harnessesDialog = document.getElementById("harnesses-dialog");
+    const harnessLoop = document.getElementById("harness-project-loop");
+    const harnessContext = document.getElementById("harness-project-context");
+    const harnessInput = document.getElementById("harness-task-input");
+    const harnessSend = document.getElementById("harness-task-send");
+    const harnessSave = document.getElementById("harness-save-output");
+    const harnessFiles = document.getElementById("harness-changed-files");
+    if (!harnessesOpen || !harnessesDialog || !harnessLoop || !harnessContext || !harnessInput || !harnessSend || !harnessSave || !harnessFiles) {
+      return null;
+    }
+
+    harnessesOpen.click();
+    const contextText = harnessContext.textContent?.trim() ?? "";
+    // Simulate a completed harness task with changedFiles to verify live project loop UI
+    window.__voiceboxOnTask?.({
+      id: "task-test-loop",
+      state: "completed",
+      status: "completed",
+      summary: "Analyzed workspace notes",
+      output: "# Harness Analysis\nAll checks clear.",
+      changedFiles: ["notes.md"],
+    });
+    const saveVisibleAfterTask = !harnessSave.hidden;
+    const chipCount = harnessFiles.querySelectorAll(".harness-file-chip").length;
+    harnessesDialog.close();
+
+    return {
+      envsHelpInitiallyHidden,
+      envsHelpShownAfterClick,
+      envsHelpText,
+      envsHelpHiddenOnSecondClick,
+      contextText,
+      saveVisibleAfterTask,
+      chipCount,
+    };
+  });
+  assert.ok(envsAndHarnessCheck, "#envs-help-panel and #harness-project-loop elements exist (esxf, b9oz)");
+  assert.equal(envsAndHarnessCheck.envsHelpInitiallyHidden, true, "#envs-help-panel is initially hidden when #envs opens (esxf)");
+  assert.equal(envsAndHarnessCheck.envsHelpShownAfterClick, true, "clicking #envs-help opens #envs-help-panel and sets aria-expanded=true (esxf)");
+  assert.match(envsAndHarnessCheck.envsHelpText, /What is an environment\?/i, "#envs-help-panel explains what an environment is (esxf)");
+  assert.match(envsAndHarnessCheck.envsHelpText, /How to add/i, "#envs-help-panel explains how to add an environment (esxf)");
+  assert.equal(envsAndHarnessCheck.envsHelpHiddenOnSecondClick, true, "clicking #envs-help again hides #envs-help-panel (esxf)");
+  assert.match(envsAndHarnessCheck.contextText, /Active project context:/i, "#harness-project-context displays the active project workspace (b9oz)");
+  assert.equal(envsAndHarnessCheck.saveVisibleAfterTask, true, "#harness-save-output appears when harness output is available (b9oz)");
+  assert.equal(envsAndHarnessCheck.chipCount, 1, "#harness-changed-files renders clickable file chip for touched project files (b9oz)");
+
   // Verify standalone /help.html is served in Standards Mode and passes plain-language check
   await page.goto(`${server.base}/help.html`);
   const { identifiersInRenderedText, READ_VISIBLE_TEXT } = await import("../tools/rendered-plain-language.mjs");

@@ -34,7 +34,7 @@ const WANTED = {
   micSelect: "mic-select", outSelect: "out-select",
   micDeviceState: "mic-device-state", outDeviceState: "out-device-state",
   micHotkey: "mic-hotkey", micHotkeyState: "mic-hotkey-state", micHotkeyBadge: "mic-hotkey-badge",
-  envs: "envs", envsOpen: "envs-open", envsClose: "envs-close", envList: "env-list", envCount: "envs-count", envNote: "env-note",
+  envs: "envs", envsOpen: "envs-open", envsClose: "envs-close", envsHelp: "envs-help", envsHelpPanel: "envs-help-panel", envList: "env-list", envCount: "envs-count", envNote: "env-note",
   envAdd: "env-add", envAddLabel: "env-add-label", envAddOrigin: "env-add-origin", envAddBtn: "env-add-btn",
   // The extension surface (voicebox-beads-vwb): one source (/api/extensions + /api/extensions/catalogue),
   // five states in five sections, never mixed — a present-but-unreviewed extension is never green
@@ -89,6 +89,10 @@ const WANTED = {
   harnessAgentName: "harness-agent-name", harnessAgentSelect: "harness-agent-select",
   harnessAgentModel: "harness-agent-model", harnessConfigSave: "harness-config-save",
   harnessConfigNote: "harness-config-note",
+  harnessProjectLoop: "harness-project-loop", harnessProjectContext: "harness-project-context",
+  harnessTaskInput: "harness-task-input", harnessTaskSend: "harness-task-send",
+  harnessSaveOutput: "harness-save-output", harnessLoopStatus: "harness-loop-status",
+  harnessChangedFiles: "harness-changed-files",
   changelogOpen: "changelog-open", changelogDialog: "changelog-dialog",
   changelogClose: "changelog-close", changelogRefresh: "changelog-refresh",
   changelogStatus: "changelog-status", changelogCommits: "changelog-commits",
@@ -3810,10 +3814,18 @@ on(els.extManageForm, "submit", async (event) => {
 });
 // The heading's explanation, set as the button's tooltip FROM the one paragraph that carries it —
 // so the hover text and the screen-reader text cannot drift into two different sentences.
+// Clicking the ? button toggles the inline Environments guide & instructions panel.
 {
   const help = document.getElementById("envs-help");
   const text = document.getElementById("envs-help-text");
+  const panel = document.getElementById("envs-help-panel");
   if (help && text) help.title = text.textContent.trim();
+  if (help && panel) {
+    help.addEventListener("click", () => {
+      panel.hidden = !panel.hidden;
+      help.setAttribute("aria-expanded", String(!panel.hidden));
+    });
+  }
 }
 
 on(els.envsOpen, "click", () => {
@@ -4051,6 +4063,7 @@ async function checkHarnesses() {
     if (els.harnessesScope) {
       els.harnessesScope.textContent = "Connect one or more installed coding agents to handle delegated background tasks.";
     }
+    syncHarnessProjectContext();
     const readyCount = entries.filter((r) => r.delegation?.ok || r.state === "present" || r.state === "configured").length;
     els.harnessesStatus.textContent = `${readyCount} of ${entries.length} harnesses ready on this host.`;
   } catch (error) {
@@ -4059,6 +4072,98 @@ async function checkHarnesses() {
     if (els.harnessesCheck) els.harnessesCheck.disabled = false;
   }
 }
+
+let lastHarnessOutput = "";
+
+function syncHarnessProjectContext() {
+  if (!els.harnessProjectContext) return;
+  const rootLabel = els.listingRoot?.textContent?.trim() || els.rootKind?.textContent?.trim() || "Active workspace";
+  const folderSuffix = listingDir ? ` (folder: ${listingDir})` : "";
+  els.harnessProjectContext.textContent = `Active project context: ${rootLabel}${folderSuffix}`;
+}
+
+function renderHarnessChangedFiles(files) {
+  if (!els.harnessChangedFiles) return;
+  const list = Array.isArray(files) ? files.map((f) => String(f || "").trim()).filter(Boolean) : [];
+  if (list.length === 0) {
+    els.harnessChangedFiles.hidden = true;
+    els.harnessChangedFiles.replaceChildren();
+    return;
+  }
+  els.harnessChangedFiles.hidden = false;
+  els.harnessChangedFiles.replaceChildren(
+    ...list.map((filePath) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "harness-file-chip";
+      btn.textContent = `Open ${filePath}`;
+      btn.addEventListener("click", () => {
+        if (els.harnessesDialog?.open) els.harnessesDialog.close();
+        void showFile(filePath);
+      });
+      return btn;
+    }),
+  );
+}
+
+on(els.harnessTaskSend, "click", async () => {
+  const prompt = (els.harnessTaskInput?.value ?? "").trim();
+  if (!prompt) {
+    if (els.harnessLoopStatus) els.harnessLoopStatus.textContent = "Enter a task for the active coding harness first.";
+    return;
+  }
+  if (els.harnessTaskSend) els.harnessTaskSend.disabled = true;
+  if (els.harnessLoopStatus) els.harnessLoopStatus.textContent = "Running task in project workspace…";
+  try {
+    const res = await request("/api/delegate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ task: prompt, ...(listingDir ? { dir: listingDir } : {}) }),
+    });
+    const output = String(res?.output ?? res?.summary ?? res?.action ?? res?.why ?? "Task submitted to active harness.").trim();
+    lastHarnessOutput = output;
+    if (els.harnessLoopStatus) els.harnessLoopStatus.textContent = output;
+    if (els.harnessSaveOutput) els.harnessSaveOutput.hidden = !lastHarnessOutput;
+    const changed = res?.changedFiles ?? res?.projectIntegration?.changedFiles ?? [];
+    renderHarnessChangedFiles(changed);
+    void load();
+  } catch (error) {
+    if (els.harnessLoopStatus) {
+      els.harnessLoopStatus.textContent = `Could not run harness task: ${error?.why ?? error?.message ?? error}`;
+    }
+  } finally {
+    if (els.harnessTaskSend) els.harnessTaskSend.disabled = false;
+  }
+});
+
+on(els.harnessSaveOutput, "click", async () => {
+  if (!lastHarnessOutput) return;
+  if (els.harnessSaveOutput) els.harnessSaveOutput.disabled = true;
+  try {
+    const targetName = "harness-analysis.md";
+    if (roomFolder) {
+      await writeRoomFile(targetName, lastHarnessOutput);
+      await loadRoomFolder();
+    } else {
+      await request("/api/file", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: targetName, content: lastHarnessOutput }),
+      });
+      await load();
+    }
+    if (els.harnessLoopStatus) els.harnessLoopStatus.textContent = `Saved output to ${targetName} in the active project.`;
+    renderHarnessChangedFiles(["harness-analysis.md"]);
+    if (els.harnessesDialog?.open) els.harnessesDialog.close();
+    await showFile(targetName);
+  } catch (error) {
+    if (els.harnessLoopStatus) {
+      els.harnessLoopStatus.textContent = `Could not save output to project: ${error?.why ?? error?.message ?? error}`;
+    }
+  } finally {
+    if (els.harnessSaveOutput) els.harnessSaveOutput.disabled = false;
+  }
+});
 
 async function openAgentProgressTracker() {
   let html = "";
@@ -4101,6 +4206,7 @@ on(els.harnessesOpen, "click", () => {
   if (!els.harnessesDialog || els.harnessesDialog.open) return;
   els.harnessesDialog.showModal();
   els.harnessesOpen?.setAttribute("aria-expanded", "true");
+  syncHarnessProjectContext();
   if (els.harnessesList && els.harnessesList.children.length === 0) {
     void checkHarnesses();
   }
@@ -5125,6 +5231,18 @@ window.__voiceboxOnTask = (task) => {
     taskCardController.setTask(task);
   }
   if (task) {
+    const outText = [task.output, task.stdout, task.summary].filter(Boolean).join("\n").trim();
+    if (outText) {
+      lastHarnessOutput = outText;
+      if (els.harnessSaveOutput) els.harnessSaveOutput.hidden = false;
+    }
+    const changed = task.changedFiles ?? task.projectIntegration?.changedFiles ?? [];
+    if (Array.isArray(changed) && changed.length > 0) {
+      renderHarnessChangedFiles(changed);
+    }
+    if (task.status === "completed" || task.state === "completed" || task.state === "finished" || task.outcome === "finished") {
+      void load();
+    }
     appendWorkActivity({
       kind: task.state === "failed" ? "error" : "command",
       label: `Task · ${task.state || "active"}`,

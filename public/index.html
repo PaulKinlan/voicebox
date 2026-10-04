@@ -94,6 +94,16 @@
           </details>
           <h3 class="ext-section">Task Delegation</h3>
           <p class="env-note" id="harnesses-scope"></p>
+          <div class="harness-project-loop" id="harness-project-loop">
+            <p class="env-hint" id="harness-project-context">Active project: checking workspace…</p>
+            <div class="env-add">
+              <input id="harness-task-input" type="text" placeholder="Ask active harness to analyze or update the project…" aria-label="Task for coding harness" autocomplete="off">
+              <button class="quiet" id="harness-task-send" type="button">Run in Project</button>
+              <button class="quiet" id="harness-save-output" type="button" hidden>Save Output to Project</button>
+            </div>
+            <p class="env-note" id="harness-loop-status" role="status" aria-live="polite"></p>
+            <div class="harness-changed-files" id="harness-changed-files" hidden></div>
+          </div>
           <p class="env-hint">Select a harness above or configure an agent directly in this dialog — no startup environment variables required.</p>
           <p class="env-hint">Each harness runs under its own host permissions and credentials.</p>
         </form>
@@ -329,9 +339,24 @@
                  tooltip that repeats it would be the third copy of one fact. The text lives once, in
                  the paragraph below, and the button's tooltip is set from it at boot so the two cannot
                  drift apart. -->
-            <button class="icon-button" id="envs-help" type="button" aria-label="What these options mean" aria-describedby="envs-help-text">?</button>
+            <button class="icon-button" id="envs-help" type="button" aria-label="What these options mean" aria-describedby="envs-help-text" aria-expanded="false" aria-controls="envs-help-panel">?</button>
             <button class="icon-button" id="envs-close" type="submit" aria-label="Close environments" autofocus><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
-            <p class="sr-only" id="envs-help-text">Environments are where your project files live and where commands run: this browser (OPFS), your local machine, or a remote server.</p>
+            <p class="sr-only" id="envs-help-text">Environments are where your project files live and where commands run: this browser, your local machine, or a remote server.</p>
+          </div>
+          <div class="envs-help-panel" id="envs-help-panel" hidden>
+            <h3 class="env-add-title">What is an environment?</h3>
+            <p class="env-hint">An environment defines where your project files live and where tools and coding agents run:</p>
+            <ul class="envs-help-list">
+              <li><strong>Browser Workspace:</strong> Built-in browser storage for quick notes, files, and interactive mini-apps with zero machine setup.</li>
+              <li><strong>Local Machine Folder:</strong> A project folder on your computer where files are read and edited directly on disk.</li>
+              <li><strong>Remote Server Connection:</strong> Another machine running Voicebox on your local network or private tailnet.</li>
+            </ul>
+            <h3 class="env-add-title">How to add &amp; connect an environment</h3>
+            <ol class="envs-help-list">
+              <li>Start the Voicebox server on the target machine (for example <code>http://127.0.0.1:8787</code> or a network host URL).</li>
+              <li>Enter a friendly <strong>Name</strong> (such as <em>atlas box</em>) and the server <strong>Origin URL</strong> under <strong>Add an environment</strong> below, then click <strong>Add environment</strong>.</li>
+              <li>Click <strong>Pair</strong> on the added row to authorize the connection, then click <strong>Use</strong> to switch your active workspace to that environment.</li>
+            </ol>
           </div>
           <ul class="env-list" id="env-list"></ul>
           <div class="env-add-block">
