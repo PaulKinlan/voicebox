@@ -1133,15 +1133,27 @@ if (activeHarness) activeHarnesses.add(activeHarness);
 // at admission — a configured harness that cannot run is a named fact, never a crash and
 // never a silent drop. The pi-acp executor is constructed unconditionally because its own
 // check() IS the honest answer when the machine lacks a verified adapter install.
+function broadcastHarnessIntegration(integration) {
+  if (!integration) return;
+  const frame = JSON.stringify({
+    type: "harness_project_integration",
+    integration,
+  });
+  try { pageSocket?.send(frame); } catch {}
+  try { runningSession?.socket?.send(frame); } catch {}
+}
 const piExecutor = createPiAcpExecutor({
   decide: permissions.decide,
   root: () => active?.root,
+  onProjectIntegration: broadcastHarnessIntegration,
 });
-const claudeExecutor = createClaudeAcpExecutor();
-const antigravityExecutor = createAntigravityExecutor({ root: () => active?.root });
-const codexExecutor = createCodexExecutor({ root: () => active?.root });
-const geminiCliExecutor = createGeminiCliExecutor({ root: () => active?.root });
-const openCodeExecutor = createOpenCodeExecutor({ root: () => active?.root });
+const claudeExecutor = createClaudeAcpExecutor({
+  onProjectIntegration: broadcastHarnessIntegration,
+});
+const antigravityExecutor = createAntigravityExecutor({ root: () => active?.root, onProjectIntegration: broadcastHarnessIntegration });
+const codexExecutor = createCodexExecutor({ root: () => active?.root, onProjectIntegration: broadcastHarnessIntegration });
+const geminiCliExecutor = createGeminiCliExecutor({ root: () => active?.root, onProjectIntegration: broadcastHarnessIntegration });
+const openCodeExecutor = createOpenCodeExecutor({ root: () => active?.root, onProjectIntegration: broadcastHarnessIntegration });
 // 'claude' is registered too: executorForAgent derives adapter from the raw
 // harness name for agents that do not set agentConfig.adapter — one key short
 // would re-create today's half-refusal (voicebox-beads-a74y design note).
