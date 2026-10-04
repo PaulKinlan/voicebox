@@ -9,7 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isVictim, selectVictims } from "../scripts/reap-stale-servers.mjs";
+import { isVictim, selectVictims, configSaysBare } from "../scripts/reap-stale-servers.mjs";
 
 const WT = "/home/paulkinlan/worktrees/vb-test";
 const CANON = "/home/paulkinlan/voicebox";
@@ -69,6 +69,28 @@ test("FLEET-WIDE by declaration: a cap worktree server is a victim (astra's bloc
     true,
     "the audiofeed process that motivated the fleet-wide declaration must stay a victim",
   );
+});
+
+// ── canonical health: core.bare detection (voicebox-beads-6p3y) ─────────────
+
+test("configSaysBare: true detection (the 6p3y incident)", () => {
+  const realShape = `[core]
+	repositoryformatversion = 0
+	filemode = true
+	bare = true
+[remote "origin"]
+	url = https://github.com/PaulKinlan/voicebox.git
+`;
+  assert.equal(configSaysBare(realShape), true, "the measured incident shape must detect");
+  assert.equal(configSaysBare("[core]\n\tbare = true\n"), true);
+});
+
+test("configSaysBare: healthy config does not detect", () => {
+  assert.equal(configSaysBare("[core]\n	bare = false\n"), false);
+  assert.equal(configSaysBare("[core]\n	repositoryformatversion = 0\n"), false);
+  assert.equal(configSaysBare(""), false);
+  // 'bare' as a substring of another key must not match
+  assert.equal(configSaysBare("[core]\n	barefoo = true\n"), false);
 });
 
 // ── selectVictims: the ps-lines layer ────────────────────────────────────────

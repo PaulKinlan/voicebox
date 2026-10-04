@@ -122,7 +122,54 @@ export function staleTmpDirs({ entries, now = Date.now() } = {}) {
   return out;
 }
 
+// ── CANONICAL HEALTH (voicebox-beads-6p3y) ─────────────────────────────────
+// On 2026-10-01 the canonical checkout ~/voicebox was found with core.bare=true
+// (set 09:33 BST, attribution unknown — no fleet script writes it, so an ad-hoc
+// lane command). Every work-tree op in the canonical failed for hours: git
+// status/checkout/merge all refuse in a bare repo, while bd/Dolt kept working —
+// so the failure is invisible until someone tries to work, and then costs hours.
+// The reaper runs every 15 minutes regardless of dry-run mode, so it is the
+// right place for this health check: detect and auto-repair (config-only,
+// idempotent, never moves HEAD), loudly.
+
+/** Pure: does this git-config content say the canonical is (wrongly) bare? */
+export function configSaysBare(configText) {
+  // git writes the key indented with a tab inside [core] — ^bare never matches.
+  return /^\s*bare\s*=\s*true\b/m.test(configText);
+}
+
+/** Detect + repair core.bare=true in the canonical checkout. Config-only,
+ *  idempotent, NEVER moves HEAD or touches the index — safe beside dry-run.
+ *  Returns a log line, or null when healthy. */
+export function repairCanonicalBare({ canonical = CANONICAL, now = new Date() } = {}) {
+  const configPath = path.join(canonical, ".git", "config");
+  let configText = "";
+  try {
+    configText = readFileSync(configPath, "utf8");
+  } catch {
+    return null; // no canonical config — nothing to guard here
+  }
+  if (!configSaysBare(configText)) return null;
+  const stamp = now.toISOString();
+  try {
+    execFileSync("git", ["-C", canonical, "config", "--bool", "core.bare", "false"], { stdio: "ignore" });
+    // core.worktree explicit: a bare-flagged repo often loses it, and without
+    // it git cannot find the working tree even after bare=false.
+    if (!/^\s*worktree\s*=/m.test(configText)) {
+      execFileSync("git", ["-C", canonical, "config", "core.worktree", canonical], { stdio: "ignore" });
+    }
+    return `[reap:health] REPAIRED canonical ${canonical}: core.bare was true (set ~${stamp}); restored work-tree mode. A lane ran 'git config core.bare true' here or a tool misconfigured it — find the setter (voicebox-beads-6p3y).`;
+  } catch (e) {
+    return `[reap:health] FAILED to repair canonical ${canonical}: ${e.message} — run: git -C ${canonical} config --bool core.bare false && git -C ${canonical} config core.worktree ${canonical}`;
+  }
+}
+
 function main() {
+  // CANONICAL HEALTH first — config repair is idempotent and never touches
+  // HEAD, so it runs even in dry-run; a bare canonical is the invisible
+  // failure that costs hours (voicebox-beads-6p3y).
+  const healthLine = repairCanonicalBare();
+  if (healthLine) console.log(healthLine);
   const dryRun = process.argv.includes("--dry-run");
   // The gate lock's EXISTENCE is not proof a gate is live — a crashed gate can
   // leave the file behind (measured: a 4h-old zero-byte lock). A gate's live
