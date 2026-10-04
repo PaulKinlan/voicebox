@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { gitEnv } from "../lib/git-env.mjs";
 import {
   LANDING_INSPECTOR_APP_ID,
   LANDING_INSPECTOR_MINI_APP,
@@ -89,6 +90,7 @@ function git(cwd, args) {
   return execFileSync("git", args, {
     cwd,
     encoding: "utf8",
+    env: gitEnv(),
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
 }
@@ -249,4 +251,43 @@ test("branch-landing: exports valid Standards-Mode mini-app HTML and passes plai
     [],
     `Expected zero plain-language violations in public/apps/landing-inspector.html, found: ${JSON.stringify(hits)}`,
   );
+});
+
+test("branch-landing: a poisoned GIT_DIR does not steer candidate branch discovery or fixture creation (voicebox-beads-n48i)", (t) => {
+  const foreignDir = fs.mkdtempSync(path.join(os.tmpdir(), "voicebox-foreign-repo-"));
+  t.after(() => {
+    fs.rmSync(foreignDir, { recursive: true, force: true });
+  });
+  git(foreignDir, ["init", "-b", "main"]);
+  git(foreignDir, ["config", "user.name", "Foreign Repo"]);
+  git(foreignDir, ["config", "user.email", "foreign@example.invalid"]);
+  git(foreignDir, ["config", "commit.gpgsign", "false"]);
+  fs.writeFileSync(path.join(foreignDir, "foreign.txt"), "foreign data\n", "utf8");
+  git(foreignDir, ["add", "foreign.txt"]);
+  git(foreignDir, ["commit", "-m", "commit in foreign repo"]);
+
+  const savedGitDir = process.env.GIT_DIR;
+  const savedGitWorkTree = process.env.GIT_WORK_TREE;
+  try {
+    process.env.GIT_DIR = path.join(foreignDir, ".git");
+    process.env.GIT_WORK_TREE = foreignDir;
+
+    // createTempGitRepo() and listCandidateBranches() must operate exclusively on the new temp repo,
+    // completely immune to the poisoned ambient GIT_DIR.
+    const repoDir = createTempGitRepo();
+    t.after(() => {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    });
+
+    const candidates = listCandidateBranches(repoDir, { baseBranch: "main" });
+    assert.equal(candidates.ok, true);
+    assert.equal(candidates.branches.length, 1);
+    assert.equal(candidates.branches[0].name, "feat/agent-patch");
+    assert.match(candidates.branches[0].subject, /update readme and add notes/);
+  } finally {
+    if (savedGitDir === undefined) delete process.env.GIT_DIR;
+    else process.env.GIT_DIR = savedGitDir;
+    if (savedGitWorkTree === undefined) delete process.env.GIT_WORK_TREE;
+    else process.env.GIT_WORK_TREE = savedGitWorkTree;
+  }
 });
