@@ -108,6 +108,9 @@ const WANTED = {
   syncToast: "sync-toast", syncToastMessage: "sync-toast-message",
   syncToastReload: "sync-toast-reload", syncToastDismiss: "sync-toast-dismiss",
   statusHelpToggle: "status-help-toggle", statusHelpPopover: "status-help-popover",
+  statusHelpClose: "status-help-close", helpSearchInput: "help-search-input",
+  helpOpenFullPage: "help-open-full-page", helpServerVal: "help-server-val",
+  helpRootVal: "help-root-val", helpVoiceVal: "help-voice-val", helpSections: "help-sections",
   visionCameraBtn: "vision-camera-btn", visionScreenBtn: "vision-screen-btn", visionPttBtn: "vision-ptt-btn",
   visionCoreCard: "vision-core-card", visionCoreVideo: "vision-core-video", visionCoreCanvas: "vision-core-canvas",
   visionCoreMeta: "vision-core-meta", visionSnapshotBtn: "vision-snapshot-btn", visionStopBtn: "vision-stop-btn",
@@ -5980,7 +5983,7 @@ function sqehWire() {
     }
   });
 
-  // Status mirror: the server dot, declared root, and live voice status, surfaced in the top-right help icon.
+  // Status mirror: the server dot, declared root, and live voice status, surfaced in the top-right Help Center.
   const mirror = () => {
     const conn = document.getElementById("sqeh-conn");
     const dot = document.getElementById("server-dot");
@@ -5989,26 +5992,62 @@ function sqehWire() {
     const voiceStateEl = document.getElementById("voice-state");
     const summary = `server ${dot?.textContent || dot?.dataset.ok || "unknown"}${rootKind ? ` · root ${rootKind.textContent}` : ""}`;
     if (conn && dot) conn.textContent = summary;
-    const detail = `${whereNote?.textContent || summary}${rootKind ? ` · ${rootKind.textContent}` : ""}${voiceStateEl?.textContent ? ` · ${voiceStateEl.textContent}` : ""}`;
-    if (els.statusHelpToggle) els.statusHelpToggle.title = detail;
-    if (els.statusHelpPopover && !els.statusHelpPopover.hidden) {
-      els.statusHelpPopover.textContent = detail;
-    }
+    const serverText = whereNote?.textContent || (dot?.dataset.ok === "true" ? "Connected" : dot?.dataset.ok === "false" ? "Unreachable" : "Checking…");
+    const rootText = rootKind?.textContent || "Checking…";
+    const voiceText = voiceStateEl?.textContent || "Mic off";
+    if (els.helpServerVal) els.helpServerVal.textContent = serverText;
+    if (els.helpRootVal) els.helpRootVal.textContent = rootText;
+    if (els.helpVoiceVal) els.helpVoiceVal.textContent = voiceText;
+    const detail = `${serverText} · ${rootText} · ${voiceText}`;
+    if (els.statusHelpToggle) els.statusHelpToggle.title = `Help & user guide (${detail})`;
   };
   mirror();
   setInterval(mirror, 2000);
 
   if (els.statusHelpToggle && els.statusHelpPopover) {
+    const setHelpOpen = (open) => {
+      els.statusHelpPopover.hidden = !open;
+      els.statusHelpToggle.setAttribute("aria-expanded", String(Boolean(open)));
+      if (open) {
+        mirror();
+      }
+    };
     els.statusHelpToggle.addEventListener("click", () => {
-      const nextOpen = els.statusHelpPopover.hidden;
-      els.statusHelpPopover.hidden = !nextOpen;
-      els.statusHelpToggle.setAttribute("aria-expanded", String(nextOpen));
-      if (nextOpen) mirror();
+      setHelpOpen(els.statusHelpPopover.hidden);
+    });
+    els.statusHelpClose?.addEventListener("click", () => {
+      setHelpOpen(false);
+    });
+    els.helpSearchInput?.addEventListener("input", () => {
+      const q = (els.helpSearchInput.value || "").trim().toLowerCase();
+      const sections = els.statusHelpPopover.querySelectorAll(".help-section[data-help-section]");
+      for (const sec of sections) {
+        if (!q) {
+          sec.hidden = false;
+        } else {
+          const text = (sec.textContent || "").toLowerCase();
+          sec.hidden = !text.includes(q);
+        }
+      }
     });
     document.addEventListener("pointerdown", (e) => {
       if (!els.statusHelpPopover.hidden && !e.target?.closest?.("#status-help-toggle, #status-help-popover")) {
-        els.statusHelpPopover.hidden = true;
-        els.statusHelpToggle.setAttribute("aria-expanded", "false");
+        setHelpOpen(false);
+      }
+    });
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !els.statusHelpPopover.hidden) {
+        setHelpOpen(false);
+        return;
+      }
+      if (e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const active = document.activeElement;
+        const tag = active?.tagName ? active.tagName.toUpperCase() : "";
+        const inEditable = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || active?.isContentEditable;
+        if (!inEditable && !document.querySelector("dialog[open]")) {
+          e.preventDefault();
+          setHelpOpen(els.statusHelpPopover.hidden);
+        }
       }
     });
   }

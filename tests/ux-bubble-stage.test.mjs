@@ -870,4 +870,81 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
   assert.match(syncToastCheck.shownText ?? "", /different revisions/, "#sync-toast-message explains the revision mismatch (rwtc)");
   assert.equal(syncToastCheck.hiddenAfterDismiss, true, "clicking #sync-toast-dismiss hides #sync-toast (rwtc)");
   assert.equal(syncToastCheck.staysHiddenForSameKey, true, "#sync-toast stays hidden for the dismissed revision key (rwtc)");
+
+  // Verify Comprehensive Help Center in #status-help-popover and standalone /help.html (voicebox-beads-7ua4)
+  const helpCenterCheck = await page.evaluate(() => {
+    const toggle = document.getElementById("status-help-toggle");
+    const popover = document.getElementById("status-help-popover");
+    const closeBtn = document.getElementById("status-help-close");
+    const searchInput = document.getElementById("help-search-input");
+    const fullPageLink = document.getElementById("help-open-full-page");
+    const serverVal = document.getElementById("help-server-val");
+    const rootVal = document.getElementById("help-root-val");
+    const voiceVal = document.getElementById("help-voice-val");
+    if (!toggle || !popover || !closeBtn || !searchInput || !fullPageLink || !serverVal || !rootVal || !voiceVal) {
+      return null;
+    }
+    const initiallyHidden = popover.hidden;
+    toggle.click();
+    const openAfterClick = !popover.hidden && toggle.getAttribute("aria-expanded") === "true";
+    const allSections = [...popover.querySelectorAll(".help-section[data-help-section]")];
+    const headings = allSections.map((s) => s.querySelector("h3")?.textContent?.trim() ?? "");
+
+    // Filter sections by typing in #help-search-input
+    searchInput.value = "Extended Thinking";
+    searchInput.dispatchEvent(new Event("input", { bubbles: true }));
+    const visibleAfterFilter = allSections.filter((s) => !s.hidden).length;
+
+    // Clear search filter
+    searchInput.value = "";
+    searchInput.dispatchEvent(new Event("input", { bubbles: true }));
+    const visibleAfterClear = allSections.filter((s) => !s.hidden).length;
+
+    closeBtn.click();
+    const closedAfterCloseBtn = popover.hidden && toggle.getAttribute("aria-expanded") === "false";
+
+    return {
+      initiallyHidden,
+      openAfterClick,
+      sectionCount: allSections.length,
+      headings,
+      fullPageHref: fullPageLink.getAttribute("href"),
+      hasServerStatus: Boolean(serverVal.textContent?.trim()),
+      hasRootStatus: Boolean(rootVal.textContent?.trim()),
+      hasVoiceStatus: Boolean(voiceVal.textContent?.trim()),
+      visibleAfterFilter,
+      visibleAfterClear,
+      closedAfterCloseBtn,
+    };
+  });
+  assert.ok(helpCenterCheck, "#status-help-toggle, #status-help-popover, #help-search-input, #help-open-full-page, and status pills exist (7ua4)");
+  assert.equal(helpCenterCheck.initiallyHidden, true, "#status-help-popover is initially hidden (7ua4)");
+  assert.equal(helpCenterCheck.openAfterClick, true, "clicking #status-help-toggle opens #status-help-popover (7ua4)");
+  assert.ok(helpCenterCheck.sectionCount >= 6, `expected at least 6 help sections, saw ${helpCenterCheck.sectionCount} (7ua4)`);
+  assert.equal(helpCenterCheck.fullPageHref, "/help.html", "#help-open-full-page links to /help.html (7ua4)");
+  assert.equal(helpCenterCheck.hasServerStatus, true, "#help-server-val displays live server status (7ua4)");
+  assert.equal(helpCenterCheck.hasRootStatus, true, "#help-root-val displays live root status (7ua4)");
+  assert.equal(helpCenterCheck.hasVoiceStatus, true, "#help-voice-val displays live voice status (7ua4)");
+  assert.ok(helpCenterCheck.visibleAfterFilter >= 1 && helpCenterCheck.visibleAfterFilter < helpCenterCheck.sectionCount, "#help-search-input filters help sections live (7ua4)");
+  assert.equal(helpCenterCheck.visibleAfterClear, helpCenterCheck.sectionCount, "clearing #help-search-input restores all help sections (7ua4)");
+  assert.equal(helpCenterCheck.closedAfterCloseBtn, true, "clicking #status-help-close closes #status-help-popover (7ua4)");
+
+  // Verify standalone /help.html is served in Standards Mode and passes plain-language check
+  await page.goto(`${server.base}/help.html`);
+  const { identifiersInRenderedText, READ_VISIBLE_TEXT } = await import("../tools/rendered-plain-language.mjs");
+  const helpPageFacts = await page.evaluate(new Function(`
+    const visibleText = ${READ_VISIBLE_TEXT};
+    return {
+      compatMode: document.compatMode,
+      title: document.title,
+      sectionCount: document.querySelectorAll(".help-section[data-help-section]").length,
+      backHref: document.getElementById("help-back-room")?.getAttribute("href") ?? null,
+      visibleText,
+    };
+  `));
+  assert.equal(helpPageFacts.compatMode, "CSS1Compat", "/help.html renders in Standards Mode (CSS1Compat) (7ua4)");
+  assert.ok(helpPageFacts.sectionCount >= 6, `/help.html has at least 6 comprehensive sections, saw ${helpPageFacts.sectionCount} (7ua4)`);
+  assert.equal(helpPageFacts.backHref, "/", "/help.html includes #help-back-room link back to / (7ua4)");
+  assert.deepEqual(identifiersInRenderedText(helpPageFacts.visibleText, new Set()), [], "/help.html passes rendered plain-language gate with zero hits (7ua4)");
 });
+
