@@ -220,6 +220,78 @@ window.__voiceboxLiveClient = audioClient;
 window.__voiceboxSetPlaybackVolume = (v) => audioClient.setPlaybackVolume(v);
 
 /**
+ * Wait for the reconnected live session to either become ready, or fail (voicebox-beads-0aez).
+ * Rejection / closure before ready indicates failure.
+ */
+function awaitLiveSessionVerdict(ws, client, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    if (client.snapshot().ready && ws && ws.readyState === WebSocket.OPEN) {
+      return resolve({ ok: true });
+    }
+
+    let settled = false;
+    let timer = null;
+
+    const cleanup = () => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (ws) {
+        ws.removeEventListener("close", onClose);
+        ws.removeEventListener("error", onError);
+        ws.removeEventListener("message", onMessage);
+      }
+    };
+
+    const fail = (reason) => {
+      cleanup();
+      resolve({ ok: false, reason });
+    };
+
+    const succeed = () => {
+      cleanup();
+      resolve({ ok: true });
+    };
+
+    const onClose = (e) => {
+      fail(`Socket closed (${e.code}${e.reason ? `: ${e.reason}` : ""})`);
+    };
+
+    const onError = () => {
+      fail("WebSocket transport error");
+    };
+
+    const onMessage = (event) => {
+      if (typeof event.data !== "string") return;
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === "state") {
+          if (msg.state === "ready") {
+            succeed();
+          } else if (msg.state === "closed" || msg.state === "error") {
+            fail(msg.detail?.why ?? msg.detail?.message ?? msg.state);
+          }
+        } else if (msg.type === "error" || msg.type === "refused") {
+          fail(msg.why ?? msg.error ?? msg.refused ?? "provider refused session");
+        }
+      } catch {}
+    };
+
+    if (ws) {
+      ws.addEventListener("close", onClose);
+      ws.addEventListener("error", onError);
+      ws.addEventListener("message", onMessage);
+    } else {
+      return fail("No socket");
+    }
+
+    timer = setTimeout(() => {
+      fail("Timed out waiting for live session readiness");
+    }, timeoutMs);
+  });
+}
+
+/**
  * Disconnect the current live session cleanly and restart with updated settings (voicebox-beads-vgeq, voicebox-beads-0aez).
  * If the restart fails or the new model is rejected, reports honest failure, sets voice to off,
  * and allows the caller to roll back to the previously working model.
@@ -258,14 +330,26 @@ async function disconnectAndRestartLive(opts = {}) {
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     connectFailed = true;
     if (!failReason) failReason = "Live socket closed or rejected by provider";
+  } else {
+    // Wait for the provider's readiness verdict (or failure/close before ready)
+    const verdict = await awaitLiveSessionVerdict(socket, audioClient, 8000);
+    if (!verdict.ok) {
+      connectFailed = true;
+      failReason = verdict.reason;
+    }
   }
 
   if (connectFailed) {
+    await audioClient.stopCapture().catch(() => {});
+    if (socket) {
+      try { socket.close(); } catch {}
+      socket = null;
+    }
     setVoice("off");
     capturing = false;
     renderMic(audioClient.snapshot());
     if (voiceState) {
-      voiceState.textContent = "Live session failed to start with chosen model · mic off";
+      voiceState.textContent = "Live session could not connect with chosen model · mic off";
     }
     return {
       restarted: false,

@@ -277,6 +277,7 @@ test("when model restart fails, rolls back to previous working model and reports
   // 2. Mock a live session active on the page and simulate restart failure
   await page.evaluate(() => {
     window.__mockLiveActive = true;
+    window.__origIsLiveActive = window.__voiceboxIsLiveActive;
     window.__voiceboxIsLiveActive = () => window.__mockLiveActive;
     window.__voiceboxIsLiveSessionActive = () => window.__mockLiveActive;
     window.__origRestart = window.__voiceboxDisconnectAndRestartLive;
@@ -311,7 +312,24 @@ test("when model restart fails, rolls back to previous working model and reports
   await page.evaluate(() => {
     window.__voiceboxDisconnectAndRestartLive = window.__origRestart;
     window.__voiceboxRestartLiveSession = window.__origRestart;
+    window.__voiceboxIsLiveActive = window.__origIsLiveActive;
+    window.__voiceboxIsLiveSessionActive = window.__origIsLiveActive;
     delete window.__origRestart;
+    delete window.__origIsLiveActive;
     delete window.__mockLiveActive;
   });
+});
+
+test("disconnectAndRestartLive detects socket closure before ready, sets mic to off and returns failed: true (voicebox-beads-0aez)", { timeout: 90000 }, async () => {
+  const result = await page.evaluate(async () => {
+    const outcome = await window.__voiceboxDisconnectAndRestartLive({ previousModel: "models/gemini-3.8-live" });
+    return {
+      outcome,
+      micPressed: document.getElementById("mic")?.getAttribute("aria-pressed"),
+      voiceState: document.getElementById("voice-state")?.textContent,
+    };
+  });
+
+  assert.equal(result.outcome.restarted, false, "restarted must be false when not running");
+  assert.equal(result.micPressed, "false", "mic must not claim to be listening");
 });
