@@ -5621,11 +5621,13 @@ server.on("upgrade", (req, socket) => {
         }
       }
       refreshShelfToolNames(); // the shelf is mutable: newly admitted tools declare without a restart (voicebox-beads-ri4k)
+      const requestedThinkingLevel = url.searchParams.get("thinkingLevel") || undefined;
       session = createLiveSession({
         // THE AGENT SETTINGS APPLY HERE, which is what stops them being dead controls: the provider a
         // person chose is the provider this session dials, and its model comes with it.
         provider,
         model,
+        thinkingLevel: requestedThinkingLevel,
         projectInstruction,
         // The agent settings ride the seam: the personality composed over the mandatory base
         // (composeAgentInstruction cannot be handed a base — that is the mechanism), and the

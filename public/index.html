@@ -165,7 +165,7 @@
             <p>Share visual context with your live voice session using the controls right beside the microphone:</p>
             <ul>
               <li><strong>Camera &amp; Share screen:</strong> Click <strong>Camera</strong> to stream from your webcam or <strong>Share screen</strong> to share a window or display so the assistant can see what you are working on.</li>
-              <li><strong>Snapshots &amp; Activity Boundaries:</strong> Click <strong>Send frame</strong> to transmit an immediate still frame, use <strong>Push to talk</strong> to signal manual speech start and end boundaries, or click <strong>Stop video</strong> to end video capture.</li>
+              <li><strong>Snapshots &amp; Activity Boundaries:</strong> Click <strong>Send frame</strong> to transmit an immediate still frame, click <strong>Stop video</strong> to end video capture, or enable <strong>Push to talk</strong> in Settings if you want manual speech start and end controls.</li>
               <li><strong>Resolution &amp; Frame Rate:</strong> Open <strong>Settings</strong> to choose Low, Medium, or High video frame resolution and 0.5, 1, or 2 frames per second.</li>
             </ul>
           </section>
@@ -174,8 +174,8 @@
             <p>Open <strong>Settings</strong> in the top bar to configure your voice model, reasoning depth, and provider credentials:</p>
             <ul>
               <li><strong>Gemini 3.8 Live:</strong> Optimized for the fastest conversational turn response and lowest audio latency.</li>
-              <li><strong>Gemini 3.8 Live Extended Thinking:</strong> Enables deep multi-step reasoning with configurable thinking depth (<strong>Low</strong>, <strong>Medium</strong>, or <strong>High</strong>) and non-blocking background tool execution.</li>
-              <li><strong>Automatic Reconnect on Model Change:</strong> Switching your model or provider (Gemini Live, OpenAI Realtime, or Claude) while a live voice session is active automatically disconnects and restarts the session with the new selection.</li>
+              <li><strong>Gemini 3.8 Live Extended Thinking:</strong> Enables deep multi-step reasoning with configurable <strong>Extended thinking depth</strong> (<strong>Low</strong>, <strong>Medium</strong>, or <strong>High</strong> under <strong>Agent Settings</strong> for both audio and vision sessions) and non-blocking background tool execution.</li>
+              <li><strong>Automatic Reconnect on Model Change:</strong> Switching your model, thinking depth, or provider (Gemini Live, OpenAI Realtime, or Claude) while a live voice session is active automatically disconnects and restarts the session with the new selection.</li>
               <li><strong>API Keys &amp; Voice Persona:</strong> Save your Gemini, OpenAI, and Anthropic keys on the host and customize voice timbre and assistant persona.</li>
             </ul>
           </section>
@@ -412,7 +412,7 @@
           <button class="quiet interrupt" id="interrupt" type="button" disabled>Stop reply</button>
           <button class="quiet" id="vision-camera-btn" type="button" aria-pressed="false" title="Stream camera to live session">Camera</button>
           <button class="quiet" id="vision-screen-btn" type="button" aria-pressed="false" title="Share screen or window with live session">Share screen</button>
-          <button class="quiet" id="vision-ptt-btn" type="button" aria-pressed="false" title="Signal manual speech activity start or end">Push to talk</button>
+          <button class="quiet" id="vision-ptt-btn" type="button" aria-pressed="false" title="Signal manual speech activity start or end" hidden>Push to talk</button>
         </div>
         <div class="vision-core-card" id="vision-core-card" hidden>
           <video id="vision-core-video" autoplay playsinline muted></video>
@@ -748,6 +748,11 @@
             <input type="text" id="mic-hotkey" class="setting-input" aria-labelledby="mic-hotkey-label" maxlength="1" value="M" autocomplete="off" spellcheck="false">
             <p class="device-state" id="mic-hotkey-state">Press 'M' to toggle mic</p>
           </div>
+          <div class="device-row" id="ptt-settings-row">
+            <h3 id="setting-ptt-label">Push to talk control</h3>
+            <label class="setting-checkbox-label"><input type="checkbox" id="setting-ptt-enabled" aria-labelledby="setting-ptt-label"> Show Push to talk button beside microphone</label>
+            <p class="device-state" id="setting-ptt-state">Hidden — automatic voice detection active</p>
+          </div>
           <div class="device-row">
             <h3 id="out-label">Reply output</h3>
             <select id="out-select" aria-labelledby="out-label"></select>
@@ -765,6 +770,15 @@
             <h3 id="agent-model-label">Model</h3>
             <select id="agent-model" aria-labelledby="agent-model-label"></select>
             <p class="device-state" id="agent-model-state">Not asked yet</p>
+          </div>
+          <div class="device-row" id="thinking-level-row">
+            <h3 id="setting-thinking-level-label">Extended thinking depth</h3>
+            <select id="setting-thinking-level" aria-labelledby="setting-thinking-level-label">
+              <option value="low">Low — lowest latency</option>
+              <option value="medium" selected>Medium — balanced reasoning</option>
+              <option value="high">High — deep multi-step reasoning</option>
+            </select>
+            <p class="device-state" id="setting-thinking-level-state">Applies to Gemini 3.8 Live Extended Thinking (audio &amp; vision)</p>
           </div>
           <div class="device-row">
             <h3 id="agent-voice-label">Voice</h3>
@@ -788,7 +802,7 @@
           </div>
           <fieldset class="settings-group" id="settings-live-vision">
             <legend>Live Vision &amp; Video</legend>
-            <p class="device-state" id="vision-settings-hint">Configure camera and screen frame resolution, frame rate, and thinking depth for Live sessions.</p>
+            <p class="device-state" id="vision-settings-hint">Configure camera and screen frame resolution and frame rate for Live sessions.</p>
             <div class="device-row">
               <h3 id="setting-vision-resolution-label">Video frame resolution</h3>
               <select id="setting-vision-resolution" aria-labelledby="setting-vision-resolution-label">
@@ -803,14 +817,6 @@
                 <option value="0.5">0.5 frames per second</option>
                 <option value="1" selected>1 frame per second (default)</option>
                 <option value="2">2 frames per second</option>
-              </select>
-            </div>
-            <div class="device-row">
-              <h3 id="setting-thinking-level-label">Extended thinking depth</h3>
-              <select id="setting-thinking-level" aria-labelledby="setting-thinking-level-label">
-                <option value="low">Low — lowest latency</option>
-                <option value="medium" selected>Medium — balanced reasoning</option>
-                <option value="high">High — deep multi-step reasoning</option>
               </select>
             </div>
             <div class="settings-actions">

@@ -118,9 +118,10 @@ const WANTED = {
   visionCameraBtn: "vision-camera-btn", visionScreenBtn: "vision-screen-btn", visionPttBtn: "vision-ptt-btn",
   visionCoreCard: "vision-core-card", visionCoreVideo: "vision-core-video", visionCoreCanvas: "vision-core-canvas",
   visionCoreMeta: "vision-core-meta", visionSnapshotBtn: "vision-snapshot-btn", visionStopBtn: "vision-stop-btn",
+  settingPttEnabled: "setting-ptt-enabled", settingPttState: "setting-ptt-state",
   settingVisionResolution: "setting-vision-resolution", settingVisionFps: "setting-vision-fps",
-  settingThinkingLevel: "setting-thinking-level", settingStartCamera: "setting-start-camera",
-  settingStartScreen: "setting-start-screen",
+  settingThinkingLevel: "setting-thinking-level", settingThinkingLevelState: "setting-thinking-level-state",
+  settingStartCamera: "setting-start-camera", settingStartScreen: "setting-start-screen",
 };
 const els = {};
 const missing = [];
@@ -6218,10 +6219,26 @@ function sqehWire() {
       return patch;
     }
   };
+  const formatThinkingLevelState = (level) => {
+    const normalized = String(level || "medium").toLowerCase();
+    const label = normalized === "high" ? "High" : normalized === "low" ? "Low" : "Medium";
+    return `${label} depth — applies to Gemini 3.8 Live Extended Thinking (audio & vision)`;
+  };
   const savedVision = readVisionPrefs();
   if (els.settingVisionResolution && savedVision.resolution) els.settingVisionResolution.value = savedVision.resolution;
   if (els.settingVisionFps && savedVision.fps) els.settingVisionFps.value = String(savedVision.fps);
   if (els.settingThinkingLevel && savedVision.thinkingLevel) els.settingThinkingLevel.value = savedVision.thinkingLevel;
+  if (els.settingThinkingLevelState) {
+    els.settingThinkingLevelState.textContent = formatThinkingLevelState(els.settingThinkingLevel?.value);
+  }
+  const initialPttEnabled = Boolean(savedVision.pttEnabled);
+  if (els.settingPttEnabled) els.settingPttEnabled.checked = initialPttEnabled;
+  if (els.visionPttBtn) els.visionPttBtn.hidden = !initialPttEnabled;
+  if (els.settingPttState) {
+    els.settingPttState.textContent = initialPttEnabled
+      ? "Shown — manual Push to talk button visible"
+      : "Hidden — automatic voice detection active";
+  }
 
   const captureAndSendVisionFrame = () => {
     const video = els.visionCoreVideo;
@@ -6318,7 +6335,32 @@ function sqehWire() {
     restartVisionTimer();
   });
   els.settingThinkingLevel?.addEventListener("change", () => {
-    writeVisionPrefs({ thinkingLevel: els.settingThinkingLevel.value });
+    const level = els.settingThinkingLevel.value;
+    writeVisionPrefs({ thinkingLevel: level });
+    if (els.settingThinkingLevelState) {
+      els.settingThinkingLevelState.textContent = formatThinkingLevelState(level);
+    }
+    if (window.__voiceboxIsLiveSessionActive?.()) {
+      void window.__voiceboxRestartLiveSession?.();
+    }
+  });
+  els.settingPttEnabled?.addEventListener("change", () => {
+    const enabled = Boolean(els.settingPttEnabled.checked);
+    writeVisionPrefs({ pttEnabled: enabled });
+    if (els.visionPttBtn) {
+      els.visionPttBtn.hidden = !enabled;
+      if (!enabled && pttActive) {
+        pttActive = false;
+        els.visionPttBtn.setAttribute("aria-pressed", "false");
+        els.visionPttBtn.textContent = "Push to talk";
+        window.__voiceboxSendActivityControl?.("end");
+      }
+    }
+    if (els.settingPttState) {
+      els.settingPttState.textContent = enabled
+        ? "Shown — manual Push to talk button visible"
+        : "Hidden — automatic voice detection active";
+    }
   });
   els.visionPttBtn?.addEventListener("click", () => {
     pttActive = !pttActive;
