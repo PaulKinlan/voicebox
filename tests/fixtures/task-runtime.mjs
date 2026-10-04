@@ -44,4 +44,4 @@ registerLiveProvider("gemini", ({ emit }) => ({
   sendToolResponse() {},
   interrupt() {},
   close() { emit({ type: "closed", code: 1000, reason: "fixture closed" }); },
-}));
+}), { inputRate: 16000 });
