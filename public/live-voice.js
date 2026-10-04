@@ -9,9 +9,16 @@
 // old SpeechRecognition dictation handler (public/fused.js) does not attach,
 // and the page's scripted captions stop while live.
 import { createAudioClient } from "./audio-client.js";
+import { createCaptionFade } from "./caption-fade.mjs";
 import { debugEnabled, recordDebug, observeDebugSocket } from "./debug-transcript.js";
 
 window.__voiceboxLive = true;
+
+// The live caption fades out after the turn has been quiet for the dwell
+// (voicebox-beads-drcy): visible while the user speaks and while the model
+// replies, then smoothly gone. New text resets the fade; clearing the caption
+// (a new session) cancels it entirely.
+const captionFade = createCaptionFade(() => document.getElementById("caption"));
 
 const $ = (id) => document.getElementById(id);
 const mic = $("mic");
@@ -77,6 +84,7 @@ const audioClient = createAudioClient({
     // Live means live: the transcript replaces the scripted caption.
     const caption = $("caption");
     if (caption) caption.textContent = text;
+    captionFade.reset();
     window.__voiceboxOnLiveText?.(text, role);
   },
   onError: (error, info) => {
@@ -126,6 +134,7 @@ async function startLive() {
   const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/live${debugEnabled ? "?debug=1" : ""}`;
   const caption = $("caption");
   if (caption) caption.textContent = "";
+  captionFade.clear();
   if (voiceState) voiceState.textContent = "Connecting to the live session…";
   try {
     socket = new WebSocket(url);
