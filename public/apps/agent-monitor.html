@@ -423,6 +423,63 @@
       max-height: 180px;
       overflow-y: auto;
     }
+
+    .compare-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .synthesis-banner {
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: var(--status-blue-bg);
+      color: var(--status-blue-fg);
+      font-size: 0.84rem;
+      font-weight: 550;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .comparison-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+    }
+
+    .comparison-col {
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 12px;
+      background: var(--bg-page);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .comparison-col[data-winner="true"] {
+      border-color: var(--status-green-dot);
+      box-shadow: 0 0 0 1px var(--status-green-dot);
+    }
+
+    .comparison-meta {
+      font-size: 0.76rem;
+      color: var(--text-secondary);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .comparison-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding-top: 6px;
+      border-top: 1px solid var(--border-subtle);
+    }
   </style>
 </head>
 <body>
@@ -482,6 +539,14 @@
       </form>
     </section>
 
+    <section id="compare-results-panel" class="section-card compare-panel" aria-label="Multi-Harness Result Comparison">
+      <h2 class="section-label">Side-by-Side Result Comparison &amp; Diff Synthesis</h2>
+      <div id="synthesis-summary" class="synthesis-banner">
+        Run a task across two or more harnesses to compare patches, touched files, and completion speed side by side.
+      </div>
+      <div id="comparison-grid" class="comparison-grid"></div>
+    </section>
+
     <section class="section-card" aria-label="Live Multi-Harness Progress Board">
       <h2 class="section-label">Live Agent Runs</h2>
       <div id="tasks-board" class="tasks-board"></div>
@@ -510,6 +575,7 @@
           version: null,
         })),
         tasks: [],
+        selectedWinnerId: null,
       };
 
       function formatHarnessName(id) {
@@ -536,6 +602,193 @@
         const mins = Math.floor(seconds / 60);
         const rem = seconds % 60;
         return mins + "m " + rem + "s";
+      }
+
+      function extractFilesFromText(text) {
+        const source = String(text || "");
+        if (!source.trim()) return [];
+        const found = new Set();
+        const diffMatches = source.matchAll(/^(?:---|\+\+\+|diff --git) (?:a\/|b\/)?([^\s\t\r\n]+)/gm);
+        for (const match of diffMatches) {
+          const candidate = String(match[1] || "").replace(/^[ab]\//, "").trim();
+          if (candidate && candidate !== "/dev/null" && candidate !== "dev/null") {
+            found.add(candidate);
+          }
+        }
+        const pathMatches = source.matchAll(/(?:^|[\s`"'([:])((?:[a-zA-Z0-9._-]+\/)+[a-zA-Z0-9._-]+\.[a-zA-Z0-9]{1,8})(?=$|[\s`"'),.:;\]])/gm);
+        for (const match of pathMatches) {
+          const candidate = String(match[1] || "").replace(/^[ab]\//, "").trim();
+          if (candidate && !/^(?:https?:|application\/|text\/)/i.test(candidate)) {
+            found.add(candidate);
+          }
+        }
+        return Array.from(found);
+      }
+
+      function computeComparison() {
+        const runs = state.tasks.map((task, idx) => {
+          const id = String(task.address || task.id || "run_" + (idx + 1));
+          const harness = String(task.agent || task.harness || "unknown").toLowerCase();
+          const status = String(task.state || task.status || "running").toLowerCase();
+          const summary = String(
+            task.resultSummary || task.answer || task.output || task.detail || task.interruptedDetail || "",
+          );
+          const explicitFiles = Array.isArray(task.filesChanged) ? task.filesChanged : [];
+          const filesTouched = Array.from(new Set([...explicitFiles, ...extractFilesFromText(summary)]));
+          const start = task.createdAt ? Date.parse(task.createdAt) : NaN;
+          const end = task.updatedAt ? Date.parse(task.updatedAt) : Date.now();
+          const durationMs =
+            typeof task.durationMs === "number"
+              ? task.durationMs
+              : !Number.isNaN(start) && !Number.isNaN(end) && end >= start
+                ? end - start
+                : 0;
+
+          let score = status === "completed" ? 100 : status === "running" || status === "queued" ? 40 : 0;
+          if (score > 0) {
+            if (summary.trim().length > 0) score += 15;
+            if (filesTouched.length > 0) score += 15;
+            score += durationMs > 0 ? Math.max(1, Math.min(20, Math.round(20 / (1 + durationMs / 5000)))) : 10;
+          }
+
+          return {
+            id,
+            harness,
+            status,
+            prompt: String(task.prompt || task.task || ""),
+            summary,
+            durationMs,
+            filesTouched,
+            score,
+          };
+        });
+
+        const fileMap = new Map();
+        runs.forEach((r) => {
+          r.filesTouched.forEach((f) => {
+            if (!fileMap.has(f)) fileMap.set(f, new Set());
+            fileMap.get(f).add(r.harness);
+          });
+        });
+
+        const sharedFiles = [];
+        fileMap.forEach((owners, file) => {
+          if (owners.size >= 2) sharedFiles.push(file);
+        });
+
+        const ranking = [...runs].sort((a, b) => {
+          if (b.score !== a.score) return b.score - a.score;
+          return (a.durationMs || 999999) - (b.durationMs || 999999);
+        });
+
+        const topCompleted = ranking.find((r) => r.status === "completed") || null;
+        const manualWinner = state.selectedWinnerId
+          ? ranking.find((r) => r.id === state.selectedWinnerId || r.harness === state.selectedWinnerId)
+          : null;
+        const activeWinner = manualWinner || topCompleted;
+
+        return {
+          runs,
+          ranking,
+          sharedFiles,
+          recommendedWinner: topCompleted
+            ? { id: topCompleted.id, harness: topCompleted.harness, score: topCompleted.score }
+            : null,
+          selectedWinner: activeWinner
+            ? { id: activeWinner.id, harness: activeWinner.harness, score: activeWinner.score }
+            : null,
+        };
+      }
+
+      function renderComparison() {
+        const summaryEl = document.getElementById("synthesis-summary");
+        const gridEl = document.getElementById("comparison-grid");
+        if (!summaryEl || !gridEl) return;
+
+        const report = computeComparison();
+        gridEl.replaceChildren();
+
+        if (!report.ranking.length) {
+          summaryEl.textContent =
+            "Run a task across two or more harnesses to compare patches, touched files, and completion speed side by side.";
+          return;
+        }
+
+        if (report.selectedWinner) {
+          const winnerRun =
+            report.ranking.find((r) => r.id === report.selectedWinner.id) || report.ranking[0];
+          const sec = winnerRun.durationMs > 0 ? (winnerRun.durationMs / 1000).toFixed(1) + "s" : "under 1s";
+          const fileCount = winnerRun.filesTouched.length;
+          const filePhrase = fileCount === 1 ? "1 file touched" : fileCount + " files touched";
+          const sharedNote = report.sharedFiles.length
+            ? " · Shared files: " + report.sharedFiles.join(", ")
+            : "";
+          summaryEl.textContent =
+            "Recommended: " +
+            formatHarnessName(winnerRun.harness) +
+            " (completed in " +
+            sec +
+            ", " +
+            filePhrase +
+            ")" +
+            sharedNote;
+        } else {
+          summaryEl.textContent =
+            "Comparing " +
+            report.ranking.length +
+            " parallel harness runs — waiting for first completion to synthesize winner.";
+        }
+
+        report.ranking.forEach((item) => {
+          const isWinner = Boolean(report.selectedWinner && report.selectedWinner.id === item.id);
+          const col = document.createElement("div");
+          col.className = "comparison-col";
+          col.dataset.harness = item.harness;
+          col.dataset.winner = isWinner ? "true" : "false";
+
+          const top = document.createElement("div");
+          top.className = "task-item-header";
+
+          const nameBadge = document.createElement("span");
+          nameBadge.className = "harness-tag";
+          nameBadge.textContent = formatHarnessName(item.harness);
+
+          const statusPill = document.createElement("span");
+          statusPill.className = "status-pill";
+          statusPill.dataset.state = item.status;
+          statusPill.textContent = isWinner ? "Winner · " + item.status : item.status;
+
+          top.append(nameBadge, statusPill);
+
+          const meta = document.createElement("div");
+          meta.className = "comparison-meta";
+          const sec = item.durationMs > 0 ? (item.durationMs / 1000).toFixed(1) + "s" : "in flight";
+          const filesLabel = item.filesTouched.length
+            ? "Files: " + item.filesTouched.join(", ")
+            : "Files: none detected yet";
+          meta.textContent = "Score: " + item.score + " · Time: " + sec + " · " + filesLabel;
+
+          const preview = document.createElement("pre");
+          preview.className = "task-detail-pre";
+          preview.textContent = item.summary || "Waiting for harness output or diff patch...";
+
+          const actions = document.createElement("div");
+          actions.className = "comparison-actions";
+
+          const selectBtn = document.createElement("button");
+          selectBtn.type = "button";
+          selectBtn.className = isWinner ? "btn btn-primary pill-toggle-btn" : "btn pill-toggle-btn";
+          selectBtn.setAttribute("data-select-winner", item.id);
+          selectBtn.textContent = isWinner ? "Selected Winning Patch" : "Select Winning Patch";
+          selectBtn.addEventListener("click", () => {
+            state.selectedWinnerId = item.id;
+            renderComparison();
+          });
+
+          actions.appendChild(selectBtn);
+          col.append(top, meta, preview, actions);
+          gridEl.appendChild(col);
+        });
       }
 
       function syncCheckboxesFromHarnesses() {
@@ -609,6 +862,7 @@
         const board = document.getElementById("tasks-board");
         if (!board) return;
         board.replaceChildren();
+        renderComparison();
 
         if (!state.tasks.length) {
           const empty = document.createElement("div");
@@ -895,13 +1149,45 @@
           },
         };
 
+        const compareResultsTool = {
+          name: "compare_harness_results",
+          description:
+            "Compare outputs, touched files, and scores across current multi-harness runs and optionally select a winning patch.",
+          parameters: {
+            type: "object",
+            properties: {
+              selectedWinnerId: {
+                type: "string",
+                description: "Optional task ID or harness name to mark as the chosen winning patch",
+              },
+            },
+          },
+          execute: async (args) => {
+            if (args && typeof args.selectedWinnerId === "string" && args.selectedWinnerId.trim()) {
+              state.selectedWinnerId = args.selectedWinnerId.trim();
+              renderComparison();
+            }
+            const report = computeComparison();
+            return {
+              ok: true,
+              totalRuns: report.ranking.length,
+              ranking: report.ranking,
+              sharedFiles: report.sharedFiles,
+              recommendedWinner: report.recommendedWinner,
+              selectedWinner: report.selectedWinner,
+            };
+          },
+        };
+
         if (window.voicebox) {
           window.voicebox?.registerTool(getProgressTool);
           window.voicebox?.registerTool(delegateMultiTool);
+          window.voicebox?.registerTool(compareResultsTool);
           window.voicebox?.ready?.();
         } else if (window.webMcp) {
           window.webMcp?.registerTool(getProgressTool);
           window.webMcp?.registerTool(delegateMultiTool);
+          window.webMcp?.registerTool(compareResultsTool);
           window.webMcp?.ready?.();
         }
       }
