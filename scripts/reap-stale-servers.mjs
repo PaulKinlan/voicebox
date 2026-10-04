@@ -32,7 +32,7 @@
 //
 // Modes: `--dry-run` prints victims without killing.
 
-import { readdirSync, readFileSync, existsSync, statSync, rmSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync, existsSync, statSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -44,6 +44,17 @@ const CANONICAL_FLOOR_MS = 24 * 60 * 60 * 1000; // 24h — a deliberate canonica
 const TMP_DIR_FLOOR_MS = 6 * 60 * 60 * 1000; // 6h for /tmp fixture dirs
 const CANONICAL = path.join(HOME, "voicebox");
 const SERVER_SHAPE = /server\.mjs|vite|(^|[\s/])serve |deno run|\.bin\/serve/;
+
+// git ops inside the reaper must NOT inherit GIT_DIR/GIT_WORK_TREE from an
+// enclosing push or repo context — with GIT_DIR set, `git -C <dir> config`
+// operates on the WRONG repository and `git init <dir>` does not create
+// <dir>/.git at all (both measured in the pre-push gate environment, 2026-10-01).
+const GIT_ENV_KEYS = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE", "GIT_COMMON_DIR"];
+const gitEnv = () => {
+  const env = { ...process.env };
+  for (const k of GIT_ENV_KEYS) delete env[k];
+  return env;
+};
 const SCOPE_ROOTS = [
   path.join(HOME, "worktrees"),
   path.join(HOME, "voicebox-wt"),
@@ -148,18 +159,25 @@ export function repairCanonicalBare({ canonical = CANONICAL } = {}) {
   if (!existsSync(configPath)) return null;
   const configText = readFileSync(configPath, "utf8");
   if (!configSaysBare(configText)) return null;
-  const stamp = new Date().toISOString();
-  try {
-    execFileSync("git", ["-C", canonical, "config", "--bool", "core.bare", "false"], { stdio: "ignore" });
-    // core.worktree explicit: a bare-flagged repo often loses it, and without
-    // it git cannot find the working tree even after bare=false.
-    if (!/^\s*worktree\s*=/m.test(configText)) {
-      execFileSync("git", ["-C", canonical, "config", "core.worktree", canonical], { stdio: "ignore" });
-    }
-    return `[reap:health] REPAIRED canonical ${canonical}: core.bare was true (set ~${stamp}); restored work-tree mode. A lane ran 'git config core.bare true' here or a tool misconfigured it — find the setter (voicebox-beads-6p3y).`;
-  } catch (e) {
-    return `[reap:health] FAILED to repair canonical ${canonical}: ${e.message} — run: git -C ${canonical} config --bool core.bare false && git -C ${canonical} config core.worktree ${canonical}`;
+  // Direct config surgery — NOT `git config` subprocesses. git config write ops
+  // require repo discovery (HEAD, objects), which a minimal scratch or an odd
+  // environment may not satisfy (measured: ENOENT/Command-failed on a minimal
+  // .git). The edit is well-defined: flip the bare value, ensure worktree.
+  let repaired = configText.replace(/^\s*bare\s*=\s*true\s*$/m, "\tbare = false");
+  if (repaired === configText) {
+    // fallback: the bare line matched the detector but not the exact-value edit
+    repaired = configText.replace(/^(\s*bare\s*=).*/m, "$1 false");
   }
+  if (!/^\s*worktree\s*=/m.test(repaired)) {
+    repaired = repaired.replace(/^(\s*bare\s*=\s*false\s*)$/m, "$1\n\tworktree = " + canonical + "\n");
+  }
+  const stamp = new Date().toISOString();
+  writeFileSync(configPath, repaired);
+  // Post-write verification: the config must no longer say bare=true.
+  if (configSaysBare(repaired)) {
+    return `[reap:health] FAILED to repair canonical ${canonical}: post-write config still says bare=true — manual fix required: git -C ${canonical} config --bool core.bare false && git -C ${canonical} config core.worktree ${canonical}`;
+  }
+  return `[reap:health] REPAIRED canonical ${canonical}: core.bare was true (repaired ~${stamp}); restored work-tree mode. A lane ran 'git config core.bare true' here or a tool misconfigured it — find the setter (voicebox-beads-6p3y).`;
 }
 
 function main() {

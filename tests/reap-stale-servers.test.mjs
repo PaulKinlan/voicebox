@@ -106,10 +106,12 @@ test("WIRING: repairCanonicalBare fixes a scratch bare repo (core.bare=false + c
   const path = await import("node:path");
   const scratch = mkdtempSync(path.join(tmpdir(), "vb-reap-bare-"));
   try {
-    const { execFileSync: git } = await import("node:child_process");
-    git("git", ["init", scratch], { stdio: "ignore" });
+    // No `git init`: the gate env carries GIT_DIR from the enclosing push,
+    // which redirects init/config ops to the WRONG repo (measured). A minimal
+    // explicit repo dir is deterministic in any environment.
+    mkdirSync(path.join(scratch, ".git"), { recursive: true });
     const cfg = path.join(scratch, ".git", "config");
-    writeFileSync(cfg, rf(cfg, "utf8").replace("bare = false", "bare = true"));
+    writeFileSync(cfg, "[core]\n\trepositoryformatversion = 0\n\tbare = true\n");
     assert.match(rf(cfg, "utf8"), /^\s*bare\s*=\s*true/m, "scratch must start bare");
 
     const result = repairCanonicalBare({ canonical: scratch });
@@ -123,14 +125,17 @@ test("WIRING: repairCanonicalBare fixes a scratch bare repo (core.bare=false + c
 });
 
 test("WIRING: a healthy canonical is a no-op (config untouched)", async () => {
-  const { mkdtempSync, readFileSync: rf, rmSync } = await import("node:fs");
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync: rf, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const path = await import("node:path");
   const scratch = mkdtempSync(path.join(tmpdir(), "vb-reap-healthy-"));
   try {
-    const { execFileSync: git } = await import("node:child_process");
-    git("git", ["init", scratch], { stdio: "ignore" });
+    // No `git init`: the gate env carries GIT_DIR from the enclosing push,
+    // which redirects init/config ops to the WRONG repo (measured). A minimal
+    // explicit repo dir is deterministic in any environment.
+    mkdirSync(path.join(scratch, ".git"), { recursive: true });
     const cfg = path.join(scratch, ".git", "config");
+    writeFileSync(cfg, "[core]\n\trepositoryformatversion = 0\n\tbare = false\n");
     const before = rf(cfg, "utf8");
     const result = repairCanonicalBare({ canonical: scratch });
     assert.equal(result, null, "healthy config returns null");
