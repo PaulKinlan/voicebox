@@ -112,6 +112,7 @@ const WANTED = {
   syncToast: "sync-toast", syncToastMessage: "sync-toast-message",
   syncToastReload: "sync-toast-reload", syncToastDismiss: "sync-toast-dismiss",
   statusHelpToggle: "status-help-toggle", statusHelpPopover: "status-help-popover",
+  statusHelpBackdrop: "status-help-backdrop",
   statusHelpClose: "status-help-close", helpSearchInput: "help-search-input",
   helpOpenFullPage: "help-open-full-page", helpServerVal: "help-server-val",
   helpRootVal: "help-root-val", helpVoiceVal: "help-voice-val", helpSections: "help-sections",
@@ -6203,6 +6204,7 @@ function sqehWire() {
   if (els.statusHelpToggle && els.statusHelpPopover) {
     const setHelpOpen = (open) => {
       els.statusHelpPopover.hidden = !open;
+      if (els.statusHelpBackdrop) els.statusHelpBackdrop.hidden = !open;
       els.statusHelpToggle.setAttribute("aria-expanded", String(Boolean(open)));
       if (open) {
         mirror();
@@ -6212,6 +6214,9 @@ function sqehWire() {
       setHelpOpen(els.statusHelpPopover.hidden);
     });
     els.statusHelpClose?.addEventListener("click", () => {
+      setHelpOpen(false);
+    });
+    els.statusHelpBackdrop?.addEventListener("click", () => {
       setHelpOpen(false);
     });
     els.helpSearchInput?.addEventListener("input", () => {

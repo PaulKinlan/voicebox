@@ -132,6 +132,7 @@
       <button class="quiet icon-button" id="exts-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="exts" aria-label="Extensions" title="Extensions"><svg class="icon" aria-hidden="true"><use href="#i-box"/></svg><span class="sr-only" id="exts-count">Extensions</span></button>
       <button class="quiet icon-button" id="settings-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="settings" aria-label="Settings" title="Settings"><svg class="icon" aria-hidden="true"><use href="#i-gear"/></svg><span class="sr-only">Settings</span></button>
       <button class="quiet icon-button" id="status-help-toggle" type="button" aria-label="Help and user guide" aria-expanded="false" aria-controls="status-help-popover" title="Help, system status, and user guide (hotkey: ?)">?</button>
+      <div class="help-modal-backdrop" id="status-help-backdrop" hidden aria-hidden="true"></div>
       <div class="status-help-popover" id="status-help-popover" role="region" aria-labelledby="status-help-title" hidden>
         <div class="help-popover-head">
           <div class="help-popover-title-wrap">
@@ -158,6 +159,7 @@
             <ul>
               <li><strong>Natural Barge-In:</strong> Speak at any time while the assistant is talking to interrupt and redirect the conversation, or click <strong>Stop reply</strong> to silence audio playback while keeping the microphone open.</li>
               <li><strong>Text Turn Composer:</strong> Prefer typing or working in a quiet space? Use the text input below the microphone to send any question or file command directly.</li>
+              <li><strong>How Turns &amp; Tools Work:</strong> Typed turns go to the local server, which reads and writes the project folder when the folder is one it can reach. Live voice runs through the same server and uses the same tools, so the model can write files while you talk — they appear in the Files window as they arrive.</li>
             </ul>
           </section>
           <section class="help-section" data-help-section>
@@ -667,8 +669,6 @@
     </section>
 
     <footer class="foot">
-      <p class="foot-fact">Typed turns go to the local server, which reads and writes the project folder when the folder is one it can reach.</p>
-      <p class="foot-fact">Live voice runs through the same server and uses the same tools, so the model can write files while you talk — they appear in the list above as they arrive.</p>
       <p class="foot-fact build" id="build"></p>
     </footer>
   </div>
