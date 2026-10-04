@@ -440,7 +440,7 @@ const ENV_MEANING = {
   VOICEBOX_EXTENSIONS_DIR: "Host state directory storing admitted extensions, `.host-token`, `.ledger.jsonl`, `.pairings.json`, `.api-keys.json`, and `.harness-settings.json` (mode `0600`).",
   VOICEBOX_SANDBOX_HOMES: "Base directory for fenced sandbox home directories (default `~/sandbox-homes/<key>`, located outside `/tmp` for `PrivateTmp` compatibility).",
   VOICEBOX_INSTANCE: "Writer identifier recorded in the active workspace's `.audit/<writer>.jsonl` log (default `machine`).",
-  VOICEBOX_ENABLE_STUB_PROVIDER: "Set to `1` to register the key-free `stub` live voice provider for local audio testing.",
+  VOICEBOX_ENABLE_STUB_PROVIDER: "Set to `1` to register the key-free `stub` live voice provider for local audio testing — with a declared input rate and settings facts, so a test can select it in Settings and run a full session.",
   VOICEBOX_BIND_RETRY_MS: "Interval in milliseconds between port bind retries at startup.",
   VOICEBOX_BIND_DEADLINE_MS: "Maximum duration in milliseconds to retry binding the server port before failing.",
   VOICEBOX_HELLO_BOUND_MS: "Timeout in milliseconds to receive an authentication `hello` frame on `/channel` or `/live` (default `5000`).",
