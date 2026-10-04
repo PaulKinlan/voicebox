@@ -22,6 +22,7 @@ Voicebox is architected around five foundational invariants:
    - Provider API keys (`.api-keys.json`), host tokens (`.host-token`), and remote pairing bearers (`.pairings.json`) are stored with `0600` permissions inside `HOST_DIR` outside every project workspace root. Browser JavaScript and sandboxed child processes never receive raw credentials.
 5. **Plain-Language, Zero-Shift UI**:
    - The browser room (`public/index.html`, `public/fused.js`, `public/style.css`) keeps the microphone at the center of the stage while surfacing files, diffs, mini-apps, and live agent progress in non-blocking popovers and docked drawers. Every refusal names the exact rule and recovery action in plain English (`tools/rendered-plain-language.mjs`).
+   - The agent's own contour (`.output-ring path`) is a followed, seam-free meter (voicebox-beads-u03k): each painted radius chases the audio with a fast attack and a slower decay, so a pause eases over ~20 frames instead of collapsing the whole amplitude in one (measured: 13.0 units in a single frame before the change), and the ring's history is traversed mirrored, so the oldest and newest entries are never drawn adjacent (measured: a 9.5-unit step at that wrap before). The data-driven phase and its carrier stay, so a steady note still moves; `tests/mic-waveform-animation.test.mjs` drives the real renderer with a wrap-only fixture, a loud→silent step, and a constant input, and asserts all three.
 
 ---
 

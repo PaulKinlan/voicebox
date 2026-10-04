@@ -1,0 +1,11 @@
+{
+  "tree": "/home/paulkinlan/worktrees/vb-946i-review",
+  "points": 161,
+  "wrapSeamUnits": 0.31,
+  "onsetMaxDeltaUnits": 3.25,
+  "decayMaxDeltaUnits": 2.08,
+  "framesToRest": 19,
+  "distinctPathsOnConstantRing": 15,
+  "baseRadius": 62,
+  "amplitude": 13
+}
