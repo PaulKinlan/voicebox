@@ -9,7 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isVictim, selectVictims } from "../scripts/reap-stale-servers.mjs";
+import { isVictim, selectVictims, checkAndRepairCanonicalGitConfig } from "../scripts/reap-stale-servers.mjs";
 
 const WT = "/home/paulkinlan/worktrees/vb-test";
 const CANON = "/home/paulkinlan/voicebox";
@@ -108,4 +108,54 @@ test("unresolvable cwd (process died) is skipped, not a crash", () => {
     cwdFor: () => null,
   });
   assert.deepEqual(r.victims, []);
+});
+
+// ── checkAndRepairCanonicalGitConfig (voicebox-beads-6p3y) ───────────────────
+
+test("canonical git config: non-existent directory is skipped", () => {
+  const res = checkAndRepairCanonicalGitConfig({ canonicalDir: "/nonexistent/path/never" });
+  assert.equal(res.ok, true);
+  assert.match(res.skipped, /missing/);
+});
+
+test("canonical git config: core.bare=false returns ok without repair", () => {
+  const calls = [];
+  const execGit = (args) => {
+    calls.push(args);
+    return "false";
+  };
+  const res = checkAndRepairCanonicalGitConfig({ canonicalDir: CANON, execGit });
+  assert.equal(res.ok, true);
+  assert.equal(res.repaired, false);
+  assert.deepEqual(calls, [["-C", CANON, "config", "core.bare"]]);
+});
+
+test("canonical git config: dry-run warns when core.bare=true without modifying config", () => {
+  const calls = [];
+  const execGit = (args) => {
+    calls.push(args);
+    return "true";
+  };
+  const res = checkAndRepairCanonicalGitConfig({ canonicalDir: CANON, dryRun: true, execGit });
+  assert.equal(res.ok, false);
+  assert.equal(res.repaired, false);
+  assert.equal(res.dryRun, true);
+  assert.deepEqual(calls, [["-C", CANON, "config", "core.bare"]]);
+});
+
+test("canonical git config: auto-heals core.bare=true to false and unsets worktree", () => {
+  const calls = [];
+  const execGit = (args) => {
+    calls.push(args);
+    if (args[2] === "config" && args[3] === "core.bare" && args.length === 4) return "true";
+    return "";
+  };
+  const res = checkAndRepairCanonicalGitConfig({ canonicalDir: CANON, dryRun: false, execGit });
+  assert.equal(res.ok, true);
+  assert.equal(res.repaired, true);
+  assert.deepEqual(calls, [
+    ["-C", CANON, "config", "core.bare"],
+    ["-C", CANON, "config", "core.bare", "false"],
+    ["-C", CANON, "config", "--unset", "core.worktree"],
+  ]);
 });

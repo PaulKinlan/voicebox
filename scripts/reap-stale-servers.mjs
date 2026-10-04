@@ -122,8 +122,49 @@ export function staleTmpDirs({ entries, now = Date.now() } = {}) {
   return out;
 }
 
+/**
+ * Check and auto-repair canonical checkout git configuration (voicebox-beads-6p3y).
+ * If core.bare=true is set in the canonical checkout, all working tree commands fail
+ * ("this operation must be run in a work tree"). Auto-heals by running:
+ *   git -C <dir> config core.bare false
+ *   git -C <dir> config --unset core.worktree (if set)
+ */
+export function checkAndRepairCanonicalGitConfig({ canonicalDir = CANONICAL, dryRun = false, execGit } = {}) {
+  const _git = execGit ?? ((args, opts) => execFileSync("git", args, { encoding: "utf8", ...opts }).trim());
+  if (!existsSync(canonicalDir) || !existsSync(path.join(canonicalDir, ".git"))) {
+    return { ok: true, skipped: "canonical directory or .git missing" };
+  }
+  let bare = "false";
+  try {
+    bare = _git(["-C", canonicalDir, "config", "core.bare"]);
+  } catch {
+    return { ok: true, checked: false };
+  }
+  if (bare === "true") {
+    if (dryRun) {
+      console.warn(`[reap:dry-run] WARNING: Canonical checkout ${canonicalDir} has core.bare=true — would auto-heal to core.bare=false`);
+      return { ok: false, repaired: false, dryRun: true };
+    }
+    console.warn(`[reap] WARNING: Canonical checkout ${canonicalDir} has core.bare=true — auto-healing to core.bare=false`);
+    try {
+      _git(["-C", canonicalDir, "config", "core.bare", "false"]);
+      try {
+        _git(["-C", canonicalDir, "config", "--unset", "core.worktree"]);
+      } catch { /* worktree key may not be set */ }
+      return { ok: true, repaired: true };
+    } catch (err) {
+      console.error(`[reap] ERROR: Failed to auto-heal ${canonicalDir}: ${err.message}`);
+      return { ok: false, error: err.message };
+    }
+  }
+  return { ok: true, repaired: false };
+}
+
 function main() {
   const dryRun = process.argv.includes("--dry-run");
+
+  // Integrity check & auto-repair for canonical checkout git config (voicebox-beads-6p3y)
+  checkAndRepairCanonicalGitConfig({ dryRun });
   // The gate lock's EXISTENCE is not proof a gate is live — a crashed gate can
   // leave the file behind (measured: a 4h-old zero-byte lock). A gate's live
   // phase is minutes (budgets total ~9 min); treat the lock as held only when

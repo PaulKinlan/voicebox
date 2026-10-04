@@ -10,6 +10,15 @@ set -e
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$REPO_ROOT"
 
+# ── CHECK REPO INTEGRITY (voicebox-beads-6p3y) ───────────────────────────────
+# If core.bare=true was mistakenly set on a working tree, all work-tree ops fail.
+_bare="$(git config core.bare 2>/dev/null || echo "false")"
+if [ "$_bare" = "true" ]; then
+  echo >&2 "[gate] pre-push WARNING: core.bare=true detected in repo $REPO_ROOT — auto-healing to core.bare=false"
+  git config core.bare false
+  git config --unset core.worktree 2>/dev/null || true
+fi
+
 # ── REFUSE WHEN core.bare=true IS SET ON A WORKING TREE CHECKOUT (voicebox-beads-6p3y) ──
 if [ "$(git config --bool core.bare 2>/dev/null || echo false)" = "true" ] && [ -e ".git" ]; then
   echo >&2 "[gate] pre-push REFUSED: git config core.bare=true is set on a working tree checkout ($REPO_ROOT)"
