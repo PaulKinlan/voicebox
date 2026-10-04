@@ -121,6 +121,8 @@
            can stage and disclose; approval needs a one-use code from the host console. -->
       <button class="quiet icon-button" id="exts-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="exts" aria-label="Extensions" title="Extensions"><svg class="icon" aria-hidden="true"><use href="#i-box"/></svg><span class="sr-only" id="exts-count">Extensions</span></button>
       <button class="quiet icon-button" id="settings-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="settings" aria-label="Settings" title="Settings"><svg class="icon" aria-hidden="true"><use href="#i-gear"/></svg><span class="sr-only">Settings</span></button>
+      <button class="quiet icon-button" id="status-help-toggle" type="button" aria-label="Connection and voice status" aria-expanded="false" aria-controls="status-help-popover" title="Connection and voice status">?</button>
+      <div class="status-help-popover" id="status-help-popover" role="status" aria-live="polite" hidden></div>
       <dialog class="envs" id="exts" closedby="any" aria-labelledby="exts-title">
         <div class="envs-form">
           <div class="settings-head">
@@ -294,6 +296,18 @@
         <p class="voice-state" id="voice-state" role="status">Microphone off. Tap circle to speak or press M.</p>
         <div class="voice-actions">
           <button class="quiet interrupt" id="interrupt" type="button" disabled>Stop reply</button>
+          <button class="quiet" id="vision-camera-btn" type="button" aria-pressed="false" title="Stream camera to live session">Camera</button>
+          <button class="quiet" id="vision-screen-btn" type="button" aria-pressed="false" title="Share screen or window with live session">Share screen</button>
+          <button class="quiet" id="vision-ptt-btn" type="button" aria-pressed="false" title="Signal manual speech activity start or end">Push to talk</button>
+        </div>
+        <div class="vision-core-card" id="vision-core-card" hidden>
+          <video id="vision-core-video" autoplay playsinline muted></video>
+          <canvas id="vision-core-canvas" hidden></canvas>
+          <div class="vision-core-controls">
+            <span class="vision-core-meta" id="vision-core-meta">Camera off</span>
+            <button class="quiet" id="vision-snapshot-btn" type="button">Send frame</button>
+            <button class="quiet" id="vision-stop-btn" type="button">Stop video</button>
+          </div>
         </div>
         <form class="composer" id="text-form" hidden>
           <label class="sr-only" for="utterance">Your turn</label>
@@ -658,6 +672,38 @@
             <textarea id="agent-custom-instruction" class="setting-input" rows="2" placeholder="Optional custom instructions to layer over the base rules..." aria-labelledby="agent-custom-instruction-label"></textarea>
             <p class="device-state" id="agent-custom-instruction-state">Custom instructions layered over base rules</p>
           </div>
+          <fieldset class="settings-group" id="settings-live-vision">
+            <legend>Live Vision &amp; Video</legend>
+            <p class="device-state" id="vision-settings-hint">Configure camera and screen frame resolution, frame rate, and thinking depth for Live sessions.</p>
+            <div class="device-row">
+              <h3 id="setting-vision-resolution-label">Video frame resolution</h3>
+              <select id="setting-vision-resolution" aria-labelledby="setting-vision-resolution-label">
+                <option value="MEDIA_RESOLUTION_LOW">Low — fastest turn response</option>
+                <option value="MEDIA_RESOLUTION_MEDIUM" selected>Medium — balanced detail (default)</option>
+                <option value="MEDIA_RESOLUTION_HIGH">High — fine text and UI detail</option>
+              </select>
+            </div>
+            <div class="device-row">
+              <h3 id="setting-vision-fps-label">Video frame rate</h3>
+              <select id="setting-vision-fps" aria-labelledby="setting-vision-fps-label">
+                <option value="0.5">0.5 frames per second</option>
+                <option value="1" selected>1 frame per second (default)</option>
+                <option value="2">2 frames per second</option>
+              </select>
+            </div>
+            <div class="device-row">
+              <h3 id="setting-thinking-level-label">Extended thinking depth</h3>
+              <select id="setting-thinking-level" aria-labelledby="setting-thinking-level-label">
+                <option value="low">Low — lowest latency</option>
+                <option value="medium" selected>Medium — balanced reasoning</option>
+                <option value="high">High — deep multi-step reasoning</option>
+              </select>
+            </div>
+            <div class="settings-actions">
+              <button class="quiet" id="setting-start-camera" type="button">Toggle camera</button>
+              <button class="quiet" id="setting-start-screen" type="button">Toggle screen share</button>
+            </div>
+          </fieldset>
           <fieldset class="settings-group" id="settings-api-keys">
             <legend>Provider API Keys</legend>
             <p class="device-state" id="api-keys-hint">Stored locally on this host so you do not need shell environment variables.</p>

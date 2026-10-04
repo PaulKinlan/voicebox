@@ -51,8 +51,7 @@ export const PROVIDERS: Record<ProviderId, ProviderFacts> = {
     model: "models/gemini-3.8-live",
     models: [
       { id: "models/gemini-3.8-live", label: "Gemini 3.8 Live (default)" },
-      { id: "models/gemini-3.8-thinking", label: "Gemini 3.8 Thinking — deep reasoning" },
-      { id: "models/gemini-3.8-flash", label: "Gemini 3.8 Flash" },
+      { id: "models/gemini-3.8-live-extended-thinking", label: "Gemini 3.8 Live Extended Thinking — deep reasoning & async tools" },
     ],
     voices: [
       { id: "Puck", label: "Puck (the default the app has been using)" },
@@ -239,7 +238,10 @@ export function validateAgentSettings(input: unknown, current: AgentSettings): V
     if (model === null || model === "") {
       next.model = null;
     } else {
-      const offered = PROVIDERS[next.provider].models?.some((m) => m.id === String(model)) || String(model) === PROVIDERS[next.provider].model;
+      const offered =
+        PROVIDERS[next.provider].models?.some((m) => m.id === String(model)) ||
+        String(model) === PROVIDERS[next.provider].model ||
+        (next.provider === "gemini" && String(model) === "models/gemini-3.8-thinking");
       if (!offered) {
         return {
           ok: false,

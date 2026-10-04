@@ -107,6 +107,13 @@ const WANTED = {
   apiKeysSave: "api-keys-save", apiKeysStatus: "api-keys-status",
   syncToast: "sync-toast", syncToastMessage: "sync-toast-message",
   syncToastReload: "sync-toast-reload", syncToastDismiss: "sync-toast-dismiss",
+  statusHelpToggle: "status-help-toggle", statusHelpPopover: "status-help-popover",
+  visionCameraBtn: "vision-camera-btn", visionScreenBtn: "vision-screen-btn", visionPttBtn: "vision-ptt-btn",
+  visionCoreCard: "vision-core-card", visionCoreVideo: "vision-core-video", visionCoreCanvas: "vision-core-canvas",
+  visionCoreMeta: "vision-core-meta", visionSnapshotBtn: "vision-snapshot-btn", visionStopBtn: "vision-stop-btn",
+  settingVisionResolution: "setting-vision-resolution", settingVisionFps: "setting-vision-fps",
+  settingThinkingLevel: "setting-thinking-level", settingStartCamera: "setting-start-camera",
+  settingStartScreen: "setting-start-screen",
 };
 const els = {};
 const missing = [];
@@ -4527,6 +4534,17 @@ async function saveAgentSetting(patch) {
   agent = answer;
   writeLocalAgentSettings(agent.requested);
   renderAgentSettings();
+  if (("model" in patch || "provider" in patch) && typeof window.__voiceboxIsLiveSessionActive === "function" && window.__voiceboxIsLiveSessionActive()) {
+    try {
+      await window.__voiceboxRestartLiveSession?.();
+      const modelStateEl = document.getElementById("agent-model-state");
+      if (modelStateEl) {
+        modelStateEl.textContent = `Reconnected live session with ${agent.applied?.model ?? agent.requested?.model ?? "default model"}.`;
+      }
+    } catch {
+      // If restart fails, startLive's own error handler updates the voice status
+    }
+  }
   void health();
 }
 
@@ -4595,6 +4613,7 @@ for (let i = 0; i < RENDER_POINTS; i++) {
 let ringPhase = 0;         // where we are rendering, in ring positions
 let ringTarget = 0;        // where the newest data has arrived, in ring positions
 let ringSeen = null;       // the newest sample we have already counted
+let ringFlowPhase = 0;     // continuous carrier phase for smooth wave motion
 
 function ringAt(samples, position) {
   const n = samples.length;
@@ -4628,6 +4647,7 @@ function drawOutputRing(samples) {
     ringSeen = null;
     ringPhase = 0;
     ringTarget = 0;
+    ringFlowPhase = 0;
     return;
   }
   // Count a new sample once: the newest value changing is the signal that the
@@ -4637,13 +4657,16 @@ function drawOutputRing(samples) {
     ringSeen = newest;
     ringTarget += 1;
   }
-  // Ease the render phase toward the data, so a step arrives as a movement.
-  ringPhase += (ringTarget - ringPhase) * 0.18;
+  // Ease the render phase toward the data, and advance a gentle continuous carrier wave.
+  ringPhase += (ringTarget - ringPhase) * 0.14;
+  ringFlowPhase += 0.045;
 
   const points = new Array(RENDER_POINTS);
   for (let i = 0; i < RENDER_POINTS; i++) {
     const position = ringPhase + (i / RENDER_POINTS) * OUTPUT_SAMPLES;
-    const radius = OUTPUT_BASE + meterLevel(ringAt(samples, position)) * OUTPUT_AMPLITUDE;
+    const level = meterLevel(ringAt(samples, position));
+    const harmonic = level > 0.01 ? Math.sin((i / RENDER_POINTS) * Math.PI * 6 + ringFlowPhase) * level * 1.8 : 0;
+    const radius = OUTPUT_BASE + level * OUTPUT_AMPLITUDE + harmonic;
     points[i] = [OUTPUT_CENTRE + RING_COS[i] * radius, OUTPUT_CENTRE + RING_SIN[i] * radius];
   }
   path.setAttribute("d", closedCurve(points));
@@ -5957,15 +5980,171 @@ function sqehWire() {
     }
   });
 
-  // Status mirror: the server dot and the declared root, copied from the facts the room owns.
+  // Status mirror: the server dot, declared root, and live voice status, surfaced in the top-right help icon.
   const mirror = () => {
     const conn = document.getElementById("sqeh-conn");
     const dot = document.getElementById("server-dot");
+    const whereNote = document.getElementById("where-note");
     const rootKind = document.getElementById("root-kind");
-    if (conn && dot) conn.textContent = `server ${dot.textContent || dot.dataset.ok || "unknown"}${rootKind ? ` · root ${rootKind.textContent}` : ""}`;
+    const voiceStateEl = document.getElementById("voice-state");
+    const summary = `server ${dot?.textContent || dot?.dataset.ok || "unknown"}${rootKind ? ` · root ${rootKind.textContent}` : ""}`;
+    if (conn && dot) conn.textContent = summary;
+    const detail = `${whereNote?.textContent || summary}${rootKind ? ` · ${rootKind.textContent}` : ""}${voiceStateEl?.textContent ? ` · ${voiceStateEl.textContent}` : ""}`;
+    if (els.statusHelpToggle) els.statusHelpToggle.title = detail;
+    if (els.statusHelpPopover && !els.statusHelpPopover.hidden) {
+      els.statusHelpPopover.textContent = detail;
+    }
   };
   mirror();
   setInterval(mirror, 2000);
+
+  if (els.statusHelpToggle && els.statusHelpPopover) {
+    els.statusHelpToggle.addEventListener("click", () => {
+      const nextOpen = els.statusHelpPopover.hidden;
+      els.statusHelpPopover.hidden = !nextOpen;
+      els.statusHelpToggle.setAttribute("aria-expanded", String(nextOpen));
+      if (nextOpen) mirror();
+    });
+    document.addEventListener("pointerdown", (e) => {
+      if (!els.statusHelpPopover.hidden && !e.target?.closest?.("#status-help-toggle, #status-help-popover")) {
+        els.statusHelpPopover.hidden = true;
+        els.statusHelpToggle.setAttribute("aria-expanded", "false");
+      }
+    });
+  }
+
+  // Core Live Vision & manual speech activity controls (camera, screen share, push-to-talk, settings)
+  const VISION_PREFS_KEY = "voicebox:vision-prefs";
+  let visionStream = null;
+  let visionTimer = null;
+  let visionMode = null;
+  let pttActive = false;
+
+  const readVisionPrefs = () => {
+    try {
+      const raw = localStorage.getItem(VISION_PREFS_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  };
+  const writeVisionPrefs = (patch) => {
+    try {
+      const next = { ...readVisionPrefs(), ...patch };
+      localStorage.setItem(VISION_PREFS_KEY, JSON.stringify(next));
+      return next;
+    } catch {
+      return patch;
+    }
+  };
+  const savedVision = readVisionPrefs();
+  if (els.settingVisionResolution && savedVision.resolution) els.settingVisionResolution.value = savedVision.resolution;
+  if (els.settingVisionFps && savedVision.fps) els.settingVisionFps.value = String(savedVision.fps);
+  if (els.settingThinkingLevel && savedVision.thinkingLevel) els.settingThinkingLevel.value = savedVision.thinkingLevel;
+
+  const captureAndSendVisionFrame = () => {
+    const video = els.visionCoreVideo;
+    const canvas = els.visionCoreCanvas;
+    if (!video || !canvas || !visionStream) return false;
+    const resPref = els.settingVisionResolution?.value || "MEDIA_RESOLUTION_MEDIUM";
+    const targetWidth = resPref === "MEDIA_RESOLUTION_HIGH" ? 960 : resPref === "MEDIA_RESOLUTION_LOW" ? 320 : 640;
+    const vw = video.videoWidth || targetWidth;
+    const vh = video.videoHeight || Math.round(targetWidth * 0.75);
+    const scale = Math.min(1, targetWidth / Math.max(1, vw));
+    canvas.width = Math.max(1, Math.round(vw * scale));
+    canvas.height = Math.max(1, Math.round(vh * scale));
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return false;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.78);
+    const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : "";
+    const sent = window.__voiceboxSendLiveVideo?.(base64, "image/jpeg") ?? false;
+    if (els.visionCoreMeta) {
+      els.visionCoreMeta.textContent = sent
+        ? `${visionMode === "screen" ? "Screen" : "Camera"} live (${canvas.width}×${canvas.height})`
+        : `${visionMode === "screen" ? "Screen" : "Camera"} preview ready (start mic to stream)`;
+    }
+    return sent;
+  };
+
+  const stopVisionStream = () => {
+    if (visionTimer) {
+      clearInterval(visionTimer);
+      visionTimer = null;
+    }
+    if (visionStream) {
+      for (const track of visionStream.getTracks?.() ?? []) {
+        try { track.stop(); } catch {}
+      }
+      visionStream = null;
+    }
+    visionMode = null;
+    if (els.visionCoreVideo) els.visionCoreVideo.srcObject = null;
+    if (els.visionCoreCard) els.visionCoreCard.hidden = true;
+    if (els.visionCameraBtn) els.visionCameraBtn.setAttribute("aria-pressed", "false");
+    if (els.visionScreenBtn) els.visionScreenBtn.setAttribute("aria-pressed", "false");
+    if (els.visionCoreMeta) els.visionCoreMeta.textContent = "Camera off";
+  };
+
+  const restartVisionTimer = () => {
+    if (visionTimer) clearInterval(visionTimer);
+    if (!visionStream) return;
+    const fps = Math.max(0.25, Math.min(5, Number(els.settingVisionFps?.value) || 1));
+    visionTimer = setInterval(captureAndSendVisionFrame, Math.round(1000 / fps));
+  };
+
+  const startVisionStream = async (mode) => {
+    if (visionMode === mode && visionStream) {
+      stopVisionStream();
+      return;
+    }
+    stopVisionStream();
+    try {
+      const stream = mode === "screen"
+        ? await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false })
+        : await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+      visionStream = stream;
+      visionMode = mode;
+      const [track] = stream.getVideoTracks?.() ?? [];
+      track?.addEventListener?.("ended", () => stopVisionStream());
+      if (els.visionCoreVideo) {
+        els.visionCoreVideo.srcObject = stream;
+        await els.visionCoreVideo.play?.().catch(() => {});
+      }
+      if (els.visionCoreCard) els.visionCoreCard.hidden = false;
+      if (els.visionCameraBtn) els.visionCameraBtn.setAttribute("aria-pressed", String(mode === "camera"));
+      if (els.visionScreenBtn) els.visionScreenBtn.setAttribute("aria-pressed", String(mode === "screen"));
+      if (els.visionCoreMeta) els.visionCoreMeta.textContent = `${mode === "screen" ? "Screen share" : "Camera"} active`;
+      captureAndSendVisionFrame();
+      restartVisionTimer();
+    } catch (error) {
+      stopVisionStream();
+      setState(`Video capture unavailable: ${error?.message ?? error}`, "warn");
+    }
+  };
+
+  els.visionCameraBtn?.addEventListener("click", () => void startVisionStream("camera"));
+  els.visionScreenBtn?.addEventListener("click", () => void startVisionStream("screen"));
+  els.visionSnapshotBtn?.addEventListener("click", () => { captureAndSendVisionFrame(); });
+  els.visionStopBtn?.addEventListener("click", () => stopVisionStream());
+  els.settingStartCamera?.addEventListener("click", () => void startVisionStream("camera"));
+  els.settingStartScreen?.addEventListener("click", () => void startVisionStream("screen"));
+  els.settingVisionResolution?.addEventListener("change", () => {
+    writeVisionPrefs({ resolution: els.settingVisionResolution.value });
+  });
+  els.settingVisionFps?.addEventListener("change", () => {
+    writeVisionPrefs({ fps: Number(els.settingVisionFps.value) || 1 });
+    restartVisionTimer();
+  });
+  els.settingThinkingLevel?.addEventListener("change", () => {
+    writeVisionPrefs({ thinkingLevel: els.settingThinkingLevel.value });
+  });
+  els.visionPttBtn?.addEventListener("click", () => {
+    pttActive = !pttActive;
+    els.visionPttBtn.setAttribute("aria-pressed", String(pttActive));
+    els.visionPttBtn.textContent = pttActive ? "End turn" : "Push to talk";
+    window.__voiceboxSendActivityControl?.(pttActive ? "start" : "end");
+  });
   // Quick Files sync: the file list is the source of truth; refresh the tiles when it changes.
   const files = document.getElementById("files");
   if (files) new MutationObserver(() => sqehSyncQuickFiles()).observe(files, { childList: true, subtree: true });
