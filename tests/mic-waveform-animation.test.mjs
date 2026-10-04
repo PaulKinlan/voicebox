@@ -326,3 +326,80 @@ test("mic waveform: the speech+microphone blend is alive, unclamped, and keeps t
     `the microphone does not reach the wave: open mean ${mean(reading.micOpen)} vs shut mean ${mean(reading.micClosed)}`,
   );
 });
+
+test("output ring: speech output wave animation is smooth, continuous, and has zero boundary seams (voicebox-beads-d2ji)", { timeout: 30000 }, async (t) => {
+  const server = await startServer();
+  t.after(() => server.stop());
+
+  const page = await launch({ width: 1000, height: 800 });
+  t.after(() => page.close());
+
+  await page.goto(`${server.base}/`);
+  await page.waitFor(() => window.__voiceboxMeters?.drawOutputRing !== undefined, { label: "meters on window" });
+
+  const metrics = await page.evaluate(async () => {
+    const stage = document.getElementById("voice-ring-wrap");
+    stage.dataset.voice = "speaking";
+    const path = document.getElementById("output-path");
+
+    const samples = new Float32Array(64);
+    for (let i = 0; i < 64; i++) {
+      samples[i] = 0.15 + 0.12 * Math.sin((i / 64) * Math.PI * 4);
+    }
+
+    const frames = [];
+    const tick = () => new Promise((resolve) => requestAnimationFrame(resolve));
+
+    // Sample 10 consecutive frames
+    for (let f = 0; f < 10; f++) {
+      window.__voiceboxMeters.drawOutputRing(samples);
+      await tick();
+      frames.push(path.getAttribute("d") ?? "");
+    }
+
+    // Measure decay across 4 frames of silence
+    const decayFrames = [];
+    const silentSamples = new Float32Array(64).fill(0);
+    for (let f = 0; f < 4; f++) {
+      window.__voiceboxMeters.drawOutputRing(silentSamples);
+      await tick();
+      decayFrames.push(path.getAttribute("d") ?? "");
+    }
+
+    // Reset with null
+    window.__voiceboxMeters.drawOutputRing(null);
+    const clearedD = path.getAttribute("d");
+
+    return { frames, decayFrames, clearedD };
+  });
+
+  // 1. All frames must be non-empty and start with M and end with Z
+  assert.equal(metrics.frames.length, 10);
+  assert.ok(metrics.frames.every((d) => /^M.*Z$/.test(d)), "every frame must produce a valid closed cubic path");
+
+  // 2. Consecutive frames must animate continuously (no frozen / duplicate frames)
+  for (let f = 1; f < metrics.frames.length; f++) {
+    assert.notEqual(metrics.frames[f], metrics.frames[f - 1], `frame ${f} must advance continuously from frame ${f - 1}`);
+  }
+
+  // 3. Continuity along the curve: extract coordinates and check that point distances are smooth with no sharp seam
+  for (const d of metrics.frames) {
+    const coords = [...d.matchAll(/(-?[\d.]+),(-?[\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+    assert.ok(coords.length >= 100, `expected dense cubic bezier points, got ${coords.length}`);
+    assert.ok(coords.every(([x, y]) => Number.isFinite(x) && Number.isFinite(y)), "all coordinates must be finite");
+    for (let i = 0; i < coords.length; i++) {
+      const [x1, y1] = coords[i];
+      const [x2, y2] = coords[(i + 1) % coords.length];
+      const dist = Math.hypot(x2 - x1, y2 - y1);
+      assert.ok(dist < 12, `distance between adjacent points must be smooth and bounded, got ${dist}`);
+    }
+  }
+
+  // 4. Smooth decay: amplitude decays smoothly across frames of silence without snapping
+  for (let f = 1; f < metrics.decayFrames.length; f++) {
+    assert.notEqual(metrics.decayFrames[f], metrics.decayFrames[f - 1], "decay must transition smoothly across frames");
+  }
+
+  // 5. Clean reset
+  assert.equal(metrics.clearedD, null, "path attribute must be removed when cleared with null");
+});

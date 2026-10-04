@@ -4592,15 +4592,22 @@ for (let i = 0; i < RENDER_POINTS; i++) {
   RING_COS[i] = Math.cos(angle);
   RING_SIN[i] = Math.sin(angle);
 }
-let ringPhase = 0;         // where we are rendering, in ring positions
-let ringTarget = 0;        // where the newest data has arrived, in ring positions
-let ringSeen = null;       // the newest sample we have already counted
+let ringPhase = 0;
+const currentRadii = new Float64Array(RENDER_POINTS).fill(OUTPUT_BASE);
 
-function ringAt(samples, position) {
+/**
+ * Sample the audio ring with continuous reflection so there is zero
+ * boundary seam discontinuity between the first and last sample (voicebox-beads-d2ji).
+ */
+function sampleContinuousRing(samples, normPos) {
   const n = samples.length;
-  const i = Math.floor(position) % n;
-  const j = (i + 1) % n;
-  const t = position - Math.floor(position);
+  // Fold normalized position [0, 1) into a continuous triangle wave [0, 1] -> [1, 0]
+  const p = ((normPos % 1) + 1) % 1;
+  const triangle = p <= 0.5 ? p * 2 : (1 - p) * 2;
+  const floatIndex = triangle * (n - 1);
+  const i = Math.floor(floatIndex);
+  const j = Math.min(n - 1, i + 1);
+  const t = floatIndex - i;
   return samples[i] * (1 - t) + samples[j] * t;
 }
 
@@ -4625,26 +4632,33 @@ function drawOutputRing(samples) {
   if (!path) return;
   if (!samples) {
     path.removeAttribute("d");
-    ringSeen = null;
     ringPhase = 0;
-    ringTarget = 0;
+    currentRadii.fill(OUTPUT_BASE);
     return;
   }
-  // Count a new sample once: the newest value changing is the signal that the
-  // client's ring advanced (it advances on PLAYBACK, not on arrival).
-  const newest = samples[samples.length - 1];
-  if (ringSeen === null || Math.abs(newest - ringSeen) > 1e-6) {
-    ringSeen = newest;
-    ringTarget += 1;
+
+  // Smooth continuous phase advance every frame: base motion + audio energy
+  let totalEnergy = 0;
+  for (let i = 0; i < samples.length; i++) {
+    totalEnergy += Math.abs(samples[i]);
   }
-  // Ease the render phase toward the data, so a step arrives as a movement.
-  ringPhase += (ringTarget - ringPhase) * 0.18;
+  const avgEnergy = totalEnergy / (samples.length || 1);
+  const phaseSpeed = 0.003 + Math.min(0.012, avgEnergy * 0.08);
+  ringPhase = (ringPhase + phaseSpeed) % 1;
 
   const points = new Array(RENDER_POINTS);
   for (let i = 0; i < RENDER_POINTS; i++) {
-    const position = ringPhase + (i / RENDER_POINTS) * OUTPUT_SAMPLES;
-    const radius = OUTPUT_BASE + meterLevel(ringAt(samples, position)) * OUTPUT_AMPLITUDE;
-    points[i] = [OUTPUT_CENTRE + RING_COS[i] * radius, OUTPUT_CENTRE + RING_SIN[i] * radius];
+    const normPos = (i / RENDER_POINTS) + ringPhase;
+    const sampleVal = sampleContinuousRing(samples, normPos);
+    const targetRadius = OUTPUT_BASE + meterLevel(sampleVal) * OUTPUT_AMPLITUDE;
+
+    // Organic asymmetric envelope follower: fast attack (0.35) for crisp response,
+    // smooth decay (0.16) so amplitude doesn't snap down between syllables.
+    const smoothing = targetRadius > currentRadii[i] ? 0.35 : 0.16;
+    currentRadii[i] += (targetRadius - currentRadii[i]) * smoothing;
+
+    const r = currentRadii[i];
+    points[i] = [OUTPUT_CENTRE + RING_COS[i] * r, OUTPUT_CENTRE + RING_SIN[i] * r];
   }
   path.setAttribute("d", closedCurve(points));
 }
