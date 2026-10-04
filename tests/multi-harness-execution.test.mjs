@@ -79,7 +79,7 @@ function createScratchHarnessBin(t) {
   return { rootDir, binDir, workspaceDir, adapterDir, writeExecutable };
 }
 
-test("discoverHarnesses discovers antigravity, codex, gemini, pi, and claude in PATH", async (t) => {
+test("discoverHarnesses discovers antigravity, codex, opencode, pi, and claude in PATH and excludes gemini", async (t) => {
   const { binDir, adapterDir } = createScratchHarnessBin(t);
   const report = await discoverHarnesses({
     env: {
@@ -110,10 +110,7 @@ test("discoverHarnesses discovers antigravity, codex, gemini, pi, and claude in 
   assert.equal(byId.codex?.delegation?.ok, true);
   assert.equal(byId.codex?.delegation?.adapter, "codex-cli");
 
-  assert.equal(byId.gemini?.state, "present");
-  assert.equal(byId.gemini?.version, "0.18.1");
-  assert.equal(byId.gemini?.delegation?.ok, true);
-  assert.equal(byId.gemini?.delegation?.adapter, "gemini-cli");
+  assert.equal(byId.gemini, undefined, "Gemini CLI must be excluded from harness inventory (voicebox-beads-zjdd)");
 
   assert.equal(byId.opencode?.state, "present");
   assert.equal(byId.opencode?.version, "0.9.5");

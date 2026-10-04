@@ -23,7 +23,7 @@ function fixture(t) {
   command("pi", `test "$1" = "--version" || exit 3; echo ${ACP_AGENT.piVersion}`);
   command("claude", "exit 7");
   command("codex", "echo ignored", 0o600);
-  command("gemini", "echo private-output-must-not-leak");
+  command("antigravity", "echo private-output-must-not-leak");
   command("opencode", `(/bin/sleep 1.5; echo escaped > '${path.join(dir, "escaped")}') & wait`);
   return { env: { PATH: dir, VOICEBOX_ACP_ADAPTER: adapter, VOICEBOX_HARNESS_TOOLS: "" }, command, dir };
 }
@@ -35,6 +35,7 @@ test("host inventory separates version-only presence, broken installs, unknown i
   assert.ok(Date.now() - before < 5000);
   assert.equal(report.entries.length, 8); // + claude-agent-acp row (voicebox-beads-a74y)
   const rows = Object.fromEntries(report.entries.map((r) => [r.id, r]));
+  assert.equal(rows.gemini, undefined, "Gemini CLI must not be present in harness inventory (voicebox-beads-zjdd)");
   assert.equal(rows.pi.state, "present");
   assert.equal(rows.pi.version, ACP_AGENT.piVersion);
   assert.equal(rows.pi.toolCatalogue.status, "unknown");
@@ -44,7 +45,7 @@ test("host inventory separates version-only presence, broken installs, unknown i
   assert.equal(rows.claude.state, "unrunnable");
   assert.match(rows.claude.why, /exit 7/);
   assert.equal(rows.codex.state, "unrunnable");
-  assert.equal(rows.gemini.state, "unknown");
+  assert.equal(rows.antigravity.state, "unknown");
   assert.equal(rows.opencode.state, "unrunnable");
   assert.match(rows.opencode.why, /exceeded 1000ms/);
   assert.equal(rows.aider.state, "absent");
@@ -112,7 +113,8 @@ test("harness page: click lists host facts, cache does not spawn twice, lost ser
   const body = await page.evaluate(() => document.body.innerText);
   assert.match(body, new RegExp(`Pi coding agent — present \\(${ACP_AGENT.piVersion.replace(/\./g, "\\.")}\\)`));
   assert.match(body, /Claude Code — unrunnable/);
-  assert.match(body, /Gemini CLI — unknown/);
+  assert.match(body, /Anti-Gravity — unknown/);
+  assert.ok(!body.includes("Gemini CLI"), "Gemini CLI must not appear on harnesses page");
   assert.match(body, /A browser cannot start a local CLI/);
   const rows = await page.evaluate(() => [...document.querySelectorAll("article")].map((row) => ({
     id: row.dataset.harness, refusal: row.dataset.delegationRefusal, text: row.innerText,
@@ -157,7 +159,7 @@ test("native tool disclosures show only declared metadata, preserve refusals, an
     { name: "bash", description: "Run a shell command subject to that harness's configuration." },
   ] };
   const hostile = '<img src=x onerror="globalThis.metadataRan=true">';
-  writeFileSync(file, JSON.stringify({ pi, claude: { source: hostile, scope: "Fixture declarations only", tools: [{ name: "Read", description: hostile }] }, gemini: { ...pi, tools: [] } }));
+  writeFileSync(file, JSON.stringify({ pi, claude: { source: hostile, scope: "Fixture declarations only", tools: [{ name: "Read", description: hostile }] }, antigravity: { ...pi, tools: [] } }));
   const serverEnv = { ...env, VOICEBOX_WORKSPACE: project, VOICEBOX_HARNESS_TOOLS: file };
   let server = await startServer({ env: serverEnv });
   t.after(() => server.stop());
@@ -203,8 +205,8 @@ test("native tool disclosures show only declared metadata, preserve refusals, an
   // install and no npx, so the preserved refusal is the machine-level one.
   assert.equal(await page.evaluate(() => document.querySelector('[data-harness="claude"]').dataset.delegationRefusal), "adapter-unavailable");
   assert.match(await page.evaluate(() => document.querySelector('[data-harness="claude"]').innerText), /VOICEBOX_CLAUDE_ACP_ADAPTER|npx is not on PATH/);
-  await page.click('[data-harness="gemini"] summary');
-  assert.match(await page.evaluate(() => document.querySelector('[data-harness="gemini"] details').innerText), /host declared an empty list/i);
+  await page.click('[data-harness="antigravity"] summary');
+  assert.match(await page.evaluate(() => document.querySelector('[data-harness="antigravity"] details').innerText), /host declared an empty list/i);
   assert.match(await page.evaluate(() => document.querySelector('[data-harness="codex"]').innerText), /Tools — unknown/);
   // Neither a query parameter nor a file change bypasses the existing snapshot cache.
   writeFileSync(file, '{"private-parser-fragment": invalid}');
