@@ -217,6 +217,28 @@ describe("Local offline speech-to-text and text-to-speech fallback", () => {
     assert.equal(states.at(-1), "idle");
   });
 
+  it("runBinary: child exiting before reading stdin does not raise unhandled EPIPE (voicebox-beads-uck3)", async () => {
+    const scratchBin = mkdtempSync(path.join(os.tmpdir(), "vb-epipe-bin-"));
+    try {
+      // Mock whisper-cli executable that exits immediately without reading stdin
+      const whisperScript = path.join(scratchBin, "whisper-cli");
+      writeFileSync(
+        whisperScript,
+        "#!/bin/sh\nexit 0\n",
+        "utf8",
+      );
+      chmodSync(whisperScript, 0o755);
+
+      // Large buffer to ensure stdin write occurs while child exits
+      const largeBuffer = Buffer.alloc(128 * 1024, 0x42);
+      const env = { PATH: scratchBin };
+      const res = await transcribeAudioOffline(largeBuffer, { env });
+      assert.equal(res.ok, true);
+    } finally {
+      rmSync(scratchBin, { recursive: true, force: true });
+    }
+  });
+
   it("public/offline-speech-client.mjs passes the plain-language source scan with 0 hits", () => {
     const source = readFileSync(CLIENT_MODULE_PATH, "utf8");
     const hits = identifiersInRenderedText(source);
