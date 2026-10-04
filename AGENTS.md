@@ -139,6 +139,7 @@ Every plan, task decomposition, implementation, and review must optimize for the
 2. **UX & UI Quality**: Responsive, accessible, plain-language interfaces with zero layout shift, clear visual states, and minimal interaction friction.
 3. **Quality of Life (QoL)**: Smooth operator and developer ergonomics, self-diagnosing refusals, and low cognitive overhead.
 4. **Features**: New capabilities built on measured boundaries and clean component seams.
+- **Full-Stack Feature Completion (UI Mandate)**: Every user-facing feature or backend capability (such as live video streaming, activity control, model configuration, or harness tools) must include fully wired, accessible browser UI components in `public/` (not just backend modules or isolated prototypes) before a bead can be marked complete.
 
 ### 2. Main Agent Responsiveness & Massive Delegation
 
@@ -152,6 +153,7 @@ Every plan, task decomposition, implementation, and review must optimize for the
   - Every feature, bugfix, or task must be developed in an isolated git worktree (`git worktree add --no-track -b <branch> <dir> origin/main` or sub-agent `Workspace: "share"`). Using `--no-track` prevents a worktree branch from tracking `origin/main` and accidentally offering `HEAD:main` on push; pushing a candidate branch runs only the fast `docs-touched` + `unit` gate, while the Merger Lane runs the full `live` + `acceptance` gate on landing to `main`.
   - If `node_modules` is needed in a worktree on macOS/APFS, clone it via copy-on-write (`cp -Rc /Users/paulkinlan/Code/voicebox/node_modules ./node_modules`). **Never symlink `node_modules`**: `.gitignore` specifies `node_modules/` (with trailing slash), which does not match a symlink and fails tree-cleanliness checks.
   - **Never use `git stash`** in any worktree: `refs/stash` is shared across all worktrees of the repository, so concurrent lanes will collide.
+  - **Never set `git config core.bare`**: Never run `git config core.bare true` in the canonical checkout or any worktree.
 - **Dedicated Merger Lane**:
   - Feature/task sub-agents do **not** push directly to `main`, edit shared documentation blocks, or move the live served tree. Each feature lane verifies its scoped tests and outputs a clean patch or worktree branch.
   - A single **Merger Lane** (the orchestrator or a dedicated Merger sub-agent) is responsible for:
@@ -166,6 +168,7 @@ Every plan, task decomposition, implementation, and review must optimize for the
   - Keep modules small, cohesive, and single-purpose (`core/` for runtime-agnostic pure logic, `lib/` for isolated host capabilities, `public/` for modular UI components).
   - Prefer extracting new features or UI surfaces into dedicated modules with narrow interfaces rather than growing monolithic files (such as the main server or room entry points). Smaller components eliminate cross-agent merge conflicts and allow fast, isolated testing.
   - Enforce **one fact, one computing site** (`node scripts/single-owner.mjs`).
+  - **Full-Stack Feature Completion (UI Mandate)**: Every user-facing feature or backend capability (such as live video streaming, activity control, model configuration, or harness tools) must include fully wired, accessible browser UI components in `public/` (not just backend modules or isolated prototypes) before a bead can be marked complete.
 - **Test only what changed during inner-loop iteration**:
   - While developing in a worktree, sub-agents must run **only the scoped test file(s) covering the touched component** (`node --test tests/<component>.test.mjs`) plus fast static checks (`node scripts/single-owner.mjs`, `node scripts/docs-check.mjs`). Do not run the full serial `live` suite inside every sub-agent worktree unless changing a shared harness/server primitive.
   - Write new tests in the **concurrent `unit` lane** (`npm run test:unit`) whenever behavior can be verified without launching Chromium or a full server process; reserve the serial `live` lane for true end-to-end integration boundaries.

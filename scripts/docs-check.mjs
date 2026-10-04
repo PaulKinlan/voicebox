@@ -94,6 +94,7 @@ if (DOCS_ROOT !== ROOT) console.log(`docs-check: documents from ${DOCS_ROOT}; co
 delete process.env.LIVE_PROVIDER;
 delete process.env.VOICEBOX_LIVE_PROVIDER;
 delete process.env.VOICEBOX_RESOLVER;
+delete process.env.ANTHROPIC_API_KEY;
 
 // ── derived facts ────────────────────────────────────────────────────────────
 
@@ -151,7 +152,7 @@ async function probeServer() {
   // PIN THE CHILD'S ENVIRONMENT (the suite's own lesson, d8af9a0): with a real GEMINI_API_KEY in the shell,
   // the /live upgrade probe below was opening a REAL vendor session during a docs check. Blank keys make the
   // provider refuse by name after the 101 — which is the only fact the line reports.
-  const env = { ...process.env, PORT: String(port), VOICEBOX_EXTENSIONS_DIR: dirs.extensions, VOICEBOX_WORKSPACE: dirs.workspace, VOICEBOX_WASM_SHELF_DIR: dirs.shelf, GEMINI_API_KEY: "", OPENAI_API_KEY: "" };
+  const env = { ...process.env, PORT: String(port), VOICEBOX_EXTENSIONS_DIR: dirs.extensions, VOICEBOX_WORKSPACE: dirs.workspace, VOICEBOX_WASM_SHELF_DIR: dirs.shelf, GEMINI_API_KEY: "", OPENAI_API_KEY: "", ANTHROPIC_API_KEY: "" };
   for (const k of ["LIVE_PROVIDER", "VOICEBOX_LIVE_PROVIDER", "VOICEBOX_PROVIDER", "VOICEBOX_INSTANCE"]) delete env[k];
   env.VOICEBOX_RESOLVER = "script";
   // ITS CWD IS THE SCRATCH, NOT THE CHECKOUT (voicebox-beads-qxy2, the bp8 rule again): /api/probe runs

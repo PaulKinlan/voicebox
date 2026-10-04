@@ -9,6 +9,7 @@ import {
   resolveSystemBinary,
   runSystemCommand,
 } from "../lib/system-tools.mjs";
+import { runSystemCommand as runToolIndexCommand } from "../lib/tool-index.mjs";
 
 describe("system-tools: CLI discovery and execution", () => {
   const tempDirs = [];
@@ -220,6 +221,43 @@ console.log(JSON.stringify({
       args: ["-e", "console.log(JSON.stringify({ ci: process.env.CI, dir: process.env.GIT_DIR, tree: process.env.GIT_WORK_TREE, index: process.env.GIT_INDEX_FILE }))"] });
     assert.equal(child.ok, true);
     assert.deepEqual(JSON.parse(child.stdout), { ci: "fixture" }, "descendant git cannot inherit hook plumbing either");
+    assert.equal(env.GIT_DIR, path.join(other, ".git"), "the caller's environment is not mutated");
+  });
+
+  it("runToolIndexCommand (lib/tool-index.mjs) strips hook Git plumbing and includes macOS fallback PATHs (voicebox-beads-946i, voicebox-beads-mno8)", async () => {
+    const rootPath = makeScratchDir("vb-ti-git-env-root-");
+    const other = makeScratchDir("vb-ti-git-env-other-");
+    const env = {
+      ...process.env,
+      GIT_DIR: path.join(other, ".git"),
+      GIT_WORK_TREE: other,
+      GIT_INDEX_FILE: path.join(other, "index"),
+      CI: "fixture",
+    };
+    const init = await runToolIndexCommand(rootPath, { command: "git init", env });
+    assert.equal(init.ok, true, init.stderr);
+    const status = await runToolIndexCommand(rootPath, {
+      command: "git rev-parse --show-toplevel",
+      env,
+    });
+    assert.equal(status.ok, true, status.stderr);
+    assert.equal(
+      realpathSync(status.stdout),
+      realpathSync(rootPath),
+      "lib/tool-index.mjs git answers about the declared root, not the hook repository",
+    );
+    const child = await runToolIndexCommand(rootPath, {
+      command: `node -e 'console.log(JSON.stringify({ ci: process.env.CI, dir: process.env.GIT_DIR, tree: process.env.GIT_WORK_TREE, index: process.env.GIT_INDEX_FILE, path: process.env.PATH }))'`,
+      env,
+    });
+    assert.equal(child.ok, true, child.stderr);
+    const parsed = JSON.parse(child.stdout);
+    assert.equal(parsed.ci, "fixture");
+    assert.equal(parsed.dir, undefined);
+    assert.equal(parsed.tree, undefined);
+    assert.equal(parsed.index, undefined);
+    assert.match(parsed.path, /\/opt\/homebrew\/bin/);
+    assert.match(parsed.path, /\/usr\/local\/bin/);
     assert.equal(env.GIT_DIR, path.join(other, ".git"), "the caller's environment is not mutated");
   });
 
