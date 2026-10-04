@@ -6,6 +6,20 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+// THE FIXTURE'S GIT MUST NOT BE STEERED (the bp8/bbb rule, lib/git-env.mjs): git exports GIT_DIR /
+// GIT_WORK_TREE into every child, and GIT_DIR OUTRANKS `-C`. Caught in the field 2026-10-04: inside
+// a worktree, this file's fixture commits ("Initial commit on main") landed on the LANE'S BRANCH
+// and gutted the checkout's README mid-gate. The shared helper strips the plumbing so the fixture's
+// repository is the one the arguments name.
+import { gitEnv } from "../lib/git-env.mjs";
+
+// THE WHOLE PROCESS MUST SHED GIT'S PLUMBING, not just this file's own spawns (the same finding,
+// one layer deeper): the module under test (the landing inspector) spawns `git` internally, and a
+// worktree's GIT_DIR would steer EVERY one of those spawns at the lane's own repository — the
+// candidate-branch census answered with the worktree's 287 branches instead of the fixture's one
+// (caught in the field, 2026-10-04). A test of landing-on-a-temporary-repo runs in a process where
+// no repository is inherited.
+for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"]) delete process.env[name];
 import {
   LANDING_INSPECTOR_APP_ID,
   LANDING_INSPECTOR_MINI_APP,
@@ -89,6 +103,7 @@ function git(cwd, args) {
   return execFileSync("git", args, {
     cwd,
     encoding: "utf8",
+    env: gitEnv(),
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
 }
