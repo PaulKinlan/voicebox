@@ -17,7 +17,9 @@ Start here to understand how Voicebox is structured, how the local server and br
 | [`12-pre-push-gate.md`](12-pre-push-gate.md) | **Testing Lanes & Pre-Push Gate** | How tests are partitioned into concurrent `unit` and isolated `live` lanes, stage timeout budgets, and cross-worktree gate locking. |
 | [`21-voice-system-commands.md`](21-voice-system-commands.md) | **Voice System Commands & Catalogue** | Deterministic, zero-latency voice commands (`lib/system-commands.mjs`) for clipboard, theme switching, panel navigation, and audio/session control. |
 | [`23-pluggable-live-models.md`](23-pluggable-live-models.md) | **Pluggable Live Models** | Public harness API, Gemini 3.8 Thinking, OpenAI Realtime, SVG/ASCII layers, audio negotiation and bounded tools. |
-| [`22-roadmap-epics.md`](22-roadmap-epics.md) | **Roadmap & Unimplemented Epics** | Catalogue of the 6 major unimplemented platform epics (shared rooms, branch landing inspector, local STT/TTS, multi-harness diff comparison, OS hotkey bridge, and Wasm concurrency). |
+| [`23-gemini-live-config-and-video.md`](23-gemini-live-config-and-video.md) | **Gemini Live Config & Camera / Screen Video** | Full `BidiGenerateContentSetup` configuration matrix (`lib/live-video-stream.mjs`), Camera (`getUserMedia`) and Desktop (`getDisplayMedia`) live video streaming (`public/live-video-experiment.mjs`), and the Live Vision Studio Mini-App (`public/apps/live-vision-studio.html`). |
+| [`24-gemini-multimodal-platform-plan.md`](24-gemini-multimodal-platform-plan.md) | **Gemini Multi-Model Capabilities** | Unified integration for Image Generation (`gemini-2.5-flash-image`), Veo Video Generation (`veo-2.0-generate-001`), and Workspace Semantic Search (`text-embedding-004`) via `lib/gemini-models.mjs`. |
+| [`22-roadmap-epics.md`](22-roadmap-epics.md) | **Roadmap & Platform Epics** | Architectural summary of the 6 platform epics (shared rooms, branch landing inspector, local STT/TTS, multi-harness diff comparison, OS hotkey bridge, and Wasm concurrency). |
 
 ---
 

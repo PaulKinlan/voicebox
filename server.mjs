@@ -80,6 +80,18 @@ import {
 } from "./lib/project-instruction.mjs";
 import { exportWorkspaceBundle, importWorkspaceBundle } from "./lib/env-transport.mjs";
 import { createRoomPresenceCoordinator } from "./lib/room-presence.mjs";
+import {
+  listGeminiCapabilities,
+  generateGeminiImage,
+  startGeminiVideoGeneration,
+  pollGeminiVideoOperation,
+  embedGeminiTexts,
+  semanticSearchDocuments,
+} from "./lib/gemini-models.mjs";
+import {
+  GEMINI_LIVE_CONFIG_CATALOGUE,
+  validateAndFormatVideoFrame,
+} from "./lib/live-video-stream.mjs";
 // A KEY-FREE LIVE PROVIDER FOR PROOFS (voicebox-beads-ldxa). The stub is the seam's own falsifier — no
 // vendor, no network, no key — and it is registered ONLY when an operator asks for it by name, so it can
 // never appear in the provider list a person chooses from. With the flag set, a test (or a human on a
@@ -3811,6 +3823,100 @@ const routes = {
     return json(res, 200, { ok: true, entries: [] });
   },
 
+  "GET /api/gemini/capabilities": (req, res) => {
+    return json(res, 200, {
+      ...listGeminiCapabilities(),
+      liveConfigCatalogue: GEMINI_LIVE_CONFIG_CATALOGUE,
+    });
+  },
+  "POST /api/gemini/image": (req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => answerOnce(res, async () => {
+      let parsed = {};
+      try {
+        parsed = JSON.parse(body || "{}");
+      } catch {
+        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
+      }
+      const generated = await generateGeminiImage({
+        prompt: parsed?.prompt,
+        model: parsed?.model,
+        aspectRatio: parsed?.aspectRatio,
+        referenceImages: Array.isArray(parsed?.referenceImages) ? parsed.referenceImages : [],
+      });
+      if (!generated.ok) return json(res, 400, generated);
+      let savedFile = null;
+      if (typeof parsed?.saveAs === "string" && parsed.saveAs.trim() && active?.root?.kind === "machine") {
+        const target = resolveActive(parsed.saveAs.trim());
+        if (target.ok) {
+          mkdirSync(path.dirname(target.path), { recursive: true });
+          writeFileSync(target.path, generated.bytes);
+          savedFile = parsed.saveAs.trim();
+        }
+      }
+      return json(res, 200, {
+        ok: true,
+        model: generated.model,
+        mimeType: generated.mimeType,
+        data: generated.data,
+        caption: generated.caption,
+        savedFile,
+      });
+    }));
+  },
+  "POST /api/gemini/video": (req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => answerOnce(res, async () => {
+      let parsed = {};
+      try {
+        parsed = JSON.parse(body || "{}");
+      } catch {
+        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
+      }
+      if (typeof parsed?.operationName === "string" && parsed.operationName.trim()) {
+        const polled = await pollGeminiVideoOperation({ operationName: parsed.operationName.trim() });
+        return json(res, polled.ok ? 200 : 400, polled);
+      }
+      const started = await startGeminiVideoGeneration({
+        prompt: parsed?.prompt,
+        model: parsed?.model,
+        aspectRatio: parsed?.aspectRatio,
+        durationSeconds: parsed?.durationSeconds,
+      });
+      return json(res, started.ok ? 200 : 400, started);
+    }));
+  },
+  "POST /api/gemini/embed": (req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => answerOnce(res, async () => {
+      let parsed = {};
+      try {
+        parsed = JSON.parse(body || "{}");
+      } catch {
+        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
+      }
+      if (typeof parsed?.query === "string" && Array.isArray(parsed?.documents)) {
+        const searchResult = await semanticSearchDocuments({
+          query: parsed.query,
+          documents: parsed.documents,
+          model: parsed?.model,
+          topK: parsed?.topK,
+        });
+        return json(res, searchResult.ok ? 200 : 400, searchResult);
+      }
+      const embedded = await embedGeminiTexts({
+        texts: Array.isArray(parsed?.texts) ? parsed.texts : (typeof parsed?.text === "string" ? [parsed.text] : []),
+        model: parsed?.model,
+        taskType: parsed?.taskType,
+        outputDimensionality: parsed?.outputDimensionality,
+      });
+      return json(res, embedded.ok ? 200 : 400, embedded);
+    }));
+  },
+
   // UN-DECLARE: back to `root-not-declared`, deliberately and by request. The gate asserts that
   // state positively, and a state you cannot return to is one you can only test once per process —
   // and for a person, "close the project" has to have an expression that is not "restart the server".
@@ -5673,6 +5779,15 @@ server.on("upgrade", (req, socket) => {
           return;
         }
         if (msg?.type === "text" && typeof msg.text === "string") session.sendText(msg.text);
+        if (msg?.type === "video" && typeof msg.data === "string") {
+          const checked = validateAndFormatVideoFrame({ data: msg.data, mimeType: msg.mimeType || "image/jpeg" });
+          if (!checked.ok) {
+            ws.send(JSON.stringify({ type: "error", error: `dropped invalid video frame — ${checked.why ?? checked.refused}` }));
+            return;
+          }
+          session.sendVideo?.(checked.data, checked.mimeType);
+          return;
+        }
         // BARGE-IN (voicebox-beads-ldxa): the page heard the person start talking over the model and asks
         // the session to stop producing. The PROVIDER decides what that means — OpenAI sends
         // `response.cancel`; Gemini's barge-in is already server-side and names this a no-op on purpose.
