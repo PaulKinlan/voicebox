@@ -5728,6 +5728,7 @@ server.on("upgrade", (req, socket) => {
       // gone — the same class of lie as the flag never clearing at all, told the other way round.
       runningSession = {
         provider: session.state?.provider ?? provider,
+        model,
         startedAt: new Date().toISOString(),
         socket: ws,
       };

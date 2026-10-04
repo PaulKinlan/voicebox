@@ -39,7 +39,14 @@ let BASE;
 test.before(async () => {
   // A private instance on an ephemeral port: this suite changes settings, so it must not touch
   // anybody's running server.
-  server = await startServer({ cwd: ROOT, env: { VOICEBOX_WORKSPACE: undefined, VOICEBOX_INSTANCE: "agent-settings-test" } });
+  server = await startServer({
+    cwd: ROOT,
+    env: {
+      VOICEBOX_WORKSPACE: undefined,
+      VOICEBOX_INSTANCE: "agent-settings-test",
+      ANTHROPIC_API_KEY: "test-anthropic-key",
+    },
+  });
   BASE = server.base;
 });
 
@@ -259,5 +266,40 @@ test("Gemini Live offers Gemini 3.8 Live Extended Thinking and removes non-live 
   const put = await update({ provider: "gemini", model: "models/gemini-3.8-live-extended-thinking" });
   assert.equal(put.status, 200);
   assert.equal(put.body.applied.model, "models/gemini-3.8-live-extended-thinking");
+});
+
+test("runningSession on /api/agent-settings includes provider, model, and startedAt while /live is connected (voicebox-beads-jp7r)", async () => {
+  const put = await update({ provider: "claude", model: "claude-3-5-sonnet" });
+  assert.equal(put.status, 200);
+
+  const wsUrl = `${BASE.replace(/^http/, "ws")}/live`;
+  const ws = new WebSocket(wsUrl, { headers: { Origin: BASE } });
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("timed out waiting for /live frame")), 4000);
+      ws.addEventListener(
+        "message",
+        () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        { once: true },
+      );
+      ws.addEventListener("error", (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+
+    const view = await settings();
+    assert.ok(view.runningSession, "runningSession must be present while /live socket is open");
+    assert.equal(view.runningSession.provider, "claude");
+    assert.equal(view.runningSession.model, "claude-3-5-sonnet");
+    assert.equal(typeof view.runningSession.startedAt, "string");
+  } finally {
+    ws.close();
+    await sleep(50);
+    await update({ provider: "gemini", model: "models/gemini-3.8-live" });
+  }
 });
 
