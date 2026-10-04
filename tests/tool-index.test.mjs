@@ -232,3 +232,31 @@ test("HTTP GET /api/tools, POST /api/root { self: true }, and /api/turn for list
     rmSync(scratch, { recursive: true, force: true });
   }
 });
+
+test("runSystemCommand strips hook Git plumbing while preserving the supplied environment (voicebox-beads-946i)", async () => {
+  const rootPath = realpathSync(mkdtempSync(path.join(os.tmpdir(), "vb-tool-git-root-")));
+  const other = realpathSync(mkdtempSync(path.join(os.tmpdir(), "vb-tool-git-other-")));
+  try {
+    const env = {
+      ...process.env,
+      GIT_DIR: path.join(other, ".git"),
+      GIT_WORK_TREE: other,
+      GIT_INDEX_FILE: path.join(other, "index"),
+      CUSTOM_VAR: "preserve-me",
+    };
+    const init = await runSystemCommand(rootPath, { command: "git init", env });
+    assert.equal(init.ok, true, init.stderr);
+    const status = await runSystemCommand(rootPath, { command: "git rev-parse --show-toplevel", env });
+    assert.equal(realpathSync(status.stdout.trim()), realpathSync(rootPath), "git answers about the declared root, not the hook repository");
+    const child = await runSystemCommand(rootPath, {
+      command: `${JSON.stringify(process.execPath)} -e "console.log(JSON.stringify({ custom: process.env.CUSTOM_VAR, dir: process.env.GIT_DIR, tree: process.env.GIT_WORK_TREE, index: process.env.GIT_INDEX_FILE }))"`,
+      env,
+    });
+    assert.equal(child.ok, true);
+    assert.deepEqual(JSON.parse(child.stdout.trim()), { custom: "preserve-me" }, "descendant git cannot inherit hook plumbing either");
+    assert.equal(env.GIT_DIR, path.join(other, ".git"), "the caller's environment is not mutated");
+  } finally {
+    rmSync(rootPath, { recursive: true, force: true });
+    rmSync(other, { recursive: true, force: true });
+  }
+});
