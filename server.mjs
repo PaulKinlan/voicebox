@@ -3810,7 +3810,9 @@ const routes = {
       // deferred to nothing. Now it says which of the two is true.
       return json(res, 200, agentSettingsPayload({
         note: runningSession
-          ? "stored — the live session already running keeps the provider it started with"
+          ? (asked.model
+            ? `stored — live session model updated to ${agentSettings.model || PROVIDERS[agentSettings.provider].model}`
+            : "stored — the live session already running keeps the provider it started with")
           : "stored — no live session is running, so the next one this page opens will use it",
       }));
     }));
@@ -5716,6 +5718,7 @@ server.on("upgrade", (req, socket) => {
       // gone — the same class of lie as the flag never clearing at all, told the other way round.
       runningSession = {
         provider: session.state?.provider ?? provider,
+        model,
         startedAt: new Date().toISOString(),
         socket: ws,
       };

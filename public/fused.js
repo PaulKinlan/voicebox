@@ -4508,6 +4508,7 @@ function renderAgentSettings() {
 }
 
 async function saveAgentSetting(patch) {
+  const oldModel = agent?.applied?.model;
   const answer = await request("/api/agent-settings", { method: "PUT", body: JSON.stringify(patch) });
   if (!answer || answer.ok === false) {
     const why = answer?.why ?? "the server did not accept that";
@@ -4528,6 +4529,17 @@ async function saveAgentSetting(patch) {
   writeLocalAgentSettings(agent.requested);
   renderAgentSettings();
   void health();
+
+  const nextModel = agent.applied?.model;
+  const modelChanged = "model" in patch || (oldModel && nextModel && oldModel !== nextModel);
+  if (modelChanged && window.__voiceboxIsLiveActive?.()) {
+    const modelStateEl = document.getElementById("agent-model-state");
+    if (modelStateEl) {
+      modelStateEl.textContent = `Restarting live session with ${nextModel}…`;
+    }
+    await window.__voiceboxDisconnectAndRestartLive?.("model-changed");
+    renderAgentSettings();
+  }
 }
 
 for (const [id, patch] of [

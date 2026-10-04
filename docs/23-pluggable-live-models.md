@@ -77,7 +77,7 @@ Providers emit:
 
 ## Model selection and reasoning depth
 
-Select provider, model and voice in Settings; changes apply to the next session. `core/agent-settings.ts` owns the offered lists and rejects models/voices from the wrong provider.
+Select provider, model and voice in Settings; changing the model while a live session is active cleanly disconnects and restarts the session with the newly chosen model (`voicebox-beads-vgeq`). `core/agent-settings.ts` owns the offered lists and rejects models/voices from the wrong provider.
 
 | Provider | Offered models | Capture / playback |
 |---|---|---|

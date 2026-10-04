@@ -218,3 +218,41 @@ interrupt?.addEventListener("click", () => {
 
 window.__voiceboxLiveClient = audioClient;
 window.__voiceboxSetPlaybackVolume = (v) => audioClient.setPlaybackVolume(v);
+
+/**
+ * Disconnect the current live session cleanly and restart with the updated settings (voicebox-beads-vgeq).
+ */
+async function disconnectAndRestartLive(reason = "model-changed") {
+  const isRunning = Boolean(capturing || (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)));
+  if (!isRunning) return false;
+
+  await audioClient.stopCapture().catch(() => {});
+  if (socket) {
+    const oldSocket = socket;
+    socket = null;
+    oldSocket.onclose = null;
+    oldSocket.onerror = null;
+    oldSocket.onmessage = null;
+    try { oldSocket.close(1000, reason); } catch {}
+  }
+  capturing = false;
+
+  if (voiceState) voiceState.textContent = "Reconnecting live session…";
+
+  try {
+    await startLive();
+    capturing = audioClient.snapshot().capture;
+    return true;
+  } catch (err) {
+    if (voiceState) voiceState.textContent = `Live voice reconnection failed: ${err?.message ?? err}`;
+    setVoice("off");
+    renderMic(audioClient.snapshot());
+    return false;
+  }
+}
+
+window.__voiceboxDisconnectAndRestartLive = disconnectAndRestartLive;
+window.__voiceboxIsLiveActive = () => Boolean(capturing || (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)));
+window.__voiceboxLiveSocket = () => socket;
+window.__voiceboxSetCapturingForTest = (v) => { capturing = Boolean(v); };
+

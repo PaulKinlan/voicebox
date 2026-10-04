@@ -245,3 +245,10 @@ test("Q2: agentSettings persist to disk across server restarts (voicebox-beads-x
   }
 });
 
+test("agentSettings updates model and reflects runningSession model (voicebox-beads-vgeq)", async () => {
+  const put = await update({ provider: "gemini", model: "models/gemini-3.8-thinking" });
+  assert.equal(put.status, 200);
+  assert.equal(put.body.applied.model, "models/gemini-3.8-thinking");
+  assert.equal(put.body.requested.model, "models/gemini-3.8-thinking");
+});
+

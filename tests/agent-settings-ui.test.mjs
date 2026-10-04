@@ -257,3 +257,81 @@ test("unified agent settings: model, voice timbre, custom prompt, and local stor
   assert.equal(reloadedTimbre, "warm", "persisted timbre must be restored after reload");
   assert.equal(reloadedCustom, "Be brief and technical.", "persisted custom instruction must be restored after reload");
 });
+
+test("changing model from settings disconnects active live session and restarts with newly chosen model (voicebox-beads-vgeq)", { timeout: 90000 }, async () => {
+  // 1. Establish spy hooks in the browser page for live session activity
+  await page.evaluate(() => {
+    window.__restarts = [];
+    window.__mockLiveActive = true;
+    window.__voiceboxIsLiveActive = () => window.__mockLiveActive;
+    window.__origDisconnectAndRestartLive = window.__voiceboxDisconnectAndRestartLive;
+    window.__voiceboxDisconnectAndRestartLive = async (reason) => {
+      window.__restarts.push({
+        reason,
+        chosenModel: document.getElementById("agent-model").value,
+      });
+      return true;
+    };
+  });
+
+  // 2. Change model via settings UI
+  const targetModel = "models/gemini-3.8-thinking";
+  await choose("agent-model", targetModel);
+  await answered("model", targetModel);
+
+  // 3. Verify that disconnect and restart was invoked with 'model-changed'
+  const restartCalls = await page.evaluate(() => window.__restarts);
+  assert.equal(restartCalls.length, 1, "disconnectAndRestartLive must be called exactly once on model change");
+  assert.equal(restartCalls[0].reason, "model-changed");
+  assert.equal(restartCalls[0].chosenModel, targetModel);
+
+  // 4. Verify that when live session is NOT active, changing model does NOT call restart
+  await page.evaluate(() => {
+    window.__mockLiveActive = false;
+    window.__restarts = [];
+  });
+  const defaultModel = "models/gemini-3.8-live";
+  await choose("agent-model", defaultModel);
+  await answered("model", defaultModel);
+  const inactiveRestarts = await page.evaluate(() => window.__restarts);
+  assert.equal(inactiveRestarts.length, 0, "must not restart if live session is not active");
+
+  // Restore original hook
+  await page.evaluate(() => {
+    window.__voiceboxDisconnectAndRestartLive = window.__origDisconnectAndRestartLive;
+    delete window.__origDisconnectAndRestartLive;
+    delete window.__restarts;
+    delete window.__mockLiveActive;
+  });
+});
+
+test("disconnectAndRestartLive cleanly closes previous socket and opens new live connection (voicebox-beads-vgeq)", { timeout: 90000 }, async () => {
+  const result = await page.evaluate(async () => {
+    let stopped = false;
+    let started = false;
+    const client = window.__voiceboxLiveClient;
+    const origStop = client.stopCapture;
+    const origStart = client.startCapture;
+    client.stopCapture = async () => {
+      stopped = true;
+      return origStop.call(client);
+    };
+    client.startCapture = async (opts) => {
+      started = true;
+      return origStart.call(client, opts);
+    };
+
+    window.__voiceboxSetCapturingForTest?.(true);
+    const restarted = await window.__voiceboxDisconnectAndRestartLive("model-changed");
+    window.__voiceboxSetCapturingForTest?.(false);
+
+    client.stopCapture = origStop;
+    client.startCapture = origStart;
+
+    return { restarted, stopped, started };
+  });
+
+  assert.equal(result.restarted, true, "disconnectAndRestartLive should complete successfully");
+  assert.equal(result.stopped, true, "must stop capture on disconnect");
+  assert.equal(result.started, true, "must start capture on restart");
+});
