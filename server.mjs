@@ -79,6 +79,7 @@ import {
   readProjectInstructionFor,
 } from "./lib/project-instruction.mjs";
 import { exportWorkspaceBundle, importWorkspaceBundle } from "./lib/env-transport.mjs";
+import { createRoomPresenceCoordinator } from "./lib/room-presence.mjs";
 // A KEY-FREE LIVE PROVIDER FOR PROOFS (voicebox-beads-ldxa). The stub is the seam's own falsifier — no
 // vendor, no network, no key — and it is registered ONLY when an operator asks for it by name, so it can
 // never appear in the provider list a person chooses from. With the flag set, a test (or a human on a
@@ -3435,7 +3436,71 @@ function facts_why(provider) {
 }
 
 const harnessInventory = createHarnessInventory();
+const roomPresence = createRoomPresenceCoordinator();
 const routes = {
+  "GET /api/presence": (_req, res) => json(res, 200, roomPresence.snapshot()),
+  "POST /api/presence": (req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => answerOnce(res, async () => {
+      let parsed = {};
+      try {
+        parsed = JSON.parse(body || "{}");
+      } catch {
+        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
+      }
+      const {
+        action = "heartbeat",
+        participantId,
+        name,
+        role,
+        device,
+        voiceState,
+        activeFile,
+        caption,
+        speaker,
+        text,
+        kind,
+      } = parsed ?? {};
+      let result;
+      if (action === "join" || action === "joinParticipant") {
+        result = roomPresence.joinParticipant({
+          participantId,
+          name,
+          role,
+          device,
+          voiceState,
+          activeFile,
+        });
+      } else if (action === "leave" || action === "leaveParticipant") {
+        result = roomPresence.leaveParticipant(participantId);
+      } else if (action === "requestFloor" || action === "request_floor") {
+        result = roomPresence.requestFloor(participantId);
+      } else if (action === "releaseFloor" || action === "release_floor") {
+        result = roomPresence.releaseFloor(participantId);
+      } else if (
+        action === "recordSharedCaption" ||
+        action === "record_caption" ||
+        action === "caption"
+      ) {
+        result = roomPresence.recordSharedCaption({
+          participantId,
+          speaker: speaker ?? name,
+          text: text ?? caption ?? "",
+          kind,
+        });
+      } else {
+        result = roomPresence.heartbeatParticipant(participantId, {
+          name,
+          voiceState,
+          activeFile,
+          caption: caption ?? text,
+        });
+      }
+      broadcastChannel({ type: "presence", ...roomPresence.snapshot() });
+      return json(res, result.ok === false ? 409 : 200, result);
+    }));
+  },
   "GET /api/agents": (req, res, url) => {
     const environmentKey = url.searchParams.get("environment") || undefined;
     const harness = url.searchParams.get("harness") || undefined;
