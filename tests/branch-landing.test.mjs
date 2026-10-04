@@ -86,9 +86,15 @@ function scanPlainLanguage(rawHtml) {
 }
 
 function git(cwd, args) {
+  // Sanitize GIT_* repo-context vars (measured: inherited GIT_DIR inside a
+  // pre-push gate redirected every temp-repo git op at the voicebox repo —
+  // 277 branches instead of 1).
+  const env = { ...process.env };
+  for (const k of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE", "GIT_COMMON_DIR"]) delete env[k];
   return execFileSync("git", args, {
     cwd,
     encoding: "utf8",
+    env,
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
 }
