@@ -68,6 +68,31 @@ describe("Local offline speech-to-text and text-to-speech fallback", () => {
     }
   });
 
+  it("tolerates EPIPE when a local TTS binary exits immediately without draining large stdin (voicebox-beads-uck3)", async () => {
+    const scratchBin = mkdtempSync(path.join(os.tmpdir(), "vb-offline-epipe-bin-"));
+    try {
+      const piperScript = path.join(scratchBin, "piper");
+      writeFileSync(
+        piperScript,
+        "#!/bin/sh\nexec <&-\nprintf \"RIFF-early-exit-wav\"\nexit 0\n",
+        "utf8",
+      );
+      chmodSync(piperScript, 0o755);
+
+      const env = { PATH: scratchBin };
+      const largeText = "Voicebox offline synthesis payload. ".repeat(8192);
+      const ttsRes = await synthesizeSpeechOffline(largeText, { env });
+      assert.equal(ttsRes.ok, true);
+      assert.equal(ttsRes.mode, "local-cli");
+      assert.equal(
+        Buffer.from(ttsRes.audioBase64, "base64").toString("utf8"),
+        "RIFF-early-exit-wav",
+      );
+    } finally {
+      rmSync(scratchBin, { recursive: true, force: true });
+    }
+  });
+
   it("falls back to browser speech recognition and synthesis when PATH has no local speech binaries", async () => {
     const emptyEnv = { PATH: "" };
     const detected = detectLocalSpeechEngines({ env: emptyEnv });

@@ -339,9 +339,34 @@ test("a REMOTE MCP server is expressible and admissible: no launch, bounded netw
 
 // ── 7. one admission point: the user's door and the model's door agree ────
 test("sideload and model proposal pass the SAME gate and reach the same states", async () => {
-  // The user's door: sideload the harmless notes reader.
-  const staged = await postJson("/api/extensions/sideload", { id: "notes", confirm: true });
+  // The user's door: sideload web-search from the catalogue.
+  const staged = await postJson("/api/extensions/sideload", { id: "web-search", confirm: true });
   assert.equal(staged.state, "pending");
+  const rSideload = await admitAsHost("web-search");
+  assert.equal(rSideload.decision, "admitted");
+
+  // The model's door: propose a read-file notes extension and admit through the same gate.
+  const proposedNotes = await postJson("/api/extensions/proposals", {
+    descriptor: {
+      id: "notes",
+      name: "Notes Reader",
+      description: "Read the project's notes file inside the workspace root.",
+      source: "model",
+      runsIn: "host",
+      capabilities: ["read"],
+      bounds: {},
+      tools: [
+        {
+          name: "read_notes",
+          description: "Read the project's notes file.",
+          promptSnippet: "read_notes reads notes.md inside the project root.",
+          primitive: "read-file",
+          params: { path: "notes.md" },
+        },
+      ],
+    },
+  });
+  assert.equal(proposedNotes.state, "pending");
   const r = await admitAsHost("notes");
   assert.equal(r.decision, "admitted");
   writeFileSync(path.join(WORKSPACE, "notes.md"), "the notes live here");
@@ -375,10 +400,16 @@ test("the host's veto: decision 'deny' refuses even an admissible proposal, by n
 test("the catalogue lists strangers with what admission WOULD decide", async () => {
   const cat = await getJson("/api/extensions/catalogue");
   const byId = Object.fromEntries(cat.catalogue.map((c) => [c.id, c]));
+  assert.equal(byId["notes"], undefined, "Notes Reader is excluded from the built-in catalogue (voicebox-beads-v6m2)");
+  assert.equal(byId["local-notes"], undefined, "local-notes is excluded from the built-in catalogue (voicebox-beads-v6m2)");
   assert.equal(byId["web-search"].preview.decision, "admitted");
+  assert.match(byId["web-search"].description, /DuckDuckGo/i);
+  assert.match(byId["brave-search"].description, /Brave Search/i);
   assert.equal(byId["mcp-server-local"].preview.decision, "refused", "the catalogue must say upfront what the gate would decide");
   assert.equal(byId["mcp-server-local"].preview.rule, "exec-absent");
+  assert.match(byId["mcp-server-local"].description, /exec/i);
   assert.equal(byId["mcp-server-remote"].preview.decision, "admitted");
+  assert.match(byId["mcp-server-remote"].description, /HTTPS/i);
 });
 
 // ── 9. the m2i acceptance: the page's two-fetch admission now fails BY NAME ─

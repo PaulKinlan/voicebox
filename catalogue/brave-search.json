@@ -1,7 +1,7 @@
 {
   "id": "brave-search",
   "name": "Brave Search",
-  "description": "A search extension using the Brave Search API. Requires a Brave Search API subscription key (BRAVE_API_KEY in the host environment). Returns web results with title, description and URL.",
+  "description": "Search the web using the Brave Search API (requires BRAVE_API_KEY in the host environment). Network access is restricted to api.search.brave.com (up to 20 requests per session).",
   "source": "catalogue",
   "runsIn": "host",
   "capabilities": ["network"],
