@@ -129,10 +129,23 @@ body:has(#server-dot[data-ok="false"]) .wordmark-dot {
   font-weight: 700;
   font-size: 0.875rem;
 }
+.help-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 139;
+  background: color-mix(in srgb, var(--ground) 55%, transparent);
+  backdrop-filter: blur(10px) saturate(120%);
+  -webkit-backdrop-filter: blur(10px) saturate(120%);
+}
+.help-modal-backdrop[hidden] {
+  display: none !important;
+}
 .status-help-popover {
-  position: absolute;
-  inset-block-start: calc(100% + 8px);
-  inset-inline-end: 0;
+  position: fixed;
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  inset-inline-end: auto;
+  transform: translate(-50%, -50%);
   z-index: 140;
   inline-size: min(92vw, 760px);
   max-block-size: min(84svh, 680px);
