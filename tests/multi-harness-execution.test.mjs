@@ -20,6 +20,13 @@ import {
   locateGeminiCli,
   locateOpenCode,
 } from "../lib/cli-harness-executor.mjs";
+import {
+  buildProjectAwareTaskPrompt,
+  diffProjectSnapshots,
+  integrateHarnessOutput,
+  runWithProjectLoop,
+  snapshotProjectWorkspace,
+} from "../lib/harness-project-loop.mjs";
 
 function createScratchHarnessBin(t) {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "vb-multi-harness-"));
@@ -251,3 +258,105 @@ test("Codex, Gemini CLI, and OpenCode executors: check(), refusal when absent, a
   assert.equal(locateGeminiCli({ env: { PATH: binDir } }).ok, true);
   assert.equal(locateOpenCode({ env: { PATH: binDir } }).ok, true);
 });
+
+test("Bidirectional harness-project live loop: workspace snapshot, prompt enrichment, file diff detection, and report integration", async (t) => {
+  const { binDir, workspaceDir, writeExecutable } = createScratchHarnessBin(t);
+
+  // Seed workspace with project instructions and an initial source file
+  fs.writeFileSync(path.join(workspaceDir, "AGENTS.md"), "# Project Rules\nAlways keep modules small and tested.\n");
+  fs.mkdirSync(path.join(workspaceDir, "src"), { recursive: true });
+  fs.writeFileSync(path.join(workspaceDir, "src", "index.js"), "export const version = 1;\n");
+  fs.writeFileSync(path.join(workspaceDir, "obsolete.txt"), "remove me\n");
+
+  const beforeSnap = snapshotProjectWorkspace(workspaceDir);
+  assert.equal(beforeSnap.ok, true);
+  assert.ok(beforeSnap.fileList.includes("AGENTS.md"));
+  assert.ok(beforeSnap.fileList.includes("src/index.js"));
+  assert.match(beforeSnap.instructionsSnippet, /Always keep modules small/);
+
+  // Verify project-aware prompt enrichment includes workspace files & instructions
+  const enrichedPrompt = buildProjectAwareTaskPrompt({
+    task: "Analyze src/index.js and bump version",
+    rootPath: workspaceDir,
+    subDir: "src",
+    includeProjectContext: true,
+  });
+  assert.match(enrichedPrompt, /\[Project Workspace Context\]/);
+  assert.match(enrichedPrompt, /Active Sub-directory: src/);
+  assert.match(enrichedPrompt, /AGENTS\.md/);
+  assert.match(enrichedPrompt, /Always keep modules small/);
+  assert.match(enrichedPrompt, /Analyze src\/index\.js and bump version/);
+
+  // Configure mock codex binary to mutate workspace files (create, modify, delete) during execution
+  writeExecutable(
+    "codex",
+    [
+      `if [ "$1" = "--version" ]; then echo "codex-cli 0.42.0"; exit 0; fi`,
+      `echo "export const version = 2;" > src/index.js`,
+      `echo "# Architecture Findings" > analysis.md`,
+      `/bin/rm -f obsolete.txt`,
+      `echo "Completed analysis and updated version to 2."`,
+    ].join("\n"),
+  );
+
+  const integrationEvents = [];
+  const codexExec = createCodexExecutor({ env: { PATH: binDir } });
+  const runRes = await codexExec.run({
+    input: { task: "Upgrade version and write analysis" },
+    root: { path: workspaceDir },
+    enrichProjectContext: true,
+    onProjectIntegration: (ev) => integrationEvents.push(ev),
+  });
+
+  assert.equal(runRes.ok, true);
+  assert.deepEqual(runRes.createdFiles, ["analysis.md"]);
+  assert.deepEqual(runRes.modifiedFiles, ["src/index.js"]);
+  assert.deepEqual(runRes.deletedFiles, ["obsolete.txt"]);
+  assert.deepEqual(runRes.changedFiles, ["analysis.md", "obsolete.txt", "src/index.js"]);
+  assert.equal(integrationEvents.length, 1);
+  assert.match(integrationEvents[0].summary, /created 1 \(analysis\.md\)/);
+  assert.match(integrationEvents[0].summary, /modified 1 \(src\/index\.js\)/);
+  assert.match(integrationEvents[0].summary, /deleted 1 \(obsolete\.txt\)/);
+
+  // Verify runWithProjectLoop wrapper and persisted report artifact
+  const wrapped = runWithProjectLoop(
+    {
+      check: () => ({ ok: true }),
+      run: async ({ root }) => {
+        fs.writeFileSync(path.join(root.path, "src", "feature.js"), "export const ok = true;\n");
+        return "Added src/feature.js with live project integration.";
+      },
+    },
+    { harness: "pi-acp", saveReport: true, reportPath: ".voicebox/last-analysis.md" },
+  );
+
+  const wrappedRes = await wrapped.run({
+    input: { task: "Create feature module" },
+    root: { path: workspaceDir },
+  });
+  assert.equal(wrappedRes.ok, true);
+  assert.ok(wrappedRes.createdFiles.includes("src/feature.js"));
+  assert.ok(wrappedRes.projectIntegration.savedReportFile);
+  assert.ok(fs.existsSync(wrappedRes.projectIntegration.savedReportFile));
+  const savedReportText = fs.readFileSync(wrappedRes.projectIntegration.savedReportFile, "utf8");
+  assert.match(savedReportText, /Harness Analysis Report \(pi-acp\)/);
+  assert.match(savedReportText, /\*\*Created\*\*: src\/feature\.js/);
+
+  // Direct diffProjectSnapshots & integrateHarnessOutput verification
+  const afterSnap = snapshotProjectWorkspace(workspaceDir);
+  const fullDiff = diffProjectSnapshots(beforeSnap, afterSnap);
+  assert.ok(fullDiff.createdFiles.includes("analysis.md"));
+  assert.ok(fullDiff.createdFiles.includes("src/feature.js"));
+  assert.ok(fullDiff.modifiedFiles.includes("src/index.js"));
+  assert.ok(fullDiff.deletedFiles.includes("obsolete.txt"));
+
+  const directIntegration = integrateHarnessOutput(workspaceDir, {
+    harness: "gemini",
+    prompt: "Direct check",
+    output: "All checks green",
+    beforeSnapshot: beforeSnap,
+  });
+  assert.equal(directIntegration.ok, true);
+  assert.ok(directIntegration.changedFiles.includes("src/feature.js"));
+});
+
