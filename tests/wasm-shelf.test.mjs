@@ -410,3 +410,64 @@ test("live tool declarations: admitted+driven tools declare with per-ABI schemas
   const withReserved = liveToolDeclarations(shelf, new Set(["hash"]));
   assert.deepEqual(withReserved.map((d) => d.name), ["diff"], "a reserved shelf id is not declared");
 });
+
+test("mbk: FIFO concurrency semaphore caps active wasm worker cells and releases permits on completion/timeout", async () => {
+  const {
+    callWasmTool,
+    createWasmSemaphore,
+    getWasmSemaphoreStats,
+    WASM_MAX_CONCURRENT_WORKERS,
+    WASM_MAX_QUEUE_DEPTH,
+  } = await import("../lib/wasm-shelf.mjs");
+  assert.equal(WASM_MAX_CONCURRENT_WORKERS, 4);
+  assert.equal(WASM_MAX_QUEUE_DEPTH, 32);
+  assert.equal(typeof getWasmSemaphoreStats().active, "number");
+
+  const file = path.join(scratch, "mbk-loop-cap.wasm");
+  writeFileSync(file, LOOP_MODULE);
+  const tool = attackTool(LOOP_MODULE);
+  tool.wasm.path = file;
+
+  const semaphore = createWasmSemaphore({ maxConcurrent: 2, maxQueueDepth: 10 });
+  const results = await Promise.all(
+    Array.from({ length: 6 }, () => callWasmTool(tool, { input: "abc" }, { semaphore, deadlineMs: 60 })),
+  );
+
+  for (const res of results) {
+    assert.equal(res.ok, false);
+    assert.equal(res.refused, "time-exceeded");
+  }
+  const stats = semaphore.stats();
+  assert.equal(stats.maxObservedActive, 2, "at most 2 worker cells ran concurrently across 6 parallel calls");
+  assert.equal(stats.active, 0, "all permits released after completion");
+  assert.equal(stats.queued, 0, "queue is empty after completion");
+});
+
+test("mbk: queue overflow is refused by name as over-budget when fan-out exceeds maxQueueDepth", async () => {
+  const { callWasmTool, createWasmSemaphore } = await import("../lib/wasm-shelf.mjs");
+  const file = path.join(scratch, "mbk-loop-overflow.wasm");
+  writeFileSync(file, LOOP_MODULE);
+  const tool = attackTool(LOOP_MODULE);
+  tool.wasm.path = file;
+
+  const semaphore = createWasmSemaphore({ maxConcurrent: 1, maxQueueDepth: 1 });
+  const [first, second, third] = await Promise.all([
+    callWasmTool(tool, { input: "abc" }, { semaphore, deadlineMs: 60 }),
+    callWasmTool(tool, { input: "abc" }, { semaphore, deadlineMs: 60 }),
+    callWasmTool(tool, { input: "abc" }, { semaphore, deadlineMs: 60 }),
+  ]);
+
+  assert.equal(first.ok, false);
+  assert.equal(first.refused, "time-exceeded");
+  assert.equal(second.ok, false);
+  assert.equal(second.refused, "time-exceeded");
+  assert.equal(third.ok, false);
+  assert.equal(third.refused, "over-budget", "3rd simultaneous call overflows queue and is refused immediately");
+  assert.match(third.why, /call fan-out is bounded by the host/);
+
+  const stats = semaphore.stats();
+  assert.equal(stats.maxObservedActive, 1);
+  assert.equal(stats.active, 0);
+  assert.equal(stats.queued, 0);
+});
+

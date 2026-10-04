@@ -5730,6 +5730,37 @@ function sqehSyncMiniApps() {
     buttons.push(trackerBtn);
   }
 
+  for (const builtIn of [
+    { appId: "live-vision-studio", title: "Live Vision", fileName: "live-vision-studio.html", url: "/apps/live-vision-studio.html" },
+    { appId: "landing-inspector", title: "Branch Landing", fileName: "landing-inspector.html", url: "/apps/landing-inspector.html" },
+  ]) {
+    if (isAlreadySeen(builtIn.appId, builtIn.title, builtIn.fileName)) continue;
+    markSeen(builtIn.appId, builtIn.title, builtIn.fileName);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "sqeh-miniapp-bubble";
+    btn.dataset.appId = builtIn.appId;
+    btn.dataset.miniAppId = builtIn.appId;
+    const badge = document.createElement("span");
+    badge.className = "sqeh-miniapp-bubble-badge";
+    badge.textContent = "App";
+    const title = document.createElement("span");
+    title.className = "sqeh-miniapp-bubble-title";
+    title.textContent = builtIn.title;
+    btn.append(badge, title);
+    btn.addEventListener("click", async () => {
+      if (!miniAppController) return;
+      try {
+        const res = await fetch(builtIn.url);
+        if (res.ok) {
+          const html = await res.text();
+          miniAppController.mount({ appId: builtIn.appId, title: builtIn.title, fileName: builtIn.fileName, html, source: "host" });
+        }
+      } catch {}
+    });
+    buttons.push(btn);
+  }
+
   host.replaceChildren(...buttons);
 }
 
