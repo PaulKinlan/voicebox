@@ -41,7 +41,7 @@ test("live-harness: Gemini 3.8 settings only, Thinking budget, and tool failover
     frame(data) { this.onmessage({ data: JSON.stringify(data) }); }
   });
   assert.deepEqual(PROVIDERS.gemini.models.map(m => m.id), [
-    "models/gemini-3.8-live", "models/gemini-3.8-thinking", "models/gemini-3.8-flash",
+    "models/gemini-3.8-live", "models/gemini-3.8-live-extended-thinking",
   ]);
   for (const model of ["models/gemini-2.0-flash-exp", "models/gemini-2.0-flash"]) {
     assert.equal(validateAgentSettings({ model }, DEFAULT_AGENT_SETTINGS).ok, false);
@@ -53,8 +53,11 @@ test("live-harness: Gemini 3.8 settings only, Thinking budget, and tool failover
       const socket = sockets.at(-1);
       socket.onopen();
       assert.equal(socket.frames[0].setup.model, model);
-      assert.equal(socket.frames[0].setup.generationConfig.thinkingConfig.thinkingBudget,
-        model === "models/gemini-3.8-thinking" ? 2048 : -1);
+      if (model === "models/gemini-3.8-live-extended-thinking") {
+        assert.equal(socket.frames[0].setup.generationConfig.thinkingConfig.thinkingLevel, "low");
+      } else {
+        assert.equal(socket.frames[0].setup.generationConfig.thinkingConfig.thinkingBudget, -1);
+      }
     } finally { session.close(); }
   }
   const session = createLiveSession({ provider: "gemini", tools: functionDeclarations(), log() {} });

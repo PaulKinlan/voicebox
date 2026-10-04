@@ -5788,6 +5788,11 @@ server.on("upgrade", (req, socket) => {
           session.sendVideo?.(checked.data, checked.mimeType);
           return;
         }
+        if (msg?.type === "activity_control") {
+          if (msg.kind === "audioStreamEnd") session.sendAudioStreamEnd?.();
+          else session.sendActivityControl?.(msg.kind === "end" ? "end" : "start");
+          return;
+        }
         // BARGE-IN (voicebox-beads-ldxa): the page heard the person start talking over the model and asks
         // the session to stop producing. The PROVIDER decides what that means — OpenAI sends
         // `response.cancel`; Gemini's barge-in is already server-side and names this a no-op on purpose.

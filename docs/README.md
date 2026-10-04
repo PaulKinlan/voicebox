@@ -51,6 +51,7 @@ Guides covering task delegation to external coding agents, interactive Web MCP M
 | [`16-zero-server-delegation.md`](16-zero-server-delegation.md) | **Zero-Server Browser Delegation** | Running task delegation across `browser`, `machine`, and `remote` placements with portable `opfs`, `handle`, and `machine` roots (`lib/task-placement.mjs`). |
 | [`17-mini-apps-architecture.md`](17-mini-apps-architecture.md) | **Interactive Mini-Apps (Web MCP)** | Double-iframe sandbox architecture (`/mini-app-bridge.html`), private `MessagePort` RPC, and live voice tool registration via `window.webMcp`. |
 | [`20-webassembly-tools.md`](20-webassembly-tools.md) | **WebAssembly Tool Shelf** | Authoring, compiling (`tools/build-wasm.mjs`), digest-pinning, and executing isolated `.wasm` modules (`buffer-abi/1` and `buffer-abi/diff`). |
+| [`25-factory-agent-proposal.md`](25-factory-agent-proposal.md) | **Factory Agent Fleet & Defect Taxonomy** | Defect mining taxonomy across closed beads, audit yield decision (`0%` yield -> retire background sweep), and `.github/factory-agents.json` lane specifications. |
 
 ---
 
