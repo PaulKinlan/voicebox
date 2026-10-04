@@ -245,11 +245,14 @@ test("Q2: agentSettings persist to disk across server restarts (voicebox-beads-x
   }
 });
 
-test("Gemini Live offers Gemini 3.8 Live Extended Thinking and removes non-live Gemini 3.8 Flash", async () => {
+test("Gemini Live offers Gemini 3.8 Live Extended Thinking and removes non-live Gemini 3.8 Flash and non-bidi Gemini 3.8 Thinking (voicebox-beads-0aez)", async () => {
   const geminiModels = PROVIDERS.gemini.models.map((m) => m.id);
   assert.ok(geminiModels.includes("models/gemini-3.8-live"), "Gemini 3.8 Live default model must be offered");
   assert.ok(geminiModels.includes("models/gemini-3.8-live-extended-thinking"), "Gemini 3.8 Live Extended Thinking model must be offered");
   assert.equal(geminiModels.includes("models/gemini-3.8-flash"), false, "Gemini 3.8 Flash should be removed from Live models");
+  assert.equal(geminiModels.includes("models/gemini-3.8-thinking"), false, "Gemini 3.8 Thinking must not be offered in Live models");
+
+  assert.equal(validateAgentSettings({ model: "models/gemini-3.8-thinking" }, DEFAULT_AGENT_SETTINGS).ok, false);
 
   // Legacy models/gemini-3.8-thinking is upgraded to models/gemini-3.8-live-extended-thinking
   const upgraded = validateAgentSettings({ provider: "gemini", model: "models/gemini-3.8-thinking" }, DEFAULT_AGENT_SETTINGS);

@@ -218,16 +218,74 @@ interrupt?.addEventListener("click", () => {
 
 window.__voiceboxLiveClient = audioClient;
 window.__voiceboxSetPlaybackVolume = (v) => audioClient.setPlaybackVolume(v);
-window.__voiceboxIsLiveSessionActive = () =>
-  Boolean(capturing || (socket && socket.readyState === WebSocket.OPEN));
-window.__voiceboxRestartLiveSession = async () => {
-  await audioClient.stopCapture();
-  try { socket?.close(); } catch { /* already closed */ }
+
+/**
+ * Disconnect the current live session cleanly and restart with updated settings (voicebox-beads-vgeq, voicebox-beads-0aez).
+ * If the restart fails or the new model is rejected, reports honest failure, sets voice to off,
+ * and allows the caller to roll back to the previously working model.
+ */
+async function disconnectAndRestartLive(opts = {}) {
+  const previousModel = typeof opts === "object" ? opts?.previousModel : null;
+  const reason = typeof opts === "string" ? opts : (opts?.reason ?? "model-changed");
+  const isRunning = Boolean(capturing || (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)));
+  if (!isRunning) return { restarted: false, reason: "not-running" };
+
+  await audioClient.stopCapture().catch(() => {});
+  if (socket) {
+    const oldSocket = socket;
+    socket = null;
+    try {
+      window.__voiceboxLastLiveClose = { code: 1000, reason };
+      recordDebug({ type: "live.disconnect", code: 1000, reason });
+      oldSocket.close(1000, reason);
+    } catch {}
+  }
   capturing = false;
-  await startLive();
-  capturing = audioClient.snapshot().capture;
-  return { restarted: true, capturing };
-};
+
+  if (voiceState) voiceState.textContent = "Reconnecting live session…";
+
+  let connectFailed = false;
+  let failReason = "";
+
+  try {
+    await startLive();
+  } catch (err) {
+    connectFailed = true;
+    failReason = err?.message ?? String(err);
+  }
+
+  // Verify that the socket actually reached OPEN and capture started
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    connectFailed = true;
+    if (!failReason) failReason = "Live socket closed or rejected by provider";
+  }
+
+  if (connectFailed) {
+    setVoice("off");
+    capturing = false;
+    renderMic(audioClient.snapshot());
+    if (voiceState) {
+      voiceState.textContent = "Live session failed to start with chosen model · mic off";
+    }
+    return {
+      restarted: false,
+      failed: true,
+      reason: failReason,
+      previousModel,
+    };
+  }
+
+  capturing = Boolean(audioClient.snapshot().capture && socket?.readyState === WebSocket.OPEN);
+  return { restarted: true, capturing: true };
+}
+
+window.__voiceboxDisconnectAndRestartLive = disconnectAndRestartLive;
+window.__voiceboxRestartLiveSession = disconnectAndRestartLive;
+window.__voiceboxIsLiveActive = () =>
+  Boolean(capturing || (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)));
+window.__voiceboxIsLiveSessionActive = window.__voiceboxIsLiveActive;
+window.__voiceboxLiveSocket = () => socket;
+window.__voiceboxStartLive = startLive;
 window.__voiceboxSendLiveVideo = (jpegBase64, mimeType = "image/jpeg") => {
   if (socket && socket.readyState === WebSocket.OPEN && typeof jpegBase64 === "string" && jpegBase64) {
     socket.send(JSON.stringify({ type: "video", data: jpegBase64, mimeType }));

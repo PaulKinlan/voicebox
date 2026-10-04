@@ -210,7 +210,10 @@ test("with a provider that cannot run, the row NAMES the reason — and the voic
 test("unified agent settings: model, voice timbre, custom prompt, and local storage persistence (voicebox-beads-bc0i)", { timeout: 90000 }, async () => {
   // Test controls for model, timbre, and custom prompt
   const models = await page.evaluate(() => [...document.getElementById("agent-model").options].map((o) => o.value));
-  assert.ok(models.length >= 2, "Gemini models must be populated");
+  assert.ok(models.length >= 1, "Gemini models must be populated");
+  assert.ok(models.includes("models/gemini-3.8-live"), "Gemini 3.8 Live must be in options");
+  assert.equal(models.includes("models/gemini-3.8-thinking"), false, "non-bidi models/gemini-3.8-thinking must NOT be in options (voicebox-beads-0aez)");
+  assert.equal(models.includes("models/gemini-3.8-flash"), false, "models/gemini-3.8-flash must NOT be in options");
 
   const timbres = await page.evaluate(() => [...document.getElementById("agent-timbre").options].map((o) => o.value));
   assert.ok(timbres.includes("warm") && timbres.includes("crisp"), "timbres must be populated");
@@ -256,4 +259,59 @@ test("unified agent settings: model, voice timbre, custom prompt, and local stor
   const reloadedCustom = await page.evaluate(() => document.getElementById("agent-custom-instruction").value);
   assert.equal(reloadedTimbre, "warm", "persisted timbre must be restored after reload");
   assert.equal(reloadedCustom, "Be brief and technical.", "persisted custom instruction must be restored after reload");
+});
+
+test("live model picker excludes non-bidi models and offers only supported live models (voicebox-beads-0aez)", { timeout: 90000 }, async () => {
+  const models = await page.evaluate(() => [...document.getElementById("agent-model").options].map((o) => o.value));
+  assert.ok(models.includes("models/gemini-3.8-live"), "Gemini 3.8 Live must be present");
+  assert.equal(models.includes("models/gemini-3.8-thinking"), false, "non-bidi models/gemini-3.8-thinking must NOT be in options");
+  assert.equal(models.includes("models/gemini-3.8-flash"), false, "models/gemini-3.8-flash must NOT be in options");
+});
+
+test("when model restart fails, rolls back to previous working model and reports honest user-facing message (voicebox-beads-0aez)", { timeout: 90000 }, async () => {
+  // 1. Establish initial working model
+  const initialModel = "models/gemini-3.8-live";
+  await choose("agent-model", initialModel);
+  await answered("model", initialModel);
+
+  // 2. Mock a live session active on the page and simulate restart failure
+  await page.evaluate(() => {
+    window.__mockLiveActive = true;
+    window.__voiceboxIsLiveActive = () => window.__mockLiveActive;
+    window.__voiceboxIsLiveSessionActive = () => window.__mockLiveActive;
+    window.__origRestart = window.__voiceboxDisconnectAndRestartLive;
+    window.__voiceboxDisconnectAndRestartLive = async ({ previousModel } = {}) => {
+      // Simulate socket rejected / failed to start
+      return { restarted: false, failed: true, reason: "Model rejected by bidi API", previousModel };
+    };
+    window.__voiceboxRestartLiveSession = window.__voiceboxDisconnectAndRestartLive;
+  });
+
+  // 3. Operator attempts to switch to an unsupported/failing model
+  await page.evaluate(async () => {
+    const sel = document.getElementById("agent-model");
+    sel.value = "models/gemini-3.8-live-extended-thinking";
+    sel.dispatchEvent(new Event("change"));
+  });
+
+  // 4. Wait for rollback to apply and check honest accessible message
+  await page.waitFor(() => {
+    const text = document.getElementById("agent-model-state")?.textContent ?? "";
+    return text.includes("rolled back to");
+  }, { label: "the model rollback notice to be drawn" });
+
+  const stateText = await page.evaluate(() => document.getElementById("agent-model-state").textContent);
+  assert.match(stateText, /not supported for live speech; rolled back to models\/gemini-3\.8-live/);
+
+  // 5. Verify the setting on the server rolled back to initialModel
+  const serverSettings = await fetch(`${server.base}/api/agent-settings`).then((r) => r.json());
+  assert.equal(serverSettings.applied.model, initialModel, "server setting must be rolled back to initial working model");
+
+  // Restore original hook
+  await page.evaluate(() => {
+    window.__voiceboxDisconnectAndRestartLive = window.__origRestart;
+    window.__voiceboxRestartLiveSession = window.__origRestart;
+    delete window.__origRestart;
+    delete window.__mockLiveActive;
+  });
 });

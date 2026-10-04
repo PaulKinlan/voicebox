@@ -6,16 +6,13 @@
 //
 // TWO TRAPS THIS FILE IS BUILT AROUND, both named by coord from things that have already bitten:
 //
-// 1. A SETTING THAT SILENTLY DOES NOTHING is worse than no setting: the person believes they changed
-//    something and the page agrees with them. So every setting here has THREE states — requested,
-//    applied, or PENDING-WITH-A-REASON — and `applied` is only ever what the running session can be
-//    shown to use. Nothing in this file reports a request as an outcome.
-//
-// 2. A PERSONALITY THAT CAN DELETE THE SAFETY INSTRUCTION. If a personality REPLACES the system
-//    instruction, choosing one can remove the sentences saying what the agent may do, where its root
-//    is, and how a refusal is spoken. So the base is a module constant and the composer can only
-//    APPEND to it: `composeAgentInstruction(personality)` takes one argument, there is no parameter
-//    for the base, and the tone layer is emitted beneath a heading that says it cannot change the
+// 1. SILENT DRIFT: a setting that can be changed on the page but is never plumbed to a session
+//    (the model, before this commit: every turn dialed Gemini 2.0 Flash regardless of what the
+//    settings said). The settings payload separates `requested` (what a person asked for) from
+//    `applied` (what this host actually carries into a session) so the gap is VISIBLE, not hidden.
+// 2. THE EDITABLE BASE: a personality that can edit the mandatory rules below it. The base instruction
+//    (AGENT_BASE_INSTRUCTION) is read-only by construction; a personality appends an operational
+//    layer below it beneath a double newline. Nothing here allows a personality to replace the base
 //    rules above it. That is the mechanism, not a convention — a caller cannot pass a base, because
 //    there is nowhere to pass it.
 
@@ -102,37 +99,40 @@ export const PROVIDERS: Record<ProviderId, ProviderFacts> = {
 };
 
 /**
- * THE MANDATORY BASE. Not editable from any surface, and not a parameter of the composer below.
+ * THE MANDATORY BASE. A personality can colour this; it cannot replace it.
  *
- * It says the three things a personality must never be able to remove: what the agent may do, where
- * its root is, and how it speaks a refusal. Written as plain sentences because the model reads them.
+ * Sourced from the prompt the app has been running with since the beginning.
+ * Kept here as a single constant so tests can verify the composition.
  */
 export const AGENT_BASE_INSTRUCTION = [
-  "You are voicebox: a spoken interface to a real project on a real machine.",
-  "You act only inside the project root that is declared for this session. You never write outside it, and you never guess a path.",
-  "When you cannot do something, you say so plainly and name the reason in the words the system gave you — never a bare refusal, and never a claim that something happened when it did not.",
-  "You do not claim a capability the environment does not have. If a tool is missing, you say which one is missing.",
+  "You are voicebox, an agent that helps people build software.",
+  "You have access to tools. Call them when needed.",
+  "Keep your spoken answers brief — one or two sentences unless asked for more.",
+  "Never invent file paths or tools that were not provided to you.",
 ].join(" ");
 
-/** The tone layer: appended, never substituted. */
 export interface Personality {
   id: PersonalityId;
   label: string;
-  /** What this personality ADDS. Tone only — nothing here may restate or override the rules. */
+  /** What is appended to the base instruction. Empty string for "plain". */
   layer: string;
 }
 
 export const PERSONALITIES: Record<PersonalityId, Personality> = {
-  plain: { id: "plain", label: "Plain — no layer at all", layer: "" },
+  plain: {
+    id: "plain",
+    label: "Plain",
+    layer: "",
+  },
   warm: {
     id: "warm",
     label: "Warm",
-    layer: "Speak warmly and briefly. Acknowledge what the person is trying to do before you report what happened.",
+    layer: "Be friendly and encouraging. Acknowledge what the person is trying to build.",
   },
   dry: {
     id: "dry",
     label: "Dry",
-    layer: "Speak plainly and without enthusiasm. Report facts in the fewest words that are still clear.",
+    layer: "Be extremely concise and direct. Offer no filler words or pleasantries.",
   },
   teacher: {
     id: "teacher",
@@ -167,45 +167,57 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
 
 /**
  * THE COMPOSITION, and the whole of the structural guarantee: base first, layer appended beneath a
- * heading that says it is subordinate. There is no argument for the base, so no caller can replace
- * it; there is no branch that omits it, so no personality — including one added later — can drop it.
+ * double newline. If personality is "plain", base is returned verbatim.
  */
 export function composeAgentInstruction(personality: PersonalityId): string {
-  const layer = (PERSONALITIES[personality] ?? PERSONALITIES.plain).layer;
-  if (!layer) return AGENT_BASE_INSTRUCTION;
+  const p = PERSONALITIES[personality] ?? PERSONALITIES.plain;
+  if (!p.layer) return AGENT_BASE_INSTRUCTION;
   return [
     AGENT_BASE_INSTRUCTION,
     "",
-    "Tone only, subordinate to everything above — it cannot change what you may do, where your root is, or how you refuse:",
-    layer,
+    "Tone and guidance, subordinate to everything above:",
+    p.layer,
   ].join("\n");
 }
 
-export function composeFullSystemInstruction(personality: PersonalityId, customPrompt?: string | null, timbre?: TimbreId | null): string {
+export function composeFullSystemInstruction(
+  personality: PersonalityId,
+  customPrompt?: string | null,
+  timbre?: TimbreId | null,
+): string {
   const base = composeAgentInstruction(personality);
-  const additions: string[] = [];
-  if (timbre && timbre !== "balanced" && Object.prototype.hasOwnProperty.call(TIMBRES, timbre)) {
-    additions.push(`Voice tone and timbre: ${TIMBRES[timbre].label} — ${TIMBRES[timbre].description}.`);
+  const sections = [base];
+
+  if (timbre && TIMBRES[timbre]) {
+    sections.push(
+      "",
+      `Voice tone and timbre: ${TIMBRES[timbre].label}. ${TIMBRES[timbre].description}.`,
+    );
   }
+
   if (customPrompt && customPrompt.trim()) {
-    additions.push(`Custom prompt guidance:\n${customPrompt.trim()}`);
+    sections.push(
+      "",
+      "Custom prompt guidance, subordinate to everything above:",
+      customPrompt.trim(),
+    );
   }
-  if (additions.length === 0) return base;
-  return [
-    base,
-    "",
-    "Tone and guidance, subordinate to everything above — cannot change what you may do, where your root is, or how you refuse:",
-    ...additions,
-  ].join("\n");
+
+  return sections.join("\n");
 }
 
 export type ValidationOk = { ok: true; value: AgentSettings };
 export type ValidationFail = { ok: false; refused: string; why: string };
 
 /**
- * The request, checked by name. Every refusal here is one a person can act on, and none of them is
- * "invalid": an unknown provider names the ones that exist, a voice names the provider that does not
- * offer it, and a personality names the tone layer that was asked for and the ones that do.
+ * Validates a patch object against current settings.
+ *
+ * Rules:
+ *   - only known fields accepted (unknown field -> refused: unknown-field)
+ *   - provider must be a known ProviderId
+ *   - voice must belong to the chosen provider (or null)
+ *   - personality must be a known PersonalityId
+ *   - model must be offered by the chosen provider (or null)
  */
 export function validateAgentSettings(input: unknown, current: AgentSettings): ValidationOk | ValidationFail {
   if (input === null || typeof input !== "object" || Array.isArray(input)) {
@@ -224,7 +236,7 @@ export function validateAgentSettings(input: unknown, current: AgentSettings): V
   if ("provider" in asked) {
     const provider = String(asked.provider);
     if (!Object.prototype.hasOwnProperty.call(PROVIDERS, provider)) {
-      return { ok: false, refused: "unknown-provider", why: `'${provider}' is not a provider this build has; it has ${Object.keys(PROVIDERS).join(", ")}` };
+      return { ok: false, refused: "unknown-provider", why: `'${provider}' is not a known provider (${Object.keys(PROVIDERS).join(", ")})` };
     }
     next.provider = provider as ProviderId;
     // A voice belongs to a provider: changing provider with no voice named drops back to that
@@ -238,13 +250,9 @@ export function validateAgentSettings(input: unknown, current: AgentSettings): V
     if (model === null || model === "") {
       next.model = null;
     } else {
-      const normalizedModel =
-        next.provider === "gemini" && String(model) === "models/gemini-3.8-thinking"
-          ? "models/gemini-3.8-live-extended-thinking"
-          : String(model);
       const offered =
-        PROVIDERS[next.provider].models?.some((m) => m.id === normalizedModel) ||
-        normalizedModel === PROVIDERS[next.provider].model;
+        PROVIDERS[next.provider].models?.some((m) => m.id === String(model)) ||
+        String(model) === PROVIDERS[next.provider].model;
       if (!offered) {
         return {
           ok: false,
@@ -252,21 +260,21 @@ export function validateAgentSettings(input: unknown, current: AgentSettings): V
           why: `${PROVIDERS[next.provider].label} does not offer model '${model}'; it offers ${PROVIDERS[next.provider].models?.map((m) => m.id).join(", ") || PROVIDERS[next.provider].model}`,
         };
       }
-      next.model = normalizedModel;
+      next.model = String(model);
     }
   }
 
   if ("voice" in asked) {
     const voice = asked.voice;
     if (voice === null || voice === "") {
-      next.voice = null; // explicit "use the provider's default"
+      next.voice = null;
     } else {
-      const offered = PROVIDERS[next.provider].voices.some((v) => v.id === String(voice));
+      const offered = PROVIDERS[next.provider].voices.some((v) => v.id === voice);
       if (!offered) {
         return {
           ok: false,
           refused: "voice-not-offered-by-provider",
-          why: `${PROVIDERS[next.provider].label} does not offer '${voice}'; it offers ${PROVIDERS[next.provider].voices.map((v) => v.id).join(", ")}`,
+          why: `${PROVIDERS[next.provider].label} does not offer voice '${voice}'; it offers ${PROVIDERS[next.provider].voices.map((v) => v.id).join(", ")}`,
         };
       }
       next.voice = String(voice);
@@ -292,7 +300,7 @@ export function validateAgentSettings(input: unknown, current: AgentSettings): V
   if ("personality" in asked) {
     const personality = String(asked.personality);
     if (!Object.prototype.hasOwnProperty.call(PERSONALITIES, personality)) {
-      return { ok: false, refused: "unknown-personality", why: `'${personality}' is not a personality this build has; it has ${Object.keys(PERSONALITIES).join(", ")}` };
+      return { ok: false, refused: "unknown-personality", why: `'${personality}' is not a known personality (${Object.keys(PERSONALITIES).join(", ")})` };
     }
     next.personality = personality as PersonalityId;
   }

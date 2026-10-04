@@ -4515,6 +4515,7 @@ function renderAgentSettings() {
 }
 
 async function saveAgentSetting(patch) {
+  const previousModel = agent?.requested?.model ?? agent?.applied?.model;
   const answer = await request("/api/agent-settings", { method: "PUT", body: JSON.stringify(patch) });
   if (!answer || answer.ok === false) {
     const why = answer?.why ?? "the server did not accept that";
@@ -4534,15 +4535,43 @@ async function saveAgentSetting(patch) {
   agent = answer;
   writeLocalAgentSettings(agent.requested);
   renderAgentSettings();
-  if (("model" in patch || "provider" in patch) && typeof window.__voiceboxIsLiveSessionActive === "function" && window.__voiceboxIsLiveSessionActive()) {
-    try {
-      await window.__voiceboxRestartLiveSession?.();
-      const modelStateEl = document.getElementById("agent-model-state");
-      if (modelStateEl) {
-        modelStateEl.textContent = `Reconnected live session with ${agent.applied?.model ?? agent.requested?.model ?? "default model"}.`;
+
+  const isModelOrProviderChange = "model" in patch || "provider" in patch;
+  const isLiveActive = typeof window.__voiceboxIsLiveActive === "function"
+    ? window.__voiceboxIsLiveActive()
+    : (typeof window.__voiceboxIsLiveSessionActive === "function" && window.__voiceboxIsLiveSessionActive());
+
+  if (isModelOrProviderChange && isLiveActive) {
+    const modelStateEl = document.getElementById("agent-model-state");
+    const nextModel = agent.applied?.model ?? agent.requested?.model ?? "new model";
+    if (modelStateEl) {
+      modelStateEl.textContent = `Restarting live session with ${nextModel}…`;
+    }
+
+    const restartFn = window.__voiceboxDisconnectAndRestartLive || window.__voiceboxRestartLiveSession;
+    const restartResult = await restartFn?.({ previousModel, reason: "model-changed" });
+
+    if (restartResult && restartResult.restarted === false && restartResult.failed) {
+      // HONEST FAILOVER & ROLLBACK (voicebox-beads-0aez): Roll back to previous working model
+      if (previousModel && previousModel !== patch.model) {
+        const rollbackAns = await request("/api/agent-settings", {
+          method: "PUT",
+          body: JSON.stringify({ model: previousModel }),
+        });
+        if (rollbackAns && rollbackAns.ok !== false) {
+          agent = rollbackAns;
+          writeLocalAgentSettings(agent.requested);
+          renderAgentSettings();
+        }
       }
-    } catch {
-      // If restart fails, startLive's own error handler updates the voice status
+      if (modelStateEl) {
+        modelStateEl.textContent = `Model '${patch.model || nextModel}' is not supported for live speech; rolled back to ${previousModel || "default"}.`;
+      }
+    } else {
+      if (modelStateEl) {
+        modelStateEl.textContent = `Reconnected live session with ${nextModel}.`;
+      }
+      renderAgentSettings();
     }
   }
   void health();
