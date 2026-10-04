@@ -1,8 +1,12 @@
 {
   "$comment": "Data-driven factory agent list for .github/workflows/agent-factory.yml. Adding an agent is a config change: add its name here and the workflow picks it up on the next run. Each name must exist as agents/<name>/agent.yaml in the pinned factory commit (FACTORY_PIN in the workflow).",
-  "$justified_next": "The evidence for what to add next is docs/21-factory-agent-proposal.md (voicebox-beads-h0nv), which counts voicebox's own history: qa-station (26 defect beads), test-gap (14), docs-write (pairs with docs-drift, already listed here), threat-model (11 + 7 refusal-accuracy), vuln-discovery + vuln-verify (11), perf-review (5). Add one per run: each extra agent is another model call per night.",
+  "$justified_next": "The evidence and decision record for the agent subset and engine selection live in docs/25-factory-agent-proposal.md (voicebox-beads-h0nv, voicebox-beads-algv), which counts voicebox's own history: qa-station (26 defect beads), test-gap (14), threat-model (11 + 7 refusal-accuracy), perf-review (5), docs-write (pairs with docs-drift, 14), and vuln-discovery + vuln-verify (11). Enable the medium-shaped quartet (qa-station, test-gap, threat-model, perf-review) first so findings pass the public-repo embargo as beads.",
   "agents": [
     "modern-web",
-    "docs-drift"
+    "docs-drift",
+    "qa-station",
+    "test-gap",
+    "threat-model",
+    "perf-review"
   ]
 }
