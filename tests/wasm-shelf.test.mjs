@@ -411,7 +411,7 @@ test("live tool declarations: admitted+driven tools declare with per-ABI schemas
   assert.deepEqual(withReserved.map((d) => d.name), ["diff"], "a reserved shelf id is not declared");
 });
 
-test("mbk: FIFO concurrency semaphore caps active wasm worker cells and releases permits on completion/timeout", async () => {
+test("mbk: FIFO concurrency semaphore caps active wasm worker cells and releases permits on completion/timeout", { timeout: 10000 }, async () => {
   const {
     callWasmTool,
     createWasmSemaphore,
@@ -443,7 +443,7 @@ test("mbk: FIFO concurrency semaphore caps active wasm worker cells and releases
   assert.equal(stats.queued, 0, "queue is empty after completion");
 });
 
-test("mbk: queue overflow is refused by name as over-budget when fan-out exceeds maxQueueDepth", async () => {
+test("mbk: queue overflow is refused by name as over-budget when fan-out exceeds maxQueueDepth", { timeout: 10000 }, async () => {
   const { callWasmTool, createWasmSemaphore } = await import("../lib/wasm-shelf.mjs");
   const file = path.join(scratch, "mbk-loop-overflow.wasm");
   writeFileSync(file, LOOP_MODULE);
@@ -470,4 +470,52 @@ test("mbk: queue overflow is refused by name as over-budget when fan-out exceeds
   assert.equal(stats.active, 0);
   assert.equal(stats.queued, 0);
 });
+
+test("3kr3: a fast call finishing alongside a held spinner releases its own slot once and never decrements the spinner's active slot", { timeout: 10000 }, async () => {
+  const { callWasmTool, createWasmSemaphore } = await import("../lib/wasm-shelf.mjs");
+
+  // 0 locals, i32.const 32, end — valid buffer-abi/1 module that returns immediately
+  const FAST_MODULE = attackModule([0x00, 0x41, 0x20, 0x0b]);
+  const fastFile = path.join(scratch, "3kr3-fast.wasm");
+  writeFileSync(fastFile, FAST_MODULE);
+  const fastTool = attackTool(FAST_MODULE);
+  fastTool.wasm.path = fastFile;
+
+  const loopFile = path.join(scratch, "3kr3-loop.wasm");
+  writeFileSync(loopFile, LOOP_MODULE);
+  const loopTool = attackTool(LOOP_MODULE);
+  loopTool.wasm.path = loopFile;
+
+  // Cap = 2, maxQueueDepth = 0 so any admission check against the remaining slot is immediate
+  const semaphore = createWasmSemaphore({ maxConcurrent: 2, maxQueueDepth: 0 });
+
+  // 1. Spinner holds 1 slot while a fast call runs and exits beside it
+  const spinnerPromise = callWasmTool(loopTool, { input: "spin" }, { semaphore, deadlineMs: 350 });
+  const fastResult = await callWasmTool(fastTool, { input: "fast" }, { semaphore, deadlineMs: 1000 });
+  assert.equal(fastResult.ok, true);
+
+  // Give the fast child's 'close' event time to fire after its stdout line resolved
+  await new Promise((r) => setTimeout(r, 30));
+
+  // If finish() / permit.release() were not idempotent (settled guard removed), the fast worker's
+  // second completion event ('close') would have decremented active from 1 to 0 while spinner still runs.
+  assert.equal(semaphore.stats().active, 1, "spinner's slot remains active after fast worker exits");
+
+  // 2. Offer two calls at cap 2 while spinner holds 1 slot: exactly ONE must be admitted
+  const [probe1, probe2] = await Promise.all([
+    callWasmTool(fastTool, { input: "probe-1" }, { semaphore, deadlineMs: 1000 }),
+    callWasmTool(fastTool, { input: "probe-2" }, { semaphore, deadlineMs: 1000 }),
+  ]);
+  const admittedCount = [probe1, probe2].filter((r) => r.ok).length;
+  const refusedCount = [probe1, probe2].filter((r) => !r.ok && r.refused === "over-budget").length;
+  assert.equal(admittedCount, 1, "exactly one call admitted into the single free slot alongside the spinner");
+  assert.equal(refusedCount, 1, "second concurrent probe refused over-budget because spinner still holds slot 1");
+
+  const spinnerResult = await spinnerPromise;
+  assert.equal(spinnerResult.ok, false);
+  assert.equal(spinnerResult.refused, "time-exceeded");
+  assert.equal(semaphore.stats().active, 0, "all slots released once spinner terminates");
+  assert.equal(semaphore.stats().queued, 0);
+});
+
 
