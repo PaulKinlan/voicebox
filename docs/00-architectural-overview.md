@@ -22,6 +22,7 @@ Voicebox is architected around five foundational invariants:
    - Provider API keys (`.api-keys.json`), host tokens (`.host-token`), and remote pairing bearers (`.pairings.json`) are stored with `0600` permissions inside `HOST_DIR` outside every project workspace root. Browser JavaScript and sandboxed child processes never receive raw credentials.
 5. **Plain-Language, Zero-Shift UI**:
    - The browser room (`public/index.html`, `public/fused.js`, `public/style.css`) keeps the microphone at the center of the stage while surfacing files, diffs, mini-apps, and live agent progress in non-blocking popovers and docked drawers. Every refusal names the exact rule and recovery action in plain English (`tools/rendered-plain-language.mjs`).
+   - A project, folder or server-route switch is announced by a cue that CANNOT move the page: the stage fades a 2px accent outline in and out, and the header chip tints and settles back to its own resting colours (`project-switch-outline` / `project-switch-chip` in `public/style.css`). The earlier ring — a 650ms box-shadow that spread around the whole stage with `border-radius: 20px` applied only while flashing — threw a ~1000x1100 pulsing rounded rectangle per switch and popped the corners; measured frame by frame, no box ever moved, which is why the cue is now an outline and `tests/project-switch-outline.test.mjs` asserts the box, the radius and the shadow are invariant while the outline really is visible.
 
 ---
 
