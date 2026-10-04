@@ -134,9 +134,10 @@ test("seam: THE BOUNDARY — the page holds no vendor handle, so the gate cannot
     exposed,
     // `updateProjectInstruction` is the folder-change seam (voicebox-beads-0zi4): the page reports the
     // folder, the host relays it, and the provider answers whether it could apply it. `sendVideo` relays
-    // camera and screen-capture frames through the same readiness gate (voicebox-beads-igmc). Still no
+    // camera and screen-capture frames through the same readiness gate (voicebox-beads-igmc).
+    // `sendAudioStreamEnd` flushes server-side Hybrid VAD audio buffers when the mic pauses. Still no
     // vendor handle — same boundary, one more capability the page may ASK for.
-    ["close", "gatedFrames", "interrupt", "provider", "ready", "refusedByTransport", "sendAudio", "sendText", "sendToolResponse", "sendVideo", "updateProjectInstruction"],
+    ["close", "gatedFrames", "interrupt", "provider", "ready", "refusedByTransport", "sendAudio", "sendAudioStreamEnd", "sendText", "sendToolResponse", "sendVideo", "updateProjectInstruction"],
     `the page's surface must be exactly the contract: ${exposed.join(", ")}`,
   );
   // `refusedByTransport` was added in the REVISE so "the gate is host-side" is a NUMBER rather than a
@@ -415,3 +416,72 @@ test("REVISE-3-3: repeated public close() calls provider.close ONCE (cleanup is 
   session.close();
   assert.equal(closeCalls, 1, `cleanup must be idempotent as well as the notification: closeCalls=${closeCalls}`);
 });
+
+test("seam: forwards extended thinking and session management options and relays interaction-status, generation-complete, session-resumption, go-away, and sendAudioStreamEnd", () => {
+  let receivedOpts = null;
+  let audioStreamEndCalls = 0;
+  registerLiveProvider("extended-thinking-stub", (opts) => {
+    receivedOpts = opts;
+    return {
+      start() {
+        opts.emit({ type: "transport-open" });
+      },
+      sendAudio() {},
+      sendAudioStreamEnd() {
+        audioStreamEndCalls += 1;
+        return true;
+      },
+      close() {
+        opts.emit({ type: "closed", code: 1000, reason: "done" });
+      },
+    };
+  });
+
+  const states = [];
+  const lines = [];
+  const session = createLiveSession({
+    provider: "extended-thinking-stub",
+    model: "models/gemini-3.8-live-extended-thinking",
+    thinkingLevel: "high",
+    includeThoughts: true,
+    nonBlockingTools: true,
+    contextWindowCompression: { triggerTokens: 16000 },
+    sessionResumption: { handle: "resume-123" },
+    onState: (name, meta) => states.push({ name, ...meta }),
+    log: (l) => lines.push(l),
+  });
+
+  assert.equal(receivedOpts.model, "models/gemini-3.8-live-extended-thinking");
+  assert.equal(receivedOpts.thinkingLevel, "high");
+  assert.equal(receivedOpts.includeThoughts, true);
+  assert.equal(receivedOpts.nonBlockingTools, true);
+  assert.deepEqual(receivedOpts.contextWindowCompression, { triggerTokens: 16000 });
+  assert.deepEqual(receivedOpts.sessionResumption, { handle: "resume-123" });
+
+  // Before ready, sendAudioStreamEnd is gated
+  assert.equal(session.sendAudioStreamEnd(), false);
+  assert.equal(audioStreamEndCalls, 0);
+
+  receivedOpts.emit({ type: "ready" });
+  assert.equal(session.sendAudioStreamEnd(), true);
+  assert.equal(audioStreamEndCalls, 1);
+
+  receivedOpts.emit({ type: "interaction-status", status: "IN_PROGRESS" });
+  receivedOpts.emit({ type: "generation-complete" });
+  receivedOpts.emit({ type: "session-resumption", resumable: true, handle: "handle-xyz" });
+  receivedOpts.emit({ type: "go-away", timeLeft: "30s", resumptionHandle: "handle-xyz" });
+  receivedOpts.emit({ type: "interaction-status", status: "IDLE" });
+
+  assert.ok(
+    !lines.some((l) => /unknown provider event/.test(l)),
+    `no unknown provider event warnings expected: ${lines.join(" | ")}`,
+  );
+  assert.ok(states.some((s) => s.name === "interaction-status" && s.status === "IN_PROGRESS"));
+  assert.ok(states.some((s) => s.name === "generation-complete"));
+  assert.ok(states.some((s) => s.name === "session-resumption" && s.handle === "handle-xyz"));
+  assert.ok(states.some((s) => s.name === "go-away" && s.timeLeft === "30s"));
+  assert.ok(states.some((s) => s.name === "interaction-status" && s.status === "IDLE"));
+
+  session.close();
+});
+
