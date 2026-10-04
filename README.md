@@ -100,6 +100,7 @@ See [Pluggable live models](docs/23-pluggable-live-models.md) for the API, 16/24
 
 ### 2. The Agent Loop & Shared Executor (`server.mjs`, `core/extensions.ts`)
 Whether an action originates from a live voice tool call or a typed turn, it runs through a single mediated executor:
+Root-scoped CLI execution in `lib/system-tools.mjs` strips inherited Git hook plumbing so Git and child commands operate on the declared workspace rather than the hook's repository.
 - **Workspace File Tools**: Root-scoped operations (`read_file`, `write_file`, `list_files`, `delete_file`, `edit_file`, `diff_file`, `grep_files`) enforce strict path containment inside the declared project root.
 - **WebAssembly Tool Shelf (`lib/wasm-shelf.mjs`, `lib/wasm-worker.mjs`)**: Executes digest-pinned `.wasm` modules in isolated worker processes with strict memory, stdout (2 MB), and wall-clock (5,000ms) ceilings. See [`docs/20-webassembly-tools.md`](docs/20-webassembly-tools.md).
 - **Coding Agent Delegation (`lib/pi-acp.mjs`, `lib/claude-acp.mjs`)**: Delegates complex multi-step coding tasks over the Agent Client Protocol (ACP) to Pi or Claude Code with bounded timeouts and output budgets.

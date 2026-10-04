@@ -207,6 +207,22 @@ console.log(JSON.stringify({
     assert.equal(trackerData.issues[0].id, "ISS-101");
   });
 
+  it("runSystemCommand strips hook Git plumbing while preserving the supplied environment", async () => {
+    const rootPath = makeScratchDir("vb-git-env-root-");
+    const other = makeScratchDir("vb-git-env-other-");
+    const env = { ...process.env, GIT_DIR: path.join(other, ".git"), GIT_WORK_TREE: other,
+      GIT_INDEX_FILE: path.join(other, "index"), CI: "fixture" };
+    const init = await runSystemCommand(rootPath, { command: "git init", env });
+    assert.equal(init.ok, true, init.stderr);
+    const status = await runSystemCommand(rootPath, { command: "git rev-parse --show-toplevel", env });
+    assert.equal(status.stdout, rootPath, "git answers about the declared root, not the hook repository");
+    const child = await runSystemCommand(rootPath, { command: "node", env,
+      args: ["-e", "console.log(JSON.stringify({ ci: process.env.CI, dir: process.env.GIT_DIR, tree: process.env.GIT_WORK_TREE, index: process.env.GIT_INDEX_FILE }))"] });
+    assert.equal(child.ok, true);
+    assert.deepEqual(JSON.parse(child.stdout), { ci: "fixture" }, "descendant git cannot inherit hook plumbing either");
+    assert.equal(env.GIT_DIR, path.join(other, ".git"), "the caller's environment is not mutated");
+  });
+
   it("runSystemCommand refuses missing rootPath, missing tools, and commands exceeding timeoutMs", async () => {
     const rootPath = makeScratchDir("vb-refusal-root-");
 

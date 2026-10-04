@@ -120,6 +120,8 @@ Model functionCall / response.function_call_arguments.done
   -> sendToolResponse -> vendor encoding -> model continues speaking
 ```
 
+Root-scoped CLI execution in `lib/system-tools.mjs` uses `lib/git-env.mjs` to remove inherited Git hook plumbing before spawning commands, including non-Git commands that may invoke Git themselves. Explicit non-Git environment settings are preserved; this prevents a hook's repository from overriding the declared working directory, not an OS sandbox guarantee.
+
 The provider cannot run a tool directly. The server's executor catches execution failures and returns a result for each call, preserving root containment and audit semantics from the text path. Bounds belong to the execution backend (see [WASM tools](20-webassembly-tools.md) and [extension admission](07-extension-admission.md)); the session is not itself a general tool timeout scheduler.
 
 OpenAI emits `conversation.item.create` with `function_call_output` and the original `call_id`. It resumes with exactly one `response.create` only after both `response.done` and all pending tool outputs, whether execution or generation finishes first. Malformed JSON arguments produce a correlated refusal instead of executing an action.
