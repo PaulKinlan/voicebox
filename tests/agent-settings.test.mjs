@@ -252,7 +252,8 @@ test("Gemini Live offers Gemini 3.8 Live Extended Thinking and removes non-live 
   assert.equal(geminiModels.includes("models/gemini-3.8-flash"), false, "Gemini 3.8 Flash should be removed from Live models");
   assert.equal(geminiModels.includes("models/gemini-3.8-thinking"), false, "Gemini 3.8 Thinking must not be offered in Live models");
 
-  assert.equal(validateAgentSettings({ model: "models/gemini-3.8-thinking" }, DEFAULT_AGENT_SETTINGS).ok, false);
+  assert.equal(validateAgentSettings({ model: "models/gemini-3.8-flash" }, DEFAULT_AGENT_SETTINGS).ok, false);
+  assert.equal(validateAgentSettings({ model: "bogus-unoffered-model" }, DEFAULT_AGENT_SETTINGS).ok, false);
 
   // Legacy models/gemini-3.8-thinking is upgraded to models/gemini-3.8-live-extended-thinking
   const upgraded = validateAgentSettings({ provider: "gemini", model: "models/gemini-3.8-thinking" }, DEFAULT_AGENT_SETTINGS);

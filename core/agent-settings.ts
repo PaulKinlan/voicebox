@@ -250,9 +250,13 @@ export function validateAgentSettings(input: unknown, current: AgentSettings): V
     if (model === null || model === "") {
       next.model = null;
     } else {
+      const normalizedModel =
+        next.provider === "gemini" && String(model) === "models/gemini-3.8-thinking"
+          ? "models/gemini-3.8-live-extended-thinking"
+          : String(model);
       const offered =
-        PROVIDERS[next.provider].models?.some((m) => m.id === String(model)) ||
-        String(model) === PROVIDERS[next.provider].model;
+        PROVIDERS[next.provider].models?.some((m) => m.id === normalizedModel) ||
+        normalizedModel === PROVIDERS[next.provider].model;
       if (!offered) {
         return {
           ok: false,
@@ -260,7 +264,7 @@ export function validateAgentSettings(input: unknown, current: AgentSettings): V
           why: `${PROVIDERS[next.provider].label} does not offer model '${model}'; it offers ${PROVIDERS[next.provider].models?.map((m) => m.id).join(", ") || PROVIDERS[next.provider].model}`,
         };
       }
-      next.model = String(model);
+      next.model = normalizedModel;
     }
   }
 
