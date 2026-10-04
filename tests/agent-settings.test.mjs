@@ -50,6 +50,54 @@ test.after(async () => {
 const settings = () => fetch(`${BASE}/api/agent-settings`).then((r) => r.json());
 const update = (body) =>
   fetch(`${BASE}/api/agent-settings`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, body: await r.json() }));
+// ── jp7r: the running session says WHICH MODEL it is using ─────────────────
+//
+// The payload's own design note says running exists so a person can answer
+// "did my model change take effect?" for the session that is actually running —
+// and the Wave-5 re-implementation dropped the field (vgeq's runningSession.model
+// never landed). The stub provider is the seam that lets a keyless test prove it:
+// a session that starts with a chosen model must show THAT model while it runs.
+test("a running session reports the model it started with (jp7r)", { timeout: 30000 }, async () => {
+  // Its own instance: the shared suite server has no stub seam, and this suite
+  // changes settings, so neither may see the other's state.
+  const srv = await startServer({
+    cwd: ROOT,
+    env: { VOICEBOX_WORKSPACE: undefined, VOICEBOX_INSTANCE: "agent-settings-jp7r", VOICEBOX_ENABLE_STUB_PROVIDER: "1" },
+  });
+  try {
+    const put = await fetch(`${srv.base}/api/agent-settings`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider: "stub", model: "stub-model" }),
+    }).then((r) => r.json());
+    assert.equal(put.applied?.provider ?? put.body?.applied?.provider ?? put.provider, "stub", `the stub seam is not selectable: ${JSON.stringify(put).slice(0, 300)}`);
+
+    const ws = new WebSocket(`${srv.base.replace("http", "ws")}/live`, { headers: { origin: srv.base } });
+    const states = [];
+    ws.onmessage = (e) => {
+      if (typeof e.data !== "string") return;
+      const m = JSON.parse(e.data);
+      if (m.type === "state") states.push(m);
+    };
+    await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
+    for (let i = 0; i < 100 && !states.some((s) => s.state === "ready"); i++) await sleep(100);
+    assert.ok(states.some((s) => s.state === "ready"), "the stub session never became ready");
+    // The state frames carried the model too — the page is told, not just the payload.
+    assert.equal(states.find((s) => s.state === "ready")?.model, "stub-model");
+
+    const view = await fetch(`${srv.base}/api/agent-settings`).then((r) => r.json());
+    assert.ok(view.runningSession, "a live session is running but the payload reports none");
+    assert.equal(view.runningSession.provider, "stub");
+    assert.equal(
+      view.runningSession.model,
+      "stub-model",
+      `the running session must name the model it started with — got ${JSON.stringify(view.runningSession).slice(0, 200)}`,
+    );
+    ws.close();
+  } finally {
+    await srv.stop();
+  }
+});
 
 // ── 1. the base cannot be removed, and cannot be passed in ───────────────────────────────────────
 

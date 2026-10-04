@@ -207,7 +207,10 @@ export type ValidationFail = { ok: false; refused: string; why: string };
  * "invalid": an unknown provider names the ones that exist, a voice names the provider that does not
  * offer it, and a personality names the tone layer that was asked for and the ones that do.
  */
-export function validateAgentSettings(input: unknown, current: AgentSettings): ValidationOk | ValidationFail {
+export function validateAgentSettings(input: unknown, current: AgentSettings, extraProviders: Record<string, ProviderFacts> = {}): ValidationOk | ValidationFail {
+  // Test seams (the stub provider, voicebox-beads-jp7r) merge their facts in
+  // here rather than mutating PROVIDERS — production callers never pass them.
+  const providerFacts: Record<string, ProviderFacts> = { ...PROVIDERS, ...extraProviders };
   if (input === null || typeof input !== "object" || Array.isArray(input)) {
     return { ok: false, refused: "bad-request", why: "agent settings must be an object: {provider?, model?, voice?, timbre?, personality?, customInstruction?}" };
   }
@@ -223,8 +226,8 @@ export function validateAgentSettings(input: unknown, current: AgentSettings): V
 
   if ("provider" in asked) {
     const provider = String(asked.provider);
-    if (!Object.prototype.hasOwnProperty.call(PROVIDERS, provider)) {
-      return { ok: false, refused: "unknown-provider", why: `'${provider}' is not a provider this build has; it has ${Object.keys(PROVIDERS).join(", ")}` };
+    if (!Object.prototype.hasOwnProperty.call(providerFacts, provider)) {
+      return { ok: false, refused: "unknown-provider", why: `'${provider}' is not a provider this build has; it has ${Object.keys(providerFacts).join(", ")}` };
     }
     next.provider = provider as ProviderId;
     // A voice belongs to a provider: changing provider with no voice named drops back to that
@@ -243,13 +246,13 @@ export function validateAgentSettings(input: unknown, current: AgentSettings): V
           ? "models/gemini-3.8-live-extended-thinking"
           : String(model);
       const offered =
-        PROVIDERS[next.provider].models?.some((m) => m.id === normalizedModel) ||
-        normalizedModel === PROVIDERS[next.provider].model;
+        providerFacts[next.provider].models?.some((m) => m.id === normalizedModel) ||
+        normalizedModel === providerFacts[next.provider].model;
       if (!offered) {
         return {
           ok: false,
           refused: "model-not-offered-by-provider",
-          why: `${PROVIDERS[next.provider].label} does not offer model '${model}'; it offers ${PROVIDERS[next.provider].models?.map((m) => m.id).join(", ") || PROVIDERS[next.provider].model}`,
+          why: `${providerFacts[next.provider].label} does not offer model '${model}'; it offers ${providerFacts[next.provider].models?.map((m) => m.id).join(", ") || providerFacts[next.provider].model}`,
         };
       }
       next.model = normalizedModel;
@@ -261,12 +264,12 @@ export function validateAgentSettings(input: unknown, current: AgentSettings): V
     if (voice === null || voice === "") {
       next.voice = null; // explicit "use the provider's default"
     } else {
-      const offered = PROVIDERS[next.provider].voices.some((v) => v.id === String(voice));
+      const offered = providerFacts[next.provider].voices.some((v) => v.id === String(voice));
       if (!offered) {
         return {
           ok: false,
           refused: "voice-not-offered-by-provider",
-          why: `${PROVIDERS[next.provider].label} does not offer '${voice}'; it offers ${PROVIDERS[next.provider].voices.map((v) => v.id).join(", ")}`,
+          why: `${providerFacts[next.provider].label} does not offer '${voice}'; it offers ${providerFacts[next.provider].voices.map((v) => v.id).join(", ")}`,
         };
       }
       next.voice = String(voice);
