@@ -53,10 +53,13 @@ test("live-harness: Gemini 3.8 settings only, Thinking budget, and tool failover
       const socket = sockets.at(-1);
       socket.onopen();
       assert.equal(socket.frames[0].setup.model, model);
+      const thinkingConfig = socket.frames[0].setup.generationConfig.thinkingConfig;
       if (model === "models/gemini-3.8-live-extended-thinking") {
-        assert.equal(socket.frames[0].setup.generationConfig.thinkingConfig.thinkingLevel, "low");
+        assert.equal(thinkingConfig.thinkingLevel, "low");
+        assert.equal("thinkingBudget" in thinkingConfig, false, "extended thinking must never send thinkingBudget alongside thinkingLevel");
       } else {
-        assert.equal(socket.frames[0].setup.generationConfig.thinkingConfig.thinkingBudget, -1);
+        assert.equal(thinkingConfig.thinkingBudget, -1);
+        assert.equal("thinkingLevel" in thinkingConfig, false, "standard live model must never send thinkingLevel");
       }
     } finally { session.close(); }
   }

@@ -81,14 +81,14 @@ Select provider, model and voice in Settings; changes apply to the next session.
 
 | Provider | Offered models | Capture / playback |
 |---|---|---|
-| Gemini | `models/gemini-3.8-live` (default), `models/gemini-3.8-thinking`, `models/gemini-3.8-flash` | 16 kHz / 24 kHz |
+| Gemini | `models/gemini-3.8-live` (default), `models/gemini-3.8-live-extended-thinking` | 16 kHz / 24 kHz |
 | OpenAI | `gpt-realtime` (default), `gpt-4o-realtime-preview`, `gpt-4o-mini-realtime-preview` | 24 kHz / 24 kHz |
 
-Thinking sends `generationConfig.thinkingConfig: { thinkingBudget: 2048 }`; Live and Flash retain the dynamic budget (`-1`). The explicit Thinking model is not silently substituted. The existing Live tool-turn retry on upstream close 1011 now targets **3.8 Flash**, once, replaying pending text; no Gemini 2 model is offered or used by this live fallback.
+`models/gemini-3.8-live` sends `generationConfig.thinkingConfig: { thinkingBudget: -1 }`, while `models/gemini-3.8-live-extended-thinking` sends `generationConfig.thinkingConfig: { thinkingLevel: "low" | "medium" | "high" }` (mutually exclusive with `thinkingBudget` — setting both is rejected by the Gemini Live API). Legacy `"models/gemini-3.8-thinking"` requests are normalized to `"models/gemini-3.8-live-extended-thinking"`. The existing Live tool-turn retry on upstream close 1011 targets **3.8 Flash** (`models/gemini-3.8-flash`), once, replaying pending text; no Gemini 2 model is offered or used by this live fallback.
 
 OpenAI voices: alloy, verse, shimmer, ash, ballad, coral, echo, sage. The GA setup puts voice under `session.audio.output.voice`, with PCM formats at 24000 Hz for input and output. Readiness requires `session.updated`, not just socket open. Preview event aliases for audio/transcripts are normalized; all listed models use the GA session setup.
 
-These are configured identifiers, not a guarantee of vendor account entitlement or model availability. Deterministic tests validate frames and settings; a credentialed session is still needed to verify upstream acceptance and audible quality, especially the requested Gemini 3.8 Thinking/Flash endpoints.
+These are configured identifiers, not a guarantee of vendor account entitlement or model availability. Deterministic tests validate frames and settings; a credentialed session is still needed to verify upstream acceptance and audible quality, especially the requested Gemini 3.8 Live Extended Thinking and fallback endpoints.
 
 ## Audio streaming and rate negotiation
 

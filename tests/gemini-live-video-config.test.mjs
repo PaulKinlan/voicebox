@@ -482,28 +482,36 @@ test("buildGeminiLiveSetupPayload configures thinkingLevel and NON_BLOCKING tool
   assert.equal(isExtendedThinkingModel("models/gemini-3.8-live-extended-thinking"), true);
   assert.equal(isExtendedThinkingModel("models/gemini-3.8-thinking"), true);
 
-  // 1. Standard gemini-3.8-live MUST NOT include thinkingLevel even if passed
+  // 1. Standard gemini-3.8-live MUST include thinkingBudget and MUST NOT include thinkingLevel even if passed
   const standardPayload = buildGeminiLiveSetupPayload({
     model: "models/gemini-3.8-live",
     thinkingLevel: "high",
+    thinkingBudget: 512,
     tools: [{ name: "get_weather", description: "Get weather" }],
   });
   assert.equal("thinkingLevel" in standardPayload.setup.generationConfig.thinkingConfig, false);
+  assert.equal(standardPayload.setup.generationConfig.thinkingConfig.thinkingBudget, 512);
   assert.equal(
     "behavior" in standardPayload.setup.tools[0].functionDeclarations[0],
     false,
   );
 
-  // 2. Extended thinking model includes thinkingLevel (defaults to 'low', rejects 'minimal') and sets NON_BLOCKING on tools
+  // 2. Extended thinking model includes thinkingLevel ONLY (never thinkingBudget, even if passed) and sets NON_BLOCKING on tools
   const extendedDefault = buildGeminiLiveSetupPayload({
     model: "models/gemini-3.8-live-extended-thinking",
     thinkingLevel: "minimal", // unsupported on 3.8 extended thinking -> falls back to "low"
+    thinkingBudget: 2048, // must be ignored on extended thinking so Live API does not reject with "only one of thinking budget and thinking level"
     includeThoughts: true,
     tools: [{ name: "run_query", description: "Run async query" }],
   });
   assert.equal(
     extendedDefault.setup.generationConfig.thinkingConfig.thinkingLevel,
     "low",
+  );
+  assert.equal(
+    "thinkingBudget" in extendedDefault.setup.generationConfig.thinkingConfig,
+    false,
+    "thinkingBudget must never be sent alongside thinkingLevel",
   );
   assert.equal(
     extendedDefault.setup.generationConfig.thinkingConfig.includeThoughts,
@@ -515,12 +523,17 @@ test("buildGeminiLiveSetupPayload configures thinkingLevel and NON_BLOCKING tool
   );
 
   const extendedHigh = buildGeminiLiveSetupPayload({
-    model: "models/gemini-3.8-live-extended-thinking",
+    model: "models/gemini-3.8-thinking", // legacy alias normalized to models/gemini-3.8-live-extended-thinking
     thinkingLevel: "high",
   });
+  assert.equal(extendedHigh.setup.model, "models/gemini-3.8-live-extended-thinking");
   assert.equal(
     extendedHigh.setup.generationConfig.thinkingConfig.thinkingLevel,
     "high",
+  );
+  assert.equal(
+    "thinkingBudget" in extendedHigh.setup.generationConfig.thinkingConfig,
+    false,
   );
 
   // 3. Hybrid VAD audioStreamEnd control payload
@@ -555,6 +568,7 @@ test("createGeminiProvider handles extended thinking handshake, NON_BLOCKING too
     const provider = createGeminiProvider({
       model: "models/gemini-3.8-live-extended-thinking",
       thinkingLevel: "medium",
+      thinkingBudget: 2048,
       includeThoughts: true,
       contextWindowCompression: { triggerTokens: 20000, slidingWindow: { targetTokens: 10000 } },
       sessionResumption: { handle: "initial-handle-1" },
@@ -570,6 +584,11 @@ test("createGeminiProvider handles extended thinking handshake, NON_BLOCKING too
     const setup = sentFrames[0].payload.setup;
     assert.equal(setup.model, "models/gemini-3.8-live-extended-thinking");
     assert.equal(setup.generationConfig.thinkingConfig.thinkingLevel, "medium");
+    assert.equal(
+      "thinkingBudget" in setup.generationConfig.thinkingConfig,
+      false,
+      "thinkingBudget must not be sent when thinkingLevel is set on extended thinking model",
+    );
     assert.equal(setup.generationConfig.thinkingConfig.includeThoughts, true);
     assert.equal(setup.tools[0].functionDeclarations[0].behavior, "NON_BLOCKING");
     assert.deepEqual(setup.contextWindowCompression, {
