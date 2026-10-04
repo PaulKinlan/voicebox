@@ -256,8 +256,23 @@ async function explainFailedUpgrade() {
   }
 }
 
+function getSelectedThinkingLevel() {
+  const sel = document.getElementById("setting-thinking-level");
+  if (sel?.value) return sel.value;
+  try {
+    const prefs = JSON.parse(localStorage.getItem("voicebox:vision-prefs") || "{}");
+    if (prefs?.thinkingLevel) return String(prefs.thinkingLevel);
+  } catch {}
+  return "";
+}
+
 async function startLive() {
-  const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/live${debugEnabled ? "?debug=1" : ""}`;
+  const params = new URLSearchParams();
+  if (debugEnabled) params.set("debug", "1");
+  const thinkingLevel = getSelectedThinkingLevel();
+  if (thinkingLevel) params.set("thinkingLevel", thinkingLevel);
+  const qs = params.toString();
+  const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/live${qs ? `?${qs}` : ""}`;
   const caption = $("caption");
   if (caption) {
     caption.textContent = "";

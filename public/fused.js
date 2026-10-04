@@ -7,6 +7,7 @@
 // textContent only.
 import { debugEnabled, openTranscriptDialog, recordDebug } from "./debug-transcript.js";
 import { createRoomUndoStack, deleteHandleFile, diffHandleFile, editHandleFile, grepHandleFolder, parseRoomFolderTurn } from "./room-folder-ops.js";
+import { installWindowManager } from "./window-manager.mjs";
 
 const $ = (id) => document.getElementById(id);
 const SVG = "http://www.w3.org/2000/svg";
@@ -119,9 +120,10 @@ const WANTED = {
   visionCameraBtn: "vision-camera-btn", visionScreenBtn: "vision-screen-btn", visionPttBtn: "vision-ptt-btn",
   visionCoreCard: "vision-core-card", visionCoreVideo: "vision-core-video", visionCoreCanvas: "vision-core-canvas",
   visionCoreMeta: "vision-core-meta", visionSnapshotBtn: "vision-snapshot-btn", visionStopBtn: "vision-stop-btn",
+  settingPttEnabled: "setting-ptt-enabled", settingPttState: "setting-ptt-state",
   settingVisionResolution: "setting-vision-resolution", settingVisionFps: "setting-vision-fps",
-  settingThinkingLevel: "setting-thinking-level", settingStartCamera: "setting-start-camera",
-  settingStartScreen: "setting-start-screen",
+  settingThinkingLevel: "setting-thinking-level", settingThinkingLevelState: "setting-thinking-level-state",
+  settingStartCamera: "setting-start-camera", settingStartScreen: "setting-start-screen",
   thinkingTrace: "thinking-trace", thinkingTraceBody: "thinking-trace-body", thinkingTraceLabel: "thinking-trace-label",
 };
 const els = {};
@@ -5770,17 +5772,26 @@ function sqehSetState(state, { scroll = false } = {}) {
   const prevState = sqeh.state;
   sqeh.state = state;
   document.body.dataset.sqehState = state;
+  const wm = window.__voiceboxWindowManager;
+  if (wm) {
+    if (state === "deck") {
+      wm.closeAllWindows();
+    } else if (state === "files" || state === "history" || state === "activity") {
+      wm.openWindow(state);
+    }
+  }
   const pop = document.getElementById("sqeh-toggle-popovers");
   const hist = document.getElementById("sqeh-toggle-history");
   const act = document.getElementById("sqeh-toggle-activity");
   const filesBubble = document.getElementById("sqeh-files-bubble");
   const dockFiles = document.getElementById("sqeh-dock-files");
+  const madeList = document.getElementById("made-list");
   const session = document.getElementById("session");
   const activityPanel = document.getElementById("activity-log-panel");
-  const isFiles = state === "files";
-  const isHistory = state === "history";
-  const isActivity = state === "activity";
-  if (pop) pop.setAttribute("aria-selected", String(state === "deck"));
+  const isFiles = state === "files" || madeList?.dataset?.windowOpen === "true";
+  const isHistory = state === "history" || session?.dataset?.windowOpen === "true";
+  const isActivity = state === "activity" || activityPanel?.dataset?.windowOpen === "true";
+  if (pop) pop.setAttribute("aria-selected", String(!isFiles && !isHistory && !isActivity && state === "deck"));
   if (hist) {
     hist.setAttribute("aria-selected", String(isHistory));
     hist.setAttribute("aria-expanded", String(isHistory));
@@ -5799,7 +5810,7 @@ function sqehSetState(state, { scroll = false } = {}) {
   if (session) {
     if (isHistory) {
       session.hidden = false;
-      if (scroll) session.scrollIntoView({ block: "start" });
+      if (scroll && state === "history") session.scrollIntoView({ block: "start" });
     } else {
       session.hidden = true;
     }
@@ -5807,8 +5818,8 @@ function sqehSetState(state, { scroll = false } = {}) {
   if (activityPanel) {
     if (isActivity) {
       activityPanel.hidden = false;
-      void refreshActivityLog();
-      if (scroll) activityPanel.scrollIntoView({ block: "start" });
+      if (state === "activity") void refreshActivityLog();
+      if (scroll && state === "activity") activityPanel.scrollIntoView({ block: "start" });
     } else {
       activityPanel.hidden = true;
     }
@@ -6163,20 +6174,23 @@ function sqehWire() {
 
   // Light-dismiss the floating Files, History, or Activity popover on Escape or outside click
   window.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && (sqeh.state === "files" || sqeh.state === "history" || sqeh.state === "activity")) {
+    const openCount = window.__voiceboxWindowManager?.getOpenWindows?.()?.length ?? 0;
+    if (e.key === "Escape" && (openCount > 0 || sqeh.state === "files" || sqeh.state === "history" || sqeh.state === "activity")) {
       const anyModal = document.querySelector("dialog[open]");
       if (!anyModal) sqehSetState("deck");
     }
   });
   document.addEventListener("pointerdown", (e) => {
-    if (sqeh.state === "files") {
-      const target = e.target;
-      const insideAllowed = target?.closest?.("#made-list, #reader, #sqeh-files-bubble, #sqeh-reader-bubble, #sqeh-dock-files, #sqeh-act-explorer, #sqeh-quick-files, dialog[open]");
-      if (!insideAllowed) sqehSetState("deck");
-    } else if (sqeh.state === "activity") {
-      const target = e.target;
-      const insideAllowed = target?.closest?.("#activity-log-panel, #sqeh-toggle-activity, dialog[open]");
-      if (!insideAllowed) sqehSetState("deck");
+    const target = e.target;
+    const insideAllowed = target?.closest?.(
+      "#made-list, #reader, #session, #activity-log-panel, #mini-app-container, #sqeh-deck, #sqeh-dock, #sqeh-sheet, dialog[open]",
+    );
+    if (insideAllowed) return;
+    const openCount = window.__voiceboxWindowManager?.getOpenWindows?.()?.length ?? 0;
+    if (openCount === 1 && (sqeh.state === "files" || sqeh.state === "activity")) {
+      sqehSetState("deck");
+    } else if (openCount === 0 && (sqeh.state === "files" || sqeh.state === "activity")) {
+      sqehSetState("deck");
     }
   });
 
@@ -6277,10 +6291,26 @@ function sqehWire() {
       return patch;
     }
   };
+  const formatThinkingLevelState = (level) => {
+    const normalized = String(level || "medium").toLowerCase();
+    const label = normalized === "high" ? "High" : normalized === "low" ? "Low" : "Medium";
+    return `${label} depth — applies to Gemini 3.8 Live Extended Thinking (audio & vision)`;
+  };
   const savedVision = readVisionPrefs();
   if (els.settingVisionResolution && savedVision.resolution) els.settingVisionResolution.value = savedVision.resolution;
   if (els.settingVisionFps && savedVision.fps) els.settingVisionFps.value = String(savedVision.fps);
   if (els.settingThinkingLevel && savedVision.thinkingLevel) els.settingThinkingLevel.value = savedVision.thinkingLevel;
+  if (els.settingThinkingLevelState) {
+    els.settingThinkingLevelState.textContent = formatThinkingLevelState(els.settingThinkingLevel?.value);
+  }
+  const initialPttEnabled = Boolean(savedVision.pttEnabled);
+  if (els.settingPttEnabled) els.settingPttEnabled.checked = initialPttEnabled;
+  if (els.visionPttBtn) els.visionPttBtn.hidden = !initialPttEnabled;
+  if (els.settingPttState) {
+    els.settingPttState.textContent = initialPttEnabled
+      ? "Shown — manual Push to talk button visible"
+      : "Hidden — automatic voice detection active";
+  }
 
   const captureAndSendVisionFrame = () => {
     const video = els.visionCoreVideo;
@@ -6381,7 +6411,32 @@ function sqehWire() {
     restartVisionTimer();
   });
   els.settingThinkingLevel?.addEventListener("change", () => {
-    writeVisionPrefs({ thinkingLevel: els.settingThinkingLevel.value });
+    const level = els.settingThinkingLevel.value;
+    writeVisionPrefs({ thinkingLevel: level });
+    if (els.settingThinkingLevelState) {
+      els.settingThinkingLevelState.textContent = formatThinkingLevelState(level);
+    }
+    if (window.__voiceboxIsLiveSessionActive?.()) {
+      void window.__voiceboxRestartLiveSession?.();
+    }
+  });
+  els.settingPttEnabled?.addEventListener("change", () => {
+    const enabled = Boolean(els.settingPttEnabled.checked);
+    writeVisionPrefs({ pttEnabled: enabled });
+    if (els.visionPttBtn) {
+      els.visionPttBtn.hidden = !enabled;
+      if (!enabled && pttActive) {
+        pttActive = false;
+        els.visionPttBtn.setAttribute("aria-pressed", "false");
+        els.visionPttBtn.textContent = "Push to talk";
+        window.__voiceboxSendActivityControl?.("end");
+      }
+    }
+    if (els.settingPttState) {
+      els.settingPttState.textContent = enabled
+        ? "Shown — manual Push to talk button visible"
+        : "Hidden — automatic voice detection active";
+    }
   });
   els.visionPttBtn?.addEventListener("click", () => {
     pttActive = !pttActive;
@@ -6426,6 +6481,10 @@ function sqehWire() {
     }
     sqehSyncQuickFiles();
   };
+  installWindowManager(document, window, {
+    onOpenActivity: () => void refreshActivityLog(),
+    onSyncReaderBubble: () => syncReaderBubble(),
+  });
   // Ensure the initial state is always applied cleanly on first paint
   sqehSetState("deck");
 }

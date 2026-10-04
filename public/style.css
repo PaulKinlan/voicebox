@@ -2187,11 +2187,12 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
   .sqeh-sheet { inset-block-end: auto; inset-block-start: 76px; inset-inline-start: auto; inset-inline-end: 24px; inline-size: 420px; max-block-size: 70svh; border-radius: 20px; }
 }
 
-/* ── Pure bubble + popover behavior for #made-list and #reader (voicebox-beads-wc8c, voicebox-beads-maeu) ── */
-body:not([data-sqeh-state="files"]) .made:not(.dropping) {
+/* ── Pure bubble + popover behavior for #made-list and #reader (voicebox-beads-wc8c, voicebox-beads-maeu, voicebox-beads-od4p) ── */
+body:not([data-sqeh-state="files"]) .made:not(.dropping):not([data-window-open="true"]) {
   display: none;
 }
-body[data-sqeh-state="files"] .made {
+body[data-sqeh-state="files"] .made,
+.made[data-window-open="true"] {
   position: fixed;
   inset-block-start: 72px;
   inset-inline-end: 24px;
@@ -2206,7 +2207,8 @@ body[data-sqeh-state="files"] .made {
   padding: 16px 20px;
   overflow: visible;
 }
-body[data-sqeh-state="files"] .made::before {
+body[data-sqeh-state="files"] .made::before,
+.made[data-window-open="true"]::before {
   content: '';
   position: absolute;
   inset: 0;
@@ -2219,11 +2221,22 @@ body[data-sqeh-state="files"] .made::before {
   box-shadow: var(--shadow);
   pointer-events: none;
 }
-body[data-sqeh-state="files"] .made.dropping {
+body[data-sqeh-state="files"] .made.dropping,
+.made[data-window-open="true"].dropping {
   background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
-body[data-sqeh-state="files"] .made-close {
+body[data-sqeh-state="files"] .made-close,
+.made[data-window-open="true"] .made-close {
   display: inline-grid;
+}
+
+[data-draggable-handle="true"] {
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+[data-window-focused="true"] {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
 }
 
 .reader[data-state="empty"],
@@ -2253,6 +2266,7 @@ body[data-sqeh-state="files"] .made-close {
 }
 @media (max-width: 768px) {
   body[data-sqeh-state="files"] .made,
+  .made[data-window-open="true"],
   .reader:not([data-state="empty"]):not([data-collapsed="true"]),
   .session {
     inset-inline-start: 12px;
@@ -2260,7 +2274,7 @@ body[data-sqeh-state="files"] .made-close {
     inline-size: auto;
   }
 }
-body:has(#reader:not([data-state="empty"]):not([data-collapsed="true"])) .made:not(.dropping) {
+body:not([data-multi-window="true"]):has(#reader:not([data-state="empty"]):not([data-collapsed="true"])) .made:not(.dropping) {
   display: none;
 }
 

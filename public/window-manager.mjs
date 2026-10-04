@@ -60,58 +60,8 @@ const HOME_BUTTON_IDS = Object.freeze([
 const BASE_Z_INDEX = 90;
 const MAX_Z_INDEX = 130;
 
-function ensureWindowManagerStyles(documentObj) {
-  if (!documentObj?.head || typeof documentObj.createElement !== "function") return;
-  const styleId = "voicebox-window-manager-styles";
-  if (documentObj.getElementById?.(styleId)) return;
-  const style = documentObj.createElement("style");
-  style.id = styleId;
-  style.textContent = [
-    `.made[data-window-open="true"] {`,
-    `  display: block !important;`,
-    `  position: fixed;`,
-    `  inset-block-start: 76px;`,
-    `  inset-inline-end: 24px;`,
-    `  inset-inline-start: auto;`,
-    `  transform: none;`,
-    `  inline-size: min(560px, calc(100vw - 32px));`,
-    `  max-block-size: min(74svh, 580px);`,
-    `  box-sizing: border-box;`,
-    `  background: transparent;`,
-    `  border-radius: 20px;`,
-    `  padding: 16px 20px;`,
-    `  overflow: visible;`,
-    `}`,
-    `.made[data-window-open="true"]::before {`,
-    `  content: "";`,
-    `  position: absolute;`,
-    `  inset: 0;`,
-    `  z-index: -1;`,
-    `  background: color-mix(in srgb, var(--card) 94%, transparent);`,
-    `  backdrop-filter: blur(16px);`,
-    `  -webkit-backdrop-filter: blur(16px);`,
-    `  border: 1px solid var(--line);`,
-    `  border-radius: 20px;`,
-    `  box-shadow: var(--shadow);`,
-    `  pointer-events: none;`,
-    `}`,
-    `.made[data-window-open="true"] .made-close {`,
-    `  display: inline-grid;`,
-    `}`,
-    `.session[data-window-open="true"]:not([hidden]),`,
-    `.activity-panel[data-window-open="true"]:not([hidden]) {`,
-    `  display: flex !important;`,
-    `  position: fixed;`,
-    `}`,
-    `[data-draggable-handle="true"] {`,
-    `  user-select: none;`,
-    `  touch-action: none;`,
-    `}`,
-    `[data-window-focused="true"] {`,
-    `  outline: 1px solid color-mix(in srgb, var(--accent, #1f3fd0) 38%, transparent);`,
-    `}`,
-  ].join("\n");
-  documentObj.head.appendChild(style);
+function ensureWindowManagerStyles(_documentObj) {
+  // Styles live in public/style.css so Content-Security-Policy (style-src 'self') is respected.
 }
 
 function applyDefaultCascadePosition(panelEl, offset) {
@@ -288,6 +238,7 @@ export function createWindowManager({
   documentObj = globalThis.document,
   windowObj = globalThis.window,
   onOpenActivity = null,
+  onSyncReaderBubble = null,
 } = {}) {
   const openWindows = new Set();
   let topZ = BASE_Z_INDEX;
@@ -359,12 +310,18 @@ export function createWindowManager({
     const list = [...openWindows];
     if (list.length > 0) {
       body.dataset.openWindows = list.join(" ");
+      if (list.length > 1) {
+        body.dataset.multiWindow = "true";
+      } else {
+        delete body.dataset.multiWindow;
+      }
       const activeState = preferredState && openWindows.has(preferredState)
         ? preferredState
         : list[list.length - 1];
       body.dataset[STATE_PROP] = activeState;
     } else {
       delete body.dataset.openWindows;
+      delete body.dataset.multiWindow;
       body.dataset[STATE_PROP] = "deck";
     }
     const isDeck = openWindows.size === 0;
@@ -489,6 +446,15 @@ export function createWindowManager({
           "click",
           (event) => {
             event?.stopImmediatePropagation?.();
+            if (spec.name === "files") {
+              const reader = documentObj.getElementById?.("reader");
+              if (reader && reader.dataset?.state && reader.dataset.state !== "empty" && reader.dataset.collapsed !== "true" && openWindows.has("files")) {
+                reader.dataset.collapsed = "true";
+                onSyncReaderBubble?.();
+                openWindow("files");
+                return;
+              }
+            }
             toggleWindow(spec.name);
           },
           true,
@@ -517,11 +483,9 @@ export function createWindowManager({
       if (homeBtn.dataset) homeBtn.dataset.windowHomeBound = "true";
       homeBtn.addEventListener?.(
         "click",
-        (event) => {
-          event?.stopImmediatePropagation?.();
+        () => {
           closeAllWindows();
         },
-        true,
       );
     }
 
@@ -530,20 +494,24 @@ export function createWindowManager({
       if (backFilesBtn.dataset) backFilesBtn.dataset.windowBackBound = "true";
       backFilesBtn.addEventListener?.(
         "click",
-        (event) => {
-          event?.stopImmediatePropagation?.();
+        () => {
           openWindow("files");
         },
-        true,
       );
     }
 
-    // Preserve simultaneous open windows if legacy outside-click handlers fire
-    documentObj.addEventListener?.("pointerdown", () => {
-      if (openWindows.size > 0) {
-        syncWindows();
-      }
-    });
+    const readerMinBtn = documentObj.getElementById?.("reader-minimize");
+    if (readerMinBtn && readerMinBtn.dataset?.windowMinBound !== "true") {
+      if (readerMinBtn.dataset) readerMinBtn.dataset.windowMinBound = "true";
+      readerMinBtn.addEventListener?.(
+        "click",
+        () => {
+          if (openWindows.size === 1 && openWindows.has("files")) {
+            closeWindow("files");
+          }
+        },
+      );
+    }
   }
 
   wireDom();

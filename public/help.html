@@ -40,7 +40,7 @@
         <ul>
           <li><strong>Camera Streaming:</strong> Click <strong>Camera</strong> to stream frames from your webcam into the active live session so the assistant can see physical objects, sketches, or devices.</li>
           <li><strong>Screen &amp; Window Sharing:</strong> Click <strong>Share screen</strong> to share a browser tab, application window, or entire display so the assistant can inspect layouts, errors, or documents with you.</li>
-          <li><strong>Instant Frame &amp; Manual Speech Boundaries:</strong> Use <strong>Send frame</strong> inside the video preview card to capture an immediate frame, <strong>Push to talk</strong> to explicitly signal the start and end of your spoken turn, or <strong>Stop video</strong> to stop sharing at any time.</li>
+          <li><strong>Instant Frame &amp; Manual Speech Boundaries:</strong> Use <strong>Send frame</strong> inside the video preview card to capture an immediate frame, <strong>Stop video</strong> to stop sharing at any time, or enable <strong>Push to talk</strong> in Settings if you want manual speech start and end controls beside the microphone.</li>
           <li><strong>Vision Settings:</strong> Open <strong>Settings</strong> in the top bar to adjust <strong>Video frame resolution</strong> (Low for fastest turn response, Medium for balanced detail, High for fine text and UI detail) and <strong>Video frame rate</strong> (0.5, 1, or 2 frames per second).</li>
         </ul>
       </section>
@@ -50,8 +50,8 @@
         <p>Open <strong>Settings</strong> in the top bar to choose your voice provider, model, reasoning depth, and voice persona:</p>
         <ul>
           <li><strong>Gemini 3.8 Live (Default):</strong> Tuned for low-latency, real-time spoken conversation and immediate tool calls.</li>
-          <li><strong>Gemini 3.8 Live Extended Thinking:</strong> Combines live spoken interaction with deep multi-step reasoning and non-blocking background tool execution. Configure <strong>Extended thinking depth</strong> (Low, Medium, or High) in Settings.</li>
-          <li><strong>Automatic Session Restart on Model Change:</strong> When you switch models or providers (Gemini Live, OpenAI Realtime, or Claude) in Settings while a live voice session is running, Voicebox automatically disconnects the previous session and reconnects using your new model.</li>
+          <li><strong>Gemini 3.8 Live Extended Thinking:</strong> Combines live spoken interaction with deep multi-step reasoning and non-blocking background tool execution. Configure <strong>Extended thinking depth</strong> (Low, Medium, or High) under <strong>Agent Settings</strong> for both live audio and video sessions.</li>
+          <li><strong>Automatic Session Restart on Model Change:</strong> When you switch models, thinking depth, or providers (Gemini Live, OpenAI Realtime, or Claude) in Settings while a live voice session is running, Voicebox automatically disconnects the previous session and reconnects using your new selection.</li>
           <li><strong>Provider API Keys:</strong> Enter and save your Gemini, OpenAI, and Anthropic API keys directly in Settings so they persist on your local host without needing shell environment variables.</li>
           <li><strong>Voice Timbre &amp; Persona:</strong> Choose from Balanced, Warm, Bright, Deep, or Crisp voice timbres and layer a persona or custom prompt guidance beneath the mandatory safety rules.</li>
         </ul>
