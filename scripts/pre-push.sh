@@ -10,6 +10,13 @@ set -e
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$REPO_ROOT"
 
+# ── REFUSE WHEN core.bare=true IS SET ON A WORKING TREE CHECKOUT (voicebox-beads-6p3y) ──
+if [ "$(git config --bool core.bare 2>/dev/null || echo false)" = "true" ] && [ -e ".git" ]; then
+  echo >&2 "[gate] pre-push REFUSED: git config core.bare=true is set on a working tree checkout ($REPO_ROOT)"
+  echo >&2 "[gate]   restore with:  git config core.bare false"
+  exit 1
+fi
+
 # ── REFUSE A NON-MAIN BRANCH PUSHING TO main (voicebox-beads-85w) ─────────────
 # A worktree created with `git worktree add -b <branch> <dir> origin/main` has its
 # UPSTREAM set to origin/main, so a BARE `git push` in it offers HEAD:main — and git's

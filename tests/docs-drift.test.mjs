@@ -195,4 +195,12 @@ test("stripComments preserves code in comment-adjacent forms and eliminates phan
   const vars = envVars();
   assert.equal(vars.some((v) => v.name === "X"), false, "phantom variable X must not be in envVars");
   assert.equal(vars.some((v) => v.name === "BRAVE_API_KEY"), true, "BRAVE_API_KEY derived from catalogue declaration");
+
+  // 3. ANTHROPIC_API_KEY isolation in probeServer (voicebox-beads-tgvk):
+  const checkSrc = readFileSync(CHECK, "utf8");
+  assert.match(
+    checkSrc,
+    /GEMINI_API_KEY:\s*""\s*,\s*OPENAI_API_KEY:\s*""\s*,\s*ANTHROPIC_API_KEY:\s*""/,
+    "probeServer must blank ANTHROPIC_API_KEY alongside GEMINI_API_KEY and OPENAI_API_KEY",
+  );
 });
