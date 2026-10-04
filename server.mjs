@@ -3811,7 +3811,7 @@ const routes = {
       return json(res, 200, agentSettingsPayload({
         note: runningSession
           ? (asked.model
-            ? `stored — live session model updated to ${agentSettings.model || PROVIDERS[agentSettings.provider].model}`
+            ? "stored — model preference saved; the active page restarts the live session to apply it"
             : "stored — the live session already running keeps the provider it started with")
           : "stored — no live session is running, so the next one this page opens will use it",
       }));

@@ -230,10 +230,11 @@ async function disconnectAndRestartLive(reason = "model-changed") {
   if (socket) {
     const oldSocket = socket;
     socket = null;
-    oldSocket.onclose = null;
-    oldSocket.onerror = null;
-    oldSocket.onmessage = null;
-    try { oldSocket.close(1000, reason); } catch {}
+    try {
+      window.__voiceboxLastLiveClose = { code: 1000, reason };
+      recordDebug({ type: "live.disconnect", code: 1000, reason });
+      oldSocket.close(1000, reason);
+    } catch {}
   }
   capturing = false;
 
@@ -254,5 +255,5 @@ async function disconnectAndRestartLive(reason = "model-changed") {
 window.__voiceboxDisconnectAndRestartLive = disconnectAndRestartLive;
 window.__voiceboxIsLiveActive = () => Boolean(capturing || (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)));
 window.__voiceboxLiveSocket = () => socket;
-window.__voiceboxSetCapturingForTest = (v) => { capturing = Boolean(v); };
+window.__voiceboxStartLive = startLive;
 

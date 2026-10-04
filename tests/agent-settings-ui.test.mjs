@@ -258,80 +258,71 @@ test("unified agent settings: model, voice timbre, custom prompt, and local stor
   assert.equal(reloadedCustom, "Be brief and technical.", "persisted custom instruction must be restored after reload");
 });
 
-test("changing model from settings disconnects active live session and restarts with newly chosen model (voicebox-beads-vgeq)", { timeout: 90000 }, async () => {
-  // 1. Establish spy hooks in the browser page for live session activity
-  await page.evaluate(() => {
-    window.__restarts = [];
-    window.__mockLiveActive = true;
-    window.__voiceboxIsLiveActive = () => window.__mockLiveActive;
-    window.__origDisconnectAndRestartLive = window.__voiceboxDisconnectAndRestartLive;
-    window.__voiceboxDisconnectAndRestartLive = async (reason) => {
-      window.__restarts.push({
-        reason,
-        chosenModel: document.getElementById("agent-model").value,
-      });
-      return true;
-    };
-  });
+test("changing model when live session is inactive updates preference without restarting (voicebox-beads-vgeq)", { timeout: 90000 }, async () => {
+  assert.equal(await page.evaluate(() => window.__voiceboxIsLiveActive?.() ?? false), false, "live session should be inactive");
 
-  // 2. Change model via settings UI
   const targetModel = "models/gemini-3.8-thinking";
   await choose("agent-model", targetModel);
   await answered("model", targetModel);
 
-  // 3. Verify that disconnect and restart was invoked with 'model-changed'
-  const restartCalls = await page.evaluate(() => window.__restarts);
-  assert.equal(restartCalls.length, 1, "disconnectAndRestartLive must be called exactly once on model change");
-  assert.equal(restartCalls[0].reason, "model-changed");
-  assert.equal(restartCalls[0].chosenModel, targetModel);
-
-  // 4. Verify that when live session is NOT active, changing model does NOT call restart
-  await page.evaluate(() => {
-    window.__mockLiveActive = false;
-    window.__restarts = [];
-  });
-  const defaultModel = "models/gemini-3.8-live";
-  await choose("agent-model", defaultModel);
-  await answered("model", defaultModel);
-  const inactiveRestarts = await page.evaluate(() => window.__restarts);
-  assert.equal(inactiveRestarts.length, 0, "must not restart if live session is not active");
-
-  // Restore original hook
-  await page.evaluate(() => {
-    window.__voiceboxDisconnectAndRestartLive = window.__origDisconnectAndRestartLive;
-    delete window.__origDisconnectAndRestartLive;
-    delete window.__restarts;
-    delete window.__mockLiveActive;
-  });
+  const modelState = await page.evaluate(() => document.getElementById("agent-model-state").textContent);
+  assert.match(modelState, /models\/gemini-3\.8-thinking/);
+  assert.equal(await page.evaluate(() => window.__voiceboxIsLiveActive?.() ?? false), false, "live session should remain inactive");
 });
 
-test("disconnectAndRestartLive cleanly closes previous socket and opens new live connection (voicebox-beads-vgeq)", { timeout: 90000 }, async () => {
-  const result = await page.evaluate(async () => {
-    let stopped = false;
-    let started = false;
-    const client = window.__voiceboxLiveClient;
-    const origStop = client.stopCapture;
-    const origStart = client.startCapture;
-    client.stopCapture = async () => {
-      stopped = true;
-      return origStop.call(client);
-    };
-    client.startCapture = async (opts) => {
-      started = true;
-      return origStart.call(client, opts);
-    };
+test("changing model from settings cleanly disconnects real socket with close(1000, 'model-changed') and restarts with new model (voicebox-beads-vgeq)", { timeout: 90000 }, async () => {
+  // 1. Start a real live session through the public entry
+  await page.evaluate(async () => {
+    window.__closedSockets = [];
+    await window.__voiceboxStartLive();
+  });
+  await page.waitFor(() => window.__voiceboxIsLiveActive?.() && window.__voiceboxLiveSocket?.()?.readyState === 1,
+    { label: "the live session WebSocket to connect and become OPEN" });
 
-    window.__voiceboxSetCapturingForTest?.(true);
-    const restarted = await window.__voiceboxDisconnectAndRestartLive("model-changed");
-    window.__voiceboxSetCapturingForTest?.(false);
+  const initialSocketOpen = await page.evaluate(() => window.__voiceboxLiveSocket()?.readyState === WebSocket.OPEN);
+  assert.equal(initialSocketOpen, true, "initial live socket must be OPEN");
 
-    client.stopCapture = origStop;
-    client.startCapture = origStart;
-
-    return { restarted, stopped, started };
+  // 2. Attach a close listener directly to the REAL live WebSocket
+  await page.evaluate(() => {
+    const ws = window.__voiceboxLiveSocket();
+    ws.addEventListener("close", (e) => {
+      window.__closedSockets.push({ code: e.code, reason: e.reason });
+    });
   });
 
-  assert.equal(result.restarted, true, "disconnectAndRestartLive should complete successfully");
-  assert.equal(result.stopped, true, "must stop capture on disconnect");
-  assert.equal(result.started, true, "must start capture on restart");
+  // 3. Change model via settings UI from gemini-3.8-thinking to gemini-3.8-live
+  const newModel = "models/gemini-3.8-live";
+  await choose("agent-model", newModel);
+  await answered("model", newModel);
+
+  // 4. Assert that the REAL WebSocket closed with code 1000 and reason 'model-changed'
+  await page.waitFor(() => (window.__closedSockets?.length ?? 0) >= 1,
+    { label: "the real WebSocket to close on model change" });
+  const closeEvent = await page.evaluate(() => window.__closedSockets[0]);
+  assert.equal(closeEvent.code, 1000, "real socket must close with clean code 1000");
+
+  const lastClose = await page.evaluate(() => window.__voiceboxLastLiveClose);
+  assert.equal(lastClose.code, 1000, "last live close code must be 1000");
+  assert.equal(lastClose.reason, "model-changed", "last live close reason must be 'model-changed'");
+
+  // 5. Assert that the live session restarted and a new active WebSocket is OPEN
+  await page.waitFor(() => window.__voiceboxIsLiveActive?.() && window.__voiceboxLiveSocket?.()?.readyState === 1,
+    { label: "the reconnected live session WebSocket to become OPEN" });
+
+  const reconnectedActive = await page.evaluate(() => {
+    const s = window.__voiceboxLiveSocket();
+    return Boolean(s && s.readyState === WebSocket.OPEN && window.__voiceboxIsLiveActive());
+  });
+  assert.equal(reconnectedActive, true, "new live session must be active and OPEN");
+
+  // 6. Assert server's runningSession reflects the newly chosen model
+  const serverSettings = await fetch(`${server.base}/api/agent-settings`).then((r) => r.json());
+  assert.equal(serverSettings.applied.model, newModel);
+  assert.equal(serverSettings.runningSession?.model, newModel, "server runningSession must reflect the new model after restart");
+
+  // Clean up session
+  await page.evaluate(async () => {
+    await window.__voiceboxLiveClient?.stopCapture();
+    window.__voiceboxLiveSocket()?.close();
+  });
 });
