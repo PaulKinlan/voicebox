@@ -77,7 +77,9 @@ Providers emit:
 
 ## Model selection and reasoning depth
 
-Select provider, model and voice in Settings; changes apply to the next session. `core/agent-settings.ts` owns the offered lists and rejects models/voices from the wrong provider.
+Select provider, model and voice in Settings; changes apply to the next session. `core/agent-settings.ts` owns the offered lists and rejects models/voices from the wrong provider. While a session runs, the settings payload's `runningSession` names the provider AND the model that session actually started with (voicebox-beads-jp7r) — that is how a person can answer "did my model change take effect?".
+
+The key-free `stub` provider (the seam-falsification provider, `VOICEBOX_ENABLE_STUB_PROVIDER=1`) is selectable end-to-end when enabled: it registers with a declared input rate, and the server extends its provider facts so Settings can choose it — via `validateAgentSettings`' optional `extraProviders`, never by mutating `PROVIDERS`.
 
 | Provider | Offered models | Capture / playback |
 |---|---|---|
