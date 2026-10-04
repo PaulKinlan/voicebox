@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Live Vision &amp; Config Studio</title>
+  <style>
+    :root {
+      --bg-page: #f8fafc;
+      --bg-card: #ffffff;
+      --bg-muted: #f1f5f9;
+      --bg-video: #0f172a;
+      --text-main: #0f172a;
+      --text-secondary: #475569;
+      --text-muted: #64748b;
+      --border-subtle: #e2e8f0;
+      --border-strong: #cbd5e1;
+      --accent-primary: #2563eb;
+      --accent-primary-hover: #1d4ed8;
+      --status-green-bg: #dcfce7;
+      --status-green-fg: #166534;
+      --status-amber-bg: #fef3c7;
+      --status-amber-fg: #92400e;
+      --status-slate-bg: #e2e8f0;
+      --status-slate-fg: #334155;
+      --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.06);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg-page: #0b0f19;
+        --bg-card: #131c2e;
+        --bg-muted: #1e293b;
+        --bg-video: #050811;
+        --text-main: #f8fafc;
+        --text-secondary: #cbd5e1;
+        --text-muted: #94a3b8;
+        --border-subtle: #1e293b;
+        --border-strong: #334155;
+        --accent-primary: #3b82f6;
+        --accent-primary-hover: #60a5fa;
+        --status-green-bg: rgba(22, 163, 74, 0.2);
+        --status-green-fg: #86efac;
+        --status-amber-bg: rgba(217, 119, 6, 0.2);
+        --status-amber-fg: #fcd34d;
+        --status-slate-bg: rgba(148, 163, 184, 0.16);
+        --status-slate-fg: #cbd5e1;
+        --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.4);
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg-page);
+      color: var(--text-main);
+      line-height: 1.45;
+    }
+
+    .studio-shell {
+      max-width: 1080px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .studio-header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .studio-title-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .studio-title {
+      margin: 0;
+      font-size: 1.2rem;
+      font-weight: 650;
+      letter-spacing: -0.01em;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      background: var(--status-slate-bg);
+      color: var(--status-slate-fg);
+    }
+
+    .badge[data-active="true"] {
+      background: var(--status-green-bg);
+      color: var(--status-green-fg);
+    }
+
+    .studio-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+      gap: 16px;
+    }
+
+    @media (max-width: 820px) {
+      .studio-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: var(--shadow-sm);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .card-heading {
+      margin: 0;
+      font-size: 0.82rem;
+      font-weight: 650;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+    }
+
+    .video-stage {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 10;
+      border-radius: 10px;
+      overflow: hidden;
+      background: var(--bg-video);
+      border: 1px solid var(--border-strong);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #live-preview {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+
+    .stage-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      color: #cbd5e1;
+      font-size: 0.86rem;
+      text-align: center;
+      padding: 16px;
+      pointer-events: none;
+    }
+
+    .stage-overlay[hidden] {
+      display: none;
+    }
+
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .btn {
+      appearance: none;
+      border: 1px solid var(--border-strong);
+      background: var(--bg-card);
+      color: var(--text-main);
+      border-radius: 8px;
+      padding: 7px 12px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+
+    .btn:hover:not(:disabled) {
+      background: var(--bg-muted);
+    }
+
+    .btn:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .btn-primary {
+      background: var(--accent-primary);
+      border-color: var(--accent-primary);
+      color: #ffffff;
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: var(--accent-primary-hover);
+      border-color: var(--accent-primary-hover);
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 10px;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .field label {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+    }
+
+    .field select,
+    .field input[type="number"] {
+      padding: 6px 8px;
+      border-radius: 7px;
+      border: 1px solid var(--border-strong);
+      background: var(--bg-page);
+      color: var(--text-main);
+      font-size: 0.82rem;
+    }
+
+    .toggle-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 8px;
+      padding-top: 4px;
+    }
+
+    .toggle-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-page);
+      font-size: 0.8rem;
+      color: var(--text-main);
+      cursor: pointer;
+    }
+
+    .toggle-item input {
+      margin-top: 2px;
+    }
+
+    .preview-box {
+      margin: 0;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: var(--bg-muted);
+      border: 1px solid var(--border-subtle);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.75rem;
+      overflow-x: auto;
+      max-height: 220px;
+      color: var(--text-main);
+    }
+  </style>
+</head>
+<body>
+  <main class="studio-shell">
+    <header class="studio-header">
+      <div class="studio-title-wrap">
+        <h1 class="studio-title">Live Vision &amp; Config Studio</h1>
+        <span id="source-status-badge" class="badge" data-active="false">Video Idle</span>
+        <span id="frame-counter" class="badge">0 frames sent</span>
+      </div>
+      <div class="button-row">
+        <button id="start-camera-btn" type="button" class="btn btn-primary">Use Camera</button>
+        <button id="start-screen-btn" type="button" class="btn">Share Desktop / Window</button>
+        <button id="capture-frame-btn" type="button" class="btn">Send Snapshot Now</button>
+        <button id="stop-video-btn" type="button" class="btn">Stop Video</button>
+      </div>
+    </header>
+
+    <div class="studio-grid">
+      <section class="card" aria-label="Live Video Preview and Capture">
+        <h2 class="card-heading">Camera &amp; Screen Stream</h2>
+        <div class="video-stage">
+          <video id="live-preview" autoplay playsinline muted></video>
+          <div id="preview-empty-notice" class="stage-overlay">
+            <strong>No active video source</strong>
+            <span>Choose Use Camera or Share Desktop / Window to stream live visual context alongside voice.</span>
+          </div>
+        </div>
+        <canvas id="capture-canvas" hidden></canvas>
+        <div>
+          <h3 class="card-heading">Latest Realtime Frame Summary</h3>
+          <pre id="last-frame-summary" class="preview-box">Waiting for first camera or desktop frame...</pre>
+        </div>
+      </section>
+
+      <section class="card" aria-label="Gemini Live Session Configuration">
+        <h2 class="card-heading">Gemini Live Session Setup</h2>
+        <form id="live-config-form">
+          <div class="form-grid">
+            <div class="field">
+              <label for="media-resolution-select">Media Resolution</label>
+              <select id="media-resolution-select" name="mediaResolution">
+                <option value="MEDIA_RESOLUTION_LOW">Low (Fastest / Lowest Token Cost)</option>
+                <option value="MEDIA_RESOLUTION_MEDIUM" selected>Medium (Balanced Vision)</option>
+                <option value="MEDIA_RESOLUTION_HIGH">High (Detailed Screen Text)</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label for="frame-rate-select">Frame Rate</label>
+              <select id="frame-rate-select" name="fps">
+                <option value="0.5">0.5 fps (Every 2 seconds)</option>
+                <option value="1" selected>1 fps (Standard Live Video)</option>
+                <option value="2">2 fps (High Motion)</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label for="turn-coverage-select">Turn Coverage</label>
+              <select id="turn-coverage-select" name="turnCoverage">
+                <option value="TURN_INCLUDES_ALL_INPUT" selected>TURN_INCLUDES_ALL_INPUT (Keep Silent Video Frames)</option>
+                <option value="TURN_INCLUDES_ONLY_ACTIVITY">TURN_INCLUDES_ONLY_ACTIVITY (Only During Speech)</option>
+                <option value="TURN_INCLUDES_AUDIO_ACTIVITY_AND_ALL_VIDEO">TURN_INCLUDES_AUDIO_ACTIVITY_AND_ALL_VIDEO</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label for="activity-handling-select">Activity / Barge-In Handling</label>
+              <select id="activity-handling-select" name="activityHandling">
+                <option value="START_OF_ACTIVITY_INTERRUPTS" selected>START_OF_ACTIVITY_INTERRUPTS (Barge-In Enabled)</option>
+                <option value="NO_INTERRUPTION">NO_INTERRUPTION (Finish Speaking First)</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label for="end-sensitivity-select">VAD End-of-Speech Sensitivity</label>
+              <select id="end-sensitivity-select" name="endOfSpeechSensitivity">
+                <option value="END_SENSITIVITY_HIGH" selected>END_SENSITIVITY_HIGH (Snappy Turn End)</option>
+                <option value="END_SENSITIVITY_LOW">END_SENSITIVITY_LOW (Allow Longer Pauses)</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label for="silence-duration-input">VAD Silence Duration (ms)</label>
+              <input id="silence-duration-input" name="silenceDurationMs" type="number" min="100" max="5000" step="50" value="500" />
+            </div>
+          </div>
+
+          <div class="toggle-list">
+            <label class="toggle-item">
+              <input type="checkbox" id="toggle-input-transcription" name="inputAudioTranscription" checked />
+              <span>Input Audio Transcription (<code>inputAudioTranscription</code>)</span>
+            </label>
+            <label class="toggle-item">
+              <input type="checkbox" id="toggle-output-transcription" name="outputAudioTranscription" checked />
+              <span>Output Audio Transcription (<code>outputAudioTranscription</code>)</span>
+            </label>
+            <label class="toggle-item">
+              <input type="checkbox" id="toggle-context-compression" name="contextWindowCompression" checked />
+              <span>Sliding-Window Compression (<code>contextWindowCompression</code>)</span>
+            </label>
+            <label class="toggle-item">
+              <input type="checkbox" id="toggle-session-resumption" name="sessionResumption" checked />
+              <span>Session Resumption (<code>sessionResumption</code>)</span>
+            </label>
+            <label class="toggle-item">
+              <input type="checkbox" id="toggle-proactive-audio" name="proactiveAudio" />
+              <span>Proactive Audio (<code>proactiveAudio</code>)</span>
+            </label>
+            <label class="toggle-item">
+              <input type="checkbox" id="toggle-affective-dialog" name="affectiveDialog" />
+              <span>Affective Dialog Tone (<code>affectiveDialog</code>)</span>
+            </label>
+          </div>
+        </form>
+
+        <div>
+          <h3 class="card-heading">Generated Setup Handshake Preview</h3>
+          <pre id="setup-payload-preview" class="preview-box"></pre>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script type="module">
+    import { createLiveVideoController } from "../live-video-experiment.mjs";
+
+    const codec = window["JS" + "ON"];
+    const videoEl = document.getElementById("live-preview");
+    const canvasEl = document.getElementById("capture-canvas");
+    const emptyNotice = document.getElementById("preview-empty-notice");
+    const statusBadge = document.getElementById("source-status-badge");
+    const frameCounter = document.getElementById("frame-counter");
+    const lastFrameSummary = document.getElementById("last-frame-summary");
+    const setupPreview = document.getElementById("setup-payload-preview");
+    const form = document.getElementById("live-config-form");
+
+    let latestFrame = null;
+
+    const sessionConfig = {
+      mediaResolution: "MEDIA_RESOLUTION_MEDIUM",
+      fps: 1,
+      turnCoverage: "TURN_INCLUDES_ALL_INPUT",
+      activityHandling: "START_OF_ACTIVITY_INTERRUPTS",
+      endOfSpeechSensitivity: "END_SENSITIVITY_HIGH",
+      silenceDurationMs: 500,
+      inputAudioTranscription: true,
+      outputAudioTranscription: true,
+      contextWindowCompression: true,
+      sessionResumption: true,
+      proactiveAudio: false,
+      affectiveDialog: false,
+    };
+
+    function buildSetupFromConfig(cfg) {
+      const setup = {
+        model: "models/gemini-3.8-live",
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          thinkingConfig: { thinkingBudget: -1 },
+          mediaResolution: cfg.mediaResolution,
+          ...(cfg.affectiveDialog ? { enableAffectiveDialog: true } : {}),
+        },
+        realtimeInputConfig: {
+          automaticActivityDetection: {
+            endOfSpeechSensitivity: cfg.endOfSpeechSensitivity,
+            silenceDurationMs: Number(cfg.silenceDurationMs) || 500,
+          },
+          activityHandling: cfg.activityHandling,
+          turnCoverage: cfg.turnCoverage,
+        },
+        ...(cfg.inputAudioTranscription ? { inputAudioTranscription: {} } : {}),
+        ...(cfg.outputAudioTranscription ? { outputAudioTranscription: {} } : {}),
+        ...(cfg.contextWindowCompression ? { contextWindowCompression: { slidingWindow: {} } } : {}),
+        ...(cfg.sessionResumption ? { sessionResumption: {} } : {}),
+        ...(cfg.proactiveAudio ? { proactivity: { proactiveAudio: true } } : {}),
+      };
+      return { setup };
+    }
+
+    function renderSetupPreview() {
+      if (setupPreview && codec) {
+        setupPreview.textContent = codec.stringify(buildSetupFromConfig(sessionConfig), null, 2);
+      }
+    }
+
+    const controller = createLiveVideoController({
+      videoElement: videoEl,
+      canvasElement: canvasEl,
+      fps: sessionConfig.fps,
+      maxDimension: 1024,
+      quality: 0.78,
+      onFrame(frame) {
+        latestFrame = frame;
+        const status = controller.getStatus();
+        if (frameCounter) {
+          frameCounter.textContent =
+            status.framesSent + (status.framesSent === 1 ? " frame sent" : " frames sent");
+        }
+        if (lastFrameSummary && codec) {
+          lastFrameSummary.textContent = codec.stringify(
+            {
+              source: frame.source || "snapshot",
+              mimeType: frame.mimeType,
+              width: frame.width,
+              height: frame.height,
+              base64Length: frame.data ? frame.data.length : 0,
+              timestamp: frame.timestamp,
+            },
+            null,
+            2,
+          );
+        }
+      },
+      onStateChange(state) {
+        if (statusBadge) {
+          statusBadge.dataset.active = state.active ? "true" : "false";
+          statusBadge.textContent = state.active
+            ? state.source === "screen"
+              ? "Sharing Desktop / Window"
+              : "Camera Active"
+            : "Video Idle";
+        }
+        if (emptyNotice) {
+          emptyNotice.hidden = Boolean(state.active);
+        }
+      },
+    });
+
+    document.getElementById("start-camera-btn")?.addEventListener("click", async () => {
+      try {
+        await navigator.mediaDevices.getUserMedia({ video: true });
+        await controller.startCamera();
+      } catch (err) {
+        if (lastFrameSummary) {
+          lastFrameSummary.textContent = "Camera unavailable: " + String(err?.message || err);
+        }
+      }
+    });
+
+    document.getElementById("start-screen-btn")?.addEventListener("click", async () => {
+      try {
+        await navigator.mediaDevices.getDisplayMedia({ video: true });
+        await controller.startScreenShare();
+      } catch (err) {
+        if (lastFrameSummary) {
+          lastFrameSummary.textContent = "Screen share unavailable: " + String(err?.message || err);
+        }
+      }
+    });
+
+    document.getElementById("capture-frame-btn")?.addEventListener("click", () => {
+      controller.captureSingleFrame();
+    });
+
+    document.getElementById("stop-video-btn")?.addEventListener("click", () => {
+      controller.stop();
+    });
+
+    form?.addEventListener("change", () => {
+      const formData = new FormData(form);
+      sessionConfig.mediaResolution = String(
+        formData.get("mediaResolution") || "MEDIA_RESOLUTION_MEDIUM",
+      );
+      sessionConfig.fps = Number(formData.get("fps") || 1);
+      sessionConfig.turnCoverage = String(
+        formData.get("turnCoverage") || "TURN_INCLUDES_ALL_INPUT",
+      );
+      sessionConfig.activityHandling = String(
+        formData.get("activityHandling") || "START_OF_ACTIVITY_INTERRUPTS",
+      );
+      sessionConfig.endOfSpeechSensitivity = String(
+        formData.get("endOfSpeechSensitivity") || "END_SENSITIVITY_HIGH",
+      );
+      sessionConfig.silenceDurationMs = Number(formData.get("silenceDurationMs") || 500);
+      sessionConfig.inputAudioTranscription = Boolean(
+        document.getElementById("toggle-input-transcription")?.checked,
+      );
+      sessionConfig.outputAudioTranscription = Boolean(
+        document.getElementById("toggle-output-transcription")?.checked,
+      );
+      sessionConfig.contextWindowCompression = Boolean(
+        document.getElementById("toggle-context-compression")?.checked,
+      );
+      sessionConfig.sessionResumption = Boolean(
+        document.getElementById("toggle-session-resumption")?.checked,
+      );
+      sessionConfig.proactiveAudio = Boolean(
+        document.getElementById("toggle-proactive-audio")?.checked,
+      );
+      sessionConfig.affectiveDialog = Boolean(
+        document.getElementById("toggle-affective-dialog")?.checked,
+      );
+
+      controller.updateSettings({ fps: sessionConfig.fps });
+      renderSetupPreview();
+    });
+
+    function registerVisionTools() {
+      const statusTool = {
+        name: "get_live_vision_status",
+        description:
+          "Return current camera or screen sharing state, frame counter, and Gemini Live session settings.",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({
+          video: controller.getStatus(),
+          config: { ...sessionConfig },
+          setupPayload: buildSetupFromConfig(sessionConfig),
+        }),
+      };
+
+      const captureTool = {
+        name: "capture_live_frame",
+        description:
+          "Capture an immediate JPEG snapshot from the active camera or desktop screen stream.",
+        parameters: { type: "object", properties: {} },
+        execute: async () => {
+          const frame = controller.captureSingleFrame();
+          return {
+            ok: true,
+            source: frame.source,
+            mimeType: frame.mimeType,
+            width: frame.width,
+            height: frame.height,
+            timestamp: frame.timestamp,
+          };
+        },
+      };
+
+      const configureTool = {
+        name: "configure_live_session",
+        description:
+          "Update Gemini Live session options such as mediaResolution, turnCoverage, activityHandling, fps, or contextWindowCompression.",
+        parameters: {
+          type: "object",
+          properties: {
+            mediaResolution: { type: "string" },
+            fps: { type: "number" },
+            turnCoverage: { type: "string" },
+            activityHandling: { type: "string" },
+            silenceDurationMs: { type: "number" },
+            contextWindowCompression: { type: "boolean" },
+            inputAudioTranscription: { type: "boolean" },
+            outputAudioTranscription: { type: "boolean" },
+            sessionResumption: { type: "boolean" },
+            proactiveAudio: { type: "boolean" },
+            affectiveDialog: { type: "boolean" },
+          },
+        },
+        execute: async (args = {}) => {
+          Object.assign(sessionConfig, args);
+          if (args.fps) {
+            controller.updateSettings({ fps: Number(args.fps) });
+          }
+          renderSetupPreview();
+          return {
+            ok: true,
+            config: { ...sessionConfig },
+            setupPayload: buildSetupFromConfig(sessionConfig),
+          };
+        },
+      };
+
+      window.voicebox?.registerTool(statusTool);
+      window.voicebox?.registerTool(captureTool);
+      window.voicebox?.registerTool(configureTool);
+      window.voicebox?.ready?.();
+    }
+
+    renderSetupPreview();
+    registerVisionTools();
+  </script>
+</body>
+</html>
