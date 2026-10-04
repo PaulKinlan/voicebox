@@ -472,8 +472,8 @@ body:has(#server-dot[data-ok="false"]) .wordmark-dot {
 .mic-stage { position: relative; display: grid; place-items: center; width: 268px; aspect-ratio: 1; }
 /* The circle is the output meter, not decoration: each sample around the ring
    sets that radius. It is invisible until the agent actually speaks. */
-.output-ring { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
-.output-ring path { fill: none; stroke: var(--good); stroke-width: 1.6; stroke-linejoin: round; opacity: 0; will-change: transform, opacity; transition: opacity 240ms ease-out; }
+.output-ring { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.output-ring path { fill: none; stroke: var(--good); stroke-width: 1.8; stroke-linejoin: round; stroke-linecap: round; opacity: 0; will-change: d, opacity; transition: opacity 240ms ease-out; }
 [data-voice="speaking"] .output-ring path { opacity: .92; animation: waveFlow 2.4s ease-in-out infinite alternate; }
 @keyframes waveFlow {
   0% { filter: drop-shadow(0 0 2px color-mix(in srgb, var(--good) 25%, transparent)); }

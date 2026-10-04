@@ -4617,12 +4617,29 @@ let ringPhase = 0;         // where we are rendering, in ring positions
 let ringTarget = 0;        // where the newest data has arrived, in ring positions
 let ringSeen = null;       // the newest sample we have already counted
 let ringFlowPhase = 0;     // continuous carrier phase for smooth wave motion
+// THE POINT RADII ARE FOLLOWED, NOT SET (voicebox-beads-u03k). The raw data can step the whole amplitude
+// between two frames — measured on the landed ring: 13.0 units in ONE frame when speech stopped, and 9.5 at
+// a loud onset — so each point's radius chases its target with a fast attack and a slower decay, and a pause
+// settles over ~20 frames instead of collapsing.
+const ringRadii = new Float64Array(RENDER_POINTS).fill(OUTPUT_BASE);
 
+/**
+ * Sample the ring with a MIRRORED (triangle-folded) traversal (voicebox-beads-u03k, from the d2ji branch's
+ * measurement). The ring is a history wrapped around a circle: position 0 is the OLDEST entry and n-1 the
+ * NEWEST, so an index-wrapping sampler draws two unrelated moments next to each other and puts a step in the
+ * contour — measured at 9.5 units of a 13-unit amplitude on a fixture whose only discontinuity is that wrap.
+ * Folding traverses 0…n-1 and back, so those two entries are never adjacent. Nothing here invents a value: it
+ * shows the history twice, mirrored, and the contour is continuous everywhere.
+ */
 function ringAt(samples, position) {
   const n = samples.length;
-  const i = Math.floor(position) % n;
-  const j = (i + 1) % n;
-  const t = position - Math.floor(position);
+  if (n === 0) return 0;
+  const turn = ((position / n) % 1 + 1) % 1;
+  const folded = turn <= 0.5 ? turn * 2 : (1 - turn) * 2;
+  const at = folded * (n - 1);
+  const i = Math.floor(at);
+  const j = Math.min(n - 1, i + 1);
+  const t = at - i;
   return samples[i] * (1 - t) + samples[j] * t;
 }
 
@@ -4651,6 +4668,7 @@ function drawOutputRing(samples) {
     ringPhase = 0;
     ringTarget = 0;
     ringFlowPhase = 0;
+    ringRadii.fill(OUTPUT_BASE);
     return;
   }
   // Count a new sample once: the newest value changing is the signal that the
@@ -4667,9 +4685,15 @@ function drawOutputRing(samples) {
   const points = new Array(RENDER_POINTS);
   for (let i = 0; i < RENDER_POINTS; i++) {
     const position = ringPhase + (i / RENDER_POINTS) * OUTPUT_SAMPLES;
-    const level = meterLevel(ringAt(samples, position));
+    const target = OUTPUT_BASE + meterLevel(ringAt(samples, position)) * OUTPUT_AMPLITUDE;
+    // Fast attack, slower decay (voicebox-beads-u03k): a syllable arrives at once, a pause settles.
+    ringRadii[i] += (target - ringRadii[i]) * (target > ringRadii[i] ? 0.35 : 0.16);
+    const shown = ringRadii[i];
+    // THE CARRIER IS THE LANDED ONE and it stays: it keeps the contour moving on a steady note, and it is
+    // driven by the FOLLOWED level rather than the raw sample, so it cannot put a step back into the picture.
+    const level = Math.max(0, Math.min(1, (shown - OUTPUT_BASE) / OUTPUT_AMPLITUDE));
     const harmonic = level > 0.01 ? Math.sin((i / RENDER_POINTS) * Math.PI * 6 + ringFlowPhase) * level * 1.8 : 0;
-    const radius = OUTPUT_BASE + level * OUTPUT_AMPLITUDE + harmonic;
+    const radius = shown + harmonic;
     points[i] = [OUTPUT_CENTRE + RING_COS[i] * radius, OUTPUT_CENTRE + RING_SIN[i] * radius];
   }
   path.setAttribute("d", closedCurve(points));

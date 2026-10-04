@@ -1,0 +1,11 @@
+{
+  "tree": "/home/paulkinlan/worktrees/vb-u03k",
+  "points": 161,
+  "wrapSeamUnits": 0.55,
+  "onsetMaxDeltaUnits": 3.25,
+  "decayMaxDeltaUnits": 2.08,
+  "framesToRest": 20,
+  "distinctPathsOnConstantRing": 30,
+  "baseRadius": 62,
+  "amplitude": 13
+}

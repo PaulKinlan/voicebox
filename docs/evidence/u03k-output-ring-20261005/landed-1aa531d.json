@@ -1,0 +1,11 @@
+{
+  "tree": "/home/paulkinlan/worktrees/vb-6omi",
+  "points": 161,
+  "wrapSeamUnits": 5.52,
+  "onsetMaxDeltaUnits": 9.52,
+  "decayMaxDeltaUnits": 13,
+  "framesToRest": 1,
+  "distinctPathsOnConstantRing": 30,
+  "baseRadius": 62,
+  "amplitude": 13
+}

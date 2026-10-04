@@ -326,3 +326,83 @@ test("mic waveform: the speech+microphone blend is alive, unclamped, and keeps t
     `the microphone does not reach the wave: open mean ${mean(reading.micOpen)} vs shut mean ${mean(reading.micClosed)}`,
   );
 });
+
+// ── the output ring's contour (voicebox-beads-u03k) ─────────────────────────────────────────────────────
+// The ring is the agent's own meter: one radius per data point, drawn as a closed curve. Two defects were
+// measured on the version that first landed (1aa531d), with the same fixtures this test now drives:
+//   · the history wraps around the circle, so the OLDEST entry sat next to the NEWEST one on screen. On a
+//     fixture whose only discontinuity is that wrap, the painted contour jumped 5.5 units — of a 13-unit
+//     amplitude — between two adjacent points.
+//   · the radius WAS the data's level, so a pause collapsed the whole amplitude in a single frame (13.0
+//     units) and the ring was back at rest after one frame.
+// The fix grafts two things onto the landed design (which kept its data-driven phase and its carrier):
+// a mirrored traversal, so those two entries are never adjacent, and a per-point follower with a fast
+// attack and a slower decay.
+//
+// THE SEAM FIXTURE IS PHASE-INDEPENDENT ON PURPOSE: a smooth ramp whose only discontinuity is between the
+// newest entry and the oldest. A step somewhere in the middle of the data would be a step wherever the grid
+// happens to sample — measured once at 6.5 and once at 1.27 units for the same defect, purely because the
+// phase fell differently — so the instrument would be reporting the phase, not the seam.
+test("output ring: the contour is seam-free, settles over many frames, and still moves on a steady note (voicebox-beads-u03k)", { timeout: 30000 }, async (t) => {
+  const server = await startServer();
+  t.after(() => server.stop());
+  const page = await launch({ width: 1000, height: 800 });
+  t.after(() => page.close());
+
+  await page.goto(`${server.base}/`);
+  await page.waitFor(() => window.__voiceboxMeters?.drawOutputRing !== undefined, { label: "the meters, ring included" });
+
+  const measured = await page.evaluate(() => {
+    const RING = 64;
+    const quiet = () => new Float32Array(RING);
+    const loud = () => Float32Array.from({ length: RING }, () => 0.5);
+    // Smooth ramp; its ONLY jump is between ring[n-1] and ring[0] — the adjacency the wrap creates.
+    const rampWithWrap = () => Float32Array.from({ length: RING }, (_, i) => 0.55 - (i / (RING - 1)) * 0.53);
+    // The painted radii: closedCurve emits M then cubic C triples whose LAST pair is the endpoint.
+    const radii = () => {
+      const d = document.getElementById("output-path")?.getAttribute("d") ?? "";
+      const pairs = [...d.matchAll(/(-?\d+\.?\d*),(-?\d+\.?\d*)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+      return pairs.filter((_, i) => i === 0 || i % 3 === 0).map(([x, y]) => Math.hypot(x - 120, y - 120));
+    };
+    const frame = (samples) => { window.__voiceboxMeters.drawOutputRing(samples); return radii(); };
+    const mean = (a) => a.reduce((x, y) => x + y, 0) / (a.length || 1);
+
+    // 1. WRAP SEAM: the only discontinuity in the data is the wrap; no adjacent pair may step more than 2 units.
+    let seam = 0;
+    let points = 0;
+    for (let i = 0; i < 40; i++) {
+      const r = frame(rampWithWrap());
+      points = r.length;
+      seam = 0;
+      for (let k = 0; k < r.length; k++) seam = Math.max(seam, Math.abs(r[k] - r[(k + 1) % r.length]));
+    }
+
+    // 2. PAUSE: loud for 30 frames, then true silence — the ring must settle over many frames, not one.
+    for (let i = 0; i < 30; i++) frame(loud());
+    const before = mean(frame(loud()));
+    const means = [];
+    for (let i = 0; i < 60; i++) means.push(mean(frame(quiet())));
+    const drops = means.map((v, i) => (i === 0 ? before - v : means[i - 1] - v));
+    const worstDrop = Math.max(...drops);
+    const target = 62; // OUTPUT_BASE
+    const ninetyFive = before - (before - target) * 0.95;
+    const framesTo95 = means.findIndex((v) => v <= ninetyFive) + 1 || 60;
+
+    // 3. MOTION: a steady note must still move — the carrier is kept, it is not the thing the fix removes.
+    const seen = new Set();
+    for (let i = 0; i < 30; i++) { frame(loud()); seen.add(document.getElementById("output-path")?.getAttribute("d") ?? ""); }
+
+    // 4. RESET: null clears the painted contour.
+    window.__voiceboxMeters.drawOutputRing(null);
+    const afterNull = document.getElementById("output-path")?.getAttribute("d") ?? "";
+
+    return { points, seam: Number(seam.toFixed(2)), worstDrop: Number(worstDrop.toFixed(2)), framesTo95, distinctPaths: seen.size, afterNull };
+  });
+
+  assert.ok(measured.points > 0, "the ring painted nothing");
+  assert.ok(measured.seam <= 2, `the contour steps ${measured.seam} units between adjacent points — the wrap seam is back`);
+  assert.ok(measured.worstDrop <= 4, `the ring dropped ${measured.worstDrop} units in one frame when speech stopped — the pause snapped`);
+  assert.ok(measured.framesTo95 >= 10, `the ring settled in ${measured.framesTo95} frames — a pause must ease, not collapse`);
+  assert.ok(measured.distinctPaths >= 20, `a steady note drew only ${measured.distinctPaths}/30 distinct frames — the carrier was lost`);
+  assert.equal(measured.afterNull, "", "null must clear the painted contour");
+});
