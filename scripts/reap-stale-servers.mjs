@@ -32,7 +32,7 @@
 //
 // Modes: `--dry-run` prints victims without killing.
 
-import { readdirSync, existsSync, statSync, rmSync } from "node:fs";
+import { readdirSync, readFileSync, existsSync, statSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -140,17 +140,15 @@ export function configSaysBare(configText) {
 
 /** Detect + repair core.bare=true in the canonical checkout. Config-only,
  *  idempotent, NEVER moves HEAD or touches the index — safe beside dry-run.
- *  Returns a log line, or null when healthy. */
-export function repairCanonicalBare({ canonical = CANONICAL, now = new Date() } = {}) {
+ *  A MISSING config returns null (no canonical here); a config that exists but
+ *  cannot be READ surfaces the error — swallowing a read failure would present
+ *  a real incident as 'healthy no-op' (astra's rmgq REVISE, measured). */
+export function repairCanonicalBare({ canonical = CANONICAL } = {}) {
   const configPath = path.join(canonical, ".git", "config");
-  let configText = "";
-  try {
-    configText = readFileSync(configPath, "utf8");
-  } catch {
-    return null; // no canonical config — nothing to guard here
-  }
+  if (!existsSync(configPath)) return null;
+  const configText = readFileSync(configPath, "utf8");
   if (!configSaysBare(configText)) return null;
-  const stamp = now.toISOString();
+  const stamp = new Date().toISOString();
   try {
     execFileSync("git", ["-C", canonical, "config", "--bool", "core.bare", "false"], { stdio: "ignore" });
     // core.worktree explicit: a bare-flagged repo often loses it, and without

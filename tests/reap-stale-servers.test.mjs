@@ -9,7 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isVictim, selectVictims, configSaysBare } from "../scripts/reap-stale-servers.mjs";
+import { isVictim, selectVictims, configSaysBare, repairCanonicalBare } from "../scripts/reap-stale-servers.mjs";
 
 const WT = "/home/paulkinlan/worktrees/vb-test";
 const CANON = "/home/paulkinlan/voicebox";
@@ -91,6 +91,53 @@ test("configSaysBare: healthy config does not detect", () => {
   assert.equal(configSaysBare(""), false);
   // 'bare' as a substring of another key must not match
   assert.equal(configSaysBare("[core]\n	barefoo = true\n"), false);
+});
+
+
+// ── WIRING: repairCanonicalBare driven against a real scratch repo ─────────
+// (astra's rmgq REVISE: the first version shipped with the helper green and
+// the wiring dead — readFileSync unimported, ReferenceError swallowed by its
+// own catch, presenting as 'healthy no-op'. These tests drive the real
+// function against a real scratch repo so the wiring cannot ship dead again.)
+
+test("WIRING: repairCanonicalBare fixes a scratch bare repo (core.bare=false + core.worktree set)", async () => {
+  const { mkdtempSync, writeFileSync, readFileSync: rf, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const path = await import("node:path");
+  const { execFileSync: git } = await import("node:child_process");
+  const scratch = mkdtempSync(path.join(tmpdir(), "vb-reap-bare-"));
+  try {
+    git("git", ["init", scratch], { stdio: "ignore" });
+    const cfg = path.join(scratch, ".git", "config");
+    writeFileSync(cfg, rf(cfg, "utf8").replace("bare = false", "bare = true"));
+    assert.match(rf(cfg, "utf8"), /^\s*bare\s*=\s*true/m, "scratch must start bare");
+
+    const result = repairCanonicalBare({ canonical: scratch });
+    assert.match(result, /REPAIRED/);
+    const after = rf(cfg, "utf8");
+    assert.doesNotMatch(after, /^\s*bare\s*=\s*true/m, "bare=true must be gone");
+    assert.match(after, /^\s*worktree\s*=\s*/m, "core.worktree must be set explicitly");
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("WIRING: a healthy canonical is a no-op (config untouched)", async () => {
+  const { mkdtempSync, readFileSync: rf, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const path = await import("node:path");
+  const { execFileSync: git } = await import("node:child_process");
+  const scratch = mkdtempSync(path.join(tmpdir(), "vb-reap-healthy-"));
+  try {
+    git("git", ["init", scratch], { stdio: "ignore" });
+    const cfg = path.join(scratch, ".git", "config");
+    const before = rf(cfg, "utf8");
+    const result = repairCanonicalBare({ canonical: scratch });
+    assert.equal(result, null, "healthy config returns null");
+    assert.equal(rf(cfg, "utf8"), before, "config untouched");
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 });
 
 // ── selectVictims: the ps-lines layer ────────────────────────────────────────
