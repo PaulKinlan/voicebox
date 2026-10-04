@@ -121,6 +121,7 @@ const WANTED = {
   settingVisionResolution: "setting-vision-resolution", settingVisionFps: "setting-vision-fps",
   settingThinkingLevel: "setting-thinking-level", settingStartCamera: "setting-start-camera",
   settingStartScreen: "setting-start-screen",
+  thinkingTrace: "thinking-trace", thinkingTraceBody: "thinking-trace-body", thinkingTraceLabel: "thinking-trace-label",
 };
 const els = {};
 const missing = [];
@@ -958,8 +959,22 @@ const size = (text) => {
   return `${n} ${n === 1 ? "byte" : "bytes"}`;
 };
 
+const REPORT_FADE_DELAY_MS = 8000;
+const REPORT_CLEAR_DELAY_MS = 800;
+let reportFadeTimer = null;
+let reportClearTimer = null;
+
 function setReport(outcome, tone, said) {
   if (!els.report) return;
+  if (reportFadeTimer) {
+    clearTimeout(reportFadeTimer);
+    reportFadeTimer = null;
+  }
+  if (reportClearTimer) {
+    clearTimeout(reportClearTimer);
+    reportClearTimer = null;
+  }
+  delete els.report.dataset.fading;
   els.report.replaceChildren();
   if (said) {
     const quote = document.createElement("span");
@@ -971,6 +986,21 @@ function setReport(outcome, tone, said) {
   result.textContent = outcome;
   els.report.append(result);
   els.report.dataset.tone = tone ?? "";
+  if (outcome && tone !== "bad") {
+    reportFadeTimer = setTimeout(() => {
+      reportFadeTimer = null;
+      if (!els.report) return;
+      els.report.dataset.fading = "true";
+      reportClearTimer = setTimeout(() => {
+        reportClearTimer = null;
+        if (!els.report || els.report.dataset.fading !== "true") return;
+        els.report.replaceChildren();
+        delete els.report.dataset.fading;
+      }, REPORT_CLEAR_DELAY_MS);
+      reportClearTimer?.unref?.();
+    }, REPORT_FADE_DELAY_MS);
+    reportFadeTimer?.unref?.();
+  }
 }
 
 function setState(text, tone) {
@@ -4526,6 +4556,8 @@ function fillAgentPicker(picker, options, selected) {
   }
 }
 
+let reconnectedLiveModel = null;
+
 function renderAgentSettings() {
   const providerState = document.getElementById("agent-provider-state");
   const modelState = document.getElementById("agent-model-state");
@@ -4555,15 +4587,29 @@ function renderAgentSettings() {
   // MODEL — per provider
   const modelPicker = document.getElementById("agent-model");
   const models = chosen.models ?? [{ id: chosen.model, label: chosen.model }];
+  const currentModel = agent.requested.model ?? chosen.model;
   fillAgentPicker(
     modelPicker,
     models.map((m) => ({ value: m.id, label: m.label })),
-    agent.requested.model ?? chosen.model,
+    currentModel,
   );
+  const liveActive = Boolean(
+    (typeof window.__voiceboxIsLiveSessionActive === "function" && window.__voiceboxIsLiveSessionActive())
+    || agent.runningSession,
+  );
+  if (!liveActive) {
+    reconnectedLiveModel = null;
+  }
   if (modelState) {
-    modelState.textContent = agent.requested.model
-      ? `Applied model: ${agent.requested.model} — the next session starts with it.`
-      : `Applied default model: ${chosen.model} — the next session starts with it.`;
+    if (liveActive && (reconnectedLiveModel === currentModel || agent.runningSession?.model === currentModel)) {
+      modelState.textContent = reconnectedLiveModel === currentModel
+        ? `Reconnected live session with ${currentModel}.`
+        : `${currentModel} active in running session.`;
+    } else {
+      modelState.textContent = agent.requested.model
+        ? `Applied model: ${agent.requested.model} — the next session starts with it.`
+        : `Applied default model: ${chosen.model} — the next session starts with it.`;
+    }
   }
 
   // VOICE — per provider
@@ -4642,17 +4688,23 @@ async function saveAgentSetting(patch) {
   }
   agent = answer;
   writeLocalAgentSettings(agent.requested);
-  renderAgentSettings();
   if (("model" in patch || "provider" in patch) && typeof window.__voiceboxIsLiveSessionActive === "function" && window.__voiceboxIsLiveSessionActive()) {
     try {
-      await window.__voiceboxRestartLiveSession?.();
+      const restarted = await window.__voiceboxRestartLiveSession?.();
+      const savedModel = agent.applied?.model ?? agent.requested?.model ?? "default model";
+      if (restarted?.restarted !== false) {
+        reconnectedLiveModel = savedModel;
+      }
+      renderAgentSettings();
       const modelStateEl = document.getElementById("agent-model-state");
       if (modelStateEl) {
-        modelStateEl.textContent = `Reconnected live session with ${agent.applied?.model ?? agent.requested?.model ?? "default model"}.`;
+        modelStateEl.textContent = `Reconnected live session with ${savedModel}.`;
       }
     } catch {
-      // If restart fails, startLive's own error handler updates the voice status
+      renderAgentSettings();
     }
+  } else {
+    renderAgentSettings();
   }
   void health();
 }
@@ -5181,11 +5233,13 @@ window.__voiceboxOnLiveTurnComplete = () => {
 };
 
 window.__voiceboxOnLiveText = (text, role = "model") => {
+  if (role === "thought") return;
   const clean = String(text ?? "").trim();
   if (!clean || !els.log || !els.session) return;
-  const label = role === "user" ? clean : `voice reply`;
-  const outcome = role === "user" ? "spoken turn" : clean;
-  if (activeLiveTurnNode && activeLiveTurnRole === role && activeLiveTurnNode.isConnected) {
+  const normalizedRole = role === "input-transcript" || role === "user" ? "user" : "model";
+  const label = normalizedRole === "user" ? clean : `voice reply`;
+  const outcome = normalizedRole === "user" ? "spoken turn" : clean;
+  if (activeLiveTurnNode && activeLiveTurnRole === normalizedRole && activeLiveTurnNode.isConnected) {
     const quote = activeLiveTurnNode.querySelector(".said");
     const did = activeLiveTurnNode.querySelector(".did");
     if (quote) quote.textContent = `“${label}”`;
@@ -5194,7 +5248,7 @@ window.__voiceboxOnLiveText = (text, role = "model") => {
   }
   logTurn(label, outcome);
   activeLiveTurnNode = els.log.firstElementChild;
-  activeLiveTurnRole = role;
+  activeLiveTurnRole = normalizedRole;
 };
 
 window.__voiceboxOnToolCalls = (calls, frame) => {
@@ -6239,7 +6293,8 @@ function sqehWire() {
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const dataUrl = canvas.toDataURL("image/jpeg", 0.78);
     const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : "";
-    const sent = window.__voiceboxSendLiveVideo?.(base64, "image/jpeg") ?? false;
+    const liveActive = Boolean(window.__voiceboxIsLiveSessionActive?.());
+    const sent = liveActive ? (window.__voiceboxSendLiveVideo?.(base64, "image/jpeg") ?? false) : false;
     if (els.visionCoreMeta) {
       els.visionCoreMeta.textContent = sent
         ? `${visionMode === "screen" ? "Screen" : "Camera"} live (${canvas.width}×${canvas.height})`
@@ -6298,6 +6353,9 @@ function sqehWire() {
       if (els.visionCoreMeta) els.visionCoreMeta.textContent = `${mode === "screen" ? "Screen share" : "Camera"} active`;
       captureAndSendVisionFrame();
       restartVisionTimer();
+      if (!window.__voiceboxIsLiveSessionActive?.() && els.mic && els.mic.getAttribute("aria-pressed") !== "true") {
+        els.mic.click();
+      }
     } catch (error) {
       stopVisionStream();
       setState(`Video capture unavailable: ${error?.message ?? error}`, "warn");

@@ -23,6 +23,103 @@ let client = null;
 let socket = null;
 let capturing = false;
 
+const THINKING_FADE_DELAY_MS = 2500;
+const THINKING_CLEAR_DELAY_MS = 400;
+const CAPTION_FADE_DELAY_MS = 6000;
+const CAPTION_CLEAR_DELAY_MS = 800;
+
+let thinkingFadeTimer = null;
+let thinkingClearTimer = null;
+let captionFadeTimer = null;
+let captionClearTimer = null;
+let currentCaptionRole = null;
+let captionBuffer = "";
+
+function canSendOnLiveSocket(sock) {
+  return Boolean(sock && (sock.readyState === undefined || sock.readyState === 1));
+}
+
+function showThinkingTrace(thoughtText = "") {
+  if (thinkingFadeTimer) {
+    clearTimeout(thinkingFadeTimer);
+    thinkingFadeTimer = null;
+  }
+  if (thinkingClearTimer) {
+    clearTimeout(thinkingClearTimer);
+    thinkingClearTimer = null;
+  }
+  const trace = $("thinking-trace");
+  const body = $("thinking-trace-body");
+  const labelEl = $("thinking-trace-label");
+  if (trace) {
+    trace.hidden = false;
+    trace.dataset.active = "true";
+    delete trace.dataset.fading;
+  }
+  if (labelEl) {
+    labelEl.textContent = "Thinking…";
+  }
+  if (body && thoughtText) {
+    const prev = body.textContent || "";
+    const sep = prev && !/\s$/.test(prev) && !/^\s/.test(thoughtText) ? " " : "";
+    body.textContent = prev + sep + thoughtText;
+  }
+}
+
+function scheduleThinkingTraceFade() {
+  const trace = $("thinking-trace");
+  if (!trace || trace.hidden) return;
+  trace.dataset.active = "false";
+  if (thinkingFadeTimer) clearTimeout(thinkingFadeTimer);
+  if (thinkingClearTimer) clearTimeout(thinkingClearTimer);
+  thinkingFadeTimer = setTimeout(() => {
+    thinkingFadeTimer = null;
+    const current = $("thinking-trace");
+    if (!current || current.hidden || current.dataset.active === "true") return;
+    current.dataset.fading = "true";
+    thinkingClearTimer = setTimeout(() => {
+      thinkingClearTimer = null;
+      const inner = $("thinking-trace");
+      const body = $("thinking-trace-body");
+      if (!inner || inner.dataset.fading !== "true") return;
+      inner.hidden = true;
+      delete inner.dataset.fading;
+      if (body) body.textContent = "";
+    }, THINKING_CLEAR_DELAY_MS);
+    thinkingClearTimer?.unref?.();
+  }, THINKING_FADE_DELAY_MS);
+  thinkingFadeTimer?.unref?.();
+}
+
+function scheduleCaptionFade() {
+  if (captionFadeTimer) {
+    clearTimeout(captionFadeTimer);
+    captionFadeTimer = null;
+  }
+  if (captionClearTimer) {
+    clearTimeout(captionClearTimer);
+    captionClearTimer = null;
+  }
+  captionFadeTimer = setTimeout(() => {
+    captionFadeTimer = null;
+    const caption = $("caption");
+    if (!caption || !caption.textContent) return;
+    caption.dataset.fading = "true";
+    captionClearTimer = setTimeout(() => {
+      captionClearTimer = null;
+      const inner = $("caption");
+      if (!inner || inner.dataset.fading !== "true") return;
+      inner.textContent = "";
+      delete inner.dataset.fading;
+      delete inner.dataset.role;
+      currentCaptionRole = null;
+      captionBuffer = "";
+    }, CAPTION_CLEAR_DELAY_MS);
+    captionClearTimer?.unref?.();
+  }, CAPTION_FADE_DELAY_MS);
+  captionFadeTimer?.unref?.();
+}
+
 function setVoice(next) {
   if (ring) ring.dataset.voice = next;
 }
@@ -73,10 +170,31 @@ const audioClient = createAudioClient({
     }
     return { ok: false, error: "no active mini-app in the room" };
   },
-  onText: (text, role) => {
-    // Live means live: the transcript replaces the scripted caption.
+  onText: (text, role = "model") => {
+    if (role === "thought") {
+      showThinkingTrace(text);
+      window.__voiceboxOnLiveText?.(text, "thought");
+      return;
+    }
+    const speaker = role === "input-transcript" || role === "user" ? "user" : "model";
+    if (speaker === "model") {
+      scheduleThinkingTraceFade();
+    }
     const caption = $("caption");
-    if (caption) caption.textContent = text;
+    if (caption) {
+      if (currentCaptionRole !== speaker) {
+        currentCaptionRole = speaker;
+        captionBuffer = text;
+      } else if (captionBuffer && !/\s$/.test(captionBuffer) && !/^\s|^[,.;:!?]/.test(text)) {
+        captionBuffer += ` ${text}`;
+      } else {
+        captionBuffer += text;
+      }
+      caption.dataset.role = speaker;
+      delete caption.dataset.fading;
+      caption.textContent = captionBuffer;
+      scheduleCaptionFade();
+    }
     window.__voiceboxOnLiveText?.(text, role);
   },
   onError: (error, info) => {
@@ -86,10 +204,26 @@ const audioClient = createAudioClient({
   },
   onDiagnostic: (d) => {
     recordDebug({ type: "audio.diagnostic", detail: d });
+    if (d?.kind === "state" && d?.state === "interaction-status") {
+      const status = String(d?.detail?.status ?? d?.status ?? "").toUpperCase();
+      if (status === "IN_PROGRESS") {
+        showThinkingTrace();
+      } else if (status === "IDLE") {
+        scheduleThinkingTraceFade();
+      }
+    }
     if (d?.kind === "state" && (d?.state === "turn-complete" || d?.state === "interrupt")) {
+      currentCaptionRole = null;
+      captionBuffer = "";
+      scheduleThinkingTraceFade();
+      scheduleCaptionFade();
       window.__voiceboxOnLiveTurnComplete?.();
     }
     if (d?.kind === "socket-closed" && voiceState) {
+      currentCaptionRole = null;
+      captionBuffer = "";
+      scheduleThinkingTraceFade();
+      scheduleCaptionFade();
       window.__voiceboxOnLiveTurnComplete?.();
       voiceState.textContent = capturing
         ? "Live voice disconnected: machine-closed · mic off"
@@ -125,7 +259,13 @@ async function explainFailedUpgrade() {
 async function startLive() {
   const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/live${debugEnabled ? "?debug=1" : ""}`;
   const caption = $("caption");
-  if (caption) caption.textContent = "";
+  if (caption) {
+    caption.textContent = "";
+    delete caption.dataset.fading;
+    delete caption.dataset.role;
+  }
+  currentCaptionRole = null;
+  captionBuffer = "";
   if (voiceState) voiceState.textContent = "Connecting to the live session…";
   try {
     socket = new WebSocket(url);
@@ -160,7 +300,7 @@ async function startLive() {
       // The folder reporter lives in fused.js; the window hook keeps this file loadable on pages that do
       // not include it (the rate fixtures, for one), which is why it is not an import (voicebox-beads-0zi4).
       window.__voiceboxProjectContext?.setSender((payload) => {
-        if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
+        if (canSendOnLiveSocket(socket)) socket.send(JSON.stringify(payload));
       });
       resolve();
     };
@@ -229,7 +369,7 @@ interrupt?.addEventListener("click", () => {
 window.__voiceboxLiveClient = audioClient;
 window.__voiceboxSetPlaybackVolume = (v) => audioClient.setPlaybackVolume(v);
 window.__voiceboxIsLiveSessionActive = () =>
-  Boolean(capturing || (socket && socket.readyState === WebSocket.OPEN));
+  Boolean(capturing || canSendOnLiveSocket(socket));
 window.__voiceboxRestartLiveSession = async () => {
   await audioClient.stopCapture();
   try {
@@ -255,15 +395,22 @@ window.__voiceboxRestartLiveSession = async () => {
     return { restarted: false, capturing: false, error: String(error?.message ?? error) };
   }
 };
+window.__voiceboxSendLiveControl = (payload) => {
+  if (canSendOnLiveSocket(socket) && payload && typeof payload === "object") {
+    socket.send(JSON.stringify(payload));
+    return true;
+  }
+  return false;
+};
 window.__voiceboxSendLiveVideo = (jpegBase64, mimeType = "image/jpeg") => {
-  if (socket && socket.readyState === WebSocket.OPEN && typeof jpegBase64 === "string" && jpegBase64) {
+  if (canSendOnLiveSocket(socket) && typeof jpegBase64 === "string" && jpegBase64) {
     socket.send(JSON.stringify({ type: "video", data: jpegBase64, mimeType }));
     return true;
   }
   return false;
 };
 window.__voiceboxSendActivityControl = (kind = "start") => {
-  if (socket && socket.readyState === WebSocket.OPEN) {
+  if (canSendOnLiveSocket(socket)) {
     socket.send(JSON.stringify({ type: "activity_control", kind: kind === "end" ? "end" : "start" }));
     return true;
   }
