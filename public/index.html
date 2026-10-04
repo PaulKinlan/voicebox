@@ -390,6 +390,10 @@
     <main class="stage" id="made" tabindex="-1">
       <section class="voice" aria-labelledby="talk-heading">
         <h2 class="sr-only" id="talk-heading">Talk to it</h2>
+        <div class="thinking-trace" id="thinking-trace" role="status" aria-live="polite" hidden data-active="false">
+          <span class="thinking-trace-badge"><span class="thinking-trace-dot" aria-hidden="true"></span><span id="thinking-trace-label">Thinking…</span></span>
+          <p class="thinking-trace-body" id="thinking-trace-body"></p>
+        </div>
         <div class="caption-space"><p class="caption" id="caption" role="status" aria-live="polite"></p></div>
         <div class="mic-stage" id="voice-ring-wrap" data-voice="off">
           <!-- sqeh (voicebox-beads-sqeh): layered radial frequency arcs behind the mic — glowing

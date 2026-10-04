@@ -125,6 +125,7 @@ export function createAudioClient({
   };
   // What the socket is doing, when a refusal needs to name it rather than guess.
   const socketReadyState = () => (ws && typeof ws.readyState === "number" ? ws.readyState : -1);
+  const canSendOnSocket = (sock) => Boolean(sock && (sock.readyState === undefined || sock.readyState === 1));
   let lastClose = null; // { code, reason } from the most recent close, for the sentence above
   const closeDetail = () => (lastClose && (lastClose.code || lastClose.reason)
     ? ` (the socket closed: code ${lastClose.code ?? "unknown"}${lastClose.reason ? `, ${lastClose.reason}` : ""})`
@@ -354,7 +355,11 @@ export function createAudioClient({
         onDiagnostic({ kind: "state", state: msg.state, detail: msg.detail });
         return;
       }
-      onDiagnostic({ kind: "state", state: msg.state, detail: msg.detail });
+      onDiagnostic({ kind: "state", state: msg.state, detail: msg.detail, status: msg.detail?.status ?? msg.status });
+      return;
+    }
+    if (msg?.type === "interaction-status") {
+      onDiagnostic({ kind: "state", state: "interaction-status", detail: msg, status: msg.status });
       return;
     }
     if (msg?.type === "text") {
@@ -387,13 +392,15 @@ export function createAudioClient({
     if (msg?.type === "mini_app_call") {
       Promise.resolve(onMiniAppCall(msg)).then((res) => {
         try {
-          ws?.send(JSON.stringify({
-            type: "mini_app_result",
-            callId: msg.callId,
-            ok: Boolean(res?.ok),
-            result: res?.result ?? null,
-            error: res?.error ?? null,
-          }));
+          if (canSendOnSocket(ws)) {
+            ws.send(JSON.stringify({
+              type: "mini_app_result",
+              callId: msg.callId,
+              ok: Boolean(res?.ok),
+              result: res?.result ?? null,
+              error: res?.error ?? null,
+            }));
+          }
         } catch {}
       });
       return;
@@ -653,8 +660,10 @@ export function createAudioClient({
           const frameEnergy = energy(frame);
           noteInput(frameEnergy);
           considerBargeIn(frameEnergy); // ONE reading, used by both the meter and the detector
-          ws?.send(floatToPcm16(frame));
-          state.framesSent += 1;
+          if (canSendOnSocket(ws)) {
+            ws.send(floatToPcm16(frame));
+            state.framesSent += 1;
+          }
         } catch (error) {
           reject(`could not send a captured frame: ${error?.message ?? error}`, { frameKind: "capture" });
         }
@@ -772,10 +781,30 @@ export function createAudioClient({
     // Only the PAGE's own interruption asks the model to stop. When the model's side reported the
     // interrupt, it has already stopped, and asking again would put a second cancel on the wire for no
     // reason. The flush is unconditional either way — the buffered tail is the page's to silence.
-    if (source === "page") {
-      try { ws?.send(JSON.stringify({ type: "interrupt", source })); } catch { /* the socket is gone */ }
+    if (source === "page" && canSendOnSocket(ws)) {
+      try { ws.send(JSON.stringify({ type: "interrupt", source })); } catch { /* the socket is gone */ }
     }
     return flushed;
+  }
+
+  function sendAudioStreamEnd() {
+    if (!canSendOnSocket(ws) || !state.ready) return false;
+    try {
+      ws.send(JSON.stringify({ type: "activity_control", kind: "audioStreamEnd" }));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function sendText(text) {
+    if (!canSendOnSocket(ws) || !state.ready) return false;
+    try {
+      ws.send(JSON.stringify({ type: "text", text: String(text ?? "") }));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   return {
@@ -789,6 +818,8 @@ export function createAudioClient({
     level,
     stopCapture,
     stopReply,
+    sendAudioStreamEnd,
+    sendText,
     snapshot,
     label,
     get state() { return snapshot(); },
