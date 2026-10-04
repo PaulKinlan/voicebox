@@ -797,25 +797,19 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
     const whereStyle = whereEl ? getComputedStyle(whereEl) : null;
     const settingsBtn = document.getElementById("settings-open");
     const settingsBtnStyle = settingsBtn ? getComputedStyle(settingsBtn) : null;
-    const ring1 = document.querySelector("#sqeh-arcs i:nth-child(1)");
-    const ring2 = document.querySelector("#sqeh-arcs i:nth-child(2)");
-    const ring3 = document.querySelector("#sqeh-arcs i:nth-child(3)");
-    const r1Style = ring1 ? getComputedStyle(ring1) : null;
-    const r2Style = ring2 ? getComputedStyle(ring2) : null;
-    const r3Style = ring3 ? getComputedStyle(ring3) : null;
+    const sqehArcs = document.getElementById("sqeh-arcs");
+    const mic = document.getElementById("mic");
+    const micStyle = mic ? getComputedStyle(mic) : null;
     return {
       hasWordmarkDot: Boolean(wordmarkDot),
       whereRadius: whereStyle?.borderRadius,
       whereBorderWidth: whereStyle?.borderTopWidth,
       iconBtnRadius: settingsBtnStyle?.borderRadius,
       iconBtnBorderWidth: settingsBtnStyle?.borderTopWidth,
-      ring1Width: r1Style?.width,
-      ring1Opacity: Number(r1Style?.opacity ?? 0),
-      ring1BorderStyle: r1Style?.borderTopStyle,
-      ring2Width: r2Style?.width,
-      ring2Opacity: Number(r2Style?.opacity ?? 0),
-      ring2BorderStyle: r2Style?.borderTopStyle,
-      ring3OpacityAtRest: Number(r3Style?.opacity ?? 1),
+      hasSqehArcs: Boolean(sqehArcs),
+      micWidth: micStyle?.width,
+      micHeight: micStyle?.height,
+      micBoxShadow: micStyle?.boxShadow,
     };
   });
   assert.equal(menuBarAndRings.hasWordmarkDot, true, ".wordmark includes .wordmark-dot status dot (2eur)");
@@ -823,13 +817,8 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
   assert.equal(menuBarAndRings.whereBorderWidth, "1px", ".where has a 1px pill border (2eur)");
   assert.equal(menuBarAndRings.iconBtnRadius, "999px", ".head > .icon-button is a rounded circle button (2eur)");
   assert.equal(menuBarAndRings.iconBtnBorderWidth, "1px", ".head > .icon-button has a 1px card border (2eur)");
-  assert.equal(menuBarAndRings.ring1Width, "148px", ".sqeh-arcs i:nth-child(1) is a 148px outside ring (c17u)");
-  assert.ok(menuBarAndRings.ring1Opacity > 0.5, `.sqeh-arcs i:nth-child(1) is visible at rest (opacity=${menuBarAndRings.ring1Opacity}) (c17u)`);
-  assert.equal(menuBarAndRings.ring1BorderStyle, "solid", ".sqeh-arcs i:nth-child(1) has a solid border (c17u)");
-  assert.equal(menuBarAndRings.ring2Width, "178px", ".sqeh-arcs i:nth-child(2) is a 178px outer ring (c17u)");
-  assert.ok(menuBarAndRings.ring2Opacity > 0.5, `.sqeh-arcs i:nth-child(2) is visible at rest (opacity=${menuBarAndRings.ring2Opacity}) (c17u)`);
-  assert.equal(menuBarAndRings.ring2BorderStyle, "dashed", ".sqeh-arcs i:nth-child(2) has a dashed border (c17u)");
-  assert.equal(menuBarAndRings.ring3OpacityAtRest, 0, ".sqeh-arcs i:nth-child(3) pulse ring is hidden at rest (c17u)");
+  assert.equal(menuBarAndRings.hasSqehArcs, false, "#sqeh-arcs decorative outside rings are removed (yf33)");
+  assert.ok(menuBarAndRings.micWidth === "92px" || menuBarAndRings.micWidth === "116px", "#mic preserves scaled button sizing (yf33)");
 
   // Verify Top-Level Out-of-Sync Toast Notification (#sync-toast, rwtc)
   const syncToastCheck = await page.evaluate(() => {

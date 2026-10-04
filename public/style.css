@@ -312,10 +312,10 @@ body:has(#server-dot[data-ok="false"]) .wordmark-dot {
 [data-voice="speaking"] .input-wave path { fill: var(--good); }
 /* Blue is yours, green is the agent's. Colour carries the distinction so the
    two meters never read as one. */
-[data-voice="listening"] .mic { color: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 10px color-mix(in srgb, var(--accent) 10%, transparent), 0 12px 32px rgba(20, 22, 26, 0.09); }
+[data-voice="listening"] .mic { color: var(--accent); border-color: var(--accent); }
 [data-voice="listening"] .mic-glyph,
 [data-voice="speaking"] .mic-glyph { display: none; }
-[data-voice="speaking"] .mic { color: var(--good); border-color: var(--good); box-shadow: 0 0 0 10px color-mix(in srgb, var(--good) 11%, transparent), 0 12px 32px rgba(20, 22, 26, 0.09); }
+[data-voice="speaking"] .mic { color: var(--good); border-color: var(--good); }
 .mic.hotkey-active {
   transform: scale(0.95);
   border-color: var(--accent);
@@ -1743,62 +1743,6 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
   line-height: 1;
 }
 .sqeh-dock-btn:hover { color: var(--ink); background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.sqeh-dock-mic { display: grid; place-items: center; inline-size: 62px; block-size: 62px; margin-block-end: 14px; border: 0; border-radius: 50%; background: radial-gradient(circle at 50% 35%, var(--accent), color-mix(in srgb, var(--accent) 55%, #000)); color: #ffffff; cursor: pointer; box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent), 0 0 34px color-mix(in srgb, var(--accent) 45%, transparent); }
-.sqeh-dock-mic:hover { box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 24%, transparent), 0 0 48px color-mix(in srgb, var(--accent) 60%, transparent); }
-
-/* ── layered radial arcs on the mic stage (concentric outside rings) ── */
-.mic-stage { position: relative; }
-.sqeh-arcs { position: absolute; inset: -26px; display: grid; place-items: center; pointer-events: none; }
-.sqeh-arcs i { position: absolute; border-radius: 50%; pointer-events: none; }
-.sqeh-arcs i:nth-child(1) {
-  inline-size: 148px;
-  block-size: 148px;
-  border: 1.5px solid color-mix(in srgb, var(--ink) 22%, var(--line));
-  opacity: 0.65;
-  transition: transform 0.3s ease, border-color 0.3s ease, opacity 0.3s ease;
-}
-.sqeh-arcs i:nth-child(2) {
-  inline-size: 178px;
-  block-size: 178px;
-  border: 1px dashed color-mix(in srgb, var(--ink) 18%, var(--line));
-  opacity: 0.85;
-  transition: transform 0.3s ease, border-color 0.3s ease, opacity 0.3s ease;
-}
-.sqeh-arcs i:nth-child(3) {
-  inline-size: 148px;
-  block-size: 148px;
-  border: 1.5px solid var(--accent);
-  opacity: 0;
-}
-[data-voice="listening"] .sqeh-arcs i:nth-child(1),
-.mic-stage[data-voice="on"] .sqeh-arcs i:nth-child(1) {
-  border-color: var(--accent);
-  opacity: 0.9;
-}
-[data-voice="listening"] .sqeh-arcs i:nth-child(2),
-.mic-stage[data-voice="on"] .sqeh-arcs i:nth-child(2) {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
-}
-[data-voice="listening"] .sqeh-arcs i:nth-child(3),
-.mic-stage[data-voice="on"] .sqeh-arcs i:nth-child(3) {
-  border-color: var(--accent);
-  animation: pulseRing 1.8s infinite ease-out;
-}
-[data-voice="speaking"] .sqeh-arcs i:nth-child(1) {
-  border-color: var(--good);
-  opacity: 0.9;
-}
-[data-voice="speaking"] .sqeh-arcs i:nth-child(2) {
-  border-color: color-mix(in srgb, var(--good) 45%, var(--line));
-}
-[data-voice="speaking"] .sqeh-arcs i:nth-child(3) {
-  border-color: var(--good);
-  animation: pulseRing 1.2s infinite ease-in-out;
-}
-@keyframes pulseRing {
-  0% { transform: scale(0.94); opacity: 0.85; }
-  100% { transform: scale(1.26); opacity: 0; }
-}
 
 /* ── State C: systems sheet (mobile slide-up; desktop anchored popover) ── */
 .sqeh-sheet { position: fixed; inset-inline: 0; inset-block-end: 0; z-index: 60; max-block-size: 70svh; padding: 14px 18px calc(18px + env(safe-area-inset-bottom, 0px)); border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line)); border-radius: 22px 22px 0 0; background: var(--sqeh-glass); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); box-shadow: var(--shadow); overflow: auto; }
@@ -1902,7 +1846,7 @@ body:has(#reader:not([data-state="empty"]):not([data-collapsed="true"])) .made:n
   body[data-sqeh-state="history"] .reader { display: none; }
 }
 
-/* The arcs glow past the mic stage; clip the SECTION's horizontal overflow so a phone
+/* Clip the SECTION's horizontal overflow so a phone
    never gains a horizontal scrollbar from decoration (voicebox-beads-35eg's own lesson). */
 .voice { overflow-x: clip; }
 
