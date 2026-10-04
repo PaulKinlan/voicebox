@@ -1,100 +1,101 @@
-# Roadmap & Unimplemented Epics
+# Roadmap Epics & Landed Architecture
 
-This document catalogues the major architectural capabilities designed in the foundational Voicebox briefs and interface studies (`docs/archive/00-brief.md`, `docs/archive/02-environment.md`, and `docs/archive/interface.md`) that remain unimplemented in the current runtime, along with new multi-harness and platform epics identified during architecture review.
+This document catalogues the six major architectural epics designed in the foundational Voicebox briefs and interface studies (`docs/archive/00-brief.md`, `docs/archive/02-environment.md`, and `docs/archive/interface.md`) and describes their implementation across the Voicebox runtime.
 
-Each epic below is tracked in Beads (`bd`) as an `epic` issue and scoped with clear module boundaries and verification criteria.
+Each epic is tracked in Beads (`bd`) as an `epic` issue with clear module boundaries and verification criteria.
 
 ---
 
 ## Summary of Roadmap Epics
 
-| Epic | Title | Origin / Design Reference | Target Layer | Priority |
-|---|---|---|---|---|
-| **Epic 1** | **Multi-Participant Shared Voice Rooms & Live Presence ("Here, Together")** | `docs/archive/00-brief.md` (N19), `docs/archive/interface.md` | `core/shared-log.ts`, `lib/channel.mjs`, `public/fused.js` | `P2` |
-| **Epic 2** | **Visual Branch & Worktree Landing Inspector ("Waiting to Land")** | `docs/archive/00-brief.md` (N19), `docs/archive/interface.md` | `server.mjs`, `lib/git-env.mjs`, `public/fused.js` | `P1` |
-| **Epic 3** | **Local Offline Speech-to-Text & TTS Fallback (Whisper / Piper)** | `docs/archive/00-brief.md`, `docs/07-architecture.md` | `lib/live-session.mjs`, `public/live-voice.js` | `P2` |
-| **Epic 4** | **Multi-Harness Result Comparison & Automated Diff Synthesis** | Multi-harness architecture (`lib/tasks.mjs`) | `lib/tasks.mjs`, `public/apps/agent-monitor.html` | `P1` |
-| **Epic 5** | **Native OS Companion / Global Hotkey & System Tray Bridge** | `docs/archive/00-brief.md` ("stay in the conversation while doing something else") | `public/pip-mic.mjs`, host companion bridge | `P3` |
-| **Epic 6** | **Wasm Execution Cell Concurrency Semaphore & WASI Preview2 Capability Grants** | `docs/20-webassembly-tools.md`, `docs/archive/02-environment.md` | `lib/wasm-shelf.mjs`, `lib/wasm-worker.mjs` | `P2` |
+| Epic | Bead | Title | Origin / Design Reference | Implementation Modules | Priority |
+|---|---|---|---|---|---|
+| **Epic 1** | `voicebox-beads-jagv` | **Multi-Participant Shared Voice Rooms & Live Presence ("Here, Together")** | `docs/archive/00-brief.md`, `docs/archive/interface.md` | `lib/room-presence.mjs`, `server.mjs`, `core/shared-log.ts`, `lib/channel.mjs`, `public/fused.js` | `P2` |
+| **Epic 2** | `voicebox-beads-2pfb` | **Visual Branch & Worktree Landing Inspector ("Waiting to Land")** | `docs/archive/00-brief.md`, `docs/archive/interface.md` | **lib/branch-landing.mjs**, **public/apps/landing-inspector.html**, `server.mjs`, `lib/git-env.mjs` | `P1` |
+| **Epic 3** | `voicebox-beads-1r99` | **Local Offline Speech-to-Text & TTS Fallback (Whisper / Piper)** | `docs/archive/00-brief.md`, `docs/07-architecture.md` | **lib/offline-speech.mjs**, **public/offline-speech-client.mjs**, `lib/live-session.mjs`, `public/live-voice.js` | `P2` |
+| **Epic 4** | `voicebox-beads-80bd` | **Multi-Harness Result Comparison & Automated Diff Synthesis** | Multi-harness architecture (`lib/tasks.mjs`) | **lib/harness-comparison.mjs**, `public/apps/agent-monitor.html`, `lib/tasks.mjs` | `P1` |
+| **Epic 5** | `voicebox-beads-kpp6` | **Native OS Companion / Global Hotkey & System Tray Bridge** | `docs/archive/00-brief.md` ("stay in the conversation while doing something else") | **lib/os-companion.mjs**, **scripts/voicebox-companion.mjs**, `public/pip-mic.mjs` | `P3` |
+| **Epic 6** | `voicebox-beads-3l0w` | **Wasm Execution Cell Concurrency Semaphore & WASI Preview2 Capability Grants** | `docs/20-webassembly-tools.md`, `docs/archive/02-environment.md` | `lib/wasm-shelf.mjs`, `lib/wasm-worker.mjs`, `core/extensions.ts` | `P2` |
 
 ---
 
-## Epic 1 — Multi-Participant Shared Voice Rooms & Live Presence ("Here, Together")
+## Epic 1 — Multi-Participant Shared Voice Rooms & Live Presence ("Here, Together") (`voicebox-beads-jagv`)
 
-### Context & Gap
-In `docs/archive/00-brief.md` (N19) and `docs/archive/interface.md`, Voicebox specifies a **"Here, together"** presence model built on `shared log + per-root work that still merges`. While `core/shared-log.ts` defines the append-only shared log data structure (`appendEntry`, `markSeen`, `peerPresence`), the live room UI (`public/fused.js`) and WebSocket `/channel` (`lib/channel.mjs`) currently operate as a single-operator session without visible multi-peer presence indicators, read-revision markers (`seen` marks), or coordinated turn-taking across multiple connected browser tabs or paired operator sessions.
+### Context & Architecture
+In `docs/archive/00-brief.md` and `docs/archive/interface.md`, Voicebox specifies a **"Here, together"** presence model built on `shared log + per-root work that still merges`. Alongside `core/shared-log.ts` (`appendEntry`, `markSeen`, `peerPresence`), `lib/room-presence.mjs` provides `createRoomPresenceCoordinator` and `DEFAULT_PRESENCE_TTL_MS` (`45000` ms) to coordinate live multi-participant room state, floor control, and shared captions across connected browser tabs, paired environments, and coding harnesses.
 
-### Scope & Deliverables
-1. **Live Peer Presence over `/channel`**:
-   - Wire `core/shared-log.ts` into `server.mjs` and `/channel` so every connected browser tab, paired environment, and active coding harness session broadcasts its presence, current activity, and `seen` cursor in real time.
-2. **"Here, Together" Presence Bar in the Room Stage**:
-   - Surface a compact, non-intrusive presence pill in `public/index.html` and `public/fused.js` showing active peer sessions, which files/revisions each peer has read, and who currently holds the microphone.
-3. **Coordinated Multi-Tab Audio & Turn Locking**:
-   - Prevent duplicate microphone capture across multiple open tabs on the same host and display clear `"last seen"` states when a peer disconnects.
-
----
-
-## Epic 2 — Visual Branch & Worktree Landing Inspector ("Waiting to Land")
-
-### Context & Gap
-`docs/archive/interface.md` specifies a first-class **"Waiting to land"** workflow where changes produced in an isolated git branch or worktree by a delegated coding harness appear as an explicit, refusable landing proposal (`source root → destination root`, changed files, conflict pre-check, and recovery boundary) with **"Review merge"**, **"Merge these changes"**, and **"Keep separate"** actions. Currently, delegated tasks run in the workspace root or worktree, but the room UI lacks an in-app branch diff inspector and one-click landing/refusal flow.
-
-### Scope & Deliverables
-1. **Per-Task Isolated Worktree Option**:
-   - Extend `lib/tasks.mjs` and `lib/git-env.mjs` so delegated coding tasks can optionally execute in an isolated git worktree (`git worktree add --no-track -b task/<id>`) without dirtying the operator's active working tree.
-2. **Landing Proposal & Pre-Flight Diff API**:
-   - Add host endpoints to inspect pending worktree branches, compute file-by-file diffs and merge-conflict status against the active workspace branch, and execute either a clean merge or a non-destructive `"keep separate"` dismissal.
-3. **In-Room "Waiting to Land" Inspector UI**:
-   - Render pending worktree landings in `public/fused.js` and the Agent Progress Tracker mini-app (`public/apps/agent-monitor.html`) with syntax-highlighted diffs and voice-triggerable `"review merge"`, `"merge changes"`, and `"keep separate"` commands.
+### Landed Implementation (`lib/room-presence.mjs`, `server.mjs`, `tests/room-presence.test.mjs`)
+1. **Live Peer Presence Coordinator (`lib/room-presence.mjs`)**:
+   - Tracks active participants (`joinParticipant`, `heartbeatParticipant`, `leaveParticipant`) with automatic TTL expiry pruning (`DEFAULT_PRESENCE_TTL_MS`).
+   - Enforces collaborative turn-taking floor locks (`requestFloor` / `releaseFloor`) with `floor-busy` refusals when another active participant holds the microphone and automatic floor release on participant leave or TTL expiry.
+   - Maintains a bounded ring buffer of shared captions and spoken turns (`recordSharedCaption`, `sharedCaptions`).
+2. **Host Presence Endpoints & WebSocket Broadcast (`server.mjs`)**:
+   - `GET /api/presence` returns the live pruned room snapshot (`count`, `floorHolderId`, `activeSpeaker`, `participants`, `sharedCaptions`).
+   - `POST /api/presence` dispatches `join`, `heartbeat`, `leave`, `requestFloor`, `releaseFloor`, and `recordSharedCaption` actions, broadcasts `{ type: "presence", ...snapshot }` over `/channel`, and returns HTTP `409` on floor contention (`floor-busy`).
 
 ---
 
-## Epic 3 — Local Offline Speech-to-Text & TTS Fallback (Whisper / Piper)
+## Epic 2 — Visual Branch & Worktree Landing Inspector ("Waiting to Land") (`voicebox-beads-2pfb`)
 
-### Context & Gap
-When cloud voice provider credentials (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) are unconfigured or the machine is offline, `/live` enters `standby` mode and falls back to browser `webkitSpeechRecognition` (`SpeechRecognition`), which is unavailable or cloud-dependent in many browsers (such as Firefox, Linux Chromium, or offline environments).
+### Context & Architecture
+`docs/archive/interface.md` specifies a first-class **"Waiting to land"** workflow where changes produced in an isolated git branch or worktree by a delegated coding harness appear as an explicit, refusable landing proposal (`source root → destination root`, changed files, conflict pre-check, and recovery boundary) with **"Review merge"**, **"Merge these changes"**, and **"Keep separate"** actions.
 
-### Scope & Deliverables
-1. **Local Whisper / WebGPU / ONNX Speech-to-Text Provider**:
-   - Add a local zero-cloud STT/TTS provider option under `lib/live-providers/` (or browser WebGPU/Wasm worker) capable of transcribing 16 kHz PCM microphone audio on-device and synthesizing spoken replies locally.
-2. **Automatic Offline Fallback**:
-   - Seamlessly transition between cloud realtime models and local on-device speech recognition/synthesis when network connectivity drops or when the user selects `"Local Offline Voice"` in Settings.
-
----
-
-## Epic 4 — Multi-Harness Result Comparison & Automated Diff Synthesis
-
-### Context & Gap
-Voicebox now supports delegating the same prompt simultaneously across multiple coding harnesses (`POST /api/tasks/delegate` with `harnesses: ["pi", "claude", "antigravity"]` or `harness: "all"`). However, once parallel harnesses finish, the operator must inspect each task's output individually rather than comparing their generated diffs and test results side-by-side.
-
-### Scope & Deliverables
-1. **Grouped Multi-Harness Run Comparison**:
-   - Group fan-out task runs by batch ID in `lib/tasks.mjs` and `public/apps/agent-monitor.html`.
-2. **Side-by-Side Output & Diff Matrix**:
-   - Display a comparison view in the Agent Progress Tracker mini-app showing execution time, exit status, files modified, and unified diffs for each harness side-by-side, with a one-click **"Apply Winner"** action.
+### Landed Implementation (**lib/branch-landing.mjs**, **public/apps/landing-inspector.html**, `server.mjs`, `lib/git-env.mjs`)
+1. **Worktree & Branch Landing Engine (**lib/branch-landing.mjs**)**:
+   - Discovers candidate worktree/task branches, computes ahead/behind counts, file-level diff stats, and dry-run merge conflict detection against the active workspace branch.
+2. **Landing Proposal & Merge API (`server.mjs`)**:
+   - Exposes host endpoints to list pending candidate branches, inspect unified diffs and conflict pre-checks, and execute either a clean fast-forward/merge or a non-destructive `"keep separate"` dismissal.
+3. **In-Room "Waiting to Land" Inspector UI (**public/apps/landing-inspector.html**, `public/fused.js`)**:
+   - Renders pending worktree landings with syntax-highlighted diffs and one-click or voice-triggered review, merge, and keep-separate controls.
 
 ---
 
-## Epic 5 — Native OS Companion / Global Hotkey & System Tray Bridge
+## Epic 3 — Local Offline Speech-to-Text & TTS Fallback (Whisper / Piper) (`voicebox-beads-1r99`)
 
-### Context & Gap
-In `docs/archive/00-brief.md`, a core operator goal is *"an agent that stays in the conversation while I do something else."* While the Document Picture-in-Picture microphone (`public/pip-mic.mjs`) keeps a floating mic window visible on desktop Chromium, browsers cannot register OS-wide global keyboard shortcuts (such as global push-to-talk when another application has focus) or read active OS window context without a lightweight native companion.
+### Context & Architecture
+When cloud voice provider credentials (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) are unconfigured or the machine is offline, `/live` enters `standby` mode and falls back to local on-device speech recognition and synthesis so the room remains conversational without cloud connectivity.
 
-### Scope & Deliverables
-1. **Lightweight Loopback OS Tray / Hotkey Helper**:
-   - Provide an optional lightweight local helper script/binary that registers an OS-wide push-to-talk / mute shortcut and forwards hotkey events to `server.mjs` over `/channel`.
-2. **Voice Feedback & Notification Bridge**:
-   - Surface non-intrusive native OS notifications when a background delegated coding task completes or requests approval while the browser window is minimized.
+### Landed Implementation (**lib/offline-speech.mjs**, **public/offline-speech-client.mjs**, `lib/live-session.mjs`, `public/live-voice.js`)
+1. **Local Whisper / Piper Speech Engine (**lib/offline-speech.mjs**)**:
+   - Probes local Whisper (`whisper-cli` / `whisper-cpp`) and Piper (`piper`) or OS TTS (`say` / `espeak-ng`) binaries, transcribes 16 kHz PCM audio locally, and synthesizes spoken responses with zero cloud dependencies.
+2. **Client Offline Voice Fallback (**public/offline-speech-client.mjs**, `public/live-voice.js`)**:
+   - Transitions seamlessly between cloud realtime models and local offline STT/TTS when network connectivity drops or when local offline voice mode is selected.
 
 ---
 
-## Epic 6 — Wasm Execution Cell Concurrency Semaphore & WASI Preview2 Capability Grants
+## Epic 4 — Multi-Harness Result Comparison & Automated Diff Synthesis (`voicebox-beads-80bd`)
 
-### Context & Gap
-As documented in `docs/20-webassembly-tools.md`, `lib/wasm-shelf.mjs` currently spawns an isolated `worker_threads` Worker (`lib/wasm-worker.mjs`) per `callWasmTool` invocation with memory ceilings and a 5-second hard timeout, using minimal zero-syscall `buffer-abi/1` and `buffer-abi/diff` ABIs. Under high parallel tool fan-out, worker creation is unbounded, and tools that need fine-grained read-only virtual filesystem access cannot use standard WASI Preview2 descriptors.
+### Context & Architecture
+Voicebox supports delegating the same prompt simultaneously across multiple coding harnesses (`POST /api/tasks/delegate` with `agents: ["pi", "claude", "antigravity"]`). Once parallel harnesses finish, the operator can compare their generated diffs, modified files, and execution metrics side-by-side.
 
-### Scope & Deliverables
-1. **Bounded Worker Concurrency Semaphore**:
-   - Add a configurable concurrency semaphore (`VOICEBOX_WASM_MAX_CONCURRENCY`, default `4`) and bounded queue in `lib/wasm-shelf.mjs` so bursts of concurrent Wasm tool calls cannot exhaust host threads or memory.
-2. **Capability-Scoped WASI Preview2 Virtual Preopens**:
-   - Support optional read-only virtual directory preopens in `lib/wasm-worker.mjs` gated by the extension's admitted capability descriptor (`core/extensions.ts`).
+### Landed Implementation (**lib/harness-comparison.mjs**, `public/apps/agent-monitor.html`, `lib/tasks.mjs`)
+1. **Multi-Harness Comparison Engine (**lib/harness-comparison.mjs**)**:
+   - Groups fan-out task runs, computes file overlap matrices, execution duration rankings, status summaries, and synthesized diff comparisons across participating harnesses.
+2. **Side-by-Side Comparison Matrix (`public/apps/agent-monitor.html`)**:
+   - Displays parallel harness runs side-by-side in the Agent Progress Tracker mini-app with execution time, exit status, files modified, and unified diff inspection.
+
+---
+
+## Epic 5 — Native OS Companion / Global Hotkey & System Tray Bridge (`voicebox-beads-kpp6`)
+
+### Context & Architecture
+In `docs/archive/00-brief.md`, a core operator goal is *"an agent that stays in the conversation while I do something else."* Alongside the Document Picture-in-Picture microphone (`public/pip-mic.mjs`), the Native OS Companion bridge lets external global hotkeys and system tray helpers drive push-to-talk, mute, and desktop notifications over loopback.
+
+### Landed Implementation (**lib/os-companion.mjs**, **scripts/voicebox-companion.mjs**, `public/pip-mic.mjs`)
+1. **OS Companion Coordinator (**lib/os-companion.mjs**)**:
+   - Manages companion registration, global hotkey dispatch (`push-to-talk`, `toggle-mute`, `stop-speaking`, `quick-note`), and desktop notification queuing.
+2. **Loopback Companion CLI Bridge (**scripts/voicebox-companion.mjs**)**:
+   - Lightweight local companion script that pairs with `server.mjs`, forwards global shortcut events into the active room, and surfaces native OS notifications when background tasks complete.
+
+---
+
+## Epic 6 — Wasm Execution Cell Concurrency Semaphore & WASI Preview2 Capability Grants (`voicebox-beads-3l0w`)
+
+### Context & Architecture
+As documented in `docs/20-webassembly-tools.md`, `lib/wasm-shelf.mjs` spawns isolated `worker_threads` Workers (`lib/wasm-worker.mjs`) per `callWasmTool` invocation with memory ceilings and hard timeouts. To protect host resources under parallel tool fan-out and support capability-scoped virtual preopens, the Wasm shelf enforces a bounded concurrency semaphore and WASI Preview2 capability grants.
+
+### Landed Implementation (`lib/wasm-shelf.mjs`, `lib/wasm-worker.mjs`, `core/extensions.ts`)
+1. **Bounded Worker Concurrency Semaphore (`lib/wasm-shelf.mjs`)**:
+   - Enforces a configurable concurrency semaphore (`VOICEBOX_WASM_MAX_CONCURRENCY`, default `4`) and bounded wait queue so bursts of concurrent Wasm tool calls never exhaust host threads or memory.
+2. **Capability-Scoped WASI Preview2 Virtual Preopens (`lib/wasm-shelf.mjs`, `lib/wasm-worker.mjs`, `core/extensions.ts`)**:
+   - Validates and mounts capability-scoped read-only virtual directory preopens gated by the extension's admitted capability descriptor.
