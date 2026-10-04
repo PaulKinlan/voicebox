@@ -101,12 +101,12 @@ test("configSaysBare: healthy config does not detect", () => {
 // function against a real scratch repo so the wiring cannot ship dead again.)
 
 test("WIRING: repairCanonicalBare fixes a scratch bare repo (core.bare=false + core.worktree set)", async () => {
-  const { mkdtempSync, writeFileSync, readFileSync: rf, rmSync } = await import("node:fs");
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync: rf, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const path = await import("node:path");
-  const { execFileSync: git } = await import("node:child_process");
   const scratch = mkdtempSync(path.join(tmpdir(), "vb-reap-bare-"));
   try {
+    const { execFileSync: git } = await import("node:child_process");
     git("git", ["init", scratch], { stdio: "ignore" });
     const cfg = path.join(scratch, ".git", "config");
     writeFileSync(cfg, rf(cfg, "utf8").replace("bare = false", "bare = true"));
@@ -126,9 +126,9 @@ test("WIRING: a healthy canonical is a no-op (config untouched)", async () => {
   const { mkdtempSync, readFileSync: rf, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const path = await import("node:path");
-  const { execFileSync: git } = await import("node:child_process");
   const scratch = mkdtempSync(path.join(tmpdir(), "vb-reap-healthy-"));
   try {
+    const { execFileSync: git } = await import("node:child_process");
     git("git", ["init", scratch], { stdio: "ignore" });
     const cfg = path.join(scratch, ".git", "config");
     const before = rf(cfg, "utf8");
