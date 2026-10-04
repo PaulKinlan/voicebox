@@ -21,7 +21,7 @@ Voicebox is architected around five foundational invariants:
 4. **Host-Held Credential Custody**:
    - Provider API keys (`.api-keys.json`), host tokens (`.host-token`), and remote pairing bearers (`.pairings.json`) are stored with `0600` permissions inside `HOST_DIR` outside every project workspace root. Browser JavaScript and sandboxed child processes never receive raw credentials.
 5. **Plain-Language, Zero-Shift UI**:
-   - The browser room (`public/index.html`, `public/fused.js`, `public/style.css`) keeps the microphone at the center of the stage while surfacing files, diffs, mini-apps, and live agent progress in non-blocking popovers and docked drawers. Every refusal names the exact rule and recovery action in plain English (`tools/rendered-plain-language.mjs`).
+   - The browser room (`public/index.html`, `public/fused.js`, `public/style.css`) keeps the microphone at the center of the stage while surfacing files, diffs, mini-apps, and live agent progress in non-blocking popovers and docked drawers. — the header's server/root/live-voice facts live behind an info icon dialog (`#help-dialog`, voicebox-beads-zhg1). Every refusal names the exact rule and recovery action in plain English (`tools/rendered-plain-language.mjs`).
 
 ---
 

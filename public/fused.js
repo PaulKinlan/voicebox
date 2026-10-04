@@ -21,6 +21,7 @@ const WANTED = {
   emptyHeadline: "empty-headline", emptyNext: "empty-next", emptyWhy: "empty-why", emptyAction: "empty-action",
   where: "where-note", dot: "server-dot", refresh: "refresh", report: "turn-report", newFile: "new-file", undoLast: "undo-last",
   rootKind: "root-kind", madeHeading: "made-heading", emptyLink: "empty-link", listingRoot: "listing-root",
+  helpOpen: "help-open", helpDialog: "help-dialog", helpClose: "help-close", helpVoice: "help-voice",
   listTools: "list-tools", fileFilter: "file-filter", showAll: "show-all", listBound: "list-bound",
   openFolder: "open-folder", openOpfsFolder: "open-opfs-folder", closeFolder: "close-folder", roomFolderHint: "room-folder-hint",
   dropHint: "drop-hint",
@@ -361,7 +362,9 @@ async function refreshActivityLog() {
 function triggerProjectChangeFlash(label = "") {
   document.body.dataset.projectFlash = "true";
   if (label) document.body.dataset.projectFlashReason = String(label);
-  const whereEl = document.querySelector(".where");
+  // The flash cue moved WITH the facts (voicebox-beads-zhg1): the header text became the
+  // info icon — the icon pulses when the project changes, drawing the eye to the details.
+  const whereEl = document.getElementById("help-open");
   if (whereEl) whereEl.dataset.flash = "true";
   if (projectFlashTimer) clearTimeout(projectFlashTimer);
   projectFlashTimer = setTimeout(() => {
@@ -3238,6 +3241,19 @@ on(els.mic, "click", startListening);
 // pip-mic rule. Its
 // pressed/coloured state is painted by watching the same data-voice attribute
 // the ring's meters watch: one writer, two viewers, no drift.
+// The help dialog's live-voice row mirrors the mic state while it is open
+// (voicebox-beads-zhg1): the facts stay readable without header text.
+const syncHelpVoice = () => {
+  const row = document.getElementById("help-voice");
+  if (!row) return;
+  const state = document.getElementById("voice-state");
+  const mic = document.getElementById("mic");
+  const pressed = mic?.getAttribute("aria-pressed") === "true";
+  row.textContent = pressed ? "live — capturing" : (state?.textContent ?? "microphone off").toLowerCase();
+};
+setInterval(() => { if (els.helpDialog?.open) syncHelpVoice(); }, 1000);
+els.helpDialog?.addEventListener("open", syncHelpVoice);
+
 if (els.micDock && els.stage && els.mic) {
   on(els.micDock, "click", () => els.mic?.click());
   // ONE mic in the page and in the tab order — now enforced, not just claimed:
@@ -4246,6 +4262,17 @@ function openChangelogDialog(triggerEl = els.changelogOpen) {
     void loadRoomChangelog();
   }
 }
+
+installLightDismissFallback(els.helpDialog);
+on(els.helpOpen, "click", () => {
+  els.helpDialog?.showModal();
+  els.helpOpen?.setAttribute("aria-expanded", "true");
+});
+on(els.helpClose, "click", () => els.helpDialog?.close());
+on(els.helpDialog, "close", () => {
+  els.helpOpen?.setAttribute("aria-expanded", "false");
+  els.helpOpen?.focus();
+});
 
 on(els.changelogOpen, "click", () => openChangelogDialog(els.changelogOpen));
 on(els.changelogClose, "click", () => els.changelogDialog?.close());

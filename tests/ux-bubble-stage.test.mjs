@@ -608,12 +608,12 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
     const whereEl = document.querySelector(".where");
     return {
       bodyFlash: document.body.dataset.projectFlash,
-      whereFlash: whereEl?.dataset.flash,
+      whereFlash: document.getElementById("help-open")?.dataset.flash,
       flashReason: document.body.dataset.projectFlashReason,
     };
   });
   assert.equal(flashState.bodyFlash, "true", "project change sets body[data-project-flash='true'] (tlec)");
-  assert.equal(flashState.whereFlash, "true", "project change sets .where[data-flash='true'] (tlec)");
+  assert.equal(flashState.whereFlash, "true", "project change flashes the info icon (voicebox-beads-zhg1: the cue moved with the facts into the help dialog)");
   assert.equal(flashState.flashReason, "switched-root", "records project flash reason (tlec)");
 
   // Verify Descriptive Changelog Commit Cards (je4i)
@@ -793,7 +793,7 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
   // ── 9. Menu Bar Redesign (2eur), Microphone Outside Rings (c17u) & Sync Toast (rwtc) ──
   const menuBarAndRings = await page.evaluate(() => {
     const wordmarkDot = document.querySelector(".head .wordmark .wordmark-dot");
-    const whereEl = document.querySelector(".head .where");
+    const whereEl = document.getElementById("help-open");
     const whereStyle = whereEl ? getComputedStyle(whereEl) : null;
     const settingsBtn = document.getElementById("settings-open");
     const settingsBtnStyle = settingsBtn ? getComputedStyle(settingsBtn) : null;

@@ -2323,3 +2323,10 @@ dialog.changelog-modal .commit-file {
   color: var(--ink);
 }
 
+/* ── the header help popover (voicebox-beads-zhg1): the server/root/live-voice facts
+   move out of the header text into an info icon + accessible dialog ── */
+.help-modal { inline-size: min(420px, 92vw); }
+.help-rows { display: grid; gap: 10px; margin-block: 6px 10px; }
+.help-row { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--card) 55%, transparent); }
+.help-label { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 0.82rem; }
+.help-value { justify-self: end; text-align: end; font-size: 0.8rem; color: var(--muted); overflow-wrap: anywhere; }

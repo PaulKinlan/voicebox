@@ -43,13 +43,28 @@
       <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
       <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></symbol>
       <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></symbol>
+      <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v5h1"/></symbol>
     </defs>
   </svg>
 
   <div class="room">
     <header class="head">
       <h1 class="wordmark"><a href="./"><span class="wordmark-dot" aria-hidden="true"></span>Voicebox</a></h1>
-      <p class="where"><span class="dot" id="server-dot" data-ok="pending" aria-hidden="true"></span><span id="where-note">checking the local server…</span><span class="where-sep" aria-hidden="true">·</span><span id="root-kind">checking which root…</span></p>
+      <button class="quiet icon-button" id="help-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="help-dialog" aria-label="Server and connection details" title="Server and connection details"><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span class="sr-only" id="where-note">checking the local server…</span></button>
+      <dialog class="envs help-modal" id="help-dialog" closedby="any" aria-labelledby="help-dialog-title">
+        <form class="envs-form" method="dialog">
+          <div class="settings-head">
+            <h2 id="help-dialog-title">Server and connection details</h2>
+            <button class="icon-button" id="help-close" type="submit" aria-label="Close server details"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+          </div>
+          <p class="env-hint">What this browser is connected to, and where the file system actions land.</p>
+          <div class="help-rows">
+            <div class="help-row"><span class="help-label"><span class="dot" id="server-dot" data-ok="pending" aria-hidden="true"></span>Server connection</span><span class="help-value" id="where-note">checking the local server…</span></div>
+            <div class="help-row"><span class="help-label">Declared root</span><span class="help-value" id="root-kind">checking which root…</span></div>
+            <div class="help-row"><span class="help-label">Live voice</span><span class="help-value" id="help-voice">microphone off</span></div>
+          </div>
+        </form>
+      </dialog>
       <!-- The environments this page can act in: the browser by default, the local server, then any
            server the person has declared. The list is SERVER-OWNED so it is the same from every
            browser, and a host that is listed but not running says so by name rather than reading as
