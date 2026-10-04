@@ -196,3 +196,20 @@ test("stripComments preserves code in comment-adjacent forms and eliminates phan
   assert.equal(vars.some((v) => v.name === "X"), false, "phantom variable X must not be in envVars");
   assert.equal(vars.some((v) => v.name === "BRAVE_API_KEY"), true, "BRAVE_API_KEY derived from catalogue declaration");
 });
+
+test("the docs probe is isolated from ambient Anthropic credentials (voicebox-beads-tgvk)", () => {
+  // THE REGRESSION: with an ambient ANTHROPIC_API_KEY in the shell, the probe server's
+  // effectiveProvider resolved to Claude and the probe's own turns answered HTTP 401 — the
+  // generated loop block went undefined and the check failed. The probe now blanks all three
+  // vendor keys, so this runs the check with the key PINNED to a fixture value and requires the
+  // same clean exit a keyless shell gets. (The 401 symptom itself stopped reproducing when the
+  // claude transport began refusing by name — this test pins the ISOLATION, so the next provider
+  // behaviour cannot reopen it.)
+  const run = spawnSync(process.execPath, [CHECK], {
+    encoding: "utf8",
+    timeout: 120000,
+    env: { ...process.env, ANTHROPIC_API_KEY: "fixture-anthropic-key-tgvk" },
+  });
+  assert.equal(run.status, 0, `docs-check failed with an ambient Anthropic credential:\n${(run.stderr ?? "").slice(-600)}\n${(run.stdout ?? "").slice(-600)}`);
+  assert.doesNotMatch(run.stdout ?? "", /401/, "no vendor 401 may appear in the probe's output");
+});

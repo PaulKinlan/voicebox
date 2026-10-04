@@ -70,6 +70,7 @@ node scripts/docs-check.mjs --docs-root <dir>   # Run checks against a directory
 ```
 `scripts/docs-check.mjs` runs a fast static pre-pass before booting the probe server:
 - Verifies that all `<!-- BEGIN GENERATED: ... -->` markers exist and are non-empty.
+- The probe server it boots blanks the vendor credential keys (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) so docs generation never makes ambient vendor calls — an operator's shell credentials cannot change what the documents say (voicebox-beads-tgvk; pinned by `tests/docs-drift.test.mjs`).
 - Verifies that every backticked repository file path (such as `lib/extensions.mjs`) exists on disk.
 - Verifies that required and forbidden literals in `docs/claims.json` hold across `README.md` and `docs/*.md`.
 
