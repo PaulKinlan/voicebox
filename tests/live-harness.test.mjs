@@ -41,9 +41,9 @@ test("live-harness: Gemini 3.8 settings only, Thinking budget, and tool failover
     frame(data) { this.onmessage({ data: JSON.stringify(data) }); }
   });
   assert.deepEqual(PROVIDERS.gemini.models.map(m => m.id), [
-    "models/gemini-3.8-live", "models/gemini-3.8-thinking", "models/gemini-3.8-flash",
+    "models/gemini-3.8-live", "models/gemini-3.8-thinking",
   ]);
-  for (const model of ["models/gemini-2.0-flash-exp", "models/gemini-2.0-flash"]) {
+  for (const model of ["models/gemini-2.0-flash-exp", "models/gemini-2.0-flash", "models/gemini-3.8-flash"]) {
     assert.equal(validateAgentSettings({ model }, DEFAULT_AGENT_SETTINGS).ok, false);
   }
   for (const { id: model } of PROVIDERS.gemini.models) {

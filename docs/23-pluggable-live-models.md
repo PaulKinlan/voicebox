@@ -81,7 +81,7 @@ Select provider, model and voice in Settings; changes apply to the next session.
 
 | Provider | Offered models | Capture / playback |
 |---|---|---|
-| Gemini | `models/gemini-3.8-live` (default), `models/gemini-3.8-thinking`, `models/gemini-3.8-flash` | 16 kHz / 24 kHz |
+| Gemini | `models/gemini-3.8-live` (default), `models/gemini-3.8-thinking` | 16 kHz / 24 kHz |
 | OpenAI | `gpt-realtime` (default), `gpt-4o-realtime-preview`, `gpt-4o-mini-realtime-preview` | 24 kHz / 24 kHz |
 
 Thinking sends `generationConfig.thinkingConfig: { thinkingBudget: 2048 }`; Live and Flash retain the dynamic budget (`-1`). The explicit Thinking model is not silently substituted. The existing Live tool-turn retry on upstream close 1011 now targets **3.8 Flash**, once, replaying pending text; no Gemini 2 model is offered or used by this live fallback.

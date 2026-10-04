@@ -210,7 +210,8 @@ test("with a provider that cannot run, the row NAMES the reason — and the voic
 test("unified agent settings: model, voice timbre, custom prompt, and local storage persistence (voicebox-beads-bc0i)", { timeout: 90000 }, async () => {
   // Test controls for model, timbre, and custom prompt
   const models = await page.evaluate(() => [...document.getElementById("agent-model").options].map((o) => o.value));
-  assert.ok(models.length >= 2, "Gemini models must be populated");
+  assert.deepEqual(models, ["models/gemini-3.8-live", "models/gemini-3.8-thinking"]);
+  assert.equal(models.includes("models/gemini-3.8-flash"), false, "gemini-3.8-flash must not be in model dropdown (voicebox-beads-adfn)");
 
   const timbres = await page.evaluate(() => [...document.getElementById("agent-timbre").options].map((o) => o.value));
   assert.ok(timbres.includes("warm") && timbres.includes("crisp"), "timbres must be populated");

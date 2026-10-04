@@ -52,7 +52,6 @@ export const PROVIDERS: Record<ProviderId, ProviderFacts> = {
     models: [
       { id: "models/gemini-3.8-live", label: "Gemini 3.8 Live (default)" },
       { id: "models/gemini-3.8-thinking", label: "Gemini 3.8 Thinking — deep reasoning" },
-      { id: "models/gemini-3.8-flash", label: "Gemini 3.8 Flash" },
     ],
     voices: [
       { id: "Puck", label: "Puck (the default the app has been using)" },
