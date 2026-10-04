@@ -995,6 +995,103 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
   assert.equal(envsAndHarnessCheck.saveVisibleAfterTask, true, "#harness-save-output appears when harness output is available (b9oz)");
   assert.equal(envsAndHarnessCheck.chipCount, 1, "#harness-changed-files renders clickable file chip for touched project files (b9oz)");
 
+  // ── 10. Real Chromium Verification for f3iv (Footer & Help Modal Backdrop), gkj8 (Vision PTT & Thinking Level), and od4p (Multi-Window Coexistence) ──
+  const f3ivGkj8Od4pCheck = await page.evaluate(() => {
+    // f3iv: footer.foot has 0 prose .foot-fact:not(.build) elements; clicking #status-help-toggle opens centered modal with blurred #status-help-backdrop
+    const footFactCount = document.querySelectorAll("footer.foot .foot-fact:not(.build)").length;
+    const footerText = document.querySelector("footer.foot")?.textContent ?? "";
+    const helpToggle = document.getElementById("status-help-toggle");
+    const helpPopover = document.getElementById("status-help-popover");
+    const helpBackdrop = document.getElementById("status-help-backdrop");
+    const helpClose = document.getElementById("status-help-close");
+
+    if (helpPopover && !helpPopover.hidden) {
+      helpClose?.click();
+    }
+    helpToggle?.click();
+    const popoverStyle = helpPopover ? getComputedStyle(helpPopover) : null;
+    const backdropStyle = helpBackdrop ? getComputedStyle(helpBackdrop) : null;
+    const f3ivState = {
+      footFactCount,
+      footerHasProse: /Typed turns go to the local server/i.test(footerText),
+      helpHasProse: /Typed turns go to the local server/i.test(helpPopover?.textContent ?? ""),
+      popoverOpen: Boolean(helpPopover && !helpPopover.hidden),
+      backdropOpen: Boolean(helpBackdrop && !helpBackdrop.hidden),
+      popoverPosition: popoverStyle?.position ?? "",
+      backdropPosition: backdropStyle?.position ?? "",
+      backdropFilter:
+        backdropStyle?.backdropFilter && backdropStyle.backdropFilter !== "none"
+          ? backdropStyle.backdropFilter
+          : backdropStyle?.webkitBackdropFilter ?? "none",
+    };
+    helpClose?.click();
+
+    // gkj8: #vision-ptt-btn is hidden; #setting-thinking-level is inside #settings and NOT inside #settings-live-vision
+    const visionPttBtn = document.getElementById("vision-ptt-btn");
+    const thinkingSelect = document.getElementById("setting-thinking-level");
+    const gkj8State = {
+      visionPttHidden: Boolean(visionPttBtn?.hidden),
+      thinkingInSettings: Boolean(thinkingSelect?.closest("#settings")),
+      thinkingInLiveVision: Boolean(thinkingSelect?.closest("#settings-live-vision")),
+    };
+
+    // od4p: Multi-window coexistence — open Files, History, and Activity simultaneously, then close all with Home
+    const homeBtn = document.getElementById("sqeh-toggle-popovers");
+    const filesBtn = document.getElementById("sqeh-files-bubble");
+    const historyBtn = document.getElementById("sqeh-toggle-history");
+    const activityBtn = document.getElementById("sqeh-toggle-activity");
+    const madeEl = document.getElementById("made-list");
+    const sessionEl = document.getElementById("session");
+    const activityEl = document.getElementById("activity-log-panel");
+
+    // Start from clean deck state
+    homeBtn?.click();
+    filesBtn?.click();
+    historyBtn?.click();
+    activityBtn?.click();
+
+    const madeVisible = Boolean(madeEl && getComputedStyle(madeEl).display !== "none" && !madeEl.hidden);
+    const sessionVisible = Boolean(sessionEl && getComputedStyle(sessionEl).display !== "none" && !sessionEl.hidden);
+    const activityVisible = Boolean(activityEl && getComputedStyle(activityEl).display !== "none" && !activityEl.hidden);
+
+    homeBtn?.click();
+    const allClosedAfterHome = Boolean(
+      madeEl &&
+        getComputedStyle(madeEl).display === "none" &&
+        sessionEl?.hidden &&
+        activityEl?.hidden,
+    );
+
+    return {
+      f3ivState,
+      gkj8State,
+      od4pState: {
+        madeVisible,
+        sessionVisible,
+        activityVisible,
+        allClosedAfterHome,
+      },
+    };
+  });
+
+  assert.equal(f3ivGkj8Od4pCheck.f3ivState.footFactCount, 0, "footer.foot contains 0 prose .foot-fact:not(.build) items (f3iv)");
+  assert.equal(f3ivGkj8Od4pCheck.f3ivState.footerHasProse, false, "footer.foot no longer contains turns/tools prose (f3iv)");
+  assert.equal(f3ivGkj8Od4pCheck.f3ivState.helpHasProse, true, "#status-help-popover contains the turns/tools prose (f3iv)");
+  assert.equal(f3ivGkj8Od4pCheck.f3ivState.popoverOpen, true, "#status-help-popover opens on #status-help-toggle click (f3iv)");
+  assert.equal(f3ivGkj8Od4pCheck.f3ivState.backdropOpen, true, "#status-help-backdrop opens alongside #status-help-popover (f3iv)");
+  assert.equal(f3ivGkj8Od4pCheck.f3ivState.popoverPosition, "fixed", "#status-help-popover uses position: fixed (f3iv)");
+  assert.equal(f3ivGkj8Od4pCheck.f3ivState.backdropPosition, "fixed", "#status-help-backdrop uses position: fixed (f3iv)");
+  assert.notEqual(f3ivGkj8Od4pCheck.f3ivState.backdropFilter, "none", "#status-help-backdrop applies backdrop-filter blur (f3iv)");
+
+  assert.equal(f3ivGkj8Od4pCheck.gkj8State.visionPttHidden, true, "#vision-ptt-btn is hidden (gkj8)");
+  assert.equal(f3ivGkj8Od4pCheck.gkj8State.thinkingInSettings, true, "#setting-thinking-level is inside #settings (gkj8)");
+  assert.equal(f3ivGkj8Od4pCheck.gkj8State.thinkingInLiveVision, false, "#setting-thinking-level is outside #settings-live-vision (gkj8)");
+
+  assert.equal(f3ivGkj8Od4pCheck.od4pState.madeVisible, true, "#made-list remains visible when History and Activity also open (od4p)");
+  assert.equal(f3ivGkj8Od4pCheck.od4pState.sessionVisible, true, "#session remains visible alongside Files and Activity (od4p)");
+  assert.equal(f3ivGkj8Od4pCheck.od4pState.activityVisible, true, "#activity-log-panel remains visible alongside Files and History (od4p)");
+  assert.equal(f3ivGkj8Od4pCheck.od4pState.allClosedAfterHome, true, "clicking #sqeh-toggle-popovers closes all open windows (od4p)");
+
   // Verify standalone /help.html is served in Standards Mode and passes plain-language check
   await page.goto(`${server.base}/help.html`);
   const { identifiersInRenderedText, READ_VISIBLE_TEXT } = await import("../tools/rendered-plain-language.mjs");
