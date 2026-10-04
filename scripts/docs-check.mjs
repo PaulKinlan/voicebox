@@ -152,7 +152,8 @@ async function probeServer() {
   // the /live upgrade probe below was opening a REAL vendor session during a docs check. Blank keys make the
   // provider refuse by name after the 101 — which is the only fact the line reports.
   const env = { ...process.env, PORT: String(port), VOICEBOX_EXTENSIONS_DIR: dirs.extensions, VOICEBOX_WORKSPACE: dirs.workspace, VOICEBOX_WASM_SHELF_DIR: dirs.shelf, GEMINI_API_KEY: "", OPENAI_API_KEY: "" };
-  for (const k of ["LIVE_PROVIDER", "VOICEBOX_LIVE_PROVIDER", "VOICEBOX_PROVIDER", "VOICEBOX_RESOLVER", "VOICEBOX_INSTANCE"]) delete env[k];
+  for (const k of ["LIVE_PROVIDER", "VOICEBOX_LIVE_PROVIDER", "VOICEBOX_PROVIDER", "VOICEBOX_INSTANCE"]) delete env[k];
+  env.VOICEBOX_RESOLVER = "script";
   // ITS CWD IS THE SCRATCH, NOT THE CHECKOUT (voicebox-beads-qxy2, the bp8 rule again): /api/probe runs
   // tools/sandbox-probe.mjs, which proves each directory writable by creating and unlinking a marker file IN
   // it — its own cwd among them. With `cwd: ROOT` that marker existed in the checkout for the instant between
