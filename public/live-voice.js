@@ -218,3 +218,28 @@ interrupt?.addEventListener("click", () => {
 
 window.__voiceboxLiveClient = audioClient;
 window.__voiceboxSetPlaybackVolume = (v) => audioClient.setPlaybackVolume(v);
+window.__voiceboxIsLiveSessionActive = () =>
+  Boolean(capturing || (socket && socket.readyState === WebSocket.OPEN));
+window.__voiceboxRestartLiveSession = async () => {
+  await audioClient.stopCapture();
+  try { socket?.close(); } catch { /* already closed */ }
+  capturing = false;
+  await startLive();
+  capturing = audioClient.snapshot().capture;
+  return { restarted: true, capturing };
+};
+window.__voiceboxSendLiveVideo = (jpegBase64, mimeType = "image/jpeg") => {
+  if (socket && socket.readyState === WebSocket.OPEN && typeof jpegBase64 === "string" && jpegBase64) {
+    socket.send(JSON.stringify({ type: "video", data: jpegBase64, mimeType }));
+    return true;
+  }
+  return false;
+};
+window.__voiceboxSendActivityControl = (kind = "start") => {
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: "activity_control", kind: kind === "end" ? "end" : "start" }));
+    return true;
+  }
+  return false;
+};
+

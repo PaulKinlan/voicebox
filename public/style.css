@@ -105,20 +105,47 @@ body:has(#server-dot[data-ok="false"]) .wordmark-dot {
   color: var(--muted);
   box-shadow: 0 1px 3px rgba(20, 22, 26, 0.04);
 }
+.head {
+  position: relative;
+}
 .head > .icon-button {
   width: 38px;
   min-height: 38px;
   border-radius: 999px;
   border: 1px solid var(--line);
+  outline: 2px solid transparent;
+  outline-offset: 2px;
   background: var(--card);
   color: var(--ink);
   box-shadow: 0 2px 8px rgba(20, 22, 26, 0.05);
-  transition: transform 0.12s ease, border-color 0.15s ease, background 0.15s ease;
+  transition: outline-color 0.18s ease, border-color 0.18s ease, background 0.15s ease;
 }
 .head > .icon-button:hover {
-  border-color: color-mix(in srgb, var(--ink) 24%, var(--line));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  outline-color: color-mix(in srgb, var(--accent) 22%, transparent);
   background: var(--card);
-  transform: translateY(-1px);
+}
+#status-help-toggle {
+  font-weight: 700;
+  font-size: 0.875rem;
+}
+.status-help-popover {
+  position: absolute;
+  inset-block-start: calc(100% + 4px);
+  inset-inline-end: 0;
+  z-index: 140;
+  max-inline-size: min(92vw, 360px);
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+.status-help-popover[hidden] {
+  display: none !important;
 }
 .sync-toast {
   position: fixed;
@@ -293,20 +320,24 @@ body:has(#server-dot[data-ok="false"]) .wordmark-dot {
 /* The circle is the output meter, not decoration: each sample around the ring
    sets that radius. It is invisible until the agent actually speaks. */
 .output-ring { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
-.output-ring path { fill: none; stroke: var(--good); stroke-width: 1.6; stroke-linejoin: round; opacity: 0; transition: opacity 240ms ease-out; }
-[data-voice="speaking"] .output-ring path { opacity: .9; }
+.output-ring path { fill: none; stroke: var(--good); stroke-width: 1.6; stroke-linejoin: round; opacity: 0; will-change: transform, opacity; transition: opacity 240ms ease-out; }
+[data-voice="speaking"] .output-ring path { opacity: .92; animation: waveFlow 2.4s ease-in-out infinite alternate; }
+@keyframes waveFlow {
+  0% { filter: drop-shadow(0 0 2px color-mix(in srgb, var(--good) 25%, transparent)); }
+  100% { filter: drop-shadow(0 0 8px color-mix(in srgb, var(--good) 50%, transparent)); }
+}
 /* No soft glow: at rest the button is a button, and the only thing that
    moves around it is the agent's real contour. A big halo reads as a radar. */
-.mic { position: relative; display: grid; place-items: center; width: 116px; height: 116px; border: 2px solid color-mix(in srgb, var(--ink) 18%, var(--line)); border-radius: 50%; color: var(--accent); background: var(--card); box-shadow: 0 12px 32px rgba(20, 22, 26, 0.09), 0 2px 6px rgba(20, 22, 26, 0.04); transition: transform 200ms ease-out, color 200ms ease-out, border-color 200ms ease-out, box-shadow 200ms ease-out; }
-.mic:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.mic { position: relative; display: grid; place-items: center; width: 116px; height: 116px; border: 2px solid color-mix(in srgb, var(--ink) 18%, var(--line)); outline: 2px solid transparent; outline-offset: 3px; border-radius: 50%; color: var(--accent); background: var(--card); box-shadow: 0 12px 32px rgba(20, 22, 26, 0.09), 0 2px 6px rgba(20, 22, 26, 0.04); transition: outline-color 180ms ease, color 200ms ease-out, border-color 200ms ease-out, box-shadow 200ms ease-out; }
+.mic:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); outline-color: color-mix(in srgb, var(--accent) 26%, transparent); }
 .mic:active { transform: scale(.98); }
 .mic-glyph { width: 38px; height: 38px; }
 /* Your own voice, at the microphone: the input meter. Same rule — no audio,
    no picture — so it never claims to hear something it is not hearing. */
 /* The meter FILLS the button and the button's inner circle is what clips it:
    Paul, 2026-09-20 — "bigger and maybe kind of clipped to the inner circle". */
-.input-wave { display: none; position: absolute; inset: 6px; width: auto; height: auto; }
-.input-wave path { fill: var(--accent); opacity: .95; }
+.input-wave { display: none; position: absolute; inset: 6px; width: auto; height: auto; will-change: transform, opacity; }
+.input-wave path { fill: var(--accent); opacity: .95; transition: fill 180ms ease; }
 [data-voice="listening"] .input-wave,
 [data-voice="speaking"] .input-wave { display: block; }
 [data-voice="speaking"] .input-wave path { fill: var(--good); }
@@ -587,6 +618,70 @@ html:has(dialog.settings[open]) { overflow: hidden; }
 .about p { margin: 8px 0 0; font-size: .75rem; color: var(--muted); }
 .interrupt { display: none; }
 .voice:has(#voice-ring-wrap[data-voice="speaking"]) .interrupt { display: inline-flex; }
+.voice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.voice-actions .quiet {
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  background: var(--card);
+  color: var(--ink);
+  font-size: 0.78rem;
+  font-weight: 500;
+  transition: outline-color 180ms ease, border-color 180ms ease, background 150ms ease;
+}
+.voice-actions .quiet:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  outline-color: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.voice-actions .quiet[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--card));
+  color: var(--accent);
+}
+.vision-core-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  max-inline-size: 320px;
+}
+.vision-core-card[hidden] {
+  display: none !important;
+}
+.vision-core-card video {
+  inline-size: 100%;
+  max-block-size: 160px;
+  border-radius: 10px;
+  background: var(--ground);
+  object-fit: cover;
+}
+.vision-core-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  inline-size: 100%;
+}
+.vision-core-meta {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
 
 /* The docked mic (voicebox-beads-dzd): appears only when the ring has scrolled
    out of view, so the page holds exactly one microphone control at a time.
@@ -604,18 +699,20 @@ html:has(dialog.settings[open]) { overflow: hidden; }
   height: 56px;
   border-radius: 50%;
   border: 1px solid color-mix(in srgb, var(--ink) 12%, var(--line));
+  outline: 2px solid transparent;
+  outline-offset: 2px;
   background: var(--card);
   color: var(--accent);
   display: grid;
   place-items: center;
   cursor: pointer;
   box-shadow: var(--shadow), 0 8px 20px -16px color-mix(in srgb, var(--ink) 40%, transparent);
-  transition: transform 120ms ease, border-color 160ms ease, color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+  transition: outline-color 180ms ease, border-color 160ms ease, color 160ms ease, background 160ms ease, box-shadow 160ms ease;
 }
 .mic-dock[hidden] { display: none; }
 .mic-dock:hover {
-  transform: translateY(-2px);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  outline-color: color-mix(in srgb, var(--accent) 24%, transparent);
 }
 .mic-dock:active { transform: translateY(0); }
 .mic-dock:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
@@ -1596,7 +1693,7 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
 }
 .sqeh-deck-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .sqeh-status { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
-.sqeh-conn { margin: 0; font-size: 0.75rem; color: var(--muted); }
+.sqeh-conn { margin: 0; font-size: 0.75rem; color: var(--muted); display: none; }
 .sqeh-toggle {
   display: inline-flex;
   align-items: center;
@@ -1663,15 +1760,17 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
   max-inline-size: 200px;
   padding: 7px 12px;
   border: 1px solid var(--line);
+  outline: 2px solid transparent;
+  outline-offset: 2px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--sqeh-slate-2) 65%, transparent);
   color: var(--ink);
   font-size: 0.78rem;
   text-align: start;
   cursor: pointer;
-  transition: border-color 0.15s ease, transform 0.15s ease;
+  transition: border-color 0.18s ease, outline-color 0.18s ease;
 }
-.sqeh-file-tile:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); transform: translateY(-1px); }
+.sqeh-file-tile:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); outline-color: color-mix(in srgb, var(--accent) 22%, transparent); }
 .sqeh-file-tile .sqeh-tile-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .sqeh-file-tile .sqeh-tile-when { display: none; }
 
@@ -1684,17 +1783,19 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
   gap: 8px;
   padding: 7px 14px;
   border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  outline: 2px solid transparent;
+  outline-offset: 2px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--accent) 10%, var(--card));
   color: var(--ink);
   font-size: 0.8rem;
   font-weight: 600;
   cursor: pointer;
-  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: outline-color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
 }
 .sqeh-miniapp-bubble:hover {
   border-color: var(--accent);
-  transform: translateY(-1px);
+  outline-color: color-mix(in srgb, var(--accent) 24%, transparent);
   box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 .sqeh-miniapp-bubble-badge {
@@ -1746,9 +1847,9 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
 .sqeh-dock-mic { display: grid; place-items: center; inline-size: 62px; block-size: 62px; margin-block-end: 14px; border: 0; border-radius: 50%; background: radial-gradient(circle at 50% 35%, var(--accent), color-mix(in srgb, var(--accent) 55%, #000)); color: #ffffff; cursor: pointer; box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent), 0 0 34px color-mix(in srgb, var(--accent) 45%, transparent); }
 .sqeh-dock-mic:hover { box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 24%, transparent), 0 0 48px color-mix(in srgb, var(--accent) 60%, transparent); }
 
-/* ── layered radial arcs on the mic stage (concentric outside rings) ── */
+/* ── layered radial arcs on the mic stage (hidden so rings around the microphone are removed) ── */
 .mic-stage { position: relative; }
-.sqeh-arcs { position: absolute; inset: -26px; display: grid; place-items: center; pointer-events: none; }
+.sqeh-arcs { position: absolute; inset: -26px; display: none; place-items: center; pointer-events: none; }
 .sqeh-arcs i { position: absolute; border-radius: 50%; pointer-events: none; }
 .sqeh-arcs i:nth-child(1) {
   inline-size: 148px;
@@ -2047,28 +2148,32 @@ body:has(#reader:not([data-state="empty"]):not([data-collapsed="true"])) .made:n
   color: var(--ink);
 }
 
-/* ── Project / folder change flash transition ── */
+/* ── Project / folder change subtle outline transition ── */
 @keyframes project-switch-flash {
   0% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+    outline-color: color-mix(in srgb, var(--accent) 55%, transparent);
     border-color: var(--accent);
   }
   50% {
-    box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 18%, transparent), 0 0 28px color-mix(in srgb, var(--accent) 30%, transparent);
+    outline-color: color-mix(in srgb, var(--accent) 32%, transparent);
     border-color: var(--accent);
   }
   100% {
-    box-shadow: 0 0 0 0 transparent;
+    outline-color: transparent;
   }
 }
 .where[data-flash="true"] {
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 16%, var(--card));
+  outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  outline-offset: 2px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--card));
   color: var(--ink);
-  animation: project-switch-flash 650ms cubic-bezier(0.16, 1, 0.3, 1);
+  animation: project-switch-flash 520ms ease-out;
 }
 body[data-project-flash="true"] .stage {
-  animation: project-switch-flash 650ms cubic-bezier(0.16, 1, 0.3, 1);
+  outline: 2px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  outline-offset: 4px;
+  animation: project-switch-flash 520ms ease-out;
   border-radius: 20px;
 }
 
