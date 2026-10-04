@@ -12,7 +12,7 @@ Voicebox is architected around five foundational invariants:
 
 1. **Voice-First Full-Duplex Workspace on `127.0.0.1`**:
    - Both the Vite development UI server and the Node.js HTTP/WebSocket host (`server.mjs`) bind strictly to loopback (`127.0.0.1`).
-   - Audio is captured in the browser via an `AudioWorklet` (`public/pcm-worklet.js`) and streamed bi-directionally over the `/live` WebSocket (`lib/live-session.mjs`) to low-latency realtime voice models (Gemini Live, OpenAI Realtime, and Claude).
+   - Audio is captured in the browser via an `AudioWorklet` (`public/pcm-worklet.js`) and streamed bi-directionally over the `/live` WebSocket (`lib/live-session.mjs`) to low-latency realtime voice models (Gemini Live and OpenAI Realtime; Claude's live adapter is a placeholder).
 2. **Explicit Workspace Root Containment (`core/root.ts`)**:
    - Every file read, write, audit record, and task delegation runs inside an explicitly declared workspace root (`core/root.ts`).
    - Path resolution (`core/paths.ts`) resolves `realpath` on existing ancestors and rejects any relative path, `..` traversal, or symlink target that leaves the active root.
@@ -64,6 +64,23 @@ flowchart TB
   Host --> StateCustody
 ```
 
+### Live-model layering
+
+The reusable public entry point is `lib/live-harness.mjs`; it does not start a UI or HTTP server. Four live-path layers keep vendor protocols below the loop and tool authority in the host:
+
+```text
+Client UI -> Wire protocol (/live) -> Live harness seam -> Live providers
+                                        |                  Gemini 3.8 / OpenAI
+                                        |                  Claude: placeholder
+                                        |                       |
+                                        v                       v
+                                  Shared tool executor    Vendor bidi sockets
+```
+
+![Live-model layering, audio negotiation and tool execution](assets/pluggable-live-models.svg)
+
+[Pluggable live models](23-pluggable-live-models.md) specifies the provider interface, Gemini 3.8 Thinking budget, OpenAI GA setup, rate negotiation, and bounded tool roundtrip. Library callbacks carry output rate; the current browser wire plays the implemented vendors' 24 kHz output.
+
 ### 2.1 Browser Layer (`public/`)
 
 - **Centered Hero Voice Stage**:
@@ -80,8 +97,8 @@ flowchart TB
 ### 2.2 Host Server Layer (`server.mjs`, `lib/`)
 
 - **Full-Duplex `/live` Voice Bridge (`lib/live-session.mjs`)**:
-  - Bridges browser PCM audio to Gemini Live (`lib/live-providers/gemini.mjs`), OpenAI Realtime (`lib/live-providers/openai.mjs`), or Claude (`lib/live-providers/claude.mjs`).
-  - Executes tool calls (`onToolCall`) directly against the active workspace root and returns structured results so the voice model speaks the outcome immediately.
+  - Bridges browser PCM audio to Gemini Live (`lib/live-providers/gemini.mjs`) or OpenAI Realtime (`lib/live-providers/openai.mjs`); `lib/live-providers/claude.mjs` currently refuses live audio/text as unimplemented.
+  - Routes tool calls through `onToolCall` to the host's shared executor, which validates the active workspace root and returns structured results; providers never execute tools themselves.
 - **Turn & System Command Resolver (`lib/resolver.mjs`, `lib/system-commands.mjs`)**:
   - Resolves spoken or typed turns into structured verbs: `write`, `read`, `list`, `call` (extension/Wasm/mini-app tool), `delegate` (coding harness task), `system` (clipboard, theme, panel navigation, mute/interrupt), or `say`.
 - **Multi-Harness Concurrent Task Delegation (`lib/tasks.mjs`)**:
@@ -110,7 +127,8 @@ sequenceDiagram
   participant Root as Active Workspace Root
 
   User->>LiveJS: Speaks into microphone
-  LiveJS->>Server: Binary 16kHz PCM frames over /live
+  Server-->>LiveJS: Required input rate (Gemini 16kHz / OpenAI 24kHz)
+  LiveJS->>Server: Binary PCM frames captured at negotiated rate
   Server->>Provider: Forward audio chunks
   Provider-->>Server: Tool call (e.g. create_file / open_mini_app / delegate_task)
   Server->>Root: Execute tool inside contained workspace root

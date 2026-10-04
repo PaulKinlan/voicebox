@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 import { createLiveSession, registerLiveProvider, availableLiveProviders } from "../lib/live-session.mjs";
 import { createOpenAIProvider, OPENAI_INPUT_RATE, OPENAI_OUTPUT_RATE } from "../lib/live-providers/openai.mjs";
 
-registerLiveProvider("openai", createOpenAIProvider);
+registerLiveProvider("openai", createOpenAIProvider, { inputRate: OPENAI_INPUT_RATE });
 
 /** A facade-shaped recorder: the provider gets `connect`/`send`/`close` and nothing else. */
 function makeFacade() {
@@ -203,7 +203,8 @@ test("openai: the agent's voice and instruction ride the session.update — vend
     });
     facade.fire({ kind: "open" });
     const setup = JSON.parse(facade.frames.find((f) => f.kind === "handshake").payload);
-    assert.equal(setup.session.voice, "verse", "the voice is the session's top-level field on this vendor");
+    assert.equal(setup.session.audio.output.voice, "verse", "GA voice belongs under audio.output");
+    assert.equal(setup.session.voice, undefined, "the beta top-level voice field must not leak into GA setup");
     // One string on this vendor: the agent's instruction FIRST, the tools instruction beneath.
     assert.equal(setup.session.instructions, "BASE + tone\n\nthe tools instruction");
   } finally { delete process.env.OPENAI_API_KEY; }

@@ -5635,7 +5635,7 @@ server.on("upgrade", (req, socket) => {
         ws.send(JSON.stringify({ type: "error", error: `dropped malformed audio frame — ${frameError} (the session is fine)` }));
         return; // rejected WITHOUT forwarding: one bad frame costs a frame.
       }
-      session.sendAudio(data.toString("base64"));
+      session.sendAudio(data.toString("base64"), inputRate);
     });
     // A SESSION IS RUNNING ONLY WHILE SOMEBODY IS CONNECTED TO IT. This flag is what tells a person
     // whether it is safe to change the provider, so it must not outlive the socket that started it: it was

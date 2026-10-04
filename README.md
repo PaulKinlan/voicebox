@@ -66,6 +66,20 @@ node server.mjs --doctor
 
 Voicebox pairs a zero-dependency Node.js gateway (`server.mjs`) and modular browser UI (`public/fused.js`, `public/live-voice.js`) with a pure TypeScript policy core (`core/`).
 
+### Pluggable live-model library
+
+`lib/live-harness.mjs` exposes the gated session and provider registry without starting the UI or server. Gemini offers **3.8 Live** (default), **3.8 Thinking** (2048-token reasoning budget), and **3.8 Flash**; OpenAI Realtime uses the same tool catalogue and executor. Claude live streaming remains a placeholder, separate from coding-agent delegation.
+
+```text
+Client UI -> /live wire -> Live harness seam -> Gemini 3.8 / OpenAI providers
+                               |                        -> vendor bidi sockets
+                               +-> Tool catalogue -> bounded host executor -> result
+```
+
+![Live providers, audio rates and tool execution](docs/assets/pluggable-live-models.svg)
+
+See [Pluggable live models](docs/23-pluggable-live-models.md) for the API, 16/24 kHz rate negotiation, tool roundtrip and verification limits. The [documentation site](https://paulkinlan.github.io/voicebox/) builds from `docs/` on main via `.github/workflows/pages.yml`; feature pushes prepare documentation but do not deploy it.
+
 ### 1. Live Voice Gateway & Turn Resolvers (`lib/live-session.mjs`, `lib/resolver.mjs`)
 - **Full-Duplex Voice (`/live`)**: Streams 16kHz/24kHz PCM audio between the browser's `pcm-worklet.js` AudioWorklet and upstream providers (`models/gemini-3.8-live` or `gpt-realtime`).
 - **Workspace Instructions (`lib/project-instruction.mjs`)**: Automatically discovers the nearest `AGENTS.md` or `AGENT.md` file (up to 32 KiB) in the active workspace and injects it into the live session instruction.

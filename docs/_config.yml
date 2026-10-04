@@ -1,0 +1,16 @@
+title: Voicebox documentation
+description: Live voice models, the reusable harness, tools and execution boundaries.
+theme: jekyll-theme-primer
+plugins:
+  - jekyll-relative-links
+  - jekyll-optional-front-matter
+relative_links:
+  enabled: true
+  collections: false
+include:
+  - README.md
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default

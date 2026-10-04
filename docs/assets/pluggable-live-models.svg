@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 830" role="img" aria-labelledby="title desc">
+  <title id="title">Voicebox live providers: layers, audio and tools</title>
+  <desc id="desc">Four layers separate the client, live wire protocol, harness and providers. Gemini and OpenAI connect to upstream sockets; Claude is a placeholder. Input is negotiated at 16 or 24 kHz; output is 24 kHz. Tool calls pass through a shared catalogue and bounded executor before returning to the model.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#334155"/></marker>
+    <style>text{font-family:system-ui,sans-serif;fill:#172554;font-size:17px}.heading{font-size:23px;font-weight:700}.small{font-size:15px}.box{fill:#eff6ff;stroke:#64748b;stroke-width:2;rx:10}.flow{fill:none;stroke:#334155;stroke-width:2;marker-end:url(#arrow)}</style>
+  </defs>
+  <rect width="1000" height="830" fill="#fff"/>
+  <text x="30" y="36" class="heading">1. Four layers — vendor-neutral until the adapter</text>
+  <rect class="box" x="30" y="55" width="940" height="48"/><text x="50" y="85">Client UI · microphone / text composer / playback</text>
+  <path class="flow" d="M500 103v22"/>
+  <rect class="box" x="30" y="130" width="940" height="48"/><text x="50" y="160">Wire protocol /live · entitlement / rate announcement / PCM16 frames</text>
+  <path class="flow" d="M500 178v22"/>
+  <rect class="box" x="30" y="205" width="940" height="48"/><text x="50" y="235">Live harness seam · ready gate / lifecycle / audio, text and tool callbacks</text>
+  <path class="flow" d="M500 253v22"/>
+  <rect class="box" x="30" y="280" width="940" height="48"/><text x="50" y="310">Live providers · Gemini 3.8 / OpenAI Realtime / Claude (placeholder only)</text>
+  <path class="flow" d="M500 328v22"/>
+  <text x="190" y="375">Injected transport ⇄ upstream Gemini / OpenAI bidirectional sockets</text>
+  <text x="30" y="430" class="heading">2. Audio — negotiate, do not relabel</text>
+  <rect class="box" x="30" y="450" width="275" height="75"/><text x="45" y="478">Provider declares input rate</text><text x="45" y="505" class="small">Gemini 16 kHz / OpenAI 24 kHz</text>
+  <path class="flow" d="M305 488h32"/>
+  <rect class="box" x="345" y="450" width="290" height="75"/><text x="360" y="478">/live rate → AudioContext</text><text x="360" y="505" class="small">Native resampling → PCM16</text>
+  <path class="flow" d="M635 488h32"/>
+  <rect class="box" x="675" y="450" width="295" height="75"/><text x="690" y="478">Ready + rate gates → vendor</text><text x="690" y="505" class="small">Reply: PCM16 at 24 kHz</text>
+  <text x="30" y="585" class="heading">3. Tools — authority stays with the host executor</text>
+  <rect class="box" x="30" y="610" width="240" height="65"/><text x="45" y="638">Model function call</text><text x="45" y="660" class="small">id + name + args</text>
+  <path class="flow" d="M270 643h32"/>
+  <rect class="box" x="310" y="610" width="285" height="65"/><text x="325" y="638">Ready gate → tool catalogue</text><text x="325" y="660" class="small">Validate → shared executor</text>
+  <path class="flow" d="M595 643h32"/>
+  <rect class="box" x="635" y="610" width="335" height="100"/><text x="650" y="638">WASM shelf / system commands</text><text x="650" y="663">Extensions / Mini-Apps</text><text x="650" y="692" class="small">Root + capability + execution bounds</text>
+  <path class="flow" d="M800 710v65H150v-93"/>
+  <rect x="280" y="752" width="470" height="44" fill="#fff"/><text x="295" y="780">Correlated result or refusal → model continues</text>
+</svg>

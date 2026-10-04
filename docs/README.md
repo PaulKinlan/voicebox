@@ -16,6 +16,7 @@ Start here to understand how Voicebox is structured, how the local server and br
 | [`09-agent-loop.md`](09-agent-loop.md) | **The Agent Loop** | End-to-end walkthrough of how a voice or text turn starts, resolves into an action, executes inside the active root, and records to the audit log. |
 | [`12-pre-push-gate.md`](12-pre-push-gate.md) | **Testing Lanes & Pre-Push Gate** | How tests are partitioned into concurrent `unit` and isolated `live` lanes, stage timeout budgets, and cross-worktree gate locking. |
 | [`21-voice-system-commands.md`](21-voice-system-commands.md) | **Voice System Commands & Catalogue** | Deterministic, zero-latency voice commands (`lib/system-commands.mjs`) for clipboard, theme switching, panel navigation, and audio/session control. |
+| [`23-pluggable-live-models.md`](23-pluggable-live-models.md) | **Pluggable Live Models** | Public harness API, Gemini 3.8 Thinking, OpenAI Realtime, SVG/ASCII layers, audio negotiation and bounded tools. |
 | [`22-roadmap-epics.md`](22-roadmap-epics.md) | **Roadmap & Unimplemented Epics** | Catalogue of the 6 major unimplemented platform epics (shared rooms, branch landing inspector, local STT/TTS, multi-harness diff comparison, OS hotkey bridge, and Wasm concurrency). |
 
 ---
