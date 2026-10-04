@@ -74,6 +74,10 @@ const audioClient = createAudioClient({
     return { ok: false, error: "no active mini-app in the room" };
   },
   onText: (text, role) => {
+    if (role === "thought") {
+      window.__voiceboxOnLiveThought?.(text);
+      return;
+    }
     // Live means live: the transcript replaces the scripted caption.
     const caption = $("caption");
     if (caption) caption.textContent = text;
@@ -88,9 +92,11 @@ const audioClient = createAudioClient({
     recordDebug({ type: "audio.diagnostic", detail: d });
     if (d?.kind === "state" && (d?.state === "turn-complete" || d?.state === "interrupt")) {
       window.__voiceboxOnLiveTurnComplete?.();
+      window.__voiceboxOnLiveThoughtEnd?.();
     }
     if (d?.kind === "socket-closed" && voiceState) {
       window.__voiceboxOnLiveTurnComplete?.();
+      window.__voiceboxOnLiveThoughtEnd?.();
       voiceState.textContent = capturing
         ? "Live voice disconnected: machine-closed · mic off"
         : "Live voice disconnected · mic off";
@@ -198,6 +204,7 @@ if (voiceState) voiceState.textContent = audioClient.label();
 
 mic?.addEventListener("click", async () => {
   if (!capturing) {
+    window.__voiceboxClearThinkingTrace?.();
     try {
       await startLive();
     } catch (error) {

@@ -5174,14 +5174,87 @@ health();
 // the scroll position, and the arrival mark then fires on the name that is new (data-arrived, ~3 s sweep).
 let activeLiveTurnNode = null;
 let activeLiveTurnRole = null;
+let thinkingStartTime = 0;
+let accumulatedThoughts = "";
+
+function appendThinkingTrace(text) {
+  const container = document.getElementById("thinking-container");
+  const traceEl = document.getElementById("thinking-trace");
+  const summaryEl = document.getElementById("thinking-summary");
+  if (!container || !traceEl) return;
+
+  if (container.hidden || container.dataset.status !== "thinking") {
+    container.hidden = false;
+    container.dataset.status = "thinking";
+    thinkingStartTime = Date.now();
+    accumulatedThoughts = "";
+    traceEl.textContent = "";
+  }
+
+  accumulatedThoughts += text;
+  traceEl.textContent = accumulatedThoughts;
+  traceEl.scrollTop = traceEl.scrollHeight;
+
+  const wordCount = accumulatedThoughts.trim().split(/\s+/).filter(Boolean).length;
+  if (summaryEl) {
+    summaryEl.textContent = `Thinking (${wordCount} words)…`;
+  }
+}
+
+function settleThinkingTrace() {
+  const container = document.getElementById("thinking-container");
+  const summaryEl = document.getElementById("thinking-summary");
+  if (!container || container.hidden) return;
+
+  if (container.dataset.status === "thinking") {
+    container.dataset.status = "settled";
+    const duration = thinkingStartTime ? Math.max(1, Math.round((Date.now() - thinkingStartTime) / 1000)) : 1;
+    if (summaryEl) {
+      summaryEl.textContent = `Thought for ${duration}s`;
+    }
+  }
+}
+
+function clearThinkingTrace() {
+  const container = document.getElementById("thinking-container");
+  const traceEl = document.getElementById("thinking-trace");
+  const summaryEl = document.getElementById("thinking-summary");
+  if (container) {
+    container.hidden = true;
+    container.dataset.status = "idle";
+  }
+  if (traceEl) traceEl.textContent = "";
+  if (summaryEl) summaryEl.textContent = "Reasoning trace";
+  accumulatedThoughts = "";
+  thinkingStartTime = 0;
+}
+
+window.__voiceboxOnLiveThought = appendThinkingTrace;
+window.__voiceboxOnLiveThoughtEnd = settleThinkingTrace;
+window.__voiceboxClearThinkingTrace = clearThinkingTrace;
+
+const thinkingHeader = document.getElementById("thinking-header");
+if (thinkingHeader) {
+  thinkingHeader.addEventListener("click", () => {
+    const body = document.getElementById("thinking-body");
+    if (!body) return;
+    const isExpanded = thinkingHeader.getAttribute("aria-expanded") === "true";
+    thinkingHeader.setAttribute("aria-expanded", String(!isExpanded));
+    body.hidden = isExpanded;
+  });
+}
 
 window.__voiceboxOnLiveTurnComplete = () => {
   activeLiveTurnNode = null;
   activeLiveTurnRole = null;
+  settleThinkingTrace();
 };
 
 window.__voiceboxOnLiveText = (text, role = "model") => {
+  settleThinkingTrace();
   const clean = String(text ?? "").trim();
+  const caption = document.getElementById("caption");
+  if (caption && role !== "thought") caption.textContent = clean;
   if (!clean || !els.log || !els.session) return;
   const label = role === "user" ? clean : `voice reply`;
   const outcome = role === "user" ? "spoken turn" : clean;

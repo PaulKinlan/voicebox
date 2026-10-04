@@ -169,3 +169,46 @@ test("a tool call with non-object args is answered with {}, not a throw downstre
   assert(call, "a well-formed call with junk args should still arrive — the door refuses by rule, not by crash");
   assert.deepEqual(call.calls[0].args, {});
 });
+
+test("thinking trace: modelTurn parts with thought=true or thought string emit output-text with kind=thought", () => {
+  const transport = fakeTransport();
+  const events = [];
+  createGeminiProvider({ emit: (e) => events.push(e), log() {}, transport });
+  transport.open();
+
+  // 1. Part with thought=true and text
+  transport.frame({
+    serverContent: {
+      modelTurn: {
+        parts: [
+          { text: "Analyzing the repository structure...", thought: true },
+          { text: "Spoken summary", thought: false },
+        ],
+      },
+    },
+  });
+
+  const thoughtEvents = events.filter((e) => e.type === "output-text" && e.kind === "thought");
+  const modelEvents = events.filter((e) => e.type === "output-text" && e.kind === "model");
+
+  assert.equal(thoughtEvents.length, 1, "must emit one thought event");
+  assert.equal(thoughtEvents[0].text, "Analyzing the repository structure...");
+
+  assert.equal(modelEvents.length, 1, "must emit one model spoken text event");
+  assert.equal(modelEvents[0].text, "Spoken summary");
+
+  // 2. Part with thought as string
+  transport.frame({
+    serverContent: {
+      modelTurn: {
+        parts: [
+          { thought: "Deep reasoning step 2" },
+        ],
+      },
+    },
+  });
+
+  const thought2 = events.filter((e) => e.type === "output-text" && e.kind === "thought");
+  assert.equal(thought2.length, 2, "must emit second thought event");
+  assert.equal(thought2[1].text, "Deep reasoning step 2");
+});

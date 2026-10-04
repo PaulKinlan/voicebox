@@ -357,8 +357,9 @@ export function createAudioClient({
       onDiagnostic({ kind: "state", state: msg.state, detail: msg.detail });
       return;
     }
-    if (msg?.type === "text") {
-      onText(String(msg.text ?? ""), msg.role ?? msg.kind ?? "model");
+    if (msg?.type === "text" || msg?.type === "thought") {
+      const role = msg.type === "thought" ? "thought" : (msg.role ?? msg.kind ?? "model");
+      onText(String(msg.text ?? ""), role);
       return;
     }
     if (msg?.type === "error") {

@@ -391,6 +391,16 @@
       <section class="voice" aria-labelledby="talk-heading">
         <h2 class="sr-only" id="talk-heading">Talk to it</h2>
         <div class="caption-space"><p class="caption" id="caption" role="status" aria-live="polite"></p></div>
+        <div class="thinking-container" id="thinking-container" hidden data-status="idle">
+          <div class="thinking-header" id="thinking-header" role="button" tabindex="0" aria-expanded="true">
+            <span class="thinking-badge"><span class="thinking-spinner" aria-hidden="true"></span>Thinking</span>
+            <span class="thinking-summary" id="thinking-summary">Reasoning trace</span>
+            <span class="thinking-toggle-icon" aria-hidden="true">▾</span>
+          </div>
+          <div class="thinking-body" id="thinking-body">
+            <pre class="thinking-trace" id="thinking-trace" role="region" aria-label="Thinking trace" tabindex="0"></pre>
+          </div>
+        </div>
         <div class="mic-stage" id="voice-ring-wrap" data-voice="off">
           <!-- sqeh (voicebox-beads-sqeh): layered radial frequency arcs behind the mic — glowing
                rings that answer to the same data-voice state the ring answers to. Decoration only. -->
