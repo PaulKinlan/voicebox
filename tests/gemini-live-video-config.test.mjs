@@ -5,11 +5,18 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
+  DEFAULT_GEMINI_LIVE_MODEL,
+  GEMINI_LIVE_EXTENDED_THINKING_MODEL,
+  VALID_THINKING_LEVELS,
+  isExtendedThinkingModel,
   GEMINI_LIVE_CONFIG_CATALOGUE,
   buildGeminiLiveSetupPayload,
   validateAndFormatVideoFrame,
   buildActivityControlPayload,
 } from "../lib/live-video-stream.mjs";
+import {
+  createGeminiProvider,
+} from "../lib/live-providers/gemini.mjs";
 import {
   createLiveVideoController,
   scaleFrameDimensions,
@@ -93,6 +100,8 @@ test("GEMINI_LIVE_CONFIG_CATALOGUE exposes metadata for all configurable Gemini 
     "proactiveAudio",
     "affectiveDialog",
     "thinkingBudget",
+    "thinkingLevel",
+    "nonBlockingTools",
     "voice",
     "languageCode",
   ];
@@ -448,6 +457,14 @@ test("public/live-video-experiment.mjs and public/apps/live-vision-studio.html p
   assert.match(studioHtml, /id="start-screen-btn"/);
   assert.match(studioHtml, /id="stop-video-btn"/);
   assert.match(studioHtml, /id="capture-frame-btn"/);
+  assert.match(studioHtml, /id="audio-stream-end-btn"/);
+  assert.match(studioHtml, /id="live-model-select"/);
+  assert.match(studioHtml, /id="thinking-level-select"/);
+  assert.match(studioHtml, /id="toggle-include-thoughts"/);
+  assert.match(studioHtml, /id="toggle-non-blocking-tools"/);
+  assert.match(studioHtml, /id="interaction-status-badge"/);
+  assert.match(studioHtml, /id="session-resumption-badge"/);
+  assert.match(studioHtml, /id="go-away-badge"/);
   assert.match(studioHtml, /id="live-preview"/);
   assert.match(studioHtml, /id="capture-canvas"/);
   assert.match(studioHtml, /id="frame-counter"/);
@@ -456,3 +473,208 @@ test("public/live-video-experiment.mjs and public/apps/live-vision-studio.html p
   assert.match(studioHtml, /capture_live_frame/);
   assert.match(studioHtml, /configure_live_session/);
 });
+
+test("buildGeminiLiveSetupPayload configures thinkingLevel and NON_BLOCKING tools for gemini-3.8-live-extended-thinking and omits thinkingLevel for gemini-3.8-live", () => {
+  assert.equal(DEFAULT_GEMINI_LIVE_MODEL, "models/gemini-3.8-live");
+  assert.equal(GEMINI_LIVE_EXTENDED_THINKING_MODEL, "models/gemini-3.8-live-extended-thinking");
+  assert.deepEqual(VALID_THINKING_LEVELS, ["low", "medium", "high"]);
+  assert.equal(isExtendedThinkingModel("models/gemini-3.8-live"), false);
+  assert.equal(isExtendedThinkingModel("models/gemini-3.8-live-extended-thinking"), true);
+  assert.equal(isExtendedThinkingModel("models/gemini-3.8-thinking"), true);
+
+  // 1. Standard gemini-3.8-live MUST NOT include thinkingLevel even if passed
+  const standardPayload = buildGeminiLiveSetupPayload({
+    model: "models/gemini-3.8-live",
+    thinkingLevel: "high",
+    tools: [{ name: "get_weather", description: "Get weather" }],
+  });
+  assert.equal("thinkingLevel" in standardPayload.setup.generationConfig.thinkingConfig, false);
+  assert.equal(
+    "behavior" in standardPayload.setup.tools[0].functionDeclarations[0],
+    false,
+  );
+
+  // 2. Extended thinking model includes thinkingLevel (defaults to 'low', rejects 'minimal') and sets NON_BLOCKING on tools
+  const extendedDefault = buildGeminiLiveSetupPayload({
+    model: "models/gemini-3.8-live-extended-thinking",
+    thinkingLevel: "minimal", // unsupported on 3.8 extended thinking -> falls back to "low"
+    includeThoughts: true,
+    tools: [{ name: "run_query", description: "Run async query" }],
+  });
+  assert.equal(
+    extendedDefault.setup.generationConfig.thinkingConfig.thinkingLevel,
+    "low",
+  );
+  assert.equal(
+    extendedDefault.setup.generationConfig.thinkingConfig.includeThoughts,
+    true,
+  );
+  assert.equal(
+    extendedDefault.setup.tools[0].functionDeclarations[0].behavior,
+    "NON_BLOCKING",
+  );
+
+  const extendedHigh = buildGeminiLiveSetupPayload({
+    model: "models/gemini-3.8-live-extended-thinking",
+    thinkingLevel: "high",
+  });
+  assert.equal(
+    extendedHigh.setup.generationConfig.thinkingConfig.thinkingLevel,
+    "high",
+  );
+
+  // 3. Hybrid VAD audioStreamEnd control payload
+  const streamEnd = buildActivityControlPayload("audioStreamEnd");
+  assert.equal(streamEnd.ok, true);
+  assert.equal(streamEnd.kind, "audioStreamEnd");
+  assert.deepEqual(JSON.parse(streamEnd.wirePayload), {
+    realtimeInput: { audioStreamEnd: true },
+  });
+});
+
+test("createGeminiProvider handles extended thinking handshake, NON_BLOCKING tools, interactionStatus gating, sessionResumptionUpdate, goAway, generationComplete, and sendAudioStreamEnd", () => {
+  const prevKey = process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY = "unit-test-gemini-key";
+  try {
+    const events = [];
+    const sentFrames = [];
+    let onTransportEvent = null;
+
+    const transport = {
+      connect(_url, handlers) {
+        onTransportEvent = handlers.onEvent;
+        return true;
+      },
+      send(kind, data) {
+        sentFrames.push({ kind, payload: JSON.parse(data) });
+        return true;
+      },
+      close() {},
+    };
+
+    const provider = createGeminiProvider({
+      model: "models/gemini-3.8-live-extended-thinking",
+      thinkingLevel: "medium",
+      includeThoughts: true,
+      contextWindowCompression: { triggerTokens: 20000, slidingWindow: { targetTokens: 10000 } },
+      sessionResumption: { handle: "initial-handle-1" },
+      tools: [{ name: "fetch_data", description: "Async tool" }],
+      emit: (e) => events.push(e),
+      log: () => {},
+      transport,
+    });
+
+    onTransportEvent({ kind: "open" });
+    assert.equal(sentFrames.length, 1);
+    assert.equal(sentFrames[0].kind, "handshake");
+    const setup = sentFrames[0].payload.setup;
+    assert.equal(setup.model, "models/gemini-3.8-live-extended-thinking");
+    assert.equal(setup.generationConfig.thinkingConfig.thinkingLevel, "medium");
+    assert.equal(setup.generationConfig.thinkingConfig.includeThoughts, true);
+    assert.equal(setup.tools[0].functionDeclarations[0].behavior, "NON_BLOCKING");
+    assert.deepEqual(setup.contextWindowCompression, {
+      triggerTokens: 20000,
+      slidingWindow: { targetTokens: 10000 },
+    });
+    assert.deepEqual(setup.sessionResumption, { handle: "initial-handle-1" });
+
+    // Complete handshake
+    onTransportEvent({ kind: "message", data: JSON.stringify({ setupComplete: {} }) });
+    assert.ok(events.some((e) => e.type === "ready"));
+
+    // Hybrid VAD audioStreamEnd
+    provider.sendAudioStreamEnd();
+    assert.deepEqual(sentFrames.at(-1), {
+      kind: "control",
+      payload: { realtimeInput: { audioStreamEnd: true } },
+    });
+
+    // SessionResumptionUpdate + GoAway
+    onTransportEvent({
+      kind: "message",
+      data: JSON.stringify({
+        sessionResumptionUpdate: { newHandle: "resumed-handle-2", resumable: true },
+      }),
+    });
+    assert.ok(
+      events.some(
+        (e) =>
+          e.type === "session-resumption" &&
+          e.handle === "resumed-handle-2" &&
+          e.resumable === true,
+      ),
+    );
+
+    onTransportEvent({
+      kind: "message",
+      data: JSON.stringify({
+        goAway: { timeLeft: "45s" },
+      }),
+    });
+    assert.ok(
+      events.some(
+        (e) =>
+          e.type === "go-away" &&
+          e.timeLeft === "45s" &&
+          e.resumptionHandle === "resumed-handle-2",
+      ),
+    );
+
+    // Non-blocking tool call with interactionStatus IN_PROGRESS -> IDLE gating queued text
+    onTransportEvent({
+      kind: "message",
+      data: JSON.stringify({
+        interactionStatus: "IN_PROGRESS",
+        serverContent: {
+          modelTurn: {
+            parts: [{ inlineData: { data: Buffer.from([1, 2]).toString("base64") } }],
+          },
+        },
+      }),
+    });
+    assert.ok(
+      events.some((e) => e.type === "interaction-status" && e.status === "IN_PROGRESS"),
+    );
+
+    // Queue user text while model is speaking & interactionStatus is IN_PROGRESS
+    provider.sendText("Follow-up after async tool finishes");
+    const countBeforeTurnComplete = sentFrames.length;
+
+    // Spoken turn finishes (generationComplete + turnComplete), but interactionStatus is still IN_PROGRESS
+    onTransportEvent({
+      kind: "message",
+      data: JSON.stringify({
+        serverContent: {
+          generationComplete: true,
+          turnComplete: true,
+        },
+      }),
+    });
+    assert.ok(events.some((e) => e.type === "generation-complete"));
+    assert.equal(
+      sentFrames.length,
+      countBeforeTurnComplete,
+      "Queued text must remain held while interactionStatus is IN_PROGRESS",
+    );
+
+    // Once interactionStatus becomes IDLE, queued text flushes automatically
+    onTransportEvent({
+      kind: "message",
+      data: JSON.stringify({
+        interactionStatus: "IDLE",
+      }),
+    });
+    assert.ok(events.some((e) => e.type === "interaction-status" && e.status === "IDLE"));
+    assert.equal(sentFrames.length, countBeforeTurnComplete + 1);
+    assert.deepEqual(sentFrames.at(-1).payload, {
+      clientContent: {
+        turns: [{ role: "user", parts: [{ text: "Follow-up after async tool finishes" }] }],
+        turnComplete: true,
+      },
+    });
+  } finally {
+    if (prevKey === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = prevKey;
+  }
+});
+

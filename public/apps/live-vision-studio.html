@@ -294,11 +294,15 @@
         <h1 class="studio-title">Live Vision &amp; Config Studio</h1>
         <span id="source-status-badge" class="badge" data-active="false">Video Idle</span>
         <span id="frame-counter" class="badge">0 frames sent</span>
+        <span id="interaction-status-badge" class="badge" data-active="false">Interaction: IDLE</span>
+        <span id="session-resumption-badge" class="badge">Resumption: Standby</span>
+        <span id="go-away-badge" class="badge">Connection: Active</span>
       </div>
       <div class="button-row">
         <button id="start-camera-btn" type="button" class="btn btn-primary">Use Camera</button>
         <button id="start-screen-btn" type="button" class="btn">Share Desktop / Window</button>
         <button id="capture-frame-btn" type="button" class="btn">Send Snapshot Now</button>
+        <button id="audio-stream-end-btn" type="button" class="btn">Signal Audio Stream End</button>
         <button id="stop-video-btn" type="button" class="btn">Stop Video</button>
       </div>
     </header>
@@ -324,6 +328,23 @@
         <h2 class="card-heading">Gemini Live Session Setup</h2>
         <form id="live-config-form">
           <div class="form-grid">
+            <div class="field">
+              <label for="live-model-select">Gemini Live Model</label>
+              <select id="live-model-select" name="model">
+                <option value="models/gemini-3.8-live" selected>models/gemini-3.8-live (Low-Latency Native Audio/Video)</option>
+                <option value="models/gemini-3.8-live-extended-thinking">models/gemini-3.8-live-extended-thinking (Extended Thinking)</option>
+              </select>
+            </div>
+
+            <div class="field" id="thinking-level-field">
+              <label for="thinking-level-select">Thinking Level (Extended Thinking Only)</label>
+              <select id="thinking-level-select" name="thinkingLevel">
+                <option value="low" selected>low (Fastest Reasoning)</option>
+                <option value="medium">medium (Balanced Multi-Step)</option>
+                <option value="high">high (Deep Complex Reasoning)</option>
+              </select>
+            </div>
+
             <div class="field">
               <label for="media-resolution-select">Media Resolution</label>
               <select id="media-resolution-select" name="mediaResolution">
@@ -375,6 +396,14 @@
 
           <div class="toggle-list">
             <label class="toggle-item">
+              <input type="checkbox" id="toggle-include-thoughts" name="includeThoughts" />
+              <span>Include Thought Summaries (<code>includeThoughts</code>)</span>
+            </label>
+            <label class="toggle-item">
+              <input type="checkbox" id="toggle-non-blocking-tools" name="nonBlockingTools" checked />
+              <span>Non-Blocking Tools (<code>behavior: NON_BLOCKING</code>)</span>
+            </label>
+            <label class="toggle-item">
               <input type="checkbox" id="toggle-input-transcription" name="inputAudioTranscription" checked />
               <span>Input Audio Transcription (<code>inputAudioTranscription</code>)</span>
             </label>
@@ -418,6 +447,9 @@
     const emptyNotice = document.getElementById("preview-empty-notice");
     const statusBadge = document.getElementById("source-status-badge");
     const frameCounter = document.getElementById("frame-counter");
+    const interactionBadge = document.getElementById("interaction-status-badge");
+    const resumptionBadge = document.getElementById("session-resumption-badge");
+    const goAwayBadge = document.getElementById("go-away-badge");
     const lastFrameSummary = document.getElementById("last-frame-summary");
     const setupPreview = document.getElementById("setup-payload-preview");
     const form = document.getElementById("live-config-form");
@@ -425,6 +457,10 @@
     let latestFrame = null;
 
     const sessionConfig = {
+      model: "models/gemini-3.8-live",
+      thinkingLevel: "low",
+      includeThoughts: false,
+      nonBlockingTools: true,
       mediaResolution: "MEDIA_RESOLUTION_MEDIUM",
       fps: 1,
       turnCoverage: "TURN_INCLUDES_ALL_INPUT",
@@ -439,12 +475,29 @@
       affectiveDialog: false,
     };
 
+    const sessionDiagnostics = {
+      interactionStatus: "IDLE",
+      resumptionHandle: null,
+      goAwayTimeLeft: null,
+      audioStreamEndSentCount: 0,
+    };
+
+    function isExtendedThinking(model) {
+      return model === "models/gemini-3.8-live-extended-thinking";
+    }
+
     function buildSetupFromConfig(cfg) {
+      const extended = isExtendedThinking(cfg.model);
+      const thinkingConfig = {
+        thinkingBudget: -1,
+        ...(extended ? { thinkingLevel: cfg.thinkingLevel || "low" } : {}),
+        ...(cfg.includeThoughts ? { includeThoughts: true } : {}),
+      };
       const setup = {
-        model: "models/gemini-3.8-live",
+        model: cfg.model || "models/gemini-3.8-live",
         generationConfig: {
           responseModalities: ["AUDIO"],
-          thinkingConfig: { thinkingBudget: -1 },
+          thinkingConfig,
           mediaResolution: cfg.mediaResolution,
           ...(cfg.affectiveDialog ? { enableAffectiveDialog: true } : {}),
         },
@@ -466,8 +519,30 @@
     }
 
     function renderSetupPreview() {
+      const thinkingSelect = document.getElementById("thinking-level-select");
+      if (thinkingSelect) {
+        thinkingSelect.disabled = !isExtendedThinking(sessionConfig.model);
+      }
       if (setupPreview && codec) {
         setupPreview.textContent = codec.stringify(buildSetupFromConfig(sessionConfig), null, 2);
+      }
+    }
+
+    function renderDiagnostics() {
+      if (interactionBadge) {
+        const inProgress = sessionDiagnostics.interactionStatus === "IN_PROGRESS";
+        interactionBadge.dataset.active = inProgress ? "true" : "false";
+        interactionBadge.textContent = "Interaction: " + sessionDiagnostics.interactionStatus;
+      }
+      if (resumptionBadge) {
+        resumptionBadge.textContent = sessionDiagnostics.resumptionHandle
+          ? "Resumption: " + String(sessionDiagnostics.resumptionHandle).slice(0, 12)
+          : "Resumption: Standby";
+      }
+      if (goAwayBadge) {
+        goAwayBadge.textContent = sessionDiagnostics.goAwayTimeLeft
+          ? "GoAway: " + sessionDiagnostics.goAwayTimeLeft
+          : "Connection: Active";
       }
     }
 
@@ -540,12 +615,28 @@
       controller.captureSingleFrame();
     });
 
+    document.getElementById("audio-stream-end-btn")?.addEventListener("click", () => {
+      sessionDiagnostics.audioStreamEndSentCount += 1;
+      if (lastFrameSummary && codec) {
+        lastFrameSummary.textContent = codec.stringify(
+          {
+            realtimeInput: { audioStreamEnd: true },
+            sentCount: sessionDiagnostics.audioStreamEndSentCount,
+          },
+          null,
+          2,
+        );
+      }
+    });
+
     document.getElementById("stop-video-btn")?.addEventListener("click", () => {
       controller.stop();
     });
 
     form?.addEventListener("change", () => {
       const formData = new FormData(form);
+      sessionConfig.model = String(formData.get("model") || "models/gemini-3.8-live");
+      sessionConfig.thinkingLevel = String(formData.get("thinkingLevel") || "low");
       sessionConfig.mediaResolution = String(
         formData.get("mediaResolution") || "MEDIA_RESOLUTION_MEDIUM",
       );
@@ -560,6 +651,12 @@
         formData.get("endOfSpeechSensitivity") || "END_SENSITIVITY_HIGH",
       );
       sessionConfig.silenceDurationMs = Number(formData.get("silenceDurationMs") || 500);
+      sessionConfig.includeThoughts = Boolean(
+        document.getElementById("toggle-include-thoughts")?.checked,
+      );
+      sessionConfig.nonBlockingTools = Boolean(
+        document.getElementById("toggle-non-blocking-tools")?.checked,
+      );
       sessionConfig.inputAudioTranscription = Boolean(
         document.getElementById("toggle-input-transcription")?.checked,
       );
@@ -592,6 +689,7 @@
         execute: async () => ({
           video: controller.getStatus(),
           config: { ...sessionConfig },
+          diagnostics: { ...sessionDiagnostics },
           setupPayload: buildSetupFromConfig(sessionConfig),
         }),
       };
@@ -617,10 +715,14 @@
       const configureTool = {
         name: "configure_live_session",
         description:
-          "Update Gemini Live session options such as mediaResolution, turnCoverage, activityHandling, fps, or contextWindowCompression.",
+          "Update Gemini Live session options such as model, thinkingLevel, includeThoughts, mediaResolution, turnCoverage, activityHandling, fps, or contextWindowCompression.",
         parameters: {
           type: "object",
           properties: {
+            model: { type: "string" },
+            thinkingLevel: { type: "string" },
+            includeThoughts: { type: "boolean" },
+            nonBlockingTools: { type: "boolean" },
             mediaResolution: { type: "string" },
             fps: { type: "number" },
             turnCoverage: { type: "string" },
@@ -655,6 +757,7 @@
     }
 
     renderSetupPreview();
+    renderDiagnostics();
     registerVisionTools();
   </script>
 </body>
