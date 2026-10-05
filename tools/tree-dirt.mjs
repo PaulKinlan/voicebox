@@ -71,7 +71,10 @@ function resolveThroughExisting(p) {
 export function outsideTree(candidate, tree) {
   const t = resolveThroughExisting(tree);
   const c = resolveThroughExisting(candidate);
-  if (c === t || c.startsWith(t + path.sep)) {
+  // The inside-tree question is the owned containment primitive (lib/path-auth.mjs,
+  // voicebox-beads-q0a3) with equality (the tree root itself is inside the tree) — one computing
+  // site for the shape, replacing this file's private `=== t || startsWith(t + sep)` copy.
+  if (containedIn(t, c, { allowEqual: true })) {
     return {
       ok: false,
       refused: INSIDE_MEASURED_TREE,
@@ -109,6 +112,7 @@ export function makeScratchDir(prefix, { tree }) {
  * keep working unchanged.
  */
 import { gitEnv } from "../lib/git-env.mjs";
+import { containedIn } from "../lib/path-auth.mjs";
 export { gitEnv };
 
 /**

@@ -36,6 +36,7 @@ import { readdirSync, existsSync, statSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { containedIn } from "../lib/path-auth.mjs";
 
 const HOME = os.homedir();
 const GATE_LOCK = process.env.VOICEBOX_GATE_LOCK ?? "/tmp/voicebox-gate.lock";
@@ -54,11 +55,13 @@ const SCOPE_ROOTS = [
 export function isVictim({ args, cwd, ageSec, env = "", markerExists = false }) {
   if (!/^(node|deno)(\s|$)/.test(args) && !args.startsWith("node ") && !args.startsWith("deno ")) return false;
   if (!SERVER_SHAPE.test(args)) return false;
-  const inScope = SCOPE_ROOTS.some((r) => cwd === r || cwd.startsWith(r + path.sep)) ||
+  // The cwd-under-root question is the owned primitive's (lib/path-auth.mjs, voicebox-beads-q0a3):
+  // one computing site for containment, with the reaper's own equality policy (a cwd may BE the root).
+  const inScope = SCOPE_ROOTS.some((r) => containedIn(r, cwd, { allowEqual: true })) ||
     /voicebox-(cdp|d1-http|dev|wt)|\/vb-[a-z0-9]+/.test(cwd) || /^\/tmp\/voicebox-/.test(cwd);
   if (!inScope) return false;
   if (env.includes("VOICEBOX_PINNED=1") || markerExists) return false;
-  const floor = cwd === CANONICAL || cwd.startsWith(CANONICAL + path.sep) ? CANONICAL_FLOOR_MS : WORKTREE_FLOOR_MS;
+  const floor = containedIn(CANONICAL, cwd, { allowEqual: true }) ? CANONICAL_FLOOR_MS : WORKTREE_FLOOR_MS;
   return ageSec * 1000 >= floor;
 }
 

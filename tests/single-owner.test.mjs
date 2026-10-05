@@ -30,11 +30,14 @@ test.after(() => {
   for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
-/** A real copy of this tree's lib/ — the owner module travels with it, so the check has someone to ask. */
+/** A real copy of this tree's lib/ AND core/ — both owner modules travel with it, and
+ * `lib/path-auth.mjs` imports the lexical seam from `../core/root.ts`, so a fixture without core/
+ * could not load the owner it is supposed to interrogate. */
 function fixture() {
   const dir = realpathSync(mkdtempSync(path.join(os.tmpdir(), "single-owner-")));
   roots.push(dir);
   cpSync(path.join(REPO, "lib"), path.join(dir, "lib"), { recursive: true });
+  cpSync(path.join(REPO, "core"), path.join(dir, "core"), { recursive: true });
   return dir;
 }
 
@@ -49,8 +52,9 @@ function run(root) {
 test("the tree this repository ships has exactly one computing site per declared fact", () => {
   const r = run(REPO);
   assert.equal(r.code, 0, `the real tree must pass its own check:\n${r.out}`);
-  assert.match(r.out, /\d+ declared fact\(s\) across \d+ source file\(s\)/, "it must say what it looked at");
-  assert.match(r.out, /lib\/state-dirs\.mjs/, "and who the owner is");
+  assert.match(r.out, /\d+ declared fact\(s\) and \d+ declared site\(s\) across \d+ source file\(s\)/, "it must say what it looked at");
+  assert.match(r.out, /lib\/state-dirs\.mjs/, "and who the env-facts owner is");
+  assert.match(r.out, /lib\/path-auth\.mjs/, "and who the path-authorization owner is");
 });
 
 test("a fourth copy of a fact is REFUSED — the variable, the file and the owner are all named", () => {
@@ -118,4 +122,84 @@ test("a tree with no owner module is REFUSED, by name — a missing owner is not
   const r = run(dir);
   assert.equal(r.code, 1, `nothing owns the facts there:\n${r.out}`);
   assert.match(r.out, /no owner module at lib\/state-dirs\.mjs/);
+});
+
+// ── the code-shape site (voicebox-beads-q0a3): containment and dotfile denial are shapes, not vars ──
+
+test("a new copy of the containment shape is REFUSED — the file, the shape and the owner are named", () => {
+  const dir = fixture();
+  writeFileSync(
+    path.join(dir, "lib", "fifth-copy.mjs"),
+    [
+      "import path from 'node:path';",
+      "// a fresh verb author writes the 6 lines again, not knowing they exist already",
+      "export function myContained(base, p) {",
+      "  const rel = path.relative(base, p);",
+      "  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  const r = run(dir);
+  assert.equal(r.code, 1, `a new computing site for containment must not pass:\n${r.out}`);
+  assert.match(r.out, /lib\/fifth-copy\.mjs:5/, "the site that copied it");
+  assert.match(r.out, /path-authorization/, "the fact it copied");
+  assert.match(r.out, /lib\/path-auth\.mjs/, "the owner to ask instead");
+  assert.match(r.out, /authorizeMachinePath/, "the question to ask it");
+});
+
+test("a new copy of the DOTFILE shape is refused too — the check that cannot see near-copies before q0a3", () => {
+  const dir = fixture();
+  writeFileSync(
+    path.join(dir, "lib", "sixth-copy.mjs"),
+    [
+      "import path from 'node:path';",
+      "export function myDotGuard(root, resolved) {",
+      "  const segs = path.relative(root, resolved).split(path.sep).filter(Boolean);",
+      "  return segs.some((seg) => seg.startsWith('.'));",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  const r = run(dir);
+  assert.equal(r.code, 1, `a new computing site for the dotfile denial must not pass:\n${r.out}`);
+  assert.match(r.out, /lib\/sixth-copy\.mjs:4/);
+  assert.match(r.out, /dotfile-segment/);
+});
+
+test("remove the shape copy and the same fixture passes — the red was the copy, not the fixture", () => {
+  const dir = fixture();
+  const file = path.join(dir, "lib", "fifth-copy.mjs");
+  writeFileSync(
+    file,
+    [
+      "import path from 'node:path';",
+      "export function myContained(base, p) {",
+      "  const rel = path.relative(base, p);",
+      "  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  assert.equal(run(dir).code, 1, "the copy is refused while it is there");
+  rmSync(file);
+  const r = run(dir);
+  assert.equal(r.code, 0, `and nothing else in this fixture is a violation:\n${r.out}`);
+});
+
+test("an owner that stops refusing is refused — the site declaration cannot be an empty promise", () => {
+  const dir = fixture();
+  const owner = path.join(dir, "lib", "path-auth.mjs");
+  const text = readFileSync(owner, "utf8");
+  // Break the dotfile denial inside the owner's spine: every dotfile drive must now fail.
+  const mutated = text.replace(
+    "  const dot = dotfileSegmentInside(rootPath, resolvedPath);",
+    "  const dot = null;",
+  );
+  assert.notEqual(mutated, text, "the mutation must actually change the owner, or this test proves nothing");
+  writeFileSync(owner, mutated);
+  const r = run(dir);
+  assert.equal(r.code, 1, `a site owner that no longer refuses must fail its own gate:\n${r.out}`);
+  assert.match(r.out, /does not answer for the site it declares/);
+  assert.match(r.out, /dotfile/);
 });

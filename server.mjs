@@ -15,7 +15,8 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { resolveTurn } from "./lib/resolver.mjs";
-import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, reachableFromEnvironment, resolveInRoot, rootVanished } from "./core/root.ts";
+import { authorizeMachinePath, containedIn } from "./lib/path-auth.mjs";
+import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, reachableFromEnvironment, rootVanished } from "./core/root.ts";
 import { normaliseRelativeDir, parentDir } from "./core/paths.ts";
 import { CORE_FS_DESCRIPTOR, createUnifiedDiff, dispatchFor } from "./core/dispatch.ts";
 import { createChannel } from "./lib/channel.mjs";
@@ -42,7 +43,7 @@ import {
 import * as extensions from "./lib/extensions.mjs";
 import { gitEnv } from "./tools/tree-dirt.mjs";
 import { sweepOrphanedProbeMarkers } from "./tools/sandbox-probe.mjs";
-import { createTaskHost, installTaskExecutor, protectedAuditPath, TASK_TOOLS } from "./lib/tasks.mjs";
+import { createTaskHost, installTaskExecutor, TASK_TOOLS } from "./lib/tasks.mjs";
 import { createPermissionPolicy } from "./lib/permission-policy.mjs";
 import { createPiAcpExecutor, describeAdapterInstall } from "./lib/pi-acp.mjs";
 import { liveToolDeclarations } from "./lib/wasm-shelf.mjs";
@@ -1949,44 +1950,12 @@ function buildIdentity() {
   return buildAnswer;
 }
 
-// Normalising is not checking: `resolve` collapses `..`, then the answer is
-// yes-or-no — is the candidate inside the workspace? (chrome-agent-platform-0j1a
-// class: `basename("..")` is `".."`, so join+basename silently rewrote the
-// escape instead of refusing it.)
-function containedIn(baseDir, p) {
-  const rel = path.relative(baseDir, p);
-  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
-}
-
-function contained(p) {
-  return containedIn(WORKSPACE, p);
-}
-
-/**
- * The machine placement's ADDITION to the shared containment: `core/paths.ts` is lexical, and a
- * lexical check follows a symlink out. So the lexical pass runs first (one implementation, refusing
- * `..` at any depth) and this pass resolves the real path — of the file if it exists, of its
- * directory if it does not — against the root's real path.
- */
-function machineRootReal() {
-  return realpathSync(active.root.path);
-}
-
-function machineContained(candidate) {
-  const rootReal = machineRootReal();
-  let probe = candidate;
-  while (true) {
-    try {
-      const real = realpathSync(probe);
-      return containedIn(rootReal, real) || real === rootReal;
-    } catch (e) {
-      if (e.code !== "ENOENT") throw e;
-      const parent = path.dirname(probe);
-      if (parent === probe) throw e;
-      probe = parent;
-    }
-  }
-}
+// PATH AUTHORIZATION IS NOT HERE ANYMORE — it moved to its one owner, `lib/path-auth.mjs`
+// (voicebox-beads-q0a3): realpath containment, dotfile denial and root-kind handling were
+// re-implemented per verb and per store in this file and three others, so a new verb inherited
+// none of the copies. `resolveActive` below is the seam's local name; the checks, their order
+// (lexical → realpath → audit → dotfile) and their refusals live in the owner, and
+// `scripts/single-owner.mjs` refuses a new copy of any of them.
 
 /**
  * Is the declared root still there? Asked BEFORE any filesystem access, because the filesystem is
@@ -2030,20 +1999,11 @@ function answerOnce(res, handler) {
   })();
 }
 
-/** Resolve a name through the seam, or the refusal that says why — used by every path below. */
+/** Resolve a name through the seam, or the refusal that says why — used by every path below.
+ * One ask, one owner: reachability (root-kind handling), the lexical resolve, realpath containment,
+ * the audit guard and the dotfile denial are `authorizeMachinePath` in `lib/path-auth.mjs`. */
 function resolveActive(name) {
-  if (!active) return { ...noRootDeclared() };
-  const reach = reachableFromEnvironment(active.root, { peer: "machine", environment: SELF_ENVIRONMENT });
-  if (!reach.ok) return { ok: false, refused: reach.refused, why: reach.why };
-  const resolved = resolveInRoot(active.root, name);
-  if (!resolved.ok) return { ok: false, refused: resolved.rule, why: resolved.why };
-  if (!machineContained(resolved.path)) {
-    return { ok: false, refused: "outside-root", why: `'${name}' resolves outside '${active.root.path}' by real path` };
-  }
-  if (protectedAuditPath(active.root.path, resolved.path)) {
-    return { ok: false, refused: "protected-audit", why: "the audit is host-owned; task records require authenticated task_status, not a raw file read or write" };
-  }
-  return { ok: true, path: resolved.path };
+  return authorizeMachinePath(active?.root ?? null, name, { environment: SELF_ENVIRONMENT });
 }
 
 const MIME_TYPES = {
@@ -2078,8 +2038,9 @@ function serveSource(res, url) {
   const rel = url.pathname.replace(/^\/+/, "");
   const dir = rel.split("/")[0];
   const file = path.resolve(ROOT, rel);
-  const allowed = path.join(ROOT, dir) + path.sep;
-  if (!SOURCE_DIRS.has(dir) || !file.startsWith(allowed) || !existsSync(file)) {
+  // The containment primitive is the owned one (`lib/path-auth.mjs`) — a raw `startsWith(prefix)`
+  // compare was this file's private copy of it (voicebox-beads-q0a3).
+  if (!SOURCE_DIRS.has(dir) || !containedIn(path.join(ROOT, dir), file) || !existsSync(file)) {
     res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
     return res.end("not found");
   }
@@ -2637,10 +2598,9 @@ async function execute(action) {
         root: active.root,
       };
     }
+    // The dotfile refusal came through `resolveActive` — the same owner as the verbs'
+    // (lib/path-auth.mjs), so `list` cannot drift from them again (voicebox-beads-q0a3).
     const relSegments = path.relative(active.root.path, resolvedDir.path).split(path.sep).filter(Boolean);
-    if (relSegments.some((seg) => seg.startsWith("."))) {
-      return { ok: false, refused: "dotfile-refused", error: "refused: dotfile-refused", why: "dotfiles are neither readable nor writable through the loop", root: active.root };
-    }
     if (!existsSync(resolvedDir.path)) {
       return { ok: false, refused: "not-found", error: "refused: not-found", why: `'${subDir}' is not in ${active.project}`, root: active.root };
     }
@@ -3152,20 +3112,11 @@ async function execute(action) {
       logged: entry ? entry.seq : null,
     };
   }
-  // Dotfiles are behind the same line as the listing: containment first (so `..` and
-  // traversal keep their own, stronger refusal), then a hidden file inside the root is
-  // refused — otherwise a declared root pointed at a sensitive directory (the host's
-  // own extensions dir) hands over its secrets — including the admission token —
-  // through a read, or loses them to a write over it. Driven chain, 2026-09-20:
-  // declare -> read .host-token -> admit.
-  if (["read", "write", "delete", "edit", "diff", "mkdir"].includes(action.verb)) {
-    const relSegments = path.relative(active.root.path, resolved.path).split(path.sep).filter(Boolean);
-    if (relSegments.some((seg) => seg.startsWith("."))) {
-      const kind = ["read", "diff"].includes(action.verb) ? action.verb : ["write", "edit", "delete"].includes(action.verb) ? action.verb : "write";
-      const entry = logAct({ kind, target: name, tool: "turn" }, "refuse", "dotfile-refused", "refused", null, action.turn ?? null);
-      return { ok: false, refused: "dotfile-refused", logged: entry ? entry.seq : null, error: "refused: dotfile-refused", why: "dotfiles are neither readable nor writable through the loop — the listing hides them and so does this verb; host secrets live behind that line", root: active.root };
-    }
-  }
+  // The dotfile refusal came through `resolveActive` above (lib/path-auth.mjs, voicebox-beads-q0a3):
+  // containment first so `..` keeps its own, stronger refusal, then a hidden file inside the root
+  // is refused — a declared root pointed at a sensitive directory (the host's own extensions dir)
+  // would otherwise hand over its secrets — including the admission token — through a read, or lose
+  // them to a write over it. Driven chain, 2026-09-20: declare -> read .host-token -> admit.
   const candidate = resolved.path;
   if (action.verb === "mkdir") {
     mkdirSync(candidate, { recursive: true });
@@ -4521,13 +4472,10 @@ async function handle(req, res) {
       });
     }
     try {
+      // The dotfile refusal came through `resolveActive` above (lib/path-auth.mjs) — same line
+      // as the verbs: containment first, then a hidden file inside the root is refused, because
+      // the listing hides it and so must the read (voicebox-beads-q0a3).
       const real = resolved.path;
-      const relSegments = path.relative(active.root.path, real).split(path.sep).filter(Boolean);
-      if (relSegments.some((seg) => seg.startsWith("."))) {
-        // Same line as the verbs: containment first, then a hidden file inside the
-        // root is refused — the listing hides it, so the read does too.
-        return json(res, 403, { ok: false, refused: "dotfile-refused", error: "refused: dotfile-refused", why: "dotfiles are not readable through the loop — the listing hides them and so does this read; host secrets live behind that line", root: active.root });
-      }
       const stat = statSync(real);
       if (stat.isDirectory()) return json(res, 400, { error: "cannot read directory" });
       const content = readFileSync(real, "utf8");
