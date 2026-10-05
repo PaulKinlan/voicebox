@@ -9,11 +9,13 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import os from "node:os";
 import { isVictim, selectVictims } from "../scripts/reap-stale-servers.mjs";
 
-const WT = "/home/paulkinlan/worktrees/vb-test";
-const CANON = "/home/paulkinlan/voicebox";
-const OUT = "/home/paulkinlan/other-project";
+const HOME = os.homedir();
+const WT = `${HOME}/worktrees/vb-test`;
+const CANON = `${HOME}/voicebox`;
+const OUT = `${HOME}/other-project`;
 const HOUR = 3600;
 
 const victim = (over = {}) => isVictim({ args: "node server.mjs", cwd: WT, ageSec: 5 * HOUR, env: "", markerExists: false, ...over });
@@ -58,14 +60,14 @@ test("server shapes all match: server.mjs, vite, serve, deno run", () => {
 
 test("scope: /tmp/voicebox-* fixtures are in scope; stale /vb-<id>/ fragments are in scope", () => {
   assert.equal(victim({ cwd: "/tmp/voicebox-d1-http-qjE0iI", ageSec: 99 * HOUR }), true);
-  assert.equal(victim({ cwd: "/home/paulkinlan/worktrees/vb-tee (deleted)", ageSec: 99 * HOUR }), true);
+  assert.equal(victim({ cwd: `${HOME}/worktrees/vb-tee (deleted)`, ageSec: 99 * HOUR }), true);
   assert.equal(victim({ cwd: "/tmp", ageSec: 99 * HOUR }), false);
 });
 
 test("FLEET-WIDE by declaration: a cap worktree server is a victim (astra's blocker pin)", () => {
-  assert.equal(victim({ cwd: "/home/paulkinlan/worktrees/cap-x", ageSec: 99 * HOUR }), true);
+  assert.equal(victim({ cwd: `${HOME}/worktrees/cap-x`, ageSec: 99 * HOUR }), true);
   assert.equal(
-    victim({ cwd: "/home/paulkinlan/worktrees/audiofeed-ds-flash-review-rqp", ageSec: 127 * HOUR }),
+    victim({ cwd: `${HOME}/worktrees/audiofeed-ds-flash-review-rqp`, ageSec: 127 * HOUR }),
     true,
     "the audiofeed process that motivated the fleet-wide declaration must stay a victim",
   );
