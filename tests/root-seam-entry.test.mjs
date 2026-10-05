@@ -53,13 +53,17 @@ test("resolveInRoot: a '..' escape is refused BY RULE for every kind — the ent
   }
 });
 
-test("resolveInRoot: the two shapes that are NOT strings are refused, not coerced", () => {
+test("resolveInRoot: a non-string candidate is refused AS NAMING NOTHING, not coerced into a path", () => {
   // The entry's own guard: a non-string candidate is handed to the resolver as "" and refused as
-  // naming nothing — a number or null must never become a path by coercion.
+  // naming nothing — a number, null, or a toString object must never become a path by coercion
+  // (String(42) → "42", {toString} → "notes.txt" would each resolve ok on a coercion regression).
   for (const bad of [42, null, undefined, { toString: () => "notes.txt" }]) {
     const r = resolveInRoot(OPFS, bad);
     assert.equal(r.ok, false, `${JSON.stringify(bad)} must not resolve`);
-    if (!r.ok) assert.equal(r.rule, "outside-root");
+    if (!r.ok) {
+      assert.equal(r.rule, "outside-root");
+      assert.match(r.why, /names no file inside the root|empty candidate/i, `refused as naming nothing, not for some other reason: ${r.why}`);
+    }
   }
 });
 
@@ -82,7 +86,7 @@ test("virtualRootOf + resolveInRoot compose: a handle's files are addressed thro
   const virtual = virtualRootOf(root);
   const inside = resolveInRoot(root, "notes.txt");
   assert.equal(inside.ok, true);
-  if (inside.ok) assert.match(inside.path, new RegExp(`^${virtual}/`), "the resolved path carries the virtual root, never a filesystem guess");
+  if (inside.ok) assert.equal(inside.path, `${virtual}/notes.txt`, "the resolved path carries the virtual root, never a filesystem guess");
 });
 
 // ── ROOT_FACTS: the table root-kind handling is derived from ─────────────────
@@ -120,32 +124,43 @@ test("rootVanished(): names the rule, the remedy, and carries an optional detail
   assert.equal(detailed.detail, "ENOENT after unlink", "the detail travels, for a log that names the cause");
 });
 
-test("the three reachability codes are distinct strings — the vocabulary never collapses", () => {
+test("the four codes are distinct, exactly-pinned strings — callers match on them, so changing one is a conscious break", () => {
+  assert.equal(ROOT_NOT_DECLARED, "root-not-declared");
+  assert.equal(ROOT_NOT_REACHABLE, "root-not-reachable-from-here");
+  assert.equal(ROOT_NOT_REACHABLE_FROM_ENVIRONMENT, "not-reachable-from-this-environment", "this literal is asserted nowhere else in the tree");
+  assert.equal(ROOT_VANISHED, "root-vanished");
   const codes = [ROOT_NOT_DECLARED, ROOT_NOT_REACHABLE, ROOT_NOT_REACHABLE_FROM_ENVIRONMENT, ROOT_VANISHED];
-  assert.equal(new Set(codes).size, 4, "four names, four meanings");
+  assert.equal(new Set(codes).size, 4, "four names, four meanings — the vocabulary never collapses");
 });
 
 // ── descriptorOf: the record a project carries, to the descriptor acts use ────
 
 test("descriptorOf: opfs and machine records pass their path through; a handle keeps its id and takes its label from the LOCATION", () => {
   const base = { id: "atlas@local", name: "atlas", placement: "local", capabilities: [], undoKind: "written-file-list", createdAt: "2026-01-01T00:00:00Z", lastUsed: "2026-01-01T00:00:00Z", durability: { kind: "opfs", persisted: true, checkedAt: "2026-01-01T00:00:00Z" } };
-  const opfs = descriptorOf({ ...base, location: { kind: "opfs", path: "v1/projects/atlas" }, root: { kind: "opfs", path: "v1/projects/atlas" } });
-  assert.deepEqual(opfs, { kind: "opfs", path: "v1/projects/atlas" });
-  const machine = descriptorOf({ ...base, location: { kind: "machine", path: "/tmp/r" }, root: { kind: "machine", path: "/tmp/r" } });
-  assert.deepEqual(machine, { kind: "machine", path: "/tmp/r" });
+  // The pathed kinds: location.path DELIBERATELY differs from root.path, so a regression that builds
+  // the descriptor from the location fails here (review finding, 8why).
+  const opfs = descriptorOf({ ...base, location: { kind: "opfs", path: "v1/projects/other" }, root: { kind: "opfs", path: "v1/projects/atlas" } });
+  assert.deepEqual(opfs, { kind: "opfs", path: "v1/projects/atlas" }, "the boundary is the ROOT's path, not the location's");
+  const machine = descriptorOf({ ...base, location: { kind: "machine", path: "/tmp/elsewhere" }, root: { kind: "machine", path: "/tmp/root" } });
+  assert.deepEqual(machine, { kind: "machine", path: "/tmp/root" });
   const handle = descriptorOf({ ...base, location: { kind: "handle", id: "h1", label: "My Atlas" }, root: { kind: "handle", id: "h1" } });
   assert.deepEqual(handle, { kind: "handle", id: "h1", label: "My Atlas" }, "the label the user gave the picked folder travels from the location");
-  const handleNoLabel = descriptorOf({ ...base, location: { kind: "opfs", path: "v1/other" }, root: { kind: "handle", id: "h2" } });
-  assert.deepEqual(handleNoLabel, { kind: "handle", id: "h2" }, "no handle location means no label — undefined is not carried");
+  // An EMPTY label is the record-shaped way to have no label (a handle location always carries
+  // the field), and the descriptor drops it rather than carrying a lie (review finding, 8why).
+  const emptyLabel = descriptorOf({ ...base, location: { kind: "handle", id: "h3", label: "" }, root: { kind: "handle", id: "h3" } });
+  assert.deepEqual(emptyLabel, { kind: "handle", id: "h3" }, "an empty label is dropped — undefined is not carried");
 });
 
 // ── describeRoot: the one-line answer for a panel ─────────────────────────────
 
 test("describeRoot: names the kind, where it is, and who acts — every kind answers all three", () => {
   for (const [label, root] of [["opfs", OPFS], ["machine", MACHINE], ["handle", HANDLE]]) {
+    const facts = ROOT_FACTS[root.kind];
     const line = describeRoot(root);
     assert.equal(typeof line, "string");
     assert.match(line, new RegExp(`^${label} — `), `${label}: the line opens with the kind`);
+    assert.ok(line.includes(facts.where), `${label}: carries the table's own 'where' sentence`);
+    assert.match(line, /Visible to: /, `${label}: says who can see the files`);
     assert.match(line, /Acts come from the /, `${label}: and closes with who acts`);
   }
 });
