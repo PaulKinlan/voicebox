@@ -3191,7 +3191,11 @@ async function send(said) {
         sqehArtifactChip(writtenName, { verb, content: previewContent, bytes: result.bytes });
       }
     }
-    if (verb === "propose_extension") {
+    if (verb === "open_workspace") {
+      if (roomFolder) roomFolder = null;
+      listingDir = "";
+      await loadRoot();
+    } else if (verb === "propose_extension") {
       await renderExtensions();
       if (els.exts && !els.exts.open && typeof els.exts.showModal === "function") {
         els.exts.showModal();
@@ -5262,7 +5266,11 @@ window.__voiceboxOnToolCalls = (calls, frame) => {
   const latencyByName = new Map(
     (frame?.calls ?? []).filter((c) => Number.isFinite(c?.durationMs)).map((c) => [c.name, c.durationMs]),
   );
+  let switchedWorkspace = false;
   for (const call of calls ?? []) {
+    if ((call.name === "open_workspace" || call.name === "switch_project" || call.name === "change_project") && call.ok) {
+      switchedWorkspace = true;
+    }
     const previous = lastToolStatus.get(call.name);
     lastToolStatus.set(call.name, {
       ok: Boolean(call.ok),
@@ -5281,6 +5289,12 @@ window.__voiceboxOnToolCalls = (calls, frame) => {
     });
   }
   if (lastToolStatus.size && els.extShelf?.isConnected) void renderExtensions();
+  if (switchedWorkspace) {
+    if (roomFolder) roomFolder = null;
+    listingDir = "";
+    void loadRoot().then(() => load());
+    return;
+  }
   void load();
 };
 window.__voiceboxOnTask = (task) => {

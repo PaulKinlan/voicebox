@@ -14,7 +14,7 @@ const execFileAsync = promisify(execFile);
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
-import { resolveTurn } from "./lib/resolver.mjs";
+import { resolveTurn, resolveWorkspaceCandidate, recoverLiveSystemErrorTurn } from "./lib/resolver.mjs";
 import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, reachableFromEnvironment, resolveInRoot, rootVanished } from "./core/root.ts";
 import { normaliseRelativeDir, parentDir } from "./core/paths.ts";
 import { CORE_FS_DESCRIPTOR, createUnifiedDiff, dispatchFor } from "./core/dispatch.ts";
@@ -2531,23 +2531,14 @@ async function execute(action) {
     };
   }
   if (action.verb === "open_workspace") {
-    const rawTarget = String(action.target || action.path || action.name || action.dir || "self").trim();
-    const isSelf = !rawTarget || /^(?:self|voicebox|repo|repository|this\s+repo|own\s+codebase|codebase)$/i.test(rawTarget);
-    const isSandboxRoot = /^(?:sandbox|sandboxes)$/i.test(rawTarget);
-    const requested = isSelf ? ROOT : isSandboxRoot ? sandboxHomesDir() : rawTarget;
-    if (isSandboxRoot && !existsSync(requested)) {
-      mkdirSync(requested, { recursive: true });
-    }
-    let candidate;
-    if (isSelf || isSandboxRoot || path.isAbsolute(requested)) {
-      candidate = path.resolve(requested);
-    } else if (active?.root?.kind === "machine" && existsSync(path.resolve(active.root.path, requested))) {
-      candidate = path.resolve(active.root.path, requested);
-    } else if (existsSync(path.resolve(sandboxHomesDir(), requested))) {
-      candidate = path.resolve(sandboxHomesDir(), requested);
-    } else {
-      candidate = path.resolve(requested);
-    }
+    const rawTarget = String(action.target || action.path || action.name || action.folder || action.dir || action.project || "self").trim();
+    const { isSelf, isSandboxRoot, requested, candidate } = resolveWorkspaceCandidate(rawTarget, {
+      activeRootPath: active?.root?.kind === "machine" ? active.root.path : null,
+      selfRootPath: ROOT,
+      sandboxRootPath: sandboxHomesDir(),
+      exists: existsSync,
+      mkdir: mkdirSync,
+    });
     if (!existsSync(candidate)) {
       return {
         ok: false,
@@ -5622,6 +5613,10 @@ server.on("upgrade", (req, socket) => {
       }
       refreshShelfToolNames(); // the shelf is mutable: newly admitted tools declare without a restart (voicebox-beads-ri4k)
       const requestedThinkingLevel = url.searchParams.get("thinkingLevel") || undefined;
+      let liveInputTranscript = "";
+      let lastTurnInputTranscript = "";
+      let liveModelTranscript = "";
+      let liveToolCallsInTurn = 0;
       session = createLiveSession({
         // THE AGENT SETTINGS APPLY HERE, which is what stops them being dead controls: the provider a
         // person chose is the provider this session dials, and its model comes with it.
@@ -5636,12 +5631,57 @@ server.on("upgrade", (req, socket) => {
         voice: agentSettings.voice || undefined,
         timbre: agentSettings.timbre || undefined,
         onDebug: trace,        onAudioOut: (pcm, mime) => { if (pcm.length > 4) ws.send(pcm); },
-        onText: (text, role) => ws.send(JSON.stringify({ type: "text", role, text })),
+        onText: (text, role) => {
+          if (role === "input-transcript" && typeof text === "string") {
+            liveInputTranscript += text;
+          } else if ((role === "model-transcript" || role === "model") && typeof text === "string") {
+            if (liveInputTranscript.trim()) {
+              lastTurnInputTranscript = liveInputTranscript.trim();
+            }
+            liveModelTranscript += text;
+          }
+          ws.send(JSON.stringify({ type: "text", role, text }));
+        },
         onState: (state, detail) => {
           ws.send(JSON.stringify({ type: "state", state, detail, model }));
           // The provider is up: a folder report that arrived while it was starting can be applied now
           // (voicebox-beads-0zi4). Gemini answers "next session" here, and the page is told that.
           if (state === "ready") applyRememberedProjectInstruction(ws, session);
+          const turnFinishedIdle =
+            (state === "turn-complete" && detail?.interactionStatus !== "IN_PROGRESS") ||
+            (state === "interaction-status" && detail?.status === "IDLE");
+          if (turnFinishedIdle) {
+            const userSpoken = liveInputTranscript.trim() || lastTurnInputTranscript;
+            const modelSpoken = liveModelTranscript;
+            const toolCount = liveToolCallsInTurn;
+            if (liveInputTranscript.trim()) {
+              lastTurnInputTranscript = liveInputTranscript.trim();
+            }
+            liveInputTranscript = "";
+            liveModelTranscript = "";
+            liveToolCallsInTurn = 0;
+            if (toolCount === 0 && /\bsystem\s+error\s+occurred\b/i.test(modelSpoken) && userSpoken) {
+              void recoverLiveSystemErrorTurn({
+                userTranscript: userSpoken,
+                modelTranscript: modelSpoken,
+                toolCallsInTurn: toolCount,
+                executeAction: execute,
+              }).then((recovery) => {
+                if (recovery?.recovered && recovery.calls?.length) {
+                  trace?.({
+                    type: "tool.recovered",
+                    spoken: recovery.spoken,
+                    action: recovery.action,
+                    result: recovery.result,
+                    severity: recovery.result?.ok === false ? "error" : "info",
+                  });
+                  try {
+                    ws.send(JSON.stringify({ type: "tool", calls: recovery.calls, recovered: true }));
+                  } catch {}
+                }
+              });
+            }
+          }
         },
         // The voice gets the SAME verbs the text path resolves to, from the ONE
         // command list (lib/commands.mjs) — and each call runs through the SAME
@@ -5659,6 +5699,7 @@ server.on("upgrade", (req, socket) => {
         })(), // a shelf or mini-app id never shadows a fixed command (hmco nit 3)
         systemInstruction: liveSystemInstruction(),
         onToolCall: async (calls) => {
+          liveToolCallsInTurn += Array.isArray(calls) ? calls.length : 1;
           const responses = [];
           const seen = [];
           for (const call of calls) {

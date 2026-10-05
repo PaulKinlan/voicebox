@@ -625,6 +625,15 @@ export function parseRoomFolderTurn(transcript) {
     };
   }
 
+  // Project/workspace switching commands belong to the host workspace route, never local file read/grep.
+  if (
+    /\b(?:change|switch)\s+(?:over\s+)?to\b/i.test(raw) ||
+    /\b(?:open|switch|change)\s+(?:the\s+)?(?:workspace|project|sandbox|voice\s*box)\b/i.test(raw) ||
+    /\s+(?:project|workspace|codebase)(?:[,?.!\s]*please[,?.!\s]*)?$/i.test(raw)
+  ) {
+    return null;
+  }
+
   const readNatural = raw.match(
     /^(?:(?:please|can\s+you|could\s+you)\s+)?(?:read|open|show|display|view)(?:\s+up)?(?:\s+me)?(?:\s+the)?(?:\s+(?:content|contents)\s+of)?(?:\s+the)?(?:\s+file)?(?:\s+(?:called|named))?\s+["']?([\w./-]+)["']?(?:\s+(?:in|on)\s+(?:the\s+)?(?:ui|user\s+interface|reader|viewer|screen|page))?$/i,
   );
