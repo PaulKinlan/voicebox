@@ -41,6 +41,34 @@ describe("mini-app-store: persistence, in-place updates, deletion & cross-sandbo
     assert.equal(normalizeAppId("sandbox:boxA:calc.html"), "sandbox:boxA:calc.html");
   });
 
+  it("a fileName that climbs or carries a path is REFUSED, not silently rewritten (voicebox-beads-owit)", () => {
+    const rootPath = makeScratchDir("vb-ws-refuse-");
+    const hostDir = makeScratchDir("vb-host-refuse-");
+    // The case the re-review drove live: basename turned this into 'escaped.html' + ok:true,
+    // so a caller could not tell a rejected name from an accepted one.
+    const escape = saveMiniApp({ title: "Escape", html: "<h1>x</h1>", fileName: "../escaped.html", rootPath, hostDir });
+    assert.equal(escape.ok, false, "a climbing name must not pass");
+    assert.equal(escape.refused, "outside-root", "refused by name, in the loop's own vocabulary");
+    assert.equal(existsSync(path.join(rootPath, "escaped.html")), false, "nothing landed at the rewritten name");
+    assert.equal(existsSync(path.join(hostDir, "mini-apps", "escaped.html")), false, "nor on the shelf");
+    // A sub-path and an absolute path are placement decisions, not names — same refusal:
+    for (const bad of ["sub/app.html", "/etc/app.html", "C:\\app.html"]) {
+      const r = saveMiniApp({ title: "Sub", html: "<h1>x</h1>", fileName: bad, rootPath, hostDir });
+      assert.equal(r.ok, false, `'${bad}' must refuse`);
+      assert.equal(r.refused, "outside-root");
+    }
+    // THE CONTROL, because a refusal set with no control proves nothing: an ordinary name still
+    // saves, and an existing app's stored fileName still updates in place untouched by this rule.
+    const control = saveMiniApp({ title: "Fine", html: "<h1>y</h1>", fileName: "fine-app.html", rootPath, hostDir });
+    assert.equal(control.ok, true, `an ordinary name must still save (got ${JSON.stringify(control)})`);
+    assert.equal(control.miniApp.fileName, "fine-app.html");
+    assert.ok(existsSync(path.join(rootPath, "fine-app.html")));
+    // A name that needs the .html appended still gets it (the basename path did this too):
+    const bare = saveMiniApp({ title: "Bare", html: "<h1>z</h1>", fileName: "bare-name", rootPath, hostDir });
+    assert.equal(bare.ok, true);
+    assert.equal(bare.miniApp.fileName, "bare-name.html");
+  });
+
   it("saveMiniApp creates a mini-app once and updates the same appId and file in place without duplicating", () => {
     const rootPath = makeScratchDir("vb-ws-");
     const hostDir = makeScratchDir("vb-host-");
