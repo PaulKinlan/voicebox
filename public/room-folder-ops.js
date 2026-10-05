@@ -283,6 +283,22 @@ export async function editHandleFile(rootHandle, relPath, oldText, newText) {
 }
 
 /**
+ * The ONE name a mini-app save may ask for: the LEAF of the shown path (voicebox-beads-m4no).
+ *
+ * The save API takes a single name inside the workspace root and REFUSES paths outright
+ * (voicebox-beads-owit — resolve, compare, refuse; never rewrite), so the room's after-save sync
+ * must ask for the file it means: the file just saved, wherever the folder navigation was when it
+ * was saved. The old caller posted the joined path ('proposals/draft.html'): the server used to
+ * basename-rewrite it into a misnamed duplicate at the root, and after owit's tightening the POST
+ * is refused 400 — with the sync's fire-and-forget catch swallowing it, a file saved inside a
+ * folder silently lost its shelf/workspace sync. A trailing separator names nothing ("" — the
+ * caller's own shape guard refuses that, same vocabulary, no rewrite here either).
+ */
+export function miniAppSyncName(shownPath) {
+  return String(shownPath ?? "").split("/").pop().trim();
+}
+
+/**
  * Compute a unified diff (`--- a/<file>`, `+++ b/<file>`, `@@ ... @@`, `-`/`+`/` ` lines)
  * between two strings using prefix/suffix trimming and LCS.
  */
