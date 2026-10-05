@@ -84,6 +84,43 @@ describe("mini-app-store: persistence, in-place updates, deletion & cross-sandbo
     assert.ok(existsSync(path.join(rootPath, "bare-name.html")), "the .html append landed on disk");
   });
 
+  it("a save with NO USABLE workspace root still authorizes the shelf write — the CONDITION is the pin (voicebox-beads-6gyv)", () => {
+    // The gap this closes was a CONDITIONAL SKIP, not a near-copy: when rootPath names a directory
+    // that does not exist (a declared root that vanished between request and save), resolvedRoot is
+    // null and the workspace branch — the only authorized branch — never ran, so the shelf copy was
+    // written with no authorization at all. A dotfile fileName landed on the shelf, invisible to
+    // discovery (dotfile-skipping scan), unaudited.
+    const hostDir = makeScratchDir("vb-host-6gyv-");
+    const vanishedRoot = path.join(makeScratchDir("vb-gone-"), "deleted"); // never created: no usable root
+
+    // BEFORE (landed main) this answered ok:true and wrote <hostDir>/mini-apps/.hidden.html.
+    const dot = saveMiniApp({ title: "Orphan", html: "<h1>x</h1>", fileName: ".hidden.html", rootPath: vanishedRoot, hostDir });
+    assert.equal(dot.ok, false, "a dotfile fileName must refuse even when no usable workspace root exists");
+    assert.equal(dot.refused, "dotfile-refused", "refused by name, the one vocabulary");
+    assert.match(dot.why, /host shelf/, "the why names WHICH copy was refused — the shelf door, not the workspace door");
+    assert.equal(existsSync(path.join(hostDir, "mini-apps", ".hidden.html")), false, "no unauthorized shelf orphan was written");
+    assert.equal(existsSync(path.join(vanishedRoot, ".hidden.html")), false, "and nothing landed in the vanished root either");
+
+    // THE CONDITION STILL SAVES WHAT IS LEGITIMATE: with no usable root, a clean name saves to the
+    // shelf ONLY (source host) — the no-root path is a working path, not a refused one.
+    const hostDir2 = makeScratchDir("vb-host-6gyv-ok-");
+    const clean = saveMiniApp({ title: "Legit Shelf", html: "<h1>y</h1>", fileName: "legit.html", rootPath: path.join(hostDir2, "no-such-root"), hostDir: hostDir2 });
+    assert.equal(clean.ok, true, `a clean name with no usable root still saves to the shelf (got ${JSON.stringify(clean)})`);
+    assert.equal(clean.miniApp.source, "host", "shelf-only, honestly labelled");
+    assert.ok(existsSync(path.join(hostDir2, "mini-apps", "legit.html")), "the shelf copy landed");
+    assert.equal(clean.miniApp.fileName, "legit.html");
+
+    // And with a USABLE root the same dotfile refusal names the WORKSPACE door (the two doors are
+    // distinguishable, so a reader can tell which ask was refused).
+    const rootPath = makeScratchDir("vb-ws-6gyv-");
+    const hostDir3 = makeScratchDir("vb-host-6gyv-ws-");
+    const ws = saveMiniApp({ title: "Ws Dot", html: "<h1>z</h1>", fileName: ".hidden.html", rootPath, hostDir: hostDir3 });
+    assert.equal(ws.ok, false);
+    assert.equal(ws.refused, "dotfile-refused");
+    assert.match(ws.why, /workspace root/, "with a usable root, the refusal names the workspace door");
+    assert.equal(existsSync(path.join(hostDir3, "mini-apps", ".hidden.html")), false, "and nothing was written anywhere");
+  });
+
   it("saveMiniApp creates a mini-app once and updates the same appId and file in place without duplicating", () => {
     const rootPath = makeScratchDir("vb-ws-");
     const hostDir = makeScratchDir("vb-host-");
