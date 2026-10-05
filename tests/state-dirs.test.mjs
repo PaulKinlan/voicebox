@@ -15,11 +15,21 @@
 //     point the facts at a scratch directory; it takes only workspace and extensions, resolves
 //     them to absolute paths, and leaves every other fact alone.
 //
-// Env hygiene: the four fact variables are saved before and restored after every drive — a test
-// that leaks its probe value re-points every later suite at a directory that vanishes with /tmp.
+// Env hygiene: the four fact variables are snapshotted at import and restored in test.after, and
+// each drive that writes a probe cleans up in a finally — because a failed assertion mid-drive must
+// not leave a fact pointing at a /tmp directory for the rest of THIS file. (Neighbouring test files
+// are safe by a different mechanism: node --test runs each file in its own child process, so a leak
+// cannot cross a file boundary.)
 import test from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { execFile as execFileCb } from "node:child_process";
+import { tmpdir } from "node:os";
+import { promisify } from "node:util";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const execFileAsync = promisify(execFileCb);
 import { FACTS, REPO, workspaceDir, workspaceDeclared, extensionsDir, wasmShelfDir, sandboxHomesDir, declareOverrides } from "../lib/state-dirs.mjs";
 
 const NAMES = Object.values(FACTS).map((f) => f.env);
@@ -27,6 +37,18 @@ const saved = new Map();
 for (const name of NAMES) {
   if (Object.prototype.hasOwnProperty.call(process.env, name)) saved.set(name, process.env[name]);
 }
+/** Set one fact's variable for the duration of a drive, restoring whatever was there — even on a failed assertion. */
+const withProbe = (fact, value, run) => {
+  const held = Object.prototype.hasOwnProperty.call(process.env, fact.env) ? process.env[fact.env] : null;
+  process.env[fact.env] = value;
+  try {
+    return run();
+  } finally {
+    if (held === null) delete process.env[fact.env];
+    else process.env[fact.env] = held;
+  }
+};
+
 /** Run a drive with every fact variable removed, restoring whatever was there after. */
 const withCleanEnv = (run) => {
   const held = new Map();
@@ -51,10 +73,10 @@ test("EMPTY IS UNSET: a variable set to the empty string answers as the default,
   for (const fact of Object.values(FACTS)) {
     const unsetDefault = withCleanEnv(() => fact.value());
     assert.ok(typeof unsetDefault === "string" && unsetDefault.length > 0, `${fact.id}: the default is a real directory`);
-    process.env[fact.env] = "";
-    assert.equal(fact.value(), unsetDefault, `${fact.id}: 'set to nothing' is ONE state with unset — the default, never a relative-everything path`);
-    assert.equal(fact.declared(), null, `${fact.id}: an empty value is not an operator declaration either`);
-    delete process.env[fact.env];
+    withProbe(fact, "", () => {
+      assert.equal(fact.value(), unsetDefault, `${fact.id}: 'set to nothing' is ONE state with unset — the default, never a relative-everything path`);
+      assert.equal(fact.declared(), null, `${fact.id}: an empty value is not an operator declaration either`);
+    });
   }
 });
 
@@ -62,10 +84,10 @@ test("CALL-TIME READS: the getter answers the variable as it is NOW, not as it w
   for (const fact of Object.values(FACTS)) {
     const before = withCleanEnv(() => fact.value());
     const probe = `/state-dirs-probe/${fact.id}`;
-    process.env[fact.env] = probe;
-    assert.equal(fact.value(), probe, `${fact.id}: a later write is seen by the next call`);
-    assert.equal(fact.declared(), probe, `${fact.id}: declared() answers the declaration, no default`);
-    delete process.env[fact.env];
+    withProbe(fact, probe, () => {
+      assert.equal(fact.value(), probe, `${fact.id}: a later write is seen by the next call`);
+      assert.equal(fact.declared(), probe, `${fact.id}: declared() answers the declaration, no default`);
+    });
     assert.equal(fact.value(), before, `${fact.id}: and removing it returns to the default — no import-time copy survives`);
     assert.equal(fact.declared(), null, `${fact.id}: absent is null, not the default`);
   }
@@ -111,6 +133,11 @@ test("declareOverrides is the ONE env write: absolute, and only for the two fact
     assert.equal(process.env.VOICEBOX_WORKSPACE, path.resolve("relative/scratch"), "the earlier override survives its own call");
     declareOverrides({});
     assert.equal(process.env.VOICEBOX_WORKSPACE, path.resolve("relative/scratch"), "an empty override changes nothing");
+    // AN EMPTY OVERRIDE IS NOT AN ANSWER EITHER (review B13): a CLI flag given as '' must not
+    // re-point the fact at cwd — the module's own central rule, driven at its one env write.
+    declareOverrides({ workspace: "", extensions: "" });
+    assert.equal(process.env.VOICEBOX_WORKSPACE, path.resolve("relative/scratch"), "an empty-string workspace override is a no-op, not path.resolve('')");
+    assert.equal(process.env.VOICEBOX_EXTENSIONS_DIR, path.resolve("another/scratch"), "an empty-string extensions override is a no-op too");
   } finally {
     delete process.env.VOICEBOX_WORKSPACE;
     delete process.env.VOICEBOX_EXTENSIONS_DIR;
@@ -118,7 +145,31 @@ test("declareOverrides is the ONE env write: absolute, and only for the two fact
   }
 });
 
-test("the defaults hang off THIS checkout (REPO), not the process cwd", () => {
+test("the defaults hang off THIS checkout (the tree that holds the owner module), not the process cwd", async () => {
+  // NOT self-referential: the parent of the default must be the tree that physically contains
+  // lib/state-dirs.mjs (review B11 — an equality against the module's own REPO constant moves with
+  // the mutation and stays green).
   const ws = withCleanEnv(() => workspaceDir());
-  assert.equal(ws, path.join(REPO, "workspace"), "the workspace default is beside the module that owns it — cwd-independence is the contract");
+  const ownerInTree = existsSync(path.join(path.dirname(ws), "lib", "state-dirs.mjs"));
+  assert.ok(ownerInTree, `the workspace default's parent must be the tree holding the owner module (got ${ws})`);
+
+  // CWD-INDEPENDENT, driven from a DIFFERENT cwd (review B10 — path.resolve("workspace") is
+  // character-identical to the right answer when the test happens to run from the checkout root,
+  // so the parent process can never observe the difference). A child with cwd=/tmp and every fact
+  // variable cleared must still answer the checkout's defaults.
+  const env = { ...process.env };
+  for (const name of NAMES) delete env[name];
+  const child = await execFileAsync(process.execPath, [
+    "--input-type=module",
+    "-e",
+    `const m = await import(${JSON.stringify(pathToFileURL(path.join(REPO, "lib", "state-dirs.mjs")).href)}); console.log(JSON.stringify([m.workspaceDir(), m.extensionsDir()]));`,
+  ], { cwd: tmpdir(), env, encoding: "utf8" });
+  const [childWorkspace, childExtensions] = JSON.parse(child.stdout.trim());
+  assert.equal(childWorkspace, path.join(REPO, "workspace"), "a child running from /tmp still answers the checkout's workspace default — not its cwd");
+  assert.equal(childExtensions, path.join(REPO, "extensions"), "and the extensions default — cwd-independence, driven not asserted");
+});
+
+test("the sandbox-homes default lives OUTSIDE /tmp — PrivateTmp hides a home inside it and the bind fails (the module's own recorded defect)", () => {
+  const homes = withCleanEnv(() => sandboxHomesDir());
+  assert.ok(!homes.startsWith(tmpdir() + path.sep), `the default must not be under ${tmpdir()} (got ${homes}) — the 226/NAMESPACE lesson, pinned so a 'tidy' default cannot quietly regress it`);
 });
