@@ -210,9 +210,9 @@ async function performAct(call: { tool: string; args: Record<string, unknown> },
   // THE SAME LINE AS THE SERVER'S VERBS: containment first, then a hidden file inside the
   // root is refused — the listing hides dotfiles and so do the verbs, whichever placement
   // executes them. One rule, one vocabulary, two writers — and the same ANSWER: segment-wise
-  // at any depth, not only the leaf (voicebox-beads-q0a3: `sub/.hidden/x.txt` used to pass here
-  // while the machine refused it).
-  if (hasDotfileSegment(resolved.path)) {
+  // at any depth from the ROOT (not only the leaf, and not counting the root's own segments —
+  // a project named `.secrets` is a declared root like any other; review P1, voicebox-beads-q0a3).
+  if (hasDotfileSegment(storage.root, resolved.path)) {
     await hooks.recordAct({ kind: tool, target: name, tool: "turn" }, "refuse", "dotfile-refused", "refused", { exists: false }, turnOf(call));
     return { ok: false as const, refused: "dotfile-refused", why: "dotfiles are neither readable nor writable through the loop — the listing hides them and so does this verb; host secrets live behind that line" };
   }

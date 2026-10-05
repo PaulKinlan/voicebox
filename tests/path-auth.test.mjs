@@ -120,3 +120,40 @@ test("dotfileSegmentInside: names the offending segment for the refusal's why", 
   assert.equal(dotfileSegmentInside(root, path.join(root, "sub", ".env")), ".env");
   assert.equal(dotfileSegmentInside(root, path.join(root, "sub", "fine.ts")), null);
 });
+
+// ── the PAGE's dotfile line, root-relative (review P1, voicebox-beads-q0a3) ──────────────────
+// A project NAMED `.secrets` is a declared root like any other: its own dot-segment must not
+// refuse every ordinary file inside it. Driven through the page's own acts door, in node —
+// the same shim shape tests/code-mgmt-tools.test.mjs uses.
+test("page acts: a dot-prefixed project root does not taint its own files; a real dotfile inside still refuses", async () => {
+  const { hasDotfileSegment } = await import("../core/paths.ts");
+  const virtualRoot = "v1/projects/.secrets";
+  // The helper answers root-relative:
+  assert.equal(hasDotfileSegment(virtualRoot, `${virtualRoot}/notes.txt`), false, "the root's own `.secrets` is not the file's dotfile");
+  assert.equal(hasDotfileSegment(virtualRoot, `${virtualRoot}/sub/.hidden/x.txt`), true, "a dotfile at depth still refuses");
+
+  const files = new Map([[`${virtualRoot}/notes.txt`, "control"]]);
+  const { startActs } = await import("../browser/acts.ts");
+  const door = startActs({
+    getCurrentDescriptor: () => ({ kind: "opfs", path: virtualRoot, environment: "local" }),
+    getStorage: () => ({
+      root: virtualRoot,
+      readText: async (p) => files.get(p) ?? (() => { throw new Error("missing"); })(),
+      writeText: async (p, c) => files.set(p, c),
+      observe: async (p) => ({ exists: files.has(p), bytes: (files.get(p) ?? "").length }),
+    }),
+    checkWritable: async () => null,
+    checkReachable: async () => null,
+    recordAct: async () => ({ seq: 1 }),
+    connect: () => ({ send() {}, close() {}, onmessage: null, onopen: null, onclose: null }),
+  }).door;
+  const call = (tool, args) => door.receive(JSON.stringify({ v: 1, callId: `c-${tool}-${args?.name}`, environment: "local", descriptorId: "voicebox-core-fs", tool, args, boundsEcho: {} })).then(JSON.parse);
+
+  const readCtl = await call("read", { name: "notes.txt" });
+  assert.equal(readCtl.ok, true, `an ordinary file inside a dot-prefixed project must be readable (got ${JSON.stringify(readCtl)})`);
+  const writeCtl = await call("write", { name: "written.txt", content: "x" });
+  assert.equal(writeCtl.ok, true, `and writable (got ${JSON.stringify(writeCtl)})`);
+  const dot = await call("read", { name: "sub/.hidden/x.txt" });
+  assert.equal(dot.ok, false);
+  assert.equal(dot.refused, "dotfile-refused", "a dotfile at depth still refuses on the page, same name as the machine");
+});

@@ -3099,7 +3099,7 @@ async function execute(action) {
   const resolved = resolveActive(name);
   if (!resolved.ok) {
     // A refusal is recorded as well: the log answers "what did it try", not only "what did it do".
-    const kind = ["read", "diff"].includes(action.verb) ? action.verb : ["write", "edit", "delete"].includes(action.verb) ? action.verb : "read";
+    const kind = ["read", "diff"].includes(action.verb) ? action.verb : ["write", "edit", "delete", "mkdir"].includes(action.verb) ? action.verb : "read";
     const entry = logAct({ kind, target: name, tool: "turn" }, "refuse", resolved.refused, "refused", null, action.turn ?? null);
     return {
       ok: false,
@@ -4465,6 +4465,7 @@ async function handle(req, res) {
     const resolved = resolveActive(name);
     if (!resolved.ok) {
       return json(res, resolved.refused === "root-not-reachable-from-here" ? 409 : 403, {
+        ok: false,
         refused: resolved.refused,
         error: `refused: ${resolved.refused}`,
         why: resolved.why,

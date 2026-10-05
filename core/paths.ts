@@ -96,13 +96,20 @@ export function normaliseRelativeDir(value: unknown): { ok: true; dir: string } 
 }
 
 /**
- * Does this already-resolved inside-root path enter a dotfile at ANY depth? The page's verbs and
- * the machine's verbs answer the same question with the same rule (voicebox-beads-q0a3: the page
- * used to check only the LEAF, so `sub/.hidden/x.txt` was readable on a page root while the
- * machine refused it — one rule, one vocabulary, two writers means the same ANSWER too).
+ * Does this already-resolved inside-root path enter a dotfile at ANY depth — measured from the
+ * ROOT, not from the string's start? The root's own segments are not the file's: a project named
+ * `.secrets` is a declared root like any other, and `root/.secrets/notes.txt` must answer about
+ * `notes.txt` (review P1, voicebox-beads-q0a3: the first cut split the whole resolved string, so a
+ * dot-prefixed project name refused every ordinary file inside it — visible in the listing, unusable
+ * by the verbs, and different from the machine's root-relative answer for the same root).
  */
-export function hasDotfileSegment(resolvedPath: string): boolean {
-  return resolvedPath
+export function hasDotfileSegment(root: string, resolvedPath: string): boolean {
+  const rel = resolvedPath === root
+    ? ""
+    : resolvedPath.startsWith(`${root}/`)
+      ? resolvedPath.slice(root.length + 1)
+      : resolvedPath;
+  return rel
     .split("/")
     .filter((part) => part !== "" && part !== ".")
     .some((part) => part.startsWith("."));
