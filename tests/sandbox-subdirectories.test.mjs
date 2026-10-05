@@ -212,6 +212,21 @@ test("mini-app persistence and harness configure aliases in server.mjs", async (
   assert.equal(launch2.result.updated, true);
   assert.equal(launch2.result.miniApp.appId, "app_counter-widget");
 
+  // A REFUSED mini-app save is named in the verb's RESULT, not reported as success
+  // (voicebox-beads-owit, review round 2): the room still shows the html, but ok must be
+  // false with the refusal by name — the model reads this result to decide what to do next.
+  const refusedLaunch = await fetch(`${srv.base}/api/turn`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      action: { verb: "mini_app", title: "Climber", html: "<h1>no</h1>", fileName: "../climber.html" },
+    }),
+  }).then((r) => r.json());
+  assert.equal(refusedLaunch.result.ok, false, "a refused save must not report success");
+  assert.equal(refusedLaunch.result.refused, "outside-root");
+  assert.equal(refusedLaunch.result.shownNotSaved, true, "the result says the room saw it but nothing persisted");
+  assert.match(refusedLaunch.result.action, /NOT saved/);
+
   const listApps = await fetch(`${srv.base}/api/mini-apps`).then((r) => r.json());
   assert.equal(listApps.ok, true);
   assert.equal(listApps.count, 1);
