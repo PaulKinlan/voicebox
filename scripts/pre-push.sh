@@ -35,7 +35,10 @@ _current_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo "")
 # it read; a direct run (the tests) still has stdin. Either way, the check reads a FILE so
 # the refusal exits THIS shell rather than a pipeline subshell.
 _refs_file="$(mktemp)"
-if [ -n "${VOICEBOX_PUSH_DESTINATIONS:-}" ]; then printf '%s' "$VOICEBOX_PUSH_DESTINATIONS" > "$_refs_file"; else cat > "$_refs_file" 2>/dev/null || true; fi
+# `%s\n` (not `%s`): a destinations value whose final line is unterminated is skipped by `read`
+# (its loop body never runs for an unterminated last line), and the gate would then behave as if
+# the push had no destination. Terminating always is harmless — the extra blank line is ignored.
+if [ -n "${VOICEBOX_PUSH_DESTINATIONS:-}" ]; then printf '%s\n' "${VOICEBOX_PUSH_DESTINATIONS}" > "$_refs_file"; else cat > "$_refs_file" 2>/dev/null || true; fi
 _destination_is_main=0
 _had_destination=0
 _main_remote_sha=""

@@ -8,7 +8,14 @@ has_code_ref=0
 while read -r local_ref local_oid remote_ref remote_oid; do
   # The gate needs ALL destination refs, and this loop consumes stdin: hand them
   # over rather than breaking after the first line or letting the check read an empty pipe (voicebox-beads-85w).
-  VOICEBOX_PUSH_DESTINATIONS="${VOICEBOX_PUSH_DESTINATIONS:-}${local_ref} ${local_oid} ${remote_ref} ${remote_oid}"$'\n'
+  # The newline is a LITERAL inside the quotes: `$'\n'` is a bash-ism, and under dash
+  # (Linux /bin/sh) it appends the three literal characters `$\n` — the accumulated blob
+  # then has no line separator at all, `while read` never runs its body, and the gate
+  # sees "no destination" and runs the FULL suite on every branch push (found on an
+  # exe.dev VM, voicebox-beads-q0a3; the embedded newline is POSIX-portable and behaves
+  # identically under bash-as-sh).
+  VOICEBOX_PUSH_DESTINATIONS="${VOICEBOX_PUSH_DESTINATIONS:-}${local_ref} ${local_oid} ${remote_ref} ${remote_oid}
+"
   if [ -n "$local_oid" ] && [ "$local_oid" != "0000000000000000000000000000000000000000" ] && [ "$local_oid" != "(delete)" ]; then
     has_non_delete=1
     case "$remote_ref" in
