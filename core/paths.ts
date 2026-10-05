@@ -95,6 +95,19 @@ export function normaliseRelativeDir(value: unknown): { ok: true; dir: string } 
   return { ok: true, dir: parts.join("/") };
 }
 
+/**
+ * Does this already-resolved inside-root path enter a dotfile at ANY depth? The page's verbs and
+ * the machine's verbs answer the same question with the same rule (voicebox-beads-q0a3: the page
+ * used to check only the LEAF, so `sub/.hidden/x.txt` was readable on a page root while the
+ * machine refused it — one rule, one vocabulary, two writers means the same ANSWER too).
+ */
+export function hasDotfileSegment(resolvedPath: string): boolean {
+  return resolvedPath
+    .split("/")
+    .filter((part) => part !== "" && part !== ".")
+    .some((part) => part.startsWith("."));
+}
+
 /** The parent of an already-normalised relative directory; null means "this is the root". */
 export function parentDir(dir: string): string | null {
   if (!dir) return null;

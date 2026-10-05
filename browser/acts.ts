@@ -37,7 +37,7 @@
 
 import { createExecutorDoor } from "../lib/channel.mjs";
 import { resolveInRoot, type RootDescriptor } from "../core/root.ts";
-import { normaliseRelativeDir, parentDir } from "../core/paths.ts";
+import { hasDotfileSegment, normaliseRelativeDir, parentDir } from "../core/paths.ts";
 import { CORE_FS_DESCRIPTOR, CORE_FS_VERBS, createUnifiedDiff } from "../core/dispatch.ts";
 
 /** The structural slice of browser/storage.ts this module uses — injected, never imported. */
@@ -209,9 +209,10 @@ async function performAct(call: { tool: string; args: Record<string, unknown> },
   }
   // THE SAME LINE AS THE SERVER'S VERBS: containment first, then a hidden file inside the
   // root is refused — the listing hides dotfiles and so do the verbs, whichever placement
-  // executes them. One rule, one vocabulary, two writers.
-  const base = resolved.path.split("/").pop() ?? "";
-  if (base.startsWith(".")) {
+  // executes them. One rule, one vocabulary, two writers — and the same ANSWER: segment-wise
+  // at any depth, not only the leaf (voicebox-beads-q0a3: `sub/.hidden/x.txt` used to pass here
+  // while the machine refused it).
+  if (hasDotfileSegment(resolved.path)) {
     await hooks.recordAct({ kind: tool, target: name, tool: "turn" }, "refuse", "dotfile-refused", "refused", { exists: false }, turnOf(call));
     return { ok: false as const, refused: "dotfile-refused", why: "dotfiles are neither readable nor writable through the loop — the listing hides them and so does this verb; host secrets live behind that line" };
   }
