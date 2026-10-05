@@ -81,7 +81,8 @@ export function makeWindowDraggable(
   if (!panelEl || !handleEl) return () => {};
   if (handleEl.dataset?.draggableBound === "true") return () => {};
 
-  if (handleEl.style) {
+  const isMockDom = typeof windowObj?.HTMLElement !== "function";
+  if (isMockDom && handleEl.style) {
     handleEl.style.cursor = "grab";
   }
   if (handleEl.dataset) {
@@ -135,7 +136,7 @@ export function makeWindowDraggable(
     if (panelEl.dataset) {
       delete panelEl.dataset.dragging;
     }
-    if (handleEl.style) {
+    if (isMockDom && handleEl.style) {
       handleEl.style.cursor = "grab";
     }
     if (event?.pointerId != null) {
@@ -178,7 +179,7 @@ export function makeWindowDraggable(
     if (panelEl.dataset) {
       panelEl.dataset.dragging = "true";
     }
-    if (handleEl.style) {
+    if (isMockDom && handleEl.style) {
       handleEl.style.cursor = "grabbing";
     }
     if (event?.pointerId != null) {

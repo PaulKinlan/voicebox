@@ -101,7 +101,7 @@ body:has(#server-dot[data-ok="false"]) .wordmark-dot {
   border: 1px solid var(--line);
   background: color-mix(in srgb, var(--shade) 75%, var(--card));
   font-size: 0.75rem;
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color: var(--muted);
   box-shadow: 0 1px 3px rgba(20, 22, 26, 0.04);
 }
@@ -2231,9 +2231,17 @@ body[data-sqeh-state="files"] .made-close,
 }
 
 [data-draggable-handle="true"] {
+  cursor: grab;
   user-select: none;
   -webkit-user-select: none;
   touch-action: none;
+}
+[data-dragging="true"] [data-draggable-handle="true"] {
+  cursor: grabbing;
+}
+.harness-tracker-actions {
+  margin-block-end: 8px;
+  justify-content: flex-start;
 }
 [data-window-focused="true"] {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
