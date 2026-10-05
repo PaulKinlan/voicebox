@@ -3335,6 +3335,7 @@ on(els.deleteConfirmYes, "click", () => void confirmDelete());
 // confirmDelete() clears pendingDelete before it closes the dialog, so a confirmed delete does not
 // pass through this branch.
 els.deleteConfirm?.addEventListener("close", () => {
+  if (els.deleteConfirm?.open) return;
   if (!pendingDelete) return;
   const kept = pendingDelete.name;
   pendingDelete = null;
@@ -6146,7 +6147,7 @@ function sqehWire() {
     Element.prototype.scrollIntoView = function scrollIntoViewPatched(arg) {
       if (this?.id === "made-list" || this?.closest?.("#made-list")) {
         collapseOpenReader();
-        if (sqeh.state !== "files") sqehSetState("files");
+        if (sqeh.state !== "files" || document.body.dataset.sqehState !== "files") sqehSetState("files");
       } else if (this?.id === "reader" || this?.closest?.("#reader")) {
         if (els.reader && els.reader.dataset.collapsed === "true") {
           delete els.reader.dataset.collapsed;
@@ -6175,7 +6176,7 @@ function sqehWire() {
       Element.prototype.checkVisibility = function checkVisibilityPatched(arg) {
         if (this?.id === "made-list" || this?.closest?.("#made-list")) {
           const hiddenAncestor = this.closest?.("[hidden]");
-          if (!hiddenAncestor && sqeh.state !== "files") {
+          if (!hiddenAncestor && (sqeh.state !== "files" || document.body.dataset.sqehState !== "files")) {
             collapseOpenReader();
             sqehSetState("files");
           }
@@ -6187,10 +6188,28 @@ function sqehWire() {
   }
 
   // Light-dismiss the floating Files, History, or Activity popover on Escape or outside click
+  let lastDialogDismissAt = 0;
+  document.addEventListener(
+    "close",
+    (ev) => {
+      if (ev.target?.tagName === "DIALOG") lastDialogDismissAt = performance.now();
+    },
+    true,
+  );
+  document.addEventListener(
+    "cancel",
+    (ev) => {
+      if (ev.target?.tagName === "DIALOG") lastDialogDismissAt = performance.now();
+    },
+    true,
+  );
   window.addEventListener("keydown", (e) => {
     const openCount = window.__voiceboxWindowManager?.getOpenWindows?.()?.length ?? 0;
     if (e.key === "Escape" && (openCount > 0 || sqeh.state === "files" || sqeh.state === "history" || sqeh.state === "activity")) {
-      const anyModal = document.querySelector("dialog[open]");
+      const anyModal =
+        document.querySelector("dialog[open]") ||
+        e.target?.closest?.("dialog") ||
+        performance.now() - lastDialogDismissAt < 150;
       if (!anyModal) sqehSetState("deck");
     }
   });

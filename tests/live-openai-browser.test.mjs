@@ -183,7 +183,7 @@ for (const provider of ["gemini", "openai"]) test(`Debug transcript: ${provider}
   assert.equal(result.ok, false, "real executor must fail on missing file");
   assert(result.error || result.refused);
   const setup = f.row.messages.find(m => m.setup || m.type === "session.update");
-  assert.equal(provider === "gemini" ? setup.setup.inputAudioTranscription : setup.session.audio.input.transcription, undefined,
+  assert.deepEqual(provider === "gemini" ? setup.setup.inputAudioTranscription : setup.session.audio.input.transcription, provider === "gemini" ? {} : undefined,
     "debug must not enable transcription or change the provider's setup");
 
   await f.page.click("#debug-next-error");
