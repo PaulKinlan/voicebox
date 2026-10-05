@@ -41,6 +41,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { buildFenceChildEnv } from "../lib/fence-child-env.mjs";
+import { containedIn } from "../lib/path-auth.mjs";
 
 const PORT = Number(process.env.PORT ?? 0);
 const PROBE = process.env.SANDBOX_PROBE ?? "/probes/sandbox-probe.mjs";
@@ -116,6 +117,9 @@ function readJson(req, limit = 65536) {
 }
 
 /** A path that must resolve inside HOME; the sandbox home is the only writable tree by construction. */
+// The realized-path containment is the owned primitive (lib/path-auth.mjs, voicebox-beads-q0a3):
+// HOME itself is a valid cwd, hence `allowEqual`. A private `path.relative + startsWith('..')` copy
+// lived here before.
 function resolveCwd(raw) {
   const candidate = raw === undefined || raw === null || raw === "" ? WORKSPACE : String(raw);
   let real, realHome;
@@ -125,8 +129,7 @@ function resolveCwd(raw) {
   } catch {
     return { refused: "exec-cwd-missing", why: `\`${candidate}\` is not a directory in this environment` };
   }
-  const rel = path.relative(realHome, real);
-  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+  if (!containedIn(realHome, real, { allowEqual: true })) {
     return { refused: "exec-cwd-outside-home", why: `cwd \`${candidate}\` is outside HOME (${HOME}) — the sandbox home is the only writable tree` };
   }
   if (!fs.statSync(real).isDirectory()) return { refused: "exec-cwd-missing", why: `\`${candidate}\` is not a directory` };

@@ -15,9 +15,9 @@ Voicebox is architected around five foundational invariants:
    - Audio is captured in the browser via an `AudioWorklet` (`public/pcm-worklet.js`) and streamed bi-directionally over the `/live` WebSocket (`lib/live-session.mjs`) to low-latency realtime voice models (Gemini Live and OpenAI Realtime; Claude's live adapter is a placeholder).
 2. **Explicit Workspace Root Containment (`core/root.ts`)**:
    - Every file read, write, audit record, and task delegation runs inside an explicitly declared workspace root (`core/root.ts`).
-   - Path resolution (`core/paths.ts`) resolves `realpath` on existing ancestors and rejects any relative path, `..` traversal, or symlink target that leaves the active root.
+   - Path resolution (`core/paths.ts`) rejects any relative path or `..` traversal that leaves the active root; the machine placement's `realpath` pass (existing-ancestor walk-up), dotfile denial and root-kind handling live in exactly one owner (`lib/path-auth.mjs`), enforced statically by `scripts/single-owner.mjs`.
 3. **Single-Owner State Facts (`lib/state-dirs.mjs`)**:
-   - Host state directories (`HOST_DIR`, `SANDBOX_ROOTS_DIR`, `HARNESS_CONFIG_DIR`, `MINI_APPS_DIR`) are computed in exactly one module (`lib/state-dirs.mjs`) and enforced statically by `scripts/single-owner.mjs`.
+   - Host state directories (`HOST_DIR`, `SANDBOX_ROOTS_DIR`, `HARNESS_CONFIG_DIR`, `MINI_APPS_DIR`) are computed in exactly one module (`lib/state-dirs.mjs`) and enforced statically by `scripts/single-owner.mjs` — which also enforces the single computing site for path authorization (`lib/path-auth.mjs`, declared as code-shape `SITES`).
 4. **Host-Held Credential Custody**:
    - Provider API keys (`.api-keys.json`), host tokens (`.host-token`), and remote pairing bearers (`.pairings.json`) are stored with `0600` permissions inside `HOST_DIR` outside every project workspace root. Browser JavaScript and sandboxed child processes never receive raw credentials.
 5. **Plain-Language, Zero-Shift UI**:
