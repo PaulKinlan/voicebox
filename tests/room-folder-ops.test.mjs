@@ -1,5 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   resolveSubpath,
   readHandleFile,
@@ -9,8 +12,11 @@ import {
   diffHandleFile,
   grepHandleFolder,
   createRoomUndoStack,
+  miniAppSyncName,
   parseRoomFolderTurn,
 } from "../public/room-folder-ops.js";
+
+const PUBLIC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
 
 function createMockFileHandle(name, initialText = "") {
   let content = String(initialText);
@@ -331,5 +337,47 @@ describe("public/room-folder-ops.js", () => {
 
     assert.equal(parseRoomFolderTurn("search the web for weather"), null);
     assert.equal(parseRoomFolderTurn("create a file called a.txt with hi"), null);
+  });
+});
+
+// ── miniAppSyncName: the ONE name a mini-app save may ask for (voicebox-beads-m4no) ──────────
+
+describe("miniAppSyncName derives the leaf name the save API takes", () => {
+  it("a file shown inside a folder asks for its LEAF — the file the user just saved", () => {
+    assert.equal(miniAppSyncName("proposals/draft.html"), "draft.html");
+    assert.equal(miniAppSyncName("a/b/c/deep-app.html"), "deep-app.html");
+  });
+  it("a plain file is itself — no folder navigation, no change", () => {
+    assert.equal(miniAppSyncName("app.html"), "app.html");
+    assert.equal(miniAppSyncName(" Score Counter.html ".trim()), "Score Counter.html");
+  });
+  it("shapes that name nothing answer '' — the caller's shape guard refuses them, no rewrite here either", () => {
+    assert.equal(miniAppSyncName("proposals/"), "", "a trailing separator names no file");
+    assert.equal(miniAppSyncName(""), "");
+    assert.equal(miniAppSyncName(null), "");
+    assert.equal(miniAppSyncName(undefined), "");
+  });
+});
+
+// ── the wiring: fused.js must SEND the derived name and NAME a refused sync (m4no) ───────────
+// Source-assertion follows the repo's established pattern for the browser script
+// (tests/caption-fade-and-thinking.test.mjs reads fused.js the same way); the behavioural
+// half — driving the real POST from a real page — is the browser-lane drive recorded as
+// UNVERIFIED-WITH-REASON on the bead until a quiet window.
+describe("fused.js asks the save API for the leaf name and surfaces a refused sync", () => {
+  const fused = readFileSync(path.join(PUBLIC, "fused.js"), "utf8");
+
+  it("the POST body carries the DERIVED name, not the shown path", () => {
+    const sync = fused.slice(fused.indexOf("function syncMiniAppAfterFileSave"), fused.indexOf("function syncReaderBubble"));
+    assert.match(sync, /const name = miniAppSyncName\(fileName\);/, "the name is derived first");
+    assert.match(sync, /if \(!isHtmlFileName\(name\)\) return;/, "the shape guard runs on the derived name");
+    assert.match(sync, /body: JSON\.stringify\(\{ fileName: name, title: name, html: content \}\)/, "the REQUEST BODY is the one-name shape the API takes");
+    assert.doesNotMatch(sync, /body: JSON\.stringify\(\{ fileName,/, "the shown path never reaches the body");
+  });
+
+  it("a refused sync is NAMED, not swallowed — the response status is checked", () => {
+    const sync = fused.slice(fused.indexOf("function syncMiniAppAfterFileSave"), fused.indexOf("function syncReaderBubble"));
+    assert.match(sync, /\.then\(\(r\) => \{[\s\S]*?if \(!r\.ok\) console\.warn/, "an !ok response warns with the name and status");
+    assert.match(sync, /the file itself was saved/, "the warning says the SAVE succeeded — only the sync failed");
   });
 });

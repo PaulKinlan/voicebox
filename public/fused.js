@@ -6,7 +6,7 @@
 // state, and no claim the server has not made. Strings are rendered with
 // textContent only.
 import { debugEnabled, openTranscriptDialog, recordDebug } from "./debug-transcript.js";
-import { createRoomUndoStack, deleteHandleFile, diffHandleFile, editHandleFile, grepHandleFolder, parseRoomFolderTurn } from "./room-folder-ops.js";
+import { createRoomUndoStack, deleteHandleFile, diffHandleFile, editHandleFile, grepHandleFolder, miniAppSyncName, parseRoomFolderTurn } from "./room-folder-ops.js";
 import { installWindowManager } from "./window-manager.mjs";
 
 const $ = (id) => document.getElementById(id);
@@ -2361,17 +2361,29 @@ async function refreshCatalogMiniApps() {
 }
 
 function syncMiniAppAfterFileSave(fileName, content) {
-  if (!isHtmlFileName(fileName)) return;
-  const norm = normalizeMiniAppKey(fileName);
+  // ASK FOR THE NAME THE SAVE API TAKES: ONE name inside the root (voicebox-beads-m4no). The
+  // caller hands the SHOWN path, which is the folder-joined 'proposals/draft.html' whenever the
+  // reader was inside a folder; posting that used to make the server basename-rewrite it into a
+  // misnamed duplicate at the root, and after owit's tightening it is refused 400 — with the old
+  // fire-and-forget catch swallowing the status, a file saved inside a folder silently lost its
+  // shelf/workspace sync. The leaf IS the file the user just saved; the folder is placement,
+  // which the save API refuses by design.
+  const name = miniAppSyncName(fileName);
+  if (!isHtmlFileName(name)) return;
+  const norm = normalizeMiniAppKey(name);
   void fetch("/api/mini-apps", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ fileName, title: fileName, html: content }),
+    body: JSON.stringify({ fileName: name, title: name, html: content }),
+  }).then((r) => {
+    // A REFUSED SYNC IS NAMED, NOT SWALLOWED (the old .catch(() => {}) is how a 400 hid): the
+    // file itself was already saved — this is the shelf/workspace copy that did not land.
+    if (!r.ok) console.warn(`[mini-app-sync] shelf sync for '${name}' was refused (${r.status}) — the file itself was saved`);
   }).catch(() => {});
   let matchedDesc = null;
   for (const [k, v] of launchedMiniApps.entries()) {
     const vNorm = normalizeMiniAppKey(v.fileName || v.title || k);
-    if (v.fileName === fileName || v.title === fileName || (norm && vNorm === norm)) {
+    if (v.fileName === name || v.title === name || (norm && vNorm === norm)) {
       v.html = content;
       matchedDesc = v;
     }
@@ -2379,8 +2391,8 @@ function syncMiniAppAfterFileSave(fileName, content) {
   const current = miniAppController?.getDescriptor?.();
   if (current) {
     const curNorm = normalizeMiniAppKey(current.fileName || current.title || current.appId);
-    if (current.fileName === fileName || current.title === fileName || (norm && curNorm === norm)) {
-      miniAppController.mount({ ...current, fileName, html: content });
+    if (current.fileName === name || current.title === name || (norm && curNorm === norm)) {
+      miniAppController.mount({ ...current, fileName: name, html: content });
       return;
     }
   }
