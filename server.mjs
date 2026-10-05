@@ -2460,6 +2460,20 @@ async function execute(action) {
     });
     try { pageSocket?.send(frame); } catch {}
     try { runningSession?.socket?.send(frame); } catch {}
+    // A REFUSED SAVE IS STILL NAMED IN THE RESULT (review round 2, voicebox-beads-owit): the room
+    // still shows the html (that is this verb's product), but the answer must not claim a
+    // persistence that did not happen — the model reads this result to decide what to do next.
+    if (!saved.ok) {
+      return {
+        ok: false,
+        refused: saved.refused,
+        why: saved.why,
+        action: `mini-app "${action.title || "Interactive App"}" was shown in the room but NOT saved: ${saved.refused} — ${saved.why}`,
+        miniApp,
+        shownNotSaved: true,
+        root: active?.root ?? null,
+      };
+    }
     return {
       ok: true,
       action: `${saved.updated ? "updated" : "launched"} mini-app "${miniApp.title}" (${miniApp.appId})`,

@@ -51,22 +51,37 @@ describe("mini-app-store: persistence, in-place updates, deletion & cross-sandbo
     assert.equal(escape.refused, "outside-root", "refused by name, in the loop's own vocabulary");
     assert.equal(existsSync(path.join(rootPath, "escaped.html")), false, "nothing landed at the rewritten name");
     assert.equal(existsSync(path.join(hostDir, "mini-apps", "escaped.html")), false, "nor on the shelf");
-    // A sub-path and an absolute path are placement decisions, not names — same refusal:
-    for (const bad of ["sub/app.html", "/etc/app.html", "C:\\app.html"]) {
-      const r = saveMiniApp({ title: "Sub", html: "<h1>x</h1>", fileName: bad, rootPath, hostDir });
+    // A sub-path, an absolute path, and — review round 2 — the shapes the first cut's
+    // empty-segment filter let through ('/app.html', trailing separators, './' forms): a
+    // separator character ANYWHERE in the name is a placement decision, refused verbatim.
+    for (const bad of ["sub/app.html", "/etc/app.html", "C:\\app.html", "/app.html", "/tmp", "/tmp/", "app.html/", "./app.html", ".", ".."]) {
+      const r = saveMiniApp({ title: `Sub ${bad}`, html: "<h1>x</h1>", fileName: bad, rootPath, hostDir });
       assert.equal(r.ok, false, `'${bad}' must refuse`);
-      assert.equal(r.refused, "outside-root");
+      assert.equal(r.refused, "outside-root", `'${bad}' refused by name`);
     }
+    // Review round 2, the identity bypass: a climbing name must refuse EVEN WHEN its basename
+    // matches an existing app (the first cut checked the name only after matching, so
+    // '../escaped.html' updated the existing 'escaped.html' in place with ok:true).
+    const seed = saveMiniApp({ title: "Seed Identity", html: "<h1>v1</h1>", fileName: "bypassed.html", rootPath, hostDir });
+    assert.equal(seed.ok, true, "the seed must save");
+    const climb = saveMiniApp({ title: "Climb Identity", html: "<h1>v2</h1>", fileName: "../bypassed.html", rootPath, hostDir });
+    assert.equal(climb.ok, false, "a climbing name refuses even when the basename matches an existing app");
+    assert.equal(climb.refused, "outside-root");
+    const after = getMiniApp("bypassed.html", { rootPath, hostDir });
+    assert.equal(after.ok, true, "the existing app is untouched");
+    if (after.ok) assert.match(after.miniApp.html, /v1/, "its content was not overwritten by the refused save");
     // THE CONTROL, because a refusal set with no control proves nothing: an ordinary name still
     // saves, and an existing app's stored fileName still updates in place untouched by this rule.
     const control = saveMiniApp({ title: "Fine", html: "<h1>y</h1>", fileName: "fine-app.html", rootPath, hostDir });
     assert.equal(control.ok, true, `an ordinary name must still save (got ${JSON.stringify(control)})`);
     assert.equal(control.miniApp.fileName, "fine-app.html");
-    assert.ok(existsSync(path.join(rootPath, "fine-app.html")));
-    // A name that needs the .html appended still gets it (the basename path did this too):
+    assert.ok(existsSync(path.join(rootPath, "fine-app.html")), "the control landed on disk, not just in the result");
+    // A name that needs the .html appended still gets it (the basename path did this too),
+    // and the appended file lands on disk (review round 2 test nit):
     const bare = saveMiniApp({ title: "Bare", html: "<h1>z</h1>", fileName: "bare-name", rootPath, hostDir });
     assert.equal(bare.ok, true);
     assert.equal(bare.miniApp.fileName, "bare-name.html");
+    assert.ok(existsSync(path.join(rootPath, "bare-name.html")), "the .html append landed on disk");
   });
 
   it("saveMiniApp creates a mini-app once and updates the same appId and file in place without duplicating", () => {
