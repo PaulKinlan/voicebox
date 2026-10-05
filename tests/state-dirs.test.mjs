@@ -24,7 +24,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { execFile as execFileCb } from "node:child_process";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { promisify } from "node:util";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -159,17 +159,30 @@ test("the defaults hang off THIS checkout (the tree that holds the owner module)
   // variable cleared must still answer the checkout's defaults.
   const env = { ...process.env };
   for (const name of NAMES) delete env[name];
+  // ALL FOUR facts, not two: the homedir-relative defaults cannot be caught by cwd in the parent
+  // (review hole 3), so the child answers them too — and a cwd-relative mutation of either homedir
+  // fact goes red HERE (cwd=/tmp), not just by value.
   const child = await execFileAsync(process.execPath, [
     "--input-type=module",
     "-e",
-    `const m = await import(${JSON.stringify(pathToFileURL(path.join(REPO, "lib", "state-dirs.mjs")).href)}); console.log(JSON.stringify([m.workspaceDir(), m.extensionsDir()]));`,
+    `const m = await import(${JSON.stringify(pathToFileURL(path.join(REPO, "lib", "state-dirs.mjs")).href)}); console.log(JSON.stringify([m.workspaceDir(), m.extensionsDir(), m.wasmShelfDir(), m.sandboxHomesDir()]));`,
   ], { cwd: tmpdir(), env, encoding: "utf8" });
-  const [childWorkspace, childExtensions] = JSON.parse(child.stdout.trim());
+  const [childWorkspace, childExtensions, childShelf, childHomes] = JSON.parse(child.stdout.trim());
   assert.equal(childWorkspace, path.join(REPO, "workspace"), "a child running from /tmp still answers the checkout's workspace default — not its cwd");
   assert.equal(childExtensions, path.join(REPO, "extensions"), "and the extensions default — cwd-independence, driven not asserted");
+  assert.equal(childShelf, path.join(homedir(), ".isocan", "modules", "wasm-tools"), "and the wasm shelf default — by VALUE, from a different cwd");
+  assert.equal(childHomes, path.join(homedir(), "sandbox-homes"), "and the sandbox-homes default — by VALUE, from a different cwd");
 });
 
-test("the sandbox-homes default lives OUTSIDE /tmp — PrivateTmp hides a home inside it and the bind fails (the module's own recorded defect)", () => {
+test("the two homedir-relative defaults are pinned BY VALUE, not by shape (review holes 1+2)", () => {
+  // A presence-only check lets '/tmp/bogus-shelf' or a cwd-relative path through; the VALUE is
+  // the contract — the isocan shelf and the sandbox homes hang off the user's home, exactly there.
+  const shelf = withCleanEnv(() => wasmShelfDir());
   const homes = withCleanEnv(() => sandboxHomesDir());
-  assert.ok(!homes.startsWith(tmpdir() + path.sep), `the default must not be under ${tmpdir()} (got ${homes}) — the 226/NAMESPACE lesson, pinned so a 'tidy' default cannot quietly regress it`);
+  assert.equal(shelf, path.join(homedir(), ".isocan", "modules", "wasm-tools"), "the wasm shelf default, by value");
+  assert.equal(homes, path.join(homedir(), "sandbox-homes"), "the sandbox-homes default, by value");
+  // And the module's own recorded lesson stays named: a home under /tmp is hidden by PrivateTmp
+  // and the fence bind fails (status 226/NAMESPACE) — the value pin above is the primary guard,
+  // this documents WHY that value must never be tidied somewhere writable-looking.
+  assert.ok(!homes.startsWith(tmpdir() + path.sep), `the default must not be under ${tmpdir()} — the 226/NAMESPACE lesson`);
 });
