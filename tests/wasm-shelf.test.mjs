@@ -471,7 +471,7 @@ test("mbk: queue overflow is refused by name as over-budget when fan-out exceeds
   assert.equal(stats.queued, 0);
 });
 
-test("3kr3: a fast call finishing alongside a held spinner releases its own slot once and never decrements the spinner's active slot", { timeout: 10000 }, async () => {
+test("3kr3: a real fast worker's completion releases exactly its own slot and never decrements another holder's (voicebox-beads-nhlr)", { timeout: 10000 }, async () => {
   const { callWasmTool, createWasmSemaphore } = await import("../lib/wasm-shelf.mjs");
 
   // 0 locals, i32.const 32, end — valid buffer-abi/1 module that returns immediately
@@ -481,41 +481,64 @@ test("3kr3: a fast call finishing alongside a held spinner releases its own slot
   const fastTool = attackTool(FAST_MODULE);
   fastTool.wasm.path = fastFile;
 
-  const loopFile = path.join(scratch, "3kr3-loop.wasm");
-  writeFileSync(loopFile, LOOP_MODULE);
-  const loopTool = attackTool(LOOP_MODULE);
-  loopTool.wasm.path = loopFile;
-
   // Cap = 2, maxQueueDepth = 0 so any admission check against the remaining slot is immediate
   const semaphore = createWasmSemaphore({ maxConcurrent: 2, maxQueueDepth: 0 });
 
-  // 1. Spinner holds 1 slot while a fast call runs and exits beside it
-  const spinnerPromise = callWasmTool(loopTool, { input: "spin" }, { semaphore, deadlineMs: 350 });
+  // THE HOLDER IS DETERMINISTIC (voicebox-beads-nhlr). This slot used to be held by a loop module on a
+  // 350ms deadline, and the case asserted — after a 30ms sleep — that the spinner was STILL RUNNING.
+  // That asserts a property of the wall clock, not of the code: inside a loaded unit lane the deadline
+  // expired first, `active` was legitimately 0, and the case failed because the BOX was busy (measured
+  // in the fleet-check unit lane; the same tree passed 504/0 in an unloaded run). Held through the
+  // semaphore's own acquire(), nothing can expire this slot, so the condition under test no longer
+  // depends on scheduling. The deadline-terminated-loop case lives in its own test (voicebox-beads-LGW).
+  const held = await semaphore.acquire();
+  assert.equal(semaphore.stats().active, 1, "the test holds one slot deterministically");
+
+  // 1. A real worker completes beside the held slot
   const fastResult = await callWasmTool(fastTool, { input: "fast" }, { semaphore, deadlineMs: 1000 });
   assert.equal(fastResult.ok, true);
+  // No sleep is needed and none is used: the worker's release reaches its OWN permit, and a permit's
+  // release is exactly-once by construction, so whether its second completion event ('close') has
+  // fired yet cannot change the count.
+  assert.equal(semaphore.stats().active, 1, "the holder's slot survives the fast worker's completion — a repeat release never decrements another holder");
 
-  // Give the fast child's 'close' event time to fire after its stdout line resolved
-  await new Promise((r) => setTimeout(r, 30));
-
-  // If finish() / permit.release() were not idempotent (settled guard removed), the fast worker's
-  // second completion event ('close') would have decremented active from 1 to 0 while spinner still runs.
-  assert.equal(semaphore.stats().active, 1, "spinner's slot remains active after fast worker exits");
-
-  // 2. Offer two calls at cap 2 while spinner holds 1 slot: exactly ONE must be admitted
+  // 2. Offer two calls at cap 2 while the holder holds 1 slot: exactly ONE must be admitted
   const [probe1, probe2] = await Promise.all([
     callWasmTool(fastTool, { input: "probe-1" }, { semaphore, deadlineMs: 1000 }),
     callWasmTool(fastTool, { input: "probe-2" }, { semaphore, deadlineMs: 1000 }),
   ]);
   const admittedCount = [probe1, probe2].filter((r) => r.ok).length;
   const refusedCount = [probe1, probe2].filter((r) => !r.ok && r.refused === "over-budget").length;
-  assert.equal(admittedCount, 1, "exactly one call admitted into the single free slot alongside the spinner");
-  assert.equal(refusedCount, 1, "second concurrent probe refused over-budget because spinner still holds slot 1");
+  assert.equal(admittedCount, 1, "exactly one call admitted into the single free slot alongside the holder");
+  assert.equal(refusedCount, 1, "second concurrent probe refused over-budget because the holder still holds slot 1");
 
-  const spinnerResult = await spinnerPromise;
-  assert.equal(spinnerResult.ok, false);
-  assert.equal(spinnerResult.refused, "time-exceeded");
-  assert.equal(semaphore.stats().active, 0, "all slots released once spinner terminates");
+  held.release();
+  assert.equal(semaphore.stats().active, 0, "the holder's own release is what empties the semaphore");
   assert.equal(semaphore.stats().queued, 0);
+});
+
+test("3kr3: the permit's release is EXACTLY ONCE — driven at the semaphore seam with no process, no deadline and no sleep (voicebox-beads-nhlr)", async () => {
+  // The property the case above needs from below it, pinned deterministically. A worker reaches its
+  // completion twice (the stdout line, then 'exit'/'close') and callWasmTool releases again in its
+  // `finally`, so the same permit is released up to three times. A repeated release must be a no-op
+  // and must NEVER decrement a DIFFERENT holder's slot — the underflow the old worker-thread design
+  // had. No wasm child, no clock: this cannot fail because the box is busy, which is the whole point
+  // of filing voicebox-beads-nhlr.
+  const { createWasmSemaphore } = await import("../lib/wasm-shelf.mjs");
+  const semaphore = createWasmSemaphore({ maxConcurrent: 2, maxQueueDepth: 0 });
+
+  const held = await semaphore.acquire();
+  const worker = await semaphore.acquire();
+  assert.equal(semaphore.stats().active, 2, "both slots are held");
+
+  worker.release(); // the worker's first completion event
+  assert.equal(semaphore.stats().active, 1, "the worker gave back exactly its own slot");
+  worker.release(); // its second completion event — the case 3kr3 exists for
+  worker.release(); // and callWasmTool's own `finally`
+  assert.equal(semaphore.stats().active, 1, "repeated releases are no-ops — they must never decrement the holder's slot");
+
+  held.release();
+  assert.equal(semaphore.stats().active, 0, "the holder's release is the one that empties the semaphore");
 });
 
 
