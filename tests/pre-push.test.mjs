@@ -50,17 +50,18 @@ child.on("exit", (code, sig) => {
 // disposable fixture's init/config/add/commit into the repository being pushed.
 const cleanEnv = { ...process.env };
 for (const key of execFileSync('git', ['rev-parse', '--local-env-vars'], { encoding: 'utf8' }).trim().split('\n')) delete cleanEnv[key];
-// The fixture's timeout shim accelerates the DEFAULT budgets, keyed by stage+duration
-// (unit-timeout:180s, live-timeout:400s, accept-timeout:45s) — the duration is how it targets the
-// ONE stage under test, since GATE_CASE stays set for the whole push. The unit default is ALSO
-// asserted by value from the gate's own `(max 180s)` line in the branch-push case
-// (voicebox-beads-lq8s: 90s sat inside the suite's measured swing, so it is 180s now), which is
-// what names the number when it changes. A parent gate
+// The fixture's timeout shim accelerates the DEFAULT budgets, keyed on the COMMAND under test
+// (npm run test:unit / test:live / accept) and never on the budget number. Keying on the number
+// made the shim miss whenever the default budget changed, so the suite ran to completion and the
+// failure landed on an opaque `assert.notEqual(result.status, 0)` far from the cause; now a budget
+// change is intercepted like any other run and the named budget assertions fail with the number
+// (review findings M1/M2/M5, voicebox-beads-lq8s). The unit default is asserted by value from the
+// gate's own `(max 180s)` line in the branch-push case. A parent gate
 // run with a raised VOICEBOX_GATE_*_SECS (the refusal's own documented escape) would otherwise
 // leak in, miss the shim's match, and let the "timeout" scenario finish — the instrument
 // measuring itself under someone else's budget (voicebox-beads-67b). Strip them: the fixture
 // always exercises the defaults it is written against.
-for (const key of ['VOICEBOX_GATE_UNIT_SECS', 'VOICEBOX_GATE_LIVE_SECS', 'VOICEBOX_GATE_ACCEPT_SECS', 'VOICEBOX_PUSH_DESTINATIONS']) delete cleanEnv[key];
+for (const key of ['VOICEBOX_GATE_UNIT_SECS', 'VOICEBOX_GATE_TESTS_SECS', 'VOICEBOX_GATE_LIVE_SECS', 'VOICEBOX_GATE_ACCEPT_SECS', 'VOICEBOX_PUSH_DESTINATIONS']) delete cleanEnv[key];
 const hasFlock = (() => { try { execFileSync('which', ['flock'], { stdio: 'ignore' }); return true; } catch { return false; } })();
 
 test('pre-push names the stage and cause, streams output, and refuses real failing tests', { timeout: 60000 }, () => {
@@ -105,11 +106,25 @@ console.error('ACCEPTANCE STDERR BEFORE TERMINATION');
 if (process.env.GATE_CASE === 'accept-timeout') setTimeout(() => {}, 30000);
 if (process.env.GATE_CASE === 'accept-failure') { console.error('fetch failed (ECONNREFUSED): fixture front'); process.exitCode = 1; }
 `);
-    // Accelerate only the timeout being tested; execute the real GNU timeout.
+    // Accelerate ONLY the stage under test, keyed on its COMMAND — never on its budget. See the
+    // note above the fixture's cleanEnv: a number-keyed shim turned every future budget change into
+    // an opaque failure (review findings M1/M2/M5, voicebox-beads-lq8s).
     writeFileSync(path.join(bin, 'timeout'), `#!/bin/sh
-case "$GATE_CASE:$3" in
-  unit-timeout:180s|live-timeout:400s|accept-timeout:45s) shift 3; exec '${timeout}' --verbose --kill-after=1s 2s "$@" ;;
+case "$1" in --help) exec '${timeout}' --help ;; esac
+case "$GATE_CASE" in
+  unit-timeout) _want="run test:unit" ;;
+  live-timeout) _want="run test:live" ;;
+  accept-timeout) _want="run accept" ;;
+  *) _want="" ;;
 esac
+if [ -n "$_want" ]; then
+  case "$*" in
+    *"$_want"*)
+      while [ $# -gt 0 ]; do case "$1" in --verbose|--kill-after=*) shift ;; *) break ;; esac; done
+      [ $# -gt 0 ] && shift
+      exec '${timeout}' --verbose --kill-after=1s 2s "$@" ;;
+  esac
+fi
 exec '${timeout}' "$@"
 `);
     chmodSync(path.join(bin, 'timeout'), 0o755);
