@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { findBrowserBinary } from './lib/cdp.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const timeout = (() => {
@@ -228,7 +229,19 @@ exec '${timeout}' "$@"
   }
 });
 
-test('acceptance names the network cause when a responding front drops mid-run', { timeout: 30000 }, async () => {
+test('acceptance names the network cause when a responding front drops mid-run', { timeout: 30000 }, async (t) => {
+  // NAMED PRECONDITION, not a flake (voicebox-beads-80vw). This case drives tools/page-acceptance.mjs,
+  // which launches a REAL browser (VOICEBOX_CHROME, else a system chromium). With none present the
+  // tool dies at 'spawn /usr/bin/chromium ENOENT' BEFORE the network path this case asserts — which
+  // is exactly how it read: red standalone on a box without VOICEBOX_CHROME, green in the browser
+  // lane, which always sets it. The lane still exercises the assertion; a standalone run without a
+  // browser says WHY by name instead of failing as though the network naming were broken.
+  const browser = findBrowserBinary();
+  if (!browser) {
+    console.log('SKIP BY NAME: no browser binary (set VOICEBOX_CHROME) — this case needs a real browser to reach the network path it asserts');
+    t.skip('no browser binary — set VOICEBOX_CHROME; the acceptance tool cannot reach the network path this case asserts');
+    return;
+  }
   const front = createServer((req, res) => {
     if (req.url === '/api/root') res.end('{}');
     else if (req.url === '/api/files') res.end('{"files":[]}');
@@ -238,7 +251,10 @@ test('acceptance names the network cause when a responding front drops mid-run',
   await new Promise(resolve => front.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${front.address().port}`;
   const child = spawn(process.execPath, ['tools/page-acceptance.mjs'], {
-    cwd: root, env: { ...cleanEnv, VOICEBOX_UI_URL: url, VOICEBOX_API_URL: url, VOICEBOX_TREE: root },
+    // The VERIFIED binary is handed to the tool explicitly: this case's precondition and the tool's
+    // own discovery list live in different files, and passing the answer through means they cannot
+    // diverge into 'the test skipped while the tool could run' (or vice versa).
+    cwd: root, env: { ...cleanEnv, VOICEBOX_CHROME: browser, VOICEBOX_UI_URL: url, VOICEBOX_API_URL: url, VOICEBOX_TREE: root },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';
