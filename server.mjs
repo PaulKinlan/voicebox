@@ -6000,20 +6000,23 @@ try {
     // THE DEFAULT IS NOT SILENT ABOUT WHAT IT LEAVES OPEN (voicebox-beads-k74h, owner ruling
     // 2026-10-06: the gate stays OFF by default for testing — an accepted posture, but it must
     // announce itself). Named exposure: with the gate off, any unauthenticated client on
-    // loopback — including requests a page in the operator's browser can cause it to send
-    // without negotiation — can reach state-mutating routes: writing files into the ACTIVE
-    // WORKSPACE and registering environments, with no prompt and nothing visible in the page.
-    // The remedy is one restart away and the gate's effect is measured (docs/18 §0): every
-    // route except /api/health answers 401 loopback-unauthenticated without the session cookie.
+    // loopback — including requests a page in the operator's browser can cause it to send —
+    // can reach state-mutating routes: writing files into the ACTIVE WORKSPACE and registering
+    // environments, with no prompt and nothing visible in the page. The remedy is one restart
+    // away and the gate's effect is measured (docs/18 §0): without the session cookie, every
+    // route answers 401 loopback-unauthenticated except the self-authorising exemptions the
+    // wall itself names — /api/health, the bootstrap door, the ?bootstrap= page, host-token
+    // requests (server.mjs's LOOPBACK_AUTH block).
     console.warn(
-      `WARNING  VOICEBOX_LOOPBACK_AUTH is not set — the loopback session gate is OFF (the default).\n` +
+      `WARNING  VOICEBOX_LOOPBACK_AUTH is not 1 (unset or disabled) — the loopback session gate is OFF (the default).\n` +
         `         Any unauthenticated client on loopback, including requests a page the operator\n` +
         `         visits can cause the browser to send, can reach state-mutating routes on\n` +
         `         http://127.0.0.1:${bound} — writing files into the active workspace and registering\n` +
         `         environments — with no credential and no prompt.\n` +
-        `         Remedy: restart with VOICEBOX_LOOPBACK_AUTH=1. Every route except /api/health\n` +
-        `         (which stays 200) then answers 401 loopback-unauthenticated without the session\n` +
-        `         cookie minted by the one-time bootstrap URL printed at startup.\n` +
+        `         Remedy: restart with VOICEBOX_LOOPBACK_AUTH=1. Without the session cookie minted\n` +
+        `         by the one-time bootstrap URL printed at startup, every route then answers 401\n` +
+        `         loopback-unauthenticated — except /api/health (stays 200), the bootstrap door and\n` +
+        `         the ?bootstrap= page, and host-token requests, which are their own authority checks.\n` +
         `         See docs/18-loopback-session-auth.md.`,
     );
   }

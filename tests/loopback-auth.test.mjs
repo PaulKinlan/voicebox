@@ -35,7 +35,7 @@ const GATE_ON = { VOICEBOX_LOOPBACK_AUTH: "1", VOICEBOX_HELLO_BOUND_MS: "400" };
 async function scratchServer(env = {}) {
   const host = mkdtempSync(path.join(tmpdir(), "vb-loopback-auth-"));
   const extensions = path.join(host, "extensions");
-  const started = await startServer({ env: { VOICEBOX_EXTENSIONS_DIR: extensions, ...env } });
+  const started = await startServer({ env: { VOICEBOX_LOOPBACK_AUTH: undefined, VOICEBOX_EXTENSIONS_DIR: extensions, ...env } }); // an ambient shell value must not decide which posture is under test (the env-names.test.mjs pattern)
   return {
     ...started,
     extensions,
@@ -153,12 +153,13 @@ test("default OFF: startup names the unauthenticated loopback exposure and the f
     // posture — accepted, not silent. The warning is the acceptance's visible half: it names
     // the exposure (unauthenticated loopback clients, browser-originated requests included,
     // reaching state-mutating routes) and the remedy (the flag, and the measured gate-on
-    // effect: 401 loopback-unauthenticated everywhere except health, which stays 200).
-    const warned = await waitFor(() => server.stderr().includes("VOICEBOX_LOOPBACK_AUTH is not set"));
+    // effect: 401 loopback-unauthenticated except the wall's own self-authorising exemptions —
+    // health, which stays 200, the bootstrap door, and host-token requests).
+    const warned = await waitFor(() => server.stderr().includes("VOICEBOX_LOOPBACK_AUTH is not 1"));
     assert.ok(warned, "gate-off startup must print the unauthenticated-loopback warning");
     assert.match(server.stderr(), /active workspace/, "the warning names the workspace-write exposure");
     assert.match(server.stderr(), /VOICEBOX_LOOPBACK_AUTH=1/, "the warning names the flag remedy");
-    assert.match(server.stderr(), /401 loopback-unauthenticated/, "the warning names the gate's measured effect");
+    assert.match(server.stderr(), /401\s+loopback-unauthenticated/, "the warning names the gate's measured effect");
     assert.match(server.stderr(), /docs\/18-loopback-session-auth\.md/, "the warning points at the full posture doc");
   } finally {
     await server.stop();
@@ -174,7 +175,7 @@ test("gate ON: the gate-off warning is not printed — the bootstrap URL is the 
     const bootstrapped = await waitFor(() => server.stdout().includes("bootstrap"));
     assert.ok(bootstrapped, "gate-on startup prints the bootstrap URL");
     assert.ok(
-      !server.stderr().includes("VOICEBOX_LOOPBACK_AUTH is not set"),
+      !server.stderr().includes("VOICEBOX_LOOPBACK_AUTH is not 1"),
       "the unauthenticated-loopback warning must not fire when the gate is on",
     );
   } finally {
