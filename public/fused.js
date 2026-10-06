@@ -1995,9 +1995,11 @@ async function renderExtensions() {
     const shelfRunning = runningAll.filter((e) => e.source === "wasm-shelf");
     lastRunningExtensions = running;
     const waiting = (inv.proposals ?? []).filter((p) => p.state === "pending");
-    // An id that is no longer pending leaves both pieces of panel state with it: otherwise an id a
-    // later proposal reuses would come back unexpectedly open, and its old plan text with it.
-    for (const id of [...openPlanIds]) if (!waiting.some((p) => p.id === id)) { openPlanIds.delete(id); planCache.delete(id); }
+    // An id that is no longer reviewable leaves both pieces of panel state with it: otherwise an id a
+    // later proposal reuses would come back unexpectedly open, and its old plan text with it. A
+    // PRESENT file is reviewable too — it gets the same review panel — so it counts as still here.
+    const reviewableIds = new Set([...waiting, ...(inv.present ?? [])].map((p) => p.id));
+    for (const id of [...openPlanIds]) if (!reviewableIds.has(id)) { openPlanIds.delete(id); planCache.delete(id); }
     const refused = (inv.proposals ?? []).filter((p) => p.state === "refused");
     const present = inv.present ?? [];
     const catalogue = cat.catalogue ?? [];

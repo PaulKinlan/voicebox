@@ -204,3 +204,52 @@ test("extension plan panel: a background refresh keeps the open panel and its pl
     rmSync(scratch, { recursive: true, force: true });
   }
 });
+
+// AN UNREVIEWED HOST FILE GETS THE SAME REVIEW PANEL, so the same rule must hold for it: a background
+// refresh must not close what the person opened (reviewer nit d on abbd4a9 — my first prune kept only
+// pending proposals and this case is exactly what it would have closed).
+test("extension plan panel: a background refresh keeps the panel on an unreviewed host file", async () => {
+  const scratch = mkdtempSync(path.join(os.tmpdir(), "vb-approval-present-"));
+  const workspace = path.join(scratch, "workspace");
+  mkdirSync(workspace);
+  let server, page;
+  try {
+    server = await startServer({ env: { VOICEBOX_WORKSPACE: workspace, VOICEBOX_EXTENSIONS_DIR: path.join(scratch, "host") } });
+    // A file in the extensions folder: present here, never reviewed, no proposal. It is listed with
+    // the same disclose panel as a pending proposal.
+    const presentFile = { id: "presentclock", name: "presentclock", description: "A fixture clock", runsIn: "host",
+      capabilities: [], bounds: {}, tools: [{ name: "presentclock", primitive: "now", description: "Tell the time" }] };
+    writeFileSync(path.join(server.extensionsDir, "presentclock.json"), JSON.stringify(presentFile));
+    page = await launch();
+    await page.goto(server.base);
+    await page.click("#exts-open");
+    await page.waitFor(() => document.querySelector("#ext-present details.ext-plan"), { label: "unreviewed host file listed" });
+    await page.click("#ext-present details.ext-plan summary");
+    await page.waitFor(() => {
+      const panel = document.querySelector("#ext-present details.ext-plan");
+      return panel?.dataset.planState === "ready" || panel?.querySelector("pre")?.textContent.includes("presentclock");
+    }, { label: "extension plan loaded" });
+    await page.evaluate(() => { document.querySelector("#ext-present details.ext-plan").dataset.wasOpenBeforeRefresh = "true"; });
+    const injected = await page.evaluate(() => {
+      if (typeof window.__voiceboxOnToolCalls !== "function") return "no-hook";
+      window.__voiceboxOnToolCalls([{ name: "presentclock", ok: true }], { calls: [] });
+      return "injected";
+    });
+    assert.equal(injected, "injected");
+    await page.waitFor(() => {
+      const panel = document.querySelector("#ext-present details.ext-plan");
+      return Boolean(panel) && panel.dataset.wasOpenBeforeRefresh !== "true" && panel.dataset.planState !== "loading";
+    }, { label: "the rebuilt present-file panel settles", timeout: 8000 });
+    const after = await page.evaluate(() => {
+      const panel = document.querySelector("#ext-present details.ext-plan");
+      return { open: panel?.open ?? null, state: panel?.dataset.planState ?? null, plan: panel?.querySelector("pre")?.textContent ?? "" };
+    });
+    assert.equal(after.open, true, "the person's open panel on an unreviewed host file survives a background refresh");
+    assert.equal(after.state, "ready", "and its plan is still loaded, not left blank");
+    assert.match(after.plan, /presentclock/);
+  } finally {
+    await page?.close();
+    await server?.stop();
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
