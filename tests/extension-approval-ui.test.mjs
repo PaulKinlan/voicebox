@@ -48,7 +48,16 @@ test("extension approval in Chromium: console code admits and runs, replay/tampe
     await page.click("#exts-open");
     await page.waitFor(() => document.querySelector("#ext-waiting .ext-approve-btn"), { label: "waiting proposal 1-click button" });
     await page.click("#ext-waiting details.ext-plan summary");
-    await page.waitFor(() => document.querySelector("#ext-waiting .ext-plan pre")?.textContent.includes("approvalclock"), { label: "extension plan loaded" });
+    // READINESS IS A NAMED STATE, NOT A POLL OF TEXT (voicebox-beads-ujay): the panel says
+    // "loading" -> "ready" | "error", so a plan that never arrives fails as the state it reached
+    // (with the reason) instead of as a timeout that looks like slowness.
+    await page.waitFor(() => ["ready", "error"].includes(document.querySelector("#ext-waiting details.ext-plan")?.dataset.planState), { label: "extension plan settled" });
+    const settled = await page.evaluate(() => ({
+      state: document.querySelector("#ext-waiting details.ext-plan")?.dataset.planState,
+      note: document.querySelector("#ext-waiting details.ext-plan [role=status]")?.textContent,
+    }));
+    assert.equal(settled.state, "ready", `the plan panel finished loading, not refused: ${settled.note}`);
+    assert.match(await page.evaluate(() => document.querySelector("#ext-waiting details.ext-plan pre").textContent), /approvalclock/);
     assert.equal(await page.evaluate(() => {
       const dialog = document.getElementById("exts");
       return dialog.scrollWidth <= dialog.clientWidth && getComputedStyle(document.querySelector(".ext-plan pre")).whiteSpace === "pre-wrap";
@@ -116,6 +125,65 @@ test("extension approval in Chromium: console code admits and runs, replay/tampe
       assert.equal((await post("/api/turn", { transcript: "run the tool expiredclock" })).body.result?.refused, "not-admitted");
       console.log("Real 120-second expiry driven from Chromium: approval-expired; tool remains not-admitted.");
     }
+  } finally {
+    await page?.close();
+    await server?.stop();
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+// A BACKGROUND REFRESH MUST NOT TAKE AWAY WHAT THE PERSON IS READING (voicebox-beads-ujay). This is
+// the race that timed this file out under load: health()'s 20s poll and a landing tool call both
+// rebuild the waiting list with replaceChildren(), and the open review panel used to come back
+// closed with its plan gone — the plan only ever loaded from a `toggle` event the fresh row never
+// got, so a longer wait could not have helped. The refresh below is the app's OWN path
+// (window.__voiceboxOnToolCalls), not a synthetic DOM poke.
+test("extension plan panel: a background refresh keeps the open panel and its plan", async () => {
+  const scratch = mkdtempSync(path.join(os.tmpdir(), "vb-approval-race-"));
+  const workspace = path.join(scratch, "workspace");
+  mkdirSync(workspace);
+  let server, page;
+  try {
+    server = await startServer({ env: { VOICEBOX_WORKSPACE: workspace, VOICEBOX_EXTENSIONS_DIR: path.join(scratch, "host") } });
+    const descriptor = { id: "raceclock", name: "raceclock", description: "A fixture clock", runsIn: "host",
+      capabilities: [], bounds: {}, tools: [{ name: "raceclock", primitive: "now", description: "Tell the time" }] };
+    const staged = await fetch(server.base + "/api/extensions/proposals", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ descriptor }),
+    });
+    assert.equal(staged.status, 200, "the fixture proposal is staged");
+    page = await launch();
+    await page.goto(server.base);
+    await page.click("#exts-open");
+    await page.waitFor(() => document.querySelector("#ext-waiting .ext-approve-btn"), { label: "waiting proposal 1-click button" });
+    await page.click("#ext-waiting details.ext-plan summary");
+    // Deliberately tolerant of HOW readiness is signalled, so this case can also be run against the
+    // pre-fix page: it is the race below that it exists to catch, not the shape of the signal.
+    await page.waitFor(() => {
+      const panel = document.querySelector("#ext-waiting details.ext-plan");
+      return panel?.dataset.planState === "ready" || panel?.querySelector("pre")?.textContent.includes("raceclock");
+    }, { label: "extension plan loaded" });
+
+    const injected = await page.evaluate(() => {
+      if (typeof window.__voiceboxOnToolCalls !== "function") return "no-hook";
+      window.__voiceboxOnToolCalls([{ name: "raceclock", ok: true }], { calls: [] });
+      return "injected";
+    });
+    assert.equal(injected, "injected", "the app's tool-call path must exist for this to be the real refresh");
+    // Give the rebuilt panel a bound to settle. The pre-fix behaviour is not slow, it is WRONG: the
+    // rebuilt row is closed and blank, so this predicate is true at once and the assertions below
+    // name exactly what was lost.
+    await page.waitFor(() => {
+      const panel = document.querySelector("#ext-waiting details.ext-plan");
+      return Boolean(panel) && (panel.dataset.planState === "ready" || panel.dataset.planState === "error" || !panel.open);
+    }, { label: "the rebuilt panel settles", timeout: 8000 });
+    const after = await page.evaluate(() => {
+      const panel = document.querySelector("#ext-waiting details.ext-plan");
+      return { open: panel?.open ?? null, state: panel?.dataset.planState ?? null, plan: panel?.querySelector("pre")?.textContent ?? "" };
+    });
+    assert.equal(after.open, true, "the panel the person opened survives a background refresh");
+    assert.equal(after.state, "ready", "and its plan is still loaded, not left blank");
+    assert.match(after.plan, /raceclock/);
+    assert.deepEqual(page.events("Runtime.exceptionThrown"), [], "browser JavaScript errors");
   } finally {
     await page?.close();
     await server?.stop();

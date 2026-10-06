@@ -1745,6 +1745,11 @@ function extSection(listEl, rows, emptyText) {
   for (const row of rows) listEl.appendChild(row);
 }
 
+// The review panels the person has opened, by proposal id. Kept OUTSIDE the render because a
+// background refresh rebuilds the list and must not discard what the person was reading
+// (voicebox-beads-ujay).
+const openPlanIds = new Set();
+
 function extensionApproval(id) {
   const wrap = document.createElement("div");
   wrap.className = "ext-review-controls";
@@ -1774,19 +1779,42 @@ function extensionApproval(id) {
   const plan = document.createElement("pre");
   details.append(summary, note, plan);
 
+  // READINESS IS NAMED, NOT INFERRED: "loading" -> "ready" | "error". A caller (and the test that
+  // drives this panel) waits for a state instead of polling for text and calling the wait a timeout,
+  // and an error keeps its own name so a refusal is reported as a refusal, not as slowness.
+  const loadPlan = async () => {
+    if (plan.textContent || details.dataset.planState === "loading") return;
+    details.dataset.planState = "loading";
+    try {
+      const p = await request(`/api/extensions/proposals/${encodeURIComponent(id)}/plan`);
+      plan.textContent = JSON.stringify(p, null, 2);
+      details.dataset.planState = "ready";
+    } catch (err) {
+      note.textContent = err.message;
+      details.dataset.planState = "error";
+    }
+  };
+
   const post = (route, body) => request(`/api/extensions/${route}`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
   });
 
-  details.addEventListener("toggle", async () => {
-    if (!details.open || plan.textContent) return;
-    try {
-      const p = await request(`/api/extensions/proposals/${encodeURIComponent(id)}/plan`);
-      plan.textContent = JSON.stringify(p, null, 2);
-    } catch (err) {
-      note.textContent = err.message;
-    }
+  details.addEventListener("toggle", () => {
+    if (details.open) { openPlanIds.add(id); void loadPlan(); }
+    else openPlanIds.delete(id);
   });
+
+  // A REFRESH MUST NOT CLOSE THE PANEL THE PERSON OPENED (voicebox-beads-ujay). renderExtensions()
+  // rebuilds this list with replaceChildren(), and health() (a 20s poll) and a landing tool call both
+  // call it — so a background refresh used to replace an open review panel with a fresh closed row
+  // and its already-fetched plan vanished. The plan only ever loaded from the `toggle` event, and a
+  // row that was never toggled never fires one: under load the plan simply never appeared, which is
+  // the flake. The panel's open state belongs to the person, not to the render, so restore it here
+  // and load the plan directly rather than waiting for an event this element will not get.
+  if (openPlanIds.has(id)) {
+    details.open = true;
+    void loadPlan();
+  }
 
   approve.addEventListener("click", async () => {
     approve.disabled = true;
