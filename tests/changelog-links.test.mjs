@@ -159,11 +159,25 @@ test("browser: room build stamp links commits to GitHub and opens changelog as a
   assert.ok(first.subject.length > 0);
   assert.ok(first.meta.length > 0);
 
-  // Close via close button and verify focus returns to #changelog-open
+  // Close via close button and verify aria-expanded clears and focus returns to #changelog-open.
+  // Focus restoration is synchronous in the dialog close() algorithm (platform-owned), but
+  // `aria-expanded` is set by the app's close handler in a SEPARATE task, so wait for BOTH before
+  // asserting (voicebox-beads-tnxm / voicebox-beads-xep4).
   await page.click("#changelog-close");
-  await page.waitFor(() => document.getElementById("changelog-dialog")?.open === false, {
-    label: "changelog dialog closed",
-  });
+  await page.waitFor(
+    () => {
+      const dialog = document.getElementById("changelog-dialog");
+      const trigger = document.getElementById("changelog-open");
+      return dialog?.open === false && trigger?.getAttribute("aria-expanded") === "false" && document.activeElement === trigger;
+    },
+    { label: "changelog dialog closed (aria-expanded false, focus back on #changelog-open)" },
+  );
+  const afterClose = await page.evaluate(() => ({
+    expanded: document.getElementById("changelog-open")?.getAttribute("aria-expanded"),
+    activeId: document.activeElement?.id ?? document.activeElement?.tagName,
+  }));
+  assert.equal(afterClose.expanded, "false", "the changelog trigger still says expanded after close");
+  assert.equal(afterClose.activeId, "changelog-open", `closing the changelog must return focus to its trigger, got '${afterClose.activeId}'`);
 
   // Also verify clicking the #build "change log" link opens the same modal without navigating
   await page.click('#build a[href="#changelog-dialog"]');
