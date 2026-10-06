@@ -6,6 +6,24 @@ While the default loopback `Origin` check blocks Cross-Site WebSocket Hijacking 
 
 ---
 
+## 0. Default Posture: Gate OFF (accepted testing posture, owner ruling 2026-10-06)
+
+The gate is **OFF by default**, and the owner has ruled it stays that way for testing (voicebox-beads-k74h). The default is accepted, not silent:
+
+- **Startup warning.** When `VOICEBOX_LOOPBACK_AUTH` is not `1` (unset or disabled), `server.mjs` prints a warning at startup naming the exposure and the flag remedy.
+- **Browser-originated write risk.** With the gate off, the loopback `Origin` check distinguishes browser contexts but requires no credential. A page the operator merely visits can cause the browser to send requests that reach **state-mutating routes** — writing files into the **active workspace** and registering environments — with no credential, no prompt, and nothing visible in the page. The state-mutating surface includes a command-execution verb, so the exposure ceiling is higher than file writes. The response is not readable cross-origin, but the server has already acted.
+- **Verified gate-on behaviour.** With `VOICEBOX_LOOPBACK_AUTH=1`, an unauthenticated HTTP request is refused with `401` (`loopback-unauthenticated`) before any route answers (WebSocket upgrades are refused too, under their own names — §1 item 6). The exemptions are the wall's own self-authorising checks (§1, "HTTP & API Wall"): `GET /api/health` remains `200` for supervisors and readiness checks (it exposes no file contents and no credential, though it does report the declared root and project name), and the bootstrap door, the `?bootstrap=` page, and host-token requests pass on their own authority. This is pinned by `tests/loopback-auth.test.mjs`.
+- **Which browser-originated requests act (conceptual).** Cross-origin *simple* POSTs — the shapes a browser sends without a CORS preflight, which include plain form submissions — reach the routes and act. A JSON-content-type request triggers a preflight first, which this server answers `404`, so nothing acts on that path. No executable reproduction is published here; the owner ruling records the impact at this conceptual level only.
+- **Recommendation.** Run with `VOICEBOX_LOOPBACK_AUTH=1` outside local testing — the gate-off default exists for the raw command-line testing workflow, and the flag is one restart away.
+
+Enabling the gate is one restart away:
+
+```bash
+VOICEBOX_LOOPBACK_AUTH=1 npm start
+```
+
+---
+
 ## 1. How the Loopback Session Gate Works
 
 ```bash

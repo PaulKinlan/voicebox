@@ -215,7 +215,7 @@ Environment variables read by the server and runtime libraries:
 | `VOICEBOX_HELLO_BOUND_MS` | `server.mjs` | Timeout in milliseconds to receive an authentication `hello` frame on `/channel` or `/live` (default `5000`). |
 | `VOICEBOX_INSTANCE` | `server.mjs` | Writer identifier recorded in the active workspace's `.audit/<writer>.jsonl` log (default `machine`). |
 | `VOICEBOX_LIVE_PROVIDER` | `lib/live-session.mjs`, `server.mjs` | Fallback live voice provider (`gemini`, `openai`, or `claude`) when the client session does not specify one. |
-| `VOICEBOX_LOOPBACK_AUTH` | `server.mjs` | Set to `1` to require a single-use bootstrap ticket (`?bootstrap=<ticket>`) and `HttpOnly` session cookie for local browser access. |
+| `VOICEBOX_LOOPBACK_AUTH` | `server.mjs` | Set to `1` to require a single-use bootstrap ticket (`?bootstrap=<ticket>`) and `HttpOnly` session cookie for local browser access. **Default off** (accepted testing posture): with the gate off, unauthenticated loopback clients — including browser-originated requests — can reach state-mutating routes such as active-workspace writes, so the server prints a startup warning naming the exposure and this remedy (see `docs/18-loopback-session-auth.md`). |
 | `VOICEBOX_OPENAI_INPUT_TRANSCRIPTION` | `lib/live-providers/openai.mjs` | Set to `1` to enable `gpt-4o-mini-transcribe` input audio transcription in the OpenAI Realtime session handshake. |
 | `VOICEBOX_PROVIDER` | `server.mjs` | Deprecated alias for `VOICEBOX_RESOLVER`, retained for backward compatibility. |
 | `VOICEBOX_RESOLVER` | `server.mjs` | Default text turn resolver used by `POST /api/turn` (`script`, `gemini`, `openai`, or `claude`; default `script`). |
@@ -223,6 +223,16 @@ Environment variables read by the server and runtime libraries:
 | `VOICEBOX_WASM_SHELF_DIR` | `lib/state-dirs.mjs` | Directory containing the digest-pinned WebAssembly tool shelf (`manifest.json` and `.wasm` binaries; default `~/.isocan/modules/wasm-tools`). |
 | `VOICEBOX_WORKSPACE` | `lib/state-dirs.mjs` | Declares an active machine project root at startup and stores extension proposals (`proposals/`) and extension audit logs (`audit.jsonl`). |
 <!-- END GENERATED: config -->
+
+### Loopback Security Posture (default: unauthenticated — local testing only)
+
+- **Default.** `VOICEBOX_LOOPBACK_AUTH` not `1` → the loopback session gate is OFF (owner-accepted testing posture). The server prints a startup warning naming the exposure and the remedy.
+- **Impact.** Any unauthenticated loopback client can reach state-mutating routes: writing files into the **active workspace** and registering environments — and the state-mutating surface includes a command-execution verb. A web page the operator merely visits can cause the browser to send such requests to `127.0.0.1`; the server acts even though the response is not readable cross-origin.
+- **Which browser-originated requests act.** Cross-origin *simple* POSTs — the shapes a browser sends without a CORS preflight, which include plain form submissions — reach the routes and act. A JSON-content-type request triggers a preflight first, which the server answers `404`, so nothing acts on that path.
+- **Remedy (verified).** `VOICEBOX_LOOPBACK_AUTH=1` requires a token: the one-time bootstrap URL printed at startup redeems into an `HttpOnly` session cookie. Verified behaviour: unauthenticated HTTP requests are refused with `401` (`loopback-unauthenticated`) and WebSocket upgrades refuse under their own names, while `GET /api/health` stays `200` — pinned by `tests/loopback-auth.test.mjs`.
+- **Recommendation.** Run with `VOICEBOX_LOOPBACK_AUTH=1` outside local testing; the gate-off default exists for the raw command-line workflow.
+
+Full gate documentation: [`docs/18-loopback-session-auth.md`](docs/18-loopback-session-auth.md).
 
 ---
 

@@ -4131,7 +4131,8 @@ async function handle(req, res) {
   // Self-authorising exemptions, each with its reason named:
   //   · /api/health — supervisors, the currency gate heartbeat and the suites that spawn a server and
   //     wait on it (tests/server-bind-resilience.test.mjs) read it before any session exists; it
-  //     reports no root, no file and no credential. (The shared tests/lib/server.mjs harness no
+  //     reports the declared root and project name, but no file contents and no credential.
+  //     (The shared tests/lib/server.mjs harness no
   //     longer polls it — its readiness is the startup banner, voicebox-beads-4oj6.)
   //   · POST /api/bootstrap — it IS the authority check (host token) and the re-entry door.
   //   · the page carrying ?bootstrap= — the route itself validates and consumes the ticket.
@@ -5996,6 +5997,32 @@ try {
     console.log(`bootstrap  http://127.0.0.1:${bound}/?bootstrap=${ticket}`);
     console.log(`  the page and every API/WS route answer only with the session cookie that URL mints (one-time; HttpOnly; SameSite=Strict).`);
     console.log(`  lost the cookie? mint another without restarting: curl -X POST -H "x-voicebox-host-token: $(cat "${HOST_DIR}/.host-token")" http://127.0.0.1:${bound}/api/bootstrap`);
+  } else {
+    // THE DEFAULT IS NOT SILENT ABOUT WHAT IT LEAVES OPEN (voicebox-beads-k74h, owner ruling
+    // 2026-10-06: the gate stays OFF by default for testing — an accepted posture, but it must
+    // announce itself). Named exposure: with the gate off, any unauthenticated client on
+    // loopback — including requests a page in the operator's browser can cause it to send —
+    // can reach state-mutating routes: writing files into the ACTIVE WORKSPACE and registering
+    // environments, with no prompt and nothing visible in the page. The remedy is one restart
+    // away and the gate's effect is measured (docs/18 §0): without the session cookie, every
+    // HTTP route answers 401 loopback-unauthenticated, WebSocket upgrades refuse under their
+    // own names, and the only ways through are the exemptions the wall itself names —
+    // GET /api/health for supervisors, and the bootstrap door, the ?bootstrap= page and
+    // host-token requests, each on its own authority (server.mjs's LOOPBACK_AUTH block).
+    console.warn(
+      `WARNING  VOICEBOX_LOOPBACK_AUTH is not 1 (unset or disabled) — the loopback session gate is OFF (the default).\n` +
+        `         Any unauthenticated client on loopback, including requests a page the operator\n` +
+        `         visits can cause the browser to send, can reach state-mutating routes on\n` +
+        `         http://127.0.0.1:${bound} — writing files into the active workspace and registering\n` +
+        `         environments — with no credential and no prompt.\n` +
+        `         Remedy: restart with VOICEBOX_LOOPBACK_AUTH=1. Without the session cookie minted\n` +
+        `         by the one-time bootstrap URL printed at startup, every HTTP route then answers\n` +
+        `         401 loopback-unauthenticated (WebSocket upgrades refuse under their own names).\n` +
+        `         Exempt: GET /api/health, which stays 200 for supervisors, and the bootstrap door,\n` +
+        `         the ?bootstrap= page, and host-token requests, which pass on their own authority.\n` +
+        `         The gate-off default is a local-testing posture — run with the flag outside testing.\n` +
+        `         See docs/18-loopback-session-auth.md.`,
+    );
   }
 } catch (error) {
   console.error(
