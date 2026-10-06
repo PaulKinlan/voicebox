@@ -24,16 +24,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-
-const BROWSERS = [
-  process.env.VOICEBOX_CHROME,
-  "/usr/bin/chromium",
-  "/usr/bin/chromium-browser",
-  "/usr/bin/google-chrome-stable",
-  "/usr/bin/google-chrome",
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  "/Applications/Chromium.app/Contents/MacOS/Chromium",
-].filter(Boolean);
+import { findBrowserBinary } from "../../lib/browser-binaries.mjs";
 
 /**
  * The browser binary this box can actually launch, or null. THE ONE DISCOVERY SITE for the test
@@ -42,9 +33,7 @@ const BROWSERS = [
  * failed standalone as 'uncaught: spawn /usr/bin/chromium ENOENT' — which reads as a network
  * verdict, not as a missing precondition).
  */
-export function findBrowserBinary() {
-  return BROWSERS.find((b) => existsSync(b)) ?? null;
-}
+export { findBrowserBinary }; // re-exported for the driver's callers — the list itself lives in the one owner (voicebox-beads-phs9)
 
 export async function launch({ width = 1000, height = 800, profile = null, fakeMedia = false, fakeAudioFile = null } = {}) {
   const binary = findBrowserBinary();
