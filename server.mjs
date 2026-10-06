@@ -6005,9 +6005,10 @@ try {
     // can reach state-mutating routes: writing files into the ACTIVE WORKSPACE and registering
     // environments, with no prompt and nothing visible in the page. The remedy is one restart
     // away and the gate's effect is measured (docs/18 §0): without the session cookie, every
-    // route answers 401 loopback-unauthenticated except the self-authorising exemptions the
-    // wall itself names — /api/health, the bootstrap door, the ?bootstrap= page, host-token
-    // requests (server.mjs's LOOPBACK_AUTH block).
+    // HTTP route answers 401 loopback-unauthenticated, WebSocket upgrades refuse under their
+    // own names, and the only ways through are the exemptions the wall itself names —
+    // GET /api/health for supervisors, and the bootstrap door, the ?bootstrap= page and
+    // host-token requests, each on its own authority (server.mjs's LOOPBACK_AUTH block).
     console.warn(
       `WARNING  VOICEBOX_LOOPBACK_AUTH is not 1 (unset or disabled) — the loopback session gate is OFF (the default).\n` +
         `         Any unauthenticated client on loopback, including requests a page the operator\n` +
@@ -6015,9 +6016,10 @@ try {
         `         http://127.0.0.1:${bound} — writing files into the active workspace and registering\n` +
         `         environments — with no credential and no prompt.\n` +
         `         Remedy: restart with VOICEBOX_LOOPBACK_AUTH=1. Without the session cookie minted\n` +
-        `         by the one-time bootstrap URL printed at startup, every route then answers 401\n` +
-        `         loopback-unauthenticated — except /api/health (stays 200), the bootstrap door and\n` +
-        `         the ?bootstrap= page, and host-token requests, which are their own authority checks.\n` +
+        `         by the one-time bootstrap URL printed at startup, every HTTP route then answers\n` +
+        `         401 loopback-unauthenticated (WebSocket upgrades refuse under their own names).\n` +
+        `         Exempt: GET /api/health, which stays 200 for supervisors, and the bootstrap door,\n` +
+        `         the ?bootstrap= page, and host-token requests, which pass on their own authority.\n` +
         `         The gate-off default is a local-testing posture — run with the flag outside testing.\n` +
         `         See docs/18-loopback-session-auth.md.`,
     );
