@@ -16,10 +16,12 @@ mkdir -p "$SANDBOX_HOME/workspace"
 # The tree the fence binds is THIS SCRIPT's repo, not the caller's cwd: a server that boots a fence
 # may run from anywhere, and the probe and the source it mounts live beside this script.
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The ELF loader lives under /usr/lib64 on some hosts and /usr/lib on others: mirror the host.
+LIB64=usr/lib; [ -e /usr/lib64/ld-linux-x86-64.so.2 ] && LIB64=usr/lib64
 exec /usr/bin/bwrap \
   --ro-bind /usr /usr \
   --symlink usr/bin /bin \
-  --symlink usr/lib /lib64 \
+  --symlink "$LIB64" /lib64 \
   --symlink usr/lib /lib \
   --ro-bind /etc /etc \
   --proc /proc \

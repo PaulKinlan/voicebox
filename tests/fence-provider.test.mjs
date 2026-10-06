@@ -71,7 +71,9 @@ test("boots an L1 fence from a descriptor and returns a MEASURED per-axis bounda
   assert.match(out.origin, /^http:\/\/127\.0\.0\.1:\d+$/, "the origin is a loopback URL on a free port");
   assert.equal(out.home.kind, "machine");
   assertOwnWorkspace(out.home.path, "vb-test-measure");
-  assert.equal(out.boundary.level, "L1");
+  // The level is DERIVED from the probe: the fence earns L1; a host whose launching process already has
+  // seccomp filter mode and zero caps (e.g. the exe.dev VM) legitimately earns L1.5. Either is a fenced box.
+  assert.ok(["L1", "L1.5"].includes(out.boundary.level), `fenced level, got ${out.boundary.level}`);
 
   // The decisive case: files and processes FENCED, network PASSED — each named with its measurement.
   assert.equal(out.boundary.axes.files.verdict, "fenced");
