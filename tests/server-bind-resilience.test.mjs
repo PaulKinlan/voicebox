@@ -82,8 +82,12 @@ const health = async (port) => {
 
 test("a port held at boot is retried, and the server binds when the holder lets go", { timeout: 60000 }, async () => {
   const port = await freePort();
-  const { release } = await holdPort(port, 1500);
-
+  // voicebox-beads-hyww: hold the port until the server has actually RETRIED — an event, not a
+  // wall-clock. The fixed 1500ms hold this replaces could expire before the child had spawned,
+  // booted and attempted its first bind (measured under full-gate load: the server bound cleanly
+  // on attempt one and the output held no [bind] line at all). The 30s backstop exists only so a
+  // hung child cannot pin the port forever.
+  const { release } = await holdPort(port, 30000);
   const child = spawn(process.execPath, [SERVER], {
     cwd: ROOT,
     detached: true, // its own group, so the teardown below can reap all of it
@@ -98,6 +102,15 @@ test("a port held at boot is retried, and the server binds when the holder lets 
     // The server must NOT have exited while the port was held — that is the whole defect.
     assert.equal(child.exitCode, null, `the server exited instead of retrying:\n${output}`);
 
+    // Let go only once the retry is OBSERVED — the thing under test has then provably happened.
+    let sawRetry = /\[bind\] waiting/.test(output);
+    for (let i = 0; i < 400 && !sawRetry && child.exitCode === null; i++) {
+      await sleep(25);
+      sawRetry = /\[bind\] waiting/.test(output);
+    }
+    assert(sawRetry, `the server never retried the held port:\n${output}`);
+    await release();
+
     let up = false;
     for (let i = 0; i < 60 && !up; i++) {
       up = (await health(port)) === 200;
@@ -111,6 +124,35 @@ test("a port held at boot is retried, and the server binds when the holder lets 
     assert.match(output, /voicebox on http:\/\/127\.0\.0\.1:\d+/, "the server did not announce its address");
   } finally {
     await release().catch(() => {});
+    await reap(child);
+  }
+});
+
+// Negative control for the test above (voicebox-beads-hyww): with the port free, a boot logs NO
+// [bind] retry line — so asserting that line in the held-port test witnesses a real retry, not
+// just any boot. Without this control the held-port test could pass against a server that logs
+// the line unconditionally.
+test("a clean bind logs no [bind] retry line", { timeout: 60000 }, async () => {
+  const port = await freePort();
+  const child = spawn(process.execPath, [SERVER], {
+    cwd: ROOT,
+    detached: true,
+    env: { ...process.env, PORT: String(port), VOICEBOX_BIND_RETRY_MS: "150", VOICEBOX_BIND_DEADLINE_MS: "10000" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout.on("data", (d) => (output += String(d)));
+  child.stderr.on("data", (d) => (output += String(d)));
+
+  try {
+    let up = false;
+    for (let i = 0; i < 60 && !up; i++) {
+      up = (await health(port)) === 200;
+      if (!up) await sleep(250);
+    }
+    assert.equal(up, true, `the server never answered on a free port:\n${output}`);
+    assert.doesNotMatch(output, /\[bind\] waiting/, `a clean bind claimed a retry:\n${output}`);
+  } finally {
     await reap(child);
   }
 });
