@@ -177,6 +177,23 @@ done
 # a question in a namespace that does not exist.
 TARGET="${TARGET#refs/heads/}"
 
+# …and then the TARGET must still BE A REFNAME. Normalising introduced the hole the third-family
+# reviewer found on the round after the empty-value guard: `--target=refs/heads/` is non-empty so it
+# passed that guard, and then became EMPTY by stripping the prefix — so `--check` printed
+# `PRECONDITION-OK … target=origin/` and exited 0, an OK about no target at all, which is the same
+# defect the guard was written to refuse, walking in through the back door.
+#
+# `git check-ref-format` is asked instead of hand-rolling a test for "empty", because the honest rule
+# is not "non-empty" — it is "a ref this repository could actually have". Measured on this git, that
+# also refuses `//`, a name with a space, `.` and `..`, and accepts `main`, `feat/x` and the
+# already-normalised `refs/heads/x`.
+if [ -z "$TARGET" ] || ! git check-ref-format "refs/heads/$TARGET" 2>/dev/null; then
+  printf 'landing-preflight: --target %s is not a branch name this repository could have\n' ""$TARGET"" >&2
+  printf 'landing-preflight: (a refs/heads/-prefixed value is normalised, so "refs/heads/" alone is EMPTY)\n' >&2
+  usage >&2
+  exit 1
+fi
+
 say() { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*" >&2; }
 
@@ -256,6 +273,16 @@ precondition() {
     warn "[preflight]   HEAD on the default branch, and the dry run then reports 'Everything"
     warn "[preflight]   up-to-date' about a landing that has not happened."
     git status --porcelain 2>/dev/null | head -n 12 || true
+    return 5
+  fi
+  # The remote must exist before anything is asked of it. Measured: with a name that is not a remote,
+  # `git push --dry-run` exits 128 with a fatal line and the classifier answered UNKNOWN (4) — correct
+  # but unreadable, and it spent a remote call to learn something `git config` knows for free. Naming
+  # it here is a PRECONDITION, because "you asked a remote that is not configured" is a state of this
+  # checkout, not an answer from a server.
+  if [ -z "$(git config --get "remote.$REMOTE.url" 2>/dev/null || true)" ]; then
+    warn "[preflight] PRECONDITION: remote '$REMOTE' is not configured here (exit 5). Available:"
+    git remote 2>/dev/null | head -n 10 || true
     return 5
   fi
   _tip="$(git rev-parse --verify --quiet "$REMOTE/$TARGET" 2>/dev/null || true)"

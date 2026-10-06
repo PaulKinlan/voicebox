@@ -123,6 +123,17 @@ a usage error (exit 1), never a verdict code — and three ways of being missing
     target at all, because the tip compare it should have failed was against a ref that cannot exist
     either.
 
+**The rule is a refname, not "non-empty".** That distinction was the reviewer's finding on the round
+after the empty-value guard: `--target=refs/heads/` is non-empty, so it passed, and then became EMPTY by
+stripping the prefix — `--check` printed `PRECONDITION-OK … target=origin/` and exited 0. The script now
+asks git, rather than hand-rolling a test: `git check-ref-format "refs/heads/$TARGET"`, which on this
+also refuses `//`, `..`, `.`, a name containing a space, `mai.*` and `ma[n]in`, and accepts `main`,
+`min`, `main|wrong`, `feat/x` and `-x`. Anything refused is a usage error (exit 1) with the name echoed
+back. One layer out, the same reasoning: `--remote=nosuchremote` used to spend a transport call to learn
+`fatal: … does not appear to be a git repository` and answer UNKNOWN — correct but unreadable, and an
+unconfigured remote is a fact about *this checkout*, so it is now `PRECONDITION` (5), naming the remote
+and listing the configured ones.
+
 Every value flag also accepts `--flag=<value>` — the escape hatch that keeps a genuinely odd value
 (e.g. a filename starting with `-`) expressible, without letting the space-separated form swallow a
 flag.

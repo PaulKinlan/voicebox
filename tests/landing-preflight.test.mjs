@@ -340,14 +340,23 @@ test("SYNTHESISED rows + regex-bearing flags: a flag cannot match a row it was n
   const onWrong = file("row-wrong.txt", "wrong");
   const onMain = file("row-main.txt", "main");
 
+  // <captured row lands on> <flag> <verdict wanted; "not-ok" = must not reach a verdict at all>
+  // `git check-ref-format` rejects some of these shapes outright (a `*` and a trailing `.` are not
+  // legal in a refname), which is a BETTER answer than a verdict: they exit 1 as "that is not a
+  // branch". What every case must share is that none of them may say OK.
   const cases = [
-    // <captured row lands on> <flag> <verdict wanted> — 4 = UNKNOWN, the guard refused to be widened
-    [onWrong, "main|wrong", 4], [onWrong, "mai.*", 4], [onWrong, "ma[n]in", 4], [onWrong, "wrong", 0],
-    [onMain, "mai.", 4], [onMain, "main|wrong", 4], [onMain, "main", 0], [onMain, "refs/heads/main", 0],
-    [onWrong, "main\\hwrong", 4],
+    [onWrong, "main|wrong", "not-ok"], [onWrong, "mai.*", "not-ok"], [onWrong, "ma[n]in", "not-ok"],
+    [onWrong, "main\\hwrong", "not-ok"], [onWrong, "wrong", 0], [onWrong, "main", 4],
+    [onMain, "mai.", "not-ok"], [onMain, "main|wrong", "not-ok"], [onMain, "min", 4],
+    [onMain, "main", 0], [onMain, "refs/heads/main", 0],
   ];
   for (const [row, target, want] of cases) {
     const r = preflight(f.work, ["--classify", row, "--target", target]);
+    if (want === "not-ok") {
+      assert.notEqual(r.code, 0, `row ${path.basename(row)} asked about '${target}' must NEVER be OK:\n${r.out}`);
+      assert.ok([1, 2, 3, 4, 5, 6].includes(r.code), `and it must be a named answer, got ${r.code}:\n${r.out}`);
+      continue;
+    }
     assert.equal(r.code, want, `row ${path.basename(row)} asked about '${target}' must be ${want}:\n${r.out}`);
   }
 
@@ -411,6 +420,29 @@ test("A FLAG CANNOT EAT THE NEXT FLAG, and cannot be empty: usage error 1, never
   const dashValue = preflight(f.work, ["--classify=-weird"]);
   assert.equal(dashValue.code, 4, `an odd-but-present value is still a question, not a usage error:\n${dashValue.out}`);
   assert.match(dashValue.out, /no captured output to read \(-weird\)/, "and it is echoed back:\n" + dashValue.out);
+
+  // THE NORMALISATION BACK-DOOR, found by the reviewer on the round AFTER the guard above:
+  // `--target=refs/heads/` is non-empty, so it passed `require_value`, and then became EMPTY by
+  // stripping the prefix — `--check` printed PRECONDITION-OK about no target at all and exited 0. So
+  // the rule is not "non-empty", it is "a refname this repository could actually have", and git is
+  // asked to say so.
+  for (const bad of ["refs/heads/", "//", "..", ".", "x y"]) {
+    const r = preflight(f.work, ["--check", `--target=${bad}`]);
+    assert.equal(r.code, 1, `--target=${bad} must be a usage error, never an OK:\n${r.out}`);
+    assert.match(r.out, /not a branch name this repository could have/, `--target=${bad}: named as such\n${r.out}`);
+    assert.doesNotMatch(r.out, /PRECONDITION-OK|^OK/m, `--target=${bad}: no green word may appear:\n${r.out}`);
+  }
+  // …and a legitimate long form still works, so this is not the guard that never passes.
+  // (A leading dash IS a legal refname to git, so `--target=-x` is accepted by the `=` form — the
+  // space-separated form is the one that refuses a dash, because there it means "you forgot a value".)
+  const longForm = preflight(f.work, ["--check", "--target=refs/heads/main"]);
+  assert.equal(longForm.code, 0, `--target=refs/heads/main normalises to main:\n${longForm.out}`);
+
+  // Asking a remote that is not configured is a PRECONDITION about THIS checkout, not a mystery 128
+  // from a transport that was never going to happen.
+  const noRemote = preflight(f.work, ["--check", "--remote=nosuchremote"]);
+  assert.equal(noRemote.code, 5, `an unconfigured remote must stop the run:\n${noRemote.out}`);
+  assert.match(noRemote.out, /remote 'nosuchremote' is not configured/, "and name it:\n" + noRemote.out);
 });
 
 test("REAL: --rehearse drives every branch with the push stubbed and contacts no remote", () => {
