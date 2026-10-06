@@ -90,7 +90,12 @@ test("the explorer deletes a file through the confirmation gate, and the root's 
   await page.click("#confirm-yes");
   await until(async () => (await send({ type: "readFile", path: "assets/gone.txt" })).ok === false, "the file to be gone from storage");
 
-  const audit = await send({ type: "audit" });
-  const entry = (audit.entries ?? []).find((e) => e.act?.kind === "delete" && String(e.act?.target ?? "").endsWith("assets/gone.txt") && e.result === "ok");
-  assert(entry, `the root's log has no successful delete entry: ${JSON.stringify((audit.entries ?? []).map((e) => [e.act?.kind, e.act?.target, e.result]))}`);
+  // voicebox-beads-r2bn: the worker's confirm path awaits storage.remove() and THEN awaits
+  // record() (browser/worker.ts answer()), so an observer that already sees the file gone has
+  // NOT been promised the audit entry — the same window as voicebox-beads-7zef. Poll for the
+  // entry, bounded, like every other observation in this test.
+  await until(async () => {
+    const audit = await send({ type: "audit" });
+    return (audit.entries ?? []).find((e) => e.act?.kind === "delete" && String(e.act?.target ?? "").endsWith("assets/gone.txt") && e.result === "ok") ?? null;
+  }, "the root's log to record the successful delete");
 });
