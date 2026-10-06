@@ -128,6 +128,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# One normalisation, here at the top, so every use below sees the same thing: the refspec built for
+# the dry run (`refs/heads/$TARGET`), the message, and the destination compare. A caller who passes
+# `--target refs/heads/main` would otherwise build `HEAD:refs/heads/refs/heads/main` and ask the remote
+# a question in a namespace that does not exist.
+TARGET="${TARGET#refs/heads/}"
+
 say() { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*" >&2; }
 
@@ -140,32 +146,46 @@ warn() { printf '%s\n' "$*" >&2; }
 REJECT_MARK='[rejected]'
 NOOP_MARK='Everything up-to-date'
 
-# The update row, as ERE: anchored, four-or-more hex either side of the dots, then the LOCAL REF
-# being pushed, then the DESTINATION it would be written to. Built by concatenation because the refs
-# are data, and passed to `grep -E`.
+# THE ROW IS PARSED AND COMPARED, NEVER MATCHED AGAINST AN INTERPOLATED PATTERN.
 #
-# BOTH ENDS ARE MATCHED, AND THAT IS THE WHOLE CHECK. A row names two refs: the thing being pushed and
-# the ref it lands on. Matching only the left side was the P0 the cross-family review found on this
-# script — `   0123456..ede44f5  HEAD -> wrong` classified as `OK … origin/main would move`, i.e. this
-# tool itself would have pronounced a landing that was aimed at a different branch. That is the same
-# defect it exists to catch: a true sentence about a ref that is not the one being landed.
+# A row names everything this verdict depends on:
+#     <old>..<new>  <source ref> -> <destination ref>[ (note)]
+# The first draft built one ERE by pasting `$LOCAL_REF` and `$TARGET` into it. That was a second
+# fail-open, found by probing my own fix: `--target 'main|wrong'` turned the destination test into an
+# ALTERNATION and answered OK for a row landing on `wrong`. Refs and branch names are data — `|`, `.`,
+# `*` and `[` are legal in them or arrive by typo — so no user string goes near a pattern. The
+# structure is checked against a fixed pattern with no substitutions, the fields are cut out, and each
+# one is compared LITERALLY. Same protection, no way for a flag to widen its own guard.
 #
-# Deletion rows (`-  …`) and forced rows (`+ old...new`) begin with a marker, not a sha; a `...` row
-# cannot match either; and an arrow this script has not been shown (`->`, git's ASCII form on 2.43)
-# falls through. Every one of those is UNKNOWN — the fail-closed answer for a shape not understood.
-row_pattern() {
-  printf '%s' '^ *[0-9a-f]{4,}\.\.[0-9a-f]{4,} +'
-  printf '%s' "$LOCAL_REF"
-  printf '%s' ' +-> +(refs/heads/)?'
-  printf '%s' "$TARGET"
-  printf '%s' '([ ]|$)'
-}
+# BOTH ENDS ARE COMPARED, AND THAT IS THE WHOLE CHECK. Matching only the left side was the P0 the
+# cross-family review found on the first commit: `   0123456..ede44f5  HEAD -> wrong` printed
+# `OK … origin/main would move`, i.e. this tool committing the error it exists to catch — a true
+# sentence about a ref that is not the one being landed.
+#
+# Deletion rows (`-  …`) and forced rows (`+ old...new`) begin with a marker, so their first field is
+# not `hex..hex`; a `...` row cannot satisfy the pair either; a row without git's ASCII `->` is not a
+# row. Every one of those is UNKNOWN — the fail-closed answer for a shape not understood.
+ROW_SHAPE='^[0-9a-f]{4,}\.\.[0-9a-f]{4,}$'
+ARROW='->'
+
+# `old..new` field, then source, arrow, destination, with any trailing note (` (fast-forward)`) dropped.
+norm_row() { printf '%s\n' "$1" | tr '\t' ' ' | sed -e 's/^[ ]*//' -e 's/[ ]*$//' -e 's/[ ][ ]*/ /g'; }
+field() { printf '%s' "$1" | cut -d' ' -f"$2"; }
 
 # ── THE PRECONDITION (asserted, not assumed) ──────────────────────────────────
 precondition() {
-  _head="$(git rev-parse "$LOCAL_REF" 2>/dev/null || true)"
-  if [ -z "$_head" ]; then
-    warn "[preflight] PRECONDITION: $LOCAL_REF does not resolve to a commit (exit 5)"
+  # `--verify "$LOCAL_REF^{commit}"`, NOT a bare rev-parse: measured on git 2.43, `git rev-parse 'HE.*D'`
+  # ECHOES the argument and exits 0 for anything it cannot resolve, so a bare rev-parse "succeeds" and
+  # the identity compare then runs against a HEAD_SHA that is a typo, not a commit. `--verify` with the
+  # `^{commit}` peel fails the way a non-commit must fail.
+  _head="$(git rev-parse --verify --quiet "$LOCAL_REF^{commit}" 2>/dev/null || true)"
+  case "$_head" in
+    '' | *[!0-9a-f]*)
+      warn "[preflight] PRECONDITION: $LOCAL_REF does not resolve to a commit (exit 5)"
+      return 5 ;;
+  esac
+  if [ "${#_head}" -lt 7 ]; then
+    warn "[preflight] PRECONDITION: $LOCAL_REF resolved to '$_head', too short to be a sha (exit 5)"
     return 5
   fi
   if [ -n "$(git status --porcelain 2>/dev/null | head -n 1)" ]; then
@@ -209,25 +229,43 @@ classify() {
     return 2
   fi
 
-  # 3 — OK only when the row exists, names the ref being landed, and prints THIS tree's sha.
-  _row="$(grep -E "$(row_pattern)" "$_out" 2>/dev/null | head -n 1 || true)"
-  if [ -z "$_row" ]; then
-    printf 'UNKNOWN  no update row pushing %s at %s. Do NOT push.\n' "$LOCAL_REF" "$TARGET"
+  # 3 — OK only when a row exists AND every one of its four parts is this landing.
+  #
+  # The candidate is found with a pattern that contains NO user string, and then each field is
+  # compared literally. See the note on ROW_SHAPE for why this replaced one interpolated ERE.
+  _cand="$(grep -E '^[[:blank:]]*[0-9a-f]{4,}\.[.][0-9a-f]{4,}[[:blank:]]' "$_out" 2>/dev/null | head -n 1 || true)"
+  _row="$(norm_row "$_cand")"
+  _pair="$(field "$_row" 1)"
+  _src="$(field "$_row" 2)"
+  _arrow="$(field "$_row" 3)"
+  _dst="$(field "$_row" 4)"
+  _shape_ok=0
+  if printf '%s' "$_pair" | grep -qE "$ROW_SHAPE"; then _shape_ok=1; fi
+  # `$TARGET` was already normalised to the short branch name once, above (the one place that strip
+  # happens); the row may print either form, so strip the row's side here and compare literally.
+  _dst_short="${_dst#refs/heads/}"
+  _dest_ok=0
+  if [ -n "$_dst_short" ] && [ "$_dst_short" = "$TARGET" ]; then _dest_ok=1; fi
+  if [ "$_shape_ok" != 1 ] || [ "$_arrow" != "$ARROW" ] || [ "$_src" != "$LOCAL_REF" ] || [ "$_dest_ok" != 1 ]; then
+    printf 'UNKNOWN  no row pushing %s at %s. Do NOT push.\n' "$LOCAL_REF" "$TARGET"
     # Name the near-miss rather than making the reader diff two strings: a row for another
     # destination is the single most likely cause, and it must not read as a shapeless failure.
-    _other="$(grep -E '^ *[0-9a-f]{4,}\.[.][0-9a-f]{4,} ' "$_out" 2>/dev/null | head -n 1 || true)"
-    if [ -n "$_other" ]; then
-      printf '         a row DOES exist, but it is not this landing: %s\n' "$_other"
-      printf '         asked about: %s -> %s/%s\n' "$LOCAL_REF" "$REMOTE" "$TARGET"
+    if [ -n "$_cand" ]; then
+      if [ "$_arrow" = "$ARROW" ] && [ "$_dest_ok" != 1 ]; then
+        printf '         a row DOES exist, but it lands on %s, not %s/%s: %s\n' "${_dst:-?}" "$REMOTE" "$TARGET" "$_cand"
+      elif [ "$_src" != "$LOCAL_REF" ]; then
+        printf '         a row DOES exist, but it pushes %s, not %s: %s\n' "${_src:-?}" "$LOCAL_REF" "$_cand"
+      else
+        printf '         a row-like line exists but is not a row this script can read: %s\n' "$_cand"
+      fi
     fi
     printf '%s\n' '---- captured output ----'
     head -n 40 "$_out" || true
     return 4
   fi
-  # The sha on the NEW side of `old..new` is what would be written to the target. sed keeps the
-  # digits and drops the tail; the length is whatever the row printed, read not assumed.
-  _new_sha="$(printf '%s\n' "$_row" | sed -e 's/^[ 	]*//' -e 's/^\([0-9a-f]*\)\.\.\([0-9a-f]*\).*$/\2/')"
-  if [ -z "$_new_sha" ] || [ "$_new_sha" = "$_row" ]; then
+  # The sha on the NEW side of `old..new` is what would be written to the target.
+  _new_sha="${_pair#*..}"
+  if [ -z "$_new_sha" ] || [ "$_new_sha" = "$_pair" ]; then
     printf 'UNKNOWN  the update row did not yield a new-side sha. Do NOT push.\n'
     printf '         row: %s\n' "$_row"
     return 4
@@ -376,6 +414,12 @@ case "$MODE" in
     _want OK-40-CHAR-READ-FROM-ROW 0 "$_tmp/ok-full-sha-on-right"
     _want UNKNOWN-WRONG-TARGET 4 "$_tmp/wrong-target"
     _want OK-REFS-HEADS-DEST-FORM 0 "$_tmp/ok-full-dest-form"
+    # A FLAG TRYING TO WIDEN ITS OWN GUARD: with TARGET set to an alternation, a row landing on
+    # `wrong` must STILL be refused. This is the second fail-open (found probing the fix for the first)
+    # and the reason refs are compared as parsed fields, never pasted into a pattern.
+    _saved_target="$TARGET"; TARGET='main|wrong'
+    _want TARGET-ALTERNATION-NARROWS 4 "$_tmp/wrong-target"
+    TARGET="$_saved_target"
     _want UNKNOWN-probe-ref 4 "$_tmp/probe-ref"
     _want UNKNOWN-server-error 4 "$_tmp/unknown"
     _want UNKNOWN-empty 4 "$_tmp/empty"

@@ -194,17 +194,20 @@ A landing to `main` runs the gates BEFORE pushing — the push itself is the gat
 - `npm run accept` — the page acceptance harness (drives the real page; must be ALL CLEAR)
 - `scripts/landing-preflight.sh` — **would this push actually move the branch I am landing, to the commit I
 gated?** Asked once, in the second before the push, against a dry run at the REAL target ref. Both ends of
-the accepted row are asserted — the ref being pushed **and** the ref it lands on — because a row matched on
-the left side alone would call a push aimed at some other branch a landing on `main`. Four verdicts
-(`OK` 0 / `NO-OP` 2 / `REFUSED` 3 / `UNKNOWN` 4) plus two asserted preconditions (`PRECONDITION` 5 for a
-dirty tree or a `HEAD` that already *is* the target, `IDENTITY-MISMATCH` 6 when the row names a sha other
-than `HEAD`), and it is fail-closed: an unrecognised shape never says `OK`, a dry run whose command itself
-failed cannot say `OK`, and a flag with no value is exit 1, never a verdict. It exists because `Everything
-up-to-date` is a true statement about a ref that is not the landing, and because four lanes were each
-rebuilding that check by hand in the minute before pushing (voicebox-beads-vto3). `--rehearse` drives every
-branch with the push stubbed; `tests/landing-preflight.test.mjs` proves the classifier against refusals and
-update rows a real git printed, at four abbreviation lengths and against two destination refs. See
-[docs/12-pre-push-gate.md](docs/12-pre-push-gate.md).
+the accepted row are asserted — the ref being pushed **and** the ref it lands on — by PARSING the row and
+comparing each field literally, never by pasting a ref into a regular expression: a left-side-only match
+called a push aimed at another branch a landing on `main`, and an interpolated `--target 'main|wrong'`
+called it an alternation. Four verdicts (`OK` 0 / `NO-OP` 2 / `REFUSED` 3 / `UNKNOWN` 4) plus two asserted
+preconditions (`PRECONDITION` 5 for a dirty tree, or a `HEAD` that already *is* the target, or a
+`LOCAL_REF` that does not peel to a commit — `git rev-parse` echoes typos and exits 0 — and
+`IDENTITY-MISMATCH` 6 when the row names a sha other than `HEAD`), and it is fail-closed: an unrecognised
+shape never says `OK`, a dry run whose command itself failed cannot say `OK`, and a flag with no value is
+exit 1, never a verdict. It exists because `Everything up-to-date` is a true statement about a ref that is
+not the landing, and because four lanes were each rebuilding that check by hand in the minute before
+pushing (voicebox-beads-vto3). `--rehearse` drives every branch with the push stubbed;
+`tests/landing-preflight.test.mjs` proves the classifier against refusals and update rows a real git
+printed, at four abbreviation lengths, against two destination refs, and against flags shaped like
+regular expressions. See [docs/12-pre-push-gate.md](docs/12-pre-push-gate.md).
 
 **The docs rule, and the one question to ask on every change: *did this move something a
 document describes?*** The generated blocks answer for themselves (`npm run docs:write`); the prose

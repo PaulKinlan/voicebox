@@ -58,17 +58,25 @@ line also carries a sha, so a loosely-matched "success" pattern can be satisfied
 |---|---|---|---|
 | `REFUSED` | 3 | output contains the literal `[rejected]` (tested **first**) | do not push: fetch, re-merge, **re-gate** the merged tree |
 | `NO-OP` | 2 | output contains `Everything up-to-date` | do not push: this is a true statement about a ref that is not the landing |
-| `OK` | 0 | an update row whose **both ends** are the landing — `^ *<sha>..<sha>  HEAD -> main` — and whose new-side sha is a prefix of `git rev-parse HEAD` | push |
+| `OK` | 0 | a parsed row whose **both ends** are the landing — `<sha>..<sha>  HEAD -> main` — and whose new-side sha is a prefix of `git rev-parse HEAD` | push |
 | `UNKNOWN` | 4 | anything else, **including a dry run whose command itself failed** | do not push |
 
 **Both ends of the row are asserted, and that is the whole check.** A row names two refs: the thing
 being pushed, and the ref it would land on. The first draft of this script matched only the left side,
 and the cross-family review caught it: a dry run aimed at `wrong` printed `OK … origin/main would
-move` — this tool committing the error it exists to prevent. So the destination is matched too (short
-form or `refs/heads/`-prefixed), and `tests/landing-preflight.test.mjs` drives a REAL row landing on
-another branch and asserts BOTH halves: `UNKNOWN` when asked about `main`, still `OK` when asked about
-the branch the row really names. Without the second half, "fixed" and "regex that never matches" look
-identical.
+move` — this tool committing the error it exists to prevent.
+
+The way to assert a destination is **not** to paste it into a regular expression. That was the second
+fail-open, found by probing the fix for the first: with `$LOCAL_REF` and `$TARGET` interpolated into
+one ERE, `--target 'main|wrong'` turned the destination test into an *alternation* and answered OK for
+a row landing on `wrong` — measured, same tree, same bytes. So the row is **parsed and compared
+literally**: a fixed structural pattern with no substitution in it finds the candidate, the fields
+(`old..new`, source, `->`, destination) are cut out, and each is compared with `[ … = … ]`. A flag can
+only narrow the question, never widen it. `git rev-parse` gets the same treatment: it ECHOES an
+unresolvable argument and exits 0 on git 2.43 (`git rev-parse 'HE.*D'` → `HE.*D`), so the precondition
+peels with `--verify "$LOCAL_REF^{commit}"` and rejects anything that is not a hex sha. And a
+`refs/heads/` prefix is normalised once, at the top, so the flag, the refspec and the comparison
+cannot end up asking about different namespaces.
 
 Two more answers, asserted rather than assumed, because both produce a false green if skipped:
 `PRECONDITION` (5) refuses to ask anything when the worktree is dirty or when `HEAD` already equals

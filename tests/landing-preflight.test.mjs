@@ -276,7 +276,7 @@ test("REAL row aimed at ANOTHER branch: UNKNOWN (exit 4) for the target we asked
   // error it exists to catch: a true sentence about a ref that is not the one being landed.
   const asked = preflight(f.work, ["--classify", captured, "--target", "main"]);
   assert.equal(asked.code, 4, `a row aimed at 'other' is NOT a landing on main:\n${asked.out}`);
-  assert.match(asked.out, /a row DOES exist, but it is not this landing/, "and the reason must name the near-miss:\n" + asked.out);
+  assert.match(asked.out, /a row DOES exist, but it lands on other, not/, "and the reason must name the near-miss:\n" + asked.out);
   assert.doesNotMatch(asked.out, /^OK/m, `never say OK about a ref nobody is landing:\n${asked.out}`);
 
   // …and the SAME classifier still says OK when asked about the ref the row really names, so the first
@@ -290,6 +290,69 @@ test("REAL row aimed at ANOTHER branch: UNKNOWN (exit 4) for the target we asked
   assert.equal(full.code, 0, `a refs/heads/-prefixed destination is still the target:\n${full.out}`);
 });
 
+// ── A FLAG CANNOT WIDEN ITS OWN GUARD (the second fail-open, found by probing the first fix) ──────
+//
+// The destination used to be tested by pasting `$TARGET` and `$LOCAL_REF` into one ERE. Measured on
+// this tree: a row landing on `wrong`, asked about with `--target 'main|wrong'`, answered OK — the
+// flag became an ALTERNATION. Both are now parsed fields compared literally, so metacharacters in a
+// refname are ordinary characters and a flag can only ever narrow the question.
+test("SYNTHESISED rows + regex-bearing flags: a flag cannot match a row it was not aimed at", () => {
+  const f = fixture();
+  const h7 = f.ahead.slice(0, 7);
+  const b7 = f.base.slice(0, 7);
+  const file = (name, dest) => {
+    const p = path.join(f.dir, name);
+    writeFileSync(p, `To x\n   ${b7}..${h7}  HEAD -> ${dest}\n`);
+    return p;
+  };
+  const onWrong = file("row-wrong.txt", "wrong");
+  const onMain = file("row-main.txt", "main");
+
+  const cases = [
+    // <captured row lands on> <flag> <verdict wanted> — 4 = UNKNOWN, the guard refused to be widened
+    [onWrong, "main|wrong", 4], [onWrong, "mai.*", 4], [onWrong, "ma[n]in", 4], [onWrong, "wrong", 0],
+    [onMain, "mai.", 4], [onMain, "main|wrong", 4], [onMain, "main", 0], [onMain, "refs/heads/main", 0],
+    [onWrong, "main\\hwrong", 4],
+  ];
+  for (const [row, target, want] of cases) {
+    const r = preflight(f.work, ["--classify", row, "--target", target]);
+    assert.equal(r.code, want, `row ${path.basename(row)} asked about '${target}' must be ${want}:\n${r.out}`);
+  }
+
+  // The source end is literal too: a regex-y --local-ref must not reach across to a row it names partly.
+  const r1 = preflight(f.work, ["--classify", onMain, "--local-ref", "HE.*D"]);
+  assert.notEqual(r1.code, 0, `--local-ref 'HE.*D' must not match a HEAD row:\n${r1.out}`);
+  const r2 = preflight(f.work, ["--classify", onMain, "--local-ref", "HEAD"]);
+  assert.equal(r2.code, 0, `the literal control still reads OK — so the first half is not a dead test:\n${r2.out}`);
+
+  // And a flag whose value is not a commit at all is a PRECONDITION, never a verdict about a landing.
+  // (`git rev-parse 'HE.*D'` ECHOES the typo and exits 0 on git 2.43 — measured — which is why the
+  // precondition peels with `--verify "$LOCAL_REF^{commit}"` and rejects anything that is not hex.)
+  const r3 = preflight(f.work, ["--check", "--local-ref", "HE.*D"]);
+  assert.equal(r3.code, 5, `a non-commit local-ref must stop the run:\n${r3.out}`);
+});
+
+test("SYNTHESISED: whitespace and annotation variants are read as the same row, or refused", () => {
+  const f = fixture();
+  const h7 = f.ahead.slice(0, 7);
+  const b7 = f.base.slice(0, 7);
+  const rows = [
+    [`   ${b7}..${h7}  HEAD -> main`, 0, "git's own two-space form"],
+    [`\t${b7}..${h7}\tHEAD -> main`, 0, "tabs instead of spaces"],
+    [`   ${b7}..${h7}  HEAD -> main (fast-forward)`, 0, "a trailing note is not part of the ref"],
+    [`   ${b7}..${h7}  HEAD -> 'main'`, 4, "a quoted destination is a shape we do not vouch for"],
+    [`   ${b7}..${h7}  HEAD → main`, 4, "a unicode arrow is not git 2.43's arrow"],
+    [` + ${b7}...${h7}  HEAD -> main`, 4, "a forced row is never a landing"],
+    [` - ${b7}         (deleted) HEAD -> main`, 4, "a deletion row is never a landing"],
+  ];
+  for (const [row, want, why] of rows) {
+    const p = path.join(f.dir, `ws-${want}-${b7}.txt`);
+    writeFileSync(p, `To x\n${row}\n`);
+    const r = preflight(f.work, ["--classify", p]);
+    assert.equal(r.code, want, `${why}: ${JSON.stringify(row)} ->\n${r.out}`);
+  }
+});
+
 test("REAL: --rehearse drives every branch with the push stubbed and contacts no remote", () => {
   const f = fixture();
   const before = lsRemote(f.bare);
@@ -301,6 +364,7 @@ test("REAL: --rehearse drives every branch with the push stubbed and contacts no
   assert.match(r.out, /OK-7-CHAR\s+exit 0 as expected/, "the good row:\n" + r.out);
   assert.match(r.out, /IDENTITY-MISMATCH\s+exit 6 as expected/, "and the identity tie:\n" + r.out);
   assert.match(r.out, /exit 4 as expected/, "and the fail-closed default:\n" + r.out);
+  assert.match(r.out, /UNKNOWN-WRONG-TARGET\s+exit 4 as expected/, "including the destination guard:\n" + r.out);
   assert.match(r.out, /SYNTHESISED/, "it must say which inputs were invented:\n" + r.out);
   assert.equal(lsRemote(f.bare), before, "the rehearsal must leave the remote exactly as it found it");
 });
@@ -313,7 +377,8 @@ test("DASH, NOT BASH: the script parses under dash and uses no bash-only constru
   const code = src.split("\n").filter((line, i) => i === 0 || !/^\s*#/.test(line)).join("\n");
   assert.doesNotMatch(code, /PIPESTATUS/, "no PIPESTATUS — dash has none (the class fixed by 221c44d)");
   assert.doesNotMatch(code, /set -o pipefail/, "no pipefail either");
-  assert.doesNotMatch(code, /\[\[/, "no [[ ]]");
+  // `[[:blank:]]` is a POSIX character class and is allowed; bash's `[[ ]]` test keyword is not.
+  assert.doesNotMatch(code, /\[\[[^:[:space:]]|\[\[ /, "no [[ ]] test keyword (POSIX classes like [[:blank:]] are fine)");
   assert.doesNotMatch(code, /=\s*\(/, "no arrays");
   // And the trap this script hit while being written: dash's printf reads a format that STARTS with
   // a dash as an option and dies with "Illegal option --". Every literal line the script prints goes
