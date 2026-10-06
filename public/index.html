@@ -29,6 +29,8 @@
       <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
       <symbol id="i-terminal" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></symbol>
       <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/></symbol>
+      <!-- voicebox-beads-0qgq: the harnesses button's robot — a stroked line icon, matching every symbol above. -->
+      <symbol id="i-bot" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></symbol>
       <!-- voicebox-beads-io3a / 35eg: the file list's two new cues — a compact delete affordance and a
            folder that looks like a folder. Both are stroked line icons, matching every symbol above. -->
       <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/></symbol>
@@ -55,7 +57,7 @@
            browser, and a host that is listed but not running says so by name rather than reading as
            ready. The "+" declares a descriptor; it never starts a service. -->
       <button class="icon-button" id="theme-toggle" type="button" aria-label="Switch to dark theme" title="Switch to dark theme" hidden><svg class="icon" aria-hidden="true"><use href="#i-moon"/></svg></button>
-      <button class="quiet icon-button" id="harnesses-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="harnesses-dialog" aria-label="Harnesses" title="Harnesses"><svg class="icon" aria-hidden="true"><use href="#i-list"/></svg><span class="sr-only" id="envs-count-wrap">Harnesses</span></button>
+      <button class="quiet icon-button" id="harnesses-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="harnesses-dialog" aria-label="Harnesses" title="Harnesses"><svg class="icon" aria-hidden="true"><use href="#i-bot"/></svg><span class="sr-only" id="envs-count-wrap">Harnesses</span></button>
       <dialog class="envs harnesses-modal" id="harnesses-dialog" closedby="any" aria-labelledby="harnesses-dialog-title">
         <form class="envs-form" method="dialog">
           <div class="settings-head">
