@@ -45,9 +45,33 @@ const state = () =>
     };
   });
 
+// Wait for fused.js to have wired its handlers before clicking. `page.goto` resolves before the
+// module has run, and a click on the static trigger that lands before its listener is attached is
+// silently dropped, so the dialog never opens (observed under load in the phone test,
+// voicebox-beads-xep4). The old check here was a no-op: `window.__voiceboxFused` is set nowhere,
+// and the static `#settings-open` element always exists, so the `||` was always true.
+// `window.__voiceboxHotkey` is assigned at the end of fused.js's top-level body, after the
+// settings open/close handlers are registered.
+const waitForAppWired = async () => {
+  await page.waitFor(() => window.__voiceboxHotkey !== undefined, { label: "fused.js to finish wiring its handlers" });
+};
+
 const openSettings = async () => {
+  await waitForAppWired();
   await page.click("#settings-open");
   await page.waitFor(() => document.getElementById("settings").open, { label: "the settings dialog to open" });
+};
+
+// See tests/modal-panels.test.mjs (voicebox-beads-tnxm): a native <dialog>'s `close` event is
+// dispatched in a SEPARATE task from the one that flips `open` to false, so asserting focus
+// straight after `open === false` races the app's close handler and loses on a contended box.
+// Wait for the observable the next assertion is about — the dialog closed AND focus back on the
+// gear — so the wait is the synchronisation, and the named label still fails if it never happens.
+const waitForSettingsClosedWithFocus = async (label) => {
+  await page.waitFor(
+    () => document.getElementById("settings")?.open === false && document.activeElement?.id === "settings-open",
+    { label: `${label} (dialog closed, focus back on the gear)` },
+  );
 };
 
 test.before(async () => {
@@ -65,7 +89,7 @@ test.before(async () => {
     filler.style.height = "300vh";
     document.body.appendChild(filler);
   });
-  await page.waitFor(() => window.__voiceboxFused !== undefined || document.getElementById("settings-open") !== null, { label: "the page to be interactive" });
+  await page.waitFor(() => window.__voiceboxHotkey !== undefined, { label: "the page to be interactive" });
 });
 
 test.after(async () => {
@@ -137,7 +161,7 @@ test("the backdrop is frosted, with a solid fallback where blur is unavailable",
 test("Esc cancels it and returns focus to the gear", { timeout: 90000 }, async () => {
   assert.equal((await state()).open, true, "the dialog was not open for the Esc check");
   await page.press("Escape");
-  await page.waitFor(() => document.getElementById("settings").open === false, { label: "Esc to close the dialog" });
+  await waitForSettingsClosedWithFocus("Esc to close the dialog");
   const after = await state();
   assert.equal(after.open, false);
   assert.equal(after.activeId, "settings-open", `focus went to '${after.activeId}' instead of back to the gear`);
@@ -148,7 +172,7 @@ test("clicking outside dismisses it (and the mechanism is named)", { timeout: 90
   const before = await state();
   // A point near the top-left corner: the backdrop, never the dialog.
   await page.clickAt(8, 8);
-  await page.waitFor(() => document.getElementById("settings").open === false, { label: "light dismiss to close the dialog" });
+  await waitForSettingsClosedWithFocus("light dismiss to close the dialog");
   const after = await state();
   assert.equal(after.open, false, "clicking the backdrop did not dismiss the dialog");
   assert.equal(after.activeId, "settings-open", "light dismiss did not hand focus back");

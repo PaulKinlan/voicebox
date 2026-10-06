@@ -159,11 +159,16 @@ test("browser: room build stamp links commits to GitHub and opens changelog as a
   assert.ok(first.subject.length > 0);
   assert.ok(first.meta.length > 0);
 
-  // Close via close button and verify focus returns to #changelog-open
+  // Close via close button and verify focus returns to #changelog-open. The `close` event is
+  // dispatched in a SEPARATE task from the one that flips `open`, so wait for BOTH the closed
+  // dialog and the returned focus before asserting (voicebox-beads-tnxm / voicebox-beads-xep4).
   await page.click("#changelog-close");
-  await page.waitFor(() => document.getElementById("changelog-dialog")?.open === false, {
-    label: "changelog dialog closed",
-  });
+  await page.waitFor(
+    () => document.getElementById("changelog-dialog")?.open === false && document.activeElement?.id === "changelog-open",
+    { label: "changelog dialog closed with focus back on #changelog-open" },
+  );
+  const focusAfterClose = await page.evaluate(() => document.activeElement?.id ?? document.activeElement?.tagName);
+  assert.equal(focusAfterClose, "changelog-open", `closing the changelog must return focus to its trigger, got '${focusAfterClose}'`);
 
   // Also verify clicking the #build "change log" link opens the same modal without navigating
   await page.click('#build a[href="#changelog-dialog"]');
