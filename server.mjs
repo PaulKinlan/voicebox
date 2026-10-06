@@ -4131,7 +4131,8 @@ async function handle(req, res) {
   // Self-authorising exemptions, each with its reason named:
   //   · /api/health — supervisors, the currency gate heartbeat and the suites that spawn a server and
   //     wait on it (tests/server-bind-resilience.test.mjs) read it before any session exists; it
-  //     reports no root, no file and no credential. (The shared tests/lib/server.mjs harness no
+  //     reports the declared root and project name, but no file contents and no credential.
+  //     (The shared tests/lib/server.mjs harness no
   //     longer polls it — its readiness is the startup banner, voicebox-beads-4oj6.)
   //   · POST /api/bootstrap — it IS the authority check (host token) and the re-entry door.
   //   · the page carrying ?bootstrap= — the route itself validates and consumes the ticket.
@@ -6017,6 +6018,7 @@ try {
         `         by the one-time bootstrap URL printed at startup, every route then answers 401\n` +
         `         loopback-unauthenticated — except /api/health (stays 200), the bootstrap door and\n` +
         `         the ?bootstrap= page, and host-token requests, which are their own authority checks.\n` +
+        `         The gate-off default is a local-testing posture — run with the flag outside testing.\n` +
         `         See docs/18-loopback-session-auth.md.`,
     );
   }

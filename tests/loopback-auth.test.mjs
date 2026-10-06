@@ -161,6 +161,7 @@ test("default OFF: startup names the unauthenticated loopback exposure and the f
     assert.match(server.stderr(), /VOICEBOX_LOOPBACK_AUTH=1/, "the warning names the flag remedy");
     assert.match(server.stderr(), /401\s+loopback-unauthenticated/, "the warning names the gate's measured effect");
     assert.match(server.stderr(), /docs\/18-loopback-session-auth\.md/, "the warning points at the full posture doc");
+    assert.match(server.stderr(), /local-testing posture/, "the warning says the default is for local testing (owner ruling)");
   } finally {
     await server.stop();
     server.cleanup();
