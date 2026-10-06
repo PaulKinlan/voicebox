@@ -90,6 +90,10 @@ landing-preflight.sh — is it safe to push this tree at that ref?
   --push-cmd <command>          shell command performing the dry run; $1=remote $2=target
                                 $3=local-ref (default: git push --dry-run $1 "$3:refs/heads/$2")
 
+  Every value flag also accepts --flag=<value>. That form is REQUIRED for a value that begins with a
+  dash: a bare `--target --remote` would otherwise consume `--remote` as the target and answer about a
+  landing nobody asked for, so a flag-eating-flag is a usage error (exit 1), as is an empty value.
+
 verdicts / exit codes
   0  OK                  the target would move to the tree standing here
   2  NO-OP              nothing would move — a probe, or HEAD already is the target. Do not push.
@@ -105,18 +109,57 @@ USAGE
 # this script's own NO-OP code, so a broken command line reported a verdict it had never reached. It is
 # a function that runs in the MAIN shell on purpose: `exit` inside a command substitution only leaves
 # the subshell, which would sail straight past the error and carry on with an empty value.
+# The rule is: a value that STARTS WITH A DASH IS NOT A VALUE. Measured on git 2.43 before this
+# existed, `--target --remote --check` consumed `--remote` as the target and printed
+#
+#   PRECONDITION-OK  …  target=origin/--remote        exit 0
+#
+# i.e. a mistyped command line reached check mode and answered GREEN about a landing that had no
+# target, and the plain `--target --remote` form went further: it built the refspec
+# `HEAD:refs/heads/--remote` and ASKED THE REAL REMOTE about a namespace that cannot exist. A flag
+# that eats the flag after it does not merely mis-parse; it silently changes which question the next
+# answer is about — the same failure this whole script exists to refuse.
+#
+# The escape hatch is the `=` form (`--target=-weird`, `--push-cmd=-x`), which is matched separately
+# and never routes through here, so a genuinely odd value is still expressible.
+require_value() {
+  if [ -z "${2:-}" ]; then
+    printf 'landing-preflight: %s needs a value (nothing after the =)\n' "${1%%=*}" >&2
+    usage >&2
+    exit 1
+  fi
+}
+
 take() {
   if [ -z "${2:-}" ]; then
     printf 'landing-preflight: %s needs a value\n' "$1" >&2
     usage >&2
     exit 1
   fi
+  case "$2" in
+    -*)
+      printf 'landing-preflight: %s got %s, which looks like another flag, not a value\n' "$1" "$2" >&2
+      printf 'landing-preflight: a flag that swallows the flag after it changes WHICH question the\n' >&2
+      printf 'landing-preflight: answer is about. Pass it as --%s=<value> if it really is a value.\n' "${1#--}" >&2
+      usage >&2
+      exit 1 ;;
+  esac
   TAKE_VALUE="$2"
 }
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --help|-h) usage; exit 0 ;;
+    # The `=` form first: an assignment cannot consume the flag after it, so it needs no dash guard —
+    # `--classify=-weird` is a real (if odd) filename. It still cannot be EMPTY: measured before this
+    # line existed, `--check --target=` printed `PRECONDITION-OK … target=origin/` and exited 0, i.e.
+    # it answered green about a landing with no target, because the tip compare it would have failed
+    # was against a ref that cannot exist either. An empty value is the same defect as a swallowed one.
+    --classify=*) MODE="classify"; require_value "$1" "${1#*=}"; CLASSIFY_FILE="${1#*=}"; shift ;;
+    --remote=*) require_value "$1" "${1#*=}"; REMOTE="${1#*=}"; shift ;;
+    --target=*) require_value "$1" "${1#*=}"; TARGET="${1#*=}"; shift ;;
+    --local-ref=*) require_value "$1" "${1#*=}"; LOCAL_REF="${1#*=}"; shift ;;
+    --push-cmd=*) require_value "$1" "${1#*=}"; PUSH_CMD="${1#*=}"; shift ;;
     --classify) MODE="classify"; take "$1" "${2:-}"; CLASSIFY_FILE="$TAKE_VALUE"; shift 2 ;;
     --check) MODE="check"; shift ;;
     --rehearse) MODE="rehearse"; shift ;;

@@ -353,6 +353,34 @@ test("SYNTHESISED: whitespace and annotation variants are read as the same row, 
   }
 });
 
+test("A FLAG CANNOT EAT THE NEXT FLAG, and cannot be empty: usage error 1, never a verdict", () => {
+  const f = fixture();
+  // Measured before this was fixed, on git 2.43 under dash:
+  //   --check --target --remote  ->  "PRECONDITION-OK … target=origin/--remote"  exit 0
+  //   --target --remote          ->  asked the REAL remote about refs/heads/--remote
+  //   --check --target=          ->  "PRECONDITION-OK … target=origin/"          exit 0
+  // Each one is the same defect as the bug this whole script exists to refuse: the answer is green
+  // about a question nobody asked. So a flag-like value and an empty value are BOTH usage errors.
+  const flags = ["--target", "--remote", "--local-ref", "--classify", "--push-cmd"];
+  for (const flag of flags) {
+    for (const argv of [[flag, "--check"], ["--check", flag, "--target"], [`${flag}=`]]) {
+      const r = preflight(f.work, argv);
+      assert.equal(r.code, 1, `${argv.join(" ")} must be a usage error, never a verdict:\n${r.out}`);
+      assert.match(r.out, /needs a value|looks like another flag/, `${argv.join(" ")}: named as such\n${r.out}`);
+      assert.doesNotMatch(r.out, /^OK|^NO-OP|^REFUSED|^UNKNOWN|^IDENTITY-MISMATCH|^PRECONDITION-OK/m,
+        `${argv.join(" ")}: no verdict word may appear at all:\n${r.out}`);
+    }
+  }
+  // The `=` form is the escape hatch, and it must still WORK — otherwise the guard above is only a
+  // refusal to accept input, not a fix.
+  const eq = preflight(f.work, ["--check", "--target=main"]);
+  assert.equal(eq.code, 0, `--target=main is a normal flag value:\n${eq.out}`);
+  assert.match(eq.out, /target=origin\/main/, "and it lands in the right namespace:\n" + eq.out);
+  const dashValue = preflight(f.work, ["--classify=-weird"]);
+  assert.equal(dashValue.code, 4, `an odd-but-present value is still a question, not a usage error:\n${dashValue.out}`);
+  assert.match(dashValue.out, /no captured output to read \(-weird\)/, "and it is echoed back:\n" + dashValue.out);
+});
+
 test("REAL: --rehearse drives every branch with the push stubbed and contacts no remote", () => {
   const f = fixture();
   const before = lsRemote(f.bare);

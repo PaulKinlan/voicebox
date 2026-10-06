@@ -201,8 +201,9 @@ called it an alternation. Four verdicts (`OK` 0 / `NO-OP` 2 / `REFUSED` 3 / `UNK
 preconditions (`PRECONDITION` 5 for a dirty tree, or a `HEAD` that already *is* the target, or a
 `LOCAL_REF` that does not peel to a commit — `git rev-parse` echoes typos and exits 0 — and
 `IDENTITY-MISMATCH` 6 when the row names a sha other than `HEAD`), and it is fail-closed: an unrecognised
-shape never says `OK`, a dry run whose command itself failed cannot say `OK`, and a flag with no value is
-exit 1, never a verdict. It exists because `Everything up-to-date` is a true statement about a ref that is
+shape never says `OK`, a dry run whose command itself failed cannot say `OK`, and a flag that is missing its
+value — absent, empty, or holding what looks like the next flag — is exit 1, never a verdict, because
+`--check --target --remote` once printed `PRECONDITION-OK … target=origin/--remote` and exited 0. It exists because `Everything up-to-date` is a true statement about a ref that is
 not the landing, and because four lanes were each rebuilding that check by hand in the minute before
 pushing (voicebox-beads-vto3). `--rehearse` drives every branch with the push stubbed;
 `tests/landing-preflight.test.mjs` proves the classifier against refusals and update rows a real git

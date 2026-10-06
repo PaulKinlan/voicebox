@@ -93,9 +93,23 @@ marker alone, because the reason after it is git's prose and may change.
 
 It is a plain script, not a hook: `.githooks/pre-push` and `scripts/pre-push.sh` stay unaware of it,
 and a `--push-cmd` stub plus `--rehearse` lets every branch be driven without contacting a remote.
-A flag given without its value is a **usage error (exit 1)**, never a verdict code: it used to die
-inside dash's `shift 2` with exit 2, which is this script's own `NO-OP` code, so a mistyped command
-line answered "nothing to do" about a question it had not been asked.
+**Argument handling is a verdict-safety surface, not ergonomics.** A flag that is missing its value is
+a usage error (exit 1), never a verdict code — and three ways of being missing were measured:
+
+  * a bare value-flag (`--target` at the end of a line) used to die inside dash's `shift 2` with exit
+    **2**, which is this script's own `NO-OP` code, so a mistyped command line answered "nothing to do"
+    about a question it had not been asked;
+  * a flag that **eats the next flag** — `--check --target --remote` — used to print
+    `PRECONDITION-OK … target=origin/--remote` and **exit 0**, and the plain `--target --remote` form
+    went on to build the refspec `HEAD:refs/heads/--remote` and ask the real remote about a namespace
+    that cannot exist. A dash-leading value is therefore refused, naming the case;
+  * and so is an **empty** one: `--check --target=` printed the same green `PRECONDITION-OK` with no
+    target at all, because the tip compare it should have failed was against a ref that cannot exist
+    either.
+
+Every value flag also accepts `--flag=<value>` — the escape hatch that keeps a genuinely odd value
+(e.g. a filename starting with `-`) expressible, without letting the space-separated form swallow a
+flag.
 POSIX `sh` throughout (the `DASH, NOT BASH` case in `tests/landing-preflight.test.mjs` keeps it that
 way, and the trap it had to fix was a real one: dash reads a `printf` format starting with a dash as
 an option and dies with `Illegal option --`, which turned a `REFUSED` verdict into exit 2 until the
