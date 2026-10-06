@@ -172,3 +172,36 @@ test("the timeout ceiling is PER-ADAPTER (voicebox-beads-hmco): a raised ceiling
     "a ceiling above the 600000ms meta-cap must refuse",
   );
 });
+
+test("a write that fails because the harness is already GONE is not the verdict — the transport's closure is (voicebox-beads-cps6)", async () => {
+  // THE MEASURED FLAKE, made deterministic: a stub adapter writes stderr and exits(1), and the
+  // client's initialize frame loses the race against the process. The raw `write EPIPE` used to
+  // reach the caller as the task's outcome, so the diagnostics case failed on the write instead of
+  // asserting the exit code and stderr it exists for. The peer-gone frame is dropped (there is
+  // nobody to receive it) and the transport's own closure — which carries the diagnostic — settles
+  // the pending request.
+  let ended;
+  const client = createAcpClient({
+    onMessage() {}, onClose(fn) { ended = fn; },
+    send() { throw Object.assign(new Error("write EPIPE"), { code: "EPIPE" }); }, close() {},
+  }, { timeoutMs: 1000 });
+
+  const pending = client.initialize();
+  ended(Object.assign(new Error("claude-code process exited with code 1 while initializing claude-code\nStderr: npm error notarget ETARGET"), { refused: "harness-ended-outcome-unknown" }));
+  await assert.rejects(pending, (err) =>
+    err.refused === "harness-ended-outcome-unknown" && /ETARGET/.test(err.message),
+  "the closure's diagnostic must win over the write failure");
+});
+
+test("a write failure that is NOT the peer being gone still surfaces as itself — the tolerance is not a blanket swallow (voicebox-beads-cps6)", async () => {
+  // The adversarial control: the codes that mean "there is nobody to receive this" are absorbed,
+  // and nothing else is. A transport that fails for a real reason must name that reason rather
+  // than stalling until the timeout and refusing as an unrelated one.
+  const client = createAcpClient({
+    onMessage() {}, onClose() {},
+    send() { throw Object.assign(new Error("bad file descriptor"), { code: "EBADF" }); }, close() {},
+  }, { timeoutMs: 1000 });
+
+  await assert.rejects(client.initialize(), (err) => err.code === "EBADF",
+    "a non-peer-gone write failure must still reach the caller as itself");
+});
