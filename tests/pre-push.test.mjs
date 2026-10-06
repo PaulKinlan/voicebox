@@ -271,26 +271,34 @@ test('acceptance names the network cause when a responding front drops mid-run',
   }
 });
 
+/**
+ * A scratch repo holding the gate and every script its stages run, so a budget case can be driven
+ * without a real repository. The fake unit lane sleeps 30s, so any budget below that is REFUSED by
+ * name — which is what makes the resolved budget observable in the output (voicebox-beads-03po).
+ *
+ * The docs stage runs before the test lanes and needs its script here too; in this scratch repo
+ * there is no `origin/main`, so it reports SKIPPED BY NAME and exits 0 — the designed answer for
+ * "the base is unknown". The classifier is copied because the gate calls it before its stages.
+ */
+function gateBudgetFixture(dir) {
+  const repo = path.join(dir, 'repo');
+  mkdirSync(repo);
+  execFileSync('git', ['init', '-q'], { cwd: repo, env: cleanEnv });
+  mkdirSync(path.join(repo, 'scripts'), { recursive: true });
+  mkdirSync(path.join(repo, 'lib'), { recursive: true });
+  copyFileSync(path.join(root, 'scripts/pre-push.sh'), path.join(repo, 'pre-push.sh'));
+  copyFileSync(path.join(root, 'scripts/test-lanes.mjs'), path.join(repo, 'scripts/test-lanes.mjs'));
+  copyFileSync(path.join(root, 'scripts/docs-touched.mjs'), path.join(repo, 'scripts/docs-touched.mjs'));
+  copyFileSync(path.join(root, 'lib/git-env.mjs'), path.join(repo, 'lib/git-env.mjs'));
+  chmodSync(path.join(repo, 'pre-push.sh'), 0o755);
+  writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ scripts: { 'test:unit': 'node -e "setTimeout(()=>{}, 30000)"' } }));
+  return repo;
+}
+
 test('pre-push timeout refusal respects custom budget and reports measured elapsed time', { timeout: 30000 }, () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-pre-push-budget-'));
-  const repo = path.join(dir, 'repo');
   try {
-    mkdirSync(repo);
-    execFileSync('git', ['init', '-q'], { cwd: repo, env: cleanEnv });
-    mkdirSync(path.join(repo, 'scripts'), { recursive: true });
-    copyFileSync(path.join(root, 'scripts/pre-push.sh'), path.join(repo, 'pre-push.sh'));
-    // The gate calls the classifier before its stages, so a fixture that runs
-    // the gate needs the classifier present (it tolerates having no tests/).
-    copyFileSync(path.join(root, 'scripts/test-lanes.mjs'), path.join(repo, 'scripts/test-lanes.mjs'));
-    chmodSync(path.join(repo, 'pre-push.sh'), 0o755);
-    // The docs stage runs before the test lanes; it needs its script here too. In this scratch repo
-    // there is no `origin/main`, so it reports SKIPPED BY NAME and exits 0 — which is the designed
-    // answer for "the base is unknown", and lets this case get to the timeout it is about.
-    mkdirSync(path.join(repo, 'scripts'), { recursive: true });
-    mkdirSync(path.join(repo, 'lib'), { recursive: true });
-    copyFileSync(path.join(root, 'scripts/docs-touched.mjs'), path.join(repo, 'scripts/docs-touched.mjs'));
-    copyFileSync(path.join(root, 'lib/git-env.mjs'), path.join(repo, 'lib/git-env.mjs'));
-    writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ scripts: { 'test:unit': 'node -e "setTimeout(()=>{}, 30000)"' } }));
+    const repo = gateBudgetFixture(dir);
 
     const result = spawnSync(path.join(repo, 'pre-push.sh'), [], {
       cwd: repo, encoding: 'utf8', timeout: 15000,
@@ -312,6 +320,46 @@ test('pre-push timeout refusal respects custom budget and reports measured elaps
     const elapsed = Number(match[2]);
     assert.equal(budget, 2, 'configured budget must be 2s');
     assert.ok(elapsed >= 1 && elapsed <= 5, `elapsed must be measured execution time: ${elapsed}s`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('pre-push budget resolution honours the legacy VOICEBOX_GATE_TESTS_SECS, and VOICEBOX_GATE_UNIT_SECS wins over it', { timeout: 30000 }, () => {
+  // WHY (voicebox-beads-03po, from the lq8s delta review's M4-variant): the gate resolves the unit
+  // budget as `${VOICEBOX_GATE_UNIT_SECS:-${VOICEBOX_GATE_TESTS_SECS:-180}}`, and the custom-budget
+  // case above only ever sets the PRIMARY variable. Removing the legacy fallback link therefore left
+  // the suite green — a compat break for an operator still running the legacy variable would be
+  // silent, and would surface as "my budget is ignored" rather than as a failing test. Both links
+  // are pinned here, including the PRECEDENCE (primary over legacy), because "both set" is the case
+  // a reader has to guess at otherwise.
+  const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-pre-push-legacy-budget-'));
+  try {
+    const repo = gateBudgetFixture(dir);
+    const runGate = (budgetEnv) => {
+      const result = spawnSync(path.join(repo, 'pre-push.sh'), [], {
+        cwd: repo, encoding: 'utf8', timeout: 15000,
+        env: {
+          ...cleanEnv,
+          ...budgetEnv,
+          VOICEBOX_SKIP_ACCEPT: '1',
+          VOICEBOX_GATE_LOCK: path.join(dir, 'fixture-gate.lock'),
+          VOICEBOX_GATE_HOLDER: path.join(dir, 'fixture-gate.holder.json'),
+        },
+      });
+      assert.notEqual(result.status, 0, result.stdout + result.stderr);
+      return result.stdout + result.stderr;
+    };
+
+    // 1. ONLY the legacy variable: it is honoured, and the refusal names the budget it produced.
+    const legacy = runGate({ VOICEBOX_GATE_TESTS_SECS: '2' });
+    assert.match(legacy, /running npm run test:unit \(max 2s\)\.\.\./, `the legacy variable must set the unit budget: ${legacy}`);
+    assert.match(legacy, /TIMED OUT — budget 2s, elapsed \d+s \(exit 124\)/, `and the refusal must name that budget: ${legacy}`);
+
+    // 2. BOTH set: the primary WINS over the legacy value (documented precedence, not a coin toss).
+    const both = runGate({ VOICEBOX_GATE_UNIT_SECS: '3', VOICEBOX_GATE_TESTS_SECS: '2' });
+    assert.match(both, /running npm run test:unit \(max 3s\)\.\.\./, `VOICEBOX_GATE_UNIT_SECS must win over the legacy variable: ${both}`);
+    assert.match(both, /TIMED OUT — budget 3s, elapsed \d+s \(exit 124\)/, `the refusal must name the winning budget: ${both}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
