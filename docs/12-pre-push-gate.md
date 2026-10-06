@@ -23,6 +23,13 @@ Voicebox enforces a multi-stage verification gate on `git push` via `.githooks/p
 | **Live Suite** | `npm run test:live` | Server lane (`--test-concurrency=4`) + Browser CDP lane (`--test-concurrency=1`) | `400s` |
 | **Acceptance** | `npm run accept` | End-to-end headless Chromium verification (`page-acceptance.mjs`) | `45s` |
 
+### Budget Overrides
+Each bound can be raised or tightened per run without editing the gate:
+- The **unit** bound resolves in order — `VOICEBOX_GATE_UNIT_SECS`, then the legacy `VOICEBOX_GATE_TESTS_SECS`, then the table's default. The primary variable wins when both are set.
+- The **live** and **acceptance** bounds are their own variables: `VOICEBOX_GATE_LIVE_SECS`, `VOICEBOX_GATE_ACCEPT_SECS`.
+
+A refusal names the variable to raise, so the remedy is copy-pasteable. `tests/pre-push.test.mjs` pins the resolution, the legacy fallback and its precedence (voicebox-beads-03po), so removing a link is a failing test rather than a silent compat break.
+
 ### Automatic Test Lane Classification (`scripts/test-lanes.mjs`)
 `scripts/test-lanes.mjs` lexes every `tests/*.test.mjs` file (ignoring comments and fixture string writes) to classify it into the appropriate lane:
 - **`unit` lane**: Pure logic, state machine, and worker tests (including `tests/wasm-shelf.test.mjs` and `tests/docs-drift.test.mjs`) that do not spawn `server.mjs`, `createServer`, `task-fixture.mjs`, or headless Chromium.
