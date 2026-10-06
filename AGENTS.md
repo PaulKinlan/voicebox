@@ -193,15 +193,18 @@ A landing to `main` runs the gates BEFORE pushing — the push itself is the gat
 - `node scripts/single-owner.mjs` — **one fact, one computing site.** The state directories are owned by `lib/state-dirs.mjs`; a second read of the variable, or a rebuilt default, anywhere else is refused by name and by owner. Path authorization (realpath containment, dotfile denial, root-kind handling) is owned by `lib/path-auth.mjs` (voicebox-beads-q0a3); a second copy of any of its three declared code shapes is refused the same way, and the owner is driven on a scratch tree — a declaration that stops refusing fails the gate. It also runs inside the unit lane: `tests/single-owner.test.mjs` drives a fourth copy into a scratch tree and watches the check refuse, so the refusal is proven rather than assumed. The review question behind it (voicebox-beads-y5k): *is this component answering about itself?*
 - `npm run accept` — the page acceptance harness (drives the real page; must be ALL CLEAR)
 - `scripts/landing-preflight.sh` — **would this push actually move the branch I am landing, to the commit I
-gated?** Asked once, in the second before the push, against a dry run at the REAL target ref. Four
-verdicts (`OK` 0 / `NO-OP` 2 / `REFUSED` 3 / `UNKNOWN` 4) plus two asserted preconditions
-(`PRECONDITION` 5 for a dirty tree or a `HEAD` that already *is* the target, `IDENTITY-MISMATCH` 6 when the
-row names a sha other than `HEAD`), and it is fail-closed: an unrecognised shape never says `OK`, and a
-dry run whose command itself failed cannot say `OK` either. It exists because `Everything up-to-date` is a
-true statement about a ref that is not the landing, and because four lanes were each rebuilding that
-check by hand in the minute before pushing (voicebox-beads-vto3). `--rehearse` drives every branch with
-the push stubbed; `tests/landing-preflight.test.mjs` proves the classifier against refusals and update
-rows a real git printed, at four abbreviation lengths. See [docs/12-pre-push-gate.md](docs/12-pre-push-gate.md).
+gated?** Asked once, in the second before the push, against a dry run at the REAL target ref. Both ends of
+the accepted row are asserted — the ref being pushed **and** the ref it lands on — because a row matched on
+the left side alone would call a push aimed at some other branch a landing on `main`. Four verdicts
+(`OK` 0 / `NO-OP` 2 / `REFUSED` 3 / `UNKNOWN` 4) plus two asserted preconditions (`PRECONDITION` 5 for a
+dirty tree or a `HEAD` that already *is* the target, `IDENTITY-MISMATCH` 6 when the row names a sha other
+than `HEAD`), and it is fail-closed: an unrecognised shape never says `OK`, a dry run whose command itself
+failed cannot say `OK`, and a flag with no value is exit 1, never a verdict. It exists because `Everything
+up-to-date` is a true statement about a ref that is not the landing, and because four lanes were each
+rebuilding that check by hand in the minute before pushing (voicebox-beads-vto3). `--rehearse` drives every
+branch with the push stubbed; `tests/landing-preflight.test.mjs` proves the classifier against refusals and
+update rows a real git printed, at four abbreviation lengths and against two destination refs. See
+[docs/12-pre-push-gate.md](docs/12-pre-push-gate.md).
 
 **The docs rule, and the one question to ask on every change: *did this move something a
 document describes?*** The generated blocks answer for themselves (`npm run docs:write`); the prose

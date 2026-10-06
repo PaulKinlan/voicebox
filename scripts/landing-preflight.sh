@@ -100,22 +100,37 @@ verdicts / exit codes
 USAGE
 }
 
+# A flag with no value is a USAGE error (exit 1), never a verdict code. Written as `${2:-}` + `shift 2`
+# first, and dash answered a bare `--target` with `shift: can't shift that many` and exit 2 — which is
+# this script's own NO-OP code, so a broken command line reported a verdict it had never reached. It is
+# a function that runs in the MAIN shell on purpose: `exit` inside a command substitution only leaves
+# the subshell, which would sail straight past the error and carry on with an empty value.
+take() {
+  if [ -z "${2:-}" ]; then
+    printf 'landing-preflight: %s needs a value\n' "$1" >&2
+    usage >&2
+    exit 1
+  fi
+  TAKE_VALUE="$2"
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --help|-h) usage; exit 0 ;;
-    --classify) MODE="classify"; CLASSIFY_FILE="${2:-}"; shift 2 ;;
+    --classify) MODE="classify"; take "$1" "${2:-}"; CLASSIFY_FILE="$TAKE_VALUE"; shift 2 ;;
     --check) MODE="check"; shift ;;
     --rehearse) MODE="rehearse"; shift ;;
-    --remote) REMOTE="${2:-}"; shift 2 ;;
-    --target) TARGET="${2:-}"; shift 2 ;;
-    --local-ref) LOCAL_REF="${2:-}"; shift 2 ;;
-    --push-cmd) PUSH_CMD="${2:-}"; shift 2 ;;
+    --remote) take "$1" "${2:-}"; REMOTE="$TAKE_VALUE"; shift 2 ;;
+    --target) take "$1" "${2:-}"; TARGET="$TAKE_VALUE"; shift 2 ;;
+    --local-ref) take "$1" "${2:-}"; LOCAL_REF="$TAKE_VALUE"; shift 2 ;;
+    --push-cmd) take "$1" "${2:-}"; PUSH_CMD="$TAKE_VALUE"; shift 2 ;;
     *) printf 'landing-preflight: unknown argument: %s\n' "$1" >&2; usage >&2; exit 1 ;;
   esac
 done
 
 say() { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*" >&2; }
+
 
 # ── THE SHAPES ────────────────────────────────────────────────────────────────
 # FIXED STRINGS, not patterns, where a pattern would lie: `[rejected]` as a BRE is a character class
@@ -126,13 +141,23 @@ REJECT_MARK='[rejected]'
 NOOP_MARK='Everything up-to-date'
 
 # The update row, as ERE: anchored, four-or-more hex either side of the dots, then the LOCAL REF
-# being pushed. Built by concatenation because the ref is data, and passed to `grep -E`.
-# Deletion rows (`-  …`) and forced rows (`+ old...new`) begin with a marker, not a sha, and a `...`
-# row cannot match `[0-9a-f]{4,}\.\.[0-9a-f]{4,}` — both fall through to UNKNOWN, which is the
-# fail-closed answer for a shape this script has not been shown how to read.
+# being pushed, then the DESTINATION it would be written to. Built by concatenation because the refs
+# are data, and passed to `grep -E`.
+#
+# BOTH ENDS ARE MATCHED, AND THAT IS THE WHOLE CHECK. A row names two refs: the thing being pushed and
+# the ref it lands on. Matching only the left side was the P0 the cross-family review found on this
+# script — `   0123456..ede44f5  HEAD -> wrong` classified as `OK … origin/main would move`, i.e. this
+# tool itself would have pronounced a landing that was aimed at a different branch. That is the same
+# defect it exists to catch: a true sentence about a ref that is not the one being landed.
+#
+# Deletion rows (`-  …`) and forced rows (`+ old...new`) begin with a marker, not a sha; a `...` row
+# cannot match either; and an arrow this script has not been shown (`->`, git's ASCII form on 2.43)
+# falls through. Every one of those is UNKNOWN — the fail-closed answer for a shape not understood.
 row_pattern() {
   printf '%s' '^ *[0-9a-f]{4,}\.\.[0-9a-f]{4,} +'
   printf '%s' "$LOCAL_REF"
+  printf '%s' ' +-> +(refs/heads/)?'
+  printf '%s' "$TARGET"
   printf '%s' '([ ]|$)'
 }
 
@@ -187,7 +212,14 @@ classify() {
   # 3 — OK only when the row exists, names the ref being landed, and prints THIS tree's sha.
   _row="$(grep -E "$(row_pattern)" "$_out" 2>/dev/null | head -n 1 || true)"
   if [ -z "$_row" ]; then
-    printf 'UNKNOWN  no update row naming %s, no refusal, no up-to-date. Do NOT push.\n' "$LOCAL_REF"
+    printf 'UNKNOWN  no update row pushing %s at %s. Do NOT push.\n' "$LOCAL_REF" "$TARGET"
+    # Name the near-miss rather than making the reader diff two strings: a row for another
+    # destination is the single most likely cause, and it must not read as a shapeless failure.
+    _other="$(grep -E '^ *[0-9a-f]{4,}\.[.][0-9a-f]{4,} ' "$_out" 2>/dev/null | head -n 1 || true)"
+    if [ -n "$_other" ]; then
+      printf '         a row DOES exist, but it is not this landing: %s\n' "$_other"
+      printf '         asked about: %s -> %s/%s\n' "$LOCAL_REF" "$REMOTE" "$TARGET"
+    fi
     printf '%s\n' '---- captured output ----'
     head -n 40 "$_out" || true
     return 4
@@ -325,6 +357,11 @@ case "$MODE" in
     printf 'To x\n   %s..%s  HEAD -> %s\n' "$_h4" "$_h4" "$TARGET" > "$_tmp/ok-4char"
     printf 'To x\n   %s..%s  HEAD -> %s\n' "$_old7" "$_foreign7" "$TARGET" > "$_tmp/mismatch"
     printf 'To x\n   %s..%s  HEAD -> %s\n' "$_h4" "$_h40" "$TARGET" > "$_tmp/ok-full-sha-on-right"
+    # THE P0 REGRESSION, as a rehearsal case too: a row aimed at ANOTHER branch. Before the fix this
+    # printed OK. It also proves the match is on the destination and not merely a broken regex, by
+    # keeping the same row OK when --target IS `wrong` (that half is the real test in the .mjs file).
+    printf 'To x\n   %s..%s  HEAD -> wrong\n' "$_h7" "$_h7" > "$_tmp/wrong-target"
+    printf 'To x\n   %s..%s  HEAD -> refs/heads/%s\n' "$_h7" "$_h7" "$TARGET" > "$_tmp/ok-full-dest-form"
     printf 'To x\n   00000000..%s  refs/heads/feature -> %s\n' "$_h7" "$TARGET" > "$_tmp/probe-ref"
     printf 'remote: Internal server error\nfatal: the remote end hung up unexpectedly\n' > "$_tmp/unknown"
     : > "$_tmp/empty"
@@ -337,6 +374,8 @@ case "$MODE" in
     _want OK-4-CHAR-FROM-ROW 0 "$_tmp/ok-4char"
     _want IDENTITY-MISMATCH 6 "$_tmp/mismatch"
     _want OK-40-CHAR-READ-FROM-ROW 0 "$_tmp/ok-full-sha-on-right"
+    _want UNKNOWN-WRONG-TARGET 4 "$_tmp/wrong-target"
+    _want OK-REFS-HEADS-DEST-FORM 0 "$_tmp/ok-full-dest-form"
     _want UNKNOWN-probe-ref 4 "$_tmp/probe-ref"
     _want UNKNOWN-server-error 4 "$_tmp/unknown"
     _want UNKNOWN-empty 4 "$_tmp/empty"

@@ -58,8 +58,17 @@ line also carries a sha, so a loosely-matched "success" pattern can be satisfied
 |---|---|---|---|
 | `REFUSED` | 3 | output contains the literal `[rejected]` (tested **first**) | do not push: fetch, re-merge, **re-gate** the merged tree |
 | `NO-OP` | 2 | output contains `Everything up-to-date` | do not push: this is a true statement about a ref that is not the landing |
-| `OK` | 0 | an update row `^ *<sha>..<sha>  HEAD -> main` whose new-side sha is a prefix of `git rev-parse HEAD` | push |
+| `OK` | 0 | an update row whose **both ends** are the landing — `^ *<sha>..<sha>  HEAD -> main` — and whose new-side sha is a prefix of `git rev-parse HEAD` | push |
 | `UNKNOWN` | 4 | anything else, **including a dry run whose command itself failed** | do not push |
+
+**Both ends of the row are asserted, and that is the whole check.** A row names two refs: the thing
+being pushed, and the ref it would land on. The first draft of this script matched only the left side,
+and the cross-family review caught it: a dry run aimed at `wrong` printed `OK … origin/main would
+move` — this tool committing the error it exists to prevent. So the destination is matched too (short
+form or `refs/heads/`-prefixed), and `tests/landing-preflight.test.mjs` drives a REAL row landing on
+another branch and asserts BOTH halves: `UNKNOWN` when asked about `main`, still `OK` when asked about
+the branch the row really names. Without the second half, "fixed" and "regex that never matches" look
+identical.
 
 Two more answers, asserted rather than assumed, because both produce a false green if skipped:
 `PRECONDITION` (5) refuses to ask anything when the worktree is dirty or when `HEAD` already equals
@@ -76,6 +85,9 @@ marker alone, because the reason after it is git's prose and may change.
 
 It is a plain script, not a hook: `.githooks/pre-push` and `scripts/pre-push.sh` stay unaware of it,
 and a `--push-cmd` stub plus `--rehearse` lets every branch be driven without contacting a remote.
+A flag given without its value is a **usage error (exit 1)**, never a verdict code: it used to die
+inside dash's `shift 2` with exit 2, which is this script's own `NO-OP` code, so a mistyped command
+line answered "nothing to do" about a question it had not been asked.
 POSIX `sh` throughout (the `DASH, NOT BASH` case in `tests/landing-preflight.test.mjs` keeps it that
 way, and the trap it had to fix was a real one: dash reads a `printf` format starting with a dash as
 an option and dies with `Illegal option --`, which turned a `REFUSED` verdict into exit 2 until the

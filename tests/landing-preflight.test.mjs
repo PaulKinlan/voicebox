@@ -257,6 +257,39 @@ test("REAL: a dry run that fails after printing a good row is downgraded to UNKN
 
 // ── THE REHEARSAL and the hygiene it exists to protect ────────────────────────
 
+test("REAL row aimed at ANOTHER branch: UNKNOWN (exit 4) for the target we asked about, and OK for the one the row really names", () => {
+  const f = fixture();
+  // Put `other` on the remote at the BASE, so a dry run of HEAD:refs/heads/other prints a genuine
+  // UPDATE ROW (not "[new branch]") naming `other` on the right of the arrow. git 2.43 prints:
+  //    <base7>..<ahead7>  HEAD -> other
+  git(f.work, "push", "-q", "origin", `${f.base}:refs/heads/other`);
+  const raw = spawnSync("git", ["push", "--dry-run", "origin", "HEAD:refs/heads/other"], {
+    cwd: f.work, env: cleanEnv, encoding: "utf8",
+  });
+  const captured = path.join(f.dir, "captured-other-target.txt");
+  writeFileSync(captured, `${raw.stdout ?? ""}${raw.stderr ?? ""}`);
+  const body = readFileSync(captured, "utf8");
+  assert.match(body, /HEAD -> other/, `the fixture must really print a row landing on 'other':\n${body}`);
+
+  // THE FAIL-OPEN THIS PROVES FIXED: the same bytes, asked about `main`, must not answer OK. Before
+  // the review this returned 0 with "origin/main would move…" — the tool itself committing the exact
+  // error it exists to catch: a true sentence about a ref that is not the one being landed.
+  const asked = preflight(f.work, ["--classify", captured, "--target", "main"]);
+  assert.equal(asked.code, 4, `a row aimed at 'other' is NOT a landing on main:\n${asked.out}`);
+  assert.match(asked.out, /a row DOES exist, but it is not this landing/, "and the reason must name the near-miss:\n" + asked.out);
+  assert.doesNotMatch(asked.out, /^OK/m, `never say OK about a ref nobody is landing:\n${asked.out}`);
+
+  // …and the SAME classifier still says OK when asked about the ref the row really names, so the first
+  // half cannot be satisfied by a regex that simply never matches anything.
+  const aimed = preflight(f.work, ["--classify", captured, "--target", "other"]);
+  assert.equal(aimed.code, 0, `aimed at its real destination it must still read OK:\n${aimed.out}`);
+
+  // Full-form destination (`HEAD -> refs/heads/main`) is the same landing, so it is the same verdict.
+  writeFileSync(captured, `To x\n   0123456..${f.ahead.slice(0, 7)}  HEAD -> refs/heads/${"main"}\n`);
+  const full = preflight(f.work, ["--classify", captured, "--target", "main"]);
+  assert.equal(full.code, 0, `a refs/heads/-prefixed destination is still the target:\n${full.out}`);
+});
+
 test("REAL: --rehearse drives every branch with the push stubbed and contacts no remote", () => {
   const f = fixture();
   const before = lsRemote(f.bare);
@@ -294,8 +327,15 @@ test("DASH, NOT BASH: the script parses under dash and uses no bash-only constru
 
 test("the script refuses an unknown argument instead of guessing (exit 1)", () => {
   const f = fixture();
-  const r = preflight(f.work, ["--classify"]);
-  assert.ok(r.code === 1 || r.code === 2, `a missing file is a usage error, not a verdict (got ${r.code}):\n${r.out}`);
   const r2 = preflight(f.work, ["--nonsense"]);
   assert.equal(r2.code, 1, `unknown flags must fail closed:\n${r2.out}`);
+  // A VALUE-FLAG WITH NO VALUE must be a usage error (1), not a verdict. It used to die inside dash's
+  // `shift 2` with exit 2 — the script's own NO-OP code, so a broken command line reported a verdict
+  // it had never reached, and a caller keying on 2 would have read "do not push, nothing to do".
+  for (const flag of ["--target", "--remote", "--local-ref", "--classify", "--push-cmd"]) {
+    const r = preflight(f.work, [flag]);
+    assert.equal(r.code, 1, `${flag} with no value must exit 1, not alias a verdict code:\n${r.out}`);
+    assert.match(r.out, /needs a value/, `${flag}: and must say so\n${r.out}`);
+    assert.doesNotMatch(r.out, /^NO-OP|^REFUSED|^UNKNOWN|^OK/m, `${flag}: no verdict may appear:\n${r.out}`);
+  }
 });
