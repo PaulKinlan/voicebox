@@ -17,6 +17,9 @@
 //   3. /api/files and /api/file route too — the room's panel and reader work
 //      for a page-owned root, and say whose bytes they show (via: "page").
 //   4. The page closing mid-flight answers page-closed, not silence.
+//   5. THE LIVE LEG (with a key): a live tool call routes the same way — and its READ half is proved by
+//      words only the disk and the test know, asked for by a plain file name, with bounded re-asks whose
+//      count is in the failure message (voicebox-beads-k6uu: the model, not the route, is the variable).
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -157,7 +160,63 @@ test("the page closing answers page-closed or no-page — the absence family, ne
 // ── 5. the live leg: a VOICE turn routes to the page ────────────────────────
 const HAVE_KEY = Boolean(process.env.GEMINI_API_KEY);
 
-test("the live leg: a spoken write into a page-owned root lands through the channel", { skip: !HAVE_KEY && "GEMINI_API_KEY not set", timeout: 120000 }, async () => {
+/**
+ * THE MODEL IS NOT THE THING UNDER TEST (voicebox-beads-k6uu). This leg proves a ROUTE: a live tool call
+ * leaves the server, is performed by the PAGE that owns the root, and its answer comes back. The model in
+ * the middle is nondeterministic — on its own mood, or on a loaded box, it can answer a read request out of
+ * the conversation instead of calling `read_file` — and the first version of this test let exactly that
+ * happen SILENTLY: it waited for the model to SAY the content, which the model already knew from the turn
+ * that wrote it, and then asserted a tool call that was never made. Re-run alone it passed 4/4 (the model
+ * happened to call the tool), inside the serial lane it went red — a flake was measured, and the test was
+ * the instrument at fault for accepting proof that did not exist.
+ *
+ * Two changes fix that, and neither of them weakens the claim:
+ *   1. THE MODEL MUST READ SOMETHING IT HAS NEVER SEEN. The test writes a second file at the project root
+ *      through the product's own write route with a random phrase, and asks the model to read THAT. A
+ *      spoken match is then structural proof of a routed read — an answer from context cannot produce words
+ *      the model was never told. The phrase is WORDS, not a token (`read-back-50rel8n` came back from the
+ *      live session's own speech transcription as "read back a fifty r e l eight n", which is a mangled
+ *      match, not a missing read — the model's audio is transcribed and a random string is exactly what a
+ *      transcriber mangles). Two of the three words is the bar: the model was told none of them, and one
+ *      may be misheard. The name is PLAIN, no directories, because that is the tool contract
+ *      (`write_file`: "Use a plain file name, no directories") — a fixture at `assets/…` made the model
+ *      refuse three asks running for a reason that was the product working, not the route failing.
+ *   2. A SKIPPED TOOL CALL IS ASKED AGAIN, BOUNDED AND RECORDED. If the model answers without calling the
+ *      tool, the request is repeated in a CORRECTED form (up to three asks, each bounded) — a model that
+ *      reached for the wrong verb rarely reaches for the right one when asked the same way twice — because
+ *      that failure class is "a language model declined to use a tool", not "the route broke". A route that
+ *      is actually broken fails every ask and is still red, and the message names how many asks were spent,
+ *      so a reviewer can tell a flake from a regression (which a lane-level retry of the whole FILE could
+ *      not: it would re-run every earlier check and could hide a real one).
+ */
+const LIVE_ASKS = 3;
+const LIVE_ASK_MS = 15000;
+
+/** Words a speech transcriber handles, and a model reading a file cannot guess. */
+const READ_WORDS = ["saffron", "pelican", "quartz", "walnut", "lantern", "cobalt", "tundra", "meadow", "harbour", "marble"];
+const pickWords = (count) => {
+  const pool = [...READ_WORDS];
+  const picked = [];
+  while (picked.length < count) picked.push(...pool.splice(Math.floor(Math.random() * pool.length), 1));
+  return picked;
+};
+
+/**
+ * One live text turn, waited on for a NAMED condition ("the tool was called", "the secret was spoken").
+ * The condition is the caller's, and it is re-read on every frame-bearing poll: `ws.onmessage` fills the
+ * shared arrays, so a bounded predicate over them is the whole wait.
+ */
+async function liveAsk(ws, text, settled, ms = LIVE_ASK_MS) {
+  ws.send(JSON.stringify({ type: "text", text }));
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    await sleep(200);
+    if (settled()) return true;
+  }
+  return settled();
+}
+
+test("the live leg: a spoken write into a page-owned root lands through the channel", { skip: !HAVE_KEY && "GEMINI_API_KEY not set", timeout: 180000 }, async () => {
   // The shape under test: page (OPFS project) ⇄ /channel ⇄ server ⇄ /live ⇄ Gemini Live.
   // The live tool call hits the SAME execute() as the REST turn, so the dispatch routes it —
   // this test proves that rather than assuming it from the code path.
@@ -182,12 +241,19 @@ test("the live leg: a spoken write into a page-owned root lands through the chan
   for (let i = 0; i < 100 && !states.some((s) => s.state === "ready"); i++) await sleep(200);
   assert(states.some((s) => s.state === "ready"), "the live session never became ready");
 
-  ws.send(JSON.stringify({ type: "text", text: "Please create a file called voice-wrote-this.txt with the exact content: spoken and routed" }));
-  for (let i = 0; i < 300 && !tools.some((t) => t.calls.some((c) => c.name === "write_file")); i++) await sleep(200);
-  const writeCall = tools.flatMap((t) => t.calls).find((c) => c.name === "write_file");
-  assert(writeCall, "the model did not call write_file");
-  assert.equal(writeCall.ok, true, `the routed write was refused: ${JSON.stringify(writeCall)}`);
-  assert.match(writeCall.action ?? "", /observed by the page/, "the tool result does not name whose observation it quotes");
+  // THE WRITE LEG: the model creates the file through the route. A skipped tool call is asked again
+  // (bounded), and the second ask states the EXACT call rather than repeating the sentence — a model that
+  // reached for the wrong verb does not usually reach for the right one because it was asked the same way
+  // twice.
+  const writeCall = () => tools.flatMap((t) => t.calls).find((c) => c.name === "write_file");
+  const writePrompt = (attempt) => attempt === 0
+    ? "Please create a file called voice-wrote-this.txt with the exact content: spoken and routed"
+    : 'Call the write_file tool with name "voice-wrote-this.txt" and content "spoken and routed" — create the file itself.';
+  let writeAsks = 0;
+  for (; writeAsks < LIVE_ASKS && !writeCall(); writeAsks++) await liveAsk(ws, writePrompt(writeAsks), () => Boolean(writeCall()));
+  assert(writeCall(), `the model did not call write_file in ${writeAsks} ask(s)`);
+  assert.equal(writeCall().ok, true, `the routed write was refused: ${JSON.stringify(writeCall())}`);
+  assert.match(writeCall().action ?? "", /observed by the page/, "the tool result does not name whose observation it quotes");
 
   // The bytes, read back through the page's OWN door — the route's report is not the witness:
   const direct = await page.evaluate(async () => await window.e1m0.send({ type: "readFile", path: "voice-wrote-this.txt" }));
@@ -196,28 +262,55 @@ test("the live leg: a spoken write into a page-owned root lands through the chan
 
   // Wait for the write turn to complete so its spoken tail does not bleed into the read turn
   // (voicebox-beads-k6uu: awaitingToolTurnComplete queues the read turn while turn 1 is speaking,
-  // and turn 1's trailing speech previously caused premature loop exit before read_file was called):
+  // and turn 1's trailing speech previously caused premature loop exit before read_file was called).
+  // PRESERVED through the disk-only-fixture port (voicebox-beads-ygvd): the write turn settles
+  // BEFORE the read fixture is seeded and asked for, so no live turn is ever racing this one.
   for (let i = 0; i < 150 && !states.some((s) => s.state === "turn-complete"); i++) await sleep(200);
   assert(states.some((s) => s.state === "turn-complete"), "the write turn did not settle");
 
-  // And a spoken READ routes the same way and the model hears the content:
-  const spokenBefore = texts.length;
+  // ── THE READ LEG: A FILE ONLY THE DISK AND THIS TEST KNOW ──────────────────────
+  // The fixture is written through the PRODUCT's own route — a REST turn, which the server routes to the
+  // page that owns the root — and it is named as a PLAIN FILE NAME, because that is the tool contract:
+  // `write_file`'s own description says "Use a plain file name, no directories" (lib/commands.mjs). A model
+  // handed `assets/routed-read.txt` refused it three asks running — "I am restricted to using plain
+  // filenames without any directory paths" — which is the model obeying the product, not the route failing.
+  // The first version of this fixture fought that instruction; the words are the test's own, so nothing in
+  // the live conversation has ever contained them.
+  const [wordA, wordB, wordC] = pickWords(3);
+  const fixtureName = "routed-read.txt";
+  const seeded = await turn(`create a file called ${fixtureName} with the phrase ${wordA} ${wordB} ${wordC}`);
+  assert.equal(seeded.result?.ok, true, `the read fixture did not land through the routed write: ${JSON.stringify(seeded.result)}`);
+  assert.equal(seeded.result?.via, "page", "the fixture must be written by the page that owns the root, not by the machine");
+  const fixture = await page.evaluate(async (name) => await window.e1m0.send({ type: "readFile", path: name }), fixtureName);
+  assert.equal(fixture.ok, true, `the fixture is not readable in the page's root: ${JSON.stringify(fixture)}`);
+  assert.equal(fixture.text, `the phrase ${wordA} ${wordB} ${wordC}`, "the fixture's bytes are not what the routed write was told to write");
+
+  // The read leg's tool calls are measured FROM HERE (a401ad8's toolsBefore discipline, kept through the
+  // port): an ok read_file from an earlier turn cannot stand in for the call this leg is asking for.
   const toolsBefore = tools.length;
-  ws.send(JSON.stringify({ type: "text", text: "Read voice-wrote-this.txt back to me." }));
-
-  // Wait explicitly for the model to issue the read_file tool call:
-  for (let i = 0; i < 300 && !tools.slice(toolsBefore).some((t) => t.calls.some((c) => c.name === "read_file")); i++) await sleep(200);
-  const readCall = tools.slice(toolsBefore).flatMap((t) => t.calls).find((c) => c.name === "read_file");
-  assert(readCall, "the model did not call read_file");
-  assert.equal(readCall.ok, true, `the routed read was refused: ${JSON.stringify(readCall)}`);
-
-  let said = "";
-  for (let i = 0; i < 300; i++) {
-    await sleep(200);
-    said = texts.slice(spokenBefore).map((t) => t.text).join(" ").replace(/\s+/g, " ");
-    if (/spoken and routed/i.test(said)) break;
-  }
-  assert.match(said, /spoken and routed/i, `the model did not speak the page-routed content — heard: ${said.slice(0, 160)}`);
+  const readCall = () => tools.slice(toolsBefore).flatMap((t) => t.calls).find((c) => c.name === "read_file" && c.ok);
+  const heard = () => texts.map((t) => t.text).join(" ").replace(/\s+/g, " ");
+  const heardWords = () => [wordA, wordB, wordC].filter((w) => new RegExp(`\\b${w}\\b`, "i").test(heard()));
+  // A CORRECTED ASK, NOT A REPEAT. A model that read the wrong name reads the wrong name again if it is
+  // simply asked the same way — its OWN refusal is the most useful sentence to hand back, and the name is
+  // restated plainly, because a path with directories in it is refused by the tool's own instruction.
+  const readPrompt = (attempt) => {
+    if (attempt === 0) return `Read ${fixtureName} with the read_file tool and tell me exactly what it says — do not guess.`;
+    const refused = tools.slice(toolsBefore).flatMap((t) => t.calls).filter((c) => c.name === "read_file" && !c.ok).at(-1);
+    return refused
+      ? `The read_file call for ${fixtureName} was refused (${refused.action ?? "refused"}). Call read_file with the plain file name "${fixtureName}" — and tell me what the file says.`
+      : `Call the read_file tool with the plain file name "${fixtureName}" — and tell me what the file says.`;
+  };
+  const answered = () => Boolean(readCall()) && heardWords().length >= 2;
+  let readAsks = 0;
+  for (; readAsks < LIVE_ASKS && !answered(); readAsks++) await liveAsk(ws, readPrompt(readAsks), answered);
+  // The spoken words are the WITNESS, not the model's sentence: they cannot be produced without a routed
+  // read of the file the page wrote, so a regression in the route shows up here as words that never came.
+  assert(
+    heardWords().length >= 2,
+    `the model spoke ${heardWords().length} of the fixture's own words after ${readAsks} ask(s), so no routed read can be claimed (wanted 2+) — heard: ${heard().slice(-200)}`,
+  );
+  assert(readCall(), `the model did not call read_file with an ok answer in ${readAsks} ask(s) — calls seen: ${JSON.stringify(tools.slice(toolsBefore).flatMap((t) => t.calls).map((c) => [c.name, c.ok]))}`);
 
   ws.close();
   await undeclare();
