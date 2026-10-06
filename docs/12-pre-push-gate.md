@@ -43,7 +43,56 @@ Each stage is bounded by GNU `timeout` with a 5-second kill grace period:
 
 ---
 
-## 4. Acceptance Read Idempotence Check
+## 4. Landing Preflight — `scripts/landing-preflight.sh`
+
+The gate answers *is this tree good*. A second question is asked in the minute right after it, before
+the push, and until now every answer was hand-built on the spot: **would this push actually move the
+branch I am landing, to the commit I just gated?** `scripts/landing-preflight.sh` answers that, once,
+with an exit code (voicebox-beads-vto3).
+
+It runs a `git push --dry-run` **at the real target ref** (`HEAD:refs/heads/main` on the real remote)
+and reads the output as one of four verdicts. The order is the mechanism, not typography — a refusal
+line also carries a sha, so a loosely-matched "success" pattern can be satisfied by a rejection:
+
+| Verdict | Exit | Read from | Answer |
+|---|---|---|---|
+| `REFUSED` | 3 | output contains the literal `[rejected]` (tested **first**) | do not push: fetch, re-merge, **re-gate** the merged tree |
+| `NO-OP` | 2 | output contains `Everything up-to-date` | do not push: this is a true statement about a ref that is not the landing |
+| `OK` | 0 | an update row `^ *<sha>..<sha>  HEAD -> main` whose new-side sha is a prefix of `git rev-parse HEAD` | push |
+| `UNKNOWN` | 4 | anything else, **including a dry run whose command itself failed** | do not push |
+
+Two more answers, asserted rather than assumed, because both produce a false green if skipped:
+`PRECONDITION` (5) refuses to ask anything when the worktree is dirty or when `HEAD` already equals
+`<remote>/<target>` — an uncommitted merge leaves `HEAD` on the default branch, and then the dry run
+happily reports `Everything up-to-date` about a landing that never happened. `IDENTITY-MISMATCH` (6)
+fires when the row git would act on names a sha that is not `HEAD` here: the gated tree and the
+offered tree are different trees.
+
+The sha length is **read from the row**, never hardcoded: git's abbreviation follows repository size
+and `core.abbrev`, so 7 is a guess that breaks quietly on a big repo. The two refusal wordings this
+repo has actually printed — `(non-fast-forward)` when the pushed tip is an ancestor, `(fetch first)`
+when the tips have diverged and the object is not held locally — are matched by the `[rejected]`
+marker alone, because the reason after it is git's prose and may change.
+
+It is a plain script, not a hook: `.githooks/pre-push` and `scripts/pre-push.sh` stay unaware of it,
+and a `--push-cmd` stub plus `--rehearse` lets every branch be driven without contacting a remote.
+POSIX `sh` throughout (the `DASH, NOT BASH` case in `tests/landing-preflight.test.mjs` keeps it that
+way, and the trap it had to fix was a real one: dash reads a `printf` format starting with a dash as
+an option and dies with `Illegal option --`, which turned a `REFUSED` verdict into exit 2 until the
+literals went through `printf '%s\n'`), and `tests/landing-preflight.test.mjs` drives the real refusals, the real update row
+at four abbreviation lengths and a real forced-update row against a scratch repository with its own
+local bare remote — so the classifier is proven against git's bytes, not against a transcription of
+them.
+
+```bash
+scripts/landing-preflight.sh              # ask once, before pushing at main
+scripts/landing-preflight.sh --rehearse    # every verdict, push stubbed, no remote touched
+node --test tests/landing-preflight.test.mjs
+```
+
+---
+
+## 5. Acceptance Read Idempotence Check
 
 During `npm run accept`, the acceptance harness verifies that read endpoints are strictly idempotent:
 1. Declares an isolated workspace root and seeds a known file before loading the browser page.
