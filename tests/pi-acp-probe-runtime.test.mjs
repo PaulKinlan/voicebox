@@ -43,7 +43,7 @@ process.stdin.on("data", (chunk) => {
     if (message.method === "initialize") {
       reply(message.id, {
         protocolVersion: 1,
-        agentInfo: { name: "pi-acp", version: "0.0.34" },
+        agentInfo: { name: "${ACP_AGENT.name}", version: "${ACP_AGENT.version}" },
         standIn: { cwd: process.cwd(), piCommand: process.env.PI_ACP_PI_COMMAND ?? null },
       });
     } else if (message.method === "session/new") reply(message.id, { sessionId: "stand-in-session" });
@@ -82,7 +82,7 @@ test("the stand-in probe fails in the ACP layer or succeeds — never with a mis
   }
   const { adapterDir, piBinary } = standIn(t);
   const settled = await openPiAcpProbe({ adapterDir, piBinary, timeoutMs: 15000 })
-    .then((probe) => { probe.close(); return { ok: true }; }, (error) => ({ ok: false, error }));
+    .then(async (probe) => { await probe.close(); return { ok: true }; }, (error) => ({ ok: false, error }));
   assert.ok(!(settled.error instanceof ReferenceError),
     `a missing binding must not be able to hide here: ${settled.error?.stack}`);
   assert.ok(settled.ok || typeof settled.error?.refused === "string",
