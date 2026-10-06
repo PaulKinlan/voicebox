@@ -62,13 +62,17 @@ async function holdPort(port, ms) {
   const blocker = net.createServer((socket) => socket.on("error", () => {}));
   await new Promise((resolve) => blocker.listen(port, "127.0.0.1", resolve));
   let released = false;
+  // voicebox-beads-csq5: the backstop is cleared by an explicit release() and unref'd, so an
+  // isolated test run's process exits when the test does instead of lingering until the timer fires.
+  const timer = setTimeout(() => void release(), ms);
+  timer.unref?.();
   const release = async () => {
     if (released) return;
     released = true;
+    clearTimeout(timer);
     blocker.closeAllConnections?.();
     await new Promise((resolve) => blocker.close(resolve));
   };
-  setTimeout(() => void release(), ms);
   return { release };
 }
 
