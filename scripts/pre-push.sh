@@ -160,7 +160,20 @@ run_stage() {
 # classifies every tests/*.mjs, and --check fails if a file is in neither lane).
 # Measured: unit 15s concurrent (175 tests), live 186s serial (182 tests), at load
 # 19.5. The budgets are headroom over those measurements, not a guess.
-_unit_secs="${VOICEBOX_GATE_UNIT_SECS:-${VOICEBOX_GATE_TESTS_SECS:-90}}"
+#
+# UNIT BUDGET RE-SIZED FOR THE STARVED BOX (voicebox-beads-lq8s). 90s turned out
+# to sit INSIDE the unit suite's own run-to-run swing on this 2-vCPU VM: four
+# runs of `npm run test:unit` on one branch, minutes apart, measured duration_ms
+# 71084 and 78510 (both green) against 88686 and 88966 (both killed at the 90s
+# bound, exit 124 — the gate's own correct label is "completion is unknown, not a
+# test verdict"). A bound that converts a FINISHED suite into an unknown costs a
+# lane a model turn and a queue slot to learn nothing, so the default is 180s:
+# about 2x the worst measured run, outside the swing, and headroom for a suite
+# that is still growing (515 -> 538 tests across those same measurements). This
+# is a bound for the starved box, not the quiet one. VOICEBOX_GATE_UNIT_SECS (or
+# the legacy VOICEBOX_GATE_TESTS_SECS) still overrides it — that is the remedy
+# the refusal message names.
+_unit_secs="${VOICEBOX_GATE_UNIT_SECS:-${VOICEBOX_GATE_TESTS_SECS:-180}}"
 _live_secs="${VOICEBOX_GATE_LIVE_SECS:-400}"
 _accept_secs="${VOICEBOX_GATE_ACCEPT_SECS:-45}"
 _docs_secs="${VOICEBOX_GATE_DOCS_SECS:-30}"

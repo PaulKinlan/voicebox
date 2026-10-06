@@ -19,7 +19,7 @@ Voicebox enforces a multi-stage verification gate on `git push` via `.githooks/p
 | Stage | Command | Execution Mode | Default Timeout |
 |---|---|---|---|
 | **Docs Touched** | `node scripts/docs-touched.mjs` | Static `git diff` check | Immediate |
-| **Unit Suite** | `npm run test:unit` | Concurrent across files | `90s` |
+| **Unit Suite** | `npm run test:unit` | Concurrent across files | `180s` |
 | **Live Suite** | `npm run test:live` | Server lane (`--test-concurrency=4`) + Browser CDP lane (`--test-concurrency=1`) | `400s` |
 | **Acceptance** | `npm run accept` | End-to-end headless Chromium verification (`page-acceptance.mjs`) | `45s` |
 

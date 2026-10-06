@@ -50,7 +50,12 @@ child.on("exit", (code, sig) => {
 // disposable fixture's init/config/add/commit into the repository being pushed.
 const cleanEnv = { ...process.env };
 for (const key of execFileSync('git', ['rev-parse', '--local-env-vars'], { encoding: 'utf8' }).trim().split('\n')) delete cleanEnv[key];
-// The fixture's timeout shim accelerates the DEFAULT budgets (unit-timeout:90s). A parent gate
+// The fixture's timeout shim accelerates the DEFAULT budgets, keyed by stage+duration
+// (unit-timeout:180s, live-timeout:400s, accept-timeout:45s) — the duration is how it targets the
+// ONE stage under test, since GATE_CASE stays set for the whole push. The unit default is ALSO
+// asserted by value from the gate's own `(max 180s)` line in the branch-push case
+// (voicebox-beads-lq8s: 90s sat inside the suite's measured swing, so it is 180s now), which is
+// what names the number when it changes. A parent gate
 // run with a raised VOICEBOX_GATE_*_SECS (the refusal's own documented escape) would otherwise
 // leak in, miss the shim's match, and let the "timeout" scenario finish — the instrument
 // measuring itself under someone else's budget (voicebox-beads-67b). Strip them: the fixture
@@ -103,7 +108,7 @@ if (process.env.GATE_CASE === 'accept-failure') { console.error('fetch failed (E
     // Accelerate only the timeout being tested; execute the real GNU timeout.
     writeFileSync(path.join(bin, 'timeout'), `#!/bin/sh
 case "$GATE_CASE:$3" in
-  unit-timeout:90s|live-timeout:400s|accept-timeout:45s) shift 3; exec '${timeout}' --verbose --kill-after=1s 2s "$@" ;;
+  unit-timeout:180s|live-timeout:400s|accept-timeout:45s) shift 3; exec '${timeout}' --verbose --kill-after=1s 2s "$@" ;;
 esac
 exec '${timeout}' "$@"
 `);
@@ -140,6 +145,17 @@ exec '${timeout}' "$@"
       assert.notEqual(result.status, 0, output);
       const cause = scenario.endsWith('timeout') ? 'TIMED OUT' : 'FAILED';
       assert.match(output, new RegExp(`REFUSED: unit .* — ${cause}`));
+      // The unit budget is a SIZED FACT, asserted from the gate's own announcement and from the
+      // refusal (voicebox-beads-lq8s): 90s sat inside the suite's measured run-to-run swing on this
+      // box (duration_ms 71084/78510 green against 88686/88966 killed at 90s), so it is 180s.
+      if (scenario.startsWith('unit')) {
+        assert.match(output, /pre-push: unit — running npm run test:unit \(max 180s\)/, 'the branch-push unit budget must be 180s — sized outside the suite swing on a starved box (voicebox-beads-lq8s)');
+      }
+      if (scenario === 'unit-timeout') {
+        const m = output.match(/TIMED OUT — budget (\d+)s, elapsed (\d+)s \(exit 124\)/);
+        assert.ok(m, `the unit refusal must state budget and elapsed time: ${output}`);
+        assert.equal(Number(m[1]), 180, 'the unit refusal must name the same budget the stage announced');
+      }
       if (scenario === 'unit-failure') assert.match(output, /deliberate arithmetic assertion/);
       assert.equal(spawnSync('git', ['--git-dir', remote, 'show-ref', '--verify', '--quiet', 'refs/heads/candidate'], { env: cleanEnv }).status, 1);
     }
