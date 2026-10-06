@@ -33,10 +33,11 @@ When no harness is active, calling `delegate_task` returns `executor-unavailable
 - **Handshake & Session Setup**: Sends `initialize`, creates a workspace session via `session/new`, configures model and reasoning options via `session/set_config_option`, and dispatches tasks via `session/prompt`.
 - **Timeout Ceilings**: Enforces per-adapter wall-clock bounds (`60,000ms` ceiling for `pi-acp`; `120,000ms` `CLAUDE_ACP_TIMEOUT_CEILING_MS` for `claude-acp`, meta-capped at `600,000ms`) and a `64 KiB` output ceiling.
 - **Three-State Cancellation**:
-  - Calling `cancel()` during an active turn sends `session/cancel` (`{ ok: true, sent: true }`). When the adapter confirms `stopReason: "cancelled"`, the task settles as `task-cancelled`.
+  - Calling `cancel()` during an active turn sends `session/cancel` (`{ ok: true, sent: true }`). When the adapter confirms `stopReason: "cancelled"`, the task settles as `task-cancelled`. A frame dropped because the harness was already gone reports `sent: false` — no notification left, and the transport's closure is the verdict (`voicebox-beads-cps6`).
   - Calling `cancel()` when no task exists returns `task-not-found`.
   - Calling `cancel()` after a task has already settled returns `task-not-running`.
 - **Unexpected Process Exit**: If the adapter subprocess exits before returning a prompt result, the task records a typed `TaskInterrupted` (`lib/task-interrupted.mjs`) with reason `harness-ended-outcome-unknown`.
+  - A frame written to an adapter that has **already exited** fails — synchronously with `EPIPE`, or asynchronously as an `'error'` on the child's stdin. That write failure is not the task's outcome: the frame is dropped because there is nobody to receive it, and the exit descriptor (exit code, stage and stderr tail) is the diagnostic the caller sees. `isPeerGoneWrite` (`lib/acp-client.mjs`) names the peer-gone codes; any other write failure still surfaces as itself (`tests/acp-client.test.mjs`, `voicebox-beads-cps6`).
 
 ### Pi ACP Adapter (`lib/pi-acp.mjs`)
 - Targets `pi-acp` (`0.0.34`) with `pi` (`0.87.1`). Override binary paths via `VOICEBOX_ACP_ADAPTER` and `VOICEBOX_ACP_PI`.

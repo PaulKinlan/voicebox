@@ -50,12 +50,18 @@ child.on("exit", (code, sig) => {
 // disposable fixture's init/config/add/commit into the repository being pushed.
 const cleanEnv = { ...process.env };
 for (const key of execFileSync('git', ['rev-parse', '--local-env-vars'], { encoding: 'utf8' }).trim().split('\n')) delete cleanEnv[key];
-// The fixture's timeout shim accelerates the DEFAULT budgets (unit-timeout:90s). A parent gate
+// The fixture's timeout shim accelerates the DEFAULT budgets, keyed on the COMMAND under test
+// (npm run test:unit / test:live / accept) and never on the budget number. Keying on the number
+// made the shim miss whenever the default budget changed, so the suite ran to completion and the
+// failure landed on an opaque `assert.notEqual(result.status, 0)` far from the cause; now a budget
+// change is intercepted like any other run and the named budget assertions fail with the number
+// (review findings M1/M2/M5, voicebox-beads-lq8s). The unit default is asserted by value from the
+// gate's own `(max 180s)` line in the branch-push case. A parent gate
 // run with a raised VOICEBOX_GATE_*_SECS (the refusal's own documented escape) would otherwise
 // leak in, miss the shim's match, and let the "timeout" scenario finish — the instrument
 // measuring itself under someone else's budget (voicebox-beads-67b). Strip them: the fixture
 // always exercises the defaults it is written against.
-for (const key of ['VOICEBOX_GATE_UNIT_SECS', 'VOICEBOX_GATE_LIVE_SECS', 'VOICEBOX_GATE_ACCEPT_SECS', 'VOICEBOX_PUSH_DESTINATIONS']) delete cleanEnv[key];
+for (const key of ['VOICEBOX_GATE_UNIT_SECS', 'VOICEBOX_GATE_TESTS_SECS', 'VOICEBOX_GATE_LIVE_SECS', 'VOICEBOX_GATE_ACCEPT_SECS', 'VOICEBOX_PUSH_DESTINATIONS']) delete cleanEnv[key];
 const hasFlock = (() => { try { execFileSync('which', ['flock'], { stdio: 'ignore' }); return true; } catch { return false; } })();
 
 test('pre-push names the stage and cause, streams output, and refuses real failing tests', { timeout: 60000 }, () => {
@@ -100,11 +106,25 @@ console.error('ACCEPTANCE STDERR BEFORE TERMINATION');
 if (process.env.GATE_CASE === 'accept-timeout') setTimeout(() => {}, 30000);
 if (process.env.GATE_CASE === 'accept-failure') { console.error('fetch failed (ECONNREFUSED): fixture front'); process.exitCode = 1; }
 `);
-    // Accelerate only the timeout being tested; execute the real GNU timeout.
+    // Accelerate ONLY the stage under test, keyed on its COMMAND — never on its budget. See the
+    // note above the fixture's cleanEnv: a number-keyed shim turned every future budget change into
+    // an opaque failure (review findings M1/M2/M5, voicebox-beads-lq8s).
     writeFileSync(path.join(bin, 'timeout'), `#!/bin/sh
-case "$GATE_CASE:$3" in
-  unit-timeout:90s|live-timeout:400s|accept-timeout:45s) shift 3; exec '${timeout}' --verbose --kill-after=1s 2s "$@" ;;
+case "$1" in --help) exec '${timeout}' --help ;; esac
+case "$GATE_CASE" in
+  unit-timeout) _want="run test:unit" ;;
+  live-timeout) _want="run test:live" ;;
+  accept-timeout) _want="run accept" ;;
+  *) _want="" ;;
 esac
+if [ -n "$_want" ]; then
+  case "$*" in
+    *"$_want"*)
+      while [ $# -gt 0 ]; do case "$1" in --verbose|--kill-after=*) shift ;; *) break ;; esac; done
+      [ $# -gt 0 ] && shift
+      exec '${timeout}' --verbose --kill-after=1s 2s "$@" ;;
+  esac
+fi
 exec '${timeout}' "$@"
 `);
     chmodSync(path.join(bin, 'timeout'), 0o755);
@@ -140,6 +160,17 @@ exec '${timeout}' "$@"
       assert.notEqual(result.status, 0, output);
       const cause = scenario.endsWith('timeout') ? 'TIMED OUT' : 'FAILED';
       assert.match(output, new RegExp(`REFUSED: unit .* — ${cause}`));
+      // The unit budget is a SIZED FACT, asserted from the gate's own announcement and from the
+      // refusal (voicebox-beads-lq8s): 90s sat inside the suite's measured run-to-run swing on this
+      // box (duration_ms 71084/78510 green against 88686/88966 killed at 90s), so it is 180s.
+      if (scenario.startsWith('unit')) {
+        assert.match(output, /pre-push: unit — running npm run test:unit \(max 180s\)/, 'the branch-push unit budget must be 180s — sized outside the suite swing on a starved box (voicebox-beads-lq8s)');
+      }
+      if (scenario === 'unit-timeout') {
+        const m = output.match(/TIMED OUT — budget (\d+)s, elapsed (\d+)s \(exit 124\)/);
+        assert.ok(m, `the unit refusal must state budget and elapsed time: ${output}`);
+        assert.equal(Number(m[1]), 180, 'the unit refusal must name the same budget the stage announced');
+      }
       if (scenario === 'unit-failure') assert.match(output, /deliberate arithmetic assertion/);
       assert.equal(spawnSync('git', ['--git-dir', remote, 'show-ref', '--verify', '--quiet', 'refs/heads/candidate'], { env: cleanEnv }).status, 1);
     }
@@ -271,26 +302,34 @@ test('acceptance names the network cause when a responding front drops mid-run',
   }
 });
 
+/**
+ * A scratch repo holding the gate and every script its stages run, so a budget case can be driven
+ * without a real repository. The fake unit lane sleeps 30s, so any budget below that is REFUSED by
+ * name — which is what makes the resolved budget observable in the output (voicebox-beads-03po).
+ *
+ * The docs stage runs before the test lanes and needs its script here too; in this scratch repo
+ * there is no `origin/main`, so it reports SKIPPED BY NAME and exits 0 — the designed answer for
+ * "the base is unknown". The classifier is copied because the gate calls it before its stages.
+ */
+function gateBudgetFixture(dir) {
+  const repo = path.join(dir, 'repo');
+  mkdirSync(repo);
+  execFileSync('git', ['init', '-q'], { cwd: repo, env: cleanEnv });
+  mkdirSync(path.join(repo, 'scripts'), { recursive: true });
+  mkdirSync(path.join(repo, 'lib'), { recursive: true });
+  copyFileSync(path.join(root, 'scripts/pre-push.sh'), path.join(repo, 'pre-push.sh'));
+  copyFileSync(path.join(root, 'scripts/test-lanes.mjs'), path.join(repo, 'scripts/test-lanes.mjs'));
+  copyFileSync(path.join(root, 'scripts/docs-touched.mjs'), path.join(repo, 'scripts/docs-touched.mjs'));
+  copyFileSync(path.join(root, 'lib/git-env.mjs'), path.join(repo, 'lib/git-env.mjs'));
+  chmodSync(path.join(repo, 'pre-push.sh'), 0o755);
+  writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ scripts: { 'test:unit': 'node -e "setTimeout(()=>{}, 30000)"' } }));
+  return repo;
+}
+
 test('pre-push timeout refusal respects custom budget and reports measured elapsed time', { timeout: 30000 }, () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-pre-push-budget-'));
-  const repo = path.join(dir, 'repo');
   try {
-    mkdirSync(repo);
-    execFileSync('git', ['init', '-q'], { cwd: repo, env: cleanEnv });
-    mkdirSync(path.join(repo, 'scripts'), { recursive: true });
-    copyFileSync(path.join(root, 'scripts/pre-push.sh'), path.join(repo, 'pre-push.sh'));
-    // The gate calls the classifier before its stages, so a fixture that runs
-    // the gate needs the classifier present (it tolerates having no tests/).
-    copyFileSync(path.join(root, 'scripts/test-lanes.mjs'), path.join(repo, 'scripts/test-lanes.mjs'));
-    chmodSync(path.join(repo, 'pre-push.sh'), 0o755);
-    // The docs stage runs before the test lanes; it needs its script here too. In this scratch repo
-    // there is no `origin/main`, so it reports SKIPPED BY NAME and exits 0 — which is the designed
-    // answer for "the base is unknown", and lets this case get to the timeout it is about.
-    mkdirSync(path.join(repo, 'scripts'), { recursive: true });
-    mkdirSync(path.join(repo, 'lib'), { recursive: true });
-    copyFileSync(path.join(root, 'scripts/docs-touched.mjs'), path.join(repo, 'scripts/docs-touched.mjs'));
-    copyFileSync(path.join(root, 'lib/git-env.mjs'), path.join(repo, 'lib/git-env.mjs'));
-    writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ scripts: { 'test:unit': 'node -e "setTimeout(()=>{}, 30000)"' } }));
+    const repo = gateBudgetFixture(dir);
 
     const result = spawnSync(path.join(repo, 'pre-push.sh'), [], {
       cwd: repo, encoding: 'utf8', timeout: 15000,
@@ -312,6 +351,46 @@ test('pre-push timeout refusal respects custom budget and reports measured elaps
     const elapsed = Number(match[2]);
     assert.equal(budget, 2, 'configured budget must be 2s');
     assert.ok(elapsed >= 1 && elapsed <= 5, `elapsed must be measured execution time: ${elapsed}s`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('pre-push budget resolution honours the legacy VOICEBOX_GATE_TESTS_SECS, and VOICEBOX_GATE_UNIT_SECS wins over it', { timeout: 30000 }, () => {
+  // WHY (voicebox-beads-03po, from the lq8s delta review's M4-variant): the gate resolves the unit
+  // budget as `${VOICEBOX_GATE_UNIT_SECS:-${VOICEBOX_GATE_TESTS_SECS:-180}}`, and the custom-budget
+  // case above only ever sets the PRIMARY variable. Removing the legacy fallback link therefore left
+  // the suite green — a compat break for an operator still running the legacy variable would be
+  // silent, and would surface as "my budget is ignored" rather than as a failing test. Both links
+  // are pinned here, including the PRECEDENCE (primary over legacy), because "both set" is the case
+  // a reader has to guess at otherwise.
+  const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-pre-push-legacy-budget-'));
+  try {
+    const repo = gateBudgetFixture(dir);
+    const runGate = (budgetEnv) => {
+      const result = spawnSync(path.join(repo, 'pre-push.sh'), [], {
+        cwd: repo, encoding: 'utf8', timeout: 15000,
+        env: {
+          ...cleanEnv,
+          ...budgetEnv,
+          VOICEBOX_SKIP_ACCEPT: '1',
+          VOICEBOX_GATE_LOCK: path.join(dir, 'fixture-gate.lock'),
+          VOICEBOX_GATE_HOLDER: path.join(dir, 'fixture-gate.holder.json'),
+        },
+      });
+      assert.notEqual(result.status, 0, result.stdout + result.stderr);
+      return result.stdout + result.stderr;
+    };
+
+    // 1. ONLY the legacy variable: it is honoured, and the refusal names the budget it produced.
+    const legacy = runGate({ VOICEBOX_GATE_TESTS_SECS: '2' });
+    assert.match(legacy, /running npm run test:unit \(max 2s\)\.\.\./, `the legacy variable must set the unit budget: ${legacy}`);
+    assert.match(legacy, /TIMED OUT — budget 2s, elapsed \d+s \(exit 124\)/, `and the refusal must name that budget: ${legacy}`);
+
+    // 2. BOTH set: the primary WINS over the legacy value (documented precedence, not a coin toss).
+    const both = runGate({ VOICEBOX_GATE_UNIT_SECS: '3', VOICEBOX_GATE_TESTS_SECS: '2' });
+    assert.match(both, /running npm run test:unit \(max 3s\)\.\.\./, `VOICEBOX_GATE_UNIT_SECS must win over the legacy variable: ${both}`);
+    assert.match(both, /TIMED OUT — budget 3s, elapsed \d+s \(exit 124\)/, `the refusal must name the winning budget: ${both}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

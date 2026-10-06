@@ -19,9 +19,16 @@ Voicebox enforces a multi-stage verification gate on `git push` via `.githooks/p
 | Stage | Command | Execution Mode | Default Timeout |
 |---|---|---|---|
 | **Docs Touched** | `node scripts/docs-touched.mjs` | Static `git diff` check | Immediate |
-| **Unit Suite** | `npm run test:unit` | Concurrent across files | `90s` |
+| **Unit Suite** | `npm run test:unit` | Concurrent across files | `180s` |
 | **Live Suite** | `npm run test:live` | Server lane (`--test-concurrency=4`) + Browser CDP lane (`--test-concurrency=1`) | `400s` |
 | **Acceptance** | `npm run accept` | End-to-end headless Chromium verification (`page-acceptance.mjs`) | `45s` |
+
+### Budget Overrides
+Each bound can be raised or tightened per run without editing the gate:
+- The **unit** bound resolves in order — `VOICEBOX_GATE_UNIT_SECS`, then the legacy `VOICEBOX_GATE_TESTS_SECS`, then the table's default. The primary variable wins when both are set.
+- The **live** and **acceptance** bounds are their own variables: `VOICEBOX_GATE_LIVE_SECS`, `VOICEBOX_GATE_ACCEPT_SECS`.
+
+A refusal names the variable to raise, so the remedy is copy-pasteable. `tests/pre-push.test.mjs` pins the resolution, the legacy fallback and its precedence (voicebox-beads-03po), so removing a link is a failing test rather than a silent compat break.
 
 ### Automatic Test Lane Classification (`scripts/test-lanes.mjs`)
 `scripts/test-lanes.mjs` lexes every `tests/*.test.mjs` file (ignoring comments and fixture string writes) to classify it into the appropriate lane:
@@ -43,7 +50,117 @@ Each stage is bounded by GNU `timeout` with a 5-second kill grace period:
 
 ---
 
-## 4. Acceptance Read Idempotence Check
+## 4. Landing Preflight — `scripts/landing-preflight.sh`
+
+The gate answers *is this tree good*. A second question is asked in the minute right after it, before
+the push, and until now every answer was hand-built on the spot: **would this push actually move the
+branch I am landing, to the commit I just gated?** `scripts/landing-preflight.sh` answers that, once,
+with an exit code (voicebox-beads-vto3).
+
+It runs a `git push --dry-run` **at the real target ref** (`HEAD:refs/heads/main` on the real remote)
+and reads the output as one of four verdicts. The order is the mechanism, not typography — a refusal
+line also carries a sha, so a loosely-matched "success" pattern can be satisfied by a rejection:
+
+| Verdict | Exit | Read from | Answer |
+|---|---|---|---|
+| `REFUSED` | 3 | output contains the literal `[rejected]` (tested **first**) | do not push: fetch, re-merge, **re-gate** the merged tree |
+| `NO-OP` | 2 | output contains `Everything up-to-date` | do not push: this is a true statement about a ref that is not the landing |
+| `OK` | 0 | a parsed row whose **both ends** are the landing — `<sha>..<sha>  HEAD -> main` — and whose new-side sha is a prefix of `git rev-parse HEAD` | push |
+| `UNKNOWN` | 4 | anything else, **including a dry run whose command itself failed** | do not push |
+
+**Both ends of the row are asserted, and that is the whole check.** A row names two refs: the thing
+being pushed, and the ref it would land on. The first draft of this script matched only the left side,
+and the cross-family review caught it: a dry run aimed at `wrong` printed `OK … origin/main would
+move` — this tool committing the error it exists to prevent.
+
+The way to assert a destination is **not** to paste it into a regular expression. That was the second
+fail-open, found by probing the fix for the first: with `$LOCAL_REF` and `$TARGET` interpolated into
+one ERE, `--target 'main|wrong'` turned the destination test into an *alternation* and answered OK for
+a row landing on `wrong` — measured, same tree, same bytes. So the row is **parsed and compared
+literally**: a fixed structural pattern with no substitution in it finds the candidate, the fields
+(`old..new`, source, `->`, destination) are cut out, and each is compared with `[ … = … ]`. A flag can
+only narrow the question, never widen it. `git rev-parse` gets the same treatment: it ECHOES an
+unresolvable argument and exits 0 on git 2.43 (`git rev-parse 'HE.*D'` → `HE.*D`), so the precondition
+peels with `--verify "$LOCAL_REF^{commit}"` and rejects anything that is not a hex sha. And a
+`refs/heads/` prefix is normalised once, at the top, so the flag, the refspec and the comparison
+cannot end up asking about different namespaces.
+
+Two more answers, asserted rather than assumed, because both produce a false green if skipped:
+`PRECONDITION` (5) refuses to ask anything when the worktree is dirty or when `HEAD` already equals
+`<remote>/<target>` — an uncommitted merge leaves `HEAD` on the default branch, and then the dry run
+happily reports `Everything up-to-date` about a landing that never happened. `IDENTITY-MISMATCH` (6)
+fires when the row git would act on names a sha that is not `HEAD` here: the gated tree and the
+offered tree are different trees.
+
+**`HEAD` is the gated tree, and nothing moves that tie — including `--local-ref`.** That was the third
+fail-open, found by the third-family reviewer and measured before it was fixed: the identity sha had
+been derived from `--local-ref`, so with `HEAD` at one commit and a second branch at a later one,
+
+    scripts/landing-preflight.sh --local-ref other
+    OK  origin/main would move to 6ed23ce — the tree standing here (6ed23ce…)   exit 0
+
+while the tree standing here was `4afd4d5`. The sentence was internally consistent and the verdict was
+wrong: the gate ran on HEAD, so an offer that is not HEAD is not the gated tree, whatever the row says.
+`HEAD_SHA` now comes from `HEAD` — `--verify`d and peeled, full stop; the offer is a separate sha, named
+on the output line when it differs, and `--local-ref` can only change what is pushed, never what counts.
+
+`--check` is the same trap in mode form: it asserts preconditions and **asks the remote nothing**, so its
+exit 0 is not a clearance to push. It now prints that on its own answer line, because an "OK" a caller
+could read as a verdict should say in the same breath that it is not one.
+
+The sha length is **read from the row**, never hardcoded: git's abbreviation follows repository size
+and `core.abbrev`, so 7 is a guess that breaks quietly on a big repo. The two refusal wordings this
+repo has actually printed — `(non-fast-forward)` when the pushed tip is an ancestor, `(fetch first)`
+when the tips have diverged and the object is not held locally — are matched by the `[rejected]`
+marker alone, because the reason after it is git's prose and may change.
+
+It is a plain script, not a hook: `.githooks/pre-push` and `scripts/pre-push.sh` stay unaware of it,
+and a `--push-cmd` stub plus `--rehearse` lets every branch be driven without contacting a remote.
+**Argument handling is a verdict-safety surface, not ergonomics.** A flag that is missing its value is
+a usage error (exit 1), never a verdict code — and three ways of being missing were measured:
+
+  * a bare value-flag (`--target` at the end of a line) used to die inside dash's `shift 2` with exit
+    **2**, which is this script's own `NO-OP` code, so a mistyped command line answered "nothing to do"
+    about a question it had not been asked;
+  * a flag that **eats the next flag** — `--check --target --remote` — used to print
+    `PRECONDITION-OK … target=origin/--remote` and **exit 0**, and the plain `--target --remote` form
+    went on to build the refspec `HEAD:refs/heads/--remote` and ask the real remote about a namespace
+    that cannot exist. A dash-leading value is therefore refused, naming the case;
+  * and so is an **empty** one: `--check --target=` printed the same green `PRECONDITION-OK` with no
+    target at all, because the tip compare it should have failed was against a ref that cannot exist
+    either.
+
+**The rule is a refname, not "non-empty".** That distinction was the reviewer's finding on the round
+after the empty-value guard: `--target=refs/heads/` is non-empty, so it passed, and then became EMPTY by
+stripping the prefix — `--check` printed `PRECONDITION-OK … target=origin/` and exited 0. The script now
+asks git, rather than hand-rolling a test: `git check-ref-format "refs/heads/$TARGET"`, which on this
+also refuses `//`, `..`, `.`, a name containing a space, `mai.*` and `ma[n]in`, and accepts `main`,
+`min`, `main|wrong`, `feat/x` and `-x`. Anything refused is a usage error (exit 1) with the name echoed
+back. One layer out, the same reasoning: `--remote=nosuchremote` used to spend a transport call to learn
+`fatal: … does not appear to be a git repository` and answer UNKNOWN — correct but unreadable, and an
+unconfigured remote is a fact about *this checkout*, so it is now `PRECONDITION` (5), naming the remote
+and listing the configured ones.
+
+Every value flag also accepts `--flag=<value>` — the escape hatch that keeps a genuinely odd value
+(e.g. a filename starting with `-`) expressible, without letting the space-separated form swallow a
+flag.
+POSIX `sh` throughout (the `DASH, NOT BASH` case in `tests/landing-preflight.test.mjs` keeps it that
+way, and the trap it had to fix was a real one: dash reads a `printf` format starting with a dash as
+an option and dies with `Illegal option --`, which turned a `REFUSED` verdict into exit 2 until the
+literals went through `printf '%s\n'`), and `tests/landing-preflight.test.mjs` drives the real refusals, the real update row
+at four abbreviation lengths and a real forced-update row against a scratch repository with its own
+local bare remote — so the classifier is proven against git's bytes, not against a transcription of
+them.
+
+```bash
+scripts/landing-preflight.sh              # ask once, before pushing at main
+scripts/landing-preflight.sh --rehearse    # every verdict, push stubbed, no remote touched
+node --test tests/landing-preflight.test.mjs
+```
+
+---
+
+## 5. Acceptance Read Idempotence Check
 
 During `npm run accept`, the acceptance harness verifies that read endpoints are strictly idempotent:
 1. Declares an isolated workspace root and seeds a known file before loading the browser page.

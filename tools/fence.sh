@@ -16,10 +16,22 @@ mkdir -p "$SANDBOX_HOME/workspace"
 # The tree the fence binds is THIS SCRIPT's repo, not the caller's cwd: a server that boots a fence
 # may run from anywhere, and the probe and the source it mounts live beside this script.
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# /lib64 is where the ELF loader lives, and its host path is NOT constant: Debian/Ubuntu map it to
+# /usr/lib64 (loader name ld-linux-x86-64.so.2), Arch to /usr/lib, and aarch64 hosts to /usr/lib64
+# with a different loader name entirely. So mirror the host's OWN /lib64 target when it resolves
+# under /usr — the only tree this fence binds — and fall back to /usr/lib64, then /usr/lib, on hosts
+# that are not merged-usr. Naming one architecture's loader file here is what broke this fence.
+LIB64=usr/lib
+if [ -L /lib64 ]; then
+  _lib64_target="$(readlink -f /lib64 2>/dev/null || true)"
+  case "$_lib64_target" in /usr/*) LIB64="${_lib64_target#/}" ;; esac
+elif [ -d /usr/lib64 ]; then
+  LIB64=usr/lib64
+fi
 exec /usr/bin/bwrap \
   --ro-bind /usr /usr \
   --symlink usr/bin /bin \
-  --symlink usr/lib /lib64 \
+  --symlink "$LIB64" /lib64 \
   --symlink usr/lib /lib \
   --ro-bind /etc /etc \
   --proc /proc \
