@@ -39,6 +39,27 @@ test.after(async () => {
   await server?.stop();
 });
 
+// A native <dialog>'s `close` event is dispatched in a SEPARATE task from the one that flips
+// `dialog.open` to false (the HTML spec queues an element task to fire it). Asserting the trigger's
+// aria-expanded or focus restoration straight after `open === false` therefore races the app's own
+// close handler and loses on a contended box — measured as voicebox-beads-tnxm. Wait for the exact
+// observable each step goes on to assert, so the wait is the synchronisation rather than a
+// wall-clock guess; the named label still fails loudly if the app never gets there.
+async function waitForDialogFullyClosed(name, dialogId, triggerId) {
+  await page.waitFor(
+    (dId, tId) => {
+      const dialog = document.getElementById(dId);
+      const trigger = document.getElementById(tId);
+      return (
+        dialog?.open === false &&
+        trigger?.getAttribute("aria-expanded") === "false" &&
+        document.activeElement === trigger
+      );
+    },
+    { args: [dialogId, triggerId], label: `${name} to close (dialog closed, aria-expanded false, focus returned)` },
+  );
+}
+
 test("modal panels: extensions, environments, and harnesses open as native modal dialogs in the room", { timeout: 60000 }, async () => {
   await page.goto(`${server.base}/`);
   await page.waitFor(() => document.getElementById("harnesses-open") !== null, { label: "header buttons" });
@@ -84,7 +105,7 @@ test("modal panels: extensions, environments, and harnesses open as native modal
 
     // 3. Close via close button and verify focus restoration
     await page.click(`#${closeId}`);
-    await page.waitFor((id) => document.getElementById(id)?.open === false, { args: [dialogId], label: `${name} to close` });
+    await waitForDialogFullyClosed(name, dialogId, triggerId);
 
     const closedByBtn = await page.evaluate((dId, tId) => {
       const dialog = document.getElementById(dId);
@@ -106,7 +127,7 @@ test("modal panels: extensions, environments, and harnesses open as native modal
 
     await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
     await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
-    await page.waitFor((id) => document.getElementById(id)?.open === false, { args: [dialogId], label: `${name} to close on Esc` });
+    await waitForDialogFullyClosed(name, dialogId, triggerId);
 
     const closedByEsc = await page.evaluate((dId, tId) => {
       const dialog = document.getElementById(dId);
@@ -127,7 +148,7 @@ test("modal panels: extensions, environments, and harnesses open as native modal
 
     // Click outside the dialog geometry on the backdrop
     await page.clickAt(8, 8);
-    await page.waitFor((id) => document.getElementById(id)?.open === false, { args: [dialogId], label: `${name} light dismiss` });
+    await waitForDialogFullyClosed(name, dialogId, triggerId);
 
     const closedByBackdrop = await page.evaluate((dId) => document.getElementById(dId)?.open, dialogId);
     assert.equal(closedByBackdrop, false, `light-dismiss must close ${name} dialog`);
