@@ -198,10 +198,13 @@ the accepted row are asserted — the ref being pushed **and** the ref it lands 
 comparing each field literally, never by pasting a ref into a regular expression: a left-side-only match
 called a push aimed at another branch a landing on `main`, and an interpolated `--target 'main|wrong'`
 called it an alternation. Four verdicts (`OK` 0 / `NO-OP` 2 / `REFUSED` 3 / `UNKNOWN` 4) plus two asserted
-preconditions (`PRECONDITION` 5 for a dirty tree, or a `HEAD` that already *is* the target, or a
-`LOCAL_REF` that does not peel to a commit — `git rev-parse` echoes typos and exits 0 — and
-`IDENTITY-MISMATCH` 6 when the row names a sha other than `HEAD`), and it is fail-closed: an unrecognised
-shape never says `OK`, a dry run whose command itself failed cannot say `OK`, and a flag that is missing its
+preconditions (`PRECONDITION` 5 for a dirty tree, a `HEAD` that already *is* the target, or an offer that
+already is; `IDENTITY-MISMATCH` 6 when the row names a sha other than `HEAD`), fail-closed on the gated
+tree — `HEAD` is what the gate ran on, so `--local-ref` names the offer and can never move the identity
+tie (an earlier draft derived it from `--local-ref` and answered OK for a commit that was not this tree;
+`git rev-parse` also echoes typos and exits 0, so refs are `--verify`d and peeled): an unrecognised shape
+never says `OK`, a dry run whose command itself failed cannot say `OK`, `--check` is not a push clearance
+because it asks the remote nothing, and a flag that is missing its
 value — absent, empty, or holding what looks like the next flag — is exit 1, never a verdict, because
 `--check --target --remote` once printed `PRECONDITION-OK … target=origin/--remote` and exited 0. It exists because `Everything up-to-date` is a true statement about a ref that is
 not the landing, and because four lanes were each rebuilding that check by hand in the minute before

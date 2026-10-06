@@ -82,7 +82,7 @@ landing-preflight.sh — is it safe to push this tree at that ref?
 
   (no args)                     preconditions, then a DRY RUN AT THE REAL TARGET, then a verdict
   --classify <file>             verdict for previously captured push output (preconditions too)
-  --check                       preconditions only
+  --check                       preconditions only — asks the remote NOTHING and is NOT a push clearance
   --rehearse                    drive every branch with the push stubbed; sends nothing anywhere
   --remote <name>               remote to ask (default: origin)
   --target <branch>             ref being landed (default: main)
@@ -217,19 +217,39 @@ field() { printf '%s' "$1" | cut -d' ' -f"$2"; }
 
 # ── THE PRECONDITION (asserted, not assumed) ──────────────────────────────────
 precondition() {
+  # TWO SHAS, AND THEY ARE NOT THE SAME FACT.
+  #
+  # HEAD_SHA is THE GATED TREE — the thing the caller says they just ran the gate on. It comes from
+  # `HEAD`, always, and nothing may move it. The offer being checked (`--local-ref`, which is what the
+  # refspec pushes) is a SEPARATE sha. Conflating them was the third fail-open, found by the
+  # third-family reviewer and measured here: with HEAD at one commit and a second branch `other` at a
+  # later one, `landing-preflight --local-ref other` answered
+  #
+  #     OK  origin/main would move to 6ed23ce — the tree standing here (6ed23ce…)
+  #
+  # while the tree standing here was 4afd4d5. The sentence was self-consistent and the verdict was
+  # wrong, because HEAD_SHA had been derived from the argument instead of from HEAD. Now the offer is
+  # compared to the gated tree and a difference is IDENTITY-MISMATCH (6) — which is exactly what the
+  # classifier is for: the gated tree is not the tree being offered.
+  HEAD_SHA="$(git rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null || true)"
+  case "$HEAD_SHA" in
+    '' | *[!0-9a-f]*)
+      warn "[preflight] PRECONDITION: HEAD does not resolve to a commit (exit 5)"
+      return 5 ;;
+  esac
   # `--verify "$LOCAL_REF^{commit}"`, NOT a bare rev-parse: measured on git 2.43, `git rev-parse 'HE.*D'`
   # ECHOES the argument and exits 0 for anything it cannot resolve, so a bare rev-parse "succeeds" and
-  # the identity compare then runs against a HEAD_SHA that is a typo, not a commit. `--verify` with the
-  # `^{commit}` peel fails the way a non-commit must fail.
-  _head="$(git rev-parse --verify --quiet "$LOCAL_REF^{commit}" 2>/dev/null || true)"
-  case "$_head" in
+  # the identity compare then runs against a sha that is a typo, not a commit.
+  OFFER_SHA="$(git rev-parse --verify --quiet "$LOCAL_REF^{commit}" 2>/dev/null || true)"
+  case "$OFFER_SHA" in
     '' | *[!0-9a-f]*)
       warn "[preflight] PRECONDITION: $LOCAL_REF does not resolve to a commit (exit 5)"
       return 5 ;;
   esac
-  if [ "${#_head}" -lt 7 ]; then
-    warn "[preflight] PRECONDITION: $LOCAL_REF resolved to '$_head', too short to be a sha (exit 5)"
-    return 5
+  if [ "$OFFER_SHA" != "$HEAD_SHA" ]; then
+    warn "[preflight] NOTE: the offer ($LOCAL_REF = $OFFER_SHA) is NOT this tree (HEAD = $HEAD_SHA)."
+    warn "[preflight]   The gate ran on HEAD, so a row about the offer cannot be OK; if it comes back"
+    warn "[preflight]   IDENTITY-MISMATCH that is the check working, not a false red."
   fi
   if [ -n "$(git status --porcelain 2>/dev/null | head -n 1)" ]; then
     warn "[preflight] PRECONDITION: the worktree is not clean (exit 5). An uncommitted merge leaves"
@@ -239,12 +259,16 @@ precondition() {
     return 5
   fi
   _tip="$(git rev-parse --verify --quiet "$REMOTE/$TARGET" 2>/dev/null || true)"
-  if [ -n "$_tip" ] && [ "$_head" = "$_tip" ]; then
-    warn "[preflight] PRECONDITION: HEAD ($_head) IS $REMOTE/$TARGET — there is nothing here to land."
+  if [ -n "$_tip" ] && [ "$_tip" = "$HEAD_SHA" ]; then
+    warn "[preflight] PRECONDITION: HEAD ($HEAD_SHA) IS $REMOTE/$TARGET — there is nothing here to land."
     warn "[preflight]   Either the merge never happened or it is already in. Do the merge, then ask."
     return 5
   fi
-  HEAD_SHA="$_head"
+  if [ -n "$_tip" ] && [ "$_tip" = "$OFFER_SHA" ]; then
+    warn "[preflight] PRECONDITION: the offer ($LOCAL_REF = $OFFER_SHA) IS already $REMOTE/$TARGET."
+    warn "[preflight]   Pushing it would move nothing; and this tree is not it, so nothing is being asked."
+    return 5
+  fi
   return 0
 }
 
@@ -368,7 +392,12 @@ case "$MODE" in
     _rc=0
     precondition || _rc=$?
     if [ "$_rc" -ne 0 ]; then exit "$_rc"; fi
-    say "PRECONDITION-OK  HEAD=$HEAD_SHA  target=$REMOTE/$TARGET"
+    # The line says what it answered and what it did NOT: `--check` never asked the remote anything,
+    # so it is not a clearance to push. Wording it as an "OK" was the hazard the reviewer named, and a
+    # caller that treats exit 0 here as "cleared" is reading a precondition as a verdict.
+    say "PRECONDITION-OK  HEAD=$HEAD_SHA  offer=$LOCAL_REF=$OFFER_SHA  target=$REMOTE/$TARGET"
+    say "               (this mode asked the REMOTE NOTHING. It is not a clearance to push — run the"
+    say "               full preflight and read the verdict line, or the OK/REFUSED/UNKNOWN answer.)"
     exit 0
     ;;
 

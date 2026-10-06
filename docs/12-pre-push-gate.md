@@ -85,6 +85,22 @@ happily reports `Everything up-to-date` about a landing that never happened. `ID
 fires when the row git would act on names a sha that is not `HEAD` here: the gated tree and the
 offered tree are different trees.
 
+**`HEAD` is the gated tree, and nothing moves that tie — including `--local-ref`.** That was the third
+fail-open, found by the third-family reviewer and measured before it was fixed: the identity sha had
+been derived from `--local-ref`, so with `HEAD` at one commit and a second branch at a later one,
+
+    scripts/landing-preflight.sh --local-ref other
+    OK  origin/main would move to 6ed23ce — the tree standing here (6ed23ce…)   exit 0
+
+while the tree standing here was `4afd4d5`. The sentence was internally consistent and the verdict was
+wrong: the gate ran on HEAD, so an offer that is not HEAD is not the gated tree, whatever the row says.
+`HEAD_SHA` now comes from `HEAD` — `--verify`d and peeled, full stop; the offer is a separate sha, named
+on the output line when it differs, and `--local-ref` can only change what is pushed, never what counts.
+
+`--check` is the same trap in mode form: it asserts preconditions and **asks the remote nothing**, so its
+exit 0 is not a clearance to push. It now prints that on its own answer line, because an "OK" a caller
+could read as a verdict should say in the same breath that it is not one.
+
 The sha length is **read from the row**, never hardcoded: git's abbreviation follows repository size
 and `core.abbrev`, so 7 is a guess that breaks quietly on a big repo. The two refusal wordings this
 repo has actually printed — `(non-fast-forward)` when the pushed tip is an ancestor, `(fetch first)`

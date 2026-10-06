@@ -136,16 +136,48 @@ test("REAL refusal, wording 'non-fast-forward': the same push AFTER a fetch — 
   assert.doesNotMatch(r.out, /^OK/m, `and it must not read as a landing:\n${r.out}`);
 });
 
-test("REAL refusal (non-fast-forward): pushing an ANCESTOR is REFUSED (exit 3) — the other wording", () => {
+test("REAL refusal (non-fast-forward): offering an ANCESTOR of the target is REFUSED (exit 3)", () => {
   const f = fixture();
-  git(f.work, "push", "-q", "origin", "HEAD:refs/heads/main"); // main now at `ahead`
+  // Advance the remote past the offered commit from a second clone, then offer the OLD tip. The
+  // offer is a strict ancestor of main, so git's reason is "non-fast-forward" — the other wording,
+  // measured against the "fetch first" case above. It is asked as a NAMED REF (`rewind`), because
+  // `--local-ref` cannot move the identity tie any more: see the offer-is-not-HEAD test.
+  const other = path.join(f.dir, "advancer");
+  git(f.dir, "clone", "-q", f.bare, other);
+  git(other, "config", "user.email", "preflight@example.invalid");
+  git(other, "config", "user.name", "preflight fixture");
+  git(other, "config", "commit.gpgsign", "false");
+  commit(other, "advancer");
+  git(other, "push", "-q", "origin", "HEAD:refs/heads/main");
   git(f.work, "fetch", "-q", "origin");
-  // Offer the BASE again: an ancestor of the tip, so the refusal is "non-fast-forward". Asked and
-  // answered by the preflight's own local-ref, since HEAD here is the current tip.
-  const r = preflight(f.work, ["--local-ref", f.base]);
+  git(f.work, "branch", "-f", "rewind", f.base);
+  const r = preflight(f.work, ["--local-ref", "rewind"]);
   assert.equal(r.code, 3, `rewinding the target must be REFUSED:\n${r.out}`);
   assert.match(r.out, /non-fast-forward/, `the measured wording is in the output:\n${r.out}`);
-  assert.equal(lsRemote(f.bare).includes(f.ahead), true, "and the remote did not move");
+  assert.ok(lsRemote(f.bare).includes("refs/heads/main"), "the remote still has its main");
+});
+
+test("REAL: --local-ref cannot move the identity tie — an offer that is not HEAD is IDENTITY-MISMATCH (6)", () => {
+  // THE THIRD FAIL-OPEN, found by the third-family reviewer and measured before the fix: HEAD at one
+  // commit, a second branch at a LATER one, and `--local-ref other` answered
+  //   OK  origin/main would move to <other> — the tree standing here (<other>)
+  // while the tree standing here was a different commit. The gate runs on HEAD, so an offer that is
+  // not HEAD is not the gated tree, whatever the row says.
+  const f = fixture();
+  git(f.work, "branch", "later", f.ahead);           // named ref at the gated commit…
+  commit(f.work, "the-gated-tree-moved-on");          // …and HEAD moves past it
+  const headSha = git(f.work, "rev-parse", "HEAD").trim();
+  const same = preflight(f.work, ["--local-ref", "later"]);
+  assert.equal(same.code, 6, `an offer behind HEAD must not read as a landing:\n${same.out}`);
+  assert.match(same.out, /IDENTITY-MISMATCH/, "named as such:\n" + same.out);
+  assert.match(same.out, /is NOT this tree/, "and the run says up front that the offer is not HEAD:\n" + same.out);
+  assert.ok(same.out.includes(headSha), `it must name the gated tree it compared against:\n${same.out}`);
+
+  // And the honest case still works: when the named ref IS HEAD, the verdict is about this tree.
+  git(f.work, "branch", "-f", "later", headSha);
+  const isHead = preflight(f.work, ["--local-ref", "later"]);
+  assert.equal(isHead.code, 0, `an offer equal to HEAD is the landing it claims:\n${isHead.out}`);
+  assert.doesNotMatch(isHead.out, /is NOT this tree/, "no warning when they agree:\n" + isHead.out);
 });
 
 test("REAL up-to-date: a throwaway probe ref prints it, and it is NO-OP (exit 2), never success", () => {
