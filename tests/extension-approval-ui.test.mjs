@@ -51,11 +51,18 @@ test("extension approval in Chromium: console code admits and runs, replay/tampe
     // READINESS IS A NAMED STATE, NOT A POLL OF TEXT (voicebox-beads-ujay): the panel says
     // "loading" -> "ready" | "error", so a plan that never arrives fails as the state it reached
     // (with the reason) instead of as a timeout that looks like slowness.
-    await page.waitFor(() => ["ready", "error"].includes(document.querySelector("#ext-waiting details.ext-plan")?.dataset.planState), { label: "extension plan settled" });
-    const settled = await page.evaluate(() => ({
-      state: document.querySelector("#ext-waiting details.ext-plan")?.dataset.planState,
-      note: document.querySelector("#ext-waiting details.ext-plan [role=status]")?.textContent,
-    }));
+    const diagnosePanel = () => page.evaluate(() => {
+      const panel = document.querySelector("#ext-waiting details.ext-plan");
+      return { open: panel?.open ?? null, state: panel?.dataset.planState ?? null, note: panel?.querySelector("[role=status]")?.textContent ?? null };
+    });
+    try {
+      await page.waitFor(() => ["ready", "error"].includes(document.querySelector("#ext-waiting details.ext-plan")?.dataset.planState), { label: "extension plan settled" });
+    } catch (err) {
+      // A bare timeout hides WHY: the panel itself says whether it is still loading, what it refused,
+      // or whether it never opened at all. That difference is the diagnosis.
+      assert.fail(`${err.message}; the panel says ${JSON.stringify(await diagnosePanel())}`);
+    }
+    const settled = await diagnosePanel();
     assert.equal(settled.state, "ready", `the plan panel finished loading, not refused: ${settled.note}`);
     assert.match(await page.evaluate(() => document.querySelector("#ext-waiting details.ext-plan pre").textContent), /approvalclock/);
     assert.equal(await page.evaluate(() => {
