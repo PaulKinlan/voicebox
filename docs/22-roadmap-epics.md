@@ -45,8 +45,8 @@ In `docs/archive/00-brief.md` and `docs/archive/interface.md`, Voicebox specifie
    - Discovers candidate worktree/task branches, computes ahead/behind counts, file-level diff stats, and dry-run merge conflict detection against the active workspace branch.
 2. **Landing Proposal & Merge API (`server.mjs`)**:
    - Exposes host endpoints to list pending candidate branches, inspect unified diffs and conflict pre-checks, and execute either a clean fast-forward/merge or a non-destructive `"keep separate"` dismissal.
-3. **In-Room "Waiting to Land" Inspector UI (**public/apps/landing-inspector.html**, `public/fused.js`)**:
-   - Renders pending worktree landings with syntax-highlighted diffs and one-click or voice-triggered review, merge, and keep-separate controls.
+3. **"Waiting to Land" Inspector UI (**public/apps/landing-inspector.html**)**:
+   - Launchable on demand to render pending worktree landings with syntax-highlighted diffs and one-click or voice-triggered review, merge, and keep-separate controls.
 
 ---
 

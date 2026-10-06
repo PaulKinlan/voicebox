@@ -166,8 +166,10 @@ test("a page-owned root: the room's delete ROUTES to the page that owns the file
     // The PAGE's storage is the witness, not the room's report.
     const read = await envPage.evaluate(async () => await window.e1m0.send({ type: "readFile", path: "assets/pagedel.txt" }));
     assert.equal(read.ok, false, `the page still holds the file after the room deleted it: ${JSON.stringify(read)}`);
-    const pageAudit = await envPage.evaluate(async () => await window.e1m0.send({ type: "audit" }));
-    const entry = (pageAudit.entries ?? []).find((e) => e.act?.kind === "delete" && String(e.act?.target ?? "").endsWith("assets/pagedel.txt"));
+    const entry = await until(async () => {
+      const pageAudit = await envPage.evaluate(async () => await window.e1m0.send({ type: "audit" }));
+      return (pageAudit?.entries ?? []).find((e) => e.act?.kind === "delete" && String(e.act?.target ?? "").endsWith("assets/pagedel.txt"));
+    }, "the page-owned root's log to record the delete", 15000);
     assert(entry, "the page-owned root's log has no delete entry");
   } finally {
     await room?.close();

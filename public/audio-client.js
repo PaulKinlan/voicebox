@@ -80,6 +80,7 @@ export function createAudioClient({
   onToolCalls = () => {},
   onTask = () => {},
   onMiniApp = () => {},
+  onMiniAppDeleted = () => {},
   onMiniAppCall = () => ({ ok: false, error: "no mini-app handler" }),
   onError = () => {},
   onDiagnostic = () => {},
@@ -387,6 +388,10 @@ export function createAudioClient({
     }
     if (msg?.type === "mini_app") {
       onMiniApp(msg.miniApp ?? null, msg);
+      return;
+    }
+    if (msg?.type === "mini_app_deleted") {
+      onMiniAppDeleted(msg.miniApp ?? { appId: msg.appId }, msg);
       return;
     }
     if (msg?.type === "mini_app_call") {

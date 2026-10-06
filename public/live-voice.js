@@ -164,6 +164,9 @@ const audioClient = createAudioClient({
     // THE MINI-APP CONTAINER: mount the interactive mini-app in the room (voicebox-beads-5h1)
     window.__voiceboxOnMiniApp?.(miniApp);
   },
+  onMiniAppDeleted: (deleted) => {
+    window.__voiceboxOnMiniAppDeleted?.(deleted);
+  },
   onMiniAppCall: async (msg) => {
     if (window.__voiceboxMiniApp?.callTool) {
       return await window.__voiceboxMiniApp.callTool(msg.name, msg.args ?? {});
