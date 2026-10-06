@@ -54,3 +54,9 @@ During `npm run accept`, the acceptance harness verifies that read endpoints are
 ```bash
 node --test tests/pre-push.test.mjs tests/test-changed.test.mjs
 ```
+
+One case in `tests/pre-push.test.mjs` — the one that asserts a dropped front is named as a network
+cause — drives `tools/page-acceptance.mjs` end to end and therefore needs a REAL browser
+(`VOICEBOX_CHROME`, else a system chromium). Without one it SKIPS BY NAME with that reason rather
+than failing: the browser lane always provides a browser, and a standalone run without one is a named
+precondition, not a verdict on the network naming it asserts (voicebox-beads-80vw).

@@ -35,8 +35,19 @@ const BROWSERS = [
   "/Applications/Chromium.app/Contents/MacOS/Chromium",
 ].filter(Boolean);
 
+/**
+ * The browser binary this box can actually launch, or null. THE ONE DISCOVERY SITE for the test
+ * side (`launch` asks here), so a case that needs a REAL browser can say so by name instead of
+ * dying inside a spawn with a message about the network (voicebox-beads-80vw: the acceptance case
+ * failed standalone as 'uncaught: spawn /usr/bin/chromium ENOENT' — which reads as a network
+ * verdict, not as a missing precondition).
+ */
+export function findBrowserBinary() {
+  return BROWSERS.find((b) => existsSync(b)) ?? null;
+}
+
 export async function launch({ width = 1000, height = 800, profile = null, fakeMedia = false, fakeAudioFile = null } = {}) {
-  const binary = BROWSERS.find((b) => existsSync(b));
+  const binary = findBrowserBinary();
   if (!binary) throw new Error("no Chromium/Chrome binary found; set VOICEBOX_CHROME");
 
   // A caller may hand in a prepared profile — the only way to give the page a REAL platform
