@@ -1745,6 +1745,15 @@ function extSection(listEl, rows, emptyText) {
   for (const row of rows) listEl.appendChild(row);
 }
 
+// The review panels the person has opened, by proposal id. Kept OUTSIDE the render because a
+// background refresh rebuilds the list and must not discard what the person was reading
+// (voicebox-beads-ujay).
+const openPlanIds = new Set();
+
+// The last plan text fetched per proposal id, so a rebuild restores what the person is reading
+// instead of blanking the panel and re-asking the server on every background refresh.
+const planCache = new Map();
+
 function extensionApproval(id) {
   const wrap = document.createElement("div");
   wrap.className = "ext-review-controls";
@@ -1774,19 +1783,63 @@ function extensionApproval(id) {
   const plan = document.createElement("pre");
   details.append(summary, note, plan);
 
+  // READINESS IS NAMED, NOT INFERRED: "loading" -> "ready" | "error". A caller (and the test that
+  // drives this panel) waits for a state instead of polling for text and calling the wait a timeout,
+  // and an error keeps its own name so a refusal is reported as a refusal, not as slowness.
+  // The last plan fetched per proposal is kept, so a rebuild RESTORES what the person is reading
+  // instead of blanking the panel and re-asking the server on every 20s poll (the text blinked and
+  // went "loading" under the reader's eyes). A silent revalidation still runs in the background, so
+  // a plan that changed on the server is not shown stale for long; the authority is the server's own
+  // plan digest at approve time anyway, which refuses a plan that moved (approval-plan-changed).
+  const loadPlan = async ({ silent = false } = {}) => {
+    if (details.dataset.planState === "loading") return;
+    if (!silent) details.dataset.planState = "loading";
+    try {
+      const p = await request(`/api/extensions/proposals/${encodeURIComponent(id)}/plan`);
+      const text = JSON.stringify(p, null, 2);
+      plan.textContent = text;
+      planCache.set(id, text);
+      details.dataset.planState = "ready";
+    } catch (err) {
+      // A silent revalidation that failed must not erase the plan already on screen; a first load
+      // that failed is the person's to see, named.
+      if (silent) return;
+      note.textContent = err.message;
+      details.dataset.planState = "error";
+    }
+  };
+
   const post = (route, body) => request(`/api/extensions/${route}`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
   });
 
-  details.addEventListener("toggle", async () => {
-    if (!details.open || plan.textContent) return;
-    try {
-      const p = await request(`/api/extensions/proposals/${encodeURIComponent(id)}/plan`);
-      plan.textContent = JSON.stringify(p, null, 2);
-    } catch (err) {
-      note.textContent = err.message;
+  const showPlanForOpenPanel = () => {
+    const cached = planCache.get(id);
+    if (cached) {
+      plan.textContent = cached;
+      details.dataset.planState = "ready";
+      void loadPlan({ silent: true });
+      return;
     }
+    void loadPlan();
+  };
+
+  details.addEventListener("toggle", () => {
+    if (details.open) { openPlanIds.add(id); showPlanForOpenPanel(); }
+    else openPlanIds.delete(id);
   });
+
+  // A REFRESH MUST NOT CLOSE THE PANEL THE PERSON OPENED (voicebox-beads-ujay). renderExtensions()
+  // rebuilds this list with replaceChildren(), and health() (a 20s poll) and a landing tool call both
+  // call it — so a background refresh used to replace an open review panel with a fresh closed row
+  // and its already-fetched plan vanished. The plan only ever loaded from the `toggle` event, and a
+  // row that was never toggled never fires one: under load the plan simply never appeared, which is
+  // the flake. The panel's open state belongs to the person, not to the render, so restore it here
+  // and show its plan directly rather than waiting for an event this element will not get.
+  if (openPlanIds.has(id)) {
+    details.open = true;
+    showPlanForOpenPanel();
+  }
 
   approve.addEventListener("click", async () => {
     approve.disabled = true;
@@ -1942,6 +1995,11 @@ async function renderExtensions() {
     const shelfRunning = runningAll.filter((e) => e.source === "wasm-shelf");
     lastRunningExtensions = running;
     const waiting = (inv.proposals ?? []).filter((p) => p.state === "pending");
+    // An id that is no longer reviewable leaves both pieces of panel state with it: otherwise an id a
+    // later proposal reuses would come back unexpectedly open, and its old plan text with it. A
+    // PRESENT file is reviewable too — it gets the same review panel — so it counts as still here.
+    const reviewableIds = new Set([...waiting, ...(inv.present ?? [])].map((p) => p.id));
+    for (const id of [...openPlanIds]) if (!reviewableIds.has(id)) { openPlanIds.delete(id); planCache.delete(id); }
     const refused = (inv.proposals ?? []).filter((p) => p.state === "refused");
     const present = inv.present ?? [];
     const catalogue = cat.catalogue ?? [];
