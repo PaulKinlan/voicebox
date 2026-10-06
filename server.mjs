@@ -5356,7 +5356,38 @@ process.on("unhandledRejection", (e) => console.error(`[unhandledRejection] ${e?
 // 24 kHz down); text frames are JSON control ({"type":"text"} turns,
 // {"type":"stop"}). The session owns the readiness gate and the model label.
 server.on("upgrade", (req, socket) => {
-  const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
+  // A MALFORMED REQUEST TARGET IS ANSWERED, NOT LOGGED (voicebox-beads-kckr): an absolute-form
+  // target like `http://[` throws ERR_INVALID_URL in this parse. The throw reached the
+  // process-wide handler, which logged it and left the SOCKET OPEN — a retained connection for a
+  // request nothing had parsed. Answer 400 on the raw socket and CLOSE it here, so the process
+  // logger stays the backstop for the unexpected rather than the path this runs on.
+  //
+  // `destroy()` rather than `end()` on purpose: end() only half-closes, so a malformed peer that
+  // never answers can leave the connection around — the retention this fixes. A 40-byte write
+  // reaches the kernel before the destroy, and tests/upgrade-malformed-target.test.mjs observes
+  // the 400 arriving.
+  //
+  // THIS IS THE ONE PLACE. The request path's own parse (handle()) is inside the request-level
+  // try/catch that answers 500, so a malformed target there is already answered and its
+  // connection ends with the response — adding a second guard there would duplicate a handled
+  // case, not share this one.
+  let url;
+  try {
+    url = new URL(req.url, `http://127.0.0.1:${PORT}`);
+  } catch {
+    const close = () => { try { socket.destroy(); } catch { /* already gone */ } };
+    try {
+      // Destroy AFTER the write flushes (destroy() drops pending writes), with an unref'd
+      // fallback so an uncooperative peer cannot retain the socket — the retention this fixes
+      // (review nit, voicebox-beads-kckr).
+      socket.write("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n", close);
+      const fallback = setTimeout(close, 500);
+      fallback.unref?.();
+    } catch {
+      close();
+    }
+    return;
+  }
   // ── the routed-acts channel ───────────────────────────────────────────────
   // The environment page connects here and ANSWERS acts the server routes to it
   // (core/dispatch.ts: a page-owned root is executed by the page). JSON text frames only:
