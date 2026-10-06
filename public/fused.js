@@ -1750,6 +1750,10 @@ function extSection(listEl, rows, emptyText) {
 // (voicebox-beads-ujay).
 const openPlanIds = new Set();
 
+// The last plan text fetched per proposal id, so a rebuild restores what the person is reading
+// instead of blanking the panel and re-asking the server on every background refresh.
+const planCache = new Map();
+
 function extensionApproval(id) {
   const wrap = document.createElement("div");
   wrap.className = "ext-review-controls";
@@ -1782,14 +1786,24 @@ function extensionApproval(id) {
   // READINESS IS NAMED, NOT INFERRED: "loading" -> "ready" | "error". A caller (and the test that
   // drives this panel) waits for a state instead of polling for text and calling the wait a timeout,
   // and an error keeps its own name so a refusal is reported as a refusal, not as slowness.
-  const loadPlan = async () => {
-    if (plan.textContent || details.dataset.planState === "loading") return;
-    details.dataset.planState = "loading";
+  // The last plan fetched per proposal is kept, so a rebuild RESTORES what the person is reading
+  // instead of blanking the panel and re-asking the server on every 20s poll (the text blinked and
+  // went "loading" under the reader's eyes). A silent revalidation still runs in the background, so
+  // a plan that changed on the server is not shown stale for long; the authority is the server's own
+  // plan digest at approve time anyway, which refuses a plan that moved (approval-plan-changed).
+  const loadPlan = async ({ silent = false } = {}) => {
+    if (details.dataset.planState === "loading") return;
+    if (!silent) details.dataset.planState = "loading";
     try {
       const p = await request(`/api/extensions/proposals/${encodeURIComponent(id)}/plan`);
-      plan.textContent = JSON.stringify(p, null, 2);
+      const text = JSON.stringify(p, null, 2);
+      plan.textContent = text;
+      planCache.set(id, text);
       details.dataset.planState = "ready";
     } catch (err) {
+      // A silent revalidation that failed must not erase the plan already on screen; a first load
+      // that failed is the person's to see, named.
+      if (silent) return;
       note.textContent = err.message;
       details.dataset.planState = "error";
     }
@@ -1799,8 +1813,19 @@ function extensionApproval(id) {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
   });
 
+  const showPlanForOpenPanel = () => {
+    const cached = planCache.get(id);
+    if (cached) {
+      plan.textContent = cached;
+      details.dataset.planState = "ready";
+      void loadPlan({ silent: true });
+      return;
+    }
+    void loadPlan();
+  };
+
   details.addEventListener("toggle", () => {
-    if (details.open) { openPlanIds.add(id); void loadPlan(); }
+    if (details.open) { openPlanIds.add(id); showPlanForOpenPanel(); }
     else openPlanIds.delete(id);
   });
 
@@ -1810,10 +1835,10 @@ function extensionApproval(id) {
   // and its already-fetched plan vanished. The plan only ever loaded from the `toggle` event, and a
   // row that was never toggled never fires one: under load the plan simply never appeared, which is
   // the flake. The panel's open state belongs to the person, not to the render, so restore it here
-  // and load the plan directly rather than waiting for an event this element will not get.
+  // and show its plan directly rather than waiting for an event this element will not get.
   if (openPlanIds.has(id)) {
     details.open = true;
-    void loadPlan();
+    showPlanForOpenPanel();
   }
 
   approve.addEventListener("click", async () => {
@@ -1970,6 +1995,9 @@ async function renderExtensions() {
     const shelfRunning = runningAll.filter((e) => e.source === "wasm-shelf");
     lastRunningExtensions = running;
     const waiting = (inv.proposals ?? []).filter((p) => p.state === "pending");
+    // An id that is no longer pending leaves both pieces of panel state with it: otherwise an id a
+    // later proposal reuses would come back unexpectedly open, and its old plan text with it.
+    for (const id of [...openPlanIds]) if (!waiting.some((p) => p.id === id)) { openPlanIds.delete(id); planCache.delete(id); }
     const refused = (inv.proposals ?? []).filter((p) => p.state === "refused");
     const present = inv.present ?? [];
     const catalogue = cat.catalogue ?? [];

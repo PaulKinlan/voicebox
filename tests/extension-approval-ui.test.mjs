@@ -169,6 +169,12 @@ test("extension plan panel: a background refresh keeps the open panel and its pl
       const panel = document.querySelector("#ext-waiting details.ext-plan");
       return panel?.dataset.planState === "ready" || panel?.querySelector("pre")?.textContent.includes("raceclock");
     }, { label: "extension plan loaded" });
+    // MARK THE PANEL WE ARE LOOKING AT BEFORE THE REFRESH. Without this the settle-wait below can be
+    // satisfied by THIS element (already ready), so it returns at once and the assertions then sample
+    // the freshly rebuilt row mid-load — the client-side race that made this case flake (reviewer,
+    // 2026-10-06). replaceChildren() guarantees a new element, so "a different node is in the DOM" is
+    // exactly the event being waited on.
+    await page.evaluate(() => { document.querySelector("#ext-waiting details.ext-plan").dataset.wasOpenBeforeRefresh = "true"; });
 
     const injected = await page.evaluate(() => {
       if (typeof window.__voiceboxOnToolCalls !== "function") return "no-hook";
@@ -181,7 +187,8 @@ test("extension plan panel: a background refresh keeps the open panel and its pl
     // name exactly what was lost.
     await page.waitFor(() => {
       const panel = document.querySelector("#ext-waiting details.ext-plan");
-      return Boolean(panel) && (panel.dataset.planState === "ready" || panel.dataset.planState === "error" || !panel.open);
+      return Boolean(panel) && panel.dataset.wasOpenBeforeRefresh !== "true" &&
+        (panel.dataset.planState === "ready" || panel.dataset.planState === "error" || !panel.open);
     }, { label: "the rebuilt panel settles", timeout: 8000 });
     const after = await page.evaluate(() => {
       const panel = document.querySelector("#ext-waiting details.ext-plan");
