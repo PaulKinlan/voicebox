@@ -33,7 +33,7 @@ When no harness is active, calling `delegate_task` returns `executor-unavailable
 - **Handshake & Session Setup**: Sends `initialize`, creates a workspace session via `session/new`, configures model and reasoning options via `session/set_config_option`, and dispatches tasks via `session/prompt`.
 - **Timeout Ceilings**: Enforces per-adapter wall-clock bounds (`60,000ms` ceiling for `pi-acp`; `120,000ms` `CLAUDE_ACP_TIMEOUT_CEILING_MS` for `claude-acp`, meta-capped at `600,000ms`) and a `64 KiB` output ceiling.
 - **Three-State Cancellation**:
-  - Calling `cancel()` during an active turn sends `session/cancel` (`{ ok: true, sent: true }`). When the adapter confirms `stopReason: "cancelled"`, the task settles as `task-cancelled`.
+  - Calling `cancel()` during an active turn sends `session/cancel` (`{ ok: true, sent: true }`). When the adapter confirms `stopReason: "cancelled"`, the task settles as `task-cancelled`. A frame dropped because the harness was already gone reports `sent: false` — no notification left, and the transport's closure is the verdict (`voicebox-beads-cps6`).
   - Calling `cancel()` when no task exists returns `task-not-found`.
   - Calling `cancel()` after a task has already settled returns `task-not-running`.
 - **Unexpected Process Exit**: If the adapter subprocess exits before returning a prompt result, the task records a typed `TaskInterrupted` (`lib/task-interrupted.mjs`) with reason `harness-ended-outcome-unknown`.

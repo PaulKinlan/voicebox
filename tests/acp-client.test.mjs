@@ -205,3 +205,33 @@ test("a write failure that is NOT the peer being gone still surfaces as itself �
   await assert.rejects(client.initialize(), (err) => err.code === "EBADF",
     "a non-peer-gone write failure must still reach the caller as itself");
 });
+
+test("cancel() reports what it DID: a frame dropped because the peer is gone is not 'sent' (voicebox-beads-cps6)", async () => {
+  // The corollary of absorbing a peer-gone write: `sent: true` claims "the notification left".
+  // When the harness is already gone it did not, and the closure — not this call — is the verdict.
+  // Otherwise cancel() would report delivery for a frame that was dropped.
+  let receive;
+  const client = createAcpClient({
+    onMessage(fn) { receive = fn; }, onClose() {},
+    send(m) {
+      if (m.method === "session/cancel") throw Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+      queueMicrotask(() => {
+        if (m.method === "initialize") receive(result(m, info));
+        if (m.method === "session/new") receive(result(m, { sessionId: "s" }));
+        // session/prompt stays unanswered: the turn is in flight, which is when cancel applies.
+      });
+    },
+    close() {},
+  }, { timeoutMs: 2000 });
+
+  await client.initialize();
+  await client.newSession("/work");
+  const turn = client.prompt("hello");
+  turn.catch(() => {});
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(client.cancel(), { ok: true, sent: false }, "a frame that never left must not be reported as sent");
+
+  client.close();
+  await assert.rejects(turn, (err) => err.refused === "acp-closed", "the closure settles the in-flight turn");
+});
