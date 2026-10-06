@@ -44,6 +44,7 @@ import { refusalVocabulary, identifiersInRenderedText, ID_PATTERNS, JARGON, READ
 import { driftBetween } from "./served-vs-disk.mjs";
 import { makeScratchDir, porcelainLines, dirtDelta, gitEnv } from "./tree-dirt.mjs";
 import path from "node:path";
+import { browserCandidates, findBrowserBinary } from "../lib/browser-binaries.mjs";
 import { fileURLToPath } from "node:url";
 import { startServer } from "../tests/lib/server.mjs";
 
@@ -93,15 +94,16 @@ process.on("uncaughtException", (e) => { cleanupArtefacts(); killPrivate(); try 
 // derived from pid — two concurrent runs must never share one). The phases
 // are sequential, so no lock is needed: the shared half writes nothing, and
 // the private half owns its own server.
-const CHROME_BIN = [
-  process.env.VOICEBOX_CHROME,
-  "/usr/bin/chromium",
-  "/usr/bin/chromium-browser",
-  "/usr/bin/google-chrome-stable",
-  "/usr/bin/google-chrome",
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  "/Applications/Chromium.app/Contents/MacOS/Chromium",
-].filter(Boolean).find((b) => existsSync(b)) ?? "/usr/bin/chromium";
+// THE ONE OWNER (voicebox-beads-phs9): the candidate list and the VOICEBOX_CHROME read live in
+// lib/browser-binaries.mjs. A second list here is how a box with no browser came to die inside a
+// spawn with a message about something else — a missing browser read as a network failure for an
+// unknown length of time (voicebox-beads-80vw).
+const CHROME_BIN = findBrowserBinary();
+if (!CHROME_BIN) {
+  console.log("FAIL  harness could not start a browser — no Chromium/Chrome binary found; set VOICEBOX_CHROME (checked: " + browserCandidates().join(", ") + ")");
+  cleanupArtefacts();
+  process.exit(1);
+}
 
 const chromium = spawn(CHROME_BIN, [
   "--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",

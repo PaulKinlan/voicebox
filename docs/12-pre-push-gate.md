@@ -56,7 +56,22 @@ node --test tests/pre-push.test.mjs tests/test-changed.test.mjs
 ```
 
 One case in `tests/pre-push.test.mjs` — the one that asserts a dropped front is named as a network
-cause — drives `tools/page-acceptance.mjs` end to end and therefore needs a REAL browser
-(`VOICEBOX_CHROME`, else a system chromium). Without one it SKIPS BY NAME with that reason rather
-than failing: the browser lane always provides a browser, and a standalone run without one is a named
-precondition, not a verdict on the network naming it asserts (voicebox-beads-80vw).
+cause — drives `tools/page-acceptance.mjs` end to end and therefore needs a REAL browser. Without one
+it SKIPS BY NAME with that reason rather than failing: the browser lane always provides a browser, and
+a standalone run without one is a named precondition, not a verdict on the network naming it asserts
+(voicebox-beads-80vw).
+
+Which browser that is comes from ONE place: `lib/browser-binaries.mjs` (`browserCandidates()` /
+`findBrowserBinary()` — `VOICEBOX_CHROME` first, then the system paths, read at call time). The test
+driver, `tools/page-acceptance.mjs` and the phantom-turns case in `tests/voicebox.test.mjs` all ask
+it and pass the resolved path down; `tests/browser-binaries-owner.test.mjs` fails if a second
+candidate list (two or more browser-path literals in one file) or a second `VOICEBOX_CHROME` READ
+reappears — scanned across `.mjs`/`.js`/`.cjs`/`.mts`/`.cts`/`.ts` under the repository, excluding
+`node_modules`, `.git`, `docs/` (prose), `.beads/` (task state), `workspace/` (a root the product
+writes) and the guard file itself (its own patterns and fixtures contain the strings it hunts for,
+bounded by a scanned-count assertion). That includes `tests/`, which the standing
+`scripts/single-owner.mjs` check deliberately does not scan — one of the three copies lived there,
+which is why nothing else could see it. A message that merely NAMES the variable is documentation,
+not a read (the same call `single-owner.mjs` makes for comments); `public/verify.mjs` is a named
+exemption for its own `CHROME` variable and single literal, and the guard speaks if it grows a list
+or reads `VOICEBOX_CHROME` (voicebox-beads-phs9).

@@ -16,6 +16,7 @@ import { startServer } from "./lib/server.mjs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { findBrowserBinary } from "../lib/browser-binaries.mjs";
 import { tmpdir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -250,7 +251,17 @@ test("read API endpoints: GET /api/file reads file without turn, and GET /api/fi
 });
 
 // ── the phantom turns guard: loading page with N files does zero POST /api/turn ─
-test("page load with files produces zero POST /api/turn calls (no phantom turns)", async () => {
+test("page load with files produces zero POST /api/turn calls (no phantom turns)", async (t) => {
+  // THE ONE OWNER, ASKED FIRST (voicebox-beads-phs9): the browser list is lib/browser-binaries.mjs's,
+  // and a box with no browser says so BY NAME rather than dying inside the spawn with a message that
+  // reads as something else (the failure mode 80vw measured). Asked BEFORE any setup, so a skip
+  // leaves nothing behind — no profile directory, no seeded files (review finding).
+  const chromeBin = findBrowserBinary();
+  if (!chromeBin) {
+    console.log("SKIP BY NAME: no browser binary (set VOICEBOX_CHROME) — this phantom-turns case drives a real browser");
+    t.skip("no browser binary — set VOICEBOX_CHROME; this case drives a real browser");
+    return;
+  }
   const f1 = path.join(WORKSPACE, "alpha.txt");
   const f2 = path.join(WORKSPACE, "beta.txt");
   writeFileSync(f1, "hello alpha", "utf8");
@@ -261,15 +272,6 @@ test("page load with files produces zero POST /api/turn calls (no phantom turns)
   // held 19996 and this test refused to steal or kill it — correctly). `--remote-debugging-port=0` asks
   // Chromium to choose, and it writes the choice to DevToolsActivePort in the user-data-dir.
   const profile = mkdtempSync(path.join(tmpdir(), "voicebox-cdp-"));
-  const chromeBin = [
-    process.env.VOICEBOX_CHROME,
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-    "/usr/bin/google-chrome-stable",
-    "/usr/bin/google-chrome",
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "/Applications/Chromium.app/Contents/MacOS/Chromium",
-  ].filter(Boolean).find((b) => existsSync(b)) ?? "/usr/bin/chromium";
   const chrome = spawn(chromeBin, [
     "--headless=new",
     "--no-sandbox",
