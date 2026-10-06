@@ -49,6 +49,11 @@
            (i-box removed — extensions was its only user.) -->
       <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></symbol>
       <symbol id="i-puzzle" viewBox="0 0 24 24"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></symbol>
+      <!-- voicebox-beads-um60: the reader bubble's document glyph. The button pointed at #i-spark,
+           which was never defined (born dangling in e2672ac), so the tab wore an empty svg. A file
+           with lines is what the bubble IS — the one open document, next to the Files bubble's folder
+           (the collection). Stroked line icon (canonical Lucide file-text), matching every symbol above. -->
+      <symbol id="i-file" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></symbol>
       <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></symbol>
       <symbol id="i-minimize" viewBox="0 0 24 24"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></symbol>
       <symbol id="i-maximize" viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></symbol>
@@ -455,7 +460,7 @@
           <div class="sqeh-toggle" role="tablist" aria-label="Deck view">
             <button class="sqeh-toggle-btn" id="sqeh-toggle-popovers" role="tab" aria-selected="true" type="button">Home</button>
             <button class="sqeh-toggle-btn sqeh-files-bubble" id="sqeh-files-bubble" role="tab" aria-selected="false" aria-expanded="false" type="button"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg><span>Files</span><span class="sqeh-files-badge" id="sqeh-files-badge">0</span></button>
-            <button class="sqeh-toggle-btn sqeh-reader-bubble" id="sqeh-reader-bubble" type="button" hidden aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="#i-spark"/></svg><span class="sqeh-reader-bubble-name" id="sqeh-reader-bubble-name">File</span></button>
+            <button class="sqeh-toggle-btn sqeh-reader-bubble" id="sqeh-reader-bubble" type="button" hidden aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="#i-file"/></svg><span class="sqeh-reader-bubble-name" id="sqeh-reader-bubble-name">File</span></button>
             <button class="sqeh-toggle-btn" id="sqeh-toggle-history" role="tab" aria-selected="false" type="button">History</button>
             <button class="sqeh-toggle-btn" id="sqeh-toggle-activity" role="tab" aria-selected="false" aria-controls="activity-log-panel" type="button"><svg class="icon" aria-hidden="true"><use href="#i-terminal"/></svg><span>Activity</span><span class="sqeh-files-badge" id="sqeh-activity-badge" hidden>0</span></button>
           </div>
