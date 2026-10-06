@@ -37,6 +37,7 @@ const state = () =>
       position: getComputedStyle(dialog).position,
       rect: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right, height: rect.height },
       activeId: document.activeElement?.id ?? document.activeElement?.tagName,
+      expanded: document.getElementById("settings-open")?.getAttribute("aria-expanded"),
       activeInside: dialog.contains(document.activeElement),
       htmlOverflow: getComputedStyle(document.documentElement).overflowY,
       scrollY: window.scrollY,
@@ -62,15 +63,20 @@ const openSettings = async () => {
   await page.waitFor(() => document.getElementById("settings").open, { label: "the settings dialog to open" });
 };
 
-// See tests/modal-panels.test.mjs (voicebox-beads-tnxm): a native <dialog>'s `close` event is
-// dispatched in a SEPARATE task from the one that flips `open` to false, so asserting focus
-// straight after `open === false` races the app's close handler and loses on a contended box.
-// Wait for the observable the next assertion is about — the dialog closed AND focus back on the
-// gear — so the wait is the synchronisation, and the named label still fails if it never happens.
-const waitForSettingsClosedWithFocus = async (label) => {
+// See tests/modal-panels.test.mjs (voicebox-beads-tnxm / voicebox-beads-xep4). Focus restoration
+// is SYNCHRONOUS in the dialog `close()` algorithm (the platform puts focus back on the invoker
+// before `open` flips), so a focus-only wait is already race-free — and asserting only focus would
+// NOT pin the app. The app-owned observable is `aria-expanded`, which its `close` handler sets in a
+// SEPARATE task from the one that flips `open`, so that is where the race lives. Wait for the
+// dialog closed AND aria-expanded false AND focus back on the gear, and assert all three.
+const waitForSettingsFullyClosed = async (label) => {
   await page.waitFor(
-    () => document.getElementById("settings")?.open === false && document.activeElement?.id === "settings-open",
-    { label: `${label} (dialog closed, focus back on the gear)` },
+    () => {
+      const dialog = document.getElementById("settings");
+      const trigger = document.getElementById("settings-open");
+      return dialog?.open === false && trigger?.getAttribute("aria-expanded") === "false" && document.activeElement === trigger;
+    },
+    { label: `${label} (dialog closed, aria-expanded false, focus back on the gear)` },
   );
 };
 
@@ -161,9 +167,10 @@ test("the backdrop is frosted, with a solid fallback where blur is unavailable",
 test("Esc cancels it and returns focus to the gear", { timeout: 90000 }, async () => {
   assert.equal((await state()).open, true, "the dialog was not open for the Esc check");
   await page.press("Escape");
-  await waitForSettingsClosedWithFocus("Esc to close the dialog");
+  await waitForSettingsFullyClosed("Esc to close the dialog");
   const after = await state();
   assert.equal(after.open, false);
+  assert.equal(after.expanded, "false", "the gear still says the dialog is expanded after Esc");
   assert.equal(after.activeId, "settings-open", `focus went to '${after.activeId}' instead of back to the gear`);
 });
 
@@ -172,9 +179,10 @@ test("clicking outside dismisses it (and the mechanism is named)", { timeout: 90
   const before = await state();
   // A point near the top-left corner: the backdrop, never the dialog.
   await page.clickAt(8, 8);
-  await waitForSettingsClosedWithFocus("light dismiss to close the dialog");
+  await waitForSettingsFullyClosed("light dismiss to close the dialog");
   const after = await state();
   assert.equal(after.open, false, "clicking the backdrop did not dismiss the dialog");
+  assert.equal(after.expanded, "false", "the gear still says the dialog is expanded after light dismiss");
   assert.equal(after.activeId, "settings-open", "light dismiss did not hand focus back");
   console.log(`[settings] light dismiss handled by: ${before.closedBySupported ? "native closedby" : "the documented geometry fallback"}`);
 });
