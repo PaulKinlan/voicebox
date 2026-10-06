@@ -5996,6 +5996,26 @@ try {
     console.log(`bootstrap  http://127.0.0.1:${bound}/?bootstrap=${ticket}`);
     console.log(`  the page and every API/WS route answer only with the session cookie that URL mints (one-time; HttpOnly; SameSite=Strict).`);
     console.log(`  lost the cookie? mint another without restarting: curl -X POST -H "x-voicebox-host-token: $(cat "${HOST_DIR}/.host-token")" http://127.0.0.1:${bound}/api/bootstrap`);
+  } else {
+    // THE DEFAULT IS NOT SILENT ABOUT WHAT IT LEAVES OPEN (voicebox-beads-k74h, owner ruling
+    // 2026-10-06: the gate stays OFF by default for testing — an accepted posture, but it must
+    // announce itself). Named exposure: with the gate off, any unauthenticated client on
+    // loopback — including requests a page in the operator's browser can cause it to send
+    // without negotiation — can reach state-mutating routes: writing files into the ACTIVE
+    // WORKSPACE and registering environments, with no prompt and nothing visible in the page.
+    // The remedy is one restart away and the gate's effect is measured (docs/18 §0): every
+    // route except /api/health answers 401 loopback-unauthenticated without the session cookie.
+    console.warn(
+      `WARNING  VOICEBOX_LOOPBACK_AUTH is not set — the loopback session gate is OFF (the default).\n` +
+        `         Any unauthenticated client on loopback, including requests a page the operator\n` +
+        `         visits can cause the browser to send, can reach state-mutating routes on\n` +
+        `         http://127.0.0.1:${bound} — writing files into the active workspace and registering\n` +
+        `         environments — with no credential and no prompt.\n` +
+        `         Remedy: restart with VOICEBOX_LOOPBACK_AUTH=1. Every route except /api/health\n` +
+        `         (which stays 200) then answers 401 loopback-unauthenticated without the session\n` +
+        `         cookie minted by the one-time bootstrap URL printed at startup.\n` +
+        `         See docs/18-loopback-session-auth.md.`,
+    );
   }
 } catch (error) {
   console.error(

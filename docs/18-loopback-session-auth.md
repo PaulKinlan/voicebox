@@ -6,6 +6,22 @@ While the default loopback `Origin` check blocks Cross-Site WebSocket Hijacking 
 
 ---
 
+## 0. Default Posture: Gate OFF (accepted testing posture, owner ruling 2026-10-06)
+
+The gate is **OFF by default**, and the owner has ruled it stays that way for testing (voicebox-beads-k74h). The default is accepted, not silent:
+
+- **Startup warning.** When `VOICEBOX_LOOPBACK_AUTH` is unset, `server.mjs` prints a warning at startup naming the exposure and the flag remedy.
+- **Browser-originated write risk.** With the gate off, the loopback `Origin` check distinguishes browser contexts but requires no credential. A page the operator merely visits can cause the browser to send requests that reach **state-mutating routes** — writing files into the **active workspace** and registering environments — with no credential, no prompt, and nothing visible in the page. The command-execution verb sits behind the same route wall. The response is not readable cross-origin, but the server has already acted.
+- **Verified gate-on behaviour.** With `VOICEBOX_LOOPBACK_AUTH=1`, every such request is refused with `401` (`loopback-unauthenticated`) — including the request shapes a browser can send cross-origin without negotiation — while `GET /api/health` remains `200` for supervisors and readiness checks (it reports no root, no file, and no credential). This is pinned by `tests/loopback-auth.test.mjs`.
+
+Enabling the gate is one restart away:
+
+```bash
+VOICEBOX_LOOPBACK_AUTH=1 npm start
+```
+
+---
+
 ## 1. How the Loopback Session Gate Works
 
 ```bash

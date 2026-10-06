@@ -146,7 +146,42 @@ test("default OFF: a forged loopback Origin alone still takes the executor chair
   }
 });
 
+test("default OFF: startup names the unauthenticated loopback exposure and the flag remedy (k74h)", async () => {
+  const server = await scratchServer();
+  try {
+    // The owner ruling (2026-10-06) keeps the gate OFF by default as an accepted testing
+    // posture — accepted, not silent. The warning is the acceptance's visible half: it names
+    // the exposure (unauthenticated loopback clients, browser-originated requests included,
+    // reaching state-mutating routes) and the remedy (the flag, and the measured gate-on
+    // effect: 401 loopback-unauthenticated everywhere except health, which stays 200).
+    const warned = await waitFor(() => server.stderr().includes("VOICEBOX_LOOPBACK_AUTH is not set"));
+    assert.ok(warned, "gate-off startup must print the unauthenticated-loopback warning");
+    assert.match(server.stderr(), /active workspace/, "the warning names the workspace-write exposure");
+    assert.match(server.stderr(), /VOICEBOX_LOOPBACK_AUTH=1/, "the warning names the flag remedy");
+    assert.match(server.stderr(), /401 loopback-unauthenticated/, "the warning names the gate's measured effect");
+    assert.match(server.stderr(), /docs\/18-loopback-session-auth\.md/, "the warning points at the full posture doc");
+  } finally {
+    await server.stop();
+    server.cleanup();
+  }
+});
+
 // ── the gated surface: VOICEBOX_LOOPBACK_AUTH=1 ──────────────────────────────
+
+test("gate ON: the gate-off warning is not printed — the bootstrap URL is the startup story", async () => {
+  const server = await scratchServer(GATE_ON);
+  try {
+    const bootstrapped = await waitFor(() => server.stdout().includes("bootstrap"));
+    assert.ok(bootstrapped, "gate-on startup prints the bootstrap URL");
+    assert.ok(
+      !server.stderr().includes("VOICEBOX_LOOPBACK_AUTH is not set"),
+      "the unauthenticated-loopback warning must not fire when the gate is on",
+    );
+  } finally {
+    await server.stop();
+    server.cleanup();
+  }
+});
 
 test("gate ON: an unauthenticated request is refused by name, with the remedy, before any route", async () => {
   const server = await scratchServer(GATE_ON);
