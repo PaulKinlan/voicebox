@@ -37,6 +37,7 @@ When no harness is active, calling `delegate_task` returns `executor-unavailable
   - Calling `cancel()` when no task exists returns `task-not-found`.
   - Calling `cancel()` after a task has already settled returns `task-not-running`.
 - **Unexpected Process Exit**: If the adapter subprocess exits before returning a prompt result, the task records a typed `TaskInterrupted` (`lib/task-interrupted.mjs`) with reason `harness-ended-outcome-unknown`.
+  - A frame written to an adapter that has **already exited** fails — synchronously with `EPIPE`, or asynchronously as an `'error'` on the child's stdin. That write failure is not the task's outcome: the frame is dropped because there is nobody to receive it, and the exit descriptor (exit code, stage and stderr tail) is the diagnostic the caller sees. `isPeerGoneWrite` (`lib/acp-client.mjs`) names the peer-gone codes; any other write failure still surfaces as itself (`tests/acp-client.test.mjs`, `voicebox-beads-cps6`).
 
 ### Pi ACP Adapter (`lib/pi-acp.mjs`)
 - Targets `pi-acp` (`0.0.34`) with `pi` (`0.87.1`). Override binary paths via `VOICEBOX_ACP_ADAPTER` and `VOICEBOX_ACP_PI`.
