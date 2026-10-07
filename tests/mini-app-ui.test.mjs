@@ -281,3 +281,98 @@ test("mini-app producer: conversational turn dynamically launches mini-app widge
   assert.equal(liveState.hidden, false);
   assert.equal(liveState.title, "Live Game Board");
 });
+
+test("mini-app room UI: spoofed bridge_ready from decoy frame cannot disrupt mounting or hijack room channel (voicebox-beads-221y)", { timeout: 30000 }, async (t) => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-mini-app-spoof-"));
+  const workspace = path.join(scratch, "project");
+  fs.mkdirSync(workspace, { recursive: true });
+
+  const server = await startServer({
+    env: {
+      VOICEBOX_WORKSPACE: workspace,
+      VOICEBOX_RESOLVER: "script",
+      VOICEBOX_SANDBOX_HOMES: path.join(scratch, "sandbox-homes"),
+    },
+  });
+  t.after(async () => {
+    await server.stop();
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+
+  const page = await launch({ width: 1200, height: 900 });
+  t.after(() => page.close());
+
+  await page.goto(`${server.base}/`);
+  await page.waitFor(() => window.__voiceboxMiniApp !== undefined, { label: "mini-app controller on window" });
+
+  const attackResult = await page.evaluate(async (base) => {
+    // 1. Create a decoy frame on the same origin pointing to /help.html
+    const decoy = document.createElement("iframe");
+    decoy.id = "decoy-room-frame";
+    decoy.src = `${base}/help.html`;
+    await new Promise((r) => {
+      decoy.onload = r;
+      document.body.appendChild(decoy);
+    });
+
+    const script = decoy.contentDocument.createElement("script");
+    script.textContent = `
+      window.spoofBridgeReady = function(appId) {
+        window.parent.postMessage({ type: "bridge_ready", appId: appId || "spoofed-app" }, window.location.origin);
+      };
+      window.spoofHandshake = function(appId) {
+        window.parent.postMessage({ type: "mini_app_handshake", appId: appId || "spoofed-app" }, window.location.origin);
+      };
+    `;
+    decoy.contentDocument.body.appendChild(script);
+
+    // 2. Mount legitimate app through the real room API
+    const app = {
+      title: "Legitimate Room App",
+      html: `
+        <div id="room-app-content">Active</div>
+        <script>
+          window.webMcp.registerTool({
+            name: "room_ping",
+            description: "ping",
+            parameters: { type: "object", properties: {} },
+            execute: async () => ({ status: "room_pong" })
+          });
+          window.webMcp.ready();
+        <\/script>
+      `,
+    };
+
+    // Attack: Decoy fires spoofed bridge_ready and mini_app_handshake before and during mount
+    decoy.contentWindow.spoofBridgeReady("spoofed-pre");
+    decoy.contentWindow.spoofHandshake("spoofed-pre");
+
+    window.__voiceboxMiniApp.mount(app);
+
+    // Spoof again while mount/handshake is in flight
+    decoy.contentWindow.spoofBridgeReady("spoofed-mid");
+    decoy.contentWindow.spoofHandshake("spoofed-mid");
+
+    return { decoyAttackSent: true };
+  }, server.base);
+
+  assert.equal(attackResult.decoyAttackSent, true);
+
+  // Assert legitimate app mounts cleanly despite spoofed trigger attempts
+  await page.waitFor(() => {
+    const c = document.querySelector("#mini-app-container");
+    const outer = document.querySelector("#mini-app-outer-frame");
+    const inner = outer?.contentDocument?.getElementById("inner-app");
+    const srcdoc = inner?.getAttribute("srcdoc");
+    return c && !c.hidden && document.querySelector("#mini-app-title")?.textContent === "Legitimate Room App" && srcdoc && srcdoc.includes("room-app-content");
+  }, { label: "legitimate mini-app mounting despite spoofed bridge_ready", timeout: 15000 });
+
+  const mountState = await page.evaluate(() => {
+    const c = document.querySelector("#mini-app-container");
+    const title = document.querySelector("#mini-app-title")?.textContent;
+    return { containerHidden: c?.hidden, title };
+  });
+
+  assert.equal(mountState.containerHidden, false);
+  assert.equal(mountState.title, "Legitimate Room App");
+});

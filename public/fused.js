@@ -5766,7 +5766,8 @@ if (els.miniAppContainer) {
 
     const onBridgeHandshake = (e) => {
       if (e.origin !== window.location.origin) return;
-      if (e.data && (e.data.type === "mini_app_handshake" || e.data.type === "bridge_ready") && outer.contentWindow) {
+      if (!outer.contentWindow || e.source !== outer.contentWindow) return;
+      if (e.data && (e.data.type === "mini_app_handshake" || e.data.type === "bridge_ready")) {
         window.removeEventListener("message", onBridgeHandshake);
         outer.contentWindow.postMessage(
           { type: "mini_app_port", appId },

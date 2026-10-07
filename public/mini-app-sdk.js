@@ -18,6 +18,8 @@ function postToBridge(msg) {
 
 // Listen for the initial handshake from the outer bridge transferring port2
 window.addEventListener("message", (event) => {
+  // SECURITY HARDENING (voicebox-beads-221y): strictly verify event.source is window.parent
+  if (event.source !== window.parent) return;
   if (event.data?.type === "mini_app_handshake" && event.ports && event.ports[0]) {
     bridgePort = event.ports[0];
     bridgePort.onmessage = async (e) => {
