@@ -260,3 +260,46 @@ test("mini-app persistence and harness configure aliases in server.mjs", async (
   assert.equal(customAgy.name, "Custom Anti-Gravity");
   assert.equal(customAgy.url, "http://127.0.0.1:3284");
 });
+
+test("git_status over subrepos: parallel probes preserve discovery order and isolate one broken subrepo (voicebox-beads-3017)", async (t) => {
+  const sandboxRoot = mkdtempSync(path.join(os.tmpdir(), "vb-3017-"));
+  t.after(() => rmSync(sandboxRoot, { recursive: true, force: true }));
+  // Three healthy subrepos, names chosen so discovery order (sorted) is a/b/c — the array order
+  // must be discovery order, never probe-completion order.
+  initSubRepo(path.join(sandboxRoot, "repo-a"), "main", "a", "a.txt", "a\n");
+  initSubRepo(path.join(sandboxRoot, "repo-b"), "main", "b", "b.txt", "b\n");
+  initSubRepo(path.join(sandboxRoot, "repo-c"), "main", "c", "c.txt", "c\n");
+
+  const srv = await startServer({
+    env: { VOICEBOX_WORKSPACE: sandboxRoot, VOICEBOX_SANDBOX_HOMES: sandboxRoot },
+  });
+  t.after(() => srv.stop());
+
+  const gitStatus = async () => {
+    const res = await fetch(`${srv.base}/api/turn`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ transcript: "git status" }),
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.result.ok, true, JSON.stringify(body.result).slice(0, 300));
+    return body.result;
+  };
+
+  const ordered = await gitStatus();
+  assert.deepEqual(
+    ordered.subrepositories.map((r) => r.dir),
+    ["repo-a", "repo-b", "repo-c"],
+    "subrepository results must stay in discovery order however the probes finish",
+  );
+
+  // Break one subrepo's git metadata: its probe fails, it drops out ALONE, the others survive.
+  rmSync(path.join(sandboxRoot, "repo-b", ".git", "HEAD"));
+  const isolated = await gitStatus();
+  assert.deepEqual(
+    isolated.subrepositories.map((r) => r.dir),
+    ["repo-a", "repo-c"],
+    "one broken subrepo must drop only itself, order preserved",
+  );
+});
