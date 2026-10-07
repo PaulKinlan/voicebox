@@ -35,6 +35,36 @@ import { findBrowserBinary } from "../../lib/browser-binaries.mjs";
  */
 export { findBrowserBinary }; // re-exported for the driver's callers — the list itself lives in the one owner (voicebox-beads-phs9)
 
+const activeBrowserPids = new Set();
+
+function killBrowserProcessGroup(pid) {
+  if (!pid) return;
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {}
+  }
+}
+
+// Ensure browser process groups are reaped synchronously if the Node runner exits unexpectedly (voicebox-beads-uv1q)
+process.on("exit", () => {
+  for (const pid of activeBrowserPids) {
+    killBrowserProcessGroup(pid);
+  }
+});
+
+for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+  process.once(sig, () => {
+    for (const pid of activeBrowserPids) {
+      killBrowserProcessGroup(pid);
+    }
+    const sigNum = os.constants.signals[sig] ?? 0;
+    process.exit(128 + sigNum);
+  });
+}
+
 export async function launch({ width = 1000, height = 800, profile = null, fakeMedia = false, fakeAudioFile = null } = {}) {
   const binary = findBrowserBinary();
   if (!binary) throw new Error("no Chromium/Chrome binary found; set VOICEBOX_CHROME");
@@ -47,6 +77,12 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
     binary,
     [
       "--headless=new",
+      // --no-zygote prevents Chrome from creating an internal zygote PID namespace, where PID 1
+      // drops signal handlers and can become an unkillable zombie if parent aborts abruptly.
+      // Note: On Linux, --no-sandbox is a required companion flag for --no-zygote to start up.
+      "--no-sandbox",
+      "--no-zygote",
+      "--disable-crash-reporter",
       ...(fakeMedia ? ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"] : []),
       // A wav file the fake microphone PLAYS (voicebox-beads-ldxa): the only way to give the page real,
       // deterministic mic input — a quiet passage and then a spoken one — so a detector can be driven
@@ -63,17 +99,20 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
       "--remote-debugging-port=0",
       "about:blank",
     ],
-    { stdio: ["ignore", "pipe", "pipe"] },
+    { detached: true, stdio: ["ignore", "pipe", "pipe"] },
   );
+  activeBrowserPids.add(child.pid);
+  child.on("exit", () => {
+    activeBrowserPids.delete(child.pid);
+  });
   // Node loads its WebSocket lazily, on first touch (~10ms, measured): touching it here overlaps
   // that with the browser's own start-up instead of adding it after the endpoint is known.
   void globalThis.WebSocket;
   // A browser that dies, never answers, or refuses the socket is killed and its scratch profile
   // removed — not left running behind the error (voicebox-beads-9mqc).
   const abandon = () => {
-    try {
-      child.kill("SIGKILL");
-    } catch {}
+    activeBrowserPids.delete(child.pid);
+    killBrowserProcessGroup(child.pid);
     try {
       if (ownProfile) rmSync(profile, { recursive: true, force: true });
     } catch {}
@@ -167,6 +206,7 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
 
   const page = {
     sessionId,
+    pid: child.pid,
     send: (method, params) => send(method, params, sessionId),
     // Read-only protocol evidence: observe real frames without patching the page's WebSocket.
     events: (method) => events.filter((event) => event.sessionId === sessionId && event.method === method).map((event) => event.params),
@@ -174,9 +214,8 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
       try {
         socket.close();
       } catch {}
-      try {
-        child.kill("SIGKILL");
-      } catch {}
+      activeBrowserPids.delete(child.pid);
+      killBrowserProcessGroup(child.pid);
       try {
         if (ownProfile) rmSync(profile, { recursive: true, force: true });
       } catch {}
