@@ -4569,6 +4569,15 @@ async function handle(req, res) {
     const rootPath = active?.root?.kind === "machine" ? active.root.path : WORKSPACE;
     const deleted = deleteMiniApp(id, { rootPath });
     if (!deleted.ok) return json(res, deleted.refused === "mini-app-not-found" || deleted.refused === "not-found" ? 404 : 400, deleted);
+    if (deleted.miniApp?.appId) activeMiniAppRegistry.unregisterApp(deleted.miniApp.appId);
+    if (id) activeMiniAppRegistry.unregisterApp(id);
+    const frame = JSON.stringify({
+      type: "mini_app_deleted",
+      appId: deleted.miniApp?.appId ?? id,
+      miniApp: deleted.miniApp,
+    });
+    try { pageSocket?.send(frame); } catch {}
+    try { runningSession?.socket?.send(frame); } catch {}
     return json(res, 200, deleted);
   }
 

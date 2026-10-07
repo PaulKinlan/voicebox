@@ -50,6 +50,7 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
     env: {
       VOICEBOX_WORKSPACE: workspace,
       VOICEBOX_RESOLVER: "script",
+      VOICEBOX_SANDBOX_HOMES: path.join(scratch, "sandbox-homes"),
     },
   });
   t.after(async () => {
@@ -352,9 +353,18 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
     "workspace counter.html appears as a real Mini-App bubble in #sqeh-actions",
   );
   assert.ok(
-    miniAppBubbles.htmlBubbles.some((b) => b.id === "agent-progress-tracker"),
-    "built-in Agent Progress bubble appears in #sqeh-actions",
+    !miniAppBubbles.htmlBubbles.some((b) => b.id === "agent-progress-tracker"),
+    "built-in Agent Progress bubble does not appear in #sqeh-actions by default",
   );
+  assert.ok(
+    !miniAppBubbles.htmlBubbles.some((b) => b.id === "live-vision-studio"),
+    "built-in Live Vision Studio bubble does not appear in #sqeh-actions by default",
+  );
+  assert.ok(
+    !miniAppBubbles.htmlBubbles.some((b) => b.id === "landing-inspector"),
+    "built-in Branch Landing bubble does not appear in #sqeh-actions by default",
+  );
+  assert.equal(miniAppBubbles.htmlBubbles.length, 1, "only workspace counter.html bubble appears in #sqeh-actions");
   assert.equal(miniAppBubbles.htmlBubbles[0].file, "counter.html", "first bubble targets counter.html");
 
   // Click the counter.html Mini-App bubble in #sqeh-actions and verify it mounts #mini-app-container

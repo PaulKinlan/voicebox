@@ -73,7 +73,7 @@ test("a page-owned root: usable while the tab holds it, and a refusal that names
     await roomPage.goto(`${BASE}/`);
     const held = await until(async () => {
       const r = await readRoom(roomPage);
-      return r.headline ? r : null;
+      return (r.headline && !r.about.includes("This server does not say")) ? r : null;
     }, "the room to render its root state");
 
     assert.doesNotMatch(held.headline, /cannot save/i, `the room refused a folder the tab is holding: "${held.headline}"`);

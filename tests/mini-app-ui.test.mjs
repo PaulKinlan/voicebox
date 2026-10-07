@@ -35,6 +35,7 @@ test("mini-app room UI: mounting, double-iframe sandbox, interactive controls, a
     env: {
       VOICEBOX_WORKSPACE: workspace,
       VOICEBOX_RESOLVER: "script",
+      VOICEBOX_SANDBOX_HOMES: path.join(scratch, "sandbox-homes"),
     },
   });
   t.after(async () => {
@@ -48,12 +49,26 @@ test("mini-app room UI: mounting, double-iframe sandbox, interactive controls, a
   await page.goto(`${server.base}/`);
   await page.waitFor(() => window.__voiceboxMiniApp !== undefined, { label: "mini-app controller on window" });
 
-  // 1. Initially hidden
+  // 1. Initially hidden and empty mini-app tray (#sqeh-actions)
   const initHidden = await page.evaluate(() => {
     const c = document.querySelector("#mini-app-container");
     return c?.hidden;
   });
   assert.equal(initHidden, true, "mini-app container must start hidden");
+
+  const initialTrayBubbles = await page.evaluate(() => {
+    const actions = document.getElementById("sqeh-actions");
+    const bubbles = [...(actions?.querySelectorAll(".sqeh-miniapp-bubble") ?? [])];
+    return bubbles.map((b) => ({
+      id: b.dataset.miniAppId || b.dataset.appId || "",
+      text: b.textContent?.trim() || "",
+    }));
+  });
+  assert.equal(initialTrayBubbles.length, 0, "#sqeh-actions must have zero default mini-app buttons in empty workspace");
+  assert.ok(
+    !initialTrayBubbles.some((b) => b.id === "agent-progress-tracker" || b.id === "live-vision-studio" || b.id === "landing-inspector"),
+    "built-in default apps must not appear in mini-app tray",
+  );
 
   // 2. Mount fixture mini-app with Web MCP tool
   const fixtureApp = {
@@ -205,6 +220,7 @@ test("mini-app producer: conversational turn dynamically launches mini-app widge
     env: {
       VOICEBOX_WORKSPACE: workspace,
       VOICEBOX_RESOLVER: "script",
+      VOICEBOX_SANDBOX_HOMES: path.join(scratch, "sandbox-homes"),
     },
   });
   t.after(async () => {

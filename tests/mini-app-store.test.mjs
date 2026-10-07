@@ -289,4 +289,93 @@ describe("mini-app-store: persistence, in-place updates, deletion & cross-sandbo
     assert.equal(missing.ok, false);
     assert.equal(missing.refused, "mini-app-not-found");
   });
+
+  it("discovery starts clean with zero default apps, and deleting unregisters all shelf metadata without resurrecting defaults", () => {
+    const rootPath = makeScratchDir("vb-ws-clean-");
+    const hostDir = makeScratchDir("vb-host-clean-");
+    const sandboxRootDir = makeScratchDir("vb-sb-clean-");
+
+    // Fresh environment must not discover any built-in/default apps
+    const initial = discoverMiniApps({ rootPath, hostDir, sandboxRootDir });
+    assert.equal(initial.count, 0, "no default apps exist in fresh discovery");
+    assert.deepEqual(initial.miniApps, []);
+
+    // Save an app with custom title and file to test shelf metadata cleanup
+    const saveRes = saveMiniApp({
+      title: "Custom Tracker",
+      fileName: "custom-tracker.html",
+      html: "<h1>custom tracker</h1>",
+      rootPath,
+      hostDir,
+    });
+    assert.equal(saveRes.ok, true);
+
+    const shelfDir = path.join(hostDir, "mini-apps");
+    assert.ok(existsSync(path.join(shelfDir, "custom-tracker.html")));
+    assert.ok(existsSync(path.join(shelfDir, "custom-tracker.meta.json")));
+
+    // Delete by title
+    const delRes = deleteMiniApp("Custom Tracker", { rootPath, hostDir, sandboxRootDir });
+    assert.equal(delRes.ok, true);
+    assert.equal(delRes.deleted, true);
+
+    // Verify all shelf artifacts are cleanly wiped
+    assert.equal(existsSync(path.join(shelfDir, "custom-tracker.html")), false);
+    assert.equal(existsSync(path.join(shelfDir, "custom-tracker.meta.json")), false);
+    assert.equal(existsSync(path.join(rootPath, "custom-tracker.html")), false);
+
+    // Discovery after deletion must be completely empty, no resurrection of defaults
+    const finalDiscovery = discoverMiniApps({ rootPath, hostDir, sandboxRootDir });
+    assert.equal(finalDiscovery.count, 0, "zero apps discovered after deletion, no defaults resurrected");
+    assert.deepEqual(finalDiscovery.miniApps, []);
+  });
+
+  it("deleting a mini-app does not destroy an unrelated app that shares a title slug", () => {
+    const rootPath = makeScratchDir("vb-ws-iso-");
+    const hostDir = makeScratchDir("vb-host-iso-");
+    const sandboxRootDir = makeScratchDir("vb-sb-iso-");
+
+    // App B is saved as counter.html with title "Counter"
+    const appB = saveMiniApp({
+      title: "Counter",
+      fileName: "counter.html",
+      html: "<h1>Counter Widget</h1>",
+      rootPath,
+      hostDir,
+    });
+    assert.equal(appB.ok, true);
+
+    // App A is saved as report.html with <title>Counter</title> in HTML
+    const appA = saveMiniApp({
+      fileName: "report.html",
+      html: "<!doctype html><html><head><title>Counter</title></head><body><h1>Report</h1></body></html>",
+      rootPath,
+      hostDir,
+    });
+    assert.equal(appA.ok, true);
+
+    const shelfDir = path.join(hostDir, "mini-apps");
+    assert.ok(existsSync(path.join(shelfDir, "counter.html")), "App B HTML on shelf");
+    assert.ok(existsSync(path.join(shelfDir, "counter.meta.json")), "App B meta on shelf");
+    assert.ok(existsSync(path.join(shelfDir, "report.html")), "App A HTML on shelf");
+    assert.ok(existsSync(path.join(shelfDir, "report.meta.json")), "App A meta on shelf");
+
+    // Deleting App A (by its specific file or ID) must NOT wipe App B's shelf artifacts
+    const delRes = deleteMiniApp("report.html", { rootPath, hostDir, sandboxRootDir });
+    assert.equal(delRes.ok, true);
+
+    // App A artifacts are gone
+    assert.equal(existsSync(path.join(shelfDir, "report.html")), false);
+    assert.equal(existsSync(path.join(shelfDir, "report.meta.json")), false);
+    assert.equal(existsSync(path.join(rootPath, "report.html")), false);
+
+    // App B artifacts must survive untouched!
+    assert.ok(existsSync(path.join(shelfDir, "counter.html")), "App B shelf HTML must survive");
+    assert.ok(existsSync(path.join(shelfDir, "counter.meta.json")), "App B shelf meta must survive");
+    assert.ok(existsSync(path.join(rootPath, "counter.html")), "App B workspace HTML must survive");
+
+    const afterDiscovery = discoverMiniApps({ rootPath, hostDir, sandboxRootDir });
+    assert.equal(afterDiscovery.count, 1, "App B still discovered after App A deletion");
+    assert.equal(afterDiscovery.miniApps[0].fileName, "counter.html");
+  });
 });
