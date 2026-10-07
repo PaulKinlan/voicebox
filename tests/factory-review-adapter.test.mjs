@@ -183,12 +183,14 @@ test("factory-issue-commenter: embeds all 4 shared markers and sanitizes credent
   assert.ok(res.comment.includes("<!-- factory-severity: high -->"));
   assert.ok(res.comment.includes("<!-- factory-state: new -->"));
 
-  // Text sanitization verification
-  const dirty = "Exposed Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9 and token ghp_ABCDEF0123456789xyz and api_key='sk_test_123456'";
+  // Text sanitization verification (including ordinary unquoted credentials)
+  const dirty = "Exposed Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9 and token ghp_ABCDEF0123456789xyz and api_key='sk_test_123456' and password=my-super-secret-password and api_key=unquoted_secret_val";
   const clean = sanitizeFindingText(dirty);
   assert.ok(!clean.includes("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"));
   assert.ok(!clean.includes("ghp_ABCDEF0123456789xyz"));
   assert.ok(!clean.includes("sk_test_123456"));
+  assert.ok(!clean.includes("my-super-secret-password"));
+  assert.ok(!clean.includes("unquoted_secret_val"));
   assert.ok(clean.includes("[REDACTED]"));
 });
 

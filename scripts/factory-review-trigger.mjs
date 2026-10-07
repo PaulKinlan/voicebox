@@ -198,20 +198,24 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
           env: { ...env, VOICEBOX_FACTORY_PRIVATE_DIR: runDir },
           encoding: "utf8",
         });
-        publishExit = pubRes.status ?? 0;
+        publishExit = pubRes.status ?? 1;
         console.log(`[review-trigger] Publisher output:\n${pubRes.stdout || ""}`);
         if (pubRes.stderr) console.error(`[review-trigger] Publisher stderr:\n${pubRes.stderr}`);
       } else {
-        console.log(`[review-trigger] Note: scripts/factory-triage.mjs not present on current tree; skipping publication call.`);
+        console.error(`[review-trigger] Error: scripts/factory-triage.mjs is absent; cannot publish delta report.`);
+        publishExit = 1;
       }
     } catch (e) {
-      console.warn(`[review-trigger] Publisher invocation warning: ${e.message}`);
+      console.error(`[review-trigger] Publisher invocation error: ${e.message}`);
+      publishExit = 1;
     }
   } else {
     console.log(`[review-trigger] Notice: No delta report produced by station '${station}' (clean pass).`);
   }
 
-  const verdict = runExit === 0 && (publishExit === 0 || publishExit === 2) ? "PASS" : "FAILED";
+  const ok = runExit === 0 && (publishExit === 0 || publishExit === 2);
+  const verdict = ok ? "PASS" : "FAILED";
+  const exitCode = ok ? 0 : 1;
 
   // 6. Record on Bead if requested
   if (beadId) {
@@ -225,11 +229,11 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
     }
   }
 
-  // 7. Store cache entry
+  // 7. Store cache entry (only cache successful passes so failures are not replayed)
   cache[cacheKey] = {
     station,
     category,
-    exitCode: 0,
+    exitCode,
     verdict,
     deferred,
     timestamp: new Date().toISOString(),
@@ -237,7 +241,7 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
   writeFileSync(cacheFile, JSON.stringify(cache, null, 2), "utf8");
 
   console.log(`[review-trigger] Completed review trigger for '${station}': ${verdict}`);
-  return { ok: true, exitCode: 0, verdict, station, deferred, cacheKey };
+  return { ok, exitCode, verdict, station, deferred, cacheKey };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

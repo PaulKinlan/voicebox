@@ -50,14 +50,22 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
 
   mkdirSync(privateDir, { recursive: true });
 
-  // 1. Read Cursor
-  let cursor = { highestIssueNumber: 0, processedIssues: [] };
+  // 1. Read Cursor (supports both object map and legacy array format)
+  let cursor = { highestIssueNumber: 0, processedIssues: {} };
   if (existsSync(cursorFile)) {
     try {
-      cursor = JSON.parse(readFileSync(cursorFile, "utf8"));
+      const parsedCursor = JSON.parse(readFileSync(cursorFile, "utf8"));
+      cursor.highestIssueNumber = parsedCursor.highestIssueNumber || 0;
+      if (Array.isArray(parsedCursor.processedIssues)) {
+        cursor.processedIssues = {};
+        for (const id of parsedCursor.processedIssues) {
+          cursor.processedIssues[id] = { updatedAt: "" };
+        }
+      } else {
+        cursor.processedIssues = parsedCursor.processedIssues || {};
+      }
     } catch {}
   }
-  const processedSet = new Set(cursor.processedIssues || []);
 
   // 2. Fetch issues via gh CLI
   let issues = [];
@@ -66,7 +74,7 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
       "issue",
       "list",
       "--state", "all",
-      "--json", "number,title,body,author,createdAt,labels,authorAssociation",
+      "--json", "number,title,body,author,createdAt,updatedAt,labels,authorAssociation",
       "--limit", String(limit),
       "--repo", repo,
     ], { encoding: "utf8", env });
@@ -81,17 +89,21 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
   let newProcessed = 0;
   for (const issue of issues) {
     const num = issue.number;
-    if (processedSet.has(num)) {
+    const updatedAt = String(issue.updatedAt || issue.createdAt || "");
+    const prevRecord = cursor.processedIssues[num];
+
+    // Revisit if issue was updated or never processed
+    if (prevRecord && prevRecord.updatedAt && prevRecord.updatedAt === updatedAt) {
       continue;
     }
 
-    console.log(`[issue-poller] Evaluating issue #${num}: "${issue.title}"`);
+    console.log(`[issue-poller] Evaluating issue #${num}: "${issue.title}" (updatedAt: ${updatedAt})`);
 
     // Loop hazard guard & routing
     const routing = routeIssue(issue);
     if (!routing.ok) {
       console.log(`[issue-poller] Skipping issue #${num}: ${routing.reason}`);
-      processedSet.add(num);
+      cursor.processedIssues[num] = { updatedAt, skipped: true, reason: routing.reason };
       continue;
     }
 
@@ -99,7 +111,7 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
     console.log(`[issue-poller] Issue #${num} routed to stations: [${stations.join(", ")}]`);
 
     if (stations.length === 0) {
-      processedSet.add(num);
+      cursor.processedIssues[num] = { updatedAt, skipped: true };
       continue;
     }
 
@@ -107,17 +119,22 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
     const issueRunDir = path.join(privateDir, `issue-${num}`);
     mkdirSync(issueRunDir, { recursive: true });
 
+    let scanSuccess = true;
     if (!dryRun) {
       for (const st of stations) {
         console.log(`[issue-poller] Running station '${st}' for issue #${num}...`);
         try {
-          spawnSync("factory", ["run", st, "--target", rootDir, "--sink", "file", "--station-only"], {
+          const res = spawnSync("factory", ["run", st, "--target", rootDir, "--sink", "file", "--station-only"], {
             cwd: rootDir,
             env: { ...env, VOICEBOX_FACTORY_PRIVATE_DIR: issueRunDir },
             encoding: "utf8",
           });
+          if (res.status !== 0) {
+            console.warn(`[issue-poller] Station '${st}' returned status ${res.status}`);
+          }
         } catch (e) {
-          console.warn(`[issue-poller] Station run notice: ${e.message}`);
+          console.error(`[issue-poller] Station run error: ${e.message}`);
+          scanSuccess = false;
         }
       }
 
@@ -132,7 +149,8 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
         const parsed = JSON.parse(commentData);
         existingComments = parsed.comments || [];
       } catch (e) {
-        // Fallback: empty existing comments
+        console.error(`[issue-poller] Failed to fetch comments for issue #${num}: ${e.message}. Refusing to comment without verified deduplication.`);
+        continue; // Fail closed, retry next poll cycle
       }
 
       // Format safe triage comment with fingerprint deduplication
@@ -143,6 +161,7 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
         existingComments,
       });
 
+      let postSuccess = true;
       if (triageResult.exitCode === 2 || triageResult.newFindings === 0) {
         console.log(`[issue-poller] Issue #${num}: all ${triageResult.totalFindings} finding(s) already commented. Skipping duplicate comment.`);
       } else if (triageResult.comment) {
@@ -155,20 +174,27 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
           console.log(`[issue-poller] Successfully posted triage comment to issue #${num}`);
         } catch (e) {
           console.error(`[issue-poller] Failed to post comment on issue #${num}: ${e.message}`);
+          postSuccess = false;
         }
+      }
+
+      if (!scanSuccess || !postSuccess) {
+        console.warn(`[issue-poller] Issue #${num} encountered an error during scan or comment post. Not recording as processed.`);
+        continue;
       }
     } else {
       console.log(`[issue-poller] DRY-RUN: would scan stations [${stations.join(", ")}] and comment on issue #${num}`);
     }
 
-    processedSet.add(num);
+    cursor.processedIssues[num] = {
+      updatedAt,
+      lastPolled: new Date().toISOString(),
+    };
     if (num > cursor.highestIssueNumber) {
       cursor.highestIssueNumber = num;
     }
     newProcessed++;
   }
-
-  cursor.processedIssues = [...processedSet];
   cursor.lastPolled = new Date().toISOString();
   writeFileSync(cursorFile, JSON.stringify(cursor, null, 2), "utf8");
 

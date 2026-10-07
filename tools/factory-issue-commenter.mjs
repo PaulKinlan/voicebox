@@ -17,6 +17,7 @@
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { redactSecrets } from "../lib/redact.mjs";
 
 /**
  * Format a safe, sanitized markdown triage comment from a directory of factory reports.
@@ -170,18 +171,13 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
 }
 
 /**
- * Basic regex sanitization: mask high-entropy strings, tokens, or credential-shaped values.
+ * Thoroughly sanitize finding descriptions using Voicebox's standard redactSecrets
+ * plus explicit GitHub/OAuth token redactors.
  */
 export function sanitizeFindingText(text = "") {
-  return String(text)
-    // Redact generic Bearer/token patterns
-    .replace(/(bearer\s+)[a-zA-Z0-9_\-\.]{8,}/gi, "$1[REDACTED]")
-    // Redact API key assignments
-    .replace(/(api[_-]?key\s*[:=]\s*)['"][^'"]+['"]/gi, "$1'[REDACTED]'")
-    // Redact GitHub/OAuth tokens
-    .replace(/gh[pousr]_[A-Za-z0-9_]{16,}/g, "[REDACTED_GH_TOKEN]")
-    // Redact private key header mentions
-    .replace(/-----BEGIN [A-Z ]+ PRIVATE KEY-----/g, "[REDACTED_PRIVATE_KEY]");
+  let sanitized = redactSecrets(String(text));
+  sanitized = sanitized.replace(/gh[pousr]_[A-Za-z0-9_]{16,}/g, "[REDACTED]");
+  return sanitized;
 }
 
 // CLI entry point
