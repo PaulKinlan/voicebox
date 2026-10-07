@@ -57,6 +57,7 @@ Every action and refusal inside an active workspace root is recorded to an appen
   1. An `attempt` entry (`decision: "attempt"`, `result: "pending"`) before execution begins.
   2. An outcome entry (`decision: "allow"`, `result: "ok"`, `attempt: <seq>`) referencing the attempt's sequence number after the write completes and is verified on disk.
 - **Pre-Flight Refusals**: Requests rejected before execution (such as `outside-root`) record a single `refuse` entry naming the violated rule.
+- **Serialized appends (page side)**: the browser writer's OPFS appends run on a per-file promise chain in `browser/storage.ts` — concurrent acts used to capture the same file size and overwrite each other's lines (measured: 39 of 40 concurrent lines lost, voicebox-beads-2g7p), so "append-only" now includes "appends to one file never interleave".
 
 ---
 

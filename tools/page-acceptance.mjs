@@ -341,7 +341,7 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
     //     fetched (the served copy is compiled JS, so the same specifier regex applies);
     //   · the WORKER ENTRY POINTS — a worker is constructed at runtime
     //     (`new Worker("/browser/worker.ts", …)`), so nothing in the HTML or the import graph points at it,
-    //     and its whole graph (browser/acts.ts, browser/opfs.ts, …) went uncompared. Measured 2026-09-23:
+    //     and its whole graph (browser/acts.ts, browser/storage.ts, …) went uncompared. Measured 2026-09-23:
     //     a code-only edit to browser/acts.ts was invisible to this check for exactly that reason — the
     //     comparison was right and never reached the file.
     if (/\.(?:js|ts|mjs)$/.test(ref)) {
