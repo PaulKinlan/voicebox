@@ -85,6 +85,8 @@ export interface TaskRecord {
   harness?: string;
   /** Present once the task is terminal — see OutcomeClass for what the class does and does not mean. */
   outcome?: TaskOutcome;
+  /** Live console output snippet or event */
+  console?: { source?: string; text?: string; agent?: string; at?: string };
 }
 /**
  * WHAT A DELEGATION'S OUTCOME IS, AND WHO SAYS SO (voicebox-beads-m9u).
@@ -183,7 +185,7 @@ export function reduceTask(entries: LogEntry[], address: string): TaskRecord | n
         cancel_unconfirmed: ["cancelled", "completed", "failed", "interrupted"],
       };
       if (!allowed[record.state]?.includes(event.state)) throw new Error("invalid task transition");
-      record = { ...record, state: event.state, updatedAt: entry.at, ...(event.reason ? { reason: event.reason } : {}), ...(event.detail ? { detail: event.detail } : {}), ...(event.answer !== undefined ? { answer: event.answer } : {}), ...(event.progress !== undefined ? { progress: event.progress } : {}), ...(event.partial !== undefined ? { partial: event.partial } : {}) };
+      record = { ...record, state: event.state, updatedAt: entry.at, ...(event.reason ? { reason: event.reason } : {}), ...(event.detail ? { detail: event.detail } : {}), ...(event.answer !== undefined ? { answer: event.answer } : {}), ...(event.progress !== undefined ? { progress: event.progress } : {}), ...(event.partial !== undefined ? { partial: event.partial } : {}), ...(event.console ? { console: event.console } : {}) };
     }
     const expectedRoot = record.root.kind === "handle"
       ? `picked:${record.root.id}`
@@ -237,6 +239,7 @@ export function taskView(record: TaskRecord) {
     ...(progress ? { progress } : {}),
     ...(partial ? { partial } : {}),
     ...(outcome ? { outcome } : {}),
+    ...((record as any).console ? { console: (record as any).console } : {}),
   };
 }
 

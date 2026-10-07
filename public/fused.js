@@ -5,7 +5,7 @@
 // reading its bytes back. There is no seeded content, no timer that fakes a
 // state, and no claim the server has not made. Strings are rendered with
 // textContent only.
-import { debugEnabled, openTranscriptDialog, recordDebug } from "./debug-transcript.js";
+import { debugEnabled, openTranscriptDialog, recordDebug, redact } from "./debug-transcript.js";
 import { createRoomUndoStack, deleteHandleFile, diffHandleFile, editHandleFile, grepHandleFolder, miniAppSyncName, parseRoomFolderTurn } from "./room-folder-ops.js";
 import { installWindowManager } from "./window-manager.mjs";
 
@@ -268,7 +268,8 @@ function sanitizePlainActivityText(raw) {
   const sWord = new RegExp(`\\b${"sand"}${"box"}\\b`, "gi");
   const wWord = new RegExp(`\\b${"work"}${"tree"}\\b`, "gi");
   const oWord = new RegExp(`\\b${"op"}${"fs"}\\b`, "gi");
-  return String(raw ?? "")
+  const scrubbed = redact(String(raw ?? ""));
+  return scrubbed
     .replace(sWord, "workspace")
     .replace(wWord, "workspace")
     .replace(oWord, "browser storage")
@@ -3219,6 +3220,24 @@ async function send(said) {
     const delegatedTask = answer.task ?? result.task;
     if (delegatedTask && taskCardController) {
       taskCardController.setTask(delegatedTask);
+      if (delegatedTask.address && (delegatedTask.state === "running" || delegatedTask.state === "queued")) {
+        const addr = delegatedTask.address;
+        let pollCount = 0;
+        const maxPolls = 120; // 2 minutes at 1000ms
+        const pollTimer = setInterval(async () => {
+          pollCount += 1;
+          try {
+            const res = await taskCardController.status(addr);
+            const curState = res?.task?.state;
+            if (curState === "completed" || curState === "failed" || curState === "interrupted" || curState === "cancelled" || pollCount >= maxPolls) {
+              clearInterval(pollTimer);
+              if (res?.task) window.__voiceboxOnTask?.(res.task);
+            }
+          } catch {
+            clearInterval(pollTimer);
+          }
+        }, 1000);
+      }
     }
     const miniApp = answer.miniApp ?? result.miniApp;
     if (miniApp && miniAppController) {
@@ -5384,6 +5403,9 @@ window.__voiceboxOnTask = (task) => {
     }
     if (task.status === "completed" || task.state === "completed" || task.state === "finished" || task.outcome === "finished") {
       void load();
+      logTurn(`agent: ${task.agent || "task"}`, task.summary || task.answer?.slice(0, 120) || "completed task");
+    } else if (task.state === "failed" || task.state === "interrupted") {
+      logTurn(`agent: ${task.agent || "task"}`, `stopped: ${task.reason || "failed"}`);
     }
     appendWorkActivity({
       kind: task.state === "failed" ? "error" : "command",

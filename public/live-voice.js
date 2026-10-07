@@ -160,6 +160,9 @@ const audioClient = createAudioClient({
     // THE TASK CARD: forward the live task handle to the room component (voicebox-beads-8fv.4)
     window.__voiceboxOnTask?.(task);
   },
+  onActivity: (entry, frame) => {
+    window.__voiceboxOnActivity?.(entry, frame);
+  },
   onMiniApp: (miniApp) => {
     // THE MINI-APP CONTAINER: mount the interactive mini-app in the room (voicebox-beads-5h1)
     window.__voiceboxOnMiniApp?.(miniApp);

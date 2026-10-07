@@ -61,7 +61,17 @@ When `delegate_task` targets a configured agent entry (`core/harness-config.ts`,
 
 ---
 
-## 4. Browser Placement Boundary
+## 4. Live Progress, Console Output & Secret Redaction
+
+During ACP and Claude Code task execution, intermediate protocol events and console logs are surfaced live in the UI:
+- **Live Stage Progress**: Subprocess lifecycle updates (`initializing`, `session/new`, `session/prompt`, and tool calls) stream via `onProgress` to the task host and appear live on the Result Card (`#task-card`).
+- **Console Output Stream**: Subprocess `stderr` and tool call diagnostics stream into the live **Work Activity** panel (`#activity-log-panel`) and Result Card (`#task-card-console`).
+- **Credential & Secret Redaction (`lib/redact.mjs`)**: All streamed console output, progress notes, and task details pass through strict redaction that scrubs API keys (`sk-ant-...`, `AIza...`), Bearer/Basic auth headers, private keys, and ambient host environment tokens before reaching the client or audit log.
+- **Session History Integration**: When delegated tasks complete or fail, their outcomes are recorded in **Recent Turns** (`#session-log`).
+
+---
+
+## 5. Browser Placement Boundary
 
 Stdio ACP adapters (`lib/pi-acp.mjs`, `lib/claude-acp.mjs`) spawn local OS subprocesses and therefore run on `machine` and `remote` placements (`lib/tasks.mjs`). Zero-server browser environments (`tests/acp-browser.test.mjs`) use `createBrowserTaskHost()` in `lib/task-placement.mjs` (see [`16-zero-server-delegation.md`](16-zero-server-delegation.md)).
 

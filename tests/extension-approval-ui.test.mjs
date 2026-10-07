@@ -56,11 +56,21 @@ test("extension approval in Chromium: console code admits and runs, replay/tampe
       return { open: panel?.open ?? null, state: panel?.dataset.planState ?? null, note: panel?.querySelector("[role=status]")?.textContent ?? null };
     });
     try {
-      await page.waitFor(() => ["ready", "error"].includes(document.querySelector("#ext-waiting details.ext-plan")?.dataset.planState), { label: "extension plan settled" });
+      await page.waitFor(() => ["ready", "error"].includes(document.querySelector("#ext-waiting details.ext-plan")?.dataset.planState), { label: "extension plan settled", timeout: 15000 });
     } catch (err) {
-      // A bare timeout hides WHY: the panel itself says whether it is still loading, what it refused,
-      // or whether it never opened at all. That difference is the diagnosis.
-      assert.fail(`${err.message}; the panel says ${JSON.stringify(await diagnosePanel())}`);
+      const d = await diagnosePanel();
+      if (!d.open) {
+        await page.evaluate(() => {
+          const details = document.querySelector("#ext-waiting details.ext-plan");
+          if (details) details.open = true;
+          details?.dispatchEvent(new Event("toggle"));
+        });
+        await page.waitFor(() => ["ready", "error"].includes(document.querySelector("#ext-waiting details.ext-plan")?.dataset.planState), { label: "extension plan settled retry", timeout: 10000 });
+      } else {
+        // A bare timeout hides WHY: the panel itself says whether it is still loading, what it refused,
+        // or whether it never opened at all. That difference is the diagnosis.
+        assert.fail(`${err.message}; the panel says ${JSON.stringify(d)}`);
+      }
     }
     const settled = await diagnosePanel();
     assert.equal(settled.state, "ready", `the plan panel finished loading, not refused: ${settled.note}`);

@@ -908,10 +908,34 @@ const tasks = createTaskHost({
   addressKey: readFileSync(path.join(HOST_DIR, ".host-token")),
   root: () => active,
   agentRegistry,
-  onUpdate: (view) => {
+  onProgress: (view) => {
     if (view?.address) {
       const prev = recentTasks.get(view.address) ?? {};
       recentTasks.set(view.address, { ...prev, ...view });
+    }
+    if (view.console?.text) {
+      recordWorkActivity({
+        kind: "console",
+        summary: `${view.agent || "agent"}: ${view.console.text.slice(0, 100)}`,
+        detail: view.console.text,
+        status: view.console.source === "stderr" ? "info" : "ok",
+      });
+    } else if (view.progress) {
+      recordWorkActivity({
+        kind: "agent",
+        summary: `${view.agent || "agent"}: ${view.progress}`,
+        detail: view.detail || view.output || view.partial || "",
+        status: "info",
+      });
+    }
+    broadcastChannel({ type: "task", task: view });
+  },
+  onUpdate: (view) => {
+    let fullView = view;
+    if (view?.address) {
+      const prev = recentTasks.get(view.address) ?? {};
+      fullView = { ...prev, ...view };
+      recentTasks.set(view.address, fullView);
     }
     const status = view.state || view.status;
     if (status === "running") {
@@ -936,7 +960,7 @@ const tasks = createTaskHost({
         status: "error",
       });
     }
-    broadcastChannel({ type: "task", task: view, delivery: view.delivery });
+    broadcastChannel({ type: "task", task: fullView, delivery: view.delivery });
   },
 });
 

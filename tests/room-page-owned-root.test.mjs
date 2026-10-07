@@ -101,7 +101,7 @@ test("a page-owned root: usable while the tab holds it, and a refusal that names
     await roomPage.goto(`${BASE}/`);
     const without = await until(async () => {
       const r = await readRoom(roomPage);
-      return r.headline ? r : null;
+      return (r.headline && /tab that holds this folder is not open/i.test(r.headline)) ? r : null;
     }, "the room to render the refusal");
 
     assert.match(without.headline, /tab that holds this folder is not open/i, `the refusal does not name the cause: "${without.headline}"`);
