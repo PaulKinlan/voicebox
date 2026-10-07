@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { startServer } from "./lib/server.mjs";
@@ -302,4 +302,62 @@ test("git_status over subrepos: parallel probes preserve discovery order and iso
     ["repo-a", "repo-c"],
     "one broken subrepo must drop only itself, order preserved",
   );
+});
+
+test("git_status caps discovery at 15 and bounds probe fan-out (voicebox-beads-8d3n)", async (t) => {
+  const sandboxRoot = mkdtempSync(path.join(os.tmpdir(), "vb-8d3n-"));
+  t.after(() => rmSync(sandboxRoot, { recursive: true, force: true }));
+  // 50 repos in ONE directory: the pre-fix traversal pushed all 50 (the cap was checked only at
+  // walk entry), and since 3017 all 50 probes fanned out in one Promise.all.
+  for (let i = 0; i < 50; i++) {
+    initSubRepo(path.join(sandboxRoot, `repo-${String(i).padStart(2, "0")}`), "main", "init", "f.txt", "x\n");
+  }
+
+  // A git shim that records start/end markers with a pause between, so the log's maximum
+  // overlap IS the peak probe concurrency. The real git does the work.
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const shimDir = path.join(sandboxRoot, "shim");
+  mkdirSync(shimDir);
+  const logFile = path.join(sandboxRoot, "git-calls.log");
+  writeFileSync(path.join(shimDir, "git"), `#!/bin/sh
+echo "S $$ $(date +%s%N)" >> "${logFile}"
+sleep 0.15
+"${realGit}" "$@"
+rc=$?
+echo "E $$" >> "${logFile}"
+exit $rc
+`);
+  execFileSync("chmod", ["+x", path.join(shimDir, "git")]);
+
+  const srv = await startServer({
+    env: {
+      VOICEBOX_WORKSPACE: sandboxRoot,
+      VOICEBOX_SANDBOX_HOMES: sandboxRoot,
+      PATH: `${shimDir}:${process.env.PATH}`,
+    },
+  });
+  t.after(() => srv.stop());
+
+  const res = await fetch(`${srv.base}/api/turn`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ transcript: "git status" }),
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.result.ok, true, JSON.stringify(body.result).slice(0, 300));
+
+  // The cap is HARD: exactly the first 15 in sorted discovery order.
+  const dirs = body.result.subrepositories.map((r) => r.dir);
+  assert.equal(dirs.length, 15, `expected the hard cap of 15, got ${dirs.length}`);
+  assert.deepEqual(dirs, [...dirs].sort((a, b) => a.localeCompare(b)), "discovery order preserved under the cap");
+
+  // The fan-out is BOUNDED: peak overlap in the shim log must never exceed the pool size.
+  const lines = readFileSync(logFile, "utf8").trim().split("\n");
+  const events = lines.map((l) => ({ kind: l.startsWith("S") ? 1 : -1, pid: l.split(" ")[1], at: Number(l.split(" ")[2] ?? 0) }));
+  // Order S before E at equal timestamps is impossible here (different lines), so a running counter suffices.
+  let running = 0, peak = 0;
+  for (const e of events) { running += e.kind; peak = Math.max(peak, running); }
+  assert.ok(events.length >= 30, `expected at least 15 probes (30 markers), got ${events.length}`);
+  assert.ok(peak <= 4, `probe fan-out exceeded the bound: peak ${peak} concurrent git spawns`);
 });
