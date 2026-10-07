@@ -166,11 +166,21 @@ test("a page-owned root: the room's delete ROUTES to the page that owns the file
     // The PAGE's storage is the witness, not the room's report.
     const read = await envPage.evaluate(async () => await window.e1m0.send({ type: "readFile", path: "assets/pagedel.txt" }));
     assert.equal(read.ok, false, `the page still holds the file after the room deleted it: ${JSON.stringify(read)}`);
-    const entry = await until(async () => {
+    // voicebox-beads-7zef: the page's delete act awaits storage.remove() and THEN awaits
+    // recordAct() (browser/acts.ts), so an observer that already sees the file gone has NOT
+    // been promised the audit entry yet — asserting it unpolled raced under full-suite load
+    // (fleet-check red on a tree whose delete code was byte-identical to a green one). Poll
+    // for the entry, bounded, like every other observation in this test. Whether an EARLY
+    // audit observation misses the entry is timing, not logic, so it cannot be proven on
+    // demand; what CAN be proven is that this audit read discriminates — a delete entry for
+    // a file this test never deleted must be absent, or the poll above proved nothing.
+    const pageDeleteEntry = async (suffix) => {
       const pageAudit = await envPage.evaluate(async () => await window.e1m0.send({ type: "audit" }));
-      return (pageAudit?.entries ?? []).find((e) => e.act?.kind === "delete" && String(e.act?.target ?? "").endsWith("assets/pagedel.txt"));
-    }, "the page-owned root's log to record the delete", 15000);
-    assert(entry, "the page-owned root's log has no delete entry");
+      return (pageAudit?.entries ?? []).find((e) => e.act?.kind === "delete" && String(e.act?.target ?? "").endsWith(suffix)) ?? null;
+    };
+    const entry = await until(() => pageDeleteEntry("assets/pagedel.txt"), "the page-owned root's log to record the delete", 30000);
+    assert.equal(entry.result, "ok", "the page's delete entry does not record a result");
+    assert.equal(await pageDeleteEntry("assets/never-deleted.txt"), null, "the audit read is vacuous — it claims a delete entry for a file never deleted");
   } finally {
     await room?.close();
     await envPage.close();
