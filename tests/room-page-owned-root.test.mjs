@@ -71,10 +71,14 @@ test("a page-owned root: usable while the tab holds it, and a refusal that names
 
     // ── THE ROOM WHILE THE TAB HOLDS IT: no refusal, and the drawer names the writer ──
     await roomPage.goto(`${BASE}/`);
+    // voicebox-beads-dvzm: synchronise on EXACTLY the observable the assertions below check.
+    // The drawer's about-text settles after the headline (undefined -> null -> declared in
+    // renderAbout), and the observed flake read it in its interim state. Waiting for the writer
+    // sentence itself means every assertion under this wait reads a settled room.
     const held = await until(async () => {
       const r = await readRoom(roomPage);
-      return (r.headline && !r.about.includes("This server does not say")) ? r : null;
-    }, "the room to render its root state");
+      return (r.headline && /written by the tab that holds it/i.test(r.about)) ? r : null;
+    }, "the room to render its root state and name the writer");
 
     assert.doesNotMatch(held.headline, /cannot save/i, `the room refused a folder the tab is holding: "${held.headline}"`);
     assert.doesNotMatch(held.next, /is not somewhere the server can save/i, `the room explained a server limitation for a folder the tab can write: "${held.next}"`);
