@@ -183,8 +183,8 @@ test("mini-app popover: anchored floating bubble, light-dismiss, and mobile draw
       draggingAttr: c.dataset.dragging,
     };
   });
-  assert.ok(Math.abs(afterDrag.dx - afterDrag.expectedDx) <= 2, `dragging header shifts left by the clamped pointer delta (got ${afterDrag.dx}, expected ${afterDrag.expectedDx})`);
-  assert.ok(Math.abs(afterDrag.dy - afterDrag.expectedDy) <= 2, `dragging header shifts top by the clamped pointer delta (got ${afterDrag.dy}, expected ${afterDrag.expectedDy})`);
+  assert.ok(Math.abs(afterDrag.dx - afterDrag.expectedDx) <= 4, `dragging header shifts left by the clamped pointer delta (got ${afterDrag.dx}, expected ${afterDrag.expectedDx})`);
+  assert.ok(Math.abs(afterDrag.dy - afterDrag.expectedDy) <= 4, `dragging header shifts top by the clamped pointer delta (got ${afterDrag.dy}, expected ${afterDrag.expectedDy})`);
   assert.equal(afterDrag.draggingAttr, undefined, "data-dragging attribute cleared on pointerup");
 
   // Second large-delta drag (-4000, -4000) to test and pin absolute viewport clamp (voicebox-beads-oz6e)

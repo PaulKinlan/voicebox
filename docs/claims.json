@@ -117,6 +117,11 @@
       "doc": "*",
       "path": "docs/extensions.md",
       "why": "citation of the PI HARNESS's extensions doc (~/.local/share/mise/installs/pi/<ver>/pi/docs/extensions.md) — prior art outside this tree, named as such in the citing sentences"
+    },
+    {
+      "doc": "docs/28-factory-review-adapter.md",
+      "path": "scripts/factory-triage.mjs",
+      "why": "citation of the factory triage publisher script landed in sibling bead voicebox-beads-h1u0"
     }
   ]
 }
