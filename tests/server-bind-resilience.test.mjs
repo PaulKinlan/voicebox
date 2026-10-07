@@ -37,7 +37,11 @@ async function reap(child) {
   } catch {
     try { child.kill("SIGKILL"); } catch { /* already gone */ }
   }
-  await Promise.race([done, sleep(2000)]);
+  // voicebox-beads-ohe8: the raced 2s grace sleep is ref'd by default and outlives a prompt exit
+  // by the full 2s; abort it once the race settles so the process can leave when the test does.
+  const ac = new AbortController();
+  await Promise.race([done, sleep(2000, undefined, { signal: ac.signal }).catch(() => {})]);
+  ac.abort();
   child.stdout?.destroy();
   child.stderr?.destroy();
 }
@@ -176,8 +180,14 @@ test("a port held past the deadline is a NAMED refusal, not a stack trace", { ti
   child.stderr.on("data", (d) => (output += String(d)));
 
   const exited = await new Promise((resolve) => {
-    child.on("exit", (code) => resolve(code));
-    setTimeout(() => resolve(null), 15000);
+    // voicebox-beads-ohe8: the 15s fallback outlived a prompt exit by its full length (isolated
+    // run: 3.5s of test, 15.3s of wall); clear it when the exit lands first, unref it regardless.
+    const fallback = setTimeout(() => resolve(null), 15000);
+    fallback.unref?.();
+    child.on("exit", (code) => {
+      clearTimeout(fallback);
+      resolve(code);
+    });
   });
 
   try {
