@@ -2,11 +2,17 @@
 //
 // Rules (voicebox-beads-cbxo, voicebox-beads-jyj1):
 // 1. Logs safe triage summary directly on the triggering GitHub issue.
-// 2. Embeds shared marker <!-- factory-triage-comment: <fingerprint> --> so h1u0 --review/--promote
-//    can inspect the comment and promote reviewed inbound findings to Beads.
-// 3. Never creates replacement issues or beads automatically at scan time.
-// 4. Never echoes raw credentials, secrets, or unredacted PoC payloads in issue text.
-// 5. Summarizes stations executed, findings count, severity bands, and next review actions.
+// 2. Embeds shared markers per finding:
+//    <!-- factory-triage-comment: <fingerprint> -->
+//    <!-- factory-station: <station> -->
+//    <!-- factory-severity: <severity> -->
+//    <!-- factory-state: <state> -->
+//    so h1u0 --review/--promote can inspect comments and promote reviewed findings to Beads.
+// 3. Deduplication: inspects existing issue comments. If all findings are already commented,
+//    returns exitCode: 2 (no-op) so repeated polls/edits post zero duplicate comments.
+//    If new findings exist, comments ONLY on newly discovered finding sections.
+// 4. Never creates replacement issues or beads automatically at scan time.
+// 5. Never echoes raw credentials, secrets, or unredacted PoC payloads in issue text.
 
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -19,20 +25,19 @@ import path from "node:path";
  * @param {string[]} options.stations - List of stations executed
  * @param {string} [options.findingsDir] - Directory holding factory markdown reports
  * @param {string} [options.commitSha] - Commit SHA scanned
- * @returns {string} Sanitized markdown comment body
+ * @param {Array<string|object>} [options.existingComments] - Existing comments on the issue for dedupe
+ * @returns {{ ok: boolean, exitCode: number, newFindings: number, totalFindings: number, comment: string }}
  */
-export function formatTriageComment({ stations = [], findingsDir = "", commitSha = "" } = {}) {
-  const stationList = stations.length > 0 ? stations.map((s) => `\`${s}\``).join(", ") : "*(none)*";
-  const lines = [
-    "### 🤖 Software Factory Automated Triage",
-    "",
-    `**Stations Executed**: ${stationList}`,
-  ];
-
-  if (commitSha) {
-    lines.push(`**Commit Scanned**: \`${commitSha.slice(0, 10)}\``);
+export function formatTriageComment({ stations = [], findingsDir = "", commitSha = "", existingComments = [] } = {}) {
+  // 1. Extract existing fingerprints from prior issue comments
+  const existingFingerprints = new Set();
+  for (const c of existingComments) {
+    const text = typeof c === "string" ? c : String(c?.body ?? "");
+    const matches = text.matchAll(/<!--\s*factory-triage-comment:\s*([0-9a-f]{16,64})\s*-->/gi);
+    for (const m of matches) {
+      existingFingerprints.add(m[1].toLowerCase());
+    }
   }
-  lines.push("");
 
   const reports = [];
   if (findingsDir && existsSync(findingsDir)) {
@@ -45,12 +50,11 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
         }
       }
     } catch (e) {
-      lines.push(`> ⚠️ Notice: Could not read findings directory: ${e.message}`);
-      lines.push("");
+      // Handled downstream
     }
   }
 
-  // Parse findings or summaries
+  // 2. Parse findings from reports
   let totalFindings = 0;
   const findingItems = [];
 
@@ -58,22 +62,29 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
     const rawLines = report.content.split("\n");
     for (let i = 0; i < rawLines.length; i++) {
       const line = rawLines[i];
-      // Look for bullet findings: - [SEVERITY] [station] title (file:line) or markdown heading
       const m = line.match(/^-\s+\[(CRITICAL|HIGH|MEDIUM|LOW|INFO)\]\s+\[?([a-z0-9_-]+)\]?\s+(.*)$/i);
       if (m) {
         totalFindings++;
         const sev = m[1].toUpperCase();
         const station = m[2];
         let description = m[3].trim();
+        let state = "new";
 
-        // Check next few lines for fingerprint if present
+        // Check next few lines for fingerprint or state
         let fingerprint = "";
-        for (let j = i + 1; j < Math.min(rawLines.length, i + 6); j++) {
+        for (let j = i + 1; j < Math.min(rawLines.length, i + 8); j++) {
+          if (/^-\s+\[(CRITICAL|HIGH|MEDIUM|LOW|INFO)\]/i.test(rawLines[j])) {
+            break;
+          }
           const fpMatch = rawLines[j].match(/fingerprint:\s*`?([0-9a-f]{16,64})`?/i) ||
                           rawLines[j].match(/<!--\s*factory-fingerprint:\s*([0-9a-f]{16,64})\s*-->/i);
-          if (fpMatch) {
-            fingerprint = fpMatch[1];
-            break;
+          if (fpMatch && !fingerprint) {
+            fingerprint = fpMatch[1].toLowerCase();
+          }
+          const stateMatch = rawLines[j].match(/<!--\s*factory-state:\s*(new|regressed)\s*-->/i) ||
+                            rawLines[j].match(/state:\s*(new|regressed)/i);
+          if (stateMatch) {
+            state = stateMatch[1].toLowerCase();
           }
         }
         if (!fingerprint) {
@@ -83,19 +94,46 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
         // Sanitize: strip credential patterns or secret tokens if present
         description = sanitizeFindingText(description);
 
-        findingItems.push({ severity: sev, station, description, fingerprint });
+        findingItems.push({ severity: sev, station, description, fingerprint, state });
       }
     }
   }
 
+  // 3. Filter out findings already commented on this issue
+  const newFindings = findingItems.filter((f) => !existingFingerprints.has(f.fingerprint.toLowerCase()));
+
+  // Deduplication check: if all reported findings are already commented on this issue, return no-op exit 2
+  if (totalFindings > 0 && newFindings.length === 0) {
+    return {
+      ok: true,
+      exitCode: 2,
+      newFindings: 0,
+      totalFindings,
+      comment: "",
+    };
+  }
+
+  // 4. Render markdown comment body
+  const stationList = stations.length > 0 ? stations.map((s) => `\`${s}\``).join(", ") : "*(none)*";
+  const lines = [
+    "### 🤖 Software Factory Automated Triage",
+    "",
+    `**Stations Executed**: ${stationList}`,
+  ];
+
+  if (commitSha) {
+    lines.push(`**Commit Scanned**: \`${commitSha.slice(0, 10)}\``);
+  }
+  lines.push("");
+
   if (totalFindings === 0) {
     lines.push("✅ **No new findings discovered** across the executed stations.");
   } else {
-    lines.push(`#### Discovered Findings (${totalFindings})`);
+    lines.push(`#### Discovered Findings (${newFindings.length}${totalFindings !== newFindings.length ? ` new, ${totalFindings - newFindings.length} already triaged` : ""})`);
     lines.push("");
 
     const bySeverity = { CRITICAL: [], HIGH: [], MEDIUM: [], LOW: [], INFO: [] };
-    for (const item of findingItems) {
+    for (const item of newFindings) {
       if (bySeverity[item.severity]) {
         bySeverity[item.severity].push(item);
       } else {
@@ -109,10 +147,11 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
         lines.push(`- **${sev}** (${items.length}):`);
         for (const it of items) {
           lines.push(`  - [\`${it.station}\`] ${it.description}`);
-          // Embed the shared triage comment marker per finding
+          // Embed all 4 shared triage markers per finding
           lines.push(`    <!-- factory-triage-comment: ${it.fingerprint} -->`);
           lines.push(`    <!-- factory-station: ${it.station} -->`);
           lines.push(`    <!-- factory-severity: ${it.severity.toLowerCase()} -->`);
+          lines.push(`    <!-- factory-state: ${it.state} -->`);
         }
       }
     }
@@ -121,7 +160,13 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
   lines.push("");
   lines.push("> ℹ️ *Findings are logged for issue review. Work beads are created only after human review approval.*");
 
-  return lines.join("\n");
+  return {
+    ok: true,
+    exitCode: 0,
+    newFindings: newFindings.length,
+    totalFindings,
+    comment: lines.join("\n"),
+  };
 }
 
 /**
@@ -152,6 +197,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     stations = rawStations ? rawStations.split(",").map((s) => s.trim()).filter(Boolean) : [];
   }
 
-  const comment = formatTriageComment({ stations, findingsDir, commitSha });
-  console.log(comment);
+  const result = formatTriageComment({ stations, findingsDir, commitSha });
+  if (result.comment) {
+    console.log(result.comment);
+  }
+  process.exit(result.exitCode);
 }

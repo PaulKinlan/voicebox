@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import {
   selectReviewStation,
   computeReviewCacheKey,
@@ -145,14 +146,30 @@ test("factory-issue-router: loop hazard guard rejects publisher issues independe
   assert.ok(resD.reason.includes("author_association 'NONE' is not in trusted set"));
 });
 
-test("factory-issue-commenter: embeds shared <!-- factory-triage-comment: <fp> --> and sanitizes credentials across all severities", () => {
-  const comment = formatTriageComment({
-    stations: ["secret-scan", "perf-review"],
-    findingsDir: "",
+test("factory-issue-commenter: embeds all 4 shared markers and sanitizes credentials across all severities", () => {
+  const tmpDir = path.join(ROOT, "tests", "fixtures", "test-report-tmp");
+  mkdirSync(tmpDir, { recursive: true });
+  writeFileSync(
+    path.join(tmpDir, "voicebox-perf-review-delta.md"),
+    `- [HIGH] perf-review Startup probe blocks boot banner\n  fingerprint: \`5939431590a573447f5b1826c33d12e4b2429002741349d1d8313deb7af5cd9a\`\n  state: new\n`,
+    "utf8"
+  );
+
+  const res = formatTriageComment({
+    stations: ["perf-review"],
+    findingsDir: tmpDir,
     commitSha: "1e970d595748a7c38b7fd39417e055165d7edecd",
   });
-  assert.ok(comment.includes("Software Factory Automated Triage"));
-  assert.ok(comment.includes("1e970d5957"));
+  rmSync(tmpDir, { recursive: true, force: true });
+
+  assert.equal(res.ok, true);
+  assert.equal(res.exitCode, 0);
+  assert.equal(res.newFindings, 1);
+  assert.ok(res.comment.includes("Software Factory Automated Triage"));
+  assert.ok(res.comment.includes("<!-- factory-triage-comment: 5939431590a573447f5b1826c33d12e4b2429002741349d1d8313deb7af5cd9a -->"));
+  assert.ok(res.comment.includes("<!-- factory-station: perf-review -->"));
+  assert.ok(res.comment.includes("<!-- factory-severity: high -->"));
+  assert.ok(res.comment.includes("<!-- factory-state: new -->"));
 
   // Text sanitization verification
   const dirty = "Exposed Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9 and token ghp_ABCDEF0123456789xyz and api_key='sk_test_123456'";
@@ -161,6 +178,62 @@ test("factory-issue-commenter: embeds shared <!-- factory-triage-comment: <fp> -
   assert.ok(!clean.includes("ghp_ABCDEF0123456789xyz"));
   assert.ok(!clean.includes("sk_test_123456"));
   assert.ok(clean.includes("[REDACTED]"));
+});
+
+test("factory-issue-commenter: fingerprint deduplication skips already-commented findings (exitCode 2 no-op) and isolates new sections", () => {
+  const tmpDir = path.join(ROOT, "tests", "fixtures", "test-dedupe-tmp");
+  mkdirSync(tmpDir, { recursive: true });
+
+  // Pass 1: One finding
+  writeFileSync(
+    path.join(tmpDir, "voicebox-perf-review-delta.md"),
+    `- [HIGH] perf-review Startup probe blocks boot banner\n  fingerprint: \`5939431590a573447f5b1826c33d12e4b2429002741349d1d8313deb7af5cd9a\`\n  state: new\n`,
+    "utf8"
+  );
+
+  const pass1 = formatTriageComment({
+    stations: ["perf-review"],
+    findingsDir: tmpDir,
+    existingComments: [],
+  });
+  assert.equal(pass1.ok, true);
+  assert.equal(pass1.exitCode, 0);
+  assert.equal(pass1.newFindings, 1);
+  assert.ok(pass1.comment.length > 0);
+
+  // Pass 2: Same finding re-polled with previous comment present -> exitCode 2 (no-op, ZERO duplicate comments)
+  const pass2 = formatTriageComment({
+    stations: ["perf-review"],
+    findingsDir: tmpDir,
+    existingComments: [pass1.comment],
+  });
+  assert.equal(pass2.ok, true);
+  assert.equal(pass2.exitCode, 2, "exitCode 2 indicates no-op (nothing new to post)");
+  assert.equal(pass2.newFindings, 0);
+  assert.equal(pass2.comment, "");
+
+  // Pass 3: Mutated report adds a second finding -> returns comment with ONLY the new finding section
+  writeFileSync(
+    path.join(tmpDir, "voicebox-perf-review-delta.md"),
+    `- [HIGH] perf-review Startup probe blocks boot banner\n  fingerprint: \`5939431590a573447f5b1826c33d12e4b2429002741349d1d8313deb7af5cd9a\`\n  state: new\n- [MEDIUM] perf-review Large uncompressed texture asset\n  fingerprint: \`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\`\n  state: new\n`,
+    "utf8"
+  );
+
+  const pass3 = formatTriageComment({
+    stations: ["perf-review"],
+    findingsDir: tmpDir,
+    existingComments: [pass1.comment],
+  });
+  rmSync(tmpDir, { recursive: true, force: true });
+
+  assert.equal(pass3.ok, true);
+  assert.equal(pass3.exitCode, 0);
+  assert.equal(pass3.newFindings, 1, "only the single newly discovered finding is returned");
+  assert.equal(pass3.totalFindings, 2);
+  assert.ok(pass3.comment.includes("Large uncompressed texture asset"));
+  assert.ok(pass3.comment.includes("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+  // Does NOT re-emit the old finding description in the new comment items list
+  assert.ok(!pass3.comment.includes("Startup probe blocks boot banner"));
 });
 
 test("factory-review-trigger: CLI executes cleanly in dry-run mode with deterministic station selection", () => {

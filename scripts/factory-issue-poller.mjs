@@ -121,22 +121,41 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
         }
       }
 
-      // Format safe triage comment
-      const commentBody = formatTriageComment({
+      // Fetch existing comments on issue for fingerprint dedupe
+      let existingComments = [];
+      try {
+        const commentData = execFileSync("gh", [
+          "issue", "view", String(num),
+          "--json", "comments",
+          "--repo", repo,
+        ], { encoding: "utf8", env });
+        const parsed = JSON.parse(commentData);
+        existingComments = parsed.comments || [];
+      } catch (e) {
+        // Fallback: empty existing comments
+      }
+
+      // Format safe triage comment with fingerprint deduplication
+      const triageResult = formatTriageComment({
         stations,
         findingsDir: issueRunDir,
         commitSha: "HEAD",
+        existingComments,
       });
 
-      console.log(`[issue-poller] Posting safe triage comment to issue #${num}...`);
-      try {
-        execFileSync("gh", ["issue", "comment", String(num), "--body", commentBody, "--repo", repo], {
-          encoding: "utf8",
-          env,
-        });
-        console.log(`[issue-poller] Successfully posted triage comment to issue #${num}`);
-      } catch (e) {
-        console.error(`[issue-poller] Failed to post comment on issue #${num}: ${e.message}`);
+      if (triageResult.exitCode === 2 || triageResult.newFindings === 0) {
+        console.log(`[issue-poller] Issue #${num}: all ${triageResult.totalFindings} finding(s) already commented. Skipping duplicate comment.`);
+      } else if (triageResult.comment) {
+        console.log(`[issue-poller] Posting triage comment (${triageResult.newFindings} new findings) to issue #${num}...`);
+        try {
+          execFileSync("gh", ["issue", "comment", String(num), "--body", triageResult.comment, "--repo", repo], {
+            encoding: "utf8",
+            env,
+          });
+          console.log(`[issue-poller] Successfully posted triage comment to issue #${num}`);
+        } catch (e) {
+          console.error(`[issue-poller] Failed to post comment on issue #${num}: ${e.message}`);
+        }
       }
     } else {
       console.log(`[issue-poller] DRY-RUN: would scan stations [${stations.join(", ")}] and comment on issue #${num}`);
