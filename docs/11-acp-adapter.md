@@ -66,7 +66,7 @@ When `delegate_task` targets a configured agent entry (`core/harness-config.ts`,
 During ACP and Claude Code task execution, intermediate protocol events and console logs are surfaced live in the UI:
 - **Live Stage Progress**: Subprocess lifecycle updates (`initializing`, `session/new`, `session/prompt`, and tool calls) stream via `onProgress` to the task host and appear live on the Result Card (`#task-card`).
 - **Console Output Stream**: Subprocess `stderr` and tool call diagnostics stream into the live **Work Activity** panel (`#activity-log-panel`) and Result Card (`#task-card-console`).
-- **Credential & Secret Redaction (`lib/redact.mjs`)**: All streamed console output, progress notes, and task details pass through strict redaction that scrubs API keys (`sk-ant-...`, `AIza...`), Bearer/Basic auth headers, private keys, and ambient host environment tokens before reaching the client or audit log.
+- **Credential & Secret Redaction (`lib/redact.mjs`)**: All streamed console output, progress notes, and task details pass through strict redaction that scrubs API keys (`sk-ant-...`, `AIza...`), Bearer/Basic auth headers, private keys, and ambient host environment tokens before reaching the client or audit log. The terminal answer and any failure partial are scrubbed at the durable boundary itself (`settle()` in `lib/tasks.mjs`), and the CLI harness executor redacts child output at the producer before any consumer sees it (voicebox-beads-fcx9).
 - **Session History Integration**: When delegated tasks complete or fail, their outcomes are recorded in **Recent Turns** (`#session-log`).
 
 ---
