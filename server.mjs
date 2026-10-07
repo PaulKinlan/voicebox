@@ -2808,11 +2808,14 @@ async function execute(action) {
       const parsed = parseGitStatusOutput(statusOutput);
       const subrepositories = [];
       if (gitTargets.discoveredFromSandbox || gitTargets.subrepos.length > 1) {
-        for (const sub of gitTargets.subrepos) {
+        // voicebox-beads-3017: the probes are independent — run them in PARALLEL (Promise.all
+        // preserves the discovery order in the result array), each with its own catch so one
+        // broken subrepo drops only itself, exactly as the sequential loop did.
+        const probed = await Promise.all(gitTargets.subrepos.map(async (sub) => {
           try {
             const subOut = await runProjectGit(sub.path, ["status", "--porcelain=v1", "--branch", "-u"]);
             const subParsed = parseGitStatusOutput(subOut);
-            subrepositories.push({
+            return {
               dir: sub.dir,
               branch: subParsed.branch,
               upstream: subParsed.upstream,
@@ -2820,9 +2823,10 @@ async function execute(action) {
               behind: subParsed.behind,
               dirty: subParsed.dirty,
               files: subParsed.files,
-            });
-          } catch {}
-        }
+            };
+          } catch { return null; }
+        }));
+        for (const row of probed) if (row) subrepositories.push(row);
       }
       const entry = logAct({ kind: "git_status", target: target.label, tool: "turn" }, "allow", "git-inside", "ok", { branch: parsed.branch, filesCount: parsed.files.length, dirty: parsed.dirty }, action.turn ?? null);
       return {
@@ -2915,16 +2919,19 @@ async function execute(action) {
       }) : [];
       const subrepositories = [];
       if (gitTargets.discoveredFromSandbox || gitTargets.subrepos.length > 1) {
-        for (const sub of gitTargets.subrepos) {
+        // voicebox-beads-3017: same parallelization as git_status — independent probes in
+        // parallel, discovery order preserved by Promise.all, one broken subrepo drops only itself.
+        const probed = await Promise.all(gitTargets.subrepos.map(async (sub) => {
           try {
             const subLog = await runProjectGit(sub.path, ["log", `-n${limit}`, "--format=%H%x1f%an%x1f%aI%x1f%s"]);
             const subCommits = subLog ? subLog.split("\n").filter(Boolean).map((line) => {
               const [hash, author, date, message] = line.split("\x1f");
               return { hash, author, date, message, dir: sub.dir };
             }) : [];
-            subrepositories.push({ dir: sub.dir, commits: subCommits, count: subCommits.length });
-          } catch {}
-        }
+            return { dir: sub.dir, commits: subCommits, count: subCommits.length };
+          } catch { return null; }
+        }));
+        for (const row of probed) if (row) subrepositories.push(row);
       }
       const entry = logAct({ kind: "git_log", target: target.label, tool: "turn" }, "allow", "git-inside", "ok", { count: commits.length }, action.turn ?? null);
       return {
