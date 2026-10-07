@@ -275,11 +275,13 @@ test("page load with files produces zero POST /api/turn calls (no phantom turns)
   const chrome = spawn(chromeBin, [
     "--headless=new",
     "--no-sandbox",
+    "--no-zygote",
+    "--disable-crash-reporter",
     "--disable-gpu",
     "--remote-debugging-port=0",
     `--user-data-dir=${profile}`,
     "about:blank",
-  ], { stdio: ["ignore", "ignore", "pipe"] });
+  ], { detached: true, stdio: ["ignore", "ignore", "pipe"] });
 
   try {
     let cdpPort = "";
@@ -368,7 +370,12 @@ test("page load with files produces zero POST /api/turn calls (no phantom turns)
 
     ws.close();
   } finally {
-    chrome.kill("SIGKILL");
+    try {
+      process.kill(-chrome.pid, "SIGKILL");
+    } catch {
+      try { chrome.kill("SIGKILL"); } catch {}
+    }
+    try { rmSync(profile, { recursive: true, force: true }); } catch {}
     rmSync(f1, { force: true });
     rmSync(f2, { force: true });
   }

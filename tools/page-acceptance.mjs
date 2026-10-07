@@ -44,6 +44,7 @@ import { refusalVocabulary, identifiersInRenderedText, ID_PATTERNS, JARGON, READ
 import { driftBetween, extractWorkerRefs } from "./served-vs-disk.mjs";
 import { makeScratchDir, porcelainLines, dirtDelta, gitEnv } from "./tree-dirt.mjs";
 import path from "node:path";
+import os from "node:os";
 import { browserCandidates, findBrowserBinary } from "../lib/browser-binaries.mjs";
 import { fileURLToPath } from "node:url";
 import { startServer } from "../tests/lib/server.mjs";
@@ -106,9 +107,31 @@ if (!CHROME_BIN) {
 }
 
 const chromium = spawn(CHROME_BIN, [
-  "--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
+  "--headless=new", "--no-sandbox", "--no-zygote", "--disable-crash-reporter", "--disable-gpu", "--disable-dev-shm-usage",
   "--remote-debugging-port=0", `--user-data-dir=/tmp/vb-accept-profile-${process.pid}`, "about:blank",
-], { stdio: ["ignore", "pipe", "pipe"] });
+], { detached: true, stdio: ["ignore", "pipe", "pipe"] });
+
+function killChromium() {
+  if (!chromium || !chromium.pid) return;
+  try {
+    process.kill(-chromium.pid, "SIGKILL");
+  } catch {
+    try {
+      chromium.kill("SIGKILL");
+    } catch {}
+  }
+}
+process.on("exit", killChromium);
+
+for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+  process.once(sig, () => {
+    cleanupArtefacts();
+    killPrivate();
+    killChromium();
+    const sigNum = os.constants.signals[sig] ?? 0;
+    process.exit(128 + sigNum);
+  });
+}
 
 let wsUrl = "";
 // THE ENDPOINT IS AN EVENT (voicebox-beads-9mqc): this was a 200ms re-check of `wsUrl`, so every run
@@ -125,7 +148,7 @@ chromium.on("exit", () => endpointSettled());
 const endpointBound = setTimeout(() => endpointSettled(), 10000);
 await endpoint;
 clearTimeout(endpointBound);
-if (!wsUrl) { console.log("FAIL  harness could not start a browser — is chromium present?"); chromium.kill(); process.exit(1); }
+if (!wsUrl) { console.log("FAIL  harness could not start a browser — is chromium present?"); killChromium(); process.exit(1); }
 
 const ws = new WebSocket(wsUrl);
 let idc = 0;
@@ -785,7 +808,7 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
   cleanupArtefacts();
   killPrivate(); // first: the declaration is process memory — dead server, no pointer
   try { if (scratchRoot) rmSync(scratchRoot, { recursive: true, force: true }); } catch {} // F5: the dir too, not only its files
-  chromium.kill();
+  killChromium();
 }
 
 // ── the run leaves no trace (voicebox-beads-bp8) ───────────────────────────

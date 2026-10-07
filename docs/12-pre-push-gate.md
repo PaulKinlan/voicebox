@@ -169,10 +169,10 @@ During `npm run accept`, the acceptance harness verifies that read endpoints are
 
 ### Verification Suites
 ```bash
-node --test tests/pre-push.test.mjs tests/test-changed.test.mjs tests/served-vs-disk.test.mjs
+node --test tests/pre-push.test.mjs tests/test-changed.test.mjs tests/served-vs-disk.test.mjs tests/cdp-process-cleanup.test.mjs
 ```
 
-When verifying environment currency against the measured tree, `tools/page-acceptance.mjs` extracts static and query-bearing module and worker references (`new Worker(...)`, `new Worker(new URL(..., import.meta.url))`), naming any unwalkable dynamic templates in both clean and stale reports (`tools/served-vs-disk.mjs`, `tests/served-vs-disk.test.mjs`).
+When verifying environment currency against the measured tree, `tools/page-acceptance.mjs` extracts static and query-bearing module and worker references (`new Worker(...)`, `new Worker(new URL(..., import.meta.url))`), naming any unwalkable dynamic templates in both clean and stale reports (`tools/served-vs-disk.mjs`, `tests/served-vs-disk.test.mjs`). Browser processes driven by `tests/lib/cdp.mjs` and `tools/page-acceptance.mjs` run in isolated process groups (`detached: true`) with `--no-sandbox --no-zygote --disable-crash-reporter`. `--no-zygote` prevents Linux zygote/PID-namespace init stubs from dropping signals and surviving as unkillable zombies. Synchronous `process.on("exit")`, `SIGTERM`/`SIGINT`/`SIGHUP`, and `finally` handlers ensure all processes in the browser's process group are reaped on normal close, abandon, signal termination, or unexpected test runner crashes, while monitoring crashpad handlers exit when the browser connection closes (`tests/cdp-process-cleanup.test.mjs`).
 
 One case in `tests/pre-push.test.mjs` — the one that asserts a dropped front is named as a network
 cause — drives `tools/page-acceptance.mjs` end to end and therefore needs a REAL browser. Without one
