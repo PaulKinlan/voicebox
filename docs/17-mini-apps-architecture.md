@@ -26,11 +26,13 @@ An untrusted mini-app executes arbitrary HTML, CSS, and JavaScript. The sandbox 
 │ • Live Voice Session (Gemini Live / OpenAI Realtime)                   │
 │ • MiniAppRegistry: tracks active apps and exposes Web MCP tools        │
 │ • Pop-over container (#mini-app-container) & launcher (#sqeh-actions)  │
+│ • Verifies e.source === outer.contentWindow on bridge handshake        │
 │                                                                        │
 │ ┌────────────────────────────────────────────────────────────────────┐ │
 │ │ Outer Mediator Bridge (/mini-app-bridge.html, Same Origin)         │ │
 │ │                                                                    │ │
-│ │ • Verifies event.origin === window.location.origin on host messages│ │
+│ │ • Verifies event.origin === window.location.origin & window.parent │ │
+│ │ • Verifies event.source === inner.contentWindow on mini_app_ready  │ │
 │ │ • Validates Web MCP tool schemas (validateWebMcpTool)              │ │
 │ │ • Enforces 64 KiB output cap and 5,000ms execution timeout         │ │
 │ │ • Creates fresh MessageChannel on each inner load and transfers    │ │
@@ -41,6 +43,7 @@ An untrusted mini-app executes arbitrary HTML, CSS, and JavaScript. The sandbox 
 │ │ │ Attribute: sandbox="allow-scripts"                             │ │ │
 │ │ │ Origin: "null" (Opaque Sandbox Origin)                         │ │ │
 │ │ │                                                                │ │ │
+│ │ │ • Verifies event.source === window.parent on handshake         │ │ │
 │ │ │ • Registers tools via window.webMcp.registerTool(...)          │ │ │
 │ │ │ • Communicates exclusively over transferred MessagePort        │ │ │
 │ │ └────────────────────────────────────────────────────────────────┘ │ │
@@ -49,8 +52,8 @@ An untrusted mini-app executes arbitrary HTML, CSS, and JavaScript. The sandbox 
 ```
 
 ### Why Two Nested Iframes?
-- **Outer Mediator Bridge (`/mini-app-bridge.html`)**: Runs on the same origin as the Voicebox room so the host window can verify `event.origin === window.location.origin`.
-- **Inner Sandboxed Frame (`sandbox="allow-scripts"`)**: Runs in a unique opaque origin (`"null"`). On every load or reload of the inner document, the outer bridge creates a fresh `MessageChannel` and transfers `port2` into the inner frame, establishing an isolated point-to-point channel that other frames cannot intercept or spoof.
+- **Outer Mediator Bridge (`/mini-app-bridge.html`)**: Runs on the same origin as the Voicebox room so the host window can verify `event.origin === window.location.origin` and `e.source === outer.contentWindow` to prevent foreign frames from triggering spoofed premature handshakes. When receiving `mini_app_ready`, the bridge strictly verifies `event.source === inner.contentWindow` before transferring the MessagePort, preventing decoy frames from forcing port churn or intercepting handshake transfers (`voicebox-beads-221y`).
+- **Inner Sandboxed Frame (`sandbox="allow-scripts"`)**: Runs in a unique opaque origin (`"null"`). On every load or reload of the inner document, the outer bridge creates a fresh `MessageChannel` and transfers `port2` into the inner frame. The inner SDK strictly verifies `event.source === window.parent` before accepting `mini_app_handshake` and adopting the port, ensuring other frames in the document cannot hijack the app's tool execution channel; the inner document itself remains the trusted counterparty for tool execution.
 
 ---
 
@@ -98,6 +101,7 @@ window.webMcp.ready();
 | **Max Tool Output** | `64 KiB` (`65,536` bytes) | Outer Bridge | Refused with `"output over budget (max 64KB)"`. |
 | **Tool Execution Timeout** | `5,000ms` | Outer Bridge | Refused with `"tool execution timed out after 5000ms"`. |
 | **Tool Name Format** | `1–64` chars (`a-zA-Z0-9_-`) | `validateWebMcpTool()` | Refused with `invalid-tool-name`. |
+| **Handshake Source** | `inner.contentWindow` / `window.parent` | Outer Bridge & Inner SDK | Drops unverified postMessage frames from decoy frames. |
 
 ### Verification Suite
 ```bash

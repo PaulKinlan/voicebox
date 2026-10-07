@@ -66,6 +66,8 @@ const INJECTED_SDK = `<script>
   }
 
   window.addEventListener("message", function(event) {
+    // SECURITY HARDENING (voicebox-beads-221y): strictly verify event.source is window.parent
+    if (event.source !== window.parent) return;
     if (event.data && event.data.type === "mini_app_handshake" && event.ports && event.ports[0]) {
       bridgePort = event.ports[0];
       bridgePort.onmessage = async function(e) {
@@ -293,31 +295,35 @@ function injectSdkIntoHtml(rawHtml) {
 window.addEventListener("message", (event) => {
   // If message is from inner frame requesting handshake (origin is "null")
   if (event.data && event.data.type === "mini_app_ready") {
+    // SECURITY HARDENING (voicebox-beads-221y): strictly verify event.source is inner.contentWindow
+    if (!inner || !inner.contentWindow || event.source !== inner.contentWindow) {
+      console.warn("[mini-app-bridge] rejected mini_app_ready from unverified window source");
+      return;
+    }
     // The inner frame announces readiness EVERY time its document (re)loads, and a transferred port
     // is single-use: re-sending appChannel.port2 throws DataCloneError (Paul's console, 2026-09-27).
     // Use the channel minted at load ONCE; on a repeat handshake mint a fresh one and wire it to
     // the same mediator, so the inner always gets a live port (voicebox-beads-sdxn).
-    if (inner && inner.contentWindow) {
-      if (!appChannel || appChannelTransferred) {
-        appChannel = new MessageChannel();
-        appChannel.port1.onmessage = handleInnerMessage;
-      }
-      appChannelTransferred = true;
-      try {
-        inner.contentWindow.postMessage(
-          { type: "mini_app_handshake", appId: currentAppId },
-          "*",
-          [appChannel.port2],
-        );
-      } catch (err) {
-        postToHost({ type: "mini_app_bridge_error", appId: currentAppId, ok: false, error: `handshake failed: ${err?.message ?? String(err)}` });
-      }
+    if (!appChannel || appChannelTransferred) {
+      appChannel = new MessageChannel();
+      appChannel.port1.onmessage = handleInnerMessage;
+    }
+    appChannelTransferred = true;
+    try {
+      inner.contentWindow.postMessage(
+        { type: "mini_app_handshake", appId: currentAppId },
+        "*",
+        [appChannel.port2],
+      );
+    } catch (err) {
+      postToHost({ type: "mini_app_bridge_error", appId: currentAppId, ok: false, error: `handshake failed: ${err?.message ?? String(err)}` });
     }
     return;
   }
 
-  // Otherwise, message must be from parent window: enforce same-origin
+  // Otherwise, message must be from parent window: enforce same-origin and parent source (voicebox-beads-221y)
   if (event.origin !== window.location.origin) return;
+  if (event.source !== window.parent) return;
 
   const data = event.data;
   if (!data) return;
