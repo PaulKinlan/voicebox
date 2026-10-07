@@ -1185,11 +1185,18 @@ function fileIssues(entries, { repo, target }) {
   const labels = knownLabels(repo);
   let published = 0;
   let duplicates = 0;
+  let skipped = 0;
   // A refused publication is counted, not swallowed. `gh issue create` failing used to `continue`
   // and leave the run reporting success, so a CI job could pass while a finding was never filed.
   let failed = 0;
   for (const entry of entries) {
-    if (entry.verdict.action !== "issue") continue;
+    if (entry.verdict.action !== "issue") {
+      // Counted, not swallowed: a report whose findings all skip publishes nothing and exits 2, and a
+      // caller that reads exit 2 as success would never see the findings were dropped. In a mixed run
+      // the receipt must say so too.
+      if (entry.verdict.action === "skip") skipped += 1;
+      continue;
+    }
     const { finding } = entry;
     const duplicate = isIssueDuplicate(finding, existing);
     if (duplicate) {
@@ -1212,7 +1219,7 @@ function fileIssues(entries, { repo, target }) {
     process.stdout.write(`published: ${finding.fingerprint.slice(0, 16)} -> ${url}${chosen.length ? ` [${chosen.join(",")}]` : ""}\n`);
   }
   process.stdout.write(
-    `issues: ${published} published, ${duplicates} duplicate${failed > 0 ? `, ${failed} FAILED` : ""}\n`,
+    `issues: ${published} published, ${duplicates} duplicate${skipped > 0 ? `, ${skipped} skipped` : ""}${failed > 0 ? `, ${failed} FAILED` : ""}\n`,
   );
   // An incomplete publication is a failure, never "nothing to do": exit 2 would read as a clean run.
   if (failed > 0) return 1;

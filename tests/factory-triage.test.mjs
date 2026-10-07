@@ -3022,6 +3022,29 @@ test("ALL MEANS ALL end to end: the default path files low/info issues, and crea
   }
 });
 
+test("THE RECEIPT counts skipped findings, so a mixed run cannot silently drop one (round 11)", () => {
+  // A caller that rewrites the report artifact makes a finding's recomputed fingerprint disagree with
+  // the prefix it declares, and the publisher then SKIPS it. In a mixed run the receipt used to say only
+  // "N published", which hides the skipped finding. Here: one publishable finding plus one whose declared
+  // fingerprint was corrupted -> "1 published, 1 skipped", exit 0.
+  const base = fixture("voicebox-modern-web-delta.md");
+  const other = fixture("voicebox-perf-review-delta.md");
+  const otherFinding = other.slice(other.indexOf("### ["));
+  const merged = `${base.replace(/\|\s*\*\*1\*\*\s*\|\s*\*\*0\*\*\s*\|/, "| **2** | **0** |")}\n${otherFinding.replace(/\*\*Fingerprint\*\*: `[0-9a-f]{4}/, "**Fingerprint**: `dead")}`;
+
+  const res = runCli({
+    args: ["--report", "voicebox-modern-web-delta.md", "--file-issues", "--repo", "owner/voicebox"],
+    reports: { "voicebox-modern-web-delta.md": merged },
+  });
+  try {
+    assert.equal(res.status, 0, `the publishable finding should still publish: ${res.stdout}\n${res.stderr}`);
+    assert.match(res.stdout, /^issues: 1 published, 0 duplicate, 1 skipped$/m, `the receipt hid the skipped finding: ${res.stdout}`);
+    assert.equal(res.ghCalls.filter((c) => c.startsWith("issue create")).length, 1, "exactly one issue should have been created");
+  } finally {
+    rmSync(res.box, { recursive: true, force: true });
+  }
+});
+
 test("declaredActionableCount reads the report's own summary table, and says null when there is none", () => {
   assert.equal(declaredActionableCount(fixture("voicebox-qa-station-delta.md")), 1);
   assert.equal(declaredActionableCount("no table here"), null);

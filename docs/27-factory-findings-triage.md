@@ -244,6 +244,11 @@ Flags: `--report-dir <dir>`, `--repo <owner/name>`, `--target <path>`, `--agent 
 
 Exit codes are part of the contract: `0` a plan was produced / an issue published / a bead created; `1` a usage or policy refusal, **or a write that failed** — a publication where any
 `gh issue create` failed exits `1` and says how many, because a partial publication reported as
+The publication receipt is part of that contract: one `published: <fingerprint> -> <issue URL>` line per
+filed issue, one `duplicate: ... skipped` line per issue that already tracked the finding, and a closing
+`issues: N published, M duplicate[, K skipped][, J FAILED]` — the skip count is there because a caller that
+rewrites the report artifact can make every recomputed fingerprint disagree with the declared one, and a
+run that files nothing exits `2`, which must not be read as "success" while findings were skipped.
 success is how a CI job passes while a finding was never filed; `2` nothing actionable (nothing in band,
 or every finding already published). A report that declares more new/regressed findings than it contains
 is NOT `2`: it exits `1` and publishes nothing, because a killed or timed-out station run is
