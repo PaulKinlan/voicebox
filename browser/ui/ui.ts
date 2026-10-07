@@ -28,7 +28,7 @@ type Reply = { id: number; ok: boolean } & Record<string, any>;
 // live realm holds the lock named for its writer identity; a clone finds it taken and takes a
 // suffixed name; a RELOAD's dead realm has released it, so the reloaded tab reuses the same
 // identity and keeps writing the same file. Storage that throws degrades to a per-boot lineage,
-// which stays correct (unique) at the cost of a file per boot.
+// which stays correct (unique up to the nonce space (8 hex)) at the cost of a file per boot.
 let lineage;
 try {
   lineage = sessionStorage.getItem("voicebox-instance");
@@ -46,7 +46,7 @@ try {
 // next suffix), and "unknown" (no Web Locks, or the request REJECTED — e.g. a not-fully-active
 // document). "unknown" must neither claim the name (a clone would collide) nor keep looping (an
 // unbounded suffix loop of settled microtasks starves the renderer — measured: the tab hangs):
-// it degrades to a nonce identity, unique per realm at a file per boot.
+// it degrades to a nonce identity, unique up to the nonce space (4 hex), at a file per boot.
 type Claim = "held" | "taken" | "unknown";
 function tryClaim(lockName: string): Promise<Claim> {
   if (!navigator.locks?.request) return Promise.resolve("unknown");

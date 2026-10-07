@@ -169,8 +169,10 @@ During `npm run accept`, the acceptance harness verifies that read endpoints are
 
 ### Verification Suites
 ```bash
-node --test tests/pre-push.test.mjs tests/test-changed.test.mjs
+node --test tests/pre-push.test.mjs tests/test-changed.test.mjs tests/served-vs-disk.test.mjs
 ```
+
+When verifying environment currency against the measured tree, `tools/page-acceptance.mjs` extracts static and query-bearing module and worker references (`new Worker(...)`, `new Worker(new URL(..., import.meta.url))`), naming any unwalkable dynamic templates in both clean and stale reports (`tools/served-vs-disk.mjs`, `tests/served-vs-disk.test.mjs`).
 
 One case in `tests/pre-push.test.mjs` — the one that asserts a dropped front is named as a network
 cause — drives `tools/page-acceptance.mjs` end to end and therefore needs a REAL browser. Without one

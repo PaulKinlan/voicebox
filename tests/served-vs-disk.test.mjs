@@ -14,7 +14,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { stripTypeScriptTypes } from "node:module";
-import { driftBetween, rewrittenByTransform, fallbackCompiledDrift } from "../tools/served-vs-disk.mjs";
+import { driftBetween, rewrittenByTransform, fallbackCompiledDrift, extractWorkerRefs } from "../tools/served-vs-disk.mjs";
 
 test("the drift the old marker could not see: a SHORT line changed, the longest line untouched", () => {
   const disk = ["// a very long shared comment that both revisions contain, so it makes a useless marker", "const ready = true;", "export const x = 1;"].join("\n");
@@ -129,4 +129,29 @@ test("the comments-and-strings rule is the FALLBACK for a runtime that cannot st
   const changed = fallbackCompiledDrift(disk, served.replace("this machine: omarchy", "this machine: elsewhere"), { ref: "ui.ts" });
   assert.ok(changed, "and it still catches a changed user-visible string");
   assert.match(changed, /not visible here/i, "with its limit stated in the failure");
+});
+
+test("extractWorkerRefs: extracts static and query-bearing worker URLs and names unwalkable templates (negative control)", () => {
+  const source = `
+    const w1 = new Worker("/browser/worker.ts", { type: "module" });
+    const w2 = new SharedWorker('./shared-worker.js');
+    const w3 = new Worker(\`/browser/worker.ts?instance=\${lineage}\`, { type: "module" });
+    const w4 = new Worker(new URL("/browser/url-worker.ts", import.meta.url));
+    const w5 = new Worker(new URL(\`./url-worker.ts?instance=\${lineage}\`, import.meta.url));
+    const w6 = new Worker(\`/browser/\${dynamicWorker}.ts\`);
+    const w7 = new Worker(new URL(\`./\${dynamicUrlWorker}.ts\`, import.meta.url));
+  `;
+
+  const { refs, unwalkable } = extractWorkerRefs(source, "browser/ui/ui.ts");
+  assert.deepEqual(refs, [
+    "browser/worker.ts",
+    "browser/ui/shared-worker.js",
+    "browser/worker.ts",
+    "browser/url-worker.ts",
+    "browser/ui/url-worker.ts",
+  ]);
+  assert.deepEqual(unwalkable, [
+    "/browser/${dynamicWorker}.ts",
+    "./${dynamicUrlWorker}.ts",
+  ]);
 });
