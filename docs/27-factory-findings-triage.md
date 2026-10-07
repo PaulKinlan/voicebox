@@ -1,162 +1,212 @@
-# Factory Findings Triage: Private File Sink → Sanitised Beads
+# Factory Findings Triage: Private Report → Public Issue → Reviewed Bead
 
 `voicebox-beads-h1u0` (child of `voicebox-beads-jyj1`). Implementation: `scripts/factory-triage.mjs`.
 Tests: `tests/factory-triage.test.mjs`. Fixtures: `tests/fixtures/factory-reports/`.
 
-## 1. The gap this closes
+## 1. What this replaces, and why
 
 The factory writes its full delta report with `--sink file`. Every other sink is a publication
-boundary: the factory's embargo module (`embargo.py` in the factory repository) holds
-`PRIVATE_SINKS = {"file"}`, and on a public repository the
-embargo withholds `critical` and `high` findings from a tracker no matter how harmless they look.
-Voicebox is public, so the consequence is measured rather than theoretical — `docs/25-factory-agent-proposal.md`
-records **zero publishable bead output** from the first two runs, because the only findings that
-survived were the ones nobody needed a tracker for.
+boundary: the factory's embargo module holds `PRIVATE_SINKS = {"file"}`, and on a public repository it
+withholds `critical` and `high` findings from a tracker. `docs/25-factory-agent-proposal.md` measured
+the result — **zero publishable bead output**, with the only interesting findings vanishing into a
+private artefact.
 
-`scripts/factory-triage.mjs` is the missing bridge. It reads the private report — the one place a
-high-severity finding actually exists — and turns it into beads, with the disclosure decision made
-explicitly instead of being a side effect of which sink was configured.
+The first design here kept that embargo for the top two bands: sensitive `critical`/`high` went to a
+private escalation log and never to the board. **That is no longer the decision.** By
+`voicebox-beads-h1u0`, this repository publishes **every severity** as a public issue, and the
+protection is the published view rather than the withholding. Two things follow, and they are the
+spine of this document:
 
-## 2. The one rule
+- a finding becomes a **public issue**, never a bead, and
+- a bead exists only when a reviewer runs the explicit `--promote` command afterwards.
 
-**The unredacted report never leaves the private directory, and a bead body is built only from the
-published view.**
+The original "never raw secret/PoC" rule survives the change, enforced by the sanitiser instead of by
+an embargo: a security station's raw candidate is never published, but the finding is never withheld
+either, and nothing is dropped silently — every finding the report contains appears in the plan with
+the reason it was or was not published.
 
-Concretely: the report path is refused if it is inside the repository working tree (including
-through a symlink), a credential-class station's snippet is withheld wholesale rather than masked,
-every other published string is masked against the same credential shapes the factory masks, and a
-`critical` finding — or any finding from a station that is security-sensitive by construction —
-becomes a private escalation instead of a bead.
+## 2. The pipeline
+
+```
+factory station ──(--sink file)──> private report  ──> scripts/factory-triage.mjs
+                                                          │
+                              ┌───────────────────────────┴───────────────────────────┐
+                              │                                                       │
+                     --file-issues                                              --promote <n>
+                              │                                              --reviewed-by <actor>
+                     public GitHub issue                                            │
+                     (triage record in the body,                                     bead
+                      fingerprint marker, labels)                          (priority, external-ref,
+                                                                            BLOCKED if the issue
+                                                                            is marked human-review)
+```
+
+Nothing creates a bead from a report. The publisher has no such option, which is why the safety
+property is testable: a scan run with both `gh` and `bd` stubs never invokes `bd`.
 
 ## 3. Input contract
 
 | Input | Rule |
 |---|---|
-| Report location | `$VOICEBOX_FACTORY_PRIVATE_DIR`, else `~/.voicebox/factory-reports`. A path inside the repository is refused with exit 1. |
-| Report naming | `<target>-<agent>-delta.md`; the station is read as the longest known station suffix, so `voicebox-docs-drift-delta.md` is station `docs-drift` and not `drift`. |
-| Station names | The set `factory list` reports. A report for an unknown station is refused (or named explicitly with `--agent`); a station name is never guessed. |
-| Report form | The full delta report. A reduced (step-summary) report is accepted but its findings cannot have their identity recomputed, so they are deferred privately rather than filed. |
+| Report location | `$VOICEBOX_FACTORY_PRIVATE_DIR`, else `~/.voicebox/factory-reports`. A path inside the repository is refused with exit 1, including through a symlink. |
+| Report naming | `<target>-<agent>-delta.md`. The station is the longest known station suffix, so `voicebox-docs-drift-delta.md` is `docs-drift` and never `drift`. |
+| Station names | The set `factory list` reports (22 stations as of 2026-10-07). An unknown station is refused unless `--agent` names it explicitly. |
+| Report form | The full delta report. A reduced (step-summary) form has no snippet, so its identity cannot be recomputed: its findings are not published, and the plan says so. |
+| Repository | `--repo <owner/name>` or `$VOICEBOX_FACTORY_REPO`. Issues are published to a named repository; there is no implicit default. |
 
-The station name is not decoration: it selects the disclosure class. The factory's own
-`IDENTITY_CRITICAL_AGENTS` are mirrored here — `secret-scan`, `vuln-discovery`, `vuln-verify`,
-`vuln-triage`, `threat-model` — because a scanner candidate *is* a credential and a vulnerability
-agent's candidate *is* an attack surface; a triage model that understates one does not authorise
-its publication.
+Why the private path matters at all, given everything is published: the report is **unredacted**. It
+holds the credential value, the raw payload and the private evidence trail. The refusal is what stops
+one `git add -A` from committing it. Publishing the *finding* is the decision; publishing the *raw
+value* is never allowed.
 
-## 4. Severity mapping
+## 4. What gets published
 
-The script does not trust the label on the badge. It follows the factory's routing rules:
-
-- An **identity-critical** station routes as `critical` whatever the badge says. The factory
-  usually prints this as `[MEDIUM · routed critical]`; the backstop is enforced here too, so a
-  plain `[MEDIUM]` on `secret-scan` still routes as critical.
-- A badge the vocabulary does not recognise — `[SEVERE]`, `[5]`, or a missing badge — is
-  `critical`. The factory's old default was `medium`, which is exactly the band public sinks
-  publish, so an absent field used to authorise publication.
-
-| Effective severity | Station class | Action | Priority |
+| Effective severity | Station class | Published? | Bead priority on promotion |
 |---|---|---|---|
-| `critical` | any | **Defer** — private escalation, no public bead | — |
-| `high` | identity-critical | **Defer** — private escalation, no public bead | — |
-| `high` | any other | Public bead, sanitised | P1 |
-| `medium` | any | Public bead, sanitised | P2 |
-| `low`, `info` | any | Skipped by default (mirrors the factory's board band); `--include-low` files at P3 | P3 |
+| `critical` | any | Yes — deliberately, with the raw candidate withheld for identity-critical stations | P1 |
+| `high` | any | Yes — deliberately (the embargo would withhold it) | P1 |
+| `medium` | any | Yes | P2 |
+| `low`, `info` | any | Only with `--include-low` | P3 |
+| any | any | Functionality change → published, marked `human-review`, and the promoted bead is BLOCKED | P1–P2 by severity |
 
-Two deliberate decisions, stated so a reviewer can disagree with them rather than discover them:
+Severity is routed, not merely displayed:
 
-1. **A non-sensitive `high` finding is filed publicly.** The embargo protects *detail*, and the
-   sanitised body carries no exploit or credential — a startup probe that blocks the boot banner
-   is not a disclosure. Deferring every `high` is what produced the zero yield documented in
-   `docs/25-factory-agent-proposal.md`.
-2. **`low` and `info` are below the board band by default.** The factory's own `beads` sink skips
-   them; a board that files them is a board that stops being read.
+- An **identity-critical** station — `secret-scan`, `vuln-discovery`, `vuln-verify`, `vuln-triage`,
+  `threat-model` — routes as `critical` whatever the badge says. A scanner candidate *is* a
+  credential and a vulnerability agent's candidate *is* an attack surface, so the label a triage model
+  chose cannot lower the band. The issue body shows the label the station used beside the band it
+  routed as, because a reviewer needs to see that difference.
+- A badge the vocabulary does not recognise — `[SEVERE]`, `[5]`, absent — is `critical`. The factory's
+  old default was `medium`, the band that publishes, so an absent field used to authorise publication.
+- A finding whose remediation changes behaviour is published with the `human-review` marker, a
+  `[human-review]` title prefix and an explicit decision to record; promoting it creates a **BLOCKED**
+  bead with the `human-review` label and the decision in a comment.
 
-**A functionality change is never filed as work to do.** The script is deterministic, so it cannot
-know whether a behaviour change is wanted: it flags the signals it can detect (a remediation that
-reads as rename/refactor/migrate/change-the-API), accepts the analyst's `--functionality-change`
-confirmation, and files that finding **BLOCKED** with a `human-review` label, a recorded reason and
-the single decision a human has to make. No findings are auto-fixed, ever — the script cannot edit
-code at all (section 7).
+## 5. What is never published, and what is never dropped
 
-## 5. Identity and idempotency
+**Never published:** raw credential values, and the raw candidate of any identity-critical station.
+Every other string is masked with the same credential shapes the factory masks, and absolute home
+paths and the private report path are elided — **on the title as well as the body**, because the
+factory's own sink learned that lesson and a credential recognised in the body reached the tracker
+through the title.
 
-A finding's identity is its fingerprint, recomputed here exactly as the factory computes it:
-`sha256(agent:rule_id:normalize_path(path):normalize_text(snippet))`. The report prints only the
-first 16 hex characters, so the recomputed full hash is checked against that prefix.
+Two layers decide what "a credential finding" means, mirroring the factory: the station (`secret-scan`)
+and the rule id (any rule containing `key`, `secret`, `token`, `credential`, `password` or `private`).
+Either one fires, because a station that is not the credential scanner can still report a matched key.
+For those findings the pipeline publishes **derived text only** — the rule, the location, the severity,
+the state and a generic rotate-and-remove remediation — and the triage model's own title, description
+and remediation are dropped. What is dropped is the untrusted *prose*, never the finding: the severity,
+the identity, the rule and the location all still publish, so a reader always sees that a critical
+credential finding exists and where. That is deliberate, not fastidious: prose cannot be checked for an echo of a
+value whose shape is unknown, so no regex would have caught it. The value and the model's notes exist only in the local report — and that
+report is a **working file, not a durable store**: the published issue is the durable record, and a
+matched credential has to be rotated rather than archived.
 
-- **Verified** → the bead carries `--external-ref factory:<sha256>` and a `Fingerprint:` line, the
-  same convention the factory's own `beads` sink writes. A bead filed here and a bead filed by the
-  factory's sink therefore dedupe against each other instead of duplicating.
-- **Mismatch** → the finding is deferred, never filed. An identity that cannot be recomputed is
-  not an identity to file work under.
-- **Unverifiable** (a reduced report with no snippet) → deferred.
+**Never dropped silently:** every finding parsed from the report appears in the plan, with the reason
+it was published or not (`false positive`, `unchanged`, `below band`, `identity unverifiable`,
+`identity mismatch`). A skip is a recorded decision, not a discard.
 
-Dedupe reads the whole board (`bd list --all --json`), because the store's receipts only cover its
-own store: an open bead tracking the fingerprint wins; a closed one wins too unless the finding
-regressed. If the board cannot be read, the run files **nothing** and says so — a duplicate bead is
-worse than no bead.
+## 6. Publication is deliberately declared on the artefact
 
-## 6. What it never does
+Every issue carries `PUBLICATION_DECLARATION` in a collapsed section: that the publisher reads an
+unredacted private report, that the repository's visibility is **public and declared deliberately**,
+that it **deliberately bypasses** the factory's public-sink embargo for its own findings and is *not*
+claiming a private target, why, and that no bead was created from the scan. A deliberate bypass that
+is not stated on the thing it affects is indistinguishable from a mistake.
 
-- No code, workflow or configuration edits; no auto-fix. The only writes are `bd create`,
-  `bd update --status blocked`, `bd comment`, and the private escalation log.
-- No network call and no model call. Triage is deterministic and inspectable.
-- No write into the repository working tree, in either `--report` or `--apply` mode.
+## 7. Identity and dedupe
 
-## 7. Usage
+A finding's identity is its fingerprint, recomputed exactly as the factory computes it:
+`sha256(agent:rule_id:normalize_path(path):normalize_text(snippet))`. The report prints only the first
+16 hex characters, so the recomputed value is checked against that prefix before anything is
+published.
+
+The issue body carries the fingerprint in an HTML marker
+(`<!-- factory-fingerprint: … -->`), and dedupe works off those markers:
+
+- an **open** issue with the fingerprint wins, always;
+- a **closed** issue wins too, unless the finding has regressed.
+
+If the issue list cannot be read, the run publishes **nothing** and says so. A duplicate issue is
+worse than no issue: it splits the triage record in two. The same rule applies to promotion, which
+dedupes against beads already carrying the fingerprint (either as `external-ref factory:<sha256>` or
+as a `Fingerprint:` line) so a finding cannot be promoted twice, and refuses outright when the issue
+itself already carries a `<!-- factory-promoted: <id> -->` marker.
+
+## 8. Promotion creates the bead, and only a human starts it
 
 ```text
-node scripts/factory-triage.mjs --report <path>        # plan only, nothing is filed
-node scripts/factory-triage.mjs --report-dir <dir>     # every *-delta.md in a private directory
-node scripts/factory-triage.mjs --report <path> --apply
+node scripts/factory-triage.mjs --review <issue-number> --reviewed-by <actor> [--notes "..."]
+node scripts/factory-triage.mjs --promote <issue-number> [--reviewed-by <actor>] [--apply]
 ```
 
-| Flag | Meaning |
-|---|---|
-| `--agent <name>` | Override the station when the filename does not carry it |
-| `--apply` | File the beads (default is a plan on stdout) |
-| `--include-low` | File `low`/`info` at P3 instead of skipping them |
-| `--functionality-change <rule\|agent>` | The analyst confirms a behaviour change → BLOCKED + `human-review` |
-| `--json` | Machine-readable plan |
-| `--private-root <dir>`, `--escalation-log <path>` | Override the private locations |
+Review evidence lives **on the issue**: `--review` posts a comment carrying
+`<!-- factory-review: <actor> -->`, and `--promote` refuses an issue that has no such record. A name
+typed at promotion time proves nothing about whether a review happened, so `--reviewed-by` at
+promotion is only a cross-check that must match the recorded reviewer, not the evidence itself.
+Promotion also refuses an issue marked `<!-- factory-self-test -->` (a publisher self-test is not
+work) and an issue that is already closed, unless `--allow-closed` says otherwise.
 
-Exit codes: `0` a plan was produced or beads were filed · `1` usage or policy refusal · `2` nothing
-actionable (no findings in band, or everything already tracked).
+The bead body names the reviewer and the issue URL, and a comment carrying the `factory-promoted`
+marker is posted back on the issue. The
+bead deliberately does **not** copy the finding text — it points at the issue, so there is one place
+to correct. A functionality-changing issue produces a bead created `BLOCKED` with the `human-review`
+label and a comment naming the single decision that unblocks it.
 
-`--apply` writes deferred findings as JSONL to `<private-root>/escalations.jsonl` (mode `0600`).
-That log keeps the evidence a responder needs — the value, the path, the remediation — because it
-is the one place a withheld finding still exists in a usable form. Escalation to the hub is the
-operator's action on that file; the script never transmits it.
+## 9. What it never does
 
-## 8. Verification
+- No code, workflow or configuration edits, and no auto-fix. The only writes are `gh issue create`,
+  `gh issue comment`, and (on promotion) `bd create`, `bd update`, `bd comment`.
+- No label creation, and no other repository-configuration change. Labels are requested only from the
+  set the repository already has; the machine-readable record is the body markers, so a missing label
+  costs nothing.
+- No network call beyond `gh`, and no model call. Triage is deterministic and inspectable.
+- No write into the repository working tree, in any mode.
 
-- **Format fidelity is not assumed.** The fixtures in `tests/fixtures/factory-reports/` are
-  produced by the factory's **own renderer** (the factory's `_render_delta_report`), so the
-  parser is measured against the real format, including the reduced form in which the rule id
-  lives in the heading and no `Fingerprint:` line exists. Regeneration is documented in
-  `tests/fixtures/factory-reports/README.md`.
-- **The fingerprint mirror is cross-checked**, not just asserted: the same inputs are hashed by
-  the factory's `compute_fingerprint` and by this script, and the script's value must match the
-  prefix the report printed.
-- **36 tests** cover the policy, and **9 mutations** were run against the script — dropping the
-  identity elevation, the fail-closed severity, the masking, the in-repo refusal, the station
-  resolution, the dedupe, the critical deferral, the identity reason and the low-band skip — each
-  one turning the suite red. Three mutants stayed green on the first pass, and each exposed a real
-  weakness: one **vacuous test** (it asserted a value the test itself computed), one test that
-  leaned on the factory's routed badge instead of exercising this script's own elevation, and one
-  sub-branch in the routing code that was **dead** — an identity-critical station already routes as
-  `critical`, so the separate identity check could never fire and was collapsed into a single
-  decision with the identity kept in the reason a human reads. That is three defects found by
-  mutation testing that 36 green tests had not found.
-- **Not yet run end-to-end against a live station.** No factory station was executed with a real
-  model for this change: that is the wiring bead (`voicebox-beads-cbxo`), and the run cost belongs
-  to whoever arms the schedule. What is verified here is the parse, the policy, the sanitisation,
-  the identity chain and the dispatch, against renderer-produced reports and a stub `bd`.
+## 10. CLI
 
-## 9. Related
+```text
+node scripts/factory-triage.mjs --report <path> [--json]            # plan only, writes nothing
+node scripts/factory-triage.mjs --report <path> --file-issues       # publish (requires --repo)
+node scripts/factory-triage.mjs --promote <n> --reviewed-by <who> [--apply]
+```
 
-- [`25-factory-agent-proposal.md`](25-factory-agent-proposal.md) — the defect-class evidence and
-  the measured yield that motivates this policy.
-- `scripts/factory-triage.mjs` — the implementation, whose comments name the upstream rule each
-  mirror comes from.
-- `tests/factory-triage.test.mjs` — the policy tests and the mutation-proven boundaries.
+Flags: `--report-dir <dir>`, `--repo <owner/name>`, `--target <path>`, `--agent <name>`,
+`--include-low`, `--functionality-change <rule|agent>`, `--json`, `--private-root <dir>`,
+`--review`, `--notes`, `--self-test`, `--allow-closed`.
+
+Exit codes: `0` a plan was produced, an issue was published, or a bead was created · `1` usage or
+policy refusal (in-repo report, unreadable file, unreadable issue list or board) · `2` nothing
+actionable (no findings in band, or everything already published).
+
+## 11. Verification
+
+- **Format fidelity is not assumed.** The fixtures are produced by the factory's **own renderer**, one
+  per station, including the reduced form in which the rule id lives in the heading. Regeneration is
+  documented in `tests/fixtures/factory-reports/README.md`.
+- **The fingerprint mirror is cross-checked** against the factory's Python implementation for the real
+  fixture inputs, not merely asserted.
+- **The embargo bypass is tested at its sharp edge**: a seeded `high` finding must produce an issue,
+  and an identity-critical station must be published with its raw candidate withheld everywhere in the
+  published text.
+- **The reviewed findings are folded with a red-on-old/green-on-new check.** An independent review of
+  the previous revision requested changes on three points (a home path leaking through the issue
+  title, credential-rule findings not being withheld, and a repository-internal symlink defeating the
+  in-repo refusal); each was reproduced against the old code, fixed, and re-driven.
+- **Mutation testing** is the bar for the suite itself: for each policy rule, breaking that rule must
+  turn the suite red. The previous revision's suite had three mutants stay green, which is how a
+  vacuous severity test and a dead routing branch were found. On this revision **11 mutations** were
+  run — the review gate, the self-test and closed-issue guards, the reviewer cross-check, the derived
+  text, the credential rule-hint trigger, the plan's title sanitisation, the lexical symlink check,
+  the issue dedupe, `--silent`, and the publication declaration — and every one turned the suite red
+  over 58 passing tests.
+- **Not verified: a live station run, and real issue publication.** The suite drives stub `gh`/`bd`
+  binaries, and the CI wiring belongs to `voicebox-beads-cbxo`. The first real publication is a
+  controlled self-test recorded on `voicebox-beads-h1u0`.
+
+## 12. Related
+
+- [`25-factory-agent-proposal.md`](25-factory-agent-proposal.md) — the defect-class evidence and the
+  measured yield this policy responds to.
+- `scripts/factory-triage.mjs` — the implementation; each mirrored constant names its upstream rule.
+- `tests/factory-triage.test.mjs` — the policy tests, including the no-bead-from-a-scan property.

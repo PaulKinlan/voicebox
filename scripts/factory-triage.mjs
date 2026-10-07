@@ -1,43 +1,48 @@
 #!/usr/bin/env node
 /**
- * Factory findings triage (voicebox-beads-h1u0).
+ * Factory findings publisher (voicebox-beads-h1u0).
  *
- * The Software Factory writes its *full, unredacted* delta report with `--sink file`, because
- * `file` is the only sink that is not a publication boundary (`lib/embargo.py`:
- * `PRIVATE_SINKS = {"file"}`). Voicebox is a public repository, so every other sink — including
- * the factory's own `beads` sink — is a disclosure boundary that withholds `critical` and `high`
- * findings regardless of how harmless they look.
+ * The Software Factory writes its full, unredacted delta report with `--sink file`, because `file` is
+ * the only sink that is not a publication boundary. Voicebox is a public repository, so the factory's
+ * configuration withholds `critical` and `high` findings from a tracker — and `docs/25-factory-agent-proposal.md`
+ * measured what that produced: zero publishable bead output, with the only interesting findings
+ * disappearing into a private artefact.
  *
- * That left an operational gap behind `voicebox-beads-algv`: the private report is the only place
- * a high-severity finding exists, and nothing carried it to the project board. This script is that
- * bridge, and it is deliberately narrow:
+ * By decision recorded in `voicebox-beads-h1u0` this repository deliberately bypasses that embargo
+ * for its own findings: every severity is published as a PUBLIC issue, the triage record is written
+ * on the issue, and no bead is created from a scan at all. A bead exists only when a reviewer runs
+ * the explicit `--promote <issue>` command afterwards.
  *
- *   1. It reads ONE private report (or a private directory of them). A report path inside the
- *      repository working tree is REFUSED, so the unredacted text cannot be committed.
- *   2. It recomputes each finding's fingerprint exactly as the factory does and refuses to file
- *      one it cannot recompute — an unverified identity is a deferred finding, not a guess.
- *   3. It files a bead only for findings the disclosure policy allows, only through the
- *      published (sanitised) view, and never with a raw credential or attack payload in the body.
- *   4. It reuses the factory's own bead convention (`external-ref factory:<sha256>` plus a
- *      `Fingerprint:` line), so a bead filed here and a bead filed by the factory's `beads` sink
- *      dedupe against each other instead of duplicating.
- *   5. It never edits code. A finding whose remediation changes behaviour is filed BLOCKED with a
- *      `human-review` label and the single decision a human has to make.
+ * What keeps that safe is not the embargo, it is the sanitiser:
+ *
+ *   1. It reads ONE private report (or a private directory of them). A path inside the repository is
+ *      REFUSED, so the unredacted text cannot be committed by accident.
+ *   2. It recomputes each finding's fingerprint exactly as the factory does, refuses to publish one
+ *      it cannot recompute (an unverified identity defeats dedupe), and never publishes the same
+ *      finding twice.
+ *   3. It publishes only the sanitised view: the factory's own credential shapes are masked, an
+ *      identity-critical station's raw candidate is withheld entirely, and home/private paths are
+ *      elided. No raw credential value reaches issue text.
+ *   4. Promotion is a review decision with a name attached: `--promote <n> --reviewed-by <actor>`
+ *      is the only code path that creates a bead, it dedupes against beads already carrying the
+ *      fingerprint, and a functionality-changing finding becomes a BLOCKED bead with a
+ *      `human-review` label.
+ *   5. It never edits code. Nothing is auto-fixed; the only writes are `gh issue create`,
+ *      `gh issue comment` and (on promotion) `bd create`/`bd update`.
  *
  * The rules this script enforces are mirrored, not invented, from the factory:
- *   - `lib/embargo.py`      — IDENTITY_CRITICAL_AGENTS, VALID_SEVERITIES, EMBARGOED_SEVERITIES,
- *                             fail-closed severity (missing/unknown is `critical`).
- *   - `lib/redaction.py`    — CREDENTIAL_AGENTS (`secret-scan`) ship a location, never a snippet;
- *                             every other string is masked with the same credential shapes.
- *   - `lib/findings.py`     — compute_fingerprint / normalize_path / normalize_text and the
- *                             `external-ref` + `Fingerprint:` dedupe convention.
+ *   - the embargo module (`embargo.py`) — IDENTITY_CRITICAL_AGENTS, VALID_SEVERITIES,
+ *     EMBARGOED_SEVERITIES, and fail-closed severity (missing/unknown is `critical`).
+ *   - the redaction module (`redaction.py`) — CREDENTIAL_AGENTS and the credential shapes.
+ *   - `compute_fingerprint` / `normalize_path` / `normalize_text` and the bead `external-ref`
+ *     convention (findings.py).
  *
- * Mirrored copies drift, so each mirrored constant carries the upstream name it mirrors and the
- * test fixture is generated by the factory's own renderer rather than hand-written.
+ * Mirrored copies drift, so each mirrored constant names the upstream rule it mirrors and the test
+ * fixtures are generated by the factory's own renderer rather than hand-written.
  */
 
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -45,6 +50,13 @@ import { spawnSync } from "node:child_process";
 // ---------------------------------------------------------------------------------------------
 // Mirrored policy constants (upstream module named in each comment)
 // ---------------------------------------------------------------------------------------------
+
+/**
+ * Mirrors `lib/redaction.py:CREDENTIAL_RULE_HINTS` — the second, independent trigger. Either signal
+ * can be absent, so a finding is credential-bearing when either one fires: a station that is not the
+ * credential scanner can still report a matched key, and the rule id is scanner-controlled.
+ */
+export const CREDENTIAL_RULE_HINTS = Object.freeze(["key", "secret", "token", "credential", "password", "private"]);
 
 /** Mirrors `lib/redaction.py:CREDENTIAL_AGENTS`. A scanner candidate *is* a credential. */
 export const CREDENTIAL_AGENTS = new Set(["secret-scan"]);
@@ -172,15 +184,50 @@ export function maskText(value) {
 }
 
 /**
+ * The title text that may be shown *anywhere* — the issue, and the plan a CI log captures.
+ *
+ * The plan used to print the finding's raw title. That is the same leak the factory's own
+ * `stdout_safe_report` exists to prevent: a terminal or a CI log has no way to be un-published, so a
+ * credential the triage model echoed into a title would be disclosed by the triage run itself.
+ */
+export function displayTitle(finding, { privateRoot } = {}) {
+  const published = sanitizeFinding(finding, { privateRoot });
+  if (isCredentialFinding(finding)) {
+    return `${maskText(finding.ruleId)} match at ${published.path}:${published.lineNumber ?? "?"}`;
+  }
+  return published.title;
+}
+
+/** Mirrors `lib/redaction.py:is_credential_finding`. */
+export function isCredentialFinding(finding) {
+  if (CREDENTIAL_AGENTS.has(finding.agent)) return true;
+  const ruleId = String(finding.ruleId ?? "").toLowerCase();
+  return CREDENTIAL_RULE_HINTS.some((hint) => ruleId.includes(hint));
+}
+
+/** Mirrors `lib/redaction.py:WITHHELD_NOTE`. */
+export const WITHHELD_NOTE =
+  "Published summaries withhold the matched value and the triage notes for credential findings. Note " +
+  "that the local report is a working file, not a durable store: this ISSUE is the durable record, and " +
+  "a matched credential has to be rotated rather than archived.";
+
+/** Mirrors `lib/redaction.py:GENERIC_REMEDIATION`. */
+export const GENERIC_REMEDIATION = "Rotate the credential, remove it from source, and re-run the scan.";
+
+/**
  * Mirrors `lib/redaction.py:redact_finding`. A credential agent's snippet never ships in any
  * form — it becomes a location, so an unrecognised credential format cannot slip through either.
  * Every other string is masked. Home paths are elided so a private report's location does not
  * ride along into a public tracker.
  */
 export function sanitizeFinding(finding, { privateRoot } = {}) {
+  // Withheld for every identity-critical station, not only the credential scanner: a vulnerability
+  // agent's candidate is an attack payload by construction, and this pipeline publishes at every
+  // severity. `credentialClass` is kept for callers that need to know which rule fired.
   const credentialClass = CREDENTIAL_AGENTS.has(finding.agent);
-  const snippet = credentialClass
-    ? `[withheld: credential-class agent — see the private report at ${finding.path}:${finding.lineNumber ?? "?"}]`
+  const withheld = IDENTITY_CRITICAL_AGENTS.has(finding.agent) || isCredentialFinding(finding);
+  const snippet = withheld
+    ? `[withheld: matched value not published (${finding.path}:${finding.lineNumber ?? "?"})]`
     : maskText(finding.snippet ?? "");
   const elide = (value) => {
     if (typeof value !== "string") return value;
@@ -330,14 +377,37 @@ function finishFinding(raw, agent) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Policy: severity mapping, routing, bead construction
+// Policy: severity mapping, routing, publication
 // ---------------------------------------------------------------------------------------------
 
-/** Priority mapping. `critical`/`high` never reach a public board except as a deferred record. */
+/**
+ * The declaration every published issue carries. The factory withholds `critical` and `high` from
+ * a public tracker; this repository deliberately does not, and a deliberate bypass has to say so
+ * on the artefact it affects rather than in a comment somewhere.
+ */
+export const PUBLICATION_DECLARATION = [
+  "This issue was created by the repository's own findings publisher (`scripts/factory-triage.mjs`),",
+  "which reads a full, unredacted factory delta report (written with `--sink file`) and publishes a",
+  "sanitised summary.",
+  "",
+  "**Visibility: public, declared deliberately.** This repository is public, and it publishes its own",
+  "factory findings at every severity — critical and high included. The factory's automatic embargo",
+  "withholds those bands from a public tracker, so this controlled publisher bypasses the factory's",
+  "public sinks on purpose, by decision recorded in `voicebox-beads-h1u0`: a high finding is visible",
+  "here instead of vanishing into a private artefact. It is *not* claiming a private target.",
+  "",
+  "No literal credential value or key is ever published, whatever the finding's severity: the report is",
+  "masked with the same credential shapes the factory masks, a credential finding publishes derived text",
+  "only, and a security station's raw candidate is withheld entirely.",
+  "",
+  "No bead was created from the scan. This issue is the record until a reviewer converts it, and the",
+  "publisher has no option that creates beads from a report.",
+].join("\n");
+
+/** Priority mapping, used when an issue is promoted to a bead (never at publish time). */
 export function priorityFor(finding) {
   switch (finding.effectiveSeverity) {
     case "critical":
-      return 1;
     case "high":
       return 1;
     case "medium":
@@ -354,108 +424,202 @@ export function suggestsFunctionalityChange(finding) {
 }
 
 /**
- * Decide what happens to one finding. This is the whole policy, in one place, so the doc and the
- * tests can point at it rather than re-describe it.
+ * Decide what happens to one finding. The whole policy, in one place, so the doc and the tests point
+ * at it instead of re-describing it.
  *
  * Returned `action`:
- *   - `file`   — a sanitised public bead is allowed.
- *   - `defer`  — sensitive and embargoed: private escalation only, NO public bead.
- *   - `skip`   — not actionable (false positive, unchanged, unmapped state).
- *   - `blocked`— sanitised bead, filed BLOCKED with `human-review`: the remediation changes
- *                behaviour and a human decides whether it is wanted (never an auto-fix).
+ *   - `issue` — publish a sanitised public issue. Every severity is published here by decision; an
+ *               identity-critical station's raw candidate is withheld from the published text, but
+ *               the finding itself is never withheld and never silently dropped.
+ *   - `skip`  — not publishable as work (false positive, unchanged, below band).
+ *
+ * `humanReview` marks a finding whose remediation changes behaviour: the issue says so and a human
+ * decides, and the bead is filed BLOCKED if the issue is ever promoted. The publisher never fixes
+ * anything itself.
  */
 export function routeFinding(finding, { confirmedFunctionalityChange = false, includeLow = false } = {}) {
   const reasons = [];
-  if (finding.falsePositive) return { action: "skip", reasons: ["triaged false positive by the factory"] };
-  if (finding.state === "unchanged") return { action: "skip", reasons: ["unchanged: already tracked"] };
+  if (finding.falsePositive) return { action: "skip", humanReview: false, reasons: ["triaged false positive by the factory"] };
+  if (finding.state === "unchanged") return { action: "skip", humanReview: false, reasons: ["unchanged: already tracked"] };
   if (!["new", "regressed"].includes(finding.state)) {
-    return { action: "skip", reasons: [`state \`${finding.state}\` is not an action state`] };
+    return { action: "skip", humanReview: false, reasons: [`state \`${finding.state}\` is not an action state`] };
   }
   if (finding.identitySource === "unverifiable") {
     return {
-      action: "defer",
-      reasons: ["identity unverifiable: the report carried no recomputable fingerprint (reduced/step-summary form)"],
+      action: "skip",
+      humanReview: false,
+      reasons: [
+        "identity unverifiable: the report carried no recomputable fingerprint (reduced/step-summary form), so a reviewer could not dedupe it",
+      ],
     };
   }
   if (finding.identitySource === "recomputed-mismatch") {
     return {
-      action: "defer",
+      action: "skip",
+      humanReview: false,
       reasons: [
-        "identity mismatch: the recomputed fingerprint does not match the report's prefix — refusing to file under an unverified identity",
+        "identity mismatch: the recomputed fingerprint does not match the report's prefix — publishing under an unverified identity would defeat dedupe",
       ],
+    };
+  }
+  if (["low", "info"].includes(finding.effectiveSeverity) && !includeLow) {
+    return {
+      action: "skip",
+      humanReview: false,
+      reasons: [`${finding.effectiveSeverity} is below the published band (pass --include-low to publish it at priority P3)`],
     };
   }
   if (EMBARGOED_SEVERITIES.has(finding.effectiveSeverity)) {
-    // One decision, not two: an identity-critical agent is already forced to `critical` above
-    // (`effective_severity` behaviour), so a separate identity branch here would be unreachable
-    // — the identity belongs in the reason a human reads, not in a second check that can never
-    // fire. Mutation testing is what showed the difference.
-    if (finding.effectiveSeverity === "critical") {
-      return {
-        action: "defer",
-        reasons: [
-          finding.identityCritical
-            ? `sensitive critical: identity-critical agent \`${finding.agent}\` routes as critical whatever the station labelled it, and critical detail is never published to a public tracker`
-            : "critical severity is deferred for a human regardless of station class (fail-closed)",
-        ],
-      };
-    }
-    reasons.push("high severity from a non-sensitive station: filed sanitised at P1");
-  }
-  if (["low", "info"].includes(finding.effectiveSeverity) && !includeLow) {
-    return { action: "skip", reasons: [`${finding.effectiveSeverity} is below the board band (pass --include-low to file at P3)`] };
+    reasons.push(
+      finding.identityCritical
+        ? `identity-critical station \`${finding.agent}\`: routed ${finding.effectiveSeverity} and published deliberately, with the raw candidate withheld`
+        : `${finding.effectiveSeverity} severity is published deliberately (the factory embargo would withhold it)`,
+    );
+  } else {
+    reasons.push("publishable band");
   }
   const functionality = confirmedFunctionalityChange || suggestsFunctionalityChange(finding);
   if (functionality) {
-    return {
-      action: "blocked",
-      reasons: [
-        confirmedFunctionalityChange
-          ? "the analyst confirmed this remediation changes functionality"
-          : "the remediation reads as a functionality change",
-        "human decides whether the behaviour change is wanted: filed BLOCKED with `human-review`, never auto-fixed",
-      ],
-    };
+    reasons.push(
+      confirmedFunctionalityChange
+        ? "the analyst confirmed this remediation changes functionality"
+        : "the remediation reads as a functionality change",
+      "a human decides whether the behaviour change is wanted; if this issue is promoted the bead is filed BLOCKED, and nothing is auto-fixed",
+    );
   }
-  return { action: "file", reasons: reasons.length ? reasons : ["publishable band"] };
+  return { action: "issue", humanReview: functionality, reasons };
 }
 
-/** Build the bead the factory's own `beads` sink would build, plus this policy's priority/labels. */
-export function buildBead(finding, verdict, { privateRoot, target } = {}) {
+/** The machine-readable identity of a published issue, greppable in the body. */
+export function markerFor(finding, verdict) {
+  const lines = [
+    `<!-- factory-fingerprint: ${finding.fingerprint} -->`,
+    `<!-- factory-station: ${finding.agent} -->`,
+    `<!-- factory-severity: ${finding.effectiveSeverity} -->`,
+    `<!-- factory-state: ${finding.state} -->`,
+  ];
+  if (verdict.humanReview) lines.push("<!-- factory-human-review -->");
+  return lines.join("\n");
+}
+
+/**
+ * Post the review record on the issue.
+ *
+ * "Review before bead" is only real if the evidence is on the artefact the promotion reads, so the
+ * reviewer writes their verdict here and `--promote` refuses without it.
+ */
+export function reviewComment(actor, notes) {
+  return [
+    `Reviewed by ${actor}.${notes ? `\n\n${notes}` : ""}`,
+    "",
+    "This issue may now be converted to a bead with `--promote`; the bead is BLOCKED if the finding",
+    "was flagged as a functionality change, and nothing is implemented before that decision is recorded.",
+    "",
+    `<!-- factory-review: ${actor} -->`,
+  ].join("\n");
+}
+
+/** Read the markers back off a published body. Used by promotion and by the tests. */
+export function parseMarkers(body) {
+  const read = (name) => {
+    const match = String(body).match(new RegExp(`<!--\\s*factory-${name}:\\s*(.*?)\\s*-->`));
+    return match ? match[1] : null;
+  };
+  return {
+    fingerprint: read("fingerprint"),
+    station: read("station"),
+    severity: read("severity"),
+    state: read("state"),
+    humanReview: /<!--\s*factory-human-review\s*-->/.test(String(body)),
+    promotedTo: (String(body).match(/<!--\s*factory-promoted:\s*(.*?)\s*-->/) ?? [])[1] ?? null,
+    reviewedBy: (String(body).match(/<!--\s*factory-review:\s*(.*?)\s*-->/) ?? [])[1] ?? null,
+    selfTest: /<!--\s*factory-self-test\s*-->/.test(String(body)),
+  };
+}
+
+/**
+ * Build the published issue. Every string here is the published view: masked, with the private
+ * report path and home directories elided, and with a security station's raw candidate withheld.
+ */
+export function buildIssue(finding, verdict, { privateRoot, repo } = {}) {
   const published = sanitizeFinding(finding, { privateRoot });
-  const type = /vuln|secret/.test(finding.agent) ? "bug" : "task";
-  const labels = ["factory", `station:${finding.agent}`, `class:${finding.className}`];
-  if (verdict.action === "blocked") labels.push("human-review");
-  if (finding.state === "regressed") labels.push("regression");
-  const decision = verdict.action === "blocked" ? "\n\nDecision needed: confirm whether to change this behaviour (yes/no) and, if yes, file the change as its own bead." : "";
+  const refused = finding.identityCritical;
+  // A credential finding publishes DERIVED TEXT ONLY, mirroring `lib/redaction.py:redact_finding`:
+  // the triage model's own words cannot be checked for an echo of a value whose shape is unknown,
+  // so its title, description and remediation are replaced by scanner-controlled facts. The
+  // identity-critical rule is deliberately stricter than upstream here — a vulnerability agent's
+  // candidate is an attack payload, and this pipeline publishes at every severity.
+  const credential = isCredentialFinding(finding);
+  const location = `${published.path}:${published.lineNumber ?? "?"}`;
+  if (credential) {
+    published.title = displayTitle(finding, { privateRoot });
+    published.description = `The deterministic scanner matched \`${maskText(finding.ruleId)}\` at \`${location}\`. ${WITHHELD_NOTE}`;
+    published.remediation = GENERIC_REMEDIATION;
+  }
+  const humanReview = verdict.humanReview ? "[human-review] " : "";
+  const title = maskText(`${humanReview}[factory/${finding.effectiveSeverity}] ${finding.agent}: ${published.title}`).slice(0, 150);
+  const severityLine =
+    finding.severityReported && finding.severityReported !== finding.effectiveSeverity
+      ? `${finding.effectiveSeverity} (the station labelled it \`${finding.severityReported}\`; it routes as \`${finding.effectiveSeverity}\`${finding.identityCritical ? " because this station's candidates are security-sensitive by construction" : ""})`
+      : finding.effectiveSeverity;
   const body = [
-    `Factory \`${finding.agent}\` (${finding.className}) reported this finding; the full report stays private and only this sanitised summary is published.`,
+    `**Station**: \`${finding.agent}\` (${finding.className} class) · **Severity**: ${severityLine} · **State**: ${finding.state}`,
+    `**Rule**: \`${maskText(finding.ruleId)}\` · **Location**: \`${published.path}:${published.lineNumber ?? "?"}\``,
     "",
-    `Rule: ${maskText(finding.ruleId)}`,
-    `Path: ${published.path}:${published.lineNumber ?? "?"}`,
-    `Severity: ${finding.effectiveSeverity}${finding.severityReported && finding.severityReported !== finding.effectiveSeverity ? ` (reported as ${finding.severityReported} by the station; treated as ${finding.effectiveSeverity})` : ""}`,
-    `State: ${finding.state}`,
+    published.description ? `**What the station reported**\n\n${published.description}` : "",
+    published.remediation ? `\n**Suggested remediation**\n\n${published.remediation}` : "",
+    refused
+      ? "\n**Raw candidate withheld.** This station's candidates are credentials or attack payloads by construction, so the raw value is not published here; the rule, location and remediation above identify it. The local report that held it is a working file rather than a durable store — this issue is the durable record, and a credential must be rotated, not archived."
+      : published.snippet
+        ? `\n**Evidence**\n\n\`\`\`\n${published.snippet}\n\`\`\``
+        : "",
     "",
-    published.description ? `Description: ${published.description}` : "",
-    published.remediation ? `Remediation: ${published.remediation}` : "",
-    published.snippet ? `Snippet:\n${published.snippet}` : "",
-    decision,
-    `Fingerprint: ${finding.fingerprint}`,
-    `External reference: ${BEAD_EXTERNAL_REF_PREFIX}${finding.fingerprint}`,
+    "**Triage**",
+    "",
+    ...verdict.reasons.map((reason) => `- ${reason}`),
+    `- Identity: \`${finding.fingerprint}\` (${finding.identitySource === "recomputed-and-verified" ? "recomputed here and verified against the report" : finding.identitySource})`,
+    "",
+    verdict.humanReview
+      ? "**Human review required before any implementation.** This remediation changes functionality, so a human decides whether the change is wanted. If this issue is promoted to a bead, that bead is filed BLOCKED with `human-review` and carries the decision that is needed. Nothing is fixed automatically."
+      : "",
+    "<details>",
+    "<summary>Publication policy and provenance</summary>",
+    "",
+    PUBLICATION_DECLARATION,
+    "</details>",
+    "",
+    markerFor(finding, verdict),
   ]
     .filter((line) => line !== "")
     .join("\n");
-  const title = maskText(`[${finding.agent}] ${finding.title}`).slice(0, 120);
   return {
     title,
-    description: body,
-    type,
-    priority: priorityFor(finding),
-    labels,
-    externalRef: `${BEAD_EXTERNAL_REF_PREFIX}${finding.fingerprint}`,
+    body,
+    // The labels this publisher would REQUEST. `fileIssues` filters them against the labels that
+    // actually exist; plan mode cannot know that without a network call, so it reports intent.
+    labels: chooseLabels(finding, verdict, null),
     fingerprint: finding.fingerprint,
-    target: target ?? null,
+    station: finding.agent,
+    severity: finding.effectiveSeverity,
+    humanReview: verdict.humanReview,
+    url: `${repo ?? "?"}/issues/`,
   };
+}
+
+/**
+ * The labels to request: only ones that already exist on the repository, because creating labels is
+ * a repository-configuration change and not this script's business. The body markers are the
+ * machine-readable record either way.
+ */
+export function chooseLabels(finding, verdict, knownLabels) {
+  const preferred = [];
+  if (finding.className === "security" || finding.className === "quality") preferred.push("bug");
+  if (finding.className === "docs") preferred.push("documentation");
+  if (finding.className === "ux" && finding.agent === "accessibility") preferred.push("accessibility");
+  if (["perf", "ops", "ux"].includes(finding.className)) preferred.push("enhancement");
+  if (verdict.humanReview) preferred.push("human-review");
+  const known = knownLabels ? new Set(knownLabels) : null;
+  return [...new Set(preferred)].filter((label) => (known ? known.has(label) : true));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -468,7 +632,7 @@ export function privateRootFromEnv(env = process.env) {
   return join(homedir(), ".voicebox", "factory-reports");
 }
 
-/** True when `path` is inside `root` (after resolving symlinks as far as the path exists). */
+/** True when `path` is inside `root` (symlinks resolved as far as the path exists). */
 export function isInside(path, root) {
   const real = (value) => {
     try {
@@ -485,9 +649,16 @@ export function isInside(path, root) {
       return join(base, ...seen.reverse(), basename(resolve(value)));
     }
   };
-  const realPath = real(path);
-  const realRoot = real(root);
-  return realPath === realRoot || realPath.startsWith(realRoot.endsWith(sep) ? realRoot : realRoot + sep);
+  const contained = (candidate, base) =>
+    candidate === base || candidate.startsWith(base.endsWith(sep) ? base : base + sep);
+  // BOTH the named path and the resolved target are checked. A symlink that lives inside the
+  // repository and points at a private report resolves outside, so a realpath-only check would
+  // accept it — and one `git add -A` would then commit the link to the unredacted report
+  // (review of 929c559, Finding 3).
+  const lexicalPath = resolve(path);
+  const lexicalRoot = resolve(root);
+  if (contained(lexicalPath, lexicalRoot)) return true;
+  return contained(real(path), real(root));
 }
 
 /**
@@ -507,19 +678,79 @@ export function agentFromReportName(file) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Board I/O (bd) — dedupe mirrors lib/findings.py:_existing_bead_fingerprints
+// Board I/O — issues are read and written through `gh`; beads only through --promote
 // ---------------------------------------------------------------------------------------------
 
-const BEAD_FINGERPRINT_LINE = /Fingerprint:\s*([0-9a-f]{64})/g;
+function gh(args, { run = spawnSync, repo } = {}) {
+  const full = repo ? [...args, "--repo", repo] : args;
+  const res = run("gh", full, { encoding: "utf8", timeout: 60000 });
+  return { status: res?.status ?? 1, stdout: res?.stdout ?? "", stderr: res?.stderr ?? "", error: res?.error };
+}
 
-/** fingerprint -> [{id, status}] for every bead already carrying one, or null when unreadable. */
-export function existingBeadFingerprints(target, { bd = "bd", run = spawnSync } = {}) {
-  const res = run(bd, ["list", "--all", "--json", "-n", "0", "-C", target], {
-    cwd: target,
-    encoding: "utf8",
-    timeout: 60000,
-  });
+/** fingerprint -> [{number, state}] for every issue the publisher filed before, or null. */
+export function existingIssues(repo, { run = spawnSync } = {}) {
+  const res = gh(["issue", "list", "--state", "all", "--json", "number,body,state", "--limit", "500"], { run, repo });
   if (res.error || res.status !== 0) return null;
+  let rows;
+  try {
+    rows = JSON.parse(res.stdout);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(rows)) return null;
+  const index = new Map();
+  for (const row of rows) {
+    const fingerprint = parseMarkers(row?.body ?? "").fingerprint;
+    if (!fingerprint) continue;
+    const list = index.get(fingerprint) ?? [];
+    list.push({ number: String(row.number ?? "?"), state: String(row.state ?? "") });
+    index.set(fingerprint, list);
+  }
+  return index;
+}
+
+/** An open issue always wins; a closed one wins unless the finding regressed. */
+export function isIssueDuplicate(finding, existing) {
+  const matches = existing?.get(finding.fingerprint) ?? [];
+  if (matches.length === 0) return null;
+  const open = matches.filter((m) => m.state.toUpperCase() !== "CLOSED");
+  if (open.length > 0) return { numbers: open.map((m) => m.number), why: "an open issue already tracks it" };
+  if (finding.state !== "regressed") {
+    return { numbers: matches.map((m) => m.number), why: "a closed issue already tracked it and nothing regressed" };
+  }
+  return null;
+}
+
+/** Labels that exist on the repository, or null when the list cannot be read. */
+export function knownLabels(repo, { run = spawnSync } = {}) {
+  const res = gh(["label", "list", "--json", "name", "--limit", "200"], { run, repo });
+  if (res.error || res.status !== 0) return null;
+  try {
+    const rows = JSON.parse(res.stdout);
+    return Array.isArray(rows) ? rows.map((r) => String(r.name)) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Read one issue for promotion. */
+export function readIssue(number, repo, { run = spawnSync } = {}) {
+  const res = gh(
+    ["issue", "view", String(number), "--json", "number,title,body,state,url,labels,comments"],
+    { run, repo },
+  );
+  if (res.error || res.status !== 0) return null;
+  try {
+    return JSON.parse(res.stdout);
+  } catch {
+    return null;
+  }
+}
+
+/** fingerprint -> [{id, status}] for beads already carrying one, or null. */
+export function existingBeadFingerprints(target, { bd = "bd", run = spawnSync } = {}) {
+  const res = run(bd, ["list", "--all", "--json", "-n", "0", "-C", target], { cwd: target, encoding: "utf8", timeout: 60000 });
+  if (res?.error || res?.status !== 0) return null;
   let rows;
   try {
     rows = JSON.parse(res.stdout);
@@ -531,31 +762,47 @@ export function existingBeadFingerprints(target, { bd = "bd", run = spawnSync } 
   for (const bead of rows) {
     const fingerprints = new Set();
     const ref = bead?.external_ref;
-    if (typeof ref === "string" && ref.startsWith(BEAD_EXTERNAL_REF_PREFIX)) {
-      fingerprints.add(ref.slice(BEAD_EXTERNAL_REF_PREFIX.length).trim());
-    }
+    if (typeof ref === "string" && ref.startsWith(BEAD_EXTERNAL_REF_PREFIX)) fingerprints.add(ref.slice(BEAD_EXTERNAL_REF_PREFIX.length).trim());
     if (typeof bead?.description === "string") {
-      for (const match of bead.description.matchAll(BEAD_FINGERPRINT_LINE)) fingerprints.add(match[1]);
+      for (const match of bead.description.matchAll(/Fingerprint:\s*([0-9a-f]{64})/g)) fingerprints.add(match[1]);
     }
-    for (const fp of fingerprints) {
-      const list = index.get(fp) ?? [];
-      list.push({ id: String(bead.id ?? "?"), status: String(bead.status ?? "") });
-      index.set(fp, list);
-    }
+    for (const fp of fingerprints) index.set(fp, (index.get(fp) ?? []).concat([{ id: String(bead.id ?? "?"), status: String(bead.status ?? "") }]));
   }
   return index;
 }
 
-/** Mirrors the factory's duplicate rule: an open match always wins; a closed one only if not regressed. */
-export function isDuplicate(finding, existing) {
-  const matches = existing?.get(finding.fingerprint) ?? [];
-  if (matches.length === 0) return null;
-  const open = matches.filter((m) => m.status !== "closed");
-  if (open.length > 0) return { ids: open.map((m) => m.id), why: "open bead already tracks it" };
-  if (finding.state !== "regressed") {
-    return { ids: matches.map((m) => m.id), why: "a closed bead already tracked it and nothing regressed" };
-  }
-  return null;
+/** The bead a promoted issue becomes: the reviewer's decision is part of its record. */
+export function beadForPromotion({ finding, issue, reviewedBy, repo, issueNumber }) {
+  const priority = priorityFor(finding);
+  const labels = ["factory"];
+  if (finding.humanReview) labels.push("human-review");
+  const body = [
+    `Promoted from the published factory issue (${repo}#${issueNumber}) by ${reviewedBy}.`,
+    "",
+    `Station: ${finding.station} · Severity: ${finding.severity} · Rule: ${finding.ruleId}`,
+    `Issue: ${issue?.url ?? `${repo}#${issueNumber}`}`,
+    `Fingerprint: ${finding.fingerprint}`,
+    "",
+    issue?.title ? `Title: ${issue.title}` : "",
+    "",
+    "The sanitised finding text lives on the issue (this bead deliberately does not copy it, so there is one place to correct).",
+    finding.humanReview
+      ? "\nDecision needed before implementation: a human must confirm whether this behaviour change is wanted. The bead is BLOCKED until that decision is recorded."
+      : "",
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
+  return {
+    title: maskText(
+      `[${finding.station}] ${(issue?.title ?? "").replace(/^\[human-review\]\s*/, "").replace(/^\[factory\/[a-z]+\]\s*[^:]*:\s*/, "")}`,
+    ).slice(0, 200),
+    description: body,
+    type: /vuln|secret/.test(finding.station) ? "bug" : "task",
+    priority,
+    labels,
+    externalRef: `${BEAD_EXTERNAL_REF_PREFIX}${finding.fingerprint}`,
+    blocked: Boolean(finding.humanReview),
+  };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -563,45 +810,44 @@ export function isDuplicate(finding, existing) {
 // ---------------------------------------------------------------------------------------------
 
 const USAGE = `Usage:
-  node scripts/factory-triage.mjs --report <path> [options]
-  node scripts/factory-triage.mjs --report-dir <dir> [options]
+  node scripts/factory-triage.mjs --report <path> [--json]
+  node scripts/factory-triage.mjs --report <path> --file-issues
+  node scripts/factory-triage.mjs --promote <issue-number> --reviewed-by <actor> [--apply]
 
-Reads a factory delta report written with \`--sink file\` and produces sanitised, actionable bead
-specifications. The report path MUST be private (default root: $VOICEBOX_FACTORY_PRIVATE_DIR, else
-~/.voicebox/factory-reports); a path inside this repository is refused.
+Reads a factory delta report written with \`--sink file\` and publishes a sanitised PUBLIC issue for
+each actionable finding, at every severity, with the triage record on the issue. It never creates a
+bead from a report: a bead exists only when a reviewer promotes a published issue.
 
 Options:
   --report <path>              One private report (e.g. voicebox-qa-station-delta.md)
   --report-dir <dir>           Every *-delta.md in a private directory
-  --target <path>              Repository the beads are filed in (default: this repo)
-  --agent <name>               Override the station name (default: from <target>-<agent>-delta.md)
-  --apply                      File the beads with \`bd create\` (default: plan only)
-  --include-low                Also file low/info findings at P3 (default: below the board band)
+  --file-issues                Publish the issues (default: plan only, nothing is written)
+  --review <number>            Record a review verdict ON the issue (required before promotion)
+  --reviewed-by <actor>        Who performed the review; required by --review
+  --promote <number>           Convert a REVIEWED issue into a bead (the only bead path)
+  --notes <text>               Notes to record with --review
+  --allow-closed               With --promote: allow a closed issue (default: refused)
+  --apply                      With --promote: actually create the bead
+  --repo <owner/name>          Repository for issues (default: the origin remote, else gh's repo)
+  --target <path>              Repository the bead is filed in (default: this repo)
+  --agent <name>               Override the station (default: from <target>-<agent>-delta.md)
+  --include-low                Also publish low/info findings
   --functionality-change <rule|agent>
                                Confirm a functionality change for that rule id or station
   --json                       Machine-readable plan on stdout
   --private-root <dir>         Override the private report root
-  --escalation-log <path>      Private JSONL of deferred findings (default: <private-root>/escalations.jsonl)
   --help
 
 Exit codes:
-  0  a plan was produced, or beads were filed
-  1  usage or policy refusal (an in-repo report, an unreadable file, an unreadable board)
-  2  nothing actionable: no findings in band, or every finding is already tracked`;
+  0  a plan was produced, an issue was published, or a bead was created
+  1  usage or policy refusal (an in-repo report, an unreadable file, an unreadable board or issue)
+  2  nothing actionable: no findings in band, or every finding is already published`;
 
 function parseArgs(argv) {
   const opts = {
-    report: null,
-    reportDir: null,
-    target: null,
-    agent: null,
-    apply: false,
-    includeLow: false,
-    functionality: new Set(),
-    json: false,
-    privateRoot: null,
-    escalationLog: null,
-    help: false,
+    report: null, reportDir: null, target: null, agent: null, apply: false, includeLow: false,
+    functionality: new Set(), json: false, privateRoot: null, fileIssues: false, promote: null,
+    reviewedBy: null, repo: null, help: false, review: null, notes: null, selfTest: false, allowClosed: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -617,11 +863,18 @@ function parseArgs(argv) {
       case "--target": opts.target = next(); break;
       case "--agent": opts.agent = next(); break;
       case "--apply": opts.apply = true; break;
+      case "--file-issues": opts.fileIssues = true; break;
+      case "--promote": opts.promote = next(); break;
+      case "--review": opts.review = next(); break;
+      case "--notes": opts.notes = next(); break;
+      case "--self-test": opts.selfTest = true; break;
+      case "--allow-closed": opts.allowClosed = true; break;
+      case "--reviewed-by": opts.reviewedBy = next(); break;
+      case "--repo": opts.repo = next(); break;
       case "--include-low": opts.includeLow = true; break;
       case "--functionality-change": opts.functionality.add(next()); break;
       case "--json": opts.json = true; break;
       case "--private-root": opts.privateRoot = next(); break;
-      case "--escalation-log": opts.escalationLog = next(); break;
       case "--help": case "-h": opts.help = true; break;
       default: throw new Error(`unknown argument: ${arg}`);
     }
@@ -629,21 +882,34 @@ function parseArgs(argv) {
   return opts;
 }
 
-/** Build the whole plan: what would be filed, deferred, skipped or blocked, and why. */
+/** Resolve a `--report` argument: a bare filename is looked for in the private root. */
+export function resolveReportPath(arg, privateRoot) {
+  if (isAbsolute(arg)) return arg;
+  const fromCwd = resolve(arg);
+  if (existsSync(fromCwd)) return fromCwd;
+  return join(privateRoot, arg);
+}
+
+/** Build the whole plan: what would be published and why, plus what is skipped and why. */
 export function buildPlan(reportFiles, opts) {
   const entries = [];
   for (const file of reportFiles) {
     const agent = opts.agent ?? agentFromReportName(file);
     if (!agent) throw new Error(`${file}: cannot determine the station; pass --agent`);
     if (!STATION_CLASSES[agent]) throw new Error(`${file}: unknown station "${agent}" (see \`factory list\`)`);
-    const markdown = readFileSync(file, "utf8");
-    const report = parseReport(markdown, { agent });
+    const report = parseReport(readFileSync(file, "utf8"), { agent });
     for (const finding of report.findings) {
       const confirmed = opts.functionality.has(finding.ruleId) || opts.functionality.has(finding.agent);
       const verdict = routeFinding(finding, { confirmedFunctionalityChange: confirmed, includeLow: opts.includeLow });
-      const entry = { report: basename(file), target: report.target, finding, verdict };
-      if (verdict.action === "file" || verdict.action === "blocked") {
-        entry.bead = buildBead(finding, verdict, { privateRoot: opts.privateRoot, target: report.target });
+      const entry = {
+        report: basename(file),
+        target: report.target,
+        finding,
+        verdict,
+        displayTitle: displayTitle(finding, { privateRoot: opts.privateRoot }),
+      };
+      if (verdict.action === "issue") {
+        entry.issue = buildIssue(finding, verdict, { privateRoot: opts.privateRoot, repo: opts.repo });
       }
       entries.push(entry);
     }
@@ -652,20 +918,177 @@ export function buildPlan(reportFiles, opts) {
 }
 
 function describePlan(entries) {
-  const out = [];
-  const groups = { file: [], blocked: [], defer: [], skip: [] };
+  const groups = { issue: [], skip: [] };
   for (const entry of entries) groups[entry.verdict.action].push(entry);
-  out.push(`Plan: ${groups.file.length} to file · ${groups.blocked.length} to file BLOCKED (human review) · ${groups.defer.length} deferred (private escalation) · ${groups.skip.length} skipped`);
-  for (const [action, label] of [["file", "FILE"], ["blocked", "FILE BLOCKED"], ["defer", "DEFER + escalate privately"], ["skip", "SKIP"]]) {
+  const lines = [
+    `Plan: ${groups.issue.length} to publish as issues · ${groups.skip.length} not published (each with a reason below)`,
+  ];
+  for (const [action, label] of [["issue", "PUBLISH ISSUE"], ["skip", "NOT PUBLISHED"]]) {
     for (const entry of groups[action]) {
       const { finding, verdict } = entry;
-      const where = `${finding.agent} ${finding.ruleId} ${finding.path}:${finding.lineNumber}`;
-      out.push(`  [${label}] P${priorityFor(finding)} ${finding.effectiveSeverity} ${where}  (${entry.report})`);
-      out.push(`      ${finding.title}`);
-      for (const reason of verdict.reasons) out.push(`      - ${reason}`);
+      const review = verdict.humanReview ? " [human-review]" : "";
+      lines.push(`  [${label}] P${priorityFor(finding)} ${finding.effectiveSeverity} ${finding.agent} ${finding.ruleId} ${finding.path}:${finding.lineNumber}${review}  (${entry.report})`);
+      lines.push(`      ${entry.displayTitle}`);
+      for (const reason of verdict.reasons) lines.push(`      - ${reason}`);
     }
   }
-  return out.join("\n");
+  return lines.join("\n");
+}
+
+function serialisablePlanEntry(entry) {
+  return {
+    report: entry.report,
+    target: entry.target,
+    action: entry.verdict.action,
+    human_review: entry.verdict.humanReview,
+    reasons: entry.verdict.reasons,
+    finding: {
+      agent: entry.finding.agent,
+      rule_id: entry.finding.ruleId,
+      path: entry.finding.path,
+      line_number: entry.finding.lineNumber,
+      state: entry.finding.state,
+      severity: entry.finding.effectiveSeverity,
+      severity_reported: entry.finding.severityReported,
+      identity_critical: entry.finding.identityCritical,
+      fingerprint: entry.finding.fingerprint,
+      identity_source: entry.finding.identitySource,
+    },
+    issue: entry.issue ?? null,
+  };
+}
+
+/** Publish one issue per actionable finding, with dedupe against the issues already filed. */
+function fileIssues(entries, { repo, target }) {
+  const existing = existingIssues(repo);
+  if (existing === null) {
+    process.stderr.write(`could not list existing issues in ${repo}: nothing published\n`);
+    return 1;
+  }
+  const labels = knownLabels(repo);
+  let published = 0;
+  let duplicates = 0;
+  for (const entry of entries) {
+    if (entry.verdict.action !== "issue") continue;
+    const { finding } = entry;
+    const duplicate = isIssueDuplicate(finding, existing);
+    if (duplicate) {
+      duplicates += 1;
+      process.stdout.write(`duplicate: ${finding.fingerprint.slice(0, 16)} (${duplicate.why}: #${duplicate.numbers.join(", #")}) — skipped\n`);
+      continue;
+    }
+    const args = ["issue", "create", "--title", entry.issue.title, "--body", entry.issue.body];
+    const chosen = chooseLabels(finding, entry.verdict, labels);
+    if (chosen.length > 0) args.push("--label", chosen.join(","));
+    const res = gh(args, { repo });
+    if (res.error || res.status !== 0) {
+      process.stderr.write(`issue create failed for ${finding.fingerprint.slice(0, 16)}: ${res.stderr || res.error}\n`);
+      continue;
+    }
+    const url = (res.stdout.match(/https?:\/\/\S+/) ?? [])[0] ?? "(no url returned)";
+    existing.set(finding.fingerprint, [{ number: url.split("/").pop(), state: "OPEN" }]);
+    published += 1;
+    process.stdout.write(`published: ${finding.fingerprint.slice(0, 16)} -> ${url}${chosen.length ? ` [${chosen.join(",")}]` : ""}\n`);
+  }
+  process.stdout.write(`issues: ${published} published, ${duplicates} duplicate\n`);
+  return published > 0 ? 0 : 2;
+}
+
+/** The only path that creates a bead: an explicit, reviewed promotion of a published issue. */
+function promote(opts, { repo, target }) {
+  const number = String(opts.promote);
+  const issue = readIssue(number, repo);
+  if (!issue) {
+    process.stderr.write(`could not read issue ${repo}#${number}\n`);
+    return 1;
+  }
+  const markers = parseMarkers(issue.body ?? "");
+  if (!markers.fingerprint) {
+    process.stderr.write(`${repo}#${number} carries no factory fingerprint marker: refusing to promote an issue this publisher did not create\n`);
+    return 1;
+  }
+  // The marker is posted as a COMMENT on the issue, so reading only the body missed it: the first
+  // live promotion wrote a marker that its own guard could not see, which would have permitted a
+  // second bead on the next promotion.
+  const comments = Array.isArray(issue.comments) ? issue.comments : [];
+  const promotedInComment = comments.map((c) => parseMarkers(c?.body ?? "").promotedTo).find(Boolean) ?? null;
+  const promotedTo = markers.promotedTo ?? promotedInComment;
+  if (promotedTo) {
+    process.stderr.write(`${repo}#${number} was already promoted to ${promotedTo}: refusing to create a second bead\n`);
+    return 1;
+  }
+  // Review evidence must be ON the issue. `--reviewed-by` is a cross-check, not the evidence: a name
+  // typed at promotion time proves nothing about whether a review happened.
+  const comments0 = Array.isArray(issue.comments) ? issue.comments : [];
+  const reviewedBy =
+    comments0.map((c) => parseMarkers(c?.body ?? "").reviewedBy).find(Boolean) ?? markers.reviewedBy;
+  if (!reviewedBy) {
+    process.stderr.write(
+      `${repo}#${number} carries no review record: record one with \`--review <number> --reviewed-by <actor>\` before promoting\n`,
+    );
+    return 1;
+  }
+  if (opts.reviewedBy && opts.reviewedBy !== reviewedBy) {
+    process.stderr.write(`--reviewed-by ${opts.reviewedBy} does not match the reviewer recorded on ${repo}#${number} (${reviewedBy}): refusing\n`);
+    return 1;
+  }
+  if (markers.selfTest) {
+    process.stderr.write(`${repo}#${number} is marked as a publisher self-test: refusing to promote a test issue\n`);
+    return 1;
+  }
+  if (String(issue.state ?? "").toUpperCase() === "CLOSED" && !opts.allowClosed) {
+    process.stderr.write(`${repo}#${number} is closed: a closed issue is not work to start (pass --allow-closed to override)\n`);
+    return 1;
+  }
+  const severity = VALID_SEVERITIES.includes(markers.severity) ? markers.severity : "critical";
+  const finding = {
+    station: markers.station ?? "unknown",
+    severity,
+    // The routing value `priorityFor` reads. An unrecognised marker fails closed to `critical`,
+    // matching how the badge is treated at publish time.
+    effectiveSeverity: severity,
+    state: markers.state ?? "new",
+    humanReview: markers.humanReview,
+    ruleId: (issue.body.match(/\*\*Rule\*\*:\s*`([^`]+)`/) ?? [])[1] ?? "unclassified",
+    fingerprint: markers.fingerprint,
+  };
+  const existing = existingBeadFingerprints(target);
+  if (existing === null) {
+    process.stderr.write("could not list existing beads to dedupe against: nothing filed\n");
+    return 1;
+  }
+  const matches = existing.get(markers.fingerprint) ?? [];
+  if (matches.length > 0) {
+    process.stderr.write(`${repo}#${number} is already tracked by ${matches.map((m) => m.id).join(", ")}: nothing filed\n`);
+    return 1;
+  }
+  const bead = beadForPromotion({ finding, issue, reviewedBy, repo, issueNumber: number });
+  process.stdout.write(
+    `would file ${bead.type} P${bead.priority}${bead.blocked ? " (BLOCKED, human review)" : ""}: ${bead.title}\n  external-ref ${bead.externalRef}\n`,
+  );
+  if (!opts.apply) return 0;
+  const res = spawnSync("bd", ["create", "--silent", "--title", bead.title, "--description", bead.description, "--type", bead.type, "--priority", String(bead.priority), "--labels", bead.labels.join(","), "--external-ref", bead.externalRef, "-C", target], { cwd: target, encoding: "utf8", timeout: 60000 });
+  if (res.error || res.status !== 0) {
+    process.stderr.write(`bd create failed: ${res.stderr || res.error}\n`);
+    return 1;
+  }
+  // `--silent` prints the id alone. Parsing the human output with a pattern instead picked the
+  // directory name out of the printed path on the first live promotion.
+  const id = (res.stdout ?? "").trim().split(/\s+/).pop();
+  if (!id || !/^[A-Za-z0-9_-]+$/.test(id)) {
+    process.stderr.write(`bd create returned no usable bead id: ${JSON.stringify(res.stdout)}\n`);
+    return 1;
+  }
+  if (bead.blocked) {
+    spawnSync("bd", ["update", id, "--status", "blocked", "-C", target], { cwd: target, timeout: 60000 });
+    spawnSync("bd", ["comment", id, "Blocked pending human review: this remediation changes functionality. Next decision: confirm yes/no, then file the change as its own bead.", "-C", target], { cwd: target, timeout: 60000 });
+  }
+  const comment = gh(["issue", "comment", number, "--body", `Promoted to bead \`${id}\` by ${opts.reviewedBy}.${bead.blocked ? " The bead is BLOCKED pending the human review decision recorded on this issue." : ""}\n\n<!-- factory-promoted: ${id} -->`], { repo });
+  if (comment.error || comment.status !== 0) {
+    process.stderr.write(`warning: created ${id} but could not comment on the issue: ${comment.stderr}\n`);
+  }
+  process.stdout.write(`filed: ${markers.fingerprint.slice(0, 16)} -> ${id}\n`);
+  return 0;
 }
 
 function main(argv) {
@@ -680,6 +1103,31 @@ function main(argv) {
     process.stdout.write(`${USAGE}\n`);
     return 0;
   }
+  const repo = opts.repo ?? process.env.VOICEBOX_FACTORY_REPO ?? null;
+  const target = resolve(opts.target ?? process.cwd());
+  if (repo === null) {
+    process.stderr.write("--repo <owner/name> (or $VOICEBOX_FACTORY_REPO) is required: issues are published to a specific repository\n");
+    return 1;
+  }
+  if (opts.review) {
+    if (!opts.reviewedBy) {
+      process.stderr.write("--review requires --reviewed-by <actor>: the record has to name the reviewer\n");
+      return 1;
+    }
+    const issue = readIssue(opts.review, repo);
+    if (!issue) {
+      process.stderr.write(`could not read issue ${repo}#${opts.review}\n`);
+      return 1;
+    }
+    const res = gh(["issue", "comment", String(opts.review), "--body", reviewComment(opts.reviewedBy, opts.notes)], { repo });
+    if (res.error || res.status !== 0) {
+      process.stderr.write(`could not record the review: ${res.stderr || res.error}\n`);
+      return 1;
+    }
+    process.stdout.write(`recorded: ${repo}#${opts.review} reviewed by ${opts.reviewedBy}\n`);
+    return 0;
+  }
+  if (opts.promote) return promote(opts, { repo, target });
   if (opts.report && opts.reportDir) {
     process.stderr.write("--report and --report-dir are mutually exclusive\n");
     return 1;
@@ -688,14 +1136,10 @@ function main(argv) {
     process.stderr.write(`one of --report or --report-dir is required\n\n${USAGE}\n`);
     return 1;
   }
-  const repoRoot = resolve(opts.target ?? process.cwd());
   const privateRoot = resolve(opts.privateRoot ?? privateRootFromEnv());
-  const gated = [];
   const candidates = opts.report
     ? [resolveReportPath(opts.report, privateRoot)]
-    : readdirSync(opts.reportDir)
-        .filter((n) => n.endsWith("-delta.md"))
-        .map((n) => join(opts.reportDir, n));
+    : readdirSync(opts.reportDir).filter((n) => n.endsWith("-delta.md")).map((n) => join(opts.reportDir, n));
   if (candidates.length === 0) {
     process.stderr.write(`${opts.reportDir}: no *-delta.md reports\n`);
     return 2;
@@ -705,141 +1149,27 @@ function main(argv) {
       process.stderr.write(`${file}: not a readable file\n`);
       return 1;
     }
-    // The full report is unredacted. A path inside the repository working tree is refused
-    // outright: one `git add -A` would publish every credential the report names.
-    if (isInside(file, repoRoot)) {
+    if (isInside(file, target)) {
       process.stderr.write(
-        `refused: ${file} is inside the repository (${repoRoot}). The factory's file sink is the ` +
-          `unredacted evidence trail — write it to the private root instead ` +
-          `(default ${privateRootFromEnv()}).\n`,
+        `refused: ${file} is inside the repository (${target}). The report is the unredacted evidence ` +
+          `trail — write it to the private root instead (default ${privateRootFromEnv()}).\n`,
       );
       return 1;
     }
-    gated.push(file);
   }
-  const plan = buildPlan(gated, { ...opts, privateRoot });
-  const actionable = plan.filter((e) => e.verdict.action !== "skip");
-
-  if (opts.json) {
-    process.stdout.write(`${JSON.stringify(plan.map(serialisablePlanEntry), null, 2)}\n`);
-  } else {
-    process.stdout.write(`${describePlan(plan)}\n`);
-  }
-  if (actionable.length === 0) return 2;
-
-  if (!opts.apply) return 0;
-
-  // ---- apply: dedupe against the board exactly like the factory's beads sink, then create ----
-  const existing = existingBeadFingerprints(repoRoot);
-  if (existing === null) {
-    process.stderr.write("could not list existing beads to dedupe against: nothing filed\n");
+  let plan;
+  try {
+    plan = buildPlan(candidates, { ...opts, privateRoot, repo });
+  } catch (error) {
+    process.stderr.write(`${error.message}\n`);
     return 1;
   }
-  const escalations = actionable
-    .filter((e) => e.verdict.action === "defer")
-    .map((e) => ({
-      at: new Date().toISOString(),
-      fingerprint: e.finding.fingerprint,
-      agent: e.finding.agent,
-      rule_id: e.finding.ruleId,
-      path: `${e.finding.path}:${e.finding.lineNumber}`,
-      severity: e.finding.effectiveSeverity,
-      state: e.finding.state,
-      title: e.finding.title,
-      description: e.finding.description,
-      remediation: e.finding.remediation,
-      snippet: e.finding.snippet,
-      reasons: e.verdict.reasons,
-    }));
-  let filed = 0;
-  let duplicates = 0;
-  for (const entry of actionable) {
-    const { finding, verdict } = entry;
-    if (verdict.action === "defer") continue; // private only
-    const duplicate = isDuplicate(finding, existing);
-    if (duplicate) {
-      duplicates += 1;
-      process.stdout.write(`duplicate: ${finding.fingerprint.slice(0, 16)} (${duplicate.why}: ${duplicate.ids.join(", ")}) — skipped\n`);
-      continue;
-    }
-    const bead = entry.bead;
-    const args = [
-      "create",
-      "--title", bead.title,
-      "--description", bead.description,
-      "--type", bead.type,
-      "--priority", String(bead.priority),
-      "--labels", bead.labels.join(","),
-      "--external-ref", bead.externalRef,
-      "-C", repoRoot,
-    ];
-    const res = spawnSync("bd", args, { cwd: repoRoot, encoding: "utf8", timeout: 60000 });
-    if (res.error || res.status !== 0) {
-      process.stderr.write(`bd create failed for ${finding.fingerprint.slice(0, 16)}: ${res.stderr || res.error}\n`);
-      continue;
-    }
-    const id = (res.stdout.match(/[A-Za-z0-9_-]+-[a-z0-9]{4,}/) ?? [])[0];
-    if (id) {
-      existing.set(finding.fingerprint, [{ id, status: "open" }]);
-      filed += 1;
-      process.stdout.write(`filed: ${finding.fingerprint.slice(0, 16)} -> ${id}\n`);
-      if (verdict.action === "blocked") {
-        // BLOCKED carries the owner, the reason and the one next decision — a parked bead
-        // that says nothing is a bead nobody can pick up.
-        spawnSync("bd", ["update", id, "--status", "blocked", "-C", repoRoot], { cwd: repoRoot, timeout: 60000 });
-        spawnSync(
-          "bd",
-          ["comment", id, "Blocked pending human review: this remediation changes functionality. Next decision: confirm yes/no, then file the change as its own bead.", "-C", repoRoot],
-          { cwd: repoRoot, timeout: 60000 },
-        );
-      }
-    } else {
-      process.stderr.write(`bd create returned no bead id for ${finding.fingerprint.slice(0, 16)}\n`);
-    }
-  }
-  if (escalations.length > 0) {
-    const logPath = opts.escalationLog ?? join(privateRoot, "escalations.jsonl");
-    const line = `${escalations.map((e) => JSON.stringify(e)).join("\n")}\n`;
-    mkdirSync(dirname(logPath), { recursive: true, mode: 0o700 });
-    appendFileSync(logPath, line, { mode: 0o600 });
-    process.stdout.write(`escalated privately: ${escalations.length} finding(s) -> ${logPath} (never filed publicly)\n`);
-  }
-  process.stdout.write(`applied: ${filed} filed, ${duplicates} duplicate, ${escalations.length} escalated privately\n`);
-  return filed > 0 || escalations.length > 0 ? 0 : 2;
-}
-
-/**
- * Resolve a `--report` argument. A bare filename is looked for in the private root, so
- * `--report voicebox-qa-station-delta.md` works from anywhere without putting the private
- * directory on the command line; an existing path is used as given.
- */
-export function resolveReportPath(arg, privateRoot) {
-  if (isAbsolute(arg)) return arg;
-  const fromCwd = resolve(arg);
-  if (existsSync(fromCwd)) return fromCwd;
-  return join(privateRoot, arg);
-}
-
-function serialisablePlanEntry(entry) {
-  return {
-    report: entry.report,
-    target: entry.target,
-    action: entry.verdict.action,
-    reasons: entry.verdict.reasons,
-    finding: {
-      agent: entry.finding.agent,
-      rule_id: entry.finding.ruleId,
-      path: entry.finding.path,
-      line_number: entry.finding.lineNumber,
-      state: entry.finding.state,
-      severity: entry.finding.effectiveSeverity,
-      severity_reported: entry.finding.severityReported,
-      identity_critical: entry.finding.identityCritical,
-      fingerprint: entry.finding.fingerprint,
-      identity_source: entry.finding.identitySource,
-    },
-    bead: entry.bead ?? null,
-  };
+  if (opts.json) process.stdout.write(`${JSON.stringify(plan.map(serialisablePlanEntry), null, 2)}\n`);
+  else process.stdout.write(`${describePlan(plan)}\n`);
+  const actionable = plan.filter((e) => e.verdict.action === "issue");
+  if (actionable.length === 0) return 2;
+  if (opts.fileIssues) return fileIssues(plan, { repo, target });
+  return 0;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
