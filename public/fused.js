@@ -5,7 +5,7 @@
 // reading its bytes back. There is no seeded content, no timer that fakes a
 // state, and no claim the server has not made. Strings are rendered with
 // textContent only.
-import { debugEnabled, openTranscriptDialog, recordDebug, redact } from "./debug-transcript.js";
+import { debugEnabled, isDebugEnabled, setDebugEnabled, openTranscriptDialog, recordDebug, redact } from "./debug-transcript.js";
 import { createRoomUndoStack, deleteHandleFile, diffHandleFile, editHandleFile, grepHandleFolder, miniAppSyncName, parseRoomFolderTurn } from "./room-folder-ops.js";
 import { installWindowManager } from "./window-manager.mjs";
 
@@ -121,6 +121,7 @@ const WANTED = {
   visionCoreCard: "vision-core-card", visionCoreVideo: "vision-core-video", visionCoreCanvas: "vision-core-canvas",
   visionCoreMeta: "vision-core-meta", visionSnapshotBtn: "vision-snapshot-btn", visionStopBtn: "vision-stop-btn",
   settingPttEnabled: "setting-ptt-enabled", settingPttState: "setting-ptt-state",
+  settingDebugEnabled: "setting-debug-enabled", settingDebugState: "setting-debug-state",
   settingVisionResolution: "setting-vision-resolution", settingVisionFps: "setting-vision-fps",
   settingThinkingLevel: "setting-thinking-level", settingThinkingLevelState: "setting-thinking-level-state",
   settingStartCamera: "setting-start-camera", settingStartScreen: "setting-start-screen",
@@ -297,7 +298,7 @@ function appendWorkActivity(entry = {}) {
   if (entry.id && workActivitySeenIds.has(id)) return;
   workActivitySeenIds.add(id);
 
-  const kindRaw = sanitizePlainActivityText(entry.kind || entry.type || entry.verb || "work") || "work";
+  const kindRaw = sanitizePlainActivityText(entry.label || entry.kind || entry.type || entry.verb || "work") || "work";
   const summaryRaw = sanitizePlainActivityText(
     entry.summary || entry.action || entry.title || entry.message || entry.command || "Workspace activity",
   );
@@ -305,8 +306,11 @@ function appendWorkActivity(entry = {}) {
   if (entry.command && entry.command !== summaryRaw) detailParts.push(`$ ${sanitizePlainActivityText(entry.command)}`);
   if (entry.stdout) detailParts.push(sanitizePlainActivityText(entry.stdout));
   if (entry.stderr) detailParts.push(sanitizePlainActivityText(entry.stderr));
+  if (entry.why) detailParts.push(sanitizePlainActivityText(entry.why));
+  if (entry.error && entry.error !== entry.why) detailParts.push(sanitizePlainActivityText(entry.error));
   if (entry.detail && !detailParts.length) detailParts.push(sanitizePlainActivityText(entry.detail));
   if (entry.output && !detailParts.length) detailParts.push(sanitizePlainActivityText(entry.output));
+  if (entry.stack && isDebugEnabled()) detailParts.push(sanitizePlainActivityText(entry.stack));
   const detailText = detailParts.filter(Boolean).join("\n").trim();
 
   const ts = entry.at || entry.timestamp || Date.now();
@@ -317,6 +321,9 @@ function appendWorkActivity(entry = {}) {
 
   const li = document.createElement("li");
   li.className = "activity-item";
+  if (entry.status === "error" || entry.kind === "error") {
+    li.classList.add("activity-item-error");
+  }
   li.dataset.activityId = id;
 
   const head = document.createElement("div");
@@ -1051,7 +1058,7 @@ async function request(path, options, traceId) {
 }
 
 const turn = async (transcript) => {
-  const traceId = debugEnabled ? crypto.randomUUID() : null;
+  const traceId = isDebugEnabled() ? crypto.randomUUID() : null;
   recordDebug({ type: "turn.request", traceId, transcript });
   try {
     return await request("/api/turn", {
@@ -5379,15 +5386,37 @@ window.__voiceboxOnToolCalls = (calls, frame) => {
       durationMs: latencyByName.get(call.name) ?? previous?.durationMs ?? null,
     });
     const verbLabel = String(call.name ?? "tool").replace(/_/g, " ");
-    const outcome = call.action || (call.ok ? "done" : "the tool call was refused");
+    const failureReason = call.why || call.error || call.refused || (call.ok ? "done" : "the tool call was refused");
+    const outcome = call.action || (call.ok ? "done" : `refused: ${failureReason}`);
     logTurn(`voice tool: ${verbLabel}`, outcome);
     const durationSuffix = Number.isFinite(latencyByName.get(call.name)) ? ` (${latencyByName.get(call.name)}ms)` : "";
+    const detailLines = [];
+    if (call.why) detailLines.push(call.why);
+    if (call.error && call.error !== call.why) detailLines.push(call.error);
+    if (call.stderr) detailLines.push(call.stderr);
+    if (call.stdout) detailLines.push(call.stdout);
+    if (isDebugEnabled() && call.stack) detailLines.push(call.stack);
+    if (isDebugEnabled() && call.args && Object.keys(call.args).length > 0) {
+      try { detailLines.push(`args: ${JSON.stringify(call.args)}`); } catch {}
+    }
     appendWorkActivity({
       kind: call.ok ? "tool" : "error",
+      status: call.ok ? "ok" : "error",
       label: `Tool · ${verbLabel}`,
-      summary: `${outcome}${durationSuffix}`,
-      detail: [call.stdout, call.stderr, call.error].filter(Boolean).join("\n").slice(0, 600),
+      summary: call.ok ? `${outcome}${durationSuffix}` : `Tool ${verbLabel} failed: ${failureReason}${durationSuffix}`,
+      detail: detailLines.filter(Boolean).join("\n").slice(0, 1200),
     });
+    if (!call.ok) {
+      console.error(`[voicebox:tool-failure] ${verbLabel}: ${sanitizePlainActivityText(failureReason)}`);
+      if (isDebugEnabled()) {
+        console.debug(`[voicebox:tool-debug] ${verbLabel}:`, {
+          reason: sanitizePlainActivityText(failureReason),
+          refused: call.refused,
+          args: call.args ? redact(JSON.stringify(call.args)) : null,
+          stack: call.stack ? sanitizePlainActivityText(call.stack) : null,
+        });
+      }
+    }
   }
   if (lastToolStatus.size && els.extShelf?.isConnected) void renderExtensions();
   if (switchedWorkspace) {
@@ -5398,6 +5427,49 @@ window.__voiceboxOnToolCalls = (calls, frame) => {
   }
   void load();
 };
+window.__voiceboxOnSystemError = (msg) => {
+  const summary = msg.summary || "System error reported by live assistant";
+  const detail = msg.detail || (msg.userTranscript ? `Input: "${msg.userTranscript}"` : "");
+  logTurn("system error", summary);
+  appendWorkActivity({
+    kind: "error",
+    status: "error",
+    label: "System · Error",
+    summary,
+    detail: isDebugEnabled() && msg.stack ? `${detail}\n${msg.stack}` : detail,
+  });
+  console.error(`[voicebox:system-error] ${sanitizePlainActivityText(summary)}`);
+  if (isDebugEnabled()) {
+    console.debug("[voicebox:system-debug]", {
+      summary: sanitizePlainActivityText(summary),
+      detail: sanitizePlainActivityText(detail),
+      stack: msg.stack ? sanitizePlainActivityText(msg.stack) : null,
+    });
+  }
+};
+
+window.__voiceboxOnLiveError = (error, info) => {
+  const summary = error?.message || "Live voice error";
+  const detail = isDebugEnabled()
+    ? [error?.stack, info ? JSON.stringify(info, null, 2) : null].filter(Boolean).join("\n")
+    : (info?.reason || info?.detail?.reason || info?.message || "");
+  logTurn("system error", summary);
+  appendWorkActivity({
+    kind: "error",
+    status: "error",
+    label: "Live · Error",
+    summary,
+    detail: detail || summary,
+  });
+  console.error(`[voicebox:live-error] ${sanitizePlainActivityText(summary)}`);
+  if (isDebugEnabled()) {
+    console.debug("[voicebox:live-debug]", {
+      summary: sanitizePlainActivityText(summary),
+      detail: sanitizePlainActivityText(detail),
+    });
+  }
+};
+
 window.__voiceboxOnTask = (task) => {
   if (task && taskCardController) {
     taskCardController.setTask(task);
@@ -6523,6 +6595,25 @@ function sqehWire() {
         : "Hidden — automatic voice detection active";
     }
   });
+  if (els.settingDebugEnabled) {
+    const isDbg = isDebugEnabled();
+    els.settingDebugEnabled.checked = isDbg;
+    if (els.settingDebugState) {
+      els.settingDebugState.textContent = isDbg
+        ? "Detailed error diagnostics and console traces enabled"
+        : "Standard error reporting";
+    }
+    els.settingDebugEnabled.addEventListener("change", () => {
+      const checked = Boolean(els.settingDebugEnabled.checked);
+      setDebugEnabled(checked);
+      if (els.settingDebugState) {
+        els.settingDebugState.textContent = checked
+          ? "Detailed error diagnostics and console traces enabled"
+          : "Standard error reporting";
+      }
+      console.log(checked ? "[voicebox] Debug logging enabled" : "[voicebox] Debug logging disabled");
+    });
+  }
   els.visionPttBtn?.addEventListener("click", () => {
     pttActive = !pttActive;
     els.visionPttBtn.setAttribute("aria-pressed", String(pttActive));
