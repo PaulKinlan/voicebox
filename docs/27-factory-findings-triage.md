@@ -163,33 +163,30 @@ bead deliberately does **not** copy the finding text — it points at the issue,
 to correct. A functionality-changing issue produces a bead created `BLOCKED` with the `human-review`
 label and a comment naming the single decision that unblocks it.
 
-## 8b. Triaging an EXISTING issue, without a second issue
+## 8b. Promoting a reviewed, human-filed issue (read-only)
 
-```text
-node scripts/factory-triage.mjs --report <private path> --repo <owner/name> --comment <n>
-```
+An inbound issue a person opened can become a bead, but only after it has been triaged **and** reviewed:
+`--promote` refuses until a review record exists. It reads the identity from the issue, and it never
+writes a marker into a comment — the existing-issue comment surface belongs to another lane's
+commenter (bead `voicebox-beads-cbxo`), a script that does not live in this tree, and whose markers this
+script reads and never writes.
 
-Alias `--issue-number`. This appends one **sanitised triage comment** to an issue a person already
-opened. It never creates an issue, never creates a bead, and never edits the issue body — the body
-stays as the person wrote it, which is also what keeps it recognisable as inbound work to the router
-that triages it.
+`--promote <n>` resolves the finding in this order:
 
-The marker is `<!-- factory-triage-comment: <fingerprint> -->`, deliberately a different marker from
-the publisher's `factory-fingerprint`, and it lives in the **comment**. The comment states the station,
-the rule and location, the severity and state, the reasons, and the policy declaration; the title and
-paths are sanitised exactly as in a published issue.
+1. the publisher's own `<!-- factory-fingerprint: … -->` in the issue **body** (unchanged);
+2. otherwise the triage markers another tool wrote **in the comments**:
+   `<!-- factory-triage-comment: <fingerprint> -->` plus `factory-station`, `factory-severity` and
+   `factory-state`, so the bead inherits the station, the severity (and therefore its priority) and
+   the state instead of guessing from the title.
 
-**Dedupe is the anti-loop property.** A fingerprint already recorded in an earlier triage comment is
-skipped: re-running the same scan posts nothing and exits `2`, and a re-scan with a genuinely new
-finding posts only that finding. So a workflow that re-scans on an edit cannot spam a thread.
+If the comments describe **more than one** finding, promotion refuses and lists them, and
+`--finding <fingerprint-or-prefix>` says which one the bead is for. A comment can describe several
+findings while a bead carries one identity, so that choice is explicit rather than derived. An issue
+that neither its body nor its comments identify is refused by name.
 
-**This mode is comment-only, and `--promote` does not read it.** An earlier revision of this document
-claimed that `--review` and `--promote` resolve the fingerprint from a triage comment; that was not
-true of the code — `--promote` reads the issue **body**, and it refuses an issue this publisher did not
-create. That is the deliberate contract: a triage comment can carry several findings while a bead
-carries one identity, so promoting an inbound issue needs a decision about *which* finding the bead is
-for, and that decision has not been made. Promoting a human-filed issue is therefore an open question
-(recorded on `voicebox-beads-h1u0`), not a capability, and the test suite pins the refusal by name.
+`--comment` / `--issue-number` were **removed**: this script does not comment on existing issues. A
+caller using them gets a named refusal that points at the other lane's commenter, rather than a silent
+no-op.
 
 ## 9. What it never does
 
@@ -211,11 +208,9 @@ node scripts/factory-triage.mjs --promote <n> --reviewed-by <who> [--apply]
 
 Flags: `--report-dir <dir>`, `--repo <owner/name>`, `--target <path>`, `--agent <name>`,
 `--include-low`, `--functionality-change <rule|agent>`, `--json`, `--private-root <dir>`,
-`--review`, `--notes`, `--comment`, `--issue-number`, `--self-test`, `--allow-closed`,
-`--allow-foreign-target`.
+`--review`, `--notes`, `--finding`, `--self-test`, `--allow-closed`, `--allow-foreign-target`.
 
-Exit codes are part of the contract: `0` a plan was produced / an issue published / a comment posted /
-a bead created; `1` a usage or policy refusal, **or a write that failed** — a publication where any
+Exit codes are part of the contract: `0` a plan was produced / an issue published / a bead created; `1` a usage or policy refusal, **or a write that failed** — a publication where any
 `gh issue create` failed exits `1` and says how many, because a partial publication reported as
 success is how a CI job passes while a finding was never filed; `2` nothing actionable (nothing in
 band, everything already published, or nothing new to triage on `--comment`).
@@ -268,10 +263,22 @@ actionable (no findings in band, or everything already published).
   reproduced against the previous revision before being fixed. The rule is now **fail closed** — a
   report whose target cannot be read is not evidence that its findings belong here — with the trailing
   slash stripped so a legitimate `/repos/voicebox/` is still accepted, and a test covers each case.
-- **The same round caught a false claim in this document**, which is the reason it now says the
-  opposite: `--comment` is comment-only and `--promote` reads the issue **body**, so it refuses an
-  issue this publisher did not create. A triage comment can carry several findings while a bead
-  carries one identity, so promoting a human-filed issue needs a decision nobody has made yet.
+- **The same round caught a false claim in this document** — that `--promote` read a fingerprint from a
+  triage comment. It did not, and the claim was retracted. It is now *implemented* instead, as the
+  read-only seam in section 8b: promotion of a reviewed, human-filed issue is allowed, `--finding`
+  resolves the one-finding-in-a-thread case, and the markers are written by the other lane's commenter.
+- **A fourth round found the mirror of the cross-target bug**: `--repo owner/voicebox/` parsed to an
+  empty repository name, which is falsy, which skipped the refusal — so a foreign report could be
+  published while the guard looked armed. `--repo` is normalised exactly like the report's target now,
+  and both directions are tested (our own repository with a slash still plans; a foreign one refuses).
+- **`--write-plan` is atomic, and that property is now mutation-observable.** A failed write left its
+  temporary file behind (reproduced by the reviewer with a directory destination, EISDIR). It is
+  removed on failure now. Atomicity itself was unmonitored — a direct `writeFileSync` survived the
+  suite — so the test uses the one arrangement that tells them apart: in a directory that cannot be
+  written, creating the temp file fails while writing to an **existing** file still succeeds, so a
+  direct write would have replaced the old plan and temp+rename cannot. A reviewer-found green mutant
+  on the `human-review-reason` marker is closed the same way, by using a reason the station-based
+  inference could never produce.
 - **And a false statement in the bead comment.** Every flagged finding's bead was told "this
   remediation changes functionality" — untrue for a security station, whose prose is model-authored
   whether or not the fix changes behaviour. The reason now travels with the flag
@@ -279,8 +286,9 @@ actionable (no findings in band, or everything already published).
   body and the bead comment are composed from it, with a station-based inference only for issues that
   predate the marker.
 - **Mutation testing** is the bar for the suite itself: for each policy rule, breaking that rule must
-  turn the suite red. On this revision **36 mutations** were run over **78 passing tests** and **every
-  one turned the suite red** — including the factory's own embargo behaviour (`routeFinding` returning
+  turn the suite red. On this revision **43 mutations** were run over **82 passing tests** and **every
+  one turned the suite red** (two mutants from the previous round no longer apply, because the code they
+  targeted was removed with the comment mode; they are recorded as retired, not as coverage) — including the factory's own embargo behaviour (`routeFinding` returning
   `skip` for `EMBARGOED_SEVERITIES`), which turns twelve tests red and is the mutation that proves a
   seeded HIGH cannot quietly disappear. The reviewer's own mutation run had found **six rules that
   stayed green** on the revision before this one — the `falsePositive` and `state: "unchanged"` skips,
@@ -320,7 +328,7 @@ What that requires of this CLI, and what was verified rather than assumed:
   work. The CLI never reads a token itself: it shells out to `gh` and inherits that authentication.
 - **Plan mode needs no repository at all.** `--json` and `--write-plan` work with no `--repo`: a
   nightly local run can inspect its own findings without naming a tracker. `--file-issues`,
-  `--comment`, `--review` and `--promote` require `--repo`, because they write to one.
+  `--review` and `--promote` require `--repo`, because they write to one.
 - **`--write-plan <path>`** writes the same sanitised plan to a local file — the artefact a review
   adapter reads — creating the parent directory, atomically, and refusing with a named error if the
   path cannot be written. It never contains the raw report text.
@@ -337,8 +345,8 @@ node scripts/factory-triage.mjs --report ~/.voicebox/factory-reports/voicebox-pe
 # 4. review on the issue, then promote
 node scripts/factory-triage.mjs --review <n> --reviewed-by <actor> --repo owner/name
 node scripts/factory-triage.mjs --promote <n> --repo owner/name --target ~/voicebox --apply
-# 5. or record triage on a thread someone already opened
-node scripts/factory-triage.mjs --report <report> --repo owner/name --comment <n>
+# 5. promote a reviewed, human-filed issue (read-only: reads the commenter's markers, writes none)
+node scripts/factory-triage.mjs --promote <n> [--finding <fingerprint>] --repo owner/name --apply
 ```
 
 A CI wiring candidate (a GitHub workflow calling this publisher) was superseded by the local-only

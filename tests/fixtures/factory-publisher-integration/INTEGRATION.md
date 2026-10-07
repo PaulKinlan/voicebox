@@ -19,8 +19,9 @@ adapter to read.
     node scripts/factory-triage.mjs --report <private report> --repo <owner/name> --file-issues
     # read-only inspection (CI-safe, writes nothing)
     node scripts/factory-triage.mjs --report <private report> --repo <owner/name> --json
-    # inbound issue: append sanitised triage to an issue a person already opened (no new issue)
-    node scripts/factory-triage.mjs --report <private report> --repo <owner/name> --comment <n>
+    # promotion (human, reviewed only): reads the publisher body marker, or the triage markers YOUR
+    # commenter writes in the comments; use --finding when a thread describes several findings
+    node scripts/factory-triage.mjs --promote <n> [--finding <fingerprint-or-prefix>] --repo <owner/name> --apply
     # review side (human): record the verdict ON the issue FIRST, then promote it
     node scripts/factory-triage.mjs --review <n> --reviewed-by <actor> --repo <owner/name>
     node scripts/factory-triage.mjs --promote <n> --repo <owner/name> --target <repo path> --apply
@@ -29,6 +30,13 @@ Exit codes: `0` plan produced / issue published / comment posted / bead created 
 refusal **or a write that failed** (a run where any `gh issue create` failed exits 1 and reports the
 count — a partial publication is never reported as success) · `2` nothing actionable (nothing in band,
 everything already published, or nothing new to triage on `--comment`).
+
+READ-ONLY SEAM (coord's ruling): your commenter owns the existing-issue comment surface; my
+`--promote` reads these markers from the comments and writes none of them:
+`<!-- factory-triage-comment: <hex> -->` (required), `<!-- factory-station: ... -->`,
+`<!-- factory-severity: ... -->`, `<!-- factory-state: ... -->`. With more than one distinct
+fingerprint in a thread, `--promote` refuses unless `--finding <prefix>` says which finding the bead is
+for. `--comment`/`--issue-number` were REMOVED from my script and are refused by name.
 
 `--promote` requires the review record to already exist: `--review <n> --reviewed-by <actor>` posts
 `<!-- factory-review: <actor> -->` on the issue, and promotion refuses without it. On the promotion

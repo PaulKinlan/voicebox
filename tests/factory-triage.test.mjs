@@ -21,6 +21,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -42,7 +43,6 @@ import {
   beadForPromotion,
   buildIssue,
   buildPlan,
-  buildTriageComment,
   displayTitle,
   chooseLabels,
   computeFingerprint,
@@ -67,7 +67,7 @@ import {
   resolveReportPath,
   routeFinding,
   sanitizeFinding,
-  triagedFingerprints,
+  triageMarkersFromComments,
   suggestsFunctionalityChange,
 } from "../scripts/factory-triage.mjs";
 
@@ -779,7 +779,7 @@ test("no bead from a scan: script contains no automatic bead creation in scan pa
 // 10. --promote: explicit reviewed conversion of an issue to a bead
 // ---------------------------------------------------------------------------------------------
 
-test("promote: refuses when issue body carries no factory fingerprint marker", () => {
+test("promote: refuses when the issue is identified neither in its body nor in a triage comment", () => {
   const issueJson = JSON.stringify({
     number: 10,
     state: "OPEN",
@@ -803,7 +803,7 @@ EOF
   });
   try {
     assert.equal(res.status, 1);
-    assert.match(res.stderr, /carries no factory fingerprint marker: refusing to promote/);
+    assert.match(res.stderr, /no factory fingerprint in its body and no triage marker in its comments: refusing to promote an issue nothing has identified/);
     assert.equal(res.bdCalls.length, 0);
   } finally {
     rmSync(res.box, { recursive: true, force: true });
@@ -1702,7 +1702,7 @@ test("CLI exits with code 1 on missing arguments or conflicting flags", () => {
     rmSync(noRepo.box, { recursive: true, force: true });
   }
 
-  for (const [flag, value] of [["--file-issues", null], ["--review", "7"], ["--promote", "7"], ["--comment", "7"]]) {
+  for (const [flag, value] of [["--file-issues", null], ["--review", "7"], ["--promote", "7"]]) {
     const res = runCli({
       args: ["--report", "voicebox-qa-station-delta.md", flag, ...(value ? [value] : []), ...(flag === "--review" ? ["--reviewed-by", "alice"] : [])],
       reports: { "voicebox-qa-station-delta.md": fixture("voicebox-qa-station-delta.md") },
@@ -1710,7 +1710,7 @@ test("CLI exits with code 1 on missing arguments or conflicting flags", () => {
     });
     try {
       assert.equal(res.status, 1, `${flag} without --repo must refuse: ${res.stdout}${res.stderr}`);
-      assert.match(res.stderr, /is required by --(file-issues|review|promote|comment)/);
+      assert.match(res.stderr, /is required by --(file-issues|review|promote)/);
     } finally {
       rmSync(res.box, { recursive: true, force: true });
     }
@@ -1818,7 +1818,7 @@ test("RECEIPT: the promotion comment names the reviewer resolved FROM the issue,
     assert.equal(res.status, 0, res.stderr);
     const receipt = res.ghCalls.find((call) => call.startsWith("issue comment"));
     assert.ok(receipt, `no receipt comment: ${res.ghCalls.join(" | ")}`);
-    assert.match(receipt, /Promoted to bead \S+ by alice\./);
+    assert.match(receipt, /Promoted to bead \S+ by alice from [0-9a-f]{16}\./);
     assert.ok(!/by null/.test(receipt), `the receipt said null: ${receipt}`);
   } finally {
     rmSync(res.box, { recursive: true, force: true });
@@ -1995,116 +1995,6 @@ test("DEDUPE reads the factory's OWN marker shape too, so two publishers cannot 
   assert.equal(isIssueDuplicate({ fingerprint: fp, state: "new" }, prefixIndex).numbers[0], "2");
 });
 
-test("INBOUND ISSUE: --comment appends sanitised triage to an existing issue, dedupes on re-run, and creates neither an issue nor a bead", () => {
-  const fp = computeFingerprint({
-    agent: "qa-station", ruleId: "flake-instrumentation", path: "tests/room-folders.test.mjs",
-    snippet: 'await page.waitForSelector("text=Projects")',
-  });
-  const issueWithout = JSON.stringify({
-    number: 42, state: "OPEN", title: "Flaky folder chips", url: "https://example.invalid/42", labels: [],
-    body: "A human filed this: the folder chips are flaky.", comments: [],
-  });
-  const first = runCli({
-    args: ["--report", "voicebox-qa-station-delta.md", "--comment", "42", "--repo", "owner/voicebox"],
-    reports: { "voicebox-qa-station-delta.md": fixture("voicebox-qa-station-delta.md") },
-    stubGh: ghStubViewing(issueWithout),
-  });
-  try {
-    assert.equal(first.status, 0, first.stderr);
-    const call = first.ghCalls.find((c) => c.startsWith("issue comment"));
-    assert.ok(call, `no triage comment was posted: ${first.ghCalls.join(" | ")}`);
-    assert.ok(call.includes(`<!-- factory-triage-comment: ${fp} -->`), `the fingerprint marker is missing: ${call}`);
-    assert.ok(call.includes("flake-instrumentation"), `the rule is missing: ${call}`);
-    assert.ok(!first.ghCalls.some((c) => c.startsWith("issue create")), "the inbound mode created an issue");
-    assert.equal(first.bdCalls.length, 0, `the inbound mode touched bd: ${first.bdCalls.join(" | ")}`);
-  } finally {
-    rmSync(first.box, { recursive: true, force: true });
-  }
-
-  // Re-running the same scan must post NOTHING (that is the anti-loop property of this mode).
-  const same = runCli({
-    args: ["--report", "voicebox-qa-station-delta.md", "--comment", "42", "--repo", "owner/voicebox"],
-    reports: { "voicebox-qa-station-delta.md": fixture("voicebox-qa-station-delta.md") },
-    stubGh: ghStubViewing(
-      JSON.stringify({
-        number: 42, state: "OPEN", title: "Flaky folder chips", url: "https://example.invalid/42", labels: [],
-        body: "A human filed this: the folder chips are flaky.",
-        comments: [{ body: `Already scanned.\n<!-- factory-triage-comment: ${fp} -->` }],
-      }),
-    ),
-  });
-  try {
-    assert.equal(same.status, 2, `a repeat scan must post nothing: ${same.stdout}${same.stderr}`);
-    assert.match(same.stdout, /nothing new/);
-    assert.ok(!same.ghCalls.some((c) => c.startsWith("issue comment")), "a repeat scan commented again");
-  } finally {
-    rmSync(same.box, { recursive: true, force: true });
-  }
-});
-
-test("INBOUND ISSUE: a closed issue is refused, and the comment body is sanitised like every other surface", () => {
-  const home = homedir();
-  const closed = runCli({
-    args: ["--report", "voicebox-qa-station-delta.md", "--comment", "42", "--repo", "owner/voicebox"],
-    reports: { "voicebox-qa-station-delta.md": fixture("voicebox-qa-station-delta.md") },
-    stubGh: ghStubViewing(
-      JSON.stringify({
-        number: 42, state: "CLOSED", title: "Flaky folder chips", url: "https://example.invalid/42", labels: [],
-        body: "done", comments: [],
-      }),
-    ),
-  });
-  try {
-    assert.equal(closed.status, 1);
-    assert.match(closed.stderr, /is closed: triage is recorded on open issues/);
-    assert.ok(!closed.ghCalls.some((c) => c.startsWith("issue comment")));
-  } finally {
-    rmSync(closed.box, { recursive: true, force: true });
-  }
-
-  // The comment carries the elided path, not the operator's home directory.
-  const canary = `ghp_${"Y".repeat(36)}`;
-  const path = `${home}/voicebox/secret.js`;
-  const snippet = 'await page.waitForSelector("text=Projects")';
-  const fp = computeFingerprint({ agent: "qa-station", ruleId: `token-${canary}`, path, snippet });
-  const rewritten = fixture("voicebox-qa-station-delta.md")
-    .replace("- **Rule**: `flake-instrumentation`", `- **Rule**: \`token-${canary}\``)
-    .replace("- **Location**: `tests/room-folders.test.mjs:96`", `- **Location**: \`${path}:10\``)
-    .replace(/^- \*\*Fingerprint\*\*: `[^`]+`/m, `- **Fingerprint**: \`${fp.slice(0, 16)}...\``);
-  const res = runCli({
-    args: ["--report", "voicebox-qa-station-delta.md", "--comment", "42", "--repo", "owner/voicebox"],
-    reports: { "voicebox-qa-station-delta.md": rewritten },
-    stubGh: ghStubViewing(
-      JSON.stringify({ number: 42, state: "OPEN", title: "Flaky folder chips", url: "https://example.invalid/42", labels: [], body: "a human wrote this", comments: [] }),
-    ),
-  });
-  try {
-    const call = res.ghCalls.find((c) => c.startsWith("issue comment"));
-    assert.ok(call, `no comment: ${res.ghCalls.join(" | ")}`);
-    assert.ok(!call.includes(canary), `the comment leaked the token: ${call}`);
-    assert.ok(!call.includes(home), `the comment leaked the operator path: ${call}`);
-    assert.match(call, /\[redacted:github-pat\]/);
-  } finally {
-    rmSync(res.box, { recursive: true, force: true });
-  }
-});
-
-test("buildTriageComment states the policy and triagedFingerprints reads only its own markers", () => {
-  const finding = {
-    agent: "qa-station", ruleId: "flake-instrumentation", path: "tests/a.test.mjs", lineNumber: "9",
-    title: "t", description: "d", snippet: "s", remediation: "r", state: "new",
-    effectiveSeverity: "medium", severityReported: "medium", identityCritical: false,
-    fingerprint: "9".repeat(64), identitySource: "recomputed-and-verified",
-  };
-  const verdict = routeFinding(finding);
-  const body = buildTriageComment([{ finding, verdict, displayTitle: "a title" }], { privateRoot: "/tmp/p", repo: "owner/voicebox", issueNumber: 7 });
-  assert.ok(body.includes(PUBLICATION_DECLARATION), "the comment must state the publication policy");
-  assert.ok(body.includes(`<!-- factory-triage-comment: ${finding.fingerprint} -->`));
-  assert.ok(!body.includes("<!-- factory-fingerprint:"), "the inbound mode must not mark the issue as publisher-created");
-  assert.deepEqual([...triagedFingerprints([{ body: body }])], [finding.fingerprint]);
-  assert.deepEqual([...triagedFingerprints([{ body: "<!-- factory-review: alice -->" }])], []);
-});
-
 test("LOCAL ACTIVATION: --write-plan writes the sanitised plan to a file and needs no repository", () => {
   const res = runCli({
     args: ["--report", "voicebox-perf-review-delta.md", "--write-plan", "%PLAN%/plan.json"],
@@ -2255,30 +2145,6 @@ test("CROSS-TARGET: the refusal cannot be walked around by a trailing slash or a
   }
 });
 
-test("PROMOTION: a triage-comment-only issue is refused by name — the doc now says so (round 3 P2)", () => {
-  // docs/27 claimed --promote reads the fingerprint from the triage comment. It never did, and a
-  // comment can carry SEVERAL findings while a bead carries one identity, so the honest contract is
-  // that promotion applies to an issue this publisher created. This pins that.
-  const fp = "3".repeat(64);
-  const res = runCli({
-    args: ["--promote", "42", "--apply", "--repo", "owner/voicebox"],
-    stubGh: ghStubViewing(
-      JSON.stringify({
-        number: 42, state: "OPEN", title: "Flaky folder chips", url: "https://example.invalid/42", labels: [],
-        body: "A human filed this: the folder chips are flaky.",
-        comments: [{ body: `Scanned by the factory.\n<!-- factory-triage-comment: ${fp} -->` }, { body: "<!-- factory-review: alice -->" }],
-      }),
-    ),
-  });
-  try {
-    assert.equal(res.status, 1, `an inbound issue must not be promoted: ${res.stdout}`);
-    assert.match(res.stderr, /carries no factory fingerprint marker: refusing to promote an issue this publisher did not create/);
-    assert.equal(res.bdCalls.length, 0, `nothing may reach bd: ${res.bdCalls.join(" | ")}`);
-  } finally {
-    rmSync(res.box, { recursive: true, force: true });
-  }
-});
-
 test("HUMAN-REVIEW REASON: the flag carries WHY it was set, and the prose follows it (round 3 P2)", () => {
   const vuln = {
     agent: "vuln-discovery", ruleId: "unsanitized-html", path: "public/x.js", lineNumber: "1",
@@ -2328,5 +2194,279 @@ test("HUMAN-REVIEW REASON: the flag carries WHY it was set, and the prose follow
     } finally {
       rmSync(res.box, { recursive: true, force: true });
     }
+  }
+});
+
+test("REMOVED SEAM: --comment and --issue-number are refused by name, not silently accepted", () => {
+  // Coord's ruling: the existing-issue comment surface belongs to miniapps' commenter. A stale caller
+  // must be told that, rather than discovering it from a usage dump or a silent no-op.
+  for (const flag of ["--comment", "--issue-number"]) {
+    const res = runCli({
+      args: ["--report", "voicebox-qa-station-delta.md", flag, "42", "--repo", "owner/voicebox"],
+      reports: { "voicebox-qa-station-delta.md": fixture("voicebox-qa-station-delta.md") },
+    });
+    try {
+      assert.equal(res.status, 1, `${flag} was accepted: ${res.stdout}`);
+      assert.match(res.stderr, /was removed: this publisher does not comment on existing issues/);
+      assert.match(res.stderr, /factory-issue-commenter\.mjs/);
+      assert.equal(res.ghCalls.length, 0, `${flag} reached gh`);
+    } finally {
+      rmSync(res.box, { recursive: true, force: true });
+    }
+  }
+  // The usage text must not advertise the removed mode either.
+  const help = runCli({ args: ["--help"] });
+  try {
+    assert.ok(!/--comment/.test(help.stdout) && !/--issue-number/.test(help.stdout), "the usage still lists the removed mode");
+    assert.match(help.stdout, /--finding <fingerprint>/);
+  } finally {
+    rmSync(help.box, { recursive: true, force: true });
+  }
+});
+
+test("READ-ONLY INBOUND PROMOTION: a reviewed human issue with triage markers can be promoted", () => {
+  // Coord: promotion of a reviewed inbound human issue IS allowed after triage+review, never before.
+  const fp = "b1".repeat(32);
+  const triageComment = [
+    "Scanned by the factory.",
+    `<!-- factory-triage-comment: ${fp} -->`,
+    "<!-- factory-station: qa-station -->",
+    "<!-- factory-severity: high -->",
+    "<!-- factory-state: new -->",
+  ].join("\n");
+  const inbound = (reviewed) =>
+    JSON.stringify({
+      number: 42, state: "OPEN", title: "Flaky folder chips on load", url: "https://example.invalid/42", labels: [],
+      body: "A human filed this: the folder chips are flaky.",
+      comments: reviewed ? [{ body: triageComment }, { body: "<!-- factory-review: alice -->" }] : [{ body: triageComment }],
+    });
+
+  // BEFORE review: refused. That is the "never before triage/review" half.
+  const early = runCli({
+    args: ["--promote", "42", "--apply", "--repo", "owner/voicebox"],
+    stubGh: ghStubViewing(inbound(false)),
+  });
+  try {
+    assert.equal(early.status, 1, `promotion before review was allowed: ${early.stdout}`);
+    assert.match(early.stderr, /carries no review record/);
+    assert.equal(early.bdCalls.length, 0, "a pre-review promotion reached bd");
+  } finally {
+    rmSync(early.box, { recursive: true, force: true });
+  }
+
+  // AFTER review: promoted, with the identity, station and severity taken from the triage markers.
+  const after = runCli({
+    args: ["--promote", "42", "--reviewed-by", "alice", "--apply", "--repo", "owner/voicebox"],
+    stubGh: ghStubViewing(inbound(true)),
+  });
+  try {
+    assert.equal(after.status, 0, after.stderr);
+    assert.match(after.stdout, new RegExp(`filed: ${fp.slice(0, 16)}`));
+    const create = after.bdCalls.find((c) => c.startsWith("create"));
+    assert.ok(create, `no bead was created: ${after.bdCalls.join(" | ")}`);
+    assert.ok(create.includes(`--external-ref factory:${fp}`), `the bead identity is not the triage fingerprint: ${create}`);
+    assert.ok(create.includes("--priority 1"), `severity from the marker did not reach priority: ${create}`);
+    assert.ok(create.includes("qa-station"), `the station did not reach the bead: ${create}`);
+    assert.ok(create.includes("--title"), "no title");
+    // The issue's own words are the bead's subject, sanitised.
+    assert.match(create, /Flaky folder chips on load/);
+    assert.ok(!/factory\//.test(create), `the bead title kept a publisher prefix: ${create}`);
+    // Read-only: nothing was written to the human's issue except the promotion receipt.
+    const writes = after.ghCalls.filter((c) => c.startsWith("issue comment"));
+    assert.equal(writes.length, 1, `expected exactly the receipt comment: ${writes.join(" | ")}`);
+    assert.match(writes[0], /Promoted to bead/);
+  } finally {
+    rmSync(after.box, { recursive: true, force: true });
+  }
+});
+
+test("READ-ONLY INBOUND PROMOTION: several findings need --finding, and it refuses to guess", () => {
+  const a = "c1".repeat(32);
+  const b = "c2".repeat(32);
+  const comments = [
+    { body: `<!-- factory-triage-comment: ${a} -->\n<!-- factory-station: qa-station -->\n<!-- factory-severity: medium -->\n<!-- factory-state: new -->` },
+    { body: `<!-- factory-triage-comment: ${b} -->\n<!-- factory-station: docs-drift -->\n<!-- factory-severity: low -->\n<!-- factory-state: regressed -->` },
+  ];
+  const issue = JSON.stringify({
+    number: 42, state: "OPEN", title: "Several things at once", url: "https://example.invalid/42", labels: [],
+    body: "human words", comments: [...comments, { body: "<!-- factory-review: alice -->" }],
+  });
+
+  const ambiguous = runCli({ args: ["--promote", "42", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(issue) });
+  try {
+    assert.equal(ambiguous.status, 1, `an ambiguous promotion was allowed: ${ambiguous.stdout}`);
+    assert.match(ambiguous.stderr, /carries 2 findings/);
+    assert.match(ambiguous.stderr, /pass --finding <fingerprint> to say which one this bead is for/);
+    assert.equal(ambiguous.bdCalls.length, 0, "an ambiguous promotion reached bd");
+  } finally {
+    rmSync(ambiguous.box, { recursive: true, force: true });
+  }
+
+  const chosen = runCli({
+    args: ["--promote", "42", "--finding", b.slice(0, 16), "--apply", "--repo", "owner/voicebox"],
+    stubGh: ghStubViewing(issue),
+  });
+  try {
+    assert.equal(chosen.status, 0, chosen.stderr);
+    const create = chosen.bdCalls.find((c) => c.startsWith("create"));
+    assert.ok(create.includes(`--external-ref factory:${b}`), `--finding picked the wrong identity: ${create}`);
+    assert.ok(create.includes("docs-drift"), `--finding did not carry the station through: ${create}`);
+  } finally {
+    rmSync(chosen.box, { recursive: true, force: true });
+  }
+
+  // A prefix matching nothing, or more than one, is refused rather than guessed.
+  const noMatch = runCli({ args: ["--promote", "42", "--finding", "ffff", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(issue) });
+  try {
+    assert.equal(noMatch.status, 1);
+    assert.match(noMatch.stderr, /--finding ffff matches 0 of the findings/);
+  } finally {
+    rmSync(noMatch.box, { recursive: true, force: true });
+  }
+});
+
+test("READ-ONLY INBOUND PROMOTION: an issue nothing has identified is refused by name", () => {
+  const res = runCli({
+    args: ["--promote", "42", "--apply", "--repo", "owner/voicebox"],
+    stubGh: ghStubViewing(
+      JSON.stringify({ number: 42, state: "OPEN", title: "Just an issue", url: "https://example.invalid/42", labels: [], body: "words", comments: [{ body: "<!-- factory-review: alice -->" }] }),
+    ),
+  });
+  try {
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /no factory fingerprint in its body and no triage marker in its comments/);
+    assert.equal(res.bdCalls.length, 0);
+  } finally {
+    rmSync(res.box, { recursive: true, force: true });
+  }
+});
+
+test("triageMarkersFromComments reads ONLY the read-only markers, and writes nothing", () => {
+  const a = "d1".repeat(32);
+  const blocks = triageMarkersFromComments([
+    { body: `<!-- factory-triage-comment: ${a} -->\n<!-- factory-station: perf-review -->\n<!-- factory-severity: critical -->\n<!-- factory-state: regressed -->` },
+    { body: "no markers here" },
+    { body: "<!-- factory-review: alice -->" },
+  ]);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].fingerprint, a);
+  assert.equal(blocks[0].station, "perf-review");
+  assert.equal(blocks[0].severity, "critical");
+  assert.equal(blocks[0].state, "regressed");
+  assert.deepEqual(triageMarkersFromComments([{ body: "<!-- factory-fingerprint: " + a + " -->" }]), [], "a BODY marker is not a triage marker");
+  assert.deepEqual(triageMarkersFromComments([]), []);
+  assert.deepEqual(triageMarkersFromComments(null), []);
+});
+
+test("CROSS-TARGET: a trailing slash on --repo cannot disarm the refusal (round 4 P1)", () => {
+  // The mirror of the previous bypass: `owner/voicebox/` parsed to an empty repo name, which is falsy,
+  // which skipped the check. Verify BOTH directions: our own report still plans, a foreign one refuses.
+  const foreign = fixture("voicebox-qa-station-delta.md").replace(/^# Software Factory Delta Report:.*$/m, "# Software Factory Delta Report: /repos/other")
+  const own = runCli({
+    args: ["--report", "voicebox-qa-station-delta.md", "--repo", "owner/voicebox/"],
+    reports: { "voicebox-qa-station-delta.md": fixture("voicebox-qa-station-delta.md") },
+  });
+  const mismatch = runCli({
+    args: ["--report", "voicebox-qa-station-delta.md", "--repo", "owner/voicebox/"],
+    reports: { "voicebox-qa-station-delta.md": foreign },
+  });
+  const publish = runCli({
+    args: ["--report", "voicebox-qa-station-delta.md", "--repo", "owner/voicebox/", "--file-issues"],
+    reports: { "voicebox-qa-station-delta.md": foreign },
+  });
+  try {
+    assert.equal(own.status, 0, `our own repo with a trailing slash was refused: ${own.stderr}`);
+    assert.match(own.stdout, /PUBLISH ISSUE/);
+    for (const [label, res] of [["plan", mismatch], ["publish", publish]]) {
+      assert.equal(res.status, 1, `${label}: a trailing-slash --repo disarmed the refusal (${res.stdout})`);
+      assert.match(res.stderr, /refusing to publish another repository's finding here/);
+      assert.ok(!res.ghCalls.some((c) => c.startsWith("issue create")), `${label}: a foreign finding was published`);
+    }
+  } finally {
+    for (const res of [own, mismatch, publish]) rmSync(res.box, { recursive: true, force: true });
+  }
+});
+
+test("--write-plan is ATOMIC, and a failed write leaves no residue (round 4 P2/P3)", () => {
+  const res = runCli({
+    args: ["--report", "voicebox-perf-review-delta.md", "--write-plan", "%PLAN%/out/plan.json"],
+    reports: { "voicebox-perf-review-delta.md": fixture("voicebox-perf-review-delta.md") },
+    env: { VOICEBOX_FACTORY_REPO: null },
+  });
+  const out = join(res.privateDir, "out");
+  const planPath = join(out, "plan.json");
+  const rerun = (dest) =>
+    spawnSync(process.execPath, [SCRIPT, "--report", "voicebox-perf-review-delta.md", "--write-plan", dest], {
+      cwd: res.repo,
+      encoding: "utf8",
+      timeout: 30000,
+      env: { ...process.env, VOICEBOX_FACTORY_PRIVATE_DIR: res.privateDir },
+    });
+  try {
+    assert.equal(res.status, 0, `the first write failed: ${res.stderr}`);
+    assert.ok(existsSync(planPath), "the first write produced no plan");
+
+    // (1) ATOMICITY. In a directory that cannot be written, creating the TEMP file fails while writing
+    // to an EXISTING file still succeeds (the permission is on the file, not the directory). So a
+    // direct writeFileSync(dest) would silently replace the old plan; temp+rename cannot.
+    writeFileSync(planPath, "THE PREVIOUS PLAN\n");
+    chmodSync(out, 0o555);
+    const locked = rerun(planPath);
+    chmodSync(out, 0o755);
+    assert.equal(locked.status, 1, `the locked write did not refuse: ${locked.stdout}`);
+    assert.match(locked.stderr, /could not write the plan to/);
+    assert.equal(readFileSync(planPath, "utf8"), "THE PREVIOUS PLAN\n", "a failed write replaced the old plan");
+
+    // (2) RESIDUE. A locked directory never creates the temp file, so it cannot catch a missing
+    // cleanup. This shape does: the temp file IS written and the rename then fails because the
+    // destination is an existing directory (EISDIR) — the case a reviewer reproduced.
+    const dirDest = join(res.privateDir, "plan-dir");
+    mkdirSync(dirDest, { recursive: true });
+    const asDir = rerun(dirDest);
+    assert.equal(asDir.status, 1, `writing a plan over a directory did not refuse: ${asDir.stdout}`);
+    assert.match(asDir.stderr, /could not write the plan to/);
+    assert.ok(statSync(dirDest).isDirectory(), "the directory destination was replaced");
+    const leftovers = readdirSync(res.privateDir).filter((n) => n.includes(".tmp-"));
+    assert.deepEqual(leftovers, [], `a failed write left its temporary file behind: ${leftovers.join(", ")}`);
+  } finally {
+    try { chmodSync(out, 0o755); } catch { /* already readable */ }
+    rmSync(res.box, { recursive: true, force: true });
+  }
+});
+
+test("HUMAN-REVIEW REASON round-trips through the markers, and an unmodelled reason is not masked", () => {
+  // The round-4 green mutant: parseMarkers could drop the reason and the promote fallback would
+  // re-infer the SAME value for an identity-critical station, so the field was unexercised.
+  const finding = {
+    agent: "vuln-discovery", ruleId: "unsanitized-html", path: "public/x.js", lineNumber: "1",
+    title: "t", description: "d", snippet: "s", remediation: "r", state: "new",
+    effectiveSeverity: "critical", severityReported: "critical", identityCritical: true,
+    fingerprint: "6".repeat(64), identitySource: "recomputed-and-verified",
+  };
+  for (const verified of [{ includeLow: false }, { includeLow: false, confirmedFunctionalityChange: true }]) {
+    const verdict = routeFinding(finding, verified);
+    const parsed = parseMarkers(markerFor(finding, verdict));
+    assert.equal(parsed.humanReviewReason, verdict.humanReviewReason, `the reason did not round-trip (${verdict.humanReviewReason})`);
+  }
+  // "both" is a reason the station-based inference would NEVER produce for this station (it would say
+  // model-prose), so a dropped marker field changes the message and the test notices.
+  const both = routeFinding(finding, { confirmedFunctionalityChange: true });
+  assert.equal(both.humanReviewReason, "both");
+  const res = runCli({
+    args: ["--promote", "10", "--apply", "--repo", "owner/voicebox"],
+    stubGh: ghStubViewing(
+      JSON.stringify({
+        number: 10, state: "OPEN", title: "[human-review] [factory/critical] vuln-discovery: stub", url: "https://example.invalid/10", labels: [],
+        body: `<!-- factory-fingerprint: ${finding.fingerprint} -->\n<!-- factory-station: vuln-discovery -->\n<!-- factory-severity: critical -->\n<!-- factory-state: new -->\n<!-- factory-human-review -->\n<!-- factory-human-review-reason: both -->`,
+        comments: [{ body: "<!-- factory-review: alice -->" }],
+      }),
+    ),
+  });
+  try {
+    const comment = res.bdCalls.find((c) => c.startsWith("comment"));
+    assert.ok(comment, `no bead comment: ${res.bdCalls.join(" | ")}`);
+    assert.match(comment, /changes functionality AND this station's prose is model-authored/, `the 'both' reason did not survive: ${comment}`);
+  } finally {
+    rmSync(res.box, { recursive: true, force: true });
   }
 });

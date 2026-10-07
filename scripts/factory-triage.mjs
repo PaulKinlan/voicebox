@@ -42,7 +42,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -503,6 +503,36 @@ export function routeFinding(finding, { confirmedFunctionalityChange = false, in
   return { action: "issue", humanReview: Boolean(humanReviewReason), humanReviewReason, reasons };
 }
 
+/**
+ * Triage markers written by ANOTHER tool on an inbound issue, read here and never written here.
+ *
+ * Coord's ruling (voicebox-beads-h1u0) puts the existing-issue comment surface with miniapps'
+ * commenter. Promotion of a reviewed *human-filed* issue is allowed, so this is the read-only seam:
+ * one entry per finding the comments describe, in comment order. Nothing in this module writes a
+ * marker into a comment.
+ */
+export function triageMarkersFromComments(comments) {
+  const found = [];
+  for (const comment of comments ?? []) {
+    const body = String(comment?.body ?? "");
+    const fingerprints = [
+      ...body.matchAll(/<!--\s*factory-triage-comment:\s*([0-9a-f]{16,64})\s*-->/g),
+    ].map((m) => m[1]);
+    if (fingerprints.length === 0) continue;
+    const read = (name) => (body.match(new RegExp(`<!--\\s*factory-${name}:\\s*(.*?)\\s*-->`)) ?? [])[1] ?? null;
+    const station = read("station");
+    const severity = read("severity");
+    const state = read("state");
+    for (const fingerprint of fingerprints) {
+      // A comment describing several findings may carry one station block or several; the markers are
+      // read per comment and applied to each fingerprint it names, which is why the shared format asks
+      // for one block per finding.
+      found.push({ fingerprint, station, severity, state, humanReview: /<!--\s*factory-human-review\s*-->/.test(body) });
+    }
+  }
+  return found;
+}
+
 /** The machine-readable identity of a published issue, greppable in the body. */
 export function markerFor(finding, verdict) {
   const lines = [
@@ -867,7 +897,6 @@ const USAGE = `Usage:
   node scripts/factory-triage.mjs --report <path> [--json]
   node scripts/factory-triage.mjs --report <path> --file-issues
   node scripts/factory-triage.mjs --promote <issue-number> --reviewed-by <actor> [--apply]
-  node scripts/factory-triage.mjs --report <path> --comment <issue-number>
   node scripts/factory-triage.mjs --report <path> --write-plan <path.json>   # LOCAL, needs no --repo
 
 Reads a factory delta report written with \`--sink file\` and publishes a sanitised PUBLIC issue for
@@ -880,11 +909,12 @@ Options:
   --file-issues                Publish the issues (default: plan only, nothing is written)
   --review <number>            Record a review verdict ON the issue (required before promotion)
   --reviewed-by <actor>        Who performed the review; required by --review
-  --promote <number>           Convert a REVIEWED issue into a bead (the only bead path)
-  --comment <number>           Append sanitised triage to an EXISTING issue (alias --issue-number)
-                               Never creates an issue or a bead, and never edits the issue body
+  --promote <number>           Convert a REVIEWED issue into a bead (the only bead path).
+                               The issue is either one this publisher created, or a human-filed one
+                               that carries triage markers in its comments (read-only)
+  --finding <fingerprint>      With --promote: which finding when the issue carries several
   --notes <text>               Notes to record with --review
-  --allow-closed               With --promote/--comment: allow a closed issue (default: refused)
+  --allow-closed               With --promote: allow a closed issue (default: refused)
   --allow-foreign-target       Publish a report whose target is not the --repo repository
   --apply                      With --promote: actually create the bead
   --repo <owner/name>          Repository for issues (default: the origin remote, else gh's repo)
@@ -902,15 +932,14 @@ Exit codes:
   0  a plan was produced, an issue was published, or a bead was created
   1  usage or policy refusal (an in-repo report, an unreadable file or board, a foreign target), or a
      publication/bead write that FAILED — a partial publication is never reported as success
-  2  nothing actionable: no findings in band, every finding already published, or nothing new
-     left to triage on the issue named by --comment`;
+  2  nothing actionable: no findings in band, or every finding is already published`;
 
 function parseArgs(argv) {
   const opts = {
     report: null, reportDir: null, target: null, agent: null, apply: false, includeLow: false,
     functionality: new Set(), json: false, privateRoot: null, fileIssues: false, promote: null,
     reviewedBy: null, repo: null, help: false, review: null, notes: null, selfTest: false, allowClosed: false,
-    comment: null, allowForeignTarget: false, writePlan: null,
+    allowForeignTarget: false, writePlan: null, finding: null,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -933,8 +962,14 @@ function parseArgs(argv) {
       case "--self-test": opts.selfTest = true; break;
       case "--allow-foreign-target": opts.allowForeignTarget = true; break;
       case "--write-plan": opts.writePlan = next(); break;
+      case "--finding": opts.finding = next(); break;
+      // --comment/--issue-number are REMOVED (coord): the inbound-issue comment surface belongs to
+      // miniapps' commenter. A stale caller gets a named refusal rather than a silent mode change.
       case "--comment":
-      case "--issue-number": opts.comment = next(); break;
+      case "--issue-number":
+        throw new Error(
+          `${arg} was removed: this publisher does not comment on existing issues. The inbound-issue comment surface belongs to tools/factory-issue-commenter.mjs (voicebox-beads-cbxo); this script reads those markers read-only for --promote.`,
+        );
       case "--allow-closed": opts.allowClosed = true; break;
       case "--reviewed-by": opts.reviewedBy = next(); break;
       case "--repo": opts.repo = next(); break;
@@ -960,7 +995,12 @@ export function resolveReportPath(arg, privateRoot) {
 /** Build the whole plan: what would be published and why, plus what is skipped and why. */
 export function buildPlan(reportFiles, opts) {
   const entries = [];
-  const repoName = opts.repo ? String(opts.repo).split("/").pop().toLowerCase() : null;
+  // Normalised the same way the REPORT's target is: `owner/voicebox/` used to parse to an empty name,
+  // which is falsy, which skipped the cross-target refusal entirely — the mirror of the bug this guard
+  // was added for. An unreadable --repo fails closed rather than disarming the check.
+  const repoName = opts.repo
+    ? String(opts.repo).trim().replace(/[\\/]+$/, "").split(/[\\/]/).pop().toLowerCase()
+    : null;
   for (const file of reportFiles) {
     const agent = opts.agent ?? agentFromReportName(file);
     if (!agent) throw new Error(`${file}: cannot determine the station; pass --agent`);
@@ -1053,91 +1093,6 @@ function serialisablePlanEntry(entry, { privateRoot } = {}) {
   };
 }
 
-/**
- * Every fingerprint already recorded by this mode on an issue, read from its COMMENTS.
- *
- * The marker lives in the comment rather than the body on purpose: an inbound issue stays inbound
- * (its body untouched) for the router that triages it, and this set is what stops a re-scan spamming
- * the thread with findings a reader has already been shown.
- */
-export function triagedFingerprints(comments) {
-  const seen = new Set();
-  for (const comment of comments ?? []) {
-    for (const match of String(comment?.body ?? "").matchAll(/<!--\s*factory-triage-comment:\s*([0-9a-f]{16,64})\s*-->/g)) {
-      seen.add(match[1]);
-    }
-  }
-  return seen;
-}
-
-/** The sanitised triage comment for findings not yet recorded on the issue. */
-export function buildTriageComment(entries, { privateRoot, repo, issueNumber } = {}) {
-  const stations = [...new Set(entries.map((e) => e.finding.agent))].join(", ");
-  const parts = [
-    `Factory triage for this issue (station${entries.length === 1 ? "" : "s"}: ${stations}).`,
-    "",
-    "Findings below come from a deterministic scan of this repository. They are recorded here rather than",
-    "filed as separate issues: this issue is the thread a person already opened, and a second issue for",
-    "the same subject would split the conversation.",
-  ];
-  for (const entry of entries) {
-    const { finding, verdict } = entry;
-    const published = sanitizeFinding(finding, { privateRoot });
-    parts.push(
-      "",
-      `**${finding.agent}** · severity \`${finding.effectiveSeverity}\` · state \`${finding.state}\` · ${verdict.action === "issue" ? "publishable" : "not published as a new issue"}`,
-      `- Rule \`${maskText(finding.ruleId)}\` at \`${published.path}:${published.lineNumber ?? "?"}\``,
-      `- ${entry.displayTitle}`,
-      ...verdict.reasons.map((reason) => `- ${reason}`),
-      "",
-      `<!-- factory-triage-comment: ${finding.fingerprint} -->`,
-      `<!-- factory-station: ${finding.agent} -->`,
-      `<!-- factory-severity: ${finding.effectiveSeverity} -->`,
-      `<!-- factory-state: ${finding.state} -->`,
-    );
-  }
-  parts.push(
-    "",
-    "<details>",
-    "<summary>Publication policy and provenance</summary>",
-    "",
-    PUBLICATION_DECLARATION,
-    "</details>",
-  );
-  return parts.join("\n");
-}
-
-/** Append triage to an EXISTING issue. Comment-only: no issue, no bead, no body edit. */
-function commentOnIssue(number, repo, entries, { privateRoot, apply, allowClosed }) {
-  const issue = readIssue(number, repo);
-  if (!issue) {
-    process.stderr.write(`could not read issue ${repo}#${number}\n`);
-    return 1;
-  }
-  if (String(issue.state ?? "").toUpperCase() === "CLOSED" && !allowClosed) {
-    process.stderr.write(`${repo}#${number} is closed: triage is recorded on open issues (pass --allow-closed to override)\n`);
-    return 1;
-  }
-  const already = triagedFingerprints(issue.comments);
-  const fresh = entries.filter((entry) => !already.has(entry.finding.fingerprint));
-  if (fresh.length === 0) {
-    process.stdout.write(`nothing new: all ${entries.length} finding(s) are already triaged on ${repo}#${number}\n`);
-    return 2;
-  }
-  const body = buildTriageComment(fresh, { privateRoot, repo, issueNumber: number });
-  if (!apply) {
-    process.stdout.write(`would comment on ${repo}#${number} with ${fresh.length} finding(s) (${entries.length - fresh.length} already recorded)\n${body}\n`);
-    return 0;
-  }
-  const res = gh(["issue", "comment", String(number), "--body", body], { repo });
-  if (res.error || res.status !== 0) {
-    process.stderr.write(`could not comment on ${repo}#${number}: ${res.stderr || res.error}\n`);
-    return 1;
-  }
-  process.stdout.write(`triaged: ${fresh.length} finding(s) recorded on ${repo}#${number}\n`);
-  return 0;
-}
-
 /** Publish one issue per actionable finding, with dedupe against the issues already filed. */
 function fileIssues(entries, { repo, target }) {
   const existing = existingIssues(repo);
@@ -1191,9 +1146,40 @@ function promote(opts, { repo, target }) {
     return 1;
   }
   const markers = parseMarkers(issue.body ?? "");
-  if (!markers.fingerprint) {
-    process.stderr.write(`${repo}#${number} carries no factory fingerprint marker: refusing to promote an issue this publisher did not create\n`);
-    return 1;
+  const triaged = triageMarkersFromComments(issue.comments);
+  const distinct = [...new Set(triaged.map((t) => t.fingerprint))];
+  let identity = markers.fingerprint
+    ? { fingerprint: markers.fingerprint, station: markers.station, severity: markers.severity, state: markers.state, humanReview: markers.humanReview, humanReviewReason: markers.humanReviewReason, ruleId: (issue.body.match(/\*\*Rule\*\*:\s*`([^`]+)`/) ?? [])[1] ?? "unclassified" }
+    : null;
+  if (!identity) {
+    if (distinct.length === 0) {
+      // Neither shape: this is an issue nothing has identified, and a bead needs an identity.
+      process.stderr.write(
+        `${repo}#${number} carries no factory fingerprint in its body and no triage marker in its comments: refusing to promote an issue nothing has identified\n`,
+      );
+      return 1;
+    }
+    // More than one finding in the thread means the BEAD's subject is a choice, not a derivation.
+    let chosen = distinct.length === 1 ? distinct[0] : null;
+    if (!chosen) {
+      if (!opts.finding) {
+        process.stderr.write(
+          `${repo}#${number} carries ${distinct.length} findings (${distinct.map((f) => f.slice(0, 16)).join(", ")}): pass --finding <fingerprint> to say which one this bead is for\n`,
+        );
+        return 1;
+      }
+      const wanted = String(opts.finding).toLowerCase();
+      const matches = distinct.filter((f) => f.toLowerCase().startsWith(wanted));
+      if (matches.length !== 1) {
+        process.stderr.write(
+          `--finding ${opts.finding} matches ${matches.length} of the findings on ${repo}#${number} (${distinct.map((f) => f.slice(0, 16)).join(", ")}): refusing to guess\n`,
+        );
+        return 1;
+      }
+      chosen = matches[0];
+    }
+    const block = triaged.find((t) => t.fingerprint === chosen);
+    identity = { ...block, humanReviewReason: null, ruleId: "triaged" };
   }
   // The marker is posted as a COMMENT on the issue, so reading only the body missed it: the first
   // live promotion wrote a marker that its own guard could not see, which would have permitted a
@@ -1232,24 +1218,24 @@ function promote(opts, { repo, target }) {
     process.stderr.write(`${repo}#${number} is closed: a closed issue is not work to start (pass --allow-closed to override)\n`);
     return 1;
   }
-  const severity = VALID_SEVERITIES.includes(markers.severity) ? markers.severity : "critical";
+  const severity = VALID_SEVERITIES.includes(identity.severity) ? identity.severity : "critical";
   const finding = {
-    station: markers.station ?? "unknown",
+    station: identity.station ?? "unknown",
     severity,
     // The routing value `priorityFor` reads. An unrecognised marker fails closed to `critical`,
     // matching how the badge is treated at publish time.
     effectiveSeverity: severity,
-    state: markers.state ?? "new",
-    humanReview: markers.humanReview,
-    ruleId: (issue.body.match(/\*\*Rule\*\*:\s*`([^`]+)`/) ?? [])[1] ?? "unclassified",
-    fingerprint: markers.fingerprint,
+    state: identity.state ?? "new",
+    humanReview: Boolean(identity.humanReview),
+    ruleId: identity.ruleId,
+    fingerprint: identity.fingerprint,
   };
   const existing = existingBeadFingerprints(target);
   if (existing === null) {
     process.stderr.write("could not list existing beads to dedupe against: nothing filed\n");
     return 1;
   }
-  const matches = existing.get(markers.fingerprint) ?? [];
+  const matches = existing.get(finding.fingerprint) ?? existing.get(String(finding.fingerprint).slice(0, 16)) ?? [];
   if (matches.length > 0) {
     process.stderr.write(`${repo}#${number} is already tracked by ${matches.map((m) => m.id).join(", ")}: nothing filed\n`);
     return 1;
@@ -1276,7 +1262,7 @@ function promote(opts, { repo, target }) {
     // The reason travels with the flag (`factory-human-review-reason`). Older issues carry no reason,
     // so the fallback infers from the station rather than asserting a cause it cannot know.
     const why =
-      markers.humanReviewReason ??
+      identity.humanReviewReason ??
       (IDENTITY_CRITICAL_AGENTS.has(markers.station) ? "model-prose" : "functionality-change");
     spawnSync(
       "bd",
@@ -1284,11 +1270,11 @@ function promote(opts, { repo, target }) {
       { cwd: target, timeout: 60000 },
     );
   }
-  const comment = gh(["issue", "comment", number, "--body", `Promoted to bead \`${id}\` by ${reviewedBy}.${bead.blocked ? " The bead is BLOCKED pending the human review decision recorded on this issue." : ""}\n\n<!-- factory-promoted: ${id} -->`], { repo });
+  const comment = gh(["issue", "comment", number, "--body", `Promoted to bead \`${id}\` by ${reviewedBy} from ${identity.fingerprint.slice(0, 16)}.${bead.blocked ? " The bead is BLOCKED pending the human review decision recorded on this issue." : ""}\n\n<!-- factory-promoted: ${id} -->`], { repo });
   if (comment.error || comment.status !== 0) {
     process.stderr.write(`warning: created ${id} but could not comment on the issue: ${comment.stderr}\n`);
   }
-  process.stdout.write(`filed: ${markers.fingerprint.slice(0, 16)} -> ${id}\n`);
+  process.stdout.write(`filed: ${finding.fingerprint.slice(0, 16)} -> ${id}\n`);
   return 0;
 }
 
@@ -1309,9 +1295,9 @@ function main(argv) {
   // Plan mode is LOCAL: it reads a report and prints a sanitised summary, so it needs no repository.
   // Only the modes that talk to GitHub require one — a nightly local run can inspect its findings
   // without naming a tracker, and the issue URL is simply unknown (`?/issues/`) until it is published.
-  const needsRepo = Boolean(opts.fileIssues || opts.review || opts.promote || opts.comment);
+  const needsRepo = Boolean(opts.fileIssues || opts.review || opts.promote);
   if (repo === null && needsRepo) {
-    const mode = opts.fileIssues ? "--file-issues" : opts.review ? "--review" : opts.promote ? "--promote" : "--comment";
+    const mode = opts.fileIssues ? "--file-issues" : opts.review ? "--review" : "--promote";
     process.stderr.write(`--repo <owner/name> (or $VOICEBOX_FACTORY_REPO) is required by ${mode}: it writes to a specific repository\n`);
     return 1;
   }
@@ -1390,12 +1376,21 @@ function main(argv) {
       );
       return 1;
     }
+    // Atomic because the destination is never the file being written: if anything fails, a
+    // pre-existing plan is left untouched and no half-written file is left where a reader finds it.
+    const tmp = `${dest}.tmp-${process.pid}`;
     try {
       if (!existsSync(dirname(dest))) mkdirSync(dirname(dest), { recursive: true });
-      const tmp = `${dest}.tmp-${process.pid}`;
       writeFileSync(tmp, `${serialised}\n`);
       renameSync(tmp, dest);
     } catch (error) {
+      // The temporary file is this call's own residue, so this call removes it: a failed
+      // --write-plan used to quietly litter the directory it was told to write into.
+      try {
+        rmSync(tmp, { force: true });
+      } catch {
+        // nothing further can be done about it; the real error is the one reported below
+      }
       process.stderr.write(`could not write the plan to ${dest}: ${error.message}\n`);
       return 1;
     }
@@ -1404,16 +1399,6 @@ function main(argv) {
   if (opts.json) {
     process.stdout.write(`${serialised}\n`);
   } else process.stdout.write(`${describePlan(plan, { privateRoot: opts.privateRoot })}\n`);
-  if (opts.comment) {
-    // Deliberately independent of `actionable`: a comment records every finding the scan produced,
-    // including the ones that are not published as issues, because the reader of THIS issue asked a
-    // question and a silently dropped finding would be invisible.
-    return commentOnIssue(opts.comment, repo, plan, {
-      privateRoot,
-      apply: true,
-      allowClosed: opts.allowClosed,
-    });
-  }
   const actionable = plan.filter((e) => e.verdict.action === "issue");
   if (actionable.length === 0) return 2;
   if (opts.fileIssues) return fileIssues(plan, { repo, target });
