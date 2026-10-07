@@ -202,6 +202,13 @@ If the comments describe **more than one** finding, promotion refuses and lists 
 findings while a bead carries one identity, so that choice is explicit rather than derived. An issue
 that neither its body nor its comments identify is refused by name.
 
+**A thread can carry one verdict per finding, and one bead per reviewed finding.** The reviewer named in
+the bead is the author of the verdict that authorises *that* finding — reading the first verdict on the
+issue attributed the promotion to someone who had reviewed a different finding. The promotion receipt
+records which finding it covers (`<!-- factory-promoted-fingerprint: … -->`), so promoting the second
+reviewed finding from the same issue is allowed while re-promoting the first is refused by name. A record
+without a fingerprint predates that rule and blocks only an issue that identifies exactly one finding.
+
 **The verdict is tied to a finding.** `--review` stamps the finding it is about
 (`<!-- factory-review-fingerprint: … -->`, automatic when the issue names exactly one), and promotion
 requires a verdict that names the identity being promoted: a verdict tied to a different finding is

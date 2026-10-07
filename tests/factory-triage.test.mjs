@@ -946,7 +946,7 @@ EOF
   });
   try {
     assert.equal(resBody.status, 1);
-    assert.match(resBody.stderr, /was already promoted to voicebox-beads-prev: refusing to create a second bead/);
+    assert.match(resBody.stderr, /was already promoted to voicebox-beads-prev[^:]*: refusing to create a second bead/);
     assert.equal(resBody.bdCalls.length, 0);
   } finally {
     rmSync(resBody.box, { recursive: true, force: true });
@@ -976,7 +976,7 @@ EOF
   });
   try {
     assert.equal(resComment.status, 1);
-    assert.match(resComment.stderr, /was already promoted to voicebox-beads-comment-prev: refusing to create a second bead/);
+    assert.match(resComment.stderr, /was already promoted to voicebox-beads-comment-prev[^:]*: refusing to create a second bead/);
     assert.equal(resComment.bdCalls.length, 0);
   } finally {
     rmSync(resComment.box, { recursive: true, force: true });
@@ -2907,4 +2907,61 @@ test("declaredActionableCount reads the report's own summary table, and says nul
   // Bolded and unbolded cells both count, and it reads the FIRST numeric row after the header.
   assert.equal(declaredActionableCount("| New | Regressed |\n|:---:|:---:|\n| 3 | 2 |\n| 9 | 9 |"), 5);
   assert.equal(declaredActionableCount("| New | Regressed |\n| **4** | **1** |"), 5);
+});
+
+test("MULTI-VERDICT THREAD: each finding keeps its own reviewer, and each reviewed finding yields one bead (round 9)", () => {
+  // Two findings, two verdicts by two different reviewers. The old code resolved the reviewer by
+  // scanning the thread globally, so promoting B was attributed to A's reviewer and the CORRECT
+  // --reviewed-by was rejected as a mismatch.
+  const a = "7a".repeat(32);
+  const b = "8b".repeat(32);
+  const thread = (extraComments = []) =>
+    JSON.stringify({
+      number: 12, state: "OPEN", title: "Two findings", url: "https://example.invalid/12", labels: [], body: "human words",
+      comments: [
+        { body: `<!-- factory-triage-comment: ${a} -->\n<!-- factory-station: qa-station -->\n<!-- factory-severity: high -->` },
+        { body: `<!-- factory-triage-comment: ${b} -->\n<!-- factory-station: docs-drift -->\n<!-- factory-severity: low -->` },
+        { body: `<!-- factory-review: alice -->\n<!-- factory-review-fingerprint: ${a} -->` },
+        { body: `<!-- factory-review: bob -->\n<!-- factory-review-fingerprint: ${b} -->` },
+        ...extraComments,
+      ],
+    });
+
+  // B promoted by bob: accepted, and the bead/receipt name BOB.
+  const byBob = runCli({ args: ["--promote", "12", "--finding", b.slice(0, 16), "--reviewed-by", "bob", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(thread()) });
+  // B promoted claiming alice: refused, because alice reviewed A.
+  const wrongReviewer = runCli({ args: ["--promote", "12", "--finding", b.slice(0, 16), "--reviewed-by", "alice", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(thread()) });
+  // A promoted by alice: accepted.
+  const byAlice = runCli({ args: ["--promote", "12", "--finding", a.slice(0, 16), "--reviewed-by", "alice", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(thread()) });
+  // The issue already carries a promotion record for A: B must STILL be promotable (one bead per
+  // reviewed finding), while A itself is refused.
+  const afterA = thread([{ body: `<!-- factory-promoted: voicebox-beads-a -->\n<!-- factory-promoted-fingerprint: ${a} -->` }]);
+  const secondB = runCli({ args: ["--promote", "12", "--finding", b.slice(0, 16), "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(afterA) });
+  const againA = runCli({ args: ["--promote", "12", "--finding", a.slice(0, 16), "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(afterA) });
+
+  try {
+    assert.equal(byBob.status, 0, byBob.stderr);
+    const bobCreate = byBob.bdCalls.find((c) => c.startsWith("create"));
+    assert.match(bobCreate, /by bob/, `the bead was attributed to the wrong reviewer: ${bobCreate}`);
+    const bobReceipt = byBob.ghCalls.find((c) => c.startsWith("issue comment"));
+    assert.match(bobReceipt, /by bob from 8b8b8b8b8b8b8b8b/, `the receipt named the wrong reviewer: ${bobReceipt}`);
+    assert.match(bobReceipt, new RegExp(`factory-promoted-fingerprint: ${b}`), `the receipt did not name the finding: ${bobReceipt}`);
+
+    assert.equal(wrongReviewer.status, 1, `a verdict authorising another finding was accepted: ${wrongReviewer.stdout}`);
+    assert.match(wrongReviewer.stderr, /does not match the reviewer recorded/);
+    assert.equal(wrongReviewer.bdCalls.length, 0);
+
+    assert.equal(byAlice.status, 0, byAlice.stderr);
+    assert.match(byAlice.bdCalls.find((c) => c.startsWith("create")), /by alice/);
+
+    // One bead per reviewed finding: A's record does not block B...
+    assert.equal(secondB.status, 0, `an issue-wide record blocked a second reviewed finding: ${secondB.stderr}`);
+    assert.ok(secondB.bdCalls.some((c) => c.includes(`--external-ref factory:${b}`)), `B was not promoted: ${secondB.bdCalls.join(" | ")}`);
+    // ...and A is still refused, by name and finding.
+    assert.equal(againA.status, 1, `the already-promoted finding was promoted twice: ${againA.stdout}`);
+    assert.match(againA.stderr, /was already promoted to voicebox-beads-a/);
+    assert.equal(againA.bdCalls.length, 0);
+  } finally {
+    for (const res of [byBob, wrongReviewer, byAlice, secondB, againA]) rmSync(res.box, { recursive: true, force: true });
+  }
 });

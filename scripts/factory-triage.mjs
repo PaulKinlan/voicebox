@@ -621,6 +621,9 @@ export function parseMarkers(body) {
     humanReview: /<!--\s*factory-human-review\s*-->/.test(String(body)),
     humanReviewReason: read("human-review-reason"),
     promotedTo: (String(body).match(/<!--\s*factory-promoted:\s*(.*?)\s*-->/) ?? [])[1] ?? null,
+    // WHICH finding that bead is for. An issue can carry several findings and, under coord's rule, one
+    // bead per reviewed finding — so an issue-wide marker cannot be the thing that blocks a promotion.
+    promotedFingerprint: (String(body).match(/<!--\s*factory-promoted-fingerprint:\s*([0-9a-f]{16,64})\s*-->/) ?? [])[1] ?? null,
     reviewedBy: (String(body).match(/<!--\s*factory-review:\s*(.*?)\s*-->/) ?? [])[1] ?? null,
     // WHICH finding a verdict is about. Without it a verdict on an issue that names several findings
     // says only "somebody looked at this thread", which is not enough to promote one identity from it.
@@ -1279,17 +1282,38 @@ function promote(opts, { repo, target }) {
   }
 
   const comments = Array.isArray(issue.comments) ? issue.comments : [];
-  const promotedInComment = comments.map((c) => parseMarkers(c?.body ?? "").promotedTo).find(Boolean) ?? null;
-  const promotedTo = markers.promotedTo ?? promotedInComment;
-  if (promotedTo) {
-    process.stderr.write(`${repo}#${number} was already promoted to ${promotedTo}: refusing to create a second bead\n`);
+  const promotedRecords = [
+    ...(markers.promotedTo ? [{ bead: markers.promotedTo, fingerprint: markers.promotedFingerprint }] : []),
+    ...comments.flatMap((c) => {
+      const parsed = parseMarkers(c?.body ?? "");
+      return parsed.promotedTo ? [{ bead: parsed.promotedTo, fingerprint: parsed.promotedFingerprint }] : [];
+    }),
+  ];
+  // A record naming THIS finding blocks this promotion; a legacy record naming none blocks it only when
+  // the issue identifies a single finding, because then there is only one thing it can have promoted.
+  // When a legacy record meets a multi-finding issue, nothing says which finding it covered — the bead
+  // dedupe (external-ref factory:<fingerprint>) is what stops the already-promoted one being filed again.
+  const promotedThis = promotedRecords.find((record) => record.fingerprint === identity.fingerprint);
+  const legacyPromotion = promotedRecords.find((record) => !record.fingerprint);
+  const blockedPromotion = promotedThis ?? (legacyPromotion && candidates.length === 1 ? legacyPromotion : null);
+  if (blockedPromotion) {
+    process.stderr.write(
+      `${repo}#${number} was already promoted to ${blockedPromotion.bead}${promotedThis ? "" : " (the record does not name a finding, and this issue identifies exactly one)"}: refusing to create a second bead\n`,
+    );
     return 1;
   }
   // Review evidence must be ON the issue. `--reviewed-by` is a cross-check, not the evidence: a name
   // typed at promotion time proves nothing about whether a review happened.
   // P3: this was a second copy of `comments` nine lines above; there is one list.
+  // The verdict that authorises THIS finding. A thread can carry one verdict per finding, so taking the
+  // first verdict on the issue attributed the promotion to whoever reviewed a DIFFERENT finding, and
+  // rejected the correct --reviewed-by as a mismatch (both verified against the previous revision).
+  const verdictComment =
+    comments.find((c) => parseMarkers(c?.body ?? "").reviewFingerprint === identity.fingerprint) ?? null;
   const reviewedBy =
-    comments.map((c) => parseMarkers(c?.body ?? "").reviewedBy).find(Boolean) ?? markers.reviewedBy;
+    (verdictComment ? parseMarkers(verdictComment.body).reviewedBy : null) ??
+    comments.map((c) => parseMarkers(c?.body ?? "").reviewedBy).find(Boolean) ??
+    markers.reviewedBy;
   if (!reviewedBy) {
     process.stderr.write(
       `${repo}#${number} carries no review record: record one with \`--review <number> --reviewed-by <actor>\` before promoting\n`,
@@ -1393,7 +1417,7 @@ function promote(opts, { repo, target }) {
       { cwd: target, timeout: 60000 },
     );
   }
-  const comment = gh(["issue", "comment", number, "--body", `Promoted to bead \`${id}\` by ${reviewedBy} from ${identity.fingerprint.slice(0, 16)}.${bead.blocked ? " The bead is BLOCKED pending the human review decision recorded on this issue." : ""}\n\n<!-- factory-promoted: ${id} -->`], { repo });
+  const comment = gh(["issue", "comment", number, "--body", `Promoted to bead \`${id}\` by ${reviewedBy} from ${identity.fingerprint.slice(0, 16)}.${bead.blocked ? " The bead is BLOCKED pending the human review decision recorded on this issue." : ""}\n\n<!-- factory-promoted: ${id} -->\n<!-- factory-promoted-fingerprint: ${identity.fingerprint} -->`], { repo });
   if (comment.error || comment.status !== 0) {
     process.stderr.write(`warning: created ${id} but could not comment on the issue: ${comment.stderr}\n`);
   }
