@@ -166,9 +166,14 @@ test("factory-issue-commenter: embeds all 4 shared markers and sanitizes credent
     `- [HIGH] perf-review Startup probe blocks boot banner\n  fingerprint: \`5939431590a573447f5b1826c33d12e4b2429002741349d1d8313deb7af5cd9a\`\n  state: new\n`,
     "utf8"
   );
+  writeFileSync(
+    path.join(tmpDir, "voicebox-secret-scan-delta.md"),
+    `- [CRITICAL] secret-scan Hardcoded API credential in config\n  fingerprint: \`a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0\`\n  state: new\n`,
+    "utf8"
+  );
 
   const res = formatTriageComment({
-    stations: ["perf-review"],
+    stations: ["perf-review", "secret-scan"],
     findingsDir: tmpDir,
     commitSha: "1e970d595748a7c38b7fd39417e055165d7edecd",
   });
@@ -176,12 +181,14 @@ test("factory-issue-commenter: embeds all 4 shared markers and sanitizes credent
 
   assert.equal(res.ok, true);
   assert.equal(res.exitCode, 0);
-  assert.equal(res.newFindings, 1);
+  assert.equal(res.newFindings, 2);
   assert.ok(res.comment.includes("Software Factory Automated Triage"));
   assert.ok(res.comment.includes("<!-- factory-triage-comment: 5939431590a573447f5b1826c33d12e4b2429002741349d1d8313deb7af5cd9a -->"));
   assert.ok(res.comment.includes("<!-- factory-station: perf-review -->"));
   assert.ok(res.comment.includes("<!-- factory-severity: high -->"));
   assert.ok(res.comment.includes("<!-- factory-state: new -->"));
+  assert.ok(res.comment.includes("<!-- factory-station: secret-scan -->"));
+  assert.ok(res.comment.includes("<!-- factory-human-review -->"));
 
   // Text sanitization verification (including ordinary unquoted credentials)
   const dirty = "Exposed Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9 and token ghp_ABCDEF0123456789xyz and api_key='sk_test_123456' and password=my-super-secret-password and api_key=unquoted_secret_val";

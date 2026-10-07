@@ -19,6 +19,8 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { redactSecrets } from "../lib/redact.mjs";
 
+const SECURITY_STATIONS = new Set(["vuln-discovery", "vuln-triage", "vuln-verify", "secret-scan", "deps-supply-chain"]);
+
 /**
  * Format a safe, sanitized markdown triage comment from a directory of factory reports.
  *
@@ -70,12 +72,16 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
         const station = m[2];
         let description = m[3].trim();
         let state = "new";
+        let humanReview = SECURITY_STATIONS.has(station);
 
         // Check next few lines for fingerprint or state
         let fingerprint = "";
         for (let j = i + 1; j < Math.min(rawLines.length, i + 8); j++) {
           if (/^-\s+\[(CRITICAL|HIGH|MEDIUM|LOW|INFO)\]/i.test(rawLines[j])) {
             break;
+          }
+          if (/human[-_]?review:\s*true/i.test(rawLines[j]) || /<!--\s*factory-human-review\s*-->/i.test(rawLines[j])) {
+            humanReview = true;
           }
           const fpMatch = rawLines[j].match(/fingerprint:\s*`?([0-9a-f]{16,64})`?/i) ||
                           rawLines[j].match(/<!--\s*factory-fingerprint:\s*([0-9a-f]{16,64})\s*-->/i);
@@ -95,7 +101,7 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
         // Sanitize: strip credential patterns or secret tokens if present
         description = sanitizeFindingText(description);
 
-        findingItems.push({ severity: sev, station, description, fingerprint, state });
+        findingItems.push({ severity: sev, station, description, fingerprint, state, humanReview });
       }
     }
   }
@@ -148,11 +154,14 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
         lines.push(`- **${sev}** (${items.length}):`);
         for (const it of items) {
           lines.push(`  - [\`${it.station}\`] ${it.description}`);
-          // Embed all 4 shared triage markers per finding
+          // Embed all shared triage markers per finding
           lines.push(`    <!-- factory-triage-comment: ${it.fingerprint} -->`);
           lines.push(`    <!-- factory-station: ${it.station} -->`);
           lines.push(`    <!-- factory-severity: ${it.severity.toLowerCase()} -->`);
           lines.push(`    <!-- factory-state: ${it.state} -->`);
+          if (it.humanReview) {
+            lines.push(`    <!-- factory-human-review -->`);
+          }
         }
       }
     }
