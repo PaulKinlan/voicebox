@@ -61,7 +61,7 @@ for (const key of execFileSync('git', ['rev-parse', '--local-env-vars'], { encod
 // leak in, miss the shim's match, and let the "timeout" scenario finish — the instrument
 // measuring itself under someone else's budget (voicebox-beads-67b). Strip them: the fixture
 // always exercises the defaults it is written against.
-for (const key of ['VOICEBOX_GATE_UNIT_SECS', 'VOICEBOX_GATE_TESTS_SECS', 'VOICEBOX_GATE_LIVE_SECS', 'VOICEBOX_GATE_ACCEPT_SECS', 'VOICEBOX_PUSH_DESTINATIONS']) delete cleanEnv[key];
+for (const key of ['VOICEBOX_GATE_UNIT_SECS', 'VOICEBOX_GATE_TESTS_SECS', 'VOICEBOX_GATE_LIVE_SECS', 'VOICEBOX_GATE_ACCEPT_SECS', 'VOICEBOX_PUSH_DESTINATIONS', 'VOICEBOX_GATE_LOCK_WAIT_SECS', 'VOICEBOX_GATE_LOCK_DISABLE']) delete cleanEnv[key];
 const hasFlock = (() => { try { execFileSync('which', ['flock'], { stdio: 'ignore' }); return true; } catch { return false; } })();
 
 test('pre-push names the stage and cause, streams output, and refuses real failing tests', { timeout: 60000 }, () => {
@@ -516,24 +516,131 @@ test('gate lock serializes concurrent pre-push runs and announces waiting holder
       },
     }));
 
-    // Start a background holder process that holds the lock for 1.5 seconds
+    // Start a background holder process that holds the lock until explicitly signaled to release.
+    // Pipe stdin ensures the holder cannot hang if the test process aborts (closing stdin releases flock).
     const holder = spawn('sh', [
       '-c',
-      `exec 9>"${lockFile}"; flock 9; echo '{"pid":'$$',"branch":"holder-branch"}' > "${holderFile}"; echo READY; sleep 1.5`,
-    ], { stdio: ['ignore', 'pipe', 'inherit'] });
+      `exec 9>"${lockFile}"; flock 9; echo '{"pid":'$$',"branch":"holder-branch"}' > "${holderFile}"; echo READY; read _ || true`,
+    ], { stdio: ['pipe', 'pipe', 'inherit'] });
 
-    await new Promise((resolve) => {
+    const holderClosed = new Promise((resolve) => {
+      if (holder.exitCode !== null) resolve(holder.exitCode);
+      else holder.on('close', resolve);
+    });
+
+    await new Promise((resolve, reject) => {
       holder.stdout.on('data', (d) => {
         if (d.toString().includes('READY')) resolve();
       });
+      holder.on('error', reject);
     });
 
-    // Run pre-push.sh pointing at this lockfile: it should wait, announce holder PID, then succeed
-    const start = Date.now();
-    const result = spawnSync(path.join(repo, 'pre-push.sh'), [], {
+    // Run pre-push.sh asynchronously: it attempts flock, observes the holder, and waits.
+    // Observable synchronization: as soon as pre-push.sh emits 'Waiting for gate lock',
+    // we have proven exclusion, and release the holder to let pre-push.sh acquire and complete.
+    const runner = spawn(path.join(repo, 'pre-push.sh'), [], {
+      cwd: repo,
+      env: {
+        ...cleanEnv,
+        VOICEBOX_GATE_LOCK: lockFile,
+        VOICEBOX_GATE_HOLDER: holderFile,
+        VOICEBOX_SKIP_ACCEPT: '1',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let output = '';
+    let waitingObserved = false;
+
+    runner.stdout.on('data', (chunk) => {
+      const text = chunk.toString();
+      output += text;
+      if (output.includes('Waiting for gate lock') && !waitingObserved) {
+        waitingObserved = true;
+        // The runner has proven exclusion and is waiting on flock; release holder now
+        holder.stdin.end();
+      }
+    });
+
+    runner.stderr.on('data', (chunk) => {
+      output += chunk.toString();
+    });
+
+    let runnerExitCode;
+    let holderExitCode;
+    try {
+      runnerExitCode = await new Promise((resolve, reject) => {
+        runner.on('close', resolve);
+        runner.on('error', reject);
+      });
+      // Guarantee holder release even if runner did not observe wait, preventing a hang
+      holder.stdin.end();
+      holderExitCode = await holderClosed;
+    } finally {
+      holder.stdin.end();
+      if (holder.exitCode === null) holder.kill();
+    }
+
+    assert.equal(runnerExitCode, 0, output);
+    assert.equal(holderExitCode, 0, 'holder process must exit cleanly');
+    assert.ok(waitingObserved, 'must have observed runner enter Waiting for gate lock state');
+    assert.match(output, /Waiting for gate lock held by PID \d+/);
+    assert.match(output, /Acquired gate lock/);
+    assert.match(output, /ALL GATES GREEN/);
+
+    // Lock holder file must be cleaned up on release
+    assert.equal(existsSync(holderFile), false, 'holder file must be deleted after release');
+
+    // Negative control 1: When the lock holder refuses to release within timeout budget,
+    // pre-push.sh must fail closed with exit code 1 and report the timed out refusal.
+    const stubbornHolder = spawn('sh', [
+      '-c',
+      `exec 9>"${lockFile}"; flock 9; echo '{"pid":'$$',"branch":"stubborn-branch"}' > "${holderFile}"; echo READY; read _ || true`,
+    ], { stdio: ['pipe', 'pipe', 'inherit'] });
+
+    const stubbornClosed = new Promise((resolve) => {
+      if (stubbornHolder.exitCode !== null) resolve(stubbornHolder.exitCode);
+      else stubbornHolder.on('close', resolve);
+    });
+
+    try {
+      await new Promise((resolve, reject) => {
+        stubbornHolder.stdout.on('data', (d) => {
+          if (d.toString().includes('READY')) resolve();
+        });
+        stubbornHolder.on('error', reject);
+      });
+
+      const timeoutResult = spawnSync(path.join(repo, 'pre-push.sh'), [], {
+        cwd: repo,
+        encoding: 'utf8',
+        timeout: 15000,
+        env: {
+          ...cleanEnv,
+          VOICEBOX_GATE_LOCK: lockFile,
+          VOICEBOX_GATE_HOLDER: holderFile,
+          VOICEBOX_GATE_LOCK_WAIT_SECS: '1',
+          VOICEBOX_SKIP_ACCEPT: '1',
+        },
+      });
+
+      stubbornHolder.stdin.end();
+      await stubbornClosed;
+
+      const timeoutOutput = timeoutResult.stdout + timeoutResult.stderr;
+      assert.equal(timeoutResult.status, 1, timeoutOutput);
+      assert.match(timeoutOutput, /pre-push REFUSED: timed out waiting for gate lock after 1s/);
+      assert.match(timeoutOutput, /held by PID \d+/);
+    } finally {
+      stubbornHolder.stdin.end();
+      if (stubbornHolder.exitCode === null) stubbornHolder.kill();
+    }
+
+    // Negative control 2: When no lock is held, pre-push.sh acquires immediately without waiting
+    const freeResult = spawnSync(path.join(repo, 'pre-push.sh'), [], {
       cwd: repo,
       encoding: 'utf8',
-      timeout: 20000,
+      timeout: 15000,
       env: {
         ...cleanEnv,
         VOICEBOX_GATE_LOCK: lockFile,
@@ -542,18 +649,11 @@ test('gate lock serializes concurrent pre-push runs and announces waiting holder
       },
     });
 
-    const elapsed = Date.now() - start;
-    const output = result.stdout + result.stderr;
-    assert.equal(result.status, 0, output);
-    assert.match(output, /Waiting for gate lock held by PID \d+/);
-    assert.match(output, /Acquired gate lock/);
-    assert.match(output, /ALL GATES GREEN/);
-    assert.ok(elapsed >= 1000, `must have waited for the lock: elapsed ${elapsed}ms`);
-
-    // Lock holder file must be cleaned up on release
+    const freeOutput = freeResult.stdout + freeResult.stderr;
+    assert.equal(freeResult.status, 0, freeOutput);
+    assert.doesNotMatch(freeOutput, /Waiting for gate lock/);
+    assert.match(freeOutput, /ALL GATES GREEN/);
     assert.equal(existsSync(holderFile), false, 'holder file must be deleted after release');
-
-    await new Promise((resolve) => holder.on('close', resolve));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
