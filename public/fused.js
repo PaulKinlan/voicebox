@@ -2208,6 +2208,14 @@ async function renderEnvironments() {
         head.appendChild(removeBtn);
       }
       li.appendChild(head);
+      // WHERE the row points, in plain sight (voicebox-beads-mrr7): two "Worker Alpha" rows on two
+      // different hosts are legitimate declarations, and indistinguishable without the origin.
+      if (env.key !== "local" && env.origin) {
+        const origin = document.createElement("p");
+        origin.className = "env-origin";
+        origin.textContent = env.origin;
+        li.appendChild(origin);
+      }
       // The capability report is CONTAINED and SCROLLABLE, and it SUMMARISES: a long probe is a count
       // with the full list behind an expansion, so it never overwrites the name or the actions.
       // voicebox-beads-1jk: presence is not capability. The probe measured what the HOST has; the
@@ -2231,7 +2239,10 @@ async function renderEnvironments() {
         }
         cap.title = `probed ${env.capability.when ?? "at an unknown time"}`;
         li.appendChild(cap);
-      } else {
+      } else if (env.reachable !== false) {
+        // "not probed" is only worth saying about a host that COULD answer (voicebox-beads-mrr7):
+        // a host that is not running cannot be probed, so under an unreachable row the line was
+        // noise on top of the state that already says so.
         const cap = document.createElement("span");
         cap.className = "env-cap-none";
         cap.textContent = "not probed";

@@ -56,7 +56,7 @@ node server.mjs --doctor
 3. **Top Bar Controls**:
    - **Theme Toggle (`#theme-toggle`)**: Switch between Warm Paper (light) and Dark mode.
    - **Harnesses**: Inspect and activate installed coding agent harnesses (such as Pi or Claude Code) directly in the UI without setting environment variables.
-   - **Environments**: Manage local, fenced sandbox, and paired remote execution environments.
+   - **Environments**: Manage local, fenced sandbox, and paired remote execution environments. Declaring the same host twice keeps one row, and each row shows the origin it points at; a host that is not running is named unreachable with the remedy.
    - **Extensions**: Review extension capability disclosures, approve pending proposals, and inspect the WebAssembly tool shelf.
    - **Settings (⚙)**: Configure voice selection, assistant instructions, audio input/output devices, and provider API keys.
 
