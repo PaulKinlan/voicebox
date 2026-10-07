@@ -226,9 +226,6 @@ export function sanitizeFinding(finding, { privateRoot } = {}) {
   // severity. `credentialClass` is kept for callers that need to know which rule fired.
   const credentialClass = CREDENTIAL_AGENTS.has(finding.agent);
   const withheld = IDENTITY_CRITICAL_AGENTS.has(finding.agent) || isCredentialFinding(finding);
-  const snippet = withheld
-    ? `[withheld: matched value not published (${finding.path}:${finding.lineNumber ?? "?"})]`
-    : maskText(finding.snippet ?? "");
   const elide = (value) => {
     if (typeof value !== "string") return value;
     let out = maskText(value);
@@ -239,6 +236,11 @@ export function sanitizeFinding(finding, { privateRoot } = {}) {
     out = out.replace(/\/(?:home|Users)\/[A-Za-z0-9._-]+/g, "~");
     return out;
   };
+  // The notice names the location, so it is built from the ELIDED path. Interpolating the raw one
+  // published the operator's home directory (or the private report dir) into a public issue body.
+  const snippet = withheld
+    ? `[withheld: matched value not published (${elide(finding.path)}:${finding.lineNumber ?? "?"})]`
+    : elide(maskText(finding.snippet ?? ""));
   return {
     title: elide(finding.title ?? ""),
     description: elide(finding.description ?? ""),
@@ -487,7 +489,17 @@ export function routeFinding(finding, { confirmedFunctionalityChange = false, in
       "a human decides whether the behaviour change is wanted; if this issue is promoted the bead is filed BLOCKED, and nothing is auto-fixed",
     );
   }
-  return { action: "issue", humanReview: functionality, reasons };
+  // A security station's description and remediation are MODEL-AUTHORED prose, and this pipeline
+  // publishes at every severity, so those words reach the public tracker with no human in between.
+  // The finding is therefore flagged for human verification: the identity of the issue is enough for
+  // a reader, but nobody should act on an unreviewed remediation, and promotion files it BLOCKED.
+  const modelProse = IDENTITY_CRITICAL_AGENTS.has(finding.agent);
+  if (modelProse) {
+    reasons.push(
+      "this station's prose is model-authored and is published unreviewed by policy, so the issue is flagged for human verification; a promoted bead is filed BLOCKED",
+    );
+  }
+  return { action: "issue", humanReview: functionality || modelProse, reasons };
 }
 
 /** The machine-readable identity of a published issue, greppable in the body. */
@@ -541,15 +553,18 @@ export function parseMarkers(body) {
  * Build the published issue. Every string here is the published view: masked, with the private
  * report path and home directories elided, and with a security station's raw candidate withheld.
  */
-export function buildIssue(finding, verdict, { privateRoot, repo } = {}) {
+export function buildIssue(finding, verdict, { privateRoot, repo, selfTest = false } = {}) {
   const published = sanitizeFinding(finding, { privateRoot });
-  const refused = finding.identityCritical;
   // A credential finding publishes DERIVED TEXT ONLY, mirroring `lib/redaction.py:redact_finding`:
   // the triage model's own words cannot be checked for an echo of a value whose shape is unknown,
   // so its title, description and remediation are replaced by scanner-controlled facts. The
   // identity-critical rule is deliberately stricter than upstream here — a vulnerability agent's
   // candidate is an attack payload, and this pipeline publishes at every severity.
   const credential = isCredentialFinding(finding);
+  // A credential finding's evidence block is refused as well. `identityCritical` alone was not
+  // enough: a QUALITY station can raise a credential rule, and its snippet block then published the
+  // withheld notice (and, before the fix above, the raw path) into a public issue.
+  const refused = finding.identityCritical || credential;
   const location = `${published.path}:${published.lineNumber ?? "?"}`;
   if (credential) {
     published.title = displayTitle(finding, { privateRoot });
@@ -589,6 +604,9 @@ export function buildIssue(finding, verdict, { privateRoot, repo } = {}) {
     "</details>",
     "",
     markerFor(finding, verdict),
+    // A self-test is marked as one AT CREATION. It exists so the publisher can be driven end to end
+    // without a synthetic finding ever being mistaken for work, and promotion refuses it.
+    selfTest ? "<!-- factory-self-test -->" : "",
   ]
     .filter((line) => line !== "")
     .join("\n");
@@ -700,18 +718,22 @@ export function existingIssues(repo, { run = spawnSync } = {}) {
   if (!Array.isArray(rows)) return null;
   const index = new Map();
   for (const row of rows) {
-    const fingerprint = parseMarkers(row?.body ?? "").fingerprint;
-    if (!fingerprint) continue;
-    const list = index.get(fingerprint) ?? [];
-    list.push({ number: String(row.number ?? "?"), state: String(row.state ?? "") });
-    index.set(fingerprint, list);
+    // Both shapes are indexed. This publisher writes an HTML comment, but the factory's OWN
+    // github-issues sink (lib/findings.py:887-897) writes a markdown line with the same digest — and
+    // a dedupe that only understands its own marker would file a second public issue for one finding.
+    for (const fingerprint of fingerprintsInBody(row?.body ?? "")) {
+      const list = index.get(fingerprint) ?? [];
+      list.push({ number: String(row.number ?? "?"), state: String(row.state ?? "") });
+      index.set(fingerprint, list);
+    }
   }
   return index;
 }
 
 /** An open issue always wins; a closed one wins unless the finding regressed. */
 export function isIssueDuplicate(finding, existing) {
-  const matches = existing?.get(finding.fingerprint) ?? [];
+  // A row may carry the 16-hex prefix (a report in reduced form) or the full digest.
+  const matches = existing?.get(finding.fingerprint) ?? existing?.get(String(finding.fingerprint).slice(0, 16)) ?? [];
   if (matches.length === 0) return null;
   const open = matches.filter((m) => m.state.toUpperCase() !== "CLOSED");
   if (open.length > 0) return { numbers: open.map((m) => m.number), why: "an open issue already tracks it" };
@@ -719,6 +741,21 @@ export function isIssueDuplicate(finding, existing) {
     return { numbers: matches.map((m) => m.number), why: "a closed issue already tracked it and nothing regressed" };
   }
   return null;
+}
+
+/**
+ * Every fingerprint a body carries, in any shape this project's publishers use.
+ *
+ * `<target>-<station>` issues filed by `factory-triage` carry `<!-- factory-fingerprint: <digest> -->`;
+ * issues filed by the factory's own github-issues sink carry `**Fingerprint**: \`<digest>\``. Both are
+ * the same sha256, so dedupe reads both and neither publisher can duplicate the other's issue.
+ */
+export function fingerprintsInBody(body) {
+  const text = String(body ?? "");
+  const found = new Set();
+  for (const match of text.matchAll(/<!--\s*factory-fingerprint:\s*([0-9a-f]{16,64})\s*-->/g)) found.add(match[1]);
+  for (const match of text.matchAll(/\*\*Fingerprint\*\*:\s*`?([0-9a-f]{16,64})`?/g)) found.add(match[1]);
+  return [...found];
 }
 
 /** Labels that exist on the repository, or null when the list cannot be read. */
@@ -813,6 +850,7 @@ const USAGE = `Usage:
   node scripts/factory-triage.mjs --report <path> [--json]
   node scripts/factory-triage.mjs --report <path> --file-issues
   node scripts/factory-triage.mjs --promote <issue-number> --reviewed-by <actor> [--apply]
+  node scripts/factory-triage.mjs --report <path> --comment <issue-number>
 
 Reads a factory delta report written with \`--sink file\` and publishes a sanitised PUBLIC issue for
 each actionable finding, at every severity, with the triage record on the issue. It never creates a
@@ -825,8 +863,11 @@ Options:
   --review <number>            Record a review verdict ON the issue (required before promotion)
   --reviewed-by <actor>        Who performed the review; required by --review
   --promote <number>           Convert a REVIEWED issue into a bead (the only bead path)
+  --comment <number>           Append sanitised triage to an EXISTING issue (alias --issue-number)
+                               Never creates an issue or a bead, and never edits the issue body
   --notes <text>               Notes to record with --review
-  --allow-closed               With --promote: allow a closed issue (default: refused)
+  --allow-closed               With --promote/--comment: allow a closed issue (default: refused)
+  --allow-foreign-target       Publish a report whose target is not the --repo repository
   --apply                      With --promote: actually create the bead
   --repo <owner/name>          Repository for issues (default: the origin remote, else gh's repo)
   --target <path>              Repository the bead is filed in (default: this repo)
@@ -840,14 +881,17 @@ Options:
 
 Exit codes:
   0  a plan was produced, an issue was published, or a bead was created
-  1  usage or policy refusal (an in-repo report, an unreadable file, an unreadable board or issue)
-  2  nothing actionable: no findings in band, or every finding is already published`;
+  1  usage or policy refusal (an in-repo report, an unreadable file or board, a foreign target), or a
+     publication/bead write that FAILED — a partial publication is never reported as success
+  2  nothing actionable: no findings in band, every finding already published, or nothing new
+     left to triage on the issue named by --comment`;
 
 function parseArgs(argv) {
   const opts = {
     report: null, reportDir: null, target: null, agent: null, apply: false, includeLow: false,
     functionality: new Set(), json: false, privateRoot: null, fileIssues: false, promote: null,
     reviewedBy: null, repo: null, help: false, review: null, notes: null, selfTest: false, allowClosed: false,
+    comment: null, allowForeignTarget: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -868,6 +912,9 @@ function parseArgs(argv) {
       case "--review": opts.review = next(); break;
       case "--notes": opts.notes = next(); break;
       case "--self-test": opts.selfTest = true; break;
+      case "--allow-foreign-target": opts.allowForeignTarget = true; break;
+      case "--comment":
+      case "--issue-number": opts.comment = next(); break;
       case "--allow-closed": opts.allowClosed = true; break;
       case "--reviewed-by": opts.reviewedBy = next(); break;
       case "--repo": opts.repo = next(); break;
@@ -893,11 +940,22 @@ export function resolveReportPath(arg, privateRoot) {
 /** Build the whole plan: what would be published and why, plus what is skipped and why. */
 export function buildPlan(reportFiles, opts) {
   const entries = [];
+  const repoName = opts.repo ? String(opts.repo).split("/").pop().toLowerCase() : null;
   for (const file of reportFiles) {
     const agent = opts.agent ?? agentFromReportName(file);
     if (!agent) throw new Error(`${file}: cannot determine the station; pass --agent`);
     if (!STATION_CLASSES[agent]) throw new Error(`${file}: unknown station "${agent}" (see \`factory list\`)`);
     const report = parseReport(readFileSync(file, "utf8"), { agent });
+    // A report names its own target, and `--report-dir` takes every report in a directory. Publishing
+    // repo B's finding into repo A's tracker is silent and public, so the mismatch is a REFUSAL.
+    if (repoName && !opts.allowForeignTarget) {
+      const reported = String(report.target ?? "").split("/").pop().toLowerCase();
+      if (reported && reported !== repoName) {
+        throw new Error(
+          `${basename(file)}: the report targets "${report.target}" but --repo is ${opts.repo}: refusing to publish another repository's finding here (pass --allow-foreign-target to force)`,
+        );
+      }
+    }
     for (const finding of report.findings) {
       const confirmed = opts.functionality.has(finding.ruleId) || opts.functionality.has(finding.agent);
       const verdict = routeFinding(finding, { confirmedFunctionalityChange: confirmed, includeLow: opts.includeLow });
@@ -909,7 +967,11 @@ export function buildPlan(reportFiles, opts) {
         displayTitle: displayTitle(finding, { privateRoot: opts.privateRoot }),
       };
       if (verdict.action === "issue") {
-        entry.issue = buildIssue(finding, verdict, { privateRoot: opts.privateRoot, repo: opts.repo });
+        entry.issue = buildIssue(finding, verdict, {
+          privateRoot: opts.privateRoot,
+          repo: opts.repo,
+          selfTest: opts.selfTest,
+        });
       }
       entries.push(entry);
     }
@@ -917,7 +979,7 @@ export function buildPlan(reportFiles, opts) {
   return entries;
 }
 
-function describePlan(entries) {
+function describePlan(entries, { privateRoot } = {}) {
   const groups = { issue: [], skip: [] };
   for (const entry of entries) groups[entry.verdict.action].push(entry);
   const lines = [
@@ -927,7 +989,12 @@ function describePlan(entries) {
     for (const entry of groups[action]) {
       const { finding, verdict } = entry;
       const review = verdict.humanReview ? " [human-review]" : "";
-      lines.push(`  [${label}] P${priorityFor(finding)} ${finding.effectiveSeverity} ${finding.agent} ${finding.ruleId} ${finding.path}:${finding.lineNumber}${review}  (${entry.report})`);
+      // Masked and elided like every other published surface: a rule id can carry a token the model
+      // echoed, and a path can carry the operator's home directory. A CI log cannot be un-published.
+      const published = sanitizeFinding(finding, { privateRoot });
+      lines.push(
+        `  [${label}] P${priorityFor(finding)} ${finding.effectiveSeverity} ${finding.agent} ${maskText(finding.ruleId)} ${published.path}:${published.lineNumber}${review}  (${entry.report})`,
+      );
       lines.push(`      ${entry.displayTitle}`);
       for (const reason of verdict.reasons) lines.push(`      - ${reason}`);
     }
@@ -935,7 +1002,10 @@ function describePlan(entries) {
   return lines.join("\n");
 }
 
-function serialisablePlanEntry(entry) {
+function serialisablePlanEntry(entry, { privateRoot } = {}) {
+  // The JSON plan is an output surface too: it is captured by CI and read by other tools, so the
+  // rule id and the path are sanitised here for the same reason they are on the terminal.
+  const published = sanitizeFinding(entry.finding, { privateRoot });
   return {
     report: entry.report,
     target: entry.target,
@@ -944,8 +1014,8 @@ function serialisablePlanEntry(entry) {
     reasons: entry.verdict.reasons,
     finding: {
       agent: entry.finding.agent,
-      rule_id: entry.finding.ruleId,
-      path: entry.finding.path,
+      rule_id: maskText(entry.finding.ruleId),
+      path: published.path,
       line_number: entry.finding.lineNumber,
       state: entry.finding.state,
       severity: entry.finding.effectiveSeverity,
@@ -958,6 +1028,91 @@ function serialisablePlanEntry(entry) {
   };
 }
 
+/**
+ * Every fingerprint already recorded by this mode on an issue, read from its COMMENTS.
+ *
+ * The marker lives in the comment rather than the body on purpose: an inbound issue stays inbound
+ * (its body untouched) for the router that triages it, and this set is what stops a re-scan spamming
+ * the thread with findings a reader has already been shown.
+ */
+export function triagedFingerprints(comments) {
+  const seen = new Set();
+  for (const comment of comments ?? []) {
+    for (const match of String(comment?.body ?? "").matchAll(/<!--\s*factory-triage-comment:\s*([0-9a-f]{16,64})\s*-->/g)) {
+      seen.add(match[1]);
+    }
+  }
+  return seen;
+}
+
+/** The sanitised triage comment for findings not yet recorded on the issue. */
+export function buildTriageComment(entries, { privateRoot, repo, issueNumber } = {}) {
+  const stations = [...new Set(entries.map((e) => e.finding.agent))].join(", ");
+  const parts = [
+    `Factory triage for this issue (station${entries.length === 1 ? "" : "s"}: ${stations}).`,
+    "",
+    "Findings below come from a deterministic scan of this repository. They are recorded here rather than",
+    "filed as separate issues: this issue is the thread a person already opened, and a second issue for",
+    "the same subject would split the conversation.",
+  ];
+  for (const entry of entries) {
+    const { finding, verdict } = entry;
+    const published = sanitizeFinding(finding, { privateRoot });
+    parts.push(
+      "",
+      `**${finding.agent}** · severity \`${finding.effectiveSeverity}\` · state \`${finding.state}\` · ${verdict.action === "issue" ? "publishable" : "not published as a new issue"}`,
+      `- Rule \`${maskText(finding.ruleId)}\` at \`${published.path}:${published.lineNumber ?? "?"}\``,
+      `- ${entry.displayTitle}`,
+      ...verdict.reasons.map((reason) => `- ${reason}`),
+      "",
+      `<!-- factory-triage-comment: ${finding.fingerprint} -->`,
+      `<!-- factory-station: ${finding.agent} -->`,
+      `<!-- factory-severity: ${finding.effectiveSeverity} -->`,
+      `<!-- factory-state: ${finding.state} -->`,
+    );
+  }
+  parts.push(
+    "",
+    "<details>",
+    "<summary>Publication policy and provenance</summary>",
+    "",
+    PUBLICATION_DECLARATION,
+    "</details>",
+  );
+  return parts.join("\n");
+}
+
+/** Append triage to an EXISTING issue. Comment-only: no issue, no bead, no body edit. */
+function commentOnIssue(number, repo, entries, { privateRoot, apply, allowClosed }) {
+  const issue = readIssue(number, repo);
+  if (!issue) {
+    process.stderr.write(`could not read issue ${repo}#${number}\n`);
+    return 1;
+  }
+  if (String(issue.state ?? "").toUpperCase() === "CLOSED" && !allowClosed) {
+    process.stderr.write(`${repo}#${number} is closed: triage is recorded on open issues (pass --allow-closed to override)\n`);
+    return 1;
+  }
+  const already = triagedFingerprints(issue.comments);
+  const fresh = entries.filter((entry) => !already.has(entry.finding.fingerprint));
+  if (fresh.length === 0) {
+    process.stdout.write(`nothing new: all ${entries.length} finding(s) are already triaged on ${repo}#${number}\n`);
+    return 2;
+  }
+  const body = buildTriageComment(fresh, { privateRoot, repo, issueNumber: number });
+  if (!apply) {
+    process.stdout.write(`would comment on ${repo}#${number} with ${fresh.length} finding(s) (${entries.length - fresh.length} already recorded)\n${body}\n`);
+    return 0;
+  }
+  const res = gh(["issue", "comment", String(number), "--body", body], { repo });
+  if (res.error || res.status !== 0) {
+    process.stderr.write(`could not comment on ${repo}#${number}: ${res.stderr || res.error}\n`);
+    return 1;
+  }
+  process.stdout.write(`triaged: ${fresh.length} finding(s) recorded on ${repo}#${number}\n`);
+  return 0;
+}
+
 /** Publish one issue per actionable finding, with dedupe against the issues already filed. */
 function fileIssues(entries, { repo, target }) {
   const existing = existingIssues(repo);
@@ -968,6 +1123,9 @@ function fileIssues(entries, { repo, target }) {
   const labels = knownLabels(repo);
   let published = 0;
   let duplicates = 0;
+  // A refused publication is counted, not swallowed. `gh issue create` failing used to `continue`
+  // and leave the run reporting success, so a CI job could pass while a finding was never filed.
+  let failed = 0;
   for (const entry of entries) {
     if (entry.verdict.action !== "issue") continue;
     const { finding } = entry;
@@ -983,6 +1141,7 @@ function fileIssues(entries, { repo, target }) {
     const res = gh(args, { repo });
     if (res.error || res.status !== 0) {
       process.stderr.write(`issue create failed for ${finding.fingerprint.slice(0, 16)}: ${res.stderr || res.error}\n`);
+      failed += 1;
       continue;
     }
     const url = (res.stdout.match(/https?:\/\/\S+/) ?? [])[0] ?? "(no url returned)";
@@ -990,7 +1149,11 @@ function fileIssues(entries, { repo, target }) {
     published += 1;
     process.stdout.write(`published: ${finding.fingerprint.slice(0, 16)} -> ${url}${chosen.length ? ` [${chosen.join(",")}]` : ""}\n`);
   }
-  process.stdout.write(`issues: ${published} published, ${duplicates} duplicate\n`);
+  process.stdout.write(
+    `issues: ${published} published, ${duplicates} duplicate${failed > 0 ? `, ${failed} FAILED` : ""}\n`,
+  );
+  // An incomplete publication is a failure, never "nothing to do": exit 2 would read as a clean run.
+  if (failed > 0) return 1;
   return published > 0 ? 0 : 2;
 }
 
@@ -1032,7 +1195,11 @@ function promote(opts, { repo, target }) {
     process.stderr.write(`--reviewed-by ${opts.reviewedBy} does not match the reviewer recorded on ${repo}#${number} (${reviewedBy}): refusing\n`);
     return 1;
   }
-  if (markers.selfTest) {
+  // The marker is posted as a COMMENT (that is where a receipt belongs), so a body-only check misses
+  // it: my own live self-test marker on issue #17 was invisible here and only the already-promoted
+  // guard refused it. Both places are inspected now.
+  const selfTest = markers.selfTest || comments.map((c) => parseMarkers(c?.body ?? "").selfTest).find(Boolean) === true;
+  if (selfTest) {
     process.stderr.write(`${repo}#${number} is marked as a publisher self-test: refusing to promote a test issue\n`);
     return 1;
   }
@@ -1083,7 +1250,7 @@ function promote(opts, { repo, target }) {
     spawnSync("bd", ["update", id, "--status", "blocked", "-C", target], { cwd: target, timeout: 60000 });
     spawnSync("bd", ["comment", id, "Blocked pending human review: this remediation changes functionality. Next decision: confirm yes/no, then file the change as its own bead.", "-C", target], { cwd: target, timeout: 60000 });
   }
-  const comment = gh(["issue", "comment", number, "--body", `Promoted to bead \`${id}\` by ${opts.reviewedBy}.${bead.blocked ? " The bead is BLOCKED pending the human review decision recorded on this issue." : ""}\n\n<!-- factory-promoted: ${id} -->`], { repo });
+  const comment = gh(["issue", "comment", number, "--body", `Promoted to bead \`${id}\` by ${reviewedBy}.${bead.blocked ? " The bead is BLOCKED pending the human review decision recorded on this issue." : ""}\n\n<!-- factory-promoted: ${id} -->`], { repo });
   if (comment.error || comment.status !== 0) {
     process.stderr.write(`warning: created ${id} but could not comment on the issue: ${comment.stderr}\n`);
   }
@@ -1164,8 +1331,19 @@ function main(argv) {
     process.stderr.write(`${error.message}\n`);
     return 1;
   }
-  if (opts.json) process.stdout.write(`${JSON.stringify(plan.map(serialisablePlanEntry), null, 2)}\n`);
-  else process.stdout.write(`${describePlan(plan)}\n`);
+  if (opts.json) {
+    process.stdout.write(`${JSON.stringify(plan.map((entry) => serialisablePlanEntry(entry, { privateRoot: opts.privateRoot })), null, 2)}\n`);
+  } else process.stdout.write(`${describePlan(plan, { privateRoot: opts.privateRoot })}\n`);
+  if (opts.comment) {
+    // Deliberately independent of `actionable`: a comment records every finding the scan produced,
+    // including the ones that are not published as issues, because the reader of THIS issue asked a
+    // question and a silently dropped finding would be invisible.
+    return commentOnIssue(opts.comment, repo, plan, {
+      privateRoot,
+      apply: true,
+      allowClosed: opts.allowClosed,
+    });
+  }
   const actionable = plan.filter((e) => e.verdict.action === "issue");
   if (actionable.length === 0) return 2;
   if (opts.fileIssues) return fileIssues(plan, { repo, target });

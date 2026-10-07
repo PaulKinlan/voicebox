@@ -81,6 +81,12 @@ Severity is routed, not merely displayed:
 - A finding whose remediation changes behaviour is published with the `human-review` marker, a
   `[human-review]` title prefix and an explicit decision to record; promoting it creates a **BLOCKED**
   bead with the `human-review` label and the decision in a comment.
+- **A security station's finding is flagged for human verification too**, for a different reason: its
+  description and remediation are *model-authored prose*, and this pipeline publishes at every
+  severity, so those words reach the public tracker with no human in between. Publishing the prose is
+  the deliberate choice — a generic replacement would make the issue un-actionable — and the flag is
+  the honest consequence: the issue says a person must verify it, and a promoted bead is filed
+  `BLOCKED`. Nothing here should be acted on unverified.
 
 ## 5. What is never published, and what is never dropped
 
@@ -122,7 +128,11 @@ A finding's identity is its fingerprint, recomputed exactly as the factory compu
 published.
 
 The issue body carries the fingerprint in an HTML marker
-(`<!-- factory-fingerprint: … -->`), and dedupe works off those markers:
+(`<!-- factory-fingerprint: … -->`), and dedupe reads **both marker shapes** in the wild: this
+publisher's HTML marker and the markdown line the factory's own `github-issues` sink writes
+(the factory's own github-issues sink writes `**Fingerprint**: …`). Both are the same sha256, and a dedupe that understood only
+its own marker would file a second public issue for one finding. Either the full digest or the 16-hex
+prefix the report itself prints will match. Dedupe then works off those markers:
 
 - an **open** issue with the fingerprint wins, always;
 - a **closed** issue wins too, unless the finding has regressed.
@@ -153,6 +163,28 @@ bead deliberately does **not** copy the finding text — it points at the issue,
 to correct. A functionality-changing issue produces a bead created `BLOCKED` with the `human-review`
 label and a comment naming the single decision that unblocks it.
 
+## 8b. Triaging an EXISTING issue, without a second issue
+
+```text
+node scripts/factory-triage.mjs --report <private path> --repo <owner/name> --comment <n>
+```
+
+Alias `--issue-number`. This appends one **sanitised triage comment** to an issue a person already
+opened. It never creates an issue, never creates a bead, and never edits the issue body — the body
+stays as the person wrote it, which is also what keeps it recognisable as inbound work to the router
+that triages it.
+
+The marker is `<!-- factory-triage-comment: <fingerprint> -->`, deliberately a different marker from
+the publisher's `factory-fingerprint`, and it lives in the **comment**. The comment states the station,
+the rule and location, the severity and state, the reasons, and the policy declaration; the title and
+paths are sanitised exactly as in a published issue.
+
+**Dedupe is the anti-loop property.** A fingerprint already recorded in an earlier triage comment is
+skipped: re-running the same scan posts nothing and exits `2`, and a re-scan with a genuinely new
+finding posts only that finding. So a workflow that re-scans on an edit cannot spam a thread, and the
+chain inbound issue → triage comment → review → promotion still works, because `--review` and
+`--promote` read the fingerprint from the triage comment when the issue body has none.
+
 ## 9. What it never does
 
 - No code, workflow or configuration edits, and no auto-fix. The only writes are `gh issue create`,
@@ -173,7 +205,22 @@ node scripts/factory-triage.mjs --promote <n> --reviewed-by <who> [--apply]
 
 Flags: `--report-dir <dir>`, `--repo <owner/name>`, `--target <path>`, `--agent <name>`,
 `--include-low`, `--functionality-change <rule|agent>`, `--json`, `--private-root <dir>`,
-`--review`, `--notes`, `--self-test`, `--allow-closed`.
+`--review`, `--notes`, `--comment`, `--issue-number`, `--self-test`, `--allow-closed`,
+`--allow-foreign-target`.
+
+Exit codes are part of the contract: `0` a plan was produced / an issue published / a comment posted /
+a bead created; `1` a usage or policy refusal, **or a write that failed** — a publication where any
+`gh issue create` failed exits `1` and says how many, because a partial publication reported as
+success is how a CI job passes while a finding was never filed; `2` nothing actionable (nothing in
+band, everything already published, or nothing new to triage on `--comment`).
+
+Two refusals exist to stop silent mis-publication:
+
+- **A report for another repository is refused.** `--report-dir` takes every `*-delta.md` in a
+  directory, and a report names its own target, so a stale or foreign report would otherwise be filed
+  into whatever `--repo` was passed — another repository's finding, published publicly, in the wrong
+  tracker. The target segment must match the repository name; `--allow-foreign-target` forces it.
+- **An in-repo report is refused**, as above: the report is the unredacted evidence trail.
 
 Exit codes: `0` a plan was produced, an issue was published, or a bead was created · `1` usage or
 policy refusal (in-repo report, unreadable file, unreadable issue list or board) · `2` nothing
@@ -193,13 +240,21 @@ actionable (no findings in band, or everything already published).
   the previous revision requested changes on three points (a home path leaking through the issue
   title, credential-rule findings not being withheld, and a repository-internal symlink defeating the
   in-repo refusal); each was reproduced against the old code, fixed, and re-driven.
+- **The second review round found two more disclosure leaks, and one of them was in the surface a
+  CI log captures.** The plan printed the raw rule id and path (a rule id is model text and can carry
+  a credential the triage agent echoed; a path can carry the operator's home directory), on stdout
+  *and* in `--json`; and the withheld-evidence notice interpolated the raw path before the elision
+  existed, so a **quality** station raising a credential rule published
+  `[withheld: … (/home/…/auth.ts:42)]` into a public issue body. Both are fixed, the credential case
+  now refuses the evidence block entirely rather than only for identity-critical stations, and both
+  are covered by tests that fail against the old code.
 - **Mutation testing** is the bar for the suite itself: for each policy rule, breaking that rule must
-  turn the suite red. The previous revision's suite had three mutants stay green, which is how a
-  vacuous severity test and a dead routing branch were found. On this revision **11 mutations** were
-  run — the review gate, the self-test and closed-issue guards, the reviewer cross-check, the derived
-  text, the credential rule-hint trigger, the plan's title sanitisation, the lexical symlink check,
-  the issue dedupe, `--silent`, and the publication declaration — and every one turned the suite red
-  over 58 passing tests.
+  turn the suite red. On this revision **19 mutations** were run over **71 passing tests**, and every
+  one turned the suite red. The reviewer's own mutation run had found **six rules that stayed green**
+  on the previous revision — the `falsePositive` and `state: "unchanged"` skips, `maskText` and
+  private-root elision inside `displayTitle`, and the `bd create` / `gh issue create` failure checks —
+  and those six now have tests and mutants of their own. One of them caught a further defect while
+  being written: a failed `gh issue create` was swallowed and the run could still exit `0`.
 - **Not verified: a live station run, and real issue publication.** The suite drives stub `gh`/`bd`
   binaries, and the CI wiring belongs to `voicebox-beads-cbxo`. The first real publication is a
   controlled self-test recorded on `voicebox-beads-h1u0`.

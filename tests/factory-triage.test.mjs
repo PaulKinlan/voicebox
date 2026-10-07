@@ -42,10 +42,13 @@ import {
   beadForPromotion,
   buildIssue,
   buildPlan,
+  buildTriageComment,
+  displayTitle,
   chooseLabels,
   computeFingerprint,
   existingBeadFingerprints,
   existingIssues,
+  fingerprintsInBody,
   isCredentialFinding,
   isInside,
   isIssueDuplicate,
@@ -63,6 +66,7 @@ import {
   resolveReportPath,
   routeFinding,
   sanitizeFinding,
+  triagedFingerprints,
   suggestsFunctionalityChange,
 } from "../scripts/factory-triage.mjs";
 
@@ -1716,4 +1720,369 @@ test("CLI exits with code 1 on missing arguments or conflicting flags", () => {
   } finally {
     rmSync(emptyDir.box, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------------------------
+// 14. Review round 2 — two P1 disclosure leaks, a false receipt, a dead flag, and the blind spots
+//     the reviewer's own mutation testing found (my 11 mutants were red; these six stayed green).
+// ---------------------------------------------------------------------------------------------
+
+test("PLAN: a token echoed into the rule id and an operator path are both sanitised (P1)", () => {
+  const home = homedir();
+  const canary = `ghp_${"Z".repeat(36)}`;
+  const ruleId = `token-${canary}`;
+  const path = `${home}/voicebox/secret.js`;
+  const snippet = 'await page.waitForSelector("text=Projects")';
+  const fp = computeFingerprint({ agent: "qa-station", ruleId, path, snippet });
+  const rewritten = fixture("voicebox-qa-station-delta.md")
+    .replace("- **Rule**: `flake-instrumentation`", `- **Rule**: \`${ruleId}\``)
+    .replace("- **Location**: `tests/room-folders.test.mjs:96`", `- **Location**: \`${path}:10\``)
+    .replace(/^- \*\*Fingerprint\*\*: `[^`]+`/m, `- **Fingerprint**: \`${fp.slice(0, 16)}...\``);
+  const res = runCli({
+    args: ["--report", "voicebox-qa-station-delta.md", "--repo", "owner/voicebox"],
+    reports: { "voicebox-qa-station-delta.md": rewritten },
+  });
+  const json = runCli({
+    args: ["--report", "voicebox-qa-station-delta.md", "--repo", "owner/voicebox", "--json"],
+    reports: { "voicebox-qa-station-delta.md": rewritten },
+  });
+  try {
+    assert.ok(res.stdout.includes("[PUBLISH ISSUE]"), `expected it publishable: ${res.stdout}`);
+    assert.ok(!res.stdout.includes(canary), `the plan printed the raw token: ${res.stdout}`);
+    assert.ok(!res.stdout.includes(home), `the plan printed the operator path: ${res.stdout}`);
+    assert.match(res.stdout, /\[redacted:github-pat\]/, "the plan must show the masked rule id");
+    assert.match(res.stdout, /~\/voicebox\/secret\.js/);
+    assert.ok(!json.stdout.includes(canary), "the JSON plan printed the raw token");
+    assert.ok(!json.stdout.includes(home), "the JSON plan printed the operator path");
+    const entry = JSON.parse(json.stdout)[0];
+    assert.match(entry.finding.rule_id, /\[redacted:github-pat\]/);
+    assert.match(entry.finding.path, /^~\/voicebox\/secret\.js$/);
+  } finally {
+    rmSync(res.box, { recursive: true, force: true });
+    rmSync(json.box, { recursive: true, force: true });
+  }
+});
+
+test("ISSUE BODY: a credential raised by a QUALITY station refuses the evidence block and never leaks the path (P1)", () => {
+  const home = homedir();
+  const path = `${home}/src/auth.ts`;
+  const snippet = "const password = 'hunter2'";
+  const fingerprint = computeFingerprint({ agent: "qa-station", ruleId: "hardcoded-password", path, snippet });
+  const finding = {
+    agent: "qa-station", ruleId: "hardcoded-password", path, lineNumber: "42", state: "new",
+    title: "t", description: "d", snippet, remediation: "r", falsePositive: false,
+    effectiveSeverity: "high", severityReported: "high", identityCritical: false,
+    fingerprint, identitySource: "recomputed-and-verified",
+  };
+  const published = sanitizeFinding(finding, { privateRoot: "/tmp/priv" });
+  const issue = buildIssue(finding, routeFinding(finding), { privateRoot: "/tmp/priv", repo: "owner/voicebox" });
+  assert.ok(!published.snippet.includes(home), `the withheld notice kept the raw path: ${published.snippet}`);
+  assert.match(published.snippet, /~\/src\/auth\.ts:42/);
+  assert.ok(!issue.body.includes(home), "the published body leaked the operator path");
+  assert.ok(!issue.body.includes("**Evidence**"), "a credential finding must not publish an evidence block");
+  assert.match(issue.body, /Raw candidate withheld/);
+  assert.ok(issue.body.includes(GENERIC_REMEDIATION));
+});
+
+test("RECEIPT: the promotion comment names the reviewer resolved FROM the issue, not null (P2)", () => {
+  const fp = "e".repeat(64);
+  const res = runCli({
+    args: ["--promote", "10", "--apply", "--repo", "owner/voicebox"],
+    stubGh: ghStubViewing(
+      JSON.stringify({
+        number: 10, state: "OPEN", title: "[factory/high] perf-review: stub", url: "https://example.invalid/10", labels: [],
+        body: `<!-- factory-fingerprint: ${fp} -->\n<!-- factory-station: perf-review -->\n<!-- factory-severity: high -->\n<!-- factory-state: new -->`,
+        comments: [{ body: "<!-- factory-review: alice -->" }],
+      }),
+    ),
+  });
+  try {
+    assert.equal(res.status, 0, res.stderr);
+    const receipt = res.ghCalls.find((call) => call.startsWith("issue comment"));
+    assert.ok(receipt, `no receipt comment: ${res.ghCalls.join(" | ")}`);
+    assert.match(receipt, /Promoted to bead \S+ by alice\./);
+    assert.ok(!/by null/.test(receipt), `the receipt said null: ${receipt}`);
+  } finally {
+    rmSync(res.box, { recursive: true, force: true });
+  }
+});
+
+test("SELF-TEST: the marker is written at creation, and a marker that lives only in a COMMENT still refuses promotion (P2)", () => {
+  // --self-test was parsed and never used, so it could not mark anything; and promote read the body
+  // only, so the marker my own live run posted as a comment was invisible to it.
+  const created = runCli({
+    args: ["--report", "voicebox-perf-review-delta.md", "--repo", "owner/voicebox", "--file-issues", "--self-test"],
+    reports: { "voicebox-perf-review-delta.md": fixture("voicebox-perf-review-delta.md") },
+  });
+  try {
+    assert.equal(created.status, 0, created.stderr);
+    const call = created.ghCalls.find((c) => c.startsWith("issue create"));
+    assert.ok(call, `nothing was published: ${created.ghCalls.join(" | ")}`);
+    assert.ok(call.includes("factory-self-test"), `--self-test did not mark the issue: ${call}`);
+  } finally {
+    rmSync(created.box, { recursive: true, force: true });
+  }
+
+  const fp = "f".repeat(64);
+  const res = runCli({
+    args: ["--promote", "10", "--apply", "--repo", "owner/voicebox"],
+    stubGh: ghStubViewing(
+      JSON.stringify({
+        number: 10, state: "OPEN", title: "[factory/high] perf-review: stub", url: "https://example.invalid/10", labels: [],
+        body: `<!-- factory-fingerprint: ${fp} -->\n<!-- factory-station: perf-review -->\n<!-- factory-severity: high -->\n<!-- factory-state: new -->`,
+        comments: [{ body: "<!-- factory-review: alice -->" }, { body: "<!-- factory-self-test -->" }],
+      }),
+    ),
+  });
+  try {
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /marked as a publisher self-test/);
+    assert.equal(res.bdCalls.length, 0, `a self-test reached bd: ${res.bdCalls.join(" | ")}`);
+  } finally {
+    rmSync(res.box, { recursive: true, force: true });
+  }
+});
+
+test("BLIND SPOT: false positives, unchanged findings and below-band states are each skipped", () => {
+  const base = {
+    agent: "qa-station", ruleId: "flake-instrumentation", path: "tests/a.test.mjs", lineNumber: "1",
+    title: "t", description: "d", snippet: "s", remediation: "r", state: "new",
+    effectiveSeverity: "high", severityReported: "high", identityCritical: false,
+    fingerprint: "a".repeat(64), identitySource: "recomputed-and-verified",
+  };
+  assert.equal(routeFinding({ ...base, falsePositive: true }).action, "skip");
+  assert.match(routeFinding({ ...base, falsePositive: true }).reasons[0], /false positive/);
+  assert.equal(routeFinding({ ...base, state: "unchanged" }).action, "skip");
+  assert.match(
+    routeFinding({ ...base, state: "unchanged" }).reasons[0],
+    /^unchanged: already tracked$/,
+    "an unchanged finding is ALREADY TRACKED (a different statement from not being an action state)",
+  );
+  assert.equal(routeFinding({ ...base, state: "fixed" }).action, "skip");
+  assert.equal(routeFinding({ ...base, state: "new" }).action, "issue");
+});
+
+test("BLIND SPOT: displayTitle masks a credential-shaped id and elides the private root", () => {
+  const canary = `ghp_${"Q".repeat(36)}`;
+  const finding = {
+    agent: "qa-station", ruleId: `token-${canary}`, path: "/tmp/priv/voicebox-qa-delta.md", lineNumber: "3",
+    title: `Password ${canary}`, description: "d", snippet: "s", remediation: "r", state: "new",
+    effectiveSeverity: "high", severityReported: "high", identityCritical: false,
+    fingerprint: "b".repeat(64), identitySource: "recomputed-and-verified",
+  };
+  const title = displayTitle(finding, { privateRoot: "/tmp/priv" });
+  assert.ok(!title.includes(canary), `displayTitle leaked the token: ${title}`);
+  assert.match(title, /\[redacted:github-pat\]/);
+  // A non-credential finding's title must still elide the private report root.
+  const plain = displayTitle({ ...finding, ruleId: "flake-instrumentation", title: "Path /tmp/priv/x.md" }, { privateRoot: "/tmp/priv" });
+  assert.ok(!plain.includes("/tmp/priv"), `displayTitle kept the private root: ${plain}`);
+  assert.match(plain, /<private-report-dir>/);
+});
+
+test("BLIND SPOT: a failed bd create and a failed gh issue create are refusals, never silent successes", () => {
+  const fp = "c".repeat(64);
+  const bdFail = runCli({
+    args: ["--promote", "10", "--apply", "--repo", "owner/voicebox"],
+    stubGh: ghStubViewing(
+      JSON.stringify({
+        number: 10, state: "OPEN", title: "[factory/high] perf-review: stub", url: "https://example.invalid/10", labels: [],
+        body: `<!-- factory-fingerprint: ${fp} -->\n<!-- factory-station: perf-review -->\n<!-- factory-severity: high -->\n<!-- factory-state: new -->`,
+        comments: [{ body: "<!-- factory-review: alice -->" }],
+      }),
+    ),
+    stubBd: `case "$1" in
+    list) echo '[]' ;;
+    create) echo "boom: database locked" >&2; exit 1 ;;
+    *) echo "unused" ;;
+  esac`,
+  });
+  const ghFail = runCli({
+    args: ["--report", "voicebox-perf-review-delta.md", "--repo", "owner/voicebox", "--file-issues"],
+    reports: { "voicebox-perf-review-delta.md": fixture("voicebox-perf-review-delta.md") },
+    stubGh: `case "$1" in
+    issue)
+      case "$2" in
+        list) echo '[]' ;;
+        create) echo "gh: HTTP 403" >&2; exit 1 ;;
+        comment) echo "unused" ;;
+        *) echo "unused" ;;
+      esac ;;
+    label) echo '[]' ;;
+    *) echo "unused" ;;
+  esac`,
+  });
+  try {
+    assert.equal(bdFail.status, 1, `a failed bd create must refuse: ${bdFail.stdout}${bdFail.stderr}`);
+    assert.match(bdFail.stderr, /bd create failed/);
+    assert.ok(!/^filed:/.test(bdFail.stdout), "a failed create must not report a filed bead");
+    assert.equal(ghFail.status, 1, `a failed gh create must refuse: ${ghFail.stdout}${ghFail.stderr}`);
+    assert.match(ghFail.stderr, /issue create failed/);
+    assert.ok(!/published/.test(ghFail.stdout) || /0 published/.test(ghFail.stdout), `a failed publish must not claim one: ${ghFail.stdout}`);
+  } finally {
+    rmSync(bdFail.box, { recursive: true, force: true });
+    rmSync(ghFail.box, { recursive: true, force: true });
+  }
+});
+
+test("SECURITY STATIONS are flagged for human verification: their prose is model-authored and published unreviewed (reviewer Q4)", () => {
+  const base = {
+    agent: "vuln-discovery", ruleId: "unsanitized-html", path: "public/x.js", lineNumber: "1",
+    title: "t", description: "d", snippet: "s", remediation: "r", state: "new",
+    effectiveSeverity: "critical", severityReported: "critical", identityCritical: true,
+    fingerprint: "d".repeat(64), identitySource: "recomputed-and-verified",
+  };
+  const verdict = routeFinding(base);
+  assert.equal(verdict.action, "issue");
+  assert.equal(verdict.humanReview, true, "a security station must be flagged for human review");
+  assert.ok(verdict.reasons.some((r) => /model-authored/.test(r)), `no reason named: ${verdict.reasons.join(" | ")}`);
+  // A non-security station is unaffected.
+  assert.equal(routeFinding({ ...base, agent: "qa-station", identityCritical: false, effectiveSeverity: "high" }).humanReview, false);
+});
+
+test("CROSS-TARGET: a report for another repository is REFUSED rather than filed into --repo", () => {
+  // --report-dir takes every report in a directory; publishing repo B's finding into repo A's
+  // tracker is silent and public, so it is a refusal with an explicit override.
+  const foreign = fixture("voicebox-perf-review-delta.md").replace("Delta Report: voicebox", "Delta Report: chrome-agent-platform");
+  const refused = runCli({
+    args: ["--report", "chrome-agent-platform-perf-review-delta.md", "--repo", "owner/voicebox"],
+    reports: { "chrome-agent-platform-perf-review-delta.md": foreign },
+  });
+  const forced = runCli({
+    args: ["--report", "chrome-agent-platform-perf-review-delta.md", "--repo", "owner/voicebox", "--allow-foreign-target"],
+    reports: { "chrome-agent-platform-perf-review-delta.md": foreign },
+  });
+  try {
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /targets "chrome-agent-platform" but --repo is owner\/voicebox/);
+    assert.ok(!refused.ghCalls.some((c) => c.startsWith("issue create")), "a foreign report was published");
+    assert.equal(forced.status, 0, forced.stderr);
+    assert.match(forced.stdout, /PUBLISH ISSUE/);
+  } finally {
+    rmSync(refused.box, { recursive: true, force: true });
+    rmSync(forced.box, { recursive: true, force: true });
+  }
+});
+
+test("DEDUPE reads the factory's OWN marker shape too, so two publishers cannot duplicate one finding", () => {
+  const fp = "ab".repeat(32);
+  const body = `**Rule**: \`blocking-boot-probe\`\n**Severity**: \`high\`\n**Location**: \`server.mjs:210\`\n**Fingerprint**: \`${fp}\``;
+  assert.deepEqual(fingerprintsInBody(body), [fp]);
+  assert.deepEqual(fingerprintsInBody(`<!-- factory-fingerprint: ${fp} -->`), [fp]);
+  const finding = { fingerprint: fp, state: "new" };
+  assert.ok(isIssueDuplicate(finding, existingIssues.index ?? null) === null); // no index given: no duplicate claimed
+  const index = new Map([["nope", [{ number: "1", state: "OPEN" }]]]);
+  assert.equal(isIssueDuplicate(finding, index), null);
+  // The prefix form the report itself uses must also match.
+  const prefixIndex = new Map([[fp.slice(0, 16), [{ number: "2", state: "OPEN" }]]]);
+  assert.equal(isIssueDuplicate({ fingerprint: fp, state: "new" }, prefixIndex).numbers[0], "2");
+});
+
+test("INBOUND ISSUE: --comment appends sanitised triage to an existing issue, dedupes on re-run, and creates neither an issue nor a bead", () => {
+  const fp = computeFingerprint({
+    agent: "qa-station", ruleId: "flake-instrumentation", path: "tests/room-folders.test.mjs",
+    snippet: 'await page.waitForSelector("text=Projects")',
+  });
+  const issueWithout = JSON.stringify({
+    number: 42, state: "OPEN", title: "Flaky folder chips", url: "https://example.invalid/42", labels: [],
+    body: "A human filed this: the folder chips are flaky.", comments: [],
+  });
+  const first = runCli({
+    args: ["--report", "voicebox-qa-station-delta.md", "--comment", "42", "--repo", "owner/voicebox"],
+    reports: { "voicebox-qa-station-delta.md": fixture("voicebox-qa-station-delta.md") },
+    stubGh: ghStubViewing(issueWithout),
+  });
+  try {
+    assert.equal(first.status, 0, first.stderr);
+    const call = first.ghCalls.find((c) => c.startsWith("issue comment"));
+    assert.ok(call, `no triage comment was posted: ${first.ghCalls.join(" | ")}`);
+    assert.ok(call.includes(`<!-- factory-triage-comment: ${fp} -->`), `the fingerprint marker is missing: ${call}`);
+    assert.ok(call.includes("flake-instrumentation"), `the rule is missing: ${call}`);
+    assert.ok(!first.ghCalls.some((c) => c.startsWith("issue create")), "the inbound mode created an issue");
+    assert.equal(first.bdCalls.length, 0, `the inbound mode touched bd: ${first.bdCalls.join(" | ")}`);
+  } finally {
+    rmSync(first.box, { recursive: true, force: true });
+  }
+
+  // Re-running the same scan must post NOTHING (that is the anti-loop property of this mode).
+  const same = runCli({
+    args: ["--report", "voicebox-qa-station-delta.md", "--comment", "42", "--repo", "owner/voicebox"],
+    reports: { "voicebox-qa-station-delta.md": fixture("voicebox-qa-station-delta.md") },
+    stubGh: ghStubViewing(
+      JSON.stringify({
+        number: 42, state: "OPEN", title: "Flaky folder chips", url: "https://example.invalid/42", labels: [],
+        body: "A human filed this: the folder chips are flaky.",
+        comments: [{ body: `Already scanned.\n<!-- factory-triage-comment: ${fp} -->` }],
+      }),
+    ),
+  });
+  try {
+    assert.equal(same.status, 2, `a repeat scan must post nothing: ${same.stdout}${same.stderr}`);
+    assert.match(same.stdout, /nothing new/);
+    assert.ok(!same.ghCalls.some((c) => c.startsWith("issue comment")), "a repeat scan commented again");
+  } finally {
+    rmSync(same.box, { recursive: true, force: true });
+  }
+});
+
+test("INBOUND ISSUE: a closed issue is refused, and the comment body is sanitised like every other surface", () => {
+  const home = homedir();
+  const closed = runCli({
+    args: ["--report", "voicebox-qa-station-delta.md", "--comment", "42", "--repo", "owner/voicebox"],
+    reports: { "voicebox-qa-station-delta.md": fixture("voicebox-qa-station-delta.md") },
+    stubGh: ghStubViewing(
+      JSON.stringify({
+        number: 42, state: "CLOSED", title: "Flaky folder chips", url: "https://example.invalid/42", labels: [],
+        body: "done", comments: [],
+      }),
+    ),
+  });
+  try {
+    assert.equal(closed.status, 1);
+    assert.match(closed.stderr, /is closed: triage is recorded on open issues/);
+    assert.ok(!closed.ghCalls.some((c) => c.startsWith("issue comment")));
+  } finally {
+    rmSync(closed.box, { recursive: true, force: true });
+  }
+
+  // The comment carries the elided path, not the operator's home directory.
+  const canary = `ghp_${"Y".repeat(36)}`;
+  const path = `${home}/voicebox/secret.js`;
+  const snippet = 'await page.waitForSelector("text=Projects")';
+  const fp = computeFingerprint({ agent: "qa-station", ruleId: `token-${canary}`, path, snippet });
+  const rewritten = fixture("voicebox-qa-station-delta.md")
+    .replace("- **Rule**: `flake-instrumentation`", `- **Rule**: \`token-${canary}\``)
+    .replace("- **Location**: `tests/room-folders.test.mjs:96`", `- **Location**: \`${path}:10\``)
+    .replace(/^- \*\*Fingerprint\*\*: `[^`]+`/m, `- **Fingerprint**: \`${fp.slice(0, 16)}...\``);
+  const res = runCli({
+    args: ["--report", "voicebox-qa-station-delta.md", "--comment", "42", "--repo", "owner/voicebox"],
+    reports: { "voicebox-qa-station-delta.md": rewritten },
+    stubGh: ghStubViewing(
+      JSON.stringify({ number: 42, state: "OPEN", title: "Flaky folder chips", url: "https://example.invalid/42", labels: [], body: "a human wrote this", comments: [] }),
+    ),
+  });
+  try {
+    const call = res.ghCalls.find((c) => c.startsWith("issue comment"));
+    assert.ok(call, `no comment: ${res.ghCalls.join(" | ")}`);
+    assert.ok(!call.includes(canary), `the comment leaked the token: ${call}`);
+    assert.ok(!call.includes(home), `the comment leaked the operator path: ${call}`);
+    assert.match(call, /\[redacted:github-pat\]/);
+  } finally {
+    rmSync(res.box, { recursive: true, force: true });
+  }
+});
+
+test("buildTriageComment states the policy and triagedFingerprints reads only its own markers", () => {
+  const finding = {
+    agent: "qa-station", ruleId: "flake-instrumentation", path: "tests/a.test.mjs", lineNumber: "9",
+    title: "t", description: "d", snippet: "s", remediation: "r", state: "new",
+    effectiveSeverity: "medium", severityReported: "medium", identityCritical: false,
+    fingerprint: "9".repeat(64), identitySource: "recomputed-and-verified",
+  };
+  const verdict = routeFinding(finding);
+  const body = buildTriageComment([{ finding, verdict, displayTitle: "a title" }], { privateRoot: "/tmp/p", repo: "owner/voicebox", issueNumber: 7 });
+  assert.ok(body.includes(PUBLICATION_DECLARATION), "the comment must state the publication policy");
+  assert.ok(body.includes(`<!-- factory-triage-comment: ${finding.fingerprint} -->`));
+  assert.ok(!body.includes("<!-- factory-fingerprint:"), "the inbound mode must not mark the issue as publisher-created");
+  assert.deepEqual([...triagedFingerprints([{ body: body }])], [finding.fingerprint]);
+  assert.deepEqual([...triagedFingerprints([{ body: "<!-- factory-review: alice -->" }])], []);
 });
