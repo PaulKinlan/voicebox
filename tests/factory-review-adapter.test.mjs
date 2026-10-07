@@ -12,7 +12,7 @@ import {
   CATEGORY_STATIONS,
 } from "../tools/factory-issue-router.mjs";
 import { formatTriageComment, sanitizeFindingText } from "../tools/factory-issue-commenter.mjs";
-import { runReviewTrigger } from "../scripts/factory-review-trigger.mjs";
+import { runReviewTrigger, parsePublisherSummary } from "../scripts/factory-review-trigger.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -264,4 +264,26 @@ test("factory-review-trigger: CLI executes cleanly in dry-run mode with determin
   assert.equal(result.exitCode, 0);
   assert.ok(result.station, "selected a station");
   assert.ok(result.cacheKey, "computed a cacheKey");
+});
+
+test("factory-review-trigger: parsePublisherSummary extracts safe summary and redacts secrets", () => {
+  const dirtyOutput = [
+    "[factory-triage] Beginning triage run...",
+    "published: 2",
+    "duplicate: 1",
+    "actionable: 3",
+    "https://github.com/PaulKinlan/voicebox/issues/42",
+    "raw finding details: password=super-secret-password-val and token github_pat_11ABCD1234567890abcdefghijklmnopqrstuvwxyz",
+    "internal debug stack trace line",
+  ].join("\n");
+
+  const safe = parsePublisherSummary(dirtyOutput);
+  assert.ok(safe.includes("[factory-triage]"));
+  assert.ok(safe.includes("published: 2"));
+  assert.ok(safe.includes("duplicate: 1"));
+  assert.ok(safe.includes("actionable: 3"));
+  assert.ok(safe.includes("https://github.com/PaulKinlan/voicebox/issues/42"));
+  assert.ok(!safe.includes("super-secret-password-val"));
+  assert.ok(!safe.includes("github_pat_11ABCD1234567890abcdefghijklmnopqrstuvwxyz"));
+  assert.ok(!safe.includes("internal debug stack trace"));
 });

@@ -19,10 +19,29 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { redactSecrets } from "../lib/redact.mjs";
 import { selectReviewStation, computeReviewCacheKey } from "../tools/factory-issue-router.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
+
+/**
+ * Extract safe, sanitized summary lines from publisher stdout (counts and issue URLs).
+ */
+export function parsePublisherSummary(stdout = "") {
+  const safeLines = [];
+  for (const line of String(stdout).split("\n")) {
+    const trimmed = line.trim();
+    if (
+      /^(published|duplicate|failed|actionable|total|clean|skipped|new|regressed):/i.test(trimmed) ||
+      /^https:\/\/github\.com\/[^\s]+\/issues\/\d+/i.test(trimmed) ||
+      /^\[factory-triage\]/i.test(trimmed)
+    ) {
+      safeLines.push(trimmed);
+    }
+  }
+  return redactSecrets(safeLines.join("\n"));
+}
 
 export function runReviewTrigger(args = process.argv.slice(2), { env = process.env, rootDir = ROOT } = {}) {
   let baseRef = "";
@@ -186,18 +205,19 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
       copyFileSync(foundReportPath, privateReportCopy);
     }
 
-    console.log(`[review-trigger] Calling h1u0 publisher (scripts/factory-triage.mjs --file-issues) for ${candidateReportName}...`);
+    console.log(`[review-trigger] Calling h1u0 publisher (scripts/factory-triage.mjs --file-issues --include-low) for ${candidateReportName}...`);
     try {
       const triageScript = path.join(rootDir, "scripts", "factory-triage.mjs");
       if (existsSync(triageScript)) {
-        const pubRes = spawnSync("node", [triageScript, "--report", privateReportCopy, "--repo", repo, "--file-issues"], {
+        const pubRes = spawnSync("node", [triageScript, "--report", privateReportCopy, "--repo", repo, "--file-issues", "--include-low"], {
           cwd: rootDir,
           env: { ...env, VOICEBOX_FACTORY_PRIVATE_DIR: runDir },
           encoding: "utf8",
         });
         publishExit = pubRes.status ?? 1;
-        console.log(`[review-trigger] Publisher output:\n${pubRes.stdout || ""}`);
-        if (pubRes.stderr) console.error(`[review-trigger] Publisher stderr:\n${pubRes.stderr}`);
+        const safeSummary = parsePublisherSummary(pubRes.stdout || "");
+        console.log(`[review-trigger] Publisher summary:\n${safeSummary || "(no summary emitted)"}`);
+        if (pubRes.stderr) console.error(`[review-trigger] Publisher stderr:\n${redactSecrets(pubRes.stderr)}`);
       } else {
         console.error(`[review-trigger] Error: scripts/factory-triage.mjs is absent; cannot publish delta report.`);
         publishExit = 1;
