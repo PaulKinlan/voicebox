@@ -34,7 +34,18 @@ everything already published, or every finding already published).
 READ-ONLY SEAM (coord's ruling): your commenter owns the existing-issue comment surface; my
 `--promote` reads these markers from the comments and writes none of them:
 `<!-- factory-triage-comment: <hex> -->` (required), `<!-- factory-station: ... -->`,
-`<!-- factory-severity: ... -->`, `<!-- factory-state: ... -->`. With more than one distinct
+`<!-- factory-severity: ... -->`, `<!-- factory-state: ... -->`.
+
+Only the fingerprint is required. `factory-station` and `factory-severity` are inherited by the bead, and
+`factory-state` is recorded as-is. Two fallbacks you should know about, because they change what the bead
+says: if the marker names an IDENTITY-CRITICAL station, the bead is marked for verification (reason
+`model-prose`, `human-review` label, prose saying what needs verifying and why it stays claimable), and
+**nothing is blocked** — a station is not a functionality change, so a security fix stays claimable; a
+`<!-- factory-human-review -->` flag, when you do send one, wins over that inference and can name its own
+reason. Without `factory-state` the bead records state `new`; a station outside the identity-critical set
+with no flag acquires no verification marking at all.
+
+With more than one distinct
 fingerprint in a thread, `--promote` refuses unless `--finding <prefix>` says which finding the bead is
 for. `--comment`/`--issue-number` were REMOVED from my script and are refused by name.
 

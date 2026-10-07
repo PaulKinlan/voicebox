@@ -188,6 +188,15 @@ script reads and never writes.
    `factory-state`, so the bead inherits the station, the severity (and therefore its priority) and
    the state instead of guessing from the title.
 
+Only the fingerprint marker is required in that comment. The station and severity it names are
+inherited by the bead, and the state is recorded as-is; two fallbacks matter. An
+**identity-critical station** named by the marker marks the bead for verification even when no review
+flag was written — reason `model-prose`, the `human-review` label, and prose saying what needs
+verifying and why the bead stays claimable. A flag the writer *does* send wins over that inference. And
+with no state marker the bead records `new`, because a missing marker is not evidence of a regression.
+A station outside the identity-critical set with no flag acquires no verification marking: the
+inference must not manufacture a security signal for an ordinary quality finding.
+
 If the comments describe **more than one** finding, promotion refuses and lists them, and
 `--finding <fingerprint-or-prefix>` says which one the bead is for. A comment can describe several
 findings while a bead carries one identity, so that choice is explicit rather than derived. An issue
