@@ -66,7 +66,7 @@ value* is never allowed.
 | `critical` | any | Yes — deliberately, with the raw candidate withheld for identity-critical stations | P1 |
 | `high` | any | Yes — deliberately (the embargo would withhold it) | P1 |
 | `medium` | any | Yes | P2 |
-| `low`, `info` | any | Only with `--include-low` | P3 |
+| `low`, `info` | any | Yes — every severity reaches the triage surface by default (`--exclude-low` opts out) | P3 |
 | any | any | Functionality change → published, marked `human-review`, and the promoted bead is BLOCKED | P1–P2 by severity |
 | any | security station | published and marked for **verification** (not a block): the bead stays claimable | P1–P2 by severity |
 
@@ -238,8 +238,9 @@ node scripts/factory-triage.mjs --promote <n> --reviewed-by <who> [--apply]
 ```
 
 Flags: `--report-dir <dir>`, `--repo <owner/name>`, `--target <path>`, `--agent <name>`,
-`--include-low`, `--functionality-change <rule|agent>`, `--json`, `--private-root <dir>`,
-`--review`, `--notes`, `--finding`, `--self-test`, `--allow-closed`, `--allow-foreign-target`.
+`--exclude-low` (skip low/info; they are published by default), `--include-low` (accepted and redundant),
+`--functionality-change <rule|agent>`, `--json`, `--private-root <dir>`, `--review`, `--notes`,
+`--finding`, `--self-test`, `--allow-closed`, `--allow-foreign-target`.
 
 Exit codes are part of the contract: `0` a plan was produced / an issue published / a bead created; `1` a usage or policy refusal, **or a write that failed** — a publication where any
 `gh issue create` failed exits `1` and says how many, because a partial publication reported as

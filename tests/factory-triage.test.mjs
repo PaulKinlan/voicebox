@@ -1412,30 +1412,33 @@ test("unknown station is refused with exit 1 unless --agent overrides it", () =>
 // 13. Bands: low/info skipped by default; reduced form is unverifiable
 // ---------------------------------------------------------------------------------------------
 
-test("low and info findings are skipped by default and published with --include-low", () => {
+test("low and info findings are PUBLISHED by default, and --exclude-low is the opt-out (coord's ALL-means-ALL)", () => {
+  // This test used to pin the opposite policy. Coord reversed it: every severity reaches the public
+  // triage surface by default, so a nightly run cannot silently drop low/info findings.
   const [lowFinding] = parseFixture("voicebox-modern-web-delta.md", "modern-web").findings;
   assert.equal(lowFinding.effectiveSeverity, "low");
-  assert.equal(routeFinding(lowFinding).action, "skip");
-  assert.match(routeFinding(lowFinding).reasons[0], /low is below the published band/);
-  assert.equal(routeFinding(lowFinding, { includeLow: true }).action, "issue");
+  assert.equal(routeFinding(lowFinding).action, "issue");
+  assert.equal(routeFinding(lowFinding, { includeLow: true }).action, "issue", "--include-low is redundant, not a change");
+  assert.equal(routeFinding(lowFinding, { includeLow: false }).action, "skip");
+  assert.match(routeFinding(lowFinding, { includeLow: false }).reasons[0], /--exclude-low/);
 
   const infoFinding = { ...lowFinding, effectiveSeverity: "info" };
-  assert.equal(routeFinding(infoFinding).action, "skip");
-  assert.equal(routeFinding(infoFinding, { includeLow: true }).action, "issue");
+  assert.equal(routeFinding(infoFinding).action, "issue");
+  assert.equal(routeFinding(infoFinding, { includeLow: false }).action, "skip");
 
-  const skipRun = runCli({
-    args: ["--report", "voicebox-modern-web-delta.md", "--repo", "owner/voicebox"],
+  const optOutRun = runCli({
+    args: ["--report", "voicebox-modern-web-delta.md", "--exclude-low", "--repo", "owner/voicebox"],
     reports: { "voicebox-modern-web-delta.md": fixture("voicebox-modern-web-delta.md") },
   });
   try {
-    assert.equal(skipRun.status, 2, "nothing actionable without --include-low");
-    assert.match(skipRun.stdout, /NOT PUBLISHED/);
+    assert.equal(optOutRun.status, 2, "--exclude-low left nothing actionable");
+    assert.match(optOutRun.stdout, /NOT PUBLISHED/);
   } finally {
-    rmSync(skipRun.box, { recursive: true, force: true });
+    rmSync(optOutRun.box, { recursive: true, force: true });
   }
 
   const includeRun = runCli({
-    args: ["--report", "voicebox-modern-web-delta.md", "--include-low", "--repo", "owner/voicebox"],
+    args: ["--report", "voicebox-modern-web-delta.md", "--repo", "owner/voicebox"],
     reports: { "voicebox-modern-web-delta.md": fixture("voicebox-modern-web-delta.md") },
   });
   try {
@@ -2896,6 +2899,126 @@ test("AN INCOMPLETE report publishes nothing (a killed or timed-out station run)
     assert.ok(ok.ghCalls.some((c) => c.startsWith("issue create")), `a complete report published nothing: ${ok.ghCalls.join(" | ")}`);
   } finally {
     rmSync(ok.box, { recursive: true, force: true });
+  }
+});
+
+test("A DECLARED state from a triage marker reaches the bead - and a defaulted state is NOT invented (round 10)", () => {
+  // miniapps' commenter emits factory-state per finding. The reader carried it on the identity and the
+  // bead dropped it, so a promoted regression was indistinguishable from a new finding on the bead a
+  // human triages - the one place the difference matters. Driven through the real CLI, because that is
+  // the only place "declared" is distinguishable from the `new` default the router uses.
+  const fp = "cd".repeat(32);
+  const thread = (stateLine) =>
+    JSON.stringify({
+      number: 21, state: "OPEN", title: "T", url: "https://example.invalid/21", labels: [], body: "human words",
+      comments: [
+        { body: `<!-- factory-triage-comment: ${fp} -->\n<!-- factory-station: perf-review -->\n<!-- factory-severity: high -->${stateLine}` },
+        { body: `<!-- factory-review: alice -->\n<!-- factory-review-fingerprint: ${fp} -->` },
+      ],
+    });
+  const declared = runCli({ args: ["--promote", "21", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(thread("\n<!-- factory-state: regressed -->")) });
+  const undeclared = runCli({ args: ["--promote", "21", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(thread("")) });
+  try {
+    const shown = declared.bdCalls.find((c) => c.startsWith("create")) ?? "";
+    assert.match(shown, /State: regressed/, `the state marker was read and then dropped: ${shown}`);
+    const defaulted = undeclared.bdCalls.find((c) => c.startsWith("create")) ?? "";
+    assert.ok(!/State:/.test(defaulted), `a state was invented with no marker: ${defaulted}`);
+  } finally {
+    for (const res of [declared, undeclared]) rmSync(res.box, { recursive: true, force: true });
+  }
+});
+
+test("THE OPERATOR can block an inbound promotion: --functionality-change reaches the promotion path (round 10)", () => {
+  // Measured gap: promote() parsed no functionality assertion, so an issue whose identity comes from
+  // triage comment markers could not be blocked for a functionality change however it was asserted -
+  // the flag filed a claimable bead. Blocking must follow the operator's decision, not only a comment
+  // flag whose default happens to be "functionality-change".
+  const fp = "5d".repeat(32);
+  const thread = (station) =>
+    JSON.stringify({
+      number: 44, state: "OPEN", title: "Inbound", url: "https://example.invalid/44", labels: [], body: "human words",
+      comments: [
+        { body: `<!-- factory-triage-comment: ${fp} -->\n<!-- factory-station: ${station} -->\n<!-- factory-severity: high -->` },
+        { body: `<!-- factory-review: alice -->\n<!-- factory-review-fingerprint: ${fp} -->` },
+      ],
+    });
+  // No flag at all on a non-security station: claimable (nothing asserts a change).
+  const bare = runCli({ args: ["--promote", "44", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(thread("qa-station")) });
+  // The operator asserts the station changes functionality: BLOCKED.
+  const byStation = runCli({ args: ["--promote", "44", "--apply", "--functionality-change", "qa-station", "--repo", "owner/voicebox"], stubGh: ghStubViewing(thread("qa-station")) });
+  // The operator asserts the rule id instead: also BLOCKED.
+  const byRule = runCli({ args: ["--promote", "44", "--apply", "--functionality-change", "triaged", "--repo", "owner/voicebox"], stubGh: ghStubViewing(thread("qa-station")) });
+  // An assertion about something else entirely does not block.
+  const unrelated = runCli({ args: ["--promote", "44", "--apply", "--functionality-change", "some-other-station", "--repo", "owner/voicebox"], stubGh: ghStubViewing(thread("qa-station")) });
+  try {
+    assert.equal(bare.status, 0, bare.stderr);
+    assert.ok(!/BLOCKED/.test(bare.stdout), `an unflagged inbound finding blocked: ${bare.stdout}`);
+    for (const [label, res] of [["station", byStation], ["rule", byRule]]) {
+      assert.equal(res.status, 0, `${label}: ${res.stderr}`);
+      assert.match(res.stdout, /BLOCKED/, `--functionality-change ${label} did not block: ${res.stdout}`);
+      // The reason lives on the BLOCKED record: `bd update --status blocked` plus a comment stating why.
+      assert.ok(
+        res.bdCalls.some((c) => c.startsWith("update") && c.includes("--status blocked")),
+        `the bead was not marked blocked: ${res.bdCalls.join(" | ")}`,
+      );
+      assert.ok(
+        res.bdCalls.some((c) => c.startsWith("comment") && /changes functionality/.test(c)),
+        `the reason was not recorded: ${res.bdCalls.join(" | ")}`,
+      );
+      assert.ok(
+        !/claimable/.test(res.bdCalls.find((c) => c.startsWith("create")) ?? ""),
+        "a blocked bead still claimed to be claimable",
+      );
+    }
+    assert.equal(unrelated.status, 0, unrelated.stderr);
+    assert.ok(!/BLOCKED/.test(unrelated.stdout), `an unrelated assertion blocked: ${unrelated.stdout}`);
+  } finally {
+    for (const res of [bare, byStation, byRule, unrelated]) rmSync(res.box, { recursive: true, force: true });
+  }
+});
+
+test("ALL MEANS ALL end to end: the default path files low/info issues, and creates no bead (round 11)", () => {
+  // Severity preserved on the published issue, dedupe unchanged, and no bead without a reviewed
+  // promotion - a purely informational issue need not become work.
+  const report = fixture("voicebox-modern-web-delta.md");
+  assert.ok(/^### \[(LOW|INFO)\]/m.test(report), "the fixture must carry a low/info finding for this test to mean anything");
+
+  const byDefault = runCli({ args: ["--report", "voicebox-modern-web-delta.md", "--file-issues", "--repo", "owner/voicebox"], reports: { "voicebox-modern-web-delta.md": report } });
+  const excluded = runCli({ args: ["--report", "voicebox-modern-web-delta.md", "--file-issues", "--exclude-low", "--repo", "owner/voicebox"], reports: { "voicebox-modern-web-delta.md": report } });
+  const redundant = runCli({ args: ["--report", "voicebox-modern-web-delta.md", "--file-issues", "--include-low", "--repo", "owner/voicebox"], reports: { "voicebox-modern-web-delta.md": report } });
+  try {
+    const created = byDefault.ghCalls.filter((c) => c.startsWith("issue create"));
+    assert.ok(created.length > 0, `the default published nothing: ${byDefault.stdout}`);
+    assert.ok(!/below the band you asked for/.test(byDefault.stdout), `a low/info finding was skipped by default: ${byDefault.stdout}`);
+    // The low finding reaches publication with its severity intact (title names the classifier, the body
+    // names the severity) and at priority P3, per the routing rule.
+    assert.ok(
+      created.some((c) => /factory\/low/.test(c) && /Severity\*\*: low/.test(c)),
+      `the low finding's severity did not reach publication: ${created.join(" | ")}`,
+    );
+    assert.match(byDefault.stdout, /^issues: \d+ published/m, `no receipt: ${byDefault.stdout}`);
+
+    // The opt-out genuinely drops them, and says why.
+    assert.match(excluded.stdout, /below the band you asked for with --exclude-low/, excluded.stdout);
+    assert.ok(
+      excluded.ghCalls.filter((c) => c.startsWith("issue create")).length < created.length,
+      `--exclude-low published just as much: ${excluded.ghCalls.join(" | ")}`,
+    );
+
+    // The old flag is a no-op, so callers that still pass it are unaffected.
+    assert.equal(redundant.status, byDefault.status, redundant.stderr);
+    assert.equal(
+      redundant.ghCalls.filter((c) => c.startsWith("issue create")).length,
+      created.length,
+      "--include-low changed the outcome",
+    );
+
+    // Nothing here created a bead: a bead still needs an explicit, reviewed promotion.
+    for (const res of [byDefault, excluded, redundant]) {
+      assert.ok(!res.bdCalls.some((c) => c.startsWith("create")), `a bead was created without a reviewed promotion: ${res.bdCalls.join(" | ")}`);
+    }
+  } finally {
+    for (const res of [byDefault, excluded, redundant]) rmSync(res.box, { recursive: true, force: true });
   }
 });
 

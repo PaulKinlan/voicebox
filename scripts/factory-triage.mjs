@@ -472,7 +472,7 @@ export function suggestsFunctionalityChange(finding) {
 export function blocksWork(humanReviewReason) {
   return humanReviewReason === "functionality-change" || humanReviewReason === "both";
 }
-export function routeFinding(finding, { confirmedFunctionalityChange = false, includeLow = false } = {}) {
+export function routeFinding(finding, { confirmedFunctionalityChange = false, includeLow = true } = {}) {
   const reasons = [];
   if (finding.falsePositive) return { action: "skip", humanReview: false, reasons: ["triaged false positive by the factory"] };
   if (finding.state === "unchanged") return { action: "skip", humanReview: false, reasons: ["unchanged: already tracked"] };
@@ -498,10 +498,14 @@ export function routeFinding(finding, { confirmedFunctionalityChange = false, in
     };
   }
   if (["low", "info"].includes(finding.effectiveSeverity) && !includeLow) {
+    // Not the default any more (coord: ALL means ALL). This survives only as the explicit opt-out an
+    // operator can ask for with --exclude-low.
     return {
       action: "skip",
       humanReview: false,
-      reasons: [`${finding.effectiveSeverity} is below the published band (pass --include-low to publish it at priority P3)`],
+      reasons: [
+        `${finding.effectiveSeverity} is below the band you asked for with --exclude-low (drop it to publish every severity at priority P3)`,
+      ],
     };
   }
   if (EMBARGOED_SEVERITIES.has(finding.effectiveSeverity)) {
@@ -912,6 +916,9 @@ export function beadForPromotion({ finding, issue, reviewedBy, repo, issueNumber
     `Promoted from the published factory issue (${repo}#${issueNumber}) by ${reviewedBy}.`,
     "",
     `Station: ${finding.station} · Severity: ${finding.severity} · Rule: ${finding.ruleId}`,
+    // The state a MARKER carried. `regressed` reads very differently from `new` to whoever triages this
+    // bead, and it was being read off the comment and then dropped here.
+    ...(finding.stateFromMarker ? [`State: ${finding.state}`] : []),
     `Issue: ${issue?.url ?? `${repo}#${issueNumber}`}`,
     `Fingerprint: ${finding.fingerprint}`,
     "",
@@ -971,7 +978,9 @@ Options:
   --repo <owner/name>          Repository for issues (default: the origin remote, else gh's repo)
   --target <path>              Repository the bead is filed in (default: this repo)
   --agent <name>               Override the station (default: from <target>-<agent>-delta.md)
-  --include-low                Also publish low/info findings
+  --exclude-low                Skip low/info findings (published by default: every severity reaches
+                               the triage surface, low/info at priority P3)
+  --include-low                Accepted and redundant (low/info are published by default)
   --functionality-change <rule|agent>
                                Confirm a functionality change for that rule id or station
   --json                       Machine-readable plan on stdout
@@ -987,7 +996,9 @@ Exit codes:
 
 function parseArgs(argv) {
   const opts = {
-    report: null, reportDir: null, target: null, agent: null, apply: false, includeLow: false,
+    report: null, reportDir: null, target: null, agent: null, apply: false,
+    // Coord's ruling: every severity reaches the triage surface by default.
+    includeLow: true,
     functionality: new Set(), json: false, privateRoot: null, fileIssues: false, promote: null,
     reviewedBy: null, repo: null, help: false, review: null, notes: null, selfTest: false, allowClosed: false,
     allowForeignTarget: false, writePlan: null, finding: null,
@@ -1025,6 +1036,7 @@ function parseArgs(argv) {
       case "--reviewed-by": opts.reviewedBy = next(); break;
       case "--repo": opts.repo = next(); break;
       case "--include-low": opts.includeLow = true; break;
+      case "--exclude-low": opts.includeLow = false; break;
       case "--functionality-change": opts.functionality.add(next()); break;
       case "--json": opts.json = true; break;
       case "--private-root": opts.privateRoot = next(); break;
@@ -1365,8 +1377,19 @@ function promote(opts, { repo, target }) {
   // signal from the station keeps a security finding marked for verification instead of dropping it
   // silently. It never blocks: a station alone is not a functionality change (Paul's criterion).
   const securityStation = IDENTITY_CRITICAL_AGENTS.has(identity.station ?? "");
-  const humanReviewReason =
-    identity.humanReview || securityStation
+  // The operator's assertion reaches this path now. It did not before: `--functionality-change` was
+  // parsed and then read nowhere here, so on an issue whose identity comes from triage comment markers
+  // there was NO way to block a promotion for a functionality change - measured, the flag filed a
+  // claimable bead. It matches the station or the rule id the marker names, exactly as the publish
+  // path does, and it is the only signal on this path that may assert a change.
+  const confirmedFunctionality = Boolean(
+    opts.functionality?.has(identity.fingerprint) ||
+      opts.functionality?.has(identity.station ?? "") ||
+      opts.functionality?.has(identity.ruleId ?? ""),
+  );
+  const humanReviewReason = confirmedFunctionality
+    ? "functionality-change"
+    : identity.humanReview || securityStation
       ? identity.humanReviewReason ?? (securityStation ? "model-prose" : "functionality-change")
       : null;
   const severity = VALID_SEVERITIES.includes(identity.severity) ? identity.severity : "critical";
@@ -1377,6 +1400,9 @@ function promote(opts, { repo, target }) {
     // matching how the badge is treated at publish time.
     effectiveSeverity: severity,
     state: identity.state ?? "new",
+    // Whether that state came from a marker rather than from this default. The bead says `State: x` only
+    // when a marker said so: a default is not evidence and must not be published as one.
+    stateFromMarker: Boolean(identity.state),
     humanReview: Boolean(humanReviewReason),
     humanReviewReason,
     ruleId: identity.ruleId,
