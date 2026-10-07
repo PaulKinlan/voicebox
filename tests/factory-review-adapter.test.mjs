@@ -19,13 +19,13 @@ const ROOT = path.resolve(__dirname, "..");
 
 test("factory-review-adapter: deterministic station selection and priority ordering (Security > Perf > UX > Docs > Ops)", () => {
   // 1. Security priority
-  const secSel = selectReviewStation(["lib/redact.mjs", "server.mjs"]);
+  const secSel = selectReviewStation(["lib/redact.mjs", "lib/tasks.mjs"]);
   assert.equal(secSel.station, "secret-scan");
   assert.equal(secSel.category, "security");
   assert.ok(secSel.deferred.some((d) => d.category === "perf"));
 
   // 2. Perf priority over UX and docs
-  const perfSel = selectReviewStation(["server.mjs", "public/index.html", "docs/README.md"]);
+  const perfSel = selectReviewStation(["lib/tasks.mjs", "public/index.html", "docs/README.md"]);
   assert.equal(perfSel.station, "perf-review");
   assert.equal(perfSel.category, "perf");
   assert.ok(perfSel.deferred.some((d) => d.category === "ux"));
@@ -52,7 +52,7 @@ test("factory-review-adapter: deterministic station selection and priority order
 test("factory-review-adapter: bounded review cap strictly enforces at most 1 station per review with explicit deferred recording", () => {
   const mixedDiff = [
     "lib/redact.mjs",       // Security
-    "server.mjs",           // Perf
+    "lib/tasks.mjs",        // Perf
     "public/style.css",     // UX
     "docs/README.md",       // Docs
     "scripts/deploy.sh",    // Ops
