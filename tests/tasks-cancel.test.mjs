@@ -129,14 +129,32 @@ test("partial output: a failing executor's partial answer is recorded, never dis
   const f = fixture(t, runner(async ({ report }) => {
     report("halfway");
     await delay(50);
-    throw Object.assign(new Error("failed halfway"), { refused: "executor-failed" });
+    throw Object.assign(new Error("failed halfway"), {
+      refused: "executor-failed",
+      partial: "intermediate result before crash",
+    });
   }));
   const { task } = f.admit();
   await until(() => f.status(task.address), (s) => s.task?.state === "failed");
   const final = await f.status(task.address);
   assert.equal(final.task.state, "failed");
-  // the partial answer is reported through progress here (the executor reports, then fails)
+  // both progress and partial answer are retained on failure
   assert.match(final.task.progress ?? "", /halfway/);
+  assert.equal(final.task.partial, "intermediate result before crash");
+  assert.equal(f.entries().at(-1)?.task?.partial, "intermediate result before crash");
+});
+
+test("negative control: a failing executor without partial output never invents partial field", async (t) => {
+  const f = fixture(t, runner(async () => {
+    throw Object.assign(new Error("plain crash"), { refused: "executor-failed" });
+  }));
+  const { task } = f.admit();
+  await until(() => f.status(task.address), (s) => s.task?.state === "failed");
+  const final = await f.status(task.address);
+  assert.equal(final.task.state, "failed");
+  assert.equal(final.task.partial, undefined);
+  assert.equal("partial" in final.task, false);
+  assert.equal(f.entries().at(-1)?.task?.partial, undefined);
 });
 
 test("retry is an explicit new attempt: a fresh admission after failure gets a NEW address and a queued record", async (t) => {
