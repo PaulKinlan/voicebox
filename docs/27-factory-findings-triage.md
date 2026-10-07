@@ -37,8 +37,8 @@ factory station ──(--sink file)──> private report  ──> scripts/facto
                      public GitHub issue                                            │
                      (triage record in the body,                                     bead
                       fingerprint marker, labels)                          (priority, external-ref,
-                                                                            BLOCKED if the issue
-                                                                            is marked human-review)
+                                                                            BLOCKED only if the
+                                                                            change is a functionality change)
 ```
 
 Nothing creates a bead from a report. The publisher has no such option, which is why the safety
@@ -312,9 +312,13 @@ actionable (no findings in band, or everything already published).
   body and the bead comment are composed from it, with a station-based inference only for issues that
   predate the marker.
 - **Mutation testing** is the bar for the suite itself: for each policy rule, breaking that rule must
-  turn the suite red. On this revision **50 mutations** were run over **85 passing tests** and **every one turned the
-  suite red** (0 green, 0 skipped). Mutants whose target code was removed with the comment mode are
-  deleted from the matrix rather than counted
+  turn the suite red. The last **full matrix** — run when the blocking criterion landed — was **50 mutations over 85
+  passing tests, and every one turned the suite red** (0 green, 0 skipped). Each later revision added
+  its own mutants for the code it touched and every one of those is red too: three over the marker-set
+  tolerance and four over the round-6 fixes (body-marker exclusion from the candidate list, `--finding`
+  validation skipped, ambiguity derived instead of refused, and malformed `--repo` returning null
+  instead of throwing). The suite stands at **88 tests**. Mutants whose target code was removed with
+  the comment mode are deleted from the matrix rather than counted
   seeded HIGH cannot quietly disappear. The reviewer's own mutation run had found **six rules that
   stayed green** on the revision before this one — the `falsePositive` and `state: "unchanged"` skips,
   `maskText` and private-root elision inside `displayTitle`, and the `bd create` / `gh issue create`

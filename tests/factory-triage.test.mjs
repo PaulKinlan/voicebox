@@ -2668,3 +2668,67 @@ test("SEAM TOLERANCE: a triage comment that names a security station marks the b
     for (const res of [security, quality]) rmSync(res.box, { recursive: true, force: true });
   }
 });
+
+test("--finding IS validated against the body fingerprint too (round 6 P1)", () => {
+  // The gap: validation lived inside the branch taken only when the body marker was ABSENT, so on a
+  // publisher-created issue a caller could ask for one finding and be handed another.
+  const bodyFp = "1a".repeat(32);
+  const commentFp = "2b".repeat(32);
+  const bodyOnly = JSON.stringify({
+    number: 5, state: "OPEN", title: "[factory/high] qa-station: stub", url: "https://example.invalid/5", labels: [],
+    body: `<!-- factory-fingerprint: ${bodyFp} -->\n<!-- factory-station: qa-station -->\n<!-- factory-severity: high -->\n<!-- factory-state: new -->`,
+    comments: [{ body: "<!-- factory-review: alice -->" }],
+  });
+  const both = JSON.stringify({
+    number: 5, state: "OPEN", title: "[factory/high] qa-station: stub", url: "https://example.invalid/5", labels: [],
+    body: `<!-- factory-fingerprint: ${bodyFp} -->\n<!-- factory-station: qa-station -->\n<!-- factory-severity: high -->\n<!-- factory-state: new -->`,
+    comments: [
+      { body: `<!-- factory-triage-comment: ${commentFp} -->\n<!-- factory-station: docs-drift -->\n<!-- factory-severity: low -->` },
+      { body: "<!-- factory-review: alice -->" },
+    ],
+  });
+
+  const wrong = runCli({ args: ["--promote", "5", "--finding", "deadbeefdeadbeef", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(bodyOnly) });
+  const right = runCli({ args: ["--promote", "5", "--finding", bodyFp.slice(0, 16), "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(bodyOnly) });
+  const pickComment = runCli({ args: ["--promote", "5", "--finding", commentFp.slice(0, 16), "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(both) });
+  const ambiguous = runCli({ args: ["--promote", "5", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(both) });
+  try {
+    assert.equal(wrong.status, 1, `a non-matching --finding was ignored on a body-fingerprint issue: ${wrong.stdout}`);
+    assert.match(wrong.stderr, /matches 0 of the findings/);
+    assert.equal(wrong.bdCalls.length, 0, "a non-matching --finding reached bd");
+
+    assert.equal(right.status, 0, right.stderr);
+    const create = right.bdCalls.find((c) => c.startsWith("create"));
+    assert.ok(create.includes(`--external-ref factory:${bodyFp}`), `the body identity was not promoted: ${create}`);
+
+    // Body AND comment name different findings: --finding must select the one asked for...
+    assert.equal(pickComment.status, 0, pickComment.stderr);
+    const commentCreate = pickComment.bdCalls.find((c) => c.startsWith("create"));
+    assert.ok(commentCreate.includes(`--external-ref factory:${commentFp}`), `--finding did not select the comment finding: ${commentCreate}`);
+
+    // ...and without it the choice is refused rather than derived, because a bead is one identity.
+    assert.equal(ambiguous.status, 1, `an ambiguous promotion was allowed: ${ambiguous.stdout}`);
+    assert.match(ambiguous.stderr, /carries 2 findings/);
+    assert.equal(ambiguous.bdCalls.length, 0, "an ambiguous promotion reached bd");
+  } finally {
+    for (const res of [wrong, right, pickComment, ambiguous]) rmSync(res.box, { recursive: true, force: true });
+  }
+});
+
+test("A MALFORMED --repo refuses cleanly, without an unhandled crash (round 6 P2)", () => {
+  // It used to print the refusal and then die on `plan.map` of a null with a stack trace.
+  for (const bad of ["/", "///", "   "]) {
+    const res = runCli({
+      args: ["--report", "voicebox-qa-station-delta.md", "--json", "--repo", bad],
+      reports: { "voicebox-qa-station-delta.md": fixture("voicebox-qa-station-delta.md") },
+    });
+    try {
+      assert.equal(res.status, 1, `--repo '${bad}' did not refuse: ${res.stdout}`);
+      assert.match(res.stderr, /names no repository/);
+      assert.ok(!/TypeError|ReferenceError|at main \(/.test(res.stderr), `an unhandled crash leaked through: ${res.stderr}`);
+      assert.ok(!/\n\s+at /.test(res.stderr), `a stack trace leaked through: ${res.stderr}`);
+    } finally {
+      rmSync(res.box, { recursive: true, force: true });
+    }
+  }
+});

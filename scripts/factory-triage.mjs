@@ -1023,10 +1023,11 @@ export function buildPlan(reportFiles, opts) {
   if (repoSpec !== null && !repoName) {
     // Fail closed rather than defaulting to "no check": an empty name is falsy, and a falsy name used
     // to skip the cross-target refusal entirely, so malformed input silently disarmed the guard.
-    process.stderr.write(
-      `--repo '${repoSpec}' names no repository (expected owner/name): refusing, because a repository that names nothing cannot be checked against the report's target\n`,
+    // Thrown, not returned: every other refusal in this function throws, and returning null here made
+    // the caller crash on `plan.map` with an unhandled TypeError instead of printing this message.
+    throw new Error(
+      `--repo '${repoSpec}' names no repository (expected owner/name): refusing, because a repository that names nothing cannot be checked against the report's target`,
     );
-    return null;
   }
   for (const file of reportFiles) {
     const agent = opts.agent ?? agentFromReportName(file);
@@ -1174,47 +1175,60 @@ function promote(opts, { repo, target }) {
   }
   const markers = parseMarkers(issue.body ?? "");
   const triaged = triageMarkersFromComments(issue.comments);
-  const distinct = [...new Set(triaged.map((t) => t.fingerprint))];
-  let identity = markers.fingerprint
-    ? { fingerprint: markers.fingerprint, station: markers.station, severity: markers.severity, state: markers.state, humanReview: markers.humanReview, humanReviewReason: markers.humanReviewReason, ruleId: (issue.body.match(/\*\*Rule\*\*:\s*`([^`]+)`/) ?? [])[1] ?? "unclassified" }
-    : null;
-  if (!identity) {
-    if (distinct.length === 0) {
-      // Neither shape: this is an issue nothing has identified, and a bead needs an identity.
-      process.stderr.write(
-        `${repo}#${number} carries no factory fingerprint in its body and no triage marker in its comments: refusing to promote an issue nothing has identified\n`,
-      );
-      return 1;
-    }
-    // An explicit --finding is ALWAYS validated, even when the thread holds exactly one finding: a
-    // prefix that matches nothing means the caller is asking about a different issue, and silently
-    // promoting the identity it did find would file the wrong bead.
-    let chosen = null;
-    if (opts.finding) {
-      const wanted = String(opts.finding).toLowerCase();
-      const matches = distinct.filter((f) => f.toLowerCase().startsWith(wanted));
-      if (matches.length !== 1) {
-        process.stderr.write(
-          `--finding ${opts.finding} matches ${matches.length} of the findings on ${repo}#${number} (${distinct.map((f) => f.slice(0, 16)).join(", ")}): refusing to guess\n`,
-        );
-        return 1;
-      }
-      chosen = matches[0];
-    } else if (distinct.length === 1) {
-      chosen = distinct[0];
-    } else {
-      // More than one finding in the thread means the BEAD's subject is a choice, not a derivation.
-      process.stderr.write(
-        `${repo}#${number} carries ${distinct.length} findings (${distinct.map((f) => f.slice(0, 16)).join(", ")}): pass --finding <fingerprint> to say which one this bead is for\n`,
-      );
-      return 1;
-    }
-    const block = triaged.find((t) => t.fingerprint === chosen);
-    identity = { ...block, humanReviewReason: null, ruleId: "triaged" };
+  // EVERY finding this issue identifies, in one list: the publisher's own body marker first, then the
+  // triage markers in the comments. An explicit --finding is validated against the WHOLE list, because
+  // validating it only when the body marker was absent meant a caller could ask for one finding and be
+  // handed another — including where the body and the comments name different findings.
+  const candidates = [];
+  if (markers.fingerprint) {
+    candidates.push({
+      fingerprint: markers.fingerprint,
+      station: markers.station,
+      severity: markers.severity,
+      state: markers.state,
+      humanReview: markers.humanReview,
+      humanReviewReason: markers.humanReviewReason,
+      ruleId: (issue.body.match(/\*\*Rule\*\*:\s*`([^`]+)`/) ?? [])[1] ?? "unclassified",
+      source: "body",
+    });
   }
-  // The marker is posted as a COMMENT on the issue, so reading only the body missed it: the first
-  // live promotion wrote a marker that its own guard could not see, which would have permitted a
-  // second bead on the next promotion.
+  for (const triageFinding of triaged) {
+    // The body marker is the issue's OWN identity: a comment repeating that fingerprint describes the
+    // same finding, so it does not create a second candidate.
+    if (candidates.some((candidate) => candidate.fingerprint === triageFinding.fingerprint)) continue;
+    candidates.push({ ...triageFinding, humanReviewReason: null, ruleId: "triaged", source: "comment" });
+  }
+  if (candidates.length === 0) {
+    // Neither shape: this is an issue nothing has identified, and a bead needs an identity.
+    process.stderr.write(
+      `${repo}#${number} carries no factory fingerprint in its body and no triage marker in its comments: refusing to promote an issue nothing has identified\n`,
+    );
+    return 1;
+  }
+  // An explicit --finding is ALWAYS validated, even when the issue names exactly one finding: a prefix
+  // matching nothing means the caller is asking about a different issue, and silently promoting the
+  // identity that was found would file the wrong bead.
+  let identity = null;
+  if (opts.finding) {
+    const wanted = String(opts.finding).toLowerCase();
+    const matches = candidates.filter((candidate) => candidate.fingerprint.toLowerCase().startsWith(wanted));
+    if (matches.length !== 1) {
+      process.stderr.write(
+        `--finding ${opts.finding} matches ${matches.length} of the findings on ${repo}#${number} (${candidates.map((c) => c.fingerprint.slice(0, 16)).join(", ")}): refusing to guess\n`,
+      );
+      return 1;
+    }
+    identity = matches[0];
+  } else if (candidates.length === 1) {
+    identity = candidates[0];
+  } else {
+    // Several findings means the BEAD's subject is a choice, not a derivation.
+    process.stderr.write(
+      `${repo}#${number} carries ${candidates.length} findings (${candidates.map((c) => c.fingerprint.slice(0, 16)).join(", ")}): pass --finding <fingerprint> to say which one this bead is for\n`,
+    );
+    return 1;
+  }
+
   const comments = Array.isArray(issue.comments) ? issue.comments : [];
   const promotedInComment = comments.map((c) => parseMarkers(c?.body ?? "").promotedTo).find(Boolean) ?? null;
   const promotedTo = markers.promotedTo ?? promotedInComment;
