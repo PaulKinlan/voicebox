@@ -68,6 +68,7 @@ import {
   routeFinding,
   sanitizeFinding,
   triageMarkersFromComments,
+  declaredActionableCount,
   suggestsFunctionalityChange,
 } from "../scripts/factory-triage.mjs";
 
@@ -2851,4 +2852,59 @@ test("A RULE marker from a triage comment reaches the bead, and its absence says
   } finally {
     for (const res of [withRule, without]) rmSync(res.box, { recursive: true, force: true });
   }
+});
+
+test("AN INCOMPLETE report publishes nothing (a killed or timed-out station run)", () => {
+  // The declared summary table says how many new/regressed findings the run found. A report whose body
+  // stops early declares more than it delivers, and publishing the rows that are present would silently
+  // drop the rest — the dropped finding would look like it was never found.
+  const complete = fixture("voicebox-qa-station-delta.md");
+  // Two shapes of the same failure: the write was cut before the findings started (declares one,
+  // delivers none), and the body survived but stops early (declares more than it delivers).
+  const headerOnly = complete.slice(0, complete.indexOf("### "));
+  const declaredMismatch = complete.replace(/\|\s*\*\*1\*\*\s*\|\s*\*\*0\*\*\s*\|/, "| **3** | **0** |");
+  assert.ok(headerOnly.length < complete.length, "the truncation must actually cut the body");
+
+  const shapes = [["cut body", headerOnly], ["declared more than delivered", declaredMismatch]];
+  for (const [label, truncated] of shapes) {
+    for (const mode of [["--json"], ["--file-issues"]]) {
+      const res = runCli({
+        args: ["--report", "voicebox-qa-station-delta.md", ...mode, "--repo", "owner/voicebox"],
+        reports: { "voicebox-qa-station-delta.md": truncated },
+      });
+      try {
+        assert.equal(res.status, 1, `an incomplete report was accepted (${label}, ${mode}): ${res.stdout}`);
+        assert.match(res.stderr, /the report is INCOMPLETE/);
+        assert.match(res.stderr, /re-run the station/);
+        assert.ok(
+          !res.ghCalls.some((c) => c.startsWith("issue create")),
+          `an incomplete report published (${label}, ${mode}): ${res.ghCalls.join(" | ")}`,
+        );
+      } finally {
+        rmSync(res.box, { recursive: true, force: true });
+      }
+    }
+  }
+
+  // The same report, complete, still publishes: the check must not refuse a healthy run.
+  const ok = runCli({
+    args: ["--report", "voicebox-qa-station-delta.md", "--file-issues", "--repo", "owner/voicebox"],
+    reports: { "voicebox-qa-station-delta.md": complete },
+  });
+  try {
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.ok(ok.ghCalls.some((c) => c.startsWith("issue create")), `a complete report published nothing: ${ok.ghCalls.join(" | ")}`);
+  } finally {
+    rmSync(ok.box, { recursive: true, force: true });
+  }
+});
+
+test("declaredActionableCount reads the report's own summary table, and says null when there is none", () => {
+  assert.equal(declaredActionableCount(fixture("voicebox-qa-station-delta.md")), 1);
+  assert.equal(declaredActionableCount("no table here"), null);
+  assert.equal(declaredActionableCount(""), null);
+  assert.equal(declaredActionableCount(null), null);
+  // Bolded and unbolded cells both count, and it reads the FIRST numeric row after the header.
+  assert.equal(declaredActionableCount("| New | Regressed |\n|:---:|:---:|\n| 3 | 2 |\n| 9 | 9 |"), 5);
+  assert.equal(declaredActionableCount("| New | Regressed |\n| **4** | **1** |"), 5);
 });

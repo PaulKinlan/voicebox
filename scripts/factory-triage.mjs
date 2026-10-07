@@ -256,6 +256,26 @@ export function sanitizeFinding(finding, { privateRoot } = {}) {
 // Report parsing (the factory's own delta renderer: lib/findings.py:_render_delta_report)
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * The number of actionable findings a report DECLARES, from its own summary table, or null when the
+ * report does not declare one.
+ *
+ * This exists because a station run that times out or is killed can leave a report that is complete in
+ * every way except that its findings stop early. Publishing the rows that happen to be present would
+ * silently drop the rest, which is worse than publishing nothing: the dropped finding looks like it was
+ * never found. The declared count is what makes truncation detectable.
+ */
+export function declaredActionableCount(markdown) {
+  const lines = String(markdown).split("\n");
+  const headerAt = lines.findIndex((line) => /\|\s*New\s*\|\s*Regressed\s*\|/.test(line));
+  if (headerAt === -1) return null;
+  for (let i = headerAt + 1; i < lines.length; i += 1) {
+    const row = lines[i].match(/^\|\s*(?:\*\*)?(\d+)(?:\*\*)?\s*\|\s*(?:\*\*)?(\d+)(?:\*\*)?\s*\|/);
+    if (row) return Number(row[1]) + Number(row[2]);
+  }
+  return null;
+}
+
 const FINDING_HEADING = /^### \[([^\]]+)\]\s+(.*?)\s+\(`([a-z]+)`\)\s*$/;
 const FIELD = /^- \*\*(Rule|Location|Fingerprint|Description|Snippet|Remediation)\*\*:\s*(.*)$/;
 
@@ -1041,7 +1061,18 @@ export function buildPlan(reportFiles, opts) {
     const agent = opts.agent ?? agentFromReportName(file);
     if (!agent) throw new Error(`${file}: cannot determine the station; pass --agent`);
     if (!STATION_CLASSES[agent]) throw new Error(`${file}: unknown station "${agent}" (see \`factory list\`)`);
-    const report = parseReport(readFileSync(file, "utf8"), { agent });
+    const markdown = readFileSync(file, "utf8");
+    const report = parseReport(markdown, { agent });
+    // A station run that times out or is killed leaves a report whose findings simply stop early, and
+    // the rows that are present look complete. The declared count is the only way to see that, and
+    // publishing the rows that happen to be there would silently drop the rest — the dropped finding
+    // would look like it was never found. All-or-nothing: an incomplete report publishes nothing.
+    const declared = declaredActionableCount(markdown);
+    if (declared !== null && declared !== report.findings.length) {
+      throw new Error(
+        `${basename(file)}: declares ${declared} new/regressed finding(s) but ${report.findings.length} were parsed: the report is INCOMPLETE (a killed or timed-out run looks like this), so nothing from it is published — re-run the station`,
+      );
+    }
     // A report names its own target, and `--report-dir` takes every report in a directory. Publishing
     // repo B's finding into repo A's tracker is silent and public, so the mismatch is a REFUSAL.
     if (repoName && !opts.allowForeignTarget) {

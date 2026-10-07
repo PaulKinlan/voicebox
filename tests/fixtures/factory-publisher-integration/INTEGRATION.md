@@ -58,6 +58,12 @@ verdict per finding with `--review <n> --reviewed-by <actor> --finding <fingerpr
 thread is not authorisation for any particular identity in it. On the promotion call `--reviewed-by` is
 optional and is only a cross-check that must match the recorded reviewer.
 
+COMPLETENESS: a report that declares more new/regressed findings in its summary table than it
+actually contains is refused — nothing from it is published and the CLI exits 1, so record the run as
+UNKNOWN and re-run the station. A killed or timed-out run looks exactly like this, and publishing the
+rows that happen to be present would silently drop the rest (the dropped finding would look like it was
+never found). A report with no declared count cannot be checked and is processed as before.
+
 Env/inputs: report must be OUTSIDE the repo tree (default root `$VOICEBOX_FACTORY_PRIVATE_DIR`
 else `~/.voicebox/factory-reports`); `--repo` or `$VOICEBOX_FACTORY_REPO` is required for any mode
 that touches GitHub; promotion needs a beads dir via `--target`.

@@ -237,7 +237,10 @@ Flags: `--report-dir <dir>`, `--repo <owner/name>`, `--target <path>`, `--agent 
 Exit codes are part of the contract: `0` a plan was produced / an issue published / a bead created; `1` a usage or policy refusal, **or a write that failed** — a publication where any
 `gh issue create` failed exits `1` and says how many, because a partial publication reported as
 success is how a CI job passes while a finding was never filed; `2` nothing actionable (nothing in band,
-or every finding already published).
+or every finding already published). A report that declares more new/regressed findings than it contains
+is NOT `2`: it exits `1` and publishes nothing, because a killed or timed-out station run is
+indistinguishable from a complete one except by that declared count — record the run as UNKNOWN and
+re-run the station.
 
 Two refusals exist to stop silent mis-publication:
 
