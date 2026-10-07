@@ -223,3 +223,4 @@ AudioWorklet modules loaded by the frontend audio engine: `pcm-worklet.js`.
 - **`public/fused.js`**: Owns the browser workspace UI, including:
   - **Pop-Over Bubble Tray (`#sqeh-deck`)**: Toggles the Files popover (`#sqeh-files-bubble`, `#made-list`), floating File Viewer (`#sqeh-reader-bubble`, `#reader`), Mini-App launcher bubbles (`#sqeh-actions`), and Recent Turns popover (`#sqeh-toggle-history`, `#session`).
   - **Directory Navigation & File Management**: Uses `normaliseRelativeDir` in `core/paths.ts` for breadcrumb folder navigation (`tests/room-explorer-ui.test.mjs`, `tests/room-file-list-polish.test.mjs`) and confirmation-gated file deletion via `DELETE /api/file`.
+  - **Room Folders Bar & Handle Management**: Manages multi-directory handle adoption, persistence, active folder switching, and observable initialization synchronization (`window.__voiceboxRoomFoldersReady`, `window.__voiceboxClearAllRoomFolders`, `tests/room-folders.test.mjs`).
