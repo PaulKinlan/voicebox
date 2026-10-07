@@ -26,19 +26,33 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 
 /**
- * Extract safe, sanitized summary lines from publisher stdout (counts and issue URLs).
+ * Comprehensive secret and token sanitizer for logs and summaries.
+ */
+export function sanitizeLogOutput(text = "") {
+  let sanitized = redactSecrets(String(text));
+  sanitized = sanitized.replace(/(?:gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{22,})/g, "[REDACTED]");
+  return sanitized;
+}
+
+/**
+ * Extract safe, sanitized summary lines from publisher stdout (anchored counts and issue URLs).
  */
 export function parsePublisherSummary(stdout = "") {
   const safeLines = [];
   for (const line of String(stdout).split("\n")) {
     const trimmed = line.trim();
+    // 1. Anchored count tallies: e.g. "published: 2", "issues: 1 published, 0 duplicate, 1 skipped"
     if (
-      /^(published|duplicate|failed|actionable|total|clean|skipped|new|regressed):\s*\d+/i.test(trimmed) ||
-      /^https:\/\/github\.com\/[^\s]+\/issues\/\d+/i.test(trimmed)
+      /^(published|duplicate|failed|actionable|total|clean|skipped|new|regressed):\s*\d+$/i.test(trimmed) ||
+      /^issues:\s*\d+\s+published,\s*\d+\s+duplicate(?:,\s*\d+\s+skipped)?(?:,\s*\d+\s+failed)?$/i.test(trimmed)
     ) {
-      let sanitizedLine = redactSecrets(trimmed);
-      sanitizedLine = sanitizedLine.replace(/(?:gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{22,})/g, "[REDACTED]");
-      safeLines.push(sanitizedLine);
+      safeLines.push(sanitizeLogOutput(trimmed));
+    } else {
+      // 2. Extracted validated issue URLs (ignoring any surrounding text or leaked payloads)
+      const urlMatch = trimmed.match(/https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/issues\/\d+/);
+      if (urlMatch) {
+        safeLines.push(urlMatch[0]);
+      }
     }
   }
   return safeLines.join("\n");
@@ -200,7 +214,7 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
         publishExit = pubRes.status ?? 1;
         const safeSummary = parsePublisherSummary(pubRes.stdout || "");
         console.log(`[review-trigger] Publisher summary:\n${safeSummary || "(no summary emitted)"}`);
-        if (pubRes.stderr) console.error(`[review-trigger] Publisher stderr:\n${redactSecrets(pubRes.stderr)}`);
+        if (pubRes.stderr) console.error(`[review-trigger] Publisher stderr:\n${sanitizeLogOutput(pubRes.stderr)}`);
       } else {
         console.error(`[review-trigger] Error: scripts/factory-triage.mjs is absent; cannot publish delta report.`);
         publishExit = 1;

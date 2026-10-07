@@ -22,6 +22,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { routeIssue } from "../tools/factory-issue-router.mjs";
 import { formatTriageComment } from "../tools/factory-issue-commenter.mjs";
+import { sanitizeLogOutput } from "./factory-review-trigger.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -101,7 +102,7 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
       continue;
     }
 
-    console.log(`[issue-poller] Evaluating issue #${num}: "${issue.title}" (updatedAt: ${updatedAt})`);
+    console.log(`[issue-poller] Evaluating issue #${num}: "${sanitizeLogOutput(issue.title)}" (updatedAt: ${updatedAt})`);
 
     // Loop hazard guard & routing
     const routing = routeIssue(issue);
@@ -135,7 +136,7 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
             encoding: "utf8",
           });
           if (res.error || res.status !== 0 || res.status === null) {
-            console.error(`[issue-poller] Station '${st}' failed (error: ${res.error?.message || `status ${res.status}`})`);
+            console.error(`[issue-poller] Station '${st}' failed (error: ${sanitizeLogOutput(res.error?.message || `status ${res.status}`)}); stderr: ${sanitizeLogOutput(res.stderr || "")}`);
             scanSuccess = false;
             break;
           }
@@ -186,7 +187,7 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
           });
           console.log(`[issue-poller] Successfully posted triage comment to issue #${num}`);
         } catch (e) {
-          console.error(`[issue-poller] Failed to post comment on issue #${num}: ${e.message}`);
+          console.error(`[issue-poller] Failed to post comment on issue #${num}: ${sanitizeLogOutput(e.message)}`);
           postSuccess = false;
         }
       }

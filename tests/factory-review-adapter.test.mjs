@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import {
   selectReviewStation,
   computeReviewCacheKey,
@@ -12,7 +12,7 @@ import {
   CATEGORY_STATIONS,
 } from "../tools/factory-issue-router.mjs";
 import { formatTriageComment, sanitizeFindingText } from "../tools/factory-issue-commenter.mjs";
-import { runReviewTrigger, parsePublisherSummary } from "../scripts/factory-review-trigger.mjs";
+import { runReviewTrigger, parsePublisherSummary, sanitizeLogOutput } from "../scripts/factory-review-trigger.mjs";
 import { pollInboundIssues } from "../scripts/factory-issue-poller.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -267,39 +267,65 @@ test("factory-review-trigger: CLI executes cleanly in dry-run mode with determin
   assert.ok(result.cacheKey, "computed a cacheKey");
 });
 
-test("factory-review-trigger: parsePublisherSummary extracts safe summary and redacts secrets", () => {
+test("factory-review-trigger: parsePublisherSummary extracts anchored counts and sanitized issue URLs", () => {
   const dirtyOutput = [
     "[factory-triage] Beginning triage run...",
-    "published: 2 with github_pat_11ABCD1234567890abcdefghijklmnopqrstuvwxyz",
-    "duplicate: 1 password=super-secret-password-val",
+    "published: 2",
+    "duplicate: 1",
     "actionable: 3",
-    "https://github.com/PaulKinlan/voicebox/issues/42",
+    "issues: 1 published, 0 duplicate, 1 skipped",
+    "published: 5939431590a57344 -> https://github.com/PaulKinlan/voicebox/issues/42",
+    "published: 2 with unanchored text and token github_pat_11ABCD1234567890abcdefghijklmnopqrstuvwxyz",
     "raw finding details: password=super-secret-password-val and token github_pat_11ABCD1234567890abcdefghijklmnopqrstuvwxyz",
     "internal debug stack trace line",
   ].join("\n");
 
   const safe = parsePublisherSummary(dirtyOutput);
-  // [factory-triage] is not an accepted count line; strictly count lines and issue URLs survive
+  // [factory-triage] and unanchored text are omitted; strictly anchored counts and issue URLs survive
   assert.ok(!safe.includes("[factory-triage]"));
-  assert.ok(safe.includes("published: 2 with [REDACTED]"));
-  assert.ok(safe.includes("duplicate: 1 password=[redacted]"));
+  assert.ok(safe.includes("published: 2"));
+  assert.ok(safe.includes("duplicate: 1"));
   assert.ok(safe.includes("actionable: 3"));
+  assert.ok(safe.includes("issues: 1 published, 0 duplicate, 1 skipped"));
   assert.ok(safe.includes("https://github.com/PaulKinlan/voicebox/issues/42"));
   assert.ok(!safe.includes("super-secret-password-val"));
   assert.ok(!safe.includes("github_pat_11ABCD1234567890abcdefghijklmnopqrstuvwxyz"));
+  assert.ok(!safe.includes("with unanchored text"));
   assert.ok(!safe.includes("internal debug stack trace"));
 });
 
-test("factory-issue-poller: pollInboundIssues processes issues cleanly in dry-run with rmSync isolation", () => {
+test("factory-review-trigger: sanitizeLogOutput masks stderr and issue titles containing secrets and PATs", () => {
+  const rawStderr = "Error: authentication failed for github_pat_11ABCD1234567890abcdefghijklmnopqrstuvwxyz with password=super-secret";
+  const sanitizedStderr = sanitizeLogOutput(rawStderr);
+  assert.ok(!sanitizedStderr.includes("github_pat_11ABCD1234567890abcdefghijklmnopqrstuvwxyz"));
+  assert.ok(!sanitizedStderr.includes("super-secret"));
+  assert.ok(sanitizedStderr.includes("[REDACTED]"));
+
+  const rawTitle = "Issue in login with token github_pat_11ABCD1234567890abcdefghijklmnopqrstuvwxyz and secret=topsecret";
+  const sanitizedTitle = sanitizeLogOutput(rawTitle);
+  assert.ok(!sanitizedTitle.includes("github_pat_11ABCD1234567890abcdefghijklmnopqrstuvwxyz"));
+  assert.ok(!sanitizedTitle.includes("topsecret"));
+  assert.ok(sanitizedTitle.includes("[REDACTED]"));
+});
+
+test("factory-issue-poller: pollInboundIssues cleans up stale attempt directories and sanitizes titles", () => {
   const tmpDir = path.join(ROOT, "tests", "fixtures", "test-poller-tmp");
+  rmSync(tmpDir, { recursive: true, force: true });
   mkdirSync(tmpDir, { recursive: true });
+
+  // Pre-seed a stale attempt directory with an old report
+  const staleIssueDir = path.join(tmpDir, "issue-101");
+  mkdirSync(staleIssueDir, { recursive: true });
+  const staleFile = path.join(staleIssueDir, "stale-old-report.md");
+  writeFileSync(staleFile, "stale report content");
+
   const mockBinDir = path.join(tmpDir, "bin");
   mkdirSync(mockBinDir, { recursive: true });
   const mockGh = path.join(mockBinDir, "gh");
   const sampleIssues = [
     {
       number: 101,
-      title: "Bug: slow boot",
+      title: "Bug: slow boot with token github_pat_11ABCD1234567890abcdefghijklmnopqrstuvwxyz",
       body: "Investigate boot latency in client",
       authorAssociation: "COLLABORATOR",
       createdAt: "2026-10-07T00:00:00Z",
@@ -312,9 +338,34 @@ test("factory-issue-poller: pollInboundIssues processes issues cleanly in dry-ru
     env: { ...process.env, PATH: `${mockBinDir}:${process.env.PATH}` },
     rootDir: ROOT,
   });
+
+  // Verify that stale file was wiped during attempt initialization
+  assert.equal(existsSync(staleFile), false, "stale file was removed by rmSync");
   rmSync(tmpDir, { recursive: true, force: true });
 
   assert.equal(result.ok, true);
   assert.equal(result.exitCode, 0);
   assert.equal(result.processedCount, 1);
+});
+
+test("factory-review-trigger: provenance check ignores ambient reports when runDir has none", () => {
+  const tmpDir = path.join(ROOT, "tests", "fixtures", "test-provenance-tmp");
+  mkdirSync(tmpDir, { recursive: true });
+
+  // Seed ambient findings directory with a report that should NOT be picked up
+  const ambientFindingsDir = path.join(tmpDir, "findings");
+  mkdirSync(ambientFindingsDir, { recursive: true });
+  const targetName = path.basename(ROOT);
+  const ambientReport = path.join(ambientFindingsDir, `${targetName}-docs-drift-delta.md`);
+  writeFileSync(ambientReport, "# Ambient report that must never be published without runDir provenance\n");
+
+  const result = runReviewTrigger(["--base", "HEAD~1", "--tip", "HEAD", "--private-dir", tmpDir, "--dry-run"], {
+    rootDir: ROOT,
+  });
+
+  rmSync(tmpDir, { recursive: true, force: true });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.exitCode, 0);
+  assert.ok(result.station, "selected a station");
 });
