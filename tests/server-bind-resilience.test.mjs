@@ -31,7 +31,14 @@ const SERVER = path.join(ROOT, "server.mjs");
 
 /** Kill a whole process group and wait for it: a forked supervisor does not die with its parent. */
 async function reap(child) {
-  const done = new Promise((resolve) => child.once("exit", resolve));
+  // voicebox-beads-v0zp: a child that is ALREADY gone never fires another 'exit', so the race
+  // below could only be settled by the 2s grace — measured: 2004ms for an already-exited child,
+  // ~2.0s of isolated test 3's 3.2s. Resolve immediately instead (signalKilled children have a
+  // null exitCode but a set signalCode, so check both).
+  const done = new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) return resolve(child.exitCode);
+    child.once("exit", resolve);
+  });
   try {
     process.kill(-child.pid, "SIGKILL");
   } catch {
@@ -273,4 +280,24 @@ test("the reported path: a landing-triggered --watch restart leaves a port that 
     if (!reason) return;
   }
   assert.fail(`the port was taken by another suite on every attempt — ${reason}`);
+});
+
+// voicebox-beads-v0zp: a child that is already gone never fires another 'exit', so reap's race
+// could only be settled by the 2s grace — measured 2004ms. Reap must now return immediately.
+test("reap returns immediately for an already-gone child instead of burning the 2s grace", { timeout: 30000 }, async () => {
+  const gone = spawn(process.execPath, ["-e", "process.exit(0)"], { detached: true, stdio: "ignore" });
+  await new Promise((resolve) => gone.once("exit", resolve));
+  const start = Date.now();
+  await reap(gone);
+  const elapsed = Date.now() - start;
+  assert.ok(elapsed < 1000, `reap of an already-gone child burned ${elapsed}ms — the 2s grace is back`);
+});
+
+// Negative control: the fast path must not make reap abandon a LIVE child — it is still killed
+// and waited for, not raced against the grace.
+test("reap still kills and waits for a live child", { timeout: 30000 }, async () => {
+  const live = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" });
+  await new Promise((resolve) => live.once("spawn", resolve));
+  await reap(live);
+  assert.equal(live.signalCode, "SIGKILL", "the live child was reaped with the group kill, not abandoned");
 });
