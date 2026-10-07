@@ -1,0 +1,35 @@
+[
+  {
+    "report": "voicebox-perf-review-delta.md",
+    "target": "voicebox",
+    "action": "issue",
+    "human_review": false,
+    "reasons": [
+      "high severity is published deliberately (the factory embargo would withhold it)"
+    ],
+    "finding": {
+      "agent": "perf-review",
+      "rule_id": "blocking-boot-probe",
+      "path": "server.mjs",
+      "line_number": "210",
+      "state": "new",
+      "severity": "high",
+      "severity_reported": "high",
+      "identity_critical": false,
+      "fingerprint": "5939431590a573447f5b1826c33d12e4b2429002741349d1d8313deb7af5cd9a",
+      "identity_source": "recomputed-and-verified"
+    },
+    "issue": {
+      "title": "[factory/high] perf-review: Startup probe blocks the boot banner",
+      "body": "**Station**: `perf-review` (perf class) \u00b7 **Severity**: high \u00b7 **State**: new\n**Rule**: `blocking-boot-probe` \u00b7 **Location**: `server.mjs:210`\n**What the station reported**\n\nthe probe is awaited before the banner prints\n\n**Suggested remediation**\n\nDo not await the probe before printing the banner\n\n**Evidence**\n\n```\nawait probeAll()\n```\n**Triage**\n- high severity is published deliberately (the factory embargo would withhold it)\n- Identity: `5939431590a573447f5b1826c33d12e4b2429002741349d1d8313deb7af5cd9a` (recomputed here and verified against the report)\n<details>\n<summary>Publication policy and provenance</summary>\nThis issue was created by the repository's own findings publisher (`scripts/factory-triage.mjs`),\nwhich reads a full, unredacted factory delta report (written with `--sink file`) and publishes a\nsanitised summary.\n\n**Visibility: public, declared deliberately.** This repository is public, and it publishes its own\nfactory findings at every severity \u2014 critical and high included. The factory's automatic embargo\nwithholds those bands from a public tracker, so this controlled publisher bypasses the factory's\npublic sinks on purpose, by decision recorded in `voicebox-beads-h1u0`: a high finding is visible\nhere instead of vanishing into a private artefact. It is *not* claiming a private target.\n\nNo literal credential value or key is ever published, whatever the finding's severity: the report is\nmasked with the same credential shapes the factory masks, a credential finding publishes derived text\nonly, and a security station's raw candidate is withheld entirely.\n\nNo bead was created from the scan. This issue is the record until a reviewer converts it, and the\npublisher has no option that creates beads from a report.\n</details>\n<!-- factory-fingerprint: 5939431590a573447f5b1826c33d12e4b2429002741349d1d8313deb7af5cd9a -->\n<!-- factory-station: perf-review -->\n<!-- factory-severity: high -->\n<!-- factory-state: new -->",
+      "labels": [
+        "enhancement"
+      ],
+      "fingerprint": "5939431590a573447f5b1826c33d12e4b2429002741349d1d8313deb7af5cd9a",
+      "station": "perf-review",
+      "severity": "high",
+      "humanReview": false,
+      "url": "PaulKinlan/voicebox/issues/"
+    }
+  }
+]
