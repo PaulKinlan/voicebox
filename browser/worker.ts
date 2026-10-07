@@ -59,9 +59,17 @@ import { startActs } from "./acts.ts";
  * named instance, not a directory, so two agents working in one project are two people and their
  * entries are two files a reader merges. The default keeps M0's single agent working unchanged;
  * `identify` names a second one, which is how the two-agent checks drive it.
+ * The PAGE passes a per-realm instance in the worker URL (voicebox-beads-826z): two tabs used to
+ * share the M0 default name and therefore one audit file — measured: 19 of 46 lines lost and
+ * torn reads, because a file-per-writer design cannot carry two writers in one file. The page's
+ * id is its sessionStorage tab lineage, claimed under a Web Lock: a duplicated or window.open'd
+ * tab inherits the lineage but finds the lock held and takes a suffixed name, while a reloaded
+ * tab re-claims its dead predecessor's name and keeps writing the same file. A worker without
+ * the parameter (tests do that) keeps the M0 default; `identify` still wins.
  */
-let instance = M0_INSTANCE;
-let actor: Actor = { name: M0_INSTANCE, harness: null, session: null, cwd: null };
+const requestedInstance = new URL(String(self.location)).searchParams.get("instance")?.trim();
+let instance = requestedInstance || M0_INSTANCE;
+let actor: Actor = { name: instance, harness: null, session: null, cwd: null };
 const ASSET_DIR = "assets";
 const AUDIT_DIR = ".audit";
 const UNDO_FILE = ".undo.json";

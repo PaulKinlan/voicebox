@@ -28,6 +28,7 @@ const PROJECT = "atlas";
 let server;
 let BASE;
 let page;
+let pageInstance;
 
 /** The page's own agent (the UI worker). */
 const me = (message) => page.evaluate((m) => window.e1m0.send(m), message);
@@ -44,6 +45,9 @@ test.before(async () => {
   page = await launch();
   await page.goto(`${BASE}/environment.html`);
   await page.waitFor(() => window.e1m0 !== undefined, { label: "the page's host API" });
+  // The page's worker identity is per-tab lineage + a boot nonce (voicebox-beads-826z), not the
+  // M0 default — every "who is the first agent" assertion below names it. The full identity is
+  // read back from the first audit entry (the storage holds only the lineage).
 });
 
 test.after(async () => {
@@ -57,6 +61,8 @@ test("two agents see each other's presence, work, and read positions — live, b
   assert.equal(opened.ok, true, `the first agent could not open the project: ${JSON.stringify(opened)}`);
   const wrote = await me({ type: "createAsset", args: { name: "from-phone.txt", kind: "text", body: "phone was here" } });
   assert.equal(wrote.ok, true, "the first agent could not write");
+  pageInstance = (await me({ type: "audit" })).entries[0]?.instance;
+  assert.ok(pageInstance?.startsWith("tab-"), `the first agent's identity is not the per-tab one: ${pageInstance}`);
 
   // Agent B: a second worker, named, with its own session — §9's actor model, driven.
   const identified = await page.evaluate(async (name) => {
@@ -95,17 +101,17 @@ test("two agents see each other's presence, work, and read positions — live, b
   // B looks: it sees A's presence and what A is doing, WITHOUT anything having been merged.
   const firstLook = await agent({ type: "look" });
   assert.equal(firstLook.ok, true, `the second agent could not look: ${JSON.stringify(firstLook)}`);
-  const phone = firstLook.agents.find((a) => a.instance === "phone");
+  const phone = firstLook.agents.find((a) => a.instance === pageInstance);
   assert.ok(phone, `the second agent cannot see the first: ${JSON.stringify(firstLook.agents)}`);
   assert.equal(phone.reported, "ready", "the first agent's presence is not visible");
   assert.ok(
-    firstLook.doing.some((d) => d.instance === "phone" && /creating text asset/.test(d.doing)),
+    firstLook.doing.some((d) => d.instance === pageInstance && /creating text asset/.test(d.doing)),
     `the second agent cannot see what the first is doing: ${JSON.stringify(firstLook.doing)}`,
   );
 
   // THE PAIR THAT WOULD COLLAPSE: "it has not run yet" versus "it has run and read nothing".
   // At this moment phone has acted but never looked, so what phone knows is UNKNOWN — not empty.
-  const beforePhoneLooked = firstLook.knew.find((k) => k.instance === "phone");
+  const beforePhoneLooked = firstLook.knew.find((k) => k.instance === pageInstance);
   assert.equal(beforePhoneLooked.mark, null, "an agent that never looked was reported as knowing nothing");
 
   // phone looks: now it has marks, and the other agent can read them.
@@ -114,7 +120,7 @@ test("two agents see each other's presence, work, and read positions — live, b
   assert.ok(phoneLook.claimed.length > 0, "looking claimed no positions, so 'what did it know' stays unanswerable");
 
   const secondLook = await agent({ type: "look", mark: false });
-  const phoneMark = secondLook.knew.find((k) => k.instance === "phone").mark;
+  const phoneMark = secondLook.knew.find((k) => k.instance === pageInstance).mark;
   assert.notEqual(phoneMark, null, "the first agent's read positions are still invisible after it looked");
   assert.ok(
     Object.keys(phoneMark).length > 0,
@@ -141,7 +147,7 @@ test("two agents see each other's presence, work, and read positions — live, b
     "the second agent's work is not in the first agent's backlog",
   );
   assert.equal(
-    thirdLook.unseen.some((g) => g.writer === "phone"),
+    thirdLook.unseen.some((g) => g.writer === pageInstance),
     false,
     "an agent was handed back its own work as something it had not seen",
   );
@@ -156,7 +162,7 @@ test("two agents see each other's presence, work, and read positions — live, b
   // And the second agent can see what the FIRST has read — the question the bead says a late merge
   // can only answer after the fact.
   const laptopLook = await agent({ type: "look" });
-  const phoneMarkAfter = laptopLook.knew.find((k) => k.instance === "phone").mark;
+  const phoneMarkAfter = laptopLook.knew.find((k) => k.instance === pageInstance).mark;
   assert.ok(
     phoneMarkAfter.laptop >= 0,
     `the second agent cannot see what the first has read: ${JSON.stringify(phoneMarkAfter)}`,
@@ -181,14 +187,14 @@ test("two agents see each other's presence, work, and read positions — live, b
   }
 
   const instanceFiles = new Set(all.filter((f) => f.instances.length === 1).map((f) => f.instances[0]));
-  assert.deepEqual([...instanceFiles].sort(), ["laptop", "phone"], "the two agents do not have their own files");
+  assert.deepEqual([...instanceFiles].sort(), ["laptop", pageInstance].sort(), "the two agents do not have their own files");
 
   // And the PAGE shows it: the shared view is a panel, not a library function.
   await page.evaluate(async () => { await window.e1m0.open("atlas"); await window.e1m0.renderAgents(true); });
   const panel = await page.evaluate(() => document.getElementById("agents").textContent);
   assert.match(panel, /laptop/, "the page does not name the other agent");
-  assert.match(panel, /read phone→/, "the page does not show what the other agent has read");
-  assert.match(panel, /you are 'phone'/, "the page does not say which agent you are");
+  assert.ok(panel.includes(`read ${pageInstance}→`), "the page does not show what the other agent has read");
+  assert.ok(panel.includes(`you are '${pageInstance}'`), "the page does not say which agent you are");
 });
 
 test("the shared view survives a reload, because it is storage and not memory", { timeout: 120000 }, async () => {

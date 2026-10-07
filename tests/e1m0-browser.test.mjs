@@ -275,11 +275,16 @@ test("9. Two roots write: one audit file per root, merged by (instance, seq)", {
   const keys = all.merged.map((e) => [e.instance, e.seq]);
   const sorted = [...keys].sort((x, y) => x[0].localeCompare(y[0]) || x[1] - y[1]);
   assert.deepEqual(keys, sorted, "the merged read is not ordered by (instance, seq)");
-  assert.equal(
-    new Set(all.merged.filter((e) => e.instance === "phone").map((e) => e.seq)).size,
-    all.merged.filter((e) => e.instance === "phone").length,
-    "two entries share a sequence number, so the merged order is ambiguous",
-  );
+  // Per WRITER, not per a hardcoded name: the page's instance is its claimed tab identity
+  // (voicebox-beads-826z), so the assertion names whoever actually wrote.
+  for (const instance of new Set(all.merged.map((e) => e.instance))) {
+    const seqs = all.merged.filter((e) => e.instance === instance).map((e) => e.seq);
+    assert.equal(
+      new Set(seqs).size,
+      seqs.length,
+      `instance ${instance} has two entries sharing a sequence number, so the merged order is ambiguous`,
+    );
+  }
   const atlasRoot = all.files.find((f) => f.root.endsWith("atlas")).root;
   assert.ok(
     all.merged.some((e) => e.root === atlasRoot) && all.merged.some((e) => e.root !== atlasRoot),

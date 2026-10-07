@@ -137,9 +137,11 @@ export function handleStorage(dir: FileSystemDirectoryHandle, virtualRoot: strin
 // the same offset; the s4mo missing delete entry was this). The key is (root, resolved), so two
 // ADAPTER INSTANCES over the same file (the audit fallback builds one per call) cannot race either.
 // A failed append rejects its own caller but never wedges the chain (the stored copy swallows the
-// rejection); a settled idle chain drops out of the map. Cross-realm writers to one file are
-// excluded by the audit's one-file-per-(root,writer) design, so an in-memory chain is the whole
-// guarantee within a realm.
+// rejection); a settled idle chain drops out of the map. Cross-REALM writers to one file are
+// excluded while Web Locks holds (Baseline since 2022): every tab claims its own writer identity
+// (browser/ui/ui.ts -> the worker URL, voicebox-beads-826z); without locks the identity carries a
+// per-realm nonce — unique up to the nonce space (4 hex), at a file per boot. Within a realm this
+// in-memory chain is the whole guarantee.
 const appendChains = new Map<string, Promise<void>>();
 
 function chainedAppend(key: string, write: () => Promise<void>): Promise<void> {

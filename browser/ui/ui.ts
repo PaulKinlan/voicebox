@@ -22,7 +22,54 @@ import { getHandle } from "../idb.ts";
 
 type Reply = { id: number; ok: boolean } & Record<string, any>;
 
-const worker = new Worker("/browser/worker.ts", { type: "module" });
+// Each REALM is its own audit writer (voicebox-beads-826z). The sessionStorage half is the tab
+// LINEAGE — stable across this tab's reloads — but a duplicated or window.open'd tab INHERITS a
+// copy of it, so lineage alone cannot be the identity. The platform's answer is Web Locks: the
+// live realm holds the lock named for its writer identity; a clone finds it taken and takes a
+// suffixed name; a RELOAD's dead realm has released it, so the reloaded tab reuses the same
+// identity and keeps writing the same file. Storage that throws degrades to a per-boot lineage,
+// which stays correct (unique) at the cost of a file per boot.
+let lineage;
+try {
+  lineage = sessionStorage.getItem("voicebox-instance");
+  if (!lineage) {
+    lineage = crypto.randomUUID().slice(0, 8);
+    sessionStorage.setItem("voicebox-instance", lineage);
+  }
+} catch {
+  lineage = crypto.randomUUID().slice(0, 8);
+}
+
+// Hold the lock for the realm's life: the callback's promise never settles, and a destroyed
+// realm's locks are released by the platform. ifAvailable makes the grant decision immediate.
+// Three outcomes, not two: "held" (the name is ours), "taken" (a live realm holds it — try the
+// next suffix), and "unknown" (no Web Locks, or the request REJECTED — e.g. a not-fully-active
+// document). "unknown" must neither claim the name (a clone would collide) nor keep looping (an
+// unbounded suffix loop of settled microtasks starves the renderer — measured: the tab hangs):
+// it degrades to a nonce identity, unique per realm at a file per boot.
+type Claim = "held" | "taken" | "unknown";
+function tryClaim(lockName: string): Promise<Claim> {
+  if (!navigator.locks?.request) return Promise.resolve("unknown");
+  let decide: (c: Claim) => void;
+  const decided = new Promise<Claim>((resolve) => { decide = resolve; });
+  navigator.locks.request(lockName, { ifAvailable: true }, (lock) => {
+    if (!lock) { decide("taken"); return; }
+    decide("held");
+    return new Promise(() => {});
+  }).catch(() => decide("unknown"));
+  return decided;
+}
+
+const baseInstance = `tab-${lineage}`;
+let tabInstance = baseInstance;
+let verdict = await tryClaim(`voicebox-writer:${tabInstance}`);
+for (let suffix = 2; verdict === "taken"; suffix++) {
+  tabInstance = `${baseInstance}-${suffix}`;
+  verdict = await tryClaim(`voicebox-writer:${tabInstance}`);
+}
+if (verdict === "unknown") tabInstance = `${baseInstance}-${crypto.randomUUID().slice(0, 4)}`;
+
+const worker = new Worker(`/browser/worker.ts?instance=${encodeURIComponent(tabInstance)}`, { type: "module" });
 const pending = new Map<number, (reply: Reply) => void>();
 let nextId = 1;
 
