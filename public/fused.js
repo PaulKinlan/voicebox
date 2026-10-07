@@ -589,7 +589,7 @@ async function openRoomFolder() {
 
 // THE BROWSER'S OWN FOLDER, BY NAME (voicebox-beads-vnos): the button opens it and a file-creation turn
 // with no root to write into lands in it, so both go through this one function — the room cannot open one
-// directory and write into another. It mirrors `browser/opfs.ts`'s `opfsRoot()` contract (the same
+// directory and write into another. It mirrors `browser/storage.ts`'s `opfsRoot()` contract (the same
 // `navigator.storage.getDirectory()` root); the page cannot import the worker's module, so the contract is
 // shared rather than the code.
 const SCRATCHPAD_NAME = "scratchpad";

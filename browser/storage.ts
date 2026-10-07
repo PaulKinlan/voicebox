@@ -132,6 +132,25 @@ export function handleStorage(dir: FileSystemDirectoryHandle, virtualRoot: strin
  * The methods both adapters share, because they share the browser's file-system API: what changes
  * between OPFS and a picked folder is only how the top-level directory handle is obtained.
  */
+// Appends to one file are serialized on a promise chain (voicebox-beads-2g7p, measured in a real
+// browser: 40 concurrent appends lost 39 lines — every writer captured the same size and wrote at
+// the same offset; the s4mo missing delete entry was this). The key is (root, resolved), so two
+// ADAPTER INSTANCES over the same file (the audit fallback builds one per call) cannot race either.
+// A failed append rejects its own caller but never wedges the chain (the stored copy swallows the
+// rejection); a settled idle chain drops out of the map. Cross-realm writers to one file are
+// excluded by the audit's one-file-per-(root,writer) design, so an in-memory chain is the whole
+// guarantee within a realm.
+const appendChains = new Map<string, Promise<void>>();
+
+function chainedAppend(key: string, write: () => Promise<void>): Promise<void> {
+  const tail = (appendChains.get(key) ?? Promise.resolve()).then(write);
+  const stored = tail.catch(() => {});
+  appendChains.set(key, stored);
+  // `stored` never rejects, so the derived promise cannot become an unhandled rejection.
+  void stored.then(() => { if (appendChains.get(key) === stored) appendChains.delete(key); });
+  return tail;
+}
+
 function adapter(
   root: string,
   at: (rel: string, create: boolean) => Promise<FileSystemDirectoryHandle>,
@@ -155,15 +174,17 @@ function adapter(
     async writeText(resolved, text) {
       await this.writeBytes(resolved, encoder.encode(text));
     },
-    async appendLine(resolved, line) {
+    appendLine(resolved, line) {
       // Append-only: a rewrite would let a reader see a torn log, and a log that can be rewritten
-      // is not a log.
-      const handle = await file(relTo(root, resolved), true);
-      const size = (await handle.getFile()).size;
-      const writable = await handle.createWritable({ keepExistingData: true });
-      await writable.seek(size);
-      await writable.write(encoder.encode(`${line}\n`));
-      await writable.close();
+      // is not a log. Serialized per file (chainedAppend above) — the size capture must be fresh.
+      return chainedAppend(`${root}\x00${resolved}`, async () => {
+        const handle = await file(relTo(root, resolved), true);
+        const size = (await handle.getFile()).size;
+        const writable = await handle.createWritable({ keepExistingData: true });
+        await writable.seek(size);
+        await writable.write(encoder.encode(`${line}\n`));
+        await writable.close();
+      });
     },
     async readLines(resolved) {
       try {
