@@ -9,7 +9,7 @@
 // old SpeechRecognition dictation handler (public/fused.js) does not attach,
 // and the page's scripted captions stop while live.
 import { createAudioClient } from "./audio-client.js";
-import { debugEnabled, recordDebug, observeDebugSocket } from "./debug-transcript.js";
+import { debugEnabled, isDebugEnabled, recordDebug, observeDebugSocket } from "./debug-transcript.js";
 
 window.__voiceboxLive = true;
 
@@ -163,6 +163,9 @@ const audioClient = createAudioClient({
   onActivity: (entry, frame) => {
     window.__voiceboxOnActivity?.(entry, frame);
   },
+  onSystemError: (msg) => {
+    window.__voiceboxOnSystemError?.(msg);
+  },
   onMiniApp: (miniApp) => {
     // THE MINI-APP CONTAINER: mount the interactive mini-app in the room (voicebox-beads-5h1)
     window.__voiceboxOnMiniApp?.(miniApp);
@@ -207,9 +210,17 @@ const audioClient = createAudioClient({
     const friendly = formatLiveErrorMessage(error?.message ?? error);
     recordDebug({ type: "audio.error", error: friendly, info });
     if (voiceState) voiceState.textContent = info?.fatal ? `Live voice failed: ${friendly}` : `Ignored a malformed frame: ${friendly}`;
+    console.error("[voicebox:live-voice]", error, info);
+    if (info?.fatal) {
+      window.__voiceboxOnLiveError?.(error, info);
+    }
   },
   onDiagnostic: (d) => {
     recordDebug({ type: "audio.diagnostic", detail: d });
+    if (d?.kind === "provider-error") {
+      console.error(`[voicebox:${d.kind}]`, d);
+      window.__voiceboxOnLiveError?.(new Error(d.reason || d.message || "Provider error"), d);
+    }
     if (d?.kind === "state" && d?.state === "interaction-status") {
       const status = String(d?.detail?.status ?? d?.status ?? "").toUpperCase();
       if (status === "IN_PROGRESS") {
@@ -274,7 +285,7 @@ function getSelectedThinkingLevel() {
 
 async function startLive() {
   const params = new URLSearchParams();
-  if (debugEnabled) params.set("debug", "1");
+  if (isDebugEnabled()) params.set("debug", "1");
   const thinkingLevel = getSelectedThinkingLevel();
   if (thinkingLevel) params.set("thinkingLevel", thinkingLevel);
   const qs = params.toString();

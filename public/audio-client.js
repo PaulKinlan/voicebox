@@ -80,6 +80,7 @@ export function createAudioClient({
   onToolCalls = () => {},
   onTask = () => {},
   onActivity = () => {},
+  onSystemError = () => {},
   onMiniApp = () => {},
   onMiniAppDeleted = () => {},
   onMiniAppCall = () => ({ ok: false, error: "no mini-app handler" }),
@@ -370,6 +371,10 @@ export function createAudioClient({
     }
     if (msg?.type === "error") {
       reject(String(msg.message ?? "server error"), { frameKind: "control-error" });
+      return;
+    }
+    if (msg?.type === "system_error") {
+      onSystemError(msg);
       return;
     }
     if (msg?.type === "tool") {

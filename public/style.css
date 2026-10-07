@@ -2542,6 +2542,14 @@ body[data-sqeh-state="activity"] .activity-panel {
   background: color-mix(in srgb, var(--shade) 45%, var(--card));
   font-size: .8125rem;
 }
+.activity-item-error {
+  border-color: color-mix(in srgb, #e53e3e 40%, var(--line));
+  background: color-mix(in srgb, #e53e3e 8%, var(--card));
+}
+.activity-item-error .activity-kind {
+  background: color-mix(in srgb, #e53e3e 20%, transparent);
+  color: #e53e3e;
+}
 .activity-item-head {
   display: flex;
   align-items: center;

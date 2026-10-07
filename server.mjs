@@ -47,6 +47,7 @@ import { createTaskHost, installTaskExecutor, TASK_TOOLS } from "./lib/tasks.mjs
 import { createPermissionPolicy } from "./lib/permission-policy.mjs";
 import { createPiAcpExecutor, describeAdapterInstall } from "./lib/pi-acp.mjs";
 import { liveToolDeclarations } from "./lib/wasm-shelf.mjs";
+import { redactSecrets, redactObject } from "./lib/redact.mjs";
 import { MiniAppRegistry } from "./lib/mini-app-host.mjs";
 import { saveMiniApp, discoverMiniApps, getMiniApp, deleteMiniApp } from "./lib/mini-app-store.mjs";
 import { createClaudeAcpExecutor, describeClaudeAdapterInstall } from "./lib/claude-acp.mjs";
@@ -850,13 +851,15 @@ function broadcastChannel(payload) {
 
 function recordWorkActivity({ kind = "work", summary = "", detail = "", file = "", status = "info" } = {}) {
   if (!summary) return null;
+  const cleanSummary = redactSecrets(String(summary)).slice(0, 500);
+  const cleanDetail = detail ? redactSecrets(String(detail)).slice(0, 4000) : "";
   const entry = {
     id: `act_${++workActivitySeq}`,
     at: new Date().toISOString(),
     kind: String(kind),
-    summary: String(summary).slice(0, 500),
+    summary: cleanSummary,
     status: String(status),
-    ...(detail ? { detail: String(detail).slice(0, 4000) } : {}),
+    ...(cleanDetail ? { detail: cleanDetail } : {}),
     ...(file ? { file: String(file).slice(0, 240) } : {}),
   };
   workActivityLog.push(entry);
@@ -4912,6 +4915,14 @@ async function handle(req, res) {
       }
 
       const executionResult = await execute(action);
+      if (executionResult && executionResult.ok === false) {
+        recordWorkActivity({
+          kind: "error",
+          summary: `${action.verb}: ${executionResult.why || executionResult.error || executionResult.refused || "failed"}`,
+          detail: [executionResult.why, executionResult.error, executionResult.detail, executionResult.stack].filter(Boolean).join("\n"),
+          status: "error",
+        });
+      }
       const responsePayload = { transcript: transcript || `(action: ${action.verb})`, action, result: executionResult };
       if (executionResult?.task) {
         responsePayload.task = executionResult.task;
@@ -5704,6 +5715,18 @@ server.on("upgrade", (req, socket) => {
         },
         onState: (state, detail) => {
           ws.send(JSON.stringify({ type: "state", state, detail, model }));
+          if (state === "error") {
+            const errSummary = `Live session error (${detail?.provider || model || "live"})`;
+            const errDetail = [detail?.message, detail?.reason, detail?.error, detail?.stack]
+              .filter(Boolean)
+              .join("\n");
+            recordWorkActivity({
+              kind: "error",
+              summary: errSummary,
+              detail: errDetail || "Live session encountered an error",
+              status: "error",
+            });
+          }
           // The provider is up: a folder report that arrived while it was starting can be applied now
           // (voicebox-beads-0zi4). Gemini answers "next session" here, and the page is told that.
           if (state === "ready") applyRememberedProjectInstruction(ws, session);
@@ -5737,6 +5760,22 @@ server.on("upgrade", (req, socket) => {
                   });
                   try {
                     ws.send(JSON.stringify({ type: "tool", calls: recovery.calls, recovered: true }));
+                  } catch {}
+                } else {
+                  recordWorkActivity({
+                    kind: "error",
+                    summary: "System error reported by live assistant",
+                    detail: `Spoken: "${modelSpoken.trim()}" | User input: "${userSpoken.trim()}"`,
+                    status: "error",
+                  });
+                  try {
+                    ws.send(JSON.stringify({
+                      type: "system_error",
+                      summary: "System error reported by live assistant",
+                      detail: `Spoken: "${modelSpoken.trim()}" | User input: "${userSpoken.trim()}"`,
+                      userTranscript: userSpoken,
+                      modelTranscript: modelSpoken,
+                    }));
                   } catch {}
                 }
               });
@@ -5782,11 +5821,29 @@ server.on("upgrade", (req, socket) => {
               try {
                 result = await execute({ ...action, turn: "live" });
               } catch (e) {
-                result = { ok: false, refused: "exec-threw", error: `refused: exec-threw`, why: `the executor threw instead of answering: ${e?.message ?? e}` };
+                result = {
+                  ok: false,
+                  refused: "exec-threw",
+                  error: `refused: exec-threw`,
+                  why: `the executor threw instead of answering: ${e?.message ?? e}`,
+                  stack: e?.stack ? String(e.stack).slice(0, 1000) : null,
+                };
               }
             }
             trace?.({ type: "tool.result", callId: call.id, name: call.name, result, durationMs: performance.now() - started,
               severity: result.ok === false ? "error" : "info" });
+            if (!result.ok) {
+              const errSummary = `Tool ${call.name} ${result.refused ? `refused (${result.refused})` : "failed"}`;
+              const errDetail = [result.why, result.error, result.detail, result.stack]
+                .filter(Boolean)
+                .join("\n");
+              recordWorkActivity({
+                kind: "error",
+                summary: errSummary,
+                detail: errDetail || `Tool call ${call.name} failed.`,
+                status: "error",
+              });
+            }
             if (result?.task) {
               try { ws.send(JSON.stringify({ type: "task", task: result.task })); } catch {}
             }
@@ -5803,6 +5860,12 @@ server.on("upgrade", (req, socket) => {
               // shelf row reads this and shows the person how long the tool took.
               durationMs: Math.round(performance.now() - started),
               action: result.action ?? result.error,
+              ...(result.refused ? { refused: result.refused } : {}),
+              ...(result.why ? { why: result.why } : {}),
+              ...(result.error ? { error: result.error } : {}),
+              ...(result.detail ? { detail: result.detail } : {}),
+              ...(result.stack ? { stack: result.stack } : {}),
+              ...(call.args ? { args: redactObject(call.args) } : {}),
               ...(typeof result.output === "string" ? { output: result.output.slice(0, 256) } : {}),
               // The written/edited/read FILE identity (voicebox-beads-2meg, voicebox-beads-8ga5, voicebox-beads-np3f):
               // artifact chips and the file reader need the file's name, bytes, preview, and content.

@@ -1,8 +1,12 @@
 // Debug capture is page-local in a bounded ring buffer. No transcript storage or background upload.
+let inMemoryDebug = null;
+
 function checkDebugEnabled() {
+  if (inMemoryDebug !== null) return inMemoryDebug;
   try {
     if (typeof location !== "undefined" && new URLSearchParams(location.search).get("debug") === "1") return true;
-    if (typeof window !== "undefined" && window.localStorage?.getItem?.("voiceboxDebug") === "1") return true;
+    const storage = typeof window !== "undefined" ? window.localStorage : (globalThis.localStorage ?? null);
+    if (storage?.getItem?.("voiceboxDebug") === "1") return true;
   } catch { /* location or localStorage unavailable */ }
   return false;
 }
@@ -10,6 +14,17 @@ function checkDebugEnabled() {
 export const debugEnabled = checkDebugEnabled();
 export function isDebugEnabled() {
   return checkDebugEnabled();
+}
+export function setDebugEnabled(enabled) {
+  inMemoryDebug = enabled === null || enabled === undefined ? null : Boolean(enabled);
+  try {
+    const storage = typeof window !== "undefined" ? window.localStorage : (globalThis.localStorage ?? null);
+    if (enabled === null) {
+      storage?.removeItem?.("voiceboxDebug");
+    } else {
+      storage?.setItem?.("voiceboxDebug", enabled ? "1" : "0");
+    }
+  } catch {}
 }
 
 export const MAX_EVENTS = 200;
