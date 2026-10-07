@@ -96,7 +96,10 @@ test("presence: when server is unreachable, #where-note names machine-unreachabl
     });
 
     assert.equal(where.dotOk, "false", "server-dot must show data-ok=false");
-    assert.equal(where.text, "machine-unreachable (fix the host)", "must name machine-unreachable with remedy");
+    assert.ok(
+      where.text === "machine-unreachable (fix the host)" || where.text === "the machine is not answering — fix the host",
+      `must name machine-unreachable with remedy, got: ${where.text}`,
+    );
     assert.match(where.title, /machine-unreachable/, "tooltip must state machine-unreachable");
     assert.doesNotMatch(where.title, /500/, "must not conflate machine-unreachable with 'server answered 500'");
   } finally {

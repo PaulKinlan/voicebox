@@ -229,6 +229,21 @@ export function renderTaskCard(
     container.append(progressBlock);
   }
 
+  // Console output
+  if (data.console?.text) {
+    const consoleBlock = document.createElement("div");
+    consoleBlock.className = "task-console-block";
+    consoleBlock.id = "task-card-console";
+    const cLabel = document.createElement("span");
+    cLabel.className = "task-section-label";
+    cLabel.textContent = "Console: ";
+    const cText = document.createElement("span");
+    cText.className = "task-console-text";
+    cText.textContent = data.console.text;
+    consoleBlock.append(cLabel, cText);
+    container.append(consoleBlock);
+  }
+
   // Result / Answer
   if (data.answer !== undefined) {
     const answerBlock = document.createElement("div");
@@ -434,11 +449,15 @@ export function createTaskCard(container: HTMLElement, options: TaskCardOptions 
     if (feedback) feedback.textContent = "Checking status…";
 
     if (options.onRefresh) {
-      await options.onRefresh(address);
+      return await options.onRefresh(address);
     } else if (client) {
       const res = await client.status(address);
       if (res.ok) {
-        currentTask = res.task;
+        currentTask = {
+          ...(currentTask ?? {}),
+          ...res.task,
+          ...(currentTask?.console && !res.task.console ? { console: currentTask.console } : {}),
+        };
         isStale = Boolean(res.stale);
         update();
         const fb = container.querySelector("#task-action-feedback");
@@ -449,10 +468,14 @@ export function createTaskCard(container: HTMLElement, options: TaskCardOptions 
         const fb = container.querySelector("#task-action-feedback");
         if (fb) fb.textContent = res.why;
       }
+      return res;
     }
   }
 
   function setTask(task: TaskRecord | TaskView | null, extra: { stale?: boolean; now?: number } = {}) {
+    if (task && currentTask?.console && !(task as any).console) {
+      (task as any).console = currentTask.console;
+    }
     currentTask = task;
     isStale = extra.stale ?? false;
     cancelRequested = false;

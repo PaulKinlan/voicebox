@@ -45,6 +45,7 @@ export interface TaskCardData {
   reason?: string;
   detail?: string;
   staleReason?: string;
+  console?: { source?: string; text?: string; at?: string };
 }
 
 /**
@@ -215,6 +216,7 @@ export function deriveCardData(options: {
     ...(task.partial !== undefined ? { partial: task.partial } : {}),
     ...(task.reason ? { reason: task.reason } : {}),
     ...(detailText ? { detail: detailText } : {}),
+    ...((task as any).console ? { console: (task as any).console } : {}),
     ...(stale ? { staleReason: "Offline cached status: environment is unreachable. This is not evidence of continuing execution." } : {}),
   };
 }

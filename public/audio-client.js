@@ -79,6 +79,7 @@ export function createAudioClient({
   onText = () => {},
   onToolCalls = () => {},
   onTask = () => {},
+  onActivity = () => {},
   onMiniApp = () => {},
   onMiniAppDeleted = () => {},
   onMiniAppCall = () => ({ ok: false, error: "no mini-app handler" }),
@@ -384,6 +385,10 @@ export function createAudioClient({
     }
     if (msg?.type === "task") {
       onTask(msg.task ?? null, msg);
+      return;
+    }
+    if (msg?.type === "activity") {
+      onActivity(msg.entry ?? msg, msg);
       return;
     }
     if (msg?.type === "mini_app") {
