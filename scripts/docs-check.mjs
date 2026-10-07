@@ -1003,6 +1003,8 @@ function claimsPass() {
         .filter((f) => f.endsWith(".md"))
         .map((f) => join("docs", f)),
       "README.md",
+      "PRODUCT.md",
+      join("designs", "README.md"),
     ]),
   ].filter((rel) => existsSync(docPath(rel)) && !pathIgnores.some((p) => rel.startsWith(p)));
 

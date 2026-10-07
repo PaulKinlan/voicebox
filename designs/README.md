@@ -23,7 +23,7 @@ This folder (`designs/`) contains the root-cause UX audit, Nano Banana visual mo
 ## 2. Root-Cause Audit of the Previous UI
 
 ### 2.1 Forced Dark Slate Theme (`#0b0f19`)
-- **Why it felt bad**: `public/index.html` hardcoded `data-theme="dark"` on `<html>`, and `public/sqeh-deck.css` overrode the room palette with heavy dark-slate glass (`#0b0f19` background, `rgba(15, 23, 42, 0.72)` cards, `#f8fafc` text) regardless of user preference. The result felt brooding, high-glare in daylight, and visually disconnected from Voicebox's original tactile paper tokens (`public/style.css`).
+- **Why it felt bad**: `public/index.html` hardcoded `data-theme="dark"` on `<html>`, and legacy deck styling (now consolidated into `public/style.css`) overrode the room palette with heavy dark-slate glass (`#0b0f19` background, `rgba(15, 23, 42, 0.72)` cards, `#f8fafc` text) regardless of user preference. The result felt brooding, high-glare in daylight, and visually disconnected from Voicebox's original tactile paper tokens in `public/style.css`.
 - **The Fix**:
   - Default `<html>` to `data-theme="light"` using the **Warm Tactile Paper** palette:
     - `--ground: #fbfbf9` (warm off-white paper canvas)
