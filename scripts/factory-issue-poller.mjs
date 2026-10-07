@@ -66,7 +66,7 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
       "issue",
       "list",
       "--state", "all",
-      "--json", "number,title,body,author,createdAt,labels",
+      "--json", "number,title,body,author,createdAt,labels,authorAssociation",
       "--limit", String(limit),
       "--repo", repo,
     ], { encoding: "utf8", env });

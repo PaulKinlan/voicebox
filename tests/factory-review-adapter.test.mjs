@@ -134,6 +134,18 @@ test("factory-issue-router: loop hazard guard rejects publisher issues independe
   assert.ok(resC.categories.includes("perf"));
   assert.ok(resC.agents.includes("perf-review"));
 
+  // Case C2: gh issue list returns camelCase authorAssociation
+  const ghCliIssue = {
+    number: 21,
+    authorAssociation: "COLLABORATOR",
+    title: "Docs typo in architecture document",
+    body: "Please update docs/07-architecture.md",
+  };
+  const resC2 = routeIssue(ghCliIssue);
+  assert.equal(resC2.ok, true);
+  assert.ok(resC2.categories.includes("docs"));
+  assert.ok(resC2.agents.includes("docs-drift"));
+
   // Case D: Untrusted author (NONE) rejected by author trust gate
   const untrustedIssue = {
     number: 20,

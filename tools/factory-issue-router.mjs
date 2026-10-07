@@ -146,7 +146,7 @@ export function computeReviewCacheKey({ diffContent = "", station = "", factoryR
 export function routeIssue(issue = {}) {
   const body = String(issue.body ?? "");
   const title = String(issue.title ?? "");
-  const authorAssoc = String(issue.author_association ?? "NONE").toUpperCase();
+  const authorAssoc = String(issue.author_association ?? issue.authorAssociation ?? "NONE").toUpperCase();
 
   // 1. Loop Hazard Guard (independent of author association):
   // Checks body and title markers matching issues created by factory-triage or upstream factory sinks
