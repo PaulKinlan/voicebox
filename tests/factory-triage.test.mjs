@@ -2633,3 +2633,38 @@ test("AN EXPLICIT --finding that matches nothing refuses even when there is only
     for (const res of [wrong, right]) rmSync(res.box, { recursive: true, force: true });
   }
 });
+
+test("SEAM TOLERANCE: a triage comment that names a security station marks the bead for verification without a flag (miniapps marker set)", () => {
+  // The other lane's commenter writes triage-comment + station + severity, and does NOT write the
+  // review flag or the state. Verified in their tree f066d2d. The verification signal must therefore
+  // be derived from the station, or a security finding promoted from their comments loses it silently.
+  const fp = "a7".repeat(32);
+  const withoutFlag = (station) =>
+    JSON.stringify({
+      number: 8, state: "OPEN", title: `Inbound ${station}`, url: "https://example.invalid/8", labels: [], body: "human words",
+      comments: [
+        { body: `<!-- factory-triage-comment: ${fp} -->\n<!-- factory-station: ${station} -->\n<!-- factory-severity: high -->` },
+        { body: "<!-- factory-review: alice -->" },
+      ],
+    });
+  const security = runCli({ args: ["--promote", "8", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(withoutFlag("secret-scan")) });
+  const quality = runCli({ args: ["--promote", "8", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(withoutFlag("qa-station")) });
+  try {
+    assert.equal(security.status, 0, security.stderr);
+    const create = security.bdCalls.find((c) => c.startsWith("create"));
+    assert.match(create, /Needs verification/, `the derived verification signal was dropped: ${create}`);
+    assert.match(create, /model-authored and security-sensitive/, `the reason was not derived from the station: ${create}`);
+    assert.match(create, /human-review/, `the verification label is missing: ${create}`);
+    const blocked = security.bdCalls.filter((c) => c.startsWith("update") && c.includes("--status blocked"));
+    assert.deepEqual(blocked, [], `a station-only signal blocked the bead: ${security.bdCalls.join(" | ")}`);
+
+    // A NON-security station with no flag and no reason is not marked for verification at all: the
+    // inference must not manufacture a security signal for an ordinary quality station.
+    assert.equal(quality.status, 0, quality.stderr);
+    const qualityCreate = quality.bdCalls.find((c) => c.startsWith("create"));
+    assert.ok(!/Needs verification/.test(qualityCreate), `a quality station was marked for verification: ${qualityCreate}`);
+    assert.ok(!/human-review/.test(qualityCreate), `a quality station got the verification label: ${qualityCreate}`);
+  } finally {
+    for (const res of [security, quality]) rmSync(res.box, { recursive: true, force: true });
+  }
+});

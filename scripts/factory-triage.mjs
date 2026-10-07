@@ -1254,10 +1254,16 @@ function promote(opts, { repo, target }) {
   // The reason travels with the flag (`factory-human-review-reason`). Older issues carry no reason,
   // so the fallback infers from the station rather than asserting a cause it cannot know — and a
   // security station infers to `model-prose`, which does NOT block under Paul's criterion.
-  const humanReviewReason = identity.humanReview
-    ? identity.humanReviewReason ??
-      (IDENTITY_CRITICAL_AGENTS.has(identity.station ?? "") ? "model-prose" : "functionality-change")
-    : null;
+  // The WRITER's flag wins when it is present. It is not always present: the other lane's commenter
+  // writes `factory-triage-comment`, `factory-station` and `factory-severity` but no review flag, and a
+  // security station named by that marker still has model-authored, unreviewed prose. Deriving the
+  // signal from the station keeps a security finding marked for verification instead of dropping it
+  // silently. It never blocks: a station alone is not a functionality change (Paul's criterion).
+  const securityStation = IDENTITY_CRITICAL_AGENTS.has(identity.station ?? "");
+  const humanReviewReason =
+    identity.humanReview || securityStation
+      ? identity.humanReviewReason ?? (securityStation ? "model-prose" : "functionality-change")
+      : null;
   const severity = VALID_SEVERITIES.includes(identity.severity) ? identity.severity : "critical";
   const finding = {
     station: identity.station ?? "unknown",
@@ -1266,7 +1272,7 @@ function promote(opts, { repo, target }) {
     // matching how the badge is treated at publish time.
     effectiveSeverity: severity,
     state: identity.state ?? "new",
-    humanReview: Boolean(identity.humanReview),
+    humanReview: Boolean(humanReviewReason),
     humanReviewReason,
     ruleId: identity.ruleId,
     fingerprint: identity.fingerprint,
