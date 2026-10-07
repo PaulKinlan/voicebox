@@ -181,11 +181,11 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
 
 /**
  * Thoroughly sanitize finding descriptions using Voicebox's standard redactSecrets
- * plus explicit GitHub/OAuth token redactors.
+ * plus explicit GitHub/OAuth token redactors (including fine-grained PATs: github_pat_...).
  */
 export function sanitizeFindingText(text = "") {
   let sanitized = redactSecrets(String(text));
-  sanitized = sanitized.replace(/gh[pousr]_[A-Za-z0-9_]{16,}/g, "[REDACTED]");
+  sanitized = sanitized.replace(/(?:gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{22,})/g, "[REDACTED]");
   return sanitized;
 }
 

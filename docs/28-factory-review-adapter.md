@@ -93,13 +93,21 @@ To prevent recursive scan storms where factory-published finding issues trigger 
 
 This guard applies **strictly independent of author association**, preventing token- or bot-created issues from triggering re-scans.
 
-### 4.2 Shared Triage Comment Marker
-Comments formatted by [`tools/factory-issue-commenter.mjs`](../tools/factory-issue-commenter.mjs) embed:
+### 4.2 Shared Triage Comment Markers
+Comments formatted by [`tools/factory-issue-commenter.mjs`](../tools/factory-issue-commenter.mjs) embed all five shared triage markers per finding:
 
 ```html
 <!-- factory-triage-comment: <fingerprint> -->
 <!-- factory-station: <station> -->
 <!-- factory-severity: <severity> -->
+<!-- factory-state: <new|regressed> -->
+<!-- factory-human-review -->
 ```
 
-This marker allows `scripts/factory-triage.mjs --review` and `--promote` to read review records from issue comments on human-submitted issues, enabling seamless conversion to Beads.
+- `factory-triage-comment`: SHA256 finding fingerprint (16–64 hex).
+- `factory-station`: executing station name (e.g. `secret-scan`, `perf-review`).
+- `factory-severity`: finding severity (`critical`, `high`, `medium`, `low`, `info`).
+- `factory-state`: finding state (`new` or `regressed`).
+- `factory-human-review`: presence flag emitted when the station is security-related (`secret-scan`, `vuln-discovery`, `vuln-triage`, `vuln-verify`, `deps-supply-chain`) or when the finding is flagged for human verification.
+
+These markers allow `scripts/factory-triage.mjs --review` and `--promote` to read review records from issue comments on human-submitted issues, enabling seamless conversion to Beads.

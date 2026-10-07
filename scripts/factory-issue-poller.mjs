@@ -115,8 +115,9 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
       continue;
     }
 
-    // Run scans into issue-specific temp dir
+    // Run scans into a clean issue-specific temp dir (isolated per attempt)
     const issueRunDir = path.join(privateDir, `issue-${num}`);
+    rmSync(issueRunDir, { recursive: true, force: true });
     mkdirSync(issueRunDir, { recursive: true });
 
     let scanSuccess = true;
@@ -129,13 +130,21 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
             env: { ...env, VOICEBOX_FACTORY_PRIVATE_DIR: issueRunDir },
             encoding: "utf8",
           });
-          if (res.status !== 0) {
-            console.warn(`[issue-poller] Station '${st}' returned status ${res.status}`);
+          if (res.error || res.status !== 0 || res.status === null) {
+            console.error(`[issue-poller] Station '${st}' failed (error: ${res.error?.message || `status ${res.status}`})`);
+            scanSuccess = false;
+            break;
           }
         } catch (e) {
           console.error(`[issue-poller] Station run error: ${e.message}`);
           scanSuccess = false;
+          break;
         }
+      }
+
+      if (!scanSuccess) {
+        console.warn(`[issue-poller] Station scan failed for issue #${num}; aborting comment posting and cursor advance.`);
+        continue;
       }
 
       // Fetch existing comments on issue for fingerprint dedupe

@@ -190,11 +190,12 @@ test("factory-issue-commenter: embeds all 4 shared markers and sanitizes credent
   assert.ok(res.comment.includes("<!-- factory-station: secret-scan -->"));
   assert.ok(res.comment.includes("<!-- factory-human-review -->"));
 
-  // Text sanitization verification (including ordinary unquoted credentials)
-  const dirty = "Exposed Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9 and token ghp_ABCDEF0123456789xyz and api_key='sk_test_123456' and password=my-super-secret-password and api_key=unquoted_secret_val";
+  // Text sanitization verification (including ordinary unquoted credentials and fine-grained PATs)
+  const dirty = "Exposed Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9 and token ghp_ABCDEF0123456789xyz and token github_pat_11AAAAAAA0123456789_abcdefghijklmnopqrstuvwxyz and api_key='sk_test_123456' and password=my-super-secret-password and api_key=unquoted_secret_val";
   const clean = sanitizeFindingText(dirty);
   assert.ok(!clean.includes("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"));
   assert.ok(!clean.includes("ghp_ABCDEF0123456789xyz"));
+  assert.ok(!clean.includes("github_pat_11AAAAAAA0123456789_abcdefghijklmnopqrstuvwxyz"));
   assert.ok(!clean.includes("sk_test_123456"));
   assert.ok(!clean.includes("my-super-secret-password"));
   assert.ok(!clean.includes("unquoted_secret_val"));

@@ -151,14 +151,11 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
   if (runExit !== 0) {
     const verdict = runExit === 124 || runExit === 137 || runExit === 143 ? "TIMEOUT/KILL" : "FAILED";
     console.error(`[review-trigger] Station '${station}' finished with non-zero exit ${runExit} (${verdict})`);
-    cache[cacheKey] = {
-      station,
-      category,
-      exitCode: runExit,
-      verdict,
-      timestamp: new Date().toISOString(),
-    };
-    writeFileSync(cacheFile, JSON.stringify(cache, null, 2), "utf8");
+    // Never cache failed executions; invalidate any stale entry
+    if (cache[cacheKey]) {
+      delete cache[cacheKey];
+      writeFileSync(cacheFile, JSON.stringify(cache, null, 2), "utf8");
+    }
     return { ok: false, exitCode: runExit, verdict, station };
   }
 
@@ -229,16 +226,23 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
     }
   }
 
-  // 7. Store cache entry (only cache successful passes so failures are not replayed)
-  cache[cacheKey] = {
-    station,
-    category,
-    exitCode,
-    verdict,
-    deferred,
-    timestamp: new Date().toISOString(),
-  };
-  writeFileSync(cacheFile, JSON.stringify(cache, null, 2), "utf8");
+  // 7. Store cache entry (STRICT: only successful passes are cached so failures are never replayed)
+  if (ok) {
+    cache[cacheKey] = {
+      station,
+      category,
+      exitCode: 0,
+      verdict: "PASS",
+      deferred,
+      timestamp: new Date().toISOString(),
+    };
+    writeFileSync(cacheFile, JSON.stringify(cache, null, 2), "utf8");
+  } else {
+    if (cache[cacheKey]) {
+      delete cache[cacheKey];
+      writeFileSync(cacheFile, JSON.stringify(cache, null, 2), "utf8");
+    }
+  }
 
   console.log(`[review-trigger] Completed review trigger for '${station}': ${verdict}`);
   return { ok, exitCode, verdict, station, deferred, cacheKey };
