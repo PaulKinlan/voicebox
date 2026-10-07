@@ -54,27 +54,47 @@ test("every icon reference in the room and its JS writers resolves to a defined 
   assert(definitions.length > 0, "the sprite itself was not found in index.html — the extraction broke, not the page");
   assert.deepEqual(duplicates(definitions), [], "the sprite defines an id twice");
 
+  const htmlRefs = iconReferences(html);
+  const fusedRefs = iconReferences(fusedJs);
+  const pipRefs = iconReferences(pipMic);
+  // Floors pin each EXTRACTION surface itself (voicebox-beads-jvek): before them, the reviewer's
+  // mutants — iconReferences body -> return [], and dropping the markup surface from the union —
+  // both passed 2/2 because every assertion was satisfiable from the builder sweep alone.
+  assert(
+    htmlRefs.length >= 40 && new Set(htmlRefs).size >= 20,
+    `the markup surface shrank: ${htmlRefs.length} literal refs, ${new Set(htmlRefs).size} distinct — the markup extraction broke or the page lost icons`,
+  );
+  assert(
+    fusedRefs.length >= 7 && pipRefs.length >= 2,
+    `a JS literal surface shrank: fused.js ${fusedRefs.length} refs, pip-mic.mjs ${pipRefs.length}`,
+  );
+
+  // The union must actually CARRY every extraction surface (dropping a surface from the union was
+  // the reviewer's green mutant — on markup first, and again on the JS literal surfaces in the
+  // jvek review): every extracted id, from every surface, is in the checked set.
+  const builderRefs = [...builderReferences(fusedJs), ...builderReferences(pipMic)];
   const references = [
-    ...iconReferences(html),
-    ...iconReferences(fusedJs),
-    ...iconReferences(pipMic),
-    ...builderReferences(fusedJs),
-    ...builderReferences(pipMic),
+    ...htmlRefs,
+    ...fusedRefs,
+    ...pipRefs,
+    ...builderRefs,
   ];
   assert(references.length > 0, "no icon references found at all — the extraction broke, not the page");
-  // Completeness anchors: a narrowed regex must not quietly shrink coverage. Pin the BUILDER SWEEP
-  // itself, not just the union — every anchor id is also reachable from markup, so union-level
-  // assertions stay green when the builder sweep is lost or narrowed (measured by the reviewer:
-  // deleting both builderReferences() calls passed 2/2).
-  const builderRefs = [...builderReferences(fusedJs), ...builderReferences(pipMic)];
+  for (const [surface, ids] of [["markup", htmlRefs], ["fused literals", fusedRefs], ["pip literals", pipRefs], ["builder sweep", builderRefs]]) {
+    assert(
+      ids.every((id) => references.includes(id)),
+      `the union no longer carries the ${surface} surface — those references are unchecked`,
+    );
+  }
+  // Completeness anchors: a narrowed regex must not quietly shrink coverage. The builder sweep pins
+  // both its call-site COUNT and its id SET (the set alone cannot see a lost site whose id survives
+  // elsewhere; the count alone cannot see a swap).
+  assert.equal(builderRefs.length, 4, `the icon() builder sweep lost or gained call sites silently: ${builderRefs.length}`);
   assert.deepEqual(
     [...new Set(builderRefs)].sort(),
     ["i-close", "i-folder", "i-mic", "i-trash"],
     "the icon() builder sweep lost call sites",
   );
-  for (const known of ["i-close", "i-mic", "i-folder", "i-trash"]) {
-    assert(references.includes(known), `the extraction no longer sees ${known} — coverage shrank silently`);
-  }
   assert.deepEqual(dangling(definitions, references), [], "an icon is referenced but never defined");
 });
 
