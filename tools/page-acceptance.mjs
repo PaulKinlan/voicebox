@@ -41,7 +41,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync, rmSync, statSync 
 import { isDeepStrictEqual } from "node:util";
 import { SOURCE_PREFIXES } from "../lib/browser-sources.mjs";
 import { refusalVocabulary, identifiersInRenderedText, ID_PATTERNS, JARGON, READ_VISIBLE_TEXT } from "./rendered-plain-language.mjs";
-import { driftBetween } from "./served-vs-disk.mjs";
+import { driftBetween, extractWorkerRefs } from "./served-vs-disk.mjs";
 import { makeScratchDir, porcelainLines, dirtDelta, gitEnv } from "./tree-dirt.mjs";
 import path from "node:path";
 import { browserCandidates, findBrowserBinary } from "../lib/browser-binaries.mjs";
@@ -350,23 +350,22 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
     if (/\.(?:js|ts|mjs)$/.test(ref)) {
       for (const m of served.matchAll(/from\s*"\.\/([^"]+)"|import\s*"\.\/([^"]+)"/g))
         servedRefs.push(path.posix.join(path.posix.dirname(ref), m[1] ?? m[2]));
-      for (const m of served.matchAll(/new\s+(?:Shared)?Worker\s*\(\s*(["'`])([^"'`]+)\1/g)) {
-        // A worker URL may carry a query (the audit-writer identity, voicebox-beads-826z) — the
-        // module path ends at the "?". A template interpolating its PATH is not walkable.
-        const spec = m[2].split("?")[0];
-        if (spec.includes("${")) { unwalkableWorkerSpecs.push(m[2]); continue; }
-        servedRefs.push(spec.startsWith("/") ? spec.slice(1) : path.posix.join(path.posix.dirname(ref), spec));
-      }
-      for (const m of served.matchAll(/new\s+(?:Shared)?Worker\s*\(\s*new\s+URL\s*\(\s*["']([^"']+)["']\s*,\s*import\.meta\.url\s*\)/g))
-        servedRefs.push(path.posix.join(path.posix.dirname(ref), m[1]));
+      const { refs: workerRefs, unwalkable } = extractWorkerRefs(served, ref);
+      servedRefs.push(...workerRefs);
+      unwalkableWorkerSpecs.push(...unwalkable);
     }
   }
   if (identityMismatch) {
     // Already reported by name above; saying it twice would be the "one fact, three times" defect in a
     // log instead of on a page.
   } else {
+    const unwalkableNote = unwalkableWorkerSpecs.length
+      ? ` · ${unwalkableWorkerSpecs.length} unwalkable worker spec(s) skipped by name: ${unwalkableWorkerSpecs.join(", ")}`
+      : "";
     report("shared-front", "environment is current (served modules match the measured tree)", staleModules.length === 0,
-      staleModules.length ? `STALE: ${staleModules.join(", ")} — touch the file or restart vite` : `${compared.size} modules compared${unwalkableWorkerSpecs.length ? ` · ${unwalkableWorkerSpecs.length} unwalkable worker spec(s) skipped by name: ${unwalkableWorkerSpecs.join(", ")}` : ""}`);
+      staleModules.length
+        ? `STALE: ${staleModules.join(", ")} — touch the file or restart vite${unwalkableNote}`
+        : `${compared.size} modules compared${unwalkableNote}`);
   }
   // ── 0a-iii. WHAT A PERSON CAN READ, on the front Paul is looking at ─────────────────────────────
   // The vocabulary comes from the responses THIS RUN received, so the assertion is "the page does not

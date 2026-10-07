@@ -26,6 +26,7 @@
 // to re-derive a normal form. A second implementation would disagree with the first and produce false
 // reds; the first implementation cannot disagree with itself.
 import { stripTypeScriptTypes } from "node:module";
+import path from "node:path";
 
 /** Lines the dev transform rewrites by definition. Each is a *shape*, not a list of known strings. */
 const REWRITTEN_BY_TRANSFORM = [
@@ -135,3 +136,38 @@ export function fallbackCompiledDrift(diskText, servedText, { ref = "" } = {}) {
 
 /** Does a line count as one the transform is allowed to rewrite? Exported for the test and for readers. */
 export const rewrittenByTransform = (line) => isRewritten(line);
+
+/**
+ * Extract worker script references and unwalkable interpolated worker specs from served source.
+ * Supports both `new Worker("...")` and `new Worker(new URL("...", import.meta.url))` forms,
+ * including template literals and query parameters.
+ */
+export function extractWorkerRefs(served, ref = "") {
+  const refs = [];
+  const unwalkable = [];
+  if (typeof served !== "string") return { refs, unwalkable };
+
+  // Form 1: new Worker("path" / `path`)
+  for (const m of served.matchAll(/new\s+(?:Shared)?Worker\s*\(\s*(["'`])([^"'`]+)\1/g)) {
+    const raw = m[2];
+    const spec = raw.split("?")[0];
+    if (spec.includes("${")) {
+      unwalkable.push(raw);
+      continue;
+    }
+    refs.push(spec.startsWith("/") ? spec.slice(1) : path.posix.join(path.posix.dirname(ref), spec));
+  }
+
+  // Form 2: new Worker(new URL("path" / `path`, import.meta.url))
+  for (const m of served.matchAll(/new\s+(?:Shared)?Worker\s*\(\s*new\s+URL\s*\(\s*(["'`])([^"'`]+)\1\s*,\s*import\.meta\.url\s*\)/g)) {
+    const raw = m[2];
+    const spec = raw.split("?")[0];
+    if (spec.includes("${")) {
+      unwalkable.push(raw);
+      continue;
+    }
+    refs.push(spec.startsWith("/") ? spec.slice(1) : path.posix.join(path.posix.dirname(ref), spec));
+  }
+
+  return { refs, unwalkable };
+}
