@@ -41,10 +41,12 @@ export function parsePublisherSummary(stdout = "") {
   const safeLines = [];
   for (const line of String(stdout).split("\n")) {
     const trimmed = line.trim();
-    // 1. Anchored count tallies: e.g. "published: 2", "issues: 1 published, 0 duplicate, 1 skipped"
+    // 1. Anchored count tallies and structured skip receipts:
+    // e.g. "published: 2", "issues: 1 published, 0 duplicate, 1 skipped", "skipped: 5939431590a57344 (identity mismatch: ...)"
     if (
       /^(published|duplicate|failed|actionable|total|clean|skipped|new|regressed):\s*\d+$/i.test(trimmed) ||
-      /^issues:\s*\d+\s+published,\s*\d+\s+duplicate(?:,\s*\d+\s+skipped)?(?:,\s*\d+\s+failed)?$/i.test(trimmed)
+      /^issues:\s*\d+\s+published,\s*\d+\s+duplicate(?:,\s*\d+\s+skipped)?(?:,\s*\d+\s+failed)?$/i.test(trimmed) ||
+      /^skipped:\s*[0-9a-f]{8,64}\s*\([^)]+\)$/i.test(trimmed)
     ) {
       safeLines.push(sanitizeLogOutput(trimmed));
     } else {

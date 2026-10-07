@@ -274,6 +274,7 @@ test("factory-review-trigger: parsePublisherSummary extracts anchored counts and
     "duplicate: 1",
     "actionable: 3",
     "issues: 1 published, 0 duplicate, 1 skipped",
+    "skipped: 5939431590a57344 (identity mismatch: unchanged)",
     "published: 5939431590a57344 -> https://github.com/PaulKinlan/voicebox/issues/42",
     "published: 2 with unanchored text and token github_pat_11ABCD1234567890abcdefghijklmnopqrstuvwxyz",
     "raw finding details: password=super-secret-password-val and token github_pat_11ABCD1234567890abcdefghijklmnopqrstuvwxyz",
@@ -287,6 +288,7 @@ test("factory-review-trigger: parsePublisherSummary extracts anchored counts and
   assert.ok(safe.includes("duplicate: 1"));
   assert.ok(safe.includes("actionable: 3"));
   assert.ok(safe.includes("issues: 1 published, 0 duplicate, 1 skipped"));
+  assert.ok(safe.includes("skipped: 5939431590a57344 (identity mismatch: unchanged)"));
   assert.ok(safe.includes("https://github.com/PaulKinlan/voicebox/issues/42"));
   assert.ok(!safe.includes("super-secret-password-val"));
   assert.ok(!safe.includes("github_pat_11ABCD1234567890abcdefghijklmnopqrstuvwxyz"));
