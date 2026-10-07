@@ -42,7 +42,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -499,7 +499,8 @@ export function routeFinding(finding, { confirmedFunctionalityChange = false, in
       "this station's prose is model-authored and is published unreviewed by policy, so the issue is flagged for human verification; a promoted bead is filed BLOCKED",
     );
   }
-  return { action: "issue", humanReview: functionality || modelProse, reasons };
+  const humanReviewReason = functionality && modelProse ? "both" : functionality ? "functionality-change" : modelProse ? "model-prose" : null;
+  return { action: "issue", humanReview: Boolean(humanReviewReason), humanReviewReason, reasons };
 }
 
 /** The machine-readable identity of a published issue, greppable in the body. */
@@ -510,7 +511,13 @@ export function markerFor(finding, verdict) {
     `<!-- factory-severity: ${finding.effectiveSeverity} -->`,
     `<!-- factory-state: ${finding.state} -->`,
   ];
-  if (verdict.humanReview) lines.push("<!-- factory-human-review -->");
+  if (verdict.humanReview) {
+    lines.push("<!-- factory-human-review -->");
+    // WHY it is flagged travels with the flag. Without it, the bead comment and the issue body both
+    // asserted "this remediation changes functionality" — false for a security station, whose prose is
+    // model-authored whether or not the fix changes behaviour.
+    if (verdict.humanReviewReason) lines.push(`<!-- factory-human-review-reason: ${verdict.humanReviewReason} -->`);
+  }
   return lines.join("\n");
 }
 
@@ -543,10 +550,20 @@ export function parseMarkers(body) {
     severity: read("severity"),
     state: read("state"),
     humanReview: /<!--\s*factory-human-review\s*-->/.test(String(body)),
+    humanReviewReason: read("human-review-reason"),
     promotedTo: (String(body).match(/<!--\s*factory-promoted:\s*(.*?)\s*-->/) ?? [])[1] ?? null,
     reviewedBy: (String(body).match(/<!--\s*factory-review:\s*(.*?)\s*-->/) ?? [])[1] ?? null,
     selfTest: /<!--\s*factory-self-test\s*-->/.test(String(body)),
   };
+}
+
+/** The human-readable reason a finding is flagged, from the one value that recorded it. */
+export function humanReviewWhy(reason) {
+  if (reason === "model-prose") return "this station's prose is model-authored and security-sensitive";
+  if (reason === "both") {
+    return "this remediation changes functionality AND this station's prose is model-authored and security-sensitive";
+  }
+  return "this remediation changes functionality";
 }
 
 /**
@@ -595,7 +612,7 @@ export function buildIssue(finding, verdict, { privateRoot, repo, selfTest = fal
     `- Identity: \`${finding.fingerprint}\` (${finding.identitySource === "recomputed-and-verified" ? "recomputed here and verified against the report" : finding.identitySource})`,
     "",
     verdict.humanReview
-      ? "**Human review required before any implementation.** This remediation changes functionality, so a human decides whether the change is wanted. If this issue is promoted to a bead, that bead is filed BLOCKED with `human-review` and carries the decision that is needed. Nothing is fixed automatically."
+      ? `**Human review required before any implementation.** ${humanReviewWhy(verdict.humanReviewReason)}, so a human decides what to do. If this issue is promoted to a bead, that bead is filed BLOCKED with \`human-review\` and carries the decision that is needed. Nothing is fixed automatically.`
       : "",
     "<details>",
     "<summary>Publication policy and provenance</summary>",
@@ -851,6 +868,7 @@ const USAGE = `Usage:
   node scripts/factory-triage.mjs --report <path> --file-issues
   node scripts/factory-triage.mjs --promote <issue-number> --reviewed-by <actor> [--apply]
   node scripts/factory-triage.mjs --report <path> --comment <issue-number>
+  node scripts/factory-triage.mjs --report <path> --write-plan <path.json>   # LOCAL, needs no --repo
 
 Reads a factory delta report written with \`--sink file\` and publishes a sanitised PUBLIC issue for
 each actionable finding, at every severity, with the triage record on the issue. It never creates a
@@ -876,6 +894,7 @@ Options:
   --functionality-change <rule|agent>
                                Confirm a functionality change for that rule id or station
   --json                       Machine-readable plan on stdout
+  --write-plan <path>          Also write the sanitised plan (same JSON) to a local file
   --private-root <dir>         Override the private report root
   --help
 
@@ -891,7 +910,7 @@ function parseArgs(argv) {
     report: null, reportDir: null, target: null, agent: null, apply: false, includeLow: false,
     functionality: new Set(), json: false, privateRoot: null, fileIssues: false, promote: null,
     reviewedBy: null, repo: null, help: false, review: null, notes: null, selfTest: false, allowClosed: false,
-    comment: null, allowForeignTarget: false,
+    comment: null, allowForeignTarget: false, writePlan: null,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -913,6 +932,7 @@ function parseArgs(argv) {
       case "--notes": opts.notes = next(); break;
       case "--self-test": opts.selfTest = true; break;
       case "--allow-foreign-target": opts.allowForeignTarget = true; break;
+      case "--write-plan": opts.writePlan = next(); break;
       case "--comment":
       case "--issue-number": opts.comment = next(); break;
       case "--allow-closed": opts.allowClosed = true; break;
@@ -949,10 +969,15 @@ export function buildPlan(reportFiles, opts) {
     // A report names its own target, and `--report-dir` takes every report in a directory. Publishing
     // repo B's finding into repo A's tracker is silent and public, so the mismatch is a REFUSAL.
     if (repoName && !opts.allowForeignTarget) {
-      const reported = String(report.target ?? "").split("/").pop().toLowerCase();
-      if (reported && reported !== repoName) {
+      const rawTarget = String(report.target ?? "").trim().replace(/[\\/]+$/, "");
+      const reported = rawTarget ? rawTarget.split(/[\\/]/).pop().toLowerCase() : "";
+      // FAIL CLOSED. A report whose target cannot be read is not evidence that its findings belong
+      // here: a trailing slash used to make this comparison empty and skip the refusal entirely, and a
+      // report with no target header at all was published into whatever --repo was passed (both
+      // verified against the previous revision).
+      if (!reported || reported !== repoName) {
         throw new Error(
-          `${basename(file)}: the report targets "${report.target}" but --repo is ${opts.repo}: refusing to publish another repository's finding here (pass --allow-foreign-target to force)`,
+          `${basename(file)}: the report targets "${report.target || "(no target header)"}" but --repo is ${opts.repo}: refusing to publish another repository's finding here (pass --allow-foreign-target to force)`,
         );
       }
     }
@@ -1182,9 +1207,9 @@ function promote(opts, { repo, target }) {
   }
   // Review evidence must be ON the issue. `--reviewed-by` is a cross-check, not the evidence: a name
   // typed at promotion time proves nothing about whether a review happened.
-  const comments0 = Array.isArray(issue.comments) ? issue.comments : [];
+  // P3: this was a second copy of `comments` nine lines above; there is one list.
   const reviewedBy =
-    comments0.map((c) => parseMarkers(c?.body ?? "").reviewedBy).find(Boolean) ?? markers.reviewedBy;
+    comments.map((c) => parseMarkers(c?.body ?? "").reviewedBy).find(Boolean) ?? markers.reviewedBy;
   if (!reviewedBy) {
     process.stderr.write(
       `${repo}#${number} carries no review record: record one with \`--review <number> --reviewed-by <actor>\` before promoting\n`,
@@ -1248,7 +1273,16 @@ function promote(opts, { repo, target }) {
   }
   if (bead.blocked) {
     spawnSync("bd", ["update", id, "--status", "blocked", "-C", target], { cwd: target, timeout: 60000 });
-    spawnSync("bd", ["comment", id, "Blocked pending human review: this remediation changes functionality. Next decision: confirm yes/no, then file the change as its own bead.", "-C", target], { cwd: target, timeout: 60000 });
+    // The reason travels with the flag (`factory-human-review-reason`). Older issues carry no reason,
+    // so the fallback infers from the station rather than asserting a cause it cannot know.
+    const why =
+      markers.humanReviewReason ??
+      (IDENTITY_CRITICAL_AGENTS.has(markers.station) ? "model-prose" : "functionality-change");
+    spawnSync(
+      "bd",
+      ["comment", id, `Blocked pending human review: ${humanReviewWhy(why)}. Next decision: confirm yes/no, then file the change as its own bead.`, "-C", target],
+      { cwd: target, timeout: 60000 },
+    );
   }
   const comment = gh(["issue", "comment", number, "--body", `Promoted to bead \`${id}\` by ${reviewedBy}.${bead.blocked ? " The bead is BLOCKED pending the human review decision recorded on this issue." : ""}\n\n<!-- factory-promoted: ${id} -->`], { repo });
   if (comment.error || comment.status !== 0) {
@@ -1272,8 +1306,13 @@ function main(argv) {
   }
   const repo = opts.repo ?? process.env.VOICEBOX_FACTORY_REPO ?? null;
   const target = resolve(opts.target ?? process.cwd());
-  if (repo === null) {
-    process.stderr.write("--repo <owner/name> (or $VOICEBOX_FACTORY_REPO) is required: issues are published to a specific repository\n");
+  // Plan mode is LOCAL: it reads a report and prints a sanitised summary, so it needs no repository.
+  // Only the modes that talk to GitHub require one — a nightly local run can inspect its findings
+  // without naming a tracker, and the issue URL is simply unknown (`?/issues/`) until it is published.
+  const needsRepo = Boolean(opts.fileIssues || opts.review || opts.promote || opts.comment);
+  if (repo === null && needsRepo) {
+    const mode = opts.fileIssues ? "--file-issues" : opts.review ? "--review" : opts.promote ? "--promote" : "--comment";
+    process.stderr.write(`--repo <owner/name> (or $VOICEBOX_FACTORY_REPO) is required by ${mode}: it writes to a specific repository\n`);
     return 1;
   }
   if (opts.review) {
@@ -1331,8 +1370,39 @@ function main(argv) {
     process.stderr.write(`${error.message}\n`);
     return 1;
   }
+  const serialised = JSON.stringify(
+    plan.map((entry) => serialisablePlanEntry(entry, { privateRoot: opts.privateRoot })),
+    null,
+    2,
+  );
+  if (opts.writePlan) {
+    // The local artefact a review adapter reads: the same sanitised plan, written beside the report
+    // rather than pasted into a terminal. The report itself stays where it is — this is a plan, and
+    // it never contains the raw report text.
+    const dest = resolve(opts.writePlan);
+    // Same rule as the report: an artefact dropped inside the working tree is one `git add -A` from
+    // being committed. The plan is sanitised, but it still names findings and fingerprints, and the
+    // private root (or any path outside the tree) is where working artefacts belong.
+    if (isInside(dest, target)) {
+      process.stderr.write(
+        `refused: --write-plan ${dest} is inside the repository (${target}). Write it outside the tree, ` +
+          `e.g. under ${privateRootFromEnv()}.\n`,
+      );
+      return 1;
+    }
+    try {
+      if (!existsSync(dirname(dest))) mkdirSync(dirname(dest), { recursive: true });
+      const tmp = `${dest}.tmp-${process.pid}`;
+      writeFileSync(tmp, `${serialised}\n`);
+      renameSync(tmp, dest);
+    } catch (error) {
+      process.stderr.write(`could not write the plan to ${dest}: ${error.message}\n`);
+      return 1;
+    }
+    process.stdout.write(`plan written: ${dest}\n`);
+  }
   if (opts.json) {
-    process.stdout.write(`${JSON.stringify(plan.map((entry) => serialisablePlanEntry(entry, { privateRoot: opts.privateRoot })), null, 2)}\n`);
+    process.stdout.write(`${serialised}\n`);
   } else process.stdout.write(`${describePlan(plan, { privateRoot: opts.privateRoot })}\n`);
   if (opts.comment) {
     // Deliberately independent of `actionable`: a comment records every finding the scan produced,

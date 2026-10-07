@@ -49,6 +49,7 @@ import {
   existingBeadFingerprints,
   existingIssues,
   fingerprintsInBody,
+  humanReviewWhy,
   isCredentialFinding,
   isInside,
   isIssueDuplicate,
@@ -140,7 +141,9 @@ ${stubBd ?? defaultStubBd}
   const repo = cwd ?? join(box, "repo");
   mkdirSync(repo, { recursive: true });
 
-  const resolvedArgs = args.map((arg) => (arg === "%PRIVATE%" ? privateDir : arg));
+  const resolvedArgs = args.map((arg) =>
+    arg === "%PRIVATE%" ? privateDir : arg.replaceAll("%PLAN%", privateDir),
+  );
   const childEnv = {
     ...process.env,
     PATH: `${bin}:${process.env.PATH}`,
@@ -1685,17 +1688,32 @@ test("CLI exits with code 1 on missing arguments or conflicting flags", () => {
     rmSync(both.box, { recursive: true, force: true });
   }
 
-  // Missing repo
+  // Missing repo: PLAN mode is local and needs none; the modes that WRITE to a tracker refuse.
   const noRepo = runCli({
     args: ["--report", "voicebox-qa-station-delta.md"],
     reports: { "voicebox-qa-station-delta.md": fixture("voicebox-qa-station-delta.md") },
     env: { VOICEBOX_FACTORY_REPO: null },
   });
   try {
-    assert.equal(noRepo.status, 1);
-    assert.match(noRepo.stderr, /--repo <owner\/name> \(or \$VOICEBOX_FACTORY_REPO\) is required/);
+    assert.equal(noRepo.status, 0, `a local plan needs no repository: ${noRepo.stderr}`);
+    assert.match(noRepo.stdout, /PUBLISH ISSUE/);
+    assert.equal(noRepo.ghCalls.length, 0, "a local plan contacted gh");
   } finally {
     rmSync(noRepo.box, { recursive: true, force: true });
+  }
+
+  for (const [flag, value] of [["--file-issues", null], ["--review", "7"], ["--promote", "7"], ["--comment", "7"]]) {
+    const res = runCli({
+      args: ["--report", "voicebox-qa-station-delta.md", flag, ...(value ? [value] : []), ...(flag === "--review" ? ["--reviewed-by", "alice"] : [])],
+      reports: { "voicebox-qa-station-delta.md": fixture("voicebox-qa-station-delta.md") },
+      env: { VOICEBOX_FACTORY_REPO: null },
+    });
+    try {
+      assert.equal(res.status, 1, `${flag} without --repo must refuse: ${res.stdout}${res.stderr}`);
+      assert.match(res.stderr, /is required by --(file-issues|review|promote|comment)/);
+    } finally {
+      rmSync(res.box, { recursive: true, force: true });
+    }
   }
 
   // Unreadable report file
@@ -2085,4 +2103,230 @@ test("buildTriageComment states the policy and triagedFingerprints reads only it
   assert.ok(!body.includes("<!-- factory-fingerprint:"), "the inbound mode must not mark the issue as publisher-created");
   assert.deepEqual([...triagedFingerprints([{ body: body }])], [finding.fingerprint]);
   assert.deepEqual([...triagedFingerprints([{ body: "<!-- factory-review: alice -->" }])], []);
+});
+
+test("LOCAL ACTIVATION: --write-plan writes the sanitised plan to a file and needs no repository", () => {
+  const res = runCli({
+    args: ["--report", "voicebox-perf-review-delta.md", "--write-plan", "%PLAN%/plan.json"],
+    reports: { "voicebox-perf-review-delta.md": fixture("voicebox-perf-review-delta.md") },
+    env: { VOICEBOX_FACTORY_REPO: null },
+  });
+  try {
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stdout, /plan written: /);
+    const written = JSON.parse(readFileSync(join(res.privateDir, "plan.json"), "utf8"));
+    assert.equal(written.length, 1);
+    assert.equal(written[0].action, "issue");
+    assert.ok(written[0].issue.body.includes("<!-- factory-fingerprint:"), "the written plan must carry the publication body");
+    assert.ok(written[0].issue.body.includes(PUBLICATION_DECLARATION));
+    assert.equal(res.ghCalls.length, 0, "writing a local plan contacted gh");
+    // The written plan is the SAME sanitised view as --json, never the raw report text.
+    assert.ok(!written[0].issue.body.includes("## Action Required: New & Regressed Findings"));
+  } finally {
+    rmSync(res.box, { recursive: true, force: true });
+  }
+});
+
+test("LOCAL ACTIVATION: --write-plan refuses an unwritable destination instead of pretending", () => {
+  const res = runCli({
+    args: ["--report", "voicebox-perf-review-delta.md", "--write-plan", "/dev/null/plan.json"],
+    reports: { "voicebox-perf-review-delta.md": fixture("voicebox-perf-review-delta.md") },
+    env: { VOICEBOX_FACTORY_REPO: null },
+  });
+  try {
+    assert.equal(res.status, 1, `an unwritable plan path must refuse: ${res.stdout}`);
+    assert.match(res.stderr, /could not write the plan to/);
+  } finally {
+    rmSync(res.box, { recursive: true, force: true });
+  }
+});
+
+test("LOCAL ACTIVATION: --write-plan refuses a destination inside the repository", () => {
+  // The report has that rule already; a plan file dropped in the tree is one `git add -A` away from
+  // being committed, and it names findings and fingerprints.
+  const res = runCli({
+    args: ["--report", "voicebox-perf-review-delta.md", "--write-plan", "plan.json"],
+    reports: { "voicebox-perf-review-delta.md": fixture("voicebox-perf-review-delta.md") },
+    env: { VOICEBOX_FACTORY_REPO: null },
+  });
+  try {
+    assert.equal(res.status, 1, `an in-repo plan must refuse: ${res.stdout}`);
+    assert.match(res.stderr, /is inside the repository/);
+    assert.ok(!existsSync(join(res.repo, "plan.json")), "an in-repo plan was written anyway");
+  } finally {
+    rmSync(res.box, { recursive: true, force: true });
+  }
+});
+
+test("A SEEDED HIGH CANNOT DISAPPEAR: the factory's public sink withholds it, this publisher must not", () => {
+  // The exact failure this guards. The factory's own public sinks embargo high/critical findings
+  // (mirrored in EMBARGOED_SEVERITIES from lib/embargo.py), so a HIGH routed through them vanishes
+  // from the tracker: no issue, no bead, no reader. This publisher deliberately bypasses that embargo,
+  // declared on every issue. If anyone ever restores the withholding here — including by delegating
+  // to the factory's sink decision — this test goes red. The mutation that proves it is documented in
+  // docs/27 section 11: make routeFinding return `skip` for EMBARGOED_SEVERITIES and five tests fail.
+  const seeded = {
+    agent: "perf-review", ruleId: "blocking-boot-probe", path: "server.mjs", lineNumber: "210",
+    title: "Startup probe blocks the boot banner", description: "d", snippet: "await probeAll()",
+    remediation: "r", state: "new", effectiveSeverity: "high", severityReported: "high",
+    identityCritical: false, fingerprint: "7".repeat(64), identitySource: "recomputed-and-verified",
+  };
+
+  // (a) The counterfactual, stated so it cannot be forgotten: the factory's sink WOULD withhold it.
+  assert.ok(EMBARGOED_SEVERITIES.has("high"), "the mirrored embargo set must still contain the high band");
+  const factoryPublicSinkWouldWithhold = EMBARGOED_SEVERITIES.has(seeded.effectiveSeverity);
+  assert.equal(factoryPublicSinkWouldWithhold, true, "the factory's public sink withholds this band");
+
+  // (b) This publisher publishes it anyway, with the bypass stated on the issue.
+  const verdict = routeFinding(seeded);
+  assert.equal(verdict.action, "issue", "a seeded HIGH must be published, not withheld");
+  const issue = buildIssue(seeded, verdict, { privateRoot: "/tmp/p", repo: "owner/voicebox" });
+  assert.ok(issue.body.includes(PUBLICATION_DECLARATION), "the bypass must be declared on the issue");
+  assert.ok(issue.body.includes("factory-fingerprint"), "the published issue must carry the identity");
+  assert.ok(!issue.body.includes("embargoed") || issue.body.includes("bypasses"), "the issue must not read as withheld");
+
+  // (c) And through the real CLI, not only the unit path: the HIGH fixture plans an ISSUE.
+  const res = runCli({
+    args: ["--report", "voicebox-perf-review-delta.md", "--repo", "owner/voicebox", "--json"],
+    reports: { "voicebox-perf-review-delta.md": fixture("voicebox-perf-review-delta.md") },
+  });
+  const critical = runCli({
+    args: ["--report", "voicebox-secret-scan-delta.md", "--repo", "owner/voicebox", "--json"],
+    reports: { "voicebox-secret-scan-delta.md": fixture("voicebox-secret-scan-delta.md") },
+  });
+  try {
+    const highEntry = JSON.parse(res.stdout)[0];
+    assert.equal(highEntry.action, "issue", `the seeded HIGH disappeared: ${res.stdout}`);
+    assert.equal(highEntry.finding.severity, "high");
+    assert.ok(highEntry.issue, "a published HIGH must carry its issue body");
+    const criticalEntry = JSON.parse(critical.stdout)[0];
+    assert.equal(criticalEntry.action, "issue", `the seeded CRITICAL disappeared: ${critical.stdout}`);
+    assert.equal(criticalEntry.finding.severity, "critical");
+    assert.ok(EMBARGOED_SEVERITIES.has("critical"));
+  } finally {
+    rmSync(res.box, { recursive: true, force: true });
+    rmSync(critical.box, { recursive: true, force: true });
+  }
+});
+
+test("CROSS-TARGET: the refusal cannot be walked around by a trailing slash or a missing header (round 3 P1)", () => {
+  // Both were REAL bypasses: `.split("/").pop()` on "/repos/other/" is "", and the old guard only
+  // refused when the parsed target was non-empty, so the comparison was skipped. A report whose
+  // target cannot be read is not evidence that its findings belong in --repo.
+  const base = fixture("voicebox-qa-station-delta.md");
+  const cases = {
+    "other-qa-station-delta.md": base.replace(/^# Software Factory Delta Report:.*$/m, "# Software Factory Delta Report: /repos/other/"),
+    "notarget-qa-station-delta.md": base.replace(/^# Software Factory Delta Report:.*$/m, "# Software Factory Delta Report"),
+    "empty-qa-station-delta.md": base.replace(/^# Software Factory Delta Report:.*$/m, "# Software Factory Delta Report: "),
+    "backslash-qa-station-delta.md": base.replace(/^# Software Factory Delta Report:.*$/m, "# Software Factory Delta Report: repos\\other\\"),
+  };
+  for (const [name, text] of Object.entries(cases)) {
+    const res = runCli({ args: ["--report", name, "--repo", "owner/voicebox"], reports: { [name]: text } });
+    try {
+      assert.equal(res.status, 1, `${name} was NOT refused: ${res.stdout}`);
+      assert.match(res.stderr, /refusing to publish another repository's finding here/);
+      assert.ok(!res.ghCalls.some((c) => c.startsWith("issue create")), `${name}: a foreign report planned a publication`);
+    } finally {
+      rmSync(res.box, { recursive: true, force: true });
+    }
+  }
+  // OUR OWN repository with a trailing slash must be ALLOWED: without stripping the trailing
+  // slash the parsed target is empty, and the fail-closed rule would then refuse a legitimate report.
+  const ownSlash = runCli({
+    args: ["--report", "voicebox-qa-station-delta.md", "--repo", "owner/voicebox"],
+    reports: { "voicebox-qa-station-delta.md": base.replace(/^# Software Factory Delta Report:.*$/m, "# Software Factory Delta Report: /repos/voicebox/") },
+  });
+  try {
+    assert.equal(ownSlash.status, 0, `our own target with a trailing slash was refused: ${ownSlash.stderr}`);
+    assert.match(ownSlash.stdout, /PUBLISH ISSUE/);
+  } finally {
+    rmSync(ownSlash.box, { recursive: true, force: true });
+  }
+
+  // A case difference is the same repository, not a foreign one.
+  const cased = runCli({
+    args: ["--report", "VOICEBOX-qa-station-delta.md", "--repo", "owner/voicebox"],
+    reports: { "VOICEBOX-qa-station-delta.md": base },
+  });
+  try {
+    assert.equal(cased.status, 0, `a case difference was treated as foreign: ${cased.stderr}`);
+  } finally {
+    rmSync(cased.box, { recursive: true, force: true });
+  }
+});
+
+test("PROMOTION: a triage-comment-only issue is refused by name — the doc now says so (round 3 P2)", () => {
+  // docs/27 claimed --promote reads the fingerprint from the triage comment. It never did, and a
+  // comment can carry SEVERAL findings while a bead carries one identity, so the honest contract is
+  // that promotion applies to an issue this publisher created. This pins that.
+  const fp = "3".repeat(64);
+  const res = runCli({
+    args: ["--promote", "42", "--apply", "--repo", "owner/voicebox"],
+    stubGh: ghStubViewing(
+      JSON.stringify({
+        number: 42, state: "OPEN", title: "Flaky folder chips", url: "https://example.invalid/42", labels: [],
+        body: "A human filed this: the folder chips are flaky.",
+        comments: [{ body: `Scanned by the factory.\n<!-- factory-triage-comment: ${fp} -->` }, { body: "<!-- factory-review: alice -->" }],
+      }),
+    ),
+  });
+  try {
+    assert.equal(res.status, 1, `an inbound issue must not be promoted: ${res.stdout}`);
+    assert.match(res.stderr, /carries no factory fingerprint marker: refusing to promote an issue this publisher did not create/);
+    assert.equal(res.bdCalls.length, 0, `nothing may reach bd: ${res.bdCalls.join(" | ")}`);
+  } finally {
+    rmSync(res.box, { recursive: true, force: true });
+  }
+});
+
+test("HUMAN-REVIEW REASON: the flag carries WHY it was set, and the prose follows it (round 3 P2)", () => {
+  const vuln = {
+    agent: "vuln-discovery", ruleId: "unsanitized-html", path: "public/x.js", lineNumber: "1",
+    title: "t", description: "d", snippet: "s", remediation: "r", state: "new",
+    effectiveSeverity: "critical", severityReported: "critical", identityCritical: true,
+    fingerprint: "4".repeat(64), identitySource: "recomputed-and-verified",
+  };
+  const verdict = routeFinding(vuln);
+  assert.equal(verdict.humanReviewReason, "model-prose");
+  const issue = buildIssue(vuln, verdict, { privateRoot: "/tmp/p", repo: "owner/voicebox" });
+  assert.ok(issue.body.includes("<!-- factory-human-review-reason: model-prose -->"), "the reason must be on the issue");
+  assert.match(issue.body, /model-authored and security-sensitive/);
+  // The false claim the reviewer found: a security station's body used to say it changes functionality.
+  assert.ok(
+    !/This remediation changes functionality, so a human decides/.test(issue.body),
+    "the body asserted a functionality change that was never established",
+  );
+
+  // A functionality change carries its own reason, and both are named when both hold.
+  const quality = { ...vuln, agent: "qa-station", identityCritical: false, effectiveSeverity: "high", ruleId: "flake-instrumentation" };
+  assert.equal(routeFinding(quality).humanReviewReason, null);
+  assert.equal(routeFinding(quality, { confirmedFunctionalityChange: true }).humanReviewReason, "functionality-change");
+  assert.equal(routeFinding(vuln, { confirmedFunctionalityChange: true }).humanReviewReason, "both");
+  assert.match(humanReviewWhy("both"), /changes functionality AND/);
+
+  // The BEAD comment states the true reason, and falls back to inference for an older issue.
+  for (const [marker, expected] of [
+    ["<!-- factory-human-review-reason: model-prose -->", /model-authored and security-sensitive/],
+    ["", /model-authored and security-sensitive/], // no reason marker + a security station => inferred
+  ]) {
+    const res = runCli({
+      args: ["--promote", "10", "--apply", "--repo", "owner/voicebox"],
+      stubGh: ghStubViewing(
+        JSON.stringify({
+          number: 10, state: "OPEN", title: "[human-review] [factory/critical] vuln-discovery: stub", url: "https://example.invalid/10", labels: [],
+          body: `<!-- factory-fingerprint: ${"5".repeat(64)} -->\n<!-- factory-station: vuln-discovery -->\n<!-- factory-severity: critical -->\n<!-- factory-state: new -->\n<!-- factory-human-review -->\n${marker}`,
+          comments: [{ body: "<!-- factory-review: alice -->" }],
+        }),
+      ),
+    });
+    try {
+      assert.equal(res.status, 0, res.stderr);
+      const comment = res.bdCalls.find((c) => c.startsWith("comment"));
+      assert.ok(comment, `no bead comment: ${res.bdCalls.join(" | ")}`);
+      assert.match(comment, expected, `the bead comment did not state the real reason: ${comment}`);
+      assert.ok(!/this remediation changes functionality/.test(comment), `a false cause was asserted: ${comment}`);
+    } finally {
+      rmSync(res.box, { recursive: true, force: true });
+    }
+  }
 });

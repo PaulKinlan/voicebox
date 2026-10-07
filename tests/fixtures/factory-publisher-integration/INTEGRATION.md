@@ -4,6 +4,15 @@ Owner split: **h1u0** owns the publisher (`scripts/factory-triage.mjs`) and the 
 **cbxo** owns the workflow wiring and the inbound-issue triage commenter. This file is the stable
 interface between them, and it is mockable: nothing here needs a network or a token.
 
+## 0. Where it runs (local only)
+
+The factory runs on the local VM: no GitHub Actions, no runner, no CI secrets. This CLI reads no
+Actions variable — verified by running with `GH_TOKEN`, `GITHUB_TOKEN`, `CI`, `GITHUB_ACTIONS`,
+`RUNNER_TEMP` and `GITHUB_WORKSPACE` unset. Plan mode (`--json`, `--write-plan`) needs **no** `--repo`;
+only `--file-issues`, `--comment`, `--review` and `--promote` do. The unredacted report stays in the
+local private root; `--write-plan <path>` writes the sanitised plan as a local file for a review
+adapter to read.
+
 ## 1. Commands (stable)
 
     # scan side: publish one sanitised PUBLIC issue per actionable finding, all severities

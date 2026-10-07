@@ -181,9 +181,15 @@ paths are sanitised exactly as in a published issue.
 
 **Dedupe is the anti-loop property.** A fingerprint already recorded in an earlier triage comment is
 skipped: re-running the same scan posts nothing and exits `2`, and a re-scan with a genuinely new
-finding posts only that finding. So a workflow that re-scans on an edit cannot spam a thread, and the
-chain inbound issue → triage comment → review → promotion still works, because `--review` and
-`--promote` read the fingerprint from the triage comment when the issue body has none.
+finding posts only that finding. So a workflow that re-scans on an edit cannot spam a thread.
+
+**This mode is comment-only, and `--promote` does not read it.** An earlier revision of this document
+claimed that `--review` and `--promote` resolve the fingerprint from a triage comment; that was not
+true of the code — `--promote` reads the issue **body**, and it refuses an issue this publisher did not
+create. That is the deliberate contract: a triage comment can carry several findings while a bead
+carries one identity, so promoting an inbound issue needs a decision about *which* finding the bead is
+for, and that decision has not been made. Promoting a human-filed issue is therefore an open question
+(recorded on `voicebox-beads-h1u0`), not a capability, and the test suite pins the refusal by name.
 
 ## 9. What it never does
 
@@ -248,18 +254,99 @@ actionable (no findings in band, or everything already published).
   `[withheld: … (/home/…/auth.ts:42)]` into a public issue body. Both are fixed, the credential case
   now refuses the evidence block entirely rather than only for identity-critical stations, and both
   are covered by tests that fail against the old code.
+- **A seeded HIGH cannot disappear.** The factory's own public sinks embargo high and critical
+  findings, so a finding routed through them vanishes from the tracker. This publisher bypasses that
+  embargo deliberately, declares the bypass on every issue, and has a test that states both halves:
+  that the factory's sink *would* withhold the seeded HIGH, and that this publisher publishes it with
+  its issue body intact. The mutation that proves the guard works is to make `routeFinding` return
+  `skip` for `EMBARGOED_SEVERITIES` — the factory's own behaviour — which turns five tests red,
+  including the HIGH and CRITICAL publication tests.
+- **A third review round found the cross-target refusal was bypassable, and it was.** A report whose
+  target ends in a slash (`/repos/other/`) parsed to an empty segment, and the old guard only refused
+  when the parsed target was non-empty, so the comparison was skipped and the report was published into
+  whatever `--repo` was passed; a report with no target header was treated the same way. Both were
+  reproduced against the previous revision before being fixed. The rule is now **fail closed** — a
+  report whose target cannot be read is not evidence that its findings belong here — with the trailing
+  slash stripped so a legitimate `/repos/voicebox/` is still accepted, and a test covers each case.
+- **The same round caught a false claim in this document**, which is the reason it now says the
+  opposite: `--comment` is comment-only and `--promote` reads the issue **body**, so it refuses an
+  issue this publisher did not create. A triage comment can carry several findings while a bead
+  carries one identity, so promoting a human-filed issue needs a decision nobody has made yet.
+- **And a false statement in the bead comment.** Every flagged finding's bead was told "this
+  remediation changes functionality" — untrue for a security station, whose prose is model-authored
+  whether or not the fix changes behaviour. The reason now travels with the flag
+  (`<!-- factory-human-review-reason: model-prose|functionality-change|both -->`), and both the issue
+  body and the bead comment are composed from it, with a station-based inference only for issues that
+  predate the marker.
 - **Mutation testing** is the bar for the suite itself: for each policy rule, breaking that rule must
-  turn the suite red. On this revision **19 mutations** were run over **71 passing tests**, and every
-  one turned the suite red. The reviewer's own mutation run had found **six rules that stayed green**
-  on the previous revision — the `falsePositive` and `state: "unchanged"` skips, `maskText` and
-  private-root elision inside `displayTitle`, and the `bd create` / `gh issue create` failure checks —
-  and those six now have tests and mutants of their own. One of them caught a further defect while
-  being written: a failed `gh issue create` was swallowed and the run could still exit `0`.
+  turn the suite red. On this revision **36 mutations** were run over **78 passing tests** and **every
+  one turned the suite red** — including the factory's own embargo behaviour (`routeFinding` returning
+  `skip` for `EMBARGOED_SEVERITIES`), which turns twelve tests red and is the mutation that proves a
+  seeded HIGH cannot quietly disappear. The reviewer's own mutation run had found **six rules that
+  stayed green** on the revision before this one — the `falsePositive` and `state: "unchanged"` skips,
+  `maskText` and private-root elision inside `displayTitle`, and the `bd create` / `gh issue create`
+  failure checks — and all six now have tests and mutants of their own. Two mutants turned out to be
+  *equivalent* rather than uncovered, and are recorded as such: dropping the `unchanged` early return
+  falls through to a skip that also says "unchanged" (the assertion was tightened to the exact reason),
+  and dropping the trailing-slash strip is caught by the fail-closed check for a foreign target but
+  **not** for our own repository with a slash, which is why that case is now a test.
+- **A failed publication cannot read as success.** Writing the failure tests found the defect itself:
+  a failed `gh issue create` was swallowed, so a run could publish nothing and exit `0`. A partial
+  publication now exits `1` and names the count.
 - **Not verified: a live station run, and real issue publication.** The suite drives stub `gh`/`bd`
   binaries, and the CI wiring belongs to `voicebox-beads-cbxo`. The first real publication is a
   controlled self-test recorded on `voicebox-beads-h1u0`.
 
-## 12. Related
+## 12. Local activation (no CI)
+
+The factory runs on the **local VM only** (Paul's decision): stations run locally, the unredacted report
+stays on the machine, and the publisher writes its issues and comments from there. No GitHub Actions,
+no runner, no CI cost.
+
+What that requires of this CLI, and what was verified rather than assumed:
+
+- **No Actions secret or runner variable is read.** Verified by driving the real CLI with `GH_TOKEN`,
+  `GITHUB_TOKEN`, `CI`, `GITHUB_ACTIONS`, `RUNNER_TEMP` and `GITHUB_WORKSPACE` all unset: exit `0`,
+  both fixtures planned, and the full issue bodies present in the local plan file. The only environment
+  inputs are `VOICEBOX_FACTORY_PRIVATE_DIR` (default `~/.voicebox/factory-reports`),
+  `VOICEBOX_FACTORY_REPO`, and whichever credential `gh` itself is authenticated with.
+- **The full report stays local.** The stations write `<target>-<agent>-delta.md` with `--sink file`;
+  this CLI reads it from the private root and **refuses** a report inside the repository, so the
+  unredacted evidence trail is never committed. It is a working file, not a durable store — the
+  published issue is the durable record.
+- **Public issues are published through the VM's own `gh` proxy, not a hub secret.** `gh` is
+  `/usr/local/bin/gh`, authenticated to `github.int.exe.xyz` in its own config, with `GH_HOST` set in
+  the environment; verified with `GH_TOKEN` and `GITHUB_TOKEN` unset — `gh api` and the publisher both
+  work. The CLI never reads a token itself: it shells out to `gh` and inherits that authentication.
+- **Plan mode needs no repository at all.** `--json` and `--write-plan` work with no `--repo`: a
+  nightly local run can inspect its own findings without naming a tracker. `--file-issues`,
+  `--comment`, `--review` and `--promote` require `--repo`, because they write to one.
+- **`--write-plan <path>`** writes the same sanitised plan to a local file — the artefact a review
+  adapter reads — creating the parent directory, atomically, and refusing with a named error if the
+  path cannot be written. It never contains the raw report text.
+
+```text
+# 1. stations (unchanged; local, file sink)
+factory run <station> --target ~/voicebox --sink file
+# 2. inspect locally - no tracker, no token, no CI
+node scripts/factory-triage.mjs --report ~/.voicebox/factory-reports/voicebox-perf-review-delta.md \
+  --write-plan /tmp/triage/plan.json
+# 3. publish (needs an authenticated gh and a repository)
+node scripts/factory-triage.mjs --report ~/.voicebox/factory-reports/voicebox-perf-review-delta.md \
+  --repo owner/name --file-issues
+# 4. review on the issue, then promote
+node scripts/factory-triage.mjs --review <n> --reviewed-by <actor> --repo owner/name
+node scripts/factory-triage.mjs --promote <n> --repo owner/name --target ~/voicebox --apply
+# 5. or record triage on a thread someone already opened
+node scripts/factory-triage.mjs --report <report> --repo owner/name --comment <n>
+```
+
+A CI wiring candidate (a GitHub workflow calling this publisher) was superseded by the local-only
+decision. The **flags above are unchanged** by that, so nothing in this contract moved; what moved is
+where the command runs. A local adapter that re-scans an issue thread still gets the same
+`factory-triage-comment` dedupe, which is what stops it repeating itself.
+
+## 13. Related
 
 - [`25-factory-agent-proposal.md`](25-factory-agent-proposal.md) — the defect-class evidence and the
   measured yield this policy responds to.
