@@ -60,6 +60,7 @@ Requests exceeding the target placement's deadline or output ceiling are refused
   - `task_status` verifies caller ownership and returns current state and outcome classifications.
   - `cancel_task` triggers the task's `AbortController` and transitions to `cancelled` or `cancel_unconfirmed`.
   - Terminal fencing prevents late completions from overwriting settled `completed`, `failed`, or `cancelled` states.
+- **Redaction at the storage boundary**: terminal answers, partials, and progress notes are scrubbed by `redactSecrets` in `persistTaskQuiet` before they reach `localStorage` (the same rule the server host's `settle()` enforces — voicebox-beads-fcx9/5lzv). Note the truthful status: this host is currently **not wired into the served app** (only its test imports it); the boundary scrub exists so a future wiring cannot introduce verbatim secret persistence.
 
 ### Direct Placement Dispatch (`createPlacementDispatcher`)
 `createPlacementDispatcher({ hosts })` routes `delegate_task`, `task_status`, and `cancel_task` directly to the host responsible for the target environment's placement (`browser`, `machine`, or `remote`), avoiding any mandatory server round-trip for browser-local tasks.

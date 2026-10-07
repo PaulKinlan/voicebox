@@ -139,3 +139,92 @@ console.error("stderr mentions ${CANARY} plainly");
   }
   assert.ok(String(result).includes("plainly"), "non-secret content must survive unredacted");
 });
+
+// ── 5lzv: the dormant browser task host gets the same boundary, and console.source is normalized ──
+
+import { createBrowserTaskHost } from "../lib/task-placement.mjs";
+
+test("the (unwired) browser task host scrubs the terminal answer at ITS durable boundary", async () => {
+  // The browser host is not wired into the served app today (only its tests import it); the
+  // scrub exists so wiring it can never introduce the verbatim-persistence class (fcx9).
+  // An in-memory localStorage shim makes the DURABLE surface itself assertable (bare Node has none).
+  const store = new Map();
+  globalThis.localStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+    key: (i) => [...store.keys()][i] ?? null,
+    get length() { return store.size; },
+  };
+  const keyBytes = new Uint8Array(32).fill(9);
+  const authority = { owner: "redaction-owner", callId: "redaction-call-1" };
+  const host = createBrowserTaskHost({
+    environment: "env_browser_redact",
+    instance: "tab-redact",
+    boot: "boot-redact-1",
+    keyBytes,
+    root: () => ({ kind: "opfs", path: "v1/projects/redact", environment: "env_browser_redact" }),
+    executor: () => ({
+      check: () => ({ ok: true, mechanism: "test", bounds: { deadlineMs: 5000, maxOutputBytes: 4096 } }),
+      run: async ({ report }) => {
+        report(`progress mentions ${CANARY} while running`);
+        return `the answer kept ${CANARY} in prose`;
+      },
+    }),
+  });
+
+  const admitted = await host.call("delegate_task", { agent: "in-page-agent", task: "leak" }, authority);
+  assert.equal(admitted.ok, true, JSON.stringify(admitted));
+  const address = admitted.task.address;
+  let view;
+  for (let i = 0; i < 100; i++) {
+    view = (await host.call("task_status", { address }, authority)).task;
+    if (view.state === "completed") break;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  assert.equal(view.state, "completed");
+  assert.ok(view.answer.includes("the answer kept"), "non-secret prose survives");
+  assert.ok(!view.answer.includes(CANARY), "the canary reached the browser host's answer");
+  assert.ok(view.answer.includes("[redacted]"));
+  assert.ok(!String(view.progress ?? "").includes(CANARY), "the canary reached the running-phase progress note");
+
+  // And from a FRESH host instance (the reload path — the view is rebuilt from the persisted record):
+  const hostReloaded = createBrowserTaskHost({
+    environment: "env_browser_redact",
+    instance: "tab-redact",
+    boot: "boot-redact-1",
+    keyBytes,
+    root: () => ({ kind: "opfs", path: "v1/projects/redact", environment: "env_browser_redact" }),
+    executor: () => { throw new Error("a reloaded host must not rerun tasks"); },
+  });
+  const revived = (await hostReloaded.call("task_status", { address }, authority)).task;
+  assert.equal(revived.state, "completed");
+  assert.ok(!JSON.stringify(revived).includes(CANARY), "the persisted record served the canary to a reloaded host");
+  assert.ok(String(revived.answer).includes("[redacted]"));
+
+  // And the durable surface ITSELF, not only the view built from it:
+  const rawStored = store.get(`vb_task_${address}`);
+  assert.ok(rawStored, "the record must be in localStorage for the reload path to mean anything");
+  assert.ok(!rawStored.includes(CANARY), "the canary reached the durable localStorage record");
+  assert.ok(rawStored.includes("[redacted]"));
+  delete globalThis.localStorage;
+});
+
+test("an executor-supplied console source is normalized to the known set (server host)", async (t) => {
+  const f = fixture(t, async ({ onConsole }) => {
+    // The ONLY console entry carries a hostile source string — it is the one that persists.
+    onConsole({ source: "https://attacker.invalid/tracker", text: `a line with ${CANARY}` });
+    return "done";
+  });
+  const admitted = f.admit();
+  assert.equal(admitted.ok, true, JSON.stringify(admitted));
+  const { task: view } = await until(
+    () => f.status(admitted.task.address),
+    (r) => r.ok && r.task.state === "completed",
+  );
+  assert.equal(view.console.source, "stderr", "an unknown executor-supplied source must normalize to stderr, not persist verbatim");
+  assert.ok(view.console.text.includes("[redacted]"));
+  const raw = f.raw();
+  assert.ok(!raw.includes("attacker.invalid"), "an unknown executor-supplied source was persisted verbatim");
+  assert.ok(!raw.includes(CANARY));
+});

@@ -534,3 +534,57 @@ test("availability transitions: existing task retry recovers handle even if exec
 });
 
 
+
+// voicebox-beads-5lzv review P1: persistTaskQuiet stores a scrubbed COPY, so cancelTask's grace
+// loop must re-read the store — watching a retrieved object never sees the runner's transition.
+test("cancel observes the runner's real terminal state (stored records are copies)", async () => {
+  const environment = "env_cancel_copies";
+  const authority = { owner: "cancel-owner", callId: "cancel-call-1" };
+
+  // (a) An executor that OBSERVES the abort: cancel reports cancelled, promptly.
+  const observing = createBrowserTaskHost({
+    environment, instance: "tab-cancel-a", boot: "boot-cancel",
+    executor: () => ({
+      check: () => ({ ok: true, mechanism: "test", bounds: { deadlineMs: 5000, maxOutputBytes: 1024 } }),
+      run: ({ signal }) => new Promise((_, reject) => {
+        signal.addEventListener("abort", () => reject(Object.assign(new Error("stopped"), { refused: "task-cancelled" })), { once: true });
+      }),
+    }),
+  });
+  const a = await observing.call("delegate_task", { agent: "test", task: "hold" }, authority);
+  assert.equal(a.ok, true);
+  for (let i = 0; i < 50; i++) {
+    const st = await observing.call("task_status", { address: a.task.address }, authority);
+    if (st.task?.state === "running") break;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  const startA = Date.now();
+  const cancelA = await observing.call("cancel_task", { address: a.task.address }, authority);
+  assert.equal(cancelA.state, "cancelled", `expected observed cancellation, got ${JSON.stringify(cancelA)}`);
+  assert.equal(cancelA.observed, true);
+  assert.ok(Date.now() - startA < 1000, "an observed cancel must not burn the full grace");
+  const storedA = (await observing.call("task_status", { address: a.task.address }, authority)).task;
+  assert.equal(storedA.state, "cancelled", "the stored record must be the real terminal state");
+
+  // (b) An executor that IGNORES the abort and completes during the grace: the completion stands —
+  // cancel_unconfirmed must never overwrite a settled record (terminal fencing, docs/16).
+  const authorityB = { owner: "cancel-owner", callId: "cancel-call-2" };
+  const ignoring = createBrowserTaskHost({
+    environment, instance: "tab-cancel-b", boot: "boot-cancel",
+    executor: () => ({
+      check: () => ({ ok: true, mechanism: "test", bounds: { deadlineMs: 5000, maxOutputBytes: 1024 } }),
+      run: async () => { await new Promise((r) => setTimeout(r, 300)); return "finished anyway"; },
+    }),
+  });
+  const b = await ignoring.call("delegate_task", { agent: "test", task: "hold" }, authorityB);
+  for (let i = 0; i < 50; i++) {
+    const st = await ignoring.call("task_status", { address: b.task.address }, authorityB);
+    if (st.task?.state === "running") break;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  const cancelB = await ignoring.call("cancel_task", { address: b.task.address }, authorityB);
+  assert.equal(cancelB.state, "completed", `the real terminal state must win, got ${JSON.stringify(cancelB)}`);
+  const storedB = (await ignoring.call("task_status", { address: b.task.address }, authorityB)).task;
+  assert.equal(storedB.state, "completed");
+  assert.equal(storedB.answer, "finished anyway", "the terminal record must not be clobbered by the cancel path");
+});
