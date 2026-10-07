@@ -234,6 +234,9 @@ try {
     console.log(`── phase A: shared front ${SHARED_UI} (GET-only; not a shared-state stability check) · measuring tree: ${TREE}${TREE === ROOT ? " (default: this repo)" : ""}`);
 
   const servedRefs = [];
+  // A skip is named, never a pass: worker constructions whose PATH is interpolated cannot be
+  // walked, and silence here is how a worker's whole subtree once dropped out of this check.
+  const unwalkableWorkerSpecs = [];
 // ── WHICH TREE IS THE FRONT? The markers below compare the front's SERVED modules
 // against THIS tree's disk — an answer only when the front serves THIS tree.
 // Measured 2026-09-23 (the moving-object repro): a front serving another branch failed
@@ -347,8 +350,13 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
     if (/\.(?:js|ts|mjs)$/.test(ref)) {
       for (const m of served.matchAll(/from\s*"\.\/([^"]+)"|import\s*"\.\/([^"]+)"/g))
         servedRefs.push(path.posix.join(path.posix.dirname(ref), m[1] ?? m[2]));
-      for (const m of served.matchAll(/new\s+(?:Shared)?Worker\s*\(\s*["']([^"']+)["']/g))
-        servedRefs.push(m[1].startsWith("/") ? m[1].slice(1) : path.posix.join(path.posix.dirname(ref), m[1]));
+      for (const m of served.matchAll(/new\s+(?:Shared)?Worker\s*\(\s*(["'`])([^"'`]+)\1/g)) {
+        // A worker URL may carry a query (the audit-writer identity, voicebox-beads-826z) — the
+        // module path ends at the "?". A template interpolating its PATH is not walkable.
+        const spec = m[2].split("?")[0];
+        if (spec.includes("${")) { unwalkableWorkerSpecs.push(m[2]); continue; }
+        servedRefs.push(spec.startsWith("/") ? spec.slice(1) : path.posix.join(path.posix.dirname(ref), spec));
+      }
       for (const m of served.matchAll(/new\s+(?:Shared)?Worker\s*\(\s*new\s+URL\s*\(\s*["']([^"']+)["']\s*,\s*import\.meta\.url\s*\)/g))
         servedRefs.push(path.posix.join(path.posix.dirname(ref), m[1]));
     }
@@ -358,7 +366,7 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
     // log instead of on a page.
   } else {
     report("shared-front", "environment is current (served modules match the measured tree)", staleModules.length === 0,
-      staleModules.length ? `STALE: ${staleModules.join(", ")} — touch the file or restart vite` : `${compared.size} modules compared`);
+      staleModules.length ? `STALE: ${staleModules.join(", ")} — touch the file or restart vite` : `${compared.size} modules compared${unwalkableWorkerSpecs.length ? ` · ${unwalkableWorkerSpecs.length} unwalkable worker spec(s) skipped by name: ${unwalkableWorkerSpecs.join(", ")}` : ""}`);
   }
   // ── 0a-iii. WHAT A PERSON CAN READ, on the front Paul is looking at ─────────────────────────────
   // The vocabulary comes from the responses THIS RUN received, so the assertion is "the page does not
