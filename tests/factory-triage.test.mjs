@@ -1250,9 +1250,9 @@ test("beadForPromotion unit computes bead fields, types, and priorities for each
   });
   assert.equal(beadLow.priority, 3);
 
-  // Human review -> blocked: true, label human-review
+  // A functionality-changing finding -> BLOCKED, label human-review
   const beadBlocked = beadForPromotion({
-    finding: { ...baseFinding, humanReview: true },
+    finding: { ...baseFinding, humanReview: true, humanReviewReason: "functionality-change" },
     issue: { ...issue, title: "[human-review] [factory/medium] qa-station: Flake chip" },
     reviewedBy: "alice",
     repo: "owner/voicebox",
@@ -1262,6 +1262,33 @@ test("beadForPromotion unit computes bead fields, types, and priorities for each
   assert.deepEqual(beadBlocked.labels, ["factory", "human-review"]);
   assert.match(beadBlocked.description, /The bead is BLOCKED until that decision is recorded/);
   assert.ok(!beadBlocked.title.includes("[human-review]"));
+
+  // A SECURITY-ONLY finding -> NOT blocked (coord/Paul's criterion is functionality, not station
+  // class), still labelled for verification, and the prose says it is claimable.
+  for (const reason of ["model-prose", null]) {
+    const beadSecurity = beadForPromotion({
+      finding: { ...baseFinding, humanReview: true, humanReviewReason: reason, station: "vuln-discovery" },
+      issue: { ...issue, title: "[human-review] [factory/critical] vuln-discovery: stub" },
+      reviewedBy: "alice",
+      repo: "owner/voicebox",
+      issueNumber: 10,
+    });
+    assert.equal(beadSecurity.blocked, false, `a security-only finding blocked the bead (reason ${reason})`);
+    assert.deepEqual(beadSecurity.labels, ["factory", "human-review"]);
+    assert.match(beadSecurity.description, /Needs verification/);
+    assert.match(beadSecurity.description, /the bead is claimable/);
+    assert.ok(!/BLOCKED/.test(beadSecurity.description), `a security-only bead claimed to be BLOCKED: ${beadSecurity.description}`);
+  }
+
+  // "both" is a functionality change, so it blocks.
+  const beadBoth = beadForPromotion({
+    finding: { ...baseFinding, humanReview: true, humanReviewReason: "both", station: "vuln-discovery" },
+    issue: { ...issue, title: "[human-review] [factory/critical] vuln-discovery: stub" },
+    reviewedBy: "alice",
+    repo: "owner/voicebox",
+    issueNumber: 10,
+  });
+  assert.equal(beadBoth.blocked, true);
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -2162,6 +2189,22 @@ test("HUMAN-REVIEW REASON: the flag carries WHY it was set, and the prose follow
     !/This remediation changes functionality, so a human decides/.test(issue.body),
     "the body asserted a functionality change that was never established",
   );
+  // ...and the round-5 correction: a security-only finding is marked for VERIFICATION, and the issue
+  // must not promise that the bead will be BLOCKED, because by criterion it will not be.
+  assert.match(issue.body, /Needs verification; not a blocker/, "a security-only issue did not carry the verification marker");
+  assert.match(issue.body, /marked for verification|stays claimable/, "the issue did not say the bead stays claimable");
+  assert.ok(!/filed BLOCKED/.test(issue.body), `a security-only issue promised a BLOCKED bead: ${issue.body}`);
+  // A functionality change DOES say so, and does promise the block.
+  const changing = routeFinding(vuln, { confirmedFunctionalityChange: true });
+  assert.equal(changing.humanReviewReason, "both");
+  const changingIssue = buildIssue(vuln, changing, { repo: "owner/voicebox", privateRoot: "/tmp/private" });
+  assert.match(changingIssue.body, /Human review required before any implementation/);
+  assert.match(changingIssue.body, /filed BLOCKED/);
+  // The BOTH case is what makes the reason prose load-bearing: a hardcoded "changes functionality"
+  // sentence reads identically for the functionality-only row, so only this assertion notices that the
+  // security half was dropped.
+  assert.match(changingIssue.body, /changes functionality AND this station's prose is model-authored/);
+  assert.match(changingIssue.body, /<!-- factory-human-review-reason: both -->/);
 
   // A functionality change carries its own reason, and both are named when both hold.
   const quality = { ...vuln, agent: "qa-station", identityCritical: false, effectiveSeverity: "high", ruleId: "flake-instrumentation" };
@@ -2170,10 +2213,13 @@ test("HUMAN-REVIEW REASON: the flag carries WHY it was set, and the prose follow
   assert.equal(routeFinding(vuln, { confirmedFunctionalityChange: true }).humanReviewReason, "both");
   assert.match(humanReviewWhy("both"), /changes functionality AND/);
 
-  // The BEAD comment states the true reason, and falls back to inference for an older issue.
-  for (const [marker, expected] of [
-    ["<!-- factory-human-review-reason: model-prose -->", /model-authored and security-sensitive/],
-    ["", /model-authored and security-sensitive/], // no reason marker + a security station => inferred
+  // The BEAD states the true reason, and falls back to inference for an older issue. The security
+  // rows must remain CLAIMABLE (Paul's criterion is functionality, not station class); the
+  // functionality row must block.
+  for (const [marker, expected, blocks] of [
+    ["<!-- factory-human-review-reason: model-prose -->", /model-authored and security-sensitive/, false],
+    ["", /model-authored and security-sensitive/, false], // no reason marker + a security station => inferred
+    ["<!-- factory-human-review-reason: functionality-change -->", /changes functionality/, true],
   ]) {
     const res = runCli({
       args: ["--promote", "10", "--apply", "--repo", "owner/voicebox"],
@@ -2187,10 +2233,28 @@ test("HUMAN-REVIEW REASON: the flag carries WHY it was set, and the prose follow
     });
     try {
       assert.equal(res.status, 0, res.stderr);
+      const blocked = res.bdCalls.filter((c) => c.startsWith("update") && c.includes("--status blocked"));
       const comment = res.bdCalls.find((c) => c.startsWith("comment"));
-      assert.ok(comment, `no bead comment: ${res.bdCalls.join(" | ")}`);
-      assert.match(comment, expected, `the bead comment did not state the real reason: ${comment}`);
-      assert.ok(!/this remediation changes functionality/.test(comment), `a false cause was asserted: ${comment}`);
+      if (!blocks) {
+        // Security-only: the issue is marked for verification, the BEAD is claimable (Paul's
+        // BLOCKED criterion is a major functionality change, not a station class).
+        assert.deepEqual(blocked, [], `a security-only promotion blocked the bead: ${res.bdCalls.join(" | ")}`);
+        assert.equal(comment, undefined, `a security-only promotion posted a blocked comment: ${comment}`);
+        const create = res.bdCalls.find((c) => c.startsWith("create"));
+        assert.match(create, /Needs verification/, `the bead did not say it needs verification: ${create}`);
+        assert.match(create, /claimable/, `the bead did not say it is claimable: ${create}`);
+        // The reason still reaches the bead, from the marker or from the station inference.
+        assert.match(create, expected, `the bead did not carry the real reason: ${create}`);
+        // The false claim round 3 caught: a security station must never assert a functionality change.
+        assert.ok(
+          !/this remediation changes functionality|the bead is BLOCKED/.test(create),
+          `a security-only bead asserted a cause or a block that was never established: ${create}`,
+        );
+      } else {
+        assert.equal(blocked.length, 1, `a functionality-changing promotion did not block: ${res.bdCalls.join(" | ")}`);
+        assert.ok(comment, `no bead comment: ${res.bdCalls.join(" | ")}`);
+        assert.match(comment, expected, `the bead comment did not state the real reason: ${comment}`);
+      }
     } finally {
       rmSync(res.box, { recursive: true, force: true });
     }
@@ -2354,6 +2418,15 @@ test("triageMarkersFromComments reads ONLY the read-only markers, and writes not
   assert.equal(blocks[0].severity, "critical");
   assert.equal(blocks[0].state, "regressed");
   assert.deepEqual(triageMarkersFromComments([{ body: "<!-- factory-fingerprint: " + a + " -->" }]), [], "a BODY marker is not a triage marker");
+  // The human-review flag in a comment used to be read but never exercised, so dropping it survived.
+  const flagged = triageMarkersFromComments([
+    { body: `<!-- factory-triage-comment: ${a} -->\n<!-- factory-station: vuln-discovery -->\n<!-- factory-human-review -->` },
+  ]);
+  assert.equal(flagged[0].humanReview, true, "the human-review marker in a comment was not read");
+  const unflagged = triageMarkersFromComments([
+    { body: `<!-- factory-triage-comment: ${"d2".repeat(32)} -->\n<!-- factory-station: qa-station -->` },
+  ]);
+  assert.equal(unflagged[0].humanReview, false, "a comment without the marker claimed human review");
   assert.deepEqual(triageMarkersFromComments([]), []);
   assert.deepEqual(triageMarkersFromComments(null), []);
 });
@@ -2468,5 +2541,95 @@ test("HUMAN-REVIEW REASON round-trips through the markers, and an unmodelled rea
     assert.match(comment, /changes functionality AND this station's prose is model-authored/, `the 'both' reason did not survive: ${comment}`);
   } finally {
     rmSync(res.box, { recursive: true, force: true });
+  }
+});
+
+test("INBOUND CRITERION: a security station promoted from a comment is claimable; a functionality change blocks (round 5)", () => {
+  // Two things at once. (1) The review reason for an issue promoted FROM COMMENTS must come from the
+  // station the triage marker names — reading the body's markers instead made every inbound security
+  // finding claim "this remediation changes functionality", which is false, and blocked it. (2) The
+  // blocked state must follow the criterion, not the station class.
+  const fp = "e1".repeat(32);
+  const inbound = (station) =>
+    JSON.stringify({
+      number: 7, state: "OPEN", title: `Inbound ${station} finding`, url: "https://example.invalid/7", labels: [], body: "human words",
+      comments: [
+        { body: `<!-- factory-triage-comment: ${fp} -->\n<!-- factory-station: ${station} -->\n<!-- factory-severity: critical -->\n<!-- factory-state: new -->\n<!-- factory-human-review -->` },
+        { body: "<!-- factory-review: alice -->" },
+      ],
+    });
+
+  // Security station, no reason marker => inferred model-prose => claimable, and the bead says why.
+  const security = runCli({ args: ["--promote", "7", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(inbound("vuln-discovery")) });
+  // Non-security station, no reason marker => inferred functionality change => blocked.
+  const changing = runCli({ args: ["--promote", "7", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(inbound("qa-station")) });
+  try {
+    assert.equal(security.status, 0, security.stderr);
+    const securityBlocked = security.bdCalls.filter((c) => c.startsWith("update") && c.includes("--status blocked"));
+    assert.deepEqual(securityBlocked, [], `an inbound security finding blocked the bead: ${security.bdCalls.join(" | ")}`);
+    const securityCreate = security.bdCalls.find((c) => c.startsWith("create"));
+    assert.match(securityCreate, /model-authored and security-sensitive/, `the station was read from the wrong place: ${securityCreate}`);
+    assert.ok(!/changes functionality/.test(securityCreate), `a false cause was asserted: ${securityCreate}`);
+    assert.match(securityCreate, /claimable/, `the bead did not say it is claimable: ${securityCreate}`);
+
+    assert.equal(changing.status, 0, changing.stderr);
+    const changingBlocked = changing.bdCalls.filter((c) => c.startsWith("update") && c.includes("--status blocked"));
+    assert.equal(changingBlocked.length, 1, `a functionality change did not block: ${changing.bdCalls.join(" | ")}`);
+  } finally {
+    for (const res of [security, changing]) rmSync(res.box, { recursive: true, force: true });
+  }
+});
+
+test("A MALFORMED --repo cannot disarm the cross-target refusal (round 5 P1)", () => {
+  // `--repo /` used to parse to an empty name, which is falsy, which skipped the guard — the third
+  // shape of the same bug. A repository that names nothing fails closed.
+  const foreign = fixture("voicebox-qa-station-delta.md").replace(/^# Software Factory Delta Report:.*$/m, "# Software Factory Delta Report: /repos/other");
+  for (const bad of ["/", "///", "  /  ", "   "]) {
+    for (const mode of [["--json"], ["--file-issues"]]) {
+      const res = runCli({
+        args: ["--report", "voicebox-qa-station-delta.md", ...mode, "--repo", bad],
+        reports: { "voicebox-qa-station-delta.md": foreign },
+      });
+      try {
+        assert.equal(res.status, 1, `--repo '${bad}' was accepted (${mode}): ${res.stdout}`);
+        assert.match(res.stderr, /names no repository/);
+        assert.ok(!res.ghCalls.some((c) => c.startsWith("issue create")), `--repo '${bad}' published a foreign finding`);
+      } finally {
+        rmSync(res.box, { recursive: true, force: true });
+      }
+    }
+  }
+  // The legitimate forms still work: our own repo with and without a trailing slash.
+  for (const ok of ["owner/voicebox", "owner/voicebox/"]) {
+    const res = runCli({
+      args: ["--report", "voicebox-qa-station-delta.md", "--json", "--repo", ok],
+      reports: { "voicebox-qa-station-delta.md": fixture("voicebox-qa-station-delta.md") },
+    });
+    try {
+      assert.equal(res.status, 0, `--repo '${ok}' was refused: ${res.stderr}`);
+    } finally {
+      rmSync(res.box, { recursive: true, force: true });
+    }
+  }
+});
+
+test("AN EXPLICIT --finding that matches nothing refuses even when there is only one finding (round 5 P2)", () => {
+  const fp = "f1".repeat(32);
+  const issue = JSON.stringify({
+    number: 7, state: "OPEN", title: "One finding", url: "https://example.invalid/7", labels: [], body: "human words",
+    comments: [
+      { body: `<!-- factory-triage-comment: ${fp} -->\n<!-- factory-station: qa-station -->\n<!-- factory-severity: low -->\n<!-- factory-state: new -->` },
+      { body: "<!-- factory-review: alice -->" },
+    ],
+  });
+  const wrong = runCli({ args: ["--promote", "7", "--finding", "deadbeefdeadbeef", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(issue) });
+  const right = runCli({ args: ["--promote", "7", "--finding", fp.slice(0, 16), "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(issue) });
+  try {
+    assert.equal(wrong.status, 1, `a non-matching --finding was ignored: ${wrong.stdout}`);
+    assert.match(wrong.stderr, /matches 0 of the findings/);
+    assert.equal(wrong.bdCalls.length, 0, "a non-matching --finding reached bd");
+    assert.equal(right.status, 0, right.stderr);
+  } finally {
+    for (const res of [wrong, right]) rmSync(res.box, { recursive: true, force: true });
   }
 });

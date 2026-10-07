@@ -9,7 +9,7 @@ interface between them, and it is mockable: nothing here needs a network or a to
 The factory runs on the local VM: no GitHub Actions, no runner, no CI secrets. This CLI reads no
 Actions variable — verified by running with `GH_TOKEN`, `GITHUB_TOKEN`, `CI`, `GITHUB_ACTIONS`,
 `RUNNER_TEMP` and `GITHUB_WORKSPACE` unset. Plan mode (`--json`, `--write-plan`) needs **no** `--repo`;
-only `--file-issues`, `--comment`, `--review` and `--promote` do. The unredacted report stays in the
+only `--file-issues`, `--review` and `--promote` do. The unredacted report stays in the
 local private root; `--write-plan <path>` writes the sanitised plan as a local file for a review
 adapter to read.
 
@@ -26,10 +26,10 @@ adapter to read.
     node scripts/factory-triage.mjs --review <n> --reviewed-by <actor> --repo <owner/name>
     node scripts/factory-triage.mjs --promote <n> --repo <owner/name> --target <repo path> --apply
 
-Exit codes: `0` plan produced / issue published / comment posted / bead created · `1` usage or policy
+Exit codes: `0` plan produced / issue published / bead created · `1` usage or policy
 refusal **or a write that failed** (a run where any `gh issue create` failed exits 1 and reports the
 count — a partial publication is never reported as success) · `2` nothing actionable (nothing in band,
-everything already published, or nothing new to triage on `--comment`).
+everything already published, or every finding already published).
 
 READ-ONLY SEAM (coord's ruling): your commenter owns the existing-issue comment surface; my
 `--promote` reads these markers from the comments and writes none of them:

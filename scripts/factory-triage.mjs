@@ -25,8 +25,8 @@
  *      elided. No raw credential value reaches issue text.
  *   4. Promotion is a review decision with a name attached: `--promote <n> --reviewed-by <actor>`
  *      is the only code path that creates a bead, it dedupes against beads already carrying the
- *      fingerprint, and a functionality-changing finding becomes a BLOCKED bead with a
- *      `human-review` label.
+ *      fingerprint, and a finding that may MAJORLY CHANGE FUNCTIONALITY becomes a BLOCKED bead with a
+ *      `human-review` label — a security-only finding does not block the bead.
  *   5. It never edits code. Nothing is auto-fixed; the only writes are `gh issue create`,
  *      `gh issue comment` and (on promotion) `bd create`/`bd update`.
  *
@@ -114,7 +114,8 @@ export const STATION_CLASSES = Object.freeze({
 /**
  * Deterministic hint that a remediation changes functionality rather than repairing it. This is a
  * HINT, never a decision: the analyst confirms with `--functionality-change <rule_id>`, and the
- * report only ever files such a finding BLOCKED with a `human-review` label.
+ * report only ever files such a finding BLOCKED with a `human-review` label. A security station is
+ * flagged for verification instead (see `blocksWork`).
  */
 const FUNCTIONALITY_CHANGE_SIGNALS = [
   /\bbreaking\b/i,
@@ -435,10 +436,22 @@ export function suggestsFunctionalityChange(finding) {
  *               the finding itself is never withheld and never silently dropped.
  *   - `skip`  — not publishable as work (false positive, unchanged, below band).
  *
- * `humanReview` marks a finding whose remediation changes behaviour: the issue says so and a human
- * decides, and the bead is filed BLOCKED if the issue is ever promoted. The publisher never fixes
- * anything itself.
+ * `humanReview` marks a finding a human should look at before the work is acted on. It is NOT the
+ * same as blocking: the bead is filed BLOCKED only when the remediation is likely to MAJORLY CHANGE
+ * FUNCTIONALITY (coord/Paul's criterion), so a security station's model-authored prose marks the
+ * PUBLIC issue for verification without gating a critical fix behind a review queue. The publisher
+ * never fixes anything itself.
  */
+
+/**
+ * Paul's BLOCKED criterion (coord, 2026-10-07): a bead is blocked for a finding likely to MAJORLY
+ * CHANGE FUNCTIONALITY, or for an unresolved external approval — NOT for a station class. A security
+ * station's prose is marked for verification on the issue and the bead stays CLAIMABLE, so a critical
+ * security fix is not gated on a review queue position.
+ */
+export function blocksWork(humanReviewReason) {
+  return humanReviewReason === "functionality-change" || humanReviewReason === "both";
+}
 export function routeFinding(finding, { confirmedFunctionalityChange = false, includeLow = false } = {}) {
   const reasons = [];
   if (finding.falsePositive) return { action: "skip", humanReview: false, reasons: ["triaged false positive by the factory"] };
@@ -491,12 +504,15 @@ export function routeFinding(finding, { confirmedFunctionalityChange = false, in
   }
   // A security station's description and remediation are MODEL-AUTHORED prose, and this pipeline
   // publishes at every severity, so those words reach the public tracker with no human in between.
-  // The finding is therefore flagged for human verification: the identity of the issue is enough for
-  // a reader, but nobody should act on an unreviewed remediation, and promotion files it BLOCKED.
+  // The finding is therefore flagged for human verification on the ISSUE. That flag is not a block:
+  // by Paul's criterion the bead is blocked for a likely major functionality change, so a critical
+  // security fix stays claimable after the issue is reviewed.
   const modelProse = IDENTITY_CRITICAL_AGENTS.has(finding.agent);
   if (modelProse) {
     reasons.push(
-      "this station's prose is model-authored and is published unreviewed by policy, so the issue is flagged for human verification; a promoted bead is filed BLOCKED",
+      functionality
+        ? "this station's prose is model-authored and is published unreviewed by policy, so the issue is flagged for human verification; this remediation also reads as a functionality change, so a promoted bead is filed BLOCKED"
+        : "this station's prose is model-authored and is published unreviewed by policy, so the issue is flagged for human verification; the bead stays claimable because this is not a functionality change",
     );
   }
   const humanReviewReason = functionality && modelProse ? "both" : functionality ? "functionality-change" : modelProse ? "model-prose" : null;
@@ -642,7 +658,9 @@ export function buildIssue(finding, verdict, { privateRoot, repo, selfTest = fal
     `- Identity: \`${finding.fingerprint}\` (${finding.identitySource === "recomputed-and-verified" ? "recomputed here and verified against the report" : finding.identitySource})`,
     "",
     verdict.humanReview
-      ? `**Human review required before any implementation.** ${humanReviewWhy(verdict.humanReviewReason)}, so a human decides what to do. If this issue is promoted to a bead, that bead is filed BLOCKED with \`human-review\` and carries the decision that is needed. Nothing is fixed automatically.`
+      ? blocksWork(verdict.humanReviewReason)
+        ? `**Human review required before any implementation.** ${humanReviewWhy(verdict.humanReviewReason)}, so a human decides what to do. If this issue is promoted to a bead, that bead is filed BLOCKED with \`human-review\` and carries the decision that is needed. Nothing is fixed automatically.`
+        : `**Needs verification; not a blocker.** ${humanReviewWhy(verdict.humanReviewReason)}. This is not a functionality change, so a promoted bead stays claimable with the \`human-review\` label: verify the remediation before acting on it. Nothing is fixed automatically.`
       : "",
     "<details>",
     "<summary>Publication policy and provenance</summary>",
@@ -870,9 +888,11 @@ export function beadForPromotion({ finding, issue, reviewedBy, repo, issueNumber
     issue?.title ? `Title: ${issue.title}` : "",
     "",
     "The sanitised finding text lives on the issue (this bead deliberately does not copy it, so there is one place to correct).",
-    finding.humanReview
-      ? "\nDecision needed before implementation: a human must confirm whether this behaviour change is wanted. The bead is BLOCKED until that decision is recorded."
-      : "",
+    blocksWork(finding.humanReviewReason)
+      ? "\nDecision needed before implementation: this remediation may change functionality, so a human must confirm it is wanted. The bead is BLOCKED until that decision is recorded."
+      : finding.humanReview
+        ? `\nNeeds verification: ${finding.humanReviewReason ? `${humanReviewWhy(finding.humanReviewReason)}. ` : ""}This is not a functionality change, so the bead is claimable — the verification is a quality bar on the fix, not a gate on starting it.`
+        : "",
   ]
     .filter((line) => line !== "")
     .join("\n");
@@ -885,7 +905,7 @@ export function beadForPromotion({ finding, issue, reviewedBy, repo, issueNumber
     priority,
     labels,
     externalRef: `${BEAD_EXTERNAL_REF_PREFIX}${finding.fingerprint}`,
-    blocked: Boolean(finding.humanReview),
+    blocked: blocksWork(finding.humanReviewReason),
   };
 }
 
@@ -998,9 +1018,16 @@ export function buildPlan(reportFiles, opts) {
   // Normalised the same way the REPORT's target is: `owner/voicebox/` used to parse to an empty name,
   // which is falsy, which skipped the cross-target refusal entirely — the mirror of the bug this guard
   // was added for. An unreadable --repo fails closed rather than disarming the check.
-  const repoName = opts.repo
-    ? String(opts.repo).trim().replace(/[\\/]+$/, "").split(/[\\/]/).pop().toLowerCase()
-    : null;
+  const repoSpec = opts.repo == null ? null : String(opts.repo).trim();
+  const repoName = repoSpec ? repoSpec.split(/[\\/]/).filter(Boolean).pop()?.toLowerCase() ?? "" : null;
+  if (repoSpec !== null && !repoName) {
+    // Fail closed rather than defaulting to "no check": an empty name is falsy, and a falsy name used
+    // to skip the cross-target refusal entirely, so malformed input silently disarmed the guard.
+    process.stderr.write(
+      `--repo '${repoSpec}' names no repository (expected owner/name): refusing, because a repository that names nothing cannot be checked against the report's target\n`,
+    );
+    return null;
+  }
   for (const file of reportFiles) {
     const agent = opts.agent ?? agentFromReportName(file);
     if (!agent) throw new Error(`${file}: cannot determine the station; pass --agent`);
@@ -1159,15 +1186,11 @@ function promote(opts, { repo, target }) {
       );
       return 1;
     }
-    // More than one finding in the thread means the BEAD's subject is a choice, not a derivation.
-    let chosen = distinct.length === 1 ? distinct[0] : null;
-    if (!chosen) {
-      if (!opts.finding) {
-        process.stderr.write(
-          `${repo}#${number} carries ${distinct.length} findings (${distinct.map((f) => f.slice(0, 16)).join(", ")}): pass --finding <fingerprint> to say which one this bead is for\n`,
-        );
-        return 1;
-      }
+    // An explicit --finding is ALWAYS validated, even when the thread holds exactly one finding: a
+    // prefix that matches nothing means the caller is asking about a different issue, and silently
+    // promoting the identity it did find would file the wrong bead.
+    let chosen = null;
+    if (opts.finding) {
       const wanted = String(opts.finding).toLowerCase();
       const matches = distinct.filter((f) => f.toLowerCase().startsWith(wanted));
       if (matches.length !== 1) {
@@ -1177,6 +1200,14 @@ function promote(opts, { repo, target }) {
         return 1;
       }
       chosen = matches[0];
+    } else if (distinct.length === 1) {
+      chosen = distinct[0];
+    } else {
+      // More than one finding in the thread means the BEAD's subject is a choice, not a derivation.
+      process.stderr.write(
+        `${repo}#${number} carries ${distinct.length} findings (${distinct.map((f) => f.slice(0, 16)).join(", ")}): pass --finding <fingerprint> to say which one this bead is for\n`,
+      );
+      return 1;
     }
     const block = triaged.find((t) => t.fingerprint === chosen);
     identity = { ...block, humanReviewReason: null, ruleId: "triaged" };
@@ -1218,6 +1249,15 @@ function promote(opts, { repo, target }) {
     process.stderr.write(`${repo}#${number} is closed: a closed issue is not work to start (pass --allow-closed to override)\n`);
     return 1;
   }
+  // The reason decides whether the bead is blocked, so it is resolved BEFORE the bead is built and
+  // reused for the comment below rather than being re-derived in two places.
+  // The reason travels with the flag (`factory-human-review-reason`). Older issues carry no reason,
+  // so the fallback infers from the station rather than asserting a cause it cannot know — and a
+  // security station infers to `model-prose`, which does NOT block under Paul's criterion.
+  const humanReviewReason = identity.humanReview
+    ? identity.humanReviewReason ??
+      (IDENTITY_CRITICAL_AGENTS.has(identity.station ?? "") ? "model-prose" : "functionality-change")
+    : null;
   const severity = VALID_SEVERITIES.includes(identity.severity) ? identity.severity : "critical";
   const finding = {
     station: identity.station ?? "unknown",
@@ -1227,6 +1267,7 @@ function promote(opts, { repo, target }) {
     effectiveSeverity: severity,
     state: identity.state ?? "new",
     humanReview: Boolean(identity.humanReview),
+    humanReviewReason,
     ruleId: identity.ruleId,
     fingerprint: identity.fingerprint,
   };
@@ -1259,14 +1300,9 @@ function promote(opts, { repo, target }) {
   }
   if (bead.blocked) {
     spawnSync("bd", ["update", id, "--status", "blocked", "-C", target], { cwd: target, timeout: 60000 });
-    // The reason travels with the flag (`factory-human-review-reason`). Older issues carry no reason,
-    // so the fallback infers from the station rather than asserting a cause it cannot know.
-    const why =
-      identity.humanReviewReason ??
-      (IDENTITY_CRITICAL_AGENTS.has(markers.station) ? "model-prose" : "functionality-change");
     spawnSync(
       "bd",
-      ["comment", id, `Blocked pending human review: ${humanReviewWhy(why)}. Next decision: confirm yes/no, then file the change as its own bead.`, "-C", target],
+      ["comment", id, `Blocked pending human review: ${humanReviewWhy(humanReviewReason)}. Next decision: confirm yes/no, then file the change as its own bead.`, "-C", target],
       { cwd: target, timeout: 60000 },
     );
   }

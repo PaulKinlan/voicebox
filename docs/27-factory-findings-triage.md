@@ -68,6 +68,7 @@ value* is never allowed.
 | `medium` | any | Yes | P2 |
 | `low`, `info` | any | Only with `--include-low` | P3 |
 | any | any | Functionality change → published, marked `human-review`, and the promoted bead is BLOCKED | P1–P2 by severity |
+| any | security station | published and marked for **verification** (not a block): the bead stays claimable | P1–P2 by severity |
 
 Severity is routed, not merely displayed:
 
@@ -81,12 +82,20 @@ Severity is routed, not merely displayed:
 - A finding whose remediation changes behaviour is published with the `human-review` marker, a
   `[human-review]` title prefix and an explicit decision to record; promoting it creates a **BLOCKED**
   bead with the `human-review` label and the decision in a comment.
+- **The block follows the criterion, not the station.** A bead is blocked when the remediation is
+  likely to *majorly change functionality*, or when an external approval is unresolved — that is
+  coord/Paul's rule. A security station is a different thing: its description and remediation are
+  model-authored and are published unreviewed, so the **issue** is marked for human/independent
+  verification (`[human-review]`, `factory-human-review` + `factory-human-review-reason: model-prose`)
+  while the **bead stays claimable**. That is deliberate: an urgent critical fix must not be gated on a
+  review queue position, and the sanitiser already withholds the raw candidate.
 - **A security station's finding is flagged for human verification too**, for a different reason: its
   description and remediation are *model-authored prose*, and this pipeline publishes at every
   severity, so those words reach the public tracker with no human in between. Publishing the prose is
   the deliberate choice — a generic replacement would make the issue un-actionable — and the flag is
   the honest consequence: the issue says a person must verify it, and a promoted bead is filed
-  `BLOCKED`. Nothing here should be acted on unverified.
+  `BLOCKED` only when the change is a functionality change; a security-only finding is marked for
+  verification and stays claimable. Nothing here should be acted on unverified.
 
 ## 5. What is never published, and what is never dropped
 
@@ -212,8 +221,8 @@ Flags: `--report-dir <dir>`, `--repo <owner/name>`, `--target <path>`, `--agent 
 
 Exit codes are part of the contract: `0` a plan was produced / an issue published / a bead created; `1` a usage or policy refusal, **or a write that failed** — a publication where any
 `gh issue create` failed exits `1` and says how many, because a partial publication reported as
-success is how a CI job passes while a finding was never filed; `2` nothing actionable (nothing in
-band, everything already published, or nothing new to triage on `--comment`).
+success is how a CI job passes while a finding was never filed; `2` nothing actionable (nothing in band,
+or every finding already published).
 
 Two refusals exist to stop silent mis-publication:
 
@@ -271,6 +280,14 @@ actionable (no findings in band, or everything already published).
   empty repository name, which is falsy, which skipped the refusal — so a foreign report could be
   published while the guard looked armed. `--repo` is normalised exactly like the report's target now,
   and both directions are tested (our own repository with a slash still plans; a foreign one refuses).
+- **A fifth round found three more real defects**, all fixed with a test that fails against the old
+  code: `--repo /` (and slash-only or whitespace-only input) parsed to an empty repository name, which
+  is the same falsy-hole as the trailing slash — malformed input now fails closed instead of quietly
+  disarming the cross-target refusal; an explicit `--finding` was ignored whenever a thread held
+  exactly one finding, so a prefix matching nothing silently promoted the identity it did find; and a
+  green mutant proved the human-review flag read from a comment was never observed. It also caught the
+  criterion's own trail: the issue body and the reason bullets still promised a BLOCKED bead for a
+  security-only finding, which the new code no longer does.
 - **`--write-plan` is atomic, and that property is now mutation-observable.** A failed write left its
   temporary file behind (reproduced by the reviewer with a directory destination, EISDIR). It is
   removed on failure now. Atomicity itself was unmonitored — a direct `writeFileSync` survived the
@@ -286,10 +303,9 @@ actionable (no findings in band, or everything already published).
   body and the bead comment are composed from it, with a station-based inference only for issues that
   predate the marker.
 - **Mutation testing** is the bar for the suite itself: for each policy rule, breaking that rule must
-  turn the suite red. On this revision **43 mutations** were run over **82 passing tests** and **every
-  one turned the suite red** (two mutants from the previous round no longer apply, because the code they
-  targeted was removed with the comment mode; they are recorded as retired, not as coverage) — including the factory's own embargo behaviour (`routeFinding` returning
-  `skip` for `EMBARGOED_SEVERITIES`), which turns twelve tests red and is the mutation that proves a
+  turn the suite red. On this revision **50 mutations** were run over **85 passing tests** and **every one turned the
+  suite red** (0 green, 0 skipped). Mutants whose target code was removed with the comment mode are
+  deleted from the matrix rather than counted
   seeded HIGH cannot quietly disappear. The reviewer's own mutation run had found **six rules that
   stayed green** on the revision before this one — the `falsePositive` and `state: "unchanged"` skips,
   `maskText` and private-root elision inside `displayTitle`, and the `bd create` / `gh issue create`
