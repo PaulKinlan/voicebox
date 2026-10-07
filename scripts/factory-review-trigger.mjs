@@ -33,14 +33,15 @@ export function parsePublisherSummary(stdout = "") {
   for (const line of String(stdout).split("\n")) {
     const trimmed = line.trim();
     if (
-      /^(published|duplicate|failed|actionable|total|clean|skipped|new|regressed):/i.test(trimmed) ||
-      /^https:\/\/github\.com\/[^\s]+\/issues\/\d+/i.test(trimmed) ||
-      /^\[factory-triage\]/i.test(trimmed)
+      /^(published|duplicate|failed|actionable|total|clean|skipped|new|regressed):\s*\d+/i.test(trimmed) ||
+      /^https:\/\/github\.com\/[^\s]+\/issues\/\d+/i.test(trimmed)
     ) {
-      safeLines.push(trimmed);
+      let sanitizedLine = redactSecrets(trimmed);
+      sanitizedLine = sanitizedLine.replace(/(?:gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{22,})/g, "[REDACTED]");
+      safeLines.push(sanitizedLine);
     }
   }
-  return redactSecrets(safeLines.join("\n"));
+  return safeLines.join("\n");
 }
 
 export function runReviewTrigger(args = process.argv.slice(2), { env = process.env, rootDir = ROOT } = {}) {
@@ -179,37 +180,19 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
   }
 
   // 5. Locate Delta Report and publish via h1u0 publisher
+  // Strictly enforce attempt provenance: the report MUST be produced in this attempt's runDir
   const targetName = path.basename(rootDir);
   const candidateReportName = `${targetName}-${station}-delta.md`;
-  let foundReportPath = "";
-
-  // Check factory default findings dir and runDir
-  const searchDirs = [
-    runDir,
-    path.join(homedir(), "agents", "findings"),
-    path.join(privateDir, "findings"),
-  ];
-
-  for (const d of searchDirs) {
-    const p = path.join(d, candidateReportName);
-    if (existsSync(p)) {
-      foundReportPath = p;
-      break;
-    }
-  }
+  const candidateReportPath = path.join(runDir, candidateReportName);
+  const foundReportPath = existsSync(candidateReportPath) ? candidateReportPath : "";
 
   let publishExit = 0;
   if (foundReportPath) {
-    const privateReportCopy = path.join(runDir, candidateReportName);
-    if (foundReportPath !== privateReportCopy) {
-      copyFileSync(foundReportPath, privateReportCopy);
-    }
-
     console.log(`[review-trigger] Calling h1u0 publisher (scripts/factory-triage.mjs --file-issues --include-low) for ${candidateReportName}...`);
     try {
       const triageScript = path.join(rootDir, "scripts", "factory-triage.mjs");
       if (existsSync(triageScript)) {
-        const pubRes = spawnSync("node", [triageScript, "--report", privateReportCopy, "--repo", repo, "--file-issues", "--include-low"], {
+        const pubRes = spawnSync("node", [triageScript, "--report", foundReportPath, "--repo", repo, "--file-issues", "--include-low"], {
           cwd: rootDir,
           env: { ...env, VOICEBOX_FACTORY_PRIVATE_DIR: runDir },
           encoding: "utf8",

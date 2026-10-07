@@ -16,7 +16,7 @@
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,7 +29,7 @@ const ROOT = path.resolve(__dirname, "..");
 export function pollInboundIssues(args = process.argv.slice(2), { env = process.env, rootDir = ROOT } = {}) {
   let repo = env.VOICEBOX_FACTORY_REPO || "PaulKinlan/voicebox";
   let privateDir = env.VOICEBOX_FACTORY_PRIVATE_DIR || path.join(homedir(), ".voicebox", "factory-reports");
-  let cursorFile = path.join(privateDir, "factory-issue-cursor.json");
+  let cursorFile = "";
   let limit = 30;
   let dryRun = false;
 
@@ -46,6 +46,10 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
     } else if (a === "--dry-run") {
       dryRun = true;
     }
+  }
+
+  if (!cursorFile) {
+    cursorFile = path.join(privateDir, "factory-issue-cursor.json");
   }
 
   mkdirSync(privateDir, { recursive: true });

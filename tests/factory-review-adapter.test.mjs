@@ -13,6 +13,7 @@ import {
 } from "../tools/factory-issue-router.mjs";
 import { formatTriageComment, sanitizeFindingText } from "../tools/factory-issue-commenter.mjs";
 import { runReviewTrigger, parsePublisherSummary } from "../scripts/factory-review-trigger.mjs";
+import { pollInboundIssues } from "../scripts/factory-issue-poller.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -269,8 +270,8 @@ test("factory-review-trigger: CLI executes cleanly in dry-run mode with determin
 test("factory-review-trigger: parsePublisherSummary extracts safe summary and redacts secrets", () => {
   const dirtyOutput = [
     "[factory-triage] Beginning triage run...",
-    "published: 2",
-    "duplicate: 1",
+    "published: 2 with github_pat_11ABCD1234567890abcdefghijklmnopqrstuvwxyz",
+    "duplicate: 1 password=super-secret-password-val",
     "actionable: 3",
     "https://github.com/PaulKinlan/voicebox/issues/42",
     "raw finding details: password=super-secret-password-val and token github_pat_11ABCD1234567890abcdefghijklmnopqrstuvwxyz",
@@ -278,12 +279,42 @@ test("factory-review-trigger: parsePublisherSummary extracts safe summary and re
   ].join("\n");
 
   const safe = parsePublisherSummary(dirtyOutput);
-  assert.ok(safe.includes("[factory-triage]"));
-  assert.ok(safe.includes("published: 2"));
-  assert.ok(safe.includes("duplicate: 1"));
+  // [factory-triage] is not an accepted count line; strictly count lines and issue URLs survive
+  assert.ok(!safe.includes("[factory-triage]"));
+  assert.ok(safe.includes("published: 2 with [REDACTED]"));
+  assert.ok(safe.includes("duplicate: 1 password=[redacted]"));
   assert.ok(safe.includes("actionable: 3"));
   assert.ok(safe.includes("https://github.com/PaulKinlan/voicebox/issues/42"));
   assert.ok(!safe.includes("super-secret-password-val"));
   assert.ok(!safe.includes("github_pat_11ABCD1234567890abcdefghijklmnopqrstuvwxyz"));
   assert.ok(!safe.includes("internal debug stack trace"));
+});
+
+test("factory-issue-poller: pollInboundIssues processes issues cleanly in dry-run with rmSync isolation", () => {
+  const tmpDir = path.join(ROOT, "tests", "fixtures", "test-poller-tmp");
+  mkdirSync(tmpDir, { recursive: true });
+  const mockBinDir = path.join(tmpDir, "bin");
+  mkdirSync(mockBinDir, { recursive: true });
+  const mockGh = path.join(mockBinDir, "gh");
+  const sampleIssues = [
+    {
+      number: 101,
+      title: "Bug: slow boot",
+      body: "Investigate boot latency in client",
+      authorAssociation: "COLLABORATOR",
+      createdAt: "2026-10-07T00:00:00Z",
+      updatedAt: "2026-10-07T00:00:00Z",
+    },
+  ];
+  writeFileSync(mockGh, `#!/bin/sh\necho '${JSON.stringify(sampleIssues)}'\n`, { mode: 0o755 });
+
+  const result = pollInboundIssues(["--dry-run", "--limit", "1", "--private-dir", tmpDir], {
+    env: { ...process.env, PATH: `${mockBinDir}:${process.env.PATH}` },
+    rootDir: ROOT,
+  });
+  rmSync(tmpDir, { recursive: true, force: true });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.processedCount, 1);
 });
