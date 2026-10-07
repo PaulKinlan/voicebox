@@ -183,9 +183,33 @@ test("mini-app popover: anchored floating bubble, light-dismiss, and mobile draw
       draggingAttr: c.dataset.dragging,
     };
   });
-  assert.ok(Math.abs(afterDrag.dx - afterDrag.expectedDx) <= 2, `dragging header shifts left by the clamped ~-120px (got ${afterDrag.dx}, expected ${afterDrag.expectedDx})`);
-  assert.ok(Math.abs(afterDrag.dy - afterDrag.expectedDy) <= 2, `dragging header shifts top by the clamped ~-80px (got ${afterDrag.dy}, expected ${afterDrag.expectedDy})`);
+  assert.ok(Math.abs(afterDrag.dx - afterDrag.expectedDx) <= 2, `dragging header shifts left by the clamped pointer delta (got ${afterDrag.dx}, expected ${afterDrag.expectedDx})`);
+  assert.ok(Math.abs(afterDrag.dy - afterDrag.expectedDy) <= 2, `dragging header shifts top by the clamped pointer delta (got ${afterDrag.dy}, expected ${afterDrag.expectedDy})`);
   assert.equal(afterDrag.draggingAttr, undefined, "data-dragging attribute cleared on pointerup");
+
+  // Second large-delta drag (-4000, -4000) to test and pin absolute viewport clamp (voicebox-beads-oz6e)
+  const afterClampedDrag = await page.evaluate(() => {
+    const c = document.querySelector("#mini-app-container");
+    const h = document.querySelector("#mini-app-drag-handle");
+    const r0 = c.getBoundingClientRect();
+    const startX = r0.left + 40;
+    const startY = r0.top + 16;
+    h.dispatchEvent(new PointerEvent("pointerdown", { clientX: startX, clientY: startY, button: 0, pointerId: 1, bubbles: true }));
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: startX - 4000, clientY: startY - 4000, pointerId: 1, bubbles: true }));
+    window.dispatchEvent(new PointerEvent("pointerup", { clientX: startX - 4000, clientY: startY - 4000, pointerId: 1, bubbles: true }));
+    const r1 = c.getBoundingClientRect();
+    return {
+      before: { left: r0.left, top: r0.top },
+      geometry: { innerWidth: window.innerWidth, innerHeight: window.innerHeight, dpr: window.devicePixelRatio },
+      left: r1.left,
+      top: r1.top,
+      draggingAttr: c.dataset.dragging,
+    };
+  });
+  assert.ok(afterClampedDrag.before.left > 10 || afterClampedDrag.before.top > 10, `clamped drag started with headroom to travel (got left ${afterClampedDrag.before.left}, top ${afterClampedDrag.before.top} at ${afterClampedDrag.geometry.innerWidth}x${afterClampedDrag.geometry.innerHeight})`);
+  assert.ok(Math.abs(afterClampedDrag.left - 8) <= 2, `large negative drag clamps left flush to 8px margin (got ${afterClampedDrag.left}, expected ~8 at ${afterClampedDrag.geometry.innerWidth}x${afterClampedDrag.geometry.innerHeight})`);
+  assert.ok(Math.abs(afterClampedDrag.top - 8) <= 2, `large negative drag clamps top flush to 8px margin (got ${afterClampedDrag.top}, expected ~8 at ${afterClampedDrag.geometry.innerWidth}x${afterClampedDrag.geometry.innerHeight})`);
+  assert.equal(afterClampedDrag.draggingAttr, undefined, "data-dragging attribute cleared on pointerup after clamped drag");
 
   // Expand to full width and full height (#mini-app-expand)
   await page.evaluate(() => {
