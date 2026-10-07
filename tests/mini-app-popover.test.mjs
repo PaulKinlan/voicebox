@@ -168,14 +168,23 @@ test("mini-app popover: anchored floating bubble, light-dismiss, and mobile draw
     window.dispatchEvent(new PointerEvent("pointermove", { clientX: startX - 120, clientY: startY - 80, pointerId: 1, bubbles: true }));
     window.dispatchEvent(new PointerEvent("pointerup", { clientX: startX - 120, clientY: startY - 80, pointerId: 1, bubbles: true }));
     const r1 = c.getBoundingClientRect();
+    // voicebox-beads-p4ae: the drag CLAMPS to the viewport (left/top >= 8, and a max by the
+    // bubble's width and 48px bottom margin — the product's own constants from the drag handler),
+    // so the expected shift is the clamped one, derived from the bubble's actual start position.
+    // A drag that starts near the left edge legitimately moves less than the full pointer delta —
+    // measured as a gate flake: dx -115 against a hard-coded -120 ± 2 when startLeft was ~123.
+    const maxLeft = Math.max(8, window.innerWidth - Math.min(r0.width || 320, 160));
+    const maxTop = Math.max(8, window.innerHeight - 48);
     return {
       dx: Math.round(r1.left - r0.left),
       dy: Math.round(r1.top - r0.top),
+      expectedDx: Math.round(Math.max(8, Math.min(maxLeft, r0.left - 120)) - r0.left),
+      expectedDy: Math.round(Math.max(8, Math.min(maxTop, r0.top - 80)) - r0.top),
       draggingAttr: c.dataset.dragging,
     };
   });
-  assert.ok(Math.abs(afterDrag.dx - -120) <= 2, `dragging header shifts left by ~-120px (got ${afterDrag.dx})`);
-  assert.ok(Math.abs(afterDrag.dy - -80) <= 2, `dragging header shifts top by ~-80px (got ${afterDrag.dy})`);
+  assert.ok(Math.abs(afterDrag.dx - afterDrag.expectedDx) <= 2, `dragging header shifts left by the clamped ~-120px (got ${afterDrag.dx}, expected ${afterDrag.expectedDx})`);
+  assert.ok(Math.abs(afterDrag.dy - afterDrag.expectedDy) <= 2, `dragging header shifts top by the clamped ~-80px (got ${afterDrag.dy}, expected ${afterDrag.expectedDy})`);
   assert.equal(afterDrag.draggingAttr, undefined, "data-dragging attribute cleared on pointerup");
 
   // Expand to full width and full height (#mini-app-expand)
