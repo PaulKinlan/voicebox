@@ -202,6 +202,12 @@ If the comments describe **more than one** finding, promotion refuses and lists 
 findings while a bead carries one identity, so that choice is explicit rather than derived. An issue
 that neither its body nor its comments identify is refused by name.
 
+**The verdict is tied to a finding.** `--review` stamps the finding it is about
+(`<!-- factory-review-fingerprint: … -->`, automatic when the issue names exactly one), and promotion
+requires a verdict that names the identity being promoted: a verdict tied to a different finding is
+refused, and a thread that names several findings with a verdict that names none of them is refused as
+unreviewed. One verdict per finding; a review of the thread is not authorisation for any identity in it.
+
 `--comment` / `--issue-number` were **removed**: this script does not comment on existing issues. A
 caller using them gets a named refusal that points at the other lane's commenter, rather than a silent
 no-op.

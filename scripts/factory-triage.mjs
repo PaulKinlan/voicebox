@@ -539,11 +539,12 @@ export function triageMarkersFromComments(comments) {
     const station = read("station");
     const severity = read("severity");
     const state = read("state");
+    const rule = read("rule");
     for (const fingerprint of fingerprints) {
       // A comment describing several findings may carry one station block or several; the markers are
       // read per comment and applied to each fingerprint it names, which is why the shared format asks
       // for one block per finding.
-      found.push({ fingerprint, station, severity, state, humanReview: /<!--\s*factory-human-review\s*-->/.test(body) });
+      found.push({ fingerprint, station, severity, state, rule, humanReview: /<!--\s*factory-human-review\s*-->/.test(body) });
     }
   }
   return found;
@@ -573,14 +574,16 @@ export function markerFor(finding, verdict) {
  * "Review before bead" is only real if the evidence is on the artefact the promotion reads, so the
  * reviewer writes their verdict here and `--promote` refuses without it.
  */
-export function reviewComment(actor, notes) {
+export function reviewComment(actor, notes, fingerprint) {
   return [
     `Reviewed by ${actor}.${notes ? `\n\n${notes}` : ""}`,
     "",
-    "This issue may now be converted to a bead with `--promote`; the bead is BLOCKED if the finding",
-    "was flagged as a functionality change, and nothing is implemented before that decision is recorded.",
+    `Reviewed finding: \`${fingerprint ? fingerprint.slice(0, 16) : "the issue itself"}\`. It may now be`,
+    "converted to a bead with `--promote`; the bead is BLOCKED if the finding was flagged as a",
+    "functionality change, and nothing is implemented before that decision is recorded.",
     "",
     `<!-- factory-review: ${actor} -->`,
+    ...(fingerprint ? [`<!-- factory-review-fingerprint: ${fingerprint} -->`] : []),
   ].join("\n");
 }
 
@@ -599,6 +602,10 @@ export function parseMarkers(body) {
     humanReviewReason: read("human-review-reason"),
     promotedTo: (String(body).match(/<!--\s*factory-promoted:\s*(.*?)\s*-->/) ?? [])[1] ?? null,
     reviewedBy: (String(body).match(/<!--\s*factory-review:\s*(.*?)\s*-->/) ?? [])[1] ?? null,
+    // WHICH finding a verdict is about. Without it a verdict on an issue that names several findings
+    // says only "somebody looked at this thread", which is not enough to promote one identity from it.
+    reviewFingerprint: (String(body).match(/<!--\s*factory-review-fingerprint:\s*([0-9a-f]{16,64})\s*-->/) ?? [])[1] ?? null,
+    rule: read("rule"),
     selfTest: /<!--\s*factory-self-test\s*-->/.test(String(body)),
   };
 }
@@ -932,7 +939,8 @@ Options:
   --promote <number>           Convert a REVIEWED issue into a bead (the only bead path).
                                The issue is either one this publisher created, or a human-filed one
                                that carries triage markers in its comments (read-only)
-  --finding <fingerprint>      With --promote: which finding when the issue carries several
+  --finding <fingerprint>      With --promote/--review: which finding when the issue carries several
+                               (a verdict must be tied to the finding it is about)
   --notes <text>               Notes to record with --review
   --allow-closed               With --promote: allow a closed issue (default: refused)
   --allow-foreign-target       Publish a report whose target is not the --repo repository
@@ -1166,19 +1174,17 @@ function fileIssues(entries, { repo, target }) {
 }
 
 /** The only path that creates a bead: an explicit, reviewed promotion of a published issue. */
-function promote(opts, { repo, target }) {
-  const number = String(opts.promote);
-  const issue = readIssue(number, repo);
-  if (!issue) {
-    process.stderr.write(`could not read issue ${repo}#${number}\n`);
-    return 1;
-  }
-  const markers = parseMarkers(issue.body ?? "");
-  const triaged = triageMarkersFromComments(issue.comments);
-  // EVERY finding this issue identifies, in one list: the publisher's own body marker first, then the
-  // triage markers in the comments. An explicit --finding is validated against the WHOLE list, because
-  // validating it only when the body marker was absent meant a caller could ask for one finding and be
-  // handed another — including where the body and the comments name different findings.
+/**
+ * EVERY finding an issue identifies, in one list: the publisher's own body marker first, then the
+ * triage markers in the comments. Both `--review` and `--promote` resolve identity through THIS, so a
+ * verdict can be tied to the finding it is about and a promotion can require that tie.
+ *
+ * An explicit `--finding` is validated against the whole list, because validating it only when the body
+ * marker was absent meant a caller could ask for one finding and be handed another.
+ */
+export function resolveIssueIdentities(issue) {
+  const markers = parseMarkers(issue?.body ?? "");
+  const triaged = triageMarkersFromComments(issue?.comments);
   const candidates = [];
   if (markers.fingerprint) {
     candidates.push({
@@ -1188,7 +1194,7 @@ function promote(opts, { repo, target }) {
       state: markers.state,
       humanReview: markers.humanReview,
       humanReviewReason: markers.humanReviewReason,
-      ruleId: (issue.body.match(/\*\*Rule\*\*:\s*`([^`]+)`/) ?? [])[1] ?? "unclassified",
+      ruleId: (String(issue?.body ?? "").match(/\*\*Rule\*\*:\s*`([^`]+)`/) ?? [])[1] ?? "unclassified",
       source: "body",
     });
   }
@@ -1196,8 +1202,20 @@ function promote(opts, { repo, target }) {
     // The body marker is the issue's OWN identity: a comment repeating that fingerprint describes the
     // same finding, so it does not create a second candidate.
     if (candidates.some((candidate) => candidate.fingerprint === triageFinding.fingerprint)) continue;
-    candidates.push({ ...triageFinding, humanReviewReason: null, ruleId: "triaged", source: "comment" });
+    // The marker may name the rule; when it does not, the bead says `triaged` rather than inventing one.
+    candidates.push({ ...triageFinding, humanReviewReason: null, ruleId: triageFinding.rule ?? "triaged", source: "comment" });
   }
+  return { markers, triaged, candidates };
+}
+
+function promote(opts, { repo, target }) {
+  const number = String(opts.promote);
+  const issue = readIssue(number, repo);
+  if (!issue) {
+    process.stderr.write(`could not read issue ${repo}#${number}\n`);
+    return 1;
+  }
+  const { markers, triaged, candidates } = resolveIssueIdentities(issue);
   if (candidates.length === 0) {
     // Neither shape: this is an issue nothing has identified, and a bead needs an identity.
     process.stderr.write(
@@ -1249,6 +1267,24 @@ function promote(opts, { repo, target }) {
   }
   if (opts.reviewedBy && opts.reviewedBy !== reviewedBy) {
     process.stderr.write(`--reviewed-by ${opts.reviewedBy} does not match the reviewer recorded on ${repo}#${number} (${reviewedBy}): refusing\n`);
+    return 1;
+  }
+  // A verdict has to be about THIS finding. A review of the thread is not authorisation for any
+  // particular identity in it, so when the issue names several findings the recorded verdict must name
+  // the one being promoted; and a verdict naming a DIFFERENT finding never authorises this one.
+  const reviewFingerprints = new Set(
+    comments.map((c) => parseMarkers(c?.body ?? "").reviewFingerprint).filter(Boolean),
+  );
+  if (reviewFingerprints.size > 0 && !reviewFingerprints.has(identity.fingerprint)) {
+    process.stderr.write(
+      `the review on ${repo}#${number} is tied to ${[...reviewFingerprints].map((f) => f.slice(0, 16)).join(", ")} but this promotion is for ${identity.fingerprint.slice(0, 16)}: refusing to promote a finding nobody reviewed\n`,
+    );
+    return 1;
+  }
+  if (reviewFingerprints.size === 0 && candidates.length > 1) {
+    process.stderr.write(
+      `${repo}#${number} names ${candidates.length} findings and its review record is tied to none of them: re-record it with \`--review <number> --reviewed-by <actor> --finding <fingerprint>\`, then promote that finding\n`,
+    );
     return 1;
   }
   // The marker is posted as a COMMENT (that is where a receipt belongs), so a body-only check misses
@@ -1367,12 +1403,37 @@ function main(argv) {
       process.stderr.write(`could not read issue ${repo}#${opts.review}\n`);
       return 1;
     }
-    const res = gh(["issue", "comment", String(opts.review), "--body", reviewComment(opts.reviewedBy, opts.notes)], { repo });
+    // Which finding is this verdict about? An explicit --finding wins; otherwise, when the issue names
+    // exactly one finding, that is the only thing the verdict can be about and it is stamped. When the
+    // issue names several, a verdict that names none authorises nothing in particular, so it refuses
+    // rather than letting a later promotion pick one of them on the strength of "somebody reviewed".
+    const identity = resolveIssueIdentities(issue);
+    let reviewed = null;
+    if (identity.candidates.length > 0) {
+      if (opts.finding) {
+        const matches = identity.candidates.filter((c) => c.fingerprint.toLowerCase().startsWith(String(opts.finding).toLowerCase()));
+        if (matches.length !== 1) {
+          process.stderr.write(
+            `--finding ${opts.finding} matches ${matches.length} of the findings on ${repo}#${opts.review} (${identity.candidates.map((c) => c.fingerprint.slice(0, 16)).join(", ")}): refusing to record a verdict for a finding that is not there\n`,
+          );
+          return 1;
+        }
+        reviewed = matches[0].fingerprint;
+      } else if (identity.candidates.length === 1) {
+        reviewed = identity.candidates[0].fingerprint;
+      } else {
+        process.stderr.write(
+          `${repo}#${opts.review} names ${identity.candidates.length} findings (${identity.candidates.map((c) => c.fingerprint.slice(0, 16)).join(", ")}): pass --finding <fingerprint> so the verdict is tied to the finding it is about\n`,
+        );
+        return 1;
+      }
+    }
+    const res = gh(["issue", "comment", String(opts.review), "--body", reviewComment(opts.reviewedBy, opts.notes, reviewed)], { repo });
     if (res.error || res.status !== 0) {
       process.stderr.write(`could not record the review: ${res.stderr || res.error}\n`);
       return 1;
     }
-    process.stdout.write(`recorded: ${repo}#${opts.review} reviewed by ${opts.reviewedBy}\n`);
+    process.stdout.write(`recorded: ${repo}#${opts.review} reviewed by ${opts.reviewedBy}${reviewed ? ` (finding ${reviewed.slice(0, 16)})` : ""}\n`);
     return 0;
   }
   if (opts.promote) return promote(opts, { repo, target });

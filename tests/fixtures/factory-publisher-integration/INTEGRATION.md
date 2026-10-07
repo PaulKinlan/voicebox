@@ -34,7 +34,7 @@ everything already published, or every finding already published).
 READ-ONLY SEAM (coord's ruling): your commenter owns the existing-issue comment surface; my
 `--promote` reads these markers from the comments and writes none of them:
 `<!-- factory-triage-comment: <hex> -->` (required), `<!-- factory-station: ... -->`,
-`<!-- factory-severity: ... -->`, `<!-- factory-state: ... -->`.
+`<!-- factory-severity: ... -->`, `<!-- factory-state: ... -->`, `<!-- factory-rule: ... -->`.
 
 Only the fingerprint is required. `factory-station` and `factory-severity` are inherited by the bead, and
 `factory-state` is recorded as-is. Two fallbacks you should know about, because they change what the bead
@@ -50,8 +50,13 @@ fingerprint in a thread, `--promote` refuses unless `--finding <prefix>` says wh
 for. `--comment`/`--issue-number` were REMOVED from my script and are refused by name.
 
 `--promote` requires the review record to already exist: `--review <n> --reviewed-by <actor>` posts
-`<!-- factory-review: <actor> -->` on the issue, and promotion refuses without it. On the promotion
-call `--reviewed-by` is optional and is only a cross-check that must match the recorded reviewer.
+`<!-- factory-review: <actor> -->` on the issue, and promotion refuses without it. The verdict is TIED TO A
+FINDING: `--review` stamps `<!-- factory-review-fingerprint: <hex> -->` for the one finding it is about
+(automatic when the issue names exactly one), and `--promote` refuses when the verdict names a different
+finding, or when a thread naming several findings carries a verdict that names none of them — record one
+verdict per finding with `--review <n> --reviewed-by <actor> --finding <fingerprint>`. A verdict on the
+thread is not authorisation for any particular identity in it. On the promotion call `--reviewed-by` is
+optional and is only a cross-check that must match the recorded reviewer.
 
 Env/inputs: report must be OUTSIDE the repo tree (default root `$VOICEBOX_FACTORY_PRIVATE_DIR`
 else `~/.voicebox/factory-reports`); `--repo` or `$VOICEBOX_FACTORY_REPO` is required for any mode

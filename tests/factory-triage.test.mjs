@@ -2351,12 +2351,18 @@ test("READ-ONLY INBOUND PROMOTION: several findings need --finding, and it refus
     { body: `<!-- factory-triage-comment: ${a} -->\n<!-- factory-station: qa-station -->\n<!-- factory-severity: medium -->\n<!-- factory-state: new -->` },
     { body: `<!-- factory-triage-comment: ${b} -->\n<!-- factory-station: docs-drift -->\n<!-- factory-severity: low -->\n<!-- factory-state: regressed -->` },
   ];
-  const issue = JSON.stringify({
+  const untiedIssue = JSON.stringify({
     number: 42, state: "OPEN", title: "Several things at once", url: "https://example.invalid/42", labels: [],
     body: "human words", comments: [...comments, { body: "<!-- factory-review: alice -->" }],
   });
+  const tiedIssue = (fingerprint) =>
+    JSON.stringify({
+      number: 42, state: "OPEN", title: "Several things at once", url: "https://example.invalid/42", labels: [],
+      body: "human words",
+      comments: [...comments, { body: `<!-- factory-review: alice -->\n<!-- factory-review-fingerprint: ${fingerprint} -->` }],
+    });
 
-  const ambiguous = runCli({ args: ["--promote", "42", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(issue) });
+  const ambiguous = runCli({ args: ["--promote", "42", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(tiedIssue(b)) });
   try {
     assert.equal(ambiguous.status, 1, `an ambiguous promotion was allowed: ${ambiguous.stdout}`);
     assert.match(ambiguous.stderr, /carries 2 findings/);
@@ -2368,7 +2374,7 @@ test("READ-ONLY INBOUND PROMOTION: several findings need --finding, and it refus
 
   const chosen = runCli({
     args: ["--promote", "42", "--finding", b.slice(0, 16), "--apply", "--repo", "owner/voicebox"],
-    stubGh: ghStubViewing(issue),
+    stubGh: ghStubViewing(tiedIssue(b)),
   });
   try {
     assert.equal(chosen.status, 0, chosen.stderr);
@@ -2379,8 +2385,30 @@ test("READ-ONLY INBOUND PROMOTION: several findings need --finding, and it refus
     rmSync(chosen.box, { recursive: true, force: true });
   }
 
+  // NEGATIVE CONTROL (coord): a thread with several findings whose verdict is tied to NONE of them
+  // authorises no particular identity, so the promotion refuses instead of picking one.
+  const untied = runCli({ args: ["--promote", "42", "--finding", b.slice(0, 16), "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(untiedIssue) });
+  try {
+    assert.equal(untied.status, 1, `an untied verdict authorised a promotion: ${untied.stdout}`);
+    assert.match(untied.stderr, /is tied to none of them/);
+    assert.match(untied.stderr, /--review <number> --reviewed-by <actor> --finding <fingerprint>/);
+    assert.equal(untied.bdCalls.length, 0, "an untied verdict reached bd");
+  } finally {
+    rmSync(untied.box, { recursive: true, force: true });
+  }
+
+  // ...and a verdict tied to a DIFFERENT finding never authorises this one.
+  const wrongTie = runCli({ args: ["--promote", "42", "--finding", b.slice(0, 16), "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(tiedIssue(a)) });
+  try {
+    assert.equal(wrongTie.status, 1, `a verdict for another finding authorised this one: ${wrongTie.stdout}`);
+    assert.match(wrongTie.stderr, /but this promotion is for/);
+    assert.equal(wrongTie.bdCalls.length, 0, "a mismatched verdict reached bd");
+  } finally {
+    rmSync(wrongTie.box, { recursive: true, force: true });
+  }
+
   // A prefix matching nothing, or more than one, is refused rather than guessed.
-  const noMatch = runCli({ args: ["--promote", "42", "--finding", "ffff", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(issue) });
+  const noMatch = runCli({ args: ["--promote", "42", "--finding", "ffff", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(tiedIssue(b)) });
   try {
     assert.equal(noMatch.status, 1);
     assert.match(noMatch.stderr, /--finding ffff matches 0 of the findings/);
@@ -2679,12 +2707,14 @@ test("--finding IS validated against the body fingerprint too (round 6 P1)", () 
     body: `<!-- factory-fingerprint: ${bodyFp} -->\n<!-- factory-station: qa-station -->\n<!-- factory-severity: high -->\n<!-- factory-state: new -->`,
     comments: [{ body: "<!-- factory-review: alice -->" }],
   });
+  // A thread can carry a verdict per finding: that is what makes promoting either of them legitimate.
   const both = JSON.stringify({
     number: 5, state: "OPEN", title: "[factory/high] qa-station: stub", url: "https://example.invalid/5", labels: [],
     body: `<!-- factory-fingerprint: ${bodyFp} -->\n<!-- factory-station: qa-station -->\n<!-- factory-severity: high -->\n<!-- factory-state: new -->`,
     comments: [
       { body: `<!-- factory-triage-comment: ${commentFp} -->\n<!-- factory-station: docs-drift -->\n<!-- factory-severity: low -->` },
-      { body: "<!-- factory-review: alice -->" },
+      { body: `<!-- factory-review: alice -->\n<!-- factory-review-fingerprint: ${bodyFp} -->` },
+      { body: `<!-- factory-review: alice -->\n<!-- factory-review-fingerprint: ${commentFp} -->` },
     ],
   });
 
@@ -2730,5 +2760,68 @@ test("A MALFORMED --repo refuses cleanly, without an unhandled crash (round 6 P2
     } finally {
       rmSync(res.box, { recursive: true, force: true });
     }
+  }
+});
+
+test("--review TIES the verdict to a finding: refused when the thread names several and none is chosen (coord's decision)", () => {
+  const a = "3c".repeat(32);
+  const b = "4d".repeat(32);
+  const issueWith = (fingerprints) =>
+    JSON.stringify({
+      number: 9, state: "OPEN", title: "Thread", url: "https://example.invalid/9", labels: [], body: "human words",
+      comments: fingerprints.map((fp) => `<!-- factory-triage-comment: ${fp} -->`).map((body) => ({ body })),
+    });
+  const many = ghStubViewing(issueWith([a, b]));
+  const one = ghStubViewing(issueWith([a]));
+
+  const untied = runCli({ args: ["--review", "9", "--reviewed-by", "alice", "--repo", "owner/voicebox"], stubGh: many });
+  const tied = runCli({ args: ["--review", "9", "--reviewed-by", "alice", "--finding", b.slice(0, 16), "--repo", "owner/voicebox"], stubGh: many });
+  const wrong = runCli({ args: ["--review", "9", "--reviewed-by", "alice", "--finding", "ffff", "--repo", "owner/voicebox"], stubGh: many });
+  const solo = runCli({ args: ["--review", "9", "--reviewed-by", "alice", "--repo", "owner/voicebox"], stubGh: one });
+  try {
+    // Several findings, no choice: the verdict would authorise nothing in particular.
+    assert.equal(untied.status, 1, `a thread-level verdict was recorded: ${untied.stdout}`);
+    assert.match(untied.stderr, /pass --finding <fingerprint> so the verdict is tied to the finding it is about/);
+    assert.ok(!untied.ghCalls.some((c) => c.startsWith("issue comment")), "an untied verdict was posted");
+
+    // Chosen: the recorded comment names the finding.
+    assert.equal(tied.status, 0, tied.stderr);
+    const posted = tied.ghCalls.find((c) => c.startsWith("issue comment"));
+    assert.ok(posted, `no review comment posted: ${tied.ghCalls.join(" | ")}`);
+    assert.match(posted, new RegExp(`factory-review-fingerprint: ${b}`), `the verdict was not tied to the finding: ${posted}`);
+    assert.match(tied.stdout, /finding 4d4d4d4d4d4d4d4d/);
+
+    // A verdict for a finding the thread does not name is refused.
+    assert.equal(wrong.status, 1, `a verdict was recorded for a finding that is not there: ${wrong.stdout}`);
+    assert.match(wrong.stderr, /refusing to record a verdict for a finding that is not there/);
+
+    // One finding: the verdict can only be about it, so it is stamped without asking.
+    assert.equal(solo.status, 0, solo.stderr);
+    const soloPosted = solo.ghCalls.find((c) => c.startsWith("issue comment"));
+    assert.match(soloPosted, new RegExp(`factory-review-fingerprint: ${a}`), `a single-finding verdict was left untied: ${soloPosted}`);
+  } finally {
+    for (const res of [untied, tied, wrong, solo]) rmSync(res.box, { recursive: true, force: true });
+  }
+});
+
+test("A RULE marker from a triage comment reaches the bead, and its absence says `triaged` rather than inventing one", () => {
+  const fp = "5e".repeat(32);
+  const issue = (withRule) =>
+    JSON.stringify({
+      number: 11, state: "OPEN", title: "Inbound", url: "https://example.invalid/11", labels: [], body: "human words",
+      comments: [
+        { body: `<!-- factory-triage-comment: ${fp} -->\n<!-- factory-station: qa-station -->\n<!-- factory-severity: medium -->\n<!-- factory-state: new -->${withRule ? "\n<!-- factory-rule: flake-instrumentation -->" : ""}` },
+        { body: `<!-- factory-review: alice -->\n<!-- factory-review-fingerprint: ${fp} -->` },
+      ],
+    });
+  const withRule = runCli({ args: ["--promote", "11", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(issue(true)) });
+  const without = runCli({ args: ["--promote", "11", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(issue(false)) });
+  try {
+    const withCreate = withRule.bdCalls.find((c) => c.startsWith("create"));
+    assert.match(withCreate, /flake-instrumentation/, `the rule marker did not reach the bead: ${withCreate}`);
+    const withoutCreate = without.bdCalls.find((c) => c.startsWith("create"));
+    assert.match(withoutCreate, /Rule: triaged/, `the absence of a rule marker was not reported as such: ${withoutCreate}`);
+  } finally {
+    for (const res of [withRule, without]) rmSync(res.box, { recursive: true, force: true });
   }
 });
