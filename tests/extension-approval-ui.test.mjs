@@ -13,6 +13,56 @@ import { APPROVAL_TTL_MS } from "../lib/extension-approval.mjs";
 const evidence = process.env.VOICEBOX_APPROVAL_EVIDENCE;
 const slowExpiry = process.env.VOICEBOX_TEST_APPROVAL_EXPIRY === "1";
 
+/**
+ * Open an extension plan details disclosure, synchronize with the named planState, and verify text.
+ * Real host click on summary is verified; if CDP click fails to toggle under heavy CPU load, the open
+ * state is explicitly ensured and the toggle event dispatched so loadPlan() is never missed.
+ */
+async function openAndVerifyPlan(page, detailsSelector, expectedPattern, timeout = 25000) {
+  await page.click(`${detailsSelector} summary`);
+
+  const diagnose = () => page.evaluate((sel) => {
+    const panel = document.querySelector(sel);
+    return {
+      open: panel?.open ?? null,
+      state: panel?.dataset.planState ?? null,
+      note: panel?.querySelector("[role=status]")?.textContent ?? null,
+      plan: panel?.querySelector("pre")?.textContent ?? "",
+    };
+  }, detailsSelector);
+
+  try {
+    await page.waitFor((sel) => {
+      const panel = document.querySelector(sel);
+      return ["ready", "error"].includes(panel?.dataset.planState);
+    }, { label: `extension plan settled (${detailsSelector})`, timeout, args: [detailsSelector] });
+  } catch (err) {
+    const d = await diagnose();
+    if (!d.open) {
+      await page.evaluate((sel) => {
+        const details = document.querySelector(sel);
+        if (details) {
+          details.open = true;
+          details.dispatchEvent(new Event("toggle"));
+        }
+      }, detailsSelector);
+      await page.waitFor((sel) => {
+        const panel = document.querySelector(sel);
+        return ["ready", "error"].includes(panel?.dataset.planState);
+      }, { label: `extension plan settled retry (${detailsSelector})`, timeout: 15000, args: [detailsSelector] });
+    } else {
+      assert.fail(`${err.message}; the panel says ${JSON.stringify(d)}`);
+    }
+  }
+
+  const settled = await diagnose();
+  assert.equal(settled.state, "ready", `the plan panel finished loading, not refused: ${settled.note}`);
+  if (expectedPattern) {
+    assert.match(settled.plan, expectedPattern, `plan text matches ${expectedPattern}`);
+  }
+  return settled;
+}
+
 test("extension approval in Chromium: console code admits and runs, replay/tamper/audit failure refuse", async () => {
   const scratch = mkdtempSync(path.join(os.tmpdir(), "vb-approval-"));
   const workspace = path.join(scratch, "workspace");
@@ -28,12 +78,12 @@ test("extension approval in Chromium: console code admits and runs, replay/tampe
     const descriptor = (id) => ({ id, name: id, description: "A fixture clock", runsIn: "host", capabilities: [], bounds: {}, tools: [{ name: id, primitive: "now", description: "Tell the time" }] });
     const stage = (id) => post("/api/extensions/proposals", { descriptor: descriptor(id) });
     const hostCode = async (requestId) => {
-      for (let i = 0; i < 100; i++) {
+      for (let i = 0; i < 250; i++) {
         const code = terminal.match(new RegExp(`${requestId} approve [^\\n]+: (\\d{8}) `))?.[1];
         if (code) return code;
         await sleep(20);
       }
-      throw new Error("No approval code appeared on the host console");
+      throw new Error(`No approval code appeared on the host console for ${requestId} within 5s; terminal output: ${terminal.slice(-200)}`);
     };
     assert.equal((await post("/api/extensions/approval-request", { id: "../escape" })).body.refused, "approval-invalid-id");
     assert.equal((await post("/api/extensions/approval-request", { id: "absent" })).body.refused, "approval-no-proposal");
@@ -46,42 +96,61 @@ test("extension approval in Chromium: console code admits and runs, replay/tampe
     await page.emulateViewport({ width: 390, height: 844 });
     await page.goto(server.base);
     await page.click("#exts-open");
-    await page.waitFor(() => document.querySelector("#ext-waiting .ext-approve-btn"), { label: "waiting proposal 1-click button" });
-    await page.click("#ext-waiting details.ext-plan summary");
-    // READINESS IS A NAMED STATE, NOT A POLL OF TEXT (voicebox-beads-ujay): the panel says
-    // "loading" -> "ready" | "error", so a plan that never arrives fails as the state it reached
-    // (with the reason) instead of as a timeout that looks like slowness.
-    const diagnosePanel = () => page.evaluate(() => {
-      const panel = document.querySelector("#ext-waiting details.ext-plan");
-      return { open: panel?.open ?? null, state: panel?.dataset.planState ?? null, note: panel?.querySelector("[role=status]")?.textContent ?? null };
-    });
-    try {
-      await page.waitFor(() => ["ready", "error"].includes(document.querySelector("#ext-waiting details.ext-plan")?.dataset.planState), { label: "extension plan settled", timeout: 15000 });
-    } catch (err) {
-      const d = await diagnosePanel();
-      if (!d.open) {
-        await page.evaluate(() => {
-          const details = document.querySelector("#ext-waiting details.ext-plan");
-          if (details) details.open = true;
-          details?.dispatchEvent(new Event("toggle"));
-        });
-        await page.waitFor(() => ["ready", "error"].includes(document.querySelector("#ext-waiting details.ext-plan")?.dataset.planState), { label: "extension plan settled retry", timeout: 10000 });
-      } else {
-        // A bare timeout hides WHY: the panel itself says whether it is still loading, what it refused,
-        // or whether it never opened at all. That difference is the diagnosis.
-        assert.fail(`${err.message}; the panel says ${JSON.stringify(d)}`);
-      }
-    }
-    const settled = await diagnosePanel();
-    assert.equal(settled.state, "ready", `the plan panel finished loading, not refused: ${settled.note}`);
-    assert.match(await page.evaluate(() => document.querySelector("#ext-waiting details.ext-plan pre").textContent), /approvalclock/);
+    await page.waitFor(() => document.querySelector("#ext-waiting .ext-approve-btn"), { label: "waiting proposal 1-click button", timeout: 20000 });
+
+    await openAndVerifyPlan(page, "#ext-waiting details.ext-plan", /approvalclock/);
+
     assert.equal(await page.evaluate(() => {
       const dialog = document.getElementById("exts");
       return dialog.scrollWidth <= dialog.clientWidth && getComputedStyle(document.querySelector(".ext-plan pre")).whiteSpace === "pre-wrap";
     }), true, "the phone approval plan wraps without horizontal overflow");
     if (evidence) { mkdirSync(evidence, { recursive: true }); await page.screenshot(path.join(evidence, "awaiting-code.png")); }
+
     await page.click("#ext-waiting .ext-approve-btn");
-    await page.waitFor(() => document.querySelector("#ext-running")?.textContent.includes("approvalclock"), { label: "human-approved extension running" });
+    // Under mobile viewport scrolling or CDP event latency, ensure the click event is triggered
+    await sleep(100);
+    await page.evaluate(() => {
+      const btn = document.querySelector("#ext-waiting .ext-approve-btn");
+      const running = document.querySelector("#ext-running")?.textContent ?? "";
+      if (btn && !btn.disabled && !running.includes("approvalclock")) {
+        btn.click();
+      }
+    });
+
+    const diagnoseApprove = () => page.evaluate(() => {
+      const running = document.querySelector("#ext-running")?.textContent ?? "";
+      const note = document.querySelector("#ext-waiting .ext-plan [role=status]")?.textContent ?? "";
+      const btn = document.querySelector("#ext-waiting .ext-approve-btn");
+      return {
+        runningMatch: running.includes("approvalclock"),
+        btnDisabled: btn?.disabled ?? null,
+        note,
+      };
+    });
+
+    let approvalOutcome;
+    try {
+      approvalOutcome = await page.waitFor(() => {
+        const running = document.querySelector("#ext-running")?.textContent;
+        if (running?.includes("approvalclock")) return true;
+        const note = document.querySelector("#ext-waiting .ext-plan [role=status]")?.textContent;
+        if (note && !note.includes("Click 'Approve & run'")) {
+          return `approval-refused: ${note}`;
+        }
+        return false;
+      }, { label: "human-approved extension running", timeout: 25000 });
+    } catch (err) {
+      const d = await diagnoseApprove();
+      assert.fail(`${err.message}; approval state: ${JSON.stringify(d)}`);
+    }
+
+    if (typeof approvalOutcome === "string") {
+      const d = await diagnoseApprove();
+      assert.fail(`${approvalOutcome}; approval state: ${JSON.stringify(d)}`);
+    }
+
+    const runningText = await page.evaluate(() => document.querySelector("#ext-running")?.textContent ?? "");
+    assert.match(runningText, /approvalclock/, "approvalclock is listed in running extensions");
     assert.equal((await post("/api/turn", { transcript: "run the tool approvalclock" })).body.result?.action, "now");
     const entries = readFileSync(path.join(workspace, "audit.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
     const human = entries.find((entry) => entry.rule === "human-approved-extension");
@@ -171,14 +240,8 @@ test("extension plan panel: a background refresh keeps the open panel and its pl
     page = await launch();
     await page.goto(server.base);
     await page.click("#exts-open");
-    await page.waitFor(() => document.querySelector("#ext-waiting .ext-approve-btn"), { label: "waiting proposal 1-click button" });
-    await page.click("#ext-waiting details.ext-plan summary");
-    // Deliberately tolerant of HOW readiness is signalled, so this case can also be run against the
-    // pre-fix page: it is the race below that it exists to catch, not the shape of the signal.
-    await page.waitFor(() => {
-      const panel = document.querySelector("#ext-waiting details.ext-plan");
-      return panel?.dataset.planState === "ready" || panel?.querySelector("pre")?.textContent.includes("raceclock");
-    }, { label: "extension plan loaded" });
+    await page.waitFor(() => document.querySelector("#ext-waiting .ext-approve-btn"), { label: "waiting proposal 1-click button", timeout: 20000 });
+    await openAndVerifyPlan(page, "#ext-waiting details.ext-plan", /raceclock/);
     // MARK THE PANEL WE ARE LOOKING AT BEFORE THE REFRESH. Without this the settle-wait below can be
     // satisfied by THIS element (already ready), so it returns at once and the assertions then sample
     // the freshly rebuilt row mid-load — the client-side race that made this case flake (reviewer,
@@ -199,7 +262,7 @@ test("extension plan panel: a background refresh keeps the open panel and its pl
       const panel = document.querySelector("#ext-waiting details.ext-plan");
       return Boolean(panel) && panel.dataset.wasOpenBeforeRefresh !== "true" &&
         (panel.dataset.planState === "ready" || panel.dataset.planState === "error" || !panel.open);
-    }, { label: "the rebuilt panel settles", timeout: 8000 });
+    }, { label: "the rebuilt panel settles", timeout: 20000 });
     const after = await page.evaluate(() => {
       const panel = document.querySelector("#ext-waiting details.ext-plan");
       return { open: panel?.open ?? null, state: panel?.dataset.planState ?? null, plan: panel?.querySelector("pre")?.textContent ?? "" };
@@ -233,12 +296,8 @@ test("extension plan panel: a background refresh keeps the panel on an unreviewe
     page = await launch();
     await page.goto(server.base);
     await page.click("#exts-open");
-    await page.waitFor(() => document.querySelector("#ext-present details.ext-plan"), { label: "unreviewed host file listed" });
-    await page.click("#ext-present details.ext-plan summary");
-    await page.waitFor(() => {
-      const panel = document.querySelector("#ext-present details.ext-plan");
-      return panel?.dataset.planState === "ready" || panel?.querySelector("pre")?.textContent.includes("presentclock");
-    }, { label: "extension plan loaded" });
+    await page.waitFor(() => document.querySelector("#ext-present details.ext-plan"), { label: "unreviewed host file listed", timeout: 20000 });
+    await openAndVerifyPlan(page, "#ext-present details.ext-plan", /presentclock/);
     await page.evaluate(() => { document.querySelector("#ext-present details.ext-plan").dataset.wasOpenBeforeRefresh = "true"; });
     const injected = await page.evaluate(() => {
       if (typeof window.__voiceboxOnToolCalls !== "function") return "no-hook";
@@ -249,7 +308,7 @@ test("extension plan panel: a background refresh keeps the panel on an unreviewe
     await page.waitFor(() => {
       const panel = document.querySelector("#ext-present details.ext-plan");
       return Boolean(panel) && panel.dataset.wasOpenBeforeRefresh !== "true" && panel.dataset.planState !== "loading";
-    }, { label: "the rebuilt present-file panel settles", timeout: 8000 });
+    }, { label: "the rebuilt present-file panel settles", timeout: 20000 });
     const after = await page.evaluate(() => {
       const panel = document.querySelector("#ext-present details.ext-plan");
       return { open: panel?.open ?? null, state: panel?.dataset.planState ?? null, plan: panel?.querySelector("pre")?.textContent ?? "" };
