@@ -2195,10 +2195,17 @@ function resolveWorkSubdir(explicitDir) {
   };
 }
 
+// voicebox-beads-8d3n: the cap is HARD, enforced inside the traversal, not only at walk entry
+// (a single directory of N repos used to push all N, and since 3017 those N probes fan out in
+// one Promise.all). The probes are additionally pooled so a turn never owns more than
+// MAX_GIT_PROBE_CONCURRENCY git spawns at once.
+const MAX_GIT_SUBREPOS = 15;
+const MAX_GIT_PROBE_CONCURRENCY = 4;
+
 async function discoverGitSubrepos(rootPath, maxDepth = 2) {
   const found = [];
   async function walk(curr, relDir, depth) {
-    if (depth > maxDepth || found.length >= 15) return;
+    if (depth > maxDepth || found.length >= MAX_GIT_SUBREPOS) return;
     let dirents;
     try {
       dirents = await readdirAsync(curr, { withFileTypes: true });
@@ -2206,6 +2213,7 @@ async function discoverGitSubrepos(rootPath, maxDepth = 2) {
       return;
     }
     for (const ent of dirents.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (found.length >= MAX_GIT_SUBREPOS) break;
       if (!ent.isDirectory() || ent.name.startsWith(".") || IGNORED_GREP_DIRS.has(ent.name)) continue;
       const full = path.join(curr, ent.name);
       const rel = relDir ? `${relDir}/${ent.name}` : ent.name;
@@ -2218,6 +2226,24 @@ async function discoverGitSubrepos(rootPath, maxDepth = 2) {
   }
   await walk(rootPath, "", 1);
   return found;
+}
+
+/**
+ * Run one probe per discovered subrepo with BOUNDED fan-out. Results stay in discovery order
+ * (indexed by position, never completion order — 3017), and one broken subrepo drops only
+ * itself (a probe that throws becomes a null that is filtered).
+ */
+async function probeSubrepos(subs, probe) {
+  const results = new Array(subs.length).fill(null);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(MAX_GIT_PROBE_CONCURRENCY, subs.length) }, async () => {
+    while (next < subs.length) {
+      const i = next++;
+      try { results[i] = await probe(subs[i]); } catch { /* one broken subrepo drops only itself */ }
+    }
+  });
+  await Promise.all(workers);
+  return results.filter(Boolean);
 }
 
 async function resolveGitTargets(explicitDir) {
@@ -2808,25 +2834,22 @@ async function execute(action) {
       const parsed = parseGitStatusOutput(statusOutput);
       const subrepositories = [];
       if (gitTargets.discoveredFromSandbox || gitTargets.subrepos.length > 1) {
-        // voicebox-beads-3017: the probes are independent — run them in PARALLEL (Promise.all
-        // preserves the discovery order in the result array), each with its own catch so one
-        // broken subrepo drops only itself, exactly as the sequential loop did.
-        const probed = await Promise.all(gitTargets.subrepos.map(async (sub) => {
-          try {
-            const subOut = await runProjectGit(sub.path, ["status", "--porcelain=v1", "--branch", "-u"]);
-            const subParsed = parseGitStatusOutput(subOut);
-            return {
-              dir: sub.dir,
-              branch: subParsed.branch,
-              upstream: subParsed.upstream,
-              ahead: subParsed.ahead,
-              behind: subParsed.behind,
-              dirty: subParsed.dirty,
-              files: subParsed.files,
-            };
-          } catch { return null; }
-        }));
-        for (const row of probed) if (row) subrepositories.push(row);
+        // voicebox-beads-3017/8d3n: independent probes, bounded fan-out, discovery order kept,
+        // one broken subrepo drops only itself.
+        const probed = await probeSubrepos(gitTargets.subrepos, async (sub) => {
+          const subOut = await runProjectGit(sub.path, ["status", "--porcelain=v1", "--branch", "-u"]);
+          const subParsed = parseGitStatusOutput(subOut);
+          return {
+            dir: sub.dir,
+            branch: subParsed.branch,
+            upstream: subParsed.upstream,
+            ahead: subParsed.ahead,
+            behind: subParsed.behind,
+            dirty: subParsed.dirty,
+            files: subParsed.files,
+          };
+        });
+        for (const row of probed) subrepositories.push(row);
       }
       const entry = logAct({ kind: "git_status", target: target.label, tool: "turn" }, "allow", "git-inside", "ok", { branch: parsed.branch, filesCount: parsed.files.length, dirty: parsed.dirty }, action.turn ?? null);
       return {
@@ -2919,19 +2942,15 @@ async function execute(action) {
       }) : [];
       const subrepositories = [];
       if (gitTargets.discoveredFromSandbox || gitTargets.subrepos.length > 1) {
-        // voicebox-beads-3017: same parallelization as git_status — independent probes in
-        // parallel, discovery order preserved by Promise.all, one broken subrepo drops only itself.
-        const probed = await Promise.all(gitTargets.subrepos.map(async (sub) => {
-          try {
-            const subLog = await runProjectGit(sub.path, ["log", `-n${limit}`, "--format=%H%x1f%an%x1f%aI%x1f%s"]);
-            const subCommits = subLog ? subLog.split("\n").filter(Boolean).map((line) => {
-              const [hash, author, date, message] = line.split("\x1f");
-              return { hash, author, date, message, dir: sub.dir };
-            }) : [];
-            return { dir: sub.dir, commits: subCommits, count: subCommits.length };
-          } catch { return null; }
-        }));
-        for (const row of probed) if (row) subrepositories.push(row);
+        const probed = await probeSubrepos(gitTargets.subrepos, async (sub) => {
+          const subLog = await runProjectGit(sub.path, ["log", `-n${limit}`, "--format=%H%x1f%an%x1f%aI%x1f%s"]);
+          const subCommits = subLog ? subLog.split("\n").filter(Boolean).map((line) => {
+            const [hash, author, date, message] = line.split("\x1f");
+            return { hash, author, date, message, dir: sub.dir };
+          }) : [];
+          return { dir: sub.dir, commits: subCommits, count: subCommits.length };
+        });
+        for (const row of probed) subrepositories.push(row);
       }
       const entry = logAct({ kind: "git_log", target: target.label, tool: "turn" }, "allow", "git-inside", "ok", { count: commits.length }, action.turn ?? null);
       return {
