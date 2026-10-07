@@ -57,14 +57,73 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
     }
   }
 
-  // 2. Parse findings from reports
+  // 2. Parse findings from reports (supporting both real factory delta format and legacy rows)
   let totalFindings = 0;
   const findingItems = [];
 
   for (const report of reports) {
+    const derivedStation = report.file
+      ? report.file.replace(/^[^-]+-/, "").replace(/-(delta|summary|latest)\.md$/, "")
+      : "";
     const rawLines = report.content.split("\n");
+
     for (let i = 0; i < rawLines.length; i++) {
-      const line = rawLines[i];
+      const line = rawLines[i].trim();
+
+      // Format A: Real Factory Delta Report (### [SEVERITY] Title (`state`))
+      const headingMatch = line.match(/^###\s+\[([^\]]+)\]\s+(.*?)(?:\s+\(`([a-z]+)`\))?\s*$/);
+      if (headingMatch && !/FALSE POSITIVE/i.test(headingMatch[1])) {
+        totalFindings++;
+        const badge = headingMatch[1];
+        const badgeParts = badge.split("·");
+        const sev = (badgeParts[1] ? badgeParts[1].replace(/routed/i, "").trim() : badgeParts[0].trim()).toUpperCase();
+        const title = headingMatch[2].trim();
+        let state = headingMatch[3] ? headingMatch[3].toLowerCase() : "new";
+        const station = derivedStation || (stations.length === 1 ? stations[0] : "unknown");
+        let humanReview = SECURITY_STATIONS.has(station);
+
+        let rule = "";
+        let location = "";
+        let fingerprint = "";
+        let description = "";
+
+        for (let j = i + 1; j < rawLines.length; j++) {
+          const next = rawLines[j].trim();
+          if (next.startsWith("### ") || next.startsWith("## ")) {
+            break;
+          }
+          const ruleMatch = next.match(/^- \*\*Rule\*\*:\s*`?([^`]+)`?/i);
+          if (ruleMatch) rule = ruleMatch[1].trim();
+
+          const locMatch = next.match(/^- \*\*Location\*\*:\s*`?([^`]+)`?/i);
+          if (locMatch) location = locMatch[1].trim();
+
+          const fpMatch = next.match(/^- \*\*Fingerprint\*\*:\s*`?([0-9a-f]{16,64})`?/i) ||
+                          next.match(/fingerprint:\s*`?([0-9a-f]{16,64})`?/i) ||
+                          next.match(/<!--\s*factory-fingerprint:\s*([0-9a-f]{16,64})\s*-->/i);
+          if (fpMatch && !fingerprint) fingerprint = fpMatch[1].toLowerCase();
+
+          const descMatch = next.match(/^- \*\*Description\*\*:\s*(.*)$/i);
+          if (descMatch) description = descMatch[1].trim();
+
+          if (/human[-_]?review:\s*true/i.test(next) || /<!--\s*factory-human-review\s*-->/i.test(next)) {
+            humanReview = true;
+          }
+          const stateMatch = next.match(/<!--\s*factory-state:\s*(new|regressed)\s*-->/i);
+          if (stateMatch) state = stateMatch[1].toLowerCase();
+        }
+
+        if (!description) description = title;
+        if (!fingerprint) {
+          fingerprint = createHash("sha256").update(`${station}:${sev}:${rule || description}`).digest("hex");
+        }
+        description = sanitizeFindingText(description);
+
+        findingItems.push({ severity: sev, station, description, rule, location, fingerprint, state, humanReview });
+        continue;
+      }
+
+      // Format B: Legacy synthetic row format (- [SEVERITY] [station] description)
       const m = line.match(/^-\s+\[(CRITICAL|HIGH|MEDIUM|LOW|INFO)\]\s+\[?([a-z0-9_-]+)\]?\s+(.*)$/i);
       if (m) {
         totalFindings++;
@@ -74,7 +133,6 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
         let state = "new";
         let humanReview = SECURITY_STATIONS.has(station);
 
-        // Check next few lines for fingerprint or state
         let fingerprint = "";
         for (let j = i + 1; j < Math.min(rawLines.length, i + 8); j++) {
           if (/^-\s+\[(CRITICAL|HIGH|MEDIUM|LOW|INFO)\]/i.test(rawLines[j])) {
@@ -98,9 +156,7 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
           fingerprint = createHash("sha256").update(`${station}:${sev}:${description}`).digest("hex");
         }
 
-        // Sanitize: strip credential patterns or secret tokens if present
         description = sanitizeFindingText(description);
-
         findingItems.push({ severity: sev, station, description, fingerprint, state, humanReview });
       }
     }
@@ -120,62 +176,56 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
     };
   }
 
-  // 4. Render markdown comment body
+  // 4. Render markdown comments (one comment per finding to avoid marker attribution confusion)
   const stationList = stations.length > 0 ? stations.map((s) => `\`${s}\``).join(", ") : "*(none)*";
-  const lines = [
-    "### 🤖 Software Factory Automated Triage",
-    "",
-    `**Stations Executed**: ${stationList}`,
-  ];
-
-  if (commitSha) {
-    lines.push(`**Commit Scanned**: \`${commitSha.slice(0, 10)}\``);
-  }
-  lines.push("");
+  const comments = [];
 
   if (totalFindings === 0) {
-    lines.push("✅ **No new findings discovered** across the executed stations.");
-  } else {
-    lines.push(`#### Discovered Findings (${newFindings.length}${totalFindings !== newFindings.length ? ` new, ${totalFindings - newFindings.length} already triaged` : ""})`);
-    lines.push("");
-
-    const bySeverity = { CRITICAL: [], HIGH: [], MEDIUM: [], LOW: [], INFO: [] };
-    for (const item of newFindings) {
-      if (bySeverity[item.severity]) {
-        bySeverity[item.severity].push(item);
-      } else {
-        bySeverity.INFO.push(item);
-      }
+    const cleanLines = [
+      "### 🤖 Software Factory Automated Triage",
+      "",
+      `**Stations Executed**: ${stationList}`,
+    ];
+    if (commitSha) {
+      cleanLines.push(`**Commit Scanned**: \`${commitSha.slice(0, 10)}\``);
     }
-
-    for (const sev of ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]) {
-      const items = bySeverity[sev];
-      if (items.length > 0) {
-        lines.push(`- **${sev}** (${items.length}):`);
-        for (const it of items) {
-          lines.push(`  - [\`${it.station}\`] ${it.description}`);
-          // Embed all shared triage markers per finding
-          lines.push(`    <!-- factory-triage-comment: ${it.fingerprint} -->`);
-          lines.push(`    <!-- factory-station: ${it.station} -->`);
-          lines.push(`    <!-- factory-severity: ${it.severity.toLowerCase()} -->`);
-          lines.push(`    <!-- factory-state: ${it.state} -->`);
-          if (it.humanReview) {
-            lines.push(`    <!-- factory-human-review -->`);
-          }
-        }
+    cleanLines.push("");
+    cleanLines.push("✅ **No new findings discovered** across the executed stations.");
+    comments.push(cleanLines.join("\n"));
+  } else {
+    for (const item of newFindings) {
+      const lines = [
+        "### 🤖 Software Factory Automated Triage",
+        "",
+        `- [**\`${item.station}\`**] \`[${item.severity}]\` ${item.description}${item.location ? ` (\`${item.location}\`)` : ""}`,
+      ];
+      if (item.rule) {
+        lines.push(`  - **Rule**: \`${item.rule}\``);
       }
+      lines.push("");
+      lines.push(`<!-- factory-triage-comment: ${item.fingerprint} -->`);
+      lines.push(`<!-- factory-station: ${item.station} -->`);
+      lines.push(`<!-- factory-severity: ${item.severity.toLowerCase()} -->`);
+      lines.push(`<!-- factory-state: ${item.state} -->`);
+      if (item.rule) {
+        lines.push(`<!-- factory-rule: ${item.rule} -->`);
+      }
+      if (item.humanReview) {
+        lines.push(`<!-- factory-human-review -->`);
+      }
+      lines.push("");
+      lines.push("> ℹ️ *Finding logged for issue review. Work beads are created only after human review approval.*");
+      comments.push(lines.join("\n"));
     }
   }
-
-  lines.push("");
-  lines.push("> ℹ️ *Findings are logged for issue review. Work beads are created only after human review approval.*");
 
   return {
     ok: true,
     exitCode: 0,
     newFindings: newFindings.length,
     totalFindings,
-    comment: lines.join("\n"),
+    comments,
+    comment: comments.join("\n\n---\n\n"),
   };
 }
 

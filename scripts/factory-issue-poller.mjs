@@ -85,8 +85,8 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
     ], { encoding: "utf8", env });
     issues = JSON.parse(raw);
   } catch (err) {
-    console.error(`[issue-poller] Failed to list issues for ${repo}: ${err.message}`);
-    return { ok: false, exitCode: 1, error: err.message };
+    console.error(`[issue-poller] Failed to list issues for ${repo}: ${sanitizeLogOutput(err.message)}`);
+    return { ok: false, exitCode: 1, error: sanitizeLogOutput(err.message) };
   }
 
   console.log(`[issue-poller] Fetched ${issues.length} issue(s) from ${repo}. Highest recorded: #${cursor.highestIssueNumber}`);
@@ -122,11 +122,11 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
 
     // Run scans into a clean issue-specific temp dir (isolated per attempt)
     const issueRunDir = path.join(privateDir, `issue-${num}`);
-    rmSync(issueRunDir, { recursive: true, force: true });
-    mkdirSync(issueRunDir, { recursive: true });
 
     let scanSuccess = true;
     if (!dryRun) {
+      rmSync(issueRunDir, { recursive: true, force: true });
+      mkdirSync(issueRunDir, { recursive: true });
       for (const st of stations) {
         console.log(`[issue-poller] Running station '${st}' for issue #${num}...`);
         try {
@@ -141,7 +141,7 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
             break;
           }
         } catch (e) {
-          console.error(`[issue-poller] Station run error: ${e.message}`);
+          console.error(`[issue-poller] Station run error: ${sanitizeLogOutput(e.message)}`);
           scanSuccess = false;
           break;
         }
@@ -163,7 +163,7 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
         const parsed = JSON.parse(commentData);
         existingComments = parsed.comments || [];
       } catch (e) {
-        console.error(`[issue-poller] Failed to fetch comments for issue #${num}: ${e.message}. Refusing to comment without verified deduplication.`);
+        console.error(`[issue-poller] Failed to fetch comments for issue #${num}: ${sanitizeLogOutput(e.message)}. Refusing to comment without verified deduplication.`);
         continue; // Fail closed, retry next poll cycle
       }
 
@@ -176,19 +176,28 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
       });
 
       let postSuccess = true;
-      if (triageResult.exitCode === 2 || triageResult.newFindings === 0) {
+      const commentsToPost = triageResult.comments && triageResult.comments.length > 0
+        ? triageResult.comments
+        : (triageResult.comment ? [triageResult.comment] : []);
+
+      if (triageResult.exitCode === 2 || triageResult.newFindings === 0 || commentsToPost.length === 0) {
         console.log(`[issue-poller] Issue #${num}: all ${triageResult.totalFindings} finding(s) already commented. Skipping duplicate comment.`);
-      } else if (triageResult.comment) {
-        console.log(`[issue-poller] Posting triage comment (${triageResult.newFindings} new findings) to issue #${num}...`);
-        try {
-          execFileSync("gh", ["issue", "comment", String(num), "--body", triageResult.comment, "--repo", repo], {
-            encoding: "utf8",
-            env,
-          });
-          console.log(`[issue-poller] Successfully posted triage comment to issue #${num}`);
-        } catch (e) {
-          console.error(`[issue-poller] Failed to post comment on issue #${num}: ${sanitizeLogOutput(e.message)}`);
-          postSuccess = false;
+      } else {
+        console.log(`[issue-poller] Posting ${commentsToPost.length} triage comment(s) (${triageResult.newFindings} new findings) to issue #${num}...`);
+        for (const c of commentsToPost) {
+          try {
+            execFileSync("gh", ["issue", "comment", String(num), "--body", c, "--repo", repo], {
+              encoding: "utf8",
+              env,
+            });
+          } catch (e) {
+            console.error(`[issue-poller] Failed to post comment on issue #${num}: ${sanitizeLogOutput(e.message)}`);
+            postSuccess = false;
+            break;
+          }
+        }
+        if (postSuccess) {
+          console.log(`[issue-poller] Successfully posted triage comment(s) to issue #${num}`);
         }
       }
 
@@ -196,23 +205,32 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
         console.warn(`[issue-poller] Issue #${num} encountered an error during scan or comment post. Not recording as processed.`);
         continue;
       }
+
+      cursor.processedIssues[num] = {
+        updatedAt,
+        lastPolled: new Date().toISOString(),
+      };
+      if (num > cursor.highestIssueNumber) {
+        cursor.highestIssueNumber = num;
+      }
+      newProcessed++;
     } else {
       console.log(`[issue-poller] DRY-RUN: would scan stations [${stations.join(", ")}] and comment on issue #${num}`);
     }
-
-    cursor.processedIssues[num] = {
-      updatedAt,
-      lastPolled: new Date().toISOString(),
-    };
-    if (num > cursor.highestIssueNumber) {
-      cursor.highestIssueNumber = num;
-    }
-    newProcessed++;
   }
-  cursor.lastPolled = new Date().toISOString();
-  writeFileSync(cursorFile, JSON.stringify(cursor, null, 2), "utf8");
 
-  console.log(`[issue-poller] Finished polling. Processed ${newProcessed} new issue(s). Cursor saved.`);
+  if (!dryRun) {
+    cursor.lastPolled = new Date().toISOString();
+    try {
+      writeFileSync(cursorFile, JSON.stringify(cursor, null, 2), "utf8");
+    } catch (e) {
+      console.error(`[issue-poller] Failed to write cursor file: ${sanitizeLogOutput(e.message)}`);
+    }
+    console.log(`[issue-poller] Finished polling. Processed ${newProcessed} new issue(s). Cursor saved.`);
+  } else {
+    console.log(`[issue-poller] Finished dry-run polling. Evaluated ${issues.length} issue(s) without mutating cursor or attempt files.`);
+  }
+
   return { ok: true, exitCode: 0, processedCount: newProcessed, cursor };
 }
 

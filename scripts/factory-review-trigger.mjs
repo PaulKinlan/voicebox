@@ -43,10 +43,11 @@ export function parsePublisherSummary(stdout = "") {
     const trimmed = line.trim();
     // 1. Anchored count tallies and structured skip receipts:
     // e.g. "published: 2", "issues: 1 published, 0 duplicate, 1 skipped", "skipped: 5939431590a57344 (identity mismatch: ...)"
+    // Supports nested parentheses in skip reason (e.g. step-summary forms)
     if (
       /^(published|duplicate|failed|actionable|total|clean|skipped|new|regressed):\s*\d+$/i.test(trimmed) ||
       /^issues:\s*\d+\s+published,\s*\d+\s+duplicate(?:,\s*\d+\s+skipped)?(?:,\s*\d+\s+failed)?$/i.test(trimmed) ||
-      /^skipped:\s*[0-9a-f]{8,64}\s*\([^)]+\)$/i.test(trimmed)
+      /^skipped:\s*[0-9a-f]{8,64}\s*\(.+\)$/i.test(trimmed)
     ) {
       safeLines.push(sanitizeLogOutput(trimmed));
     } else {
@@ -58,6 +59,17 @@ export function parsePublisherSummary(stdout = "") {
     }
   }
   return safeLines.join("\n");
+}
+
+/**
+ * Locate delta report produced specifically by this attempt in runDir.
+ * Enforces attempt provenance: ambient reports in persistent directories are strictly ignored.
+ */
+export function locateRunDeltaReport(runDir, rootDir, station) {
+  const targetName = path.basename(rootDir);
+  const candidateReportName = `${targetName}-${station}-delta.md`;
+  const candidateReportPath = path.join(runDir, candidateReportName);
+  return existsSync(candidateReportPath) ? candidateReportPath : "";
 }
 
 export function runReviewTrigger(args = process.argv.slice(2), { env = process.env, rootDir = ROOT } = {}) {
@@ -199,8 +211,7 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
   // Strictly enforce attempt provenance: the report MUST be produced in this attempt's runDir
   const targetName = path.basename(rootDir);
   const candidateReportName = `${targetName}-${station}-delta.md`;
-  const candidateReportPath = path.join(runDir, candidateReportName);
-  const foundReportPath = existsSync(candidateReportPath) ? candidateReportPath : "";
+  const foundReportPath = locateRunDeltaReport(runDir, rootDir, station);
 
   let publishExit = 0;
   if (foundReportPath) {
@@ -229,7 +240,12 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
     console.log(`[review-trigger] Notice: No delta report produced by station '${station}' (clean pass).`);
   }
 
-  const ok = runExit === 0 && (publishExit === 0 || publishExit === 2);
+  // Distinguish genuine clean/no-action exit 2 from runs with skipped/unverifiable findings
+  const hasSkippedFindings =
+    /skipped:\s*[0-9a-f]{8,64}/i.test(safeSummary) ||
+    /,\s*[1-9]\d*\s+skipped/i.test(safeSummary);
+  const publishOk = publishExit === 0 || (publishExit === 2 && !hasSkippedFindings);
+  const ok = runExit === 0 && publishOk;
   const verdict = ok ? "PASS" : "FAILED";
   const exitCode = ok ? 0 : 1;
 

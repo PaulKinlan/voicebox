@@ -12,7 +12,7 @@ import {
   CATEGORY_STATIONS,
 } from "../tools/factory-issue-router.mjs";
 import { formatTriageComment, sanitizeFindingText } from "../tools/factory-issue-commenter.mjs";
-import { runReviewTrigger, parsePublisherSummary, sanitizeLogOutput } from "../scripts/factory-review-trigger.mjs";
+import { runReviewTrigger, parsePublisherSummary, sanitizeLogOutput, locateRunDeltaReport } from "../scripts/factory-review-trigger.mjs";
 import { pollInboundIssues } from "../scripts/factory-issue-poller.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -159,19 +159,50 @@ test("factory-issue-router: loop hazard guard rejects publisher issues independe
   assert.ok(resD.reason.includes("author_association 'NONE' is not in trusted set"));
 });
 
-test("factory-issue-commenter: embeds all 4 shared markers and sanitizes credentials across all severities", () => {
+test("factory-issue-commenter: parses real factory delta reports, emits one comment per finding, and sanitizes credentials", () => {
   const tmpDir = path.join(ROOT, "tests", "fixtures", "test-report-tmp");
   mkdirSync(tmpDir, { recursive: true });
-  writeFileSync(
-    path.join(tmpDir, "voicebox-perf-review-delta.md"),
-    `- [HIGH] perf-review Startup probe blocks boot banner\n  fingerprint: \`5939431590a573447f5b1826c33d12e4b2429002741349d1d8313deb7af5cd9a\`\n  state: new\n`,
-    "utf8"
-  );
-  writeFileSync(
-    path.join(tmpDir, "voicebox-secret-scan-delta.md"),
-    `- [CRITICAL] secret-scan Hardcoded API credential in config\n  fingerprint: \`a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0\`\n  state: new\n`,
-    "utf8"
-  );
+
+  // Real factory delta format for perf-review
+  const perfReport = `# Software Factory Delta Report: voicebox
+Generated: 2026-10-07T19:32:36.485838+00:00
+
+| New | Regressed | Fixed | Unchanged | Suppressed | False positive |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| **1** | **0** | **0** | 0 | 0 | 0 |
+
+## Action Required: New & Regressed Findings
+
+### [HIGH] Startup probe blocks the boot banner (\`new\`)
+- **Rule**: \`blocking-boot-probe\`
+- **Location**: \`server.mjs:210\`
+- **Fingerprint**: \`5939431590a573447f5b1826c33d12e4b2429002741349d1d8313deb7af5cd9a\`
+- **Description**: the probe is awaited before the banner prints
+- **Snippet**: \`await probeAll()\`
+- **Remediation**: Do not await the probe before printing the banner
+`;
+
+  // Real factory delta format for secret-scan (security station)
+  const secretReport = `# Software Factory Delta Report: voicebox
+Generated: 2026-10-07T19:32:36.485721+00:00
+
+| New | Regressed | Fixed | Unchanged | Suppressed | False positive |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| **1** | **0** | **0** | 0 | 0 | 0 |
+
+## Action Required: New & Regressed Findings
+
+### [CRITICAL · routed CRITICAL] Hardcoded API credential in config (\`new\`)
+- **Rule**: \`generic-api-key\`
+- **Location**: \`config/example.env:12\`
+- **Fingerprint**: \`a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0\`
+- **Description**: credential token ghp_ABCDEF0123456789xyz and password=super-secret
+- **Snippet**: \`API_KEY="CANARY"\`
+- **Remediation**: Rotate the value
+`;
+
+  writeFileSync(path.join(tmpDir, "voicebox-perf-review-delta.md"), perfReport, "utf8");
+  writeFileSync(path.join(tmpDir, "voicebox-secret-scan-delta.md"), secretReport, "utf8");
 
   const res = formatTriageComment({
     stations: ["perf-review", "secret-scan"],
@@ -183,15 +214,33 @@ test("factory-issue-commenter: embeds all 4 shared markers and sanitizes credent
   assert.equal(res.ok, true);
   assert.equal(res.exitCode, 0);
   assert.equal(res.newFindings, 2);
-  assert.ok(res.comment.includes("Software Factory Automated Triage"));
-  assert.ok(res.comment.includes("<!-- factory-triage-comment: 5939431590a573447f5b1826c33d12e4b2429002741349d1d8313deb7af5cd9a -->"));
-  assert.ok(res.comment.includes("<!-- factory-station: perf-review -->"));
-  assert.ok(res.comment.includes("<!-- factory-severity: high -->"));
-  assert.ok(res.comment.includes("<!-- factory-state: new -->"));
-  assert.ok(res.comment.includes("<!-- factory-station: secret-scan -->"));
-  assert.ok(res.comment.includes("<!-- factory-human-review -->"));
+  assert.ok(Array.isArray(res.comments));
+  assert.equal(res.comments.length, 2, "emits exactly one comment per finding to prevent marker conflation");
 
-  // Text sanitization verification (including ordinary unquoted credentials and fine-grained PATs)
+  // Comment 1: perf-review finding
+  const c1 = res.comments[0];
+  assert.ok(c1.includes("<!-- factory-triage-comment: 5939431590a573447f5b1826c33d12e4b2429002741349d1d8313deb7af5cd9a -->"));
+  assert.ok(c1.includes("<!-- factory-station: perf-review -->"));
+  assert.ok(c1.includes("<!-- factory-severity: high -->"));
+  assert.ok(c1.includes("<!-- factory-state: new -->"));
+  assert.ok(c1.includes("<!-- factory-rule: blocking-boot-probe -->"));
+  assert.ok(!c1.includes("<!-- factory-human-review -->"));
+  assert.ok(!c1.includes("secret-scan"));
+
+  // Comment 2: secret-scan finding (security station -> human-review flag)
+  const c2 = res.comments[1];
+  assert.ok(c2.includes("<!-- factory-triage-comment: a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0 -->"));
+  assert.ok(c2.includes("<!-- factory-station: secret-scan -->"));
+  assert.ok(c2.includes("<!-- factory-severity: critical -->"));
+  assert.ok(c2.includes("<!-- factory-state: new -->"));
+  assert.ok(c2.includes("<!-- factory-rule: generic-api-key -->"));
+  assert.ok(c2.includes("<!-- factory-human-review -->"));
+  assert.ok(!c2.includes("ghp_ABCDEF0123456789xyz"));
+  assert.ok(!c2.includes("super-secret"));
+  assert.ok(c2.includes("[REDACTED]"));
+  assert.ok(!c2.includes("perf-review"));
+
+  // Text sanitization verification
   const dirty = "Exposed Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9 and token ghp_ABCDEF0123456789xyz and token github_pat_11AAAAAAA0123456789_abcdefghijklmnopqrstuvwxyz and api_key='sk_test_123456' and password=my-super-secret-password and api_key=unquoted_secret_val";
   const clean = sanitizeFindingText(dirty);
   assert.ok(!clean.includes("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"));
@@ -275,6 +324,7 @@ test("factory-review-trigger: parsePublisherSummary extracts anchored counts and
     "actionable: 3",
     "issues: 1 published, 0 duplicate, 1 skipped",
     "skipped: 5939431590a57344 (identity mismatch: unchanged)",
+    "skipped: 8a1d534b804960d9 (identity unverifiable: rule heading (reduced/step-summary form))",
     "published: 5939431590a57344 -> https://github.com/PaulKinlan/voicebox/issues/42",
     "published: 2 with unanchored text and token github_pat_11ABCD1234567890abcdefghijklmnopqrstuvwxyz",
     "raw finding details: password=super-secret-password-val and token github_pat_11ABCD1234567890abcdefghijklmnopqrstuvwxyz",
@@ -289,6 +339,7 @@ test("factory-review-trigger: parsePublisherSummary extracts anchored counts and
   assert.ok(safe.includes("actionable: 3"));
   assert.ok(safe.includes("issues: 1 published, 0 duplicate, 1 skipped"));
   assert.ok(safe.includes("skipped: 5939431590a57344 (identity mismatch: unchanged)"));
+  assert.ok(safe.includes("skipped: 8a1d534b804960d9 (identity unverifiable: rule heading (reduced/step-summary form))"));
   assert.ok(safe.includes("https://github.com/PaulKinlan/voicebox/issues/42"));
   assert.ok(!safe.includes("super-secret-password-val"));
   assert.ok(!safe.includes("github_pat_11ABCD1234567890abcdefghijklmnopqrstuvwxyz"));
@@ -310,16 +361,10 @@ test("factory-review-trigger: sanitizeLogOutput masks stderr and issue titles co
   assert.ok(sanitizedTitle.includes("[REDACTED]"));
 });
 
-test("factory-issue-poller: pollInboundIssues cleans up stale attempt directories and sanitizes titles", () => {
-  const tmpDir = path.join(ROOT, "tests", "fixtures", "test-poller-tmp");
+test("factory-issue-poller: dry-run does not mutate cursor or attempt directory", () => {
+  const tmpDir = path.join(ROOT, "tests", "fixtures", "test-dryrun-tmp");
   rmSync(tmpDir, { recursive: true, force: true });
   mkdirSync(tmpDir, { recursive: true });
-
-  // Pre-seed a stale attempt directory with an old report
-  const staleIssueDir = path.join(tmpDir, "issue-101");
-  mkdirSync(staleIssueDir, { recursive: true });
-  const staleFile = path.join(staleIssueDir, "stale-old-report.md");
-  writeFileSync(staleFile, "stale report content");
 
   const mockBinDir = path.join(tmpDir, "bin");
   mkdirSync(mockBinDir, { recursive: true });
@@ -341,33 +386,42 @@ test("factory-issue-poller: pollInboundIssues cleans up stale attempt directorie
     rootDir: ROOT,
   });
 
-  // Verify that stale file was wiped during attempt initialization
-  assert.equal(existsSync(staleFile), false, "stale file was removed by rmSync");
-  rmSync(tmpDir, { recursive: true, force: true });
+  const cursorFile = path.join(tmpDir, "factory-issue-cursor.json");
+  const issueRunDir = path.join(tmpDir, "issue-101");
 
+  // In dry run, no cursor file is written and no attempt directory is created
+  assert.equal(existsSync(cursorFile), false, "dry run must not write cursorFile");
+  assert.equal(existsSync(issueRunDir), false, "dry run must not create attempt directory");
   assert.equal(result.ok, true);
   assert.equal(result.exitCode, 0);
-  assert.equal(result.processedCount, 1);
+
+  rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("factory-review-trigger: provenance check ignores ambient reports when runDir has none", () => {
+test("factory-review-trigger: locateRunDeltaReport strictly enforces runDir provenance", () => {
   const tmpDir = path.join(ROOT, "tests", "fixtures", "test-provenance-tmp");
+  rmSync(tmpDir, { recursive: true, force: true });
   mkdirSync(tmpDir, { recursive: true });
 
-  // Seed ambient findings directory with a report that should NOT be picked up
-  const ambientFindingsDir = path.join(tmpDir, "findings");
-  mkdirSync(ambientFindingsDir, { recursive: true });
-  const targetName = path.basename(ROOT);
-  const ambientReport = path.join(ambientFindingsDir, `${targetName}-docs-drift-delta.md`);
-  writeFileSync(ambientReport, "# Ambient report that must never be published without runDir provenance\n");
+  const runDir = path.join(tmpDir, "run-12345");
+  mkdirSync(runDir, { recursive: true });
 
-  const result = runReviewTrigger(["--base", "HEAD~1", "--tip", "HEAD", "--private-dir", tmpDir, "--dry-run"], {
-    rootDir: ROOT,
-  });
+  // 1. Ambient report outside runDir
+  const ambientDir = path.join(tmpDir, "findings");
+  mkdirSync(ambientDir, { recursive: true });
+  const targetName = path.basename(ROOT);
+  const ambientReport = path.join(ambientDir, `${targetName}-docs-drift-delta.md`);
+  writeFileSync(ambientReport, "# Ambient report\n");
+
+  // Provenance check: ambient report alone yields empty string
+  const notFound = locateRunDeltaReport(runDir, ROOT, "docs-drift");
+  assert.equal(notFound, "", "ambient report in findings/ must not be accepted");
+
+  // 2. Report in runDir is accepted
+  const runReport = path.join(runDir, `${targetName}-docs-drift-delta.md`);
+  writeFileSync(runReport, "# Attempt report\n");
+  const found = locateRunDeltaReport(runDir, ROOT, "docs-drift");
+  assert.equal(found, runReport, "report in runDir must be accepted");
 
   rmSync(tmpDir, { recursive: true, force: true });
-
-  assert.equal(result.ok, true);
-  assert.equal(result.exitCode, 0);
-  assert.ok(result.station, "selected a station");
 });
