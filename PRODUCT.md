@@ -34,7 +34,7 @@ Voicebox is the confirmed name. Paul explicitly wants the visual language of iso
 
 ## Evidence on Hand
 
-[Brief](docs/00-brief.md), including N10–N13, is the source of truth. `docs/01-questions.md` predates the name/CAP decisions. The interface study records exact isocan and environment-design revisions in [its design note](docs/interface.md). Prototype content, instances, permissions and execution are synthetic and labelled; they are not evidence of a working harness, sandbox, OPFS implementation or live audio.
+[`docs/archive/00-brief.md`](docs/archive/00-brief.md), including N10–N13, is the source of truth. `docs/archive/01-questions.md` predates the name/CAP decisions. The interface study records exact isocan and environment-design revisions in [`docs/archive/interface.md`](docs/archive/interface.md). Prototype content, instances, permissions and execution are synthetic and labelled; they are not evidence of a working harness, sandbox, OPFS implementation or live audio.
 
 ## Product Principles
 

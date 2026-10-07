@@ -81,5 +81,5 @@ Early pre-implementation spike notes (archived under `docs/archive/`) and empiri
 `scripts/docs-check.mjs` automatically verifies the documentation against the live codebase on every test run (`tests/docs-drift.test.mjs`):
 
 1. **Generated Runtime Blocks**: Capabilities, routes, turn resolvers, live voice models, and environment variables between `<!-- BEGIN GENERATED: ... -->` and `<!-- END GENERATED: ... -->` markers in `README.md`, `docs/07-architecture.md`, and `docs/08-how-it-runs.md` are derived directly from a live scratch server and source modules. Run `npm run docs:write` to update them.
-2. **File Path Existence**: Every backticked repository file path in `README.md` and `docs/*.md` is checked to ensure the referenced file exists on disk.
+2. **File Path Existence**: Every backticked repository file path in `README.md`, `PRODUCT.md`, `docs/*.md`, and `designs/README.md` is checked to ensure the referenced file exists on disk.
 3. **Policy Claims (`docs/claims.json`)**: Enforces required architectural invariants and blocks retired terminology from reappearing in hand-written prose.
