@@ -67,7 +67,7 @@ value* is never allowed.
 | `high` | any | Yes — deliberately (the embargo would withhold it) | P1 |
 | `medium` | any | Yes | P2 |
 | `low`, `info` | any | Yes — every severity reaches the triage surface by default (`--exclude-low` opts out) | P3 |
-| any | any | Functionality change → published, marked `human-review`, and the promoted bead is BLOCKED | P1–P2 by severity |
+| any | any | Functionality change → published, marked `human-review`. The promoted bead is BLOCKED only on an explicit assertion (`--functionality-change`, or a recorded reason) — a bare human-review flag marks the issue for verification and leaves the bead claimable | P1–P2 by severity |
 | any | security station | published and marked for **verification** (not a block): the bead stays claimable | P1–P2 by severity |
 
 Severity is routed, not merely displayed:
@@ -244,13 +244,20 @@ Flags: `--report-dir <dir>`, `--repo <owner/name>`, `--target <path>`, `--agent 
 
 Exit codes are part of the contract: `0` a plan was produced / an issue published / a bead created; `1` a usage or policy refusal, **or a write that failed** — a publication where any
 `gh issue create` failed exits `1` and says how many, because a partial publication reported as
-The publication receipt is part of that contract: one `published: <fingerprint> -> <issue URL>` line per
-filed issue, one `duplicate: ... skipped` line per issue that already tracked the finding, and a closing
-`issues: N published, M duplicate[, K skipped][, J FAILED]` — the skip count is there because a caller that
-rewrites the report artifact can make every recomputed fingerprint disagree with the declared one, and a
-run that files nothing exits `2`, which must not be read as "success" while findings were skipped.
 success is how a CI job passes while a finding was never filed; `2` nothing actionable (nothing in band,
-or every finding already published). A report that declares more new/regressed findings than it contains
+or every finding already published).
+
+The publication receipt is part of that contract, and every line a caller could act on is one line per
+finding: `published: <fingerprint> -> <issue URL>` for a filed issue, `duplicate: ... — skipped` for one that
+was already tracked, `skipped: <fingerprint> (<reason>)` for one this run dropped, and a closing
+`issues: N published, M duplicate[, K skipped][, J FAILED]`. The per-finding `skipped:` line exists because a
+consumer that summarises a factory log by key prefix (the miniapps adapter keeps `published:`, `duplicate:`,
+`skipped:` and `failed:` lines) never sees the closing summary, which starts with `issues:`. The skip count
+itself is load-bearing: a caller that rewrites the report artifact makes every recomputed fingerprint
+disagree with the declared prefix, so every finding skips, nothing is filed, and the run exits `2` — the same
+`2` as a report with nothing to do, distinguishable from it only by what the receipt says. The all-skipped
+run therefore prints those lines too, with its reasons above them in the plan summary. `--json` output is not
+augmented. A report that declares more new/regressed findings than it contains
 is NOT `2`: it exits `1` and publishes nothing, because a killed or timed-out station run is
 indistinguishable from a complete one except by that declared count — record the run as UNKNOWN and
 re-run the station.

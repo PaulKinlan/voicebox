@@ -625,7 +625,7 @@ test("file-issues skips creating issue when open issue already tracks the finger
     assert.equal(res.status, 2, `expected exit code 2 when all duplicate: ${res.stdout}\n${res.stderr}`);
     assert.equal(res.ghCalls.some((c) => c.startsWith("issue create")), false, "duplicate issue was created");
     assert.match(res.stdout, /duplicate: [0-9a-f]{16} \(an open issue already tracks it: #42\) — skipped/);
-    assert.match(res.stdout, /issues: 0 published, 1 duplicate/);
+    assert.match(res.stdout, /^issues: 0 published, 1 duplicate$/m);
   } finally {
     rmSync(res.box, { recursive: true, force: true });
   }
@@ -657,7 +657,7 @@ test("file-issues skips creating issue when closed issue tracks fingerprint and 
     assert.equal(res.status, 2, `expected exit code 2: ${res.stdout}\n${res.stderr}`);
     assert.equal(res.ghCalls.some((c) => c.startsWith("issue create")), false, "duplicate issue was created");
     assert.match(res.stdout, /duplicate: [0-9a-f]{16} \(a closed issue already tracked it and nothing regressed: #55\) — skipped/);
-    assert.match(res.stdout, /issues: 0 published, 1 duplicate/);
+    assert.match(res.stdout, /^issues: 0 published, 1 duplicate$/m);
   } finally {
     rmSync(res.box, { recursive: true, force: true });
   }
@@ -690,7 +690,7 @@ test("file-issues republishes when closed issue tracks fingerprint but finding h
     assert.equal(res.status, 0, res.stderr);
     assert.ok(res.ghCalls.some((c) => c.startsWith("issue create")), "expected regressed finding to be published");
     assert.match(res.stdout, /published: [0-9a-f]{16} -> https:\/\/github\.com\/owner\/voicebox\/issues\/77/);
-    assert.match(res.stdout, /issues: 1 published, 0 duplicate/);
+    assert.match(res.stdout, /^issues: 1 published, 0 duplicate$/m);
   } finally {
     rmSync(res.box, { recursive: true, force: true });
   }
@@ -1149,7 +1149,7 @@ test("promote: with --apply on functionality-changing finding creates BLOCKED be
     number: 15,
     state: "OPEN",
     title: "[human-review] issue title",
-    body: `<!-- factory-fingerprint: ${fp} -->\n<!-- factory-station: qa-station -->\n<!-- factory-severity: medium -->\n<!-- factory-human-review -->\n**Rule**: \`flake-instrumentation\``,
+    body: `<!-- factory-fingerprint: ${fp} -->\n<!-- factory-station: qa-station -->\n<!-- factory-severity: medium -->\n<!-- factory-human-review -->\n<!-- factory-human-review-reason: functionality-change -->\n**Rule**: \`flake-instrumentation\``,
     comments: [{ body: "<!-- factory-review: alice -->" }],
   });
   const stubGh = `case "$1" in
@@ -2576,7 +2576,7 @@ test("HUMAN-REVIEW REASON round-trips through the markers, and an unmodelled rea
   }
 });
 
-test("INBOUND CRITERION: a security station promoted from a comment is claimable; a functionality change blocks (round 5)", () => {
+test("INBOUND CRITERION: a bare flag marks for verification and stays CLAIMABLE; only an explicit assertion blocks (coord's ruling, was round 5)", () => {
   // Two things at once. (1) The review reason for an issue promoted FROM COMMENTS must come from the
   // station the triage marker names — reading the body's markers instead made every inbound security
   // finding claim "this remediation changes functionality", which is false, and blocked it. (2) The
@@ -2593,8 +2593,18 @@ test("INBOUND CRITERION: a security station promoted from a comment is claimable
 
   // Security station, no reason marker => inferred model-prose => claimable, and the bead says why.
   const security = runCli({ args: ["--promote", "7", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(inbound("vuln-discovery")) });
-  // Non-security station, no reason marker => inferred functionality change => blocked.
-  const changing = runCli({ args: ["--promote", "7", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(inbound("qa-station")) });
+  // Non-security station with the same bare flag: CLAIMABLE. A bare automated marker is not a
+  // functionality assessment, and inventing that reason is what coord ruled out.
+  const flagged = runCli({ args: ["--promote", "7", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(inbound("qa-station")) });
+  // A station miniapps flags but the factory authority does not treat as identity-critical: the bare
+  // flag still leaves it OPEN, and its classification is preserved (no invented security-sensitive cause).
+  const depSupply = runCli({ args: ["--promote", "7", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(inbound("deps-supply-chain")) });
+  // The other station coord named in the hold: a flagged marker with no explicit assertion stays OPEN.
+  const flaggedDocs = runCli({ args: ["--promote", "7", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(inbound("docs-drift")) });
+  // The operator asserts the change against the station: BLOCKED, with an accurate reason.
+  const asserted = runCli({ args: ["--promote", "7", "--apply", "--functionality-change", "qa-station", "--repo", "owner/voicebox"], stubGh: ghStubViewing(inbound("qa-station")) });
+  // An assertion naming something this issue does not carry must not block the finding.
+  const unrelated = runCli({ args: ["--promote", "7", "--apply", "--functionality-change", "docs-drift", "--repo", "owner/voicebox"], stubGh: ghStubViewing(inbound("qa-station")) });
   try {
     assert.equal(security.status, 0, security.stderr);
     const securityBlocked = security.bdCalls.filter((c) => c.startsWith("update") && c.includes("--status blocked"));
@@ -2604,11 +2614,57 @@ test("INBOUND CRITERION: a security station promoted from a comment is claimable
     assert.ok(!/changes functionality/.test(securityCreate), `a false cause was asserted: ${securityCreate}`);
     assert.match(securityCreate, /claimable/, `the bead did not say it is claimable: ${securityCreate}`);
 
-    assert.equal(changing.status, 0, changing.stderr);
-    const changingBlocked = changing.bdCalls.filter((c) => c.startsWith("update") && c.includes("--status blocked"));
-    assert.equal(changingBlocked.length, 1, `a functionality change did not block: ${changing.bdCalls.join(" | ")}`);
+    assert.equal(flagged.status, 0, flagged.stderr);
+    assert.deepEqual(
+      flagged.bdCalls.filter((c) => c.startsWith("update") && c.includes("--status blocked")),
+      [],
+      `a bare flag blocked the bead: ${flagged.bdCalls.join(" | ")}`,
+    );
+    const flaggedCreate = flagged.bdCalls.find((c) => c.startsWith("create"));
+    assert.match(flaggedCreate, /human-review flag is recorded/, `the verification reason was not recorded: ${flaggedCreate}`);
+    assert.ok(!/changes functionality/.test(flaggedCreate), `a false cause was still asserted: ${flaggedCreate}`);
+    assert.match(flaggedCreate, /claimable/, `the bead did not say it is claimable: ${flaggedCreate}`);
+
+    assert.equal(depSupply.status, 0, depSupply.stderr);
+    assert.deepEqual(
+      depSupply.bdCalls.filter((c) => c.startsWith("update") && c.includes("--status blocked")),
+      [],
+      `a bare flag on deps-supply-chain blocked the bead: ${depSupply.bdCalls.join(" | ")}`,
+    );
+    const depCreate = depSupply.bdCalls.find((c) => c.startsWith("create"));
+    assert.match(depCreate, /human-review flag is recorded/, `deps-supply-chain was not left open for verification: ${depCreate}`);
+    assert.ok(!/model-authored and security-sensitive/.test(depCreate), `a station the authority does not classify as identity-critical was given its cause: ${depCreate}`);
+    assert.match(depCreate, /deps-supply-chain/, `the station was dropped from the bead: ${depCreate}`);
+    assert.equal(flaggedDocs.status, 0, flaggedDocs.stderr);
+    assert.deepEqual(
+      flaggedDocs.bdCalls.filter((c) => c.startsWith("update") && c.includes("--status blocked")),
+      [],
+      `a bare flag on docs-drift blocked the bead: ${flaggedDocs.bdCalls.join(" | ")}`,
+    );
+    assert.match(
+      flaggedDocs.bdCalls.find((c) => c.startsWith("create")),
+      /human-review flag is recorded/,
+      `docs-drift was not left open for verification: ${flaggedDocs.bdCalls.join(" | ")}`,
+    );
+    assert.equal(asserted.status, 0, asserted.stderr);
+    assert.equal(
+      asserted.bdCalls.filter((c) => c.startsWith("update") && c.includes("--status blocked")).length,
+      1,
+      `an explicit assertion did not block: ${asserted.bdCalls.join(" | ")}`,
+    );
+    assert.ok(
+      asserted.bdCalls.some((c) => c.startsWith("comment") && /changes functionality/.test(c)),
+      `the blocking decision was not recorded: ${asserted.bdCalls.join(" | ")}`,
+    );
+
+    assert.equal(unrelated.status, 0, unrelated.stderr);
+    assert.deepEqual(
+      unrelated.bdCalls.filter((c) => c.startsWith("update") && c.includes("--status blocked")),
+      [],
+      `an unrelated assertion blocked the bead: ${unrelated.bdCalls.join(" | ")}`,
+    );
   } finally {
-    for (const res of [security, changing]) rmSync(res.box, { recursive: true, force: true });
+    for (const res of [security, flagged, depSupply, flaggedDocs, asserted, unrelated]) rmSync(res.box, { recursive: true, force: true });
   }
 });
 
@@ -3040,6 +3096,50 @@ test("THE RECEIPT counts skipped findings, so a mixed run cannot silently drop o
     assert.equal(res.status, 0, `the publishable finding should still publish: ${res.stdout}\n${res.stderr}`);
     assert.match(res.stdout, /^issues: 1 published, 0 duplicate, 1 skipped$/m, `the receipt hid the skipped finding: ${res.stdout}`);
     assert.equal(res.ghCalls.filter((c) => c.startsWith("issue create")).length, 1, "exactly one issue should have been created");
+    assert.match(res.stdout, /^skipped: [0-9a-f]{16} \(identity mismatch: /m, `no per-finding skip line reached a key-prefix log summary: ${res.stdout}`);
+  } finally {
+    rmSync(res.box, { recursive: true, force: true });
+  }
+});
+
+test("an all-skipped run still prints the receipt, so a dropped finding is not silent (round-11 review)", () => {
+  // The short-circuit before fileIssues meant no receipt line was printed on this path at all: the caller got
+  // exit 2 and a plan summary, and nothing on the lines it parses. Both findings declared here are dropped
+  // (their declared fingerprints are corrupted), which is exactly the "everything dropped" case that must
+  // not look like "nothing to do".
+  const base = fixture("voicebox-modern-web-delta.md");
+  const other = fixture("voicebox-perf-review-delta.md");
+  const otherFinding = other.slice(other.indexOf("### ["));
+  const merged = `${base.replace(/\|\s*\*\*1\*\*\s*\|\s*\*\*0\*\*\s*\|/, "| **2** | **0** |")}\n${otherFinding.replace(/\*\*Fingerprint\*\*: `[0-9a-f]{4}/, "**Fingerprint**: `dead")}`
+    .replace(/\*\*Fingerprint\*\*: `[0-9a-f]{4}/, "**Fingerprint**: `beef");
+
+  const res = runCli({
+    args: ["--report", "voicebox-modern-web-delta.md", "--file-issues", "--repo", "owner/voicebox"],
+    reports: { "voicebox-modern-web-delta.md": merged },
+  });
+  try {
+    assert.equal(res.status, 2, `an all-skipped run must stay "nothing actionable": ${res.stdout}\n${res.stderr}`);
+    assert.match(res.stdout, /^issues: 0 published, 0 duplicate, 2 skipped$/m, `the receipt stayed silent: ${res.stdout}`);
+    assert.equal((res.stdout.match(/^skipped: /gm) || []).length, 2, `each dropped finding needs its own line: ${res.stdout}`);
+    assert.match(res.stdout, /identity mismatch/, `the reasons were not listed: ${res.stdout}`);
+    assert.equal(res.ghCalls.filter((c) => c.startsWith("issue create")).length, 0, "nothing may be filed on this path");
+  } finally {
+    rmSync(res.box, { recursive: true, force: true });
+  }
+});
+
+test("an all-skipped run with --json stays parseable JSON, with no appended receipt (round-11 review)", () => {
+  const corrupt = fixture("voicebox-modern-web-delta.md").replace(/\*\*Fingerprint\*\*: `[0-9a-f]{4}/, "**Fingerprint**: `dead");
+  const res = runCli({
+    args: ["--report", "voicebox-modern-web-delta.md", "--file-issues", "--repo", "owner/voicebox", "--json"],
+    reports: { "voicebox-modern-web-delta.md": corrupt },
+  });
+  try {
+    assert.equal(res.status, 2, `expected nothing actionable: ${res.stdout}`);
+    const parsed = JSON.parse(res.stdout.trim());
+    assert.ok(parsed && typeof parsed === "object", `stdout was not a single JSON document: ${res.stdout}`);
+    assert.ok(!/^issues:/m.test(res.stdout), `a receipt line was appended to JSON output: ${res.stdout}`);
+    assert.ok(!/^skipped:/m.test(res.stdout), `a skip line was appended to JSON output: ${res.stdout}`);
   } finally {
     rmSync(res.box, { recursive: true, force: true });
   }

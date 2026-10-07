@@ -221,6 +221,16 @@ export const GENERIC_REMEDIATION = "Rotate the credential, remove it from source
  * Every other string is masked. Home paths are elided so a private report's location does not
  * ride along into a public tracker.
  */
+// One line per dropped finding, in the shape a key-prefix log summary keeps (miniapps' parsePublisherSummary
+// retains lines beginning published:|duplicate:|skipped:|failed:). The closing summary starts with "issues:",
+// which such a filter drops, so without this line a skipped finding reaches the caller's log as nothing at
+// all. Masked like every other surface, because a reason can quote report text.
+export function skippedLine(entry) {
+  const fingerprint = String(entry?.finding?.fingerprint ?? "").slice(0, 16) || "unidentified";
+  const reasons = entry?.verdict?.reasons?.join("; ") || "no reason recorded";
+  return `skipped: ${fingerprint} (${maskText(reasons)})\n`;
+}
+
 export function sanitizeFinding(finding, { privateRoot } = {}) {
   // Withheld for every identity-critical station, not only the credential scanner: a vulnerability
   // agent's candidate is an attack payload by construction, and this pipeline publishes at every
@@ -642,6 +652,9 @@ export function humanReviewWhy(reason) {
   if (reason === "model-prose") return "this station's prose is model-authored and security-sensitive";
   if (reason === "both") {
     return "this remediation changes functionality AND this station's prose is model-authored and security-sensitive";
+  }
+  if (reason === "flagged-for-review") {
+    return "a human-review flag is recorded on this issue and no functionality change was assessed, so the bead is claimable (assert one with --functionality-change)";
   }
   return "this remediation changes functionality";
 }
@@ -1193,8 +1206,11 @@ function fileIssues(entries, { repo, target }) {
     if (entry.verdict.action !== "issue") {
       // Counted, not swallowed: a report whose findings all skip publishes nothing and exits 2, and a
       // caller that reads exit 2 as success would never see the findings were dropped. In a mixed run
-      // the receipt must say so too.
-      if (entry.verdict.action === "skip") skipped += 1;
+      // the receipt must say so too - both per finding and in the closing count.
+      if (entry.verdict.action === "skip") {
+        skipped += 1;
+        process.stdout.write(skippedLine(entry));
+      }
       continue;
     }
     const { finding } = entry;
@@ -1394,10 +1410,15 @@ function promote(opts, { repo, target }) {
       opts.functionality?.has(identity.station ?? "") ||
       opts.functionality?.has(identity.ruleId ?? ""),
   );
+  // A bare automated flag NEVER implies a functionality change (coord's ruling): it marks the issue for
+  // verification and leaves the bead claimable. Only an explicit signal blocks - the operator's assertion
+  // above, or a reason recorded on the issue (factory-human-review-reason), which is what this publisher
+  // writes when a change was confirmed at publish time. The old fallback asserted "this remediation
+  // changes functionality" for a non-security station on the strength of a flag alone.
   const humanReviewReason = confirmedFunctionality
     ? "functionality-change"
     : identity.humanReview || securityStation
-      ? identity.humanReviewReason ?? (securityStation ? "model-prose" : "functionality-change")
+      ? identity.humanReviewReason ?? (securityStation ? "model-prose" : "flagged-for-review")
       : null;
   const severity = VALID_SEVERITIES.includes(identity.severity) ? identity.severity : "critical";
   const finding = {
@@ -1605,7 +1626,19 @@ function main(argv) {
     process.stdout.write(`${serialised}\n`);
   } else process.stdout.write(`${describePlan(plan, { privateRoot: opts.privateRoot })}\n`);
   const actionable = plan.filter((e) => e.verdict.action === "issue");
-  if (actionable.length === 0) return 2;
+  if (actionable.length === 0) {
+    // Nothing is actionable, so this returns before fileIssues and no receipt line would ever be printed: a
+    // caller parsing the receipt then sees nothing, and exit 2 on its own reads as "nothing to do" while
+    // findings were skipped. The same lines are printed here - one per dropped finding, then the summary -
+    // so a caller is never silent about what the run dropped. No GitHub call is made on this path, and
+    // --json output is left alone, because a caller parsing it would be handed a trailing line.
+    const dropped = plan.filter((e) => e.verdict.action === "skip");
+    if (dropped.length > 0 && !opts.json) {
+      for (const entry of dropped) process.stdout.write(skippedLine(entry));
+      process.stdout.write(`issues: 0 published, 0 duplicate, ${dropped.length} skipped\n`);
+    }
+    return 2;
+  }
   if (opts.fileIssues) return fileIssues(plan, { repo, target });
   return 0;
 }
