@@ -2608,6 +2608,33 @@ test("INBOUND CRITERION: a security station promoted from a comment is claimable
   }
 });
 
+test("A triage comment repeating the body fingerprint is ONE finding, not two (round 8)", () => {
+  // The reviewer's surviving mutant: dropping this dedupe kept the suite green. Without it, a poller
+  // commenting the same fingerprint the issue already carries would turn one finding into two, and
+  // promotion would refuse with "carries 2 findings" for an issue that names exactly one.
+  const fp = "9f".repeat(32);
+  const repeating = JSON.stringify({
+    number: 6, state: "OPEN", title: "[factory/high] qa-station: stub", url: "https://example.invalid/6", labels: [],
+    body: `<!-- factory-fingerprint: ${fp} -->\n<!-- factory-station: qa-station -->\n<!-- factory-severity: high -->\n<!-- factory-state: new -->`,
+    comments: [
+      { body: `<!-- factory-triage-comment: ${fp} -->\n<!-- factory-station: qa-station -->\n<!-- factory-severity: high -->\n<!-- factory-state: new -->` },
+      { body: "<!-- factory-review: alice -->" },
+    ],
+  });
+  const res = runCli({ args: ["--promote", "6", "--apply", "--repo", "owner/voicebox"], stubGh: ghStubViewing(repeating) });
+  try {
+    assert.equal(res.status, 0, `one finding reported as several: ${res.stderr}`);
+    assert.ok(!/carries 2 findings/.test(res.stderr), `the repeat counted twice: ${res.stderr}`);
+    const create = res.bdCalls.find((c) => c.startsWith("create"));
+    assert.ok(create, `no bead created: ${res.bdCalls.join(" | ")}`);
+    assert.ok(create.includes(`--external-ref factory:${fp}`), `the identity changed: ${create}`);
+    // Exactly one bead, and an untied verdict is enough here BECAUSE the issue names exactly one finding.
+    assert.equal(res.bdCalls.filter((c) => c.startsWith("create")).length, 1, `more than one bead: ${res.bdCalls.join(" | ")}`);
+  } finally {
+    rmSync(res.box, { recursive: true, force: true });
+  }
+});
+
 test("A MALFORMED --repo cannot disarm the cross-target refusal (round 5 P1)", () => {
   // `--repo /` used to parse to an empty name, which is falsy, which skipped the guard — the third
   // shape of the same bug. A repository that names nothing fails closed.
