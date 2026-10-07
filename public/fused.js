@@ -776,6 +776,13 @@ async function closeOneRoomFolder(name) {
   }
 }
 
+async function clearAllRoomFolders() {
+  if (roomFoldersReadyPromise) await roomFoldersReadyPromise;
+  for (const name of Array.from(roomFolders.keys())) {
+    await closeOneRoomFolder(name);
+  }
+}
+
 async function loadRoomFolder() {
   if (!roomFolder) return load();
   if (roomFolder.permission !== "granted") {
@@ -906,6 +913,8 @@ async function writeRoomFile(name, content) {
   await loadRoomFolder();
   return { bytes: observed };
 }
+
+let roomFoldersReadyPromise = null;
 
 async function initRoomFolders() {
   const saved = await loadPersistedRoomFolders();
@@ -5920,9 +5929,11 @@ if (els.miniAppContainer) {
   window.__voiceboxMiniApp = miniAppController;
 }
 load();
-initRoomFolders().catch((err) => console.warn("[voicebox] could not restore room folders:", err));
+roomFoldersReadyPromise = initRoomFolders().catch((err) => console.warn("[voicebox] could not restore room folders:", err));
 
 // Expose room folder helpers on window for testability and non-speech drives
+window.__voiceboxRoomFoldersReady = () => roomFoldersReadyPromise;
+window.__voiceboxClearAllRoomFolders = clearAllRoomFolders;
 window.__voiceboxAdoptFolder = adoptRoomFolder;
 window.__voiceboxGetRoomFolders = () => roomFolders;
 window.__voiceboxGetActiveFolder = () => roomFolder;

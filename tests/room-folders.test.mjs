@@ -95,14 +95,19 @@ test("room folders: readable and writable handle, write lands byte-for-byte", { 
 
 test("room folders: several directories at once, switching, and closing", { timeout: 60000 }, async () => {
   await page.goto(`${server.base}/`);
-  await page.waitFor(() => window.__voiceboxAdoptFolder !== undefined, { label: "room folder helpers" });
+  await page.waitFor(() => window.__voiceboxRoomFoldersReady !== undefined, { label: "room folder helpers" });
 
-  // Clean slate
+  // Clean slate: ensure room folders initialization has settled and purge any leftover folders
   await page.evaluate(async () => {
-    const folders = window.__voiceboxGetRoomFolders?.();
-    if (folders) for (const name of Array.from(folders.keys())) await window.__voiceboxCloseOneRoomFolder?.(name);
+    await window.__voiceboxRoomFoldersReady?.();
+    await window.__voiceboxClearAllRoomFolders?.();
   });
-  await sleep(100);
+
+  // Observable clean slate confirmation: folders bar has 0 chips
+  await page.waitFor(
+    () => document.querySelectorAll(".folder-chip").length === 0,
+    { label: "clean slate zero folder chips" }
+  );
 
   // Open three distinct folders
   await page.evaluate(async () => {
@@ -130,7 +135,7 @@ test("room folders: several directories at once, switching, and closing", { time
   // Verify all 3 chips appear in the folders bar
   await page.waitFor(
     () => document.querySelectorAll(".folder-chip").length === 3,
-    { label: "three folder chips in the bar" }
+    { timeout: 30000, label: "three folder chips in the bar" }
   );
 
   const chips = await page.evaluate(() => {
@@ -157,7 +162,12 @@ test("room folders: several directories at once, switching, and closing", { time
     const chip = document.querySelector(".folder-chip[data-folder='folder-alpha']");
     chip?.querySelector(".folder-select-btn")?.click();
   });
-  await sleep(200);
+
+  // Verify folder-alpha is active via observable attribute
+  await page.waitFor(
+    () => document.querySelector(".folder-chip[data-folder='folder-alpha']")?.dataset?.active === "true",
+    { label: "folder-alpha active chip" }
+  );
 
   // Verify alpha.txt is now in the listing
   await page.waitFor(
@@ -176,7 +186,12 @@ test("room folders: several directories at once, switching, and closing", { time
     const chip = document.querySelector(".folder-chip[data-folder='folder-beta']");
     chip?.querySelector(".folder-close-btn")?.click();
   });
-  await sleep(200);
+
+  // Observable synchronization: wait until folder-beta is removed and count is 2
+  await page.waitFor(
+    () => document.querySelectorAll(".folder-chip").length === 2 && !document.querySelector(".folder-chip[data-folder='folder-beta']"),
+    { label: "two folder chips after closing folder-beta" }
+  );
 
   const remaining = await page.evaluate(() => {
     return Array.from(document.querySelectorAll(".folder-chip")).map((c) => c.dataset.folder);
@@ -186,14 +201,18 @@ test("room folders: several directories at once, switching, and closing", { time
 
 test("room folders: persistence across reloads and restore access button", { timeout: 60000 }, async () => {
   await page.goto(`${server.base}/`);
-  await page.waitFor(() => window.__voiceboxAdoptFolder !== undefined, { label: "room folder helpers" });
+  await page.waitFor(() => window.__voiceboxRoomFoldersReady !== undefined, { label: "room folder helpers" });
 
-  // Clean slate
+  // Clean slate: ensure room folders initialization has settled and purge any leftover folders
   await page.evaluate(async () => {
-    const folders = window.__voiceboxGetRoomFolders?.();
-    if (folders) for (const name of Array.from(folders.keys())) await window.__voiceboxCloseOneRoomFolder?.(name);
+    await window.__voiceboxRoomFoldersReady?.();
+    await window.__voiceboxClearAllRoomFolders?.();
   });
-  await sleep(100);
+
+  await page.waitFor(
+    () => document.querySelectorAll(".folder-chip").length === 0,
+    { label: "clean slate zero folder chips" }
+  );
 
   // 1. Adopt a folder
   await page.evaluate(async () => {
@@ -211,8 +230,10 @@ test("room folders: persistence across reloads and restore access button", { tim
 
   // 2. Reload the page!
   await page.reload();
-  await page.waitFor(() => window.__voiceboxGetRoomFolders !== undefined, { label: "room helpers after reload" });
-  await sleep(500);
+  await page.waitFor(() => window.__voiceboxRoomFoldersReady !== undefined, { label: "room helpers after reload" });
+  await page.evaluate(async () => {
+    await window.__voiceboxRoomFoldersReady?.();
+  });
 
   // 3. Verify the folder was restored from IndexedDB
   const restoredFolders = await page.evaluate(() => {
@@ -323,5 +344,51 @@ test("room folders: turn creates a file in active room folder on disk", { timeou
     return res.text;
   });
   assert.equal(content, "spoken into the room folder");
+});
+
+test("room folders negative control: un-adopted directory and non-directory handles never create chips", { timeout: 60000 }, async () => {
+  await page.goto(`${server.base}/`);
+  await page.waitFor(() => window.__voiceboxRoomFoldersReady !== undefined, { label: "room folder helpers" });
+
+  await page.evaluate(async () => {
+    await window.__voiceboxRoomFoldersReady?.();
+    await window.__voiceboxClearAllRoomFolders?.();
+  });
+
+  await page.waitFor(
+    () => document.querySelectorAll(".folder-chip").length === 0,
+    { label: "zero chips initially" }
+  );
+
+  // 1. Create a directory in OPFS but do NOT adopt it, plus attempt adopting null and a file handle
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    await root.getDirectoryHandle("unadopted-dir", { create: true });
+    await window.__voiceboxAdoptFolder?.(null);
+    const fileHandle = await root.getFileHandle("not-a-dir.txt", { create: true });
+    await window.__voiceboxAdoptFolder?.(fileHandle);
+  });
+
+  // Verify no chips were created
+  const chipsCount = await page.evaluate(() => document.querySelectorAll(".folder-chip").length);
+  assert.equal(chipsCount, 0, "unadopted or invalid handles must not create chips");
+
+  // 2. Adopt exactly one folder
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const d1 = await root.getDirectoryHandle("single-folder", { create: true });
+    await window.__voiceboxAdoptFolder(d1, { makeActive: true });
+  });
+
+  await page.waitFor(
+    () => document.querySelectorAll(".folder-chip").length === 1,
+    { label: "exactly one folder chip" }
+  );
+
+  // Negative control assertion: count is strictly 1, never 3
+  const chips = await page.evaluate(() => Array.from(document.querySelectorAll(".folder-chip")).map((c) => c.dataset.folder));
+  assert.equal(chips.length, 1);
+  assert.equal(chips[0], "single-folder");
+  assert.notEqual(chips.length, 3, "negative control: one folder must never satisfy three-chip condition");
 });
 
