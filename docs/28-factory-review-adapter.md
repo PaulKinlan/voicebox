@@ -108,6 +108,6 @@ Comments formatted by [`tools/factory-issue-commenter.mjs`](../tools/factory-iss
 - `factory-station`: executing station name (e.g. `secret-scan`, `perf-review`).
 - `factory-severity`: finding severity (`critical`, `high`, `medium`, `low`, `info`).
 - `factory-state`: finding state (`new` or `regressed`).
-- `factory-human-review`: presence flag emitted when the station is security-related (`secret-scan`, `vuln-discovery`, `vuln-triage`, `vuln-verify`, `deps-supply-chain`) or when the finding is flagged for human verification.
+- `factory-human-review`: presence flag emitted when the station is security-related (`secret-scan`, `vuln-discovery`, `vuln-triage`, `vuln-verify`, `threat-model`) or when the finding is flagged for human verification.
 
 These markers allow `scripts/factory-triage.mjs --review` and `--promote` to read review records from issue comments on human-submitted issues, enabling seamless conversion to Beads.

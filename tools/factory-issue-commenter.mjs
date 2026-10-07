@@ -19,7 +19,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { redactSecrets } from "../lib/redact.mjs";
 
-const SECURITY_STATIONS = new Set(["vuln-discovery", "vuln-triage", "vuln-verify", "secret-scan", "deps-supply-chain"]);
+const SECURITY_STATIONS = new Set(["vuln-discovery", "vuln-triage", "vuln-verify", "secret-scan", "threat-model"]);
 
 /**
  * Format a safe, sanitized markdown triage comment from a directory of factory reports.
