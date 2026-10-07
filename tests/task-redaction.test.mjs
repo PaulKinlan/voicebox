@@ -73,13 +73,9 @@ test("a completed answer is redacted at the durable boundary — audit file and 
 });
 
 test("a failure whose executor output carried a secret never persists it — the over-budget path", async (t) => {
-  // The over-budget answer must not reach the durable record in ANY field. NOTE (found while
-  // writing this test): D6's `partial: answer` spread in the catch path is DEAD CODE today —
-  // `answer` is block-scoped to the try, so the catch sees it as undeclared and the partial is
-  // silently dropped (the existing D6 test only checks `progress`). The durable boundary in
-  // settle() redacts `partial` regardless, so if the scoping is ever repaired the record stays
-  // safe. The resurrection decision is filed as its own bead; this test locks TODAY's behavior:
-  // no partial field, and no canary anywhere in the audit.
+  // An over-budget answer must never reach the durable record in unredacted form. With D6's partial
+  // output resurrected (voicebox-beads-t1d4), the partial is recorded but scrubbed through redactSecrets()
+  // at the durable settle() boundary, so no raw secret leaks into the audit or task view.
   const big = `partial work ${CANARY} `.repeat(200); // comfortably over the 4096-byte bound
   const f = fixture(t, async () => big);
   const admitted = f.admit();
@@ -92,6 +88,28 @@ test("a failure whose executor output carried a secret never persists it — the
   assert.equal(view.reason, "task-output-over-budget");
   assert.ok(!f.raw().includes(CANARY), "the canary reached the durable .audit JSONL on the failure path");
   assert.ok(!JSON.stringify(view).includes(CANARY), "the canary reached the task view on the failure path");
+  assert.ok(view.partial.includes("[redacted]"), "canary in over-budget partial must be redacted");
+});
+
+test("a failure whose partial output carries a secret persists redacted partial, never the raw canary", async (t) => {
+  const f = fixture(t, async () => {
+    throw Object.assign(new Error("interrupted"), {
+      refused: "executor-failed",
+      partial: `halfway done with key ${CANARY} and some trailing text`,
+    });
+  });
+  const admitted = f.admit();
+  assert.equal(admitted.ok, true, JSON.stringify(admitted));
+  const { task: view } = await until(
+    () => f.status(admitted.task.address),
+    (r) => r.ok && r.task.state !== "queued" && r.task.state !== "running",
+  );
+  assert.equal(view.state, "failed");
+  assert.ok(view.partial, "partial field must be present");
+  assert.ok(view.partial.includes("[redacted]"), "canary in partial must be redacted");
+  assert.ok(view.partial.includes("halfway done with key"), "non-secret text must survive");
+  assert.ok(!f.raw().includes(CANARY), "the raw canary must not reach the durable .audit JSONL");
+  assert.ok(!JSON.stringify(view).includes(CANARY), "the raw canary must not reach the task view");
 });
 
 test("the CLI harness producer redacts onConsole chunks before any consumer sees them", async (t) => {

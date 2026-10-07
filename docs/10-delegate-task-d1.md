@@ -62,6 +62,9 @@ Terminal task records carry an explicit `outcome` classification (`tests/task-ou
 
 *(Non-terminal states such as `running` or `cancel_unconfirmed` carry no outcome classification.)*
 
+### Partial Output Preservation (D6)
+When a task fails or is interrupted after partial execution output has been returned by the executor or attached to a thrown failure (`err.partial`), the partial output is recorded in `partial` rather than discarded (`lib/tasks.mjs`). Terminal partial text is scrubbed through `redactSecrets()` at the durable `settle()` boundary before being written to `.audit` or served in task views.
+
 ### Verification Suites
 ```bash
 node --test --test-concurrency=1 tests/tasks.test.mjs tests/tasks-http.test.mjs tests/tasks-browser.test.mjs tests/task-outcome.test.mjs
