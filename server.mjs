@@ -226,13 +226,39 @@ function applyRememberedProjectInstruction(ws, session) {
 // defect as a footer promising files the live path could not write.
 const ENV_FILE = path.join(WORKSPACE, "environments.json");
 
+/**
+ * What makes two rows THE SAME environment (voicebox-beads-mrr7): label, kind and origin all
+ * equal — such rows differ only in bookkeeping, never in what they point at. Structured as JSON
+ * rather than a concatenated string so no field value can smuggle a boundary (measured in review:
+ * a delimiter-free join let one pair of distinct rows collide). Note the contract: a repeat
+ * declare CANNOT change a row's home/reach — the first row stands, unmodified.
+ */
+const environmentIdentity = (env) => JSON.stringify([env?.label ?? "", env?.kind ?? "", env?.origin ?? ""]);
+
+/**
+ * The registry, deduplicated. The write path used to mint a fresh key and append unconditionally,
+ * so any client that re-declared the same host accumulated indistinguishable rows — measured on
+ * Paul's own list as ~21 copies each of three workers (voicebox-beads-mrr7). The FIRST row wins
+ * (it is the one a person named and may have paired); the rest are dropped. Applied on read (a
+ * polluted file renders clean immediately) and on write (the next write persists the healed list).
+ */
+function dedupeEnvironments(list) {
+  const seen = new Set();
+  return list.filter((env) => {
+    const identity = environmentIdentity(env);
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
 /** Read the registry. An absent file is the empty list; an unreadable/corrupt file is the named refusal. */
 function readEnvironments() {
   if (!existsSync(ENV_FILE)) return { ok: true, environments: [], declared: false };
   try {
     const parsed = JSON.parse(readFileSync(ENV_FILE, "utf8"));
     const list = Array.isArray(parsed?.environments) ? parsed.environments : [];
-    return { ok: true, environments: list, declared: true };
+    return { ok: true, environments: dedupeEnvironments(list), declared: true };
   } catch (err) {
     return { ok: false, ...listUnreadable(err?.message ?? "it is not JSON") };
   }
@@ -242,7 +268,7 @@ function readEnvironments() {
 function writeEnvironments(environments) {
   mkdirSync(WORKSPACE, { recursive: true });
   const tmp = `${ENV_FILE}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify({ environments }, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(tmp, `${JSON.stringify({ environments: dedupeEnvironments(environments) }, null, 2)}\n`, { mode: 0o600 });
   renameSync(tmp, ENV_FILE);
 }
 
@@ -4829,6 +4855,12 @@ async function handle(req, res) {
       }
 
       const descriptor = { ...candidate.value, declaredAt: new Date().toISOString() };
+      // Idempotent declare (voicebox-beads-mrr7): an EXACT repeat — label, kind and origin all
+      // equal — is the same environment, not a new row. Return the one already declared instead
+      // of appending a twin; re-declaring is how a client says "make sure this exists", and the
+      // unconditional append is what filled one operator's list with 21 copies of the same host.
+      const existing = stored.environments.find((env) => environmentIdentity(env) === environmentIdentity(descriptor));
+      if (existing) return json(res, 200, { ok: true, environment: existing, deduped: true });
       writeEnvironments([...stored.environments, descriptor]);
       return json(res, 200, { ok: true, environment: descriptor });
     });

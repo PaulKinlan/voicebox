@@ -12,6 +12,9 @@
 // re-pointed environment would silently inherit another's history. So the identity a pairing and a
 // task pin is a self-issued key the host presents at handshake. `label` and `origin` are display and
 // dialling, never identity.
+// SCOPE NOTE (voicebox-beads-mrr7): keys remain the identity for pairings, tasks and credentials.
+// The registry's declare path separately treats label+kind+origin as the SAME ROW for dedupe only —
+// an exact repeat keeps the first key rather than appending a twin; nothing pairs or pins on it.
 //
 // THE TWO NAMED ABSENCES, kept distinct because the remedies differ (the same discipline as
 // `root-not-declared` vs `root-not-reachable-from-here` one level down):

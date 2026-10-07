@@ -118,3 +118,68 @@ test("a hand-edited descriptor's boundary/capability claims are NOT inherited �
   assert.equal(fake.capability, null, "a stored capability claim is re-nulled, not echoed as a measurement");
   writeFileSync(file, JSON.stringify({ environments: [] }));
 });
+
+// voicebox-beads-mrr7: the unconditional append filled one operator's list with ~21 copies each of
+// three workers. The declare is now idempotent for an exact repeat, and the registry heals a
+// polluted file on read and persists the healing on the next write.
+test("declaring the same environment twice keeps ONE row and hands back the existing one", async () => {
+  const file = path.join(scratch, "workspace", "environments.json");
+  writeFileSync(file, JSON.stringify({ environments: [] }));
+  const descriptor = { label: "Worker Alpha", kind: "server", origin: "http://127.0.0.1:9" };
+  const first = await addEnv(descriptor);
+  assert.equal(first.status, 200);
+  assert.equal(first.body.deduped, undefined, "the first declare is a new row, not a dedupe");
+  for (let i = 0; i < 3; i++) {
+    const again = await addEnv(descriptor);
+    assert.equal(again.status, 200);
+    assert.equal(again.body.deduped, true, "an exact repeat is answered with the existing row");
+    assert.equal(again.body.environment.key, first.body.environment.key, "the repeat keeps the FIRST row's key — the one a person may have paired");
+  }
+  const { environments } = await listEnvs();
+  assert.equal(environments.filter((e) => e.label === "Worker Alpha").length, 1, "four declares, one row");
+  assert.equal(JSON.parse(readFileSync(file, "utf8")).environments.length, 1, "the file holds one row too");
+
+  // The OTHER direction, locked (the regression that would break workers-on-two-hosts): only the
+  // exact triple collapses — a different origin, a different label, or a different kind is a NEW row.
+  const differentOrigin = await addEnv({ label: "Worker Alpha", kind: "server", origin: "http://127.0.0.1:10" });
+  assert.equal(differentOrigin.body.deduped, undefined, "same label on another host is its own environment");
+  const differentLabel = await addEnv({ label: "Worker Beta", kind: "server", origin: "http://127.0.0.1:9" });
+  assert.equal(differentLabel.body.deduped, undefined, "another name for the same host is its own row");
+  const after = await listEnvs();
+  assert.equal(after.environments.filter((e) => e.label === "Worker Alpha").length, 2, "same name, two hosts, two rows");
+
+  // The identity is STRUCTURED (review, mrr7): no field value can smuggle a boundary — an origin
+  // that begins with the kind word must not collide with a longer label.
+  const smuggleA = await addEnv({ label: "Worker Alpha", kind: "server", origin: "serverhttp://h:1" });
+  const smuggleB = await addEnv({ label: "Worker Alphaserver", kind: "server", origin: "http://h:1" });
+  assert.notEqual(smuggleA.body.environment.key, smuggleB.body.environment?.key, "distinct rows must not share a key");
+  const final = await listEnvs();
+  assert.ok(final.environments.some((e) => e.origin === "serverhttp://h:1"), "the smuggled-origin row survived the write");
+  assert.ok(final.environments.some((e) => e.key === smuggleB.body.environment.key), "the second row's key survived the write — the old delimiter-join identity silently dropped it (review, mrr7)");
+  writeFileSync(file, JSON.stringify({ environments: [] }));
+});
+
+test("a polluted registry file reads deduplicated, and the next write persists the healed list", async () => {
+  // Paul's file, in miniature: three workers, each repeated, every row indistinguishable.
+  const file = path.join(scratch, "workspace", "environments.json");
+  const worker = (name, n) => ({ key: `env_dup_${name}_${n}`, label: `Worker ${name}`, kind: "server", origin: "http://127.0.0.1:9", declaredAt: new Date().toISOString() });
+  const polluted = [];
+  for (let i = 0; i < 4; i++) for (const name of ["Alpha", "Beta", "Gamma"]) polluted.push(worker(name, i));
+  writeFileSync(file, JSON.stringify({ environments: polluted }));
+
+  const { environments } = await listEnvs();
+  const workers = environments.filter((e) => e.label?.startsWith("Worker "));
+  assert.equal(workers.length, 3, "twelve polluted rows render as the three they point at");
+  assert.deepEqual(workers.map((e) => e.label).sort(), ["Worker Alpha", "Worker Beta", "Worker Gamma"]);
+  assert.equal(workers.find((e) => e.label === "Worker Alpha").key, "env_dup_Alpha_0", "the FIRST row of each name wins — the one a person may have paired");
+
+  // The file still holds the pollution (read heals the VIEW, not the disk) — until the next write,
+  // which persists the healed list.
+  assert.equal(JSON.parse(readFileSync(file, "utf8")).environments.length, 12, "a read alone does not rewrite the operator's file");
+  const added = await addEnv({ label: "atlas box", kind: "server", origin: "http://127.0.0.1:9" });
+  assert.equal(added.status, 200);
+  const onDisk = JSON.parse(readFileSync(file, "utf8")).environments;
+  assert.equal(onDisk.filter((e) => e.label?.startsWith("Worker ")).length, 3, "the next write persists the healed list");
+  assert.equal(onDisk.length, 4, "the healed three plus the new declaration");
+  writeFileSync(file, JSON.stringify({ environments: [] }));
+});
