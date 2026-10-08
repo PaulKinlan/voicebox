@@ -1319,66 +1319,87 @@ test("browser: bridge rejects unsupported schema keywords at registration time (
   assert.equal(Array.isArray(badStringEnumResult), true);
   assert.equal(badStringEnumResult.length, 0, "tool with unsatisfiable string enum must be rejected at registration");
 
-  // Also test bridge rejecting __proto__ in properties and required (both top-level and nested)
+  // Also test bridge rejecting __proto__ in properties and required (both top-level and nested) with discriminating positive control
   const bridgeProtoCheck = await page.evaluate(async (base) => {
-    const results = {};
-    const testCases = [
-      { id: "root-prop", propName: "__proto__", inProps: true, inReq: false, nested: false },
-      { id: "root-req", propName: "safe", inProps: false, inReq: true, nested: false },
-      { id: "nested-prop", propName: "__proto__", inProps: true, inReq: false, nested: true },
-      { id: "nested-req", propName: "safe", inProps: false, inReq: true, nested: true },
-      { id: "valid-control", propName: "safe", inProps: false, inReq: false, nested: false, valid: true },
-    ];
+    return new Promise((resolve, reject) => {
+      const outer = document.createElement("iframe");
+      outer.src = `${base}/mini-app-bridge.html`;
 
-    for (const tc of testCases) {
-      const p = await new Promise((resolve) => {
-        const outer = document.createElement("iframe");
-        outer.src = `${base}/mini-app-bridge.html`;
-        window.addEventListener("message", function onMsg(e) {
-          if (e.origin !== window.location.origin) return;
-          if (e.data?.type === "bridge_ready") {
-            let params;
-            if (tc.valid) {
-              params = { type: "object", properties: { safe: { type: "string" } }, required: ["safe"] };
-            } else if (!tc.nested && tc.inProps) {
-              params = { type: "object", properties: { ["__proto__"]: { type: "string" } } };
-            } else if (!tc.nested && tc.inReq) {
-              params = { type: "object", properties: { safe: { type: "string" } }, required: ["__proto__"] };
-            } else if (tc.nested && tc.inProps) {
-              params = { type: "object", properties: { sub: { type: "object", properties: { ["__proto__"]: { type: "string" } } } } };
-            } else if (tc.nested && tc.inReq) {
-              params = { type: "object", properties: { sub: { type: "object", properties: { safe: { type: "string" } }, required: ["__proto__"] } } };
-            }
+      const timer = setTimeout(() => {
+        window.removeEventListener("message", onMsg);
+        if (outer.parentNode) document.body.removeChild(outer);
+        reject(new Error("timed out waiting for bridge app_ready"));
+      }, 15000);
 
-            const appHtml = `<script>
-              window.webMcp.registerTool({
-                name: "test_proto_tool",
-                description: "Test tool",
-                parameters: ${JSON.stringify(params)},
-                execute: async () => ({ status: "ok" })
-              });
-              window.webMcp.ready();
-            <\/script>`;
-            outer.contentWindow.postMessage({ type: "load_app", appId: "test-" + tc.id, html: appHtml }, window.location.origin);
-          } else if (e.data?.type === "app_ready") {
-            window.removeEventListener("message", onMsg);
-            document.body.removeChild(outer);
-            resolve(e.data.tools || []);
-          }
-        });
-        document.body.appendChild(outer);
-        setTimeout(() => resolve([]), 5000);
-      });
-      results[tc.id] = p.length;
-    }
-    return results;
+      function onMsg(e) {
+        if (e.origin !== window.location.origin) return;
+        if (e.source !== outer.contentWindow) return;
+
+        if (e.data?.type === "bridge_ready") {
+          const appHtml = `<script>
+            // 1. Root properties.__proto__ (negative case 1)
+            window.webMcp.registerTool({
+              name: "root_prop_proto",
+              description: "Root prop proto",
+              parameters: { type: "object", properties: { ["__proto__"]: { type: "string" } } },
+              execute: async () => ({ status: "ok" })
+            });
+
+            // 2. Root required: ['__proto__'] (negative case 2)
+            window.webMcp.registerTool({
+              name: "root_req_proto",
+              description: "Root req proto",
+              parameters: { type: "object", properties: { safe: { type: "string" } }, required: ["__proto__"] },
+              execute: async () => ({ status: "ok" })
+            });
+
+            // 3. Nested properties.__proto__ (negative case 3)
+            window.webMcp.registerTool({
+              name: "nested_prop_proto",
+              description: "Nested prop proto",
+              parameters: { type: "object", properties: { sub: { type: "object", properties: { ["__proto__"]: { type: "string" } } } } },
+              execute: async () => ({ status: "ok" })
+            });
+
+            // 4. Nested required: ['__proto__'] (negative case 4)
+            window.webMcp.registerTool({
+              name: "nested_req_proto",
+              description: "Nested req proto",
+              parameters: { type: "object", properties: { sub: { type: "object", properties: { safe: { type: "string" } }, required: ["__proto__"] } } },
+              execute: async () => ({ status: "ok" })
+            });
+
+            // 5. Positive control: valid tool (must be admitted)
+            window.webMcp.registerTool({
+              name: "valid_control_tool",
+              description: "Valid control",
+              parameters: { type: "object", properties: { safe: { type: "string" } }, required: ["safe"] },
+              execute: async () => ({ status: "ok" })
+            });
+
+            window.webMcp.ready();
+          <\/script>`;
+          outer.contentWindow.postMessage({ type: "load_app", appId: "proto-check-app", html: appHtml }, window.location.origin);
+        } else if (e.data?.type === "app_ready") {
+          clearTimeout(timer);
+          window.removeEventListener("message", onMsg);
+          if (outer.parentNode) document.body.removeChild(outer);
+          resolve(e.data.tools || []);
+        }
+      }
+
+      window.addEventListener("message", onMsg);
+      document.body.appendChild(outer);
+    });
   }, server.base);
 
-  assert.equal(bridgeProtoCheck["root-prop"], 0, "bridge must reject root properties.__proto__");
-  assert.equal(bridgeProtoCheck["root-req"], 0, "bridge must reject root required: ['__proto__']");
-  assert.equal(bridgeProtoCheck["nested-prop"], 0, "bridge must reject nested properties.__proto__");
-  assert.equal(bridgeProtoCheck["nested-req"], 0, "bridge must reject nested required: ['__proto__']");
-  assert.equal(bridgeProtoCheck["valid-control"], 1, "bridge must admit valid control tool");
+  assert.equal(Array.isArray(bridgeProtoCheck), true);
+  assert.equal(bridgeProtoCheck.length, 1, "only valid control tool must be registered; all 4 __proto__ tools must be rejected");
+  assert.equal(bridgeProtoCheck[0].name, "valid_control_tool");
+  assert.equal(bridgeProtoCheck.some((t) => t.name === "root_prop_proto"), false, "bridge must reject root properties.__proto__");
+  assert.equal(bridgeProtoCheck.some((t) => t.name === "root_req_proto"), false, "bridge must reject root required: ['__proto__']");
+  assert.equal(bridgeProtoCheck.some((t) => t.name === "nested_prop_proto"), false, "bridge must reject nested properties.__proto__");
+  assert.equal(bridgeProtoCheck.some((t) => t.name === "nested_req_proto"), false, "bridge must reject nested required: ['__proto__']");
 });
 
 test("core: validateWebMcpTool rejects contradictory and malformed constraint schemas (Finding P1)", () => {
