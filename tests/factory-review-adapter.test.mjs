@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import {
   selectReviewStation,
@@ -664,13 +664,109 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
       id: "voicebox-beads-test",
       assignee: "voicebox-miniapps",
       status: "in_progress",
-      title: "Test task on fleet/miniapps-xacp",
-      description: "Working on fleet/miniapps-xacp candidate branch",
+      title: "Test task on fleet/watcher-fixture-candidate",
+      description: "Working on fleet/watcher-fixture-candidate candidate branch",
     },
   ];
 
-  const tipSha = execFileSync("git", ["rev-parse", "refs/remotes/origin/fleet/miniapps-xacp"], { cwd: ROOT, encoding: "utf8" }).trim();
-  const taskKey = `fleet/miniapps-xacp@${tipSha}`;
+  // Deterministic candidate ref OWNED BY THIS TEST, built as a REAL isolated remote
+  // (voicebox-beads-guu9). Two earlier shapes could not work: reading the author's remote-tracking ref
+  // depended on the state of the world (that branch landed and was pruned), and creating a ref under
+  // refs/remotes/origin/ ourselves does not survive the watcher's own `git fetch origin --prune`, which
+  // deletes any tracking ref the remote does not have before the ref is ever read. So the fixture stands
+  // up its own bare origin, pushes main and the candidate branch to it, and points the watcher at a clone
+  // of it: the prune then PRESERVES the candidate, and rev-parse/merge-base/diff run against real Git.
+  // Nothing here touches the shared origin or any author ref.
+  const fixtureBranch = "fleet/watcher-fixture-candidate";
+  // OUTSIDE the repo tree on purpose: an in-tree fixture that creates a nested repo can end up
+  // committing into the surrounding worktree (it did, once, and added a junk commit to the branch).
+  const fixtureRoot = mkdtempSync(path.join(tmpdir(), "watcher-fixture-remote-"));
+  rmSync(fixtureRoot, { recursive: true, force: true });
+  const bareDir = path.join(fixtureRoot, "origin.git");
+  const workDir = path.join(fixtureRoot, "work");
+  mkdirSync(fixtureRoot, { recursive: true });
+  // Owned, disposable HOME/XDG for git so no ~/.gitconfig, ~/.config/git/config, or XDG config from the
+  // invoking environment can steer the fixture (voicebox-beads-guu9). A hostile global/system config can
+  // redirect remote.origin.pushurl or point core.hooksPath at an external hook tree; the allowlist below
+  // makes both impossible by pinning system/global config and attributes to /dev/null and blanking hooks.
+  const gitHome = path.join(fixtureRoot, "githome");
+  const gitXdg = path.join(gitHome, ".config");
+  const gitHooksDir = path.join(fixtureRoot, "empty-hooks");
+  mkdirSync(gitHome, { recursive: true });
+  mkdirSync(gitXdg, { recursive: true });
+  mkdirSync(gitHooksDir, { recursive: true });
+  // Trusted absolute system Git pinned to /usr/bin/git ONLY. Fail closed with a descriptive error if it
+  // is missing or non-executable; NEVER fall back to /usr/local/bin or inherited PATH (voicebox-beads-guu9).
+  const TRUSTED_GIT = "/usr/bin/git";
+  const resolveTrustedGit = () => {
+    try {
+      accessSync(TRUSTED_GIT, constants.X_OK);
+      return TRUSTED_GIT;
+    } catch {
+      throw new Error(
+        `guu9 fixture security refusal: trusted git executable ${TRUSTED_GIT} is missing or not executable. Refusing to fall back to PATH.`
+      );
+    }
+  };
+  const trustedGit = resolveTrustedGit();
+  // Freshly constructed allowlisted env: git's HOME/XDG owned by this fixture.
+  // NOTHING is inherited from process.env, including PATH (absolute trustedGit is invoked directly),
+  // so no GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE can reach the surrounding repo and no
+  // GIT_CONFIG_*/GIT_ATTR_* steering variable or hostile PATH can leak in. The only GIT_*
+  // entries present are the fixed safe overrides below (system/global config and attributes off; no
+  // GIT_CONFIG_COUNT/KEY/VALUE survives).
+  const fixtureGitEnv = () => ({
+    HOME: gitHome,
+    XDG_CONFIG_HOME: gitXdg,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_ATTR_NOSYSTEM: "1",
+  });
+  // External hooks disabled per call: core.hooksPath points at an owned EMPTY dir and init.templateDir is
+  // an owned empty dir, so neither a configured hook nor an init template can run (voicebox-beads-guu9).
+  const git = (args, cwd) => execFileSync(
+    trustedGit,
+    ["-c", `core.hooksPath=${gitHooksDir}`, "-c", `init.templateDir=${gitHooksDir}`, ...args],
+    { cwd, encoding: "utf8", env: fixtureGitEnv() },
+  );
+  git(["init", "--bare", "-q", bareDir], fixtureRoot);
+  git(["init", "-q", "-b", "main", workDir], fixtureRoot);
+  // FAIL CLOSED, before any config/add/commit/remote: prove which repo these calls address. If the git
+  // root is not the fixture itself, the surrounding repo is in reach and this test must abort.
+  const fixtureGitRoot = git(["rev-parse", "--show-toplevel"], workDir).trim();
+  assert.equal(realpathSync(fixtureGitRoot), realpathSync(workDir),
+    `fixture git ops must resolve to the fixture itself, not a parent repo (got ${fixtureGitRoot})`);
+  git(["config", "user.email", "watcher-fixture@test.local"], workDir);
+  git(["config", "user.name", "watcher fixture"], workDir);
+  writeFileSync(path.join(workDir, "README.md"), "watcher fixture base\n");
+  git(["add", "README.md"], workDir);
+  git(["commit", "-q", "-m", "fixture base"], workDir);
+  git(["remote", "add", "origin", bareDir], workDir);
+  // Pin the push destination and fail closed on any redirect before EACH push: the effective --push
+  // origin URL must be exactly the single owned bareDir, never a config-injected pushurl (voicebox-beads-guu9).
+  git(["config", "remote.origin.pushurl", bareDir], workDir);
+  const assertPushTarget = () => {
+    const got = git(["remote", "get-url", "--push", "--all", "origin"], workDir).trim();
+    assert.equal(got, bareDir, `fixture push target must be the owned bare repo (got ${got})`);
+  };
+  assertPushTarget();
+  git(["push", "-q", "origin", "main"], workDir);
+  assert.equal(git(["rev-parse", "refs/heads/main"], bareDir).trim(),
+    git(["rev-parse", "HEAD"], workDir).trim(),
+    "bare origin main must resolve the pushed commit");
+  git(["checkout", "-q", "-b", fixtureBranch], workDir);
+  writeFileSync(path.join(workDir, "candidate.txt"), "candidate change\n");
+  git(["add", "candidate.txt"], workDir);
+  git(["commit", "-q", "-m", "fixture candidate"], workDir);
+  assertPushTarget();
+  git(["push", "-q", "origin", `${fixtureBranch}:refs/heads/${fixtureBranch}`], workDir);
+  assert.equal(git(["rev-parse", `refs/heads/${fixtureBranch}`], bareDir).trim(),
+    git(["rev-parse", "HEAD"], workDir).trim(),
+    "bare origin candidate ref must resolve the pushed commit");
+  git(["fetch", "-q", "origin", "--prune"], workDir);
+  const tipSha = git(["rev-parse", `refs/remotes/origin/${fixtureBranch}`], workDir).trim();
+  const taskKey = `${fixtureBranch}@${tipSha}`;
   const cursorFile = path.join(tmpPrivate, "review-watcher-cursor.json");
 
   let triggerInvocations = [];
@@ -681,7 +777,7 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
 
   // 1. Tick 1 with NO flags (defaults only): must invoke trigger with auto-publication (no --dry-run)
   const res1 = runReviewWatcher(["--private-dir", tmpPrivate], {
-    rootDir: ROOT,
+    rootDir: workDir,
     mockBeads,
     triggerRunner: trackingTrigger,
   });
@@ -705,7 +801,7 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
   // 2. Tick 2: Second invocation on the same branch must detect cursor entry and DEDUPLICATE (zero trigger calls)
   triggerInvocations = [];
   const res2 = runReviewWatcher(["--private-dir", tmpPrivate], {
-    rootDir: ROOT,
+    rootDir: workDir,
     mockBeads,
     triggerRunner: trackingTrigger,
   });
@@ -722,8 +818,11 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
     return { ok: false, exitCode: 1 };
   };
 
+  // NOTE: this control must run against the SAME isolated clone (workDir), not ROOT. Against ROOT the
+  // fixture candidate ref does not exist, so the watcher skips the candidate, the failing trigger is never
+  // invoked, and the control reads as a pass for the wrong reason (voicebox-beads-guu9).
   const resFail = runReviewWatcher(["--private-dir", tmpFailPrivate], {
-    rootDir: ROOT,
+    rootDir: workDir,
     mockBeads,
     triggerRunner: failingTrigger,
   });
@@ -742,6 +841,7 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
 
   rmSync(tmpPrivate, { recursive: true, force: true });
   rmSync(tmpFailPrivate, { recursive: true, force: true });
+  rmSync(fixtureRoot, { recursive: true, force: true });
 });
 
 test("factory-nightly-publisher: enforces SAME-RUN manifest barrier, target check, and batch window", () => {
