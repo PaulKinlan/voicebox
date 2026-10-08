@@ -242,8 +242,20 @@ test("the page behind cannot scroll while it is open, and can again after", { ti
   await page.waitFor(() => document.getElementById("settings").open === false, { label: "the dialog to close" });
   const closed = await state();
   assert.notEqual(closed.htmlOverflow, "hidden", "the page is still scroll-locked after the dialog closed");
+  // Reset first. The suite shares ONE page, earlier checks legitimately scroll it, and this test never
+  // reset the scroller — so the assertion below was also a claim about WHERE the page happened to be.
+  // Measured (voicebox-beads-5bmg, docs/evidence/5bmg-scroll-flake-20261008/drive.mjs): parked at
+  // maxScroll (2230) the old sequence fails with moved 0 — no product defect, the wheel had nowhere to
+  // go — and with this reset the same hostile precondition passes with moved 400.
+  await page.evaluate(() => window.scrollTo(0, 0));
   const beforeFree = await page.evaluate(() => window.scrollY);
   await page.wheel(400);
+  // Then wait for the CONDITION rather than sampling once. This is NOT because 200ms proved too short:
+  // clocked at 50ms granularity on this box, under load ~7, the wheel's scroll commit always landed
+  // inside 50ms, so the fixed sleep in `page.wheel` is not the cause of the failure seen in a gate. It
+  // is the same shape the rest of this file already uses (see waitForAppWired's note on the click race),
+  // and it fails LOUDLY by label if the page really is still locked, rather than silently reading 0.
+  await page.waitFor(() => window.scrollY > 0, { label: "the page to scroll again after the dialog closed" });
   const afterFree = await page.evaluate(() => window.scrollY);
   assert.ok(afterFree > beforeFree, "the page cannot scroll again after the dialog closed");
   await page.evaluate(() => window.scrollTo(0, 0));
