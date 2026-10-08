@@ -125,3 +125,72 @@ test("protocol: host token and in-room session token accept exactly what they ac
   assert.equal(await gate({ "x-voicebox-session-token": `${session}x` }), 403, "a long session token is refused");
   assert.equal(await gate({ "x-voicebox-session-token": "" }), 403, "an empty session token is refused");
 });
+
+// ── 4. the vb_session cookie, driven ───────────────────────────────────────
+// The cookie check (sessionCookieOk in server.mjs) is one of the four comparisons that moved onto
+// lib/timing-safe.mjs, so it gets driven acceptance here rather than a unit assertion alone.
+//
+// READ THE OUTCOMES CAREFULLY, THEY ARE NOT ALL REFUSALS: the cookie authenticates the LOOPBACK
+// WALL, nothing more. With the real cookie the request passes the wall and is then refused 403 by
+// the separate extension-authority gate, which answers to the host token, the in-room session token
+// and the page origin - not to this cookie. So 401 is "the wall refused you", 403-with-a-real-cookie
+// is the wall ACCEPTING and a different gate deciding, and both are asserted below so neither can
+// be mistaken for the other.
+//
+// What this does NOT attest: timing. Nothing here measures how long a comparison took, because
+// loopback jitter dwarfs the difference; the discrimination for this change is driven acceptance
+// plus adoption of the owner, which the adoption test above asserts separately.
+test("protocol: the vb_session cookie still gates the loopback wall and is not extension authority", async (t) => {
+  const scratch = realpathSync(mkdtempSync(path.join(os.tmpdir(), "voicebox-sseh-cookie-")));
+  mkdirSync(path.join(scratch, "workspace"), { recursive: true });
+  let server = null;
+  // Registered before anything can fail, and it owns both the process and the temp dir: a failed
+  // assertion must not leave a listening server or a scratch directory behind.
+  t.after(async () => {
+    try { await server?.stop(); } finally { rmSync(scratch, { recursive: true, force: true }); }
+  });
+  server = await startServer({
+    env: {
+      VOICEBOX_WORKSPACE: path.join(scratch, "workspace"),
+      VOICEBOX_EXTENSIONS_DIR: path.join(scratch, "extensions"),
+      VOICEBOX_LOOPBACK_AUTH: "1",
+    },
+  });
+
+  const gated = (headers) =>
+    fetch(`${server.base}/api/agents`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: "{}" })
+      .then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})) }));
+
+  // 1. No cookie: refused by the wall, by name.
+  const anonymous = await gated({});
+  assert.equal(anonymous.status, 401, "without a cookie the loopback wall must refuse");
+  assert.equal(anonymous.body.refused, "loopback-unauthenticated", "and it must say which wall refused");
+
+  // 2. The host token mints a one-time bootstrap ticket; the ticket redeems into the cookie.
+  const mint = await fetch(`${server.base}/api/bootstrap`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-voicebox-host-token": server.hostToken },
+    body: "{}",
+  });
+  assert.equal(mint.status, 200, "the host token must still mint a bootstrap ticket");
+  const { url } = await mint.json();
+  assert.match(String(url), /\?bootstrap=[0-9a-f]{64}$/, "the bootstrap URL carries a 64-hex one-time ticket");
+
+  const redeem = await fetch(url, { redirect: "manual" });
+  const setCookie = redeem.headers.get("set-cookie") ?? "";
+  const secret = /vb_session=([0-9a-f]{64})/.exec(setCookie)?.[1];
+  // The value is never printed: the test asserts its SHAPE, so nothing secret reaches the log.
+  assert.ok(secret, "redeeming the ticket must set a 64-hex vb_session cookie");
+
+  // 3. The real cookie passes the wall, and is then refused by the OTHER gate - 403, not 401.
+  const withCookie = await gated({ cookie: `vb_session=${secret}` });
+  assert.equal(withCookie.status, 403,
+    "a real cookie passes the loopback wall; the 403 is the separate extension-authority gate, not the wall");
+
+  // 4. An equal-length wrong cookie is refused by the wall.
+  assert.equal((await gated({ cookie: `vb_session=x${secret.slice(1)}` })).status, 401, "a wrong cookie of equal length is refused");
+
+  // 5. A short cookie is refused rather than thrown on: unequal lengths never reach timingSafeEqual,
+  //    which throws on buffers of different length - the length gate is what turns that into a 401.
+  assert.equal((await gated({ cookie: `vb_session=${secret.slice(0, -1)}` })).status, 401, "a short cookie is refused, not crashed on");
+});
