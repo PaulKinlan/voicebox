@@ -540,34 +540,93 @@ test("factory-issue-poller: dry-run does not mutate cursor or attempt directory 
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("factory-review-trigger: getCheckoutRepoIdentity resolves normalized repository slug and refuses cross-target publication", () => {
-  const repoId = getCheckoutRepoIdentity(ROOT);
+test("factory-review-trigger: getCheckoutRepoIdentity resolves normalized repository slug and refuses cross-target publication", (t) => {
+  // This test used to ask two questions of whatever checkout the suite happens to run in: the identity of
+  // ROOT (line 544-545) and the refusal path, which it also drove with rootDir: ROOT (line 565-567). Both
+  // answers came from the machine rather than from the code: getCheckoutRepoIdentity returns a slug only for
+  // hosts in APPROVED_GIT_HOSTS, so a clone whose origin is a local path fails the first assertion outright
+  // (observed: actual '' against expected 'paulkinlan/voicebox'), and that matters beyond the failure -
+  // the refusal guard is `if (checkoutRepo && checkoutRepo !== repo.toLowerCase())`, so an EMPTY identity
+  // SKIPS the refusal. On a checkout with no approved origin the refusal assertions therefore prove nothing,
+  // which means removing the brittle first assertion alone would have left them conditionally vacuous.
+  //
+  // Both now run against a fixture this test owns: an approved-origin repo and a foreign-origin repo, with an
+  // owned allowlisted git environment. The refusal is exercised against a NON-empty identity, so it is a real
+  // assertion rather than a side effect of the host. No network is involved: the URLs are only set and read.
+  const ownedDirs = new Set();
+  t.after(() => {
+    for (const dir of ownedDirs) rmSync(dir, { recursive: true, force: true });
+  });
+  const ownDir = (dir) => {
+    ownedDirs.add(dir);
+    return dir;
+  };
+
+  const fixtureRoot = ownDir(mkdtempSync(path.join(tmpdir(), "review-trigger-identity-fixture-")));
+  const approvedRepoDir = path.join(fixtureRoot, "approved-repo");
+  const foreignRepoDir = path.join(fixtureRoot, "foreign-repo");
+  const gitHome = path.join(fixtureRoot, "githome");
+  const gitXdg = path.join(gitHome, ".config");
+  const gitHooksDir = path.join(fixtureRoot, "empty-hooks");
+  for (const dir of [approvedRepoDir, foreignRepoDir, gitHome, gitXdg, gitHooksDir]) mkdirSync(dir, { recursive: true });
+
+  // Same discipline as the other fixtures in this file: absolute trusted git, no PATH, owned HOME/XDG,
+  // system/global config and hooks pinned off, and a fail-closed check that these calls address the fixture.
+  // The old body inherited process.env minus three GIT_ variables, so PATH, global config and hooks still
+  // reached git; this env allowlist carries none of them (voicebox-beads-guu9).
+  const trustedGit = "/usr/bin/git";
+  accessSync(trustedGit, constants.X_OK);
+  const fixtureGitEnv = () => ({
+    HOME: gitHome,
+    XDG_CONFIG_HOME: gitXdg,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_ATTR_NOSYSTEM: "1",
+  });
+  const git = (args, cwd) => execFileSync(
+    trustedGit,
+    ["-c", `core.hooksPath=${gitHooksDir}`, "-c", `init.templateDir=${gitHooksDir}`, ...args],
+    { cwd, encoding: "utf8", env: fixtureGitEnv() },
+  );
+
+  // The approved origin: this is what makes the refusal below meaningful, because a NON-empty identity is
+  // what the guard compares against.
+  git(["init", "-q", "-b", "main", approvedRepoDir], fixtureRoot);
+  const approvedGitRoot = git(["rev-parse", "--show-toplevel"], approvedRepoDir).trim();
+  assert.equal(realpathSync(approvedGitRoot), realpathSync(approvedRepoDir),
+    `fixture git ops must resolve to the fixture itself, not a parent repo (got ${approvedGitRoot})`);
+  git(["remote", "add", "origin", "https://github.com/PaulKinlan/voicebox.git"], approvedRepoDir);
+
+  const repoId = getCheckoutRepoIdentity(approvedRepoDir, fixtureGitEnv());
   assert.equal(repoId, "paulkinlan/voicebox");
 
-  // Same-slug on foreign/unapproved host is rejected (returns empty string)
-  const mockForeignDir = path.join(tmpdir(), `test-foreign-origin-${Math.random().toString(36).slice(2)}`);
-  rmSync(mockForeignDir, { recursive: true, force: true });
-  mkdirSync(mockForeignDir, { recursive: true });
-  const cleanGitEnv = { ...process.env };
-  delete cleanGitEnv.GIT_DIR;
-  delete cleanGitEnv.GIT_WORK_TREE;
-  delete cleanGitEnv.GIT_INDEX_FILE;
-  try {
-    execFileSync("git", ["init"], { cwd: mockForeignDir, env: cleanGitEnv });
-    execFileSync("git", ["remote", "add", "origin", "https://evil.example/PaulKinlan/voicebox.git"], { cwd: mockForeignDir, env: cleanGitEnv });
-    const evilId = getCheckoutRepoIdentity(mockForeignDir);
-    assert.equal(evilId, "", "unapproved git host must not be treated as proof of repo identity");
-  } finally {
-    rmSync(mockForeignDir, { recursive: true, force: true });
-  }
+  // The foreign host carries the SAME slug on purpose: an unapproved host must not be accepted just because
+  // the path looks like the repository we expect.
+  git(["init", "-q", "-b", "main", foreignRepoDir], fixtureRoot);
+  const foreignGitRoot = git(["rev-parse", "--show-toplevel"], foreignRepoDir).trim();
+  assert.equal(realpathSync(foreignGitRoot), realpathSync(foreignRepoDir),
+    `fixture git ops must resolve to the fixture itself, not a parent repo (got ${foreignGitRoot})`);
+  git(["remote", "add", "origin", "https://evil.example/PaulKinlan/voicebox.git"], foreignRepoDir);
 
-  // Mismatched target repo is refused before cache lookup with exitCode 1
-  const mismatchedRes = runReviewTrigger(["--base", "HEAD~1", "--tip", "HEAD", "--repo", "ForeignOrg/foreign-repo"], {
-    rootDir: ROOT,
-  });
+  const evilId = getCheckoutRepoIdentity(foreignRepoDir, fixtureGitEnv());
+  assert.equal(evilId, "", "unapproved git host must not be treated as proof of repo identity");
+
+  // Mismatched target repo is refused before cache lookup with exitCode 1. rootDir is the APPROVED fixture, so
+  // the guard sees a real identity and must refuse on the mismatch.
+  const privateDir = ownDir(path.join(fixtureRoot, "private"));
+  mkdirSync(privateDir, { recursive: true });
+  const mismatchedRes = runReviewTrigger(
+    ["--base", "HEAD~1", "--tip", "HEAD", "--repo", "ForeignOrg/foreign-repo", "--private-dir", privateDir],
+    { rootDir: approvedRepoDir, env: fixtureGitEnv() }
+  );
   assert.equal(mismatchedRes.ok, false);
   assert.equal(mismatchedRes.exitCode, 1);
-  assert.ok(mismatchedRes.error.includes("does not match target repo"));
+  assert.equal(
+    mismatchedRes.error,
+    "checkout origin 'paulkinlan/voicebox' does not match target repo 'ForeignOrg/foreign-repo'",
+    "the refusal must be the pre-execution guard's own error, not an incidental downstream failure"
+  );
 });
 
 test("factory-review-trigger: ambient poisoned GIT_DIR does not blind diff measurement (C2 / GH #19)", (t) => {
