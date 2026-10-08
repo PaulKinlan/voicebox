@@ -197,6 +197,18 @@ test("Create a project makes a real named project in this browser, inside the ma
   assert.ok(real.chipText !== null, "the room's folder bar shows the new project as a folder it can act on");
   assert.equal(real.barHidden, false, "the folder bar is shown once there is a folder");
 
+  // Room report line (#turn-report) must also state "Created", not "Opened", on first creation (voicebox-beads-vobq).
+  const roomReportFirst = await page.evaluate(() => document.getElementById("turn-report")?.textContent?.trim() ?? "");
+  assert.ok(
+    roomReportFirst.startsWith(`Created '${PROJECT_NAME}' in browser storage (OPFS)`),
+    `room report line says 'Created' on first project creation, got: ${JSON.stringify(roomReportFirst)}`,
+  );
+  assert.equal(
+    roomReportFirst.startsWith(`Opened '${PROJECT_NAME}'`),
+    false,
+    "room report line must not say 'Opened' on first creation",
+  );
+
   // The dialog stays open (the person is not thrown out) and the button is usable again — a control left
   // disabled after a failure is its own silent trap.
   const after = await createStatus();
@@ -216,6 +228,18 @@ test("Create a project makes a real named project in this browser, inside the ma
   const second = await createStatus();
   assert.equal(second.ok, "true", "re-opening an existing project succeeds rather than reporting an error");
   assert.equal(await opfsHasFolder(PROJECT_NAME), "directory", "and the project is still there");
+
+  // Room report line (#turn-report) must state "Opened", not "Created", on repeat open (voicebox-beads-vobq).
+  const roomReportSecond = await page.evaluate(() => document.getElementById("turn-report")?.textContent?.trim() ?? "");
+  assert.ok(
+    roomReportSecond.startsWith(`Opened '${PROJECT_NAME}' in browser storage (OPFS)`),
+    `room report line says 'Opened' on repeat open of existing project, got: ${JSON.stringify(roomReportSecond)}`,
+  );
+  assert.equal(
+    roomReportSecond.startsWith(`Created '${PROJECT_NAME}'`),
+    false,
+    "room report line must not say 'Created' on repeat open of existing project",
+  );
 
   // THE ENTER GUARD, DRIVEN (voicebox-beads-6uzd). The name box sits inside <form class="envs-form"
   // method="dialog">, so an unguarded Enter would SUBMIT that form and close the dialog without creating
@@ -238,6 +262,44 @@ test("Create a project makes a real named project in this browser, inside the ma
     "Enter must not submit the dialog's form and close the dialog",
   );
   assert.equal(await opfsHasFolder("enter-probe-project"), "directory", "and Enter really creates the project in browser storage");
+
+  // NEUTRAL REPORT WORDING (voicebox-beads-vobq): when existence pre-check is inconclusive (existed === null),
+  // room report uses neutral "In browser storage (OPFS): <name>" without falsely claiming "Created" or "Opened".
+  await page.evaluate(() => {
+    const origGetDir = FileSystemDirectoryHandle.prototype.getDirectoryHandle;
+    FileSystemDirectoryHandle.prototype.getDirectoryHandle = async function (name, options) {
+      if (!options?.create && name === "neutral-probe-project") {
+        throw new DOMException("The path supplied exists, but is not a directory", "TypeMismatchError");
+      }
+      return origGetDir.call(this, name, options);
+    };
+    window.__restoreGetDir = () => {
+      FileSystemDirectoryHandle.prototype.getDirectoryHandle = origGetDir;
+    };
+  });
+  await page.evaluate(() => {
+    const input = document.getElementById("env-create-project-name");
+    if (input) input.value = "neutral-probe-project";
+  });
+  await page.click("#env-create-project-btn");
+  await page.waitFor(
+    () => {
+      const report = document.getElementById("turn-report")?.textContent?.trim() ?? "";
+      return report.includes("neutral-probe-project");
+    },
+    { label: "neutral report on inconclusive existence pre-check" },
+  );
+  const neutralReport = await page.evaluate(() => {
+    window.__restoreGetDir?.();
+    return document.getElementById("turn-report")?.textContent?.trim() ?? "";
+  });
+  assert.ok(
+    neutralReport.startsWith("In browser storage (OPFS): 'neutral-probe-project'"),
+    `room report line uses neutral phrasing when pre-check is inconclusive, got: ${JSON.stringify(neutralReport)}`,
+  );
+  assert.equal(neutralReport.startsWith("Created '"), false, "must not claim 'Created' when pre-check is inconclusive");
+  assert.equal(neutralReport.startsWith("Opened '"), false, "must not claim 'Opened' when pre-check is inconclusive");
+
   await page.press("Escape");
   await page.waitFor(() => document.getElementById("envs")?.hasAttribute("open") === false, { label: "the dialog to close" });
 });

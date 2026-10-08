@@ -617,10 +617,27 @@ async function ensureScratchpadFolder(name = SCRATCHPAD_NAME) {
   return handle;
 }
 
-async function openOpfsScratchFolder(projectName = SCRATCHPAD_NAME, { onError } = {}) {
+async function openOpfsScratchFolder(projectName = SCRATCHPAD_NAME, { onError, action } = {}) {
   try {
+    let existed = null;
+    if (navigator.storage?.getDirectory) {
+      try {
+        const opfsRoot = await navigator.storage.getDirectory();
+        await opfsRoot.getDirectoryHandle(projectName);
+        existed = true;
+      } catch (err) {
+        existed = err?.name === "NotFoundError" ? false : null;
+      }
+    }
     const handle = await ensureScratchpadFolder(projectName);
-    setReport(`Opened '${projectName}' in browser storage (OPFS) — browser files and edits save here.`, "good");
+    const reportText = action
+      ? `${action} '${projectName}' in browser storage (OPFS) — browser files and edits save here.`
+      : existed === true
+        ? `Opened '${projectName}' in browser storage (OPFS) — browser files and edits save here.`
+        : existed === false
+          ? `Created '${projectName}' in browser storage (OPFS) — browser files and edits save here.`
+          : `In browser storage (OPFS): '${projectName}' — browser files and edits save here.`;
+    setReport(reportText, "good");
     return handle || true;
   } catch (error) {
     const msg = error?.message ?? String(error);
