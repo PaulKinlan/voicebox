@@ -2,6 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { readJsonl } from "./lib/jsonl.mjs";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -152,7 +153,7 @@ test("extension approval in Chromium: console code admits and runs, replay/tampe
     const runningText = await page.evaluate(() => document.querySelector("#ext-running")?.textContent ?? "");
     assert.match(runningText, /approvalclock/, "approvalclock is listed in running extensions");
     assert.equal((await post("/api/turn", { transcript: "run the tool approvalclock" })).body.result?.action, "now");
-    const entries = readFileSync(path.join(workspace, "audit.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+    const entries = readJsonl(readFileSync(path.join(workspace, "audit.jsonl"), "utf8"));
     const human = entries.find((entry) => entry.rule === "human-approved-extension");
     assert.equal(human.actor.name, "human-at-host");
     assert.equal(human.actor.harness, "room-ui");

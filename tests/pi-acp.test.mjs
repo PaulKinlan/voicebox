@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { readJsonlFile } from "./lib/jsonl.mjs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -71,7 +72,7 @@ test("D1 real TCP diagnostic only: killed ACP process is interrupted and second 
   const input = { agent: "diagnostic-only", task: "hold an isolated handshake, no model task" };
   const admitted = await freshExecute(base, owner, "delegate_task", input, "diagnostic-call");
   assert.equal(admitted.body.task.state, "queued");
-  const starts = () => fs.existsSync(startsFile) ? fs.readFileSync(startsFile, "utf8").trim().split("\n").map(JSON.parse) : [];
+  const starts = () => readJsonlFile(startsFile);
   const [start] = await until(starts, (list) => list.length === 1);
   t.after(() => { try { process.kill(start.pid, "SIGKILL"); } catch {} });
   assert.equal(start.agentInfo.version, ACP_AGENT.version);

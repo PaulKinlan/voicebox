@@ -9,6 +9,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { readJsonl } from "./lib/jsonl.mjs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -73,7 +74,7 @@ test("configured harness: end-to-end delegate_task reaches Pi via pi-acp adapter
   assert.ok(fs.existsSync(auditDir), "audit directory must exist");
   const auditFiles = fs.readdirSync(auditDir).filter((f) => f.endsWith(".jsonl"));
   assert.ok(auditFiles.length > 0, "audit entries must be persisted");
-  const entries = auditFiles.flatMap((f) => fs.readFileSync(path.join(auditDir, f), "utf8").trim().split("\n").map(JSON.parse));
+  const entries = auditFiles.flatMap((f) => readJsonl(fs.readFileSync(path.join(auditDir, f), "utf8")));
   const completedEntry = entries.find((e) => e.task?.address === address && e.task?.state === "completed");
   assert.ok(completedEntry, "terminal completed state must be durably recorded in audit");
   assert.match(completedEntry.task.answer, /221/);

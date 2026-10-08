@@ -6,6 +6,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { readJsonl } from "./lib/jsonl.mjs";
 import os from "node:os";
 import path from "node:path";
 import { startServer } from "./lib/server.mjs";
@@ -224,7 +225,7 @@ test("file actions: delete, edit, diff, and grep execute with audit trails and c
   assert.ok(fs.existsSync(auditDir), "audit directory must exist");
   const auditFiles = fs.readdirSync(auditDir).filter((f) => f.endsWith(".jsonl"));
   assert.ok(auditFiles.length > 0);
-  const entries = auditFiles.flatMap((f) => fs.readFileSync(path.join(auditDir, f), "utf8").trim().split("\n").map(JSON.parse));
+  const entries = auditFiles.flatMap((f) => readJsonl(fs.readFileSync(path.join(auditDir, f), "utf8")));
   const deleteEntries = entries.filter((e) => e.act?.kind === "delete" && e.decision === "allow");
   const editEntries = entries.filter((e) => e.act?.kind === "edit" && e.decision === "allow");
   const undoEntries = entries.filter((e) => e.act?.kind === "undo" && e.decision === "allow");
