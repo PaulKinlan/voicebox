@@ -643,57 +643,79 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
     },
   ];
 
-  // 1. Initial dry-run inspection detects branch
-  const res1 = runReviewWatcher(["--dry-run", "--private-dir", tmpPrivate], {
-    rootDir: ROOT,
-    mockBeads,
-  });
-  assert.equal(res1.ok, true);
-  assert.equal(res1.scannedCount, 1);
-
-  // 2. Simulate cursor persistence for taskKey
-  const cursorFile = path.join(tmpPrivate, "review-watcher-cursor.json");
   const tipSha = execFileSync("git", ["rev-parse", "refs/remotes/origin/fleet/miniapps-xacp"], { cwd: ROOT, encoding: "utf8" }).trim();
   const taskKey = `fleet/miniapps-xacp@${tipSha}`;
+  const cursorFile = path.join(tmpPrivate, "review-watcher-cursor.json");
 
-  const cursor = {
-    processedBranches: {
-      [taskKey]: {
-        beadId: "voicebox-beads-test",
-        station: "secret-scan",
-        verdict: "PASS",
-        scannedAt: new Date().toISOString(),
-      },
-    },
-    lastMainSha: "",
+  let triggerInvocations = [];
+  const trackingTrigger = (triggerArgs, opts) => {
+    triggerInvocations.push({ triggerArgs, opts });
+    return { ok: true, exitCode: 0, station: "secret-scan", verdict: "PASS" };
   };
-  writeFileSync(cursorFile, JSON.stringify(cursor, null, 2));
 
-  // 3. Second tick on the same branch detects existing cursor entry and skips (dedupes)
-  const res2 = runReviewWatcher(["--dry-run", "--private-dir", tmpPrivate], {
+  // 1. Tick 1 with NO flags (defaults only): must invoke trigger with auto-publication (no --dry-run)
+  const res1 = runReviewWatcher(["--private-dir", tmpPrivate], {
     rootDir: ROOT,
     mockBeads,
+    triggerRunner: trackingTrigger,
+  });
+
+  assert.equal(res1.ok, true);
+  assert.equal(res1.scannedCount, 1);
+  assert.equal(triggerInvocations.length, 1);
+  assert.equal(
+    triggerInvocations[0].triggerArgs.includes("--dry-run"),
+    false,
+    "watcher must NOT pass --dry-run by default (auto-publication must be enabled by default)"
+  );
+
+  // Assert cursor file was ACTUALLY created and populated by runReviewWatcher
+  assert.equal(existsSync(cursorFile), true, "cursor file must exist after tick 1");
+  const cursorContent = JSON.parse(readFileSync(cursorFile, "utf8"));
+  assert.ok(cursorContent.processedBranches[taskKey], "cursor must record taskKey after successful scan");
+  assert.equal(cursorContent.processedBranches[taskKey].station, "secret-scan");
+  assert.equal(cursorContent.processedBranches[taskKey].verdict, "PASS");
+
+  // 2. Tick 2: Second invocation on the same branch must detect cursor entry and DEDUPLICATE (zero trigger calls)
+  triggerInvocations = [];
+  const res2 = runReviewWatcher(["--private-dir", tmpPrivate], {
+    rootDir: ROOT,
+    mockBeads,
+    triggerRunner: trackingTrigger,
   });
   assert.equal(res2.ok, true);
   assert.equal(res2.scannedCount, 0, "second tick must deduplicate and skip already-processed branch");
+  assert.equal(triggerInvocations.length, 0, "trigger must NOT be invoked on second tick (deduped)");
 
-  // 4. Incomplete/non-existent branch negative control: does not scan or write cursor
-  const mockBeadIncomplete = [
-    {
-      id: "voicebox-beads-fail",
-      assignee: "voicebox-miniapps",
-      status: "in_progress",
-      title: "Broken task",
-      description: "Working on fleet/nonexistent-branch",
-    },
-  ];
-  const resIncomplete = runReviewWatcher(["--private-dir", tmpPrivate], {
+  // 3. Failure negative control: when trigger fails, watcher fails closed and does NOT write cursor
+  const tmpFailPrivate = path.join(ROOT, "tests", "fixtures", "watcher-fail-test");
+  rmSync(tmpFailPrivate, { recursive: true, force: true });
+  mkdirSync(tmpFailPrivate, { recursive: true });
+
+  const failingTrigger = () => {
+    return { ok: false, exitCode: 1 };
+  };
+
+  const resFail = runReviewWatcher(["--private-dir", tmpFailPrivate], {
     rootDir: ROOT,
-    mockBeads: mockBeadIncomplete,
+    mockBeads,
+    triggerRunner: failingTrigger,
   });
-  assert.equal(resIncomplete.scannedCount, 0);
+  assert.equal(resFail.ok, false, "watcher must fail closed when trigger fails");
+  assert.equal(resFail.watcherErrors, 1);
+
+  const failCursorFile = path.join(tmpFailPrivate, "review-watcher-cursor.json");
+  if (existsSync(failCursorFile)) {
+    const failCursorContent = JSON.parse(readFileSync(failCursorFile, "utf8"));
+    assert.equal(
+      Boolean(failCursorContent.processedBranches?.[taskKey]),
+      false,
+      "failed scan must not be recorded in cursor"
+    );
+  }
 
   rmSync(tmpPrivate, { recursive: true, force: true });
+  rmSync(tmpFailPrivate, { recursive: true, force: true });
 });
 
 test("factory-nightly-publisher: enforces SAME-RUN manifest barrier, target check, and batch window", () => {

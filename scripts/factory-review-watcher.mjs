@@ -27,7 +27,7 @@ export const ARTIFACT_BRANCH_PATTERNS = [
   /^fleet\/temp-/,
 ];
 
-export function runReviewWatcher(args = process.argv.slice(2), { env = process.env, rootDir = ROOT, mockBeads = null } = {}) {
+export function runReviewWatcher(args = process.argv.slice(2), { env = process.env, rootDir = ROOT, mockBeads = null, triggerRunner = runReviewTrigger } = {}) {
   let repo = env.VOICEBOX_FACTORY_REPO || "PaulKinlan/voicebox";
   let privateDir = env.VOICEBOX_FACTORY_PRIVATE_DIR || path.join(homedir(), ".voicebox", "factory-reports");
   let dryRun = false;
@@ -169,7 +169,7 @@ Options:
 
     console.log(`[review-watcher] Evaluating candidate branch ${branch} for bead ${beadId} (${baseSha.slice(0, 7)}..${tipSha.slice(0, 7)})`);
 
-    const triggerRes = runReviewTrigger([
+    const triggerRes = triggerRunner([
       "--base", baseSha,
       "--tip", tipSha,
       "--bead", beadId,
@@ -223,7 +223,7 @@ Options:
         watcherErrors++;
       } else {
         console.log(`[review-watcher] Backstop: origin/main moved (${cursor.lastMainSha.slice(0, 7)}..${currentMainSha.slice(0, 7)}). Evaluating landed diff...`);
-        const backstopRes = runReviewTrigger([
+        const backstopRes = triggerRunner([
           "--base", cursor.lastMainSha,
           "--tip", currentMainSha,
           "--repo", repo,
