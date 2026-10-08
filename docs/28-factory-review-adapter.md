@@ -170,7 +170,25 @@ The VM nightly line (`fleet-factory.timer`, running daily at 03:00 UTC via `/hom
 | **Documentation** | `docs-drift` | `docs-write` | `docs-drift` detects drift between code and docs. `docs-write` is an active code patch proposer, not an audit observer. |
 | **Ops / Maintenance** | `qa-station` | `test-gap`, `issue-triage`, `pr-fixer`, `log-check`, `release-notes` | `qa-station` audits factory quality. `issue-triage` is actively handled by our hourly issue poller. |
 
-### 5.4 Proposed Fleet Review Handoff Rule (Hub Handoff)
+### 5.4 Nightly Findings Publication & Fleet Hook (`scripts/factory-nightly-publisher.sh`)
+While the nightly systemd service (`fleet-factory.service` running `/home/exedev/fleet/remote/factory-nightly.sh`) runs `factory line project-audit --sink file`, its default output remains strictly on disk in `~/agents/findings/` and does not automatically file public GitHub issues.
+
+To complete the issue-first chain across all severities (with literal secrets masked), Voicebox provides `scripts/factory-nightly-publisher.sh`:
+- Iterates over station delta reports in `~/agents/findings/voicebox-factory-*-delta.md`.
+- Filters out composite line-level summaries (`voicebox-factory-delta.md`) that lack a single station identifier.
+- Invokes `node scripts/factory-triage.mjs --report <path> --repo PaulKinlan/voicebox --allow-foreign-target --file-issues`.
+
+#### Proposed Fleet Nightly Hook (Hub Handoff for `~/fleet`)
+Because `~/fleet/remote/factory-nightly.sh` belongs to the foreign `PaulKinlan/fleet` repository, the following 4-line post-audit hook is proposed for hub delegation right after `timeout 3h factory line ...`:
+
+```bash
+# Post-audit finding publication to public GitHub issues across all severities
+if [ -x "$WT/scripts/factory-nightly-publisher.sh" ]; then
+  (cd "$WT" && ./scripts/factory-nightly-publisher.sh)
+fi
+```
+
+### 5.5 Proposed Fleet Review Handoff Rule (Hub Handoff)
 To integrate `scripts/factory-review-gate.sh` into standard fleet lifecycle policies (outside the Voicebox repository), the following addition is proposed for `~/fleet/roles/implementer.md` and `~/fleet/roles/merger.md` via hub delegation:
 
 > **Factory Review Station Gate (before merge-queue)**:

@@ -522,12 +522,14 @@ test("factory-activation: systemd user units, poller runner, and review gate wra
   const timerPath = path.join(ROOT, "config", "systemd", "user", "voicebox-factory-issue-poller.timer");
   const pollerRunnerPath = path.join(ROOT, "scripts", "factory-issue-poller-runner.sh");
   const reviewGatePath = path.join(ROOT, "scripts", "factory-review-gate.sh");
+  const nightlyPublisherPath = path.join(ROOT, "scripts", "factory-nightly-publisher.sh");
 
   // 1. Files exist and have valid permissions/syntax
   assert.ok(existsSync(servicePath), "systemd service unit exists");
   assert.ok(existsSync(timerPath), "systemd timer unit exists");
   assert.ok(existsSync(pollerRunnerPath), "poller runner script exists");
   assert.ok(existsSync(reviewGatePath), "review gate script exists");
+  assert.ok(existsSync(nightlyPublisherPath), "nightly publisher script exists");
 
   const serviceContent = readFileSync(servicePath, "utf8");
   assert.ok(serviceContent.includes("[Unit]"));
@@ -541,10 +543,14 @@ test("factory-activation: systemd user units, poller runner, and review gate wra
   assert.ok(timerContent.includes("Persistent=true"));
   assert.ok(timerContent.includes("WantedBy=timers.target"));
 
-  // 2. Review gate and poller runner scripts respond to --help
+  // 2. Review gate, poller runner, and nightly publisher scripts respond to --help
   const gateHelp = execFileSync("bash", [reviewGatePath, "--help"], { encoding: "utf8" });
   assert.ok(gateHelp.includes("Usage: scripts/factory-review-gate.sh"));
   assert.ok(gateHelp.includes("--base"));
+
+  const nightlyHelp = execFileSync("bash", [nightlyPublisherPath, "--help"], { encoding: "utf8" });
+  assert.ok(nightlyHelp.includes("Usage: scripts/factory-nightly-publisher.sh"));
+  assert.ok(nightlyHelp.includes("--dry-run"));
 
   // 3. Review trigger and poller scripts respond to --help
   const triggerRes = runReviewTrigger(["--help"], { rootDir: ROOT });
