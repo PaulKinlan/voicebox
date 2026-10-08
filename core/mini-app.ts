@@ -171,6 +171,18 @@ function validateSinglePropertySchema(propName: string, raw: unknown, path = "")
       if (!Array.isArray(itemSchema.enum) || itemSchema.enum.length === 0) {
         return `enum in items schema of array property '${path}${propName}' must be a non-empty array`;
       }
+      if (itemSchema.type === "string" && !itemSchema.enum.every((item) => typeof item === "string")) {
+        return `enum in items schema of array property '${path}${propName}' must contain strings matching type '${itemSchema.type}'`;
+      }
+      if (itemSchema.type === "number" && !itemSchema.enum.every((item) => typeof item === "number" && Number.isFinite(item))) {
+        return `enum in items schema of array property '${path}${propName}' must contain numbers matching type '${itemSchema.type}'`;
+      }
+      if (itemSchema.type === "integer" && !itemSchema.enum.every((item) => typeof item === "number" && Number.isInteger(item))) {
+        return `enum in items schema of array property '${path}${propName}' must contain integers matching type '${itemSchema.type}'`;
+      }
+      if (itemSchema.type === "boolean" && !itemSchema.enum.every((item) => typeof item === "boolean")) {
+        return `enum in items schema of array property '${path}${propName}' must contain booleans matching type '${itemSchema.type}'`;
+      }
     }
   }
 
@@ -242,6 +254,11 @@ export function validateWebMcpTool(raw: unknown): ValidationResult<WebMcpToolDec
   }
   if (p.additionalProperties !== undefined && typeof p.additionalProperties !== "boolean") {
     return refusal("invalid-tool-parameters", "additionalProperties must be a boolean if specified");
+  }
+  if (p.properties !== undefined) {
+    if (!p.properties || typeof p.properties !== "object" || Array.isArray(p.properties)) {
+      return refusal("invalid-tool-parameters", "tool parameters properties must be an object");
+    }
   }
 
   const properties = (p.properties && typeof p.properties === "object" && !Array.isArray(p.properties))

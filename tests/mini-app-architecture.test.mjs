@@ -1160,6 +1160,78 @@ test("browser: bridge rejects unsupported schema keywords at registration time (
 
   assert.equal(Array.isArray(result), true);
   assert.equal(result.length, 0, "tool with unsupported 'pattern' must be rejected at registration");
+
+  // Also test bridge rejecting malformed properties: "bad" at registration
+  const badPropsResult = await page.evaluate(async (base) => {
+    return new Promise((resolve, reject) => {
+      const outer = document.createElement("iframe");
+      outer.src = `${base}/mini-app-bridge.html`;
+
+      window.addEventListener("message", (e) => {
+        if (e.origin !== window.location.origin) return;
+        if (e.data?.type === "bridge_ready") {
+          const appHtml = `<script>
+            window.webMcp.registerTool({
+              name: "bad_props_tool",
+              description: "Tool with bad properties",
+              parameters: {
+                type: "object",
+                properties: "not-an-object"
+              },
+              execute: async () => ({ status: "ok" })
+            });
+            window.webMcp.ready();
+          <\/script>`;
+          outer.contentWindow.postMessage({ type: "load_app", appId: "bad-props-app", html: appHtml }, window.location.origin);
+        } else if (e.data?.type === "app_ready") {
+          resolve(e.data.tools);
+        }
+      });
+
+      document.body.appendChild(outer);
+      setTimeout(() => reject(new Error("timed out waiting for bridge bad props registration")), 12000);
+    });
+  }, server.base);
+
+  assert.equal(Array.isArray(badPropsResult), true);
+  assert.equal(badPropsResult.length, 0, "tool with non-object properties must be rejected at registration");
+
+  // Also test bridge rejecting items.enum with wrong element types
+  const badItemsResult = await page.evaluate(async (base) => {
+    return new Promise((resolve, reject) => {
+      const outer = document.createElement("iframe");
+      outer.src = `${base}/mini-app-bridge.html`;
+
+      window.addEventListener("message", (e) => {
+        if (e.origin !== window.location.origin) return;
+        if (e.data?.type === "bridge_ready") {
+          const appHtml = `<script>
+            window.webMcp.registerTool({
+              name: "bad_items_tool",
+              description: "Tool with bad items enum",
+              parameters: {
+                type: "object",
+                properties: {
+                  tags: { type: "array", items: { type: "string", enum: [123] } }
+                }
+              },
+              execute: async () => ({ status: "ok" })
+            });
+            window.webMcp.ready();
+          <\/script>`;
+          outer.contentWindow.postMessage({ type: "load_app", appId: "bad-items-app", html: appHtml }, window.location.origin);
+        } else if (e.data?.type === "app_ready") {
+          resolve(e.data.tools);
+        }
+      });
+
+      document.body.appendChild(outer);
+      setTimeout(() => reject(new Error("timed out waiting for bridge bad items registration")), 12000);
+    });
+  }, server.base);
+
+  assert.equal(Array.isArray(badItemsResult), true);
+  assert.equal(badItemsResult.length, 0, "tool with mismatched items enum types must be rejected at registration");
 });
 
 test("core: validateWebMcpTool rejects contradictory and malformed constraint schemas (Finding P1)", () => {
@@ -1234,6 +1306,36 @@ test("core: validateWebMcpTool rejects contradictory and malformed constraint sc
   assert.equal(nestedCRes.ok, false);
   assert.equal(nestedCRes.refused, "invalid-tool-parameters");
   assert.match(nestedCRes.why, /contradictory schema on property 'nested'/);
+
+  // 5. Malformed properties: non-object properties must be rejected, never silently defaulted to {}
+  const badPropsTool = {
+    name: "bad_props",
+    description: "Bad props tool",
+    parameters: {
+      type: "object",
+      properties: "bad",
+    },
+  };
+  const badPropsRes = validateWebMcpTool(badPropsTool);
+  assert.equal(badPropsRes.ok, false);
+  assert.equal(badPropsRes.refused, "invalid-tool-parameters");
+  assert.match(badPropsRes.why, /parameters properties must be an object/);
+
+  // 6. Array items enum member type mismatch
+  const badItemsEnumTool = {
+    name: "bad_items_enum",
+    description: "Bad items enum",
+    parameters: {
+      type: "object",
+      properties: {
+        tags: { type: "array", items: { type: "string", enum: [1] } },
+      },
+    },
+  };
+  const badItemsEnumRes = validateWebMcpTool(badItemsEnumTool);
+  assert.equal(badItemsEnumRes.ok, false);
+  assert.equal(badItemsEnumRes.refused, "invalid-tool-parameters");
+  assert.match(badItemsEnumRes.why, /enum in items schema of array property 'tags' must contain strings matching type 'string'/);
 });
 
 test("core: validateMiniAppToolArgs enforces object additionalProperties: false without properties and Unicode code points (Findings P1 & P2)", () => {
@@ -1443,11 +1545,28 @@ test("browser: continuous host -> page -> bridge -> inner DOM journey with visua
   // Assert DOM remained stable and uncorrupted: screenshot buffers MUST match after-valid screenshot
   assert.deepEqual(bufAfterValid, bufAfterMalformed, "painted screenshot MUST remain unchanged and stable on malformed refusal");
 
+  // Step 4: Next-Valid-Call Probe — proves execution count was not incremented by malformed calls and handler is functional
+  const nextRes = await page.evaluate(async () => {
+    return await window.__voiceboxMiniApp.callTool("set_temperature", { target: 22.0, mode: "cool" });
+  });
+  assert.equal(nextRes.ok, true, "next valid tool call succeeded");
+  assert.equal(nextRes.result.currentTarget, 22.0);
+  assert.equal(nextRes.result.mode, "cool");
+  assert.equal(nextRes.result.count, 2, "execution count MUST advance to exactly 2 (refused calls were never executed)");
+
+  await sleep(200);
+
+  // Capture AFTER-NEXT-VALID screenshot
+  const snapAfterNextValid = await page.send("Page.captureScreenshot", { format: "png", clip });
+  const bufAfterNextValid = Buffer.from(snapAfterNextValid.data, "base64");
+  assert.notDeepEqual(bufAfterMalformed, bufAfterNextValid, "painted screenshot MUST update on subsequent valid execution");
+
   // Save artifacts to /tmp/fdtu-evidence/
   const fs = await import("node:fs");
   fs.mkdirSync("/tmp/fdtu-evidence", { recursive: true });
   fs.writeFileSync("/tmp/fdtu-evidence/01-before-initial.png", bufBefore);
   fs.writeFileSync("/tmp/fdtu-evidence/02-after-valid.png", bufAfterValid);
   fs.writeFileSync("/tmp/fdtu-evidence/03-after-malformed.png", bufAfterMalformed);
+  fs.writeFileSync("/tmp/fdtu-evidence/04-after-next-valid.png", bufAfterNextValid);
 });
 
