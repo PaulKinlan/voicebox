@@ -29,6 +29,7 @@ test("unit: secondary UI surfaces declare explicit focus rings, 12px readability
   const agentMonitorHtml = fs.readFileSync(path.join(root, "public/apps/agent-monitor.html"), "utf8");
   assert.match(agentMonitorHtml, /\.btn:focus-visible\s*\{/);
   assert.match(agentMonitorHtml, /:focus-visible\s*\{[^}]*outline:\s*2px solid/);
+  assert.match(agentMonitorHtml, /id="task-prompt-input"[^>]*aria-label="Multi-harness task prompt"/);
 
   const landingInspectorHtml = fs.readFileSync(path.join(root, "public/apps/landing-inspector.html"), "utf8");
   assert.match(landingInspectorHtml, /\.btn:focus-visible:not\(:disabled\)\s*\{/);
