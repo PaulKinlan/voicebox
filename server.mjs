@@ -358,6 +358,17 @@ function consumeBootstrapTicket(ticket) {
   outstandingBootstrapTickets.delete(ticket);
   return true;
 }
+// WHERE A REDEMPTION LANDS: the same route with the single-use ticket removed from the query, so what
+// is left in the address bar is the plain page a person can refresh. Relative on purpose — on the dev
+// front (`localhost:5173`) an absolute `127.0.0.1` URL would walk the browser off the front that holds
+// the cookie, while a relative one resolves against whatever origin the navigation came in on
+// (voicebox-beads-fo6m).
+function plainRouteWithoutTicket(url) {
+  const rest = new URLSearchParams(url.searchParams);
+  rest.delete("bootstrap");
+  const search = rest.toString();
+  return `${url.pathname}${search ? `?${search}` : ""}`;
+}
 function sessionCookieOk(req) {
   const header = req.headers.cookie;
   if (typeof header !== "string") return false;
@@ -4153,13 +4164,25 @@ const routes = {
     });
   },
   "GET /": async (req, res, url) => {
-    // THE BOOTSTRAP DOOR (docs/13 §4, opt-in): a valid one-time ticket is exchanged for the
-    // session cookie on this very response, so the page the person asked for is the page they
-    // get — no second navigation. An invalid or already-consumed ticket is a NAMED refusal with
-    // the remedy in it, because a ticket that silently 404s would read as the server being broken.
-    const bootstrapHeaders = {};
+    // THE BOOTSTRAP DOOR (docs/13 §4, opt-in): the one-time ticket is exchanged for the session
+    // cookie, and the ticket then leaves the address bar — a 303 to the same route WITHOUT the
+    // parameter, carrying the Set-Cookie, so the browser stores the cookie and re-requests the
+    // plain route in one hop. Serving the page AT the ticket URL was the trap (voicebox-beads-fo6m):
+    // the refresh everyone performs re-presented a ticket that had already been consumed and got
+    // `401 bootstrap-ticket-refused`, so a successful launch read as a broken server.
+    //
+    // An unknown or already-consumed ticket with NO session behind it is still a NAMED refusal with
+    // the remedy in it, because a ticket that silently redirects would read as the server being
+    // broken. A stale ticket URL carried by an ALREADY-authenticated browser — a bookmark, history,
+    // the back button — is just redirected to the plain route: they are already in, and the URL is
+    // noise, not an authorisation question.
     if (LOOPBACK_AUTH && url.searchParams.has("bootstrap")) {
+      const plain = plainRouteWithoutTicket(url);
       if (!consumeBootstrapTicket(url.searchParams.get("bootstrap"))) {
+        if (sessionCookieOk(req)) {
+          res.writeHead(303, { location: plain });
+          return res.end();
+        }
         res.writeHead(401, { "content-type": "text/plain; charset=utf-8" });
         return res.end(
           "401 bootstrap-ticket-refused — that bootstrap ticket is unknown or already used; one ticket opens one session. " +
@@ -4167,13 +4190,17 @@ const routes = {
             "POST /api/bootstrap with the x-voicebox-host-token header.",
         );
       }
-      bootstrapHeaders["set-cookie"] = `${SESSION_COOKIE}=${LOOPBACK_SESSION}; HttpOnly; SameSite=Strict; Path=/`;
+      // Set-Cookie rides the redirect: the browser stores it and re-requests the plain route WITH it.
+      res.writeHead(303, {
+        location: plain,
+        "set-cookie": `${SESSION_COOKIE}=${LOOPBACK_SESSION}; HttpOnly; SameSite=Strict; Path=/`,
+      });
+      return res.end();
     }
     // The stamp names THIS process's revision: the one memoized answer taken at startup
     // (voicebox-beads-4oj6), awaited BEFORE the head is written so a page is never sent half-stamped.
-    // The ticket above is consumed before this await, so one ticket still opens exactly one session.
     const build = await buildIdentity();
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8", ...bootstrapHeaders });
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     const where = build.ahead === null
       ? ` · no origin/${build.branch} here, so the distance from a remote is unknown`
       : build.ahead === 0

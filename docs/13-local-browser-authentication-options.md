@@ -27,7 +27,7 @@ To distinguish the authorized user's browser session from an unprivileged local 
 Established by tools such as Jupyter Notebook and VS Code Server (`code-server`):
 1. When `VOICEBOX_LOOPBACK_AUTH=1` is set, the server does not serve HTML or API routes without an authenticated session.
 2. At startup, the server mints a single-use cryptographic bootstrap ticket and prints the launch URL (`http://127.0.0.1:8787/?bootstrap=<ticket>`) to stdout (or mints one on demand via `POST /api/bootstrap` authenticated with `x-voicebox-host-token`).
-3. Navigating to `/?bootstrap=<ticket>` redeems the ticket once and sets an `HttpOnly`, `SameSite=Strict` session cookie (`vb_session`).
+3. Navigating to `/?bootstrap=<ticket>` redeems the ticket once, sets an `HttpOnly`, `SameSite=Strict` session cookie (`vb_session`), and answers `303` to the same route with the ticket removed — so the address bar is left holding the plain page a refresh can re-request.
 4. Subsequent HTTP, REST API, and WebSocket (`/channel`, `/live`) requests require either the session cookie or `x-voicebox-host-token`.
 
 ### Option B: Browser-Generated WebCrypto Key & Console Pairing

@@ -1,0 +1,45 @@
+{
+  "surface": "vite-dev-front",
+  "front": "http://localhost:5273",
+  "api": {
+    "port": 42615,
+    "bootstrapUrl": "http://127.0.0.1:42615/?bootstrap=<ticket>"
+  },
+  "steps": {
+    "launched": {
+      "href": "http://localhost:5273/",
+      "title": "Voicebox",
+      "wordmark": "Voicebox",
+      "bodyText": "Skip to what was made Voicebox agent: script · no folder chosen yet Harnesses Change log Environments Extensions Setting"
+    },
+    "refreshed": {
+      "href": "http://localhost:5273/",
+      "title": "Voicebox",
+      "wordmark": "Voicebox",
+      "bodyText": "Skip to what was made Voicebox agent: script · no folder chosen yet Harnesses Change log 2 environments · 2 reachable Ex"
+    },
+    "consumedRevisit": {
+      "href": "http://localhost:5273/",
+      "title": "Voicebox",
+      "wordmark": "Voicebox",
+      "bodyText": "Skip to what was made Voicebox agent: script · no folder chosen yet Harnesses Change log 2 environments · 2 reachable Ex"
+    }
+  },
+  "http": {
+    "browserCookies": [
+      {
+        "name": "vb_session",
+        "domain": "localhost",
+        "path": "/",
+        "httpOnly": true,
+        "sameSite": "Strict"
+      }
+    ],
+    "noSessionRevisit": {
+      "status": 401,
+      "location": null,
+      "body": "401 bootstrap-ticket-refused — that bootstrap ticket is unknown or already used; one ticket opens one session. Open the "
+    }
+  },
+  "notes": []
+}
