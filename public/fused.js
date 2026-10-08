@@ -5554,6 +5554,7 @@ if (els.miniAppContainer) {
         ok: Boolean(data.ok),
         result: data.result,
         error: data.error,
+        refused: data.refused,
       });
     }
   }

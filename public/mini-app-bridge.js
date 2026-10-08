@@ -190,14 +190,45 @@ function validateSinglePropertySchema(propName, raw, path = "") {
     }
   }
 
-  if (raw.type === "string" && raw.enum !== undefined) {
-    if (!Array.isArray(raw.enum) || !raw.enum.every((item) => typeof item === "string")) {
-      return `enum for string property '${path}${propName}' must be an array of strings`;
+  if (raw.type === "string") {
+    if (raw.maxLength !== undefined) {
+      if (typeof raw.maxLength !== "number" || !Number.isInteger(raw.maxLength) || raw.maxLength < 0) {
+        return `maxLength on property '${path}${propName}' must be a non-negative integer`;
+      }
+    }
+    if (raw.minLength !== undefined) {
+      if (typeof raw.minLength !== "number" || !Number.isInteger(raw.minLength) || raw.minLength < 0) {
+        return `minLength on property '${path}${propName}' must be a non-negative integer`;
+      }
+    }
+    if (typeof raw.maxLength === "number" && typeof raw.minLength === "number" && raw.minLength > raw.maxLength) {
+      return `minLength cannot exceed maxLength on property '${path}${propName}'`;
+    }
+    if (raw.enum !== undefined) {
+      if (!Array.isArray(raw.enum) || raw.enum.length === 0 || !raw.enum.every((item) => typeof item === "string")) {
+        return `enum for string property '${path}${propName}' must be a non-empty array of strings`;
+      }
     }
   }
-  if ((raw.type === "number" || raw.type === "integer") && raw.enum !== undefined) {
-    if (!Array.isArray(raw.enum) || !raw.enum.every((item) => typeof item === "number" && Number.isFinite(item))) {
-      return `enum for numeric property '${path}${propName}' must be an array of numbers`;
+
+  if (raw.type === "number" || raw.type === "integer") {
+    if (raw.maximum !== undefined) {
+      if (typeof raw.maximum !== "number" || !Number.isFinite(raw.maximum)) {
+        return `maximum on property '${path}${propName}' must be a finite number`;
+      }
+    }
+    if (raw.minimum !== undefined) {
+      if (typeof raw.minimum !== "number" || !Number.isFinite(raw.minimum)) {
+        return `minimum on property '${path}${propName}' must be a finite number`;
+      }
+    }
+    if (typeof raw.maximum === "number" && typeof raw.minimum === "number" && raw.minimum > raw.maximum) {
+      return `minimum cannot exceed maximum on property '${path}${propName}'`;
+    }
+    if (raw.enum !== undefined) {
+      if (!Array.isArray(raw.enum) || raw.enum.length === 0 || !raw.enum.every((item) => typeof item === "number" && Number.isFinite(item))) {
+        return `enum for numeric property '${path}${propName}' must be a non-empty array of numbers`;
+      }
     }
   }
 
@@ -215,25 +246,43 @@ function validateSinglePropertySchema(propName, raw, path = "") {
       return `unsupported items type '${String(itemSchema.type)}' for array property '${path}${propName}' (only primitive types string, number, integer, boolean supported)`;
     }
     if (itemSchema.enum !== undefined) {
-      if (!Array.isArray(itemSchema.enum)) {
-        return `enum in items schema of array property '${path}${propName}' must be an array`;
+      if (!Array.isArray(itemSchema.enum) || itemSchema.enum.length === 0) {
+        return `enum in items schema of array property '${path}${propName}' must be a non-empty array`;
       }
     }
   }
 
-  if (raw.type === "object" && raw.properties !== undefined) {
-    if (!raw.properties || typeof raw.properties !== "object" || Array.isArray(raw.properties)) {
-      return `properties for object property '${path}${propName}' must be an object`;
+  if (raw.type === "object") {
+    if (raw.properties !== undefined) {
+      if (!raw.properties || typeof raw.properties !== "object" || Array.isArray(raw.properties)) {
+        return `properties for object property '${path}${propName}' must be an object`;
+      }
     }
     if (raw.additionalProperties !== undefined && typeof raw.additionalProperties !== "boolean") {
       return `additionalProperties for object property '${path}${propName}' must be a boolean`;
     }
-    if (raw.required !== undefined && (!Array.isArray(raw.required) || !raw.required.every((r) => typeof r === "string"))) {
-      return `required for object property '${path}${propName}' must be an array of strings`;
+    if (raw.required !== undefined) {
+      if (!Array.isArray(raw.required) || !raw.required.every((r) => typeof r === "string" && r.length > 0)) {
+        return `required for object property '${path}${propName}' must be an array of non-empty strings`;
+      }
     }
-    for (const [nestedName, nestedSchema] of Object.entries(raw.properties)) {
-      const err = validateSinglePropertySchema(nestedName, nestedSchema, `${path}${propName}.`);
-      if (err) return err;
+    if (raw.additionalProperties === false) {
+      const nestedPropNames = (raw.properties && typeof raw.properties === "object" && !Array.isArray(raw.properties))
+        ? Object.keys(raw.properties)
+        : [];
+      if (Array.isArray(raw.required)) {
+        for (const reqKey of raw.required) {
+          if (!nestedPropNames.includes(reqKey)) {
+            return `contradictory schema on property '${path}${propName}': required property '${reqKey}' is not declared in properties when additionalProperties: false`;
+          }
+        }
+      }
+    }
+    if (raw.properties && typeof raw.properties === "object" && !Array.isArray(raw.properties)) {
+      for (const [nestedName, nestedSchema] of Object.entries(raw.properties)) {
+        const err = validateSinglePropertySchema(nestedName, nestedSchema, `${path}${propName}.`);
+        if (err) return err;
+      }
     }
   }
 
@@ -271,6 +320,28 @@ function validateTool(raw) {
     const err = validateSinglePropertySchema(propName, propSchema);
     if (err) {
       return { ok: false, error: err };
+    }
+  }
+
+  const required = Array.isArray(p.required) ? p.required : [];
+  if (p.required !== undefined) {
+    if (!Array.isArray(p.required) || !p.required.every((r) => typeof r === "string" && r.length > 0)) {
+      return { ok: false, error: "tool parameters required must be an array of non-empty strings" };
+    }
+  }
+
+  const propNames = (p.properties && typeof p.properties === "object" && !Array.isArray(p.properties))
+    ? Object.keys(p.properties)
+    : [];
+
+  if (p.additionalProperties === false && Array.isArray(p.required)) {
+    for (const reqKey of p.required) {
+      if (!propNames.includes(reqKey)) {
+        return {
+          ok: false,
+          error: `contradictory schema: required property '${reqKey}' is not declared in properties when additionalProperties: false`,
+        };
+      }
     }
   }
 
@@ -342,17 +413,19 @@ function validateToolArgs(params, rawArgs) {
       if (val !== undefined) {
         if (schema.type) {
           switch (schema.type) {
-            case "string":
+            case "string": {
               if (typeof val !== "string") {
                 return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be a string, got ${typeof val}` };
               }
-              if (typeof schema.maxLength === "number" && val.length > schema.maxLength) {
-                return { ok: false, refused: "invalid-argument-length", why: `argument '${key}' length (${val.length}) exceeds maxLength ${schema.maxLength}` };
+              const charCount = Array.from(val).length;
+              if (typeof schema.maxLength === "number" && charCount > schema.maxLength) {
+                return { ok: false, refused: "invalid-argument-length", why: `argument '${key}' length (${charCount}) exceeds maxLength ${schema.maxLength}` };
               }
-              if (typeof schema.minLength === "number" && val.length < schema.minLength) {
-                return { ok: false, refused: "invalid-argument-length", why: `argument '${key}' length (${val.length}) below minLength ${schema.minLength}` };
+              if (typeof schema.minLength === "number" && charCount < schema.minLength) {
+                return { ok: false, refused: "invalid-argument-length", why: `argument '${key}' length (${charCount}) below minLength ${schema.minLength}` };
               }
               break;
+            }
             case "number":
               if (typeof val !== "number" || !Number.isFinite(val)) {
                 return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be a finite number, got ${typeof val === "number" ? "NaN/Infinity" : typeof val}` };
@@ -419,16 +492,23 @@ function validateToolArgs(params, rawArgs) {
               if (typeof val !== "object" || Array.isArray(val)) {
                 return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be an object, got ${Array.isArray(val) ? "array" : typeof val}` };
               }
-              if (schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)) {
-                const nestedParams = {
-                  type: "object",
-                  properties: schema.properties,
-                  ...(Array.isArray(schema.required) ? { required: schema.required } : {}),
-                  ...(schema.additionalProperties === false ? { additionalProperties: false } : {}),
-                };
-                const nestedRes = validateToolArgs(nestedParams, val);
-                if (!nestedRes.ok) {
-                  return { ok: false, refused: nestedRes.refused, why: `in argument '${key}': ${nestedRes.why}` };
+              {
+                const nestedProps = (schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties))
+                  ? schema.properties
+                  : {};
+                const nestedReq = Array.isArray(schema.required) ? schema.required : [];
+                const nestedAddl = schema.additionalProperties === false ? false : undefined;
+                if (nestedReq.length > 0 || nestedAddl === false || Object.keys(nestedProps).length > 0) {
+                  const nestedParams = {
+                    type: "object",
+                    properties: nestedProps,
+                    ...(nestedReq.length ? { required: nestedReq } : {}),
+                    ...(nestedAddl === false ? { additionalProperties: false } : {}),
+                  };
+                  const nestedRes = validateToolArgs(nestedParams, val);
+                  if (!nestedRes.ok) {
+                    return { ok: false, refused: nestedRes.refused, why: `in argument '${key}': ${nestedRes.why}` };
+                  }
                 }
               }
               break;

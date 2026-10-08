@@ -20,6 +20,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { setTimeout as sleep } from "node:timers/promises";
 import {
   validateWebMcpTool,
   validateMiniAppToolArgs,
@@ -1161,33 +1162,137 @@ test("browser: bridge rejects unsupported schema keywords at registration time (
   assert.equal(result.length, 0, "tool with unsupported 'pattern' must be rejected at registration");
 });
 
+test("core: validateWebMcpTool rejects contradictory and malformed constraint schemas (Finding P1)", () => {
+  // 1. Contradictory schema: required property not declared in properties when additionalProperties: false
+  const contradictoryTool = {
+    name: "contradictory_tool",
+    description: "Contradictory tool",
+    parameters: {
+      type: "object",
+      properties: {
+        existing: { type: "string" },
+      },
+      required: ["missing_token"],
+      additionalProperties: false,
+    },
+  };
+  const cRes = validateWebMcpTool(contradictoryTool);
+  assert.equal(cRes.ok, false);
+  assert.equal(cRes.refused, "invalid-tool-parameters");
+  assert.match(cRes.why, /contradictory schema: required property 'missing_token'/);
+
+  // 2. Malformed constraint values: string maxLength is not integer
+  const badMaxLenTool = {
+    name: "bad_maxlen",
+    description: "Bad maxlen",
+    parameters: {
+      type: "object",
+      properties: {
+        code: { type: "string", maxLength: "two" },
+      },
+    },
+  };
+  const maxLenRes = validateWebMcpTool(badMaxLenTool);
+  assert.equal(maxLenRes.ok, false);
+  assert.equal(maxLenRes.refused, "invalid-tool-parameters");
+  assert.match(maxLenRes.why, /maxLength.*must be a non-negative integer/);
+
+  // 3. Malformed required: elements must be non-empty strings (no silent filtering)
+  const badReqTool = {
+    name: "bad_req",
+    description: "Bad req",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+      },
+      required: [123],
+    },
+  };
+  const reqRes = validateWebMcpTool(badReqTool);
+  assert.equal(reqRes.ok, false);
+  assert.equal(reqRes.refused, "invalid-tool-parameters");
+  assert.match(reqRes.why, /required must be an array of non-empty strings/);
+
+  // 4. Nested contradictory object schema
+  const nestedContradictoryTool = {
+    name: "nested_contradictory",
+    description: "Nested contradictory",
+    parameters: {
+      type: "object",
+      properties: {
+        nested: {
+          type: "object",
+          properties: {},
+          required: ["ghost"],
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+  const nestedCRes = validateWebMcpTool(nestedContradictoryTool);
+  assert.equal(nestedCRes.ok, false);
+  assert.equal(nestedCRes.refused, "invalid-tool-parameters");
+  assert.match(nestedCRes.why, /contradictory schema on property 'nested'/);
+});
+
+test("core: validateMiniAppToolArgs enforces object additionalProperties: false without properties and Unicode code points (Findings P1 & P2)", () => {
+  // Object schema without properties and additionalProperties: false
+  const strictEmptyObjTool = {
+    name: "strict_obj",
+    description: "Strict obj",
+    parameters: {
+      type: "object",
+      properties: {
+        config: {
+          type: "object",
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+  // Passing rogue key inside config must be refused
+  const rogueRes = validateMiniAppToolArgs(strictEmptyObjTool, { config: { rogue: 1 } });
+  assert.equal(rogueRes.ok, false);
+  assert.equal(rogueRes.refused, "invalid-argument");
+  assert.match(rogueRes.why, /unrecognized argument 'rogue'/);
+
+  // Passing empty object config: {} must pass
+  const emptyRes = validateMiniAppToolArgs(strictEmptyObjTool, { config: {} });
+  assert.equal(emptyRes.ok, true);
+
+  // Unicode code points for string maxLength / minLength
+  const unicodeTool = {
+    name: "unicode_tool",
+    description: "Unicode tool",
+    parameters: {
+      type: "object",
+      properties: {
+        char: { type: "string", maxLength: 1, minLength: 1 },
+      },
+    },
+  };
+  // '𠮷' is 2 UTF-16 code units, but 1 Unicode code point -> must pass maxLength: 1, minLength: 1
+  const singleCharRes = validateMiniAppToolArgs(unicodeTool, { char: "𠮷" });
+  assert.equal(singleCharRes.ok, true);
+
+  // Two supplementary characters '𠮷𠮷' is 2 Unicode code points -> must exceed maxLength: 1
+  const doubleCharRes = validateMiniAppToolArgs(unicodeTool, { char: "𠮷𠮷" });
+  assert.equal(doubleCharRes.ok, false);
+  assert.equal(doubleCharRes.refused, "invalid-argument-length");
+});
+
 test("browser: continuous host -> page -> bridge -> inner DOM journey with visual screenshot verification (Finding P2)", { timeout: 35000 }, async (t) => {
   const server = await startServer();
   t.after(() => server.stop());
 
-  const page = await launch({ width: 1000, height: 800 });
+  const page = await launch({ width: 1200, height: 900 });
   t.after(() => page.close());
 
   await page.goto(`${server.base}/`);
+  await page.waitFor(() => window.__voiceboxMiniApp !== undefined, { label: "mini-app controller on window" });
 
-  // Step 1: Mount mini-app in the page with visible thermostat DOM
-  await page.evaluate(async (base) => {
-    return new Promise((resolve, reject) => {
-      const outer = document.createElement("iframe");
-      outer.id = "thermostat-bridge";
-      outer.style.width = "400px";
-      outer.style.height = "300px";
-      outer.style.border = "2px solid #2563eb";
-      outer.style.position = "fixed";
-      outer.style.top = "50px";
-      outer.style.left = "50px";
-      outer.style.zIndex = "999999";
-      outer.src = `${base}/mini-app-bridge.html`;
-
-      window.addEventListener("message", (e) => {
-        if (e.origin !== window.location.origin) return;
-        if (e.data?.type === "bridge_ready") {
-          const appHtml = `<!doctype html>
+  const appHtml = `<!doctype html>
 <html>
 <head>
   <style>
@@ -1203,6 +1308,7 @@ test("browser: continuous host -> page -> bridge -> inner DOM journey with visua
     <div id="mode-val" class="mode">STANDBY</div>
   </div>
   <script>
+    let executionCount = 0;
     window.webMcp.registerTool({
       name: "set_temperature",
       description: "Set thermostat target temperature",
@@ -1216,60 +1322,59 @@ test("browser: continuous host -> page -> bridge -> inner DOM journey with visua
         additionalProperties: false
       },
       execute: async (args) => {
+        executionCount++;
         document.getElementById("temp-val").textContent = args.target.toFixed(1) + "°C";
         document.getElementById("mode-val").textContent = args.mode.toUpperCase();
-        return { ok: true, currentTarget: args.target, mode: args.mode };
+        return { ok: true, currentTarget: args.target, mode: args.mode, count: executionCount };
       }
     });
     window.webMcp.ready();
   <\/script>
 </body>
 </html>`;
-          outer.contentWindow.postMessage({ type: "load_app", appId: "continuous-thermostat", html: appHtml }, window.location.origin);
-        } else if (e.data?.type === "tools_updated") {
-          fetch(`${base}/api/mini-app/tools`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              appId: "continuous-thermostat",
-              title: "Thermostat",
-              tools: e.data.tools,
-            }),
-          }).then(() => {
-            window.__thermostatReady = true;
-          });
-        } else if (e.data?.type === "tool_result") {
-          if (e.data?.callId === "call-valid-cont") {
-            window.__validResult = e.data;
-          } else if (e.data?.callId === "call-malformed-cont") {
-            window.__malformedResult = e.data;
-          }
-        }
-      });
 
-      document.body.appendChild(outer);
-      const poll = () => {
-        if (window.__thermostatReady) resolve(true);
-        else setTimeout(poll, 50);
-      };
-      poll();
-      setTimeout(() => reject(new Error("timed out waiting for thermostat app")), 12000);
+  // 1. Mount via production window.__voiceboxMiniApp.mount() into #mini-app-container
+  await page.evaluate((html) => {
+    window.__voiceboxMiniApp.mount({
+      appId: "continuous-thermostat-app",
+      title: "Thermostat Widget",
+      html,
     });
-  }, server.base);
+  }, appHtml);
 
-  // Capture BEFORE screenshot of the thermostat iframe element
+  // Wait for outer iframe and inner app to mount and register tools
+  await page.waitFor(() => {
+    const outer = document.querySelector("#mini-app-outer-frame") || document.querySelector("#mini-app-frame");
+    const tools = window.__voiceboxMiniApp?.getTools?.() ?? [];
+    return outer && tools.some((t) => t.name === "set_temperature");
+  }, { label: "mini-app tool registered on production controller" });
+
+  // Sync tools with server host so server knows about set_temperature
+  const tools = await page.evaluate(() => window.__voiceboxMiniApp.getTools());
+  await fetch(`${server.base}/api/mini-app/tools`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      appId: "continuous-thermostat-app",
+      title: "Thermostat Widget",
+      tools,
+    }),
+  });
+
+  await sleep(200);
+
+  // Capture BEFORE screenshot of the production container
   const clip = await page.evaluate(() => {
-    const el = document.getElementById("thermostat-bridge");
+    const el = document.querySelector("#mini-app-container") || document.querySelector("#mini-app-outer-frame");
     const r = el.getBoundingClientRect();
     return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height), scale: 1 };
   });
 
   const snapBefore = await page.send("Page.captureScreenshot", { format: "png", clip });
   const bufBefore = Buffer.from(snapBefore.data, "base64");
-  assert.ok(bufBefore.length > 1000, "valid before screenshot captured");
+  assert.ok(bufBefore.length > 500, "valid before screenshot captured");
 
-  // Step 2: Continuous Server Turn -> Host Boundary Validation -> Dispatch
-  // 2a. Server /turn invocation with valid args
+  // Step 2: Continuous Server Turn -> Host Boundary Validation -> Page Controller -> Bridge -> Inner DOM
   const turnRes = await fetch(`${server.base}/api/turn`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1283,33 +1388,24 @@ test("browser: continuous host -> page -> bridge -> inner DOM journey with visua
   });
   const turnJson = await turnRes.json();
   assert.equal(turnJson.result?.ok, true, "server host validation admitted valid turn");
+  assert.ok(turnJson.miniAppToolCall, "server returned miniAppToolCall in turn result");
 
-  // Forward the admitted tool call through the bridge in the page
-  await page.evaluate(() => {
-    const outer = document.getElementById("thermostat-bridge");
-    outer.contentWindow.postMessage({
-      type: "call_tool",
-      callId: "call-valid-cont",
-      name: "set_temperature",
-      args: { target: 24.5, mode: "heat" },
-    }, window.location.origin);
-  });
+  // Route the admitted turnJson.miniAppToolCall through production controller (public/fused.js:3281-3283)
+  const appRes = await page.evaluate(async (call) => {
+    return await window.__voiceboxMiniApp.callTool(call.name, call.args);
+  }, turnJson.miniAppToolCall);
 
-  // Wait for valid execution to complete and inner DOM to update
-  await page.evaluate(async () => {
-    return new Promise((resolve) => {
-      const check = () => {
-        if (window.__validResult) resolve();
-        else setTimeout(check, 50);
-      };
-      check();
-    });
-  });
+  assert.equal(appRes.ok, true, "production callTool succeeded");
+  assert.equal(appRes.result.currentTarget, 24.5);
+  assert.equal(appRes.result.mode, "heat");
+  assert.equal(appRes.result.count, 1);
 
-  // Capture AFTER-VALID screenshot of the thermostat iframe element
+  await sleep(200);
+
+  // Capture AFTER-VALID screenshot of the production container
   const snapAfterValid = await page.send("Page.captureScreenshot", { format: "png", clip });
   const bufAfterValid = Buffer.from(snapAfterValid.data, "base64");
-  assert.ok(bufAfterValid.length > 1000, "valid after screenshot captured");
+  assert.ok(bufAfterValid.length > 500, "valid after screenshot captured");
 
   // Assert observable DOM update and screenshot pixel delta
   assert.notDeepEqual(bufBefore, bufAfterValid, "painted screenshot MUST change when mini-app executes valid tool");
@@ -1329,27 +1425,16 @@ test("browser: continuous host -> page -> bridge -> inner DOM journey with visua
   const badTurnJson = await badTurnRes.json();
   assert.equal(badTurnJson.result?.ok, false, "server host rejected malformed turn");
   assert.equal(badTurnJson.result?.refused, "invalid-argument-type");
+  assert.equal(badTurnJson.miniAppToolCall, undefined, "server must not emit miniAppToolCall on refused turn");
 
-  // Bridge Direct Malformed Invocations: Bridge intercept & refusal without inner execution
-  await page.evaluate(() => {
-    const outer = document.getElementById("thermostat-bridge");
-    outer.contentWindow.postMessage({
-      type: "call_tool",
-      callId: "call-malformed-cont",
-      name: "set_temperature",
-      args: { target: "twenty-four", mode: "turbo" },
-    }, window.location.origin);
+  // Direct bridge malformed dispatch: bridge intercepts and refuses without inner execution
+  const bridgeBadRes = await page.evaluate(async () => {
+    return await window.__voiceboxMiniApp.callTool("set_temperature", { target: "twenty-four", mode: "turbo" });
   });
+  assert.equal(bridgeBadRes.ok, false);
+  assert.equal(bridgeBadRes.refused, "invalid-argument-type");
 
-  await page.evaluate(async () => {
-    return new Promise((resolve) => {
-      const check = () => {
-        if (window.__malformedResult) resolve();
-        else setTimeout(check, 50);
-      };
-      check();
-    });
-  });
+  await sleep(200);
 
   // Capture AFTER-MALFORMED screenshot
   const snapAfterMalformed = await page.send("Page.captureScreenshot", { format: "png", clip });

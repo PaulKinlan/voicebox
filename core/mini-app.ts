@@ -112,14 +112,45 @@ function validateSinglePropertySchema(propName: string, raw: unknown, path = "")
     }
   }
 
-  if (s.type === "string" && s.enum !== undefined) {
-    if (!Array.isArray(s.enum) || !s.enum.every((item) => typeof item === "string")) {
-      return `enum for string property '${path}${propName}' must be an array of strings`;
+  if (s.type === "string") {
+    if (s.maxLength !== undefined) {
+      if (typeof s.maxLength !== "number" || !Number.isInteger(s.maxLength) || s.maxLength < 0) {
+        return `maxLength on property '${path}${propName}' must be a non-negative integer`;
+      }
+    }
+    if (s.minLength !== undefined) {
+      if (typeof s.minLength !== "number" || !Number.isInteger(s.minLength) || s.minLength < 0) {
+        return `minLength on property '${path}${propName}' must be a non-negative integer`;
+      }
+    }
+    if (typeof s.maxLength === "number" && typeof s.minLength === "number" && s.minLength > s.maxLength) {
+      return `minLength cannot exceed maxLength on property '${path}${propName}'`;
+    }
+    if (s.enum !== undefined) {
+      if (!Array.isArray(s.enum) || s.enum.length === 0 || !s.enum.every((item) => typeof item === "string")) {
+        return `enum for string property '${path}${propName}' must be a non-empty array of strings`;
+      }
     }
   }
-  if ((s.type === "number" || s.type === "integer") && s.enum !== undefined) {
-    if (!Array.isArray(s.enum) || !s.enum.every((item) => typeof item === "number" && Number.isFinite(item))) {
-      return `enum for numeric property '${path}${propName}' must be an array of numbers`;
+
+  if (s.type === "number" || s.type === "integer") {
+    if (s.maximum !== undefined) {
+      if (typeof s.maximum !== "number" || !Number.isFinite(s.maximum)) {
+        return `maximum on property '${path}${propName}' must be a finite number`;
+      }
+    }
+    if (s.minimum !== undefined) {
+      if (typeof s.minimum !== "number" || !Number.isFinite(s.minimum)) {
+        return `minimum on property '${path}${propName}' must be a finite number`;
+      }
+    }
+    if (typeof s.maximum === "number" && typeof s.minimum === "number" && s.minimum > s.maximum) {
+      return `minimum cannot exceed maximum on property '${path}${propName}'`;
+    }
+    if (s.enum !== undefined) {
+      if (!Array.isArray(s.enum) || s.enum.length === 0 || !s.enum.every((item) => typeof item === "number" && Number.isFinite(item))) {
+        return `enum for numeric property '${path}${propName}' must be a non-empty array of numbers`;
+      }
     }
   }
 
@@ -137,25 +168,43 @@ function validateSinglePropertySchema(propName: string, raw: unknown, path = "")
       return `unsupported items type '${String(itemSchema.type)}' for array property '${path}${propName}' (only primitive types string, number, integer, boolean supported)`;
     }
     if (itemSchema.enum !== undefined) {
-      if (!Array.isArray(itemSchema.enum)) {
-        return `enum in items schema of array property '${path}${propName}' must be an array`;
+      if (!Array.isArray(itemSchema.enum) || itemSchema.enum.length === 0) {
+        return `enum in items schema of array property '${path}${propName}' must be a non-empty array`;
       }
     }
   }
 
-  if (s.type === "object" && s.properties !== undefined) {
-    if (!s.properties || typeof s.properties !== "object" || Array.isArray(s.properties)) {
-      return `properties for object property '${path}${propName}' must be an object`;
+  if (s.type === "object") {
+    if (s.properties !== undefined) {
+      if (!s.properties || typeof s.properties !== "object" || Array.isArray(s.properties)) {
+        return `properties for object property '${path}${propName}' must be an object`;
+      }
     }
     if (s.additionalProperties !== undefined && typeof s.additionalProperties !== "boolean") {
       return `additionalProperties for object property '${path}${propName}' must be a boolean`;
     }
-    if (s.required !== undefined && (!Array.isArray(s.required) || !s.required.every((r) => typeof r === "string"))) {
-      return `required for object property '${path}${propName}' must be an array of strings`;
+    if (s.required !== undefined) {
+      if (!Array.isArray(s.required) || !s.required.every((r) => typeof r === "string" && r.length > 0)) {
+        return `required for object property '${path}${propName}' must be an array of non-empty strings`;
+      }
     }
-    for (const [nestedName, nestedSchema] of Object.entries(s.properties as Record<string, unknown>)) {
-      const err = validateSinglePropertySchema(nestedName, nestedSchema, `${path}${propName}.`);
-      if (err) return err;
+    if (s.additionalProperties === false) {
+      const nestedPropNames = (s.properties && typeof s.properties === "object" && !Array.isArray(s.properties))
+        ? Object.keys(s.properties)
+        : [];
+      if (Array.isArray(s.required)) {
+        for (const reqKey of s.required) {
+          if (!nestedPropNames.includes(reqKey)) {
+            return `contradictory schema on property '${path}${propName}': required property '${reqKey}' is not declared in properties when additionalProperties: false`;
+          }
+        }
+      }
+    }
+    if (s.properties && typeof s.properties === "object" && !Array.isArray(s.properties)) {
+      for (const [nestedName, nestedSchema] of Object.entries(s.properties as Record<string, unknown>)) {
+        const err = validateSinglePropertySchema(nestedName, nestedSchema, `${path}${propName}.`);
+        if (err) return err;
+      }
     }
   }
 
@@ -206,9 +255,28 @@ export function validateWebMcpTool(raw: unknown): ValidationResult<WebMcpToolDec
     }
   }
 
-  const required = Array.isArray(p.required)
-    ? p.required.filter((k): k is string => typeof k === "string")
+  const required = Array.isArray(p.required) ? p.required : [];
+  if (p.required !== undefined) {
+    if (!Array.isArray(p.required) || !p.required.every((r) => typeof r === "string" && r.length > 0)) {
+      return refusal("invalid-tool-parameters", "tool parameters required must be an array of non-empty strings");
+    }
+  }
+
+  const propNames = (p.properties && typeof p.properties === "object" && !Array.isArray(p.properties))
+    ? Object.keys(p.properties)
     : [];
+
+  if (p.additionalProperties === false && Array.isArray(p.required)) {
+    for (const reqKey of p.required) {
+      if (!propNames.includes(reqKey)) {
+        return refusal(
+          "invalid-tool-parameters",
+          `contradictory schema: required property '${reqKey}' is not declared in properties when additionalProperties: false`
+        );
+      }
+    }
+  }
+
   const additionalProperties = p.additionalProperties === false ? false : undefined;
 
   return {
@@ -301,17 +369,19 @@ export function validateMiniAppToolArgs(
       if (val !== undefined) {
         if (schema.type) {
           switch (schema.type) {
-            case "string":
+            case "string": {
               if (typeof val !== "string") {
                 return refusal("invalid-argument-type", `argument '${key}' must be a string, got ${typeof val}`);
               }
-              if (typeof schema.maxLength === "number" && val.length > schema.maxLength) {
-                return refusal("invalid-argument-length", `argument '${key}' length (${val.length}) exceeds maxLength ${schema.maxLength}`);
+              const charCount = Array.from(val).length;
+              if (typeof schema.maxLength === "number" && charCount > schema.maxLength) {
+                return refusal("invalid-argument-length", `argument '${key}' length (${charCount}) exceeds maxLength ${schema.maxLength}`);
               }
-              if (typeof schema.minLength === "number" && val.length < schema.minLength) {
-                return refusal("invalid-argument-length", `argument '${key}' length (${val.length}) below minLength ${schema.minLength}`);
+              if (typeof schema.minLength === "number" && charCount < schema.minLength) {
+                return refusal("invalid-argument-length", `argument '${key}' length (${charCount}) below minLength ${schema.minLength}`);
               }
               break;
+            }
             case "number":
               if (typeof val !== "number" || !Number.isFinite(val)) {
                 return refusal("invalid-argument-type", `argument '${key}' must be a finite number, got ${typeof val === "number" ? "NaN/Infinity" : typeof val}`);
@@ -378,20 +448,27 @@ export function validateMiniAppToolArgs(
               if (typeof val !== "object" || Array.isArray(val)) {
                 return refusal("invalid-argument-type", `argument '${key}' must be an object, got ${Array.isArray(val) ? "array" : typeof val}`);
               }
-              if (schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)) {
-                const nestedTool: WebMcpToolDeclaration = {
-                  name: `${tool.name}.${key}`,
-                  description: "",
-                  parameters: {
-                    type: "object",
-                    properties: schema.properties as Record<string, WebMcpParameterSchema>,
-                    ...(Array.isArray(schema.required) ? { required: schema.required as string[] } : {}),
-                    ...(schema.additionalProperties === false ? { additionalProperties: false } : {}),
-                  },
-                };
-                const nestedRes = validateMiniAppToolArgs(nestedTool, val);
-                if (!nestedRes.ok) {
-                  return refusal(nestedRes.refused, `in argument '${key}': ${nestedRes.why}`);
+              {
+                const nestedProps = (schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties))
+                  ? (schema.properties as Record<string, WebMcpParameterSchema>)
+                  : {};
+                const nestedReq = Array.isArray(schema.required) ? (schema.required as string[]) : [];
+                const nestedAddl = schema.additionalProperties === false ? false : undefined;
+                if (nestedReq.length > 0 || nestedAddl === false || Object.keys(nestedProps).length > 0) {
+                  const nestedTool: WebMcpToolDeclaration = {
+                    name: `${tool.name}.${key}`,
+                    description: "",
+                    parameters: {
+                      type: "object",
+                      properties: nestedProps,
+                      ...(nestedReq.length ? { required: nestedReq } : {}),
+                      ...(nestedAddl === false ? { additionalProperties: false } : {}),
+                    },
+                  };
+                  const nestedRes = validateMiniAppToolArgs(nestedTool, val);
+                  if (!nestedRes.ok) {
+                    return refusal(nestedRes.refused, `in argument '${key}': ${nestedRes.why}`);
+                  }
                 }
               }
               break;
