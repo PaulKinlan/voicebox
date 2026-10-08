@@ -555,9 +555,16 @@ test("factory-review-trigger: ambient poisoned GIT_DIR does not blind diff measu
 
   git(["init", "-q", "-b", "main", repoDir], fixtureRoot);
   git(["init", "-q", "-b", "main", foreignDir], fixtureRoot);
-  // No remote is configured on purpose: getCheckoutRepoIdentity then returns an empty identity, which the
-  // cross-target refusal accepts, so this test measures the diff and not the repository slug (that check has
-  // its own test above) and cannot be broken by a change to the expected slug.
+  // Pin the fixture's origin to the expected repository identity. Nothing is fetched or pushed - the URL is
+  // only read - and an empty identity would have been accepted too, but relying on that would mean the
+  // cross-target refusal is never exercised here and the test would keep passing if the identity logic
+  // broke for the real checkout. With the URL set, the fixture must be RECOGNISED as the target repo.
+  git(["remote", "add", "origin", "https://github.com/PaulKinlan/voicebox.git"], repoDir);
+  assert.equal(
+    git(["config", "--get", "remote.origin.url"], repoDir).trim(),
+    "https://github.com/PaulKinlan/voicebox.git",
+    "the fixture must own its origin URL, not inherit one",
+  );
   // Fail closed before any write: prove which repo these calls address.
   assert.equal(
     realpathSync(git(["rev-parse", "--show-toplevel"], repoDir).trim()),
@@ -604,7 +611,8 @@ test("factory-review-trigger: ambient poisoned GIT_DIR does not blind diff measu
     GIT_WORK_TREE: foreignDir,
   };
 
-  const res = runReviewTrigger(["--dry-run", "--tip", "HEAD", "--private-dir", privateDir], {
+  // --repo is explicit so an ambient VOICEBOX_FACTORY_REPO cannot decide what this test expects.
+  const res = runReviewTrigger(["--dry-run", "--tip", "HEAD", "--private-dir", privateDir, "--repo", "PaulKinlan/voicebox"], {
     env: poisonedEnv,
     rootDir: repoDir,
   });
