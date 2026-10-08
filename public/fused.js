@@ -4071,10 +4071,16 @@ on(els.envUseBrowserBtn, "click", async () => {
     if (els.envUseBrowserBtn) els.envUseBrowserBtn.disabled = true;
     const ok = await openOpfsScratchFolder();
     if (ok) {
+      await request("/api/root", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ project: "scratchpad", root: { kind: "opfs", path: "scratchpad" } }),
+      }).catch(() => {});
       if (els.envRootStatus) {
         els.envRootStatus.dataset.ok = "true";
         els.envRootStatus.textContent = "Switched to browser storage (OPFS) — turns and edits save here.";
       }
+      await loadRoot();
       renderRoot();
     } else {
       if (els.envRootStatus) {
@@ -4095,10 +4101,16 @@ on(els.envUseBrowserBtn, "click", async () => {
 on(els.envPickFolderBtn, "click", async () => {
   const picked = await openRoomFolder();
   if (picked) {
+    await request("/api/root", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ project: picked.name, root: { kind: "handle", id: picked.name } }),
+    }).catch(() => {});
     if (els.envRootStatus) {
       els.envRootStatus.dataset.ok = "true";
       els.envRootStatus.textContent = `Opened local folder “${picked.name}”.`;
     }
+    await loadRoot();
     renderRoot();
   }
 });
@@ -4115,13 +4127,13 @@ on(els.envDeclareRootBtn, "click", async () => {
   const projectName = pathVal.split("/").filter(Boolean).pop() || "project";
   if (els.envDeclareRootBtn) els.envDeclareRootBtn.disabled = true;
   try {
-    if (roomFolder) closeRoomFolder();
     const res = await request("/api/root", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ project: projectName, root: { kind: "machine", path: pathVal } }),
     });
     if (res && res.ok) {
+      if (roomFolder) closeRoomFolder();
       if (els.envRootStatus) {
         els.envRootStatus.dataset.ok = "true";
         els.envRootStatus.textContent = `Machine root set to ${res.root?.path ?? pathVal} — turns save here now.`;

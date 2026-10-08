@@ -175,9 +175,39 @@ test("integrated environment flow: configure machine root and browser workspace 
   const opfsTurn = await say(page, "create file opfs-note.txt with hello-from-opfs");
   assert.ok(opfsTurn.cards.includes("opfs-note.txt"), "opfs-note.txt appears in browser storage files list");
 
+  // Read back written bytes directly from OPFS to prove durability
+  const opfsContent = await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const scratch = await root.getDirectoryHandle("scratchpad");
+    const fileHandle = await scratch.getFileHandle("opfs-note.txt");
+    const file = await fileHandle.getFile();
+    return await file.text();
+  });
+  assert.equal(opfsContent.trim(), "hello-from-opfs", "bytes read back directly from OPFS match written content");
+
+  // Assert server root is aligned with OPFS
+  const serverRootKind = await page.evaluate(async () => {
+    const res = await fetch("/api/root").then((r) => r.json());
+    return res.root?.kind;
+  });
+  assert.equal(serverRootKind, "opfs", "server active root is aligned with browser storage (OPFS)");
+
   // 6. Switch back to machine root and reload: verify machine root survives reload
   await page.click("#envs-open");
   await page.waitFor(() => document.getElementById("envs")?.hasAttribute("open"));
+
+  // Verify finding P1 fix: failed machine root declaration does NOT clear active room folder
+  await page.evaluate(() => {
+    document.getElementById("env-root-path-input").value = "/nonexistent/directory/that/does/not/exist";
+  });
+  await page.click("#env-declare-root-btn");
+  await page.waitFor(() => {
+    const status = document.getElementById("env-root-status")?.textContent ?? "";
+    return status.length > 0 && document.getElementById("env-root-status")?.dataset.ok === "false";
+  });
+  const folderAfterFailedDeclare = await page.evaluate(() => window.__voiceboxGetActiveFolder()?.name);
+  assert.equal(folderAfterFailedDeclare, "scratchpad", "active room folder is preserved when machine root declaration fails");
+
   await page.evaluate((dirPath) => {
     document.getElementById("env-root-path-input").value = dirPath;
   }, testRoot);
