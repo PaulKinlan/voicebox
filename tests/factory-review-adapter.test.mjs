@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir, homedir } from "node:os";
+import { tmpdir } from "node:os";
 import {
   selectReviewStation,
   computeReviewCacheKey,
@@ -499,30 +499,124 @@ test("factory-review-trigger: getCheckoutRepoIdentity resolves normalized reposi
   assert.ok(mismatchedRes.error.includes("does not match target repo"));
 });
 
-test("factory-review-trigger: ambient poisoned GIT_DIR does not blind diff measurement (C2 / GH #19)", () => {
-  // Negative control / regression:
-  // With ambient GIT_DIR pointing to a foreign repository (e.g. ~/agents/.git),
-  // git merge-base and git diff must still evaluate against target rootDir via lib/git-env.mjs
-  const foreignRepo = path.join(homedir(), "agents", ".git");
-  if (!existsSync(foreignRepo)) {
-    return;
-  }
+test("factory-review-trigger: ambient poisoned GIT_DIR does not blind diff measurement (C2 / GH #19)", (t) => {
+  // Negative control / regression (voicebox-beads-nqrl, GH #30): with ambient GIT_DIR pointing at a foreign
+  // repository, git merge-base and git diff must still evaluate against the target rootDir via
+  // lib/git-env.mjs - never against the foreign repo, and never against whatever the ambient checkout
+  // happens to be.
+  //
+  // This test used to run against ROOT and read ~/agents/.git. That made it assert something about the LIVE
+  // checkout: it only passed while HEAD differed from origin/main, and it returned early on any machine
+  // without that path - so it failed whenever a tree was gated at main's own tip and proved nothing
+  // elsewhere. The measurement is now a property of a fixture this test owns: the diff is fixed by the
+  // fixture's two commits and the poisoned GIT_DIR points at a foreign repo the fixture also owns, so the
+  // result no longer depends on the checkout's position or on the invoking home directory at all.
+  const ownedDirs = new Set();
+  t.after(() => {
+    for (const dir of ownedDirs) rmSync(dir, { recursive: true, force: true });
+  });
+  const ownDir = (dir) => {
+    ownedDirs.add(dir);
+    return dir;
+  };
+
+  const fixtureRoot = ownDir(mkdtempSync(path.join(tmpdir(), "review-trigger-fixture-")));
+  const repoDir = path.join(fixtureRoot, "repo");
+  const foreignDir = path.join(fixtureRoot, "foreign");
+  const gitHome = path.join(fixtureRoot, "githome");
+  const emptyHooks = path.join(fixtureRoot, "empty-hooks");
+  for (const dir of [repoDir, foreignDir, gitHome, emptyHooks]) mkdirSync(dir, { recursive: true });
+
+  // Same discipline as the watcher fixture in this file, for the same reason: a test that shells out to git
+  // must not inherit the surrounding repository's environment. The pre-push hook exports GIT_DIR, and an
+  // inheriting fixture has operated on the surrounding repo before (voicebox-beads-guu9). Absolute trusted
+  // git, no PATH, owned HOME/XDG, system/global config and hooks pinned to owned empty locations.
+  const trustedGit = "/usr/bin/git";
+  accessSync(trustedGit, constants.X_OK);
+  const fixtureEnv = {
+    HOME: gitHome,
+    XDG_CONFIG_HOME: path.join(gitHome, ".config"),
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_ATTR_NOSYSTEM: "1",
+  };
+  const git = (args, cwd) => execFileSync(
+    trustedGit,
+    [
+      "-c", `core.hooksPath=${emptyHooks}`,
+      "-c", `init.templateDir=${emptyHooks}`,
+      "-c", "user.email=review-trigger-fixture@test.local",
+      "-c", "user.name=review trigger fixture",
+      ...args,
+    ],
+    { cwd, encoding: "utf8", env: fixtureEnv },
+  );
+
+  git(["init", "-q", "-b", "main", repoDir], fixtureRoot);
+  git(["init", "-q", "-b", "main", foreignDir], fixtureRoot);
+  // No remote is configured on purpose: getCheckoutRepoIdentity then returns an empty identity, which the
+  // cross-target refusal accepts, so this test measures the diff and not the repository slug (that check has
+  // its own test above) and cannot be broken by a change to the expected slug.
+  // Fail closed before any write: prove which repo these calls address.
+  assert.equal(
+    realpathSync(git(["rev-parse", "--show-toplevel"], repoDir).trim()),
+    realpathSync(repoDir),
+    "fixture git ops must resolve to the fixture itself, not to a surrounding repository",
+  );
+
+  // The fixture's diff, fixed by construction: a base commit and two ops-category changes on top.
+  writeFileSync(path.join(repoDir, "README.md"), "fixture base\n");
+  git(["add", "README.md"], repoDir);
+  git(["commit", "-q", "-m", "fixture base"], repoDir);
+  const baseSha = git(["rev-parse", "HEAD"], repoDir).trim();
+  writeFileSync(path.join(repoDir, "ops-change.log"), "2026-01-01 INFO fixture ops change\n");
+  git(["add", "ops-change.log"], repoDir);
+  git(["commit", "-q", "-m", "fixture ops change"], repoDir);
+  writeFileSync(path.join(repoDir, "ops-second.log"), "2026-01-02 INFO second fixture ops change\n");
+  git(["add", "ops-second.log"], repoDir);
+  git(["commit", "-q", "-m", "fixture second ops change"], repoDir);
+  const tipSha = git(["rev-parse", "HEAD"], repoDir).trim();
+  assert.notEqual(baseSha, tipSha, "the fixture must have a real diff for the measurement to find");
+  // Two commits above the base on purpose: origin/main points at the base, so the default base (merge-base
+  // with origin/main) and the HEAD~1 fallback are different commits, and the trigger's own log line - two
+  // changed files rather than one - shows which of the two it actually resolved. With a single commit they
+  // coincide and the test could not tell whether the default path ran at all.
+
+  // No --base on purpose. The default path is the one that failed on main's own tip: the trigger resolves
+  // `merge-base origin/main HEAD` for itself. So the fixture provides its own origin/main (pointing at the
+  // base commit) and the test exercises that resolution rather than bypassing it. An owned --private-dir
+  // keeps this run out of the invoking home directory: the trigger reads a review cache BEFORE it returns
+  // from dry-run, so an ambient ~/.voicebox cache could otherwise answer for the fixture and make this
+  // pass or fail for a reason of its own.
+  git(["update-ref", "refs/remotes/origin/main", baseSha], repoDir);
+  const privateDir = ownDir(path.join(fixtureRoot, "private"));
+  mkdirSync(privateDir, { recursive: true });
+
+  // The foreign repository this fixture owns, standing in for the old ~/agents/.git dependency.
+  writeFileSync(path.join(foreignDir, "foreign.txt"), "foreign\n");
+  git(["add", "foreign.txt"], foreignDir);
+  git(["commit", "-q", "-m", "foreign base"], foreignDir);
 
   const poisonedEnv = {
     ...process.env,
-    GIT_DIR: foreignRepo,
-    GIT_WORK_TREE: path.join(homedir(), "agents"),
+    GIT_DIR: path.join(foreignDir, ".git"),
+    GIT_WORK_TREE: foreignDir,
   };
 
-  const res = runReviewTrigger(["--dry-run", "--tip", "HEAD"], {
+  const res = runReviewTrigger(["--dry-run", "--tip", "HEAD", "--private-dir", privateDir], {
     env: poisonedEnv,
-    rootDir: ROOT,
+    rootDir: repoDir,
   });
 
   assert.equal(res.ok, true);
   assert.equal(res.dryRun, true);
-  // Verify station was selected for target repository changes (not blinded with 0 changed files)
-  assert.equal(res.station !== null, true, "review station must be selected for target repository diff");
+  // Verify the station was selected for the fixture's own changes (not blinded with 0 changed files).
+  assert.equal(
+    res.station !== null,
+    true,
+    "review station must be selected for the fixture's own diff, not blinded by the poisoned GIT_DIR"
+  );
 });
 
 test("factory-review-trigger: locateRunDeltaReport strictly enforces runDir provenance", () => {
