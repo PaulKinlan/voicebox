@@ -320,7 +320,7 @@ test("git_status caps discovery at 15 and bounds probe fan-out (voicebox-beads-8
   mkdirSync(shimDir);
   const logFile = path.join(sandboxRoot, "git-calls.log");
   writeFileSync(path.join(shimDir, "git"), `#!/bin/sh
-echo "S $$ $(date +%s%N)" >> "${logFile}"
+echo "S $$ $(date +%s%N) $*" >> "${logFile}"
 sleep 0.15
 "${realGit}" "$@"
 rc=$?
@@ -353,8 +353,24 @@ exit $rc
   assert.deepEqual(dirs, [...dirs].sort((a, b) => a.localeCompare(b)), "discovery order preserved under the cap");
 
   // The fan-out is BOUNDED: peak overlap in the shim log must never exceed the pool size.
+  // Attribute start events by PID to the sandbox subrepository probe plane (-C <sandboxRoot>)
+  // so unrelated server boot git spawns (e.g. unawaited buildIdentity()) are not miscounted.
   const lines = readFileSync(logFile, "utf8").trim().split("\n");
-  const events = lines.map((l) => ({ kind: l.startsWith("S") ? 1 : -1, pid: l.split(" ")[1], at: Number(l.split(" ")[2] ?? 0) }));
+  const probePids = new Set();
+  for (const l of lines) {
+    if (l.startsWith("S ") && l.includes("-C " + sandboxRoot)) {
+      const pid = l.split(" ")[1];
+      if (pid) probePids.add(pid);
+    }
+  }
+
+  const events = lines
+    .filter((l) => {
+      const parts = l.split(" ");
+      return probePids.has(parts[1]);
+    })
+    .map((l) => ({ kind: l.startsWith("S") ? 1 : -1, pid: l.split(" ")[1] }));
+
   // Order S before E at equal timestamps is impossible here (different lines), so a running counter suffices.
   let running = 0, peak = 0;
   for (const e of events) { running += e.kind; peak = Math.max(peak, running); }
