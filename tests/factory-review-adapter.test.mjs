@@ -622,7 +622,11 @@ test("factory-review-trigger: getCheckoutRepoIdentity resolves normalized reposi
   );
   assert.equal(mismatchedRes.ok, false);
   assert.equal(mismatchedRes.exitCode, 1);
-  assert.ok(mismatchedRes.error.includes("does not match target repo"));
+  assert.equal(
+    mismatchedRes.error,
+    "checkout origin 'paulkinlan/voicebox' does not match target repo 'ForeignOrg/foreign-repo'",
+    "the refusal must be the pre-execution guard's own error, not an incidental downstream failure"
+  );
 });
 
 test("factory-review-trigger: ambient poisoned GIT_DIR does not blind diff measurement (C2 / GH #19)", (t) => {
