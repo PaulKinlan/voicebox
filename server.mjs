@@ -33,7 +33,7 @@ import {
 import { auditFileName, makeEntry, mergeAudit, nextSeq, parseEntry, resumeSeq, serializeEntry, sweepLostAttempts } from "./core/audit.ts";
 import { reduceTask, taskView } from "./core/tasks.ts";
 import { activityEntry } from "./core/shared-log.ts";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   ENV_UNREACHABLE,
   listUnreadable,
@@ -48,6 +48,7 @@ import { createPermissionPolicy } from "./lib/permission-policy.mjs";
 import { createPiAcpExecutor, describeAdapterInstall } from "./lib/pi-acp.mjs";
 import { liveToolDeclarations } from "./lib/wasm-shelf.mjs";
 import { redactSecrets, redactObject } from "./lib/redact.mjs";
+import { timingSafeStringEqual } from "./lib/timing-safe.mjs";
 import { MiniAppRegistry } from "./lib/mini-app-host.mjs";
 import { saveMiniApp, discoverMiniApps, getMiniApp, deleteMiniApp } from "./lib/mini-app-store.mjs";
 import { createClaudeAcpExecutor, describeClaudeAdapterInstall } from "./lib/claude-acp.mjs";
@@ -306,7 +307,7 @@ function hasExtensionAuthority(req) {
 
   // 2. In-room session token embedded in the served HTML
   const sessionToken = req.headers["x-voicebox-session-token"];
-  if (typeof sessionToken === "string" && sessionToken && sessionToken === ROOM_SESSION_TOKEN) {
+  if (typeof sessionToken === "string" && sessionToken && timingSafeStringEqual(sessionToken, ROOM_SESSION_TOKEN)) {
     return true;
   }
 
@@ -362,10 +363,9 @@ function sessionCookieOk(req) {
   if (typeof header !== "string") return false;
   const match = header.split(/;\s*/).find((pair) => pair.startsWith(`${SESSION_COOKIE}=`));
   if (!match) return false;
-  const provided = Buffer.from(match.slice(SESSION_COOKIE.length + 1));
-  const expected = Buffer.from(LOOPBACK_SESSION);
-  // Length differs → not ours; timingSafeEqual throws on length mismatch, so gate on it first.
-  return provided.length === expected.length && timingSafeEqual(provided, expected);
+  // The cookie is one of the secrets lib/timing-safe.mjs owns, so the length gate lives there:
+  // unequal lengths never reach crypto.timingSafeEqual, which throws on them.
+  return timingSafeStringEqual(match.slice(SESSION_COOKIE.length + 1), LOOPBACK_SESSION);
 }
 function claimsToBeTheLocalPage(req, localOrigins) {
   const origin = typeof req.headers.origin === "string" ? req.headers.origin : null;
@@ -4315,7 +4315,7 @@ async function handle(req, res) {
       const pageOwned = root.kind === "opfs" || root.kind === "handle";
       const declaredByHost = extensions.hostTokenOk(req.headers["x-voicebox-host-token"]);
       const sessionToken = req.headers["x-voicebox-session-token"];
-      const declaredByRoomSession = typeof sessionToken === "string" && sessionToken && sessionToken === ROOM_SESSION_TOKEN;
+      const declaredByRoomSession = typeof sessionToken === "string" && sessionToken && timingSafeStringEqual(sessionToken, ROOM_SESSION_TOKEN);
       const selfPort = boundPort ?? PORT;
       const ownOrigins = new Set([
         `http://127.0.0.1:${selfPort}`,
