@@ -1848,7 +1848,7 @@ VERDICT`);
   for (const admissionLine of renderHarnessTable(harnessAdmission.rows, { environment: SELF_ENVIRONMENT })) {
     console.log(admissionLine);
   }
-  console.log(`  root at boot      ${active ? `${active.root.path} (${active.declaredBy})` : (workspaceDeclared() ?? "none — declare one from the page, or set VOICEBOX_WORKSPACE")}`);
+  console.log(`  root at boot      ${active ? `${active.root.path} (${active.declaredBy})` : (workspaceDeclared() ?? "none — declare one from the page, or set VOICEBOX_WORKSPACE / VOICEBOX_SANDBOX_HOMES")}`);
   if (missing.length === 0) {
     console.log(`  credentials       present for what is selected`);
   } else {
@@ -1878,7 +1878,7 @@ A SERVER ON :${port}`);
     } else {
       console.log(`  root              NONE DECLARED — every write refuses with "root-not-declared"`);
       console.log(`                    if that is not what you want: POST /api/root, or restart with`);
-      console.log(`                    VOICEBOX_WORKSPACE=/path npm run serve`);
+      console.log(`                    VOICEBOX_WORKSPACE=/path or VOICEBOX_SANDBOX_HOMES=/path npm run serve`);
     }
   }
   console.log("");
@@ -1899,6 +1899,7 @@ A ROOT is the folder voicebox can read and write. There are three ways to get on
 
   1. From the page      the explorer's declare control (POST /api/root)
   2. At boot            VOICEBOX_WORKSPACE=/path/to/folder npm run serve
+                        or VOICEBOX_SANDBOX_HOMES=/path/to/folder npm run serve
   3. From a worker      the browser worker declares one when it opens a project
 
 Without one, every write refuses with "root-not-declared" — that is the refusal

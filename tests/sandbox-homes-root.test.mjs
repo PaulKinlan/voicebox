@@ -16,7 +16,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -44,42 +44,35 @@ test("resolver: resolveWorkspaceCandidate expands ~/ in target paths", () => {
   assert.equal(result.candidate, path.join(os.homedir(), "my-sample-repo"));
 });
 
-test("independent proof: (a) VOICEBOX_SANDBOX_HOMES alone declares boot root when workspace is unset", async () => {
-  const testDirName = `vb-p0-test-sandbox-${crypto.randomBytes(4).toString("hex")}`;
-  const tildePath = `~/${testDirName}`;
-  const resolvedPath = path.join(os.homedir(), testDirName);
-
-  assert.equal(existsSync(resolvedPath), false, "precondition: fresh directory does not exist on disk yet");
+test("independent proof: (a) variable read — VOICEBOX_SANDBOX_HOMES alone declares boot root for existing absolute path", async () => {
+  const scratchDir = realpathSync(mkdtempSync(path.join(os.tmpdir(), "vb-p0-existing-")));
+  assert.equal(existsSync(scratchDir), true, "precondition: absolute directory already exists on disk");
 
   const srv = await startServer({
     env: {
       VOICEBOX_WORKSPACE: undefined,
-      VOICEBOX_SANDBOX_HOMES: tildePath,
+      VOICEBOX_SANDBOX_HOMES: scratchDir,
       VOICEBOX_INSTANCE: "sandbox-homes-test-a",
     },
   });
 
   try {
-    // 1. Directory is automatically created for fresh path
-    assert.equal(existsSync(resolvedPath), true, "server must auto-create fresh tilde path directory");
-
-    // 2. GET /api/root reports declared root matching the expanded tilde directory
     const res = await fetch(`${srv.base}/api/root`);
     assert.equal(res.status, 200);
     const body = await res.json();
 
     assert.equal(body.ok, true);
     assert.equal(body.declared, true, "root must be declared");
-    assert.equal(body.project, testDirName);
+    assert.equal(body.project, path.basename(scratchDir));
     assert.equal(body.root?.kind, "machine");
-    assert.equal(body.root?.path, resolvedPath, "root path must equal expanded tilde directory");
+    assert.equal(body.root?.path, scratchDir, "root path must equal supplied existing absolute directory");
   } finally {
     await srv.stop();
-    rmSync(resolvedPath, { recursive: true, force: true });
+    rmSync(scratchDir, { recursive: true, force: true });
   }
 });
 
-test("independent proof: (b) VOICEBOX_WORKSPACE with fresh ~/dir auto-creates and sets boot root", async () => {
+test("independent proof: (b) tilde expansion & fresh directory creation — ~/dir is expanded and auto-created", async () => {
   const testDirName = `vb-p0-test-ws-${crypto.randomBytes(4).toString("hex")}`;
   const tildePath = `~/${testDirName}`;
   const resolvedPath = path.join(os.homedir(), testDirName);
