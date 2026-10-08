@@ -102,10 +102,13 @@ export const READ_ONLY_CLASSES = Object.freeze(new Set(["observer", "optimizer"]
 export const WRITE_CLASSES = Object.freeze(new Set(["proposer"]));
 
 /**
- * The model variable each engine's adapter actually reads. Only the engines that consume one are
- * listed: the `pi` and `claude` adapters pass no model flag at all, so reporting a model for them
- * would be a claim about the run that nothing verifies (and it would key the review cache on an
- * unrelated caller's PI_MODEL).
+ * The model variable each engine's adapter actually reads.
+ *
+ * Only the engines that consume one are listed, and only variables the factory invocation really
+ * passes through: the trigger's command line carries `--engine` and nothing else, so a model the
+ * trigger cannot set is not recorded (recording it would attribute a run to a model this code
+ * never selected, in the cache key and in the docs). The `pi` and `claude` adapters pass no model
+ * flag and read none.
  */
 const ENGINE_MODEL_VARS = Object.freeze({
   deepseek: ["DEEPSEEK_MODEL"],
@@ -146,10 +149,8 @@ export function toolPolicyForClass(className) {
   return "unknown";
 }
 
-/** The first model variable the engine's adapter actually reads, or "". */
+/** The model the engine's adapter actually reads from the environment, or "". */
 export function resolveEngineModel(engine, env = process.env) {
-  const explicit = envValue(env, "VOICEBOX_FACTORY_MODEL");
-  if (explicit) return explicit;
   for (const name of ENGINE_MODEL_VARS[engine] || []) {
     const value = envValue(env, name);
     if (value) return value;

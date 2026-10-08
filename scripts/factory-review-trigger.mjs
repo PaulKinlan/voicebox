@@ -278,18 +278,6 @@ Options:
   const cacheFile = path.join(privateDir, "review-cache.json");
   mkdirSync(privateDir, { recursive: true });
 
-  let cache = {};
-  if (existsSync(cacheFile)) {
-    try {
-      cache = JSON.parse(readFileSync(cacheFile, "utf8"));
-    } catch {}
-  }
-
-  if (!force && cache[cacheKey] && cache[cacheKey].exitCode === 0) {
-    console.log(`[review-trigger] Cache HIT for key ${cacheKey.slice(0, 12)} (station: ${station}). Reusing prior verdict: ${cache[cacheKey].verdict}`);
-    return { ok: true, exitCode: 0, cached: true, ...cache[cacheKey] };
-  }
-
   if (dryRun) {
     console.log(`[review-trigger] DRY-RUN complete: would run '${station}' on engine '${engineSelection.engine}' under heavy queue and publish to repo '${repo}'`);
     if (!engineSelection.ok) {
@@ -308,9 +296,11 @@ Options:
     };
   }
 
-  // 3b. Named environment failure for a missing engine credential (voicebox-beads-zljj).
-  // Failing here, with the engine and the variables it needs named, is what stops a misconfigured
-  // host from looking like a clean review. Nothing is cached on this path.
+  // 3b. Named environment failure (voicebox-beads-zljj). This runs BEFORE the cache lookup, on
+  // review: a cached PASS is only reusable while the environment that produced it is still
+  // viable. Refusing after a cache hit would report a clean review from a host that can no
+  // longer run the station, which is the silent-success class this whole change exists to
+  // close. Nothing is cached on this path.
   if (!engineSelection.ok) {
     console.error(`[review-trigger] Environment failure: ${engineSelection.error}`);
     console.error(`[review-trigger] Station '${station}' was NOT executed (engine '${engineSelection.engine}').`);
@@ -324,6 +314,19 @@ Options:
       missing: engineSelection.missing,
       error: engineSelection.error,
     };
+  }
+
+  // 3c. Cache lookup, after the engine preflight.
+  let cache = {};
+  if (existsSync(cacheFile)) {
+    try {
+      cache = JSON.parse(readFileSync(cacheFile, "utf8"));
+    } catch {}
+  }
+
+  if (!force && cache[cacheKey] && cache[cacheKey].exitCode === 0) {
+    console.log(`[review-trigger] Cache HIT for key ${cacheKey.slice(0, 12)} (station: ${station}). Reusing prior verdict: ${cache[cacheKey].verdict}`);
+    return { ok: true, exitCode: 0, cached: true, ...cache[cacheKey] };
   }
 
   // 4. Bounded execution via fleet-heavy / timeout 900 under per-target exclusive lock

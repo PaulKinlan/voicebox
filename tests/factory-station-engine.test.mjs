@@ -109,13 +109,13 @@ test("factory-station-engine: an explicit VOICEBOX_FACTORY_ENGINE overrides the 
     agentsDir: root,
     env: {
       VOICEBOX_FACTORY_ENGINE: "pi",
-      VOICEBOX_FACTORY_MODEL: "antigravity/gemini-3.8-flash",
       ANTHROPIC_API_KEY: "test-key-present",
     },
   });
   assert.equal(selection.engine, "pi");
   assert.equal(selection.source, "env");
-  assert.equal(selection.model, "antigravity/gemini-3.8-flash");
+  // The pi adapter passes no model flag, so no model is recorded for it.
+  assert.equal(selection.model, "");
 });
 
 test("factory-station-engine: a missing engine credential is a named environment failure", (t) => {
@@ -157,12 +157,17 @@ test("factory-station-engine: a proposer is never pointed at a payload-only engi
   assert.equal(selection.toolPolicy, "worktree-write");
   assert.match(selection.error, /cannot deliver the station payload/);
 
+  // `antigravity` is reachable by the gate order (it has an allowlisted credential and is not on
+  // the unsound list) and is not write-capable, so it exercises the worktree-write refusal itself.
   const payloadOnly = resolveStationEngine({
     station: "perf-review",
     agentsDir: root,
-    env: { VOICEBOX_FACTORY_ENGINE: "some-payload-engine", unknown_ok: "1" },
+    env: { VOICEBOX_FACTORY_ENGINE: "antigravity", GEMINI_API_KEY: "test-key-present" },
   });
-  assert.equal(payloadOnly.ok, false, "an unknown engine must fail its credential preflight");
+  assert.equal(payloadOnly.ok, false);
+  assert.equal(payloadOnly.toolPolicy, "worktree-write");
+  assert.match(payloadOnly.error, /payload-only/);
+  assert.match(payloadOnly.error, /worktree-write/);
 });
 
 test("factory-station-engine: unknown engines and empty credential values fail closed", () => {

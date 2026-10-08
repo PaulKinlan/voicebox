@@ -1668,4 +1668,50 @@ test("factory-review-trigger: engine selection is explicit, class-aware, and rep
     const cache = JSON.parse(readFileSync(cacheFile, "utf8"));
     assert.equal(Object.keys(cache).length, 0, "an environment failure must never be cached");
   }
+
+  // 5. A cached PASS must not outlive the environment that produced it. The engine preflight runs
+  // BEFORE the cache lookup, so a host that can no longer run the station reports the environment
+  // failure instead of replaying a clean verdict (independent review finding, gpt-6-sol).
+  const seedKey = runReviewTrigger([...triggerArgs, "--dry-run"], {
+    rootDir: repoDir,
+    env: { ...fixtureGitEnv(), VOICEBOX_FACTORY_AGENTS_DIR: agentsRoot, ANTHROPIC_API_KEY: "present-for-pi" },
+  }).cacheKey;
+  writeFileSync(
+    cacheFile,
+    JSON.stringify({
+      [seedKey]: {
+        station: "log-check",
+        category: "ops",
+        engine: "pi",
+        exitCode: 0,
+        verdict: "PASS",
+        deferred: [],
+        timestamp: new Date().toISOString(),
+      },
+    }, null, 2),
+  );
+
+  // Control: with the credential present the cached verdict IS reused (and the factory is never
+  // invoked, which is also what makes this assertion cheap).
+  const reused = runReviewTrigger(triggerArgs, {
+    rootDir: repoDir,
+    env: { ...fixtureGitEnv(), VOICEBOX_FACTORY_AGENTS_DIR: agentsRoot, ANTHROPIC_API_KEY: "present-for-pi" },
+  });
+  assert.equal(reused.ok, true);
+  assert.equal(reused.cached, true, "the control must come from the cache, not from a station run");
+
+  // The same tree and station, credential removed: refuse, do not replay the cached PASS.
+  const staleRefused = runReviewTrigger(triggerArgs, {
+    rootDir: repoDir,
+    env: { ...fixtureGitEnv(), VOICEBOX_FACTORY_AGENTS_DIR: agentsRoot, VOICEBOX_FACTORY_ENGINE: "pi" },
+  });
+  assert.equal(staleRefused.ok, false);
+  assert.equal(staleRefused.exitCode, 2);
+  assert.equal(staleRefused.verdict, "ENVIRONMENT");
+  assert.equal(staleRefused.cached, undefined, "a stale cached PASS must not be returned");
+  assert.equal(
+    JSON.parse(readFileSync(cacheFile, "utf8"))[seedKey].verdict,
+    "PASS",
+    "the refusal must not corrupt the stored verdict; it simply must not be used",
+  );
 });

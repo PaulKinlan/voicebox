@@ -77,7 +77,7 @@ So the trigger resolves the engine explicitly (`tools/factory-station-engine.mjs
 
 The station manifest is read from `$VOICEBOX_FACTORY_AGENTS_DIR` (default `~/agents`). `deepseek` is payload-only (the factory's lib/containment.py ENGINE_TOOL_POLICIES table), so a proposer is never pointed at it — that combination is refused here rather than by the factory's `check_engine`.
 
-**Refusals are named environment failures:** exit `2`, `verdict: ENVIRONMENT`, the engine and the reason named, nothing executed, nothing cached. This is the voicebox-side counterpart of agents-zrn (`8622ba8`), where an adapter auth failure became a named environment failure instead of `rc2`/no-verdict — and it is strictly safer than that fix, because the false-clean these refusals replace looked like a pass.
+**Refusals are named environment failures:** exit `2`, `verdict: ENVIRONMENT`, the engine and the reason named, nothing executed, nothing cached. The preflight runs **before** the review cache is consulted: a cached `PASS` is only reusable while the environment that produced it can still run the station, so a host that has lost its engine credential reports the failure instead of replaying a clean verdict it can no longer stand behind. This is the voicebox-side counterpart of agents-zrn (`8622ba8`), where an adapter auth failure became a named environment failure instead of `rc2`/no-verdict — and it is strictly safer than that fix, because the false-clean these refusals replace looked like a pass.
 
 ```text
 [review-trigger] Station engine: engine 'pi', class observer, policy read-only, source default
