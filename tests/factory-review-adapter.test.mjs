@@ -3,9 +3,8 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
-import { gitEnv } from "../lib/git-env.mjs";
 import {
   selectReviewStation,
   computeReviewCacheKey,
@@ -686,12 +685,53 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
   const bareDir = path.join(fixtureRoot, "origin.git");
   const workDir = path.join(fixtureRoot, "work");
   mkdirSync(fixtureRoot, { recursive: true });
-  // Scrubbed env + explicit fixture cwd on EVERY fixture git call (voicebox-beads-guu9). The pre-push
-  // hook exports git's own GIT_DIR, so a fixture that inherits the process env operates on the
-  // SURROUNDING repo - which is how this fixture added junk commits to the branch and set core.bare.
-  const git = (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf8", env: gitEnv() });
-  execFileSync("git", ["init", "--bare", "-q", bareDir], { cwd: fixtureRoot, env: gitEnv() });
-  execFileSync("git", ["init", "-q", "-b", "main", workDir], { cwd: fixtureRoot, env: gitEnv() });
+  // Owned, disposable HOME/XDG for git so no ~/.gitconfig, ~/.config/git/config, or XDG config from the
+  // invoking environment can steer the fixture (voicebox-beads-guu9). A hostile global/system config can
+  // redirect remote.origin.pushurl or point core.hooksPath at an external hook tree; the allowlist below
+  // makes both impossible by pinning system/global config and attributes to /dev/null and blanking hooks.
+  const gitHome = path.join(fixtureRoot, "githome");
+  const gitXdg = path.join(gitHome, ".config");
+  const gitHooksDir = path.join(fixtureRoot, "empty-hooks");
+  mkdirSync(gitHome, { recursive: true });
+  mkdirSync(gitXdg, { recursive: true });
+  mkdirSync(gitHooksDir, { recursive: true });
+  // Trusted absolute system Git pinned to /usr/bin/git ONLY. Fail closed with a descriptive error if it
+  // is missing or non-executable; NEVER fall back to /usr/local/bin or inherited PATH (voicebox-beads-guu9).
+  const TRUSTED_GIT = "/usr/bin/git";
+  const resolveTrustedGit = () => {
+    try {
+      accessSync(TRUSTED_GIT, constants.X_OK);
+      return TRUSTED_GIT;
+    } catch {
+      throw new Error(
+        `guu9 fixture security refusal: trusted git executable ${TRUSTED_GIT} is missing or not executable. Refusing to fall back to PATH.`
+      );
+    }
+  };
+  const trustedGit = resolveTrustedGit();
+  // Freshly constructed allowlisted env: git's HOME/XDG owned by this fixture.
+  // NOTHING is inherited from process.env, including PATH (absolute trustedGit is invoked directly),
+  // so no GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE can reach the surrounding repo and no
+  // GIT_CONFIG_*/GIT_ATTR_* steering variable or hostile PATH can leak in. The only GIT_*
+  // entries present are the fixed safe overrides below (system/global config and attributes off; no
+  // GIT_CONFIG_COUNT/KEY/VALUE survives).
+  const fixtureGitEnv = () => ({
+    HOME: gitHome,
+    XDG_CONFIG_HOME: gitXdg,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_ATTR_NOSYSTEM: "1",
+  });
+  // External hooks disabled per call: core.hooksPath points at an owned EMPTY dir and init.templateDir is
+  // an owned empty dir, so neither a configured hook nor an init template can run (voicebox-beads-guu9).
+  const git = (args, cwd) => execFileSync(
+    trustedGit,
+    ["-c", `core.hooksPath=${gitHooksDir}`, "-c", `init.templateDir=${gitHooksDir}`, ...args],
+    { cwd, encoding: "utf8", env: fixtureGitEnv() },
+  );
+  git(["init", "--bare", "-q", bareDir], fixtureRoot);
+  git(["init", "-q", "-b", "main", workDir], fixtureRoot);
   // FAIL CLOSED, before any config/add/commit/remote: prove which repo these calls address. If the git
   // root is not the fixture itself, the surrounding repo is in reach and this test must abort.
   const fixtureGitRoot = git(["rev-parse", "--show-toplevel"], workDir).trim();
@@ -703,12 +743,27 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
   git(["add", "README.md"], workDir);
   git(["commit", "-q", "-m", "fixture base"], workDir);
   git(["remote", "add", "origin", bareDir], workDir);
+  // Pin the push destination and fail closed on any redirect before EACH push: the effective --push
+  // origin URL must be exactly the single owned bareDir, never a config-injected pushurl (voicebox-beads-guu9).
+  git(["config", "remote.origin.pushurl", bareDir], workDir);
+  const assertPushTarget = () => {
+    const got = git(["remote", "get-url", "--push", "--all", "origin"], workDir).trim();
+    assert.equal(got, bareDir, `fixture push target must be the owned bare repo (got ${got})`);
+  };
+  assertPushTarget();
   git(["push", "-q", "origin", "main"], workDir);
+  assert.equal(git(["rev-parse", "refs/heads/main"], bareDir).trim(),
+    git(["rev-parse", "HEAD"], workDir).trim(),
+    "bare origin main must resolve the pushed commit");
   git(["checkout", "-q", "-b", fixtureBranch], workDir);
   writeFileSync(path.join(workDir, "candidate.txt"), "candidate change\n");
   git(["add", "candidate.txt"], workDir);
   git(["commit", "-q", "-m", "fixture candidate"], workDir);
+  assertPushTarget();
   git(["push", "-q", "origin", `${fixtureBranch}:refs/heads/${fixtureBranch}`], workDir);
+  assert.equal(git(["rev-parse", `refs/heads/${fixtureBranch}`], bareDir).trim(),
+    git(["rev-parse", "HEAD"], workDir).trim(),
+    "bare origin candidate ref must resolve the pushed commit");
   git(["fetch", "-q", "origin", "--prune"], workDir);
   const tipSha = git(["rev-parse", `refs/remotes/origin/${fixtureBranch}`], workDir).trim();
   const taskKey = `${fixtureBranch}@${tipSha}`;
