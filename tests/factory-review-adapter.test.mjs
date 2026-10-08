@@ -15,6 +15,8 @@ import {
 import { formatTriageComment, sanitizeFindingText } from "../tools/factory-issue-commenter.mjs";
 import { runReviewTrigger, parsePublisherSummary, sanitizeLogOutput, locateRunDeltaReport, getCheckoutRepoIdentity } from "../scripts/factory-review-trigger.mjs";
 import { pollInboundIssues } from "../scripts/factory-issue-poller.mjs";
+import { publishNightlyFindings } from "../scripts/factory-nightly-publisher.mjs";
+import { runReviewWatcher } from "../scripts/factory-review-watcher.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -157,16 +159,17 @@ test("factory-issue-router: loop hazard guard rejects publisher issues independe
   assert.ok(resC2.categories.includes("docs"));
   assert.ok(resC2.agents.includes("docs-drift"));
 
-  // Case D: Untrusted author (NONE) rejected by author trust gate
-  const untrustedIssue = {
+  // Case D: External contributor / newcomer author (NONE) is admitted and routed
+  const newcomerIssue = {
     number: 20,
     author_association: "NONE",
     title: "Security vulnerability report",
-    body: "Found potential token leak",
+    body: "Found potential token leak in credentials",
   };
-  const resD = routeIssue(untrustedIssue);
-  assert.equal(resD.ok, false);
-  assert.ok(resD.reason.includes("author_association 'NONE' is not in trusted set"));
+  const resD = routeIssue(newcomerIssue);
+  assert.equal(resD.ok, true, "newcomers and external contributors must be admitted");
+  assert.ok(resD.categories.includes("security"));
+  assert.ok(resD.agents.includes("secret-scan"));
 
   // Case E: Pull requests skipped (handled by review trigger, not issue poller)
   const prIssue = {
@@ -560,4 +563,172 @@ test("factory-activation: systemd user units, poller runner, and review gate wra
   const pollerRes = pollInboundIssues(["--help"], { rootDir: ROOT });
   assert.equal(pollerRes.ok, true);
   assert.equal(pollerRes.help, true);
+
+  const watcherRes = runReviewWatcher(["--help"], { rootDir: ROOT });
+  assert.equal(watcherRes.ok, true);
+  assert.equal(watcherRes.help, true);
 });
+
+test("factory-review-adapter: automation diffs (scripts/factory-*, tools/factory-*, config/systemd/*) map to security domain", () => {
+  const diff = [
+    "scripts/factory-review-trigger.mjs",
+    "tools/factory-issue-router.mjs",
+    "config/systemd/user/voicebox-factory-issue-poller.service",
+  ];
+  const sel = selectReviewStation(diff);
+  assert.equal(sel.station, "secret-scan");
+  assert.equal(sel.category, "security");
+});
+
+test("factory-review-watcher: discovers candidate branches matching conjunctive ownership predicate (voicebox-* bead AND fleet/* branch)", () => {
+  const mockBeads = [
+    {
+      id: "bead-1",
+      assignee: "voicebox-miniapps",
+      status: "in_progress",
+      title: "Feature work on fleet/miniapps-test",
+      description: "Working on fleet/miniapps-test candidate branch",
+    },
+    {
+      id: "bead-2",
+      assignee: "other-lane",
+      status: "in_progress",
+      title: "Foreign task on fleet/other",
+      description: "Not owned by voicebox fleet",
+    },
+    {
+      id: "bead-3",
+      assignee: "voicebox-coord",
+      status: "in_progress",
+      title: "Rescue task on fleet/rescued-1234",
+      description: "Merger rescue artifact ref",
+    },
+  ];
+
+  const tmpPrivate = path.join(ROOT, "tests", "fixtures", "watcher-test-private");
+  rmSync(tmpPrivate, { recursive: true, force: true });
+  mkdirSync(tmpPrivate, { recursive: true });
+
+  const res = runReviewWatcher(["--dry-run", "--private-dir", tmpPrivate], {
+    rootDir: ROOT,
+    mockBeads,
+  });
+
+  // Only bead-1 has voicebox-* assignee AND non-artifact fleet/* branch
+  assert.equal(res.ok, true);
+  assert.equal(res.watcherErrors, 0);
+
+  rmSync(tmpPrivate, { recursive: true, force: true });
+});
+
+test("factory-nightly-publisher: enforces SAME-RUN manifest barrier, target check, and batch window", () => {
+  const tmpDir = path.join(ROOT, "tests", "fixtures", "nightly-pub-tmp");
+  rmSync(tmpDir, { recursive: true, force: true });
+  mkdirSync(tmpDir, { recursive: true });
+
+  const findingsDir = path.join(tmpDir, "findings");
+  const runsDir = path.join(tmpDir, "runs");
+  const privateDir = path.join(tmpDir, "private");
+  mkdirSync(findingsDir, { recursive: true });
+  mkdirSync(runsDir, { recursive: true });
+  mkdirSync(privateDir, { recursive: true });
+
+  // Negative Control 1: Missing manifest -> fails closed
+  const resMissing = publishNightlyFindings([
+    "--dry-run",
+    "--findings-dir", findingsDir,
+    "--runs-dir", runsDir,
+    "--private-dir", privateDir,
+  ], { rootDir: ROOT });
+  assert.equal(resMissing.ok, false);
+  assert.equal(resMissing.error, "missing_manifest");
+
+  // Negative Control 2: Foreign target manifest -> fails closed
+  const foreignManifest = {
+    target: "foreign-repo",
+    line: "project-audit",
+    complete: true,
+    generated: new Date().toISOString(),
+    stations: [{ station: "secret-scan", status: "PASS", run_dir: runsDir }],
+  };
+  writeFileSync(path.join(findingsDir, "voicebox-factory-line.json"), JSON.stringify(foreignManifest));
+  const resForeign = publishNightlyFindings([
+    "--dry-run",
+    "--findings-dir", findingsDir,
+    "--runs-dir", runsDir,
+    "--private-dir", privateDir,
+  ], { rootDir: ROOT });
+  assert.equal(resForeign.ok, false);
+  assert.equal(resForeign.error, "foreign_manifest_target");
+
+  // Negative Control 3: Incomplete or failed station manifest -> fails closed
+  const failedManifest = {
+    target: "voicebox-factory",
+    line: "project-audit",
+    complete: true,
+    generated: new Date().toISOString(),
+    stations: [{ station: "secret-scan", status: "FAIL", run_dir: runsDir }],
+  };
+  writeFileSync(path.join(findingsDir, "voicebox-factory-line.json"), JSON.stringify(failedManifest));
+  const resFailed = publishNightlyFindings([
+    "--dry-run",
+    "--findings-dir", findingsDir,
+    "--runs-dir", runsDir,
+    "--private-dir", privateDir,
+  ], { rootDir: ROOT });
+  assert.equal(resFailed.ok, false);
+  assert.equal(resFailed.error, "failed_stations");
+
+  // Positive Control: Valid all-PASS manifest with matching delta report -> succeeds
+  const now = new Date();
+  const validManifest = {
+    target: "voicebox-factory",
+    line: "project-audit",
+    complete: true,
+    generated: now.toISOString(),
+    stations: [{ station: "secret-scan", status: "PASS", run_dir: runsDir }],
+  };
+  writeFileSync(path.join(findingsDir, "voicebox-factory-line.json"), JSON.stringify(validManifest));
+
+  const validReport = `# Software Factory Delta Report: voicebox-factory
+Generated: ${now.toISOString()}
+
+| New | Regressed | Fixed | Unchanged | Suppressed | False positive |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| **1** | **0** | **0** | 0 | 0 | 0 |
+
+## Action Required: New & Regressed Findings
+
+### [HIGH] Hardcoded dummy secret in test fixture (\`new\`)
+- **Rule**: \`generic-secret\`
+- **Location**: \`tests/fixture.txt:10\`
+- **Fingerprint**: \`11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff\`
+- **Description**: credential found: ghp_SECRETTOKENXYZ123456
+- **Snippet**: \`TOKEN="ghp_SECRETTOKENXYZ123456"\`
+- **Remediation**: Use environment variable
+`;
+  writeFileSync(path.join(findingsDir, "voicebox-factory-secret-scan-delta.md"), validReport);
+
+  const resValid = publishNightlyFindings([
+    "--dry-run",
+    "--findings-dir", findingsDir,
+    "--runs-dir", runsDir,
+    "--private-dir", privateDir,
+  ], { rootDir: ROOT });
+  assert.equal(resValid.ok, true);
+  assert.equal(resValid.processedCount, 1);
+
+  // Idempotent duplicate check: second invocation with real cursor skips batch
+  const cursorFile = path.join(privateDir, "nightly-cursor.json");
+  writeFileSync(cursorFile, JSON.stringify({ lastPublishedBatch: validManifest.generated }));
+  const resDup = publishNightlyFindings([
+    "--findings-dir", findingsDir,
+    "--runs-dir", runsDir,
+    "--private-dir", privateDir,
+  ], { rootDir: ROOT });
+  assert.equal(resDup.ok, true);
+  assert.equal(resDup.skippedDuplicate, true);
+
+  rmSync(tmpDir, { recursive: true, force: true });
+});
+

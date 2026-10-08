@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# scripts/factory-nightly-publisher.sh — publish nightly factory findings to public GitHub issues (voicebox-beads-xacp)
-# Reads station delta reports written with --sink file by factory-nightly.sh in ~/agents/findings/
-# and calls scripts/factory-triage.mjs --file-issues with literal credentials masked.
+# scripts/factory-nightly-publisher.sh — bounded runner for nightly factory publisher (voicebox-beads-xacp)
 set -uo pipefail
 
 [ -f "$HOME/.fleet/env" ] && source "$HOME/.fleet/env"
@@ -10,69 +8,23 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-FINDINGS_DIR="${VOICEBOX_FINDINGS_DIR:-$HOME/agents/findings}"
-REPO="${VOICEBOX_FACTORY_REPO:-PaulKinlan/voicebox}"
-DRY_RUN=false
-EXTRA_ARGS=()
+REPORTS_DIR="${VOICEBOX_FACTORY_PRIVATE_DIR:-$HOME/.voicebox/factory-reports}"
+LOG_FILE="$REPORTS_DIR/nightly-publisher.log"
+LOCK_FILE="$REPORTS_DIR/nightly-publisher.lock"
 
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --dry-run)
-      DRY_RUN=true
-      shift
-      ;;
-    --findings-dir)
-      FINDINGS_DIR="$2"
-      shift 2
-      ;;
-    --repo)
-      REPO="$2"
-      shift 2
-      ;;
-    --help|-h)
-      echo "Usage: scripts/factory-nightly-publisher.sh [options]"
-      echo ""
-      echo "Options:"
-      echo "  --dry-run              Output publication plan without filing GitHub issues"
-      echo "  --findings-dir <dir>   Directory containing station delta reports (default: ~/agents/findings)"
-      echo "  --repo <owner/repo>    Target GitHub repository (default: PaulKinlan/voicebox)"
-      exit 0
-      ;;
-    *)
-      EXTRA_ARGS+=("$1")
-      shift
-      ;;
-  esac
-done
+mkdir -p "$REPORTS_DIR"
 
-if [ ! -d "$FINDINGS_DIR" ]; then
-  echo "[nightly-publisher] Findings directory not found: $FINDINGS_DIR. Nothing to publish."
+exec 201>"$LOCK_FILE"
+if ! flock -n 201; then
+  echo "[$(date -u +%FT%TZ)] [nightly-publisher] Another publisher instance is already running. Exiting." >> "$LOG_FILE"
   exit 0
 fi
 
+echo "[$(date -u +%FT%TZ)] [nightly-publisher] Starting nightly findings publisher in $ROOT_DIR" >> "$LOG_FILE"
+
 cd "$ROOT_DIR"
+node "$SCRIPT_DIR/factory-nightly-publisher.mjs" "$@" 2>&1 | tee -a "$LOG_FILE"
+rc=${PIPESTATUS[0]}
 
-PUBLISH_FLAG="--file-issues"
-if [ "$DRY_RUN" = true ]; then
-  PUBLISH_FLAG=""
-  echo "[nightly-publisher] DRY-RUN mode active: planning issues without publishing."
-fi
-
-published_count=0
-# Loop through all station delta reports for voicebox-factory, ignoring line-level voicebox-factory-delta.md
-for report in "$FINDINGS_DIR"/voicebox-factory-*-delta.md; do
-  [ -f "$report" ] || continue
-  # Ignore composite line delta (lacks single agent name)
-  if [ "$(basename "$report")" = "voicebox-factory-delta.md" ]; then
-    continue
-  fi
-
-  echo "[nightly-publisher] Processing station report: $(basename "$report")"
-  node scripts/factory-triage.mjs --report "$report" --repo "$REPO" --allow-foreign-target $PUBLISH_FLAG "${EXTRA_ARGS[@]}" || {
-    echo "[nightly-publisher] Warning: failed to process $(basename "$report") (exit $?)"
-  }
-  published_count=$((published_count + 1))
-done
-
-echo "[nightly-publisher] Finished processing $published_count station delta report(s)."
-exit 0
+echo "[$(date -u +%FT%TZ)] [nightly-publisher] Nightly findings publisher finished with exit code $rc" >> "$LOG_FILE"
+exit $rc

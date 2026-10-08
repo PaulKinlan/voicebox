@@ -20,7 +20,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { redactSecrets } from "../lib/redact.mjs";
-import { selectReviewStation, computeReviewCacheKey } from "../tools/factory-issue-router.mjs";
+import { selectReviewStation, computeReviewCacheKey, NIGHTLY_PROJECT_AUDIT_STATIONS } from "../tools/factory-issue-router.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -256,9 +256,20 @@ Options:
   }
 
   // 5. Locate Delta Report and publish via h1u0 publisher
-  // Strictly enforce attempt provenance: the report MUST be produced in this attempt's runDir
+  // Strictly enforce attempt provenance: check runDir, or copy newly-generated report from findingsDir
   const targetName = path.basename(rootDir);
-  const candidateReportName = `${targetName}-${station}-delta.md`;
+  const isolatedReportName = `${targetName}-${station}-delta.md`;
+  const isolatedReportPath = path.join(runDir, isolatedReportName);
+  if (!existsSync(isolatedReportPath) && existsSync(defaultReportPath)) {
+    try {
+      const mtimeAfter = statSync(defaultReportPath).mtimeMs;
+      if (mtimeAfter >= mtimeBefore) {
+        copyFileSync(defaultReportPath, isolatedReportPath);
+      }
+    } catch {}
+  }
+
+  const candidateReportName = isolatedReportName;
   const foundReportPath = locateRunDeltaReport(runDir, rootDir, station);
 
   let publishExit = 0;
@@ -295,6 +306,7 @@ Options:
             cwd: rootDir,
             env: { ...env, VOICEBOX_FACTORY_PRIVATE_DIR: runDir },
             encoding: "utf8",
+            timeout: 120000,
           });
           publishExit = pubRes.status ?? 1;
           safeSummary = parsePublisherSummary(pubRes.stdout || "");
@@ -310,7 +322,8 @@ Options:
       }
     }
   } else {
-    console.log(`[review-trigger] Notice: No delta report produced by station '${station}' (clean pass).`);
+    console.error(`[review-trigger] Error: No delta report produced by station '${station}' (execution unconfirmed, failing closed).`);
+    publishExit = 1;
   }
 
   // Distinguish genuine clean/no-action exit 2 from runs with skipped/unverifiable findings
@@ -326,7 +339,19 @@ Options:
 
   // 6. Record on Bead if requested
   if (beadId) {
-    const defNote = deferred.length > 0 ? ` (deferred for nightly: ${deferred.map((d) => d.station).join(", ")})` : "";
+    let defNote = "";
+    if (deferred.length > 0) {
+      const nightlyStations = deferred.filter((d) => NIGHTLY_PROJECT_AUDIT_STATIONS.has(d.station)).map((d) => d.station);
+      const unscheduledStations = deferred.filter((d) => !NIGHTLY_PROJECT_AUDIT_STATIONS.has(d.station)).map((d) => d.station);
+      const parts = [];
+      if (nightlyStations.length > 0) {
+        parts.push(`deferred for nightly project-audit: ${nightlyStations.join(", ")}`);
+      }
+      if (unscheduledStations.length > 0) {
+        parts.push(`NOT SCHEDULED NIGHTLY (manual follow-up required): ${unscheduledStations.join(", ")}`);
+      }
+      defNote = ` (${parts.join("; ")})`;
+    }
     const beadMsg = `Factory review: station '${station}', verdict ${verdict}${defNote}, cacheKey ${cacheKey.slice(0, 10)}`;
     try {
       spawnSync("bd", ["comment", beadId, beadMsg], { cwd: rootDir, encoding: "utf8" });

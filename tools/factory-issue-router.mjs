@@ -22,6 +22,21 @@ export const CATEGORY_STATIONS = {
   ops: ["log-check", "issue-triage"],
 };
 
+/** Stations executed by the nightly project-audit line on main */
+export const NIGHTLY_PROJECT_AUDIT_STATIONS = new Set([
+  "secret-scan",
+  "threat-model",
+  "vuln-discovery",
+  "vuln-verify",
+  "vuln-triage",
+  "deps-supply-chain",
+  "modern-web",
+  "ui-ux-audit",
+  "perf-review",
+  "docs-drift",
+  "qa-station",
+]);
+
 /** Category evaluation priority order */
 export const PRIORITY_ORDER = ["security", "perf", "ux", "docs", "ops"];
 
@@ -36,6 +51,9 @@ export const DOMAIN_PATTERNS = {
       /lib\/redact\.mjs/i,
       /package(-lock)?\.json/i,
       /\.env/i,
+      /scripts\/factory-/i,
+      /tools\/factory-/i,
+      /config\/systemd/i,
     ],
     terms: ["security", "vulnerability", "cve", "secret", "credential", "token leak", "xss", "traversal", "auth"],
   },
@@ -176,19 +194,7 @@ export function routeIssue(issue = {}) {
     };
   }
 
-  // 3. Author Association Trust Gate
-  const authorTrusted = TRUSTED_AUTHORS.has(authorAssoc);
-  if (!authorTrusted) {
-    return {
-      ok: false,
-      authorTrusted: false,
-      reason: `author_association '${authorAssoc}' is not in trusted set (${[...TRUSTED_AUTHORS].join(", ")})`,
-      categories: [],
-      agents: [],
-    };
-  }
-
-  // 4. Keyword / Label matching across domains
+  // 3. Keyword / Label matching across domains (newcomers and external contributors admitted)
   const labels = Array.isArray(issue.labels)
     ? issue.labels.map((l) => (typeof l === "string" ? l.toLowerCase() : String(l.name ?? "").toLowerCase()))
     : [];

@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic 15-minute invocation of Voicebox Software Factory review watcher
+Documentation=https://github.com/PaulKinlan/voicebox/blob/main/docs/28-factory-review-adapter.md
+
+[Timer]
+OnCalendar=*:0/15
+RandomizedDelaySec=60
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -146,18 +146,25 @@ XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start voicebox-factory-issue-pol
 tail -f ~/.voicebox/factory-reports/poller.log
 ```
 
-### 5.2 Review-Time Station Invocation (`scripts/factory-review-gate.sh`)
-During `IN_REVIEW` handoff, implementers or automated review tools invoke the repo-owned review gate:
+### 5.2 Pre-Merge Review Watcher & Review Gate (`scripts/factory-review-watcher.sh`)
+To eliminate any dependency on manual merger ceremonies or shared `~/fleet` role edits, review-time station gating is automated via a repository-owned watcher (`scripts/factory-review-watcher.sh` & `scripts/factory-review-watcher.mjs`):
 
+- **Timer Unit**: `config/systemd/user/voicebox-factory-review-watcher.timer`
+  Runs periodically every 15 minutes (`OnCalendar=*:0/15`).
+- **Conjunctive (`AND`) Ownership Predicate**:
+  The watcher monitors **only** active beads assigned to `voicebox-*` (with status `in_progress` or label `merge-queue`) **AND** carrying an explicit candidate branch ref matching an owned `refs/remotes/origin/fleet/*` tip.
+  Stale historical branches, third-party branches, and merger artifact refs (`fleet/rescued-*`, `fleet/backup-*`, `fleet/merger-*`) are strictly excluded.
+- **Pre-Merge Execution & Bounding**:
+  For each candidate branch, computes `base = git merge-base origin/main <tip>` and executes `scripts/factory-review-trigger.mjs` under `fleet-heavy timeout 900` capping at 1 primary station.
+- **Landed Backstop & Rewrite Safety**:
+  Monitors newly landed commits on `origin/main` (`lastMainSha..origin/main`) as an automated backstop. If `lastMainSha` is not an ancestor of `origin/main` (indicating an upstream rebase or history rewrite), the watcher fails closed with exit 1, halting and requiring explicit operator reconciliation (preventing broad or corrupted diffs).
+- **Execution Safety**:
+  Invokes only canonical `factory run <station> --sink file`, never executing untrusted scripts from candidate branches.
+
+Manual invocation during `IN_REVIEW` handoff remains available:
 ```bash
-# Run review gate for branch changes against merge-base
 scripts/factory-review-gate.sh --base <merge-base> --tip HEAD --bead <bead-id>
-
-# Dry-run station selection and deferred reporting without execution
-scripts/factory-review-gate.sh --base <merge-base> --tip HEAD --dry-run
 ```
-
-The script evaluates the diff, runs the highest-priority primary station under `fleet-heavy timeout 900`, records deferred secondary stations, and publishes findings via `scripts/factory-triage.mjs`.
 
 ### 5.3 Nightly 5-Domain Station Coverage Audit
 The VM nightly line (`fleet-factory.timer`, running daily at 03:00 UTC via `/home/exedev/fleet/remote/factory-nightly.sh`) executes `factory line project-audit --sink file`.
@@ -170,27 +177,30 @@ The VM nightly line (`fleet-factory.timer`, running daily at 03:00 UTC via `/hom
 | **Documentation** | `docs-drift` | `docs-write` | `docs-drift` detects drift between code and docs. `docs-write` is an active code patch proposer, not an audit observer. |
 | **Ops / Maintenance** | `qa-station` | `test-gap`, `issue-triage`, `pr-fixer`, `log-check`, `release-notes` | `qa-station` audits factory quality. `issue-triage` is actively handled by our hourly issue poller. |
 
-### 5.4 Nightly Findings Publication & Fleet Hook (`scripts/factory-nightly-publisher.sh`)
-While the nightly systemd service (`fleet-factory.service` running `/home/exedev/fleet/remote/factory-nightly.sh`) runs `factory line project-audit --sink file`, its default output remains strictly on disk in `~/agents/findings/` and does not automatically file public GitHub issues.
+*Honest Deferral Accounting*: Stations deferred during a diff review are compared against `NIGHTLY_PROJECT_AUDIT_STATIONS`. Unmatched stations (e.g. `log-check`, `accessibility`) are explicitly recorded as `NOT SCHEDULED NIGHTLY (manual follow-up required)`, ensuring no domain is falsely claimed covered.
 
-To complete the issue-first chain across all severities (with literal secrets masked), Voicebox provides `scripts/factory-nightly-publisher.sh`:
-- Iterates over station delta reports in `~/agents/findings/voicebox-factory-*-delta.md`.
-- Filters out composite line-level summaries (`voicebox-factory-delta.md`) that lack a single station identifier.
-- Invokes `node scripts/factory-triage.mjs --report <path> --repo PaulKinlan/voicebox --allow-foreign-target --file-issues`.
+### 5.4 Nightly Findings Publication & SAME-RUN Manifest Barrier (`scripts/factory-nightly-publisher.sh`)
+While the nightly systemd service (`fleet-factory.service` running `/home/exedev/fleet/remote/factory-nightly.sh`) runs `factory line project-audit --sink file`, its default output remains strictly on disk in `~/agents/findings/`.
 
-#### Proposed Fleet Nightly Hook (Hub Handoff for `~/fleet`)
-Because `~/fleet/remote/factory-nightly.sh` belongs to the foreign `PaulKinlan/fleet` repository, the following 4-line post-audit hook is proposed for hub delegation right after `timeout 3h factory line ...`:
+To complete the issue-first chain across all severities (with literal secrets masked), Voicebox provides `scripts/factory-nightly-publisher.sh` and `scripts/factory-nightly-publisher.mjs`:
+- **SAME-RUN Manifest Completion Barrier**:
+  Inspects `~/agents/findings/voicebox-factory-line.json`. Asserts `target === "voicebox-factory"`, `line === "project-audit"`, `complete === true`, and every station record in `manifest.stations` has `status === "PASS"`. Rejects incomplete, failed, or missing manifests with zero `gh` calls.
+- **Active Service Guard**:
+  Asserts `fleet-factory.service` is inactive (i.e. not actively running mid-batch) before publishing.
+- **Batch Window & Freshness**:
+  Asserts station report `mtime` is within `(manifest.generated - 3h) <= report.mtime <= (manifest.generated + 60s)`, rejecting stale prior-day reports.
+- **Canonical Path Containment**:
+  Station `run_dir` and report paths are resolved via `realpath`, asserting strict containment within authorized runs/findings directories and rejecting `..` or symlink escapes.
+- **Report Target Verification**:
+  Validates report frontmatter explicitly targets `voicebox-factory` or `voicebox`. Any foreign or missing target report is rejected with zero `gh` invocations.
+- **Idempotent Batch Cursor**:
+  Records `manifest.generated` in `~/.voicebox/factory-reports/nightly-cursor.json` only after all findings across all stations publish successfully, ensuring failed batches remain retryable on the next tick.
+- *Stated Operational Limitation*: Publication binds strictly to manifest `target`, `line`, report freshness, and `run_dir` provenance; the factory manifest contains no git commit SHA, so exact source revision cannot be asserted from the manifest alone.
 
+### 5.5 Systemd User Units Installation
+To install the systemd user service and timer definitions on the VM:
 ```bash
-# Post-audit finding publication to public GitHub issues across all severities
-if [ -x "$WT/scripts/factory-nightly-publisher.sh" ]; then
-  (cd "$WT" && ./scripts/factory-nightly-publisher.sh)
-fi
+scripts/factory-install-systemd.sh
 ```
-
-### 5.5 Proposed Fleet Review Handoff Rule (Hub Handoff)
-To integrate `scripts/factory-review-gate.sh` into standard fleet lifecycle policies (outside the Voicebox repository), the following addition is proposed for `~/fleet/roles/implementer.md` and `~/fleet/roles/merger.md` via hub delegation:
-
-> **Factory Review Station Gate (before merge-queue)**:
-> In repositories supporting local Software Factory review triggers, run `scripts/factory-review-gate.sh --base origin/main --tip HEAD --bead <id>` before queuing on `merge-queue`. Ensure primary station verdict is PASS (exit 0) or cached PASS, and deferred stations are noted on the bead.
+Timers remain disabled until the canonical checkout (`~/voicebox`) is populated after landing on `origin/main`.
 

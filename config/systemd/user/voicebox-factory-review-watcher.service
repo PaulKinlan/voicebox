@@ -1,11 +1,11 @@
 [Unit]
-Description=Voicebox Software Factory local inbound issue poller
+Description=Voicebox Software Factory review watcher and backstop
 Documentation=https://github.com/PaulKinlan/voicebox/blob/main/docs/28-factory-review-adapter.md
 After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=%h/voicebox/scripts/factory-issue-poller-runner.sh
+ExecStart=%h/voicebox/scripts/factory-review-watcher.sh
 StandardOutput=journal
 StandardError=journal
 
