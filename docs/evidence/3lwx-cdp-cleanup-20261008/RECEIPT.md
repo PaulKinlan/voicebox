@@ -77,6 +77,25 @@ its process group holds no running process, and no Chrome helper survives for th
 The last three need no browser and are ~2.5 s together; they pin the distinction the fix rests on, so
 the reading of a PID cannot drift back.
 
+## Review fixes (before the gate)
+
+An independent cross-family review (`antigravity/gemini-3.1-pro`) returned **FAIL** on two points, both
+fixed in the commit that follows `bf61af2`:
+
+- **A failed read could be read as a terminated process.** `procSnapshot`'s bare `catch` returned
+  `null` for *any* error, so an `EMFILE`/`EACCES` read of a LIVE leaked browser would have said
+  "terminated" — a silent pass for the exact thing this file exists to catch, under exactly the load
+  that produced the original red. Only `ENOENT`/`ENOTDIR` now means "absent"; anything else throws and
+  fails the test loudly.
+- **Test 1 could orphan its own child on the failure path.** `sleepPid` was scoped inside the `try`, so
+  an assertion that failed before the kill left a detached `sleep 600` running for ten minutes. It is
+  now declared outside and killed in the `finally`, along with the runner.
+
+Its other answers were positive: the starttime index and the zombie regex are correct and confined to
+`ps`'s `STAT` column, the bound is justified by the reproduction rather than standing in for one, the
+change is test-only and weakens no claim of the three browser tests, and this receipt overclaims
+nothing beyond `old-helper-repro.log` and the gate `.json` files.
+
 ## The combined-tree gate
 
 The fix was fixed on `origin/main`; the gate ran on the **combined tree** — this fix merged with

@@ -56,8 +56,13 @@ function procSnapshot(pid) {
   let stat;
   try {
     stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-  } catch {
-    return null;
+  } catch (err) {
+    // ONLY "there is no such process" is an answer about the process. A read that failed for any
+    // other reason — EMFILE under load, EACCES where /proc hides other users' processes — says
+    // nothing about whether it is running, and reading it as "gone" would turn a failed read into a
+    // silent pass for a LEAKED browser, which is the one thing this file may not do (review, 3lwx).
+    if (err?.code === "ENOENT" || err?.code === "ENOTDIR") return null;
+    throw err;
   }
   const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
   return { state: fields[0], ppid: Number(fields[1]), starttime: fields[19] };
@@ -321,10 +326,11 @@ test("cdp-process-cleanup: a terminated process awaiting collection is not a sur
   const runner = spawn(process.execPath, ["--input-type=module", "-e", starter], { cwd: ROOT, stdio: ["ignore", "pipe", "ignore"] });
   let out = "";
   runner.stdout.on("data", (d) => { out += String(d); });
+  let sleepPid = null; // declared here so the finally can kill it on the FAILURE path too (review, 3lwx)
   try {
     const until = Date.now() + 5000;
     while (!/RUNNER_PID:(\d+)/.test(out) && Date.now() < until) await new Promise((r) => setTimeout(r, 20));
-    const sleepPid = Number(out.match(/SLEEP_PID:(\d+)/)?.[1]);
+    sleepPid = Number(out.match(/SLEEP_PID:(\d+)/)?.[1]);
     const runnerPid = Number(out.match(/RUNNER_PID:(\d+)/)?.[1]);
     assert.ok(sleepPid && runnerPid, `the starter must report both pids; stdout was: ${out}`);
 
@@ -356,7 +362,13 @@ test("cdp-process-cleanup: a terminated process awaiting collection is not a sur
       "a group holding only a zombie has no running descendant to report",
     );
   } finally {
-    runner.kill("SIGKILL"); // the stopped reaper — SIGKILL reaches it — and the zombie is then collected
+    // BOTH children, on every path: the stopped reaper (SIGKILL reaches it), and the sleep it was
+    // stopped to keep uncollected — an assertion that failed before the kill would otherwise orphan a
+    // detached `sleep 600` on the machine for ten minutes (review, 3lwx).
+    if (sleepPid) {
+      try { process.kill(-sleepPid, "SIGKILL"); } catch {}
+    }
+    runner.kill("SIGKILL");
     await new Promise((r) => setTimeout(r, 100));
   }
 });
