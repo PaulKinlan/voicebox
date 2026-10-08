@@ -775,6 +775,18 @@ test("server: /turn validates mini-app tool arguments at host boundary before di
   const malformedBodyJson = await malformedJsonRes.json();
   assert.equal(malformedBodyJson.ok, false);
   assert.equal(malformedBodyJson.refused, "bad-json");
+
+  // Non-object JSON body (e.g. array or scalar) returns HTTP 400 bad-json
+  const arrayBodyRes = await fetch(`${server.base}/api/mini-app/tools`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify([1, 2, 3]),
+  });
+  assert.equal(arrayBodyRes.status, 400);
+  const arrayBodyJson = await arrayBodyRes.json();
+  assert.equal(arrayBodyJson.ok, false);
+  assert.equal(arrayBodyJson.refused, "bad-json");
+  assert.match(arrayBodyJson.why, /must be a JSON object/);
 });
 
 test("browser: outer bridge validates mini-app tool arguments and refuses malformed calls before execution (GH #24, voicebox-beads-fdtu)", { timeout: 25000 }, async (t) => {
