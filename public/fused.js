@@ -1283,9 +1283,21 @@ function renderEmptyState() {
     next.textContent = "The Voicebox server is not responding. Ensure it is running and click Refresh.";
     if (els.emptyWhy) { els.emptyWhy.hidden = true; }
     if (els.emptyAction) els.emptyAction.hidden = true;
-    if (els.emptyLink) els.emptyLink.textContent = "Open the environment page";
+    if (els.emptyLink) els.emptyLink.textContent = "Configure workspace";
     showSamples(false);
     setComposerEnabled(false, "the local server is not answering, so a turn cannot be written");
+    return;
+  }
+
+  // 1b. active browser folder needs write access restored:
+  if (roomFolder && (roomFolder.permission !== "granted" || roomFolder.mode !== "readwrite")) {
+    headline.textContent = `Access to '${roomFolder.name}' needed.`;
+    next.textContent = `This tab needs permission to write files into '${roomFolder.name}'. Click 'Restore access' above or choose another folder in environments.`;
+    if (els.emptyWhy) els.emptyWhy.hidden = true;
+    if (els.emptyAction) els.emptyAction.hidden = false;
+    if (els.emptyLink) els.emptyLink.textContent = "Configure workspace";
+    showSamples(false);
+    setComposerEnabled(false, `'${roomFolder.name}' needs write permission — click 'Restore access' first`);
     return;
   }
 

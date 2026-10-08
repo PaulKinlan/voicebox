@@ -189,14 +189,19 @@ test("integrated environment flow: configure machine root and browser workspace 
   await page.click("#envs-close");
   await page.waitFor(() => !document.getElementById("envs")?.hasAttribute("open"));
 
-  // Reload page
+  // Reload page and await room folder restoration
   await page.reload();
-  await page.waitFor(() => document.getElementById("root-kind"));
-  const reloadedRoot = await page.evaluate(() => document.getElementById("root-kind")?.textContent ?? "");
-  assert.ok(
-    reloadedRoot.includes("machine folder") && reloadedRoot.includes("sample-project"),
-    `machine root selection survives reload even with persisted browser folders, got: ${reloadedRoot}`,
+  await page.waitFor(() => typeof window.__voiceboxRoomFoldersReady === "function");
+  await page.evaluate(() => window.__voiceboxRoomFoldersReady());
+  await page.waitFor(
+    () => {
+      const text = document.getElementById("root-kind")?.textContent ?? "";
+      return text.includes("machine folder") && text.includes("sample-project");
+    },
+    { label: "header chip to update to machine folder after restoration" },
   );
+  const activeFolder = await page.evaluate(() => window.__voiceboxGetActiveFolder());
+  assert.equal(activeFolder, null, "active room folder is null because machine root was selected");
 
   // 7. Assert URL stayed on main UI throughout the entire flow (no separate page visited)
   const currentPath = await page.evaluate(() => location.pathname);
