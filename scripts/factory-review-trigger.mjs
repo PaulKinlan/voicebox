@@ -76,7 +76,11 @@ export const APPROVED_GIT_HOSTS = new Set(["github.com", "github.int.exe.xyz", "
 
 export function getCheckoutRepoIdentity(cwd = ROOT) {
   try {
-    const remoteUrl = execFileSync("git", ["config", "--get", "remote.origin.url"], { cwd, encoding: "utf8" }).trim();
+    const gitEnv = { ...process.env };
+    delete gitEnv.GIT_DIR;
+    delete gitEnv.GIT_WORK_TREE;
+    delete gitEnv.GIT_INDEX_FILE;
+    const remoteUrl = execFileSync("git", ["config", "--get", "remote.origin.url"], { cwd, env: gitEnv, encoding: "utf8" }).trim();
     const m = remoteUrl.match(/^(?:https?:\/\/([a-zA-Z0-9.-]+)(?::\d+)?\/|git@([a-zA-Z0-9.-]+):)([^/:]+\/[^/:]+?)(?:\.git)?$/i);
     if (m) {
       const host = (m[1] || m[2] || "").toLowerCase();
