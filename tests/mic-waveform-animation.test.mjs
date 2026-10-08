@@ -195,25 +195,51 @@ test("mic button waveform dynamically animates during speech output, listening, 
     const stage = document.getElementById("voice-ring-wrap");
     const path = document.getElementById("input-path");
 
+    // The ring reallocates on a requestAnimationFrame tick, not on the assignment: setting
+    // `data-voice` wakes the meter loop through the MutationObserver at public/fused.js:5300, and
+    // `drawInputWave` reallocates only when the sample count changes
+    // (`inputDisplay.length !== n`, public/fused.js:5021-5024). So a fixed `setTimeout(60)` was a bet
+    // that a frame lands inside 60ms, and under a loaded gate that bet loses — voicebox-beads-d679
+    // failed here with `127 !== 55` on the THIRD transition, the signature of a frame that had not
+    // run yet. Wait for the count instead. This cannot pass on a stale ring: each transition starts
+    // from the previous, DIFFERENT count (127 -> 55 -> 127 -> 55), which the assertions below pin, so
+    // reaching the expected count requires the reallocation to have happened. On a genuine failure the
+    // deadline expires and the assertion still reports the real count.
+    const waitForSegments = async (expected) => {
+      const deadline = performance.now() + 5000;
+      const segments = () => ((path.getAttribute("d") || "").match(/L/g) ?? []).length;
+      while (segments() !== expected && performance.now() < deadline) {
+        // Yield to the frame that reallocates it, RACED with a timer: a throttled or paused page can
+        // defer requestAnimationFrame indefinitely, and a wait that only listens for frames would then
+        // stall until this test's 30s timeout instead of hitting the 5s deadline. The deadline is the
+        // authority; the frame is the fast path.
+        await Promise.race([
+          new Promise((resolve) => requestAnimationFrame(resolve)),
+          new Promise((resolve) => setTimeout(resolve, 50)),
+        ]);
+      }
+      return segments();
+    };
+
     stage.dataset.voice = "listening";
     window.__voiceboxLiveClient = {
       level: () => ({ capture: 0.3, input: new Float32Array(28).fill(0.1), output: new Float32Array(64) }),
     };
-    await new Promise((r) => setTimeout(r, 60));
+    await waitForSegments(55);
     const d28 = path.getAttribute("d") || "";
 
     stage.dataset.voice = "speaking";
     window.__voiceboxLiveClient = {
       level: () => ({ capture: 0, input: new Float32Array(28), output: new Float32Array(64).fill(0.1) }),
     };
-    await new Promise((r) => setTimeout(r, 60));
+    await waitForSegments(127);
     const d64 = path.getAttribute("d") || "";
 
     stage.dataset.voice = "listening";
     window.__voiceboxLiveClient = {
       level: () => ({ capture: 0.3, input: new Float32Array(28).fill(0.1), output: new Float32Array(64) }),
     };
-    await new Promise((r) => setTimeout(r, 60));
+    await waitForSegments(55);
     const d28Again = path.getAttribute("d") || "";
 
     return { d28, d64, d28Again };
