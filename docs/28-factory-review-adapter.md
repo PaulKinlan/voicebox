@@ -61,23 +61,33 @@ If the cache key matches a prior exit-0 run, the cached verdict is returned inst
 
 The factory resolves an unset `--engine` itself (`choose_engine("auto")`), which picks `pi` — the only engine whose adapter enforces a tool policy. That silently produced **"No API key found for the selected model."** on the project VMs: the factory runs `pi` inside the bubblewrap sandbox, which mounts a fresh tmpfs over `$HOME` **by design**, so the operator's `~/.pi` subscription logins are unreachable and the engine authenticates only from the variables the factory's own lib/child_env.py allowlists (Software Factory repo) (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`). No such key is set on a fleet VM, and the alternatives are closed: the `claude` engine (the one adapter that *does* read `~/.claude` subscription credentials) is refused by the factory for a public target, and `antigravity` refuses every tool policy.
 
-What does authenticate on the VMs is the host-provisioned model integration: Paul's exe.dev BYOK LLM integrations (`https://<provider>.int.exe.xyz`) are reachable from every tagged VM and accept the fixed, non-secret placeholder `exe-integration` as the key. For a payload engine the factory already forwards `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL` from the host environment, so a **read-only** station can run end to end with no raw key and no sandbox change.
+The host-provisioned integration (`deepseek`) authenticates — Paul's exe.dev BYOK endpoints are reachable from every tagged VM with the fixed, non-secret placeholder `exe-integration` as the key — but it is **not usable**, and finding that out is the point of the verification this section records:
 
-The trigger therefore resolves the engine explicitly (`tools/factory-station-engine.mjs`) instead of leaving it to `auto`:
+> A real station run on the provisioned engine (`factory run accessibility --engine deepseek`, and `secret-scan` through this trigger) **exited 0, wrote a schema-valid report, and reported a clean scan**. It was not clean. The factory's deepseek adapter (agents-factory repository) reads the prompt into `$PROMPT` and then runs the API call from `python3 - <<EOF`, whose heredoc is the process's stdin, so the adapter's own `prompt = sys.stdin.read()` returns `""` and **every run sends an empty user message**. The model returns "No scanner data was supplied in the request", zero findings, exit 0 — a false-clean that no schema, provenance or exit-code check can see. Confirmed 2026-10-08 by driving that adapter directly with a prompt whose answer is a known count, and by `candidates.json` (492 candidates) alongside a model summary claiming no scanner data was supplied.
+
+So the trigger resolves the engine explicitly (`tools/factory-station-engine.mjs`) and refuses the false-clean class rather than trusting a config that "looks right":
 
 | Input | Result |
 |---|---|
-| `VOICEBOX_FACTORY_ENGINE` set (host config, e.g. `~/.fleet/env`) | that engine, always |
-| Station manifest declares `class: observer` or `class: optimizer` (read-only) **and** `DEEPSEEK_API_KEY` is present | `deepseek` (the provisioned integration) |
-| Anything else, including a `proposer` that needs `worktree-write` | `pi` (unchanged) |
+| `VOICEBOX_FACTORY_ENGINE` set (host config, e.g. `~/.fleet/env`) | that engine |
+| unset | `pi` — the factory's own default, unchanged |
+| an engine in `UNSOUND_ENGINES` (`deepseek`, until the adapter passes its prompt) | **refused**, with the upstream defect and the removal condition named |
+| an engine with no allowlisted credential in the environment | **refused**, with the variables it looked for named |
+| a `proposer` station (needs `worktree-write`) on a payload-only engine | **refused** |
 
 The station manifest is read from `$VOICEBOX_FACTORY_AGENTS_DIR` (default `~/agents`). `deepseek` is payload-only (the factory's lib/containment.py ENGINE_TOOL_POLICIES table), so a proposer is never pointed at it — that combination is refused here rather than by the factory's `check_engine`.
 
-**Credential preflight:** before anything executes, the selected engine must have one of its allowlisted credential variables. A missing credential is a **named environment failure** — exit `2`, `verdict: ENVIRONMENT`, the engine and the variables it looked for named — and is never cached. This is the voicebox-side counterpart of agents-zrn (`8622ba8`), where an adapter auth failure became a named environment failure instead of `rc2`/no-verdict.
+**Refusals are named environment failures:** exit `2`, `verdict: ENVIRONMENT`, the engine and the reason named, nothing executed, nothing cached. This is the voicebox-side counterpart of agents-zrn (`8622ba8`), where an adapter auth failure became a named environment failure instead of `rc2`/no-verdict — and it is strictly safer than that fix, because the false-clean these refusals replace looked like a pass.
 
 ```text
-[review-trigger] Station engine: engine 'deepseek', class observer, policy read-only, source class-default, model deepseek/deepseek-flash
+[review-trigger] Station engine: engine 'pi', class observer, policy read-only, source default
+[review-trigger] Environment failure: engine 'pi' has no credential in the environment (looked for ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, GOOGLE_API_KEY, DEEPSEEK_API_KEY, OPENROUTER_API_KEY)
+[review-trigger] Station 'secret-scan' was NOT executed (engine 'pi').
 ```
+
+#### Removing the `deepseek` refusal
+
+The upstream fix is small: pass the captured prompt to the adapter's Python payload (through the environment or a temp file) instead of relying on `sys.stdin.read()` after the heredoc consumed stdin. When it lands in the Software Factory repository, drive one real station run and check that the model's report refers to the pre-pass candidates, then delete the `UNSOUND_ENGINES` entry for `deepseek`. A configured engine is never assumed sound: the same check applies to any engine added later.
 
 #### Host configuration (outside this repository)
 
@@ -87,11 +97,13 @@ The station manifest is read from `$VOICEBOX_FACTORY_AGENTS_DIR` (default `~/age
 export DEEPSEEK_API_KEY="exe-integration"
 export DEEPSEEK_BASE_URL="https://deepseek.int.exe.xyz/v1"
 export DEEPSEEK_MODEL="deepseek/deepseek-flash"
-# optional: pin the engine for every station on this host
+# optional: pin the engine for every station on this host (refused while the engine is unsound)
 export VOICEBOX_FACTORY_ENGINE="deepseek"
 ```
 
-Run the integration end to end with a real station rather than trusting the config:
+On a host where the only reachable model is the sandboxed `pi` engine, the engine needs one of its allowlisted API keys in the environment; the factory's sandbox hides `~/.pi`, so a subscription login in the operator's home is not an alternative.
+
+Drive the real path rather than trusting the config:
 
 ```bash
 scripts/factory-review-gate.sh --base <merge-base> --tip HEAD --bead <bead-id>
@@ -128,7 +140,7 @@ The local issue poller checks inbound GitHub issues, runs relevant scans, and po
 
 ### 4.0 Station Engine Selection
 
-The poller runs every station the routing selects, which for a UX-routed issue includes `accessibility` — a station the review trigger's category priority never picks (`ui-ux-audit` is primary). It resolves each station's engine with the same policy and preflight as the review trigger ([§2.4](#24-station-engine-selection--credential-preflight-voicebox-beads-zljj)): read-only stations may use the host-provisioned integration engine, and a missing engine credential aborts the scan as a named environment failure instead of running a station that cannot authenticate.
+The poller runs every station the routing selects, which for a UX-routed issue includes `accessibility` — a station the review trigger's category priority never picks (`ui-ux-audit` is primary). It resolves each station's engine with the same policy and preflight as the review trigger ([§2.4](#24-station-engine-selection--credential-preflight-voicebox-beads-zljj)): read-only stations may use a host-provisioned integration engine, and an unsound engine or a missing engine credential aborts the scan as a named environment failure instead of running a station that cannot authenticate or cannot see its payload.
 
 ### 4.1 Loop Hazard Guard
 To prevent recursive scan storms where factory-published finding issues trigger automated scans, [`tools/factory-issue-router.mjs`](../tools/factory-issue-router.mjs) immediately refuses issues matching any of:

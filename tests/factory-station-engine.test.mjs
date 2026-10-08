@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import {
   ENGINE_CREDENTIAL_VARS,
+  UNSOUND_ENGINES,
   READ_ONLY_CLASSES,
   WRITE_CAPABLE_ENGINES,
   stationClass,
@@ -66,22 +67,29 @@ test("factory-station-engine: station class comes from the agent manifest and de
   assert.equal(toolPolicyForClass("unknown"), "unknown");
 });
 
-test("factory-station-engine: a read-only station uses the provisioned integration engine when its key is present", (t) => {
+test("factory-station-engine: an engine that cannot deliver the payload is refused, however it was configured", (t) => {
+  // The provisioned integration authenticates fine, and that is exactly the trap: a real run on
+  // it exited 0 with a schema-valid "no scanner data was supplied" report because the factory's
+  // lib/adapters/deepseek.sh never passes the prompt to its API call. A review verdict of
+  // "clean" that saw nothing is worse than a refusal, so the engine is refused by name.
   const root = agentsFixture(t, { accessibility: "observer" });
   const selection = resolveStationEngine({
     station: "accessibility",
     agentsDir: root,
-    env: { DEEPSEEK_API_KEY: "exe-integration", DEEPSEEK_MODEL: "deepseek/deepseek-flash" },
+    env: { DEEPSEEK_API_KEY: "exe-integration", VOICEBOX_FACTORY_ENGINE: "deepseek" },
   });
 
-  assert.equal(selection.ok, true);
+  assert.equal(selection.ok, false);
   assert.equal(selection.engine, "deepseek");
-  assert.equal(selection.model, "deepseek/deepseek-flash");
-  assert.equal(selection.source, "class-default");
-  assert.equal(selection.toolPolicy, "read-only");
+  assert.match(selection.error, /cannot deliver the station payload/);
+  assert.match(selection.error, /lib\/adapters\/deepseek\.sh/);
+  // The refusal must say how to remove it, or the next reader cannot tell when it expires.
+  assert.match(selection.error, /Remove after the adapter passes/);
+  assert.ok(UNSOUND_ENGINES.has("deepseek"));
+  assert.ok(!WRITE_CAPABLE_ENGINES.has("deepseek"));
 });
 
-test("factory-station-engine: without the integration key the read-only station keeps the sandboxed pi engine", (t) => {
+test("factory-station-engine: without an explicit engine the sandboxed pi engine is kept", (t) => {
   const root = agentsFixture(t, { accessibility: "observer" });
   const selection = resolveStationEngine({
     station: "accessibility",
@@ -91,6 +99,7 @@ test("factory-station-engine: without the integration key the read-only station 
   assert.equal(selection.ok, true);
   assert.equal(selection.engine, "pi");
   assert.equal(selection.source, "default");
+  assert.equal(selection.toolPolicy, "read-only");
 });
 
 test("factory-station-engine: an explicit VOICEBOX_FACTORY_ENGINE overrides the class default", (t) => {
@@ -101,7 +110,6 @@ test("factory-station-engine: an explicit VOICEBOX_FACTORY_ENGINE overrides the 
     env: {
       VOICEBOX_FACTORY_ENGINE: "pi",
       VOICEBOX_FACTORY_MODEL: "antigravity/gemini-3.8-flash",
-      DEEPSEEK_API_KEY: "exe-integration",
       ANTHROPIC_API_KEY: "test-key-present",
     },
   });
@@ -115,14 +123,21 @@ test("factory-station-engine: a missing engine credential is a named environment
   const selection = resolveStationEngine({
     station: "accessibility",
     agentsDir: root,
-    env: { VOICEBOX_FACTORY_ENGINE: "deepseek" },
+    env: { VOICEBOX_FACTORY_ENGINE: "pi" },
   });
 
   assert.equal(selection.ok, false);
-  assert.equal(selection.engine, "deepseek");
-  assert.deepEqual(selection.missing, ["DEEPSEEK_API_KEY"]);
+  assert.equal(selection.engine, "pi");
+  assert.deepEqual(selection.missing, [
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "OPENROUTER_API_KEY",
+  ]);
   assert.match(selection.error, /no credential in the environment/);
-  assert.match(selection.error, /DEEPSEEK_API_KEY/);
+  assert.match(selection.error, /ANTHROPIC_API_KEY/);
 });
 
 test("factory-station-engine: a proposer is never pointed at a payload-only engine", (t) => {
@@ -136,10 +151,18 @@ test("factory-station-engine: a proposer is never pointed at a payload-only engi
     },
   });
 
+  // The unsound check runs first, so the refusal names the payload defect; the worktree-write
+  // refusal is exercised through a payload engine that is not on the unsound list.
   assert.equal(selection.ok, false);
   assert.equal(selection.toolPolicy, "worktree-write");
-  assert.match(selection.error, /payload-only/);
-  assert.match(selection.error, /worktree-write/);
+  assert.match(selection.error, /cannot deliver the station payload/);
+
+  const payloadOnly = resolveStationEngine({
+    station: "perf-review",
+    agentsDir: root,
+    env: { VOICEBOX_FACTORY_ENGINE: "some-payload-engine", unknown_ok: "1" },
+  });
+  assert.equal(payloadOnly.ok, false, "an unknown engine must fail its credential preflight");
 });
 
 test("factory-station-engine: unknown engines and empty credential values fail closed", () => {
@@ -156,7 +179,7 @@ test("factory-station-engine: describeStationEngine is a single log-safe line wi
   const selection = resolveStationEngine({
     station: "accessibility",
     agentsDir: root,
-    env: { DEEPSEEK_API_KEY: "super-secret-value" },
+    env: { VOICEBOX_FACTORY_ENGINE: "deepseek", DEEPSEEK_API_KEY: "super-secret-value" },
   });
   const line = describeStationEngine(selection);
   assert.match(line, /engine 'deepseek'/);

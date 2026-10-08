@@ -1603,42 +1603,64 @@ test("factory-review-trigger: engine selection is explicit, class-aware, and rep
   mkdirSync(privateDir, { recursive: true });
   const triggerArgs = ["--base", "HEAD~1", "--tip", "HEAD", "--repo", "PaulKinlan/voicebox", "--private-dir", privateDir];
 
-  // 1. DRY-RUN with the provisioned integration key present: the read-only station is pointed at
-  // the payload engine, and the choice is reported (not implied).
-  const withKey = runReviewTrigger([...triggerArgs, "--dry-run"], {
+  // 1. DRY-RUN with a pi credential present: the sandboxed engine is kept, and the choice is
+  // reported (not implied).
+  const withPiKey = runReviewTrigger([...triggerArgs, "--dry-run"], {
     rootDir: repoDir,
     env: {
       ...fixtureGitEnv(),
       VOICEBOX_FACTORY_AGENTS_DIR: agentsRoot,
-      DEEPSEEK_API_KEY: "exe-integration",
-      DEEPSEEK_MODEL: "deepseek/deepseek-flash",
+      ANTHROPIC_API_KEY: "present-for-pi",
     },
   });
-  assert.equal(withKey.ok, true);
-  assert.equal(withKey.station, "log-check");
-  assert.equal(withKey.engine, "deepseek");
-  assert.equal(withKey.model, "deepseek/deepseek-flash");
+  assert.equal(withPiKey.ok, true);
+  assert.equal(withPiKey.station, "log-check");
+  assert.equal(withPiKey.engine, "pi");
 
-  // 2. The cache key is engine-specific, so this verdict can never be replayed for a `pi` run.
-  const withoutKey = runReviewTrigger([...triggerArgs, "--dry-run"], {
+  // 2. An explicitly requested payload engine is reported, and the cache key is engine-specific,
+  // so a verdict produced by one engine can never be replayed for another.
+  const withDeepseek = runReviewTrigger([...triggerArgs, "--dry-run"], {
     rootDir: repoDir,
-    env: { ...fixtureGitEnv(), VOICEBOX_FACTORY_AGENTS_DIR: agentsRoot, ANTHROPIC_API_KEY: "present-for-pi" },
+    env: {
+      ...fixtureGitEnv(),
+      VOICEBOX_FACTORY_AGENTS_DIR: agentsRoot,
+      VOICEBOX_FACTORY_ENGINE: "deepseek",
+      DEEPSEEK_API_KEY: "exe-integration",
+    },
   });
-  assert.equal(withoutKey.engine, "pi");
-  assert.notEqual(withoutKey.cacheKey, withKey.cacheKey, "engine change must produce a distinct cache key");
+  assert.equal(withDeepseek.engine, "deepseek");
+  assert.notEqual(withDeepseek.cacheKey, withPiKey.cacheKey, "engine change must produce a distinct cache key");
 
-  // 3. NON-dry-run with an explicitly requested engine that has no credential: refused BEFORE
-  // execution as a named environment failure (exit 2), never as a silent station failure.
+  // 3. NON-dry-run with an engine that cannot deliver the payload: refused BEFORE execution as a
+  // named environment failure (exit 2), never as a silent "clean" station run. This is the
+  // false-clean the real 2026-10-08 station runs produced: exit 0, schema-valid report, zero
+  // findings, and a model summary saying no scanner data was supplied.
   const refused = runReviewTrigger(triggerArgs, {
     rootDir: repoDir,
-    env: { ...fixtureGitEnv(), VOICEBOX_FACTORY_AGENTS_DIR: agentsRoot, VOICEBOX_FACTORY_ENGINE: "deepseek" },
+    env: {
+      ...fixtureGitEnv(),
+      VOICEBOX_FACTORY_AGENTS_DIR: agentsRoot,
+      VOICEBOX_FACTORY_ENGINE: "deepseek",
+      DEEPSEEK_API_KEY: "exe-integration",
+    },
   });
   assert.equal(refused.ok, false);
   assert.equal(refused.exitCode, 2);
   assert.equal(refused.verdict, "ENVIRONMENT");
   assert.equal(refused.engine, "deepseek");
-  assert.deepEqual(refused.missing, ["DEEPSEEK_API_KEY"]);
-  assert.match(refused.error, /DEEPSEEK_API_KEY/);
+  assert.match(refused.error, /cannot deliver the station payload/);
+
+  // 4. NON-dry-run with no engine credential at all: the same named refusal, with the variables
+  // the engine would have needed.
+  const noCreds = runReviewTrigger(triggerArgs, {
+    rootDir: repoDir,
+    env: { ...fixtureGitEnv(), VOICEBOX_FACTORY_AGENTS_DIR: agentsRoot, VOICEBOX_FACTORY_ENGINE: "pi" },
+  });
+  assert.equal(noCreds.ok, false);
+  assert.equal(noCreds.exitCode, 2);
+  assert.equal(noCreds.verdict, "ENVIRONMENT");
+  assert.equal(noCreds.engine, "pi");
+  assert.ok(noCreds.missing.includes("ANTHROPIC_API_KEY"));
 
   // A refused run must not leave a PASS behind for a caller that later reuses the same diff.
   const cacheFile = path.join(privateDir, "review-cache.json");
