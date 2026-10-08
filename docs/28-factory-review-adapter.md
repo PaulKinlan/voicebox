@@ -45,17 +45,59 @@ For mixed diffs (e.g. security + UI + docs), the highest-priority station runs, 
 No review run falsely claims complete coverage over unexecuted domains.
 
 ### 2.3 Cache Key Invariants
-Verdicts are cached in private local reports (`review-cache.json` under `$VOICEBOX_FACTORY_PRIVATE_DIR`) using a three-tuple SHA-256 fingerprint:
+Verdicts are cached in private local reports (`review-cache.json` under `$VOICEBOX_FACTORY_PRIVATE_DIR`) using a five-tuple SHA-256 fingerprint:
 
-$$\text{CacheKey} = \text{SHA256}(\text{DiffHash} : \text{Station} : \text{FactoryRef})$$
+$$\text{CacheKey} = \text{SHA256}(\text{DiffHash} : \text{Station} : \text{FactoryRef} : \text{Repo} : \text{Engine} : \text{Model})$$
 
 - $\text{DiffHash}$: SHA-256 of `git diff base..tip`.
 - $\text{Station}$: Primary station selected.
 - $\text{FactoryRef}$: Pinned commit hash of the Software Factory engine (e.g. `1e970d595748a7c38b7fd39417e055165d7edecd`).
+- $\text{Repo}$: Target repository (`owner/name`).
+- $\text{Engine}$ / $\text{Model}$: the engine and model the verdict was produced by (below). A verdict is a judgement by a specific model on a specific station, so it is never replayed for a different engine — adding these fields invalidated existing cache entries, which only ever causes a re-run, never a stale `PASS`.
 
 If the cache key matches a prior exit-0 run, the cached verdict is returned instantly without re-executing.
 
-### 2.4 Heavy Queue Bounding & Failure Handling
+### 2.4 Station Engine Selection & Credential Preflight (`voicebox-beads-zljj`)
+
+The factory resolves an unset `--engine` itself (`choose_engine("auto")`), which picks `pi` — the only engine whose adapter enforces a tool policy. That silently produced **"No API key found for the selected model."** on the project VMs: the factory runs `pi` inside the bubblewrap sandbox, which mounts a fresh tmpfs over `$HOME` **by design**, so the operator's `~/.pi` subscription logins are unreachable and the engine authenticates only from the variables the factory's own lib/child_env.py allowlists (Software Factory repo) (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`). No such key is set on a fleet VM, and the alternatives are closed: the `claude` engine (the one adapter that *does* read `~/.claude` subscription credentials) is refused by the factory for a public target, and `antigravity` refuses every tool policy.
+
+What does authenticate on the VMs is the host-provisioned model integration: Paul's exe.dev BYOK LLM integrations (`https://<provider>.int.exe.xyz`) are reachable from every tagged VM and accept the fixed, non-secret placeholder `exe-integration` as the key. For a payload engine the factory already forwards `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL` from the host environment, so a **read-only** station can run end to end with no raw key and no sandbox change.
+
+The trigger therefore resolves the engine explicitly (`tools/factory-station-engine.mjs`) instead of leaving it to `auto`:
+
+| Input | Result |
+|---|---|
+| `VOICEBOX_FACTORY_ENGINE` set (host config, e.g. `~/.fleet/env`) | that engine, always |
+| Station manifest declares `class: observer` or `class: optimizer` (read-only) **and** `DEEPSEEK_API_KEY` is present | `deepseek` (the provisioned integration) |
+| Anything else, including a `proposer` that needs `worktree-write` | `pi` (unchanged) |
+
+The station manifest is read from `$VOICEBOX_FACTORY_AGENTS_DIR` (default `~/agents`). `deepseek` is payload-only (the factory's lib/containment.py ENGINE_TOOL_POLICIES table), so a proposer is never pointed at it — that combination is refused here rather than by the factory's `check_engine`.
+
+**Credential preflight:** before anything executes, the selected engine must have one of its allowlisted credential variables. A missing credential is a **named environment failure** — exit `2`, `verdict: ENVIRONMENT`, the engine and the variables it looked for named — and is never cached. This is the voicebox-side counterpart of agents-zrn (`8622ba8`), where an adapter auth failure became a named environment failure instead of `rc2`/no-verdict.
+
+```text
+[review-trigger] Station engine: engine 'deepseek', class observer, policy read-only, source class-default, model deepseek/deepseek-flash
+```
+
+#### Host configuration (outside this repository)
+
+```bash
+# ~/.fleet/env on a project VM — the placeholder is not a secret; the entitlement lives in the
+# exe.dev integration attached to the VM, not in this value.
+export DEEPSEEK_API_KEY="exe-integration"
+export DEEPSEEK_BASE_URL="https://deepseek.int.exe.xyz/v1"
+export DEEPSEEK_MODEL="deepseek/deepseek-flash"
+# optional: pin the engine for every station on this host
+export VOICEBOX_FACTORY_ENGINE="deepseek"
+```
+
+Run the integration end to end with a real station rather than trusting the config:
+
+```bash
+scripts/factory-review-gate.sh --base <merge-base> --tip HEAD --bead <bead-id>
+```
+
+### 2.5 Heavy Queue Bounding & Failure Handling
 Execution runs under `fleet-heavy timeout 900 factory run <station> --target . --sink file`.
 - All scanner output is redirected to `$VOICEBOX_FACTORY_PRIVATE_DIR/runs/<id>/<station>.log`.
 - Non-zero exits, kills, or timeouts (exit codes 124, 137, 143) are recorded honestly as `UNKNOWN`/`FAILED`.
@@ -83,6 +125,10 @@ When a delta markdown report (`<target>-<agent>-delta.md`) is produced:
 ## 4. Inbound Issue Poller & Loop Hazard Guard (`scripts/factory-issue-poller.mjs`)
 
 The local issue poller checks inbound GitHub issues, runs relevant scans, and posts safe triage summaries on the triggering issue.
+
+### 4.0 Station Engine Selection
+
+The poller runs every station the routing selects, which for a UX-routed issue includes `accessibility` — a station the review trigger's category priority never picks (`ui-ux-audit` is primary). It resolves each station's engine with the same policy and preflight as the review trigger ([§2.4](#24-station-engine-selection--credential-preflight-voicebox-beads-zljj)): read-only stations may use the host-provisioned integration engine, and a missing engine credential aborts the scan as a named environment failure instead of running a station that cannot authenticate.
 
 ### 4.1 Loop Hazard Guard
 To prevent recursive scan storms where factory-published finding issues trigger automated scans, [`tools/factory-issue-router.mjs`](../tools/factory-issue-router.mjs) immediately refuses issues matching any of:

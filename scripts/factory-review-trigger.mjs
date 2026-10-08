@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { redactSecrets } from "../lib/redact.mjs";
 import { gitEnv } from "../lib/git-env.mjs";
 import { selectReviewStation, computeReviewCacheKey, NIGHTLY_PROJECT_AUDIT_STATIONS } from "../tools/factory-issue-router.mjs";
+import { resolveStationEngine, describeStationEngine } from "../tools/factory-station-engine.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -155,8 +156,8 @@ export function getCheckoutRepoIdentity(cwd = ROOT, env = process.env) {
   return "";
 }
 
-export function calculateDiffHash(diffContent, station, factoryRef, repo = "") {
-  return computeReviewCacheKey({ diffContent, station, factoryRef, repo });
+export function calculateDiffHash(diffContent, station, factoryRef, repo = "", engine = "", model = "") {
+  return computeReviewCacheKey({ diffContent, station, factoryRef, repo, engine, model });
 }
 
 export function runReviewTrigger(args = process.argv.slice(2), { env = process.env, rootDir = ROOT } = {}) {
@@ -250,6 +251,13 @@ Options:
     console.log(`[review-trigger] Bounded review cap (max 1): Deferred secondary stations for nightly line: ${defNames}`);
   }
 
+  // 2b. Resolve the station's engine and preflight its credential (voicebox-beads-zljj).
+  // The factory's own `auto` resolution is `pi`, which authenticates only from an env key that
+  // no fleet VM has, so an unset engine was an opaque "no verdict" run. Reported here, before
+  // the cache is touched, because the engine is part of the cache key.
+  const engineSelection = resolveStationEngine({ station, env });
+  console.log(`[review-trigger] Station engine: ${describeStationEngine(engineSelection)}`);
+
   // 3. Resolve pinned factory ref & Cache Key
   let factoryRef = "1e970d595748a7c38b7fd39417e055165d7edecd";
   try {
@@ -259,7 +267,14 @@ Options:
     }
   } catch {}
 
-  const cacheKey = computeReviewCacheKey({ diffContent, station, factoryRef, repo });
+  const cacheKey = computeReviewCacheKey({
+    diffContent,
+    station,
+    factoryRef,
+    repo,
+    engine: engineSelection.engine,
+    model: engineSelection.model,
+  });
   const cacheFile = path.join(privateDir, "review-cache.json");
   mkdirSync(privateDir, { recursive: true });
 
@@ -276,8 +291,39 @@ Options:
   }
 
   if (dryRun) {
-    console.log(`[review-trigger] DRY-RUN complete: would run '${station}' under heavy queue and publish to repo '${repo}'`);
-    return { ok: true, exitCode: 0, dryRun: true, station, deferred, cacheKey };
+    console.log(`[review-trigger] DRY-RUN complete: would run '${station}' on engine '${engineSelection.engine}' under heavy queue and publish to repo '${repo}'`);
+    if (!engineSelection.ok) {
+      console.log(`[review-trigger] DRY-RUN note: the engine preflight would FAIL before execution: ${engineSelection.error}`);
+    }
+    return {
+      ok: true,
+      exitCode: 0,
+      dryRun: true,
+      station,
+      deferred,
+      cacheKey,
+      engine: engineSelection.engine,
+      model: engineSelection.model,
+      engineSelection,
+    };
+  }
+
+  // 3b. Named environment failure for a missing engine credential (voicebox-beads-zljj).
+  // Failing here, with the engine and the variables it needs named, is what stops a misconfigured
+  // host from looking like a clean review. Nothing is cached on this path.
+  if (!engineSelection.ok) {
+    console.error(`[review-trigger] Environment failure: ${engineSelection.error}`);
+    console.error(`[review-trigger] Station '${station}' was NOT executed (engine '${engineSelection.engine}').`);
+    return {
+      ok: false,
+      exitCode: 2,
+      verdict: "ENVIRONMENT",
+      station,
+      engine: engineSelection.engine,
+      model: engineSelection.model,
+      missing: engineSelection.missing,
+      error: engineSelection.error,
+    };
   }
 
   // 4. Bounded execution via fleet-heavy / timeout 900 under per-target exclusive lock
@@ -308,8 +354,8 @@ Options:
   try {
     const hasFleetHeavy = existsSync("/usr/local/bin/fleet-heavy") || spawnSync("which", ["fleet-heavy"]).status === 0;
     const innerCmd = hasFleetHeavy
-      ? ["fleet-heavy", "timeout", "900", "factory", "run", station, "--target", rootDir, "--sink", "file"]
-      : ["timeout", "-k", "30", "900", "factory", "run", station, "--target", rootDir, "--sink", "file"];
+      ? ["fleet-heavy", "timeout", "900", "factory", "run", station, "--target", rootDir, "--engine", engineSelection.engine, "--sink", "file"]
+      : ["timeout", "-k", "30", "900", "factory", "run", station, "--target", rootDir, "--engine", engineSelection.engine, "--sink", "file"];
 
     // Hold per-target exclusive lock covering BOTH factory invocation AND exact report copy into runDir
     const runnerScript = `
@@ -455,7 +501,7 @@ Options:
       }
       defNote = ` (${parts.join("; ")})`;
     }
-    const beadMsg = `Factory review: station '${station}', verdict ${verdict}${defNote}, cacheKey ${cacheKey.slice(0, 10)}`;
+    const beadMsg = `Factory review: station '${station}', engine '${engineSelection.engine}', verdict ${verdict}${defNote}, cacheKey ${cacheKey.slice(0, 10)}`;
     try {
       spawnSync("bd", ["comment", beadId, beadMsg], { cwd: rootDir, encoding: "utf8" });
       console.log(`[review-trigger] Recorded review verdict on bead ${beadId}`);
@@ -469,6 +515,8 @@ Options:
     cache[cacheKey] = {
       station,
       category,
+      engine: engineSelection.engine,
+      model: engineSelection.model,
       exitCode: 0,
       verdict: "PASS",
       deferred,
@@ -483,7 +531,16 @@ Options:
   }
 
   console.log(`[review-trigger] Completed review trigger for '${station}': ${verdict}`);
-  return { ok, exitCode, verdict, station, deferred, cacheKey };
+  return {
+    ok,
+    exitCode,
+    verdict,
+    station,
+    deferred,
+    cacheKey,
+    engine: engineSelection.engine,
+    model: engineSelection.model,
+  };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

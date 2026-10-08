@@ -1,0 +1,165 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import path from "node:path";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import {
+  ENGINE_CREDENTIAL_VARS,
+  READ_ONLY_CLASSES,
+  WRITE_CAPABLE_ENGINES,
+  stationClass,
+  toolPolicyForClass,
+  resolveEngineModel,
+  unmetEngineCredentials,
+  resolveStationEngine,
+  describeStationEngine,
+} from "../tools/factory-station-engine.mjs";
+
+/**
+ * These tests pin the review-trigger engine policy (voicebox-beads-zljj): a read-only station
+ * may be pointed at a host-provisioned model integration, a proposer may not, and a missing
+ * engine credential is reported as a named environment failure rather than a silent no-verdict
+ * run.
+ */
+
+function agentsFixture(t, classes = {}) {
+  const root = mkdtempSync(path.join(tmpdir(), "station-engine-agents-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  for (const [station, className] of Object.entries(classes)) {
+    const dir = path.join(root, "agents", station);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      path.join(dir, "agent.yaml"),
+      `name: ${station}\nclass: ${className}\nplane: [local]\n`,
+    );
+  }
+  return root;
+}
+
+test("factory-station-engine: engine credential vars mirror the factory adapter allowlists", () => {
+  // lib/child_env.py ENGINE_CREDENTIALS: an engine can only authenticate from these names, so a
+  // preflight that looked at any other variable would be claiming an auth path that does not exist.
+  assert.deepEqual(ENGINE_CREDENTIAL_VARS.deepseek, ["DEEPSEEK_API_KEY"]);
+  assert.deepEqual(ENGINE_CREDENTIAL_VARS.pi, [
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "OPENROUTER_API_KEY",
+  ]);
+  assert.ok(WRITE_CAPABLE_ENGINES.has("pi"));
+  assert.ok(!WRITE_CAPABLE_ENGINES.has("deepseek"), "deepseek is payload-only (read-only)");
+  assert.ok(READ_ONLY_CLASSES.has("observer"));
+  assert.ok(READ_ONLY_CLASSES.has("optimizer"));
+});
+
+test("factory-station-engine: station class comes from the agent manifest and defaults safely", (t) => {
+  const root = agentsFixture(t, { accessibility: "observer", "perf-review": "proposer" });
+  assert.equal(stationClass("accessibility", { agentsDir: root }), "observer");
+  assert.equal(stationClass("perf-review", { agentsDir: root }), "proposer");
+  // An absent manifest must not be guessed at: the factory keeps its own resolution.
+  assert.equal(stationClass("not-a-station", { agentsDir: root }), "unknown");
+  assert.equal(toolPolicyForClass("observer"), "read-only");
+  assert.equal(toolPolicyForClass("optimizer"), "read-only");
+  assert.equal(toolPolicyForClass("proposer"), "worktree-write");
+  assert.equal(toolPolicyForClass("unknown"), "unknown");
+});
+
+test("factory-station-engine: a read-only station uses the provisioned integration engine when its key is present", (t) => {
+  const root = agentsFixture(t, { accessibility: "observer" });
+  const selection = resolveStationEngine({
+    station: "accessibility",
+    agentsDir: root,
+    env: { DEEPSEEK_API_KEY: "exe-integration", DEEPSEEK_MODEL: "deepseek/deepseek-flash" },
+  });
+
+  assert.equal(selection.ok, true);
+  assert.equal(selection.engine, "deepseek");
+  assert.equal(selection.model, "deepseek/deepseek-flash");
+  assert.equal(selection.source, "class-default");
+  assert.equal(selection.toolPolicy, "read-only");
+});
+
+test("factory-station-engine: without the integration key the read-only station keeps the sandboxed pi engine", (t) => {
+  const root = agentsFixture(t, { accessibility: "observer" });
+  const selection = resolveStationEngine({
+    station: "accessibility",
+    agentsDir: root,
+    env: { ANTHROPIC_API_KEY: "test-key-present" },
+  });
+  assert.equal(selection.ok, true);
+  assert.equal(selection.engine, "pi");
+  assert.equal(selection.source, "default");
+});
+
+test("factory-station-engine: an explicit VOICEBOX_FACTORY_ENGINE overrides the class default", (t) => {
+  const root = agentsFixture(t, { accessibility: "observer" });
+  const selection = resolveStationEngine({
+    station: "accessibility",
+    agentsDir: root,
+    env: {
+      VOICEBOX_FACTORY_ENGINE: "pi",
+      VOICEBOX_FACTORY_MODEL: "antigravity/gemini-3.8-flash",
+      DEEPSEEK_API_KEY: "exe-integration",
+      ANTHROPIC_API_KEY: "test-key-present",
+    },
+  });
+  assert.equal(selection.engine, "pi");
+  assert.equal(selection.source, "env");
+  assert.equal(selection.model, "antigravity/gemini-3.8-flash");
+});
+
+test("factory-station-engine: a missing engine credential is a named environment failure", (t) => {
+  const root = agentsFixture(t, { accessibility: "observer" });
+  const selection = resolveStationEngine({
+    station: "accessibility",
+    agentsDir: root,
+    env: { VOICEBOX_FACTORY_ENGINE: "deepseek" },
+  });
+
+  assert.equal(selection.ok, false);
+  assert.equal(selection.engine, "deepseek");
+  assert.deepEqual(selection.missing, ["DEEPSEEK_API_KEY"]);
+  assert.match(selection.error, /no credential in the environment/);
+  assert.match(selection.error, /DEEPSEEK_API_KEY/);
+});
+
+test("factory-station-engine: a proposer is never pointed at a payload-only engine", (t) => {
+  const root = agentsFixture(t, { "perf-review": "proposer" });
+  const selection = resolveStationEngine({
+    station: "perf-review",
+    agentsDir: root,
+    env: {
+      DEEPSEEK_API_KEY: "exe-integration",
+      VOICEBOX_FACTORY_ENGINE: "deepseek",
+    },
+  });
+
+  assert.equal(selection.ok, false);
+  assert.equal(selection.toolPolicy, "worktree-write");
+  assert.match(selection.error, /payload-only/);
+  assert.match(selection.error, /worktree-write/);
+});
+
+test("factory-station-engine: unknown engines and empty credential values fail closed", () => {
+  assert.deepEqual(unmetEngineCredentials("nonesuch", {}), ["unknown engine 'nonesuch'"]);
+  // Whitespace-only values are not credentials.
+  assert.deepEqual(unmetEngineCredentials("deepseek", { DEEPSEEK_API_KEY: "   " }), ["DEEPSEEK_API_KEY"]);
+  assert.deepEqual(unmetEngineCredentials("deepseek", { DEEPSEEK_API_KEY: "exe-integration" }), []);
+  assert.equal(resolveEngineModel("deepseek", { DEEPSEEK_MODEL: "deepseek/deepseek-flash" }), "deepseek/deepseek-flash");
+  assert.equal(resolveEngineModel("deepseek", {}), "");
+});
+
+test("factory-station-engine: describeStationEngine is a single log-safe line without values", (t) => {
+  const root = agentsFixture(t, { accessibility: "observer" });
+  const selection = resolveStationEngine({
+    station: "accessibility",
+    agentsDir: root,
+    env: { DEEPSEEK_API_KEY: "super-secret-value" },
+  });
+  const line = describeStationEngine(selection);
+  assert.match(line, /engine 'deepseek'/);
+  assert.match(line, /class observer/);
+  assert.ok(!line.includes("super-secret-value"), "the description must never print a credential value");
+});

@@ -117,6 +117,33 @@ test("factory-review-adapter: deterministic cache key includes diff content, sta
     factoryRef: "2222222222222222222222222222222222222222",
   });
   assert.notEqual(key1, keyRef);
+
+  // Engine / model change invalidates (voicebox-beads-zljj): a verdict belongs to the engine
+  // that produced it, so a `deepseek` run must not replay a `pi` verdict for the same diff.
+  const keyEngine = computeReviewCacheKey({
+    diffContent: "diff --git a/foo b/foo\n+line",
+    station: "perf-review",
+    factoryRef: "1e970d595748a7c38b7fd39417e055165d7edecd",
+    engine: "deepseek",
+  });
+  assert.notEqual(key1, keyEngine, "engine change produces distinct cache key");
+
+  const keyModel = computeReviewCacheKey({
+    diffContent: "diff --git a/foo b/foo\n+line",
+    station: "perf-review",
+    factoryRef: "1e970d595748a7c38b7fd39417e055165d7edecd",
+    engine: "deepseek",
+    model: "deepseek/deepseek-flash",
+  });
+  assert.notEqual(keyEngine, keyModel, "model change produces distinct cache key");
+
+  const keyEngineRepeat = computeReviewCacheKey({
+    diffContent: "diff --git a/foo b/foo\n+line",
+    station: "perf-review",
+    factoryRef: "1e970d595748a7c38b7fd39417e055165d7edecd",
+    engine: "deepseek",
+  });
+  assert.equal(keyEngine, keyEngineRepeat, "engine-keyed fingerprints stay deterministic");
 });
 
 test("factory-issue-router: loop hazard guard rejects publisher issues independent of author association", () => {
@@ -1517,3 +1544,106 @@ test("factory-review-trigger: focused concurrency negative control rejects inter
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
+
+test("factory-review-trigger: engine selection is explicit, class-aware, and reported (voicebox-beads-zljj)", (t) => {
+  // The trigger used to call `factory run` with no --engine, so the Software Factory resolved
+  // `auto` -> `pi` -> the sandboxed engine with no env key -> "No API key found for the selected
+  // model." and no verdict. These cases pin the replacement: the engine is resolved from the
+  // station's manifest class plus host config, and a missing credential is a NAMED environment
+  // failure before anything is executed or cached.
+  const ownedDirs = new Set();
+  t.after(() => {
+    for (const dir of ownedDirs) rmSync(dir, { recursive: true, force: true });
+  });
+  const ownDir = (dir) => {
+    ownedDirs.add(dir);
+    return dir;
+  };
+
+  const fixtureRoot = ownDir(mkdtempSync(path.join(tmpdir(), "engine-selection-fixture-")));
+  const repoDir = path.join(fixtureRoot, "repo");
+  const gitHome = path.join(fixtureRoot, "githome");
+  const gitXdg = path.join(gitHome, ".config");
+  const gitHooksDir = path.join(fixtureRoot, "empty-hooks");
+  const agentsRoot = path.join(fixtureRoot, "agents");
+  for (const dir of [repoDir, gitHome, gitXdg, gitHooksDir, agentsRoot]) mkdirSync(dir, { recursive: true });
+
+  const trustedGit = "/usr/bin/git";
+  accessSync(trustedGit, constants.X_OK);
+  const fixtureGitEnv = () => ({
+    HOME: gitHome,
+    XDG_CONFIG_HOME: gitXdg,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_ATTR_NOSYSTEM: "1",
+  });
+  const git = (args, cwd) => execFileSync(
+    trustedGit,
+    ["-c", `core.hooksPath=${gitHooksDir}`, "-c", `init.templateDir=${gitHooksDir}`, ...args],
+    { cwd, encoding: "utf8", env: fixtureGitEnv() },
+  );
+  git(["init", "-q", "-b", "main", repoDir], fixtureRoot);
+  git(["config", "user.email", "engine-selection-fixture@test.local"], repoDir);
+  git(["config", "user.name", "engine selection fixture"], repoDir);
+  git(["remote", "add", "origin", "https://github.com/PaulKinlan/voicebox.git"], repoDir);
+  writeFileSync(path.join(repoDir, "README.md"), "fixture base\n");
+  git(["add", "README.md"], repoDir);
+  git(["commit", "-q", "-m", "fixture base"], repoDir);
+  writeFileSync(path.join(repoDir, "ops-change.log"), "2026-01-01 INFO fixture ops change\n");
+  git(["add", "ops-change.log"], repoDir);
+  git(["commit", "-q", "-m", "fixture ops change"], repoDir);
+
+  // log-check is an observer in the factory's own manifest; the diff above selects it.
+  const stationDir = path.join(agentsRoot, "agents", "log-check");
+  mkdirSync(stationDir, { recursive: true });
+  writeFileSync(path.join(stationDir, "agent.yaml"), "name: log-check\nclass: observer\n");
+
+  const privateDir = ownDir(path.join(fixtureRoot, "private"));
+  mkdirSync(privateDir, { recursive: true });
+  const triggerArgs = ["--base", "HEAD~1", "--tip", "HEAD", "--repo", "PaulKinlan/voicebox", "--private-dir", privateDir];
+
+  // 1. DRY-RUN with the provisioned integration key present: the read-only station is pointed at
+  // the payload engine, and the choice is reported (not implied).
+  const withKey = runReviewTrigger([...triggerArgs, "--dry-run"], {
+    rootDir: repoDir,
+    env: {
+      ...fixtureGitEnv(),
+      VOICEBOX_FACTORY_AGENTS_DIR: agentsRoot,
+      DEEPSEEK_API_KEY: "exe-integration",
+      DEEPSEEK_MODEL: "deepseek/deepseek-flash",
+    },
+  });
+  assert.equal(withKey.ok, true);
+  assert.equal(withKey.station, "log-check");
+  assert.equal(withKey.engine, "deepseek");
+  assert.equal(withKey.model, "deepseek/deepseek-flash");
+
+  // 2. The cache key is engine-specific, so this verdict can never be replayed for a `pi` run.
+  const withoutKey = runReviewTrigger([...triggerArgs, "--dry-run"], {
+    rootDir: repoDir,
+    env: { ...fixtureGitEnv(), VOICEBOX_FACTORY_AGENTS_DIR: agentsRoot, ANTHROPIC_API_KEY: "present-for-pi" },
+  });
+  assert.equal(withoutKey.engine, "pi");
+  assert.notEqual(withoutKey.cacheKey, withKey.cacheKey, "engine change must produce a distinct cache key");
+
+  // 3. NON-dry-run with an explicitly requested engine that has no credential: refused BEFORE
+  // execution as a named environment failure (exit 2), never as a silent station failure.
+  const refused = runReviewTrigger(triggerArgs, {
+    rootDir: repoDir,
+    env: { ...fixtureGitEnv(), VOICEBOX_FACTORY_AGENTS_DIR: agentsRoot, VOICEBOX_FACTORY_ENGINE: "deepseek" },
+  });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.exitCode, 2);
+  assert.equal(refused.verdict, "ENVIRONMENT");
+  assert.equal(refused.engine, "deepseek");
+  assert.deepEqual(refused.missing, ["DEEPSEEK_API_KEY"]);
+  assert.match(refused.error, /DEEPSEEK_API_KEY/);
+
+  // A refused run must not leave a PASS behind for a caller that later reuses the same diff.
+  const cacheFile = path.join(privateDir, "review-cache.json");
+  if (existsSync(cacheFile)) {
+    const cache = JSON.parse(readFileSync(cacheFile, "utf8"));
+    assert.equal(Object.keys(cache).length, 0, "an environment failure must never be cached");
+  }
+});

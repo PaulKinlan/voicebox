@@ -21,6 +21,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { routeIssue } from "../tools/factory-issue-router.mjs";
+import { resolveStationEngine, describeStationEngine } from "../tools/factory-station-engine.mjs";
 import { formatTriageComment } from "../tools/factory-issue-commenter.mjs";
 import { sanitizeLogOutput } from "./factory-review-trigger.mjs";
 
@@ -182,8 +183,21 @@ Options:
       mkdirSync(issueRunDir, { recursive: true });
       for (const st of stations) {
         console.log(`[issue-poller] Running station '${st}' for issue #${num}...`);
+        // Engine selection (voicebox-beads-zljj): an unset --engine resolves to `pi`, which
+        // authenticates only from an allowlisted env key and has none on a fleet VM, so the
+        // station died with "No API key found for the selected model." A read-only station may
+        // use the host-provisioned integration engine instead; a missing credential is reported
+        // as a named environment failure and aborts the scan rather than silently producing no
+        // findings.
+        const engineSelection = resolveStationEngine({ station: st, env });
+        console.log(`[issue-poller] Station '${st}' engine: ${describeStationEngine(engineSelection)}`);
+        if (!engineSelection.ok) {
+          console.error(`[issue-poller] Environment failure: ${engineSelection.error}`);
+          scanSuccess = false;
+          break;
+        }
         try {
-          const res = spawnSync("factory", ["run", st, "--target", rootDir, "--sink", "file"], {
+          const res = spawnSync("factory", ["run", st, "--target", rootDir, "--engine", engineSelection.engine, "--sink", "file"], {
             cwd: rootDir,
             env: { ...env, VOICEBOX_FACTORY_PRIVATE_DIR: issueRunDir },
             encoding: "utf8",

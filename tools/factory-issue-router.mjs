@@ -142,16 +142,33 @@ export function selectReviewStation(changedFiles = []) {
 /**
  * Computes a deterministic cache fingerprint for a review diff.
  *
+ * The engine and model are part of the fingerprint (voicebox-beads-zljj). A verdict is a
+ * property of the (diff, station, factory revision, engine) tuple, not of the diff alone: the
+ * review trigger now runs some stations on a host-provisioned integration engine and others on
+ * the sandboxed `pi` engine, so replaying a `pi` verdict for a `deepseek` run would reuse a
+ * judgement the model never made. Adding the fields invalidates existing cache entries - the
+ * safe direction (a re-run, never a stale PASS).
+ *
  * @param {object} params
  * @param {string} params.diffContent - git diff output string
  * @param {string} params.station - target station name
  * @param {string} params.factoryRef - pinned factory commit hash or version
+ * @param {string} params.repo - target repository (owner/name)
+ * @param {string} params.engine - engine the verdict was produced by
+ * @param {string} params.model - model the engine was pointed at
  * @returns {string} SHA-256 fingerprint hex
  */
-export function computeReviewCacheKey({ diffContent = "", station = "", factoryRef = "", repo = "" } = {}) {
+export function computeReviewCacheKey({
+  diffContent = "",
+  station = "",
+  factoryRef = "",
+  repo = "",
+  engine = "",
+  model = "",
+} = {}) {
   const diffHash = createHash("sha256").update(diffContent).digest("hex");
   return createHash("sha256")
-    .update(`${diffHash}:${station}:${factoryRef}:${String(repo).toLowerCase()}`)
+    .update(`${diffHash}:${station}:${factoryRef}:${String(repo).toLowerCase()}:${engine}:${model}`)
     .digest("hex");
 }
 
