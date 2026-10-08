@@ -14,11 +14,18 @@ LOCK_FILE="$REPORTS_DIR/nightly-publisher.lock"
 
 mkdir -p "$REPORTS_DIR"
 
+TARGET_NAME="$(basename "$ROOT_DIR")"
+TARGET_LOCK="$REPORTS_DIR/${TARGET_NAME}.lock"
+
 exec 201>"$LOCK_FILE"
 if ! flock -n 201; then
   echo "[$(date -u +%FT%TZ)] [nightly-publisher] Another publisher instance is already running. Exiting." >> "$LOG_FILE"
   exit 0
 fi
+
+# Acquire per-target exclusive lock while publishing findings
+exec 200>"$TARGET_LOCK"
+flock -x 200
 
 echo "[$(date -u +%FT%TZ)] [nightly-publisher] Starting nightly findings publisher in $ROOT_DIR" >> "$LOG_FILE"
 

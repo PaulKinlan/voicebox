@@ -20,11 +20,18 @@ mkdir -p "$REPORTS_DIR"
 
 # Lock file to prevent overlapping runs
 LOCK_FILE="$REPORTS_DIR/poller.lock"
+TARGET_NAME="$(basename "$TARGET_DIR")"
+TARGET_LOCK="$REPORTS_DIR/${TARGET_NAME}.lock"
+
 exec 200>"$LOCK_FILE"
 if ! flock -n 200; then
   echo "[$(date -u +%FT%TZ)] [poller-runner] Another instance of factory-issue-poller is already running. Exiting." >> "$LOG_FILE"
   exit 0
 fi
+
+# Acquire per-target exclusive lock while executing stations and commenting
+exec 201>"$TARGET_LOCK"
+flock -x 201
 
 echo "[$(date -u +%FT%TZ)] [poller-runner] Starting issue poller in $TARGET_DIR" >> "$LOG_FILE"
 

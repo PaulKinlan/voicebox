@@ -13,7 +13,14 @@ import {
   CATEGORY_STATIONS,
 } from "../tools/factory-issue-router.mjs";
 import { formatTriageComment, sanitizeFindingText } from "../tools/factory-issue-commenter.mjs";
-import { runReviewTrigger, parsePublisherSummary, sanitizeLogOutput, locateRunDeltaReport, getCheckoutRepoIdentity } from "../scripts/factory-review-trigger.mjs";
+import {
+  runReviewTrigger,
+  parsePublisherSummary,
+  sanitizeLogOutput,
+  locateRunDeltaReport,
+  getCheckoutRepoIdentity,
+  validateStationReportProvenance,
+} from "../scripts/factory-review-trigger.mjs";
 import { pollInboundIssues } from "../scripts/factory-issue-poller.mjs";
 import { publishNightlyFindings } from "../scripts/factory-nightly-publisher.mjs";
 import { runReviewWatcher } from "../scripts/factory-review-watcher.mjs";
@@ -728,6 +735,95 @@ Generated: ${now.toISOString()}
   ], { rootDir: ROOT });
   assert.equal(resDup.ok, true);
   assert.equal(resDup.skippedDuplicate, true);
+
+  rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("factory-review-trigger: validateStationReportProvenance verifies target, station, freshness, and hash delta", async () => {
+  const tmpDir = path.join(ROOT, "tests", "fixtures", "test-val-prov-tmp");
+  rmSync(tmpDir, { recursive: true, force: true });
+  mkdirSync(tmpDir, { recursive: true });
+
+  const reportPath = path.join(tmpDir, "report.md");
+  const startTime = Date.now();
+  const targetName = "voicebox-miniapps";
+  const station = "secret-scan";
+
+  // 1. Missing report
+  const resMissing = validateStationReportProvenance(path.join(tmpDir, "nonexistent.md"), { targetName, station, startTime, rootDir: ROOT });
+  assert.equal(resMissing.ok, false);
+  assert.equal(resMissing.error, "report_not_found");
+
+  // 2. Empty report
+  writeFileSync(reportPath, "   \n");
+  const resEmpty = validateStationReportProvenance(reportPath, { targetName, station, startTime, rootDir: ROOT });
+  assert.equal(resEmpty.ok, false);
+  assert.equal(resEmpty.error, "report_empty");
+
+  // 3. Unchanged content hash
+  const staticContent = `# Software Factory Delta Report: voicebox-miniapps / secret-scan\nGenerated: ${new Date(startTime + 1000).toISOString()}\n\n| New | 0 |\n`;
+  writeFileSync(reportPath, staticContent);
+  const realHash = (await import("node:crypto")).createHash("sha256").update(staticContent).digest("hex");
+  const resUnchanged = validateStationReportProvenance(reportPath, { targetName, station, startTime, hashBefore: realHash, rootDir: ROOT });
+  assert.equal(resUnchanged.ok, false);
+  assert.equal(resUnchanged.error, "report_unchanged_from_prior_attempt");
+
+  // 4. Missing header
+  writeFileSync(reportPath, `Generated: ${new Date(startTime + 1000).toISOString()}\n\nRandom text without header\n`);
+  const resNoHeader = validateStationReportProvenance(reportPath, { targetName, station, startTime, rootDir: ROOT });
+  assert.equal(resNoHeader.ok, false);
+  assert.equal(resNoHeader.error, "missing_factory_delta_header");
+
+  // 5. Target mismatch (foreign target)
+  writeFileSync(reportPath, `# Software Factory Delta Report: foreign-target / secret-scan\nGenerated: ${new Date(startTime + 1000).toISOString()}\n`);
+  const resTargetMismatch = validateStationReportProvenance(reportPath, { targetName, station, startTime, rootDir: ROOT });
+  assert.equal(resTargetMismatch.ok, false);
+  assert.ok(resTargetMismatch.error.startsWith("target_mismatch"));
+
+  // 6. Station mismatch (interleaved different station write)
+  writeFileSync(reportPath, `# Software Factory Delta Report: voicebox-miniapps / perf-review\nGenerated: ${new Date(startTime + 1000).toISOString()}\n`);
+  const resStationMismatch = validateStationReportProvenance(reportPath, { targetName, station: "secret-scan", startTime, rootDir: ROOT });
+  assert.equal(resStationMismatch.ok, false);
+  assert.ok(resStationMismatch.error.startsWith("station_mismatch"));
+
+  // 7. Stale report timestamp (older than run start)
+  writeFileSync(reportPath, `# Software Factory Delta Report: voicebox-miniapps / secret-scan\nGenerated: ${new Date(startTime - 60000).toISOString()}\n`);
+  const resStale = validateStationReportProvenance(reportPath, { targetName, station, startTime, rootDir: ROOT });
+  assert.equal(resStale.ok, false);
+  assert.ok(resStale.error.startsWith("stale_report_timestamp"));
+
+  // 8. Positive control: valid report satisfying all invariants
+  writeFileSync(reportPath, `# Software Factory Delta Report: voicebox-miniapps / secret-scan\nGenerated: ${new Date(startTime + 1000).toISOString()}\n\n| New | 0 |\n`);
+  const resValid = validateStationReportProvenance(reportPath, { targetName, station, startTime, rootDir: ROOT });
+  assert.equal(resValid.ok, true);
+  assert.ok(resValid.hash);
+
+  rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("factory-review-trigger: focused concurrency negative control rejects interleaved foreign station report", () => {
+  const tmpDir = path.join(ROOT, "tests", "fixtures", "test-concurrency-tmp");
+  rmSync(tmpDir, { recursive: true, force: true });
+  mkdirSync(tmpDir, { recursive: true });
+
+  const targetName = path.basename(ROOT);
+  const startTime = Date.now();
+
+  // Simulate an interleaved station write where Station A (secret-scan) expected its report,
+  // but an interleaved job wrote a perf-review report with stale or mismatched station header
+  const interleavedReport = path.join(tmpDir, `${targetName}-secret-scan-delta.md`);
+  writeFileSync(interleavedReport, `# Software Factory Delta Report: ${targetName} / perf-review\nGenerated: ${new Date(startTime + 500).toISOString()}\n\n| New | 1 |\n`);
+
+  const provRes = validateStationReportProvenance(interleavedReport, {
+    targetName,
+    station: "secret-scan",
+    startTime,
+    rootDir: ROOT,
+  });
+
+  // Must fail closed due to station mismatch
+  assert.equal(provRes.ok, false);
+  assert.ok(provRes.error.includes("station_mismatch"));
 
   rmSync(tmpDir, { recursive: true, force: true });
 });
