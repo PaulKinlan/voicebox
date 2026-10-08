@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
+import { gitEnv } from "../lib/git-env.mjs";
 import {
   selectReviewStation,
   computeReviewCacheKey,
@@ -664,13 +665,53 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
       id: "voicebox-beads-test",
       assignee: "voicebox-miniapps",
       status: "in_progress",
-      title: "Test task on fleet/miniapps-xacp",
-      description: "Working on fleet/miniapps-xacp candidate branch",
+      title: "Test task on fleet/watcher-fixture-candidate",
+      description: "Working on fleet/watcher-fixture-candidate candidate branch",
     },
   ];
 
-  const tipSha = execFileSync("git", ["rev-parse", "refs/remotes/origin/fleet/miniapps-xacp"], { cwd: ROOT, encoding: "utf8" }).trim();
-  const taskKey = `fleet/miniapps-xacp@${tipSha}`;
+  // Deterministic candidate ref OWNED BY THIS TEST, built as a REAL isolated remote
+  // (voicebox-beads-guu9). Two earlier shapes could not work: reading the author's remote-tracking ref
+  // depended on the state of the world (that branch landed and was pruned), and creating a ref under
+  // refs/remotes/origin/ ourselves does not survive the watcher's own `git fetch origin --prune`, which
+  // deletes any tracking ref the remote does not have before the ref is ever read. So the fixture stands
+  // up its own bare origin, pushes main and the candidate branch to it, and points the watcher at a clone
+  // of it: the prune then PRESERVES the candidate, and rev-parse/merge-base/diff run against real Git.
+  // Nothing here touches the shared origin or any author ref.
+  const fixtureBranch = "fleet/watcher-fixture-candidate";
+  // OUTSIDE the repo tree on purpose: an in-tree fixture that creates a nested repo can end up
+  // committing into the surrounding worktree (it did, once, and added a junk commit to the branch).
+  const fixtureRoot = mkdtempSync(path.join(tmpdir(), "watcher-fixture-remote-"));
+  rmSync(fixtureRoot, { recursive: true, force: true });
+  const bareDir = path.join(fixtureRoot, "origin.git");
+  const workDir = path.join(fixtureRoot, "work");
+  mkdirSync(fixtureRoot, { recursive: true });
+  // Scrubbed env + explicit fixture cwd on EVERY fixture git call (voicebox-beads-guu9). The pre-push
+  // hook exports git's own GIT_DIR, so a fixture that inherits the process env operates on the
+  // SURROUNDING repo - which is how this fixture added junk commits to the branch and set core.bare.
+  const git = (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf8", env: gitEnv() });
+  execFileSync("git", ["init", "--bare", "-q", bareDir], { cwd: fixtureRoot, env: gitEnv() });
+  execFileSync("git", ["init", "-q", "-b", "main", workDir], { cwd: fixtureRoot, env: gitEnv() });
+  // FAIL CLOSED, before any config/add/commit/remote: prove which repo these calls address. If the git
+  // root is not the fixture itself, the surrounding repo is in reach and this test must abort.
+  const fixtureGitRoot = git(["rev-parse", "--show-toplevel"], workDir).trim();
+  assert.equal(realpathSync(fixtureGitRoot), realpathSync(workDir),
+    `fixture git ops must resolve to the fixture itself, not a parent repo (got ${fixtureGitRoot})`);
+  git(["config", "user.email", "watcher-fixture@test.local"], workDir);
+  git(["config", "user.name", "watcher fixture"], workDir);
+  writeFileSync(path.join(workDir, "README.md"), "watcher fixture base\n");
+  git(["add", "README.md"], workDir);
+  git(["commit", "-q", "-m", "fixture base"], workDir);
+  git(["remote", "add", "origin", bareDir], workDir);
+  git(["push", "-q", "origin", "main"], workDir);
+  git(["checkout", "-q", "-b", fixtureBranch], workDir);
+  writeFileSync(path.join(workDir, "candidate.txt"), "candidate change\n");
+  git(["add", "candidate.txt"], workDir);
+  git(["commit", "-q", "-m", "fixture candidate"], workDir);
+  git(["push", "-q", "origin", `${fixtureBranch}:refs/heads/${fixtureBranch}`], workDir);
+  git(["fetch", "-q", "origin", "--prune"], workDir);
+  const tipSha = git(["rev-parse", `refs/remotes/origin/${fixtureBranch}`], workDir).trim();
+  const taskKey = `${fixtureBranch}@${tipSha}`;
   const cursorFile = path.join(tmpPrivate, "review-watcher-cursor.json");
 
   let triggerInvocations = [];
@@ -681,7 +722,7 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
 
   // 1. Tick 1 with NO flags (defaults only): must invoke trigger with auto-publication (no --dry-run)
   const res1 = runReviewWatcher(["--private-dir", tmpPrivate], {
-    rootDir: ROOT,
+    rootDir: workDir,
     mockBeads,
     triggerRunner: trackingTrigger,
   });
@@ -705,7 +746,7 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
   // 2. Tick 2: Second invocation on the same branch must detect cursor entry and DEDUPLICATE (zero trigger calls)
   triggerInvocations = [];
   const res2 = runReviewWatcher(["--private-dir", tmpPrivate], {
-    rootDir: ROOT,
+    rootDir: workDir,
     mockBeads,
     triggerRunner: trackingTrigger,
   });
@@ -722,8 +763,11 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
     return { ok: false, exitCode: 1 };
   };
 
+  // NOTE: this control must run against the SAME isolated clone (workDir), not ROOT. Against ROOT the
+  // fixture candidate ref does not exist, so the watcher skips the candidate, the failing trigger is never
+  // invoked, and the control reads as a pass for the wrong reason (voicebox-beads-guu9).
   const resFail = runReviewWatcher(["--private-dir", tmpFailPrivate], {
-    rootDir: ROOT,
+    rootDir: workDir,
     mockBeads,
     triggerRunner: failingTrigger,
   });
@@ -742,6 +786,7 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
 
   rmSync(tmpPrivate, { recursive: true, force: true });
   rmSync(tmpFailPrivate, { recursive: true, force: true });
+  rmSync(fixtureRoot, { recursive: true, force: true });
 });
 
 test("factory-nightly-publisher: enforces SAME-RUN manifest barrier, target check, and batch window", () => {
