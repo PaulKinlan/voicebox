@@ -200,7 +200,7 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
         }
 
         description = sanitizeFindingText(description);
-        findingItems.push({ severity: sev, station, description, fingerprint, state, humanReview });
+        findingItems.push({ severity: sev, station, description, rule: "triaged", fingerprint, state, humanReview });
       }
     }
   }
@@ -248,22 +248,19 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
     comments.push(cleanLines.join("\n"));
   } else {
     for (const item of newFindings) {
+      const effectiveRule = item.rule || "triaged";
       const lines = [
         "### 🤖 Software Factory Automated Triage",
         "",
         `- [**\`${item.station}\`**] \`[${item.severity}]\` ${item.description}${item.location ? ` (\`${item.location}\`)` : ""}`,
+        `  - **Rule**: \`${effectiveRule}\``,
+        "",
+        `<!-- factory-triage-comment: ${item.fingerprint} -->`,
+        `<!-- factory-station: ${item.station} -->`,
+        `<!-- factory-severity: ${item.severity.toLowerCase()} -->`,
+        `<!-- factory-state: ${item.state} -->`,
+        `<!-- factory-rule: ${effectiveRule} -->`,
       ];
-      if (item.rule) {
-        lines.push(`  - **Rule**: \`${item.rule}\``);
-      }
-      lines.push("");
-      lines.push(`<!-- factory-triage-comment: ${item.fingerprint} -->`);
-      lines.push(`<!-- factory-station: ${item.station} -->`);
-      lines.push(`<!-- factory-severity: ${item.severity.toLowerCase()} -->`);
-      lines.push(`<!-- factory-state: ${item.state} -->`);
-      if (item.rule) {
-        lines.push(`<!-- factory-rule: ${item.rule} -->`);
-      }
       if (item.humanReview) {
         lines.push(`<!-- factory-human-review -->`);
       }

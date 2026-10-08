@@ -75,7 +75,7 @@ export function locateRunDeltaReport(runDir, rootDir, station) {
 export function getCheckoutRepoIdentity(cwd = ROOT) {
   try {
     const remoteUrl = execFileSync("git", ["config", "--get", "remote.origin.url"], { cwd, encoding: "utf8" }).trim();
-    const m = remoteUrl.match(/[:/]([^/:]+\/[^/:]+?)(?:\.git)?$/);
+    const m = remoteUrl.match(/^(?:https?:\/\/[a-zA-Z0-9.-]+(?::\d+)?\/|git@[a-zA-Z0-9.-]+:)([^/:]+\/[^/:]+?)(?:\.git)?$/i);
     if (m) {
       return m[1].toLowerCase();
     }
@@ -226,46 +226,52 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
 
   let publishExit = 0;
   let safeSummary = "";
+  const checkoutRepo = getCheckoutRepoIdentity(rootDir);
+
   if (foundReportPath) {
-    console.log(`[review-trigger] Calling h1u0 publisher (scripts/factory-triage.mjs --file-issues --include-low) for ${candidateReportName}...`);
-    try {
-      const triageScript = path.join(rootDir, "scripts", "factory-triage.mjs");
-      if (existsSync(triageScript)) {
-        const publisherArgs = [
-          triageScript,
-          "--report", foundReportPath,
-          "--repo", repo,
-          "--file-issues",
-          "--include-low",
-        ];
+    if (checkoutRepo && checkoutRepo !== repo.toLowerCase()) {
+      console.error(`[review-trigger] Refusing publication: checkout origin '${checkoutRepo}' does not match target repo '${repo}'`);
+      publishExit = 1;
+    } else {
+      console.log(`[review-trigger] Calling h1u0 publisher (scripts/factory-triage.mjs --file-issues --include-low) for ${candidateReportName}...`);
+      try {
+        const triageScript = path.join(rootDir, "scripts", "factory-triage.mjs");
+        if (existsSync(triageScript)) {
+          const publisherArgs = [
+            triageScript,
+            "--report", foundReportPath,
+            "--repo", repo,
+            "--file-issues",
+            "--include-low",
+          ];
 
-        // Deliberate cross-target validation: If the worktree directory name differs from the repo name
-        // (e.g. 'voicebox-miniapps' vs 'voicebox'), but we validated that the worktree's origin remote matches
-        // the target repository, pass --allow-foreign-target so the publisher admits the local worktree report.
-        const checkoutRepo = getCheckoutRepoIdentity(rootDir);
-        const repoName = repo.split(/[\\/]/).filter(Boolean).pop()?.toLowerCase();
-        const targetDirName = path.basename(rootDir).toLowerCase();
-        if (checkoutRepo && checkoutRepo === repo.toLowerCase() && targetDirName !== repoName) {
-          console.log(`[review-trigger] Worktree '${targetDirName}' verified as checkout of '${repo}'; passing --allow-foreign-target`);
-          publisherArgs.push("--allow-foreign-target");
+          // Deliberate cross-target validation: If the worktree directory name differs from the repo name
+          // (e.g. 'voicebox-miniapps' vs 'voicebox'), but we validated that the worktree's origin remote matches
+          // the target repository, pass --allow-foreign-target so the publisher admits the local worktree report.
+          const repoName = repo.split(/[\\/]/).filter(Boolean).pop()?.toLowerCase();
+          const targetDirName = path.basename(rootDir).toLowerCase();
+          if (checkoutRepo && checkoutRepo === repo.toLowerCase() && targetDirName !== repoName) {
+            console.log(`[review-trigger] Worktree '${targetDirName}' verified as checkout of '${repo}'; passing --allow-foreign-target`);
+            publisherArgs.push("--allow-foreign-target");
+          }
+
+          const pubRes = spawnSync("node", publisherArgs, {
+            cwd: rootDir,
+            env: { ...env, VOICEBOX_FACTORY_PRIVATE_DIR: runDir },
+            encoding: "utf8",
+          });
+          publishExit = pubRes.status ?? 1;
+          safeSummary = parsePublisherSummary(pubRes.stdout || "");
+          console.log(`[review-trigger] Publisher summary:\n${safeSummary || "(no summary emitted)"}`);
+          if (pubRes.stderr) console.error(`[review-trigger] Publisher stderr:\n${sanitizeLogOutput(pubRes.stderr)}`);
+        } else {
+          console.error(`[review-trigger] Error: scripts/factory-triage.mjs is absent; cannot publish delta report.`);
+          publishExit = 1;
         }
-
-        const pubRes = spawnSync("node", publisherArgs, {
-          cwd: rootDir,
-          env: { ...env, VOICEBOX_FACTORY_PRIVATE_DIR: runDir },
-          encoding: "utf8",
-        });
-        publishExit = pubRes.status ?? 1;
-        safeSummary = parsePublisherSummary(pubRes.stdout || "");
-        console.log(`[review-trigger] Publisher summary:\n${safeSummary || "(no summary emitted)"}`);
-        if (pubRes.stderr) console.error(`[review-trigger] Publisher stderr:\n${sanitizeLogOutput(pubRes.stderr)}`);
-      } else {
-        console.error(`[review-trigger] Error: scripts/factory-triage.mjs is absent; cannot publish delta report.`);
+      } catch (e) {
+        console.error(`[review-trigger] Publisher invocation error: ${sanitizeLogOutput(e.message)}`);
         publishExit = 1;
       }
-    } catch (e) {
-      console.error(`[review-trigger] Publisher invocation error: ${sanitizeLogOutput(e.message)}`);
-      publishExit = 1;
     }
   } else {
     console.log(`[review-trigger] Notice: No delta report produced by station '${station}' (clean pass).`);

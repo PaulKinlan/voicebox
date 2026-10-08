@@ -287,6 +287,7 @@ test("factory-issue-commenter: fingerprint deduplication skips already-commented
   assert.equal(pass1.exitCode, 0);
   assert.equal(pass1.newFindings, 1);
   assert.ok(pass1.comment.length > 0);
+  assert.ok(pass1.comment.includes("<!-- factory-rule: triaged -->"), "Format B without rule emits fallback factory-rule: triaged");
 
   // Pass 2: Same finding re-polled with previous comment present -> exitCode 2 (no-op, ZERO duplicate comments)
   const pass2 = formatTriageComment({
@@ -436,7 +437,7 @@ test("factory-issue-poller: dry-run does not mutate cursor or attempt directory 
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("factory-review-trigger: getCheckoutRepoIdentity resolves normalized repository slug", () => {
+test("factory-review-trigger: getCheckoutRepoIdentity resolves normalized repository slug and refuses cross-target publication", () => {
   const repoId = getCheckoutRepoIdentity(ROOT);
   assert.equal(repoId, "paulkinlan/voicebox");
 });
