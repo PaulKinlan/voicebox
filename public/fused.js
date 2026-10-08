@@ -563,11 +563,13 @@ async function roomDirHandle(dir) {
   return handle;
 }
 
-async function openRoomFolder() {
+async function openRoomFolder({ onError } = {}) {
   const picker = globalThis.showDirectoryPicker;
   if (typeof picker !== "function") {
-    setReport("This browser cannot open a folder — there is no folder picker here. Dropping one still works.", "bad");
-    return;
+    const msg = "This browser cannot open a folder — there is no folder picker here. Dropping one still works.";
+    setReport(msg, "bad");
+    if (typeof onError === "function") onError(msg);
+    return null;
   }
   try {
     // 1. Ask for readwrite mode by default (readable AND writable)
@@ -575,7 +577,7 @@ async function openRoomFolder() {
     try {
       handle = await picker({ mode: "readwrite" });
     } catch (err) {
-      if (err?.name === "AbortError") return; // user cancelled picker
+      if (err?.name === "AbortError") return null; // user cancelled picker
       // Fallback to read-only if readwrite not permitted
       handle = await picker({ mode: "read" });
     }
@@ -585,7 +587,9 @@ async function openRoomFolder() {
     }
   } catch (error) {
     if (error?.name !== "AbortError") {
-      setReport(`Could not open that folder: ${error?.message ?? error}`, "bad");
+      const msg = `Could not open that folder: ${error?.message ?? error}`;
+      setReport(msg, "bad");
+      if (typeof onError === "function") onError(msg);
     }
   }
   return null;
@@ -966,7 +970,7 @@ async function initRoomFolders() {
       renderRoomFoldersBar();
       return;
     }
-    const active = (storedActive && roomFolders.get(storedActive)) || (storedActive === null ? roomFolders.values().next().value : null);
+    const active = (storedActive && roomFolders.get(storedActive)) || roomFolders.values().next().value;
     if (active) {
       roomFolder = active;
       listingDir = "";
@@ -4054,21 +4058,24 @@ on(els.extManageForm, "submit", async (event) => {
   }
 }
 
+let envsTriggerEl = null;
 on(els.envsOpen, "click", () => {
   if (!els.envs || els.envs.open) return;
+  envsTriggerEl = els.envsOpen;
   els.envs.showModal();
   els.envsOpen.setAttribute("aria-expanded", "true");
   void renderEnvironments();
 });
 on(els.emptyLink, "click", () => {
   if (!els.envs || els.envs.open) return;
+  envsTriggerEl = els.emptyLink;
   els.envs.showModal();
   els.envsOpen?.setAttribute("aria-expanded", "true");
   void renderEnvironments();
 });
 on(els.envs, "close", () => {
-  els.envsOpen.setAttribute("aria-expanded", "false");
-  els.envsOpen.focus();
+  els.envsOpen?.setAttribute("aria-expanded", "false");
+  (envsTriggerEl || els.envsOpen)?.focus?.();
 });
 
 on(els.envUseBrowserBtn, "click", async () => {
@@ -4090,7 +4097,7 @@ on(els.envUseBrowserBtn, "click", async () => {
   } catch (err) {
     if (els.envRootStatus) {
       els.envRootStatus.dataset.ok = "false";
-      els.envRootStatus.textContent = String(err?.message ?? "Error switching to browser workspace.");
+      els.envRootStatus.textContent = `Could not switch to browser storage (OPFS): ${err?.message || "unavailable"}`;
     }
   } finally {
     if (els.envUseBrowserBtn) els.envUseBrowserBtn.disabled = false;
@@ -4098,14 +4105,21 @@ on(els.envUseBrowserBtn, "click", async () => {
 });
 
 on(els.envPickFolderBtn, "click", async () => {
-  const picked = await openRoomFolder();
+  const picked = await openRoomFolder({
+    onError: (msg) => {
+      if (els.envRootStatus) {
+        els.envRootStatus.dataset.ok = "false";
+        els.envRootStatus.textContent = msg;
+      }
+    },
+  });
   if (picked) {
     if (els.envRootStatus) {
       els.envRootStatus.dataset.ok = "true";
       const writable = roomFolder?.permission === "granted" && roomFolder?.mode === "readwrite";
       els.envRootStatus.textContent = writable
         ? `Opened local folder “${picked.name}” — browser files and edits save here.`
-        : `Opened read-only folder “${picked.name}” — click 'Restore access' above to write files.`;
+        : `Opened read-only folder “${picked.name}” — close this dialog, then click 'Restore access' on the folder chip to write files.`;
     }
     renderRoot();
   }

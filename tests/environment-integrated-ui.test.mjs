@@ -151,8 +151,9 @@ test("integrated environment flow: configure machine root and browser workspace 
 
   await page.waitFor(
     () => {
-      const status = document.getElementById("env-root-status")?.textContent ?? "";
-      return status.includes("browser storage");
+      const el = document.getElementById("env-root-status");
+      const status = el?.textContent ?? "";
+      return status.includes("browser storage") && el?.dataset.ok === "true";
     },
     { label: "browser storage switch status" },
   );
@@ -296,7 +297,47 @@ test("integrated environment flow: configure machine root and browser workspace 
   });
   assert.equal(regrantStillVisible, true, "Restore access button remains visible and mode remains 'read' when write access was not granted");
 
-  // 8. Assert URL stayed on main UI throughout the entire flow (no separate page visited)
+  // 8. Negative path: folder picker failure reporting inside #envs dialog
+  // (a) showDirectoryPicker absent (e.g. Firefox/Safari)
+  await page.click("#envs-open");
+  await page.waitFor(() => document.getElementById("envs")?.hasAttribute("open"));
+  await page.evaluate(() => {
+    window.__origShowDirectoryPicker = window.showDirectoryPicker;
+    delete window.showDirectoryPicker;
+  });
+  await page.click("#env-pick-folder-btn");
+  await page.waitFor(
+    () => {
+      const el = document.getElementById("env-root-status");
+      return el?.dataset.ok === "false" && el?.textContent.includes("there is no folder picker here");
+    },
+    { label: "folder picker absence refusal visible inside #envs dialog" },
+  );
+
+  // (b) showDirectoryPicker throwing non-Abort error
+  await page.evaluate(() => {
+    window.showDirectoryPicker = () => Promise.reject(new Error("Permission denied by system"));
+  });
+  await page.click("#env-pick-folder-btn");
+  await page.waitFor(
+    () => {
+      const el = document.getElementById("env-root-status");
+      return el?.dataset.ok === "false" && el?.textContent.includes("Could not open that folder: Permission denied by system");
+    },
+    { label: "folder picker error refusal visible inside #envs dialog" },
+  );
+
+  // Restore showDirectoryPicker
+  await page.evaluate(() => {
+    if (window.__origShowDirectoryPicker) {
+      window.showDirectoryPicker = window.__origShowDirectoryPicker;
+      delete window.__origShowDirectoryPicker;
+    }
+  });
+  await page.click("#envs-close");
+  await page.waitFor(() => !document.getElementById("envs")?.hasAttribute("open"));
+
+  // 9. Assert URL stayed on main UI throughout the entire flow (no separate page visited)
   const currentPath = await page.evaluate(() => location.pathname);
   assert.equal(currentPath, "/", "user remained strictly on the main UI root without visiting separate environment.html");
 });
