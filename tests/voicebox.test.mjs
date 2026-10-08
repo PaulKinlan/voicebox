@@ -19,6 +19,7 @@ import path from "node:path";
 import { findBrowserBinary } from "../lib/browser-binaries.mjs";
 import { tmpdir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
+import { trackBrowserProcessGroup } from "./lib/cdp.mjs";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const SERVER = path.join(ROOT, "server.mjs");
@@ -282,6 +283,9 @@ test("page load with files produces zero POST /api/turn calls (no phantom turns)
     `--user-data-dir=${profile}`,
     "about:blank",
   ], { detached: true, stdio: ["ignore", "ignore", "pipe"] });
+  // The finally below covers the ordinary path; this covers a signal, which never runs a finally
+  // (voicebox-beads-selv: a SIGTERM'd runner used to leave this browser behind).
+  const untrackBrowser = trackBrowserProcessGroup(chrome.pid);
 
   try {
     let cdpPort = "";
@@ -370,6 +374,7 @@ test("page load with files produces zero POST /api/turn calls (no phantom turns)
 
     ws.close();
   } finally {
+    untrackBrowser();
     try {
       process.kill(-chrome.pid, "SIGKILL");
     } catch {

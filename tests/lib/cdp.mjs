@@ -37,6 +37,16 @@ export { findBrowserBinary }; // re-exported for the driver's callers — the li
 
 const activeBrowserPids = new Set();
 
+/**
+ * Register a browser this module did not launch - a test body that spawns its own - so the exit and signal
+ * reapers above tear it down too (voicebox-beads-selv). Returns the function that unregisters it.
+ */
+export function trackBrowserProcessGroup(pid) {
+  if (!pid) return () => {};
+  activeBrowserPids.add(pid);
+  return () => activeBrowserPids.delete(pid);
+}
+
 function killBrowserProcessGroup(pid) {
   if (!pid) return;
   try {

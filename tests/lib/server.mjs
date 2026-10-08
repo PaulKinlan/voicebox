@@ -51,6 +51,20 @@ process.on("exit", () => {
   for (const child of LIVE_CHILDREN) reap(child);
 });
 
+// A SIGNAL IS NOT "exit" (voicebox-beads-selv). Node does not emit the event above for SIGTERM, SIGINT or
+// SIGHUP, and SIGTERM is the first thing a gate's bound sends - so this file used to lose every detached
+// server it had started whenever a suite was timed out or interrupted: measured with a SIGTERM'd parent
+// whose detached child survived, reparented to PID 1. tests/lib/cdp.mjs already reaps browsers on these
+// three signals; only this file was missing them. Synchronous, like the handler above, because a signal
+// handler has no async grace, and the exit code stays conventional.
+for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+  process.once(sig, () => {
+    for (const child of LIVE_CHILDREN) reap(child);
+    const sigNum = os.constants.signals[sig] ?? 0;
+    process.exit(128 + sigNum);
+  });
+}
+
 /**
  * READY IS THE STARTUP BANNER — `voicebox on http://127.0.0.1:<port>` (voicebox-beads-4oj6).
  *
