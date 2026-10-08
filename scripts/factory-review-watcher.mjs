@@ -30,13 +30,17 @@ export const ARTIFACT_BRANCH_PATTERNS = [
 export function runReviewWatcher(args = process.argv.slice(2), { env = process.env, rootDir = ROOT, mockBeads = null } = {}) {
   let repo = env.VOICEBOX_FACTORY_REPO || "PaulKinlan/voicebox";
   let privateDir = env.VOICEBOX_FACTORY_PRIVATE_DIR || path.join(homedir(), ".voicebox", "factory-reports");
-  let dryRun = false;
+  // Default to dry-run mode so unattended 15-minute watcher ticks evaluate diffs without filing public GitHub issues.
+  // Explicit --publish or --file-issues is required to file public issues.
+  let publish = false;
   let force = false;
 
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a === "--dry-run") {
-      dryRun = true;
+    if (a === "--publish" || a === "--file-issues") {
+      publish = true;
+    } else if (a === "--dry-run") {
+      publish = false;
     } else if (a === "--force") {
       force = true;
     } else if (a === "--private-dir" && args[i + 1]) {
@@ -47,11 +51,12 @@ export function runReviewWatcher(args = process.argv.slice(2), { env = process.e
       console.log(`Usage: scripts/factory-review-watcher.sh [options]
 
 Options:
-  --dry-run              Inspect candidate branches without executing scans
-  --force                Force re-scan of candidate diffs
-  --private-dir <dir>    Directory for watcher cursor and state
-  --repo <owner/repo>    Target repository (default: PaulKinlan/voicebox)
-  --help, -h             Show this help message`);
+  --publish, --file-issues Publish findings as public GitHub issues (default: dry-run plan mode)
+  --dry-run                Inspect candidate branches without filing issues (default)
+  --force                  Force re-scan of candidate diffs
+  --private-dir <dir>      Directory for watcher cursor and state
+  --repo <owner/repo>      Target repository (default: PaulKinlan/voicebox)
+  --help, -h               Show this help message`);
       return { ok: true, exitCode: 0, help: true };
     }
   }
@@ -175,7 +180,7 @@ Options:
       "--bead", beadId,
       "--repo", repo,
       "--private-dir", path.join(privateDir, "review-scans"),
-      ...(dryRun ? ["--dry-run"] : []),
+      ...(!publish ? ["--dry-run"] : []),
       ...(force ? ["--force"] : []),
     ], {
       env,
@@ -187,7 +192,7 @@ Options:
       watcherErrors++;
     } else {
       scannedCount++;
-      if (!dryRun) {
+      if (publish) {
         cursor.processedBranches[taskKey] = {
           beadId,
           baseSha,
@@ -228,14 +233,14 @@ Options:
           "--tip", currentMainSha,
           "--repo", repo,
           "--private-dir", path.join(privateDir, "review-scans"),
-          ...(dryRun ? ["--dry-run"] : []),
+          ...(!publish ? ["--dry-run"] : []),
           ...(force ? ["--force"] : []),
         ], {
           env,
           rootDir,
         });
 
-        if (backstopRes.ok && !dryRun) {
+        if (backstopRes.ok && publish) {
           cursor.lastMainSha = currentMainSha;
           try {
             writeFileSync(cursorFile, JSON.stringify(cursor, null, 2), "utf8");
@@ -245,7 +250,7 @@ Options:
     } else if (!cursor.lastMainSha) {
       // Initialize backstop cursor to current main without scanning all history
       cursor.lastMainSha = currentMainSha;
-      if (!dryRun) {
+      if (publish) {
         try {
           writeFileSync(cursorFile, JSON.stringify(cursor, null, 2), "utf8");
         } catch {}
