@@ -157,6 +157,31 @@ function validateTool(raw) {
   if (!raw.parameters || typeof raw.parameters !== "object" || Array.isArray(raw.parameters)) {
     return { ok: false, error: "tool parameters must be an object" };
   }
+  const SUPPORTED_PROPERTY_TYPES = new Set(["string", "number", "integer", "boolean", "array", "object"]);
+  const properties = (raw.parameters.properties && typeof raw.parameters.properties === "object" && !Array.isArray(raw.parameters.properties)) ? raw.parameters.properties : {};
+
+  for (const [propName, propSchema] of Object.entries(properties)) {
+    if (!propSchema || typeof propSchema !== "object" || Array.isArray(propSchema)) {
+      return { ok: false, error: `property '${propName}' schema must be an object` };
+    }
+    if (propSchema.type !== undefined) {
+      if (typeof propSchema.type !== "string" || !SUPPORTED_PROPERTY_TYPES.has(propSchema.type)) {
+        return { ok: false, error: `unsupported parameter type '${String(propSchema.type)}' for property '${propName}'` };
+      }
+    }
+    if (propSchema.type === "array" && propSchema.items !== undefined) {
+      if (!propSchema.items || typeof propSchema.items !== "object" || Array.isArray(propSchema.items)) {
+        return { ok: false, error: `items schema for array property '${propName}' must be an object` };
+      }
+      const itemSchema = propSchema.items;
+      if (itemSchema.type !== undefined && (typeof itemSchema.type !== "string" || !SUPPORTED_PROPERTY_TYPES.has(itemSchema.type))) {
+        return { ok: false, error: `unsupported items type '${String(itemSchema.type)}' for array property '${propName}'` };
+      }
+    }
+  }
+
+  const additionalProperties = raw.parameters.additionalProperties === false ? false : undefined;
+
   return {
     ok: true,
     tool: {
@@ -164,8 +189,9 @@ function validateTool(raw) {
       description: description.slice(0, 1024),
       parameters: {
         type: "object",
-        properties: (raw.parameters.properties && typeof raw.parameters.properties === "object") ? raw.parameters.properties : {},
-        required: Array.isArray(raw.parameters.required) ? raw.parameters.required : [],
+        properties,
+        required: Array.isArray(raw.parameters.required) ? raw.parameters.required.filter(k => typeof k === "string") : [],
+        ...(additionalProperties === false ? { additionalProperties: false } : {}),
       },
     },
   };
@@ -185,8 +211,13 @@ function validateToolArgs(params, rawArgs) {
   } catch {
     return { ok: false, refused: "invalid-tool-arguments", why: "tool arguments must be serializable JSON" };
   }
-  if (jsonStr.length > BOUNDS.maxOutputBytes) {
-    return { ok: false, refused: "invalid-tool-arguments", why: `tool arguments size (${jsonStr.length} bytes) exceeds maximum allowed bound of ${BOUNDS.maxOutputBytes} bytes` };
+
+  const byteLen = typeof TextEncoder !== "undefined"
+    ? new TextEncoder().encode(jsonStr).length
+    : (typeof Buffer !== "undefined" ? Buffer.byteLength(jsonStr, "utf8") : jsonStr.length);
+
+  if (byteLen > BOUNDS.maxOutputBytes) {
+    return { ok: false, refused: "invalid-tool-arguments", why: `tool arguments size (${byteLen} bytes) exceeds maximum allowed bound of ${BOUNDS.maxOutputBytes} bytes` };
   }
 
   const p = params || { type: "object", properties: {} };
@@ -194,76 +225,112 @@ function validateToolArgs(params, rawArgs) {
   const required = Array.isArray(p.required) ? p.required : [];
 
   for (const reqKey of required) {
-    if (typeof reqKey === "string" && (!(reqKey in args) || args[reqKey] === undefined || args[reqKey] === null)) {
+    if (typeof reqKey === "string" && (!Object.hasOwn(args, reqKey) || args[reqKey] === undefined || args[reqKey] === null)) {
       return { ok: false, refused: "missing-argument", why: `missing required argument '${reqKey}'` };
     }
   }
 
   if (p.additionalProperties === false) {
     for (const key of Object.keys(args)) {
-      if (!(key in properties)) {
+      if (!Object.hasOwn(properties, key)) {
         return { ok: false, refused: "invalid-argument", why: `unrecognized argument '${key}' not permitted by tool schema` };
       }
     }
   }
 
   for (const [key, val] of Object.entries(args)) {
+    if (!Object.hasOwn(properties, key)) continue;
     const schema = properties[key];
-    if (schema && val !== undefined && val !== null) {
-      if (schema.type) {
-        switch (schema.type) {
-          case "string":
-            if (typeof val !== "string") {
-              return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be a string, got ${typeof val}` };
-            }
-            if (typeof schema.maxLength === "number" && val.length > schema.maxLength) {
-              return { ok: false, refused: "invalid-argument-length", why: `argument '${key}' length (${val.length}) exceeds maxLength ${schema.maxLength}` };
-            }
-            if (typeof schema.minLength === "number" && val.length < schema.minLength) {
-              return { ok: false, refused: "invalid-argument-length", why: `argument '${key}' length (${val.length}) below minLength ${schema.minLength}` };
-            }
-            break;
-          case "number":
-            if (typeof val !== "number" || !Number.isFinite(val)) {
-              return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be a finite number, got ${typeof val === "number" ? "NaN/Infinity" : typeof val}` };
-            }
-            if (typeof schema.maximum === "number" && val > schema.maximum) {
-              return { ok: false, refused: "invalid-argument-range", why: `argument '${key}' value ${val} exceeds maximum ${schema.maximum}` };
-            }
-            if (typeof schema.minimum === "number" && val < schema.minimum) {
-              return { ok: false, refused: "invalid-argument-range", why: `argument '${key}' value ${val} below minimum ${schema.minimum}` };
-            }
-            break;
-          case "integer":
-            if (typeof val !== "number" || !Number.isInteger(val)) {
-              return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be an integer, got ${val}` };
-            }
-            if (typeof schema.maximum === "number" && val > schema.maximum) {
-              return { ok: false, refused: "invalid-argument-range", why: `argument '${key}' value ${val} exceeds maximum ${schema.maximum}` };
-            }
-            if (typeof schema.minimum === "number" && val < schema.minimum) {
-              return { ok: false, refused: "invalid-argument-range", why: `argument '${key}' value ${val} below minimum ${schema.minimum}` };
-            }
-            break;
-          case "boolean":
-            if (typeof val !== "boolean") {
-              return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be a boolean, got ${typeof val}` };
-            }
-            break;
-          case "array":
-            if (!Array.isArray(val)) {
-              return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be an array, got ${typeof val}` };
-            }
-            break;
-          case "object":
-            if (typeof val !== "object" || val === null || Array.isArray(val)) {
-              return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be an object, got ${Array.isArray(val) ? "array" : typeof val}` };
-            }
-            break;
-        }
+    if (schema) {
+      if (val === null) {
+        return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' cannot be null` };
       }
-      if (Array.isArray(schema.enum) && !schema.enum.includes(val)) {
-        return { ok: false, refused: "invalid-argument-enum", why: `argument '${key}' value ${JSON.stringify(val)} is not one of allowed enum values` };
+      if (val !== undefined) {
+        if (schema.type) {
+          switch (schema.type) {
+            case "string":
+              if (typeof val !== "string") {
+                return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be a string, got ${typeof val}` };
+              }
+              if (typeof schema.maxLength === "number" && val.length > schema.maxLength) {
+                return { ok: false, refused: "invalid-argument-length", why: `argument '${key}' length (${val.length}) exceeds maxLength ${schema.maxLength}` };
+              }
+              if (typeof schema.minLength === "number" && val.length < schema.minLength) {
+                return { ok: false, refused: "invalid-argument-length", why: `argument '${key}' length (${val.length}) below minLength ${schema.minLength}` };
+              }
+              break;
+            case "number":
+              if (typeof val !== "number" || !Number.isFinite(val)) {
+                return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be a finite number, got ${typeof val === "number" ? "NaN/Infinity" : typeof val}` };
+              }
+              if (typeof schema.maximum === "number" && val > schema.maximum) {
+                return { ok: false, refused: "invalid-argument-range", why: `argument '${key}' value ${val} exceeds maximum ${schema.maximum}` };
+              }
+              if (typeof schema.minimum === "number" && val < schema.minimum) {
+                return { ok: false, refused: "invalid-argument-range", why: `argument '${key}' value ${val} below minimum ${schema.minimum}` };
+              }
+              break;
+            case "integer":
+              if (typeof val !== "number" || !Number.isInteger(val)) {
+                return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be an integer, got ${val}` };
+              }
+              if (typeof schema.maximum === "number" && val > schema.maximum) {
+                return { ok: false, refused: "invalid-argument-range", why: `argument '${key}' value ${val} exceeds maximum ${schema.maximum}` };
+              }
+              if (typeof schema.minimum === "number" && val < schema.minimum) {
+                return { ok: false, refused: "invalid-argument-range", why: `argument '${key}' value ${val} below minimum ${schema.minimum}` };
+              }
+              break;
+            case "boolean":
+              if (typeof val !== "boolean") {
+                return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be a boolean, got ${typeof val}` };
+              }
+              break;
+            case "array":
+              if (!Array.isArray(val)) {
+                return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be an array, got ${typeof val}` };
+              }
+              if (schema.items && typeof schema.items === "object" && !Array.isArray(schema.items)) {
+                const itemSchema = schema.items;
+                const itemType = typeof itemSchema.type === "string" ? itemSchema.type : null;
+                for (let i = 0; i < val.length; i++) {
+                  const item = val[i];
+                  if (item === null) {
+                    return { ok: false, refused: "invalid-argument-type", why: `array item at index ${i} in '${key}' cannot be null` };
+                  }
+                  if (itemType) {
+                    if (itemType === "string" && typeof item !== "string") {
+                      return { ok: false, refused: "invalid-argument-type", why: `array item at index ${i} in '${key}' must be a string, got ${typeof item}` };
+                    }
+                    if (itemType === "number" && (typeof item !== "number" || !Number.isFinite(item))) {
+                      return { ok: false, refused: "invalid-argument-type", why: `array item at index ${i} in '${key}' must be a number, got ${typeof item}` };
+                    }
+                    if (itemType === "integer" && (typeof item !== "number" || !Number.isInteger(item))) {
+                      return { ok: false, refused: "invalid-argument-type", why: `array item at index ${i} in '${key}' must be an integer, got ${typeof item}` };
+                    }
+                    if (itemType === "boolean" && typeof item !== "boolean") {
+                      return { ok: false, refused: "invalid-argument-type", why: `array item at index ${i} in '${key}' must be a boolean, got ${typeof item}` };
+                    }
+                    if (itemType === "object" && (typeof item !== "object" || Array.isArray(item))) {
+                      return { ok: false, refused: "invalid-argument-type", why: `array item at index ${i} in '${key}' must be an object, got ${Array.isArray(item) ? "array" : typeof item}` };
+                    }
+                  }
+                  if (Array.isArray(itemSchema.enum) && !itemSchema.enum.includes(item)) {
+                    return { ok: false, refused: "invalid-argument-enum", why: `array item at index ${i} in '${key}' value ${JSON.stringify(item)} is not one of allowed enum values` };
+                  }
+                }
+              }
+              break;
+            case "object":
+              if (typeof val !== "object" || Array.isArray(val)) {
+                return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be an object, got ${Array.isArray(val) ? "array" : typeof val}` };
+              }
+              break;
+          }
+        }
+        if (Array.isArray(schema.enum) && !schema.enum.includes(val)) {
+          return { ok: false, refused: "invalid-argument-enum", why: `argument '${key}' value ${JSON.stringify(val)} is not one of allowed enum values` };
+        }
       }
     }
   }
@@ -347,7 +414,19 @@ function dispatchCallTool(data) {
   }
 
   const registered = registeredTools.get(name);
-  if (registered && registered.parameters) {
+  if (!registered) {
+    postToHost({
+      type: "tool_result",
+      callId,
+      appId: currentAppId,
+      ok: false,
+      refused: "unknown-tool",
+      error: `refused: unknown-tool — tool '${name}' is not registered in this mini-app`,
+    });
+    return;
+  }
+
+  if (registered.parameters) {
     const valid = validateToolArgs(registered.parameters, args);
     if (!valid.ok) {
       postToHost({

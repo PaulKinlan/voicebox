@@ -825,3 +825,198 @@ test("browser: outer bridge validates mini-app tool arguments and refuses malfor
   assert.ok(results.malformedResult?.error?.includes("must be a finite number"));
 });
 
+test("core: validateWebMcpTool preserves additionalProperties: false and validates property schema types (Finding P1)", () => {
+  const decl = {
+    name: "strict_tool",
+    description: "Strict tool",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        count: { type: "number" },
+      },
+      additionalProperties: false,
+    },
+  };
+  const res = validateWebMcpTool(decl);
+  assert.equal(res.ok, true);
+  assert.equal(res.value?.parameters?.additionalProperties, false);
+
+  // Reject unsupported property type at registration
+  const badTypeDecl = {
+    name: "bad_tool",
+    description: "Bad tool",
+    parameters: {
+      type: "object",
+      properties: {
+        func: { type: "function" },
+      },
+    },
+  };
+  const badRes = validateWebMcpTool(badTypeDecl);
+  assert.equal(badRes.ok, false);
+  assert.equal(badRes.refused, "invalid-tool-parameters");
+
+  // Reject non-object property schema at registration
+  const nonObjPropDecl = {
+    name: "bad_prop_tool",
+    description: "Bad prop tool",
+    parameters: {
+      type: "object",
+      properties: {
+        raw: "string",
+      },
+    },
+  };
+  const nonObjRes = validateWebMcpTool(nonObjPropDecl);
+  assert.equal(nonObjRes.ok, false);
+  assert.equal(nonObjRes.refused, "invalid-tool-parameters");
+});
+
+test("core: validateMiniAppToolArgs guards against inherited prototype properties (Finding P1)", () => {
+  const tool = {
+    name: "clean_tool",
+    description: "Clean tool",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+  };
+
+  // Tool requiring 'constructor' property: passing empty object {} must fail missing-argument,
+  // not pass via Object.prototype.constructor
+  const ctorReqTool = {
+    name: "ctor_tool",
+    description: "Tool requiring constructor",
+    parameters: {
+      type: "object",
+      properties: {
+        constructor: { type: "string" },
+      },
+      required: ["constructor"],
+    },
+  };
+  const emptyArgs = {};
+  const missingCtor = validateMiniAppToolArgs(ctorReqTool, emptyArgs);
+  assert.equal(missingCtor.ok, false);
+  assert.equal(missingCtor.refused, "missing-argument");
+
+  // Inherited properties should not be treated as own properties
+  const extraArgs = Object.create({ inheritedProp: "hidden" });
+  extraArgs.query = "valid";
+  const passInherited = validateMiniAppToolArgs(tool, extraArgs);
+  assert.equal(passInherited.ok, true);
+});
+
+test("core: validateMiniAppToolArgs enforces 64KiB bound using UTF-8 byte length (Finding P1)", () => {
+  const tool = {
+    name: "multibyte_tool",
+    description: "Tool handling multibyte text",
+    parameters: {
+      type: "object",
+      properties: {
+        content: { type: "string" },
+      },
+    },
+  };
+  // '𠮷' (U+20BB7) is 2 UTF-16 code units (surrogate pair) and 4 UTF-8 bytes.
+  // 17,000 repeats -> string.length is 34,000 (< 65536 code units),
+  // but UTF-8 byte length is 68,000 bytes (> 65536 bytes).
+  const multibyteStr = "𠮷".repeat(17000);
+  assert.ok(multibyteStr.length < 65536, "string length is less than 64K characters");
+  assert.ok(Buffer.byteLength(multibyteStr, "utf8") > 65536, "UTF-8 byte length exceeds 64KiB");
+
+  const res = validateMiniAppToolArgs(tool, { content: multibyteStr });
+  assert.equal(res.ok, false);
+  assert.equal(res.refused, "invalid-tool-arguments");
+  assert.match(res.why, /exceeds maximum allowed bound/);
+});
+
+test("core: validateMiniAppToolArgs validates array items and rejects null for non-nullable types (Finding P1)", () => {
+  const tool = {
+    name: "array_tool",
+    description: "Array tool",
+    parameters: {
+      type: "object",
+      properties: {
+        tags: { type: "array", items: { type: "string" } },
+        score: { type: "number" },
+      },
+      required: ["score"],
+    },
+  };
+
+  // Null value for required or optional typed property
+  const nullVal = validateMiniAppToolArgs(tool, { score: null });
+  assert.equal(nullVal.ok, false);
+  assert.equal(nullVal.refused, "missing-argument");
+
+  const nullOptional = validateMiniAppToolArgs(tool, { score: 10, tags: null });
+  assert.equal(nullOptional.ok, false);
+  assert.equal(nullOptional.refused, "invalid-argument-type");
+
+  // Array item type mismatch
+  const badItems = validateMiniAppToolArgs(tool, { score: 10, tags: ["good", 123] });
+  assert.equal(badItems.ok, false);
+  assert.equal(badItems.refused, "invalid-argument-type");
+  assert.match(badItems.why, /array item at index 1/i);
+
+  // Valid array items
+  const goodItems = validateMiniAppToolArgs(tool, { score: 10, tags: ["alpha", "beta"] });
+  assert.equal(goodItems.ok, true);
+});
+
+test("browser: outer bridge immediately refuses unknown tool without forwarding (Finding P2)", { timeout: 25000 }, async (t) => {
+  const server = await startServer();
+  t.after(() => server.stop());
+
+  const page = await launch({ width: 1000, height: 800 });
+  t.after(() => page.close());
+
+  await page.goto(`${server.base}/`);
+
+  const result = await page.evaluate(async (base) => {
+    return new Promise((resolve, reject) => {
+      const outer = document.createElement("iframe");
+      outer.src = `${base}/mini-app-bridge.html`;
+
+      window.addEventListener("message", (e) => {
+        if (e.origin !== window.location.origin) return;
+        if (e.data?.type === "bridge_ready") {
+          const appHtml = `<script>
+            window.webMcp.registerTool({
+              name: "known_tool",
+              description: "Known tool",
+              parameters: { type: "object", properties: {} },
+              execute: async () => ({ status: "ok" })
+            });
+            window.webMcp.ready();
+          <\/script>`;
+          outer.contentWindow.postMessage({ type: "load_app", appId: "p2-unknown-test", html: appHtml }, window.location.origin);
+        } else if (e.data?.type === "tools_updated") {
+          // Call an unknown tool
+          outer.contentWindow.postMessage({
+            type: "call_tool",
+            callId: "call-unknown-tool",
+            name: "non_existent_tool",
+            args: {},
+          }, window.location.origin);
+        } else if (e.data?.type === "tool_result" && e.data?.callId === "call-unknown-tool") {
+          resolve(e.data);
+        }
+      });
+
+      document.body.appendChild(outer);
+      setTimeout(() => reject(new Error("timed out waiting for unknown tool result")), 12000);
+    });
+  }, server.base);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.refused, "unknown-tool");
+  assert.match(result.error, /is not registered/);
+});
+
