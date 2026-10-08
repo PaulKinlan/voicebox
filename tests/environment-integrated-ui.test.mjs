@@ -6,10 +6,11 @@
 //
 // ACCEPTANCE:
 // Environment configuration accessible and usable within main UI without visiting separate environments page.
+// Drives real file creation & reading in both configured machine root and browser storage workspace.
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, rmSync, existsSync, mkdirSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { startServer } from "./lib/server.mjs";
@@ -20,6 +21,27 @@ let BASE;
 let scratch;
 let testRoot;
 let page;
+
+const say = (page, said) =>
+  page.evaluate(async (text) => {
+    const until = async (label, ready, ms = 25000) => {
+      const deadline = Date.now() + ms;
+      while (!ready()) {
+        if (Date.now() > deadline) throw new Error(`timed out after ${ms}ms waiting for ${label}`);
+        await new Promise((r) => setTimeout(r, 40));
+      }
+    };
+    const input = document.getElementById("utterance");
+    input.value = text;
+    document.getElementById("text-form").requestSubmit();
+    await until(`the turn “${text}” to settle`, () =>
+      (document.querySelector("#session-log li .said")?.textContent ?? "").includes(text) &&
+      document.getElementById("send")?.textContent === "Send");
+    return {
+      line: document.querySelector("#session-log li .did")?.textContent ?? "",
+      cards: [...document.querySelectorAll("#files .file-open")].map((b) => b.dataset.file),
+    };
+  }, said);
 
 test.before(async () => {
   scratch = realpathSync(mkdtempSync(path.join(os.tmpdir(), "voicebox-env-integrated-")));
@@ -43,7 +65,7 @@ test.after(async () => {
   rmSync(scratch, { recursive: true, force: true });
 });
 
-test("integrated environment flow: configure machine root and browser workspace in main UI dialog without navigating away", { timeout: 60000 }, async () => {
+test("integrated environment flow: configure machine root and browser workspace in main UI dialog without navigating away", { timeout: 90000 }, async () => {
   await page.goto(`${BASE}/`);
 
   // Wait for main UI to load
@@ -56,12 +78,12 @@ test("integrated environment flow: configure machine root and browser workspace 
   assert.equal(initialRoot, "no folder chosen yet");
 
   // Verify in-room button to configure environment exists in empty state and is visible
-  await page.waitFor(() => document.getElementById("configure-env-btn"), {
-    label: "configure environment button in room",
+  await page.waitFor(() => document.getElementById("empty-link"), {
+    label: "configure workspace button in room",
   });
 
-  // 1. Open the environments dialog from within the main UI
-  await page.click("#configure-env-btn");
+  // 1. Open the environments dialog from within the main UI via #empty-link
+  await page.click("#empty-link");
   await page.waitFor(() => document.getElementById("envs")?.hasAttribute("open"), {
     label: "environments modal dialog to open",
   });
@@ -106,7 +128,16 @@ test("integrated environment flow: configure machine root and browser workspace 
     { label: "header chip to update to machine folder" },
   );
 
-  // 3. Re-open via header button and switch to browser workspace (OPFS)
+  // 3. Perform a real file write turn into the configured machine root
+  const machineTurn = await say(page, "create file machine-note.txt with hello-from-machine");
+  assert.ok(machineTurn.cards.includes("machine-note.txt"), "machine-note.txt appears in files list");
+  assert.equal(
+    readFileSync(path.join(testRoot, "machine-note.txt"), "utf8"),
+    "hello-from-machine",
+    "file was written directly to the declared machine directory on disk",
+  );
+
+  // 4. Re-open via header button and switch to browser workspace (OPFS)
   await page.click("#envs-open");
   await page.waitFor(() => document.getElementById("envs")?.hasAttribute("open"), {
     label: "environments modal to re-open",
@@ -136,7 +167,11 @@ test("integrated environment flow: configure machine root and browser workspace 
     { label: "header chip to update to browser storage" },
   );
 
-  // 4. Assert URL stayed on main UI throughout the entire flow (no separate page visited)
+  // 5. Perform a real file write turn into browser storage (OPFS)
+  const opfsTurn = await say(page, "create file opfs-note.txt with hello-from-opfs");
+  assert.ok(opfsTurn.cards.includes("opfs-note.txt"), "opfs-note.txt appears in browser storage files list");
+
+  // 6. Assert URL stayed on main UI throughout the entire flow (no separate page visited)
   const currentPath = await page.evaluate(() => location.pathname);
   assert.equal(currentPath, "/", "user remained strictly on the main UI root without visiting separate environment.html");
 });

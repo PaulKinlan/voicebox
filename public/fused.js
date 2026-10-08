@@ -39,7 +39,6 @@ const WANTED = {
   envAdd: "env-add", envAddLabel: "env-add-label", envAddOrigin: "env-add-origin", envAddBtn: "env-add-btn",
   envActiveRootVal: "env-active-root-val", envUseBrowserBtn: "env-use-browser-btn", envPickFolderBtn: "env-pick-folder-btn",
   envRootPathInput: "env-root-path-input", envDeclareRootBtn: "env-declare-root-btn", envRootStatus: "env-root-status",
-  configureEnvBtn: "configure-env-btn",
   // The extension surface (voicebox-beads-vwb): one source (/api/extensions + /api/extensions/catalogue),
   // five states in five sections, never mixed — a present-but-unreviewed extension is never green
   // and never described as running, and an admitted extension that failed to load is never silent
@@ -582,12 +581,14 @@ async function openRoomFolder() {
     }
     if (handle) {
       await adoptRoomFolder(handle);
+      return handle;
     }
   } catch (error) {
     if (error?.name !== "AbortError") {
       setReport(`Could not open that folder: ${error?.message ?? error}`, "bad");
     }
   }
+  return null;
 }
 
 // THE BROWSER'S OWN FOLDER, BY NAME (voicebox-beads-vnos): the button opens it and a file-creation turn
@@ -1285,7 +1286,7 @@ function renderEmptyState() {
     headline.textContent = "Open a project.";
     next.textContent = "Open a folder above to save files locally, or speak to create files in the browser scratchpad.";
     if (els.emptyAction) els.emptyAction.hidden = false;
-    if (els.emptyLink) els.emptyLink.textContent = "Open the environment page";
+    if (els.emptyLink) els.emptyLink.textContent = "Configure workspace";
     if (els.emptyWhy) { els.emptyWhy.hidden = true; }
     showSamples(true, "file");
     // The composer is never disabled by capability, only titled by it — and here the honest title is not a
@@ -1313,10 +1314,10 @@ function renderEmptyState() {
     // the system can save here" are different problems with different next steps.
     if (pageOwnsRoot) {
       headline.textContent = "The tab that holds this folder is not open.";
-      next.textContent = `${where} belongs to a browser tab, and that tab is not connected to this server right now — so a typed turn has nothing to hand the work to. Open the tab that holds this folder, or choose a folder on this machine in the environment page.`;
+      next.textContent = `${where} belongs to a browser tab, and that tab is not connected to this server right now — so a typed turn has nothing to hand the work to. Open the tab that holds this folder, or configure a folder in the environments dialog.`;
     } else {
       headline.textContent = "Turns cannot save into this folder.";
-      next.textContent = `This folder belongs to this browser tab, and turns run in the local server — so a typed turn is refused: ${where} is not somewhere the server can save. Choose a folder on this machine in the environment page, or do the work in the tab that holds this folder.`;
+      next.textContent = `This folder belongs to this browser tab, and turns run in the local server — so a typed turn is refused: ${where} is not somewhere the server can save. Configure a folder on this machine in the environments dialog, or do the work in the tab that holds this folder.`;
     }
     // The detail line: the CAUSE in plain words, with the seam's own sentence kept on the element's
     // title for anyone who asks for it. Its `why` for a page-owned root is written to explain the
@@ -1332,7 +1333,7 @@ function renderEmptyState() {
       if (activeRoot.why) els.emptyWhy.title = activeRoot.why;
     }
     if (els.emptyAction) els.emptyAction.hidden = false;
-    if (els.emptyLink) els.emptyLink.textContent = "Open the environment page";
+    if (els.emptyLink) els.emptyLink.textContent = "Configure workspace";
     showSamples(false);
     // The composer's reason is written for the person reading it, not inherited from the seam: the
     // server's `why` for a page-owned root is written to explain the router ("this placement is the
@@ -1658,6 +1659,18 @@ function renderAbout() {
 function renderRoot() {
   const kindEl = els.rootKind;
   if (!kindEl) return;
+
+  if (roomFolder) {
+    const isOpfs = roomFolder.name === SCRATCHPAD_NAME;
+    const kindPlain = isOpfs ? "browser storage" : "picked folder";
+    kindEl.textContent = `${kindPlain} · ${roomFolder.name}`;
+    kindEl.title = `${kindPlain} · ${roomFolder.name} — saved in this browser`;
+    if (els.envActiveRootVal) {
+      els.envActiveRootVal.textContent = `${kindPlain} · ${roomFolder.name}`;
+    }
+    renderAbout();
+    return;
+  }
 
   if (activeRoot === undefined) {
     kindEl.textContent = "folder not reported";
@@ -2142,7 +2155,11 @@ async function renderExtensions() {
 
 async function renderEnvironments() {
   if (els.envActiveRootVal) {
-    if (activeRoot === null) {
+    if (roomFolder) {
+      const isOpfs = roomFolder.name === SCRATCHPAD_NAME;
+      const kindPlain = isOpfs ? "browser storage" : "picked folder";
+      els.envActiveRootVal.textContent = `${kindPlain} · ${roomFolder.name}`;
+    } else if (activeRoot === null) {
       els.envActiveRootVal.textContent = "no folder chosen yet";
     } else if (activeRoot) {
       const fullPath = activeRoot.root?.path ?? activeRoot.root?.name ?? activeRoot.root?.label ?? "";
@@ -4009,7 +4026,7 @@ on(els.envsOpen, "click", () => {
   els.envsOpen.setAttribute("aria-expanded", "true");
   void renderEnvironments();
 });
-on(els.configureEnvBtn, "click", () => {
+on(els.emptyLink, "click", () => {
   if (!els.envs || els.envs.open) return;
   els.envs.showModal();
   els.envsOpen?.setAttribute("aria-expanded", "true");
@@ -4023,24 +4040,12 @@ on(els.envs, "close", () => {
 on(els.envUseBrowserBtn, "click", async () => {
   try {
     if (els.envUseBrowserBtn) els.envUseBrowserBtn.disabled = true;
-    const res = await request("/api/root", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ project: "browser-scratchpad", root: { kind: "opfs", path: "browser-scratchpad" } }),
-    });
-    if (res && res.ok) {
-      if (els.envRootStatus) {
-        els.envRootStatus.dataset.ok = "true";
-        els.envRootStatus.textContent = "Active workspace set to browser storage (OPFS).";
-      }
-      await loadRoot();
-      await load();
-    } else {
-      if (els.envRootStatus) {
-        els.envRootStatus.dataset.ok = "false";
-        els.envRootStatus.textContent = res?.why || res?.refused || "Could not switch to browser workspace.";
-      }
+    await openOpfsScratchFolder();
+    if (els.envRootStatus) {
+      els.envRootStatus.dataset.ok = "true";
+      els.envRootStatus.textContent = "Switched to browser storage (OPFS) — turns and edits save here.";
     }
+    renderRoot();
   } catch (err) {
     if (els.envRootStatus) {
       els.envRootStatus.dataset.ok = "false";
@@ -4052,10 +4057,13 @@ on(els.envUseBrowserBtn, "click", async () => {
 });
 
 on(els.envPickFolderBtn, "click", async () => {
-  await openRoomFolder();
-  if (els.envRootStatus) {
-    els.envRootStatus.dataset.ok = "true";
-    els.envRootStatus.textContent = roomFolder ? `Opened local folder “${roomFolder.name}”.` : "";
+  const picked = await openRoomFolder();
+  if (picked) {
+    if (els.envRootStatus) {
+      els.envRootStatus.dataset.ok = "true";
+      els.envRootStatus.textContent = `Opened local folder “${picked.name}”.`;
+    }
+    renderRoot();
   }
 });
 
@@ -4071,6 +4079,7 @@ on(els.envDeclareRootBtn, "click", async () => {
   const projectName = pathVal.split("/").filter(Boolean).pop() || "project";
   if (els.envDeclareRootBtn) els.envDeclareRootBtn.disabled = true;
   try {
+    if (roomFolder) closeRoomFolder();
     const res = await request("/api/root", {
       method: "POST",
       headers: { "content-type": "application/json" },
