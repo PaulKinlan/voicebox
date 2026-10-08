@@ -1,0 +1,67 @@
+{
+  "label": "after",
+  "server": {
+    "port": 45351,
+    "bootstrapUrl": "http://127.0.0.1:45351/?bootstrap=daede541c3b5dd4f5a101dc831cf8d45e61c2852db148da240f48ce86424f45a"
+  },
+  "steps": {
+    "launched": {
+      "href": "http://127.0.0.1:45351/",
+      "title": "Voicebox",
+      "wordmark": "Voicebox",
+      "bodyText": "Skip to what was made Voicebox agent: script · no folder chosen yet Harnesses Change log 2 environments · 2 reachable Ex"
+    },
+    "refreshed": {
+      "href": "http://127.0.0.1:45351/",
+      "title": "Voicebox",
+      "wordmark": "Voicebox",
+      "bodyText": "Skip to what was made Voicebox agent: script · no folder chosen yet Harnesses Change log 2 environments · 2 reachable Ex"
+    },
+    "consumedRevisit": {
+      "href": "http://127.0.0.1:45351/",
+      "title": "Voicebox",
+      "wordmark": "Voicebox",
+      "bodyText": "Skip to what was made Voicebox agent: script · no folder chosen yet Harnesses Change log 2 environments · 2 reachable Ex"
+    }
+  },
+  "http": {
+    "redemption": [
+      {
+        "saw": "redirectResponse",
+        "url": "http://127.0.0.1:45351/?bootstrap=<ticket>",
+        "status": 303,
+        "location": "/",
+        "next": "http://127.0.0.1:45351/"
+      },
+      {
+        "saw": "redirectResponse",
+        "url": "http://127.0.0.1:45351/?bootstrap=<ticket>",
+        "status": 303,
+        "location": "/",
+        "next": "http://127.0.0.1:45351/"
+      }
+    ],
+    "browserCookies": [
+      {
+        "name": "vb_session",
+        "domain": "127.0.0.1",
+        "path": "/",
+        "httpOnly": true,
+        "sameSite": "Strict"
+      }
+    ],
+    "noSessionRevisit": {
+      "status": 401,
+      "location": null,
+      "body": "401 bootstrap-ticket-refused — that bootstrap ticket is unknown or already used; one ticket opens one session. Open the bootstrap URL the server printed when it"
+    },
+    "plainRouteWithoutSession": {
+      "status": 401,
+      "location": null,
+      "body": "401 loopback-unauthenticated — this server was started with VOICEBOX_LOOPBACK_AUTH=1: open the bootstrap URL it printed at startup (one-time), or mint a fresh t"
+    }
+  },
+  "notes": [
+    "CDP does not expose Set-Cookie on Network response headers; the cookie the redemption set is proved by `http.browserCookies`, read from the browser's own jar."
+  ]
+}

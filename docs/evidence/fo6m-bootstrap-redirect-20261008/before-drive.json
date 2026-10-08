@@ -1,0 +1,71 @@
+{
+  "label": "before",
+  "server": {
+    "port": 36635,
+    "bootstrapUrl": "http://127.0.0.1:36635/?bootstrap=41b7eaaa4b55b0da38f4818d2d06f8d2811e6efffffa0497a4fabca4e0b53a89"
+  },
+  "steps": {
+    "launched": {
+      "href": "http://127.0.0.1:36635/?bootstrap=41b7eaaa4b55b0da38f4818d2d06f8d2811e6efffffa0497a4fabca4e0b53a89",
+      "title": "Voicebox",
+      "wordmark": "Voicebox",
+      "bodyText": "Skip to what was made Voicebox agent: script · no folder chosen yet Harnesses Change log 2 environments · 2 reachable Ex"
+    },
+    "refreshed": {
+      "href": "http://127.0.0.1:36635/?bootstrap=41b7eaaa4b55b0da38f4818d2d06f8d2811e6efffffa0497a4fabca4e0b53a89",
+      "title": "",
+      "wordmark": null,
+      "bodyText": "401 bootstrap-ticket-refused — that bootstrap ticket is unknown or already used; one ticket opens one session. Open the "
+    },
+    "consumedRevisit": {
+      "href": "http://127.0.0.1:36635/?bootstrap=41b7eaaa4b55b0da38f4818d2d06f8d2811e6efffffa0497a4fabca4e0b53a89",
+      "title": "",
+      "wordmark": null,
+      "bodyText": "401 bootstrap-ticket-refused — that bootstrap ticket is unknown or already used; one ticket opens one session. Open the "
+    }
+  },
+  "http": {
+    "redemption": [
+      {
+        "saw": "responseReceived",
+        "url": "http://127.0.0.1:36635/?bootstrap=<ticket>",
+        "status": 200,
+        "location": null
+      },
+      {
+        "saw": "responseReceived",
+        "url": "http://127.0.0.1:36635/?bootstrap=<ticket>",
+        "status": 401,
+        "location": null
+      },
+      {
+        "saw": "responseReceived",
+        "url": "http://127.0.0.1:36635/?bootstrap=<ticket>",
+        "status": 401,
+        "location": null
+      }
+    ],
+    "browserCookies": [
+      {
+        "name": "vb_session",
+        "domain": "127.0.0.1",
+        "path": "/",
+        "httpOnly": true,
+        "sameSite": "Strict"
+      }
+    ],
+    "noSessionRevisit": {
+      "status": 401,
+      "location": null,
+      "body": "401 bootstrap-ticket-refused — that bootstrap ticket is unknown or already used; one ticket opens one session. Open the bootstrap URL the server printed when it"
+    },
+    "plainRouteWithoutSession": {
+      "status": 401,
+      "location": null,
+      "body": "401 loopback-unauthenticated — this server was started with VOICEBOX_LOOPBACK_AUTH=1: open the bootstrap URL it printed at startup (one-time), or mint a fresh t"
+    }
+  },
+  "notes": [
+    "CDP does not expose Set-Cookie on Network response headers; the cookie the redemption set is proved by `http.browserCookies`, read from the browser's own jar."
+  ]
+}
