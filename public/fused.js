@@ -630,8 +630,14 @@ async function openOpfsScratchFolder(projectName = SCRATCHPAD_NAME, { onError, a
       }
     }
     const handle = await ensureScratchpadFolder(projectName);
-    const verb = action || (existed === false ? "Created" : "Opened");
-    setReport(`${verb} '${projectName}' in browser storage (OPFS) — browser files and edits save here.`, "good");
+    const reportText = action
+      ? `${action} '${projectName}' in browser storage (OPFS) — browser files and edits save here.`
+      : existed === true
+        ? `Opened '${projectName}' in browser storage (OPFS) — browser files and edits save here.`
+        : existed === false
+          ? `Created '${projectName}' in browser storage (OPFS) — browser files and edits save here.`
+          : `In browser storage (OPFS): '${projectName}' — browser files and edits save here.`;
+    setReport(reportText, "good");
     return handle || true;
   } catch (error) {
     const msg = error?.message ?? String(error);
