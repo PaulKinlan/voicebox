@@ -628,6 +628,74 @@ test("factory-review-watcher: discovers candidate branches matching conjunctive 
   rmSync(tmpPrivate, { recursive: true, force: true });
 });
 
+test("factory-review-watcher: auto-publication default, cursor recording, and second-tick deduplication", () => {
+  const tmpPrivate = path.join(ROOT, "tests", "fixtures", "watcher-dedupe-test");
+  rmSync(tmpPrivate, { recursive: true, force: true });
+  mkdirSync(tmpPrivate, { recursive: true });
+
+  const mockBeads = [
+    {
+      id: "voicebox-beads-test",
+      assignee: "voicebox-miniapps",
+      status: "in_progress",
+      title: "Test task on fleet/miniapps-xacp",
+      description: "Working on fleet/miniapps-xacp candidate branch",
+    },
+  ];
+
+  // 1. Initial dry-run inspection detects branch
+  const res1 = runReviewWatcher(["--dry-run", "--private-dir", tmpPrivate], {
+    rootDir: ROOT,
+    mockBeads,
+  });
+  assert.equal(res1.ok, true);
+  assert.equal(res1.scannedCount, 1);
+
+  // 2. Simulate cursor persistence for taskKey
+  const cursorFile = path.join(tmpPrivate, "review-watcher-cursor.json");
+  const tipSha = execFileSync("git", ["rev-parse", "refs/remotes/origin/fleet/miniapps-xacp"], { cwd: ROOT, encoding: "utf8" }).trim();
+  const taskKey = `fleet/miniapps-xacp@${tipSha}`;
+
+  const cursor = {
+    processedBranches: {
+      [taskKey]: {
+        beadId: "voicebox-beads-test",
+        station: "secret-scan",
+        verdict: "PASS",
+        scannedAt: new Date().toISOString(),
+      },
+    },
+    lastMainSha: "",
+  };
+  writeFileSync(cursorFile, JSON.stringify(cursor, null, 2));
+
+  // 3. Second tick on the same branch detects existing cursor entry and skips (dedupes)
+  const res2 = runReviewWatcher(["--dry-run", "--private-dir", tmpPrivate], {
+    rootDir: ROOT,
+    mockBeads,
+  });
+  assert.equal(res2.ok, true);
+  assert.equal(res2.scannedCount, 0, "second tick must deduplicate and skip already-processed branch");
+
+  // 4. Incomplete/non-existent branch negative control: does not scan or write cursor
+  const mockBeadIncomplete = [
+    {
+      id: "voicebox-beads-fail",
+      assignee: "voicebox-miniapps",
+      status: "in_progress",
+      title: "Broken task",
+      description: "Working on fleet/nonexistent-branch",
+    },
+  ];
+  const resIncomplete = runReviewWatcher(["--private-dir", tmpPrivate], {
+    rootDir: ROOT,
+    mockBeads: mockBeadIncomplete,
+  });
+  assert.equal(resIncomplete.scannedCount, 0);
+
+  rmSync(tmpPrivate, { recursive: true, force: true });
+});
+
 test("factory-nightly-publisher: enforces SAME-RUN manifest barrier, target check, and batch window", () => {
   const tmpDir = path.join(ROOT, "tests", "fixtures", "nightly-pub-tmp");
   rmSync(tmpDir, { recursive: true, force: true });
