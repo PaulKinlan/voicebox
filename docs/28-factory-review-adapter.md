@@ -204,3 +204,16 @@ scripts/factory-install-systemd.sh
 ```
 Timers remain disabled until the canonical checkout (`~/voicebox`) is populated after landing on `origin/main`.
 
+### Credential-shape ownership (voicebox-beads-7cvr, GH #20)
+
+The shapes that decide what counts as a credential-shaped string live in exactly one place:
+`lib/redact.mjs` exports `BARE_TOKEN_SHAPES` and `redactBareTokens()`, and `redactSecrets()` delegates
+to them. Before this, the public-output paths went through `redactSecrets()` (the review trigger and the
+issue commenter) while `scripts/factory-triage.mjs` kept a private copy of a wider set, so a token of a
+family that only the private copy knew about - a GitHub PAT, an npm token, a GitLab PAT, a Slack token,
+a JWT, a stripe key - survived on the public surfaces. That is the C4 duplication this section records.
+
+Adding a shape to `BARE_TOKEN_SHAPES` therefore protects every public surface at once: the published
+issue body, the issue comment and the log line. A regression test drives shape-only synthetic tokens
+(never a real credential value) through those surfaces and is written to fail on the tree before the
+change and pass after it, so it cannot pass for the wrong reason.

@@ -286,7 +286,11 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
  */
 export function sanitizeFindingText(text = "") {
   let sanitized = redactSecrets(String(text));
-  sanitized = sanitized.replace(/(?:gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{22,})/g, "[REDACTED]");
+  // lib/redact.mjs owns the token shapes now, so there is no private pattern to keep here: its
+  // github-pat shape is exactly the union of what this line used to match (gh[pousr]_... and
+  // github_pat_...) and it runs first. These surfaces have always shown `[REDACTED]`, so the marker
+  // is normalised rather than pinned as a second copy of the shape (voicebox-beads-7cvr, GH #20).
+  sanitized = sanitized.replace(/\[redacted\]/gi, "[REDACTED]");
   return sanitized;
 }
 
