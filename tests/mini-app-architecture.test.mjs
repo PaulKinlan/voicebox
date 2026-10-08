@@ -1306,6 +1306,67 @@ test("browser: bridge rejects unsupported schema keywords at registration time (
 
   assert.equal(Array.isArray(badStringEnumResult), true);
   assert.equal(badStringEnumResult.length, 0, "tool with unsatisfiable string enum must be rejected at registration");
+
+  // Also test bridge rejecting __proto__ in properties and required (both top-level and nested)
+  const bridgeProtoCheck = await page.evaluate(async (base) => {
+    const results = {};
+    const testCases = [
+      { id: "root-prop", propName: "__proto__", inProps: true, inReq: false, nested: false },
+      { id: "root-req", propName: "safe", inProps: false, inReq: true, nested: false },
+      { id: "nested-prop", propName: "__proto__", inProps: true, inReq: false, nested: true },
+      { id: "nested-req", propName: "safe", inProps: false, inReq: true, nested: true },
+      { id: "valid-control", propName: "safe", inProps: false, inReq: false, nested: false, valid: true },
+    ];
+
+    for (const tc of testCases) {
+      const p = await new Promise((resolve) => {
+        const outer = document.createElement("iframe");
+        outer.src = `${base}/mini-app-bridge.html`;
+        window.addEventListener("message", function onMsg(e) {
+          if (e.origin !== window.location.origin) return;
+          if (e.data?.type === "bridge_ready") {
+            let params;
+            if (tc.valid) {
+              params = { type: "object", properties: { safe: { type: "string" } }, required: ["safe"] };
+            } else if (!tc.nested && tc.inProps) {
+              params = { type: "object", properties: { ["__proto__"]: { type: "string" } } };
+            } else if (!tc.nested && tc.inReq) {
+              params = { type: "object", properties: { safe: { type: "string" } }, required: ["__proto__"] };
+            } else if (tc.nested && tc.inProps) {
+              params = { type: "object", properties: { sub: { type: "object", properties: { ["__proto__"]: { type: "string" } } } } };
+            } else if (tc.nested && tc.inReq) {
+              params = { type: "object", properties: { sub: { type: "object", properties: { safe: { type: "string" } }, required: ["__proto__"] } } };
+            }
+
+            const appHtml = `<script>
+              window.webMcp.registerTool({
+                name: "test_proto_tool",
+                description: "Test tool",
+                parameters: ${JSON.stringify(params)},
+                execute: async () => ({ status: "ok" })
+              });
+              window.webMcp.ready();
+            <\/script>`;
+            outer.contentWindow.postMessage({ type: "load_app", appId: "test-" + tc.id, html: appHtml }, window.location.origin);
+          } else if (e.data?.type === "app_ready") {
+            window.removeEventListener("message", onMsg);
+            document.body.removeChild(outer);
+            resolve(e.data.tools || []);
+          }
+        });
+        document.body.appendChild(outer);
+        setTimeout(() => resolve([]), 5000);
+      });
+      results[tc.id] = p.length;
+    }
+    return results;
+  }, server.base);
+
+  assert.equal(bridgeProtoCheck["root-prop"], 0, "bridge must reject root properties.__proto__");
+  assert.equal(bridgeProtoCheck["root-req"], 0, "bridge must reject root required: ['__proto__']");
+  assert.equal(bridgeProtoCheck["nested-prop"], 0, "bridge must reject nested properties.__proto__");
+  assert.equal(bridgeProtoCheck["nested-req"], 0, "bridge must reject nested required: ['__proto__']");
+  assert.equal(bridgeProtoCheck["valid-control"], 1, "bridge must admit valid control tool");
 });
 
 test("core: validateWebMcpTool rejects contradictory and malformed constraint schemas (Finding P1)", () => {
@@ -1659,26 +1720,39 @@ test("core: validateWebMcpTool rejects contradictory and malformed constraint sc
   assert.equal(deepRes17.refused, "invalid-tool-parameters");
   assert.match(deepRes17.why, /schema nesting exceeds maximum depth of 16/);
 
-  // 13. Schema node count limit: exact 512 passes, 513 rejected with invalid-tool-parameters
-  const props512 = {};
-  for (let i = 0; i < 512; i++) props512[`p${i}`] = { type: "string" };
+  // 13. Schema node count limit: exact 512 total nodes (root + 511 properties) passes, 513 rejected with invalid-tool-parameters
+  const props511 = {};
+  for (let i = 0; i < 511; i++) props511[`p${i}`] = { type: "string" };
   const nodes512Res = validateWebMcpTool({
     name: "nodes512",
     description: "Nodes 512",
-    parameters: { type: "object", properties: props512 },
+    parameters: { type: "object", properties: props511 },
   });
-  assert.equal(nodes512Res.ok, true, "schema nodes 512 must pass");
+  assert.equal(nodes512Res.ok, true, "schema nodes 512 must pass (root + 511 properties)");
 
-  const props513 = {};
-  for (let i = 0; i < 513; i++) props513[`p${i}`] = { type: "string" };
+  const props512 = {};
+  for (let i = 0; i < 512; i++) props512[`p${i}`] = { type: "string" };
   const nodes513Res = validateWebMcpTool({
     name: "nodes513",
     description: "Nodes 513",
-    parameters: { type: "object", properties: props513 },
+    parameters: { type: "object", properties: props512 },
   });
   assert.equal(nodes513Res.ok, false);
   assert.equal(nodes513Res.refused, "invalid-tool-parameters");
   assert.match(nodes513Res.why, /schema exceeds maximum node count of 512/);
+
+  // Array items schema node counting: root (1) + 510 string properties (510) + 1 array with items (2 nodes) = 513 nodes -> FAIL
+  const propsItems513 = {};
+  for (let i = 0; i < 510; i++) propsItems513[`p${i}`] = { type: "string" };
+  propsItems513.tags = { type: "array", items: { type: "string" } };
+  const itemsNodes513Res = validateWebMcpTool({
+    name: "items_nodes513",
+    description: "Items nodes 513",
+    parameters: { type: "object", properties: propsItems513 },
+  });
+  assert.equal(itemsNodes513Res.ok, false);
+  assert.equal(itemsNodes513Res.refused, "invalid-tool-parameters");
+  assert.match(itemsNodes513Res.why, /schema exceeds maximum node count of 512/);
 
   // Positive control: valid string enum satisfying minLength and maxLength
   const validStringEnumTool = {

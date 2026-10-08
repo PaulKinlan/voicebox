@@ -302,6 +302,10 @@ function validateSinglePropertySchema(propName, raw, path = "", depth = 1, count
   }
 
   if (raw.type === "array" && raw.items !== undefined) {
+    counter.nodes++;
+    if (counter.nodes > BOUNDS.maxSchemaNodes) {
+      return `schema exceeds maximum node count of ${BOUNDS.maxSchemaNodes}`;
+    }
     if (!raw.items || typeof raw.items !== "object" || Array.isArray(raw.items)) {
       return `items schema for array property '${path}${propName}' must be an object`;
     }
@@ -411,7 +415,7 @@ function validateTool(raw) {
 
   const properties = (p.properties && typeof p.properties === "object" && !Array.isArray(p.properties)) ? p.properties : {};
 
-  const counter = { nodes: 0 };
+  const counter = { nodes: 1 }; // Root parameters schema is node 1
   for (const [propName, propSchema] of Object.entries(properties)) {
     const err = validateSinglePropertySchema(propName, propSchema, "", 1, counter);
     if (err) {

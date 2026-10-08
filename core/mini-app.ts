@@ -229,6 +229,10 @@ function validateSinglePropertySchema(
   }
 
   if (s.type === "array" && s.items !== undefined) {
+    counter.nodes++;
+    if (counter.nodes > MINI_APP_BOUNDS.maxSchemaNodes) {
+      return `schema exceeds maximum node count of ${MINI_APP_BOUNDS.maxSchemaNodes}`;
+    }
     if (!s.items || typeof s.items !== "object" || Array.isArray(s.items)) {
       return `items schema for array property '${path}${propName}' must be an object`;
     }
@@ -348,7 +352,7 @@ export function validateWebMcpTool(raw: unknown): ValidationResult<WebMcpToolDec
     ? (p.properties as Record<string, WebMcpParameterSchema>)
     : {};
 
-  const counter = { nodes: 0 };
+  const counter = { nodes: 1 }; // Root parameters schema is node 1
   for (const [propName, propSchema] of Object.entries(properties)) {
     const err = validateSinglePropertySchema(propName, propSchema, "", 1, counter);
     if (err) {
