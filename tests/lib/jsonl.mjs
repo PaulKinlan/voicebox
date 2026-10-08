@@ -16,7 +16,7 @@
 // not (a write in flight). The product's own audit reader takes the same view of the same file —
 // `parseEntry` in core/audit.ts: "a torn last line from a killed append is not a fatal read" — and this
 // is the test-side equivalent, tightened to still refuse a torn line followed by a complete one.
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 
 /** The records of a JSONL document: its complete lines, plus a final record that has no newline yet. */
 export function readJsonl(text) {
@@ -35,5 +35,13 @@ export function readJsonl(text) {
 
 /** The same, for the file itself: absent is empty, and a file being written is read to its last complete line. */
 export function readJsonlFile(file) {
-  return existsSync(file) ? readJsonl(readFileSync(file, "utf8")) : [];
+  try {
+    return readJsonl(readFileSync(file, "utf8"));
+  } catch (err) {
+    // Absent is empty — either the file is not there yet, or a teardown removed it between this call and
+    // the open. Only those two mean "no records": anything else (EACCES, EMFILE, EISDIR) is a real
+    // problem with the log and is thrown by name, the same rule the CDP cleanup fix follows.
+    if (err?.code === "ENOENT" || err?.code === "ENOTDIR") return [];
+    throw err;
+  }
 }

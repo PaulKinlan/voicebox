@@ -60,6 +60,9 @@ test("jsonl: the file reader treats absent as empty and a being-written file as 
     // the same file mid-append, caught inside a record: the prefix is still readable
     writeFileSync(file, '{"a":1}\n{"a"', "utf8");
     assert.deepEqual(readJsonlFile(file), [{ a: 1 }]);
+    // A REAL read error is not "no records": a directory is not an empty log, so the reader says so
+    // instead of silencing it (the ENOENT/ENOTDIR-only rule the CDP cleanup fix also follows).
+    assert.throws(() => readJsonlFile(dir), (err) => err.code === "EISDIR" || err.code === "EACCES");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
