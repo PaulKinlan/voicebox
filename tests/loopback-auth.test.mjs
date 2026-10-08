@@ -8,7 +8,8 @@
 // THE FIX lands docs/13 §4 Option A (the Jupyter/code-server pattern) as an OPT-IN gate:
 // VOICEBOX_LOOPBACK_AUTH=1 mints a per-process session secret and a one-time bootstrap ticket,
 // prints the ticket's URL at startup, and redeems it once — on the page route — into an
-// HttpOnly SameSite=Strict cookie. With the gate on, the page and the APIs answer only with
+// HttpOnly SameSite=Strict cookie, answering 303 to the plain route so the ticket leaves the
+// address bar (voicebox-beads-fo6m). With the gate on, the page and the APIs answer only with
 // that cookie (health, the bootstrap door itself, and holders of the host token excepted), and
 // /channel + /live require Origin AND cookie for the local-page entitlement. A process that
 // cannot read the ticket output falls to the bearer-hello path and is refused there, by name.
@@ -216,17 +217,31 @@ test("gate ON: /api/health stays open — supervisors and spawn-and-poll suites 
   }
 });
 
-test("gate ON: the printed bootstrap URL redeems ONCE into the session cookie", async () => {
+test("gate ON: the printed bootstrap URL redeems ONCE, and hands the address bar back the plain route (fo6m)", async () => {
   const server = await scratchServer(GATE_ON);
   try {
     const match = await waitFor(() => server.stdout().match(new RegExp(`bootstrap  http://127\\.0\\.0\\.1:${server.port}/\\?bootstrap=([0-9a-f]{64})`)));
     assert.ok(match, `the server must print its bootstrap URL at startup; stdout was:\n${server.stdout()}`);
     const printedUrl = match[0].replace(/^bootstrap  /, "");
 
+    // THE FIRST LAUNCH (voicebox-beads-fo6m): redemption may not LEAVE the ticket in the address
+    // bar. It answers 303 to the same route with the parameter dropped, carrying the Set-Cookie, so
+    // the browser stores the cookie and re-requests the plain route in one hop — and the refresh
+    // everyone performs lands on an AUTHENTICATED page instead of re-presenting a consumed ticket
+    // and reading `401 bootstrap-ticket-refused` as "the server is broken".
     const first = await fetch(printedUrl, { redirect: "manual" });
-    assert.equal(first.status, 200, "the first redemption must serve the page, not a redirect");
-    assert.match(first.headers.get("content-type") ?? "", /text\/html/);
+    assert.equal(first.status, 303, "the first redemption must redirect to the plain route, not serve the page at the ticket URL");
+    assert.equal(first.headers.get("location"), "/", "what is left in the address bar must be the plain route");
     const cookie = sessionCookieFrom(first);
+
+    // The hop the browser takes: the redirect target, requested WITH the cookie the redirect set.
+    const landed = await fetch(`${server.base}${first.headers.get("location")}`, { headers: { cookie } });
+    assert.equal(landed.status, 200, "the redirect must land on the page");
+    assert.match(landed.headers.get("content-type") ?? "", /text\/html/);
+
+    // The refresh of THAT address — no bootstrap parameter anywhere — keeps working.
+    const refreshed = await fetch(`${server.base}/`, { headers: { cookie } });
+    assert.equal(refreshed.status, 200, "refreshing the plain route must keep serving the page");
 
     const second = await fetch(printedUrl, { redirect: "manual" });
     assert.equal(second.status, 401, "a consumed ticket must not redeem again — one ticket opens one session");
@@ -242,6 +257,44 @@ test("gate ON: the printed bootstrap URL redeems ONCE into the session cookie", 
     assert.equal(authedPage.status, 200);
     const authedApi = await fetch(`${server.base}/api/environments`, { headers: { cookie } });
     assert.equal(authedApi.status, 200);
+  } finally {
+    await server.stop();
+    server.cleanup();
+  }
+});
+
+test("gate ON: an already-authenticated browser revisiting the consumed ticket URL is redirected, not refused (fo6m)", async () => {
+  const server = await scratchServer(GATE_ON);
+  try {
+    const match = await waitFor(() => server.stdout().match(/bootstrap=([0-9a-f]{64})/));
+    const url = `http://127.0.0.1:${server.port}/?bootstrap=${match[1]}`;
+
+    const first = await fetch(url, { redirect: "manual" });
+    const cookie = sessionCookieFrom(first);
+
+    // The SAME url again, carrying the cookie the first visit minted — a bookmark, browser history,
+    // the back button. There is no authorisation question left, so this is a redirect to the plain
+    // route rather than the 401 a person reads as a broken server.
+    const revisit = await fetch(url, { redirect: "manual", headers: { cookie } });
+    assert.equal(revisit.status, 303, "an authenticated revisit of a consumed ticket URL must redirect, not refuse");
+    assert.equal(revisit.headers.get("location"), "/");
+
+    // Without that session the named refusal stays: a stale ticket must not silently become a sign-in.
+    const noCookie = await fetch(url, { redirect: "manual" });
+    assert.equal(noCookie.status, 401, "without a session, a consumed ticket still says why it was refused");
+  } finally {
+    await server.stop();
+    server.cleanup();
+  }
+});
+
+test("gate ON: redemption drops only the ticket — other query parameters survive the redirect (fo6m)", async () => {
+  const server = await scratchServer(GATE_ON);
+  try {
+    const match = await waitFor(() => server.stdout().match(/bootstrap=([0-9a-f]{64})/));
+    const res = await fetch(`${server.base}/?bootstrap=${match[1]}&room=atlas`, { redirect: "manual" });
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.get("location"), "/?room=atlas", "the launch's other parameters are not the ticket's to discard");
   } finally {
     await server.stop();
     server.cleanup();
@@ -264,7 +317,7 @@ test("gate ON: POST /api/bootstrap with the host token mints a fresh single-use 
     assert.match(body.url, new RegExp(`^http://127\\.0\\.0\\.1:${server.port}/\\?bootstrap=[0-9a-f]{64}$`));
 
     const redeemed = await fetch(body.url, { redirect: "manual" });
-    assert.equal(redeemed.status, 200);
+    assert.equal(redeemed.status, 303, "the minted ticket redirects to the plain route like the startup one");
     sessionCookieFrom(redeemed); // shape-asserted in the helper
 
     const again = await fetch(body.url, { redirect: "manual" });

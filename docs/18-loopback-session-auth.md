@@ -35,9 +35,9 @@ VOICEBOX_LOOPBACK_AUTH=1 npm start
    ```
    bootstrap  http://127.0.0.1:8787/?bootstrap=<64-hex-ticket>
    ```
-3. **Ticket Redemption (`GET /?bootstrap=<ticket>`)**:
-   - Opening the bootstrap URL validates and consumes the single-use ticket, then sets `vb_session=<secret>; HttpOnly; SameSite=Strict; Path=/` on the HTML response.
-   - Reusing an already consumed or invalid ticket returns HTTP `401` (`bootstrap-ticket-refused`). Subsequent page reloads authenticate automatically via the `vb_session` cookie.
+3. **Ticket Redemption (`GET /?bootstrap=<ticket>`)** (voicebox-beads-fo6m):
+   - Opening the bootstrap URL validates and consumes the single-use ticket, sets `vb_session=<secret>; HttpOnly; SameSite=Strict; Path=/`, **and answers HTTP `303`** whose `Location` is the same route with the ticket removed (`/`, or `/?room=…` when the launch carried other parameters). The browser stores the cookie from the redirect and re-requests the plain route, so **the ticket never stays in the address bar** and the first refresh — the thing everyone does — is authenticated instead of re-presenting a consumed ticket.
+   - Reusing an already consumed or invalid ticket **without a session cookie** returns HTTP `401` (`bootstrap-ticket-refused`) with the remedy in the body. Reusing one **with** a valid session — a bookmark, browser history, the back button — answers the same `303` to the plain route: an authenticated browser has no authorisation question left, and a refusal there reads as a broken server. Subsequent page reloads authenticate automatically via the `vb_session` cookie.
 4. **HTTP & API Wall**:
    - Every HTTP request lacking a valid `vb_session` cookie or `x-voicebox-host-token` header is refused before reaching any route with HTTP `401` (`loopback-unauthenticated`).
    - Credential comparison has one owner, `lib/timing-safe.mjs` (`timingSafeStringEqual`): equal lengths first, then `crypto.timingSafeEqual`, because the primitive throws on a length mismatch and a bad token must be a refusal rather than a crashed request. The `vb_session` cookie check here, the host token in `lib/extensions.mjs` (`hostTokenOk`), and both in-room session-token comparisons in `server.mjs` (extension authority and `POST /api/root`) now answer with that one implementation instead of four inline ones (voicebox-beads-sseh / GH #26). The gate still reveals the expected length, and no timing exploit is claimed for this local posture — this is hardening.
@@ -59,7 +59,7 @@ VOICEBOX_LOOPBACK_AUTH=1 npm start
 
 ## 2. Vite Dev Server Integration (`vite.config.js`)
 
-When running `npm run dev` (`localhost:5173` fronting `127.0.0.1:8787`), the `loopback-bootstrap-proxy` plugin in `vite.config.js` intercepts requests carrying `?bootstrap=` and forwards them directly to `server.mjs`, returning the `Set-Cookie` header to the browser on the `:5173` origin so subsequent proxied API and WebSocket requests carry `vb_session`.
+When running `npm run dev` (`localhost:5173` fronting `127.0.0.1:8787`), the `loopback-bootstrap-proxy` plugin in `vite.config.js` intercepts requests carrying `?bootstrap=` and forwards them directly to `server.mjs`, returning the upstream status (including the redemption's `303` and its relative `Location`) and the `Set-Cookie` header to the browser on the `:5173` origin so subsequent proxied API and WebSocket requests carry `vb_session`. The redirect target is deliberately relative: the browser follows it back to the dev front it came in on — and stayed on the origin that now holds the cookie — instead of being handed to the `127.0.0.1:8787` API origin.
 
 ---
 
@@ -71,7 +71,7 @@ When running `npm run dev` (`localhost:5173` fronting `127.0.0.1:8787`), the `lo
 | Local script with forged `Origin` (no ticket/token) | Allowed on loopback | **Refused** (`401` / WS `1008`) |
 | Local CLI with `.host-token` (`x-voicebox-host-token`) | Allowed | Allowed |
 | Paired remote environment (`vbx_...` bearer) | Allowed | Allowed |
-| Browser launch workflow | Open `http://localhost:8787` | Open printed `?bootstrap=` URL once |
+| Browser launch workflow | Open `http://localhost:8787` | Open printed `?bootstrap=` URL once (redemption redirects to the plain route) |
 
 ### Verification Suite
 ```bash
