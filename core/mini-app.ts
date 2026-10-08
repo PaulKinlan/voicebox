@@ -66,8 +66,104 @@ const refusal = (refused: string, why: string): { ok: false; refused: string; wh
   why,
 });
 
+const ALLOWED_TOP_PARAM_KEYS = new Set(["type", "properties", "required", "additionalProperties"]);
+const ALLOWED_STRING_KEYS = new Set(["type", "description", "enum", "maxLength", "minLength"]);
+const ALLOWED_NUMBER_KEYS = new Set(["type", "description", "enum", "maximum", "minimum"]);
+const ALLOWED_BOOLEAN_KEYS = new Set(["type", "description"]);
+const ALLOWED_ARRAY_KEYS = new Set(["type", "description", "items"]);
+const ALLOWED_OBJECT_KEYS = new Set(["type", "description", "properties", "required", "additionalProperties"]);
+const ALLOWED_ITEMS_KEYS = new Set(["type", "description", "enum"]);
+const SUPPORTED_PRIMITIVE_ITEM_TYPES = new Set(["string", "number", "integer", "boolean"]);
+
+function validateSinglePropertySchema(propName: string, raw: unknown, path = ""): string | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return `property '${path}${propName}' schema must be an object`;
+  }
+  const s = raw as Record<string, unknown>;
+  if (typeof s.type !== "string") {
+    return `property '${path}${propName}' must declare a string 'type'`;
+  }
+
+  let allowedKeys: Set<string>;
+  switch (s.type) {
+    case "string":
+      allowedKeys = ALLOWED_STRING_KEYS;
+      break;
+    case "number":
+    case "integer":
+      allowedKeys = ALLOWED_NUMBER_KEYS;
+      break;
+    case "boolean":
+      allowedKeys = ALLOWED_BOOLEAN_KEYS;
+      break;
+    case "array":
+      allowedKeys = ALLOWED_ARRAY_KEYS;
+      break;
+    case "object":
+      allowedKeys = ALLOWED_OBJECT_KEYS;
+      break;
+    default:
+      return `unsupported parameter type '${s.type}' for property '${path}${propName}'`;
+  }
+
+  for (const k of Object.keys(s)) {
+    if (!allowedKeys.has(k)) {
+      return `unsupported schema keyword '${k}' on property '${path}${propName}' of type '${s.type}'`;
+    }
+  }
+
+  if (s.type === "string" && s.enum !== undefined) {
+    if (!Array.isArray(s.enum) || !s.enum.every((item) => typeof item === "string")) {
+      return `enum for string property '${path}${propName}' must be an array of strings`;
+    }
+  }
+  if ((s.type === "number" || s.type === "integer") && s.enum !== undefined) {
+    if (!Array.isArray(s.enum) || !s.enum.every((item) => typeof item === "number" && Number.isFinite(item))) {
+      return `enum for numeric property '${path}${propName}' must be an array of numbers`;
+    }
+  }
+
+  if (s.type === "array" && s.items !== undefined) {
+    if (!s.items || typeof s.items !== "object" || Array.isArray(s.items)) {
+      return `items schema for array property '${path}${propName}' must be an object`;
+    }
+    const itemSchema = s.items as Record<string, unknown>;
+    for (const k of Object.keys(itemSchema)) {
+      if (!ALLOWED_ITEMS_KEYS.has(k)) {
+        return `unsupported schema keyword '${k}' in items schema of array property '${path}${propName}'`;
+      }
+    }
+    if (typeof itemSchema.type !== "string" || !SUPPORTED_PRIMITIVE_ITEM_TYPES.has(itemSchema.type)) {
+      return `unsupported items type '${String(itemSchema.type)}' for array property '${path}${propName}' (only primitive types string, number, integer, boolean supported)`;
+    }
+    if (itemSchema.enum !== undefined) {
+      if (!Array.isArray(itemSchema.enum)) {
+        return `enum in items schema of array property '${path}${propName}' must be an array`;
+      }
+    }
+  }
+
+  if (s.type === "object" && s.properties !== undefined) {
+    if (!s.properties || typeof s.properties !== "object" || Array.isArray(s.properties)) {
+      return `properties for object property '${path}${propName}' must be an object`;
+    }
+    if (s.additionalProperties !== undefined && typeof s.additionalProperties !== "boolean") {
+      return `additionalProperties for object property '${path}${propName}' must be a boolean`;
+    }
+    if (s.required !== undefined && (!Array.isArray(s.required) || !s.required.every((r) => typeof r === "string"))) {
+      return `required for object property '${path}${propName}' must be an array of strings`;
+    }
+    for (const [nestedName, nestedSchema] of Object.entries(s.properties as Record<string, unknown>)) {
+      const err = validateSinglePropertySchema(nestedName, nestedSchema, `${path}${propName}.`);
+      if (err) return err;
+    }
+  }
+
+  return null;
+}
+
 /**
- * Validate a Web MCP tool declaration submitted by a mini-app.
+ * Validate a Web MCP tool declaration submitted by a mini-app against the strictly supported schema subset.
  */
 export function validateWebMcpTool(raw: unknown): ValidationResult<WebMcpToolDeclaration> {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -87,31 +183,26 @@ export function validateWebMcpTool(raw: unknown): ValidationResult<WebMcpToolDec
     return refusal("invalid-tool-parameters", "tool parameters must be a JSON schema object with type: 'object'");
   }
   const p = rawParams as Record<string, unknown>;
+  for (const k of Object.keys(p)) {
+    if (!ALLOWED_TOP_PARAM_KEYS.has(k)) {
+      return refusal("invalid-tool-parameters", `unsupported top-level schema keyword '${k}' in tool parameters`);
+    }
+  }
   if (p.type !== "object") {
     return refusal("invalid-tool-parameters", "tool parameters schema must specify type: 'object'");
   }
-  const SUPPORTED_PROPERTY_TYPES = new Set(["string", "number", "integer", "boolean", "array", "object"]);
+  if (p.additionalProperties !== undefined && typeof p.additionalProperties !== "boolean") {
+    return refusal("invalid-tool-parameters", "additionalProperties must be a boolean if specified");
+  }
+
   const properties = (p.properties && typeof p.properties === "object" && !Array.isArray(p.properties))
     ? (p.properties as Record<string, WebMcpParameterSchema>)
     : {};
 
   for (const [propName, propSchema] of Object.entries(properties)) {
-    if (!propSchema || typeof propSchema !== "object" || Array.isArray(propSchema)) {
-      return refusal("invalid-tool-parameters", `property '${propName}' schema must be an object`);
-    }
-    if (propSchema.type !== undefined) {
-      if (typeof propSchema.type !== "string" || !SUPPORTED_PROPERTY_TYPES.has(propSchema.type)) {
-        return refusal("invalid-tool-parameters", `unsupported parameter type '${String(propSchema.type)}' for property '${propName}'`);
-      }
-    }
-    if (propSchema.type === "array" && propSchema.items !== undefined) {
-      if (!propSchema.items || typeof propSchema.items !== "object" || Array.isArray(propSchema.items)) {
-        return refusal("invalid-tool-parameters", `items schema for array property '${propName}' must be an object`);
-      }
-      const itemSchema = propSchema.items as Record<string, unknown>;
-      if (itemSchema.type !== undefined && (typeof itemSchema.type !== "string" || !SUPPORTED_PROPERTY_TYPES.has(itemSchema.type))) {
-        return refusal("invalid-tool-parameters", `unsupported items type '${String(itemSchema.type)}' for array property '${propName}'`);
-      }
+    const err = validateSinglePropertySchema(propName, propSchema);
+    if (err) {
+      return refusal("invalid-tool-parameters", err);
     }
   }
 
@@ -286,6 +377,22 @@ export function validateMiniAppToolArgs(
             case "object":
               if (typeof val !== "object" || Array.isArray(val)) {
                 return refusal("invalid-argument-type", `argument '${key}' must be an object, got ${Array.isArray(val) ? "array" : typeof val}`);
+              }
+              if (schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)) {
+                const nestedTool: WebMcpToolDeclaration = {
+                  name: `${tool.name}.${key}`,
+                  description: "",
+                  parameters: {
+                    type: "object",
+                    properties: schema.properties as Record<string, WebMcpParameterSchema>,
+                    ...(Array.isArray(schema.required) ? { required: schema.required as string[] } : {}),
+                    ...(schema.additionalProperties === false ? { additionalProperties: false } : {}),
+                  },
+                };
+                const nestedRes = validateMiniAppToolArgs(nestedTool, val);
+                if (!nestedRes.ok) {
+                  return refusal(nestedRes.refused, `in argument '${key}': ${nestedRes.why}`);
+                }
               }
               break;
           }

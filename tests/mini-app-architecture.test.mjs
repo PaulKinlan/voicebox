@@ -1020,3 +1020,349 @@ test("browser: outer bridge immediately refuses unknown tool without forwarding 
   assert.match(result.error, /is not registered/);
 });
 
+test("core: validateWebMcpTool rejects unsupported schema keywords recursively (Finding P1)", () => {
+  // Reject string pattern
+  const patternTool = {
+    name: "pattern_tool",
+    description: "Pattern tool",
+    parameters: {
+      type: "object",
+      properties: {
+        code: { type: "string", pattern: "^[A-Z]+$" },
+      },
+    },
+  };
+  const patternRes = validateWebMcpTool(patternTool);
+  assert.equal(patternRes.ok, false);
+  assert.equal(patternRes.refused, "invalid-tool-parameters");
+  assert.match(patternRes.why, /unsupported schema keyword 'pattern'/);
+
+  // Reject nested items.minLength on array
+  const itemsMinLengthTool = {
+    name: "array_items_minlen",
+    description: "Array items with minLength",
+    parameters: {
+      type: "object",
+      properties: {
+        names: { type: "array", items: { type: "string", minLength: 3 } },
+      },
+    },
+  };
+  const itemsMinLenRes = validateWebMcpTool(itemsMinLengthTool);
+  assert.equal(itemsMinLenRes.ok, false);
+  assert.equal(itemsMinLenRes.refused, "invalid-tool-parameters");
+  assert.match(itemsMinLenRes.why, /unsupported schema keyword 'minLength' in items schema/);
+
+  // Reject nested items.type: array or object (non-primitive items)
+  const nestedArrayItemsTool = {
+    name: "matrix_tool",
+    description: "Matrix tool",
+    parameters: {
+      type: "object",
+      properties: {
+        matrix: { type: "array", items: { type: "array" } },
+      },
+    },
+  };
+  const nestedArrayRes = validateWebMcpTool(nestedArrayItemsTool);
+  assert.equal(nestedArrayRes.ok, false);
+  assert.equal(nestedArrayRes.refused, "invalid-tool-parameters");
+  assert.match(nestedArrayRes.why, /unsupported items type 'array'/);
+
+  // Reject top-level unknown keyword
+  const topUnknownTool = {
+    name: "top_unknown",
+    description: "Top unknown",
+    parameters: {
+      type: "object",
+      pattern: ".*",
+      properties: {},
+    },
+  };
+  const topRes = validateWebMcpTool(topUnknownTool);
+  assert.equal(topRes.ok, false);
+  assert.equal(topRes.refused, "invalid-tool-parameters");
+  assert.match(topRes.why, /unsupported top-level schema keyword 'pattern'/);
+
+  // Positive control: valid schema with supported keywords across all types
+  const validControlTool = {
+    name: "valid_control",
+    description: "Valid control tool",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string", minLength: 1, maxLength: 50, enum: ["alice", "bob"] },
+        age: { type: "integer", minimum: 0, maximum: 120 },
+        ratio: { type: "number", minimum: 0.0, maximum: 1.0 },
+        active: { type: "boolean" },
+        tags: { type: "array", items: { type: "string", enum: ["red", "blue"] } },
+        config: {
+          type: "object",
+          properties: {
+            retries: { type: "number" },
+          },
+          additionalProperties: false,
+        },
+      },
+      required: ["name", "age"],
+      additionalProperties: false,
+    },
+  };
+  const validRes = validateWebMcpTool(validControlTool);
+  assert.equal(validRes.ok, true, `valid control must pass registration: ${JSON.stringify(validRes)}`);
+  assert.equal(validRes.value?.parameters?.additionalProperties, false);
+});
+
+test("browser: bridge rejects unsupported schema keywords at registration time (Finding P1)", { timeout: 25000 }, async (t) => {
+  const server = await startServer();
+  t.after(() => server.stop());
+
+  const page = await launch({ width: 1000, height: 800 });
+  t.after(() => page.close());
+
+  await page.goto(`${server.base}/`);
+
+  const result = await page.evaluate(async (base) => {
+    return new Promise((resolve, reject) => {
+      const outer = document.createElement("iframe");
+      outer.src = `${base}/mini-app-bridge.html`;
+
+      window.addEventListener("message", (e) => {
+        if (e.origin !== window.location.origin) return;
+        if (e.data?.type === "bridge_ready") {
+          // Attempt to register tool with unsupported keyword 'pattern'
+          const appHtml = `<script>
+            window.webMcp.registerTool({
+              name: "pattern_tool",
+              description: "Tool with regex pattern",
+              parameters: {
+                type: "object",
+                properties: {
+                  code: { type: "string", pattern: "^[A-Z]+$" }
+                }
+              },
+              execute: async () => ({ status: "ok" })
+            });
+            window.webMcp.ready();
+          <\/script>`;
+          outer.contentWindow.postMessage({ type: "load_app", appId: "bad-reg-app", html: appHtml }, window.location.origin);
+        } else if (e.data?.type === "app_ready") {
+          // If rejected at registration, tools list in app_ready must be empty
+          resolve(e.data.tools);
+        }
+      });
+
+      document.body.appendChild(outer);
+      setTimeout(() => reject(new Error("timed out waiting for bridge registration")), 12000);
+    });
+  }, server.base);
+
+  assert.equal(Array.isArray(result), true);
+  assert.equal(result.length, 0, "tool with unsupported 'pattern' must be rejected at registration");
+});
+
+test("browser: continuous host -> page -> bridge -> inner DOM journey with visual screenshot verification (Finding P2)", { timeout: 35000 }, async (t) => {
+  const server = await startServer();
+  t.after(() => server.stop());
+
+  const page = await launch({ width: 1000, height: 800 });
+  t.after(() => page.close());
+
+  await page.goto(`${server.base}/`);
+
+  // Step 1: Mount mini-app in the page with visible thermostat DOM
+  await page.evaluate(async (base) => {
+    return new Promise((resolve, reject) => {
+      const outer = document.createElement("iframe");
+      outer.id = "thermostat-bridge";
+      outer.style.width = "400px";
+      outer.style.height = "300px";
+      outer.style.border = "2px solid #2563eb";
+      outer.style.position = "fixed";
+      outer.style.top = "50px";
+      outer.style.left = "50px";
+      outer.style.zIndex = "999999";
+      outer.src = `${base}/mini-app-bridge.html`;
+
+      window.addEventListener("message", (e) => {
+        if (e.origin !== window.location.origin) return;
+        if (e.data?.type === "bridge_ready") {
+          const appHtml = `<!doctype html>
+<html>
+<head>
+  <style>
+    body { font-family: sans-serif; padding: 20px; background: #eff6ff; color: #1e3a8a; margin: 0; }
+    .card { background: white; padding: 20px; border-radius: 8px; border: 2px solid #3b82f6; }
+    .temp { font-size: 40px; font-weight: bold; color: #1d4ed8; }
+    .mode { font-size: 20px; color: #64748b; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div id="temp-val" class="temp">20.0°C</div>
+    <div id="mode-val" class="mode">STANDBY</div>
+  </div>
+  <script>
+    window.webMcp.registerTool({
+      name: "set_temperature",
+      description: "Set thermostat target temperature",
+      parameters: {
+        type: "object",
+        properties: {
+          target: { type: "number", minimum: 10, maximum: 35 },
+          mode: { type: "string", enum: ["heat", "cool", "auto"] }
+        },
+        required: ["target", "mode"],
+        additionalProperties: false
+      },
+      execute: async (args) => {
+        document.getElementById("temp-val").textContent = args.target.toFixed(1) + "°C";
+        document.getElementById("mode-val").textContent = args.mode.toUpperCase();
+        return { ok: true, currentTarget: args.target, mode: args.mode };
+      }
+    });
+    window.webMcp.ready();
+  <\/script>
+</body>
+</html>`;
+          outer.contentWindow.postMessage({ type: "load_app", appId: "continuous-thermostat", html: appHtml }, window.location.origin);
+        } else if (e.data?.type === "tools_updated") {
+          fetch(`${base}/api/mini-app/tools`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              appId: "continuous-thermostat",
+              title: "Thermostat",
+              tools: e.data.tools,
+            }),
+          }).then(() => {
+            window.__thermostatReady = true;
+          });
+        } else if (e.data?.type === "tool_result") {
+          if (e.data?.callId === "call-valid-cont") {
+            window.__validResult = e.data;
+          } else if (e.data?.callId === "call-malformed-cont") {
+            window.__malformedResult = e.data;
+          }
+        }
+      });
+
+      document.body.appendChild(outer);
+      const poll = () => {
+        if (window.__thermostatReady) resolve(true);
+        else setTimeout(poll, 50);
+      };
+      poll();
+      setTimeout(() => reject(new Error("timed out waiting for thermostat app")), 12000);
+    });
+  }, server.base);
+
+  // Capture BEFORE screenshot of the thermostat iframe element
+  const clip = await page.evaluate(() => {
+    const el = document.getElementById("thermostat-bridge");
+    const r = el.getBoundingClientRect();
+    return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height), scale: 1 };
+  });
+
+  const snapBefore = await page.send("Page.captureScreenshot", { format: "png", clip });
+  const bufBefore = Buffer.from(snapBefore.data, "base64");
+  assert.ok(bufBefore.length > 1000, "valid before screenshot captured");
+
+  // Step 2: Continuous Server Turn -> Host Boundary Validation -> Dispatch
+  // 2a. Server /turn invocation with valid args
+  const turnRes = await fetch(`${server.base}/api/turn`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: {
+        verb: "mini_app_tool",
+        name: "set_temperature",
+        args: { target: 24.5, mode: "heat" },
+      },
+    }),
+  });
+  const turnJson = await turnRes.json();
+  assert.equal(turnJson.result?.ok, true, "server host validation admitted valid turn");
+
+  // Forward the admitted tool call through the bridge in the page
+  await page.evaluate(() => {
+    const outer = document.getElementById("thermostat-bridge");
+    outer.contentWindow.postMessage({
+      type: "call_tool",
+      callId: "call-valid-cont",
+      name: "set_temperature",
+      args: { target: 24.5, mode: "heat" },
+    }, window.location.origin);
+  });
+
+  // Wait for valid execution to complete and inner DOM to update
+  await page.evaluate(async () => {
+    return new Promise((resolve) => {
+      const check = () => {
+        if (window.__validResult) resolve();
+        else setTimeout(check, 50);
+      };
+      check();
+    });
+  });
+
+  // Capture AFTER-VALID screenshot of the thermostat iframe element
+  const snapAfterValid = await page.send("Page.captureScreenshot", { format: "png", clip });
+  const bufAfterValid = Buffer.from(snapAfterValid.data, "base64");
+  assert.ok(bufAfterValid.length > 1000, "valid after screenshot captured");
+
+  // Assert observable DOM update and screenshot pixel delta
+  assert.notDeepEqual(bufBefore, bufAfterValid, "painted screenshot MUST change when mini-app executes valid tool");
+
+  // Step 3: Host Rejection on Malformed Args
+  const badTurnRes = await fetch(`${server.base}/api/turn`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: {
+        verb: "mini_app_tool",
+        name: "set_temperature",
+        args: { target: "twenty-four", mode: "turbo" },
+      },
+    }),
+  });
+  const badTurnJson = await badTurnRes.json();
+  assert.equal(badTurnJson.result?.ok, false, "server host rejected malformed turn");
+  assert.equal(badTurnJson.result?.refused, "invalid-argument-type");
+
+  // Bridge Direct Malformed Invocations: Bridge intercept & refusal without inner execution
+  await page.evaluate(() => {
+    const outer = document.getElementById("thermostat-bridge");
+    outer.contentWindow.postMessage({
+      type: "call_tool",
+      callId: "call-malformed-cont",
+      name: "set_temperature",
+      args: { target: "twenty-four", mode: "turbo" },
+    }, window.location.origin);
+  });
+
+  await page.evaluate(async () => {
+    return new Promise((resolve) => {
+      const check = () => {
+        if (window.__malformedResult) resolve();
+        else setTimeout(check, 50);
+      };
+      check();
+    });
+  });
+
+  // Capture AFTER-MALFORMED screenshot
+  const snapAfterMalformed = await page.send("Page.captureScreenshot", { format: "png", clip });
+  const bufAfterMalformed = Buffer.from(snapAfterMalformed.data, "base64");
+
+  // Assert DOM remained stable and uncorrupted: screenshot buffers MUST match after-valid screenshot
+  assert.deepEqual(bufAfterValid, bufAfterMalformed, "painted screenshot MUST remain unchanged and stable on malformed refusal");
+
+  // Save artifacts to /tmp/fdtu-evidence/
+  const fs = await import("node:fs");
+  fs.mkdirSync("/tmp/fdtu-evidence", { recursive: true });
+  fs.writeFileSync("/tmp/fdtu-evidence/01-before-initial.png", bufBefore);
+  fs.writeFileSync("/tmp/fdtu-evidence/02-after-valid.png", bufAfterValid);
+  fs.writeFileSync("/tmp/fdtu-evidence/03-after-malformed.png", bufAfterMalformed);
+});
+
