@@ -86,8 +86,20 @@ test.after(async () => {
 test("THE PAGE CANNOT DECLARE A ROOT (by name), and the host's declaration drives the loop", { timeout: 120000 }, async () => {
   // The page's own controls: type the path, submit the form. This is the act that used to succeed
   // without a credential, and it re-points every file route — voicebox-beads-cfn.
+  // voicebox-beads-6uzd: those controls now live behind the create dialog's machine destination, so
+  // the test opens the dialog and chooses it — the same clicks a person makes to reach the field.
+  await page.click("#create-project");
+  await page.waitFor(() => document.getElementById("create-project-dialog")?.open === true, { label: "the create dialog to open" });
+  await page.click('input[name="dest"][value="machine"]');
+  await page.waitFor(() => document.getElementById("dest-machine")?.hidden === false, { label: "the machine destination to be shown" });
   await page.type("#machine-path", machineRoot);
   await page.click("#machine-form button");
+  // The dialog must be CLOSED before this test ends: showModal() makes the rest of the page inert, so
+  // leaving it open breaks the NEXT tests in this file (they drop a folder on #dropzone in the
+  // background). A submission that refuses keeps the dialog open by design — the person stays where
+  // they were — so the test closes it the way a person does.
+  await page.press("Escape");
+  await page.waitFor(() => document.getElementById("create-project-dialog")?.open === false, { label: "the create dialog to close" });
 
   const refusal = await page.evaluate(async (dir) => {
     const r = await fetch("/api/root", { method: "POST", headers: { "content-type": "application/json" },

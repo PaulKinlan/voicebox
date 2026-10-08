@@ -552,6 +552,7 @@ async function open(name: string): Promise<Reply> {
       : `opened ${reply.project.id} — root: ${reply.project.root}`,
     "ok",
   );
+  closeCreateDialog();
   await declareToLoop(reply.project);
   $("gallery").textContent = "";
   for (const asset of reply.assets ?? []) {
@@ -645,6 +646,7 @@ async function useMachineRoot(path: string, name = "loop-project", hostToken = "
     `the loop now writes into ${reply.root.path}${reply.canonical ? " (resolved to its real path)" : ""} — acts on this root come from the machine, not this page`,
     "ok",
   );
+  closeCreateDialog();
   await Promise.all([renderView("opfs"), renderView("picked"), renderView("server"), renderAgents(false)]);
   return reply;
 }
@@ -669,8 +671,41 @@ async function adopt(handle: FileSystemDirectoryHandle): Promise<Reply> {
     );
   }
   await declareToLoop({ ...reply.project, rootKind: "handle", name: reply.project.name });
+  closeCreateDialog();
   await Promise.all([renderView("opfs"), renderView("picked"), renderView("server")]);
   return reply;
+}
+
+// ── Create a project (voicebox-beads-6uzd) ───────────────────────────────────────────────────────
+// One button opens one dialog holding the three destinations, in the order the page states above it
+// (voicebox-beads-um5r). The dialog is this page's own pattern (`#confirm`): `showModal()` gives the
+// focus trap, the inert background and Esc, and `closedby="any"` in the markup gives click-outside —
+// the same two lines the gate dialog relies on. The ids and handlers below are the ones that already
+// existed: the boxes moved into a dialog, nothing about how a project is created was rebuilt.
+const createDialog = document.getElementById("create-project-dialog") as HTMLDialogElement | null;
+const DEST_PANELS: Record<string, string> = { opfs: "dest-opfs", picked: "dest-picked", machine: "dest-machine" };
+
+function showDestination(value: string): void {
+  for (const [dest, panel] of Object.entries(DEST_PANELS)) $(panel).hidden = dest !== value;
+}
+
+/** Closes the create dialog when it is the thing that is open. A no-op for every other way in — the
+ * drop zone, or the programmatic surface the acceptance checks drive with no dialog on screen. */
+function closeCreateDialog(): void {
+  if (createDialog?.open) createDialog.close();
+}
+
+$("create-project").addEventListener("click", () => {
+  // Open on what is actually chosen, so the dialog and the radios cannot disagree.
+  const chosen = document.querySelector<HTMLInputElement>('input[name="dest"]:checked');
+  showDestination(chosen?.value ?? "opfs");
+  createDialog?.showModal();
+});
+$("create-project-close").addEventListener("click", () => closeCreateDialog());
+for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="dest"]')) {
+  radio.addEventListener("change", () => {
+    if (radio.checked) showDestination(radio.value);
+  });
 }
 
 $("open-form").addEventListener("submit", (event) => {
@@ -717,6 +752,7 @@ $("regrant").addEventListener("click", async () => {
   else {
     line(`write access to '${handle.name}' is ${state}`, "ok");
     header(reply.project);
+    closeCreateDialog();
   }
 });
 

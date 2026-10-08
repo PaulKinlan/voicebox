@@ -65,16 +65,34 @@
   /* The tier-2 gate is a MODAL, like settings: a decision that appears off-screen is a decision
      nobody made. (Measured before this change: the panel appeared 1419px down an 820px viewport,
      2049px down a phone — 2.5 screens below the fold, with no scroll to it.) */
-  #confirm { inset: 0; margin: auto; width: min(100% - 2rem, 560px); max-height: 85vh; max-height: 85dvh;
+  /* ONE modal box, worn by both dialogs on this page: the tier-2 gate and Create a project. The box,
+     the backdrop and the scroll lock live here once — a second copy of them is how two dialogs in one
+     file start behaving differently. */
+  dialog.modal { inset: 0; margin: auto; width: min(100% - 2rem, 560px); max-height: 85vh; max-height: 85dvh;
     padding: 16px 18px calc(16px + env(safe-area-inset-bottom)); border: 1px solid var(--line);
     border-radius: 12px; background: var(--card); color: var(--ink); overflow: auto; overscroll-behavior: contain; }
+  dialog.modal::backdrop { background: color-mix(in srgb, var(--ground) 60%, transparent); backdrop-filter: blur(10px) saturate(120%); }
+  @supports not (backdrop-filter: blur(1px)) { dialog.modal::backdrop { background: #101014e6; } }
+  html:has(dialog.modal[open]) { overflow: hidden; }
+  dialog.modal .gate-note { color: var(--muted); font-size: 12px; }
   #confirm h2 { margin: 0 0 10px; font-size: 14px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
   #confirm p { margin: 0 0 10px; font: 13px/1.5 ui-monospace, monospace; word-break: break-all; }
-  #confirm .gate-note { color: var(--muted); font-size: 12px; }
   #confirm button { margin-right: 8px; }
-  #confirm::backdrop { background: color-mix(in srgb, var(--ground) 60%, transparent); backdrop-filter: blur(10px) saturate(120%); }
-  @supports not (backdrop-filter: blur(1px)) { #confirm::backdrop { background: #101014e6; } }
-  html:has(dialog#confirm[open]) { overflow: hidden; }
+  /* What setup does, why, and the order: this page's whole job, said once (voicebox-beads-um5r). */
+  .setup-guide { max-width: 78ch; font-size: 13px; line-height: 1.6; }
+  .setup-guide p { margin: 0 0 8px; }
+  .setup-guide h3 { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 14px 0 6px; }
+  .setup-steps { margin: 0; padding-left: 1.4rem; }
+  .setup-steps li { margin: 0 0 6px; }
+  .create-row { margin: 14px 0; }
+  #create-project { padding: 0.6rem 1rem; background: var(--btn-bg); color: var(--ink); border: 1px solid var(--accent); border-radius: 8px; font: inherit; font-weight: 600; cursor: pointer; }
+  #dest-choices { border: 0; margin: 12px 0; padding: 0; }
+  #dest-choices legend { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 0 0 6px; }
+  #dest-choices label { display: block; margin: 0 0 6px; font-size: 13px; }
+  .dest-panel { border-top: 1px solid var(--line); padding-top: 10px; }
+  #create-project-dialog h2 { margin: 0; font-size: 14px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .dialog-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  #create-project-dialog label { display: block; margin: 8px 0 4px; font-size: 13px; }
   #declare { margin: 0.75rem 0 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
   #declare label { flex-basis: 100%; opacity: 0.8; }
   #root-path { flex: 1 1 22rem; padding: 0.5rem 0.6rem; background: var(--input-bg); color: inherit; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
@@ -112,38 +130,77 @@
   <div id="project"></div>
 
   <h2>Start a project</h2>
-  <!-- WHICH ROOT DO I WANT? The two choices differ in who can act on them, and
-       that difference used to be discoverable only by being refused. Turns run
-       in the server, so today it can write only into a folder it can name. -->
-  <p class="chooser">Choose a folder on <strong>this machine</strong> and <strong>turns can save into it</strong> today. A folder you <strong>pick in the browser</strong> stays <strong>read-only for turns</strong> for now — the browser hands that folder to this page and not to the server, so the server cannot save there yet.</p>
-  <form id="open-form">
-    <!-- No default name: a placeholder would show a project that does not exist as if it were a
-         real choice. The label says what Open DOES. -->
-    <label for="project-name" class="sr-only">Project name</label>
-    <input id="project-name" placeholder="a name for a project in this browser" aria-label="project name">
-    <button type="submit" title="Makes a project in this browser's own storage (OPFS) and makes it the one this page acts on. It is not a folder on your disk. A name you have used before opens that project instead of making a new one.">New project in this browser</button>
-    <button type="button" id="pick">Pick a folder… <span class="tag">read-only for turns</span></button>
-    <button type="button" id="regrant" hidden>Restore write access</button>
-  </form>
-  <p class="chooser-note"><strong>New project in this browser</strong> keeps its files in <strong>this browser's own storage</strong> (origin storage, OPFS) — not a folder on your disk, and it asks for no host token and no path. This page lists and reads those files. A name you have used before opens that project instead of making a new one.</p>
-  <form id="machine-form">
-    <input id="machine-path" placeholder="/a/folder/on/this/machine" aria-label="machine folder path" style="min-width:22rem">
-    <input id="machine-host-token" type="password" placeholder="host token (from .host-token)" aria-label="host token" autocomplete="off" style="min-width:14rem">
-    <button type="submit">Save turns into this folder <span class="tag tag-good">turns can write here</span></button>
-  </form>
-  <p class="chooser-note">The path is a folder <strong>on this machine</strong> — type or paste its absolute path, and paste the host token from <code>workspace/.host/.host-token</code>. The server (which runs turns) writes there, so this is the choice that lets turns save files you can open in your own editor.</p>
-  <!-- A dropped folder cannot become a project root: browsers do not expose a
-       dropped folder's REAL path, and the server needs one to write into it.
-       So the path is asked for in words, and the declaration posted is exactly
-       the one the worker posts (browser/worker.ts useMachineRoot) — one
-       declaration, not a second vocabulary for it. -->
-  <div id="declare">
-    <label for="root-path">Or type the folder the server should write into:</label>
-    <input id="root-path" placeholder="/home/you/projects/notes" spellcheck="false" autocomplete="off">
-    <button id="declare-root" type="button">Declare this folder</button>
-    <p id="declare-result" hidden></p>
+  <!-- WHAT SETUP DOES, WHY IT IS NEEDED, AND THE ORDER — said once, here, because this page's whole
+       job is that explanation and it used to state the trade-offs in three places while never stating
+       the order (Paul, 2026-10-08: "explain more about how it works and what it's doing and why we
+       need to start it setting things up then the order"). Every claim below is one the code already
+       makes: a machine root is where "turns DO write" and the other two kinds are "readable and
+       writable only by the page until page-side writes land" (browser/ui/ui.ts, declareToLoop). -->
+  <div class="setup-guide">
+    <p><strong>What setup does:</strong> a project is a folder plus the environment that holds it. The turns that read and save files run in the Voicebox server, so that server needs a folder it can name before it can do anything.</p>
+    <p><strong>Why it is needed:</strong> with no project, reads and writes are refused — there is nowhere for them to go. This browser's own storage needs no path and no host token, but turns cannot write into it yet; a folder you pick is the same, read-only for turns. A folder on this machine is the one turns can write into, and it is where the files stay openable in your own editor.</p>
+    <h3>The order</h3>
+    <ol class="setup-steps">
+      <li>Start Voicebox on the machine whose files you want to use — that server is what saves them.</li>
+      <li>Create a project and choose where its files live: this browser's storage, a folder you pick, or a folder on this machine.</li>
+      <li>If you chose a folder on this machine, the loop writes there and turns save into it. The other two are held by this page; turns cannot write there yet.</li>
+    </ol>
   </div>
-  <div id="dropzone">or drop a folder here to make it a project root — the files stay where they are and this page becomes a window onto them. <span class="tag">read-only for turns</span></div>
+  <p class="create-row"><button type="button" id="create-project" aria-haspopup="dialog" aria-controls="create-project-dialog">Create a project</button></p>
+  <div id="dropzone">or drop a folder here to open it read-only for turns — the files stay where they are and this page becomes a window onto them. <span class="tag">read-only for turns</span></div>
+
+  <dialog id="create-project-dialog" class="modal" closedby="any" aria-labelledby="create-project-title">
+    <!-- The order above, applied: ONE dialog holds all three destinations, so the choice is made in
+         one place instead of across five exposed input boxes (Paul, 2026-10-08: "just have like a
+         create a project button inside the environments thing"). Every id and handler in here is one
+         that already existed — this is a move, not a second implementation. -->
+    <div class="dialog-head">
+      <h2 id="create-project-title">Create a project</h2>
+      <button type="button" id="create-project-close" aria-label="Close create a project">Close</button>
+    </div>
+    <p class="gate-note">Step 2: choose where this project's files live. Esc or a click outside closes this without creating anything.</p>
+    <fieldset id="dest-choices">
+      <legend>Where should the files live?</legend>
+      <label><input type="radio" name="dest" value="opfs" checked> In this browser's own storage <span class="tag">turns cannot write here yet</span></label>
+      <label><input type="radio" name="dest" value="picked"> A folder you pick <span class="tag">read-only for turns</span></label>
+      <label><input type="radio" name="dest" value="machine"> A folder on this machine <span class="tag tag-good">turns can write here</span></label>
+    </fieldset>
+    <div class="dest-panel" id="dest-opfs">
+      <form id="open-form">
+        <!-- No default name: a placeholder would show a project that does not exist as if it were a
+             real choice. The label says what the button DOES. -->
+        <label for="project-name">Project name</label>
+        <input id="project-name" placeholder="a name for a project in this browser" aria-label="project name" autocomplete="off">
+        <button type="submit" title="Makes a project in this browser's own storage (OPFS) and makes it the one this page acts on. It is not a folder on your disk. A name you have used before opens that project instead of making a new one.">Create project in this browser</button>
+      </form>
+      <p class="chooser-note">Kept in <strong>this browser's own storage</strong> (origin storage, OPFS) — not a folder on your disk, and it asks for no host token and no path. A name you have used before opens that project instead of making a new one. Turns cannot write here yet; this page lists, reads and writes these files.</p>
+    </div>
+    <div class="dest-panel" id="dest-picked" hidden>
+      <button type="button" id="pick">Pick a folder… <span class="tag">read-only for turns</span></button>
+      <button type="button" id="regrant" hidden>Restore write access</button>
+    </div>
+    <div class="dest-panel" id="dest-machine" hidden>
+      <form id="machine-form">
+        <label for="machine-path">Folder on this machine</label>
+        <input id="machine-path" placeholder="/a/folder/on/this/machine" aria-label="machine folder path">
+        <label for="machine-host-token">Host token</label>
+        <input id="machine-host-token" type="password" placeholder="from .host-token" aria-label="host token" autocomplete="off">
+        <button type="submit">Save turns into this folder <span class="tag tag-good">turns can write here</span></button>
+      </form>
+      <p class="chooser-note">An absolute path <strong>on this machine</strong>, plus the host token from <code>workspace/.host/.host-token</code>. The server writes here, so this is the choice that lets turns save files you can open in your own editor.</p>
+      <!-- A dropped folder cannot become a project root: browsers do not expose a
+           dropped folder's REAL path, and the server needs one to write into it.
+           So the path is asked for in words, and the declaration posted is exactly
+           the one the worker posts (browser/worker.ts useMachineRoot) — one
+           declaration, not a second vocabulary for it. -->
+      <div id="declare">
+        <label for="root-path">Or declare a folder the loop writes into, by path:</label>
+        <input id="root-path" placeholder="/home/you/projects/notes" spellcheck="false" autocomplete="off">
+        <button id="declare-root" type="button">Declare this folder</button>
+        <p id="declare-result" hidden></p>
+      </div>
+    </div>
+  </dialog>
 
   <h2>Where the files are</h2>
   <p class="views-note">One panel per place a project's files can live. Each says which place it is showing and who can change the files there; a place with no project yet says so rather than drawing an empty box.</p>
@@ -176,7 +233,7 @@
   <div id="gallery"></div>
 
   <h2>Waiting on you</h2>
-  <dialog id="confirm" closedby="any" aria-labelledby="confirm-title">
+  <dialog id="confirm" class="modal" closedby="any" aria-labelledby="confirm-title">
     <h2 id="confirm-title">Waiting on you</h2>
     <div id="confirm-plan"></div>
     <p class="gate-note">Esc or a click outside keeps the file — an unanswered gate is never a yes.</p>

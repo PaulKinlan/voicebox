@@ -65,6 +65,10 @@ test("a fresh room, a browser project made from the page, and a room that lists 
     await pageConnected(server, "the environment page to connect on /channel");
 
     // ── THE AFFORDANCE: a control a person uses, with no token and no path ──
+    // voicebox-beads-6uzd: reached through the one Create a project button, then the dialog's
+    // default destination (this browser's own storage), which is the click path a person takes.
+    await page.click("#create-project");
+    await page.waitFor(() => document.getElementById("create-project-dialog")?.open === true, { label: "the create dialog to open" });
     await page.type("#project-name", "scratch-fqq-test");
     await page.click('#open-form button[type="submit"]');
     await page.waitFor(() => /made\s+scratch-fqq-test/i.test(document.body.textContent ?? ""), { label: "the page says it MADE the project" });
