@@ -37,6 +37,9 @@ const WANTED = {
   micHotkey: "mic-hotkey", micHotkeyState: "mic-hotkey-state", micHotkeyBadge: "mic-hotkey-badge",
   envs: "envs", envsOpen: "envs-open", envsClose: "envs-close", envsHelp: "envs-help", envsHelpPanel: "envs-help-panel", envList: "env-list", envCount: "envs-count", envNote: "env-note",
   envAdd: "env-add", envAddLabel: "env-add-label", envAddOrigin: "env-add-origin", envAddBtn: "env-add-btn",
+  envActiveRootVal: "env-active-root-val", envUseBrowserBtn: "env-use-browser-btn", envPickFolderBtn: "env-pick-folder-btn",
+  envRootPathInput: "env-root-path-input", envDeclareRootBtn: "env-declare-root-btn", envRootStatus: "env-root-status",
+  configureEnvBtn: "configure-env-btn",
   // The extension surface (voicebox-beads-vwb): one source (/api/extensions + /api/extensions/catalogue),
   // five states in five sections, never mixed — a present-but-unreviewed extension is never green
   // and never described as running, and an admitted extension that failed to load is never silent
@@ -1689,6 +1692,13 @@ function renderRoot() {
     lastPaintedRootKey = currentKey;
     triggerProjectChangeFlash(kindEl.textContent);
   }
+  if (els.envActiveRootVal) {
+    if (activeRoot === null) {
+      els.envActiveRootVal.textContent = "no folder chosen yet";
+    } else if (activeRoot) {
+      els.envActiveRootVal.textContent = fullPath ? `${kindPlain} · ${fullPath}` : kindPlain;
+    }
+  }
   renderAbout();
 }
 
@@ -2131,6 +2141,17 @@ async function renderExtensions() {
 }
 
 async function renderEnvironments() {
+  if (els.envActiveRootVal) {
+    if (activeRoot === null) {
+      els.envActiveRootVal.textContent = "no folder chosen yet";
+    } else if (activeRoot) {
+      const fullPath = activeRoot.root?.path ?? activeRoot.root?.name ?? activeRoot.root?.label ?? "";
+      const kind = activeRoot.root?.kind ?? "";
+      const kindPlain = { machine: "machine folder", opfs: "browser storage", handle: "picked folder" }[kind]
+        ?? activeRoot.facts?.where ?? kind ?? "a root";
+      els.envActiveRootVal.textContent = fullPath ? `${kindPlain} · ${fullPath}` : kindPlain;
+    }
+  }
   if (!els.envList) return;
   try {
     const answer = await request("/api/environments");
@@ -3988,9 +4009,95 @@ on(els.envsOpen, "click", () => {
   els.envsOpen.setAttribute("aria-expanded", "true");
   void renderEnvironments();
 });
+on(els.configureEnvBtn, "click", () => {
+  if (!els.envs || els.envs.open) return;
+  els.envs.showModal();
+  els.envsOpen?.setAttribute("aria-expanded", "true");
+  void renderEnvironments();
+});
 on(els.envs, "close", () => {
   els.envsOpen.setAttribute("aria-expanded", "false");
   els.envsOpen.focus();
+});
+
+on(els.envUseBrowserBtn, "click", async () => {
+  try {
+    if (els.envUseBrowserBtn) els.envUseBrowserBtn.disabled = true;
+    const res = await request("/api/root", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ project: "browser-scratchpad", root: { kind: "opfs", path: "browser-scratchpad" } }),
+    });
+    if (res && res.ok) {
+      if (els.envRootStatus) {
+        els.envRootStatus.dataset.ok = "true";
+        els.envRootStatus.textContent = "Active workspace set to browser storage (OPFS).";
+      }
+      await loadRoot();
+      await load();
+    } else {
+      if (els.envRootStatus) {
+        els.envRootStatus.dataset.ok = "false";
+        els.envRootStatus.textContent = res?.why || res?.refused || "Could not switch to browser workspace.";
+      }
+    }
+  } catch (err) {
+    if (els.envRootStatus) {
+      els.envRootStatus.dataset.ok = "false";
+      els.envRootStatus.textContent = String(err?.message ?? "Error switching to browser workspace.");
+    }
+  } finally {
+    if (els.envUseBrowserBtn) els.envUseBrowserBtn.disabled = false;
+  }
+});
+
+on(els.envPickFolderBtn, "click", async () => {
+  await openRoomFolder();
+  if (els.envRootStatus) {
+    els.envRootStatus.dataset.ok = "true";
+    els.envRootStatus.textContent = roomFolder ? `Opened local folder “${roomFolder.name}”.` : "";
+  }
+});
+
+on(els.envDeclareRootBtn, "click", async () => {
+  const pathVal = els.envRootPathInput?.value.trim() ?? "";
+  if (!pathVal) {
+    if (els.envRootStatus) {
+      els.envRootStatus.dataset.ok = "false";
+      els.envRootStatus.textContent = "Please enter a folder path on this machine.";
+    }
+    return;
+  }
+  const projectName = pathVal.split("/").filter(Boolean).pop() || "project";
+  if (els.envDeclareRootBtn) els.envDeclareRootBtn.disabled = true;
+  try {
+    const res = await request("/api/root", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ project: projectName, root: { kind: "machine", path: pathVal } }),
+    });
+    if (res && res.ok) {
+      if (els.envRootStatus) {
+        els.envRootStatus.dataset.ok = "true";
+        els.envRootStatus.textContent = `Machine root set to ${res.root?.path ?? pathVal} — turns save here now.`;
+      }
+      if (els.envRootPathInput) els.envRootPathInput.value = "";
+      await loadRoot();
+      await load();
+    } else {
+      if (els.envRootStatus) {
+        els.envRootStatus.dataset.ok = "false";
+        els.envRootStatus.textContent = res?.why || res?.refused || "Could not set machine root.";
+      }
+    }
+  } catch (err) {
+    if (els.envRootStatus) {
+      els.envRootStatus.dataset.ok = "false";
+      els.envRootStatus.textContent = String(err?.message ?? "Error declaring machine root.");
+    }
+  } finally {
+    if (els.envDeclareRootBtn) els.envDeclareRootBtn.disabled = false;
+  }
 });
 
 // Light dismiss, declaratively, where the platform supports it: `closedby="any"` on the element.
