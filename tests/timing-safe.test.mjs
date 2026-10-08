@@ -60,11 +60,24 @@ test("timingSafeStringEqual: non-strings are refused without throwing", () => {
   }
 });
 
-test("timingSafeStringEqual: multi-byte characters compare by utf8 bytes, not characters", () => {
+test("timingSafeStringEqual: compares source code units, so distinct strings stay distinct", () => {
   assert.equal(timingSafeStringEqual("é", "é"), true);
-  assert.equal(timingSafeStringEqual("é", "e"), false);
-  // "é" is 2 bytes; a one-byte string of the same length in characters must not be accepted.
-  assert.equal(timingSafeStringEqual("é", "ab"), false);
+  assert.equal(timingSafeStringEqual("é", "e"), false, "one code unit against two");
+  assert.equal(timingSafeStringEqual("é", "ab"), false, "same nothing: different code units, different count");
+
+  // THE COLLISION THIS HELPER MADE POSSIBLE, and the reason it uses utf16le rather than utf8: a lone
+  // surrogate and the replacement character are DIFFERENT JavaScript strings that UTF-8 encodes to
+  // the same bytes. An exact-string helper that called them equal would be failing its own contract.
+  // This assertion is GREEN on utf16le and RED on utf8, so it is the behavioural discriminator for
+  // the encoding choice rather than a description of it.
+  assert.equal(timingSafeStringEqual("\uD800", "\uFFFD"), false, "a lone surrogate is not the replacement character");
+  assert.equal(timingSafeStringEqual("\uFFFD", "\uFFFD"), true, "the replacement character is itself");
+
+  // Astral control: a surrogate pair is two code units and must equal only itself, not either half.
+  assert.equal(timingSafeStringEqual("😀", "😀"), true);
+  assert.equal(timingSafeStringEqual("😀", "\uD83D"), false, "half a pair is not the pair");
+  assert.equal(timingSafeStringEqual("😀", "\uDE00"), false, "nor the other half");
+  assert.equal(timingSafeStringEqual("\uD83D\uDE00", "😀"), true, "and the pair is spelled either way");
 });
 
 // ── 2. adoption: the sites ask the owner ───────────────────────────────────
@@ -92,7 +105,15 @@ test("protocol: host token and in-room session token accept exactly what they ac
   const scratch = realpathSync(mkdtempSync(path.join(os.tmpdir(), "voicebox-sseh-")));
   const workspace = path.join(scratch, "workspace");
   mkdirSync(workspace, { recursive: true });
-  const server = await startServer({ env: { VOICEBOX_WORKSPACE: workspace, VOICEBOX_EXTENSIONS_DIR: path.join(scratch, "extensions") } });
+  // VOICEBOX_LOOPBACK_AUTH: undefined pins the POSTURE UNDER TEST rather than inheriting whatever the
+  // ambient shell is set to: with the wall on, the invalid-token requests below are refused 401 by the
+  // loopback wall before this route can answer 403, and the assertions would be measuring the shell
+  // (the tests/loopback-auth.test.mjs pattern). The cookie test further down pins it ON deliberately.
+  const server = await startServer({ env: {
+    VOICEBOX_LOOPBACK_AUTH: undefined,
+    VOICEBOX_WORKSPACE: workspace,
+    VOICEBOX_EXTENSIONS_DIR: path.join(scratch, "extensions"),
+  } });
   t.after(async () => {
     await server.stop();
     rmSync(scratch, { recursive: true, force: true });
@@ -193,4 +214,60 @@ test("protocol: the vb_session cookie still gates the loopback wall and is not e
   // 5. A short cookie is refused rather than thrown on: unequal lengths never reach timingSafeEqual,
   //    which throws on buffers of different length - the length gate is what turns that into a 401.
   assert.equal((await gated({ cookie: `vb_session=${secret.slice(0, -1)}` })).status, 401, "a short cookie is refused, not crashed on");
+});
+
+// ── 5. the second session-token site, driven: POST /api/root ───────────────
+// Finding P2 #2 of the 9f2b1fe review: the wire test drove the extension-authority comparison but not
+// the /api/root one, so the second migrated site was only covered by the source assertion. This drives
+// it. The outcome is chosen to DISCRIMINATE THE GUARD rather than merely be a refusal: a machine root
+// is decided by the token, so the real session token must get PAST the guard and be answered by the
+// route itself (200, with the root declared), while a wrong, short or absent token is refused at the
+// guard with 403 refused "host-token-required". A test that only asserted "not 200" would pass on a
+// route that broke for every caller; asserting the 200 is what pins that the token was accepted.
+test("protocol: POST /api/root is decided by the second session-token site", async (t) => {
+  const scratch = realpathSync(mkdtempSync(path.join(os.tmpdir(), "voicebox-sseh-root-")));
+  const workspace = path.join(scratch, "workspace");
+  const declared = path.join(scratch, "declared-project");
+  mkdirSync(workspace, { recursive: true });
+  mkdirSync(declared, { recursive: true });
+  let server = null;
+  t.after(async () => {
+    try { await server?.stop(); } finally { rmSync(scratch, { recursive: true, force: true }); }
+  });
+  server = await startServer({ env: {
+    VOICEBOX_LOOPBACK_AUTH: undefined,
+    VOICEBOX_WORKSPACE: workspace,
+    VOICEBOX_EXTENSIONS_DIR: path.join(scratch, "extensions"),
+  } });
+
+  const html = await fetch(`${server.base}/`).then((r) => r.text());
+  const session = (html.match(/[0-9a-f]{48}/g) ?? [])[0];
+  assert.ok(session, "the served page must carry the in-room session token");
+
+  const declareRoot = (headers) =>
+    fetch(`${server.base}/api/root`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify({ project: "sseh-fixture", root: { kind: "machine", path: declared } }),
+    }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})) }));
+
+  const accepted = await declareRoot({ "x-voicebox-session-token": session });
+  assert.equal(accepted.status, 200, "the real session token must get PAST the guard at /api/root");
+  assert.equal(accepted.body.ok, true, "and the route must then do its work rather than refuse");
+  assert.notEqual(accepted.body.refused, "host-token-required", "the guard refusal must not be what answered the real token");
+
+  const wrong = await declareRoot({ "x-voicebox-session-token": `x${session.slice(1)}` });
+  assert.equal(wrong.status, 403, "an equal-length wrong session token is refused");
+  assert.equal(wrong.body.refused, "host-token-required", "and refused by the guard, by name");
+
+  const short = await declareRoot({ "x-voicebox-session-token": session.slice(0, -1) });
+  assert.equal(short.status, 403, "a short session token is refused rather than thrown on");
+  assert.equal(short.body.refused, "host-token-required", "refused by the guard");
+
+  const malformed = await declareRoot({ "x-voicebox-session-token": "not-a-token" });
+  assert.equal(malformed.status, 403, "a malformed session token is refused");
+
+  const missing = await declareRoot({});
+  assert.equal(missing.status, 403, "and no token at all is refused");
+  assert.equal(missing.body.refused, "host-token-required", "by the same guard, so the 200 above was the guard accepting");
 });
