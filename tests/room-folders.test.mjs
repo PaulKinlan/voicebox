@@ -82,11 +82,20 @@ test("room folders: readable and writable handle, write lands byte-for-byte", { 
     { label: "the file in the room folder listing" }
   );
 
-  // 5. Open the file in the reader panel and verify facts line indicates read/write
+  // 5. Open the file in the reader panel and verify facts line indicates read/write.
   await page.evaluate(() => {
     document.querySelector(".file-open[data-file='notes.txt']")?.click();
   });
-  await sleep(200);
+  // WAIT FOR THE FACT, NOT FOR TIME (voicebox-beads-u7hq). The reader writes "Reading…" synchronously as a
+  // placeholder (public/fused.js:2654) and replaces it with the real facts when the read resolves, so
+  // reading #file-facts after a fixed sleep is a race: on a loaded gate the read had not finished and this
+  // assertion saw the placeholder (actual "Reading…", expected /read\/write/, 2026-10-08). Waiting also
+  // makes the assertions below stronger — they can no longer pass on the placeholder, and if the facts
+  // never arrive the failure names the wait instead of depending on timing.
+  await page.waitFor(
+    () => /read\/(write|only)/.test(document.getElementById("file-facts")?.textContent ?? ""),
+    { label: "the reader facts line to stop saying Reading…" },
+  );
 
   const facts = await page.evaluate(() => document.getElementById("file-facts")?.textContent);
   assert.match(facts ?? "", /read\/write/, "reader facts line must reflect read/write capability");
@@ -282,7 +291,18 @@ test("room folders: persistence across reloads and restore access button", { tim
     const btn = document.querySelector(".folder-chip[data-folder='persisted-folder'] .folder-regrant-btn");
     btn?.click();
   });
-  await sleep(200);
+  // Same fixed-sleep race as above (voicebox-beads-u7hq): the permission change is asynchronous, so wait for
+  // the state this test is about to assert rather than for 200ms to have passed.
+  await page.waitFor(
+    () => {
+      const folders = window.__voiceboxGetRoomFolders?.();
+      const folder = folders?.get("persisted-folder");
+      const chip = document.querySelector(".folder-chip[data-folder='persisted-folder']");
+      const regrant = chip?.querySelector(".folder-regrant-btn");
+      return folder?.permission === "granted" && regrant?.hidden === true;
+    },
+    { label: "access to be restored on the persisted folder" },
+  );
 
   // 6. Verify access is restored to granted and files are loaded
   const postRegrant = await page.evaluate(() => {
