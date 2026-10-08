@@ -16,8 +16,14 @@ this work does not reuse it.
 Always the **leader-PID** assertion; the group-empty and profile-process assertions never run because
 that one fails first. `tests/cdp-process-cleanup.test.mjs` and `tests/lib/cdp.mjs` are byte-identical
 in the roboticon and miniapps worktrees, so this is shared code, not the miniapps branch. Isolated
-runs of the file are 3/3 green. At 11:53 the box was running **two full gates at once** (load ≈ 4.8 on
-2 CPUs, `/tmp` on ext4 — disk, not tmpfs).
+runs of the file are 3/3 green. Load was ≈ 4.8 on 2 CPUs with `/tmp` on ext4 — disk, not tmpfs — but
+**not** because two gates ran at once. This receipt originally claimed that, and the claim has since
+been disproved and is corrected here rather than left to mislead: `FLEET_HEAVY_SLOTS=1`, and the
+post-slot `gate started` lines in the check logs show the queue handing the slot straight over
+(miniapps' `f517537` gate ran 11:45:50 → 11:53:44 and this lane's gate began at **11:53:44**, the same
+second — its recorded 1041s includes 452s of queue wait). A **single** gate already runs hot on this
+box: `npm run test:live` is `node --test --test-concurrency=4 <server lane>` followed by a browser lane
+that starts a server and headless Chrome per test. See `voicebox-beads-5bmg` for the measurement.
 
 ## The mechanism
 
