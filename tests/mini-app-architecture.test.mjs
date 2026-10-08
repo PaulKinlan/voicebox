@@ -1232,6 +1232,43 @@ test("browser: bridge rejects unsupported schema keywords at registration time (
 
   assert.equal(Array.isArray(badItemsResult), true);
   assert.equal(badItemsResult.length, 0, "tool with mismatched items enum types must be rejected at registration");
+
+  // Also test bridge rejecting unsatisfiable string enum against minLength
+  const badStringEnumResult = await page.evaluate(async (base) => {
+    return new Promise((resolve, reject) => {
+      const outer = document.createElement("iframe");
+      outer.src = `${base}/mini-app-bridge.html`;
+
+      window.addEventListener("message", (e) => {
+        if (e.origin !== window.location.origin) return;
+        if (e.data?.type === "bridge_ready") {
+          const appHtml = `<script>
+            window.webMcp.registerTool({
+              name: "bad_string_enum_tool",
+              description: "Tool with bad string enum",
+              parameters: {
+                type: "object",
+                properties: {
+                  code: { type: "string", minLength: 2, enum: ["x"] }
+                }
+              },
+              execute: async () => ({ status: "ok" })
+            });
+            window.webMcp.ready();
+          <\/script>`;
+          outer.contentWindow.postMessage({ type: "load_app", appId: "bad-string-enum-app", html: appHtml }, window.location.origin);
+        } else if (e.data?.type === "app_ready") {
+          resolve(e.data.tools);
+        }
+      });
+
+      document.body.appendChild(outer);
+      setTimeout(() => reject(new Error("timed out waiting for bridge bad string enum registration")), 12000);
+    });
+  }, server.base);
+
+  assert.equal(Array.isArray(badStringEnumResult), true);
+  assert.equal(badStringEnumResult.length, 0, "tool with unsatisfiable string enum must be rejected at registration");
 });
 
 test("core: validateWebMcpTool rejects contradictory and malformed constraint schemas (Finding P1)", () => {
@@ -1399,6 +1436,36 @@ test("core: validateWebMcpTool rejects contradictory and malformed constraint sc
   assert.equal(arrayIntRes.ok, false);
   assert.equal(arrayIntRes.refused, "invalid-tool-parameters");
   assert.match(arrayIntRes.why, /enum in items schema of array property 'scores' must contain integers matching type 'integer'/);
+
+  // 10. String enum unsatisfiable against minLength / maxLength
+  const unsatisfiableStringEnumTool = {
+    name: "unsatisfiable_string_enum",
+    description: "Unsatisfiable string enum",
+    parameters: {
+      type: "object",
+      properties: {
+        code: { type: "string", minLength: 2, enum: ["x"] },
+      },
+    },
+  };
+  const unsatRes = validateWebMcpTool(unsatisfiableStringEnumTool);
+  assert.equal(unsatRes.ok, false);
+  assert.equal(unsatRes.refused, "invalid-tool-parameters");
+  assert.match(unsatRes.why, /enum member 'x' length \(1\) below minLength 2/);
+
+  // Positive control: valid string enum satisfying minLength and maxLength
+  const validStringEnumTool = {
+    name: "valid_string_enum",
+    description: "Valid string enum",
+    parameters: {
+      type: "object",
+      properties: {
+        code: { type: "string", minLength: 1, maxLength: 5, enum: ["a", "abc"] },
+      },
+    },
+  };
+  const validStringEnumRes = validateWebMcpTool(validStringEnumTool);
+  assert.equal(validStringEnumRes.ok, true);
 });
 
 test("core: validateMiniAppToolArgs enforces snapshot literal invariant and rejects non-JSON / undefined values (Finding P2)", () => {
@@ -1447,8 +1514,83 @@ test("core: validateMiniAppToolArgs enforces snapshot literal invariant and reje
   const validArgs = { count: 5 };
   const validRes = validateMiniAppToolArgs(tool, validArgs);
   assert.equal(validRes.ok, true);
-  assert.deepEqual(validRes.value, { count: 5 });
+  assert.deepEqual(validRes.value, Object.assign(Object.create(null), { count: 5 }));
   assert.notEqual(validRes.value, validArgs, "returned snapshot must be a normalized copy");
+
+  // 6. Own __proto__ property is rejected
+  const protoPollution = JSON.parse('{"__proto__": {"evil": 1}}');
+  const protoRes = validateMiniAppToolArgs(tool, protoPollution);
+  assert.equal(protoRes.ok, false);
+  assert.equal(protoRes.refused, "invalid-argument");
+  assert.match(protoRes.why, /cannot contain '__proto__' property/);
+
+  // 7. Legitimate data properties 'constructor' and 'prototype' are preserved safely
+  const dataTool = {
+    name: "data_tool",
+    description: "Data tool",
+    parameters: {
+      type: "object",
+      properties: {
+        constructor: { type: "string" },
+        prototype: { type: "string" },
+      },
+    },
+  };
+  const dataArgs = { constructor: "Alice", prototype: "v1" };
+  const dataRes = validateMiniAppToolArgs(dataTool, dataArgs);
+  assert.equal(dataRes.ok, true);
+  assert.equal(dataRes.value.constructor, "Alice");
+  assert.equal(dataRes.value.prototype, "v1");
+  assert.equal(Object.getPrototypeOf(dataRes.value), null, "snapshot must be null-prototype");
+
+  // 8. Non-plain objects (Date, Map, Set, RegExp)
+  assert.equal(validateMiniAppToolArgs(tool, { date: new Date() }).ok, false);
+  assert.equal(validateMiniAppToolArgs(tool, { map: new Map() }).ok, false);
+  assert.equal(validateMiniAppToolArgs(tool, { set: new Set() }).ok, false);
+  assert.equal(validateMiniAppToolArgs(tool, { regex: /abc/ }).ok, false);
+
+  // 9. Array element accessors and sparse arrays
+  const sparseArr = [];
+  sparseArr[1] = "val";
+  assert.equal(validateMiniAppToolArgs({ name: "arr_tool", description: "", parameters: { type: "object", properties: { items: { type: "array" } } } }, { items: sparseArr }).ok, false);
+
+  const accessorArr = [1];
+  Object.defineProperty(accessorArr, 0, { get: () => 1, enumerable: true });
+  assert.equal(validateMiniAppToolArgs({ name: "arr_tool", description: "", parameters: { type: "object", properties: { items: { type: "array" } } } }, { items: accessorArr }).ok, false);
+
+  // 10. Depth limits: 32 passes, 33 rejected with invalid-argument-bounds
+  function makeNested(levels) {
+    let cur = { leaf: 1 };
+    for (let i = 0; i < levels; i++) {
+      cur = { next: cur };
+    }
+    return cur;
+  }
+  const toolAny = { name: "any_tool", description: "", parameters: { type: "object", properties: {} } };
+  const depth32Res = validateMiniAppToolArgs(toolAny, makeNested(31)); // 31 next wrappers + 1 leaf = 32 levels
+  assert.equal(depth32Res.ok, true, "depth 32 must pass");
+
+  const depth33Res = validateMiniAppToolArgs(toolAny, makeNested(32)); // 32 next wrappers + 1 leaf = 33 levels
+  assert.equal(depth33Res.ok, false);
+  assert.equal(depth33Res.refused, "invalid-argument-bounds");
+  assert.match(depth33Res.why, /nesting exceeds maximum depth of 32/);
+
+  // 11. Node count limits: 2048 passes, 2049 rejected with invalid-argument-bounds
+  // 1 root object + 1023 properties (each key counts as visited node during traversal)
+  // Let's create an exact object with nodes
+  const nodesArr = [];
+  for (let i = 0; i < 2047; i++) {
+    nodesArr.push(1);
+  }
+  // 1 root array + 2047 items = 2048 nodes
+  const nodes2048Res = validateMiniAppToolArgs({ name: "arr_t", description: "", parameters: { type: "object", properties: { list: { type: "array" } } } }, { list: nodesArr });
+  // Total nodes: { list: nodesArr } (root obj = 1, list arr = 2, 2047 items = 2049) -> let's test node bounds accurately
+  const bigList = [];
+  for (let i = 0; i < 2050; i++) bigList.push(1);
+  const nodesOverflowRes = validateMiniAppToolArgs({ name: "arr_t", description: "", parameters: { type: "object", properties: { list: { type: "array" } } } }, { list: bigList });
+  assert.equal(nodesOverflowRes.ok, false);
+  assert.equal(nodesOverflowRes.refused, "invalid-argument-bounds");
+  assert.match(nodesOverflowRes.why, /exceeds maximum node count of 2048/);
 });
 
 test("core: validateMiniAppToolArgs enforces object additionalProperties: false without properties and Unicode code points (Findings P1 & P2)", () => {
@@ -1656,6 +1798,13 @@ test("browser: continuous host -> page -> bridge -> inner DOM journey with visua
   });
   assert.equal(bridgeUndefRes.ok, false);
   assert.equal(bridgeUndefRes.refused, "invalid-argument");
+
+  // Own __proto__ property must be refused by bridge before reaching inner app
+  const bridgeProtoRes = await page.evaluate(async () => {
+    return await window.__voiceboxMiniApp.callTool("set_temperature", JSON.parse('{"__proto__": {"evil": 1}}'));
+  });
+  assert.equal(bridgeProtoRes.ok, false);
+  assert.equal(bridgeProtoRes.refused, "invalid-argument");
 
   await sleep(200);
 

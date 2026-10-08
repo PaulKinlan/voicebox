@@ -51,6 +51,8 @@ export const MINI_APP_BOUNDS = Object.freeze({
   maxTools: 16,
   maxOutputBytes: 65536, // 64KB
   maxArgsBytes: 65536,   // 64KB max incoming tool arguments
+  maxNestingDepth: 32,   // 32 levels of object/array nesting
+  maxNodeCount: 2048,    // 2048 total visited nodes
   callTimeoutMs: 5000,   // 5s per tool execution
   maxNameLength: 64,
   maxDescriptionLength: 1024,
@@ -129,6 +131,15 @@ function validateSinglePropertySchema(propName: string, raw: unknown, path = "")
     if (s.enum !== undefined) {
       if (!Array.isArray(s.enum) || s.enum.length === 0 || !s.enum.every((item) => typeof item === "string")) {
         return `enum for string property '${path}${propName}' must be a non-empty array of strings`;
+      }
+      for (const item of s.enum) {
+        const len = Array.from(item as string).length;
+        if (typeof s.minLength === "number" && len < s.minLength) {
+          return `enum member '${item}' length (${len}) below minLength ${s.minLength} on property '${path}${propName}'`;
+        }
+        if (typeof s.maxLength === "number" && len > s.maxLength) {
+          return `enum member '${item}' length (${len}) exceeds maxLength ${s.maxLength} on property '${path}${propName}'`;
+        }
       }
     }
   }
@@ -358,19 +369,43 @@ export function toolsToFunctionDeclarations(tools: WebMcpToolDeclaration[]) {
 interface SnapshotResult {
   ok: boolean;
   snapshot?: unknown;
+  refused?: string;
   why?: string;
 }
 
-export function inspectAndSnapshotJson(val: unknown, path = "", seen = new Set<unknown>()): SnapshotResult {
+export function inspectAndSnapshotJson(
+  val: unknown,
+  path = "",
+  depth = 0,
+  counter = { nodes: 0 },
+  seen = new Set<unknown>()
+): SnapshotResult {
+  counter.nodes++;
+  if (counter.nodes > MINI_APP_BOUNDS.maxNodeCount) {
+    return {
+      ok: false,
+      refused: "invalid-argument-bounds",
+      why: `argument exceeds maximum node count of ${MINI_APP_BOUNDS.maxNodeCount}`,
+    };
+  }
+
+  if (depth > MINI_APP_BOUNDS.maxNestingDepth) {
+    return {
+      ok: false,
+      refused: "invalid-argument-bounds",
+      why: `argument nesting exceeds maximum depth of ${MINI_APP_BOUNDS.maxNestingDepth}`,
+    };
+  }
+
   if (val === undefined) {
-    return { ok: false, why: `argument${path ? ` at '${path}'` : ""} cannot be undefined` };
+    return { ok: false, refused: "invalid-argument", why: `argument${path ? ` at '${path}'` : ""} cannot be undefined` };
   }
   if (val === null || typeof val === "boolean") {
     return { ok: true, snapshot: val };
   }
   if (typeof val === "number") {
     if (!Number.isFinite(val)) {
-      return { ok: false, why: `number${path ? ` at '${path}'` : ""} must be a finite number, got ${val}` };
+      return { ok: false, refused: "invalid-argument", why: `number${path ? ` at '${path}'` : ""} must be a finite number, got ${val}` };
     }
     return { ok: true, snapshot: val };
   }
@@ -378,22 +413,61 @@ export function inspectAndSnapshotJson(val: unknown, path = "", seen = new Set<u
     return { ok: true, snapshot: val };
   }
   if (typeof val === "bigint" || typeof val === "symbol" || typeof val === "function") {
-    return { ok: false, why: `argument${path ? ` at '${path}'` : ""} has unsupported type '${typeof val}'` };
+    return { ok: false, refused: "invalid-argument", why: `argument${path ? ` at '${path}'` : ""} has unsupported type '${typeof val}'` };
   }
   if (typeof val !== "object") {
-    return { ok: false, why: `argument${path ? ` at '${path}'` : ""} has invalid type '${typeof val}'` };
+    return { ok: false, refused: "invalid-argument", why: `argument${path ? ` at '${path}'` : ""} has invalid type '${typeof val}'` };
+  }
+
+  // Reject non-plain objects: Date, RegExp, Map, Set, Promise, Error, ArrayBuffer, ArrayBuffer views
+  if (
+    val instanceof Date ||
+    val instanceof RegExp ||
+    val instanceof Map ||
+    val instanceof Set ||
+    val instanceof Promise ||
+    val instanceof Error ||
+    val instanceof ArrayBuffer ||
+    ArrayBuffer.isView(val)
+  ) {
+    return {
+      ok: false,
+      refused: "invalid-argument",
+      why: `argument${path ? ` at '${path}'` : ""} cannot be an instance of ${Object.prototype.toString.call(val).slice(8, -1)}`,
+    };
   }
 
   if (seen.has(val)) {
-    return { ok: false, why: `circular reference detected${path ? ` at '${path}'` : ""}` };
+    return { ok: false, refused: "invalid-argument", why: `circular reference detected${path ? ` at '${path}'` : ""}` };
   }
   seen.add(val);
 
   if (Array.isArray(val)) {
+    const len = val.length;
+    let descriptors: PropertyDescriptorMap;
+    try {
+      descriptors = Object.getOwnPropertyDescriptors(val);
+    } catch {
+      seen.delete(val);
+      return { ok: false, refused: "invalid-argument", why: `cannot read descriptors on array${path ? ` at '${path}'` : ""}` };
+    }
+
     const arrSnapshot: unknown[] = [];
-    for (let i = 0; i < val.length; i++) {
-      const itemRes = inspectAndSnapshotJson(val[i], `${path}[${i}]`, seen);
-      if (!itemRes.ok) return itemRes;
+    for (let i = 0; i < len; i++) {
+      const desc = descriptors[String(i)];
+      if (!desc) {
+        seen.delete(val);
+        return { ok: false, refused: "invalid-argument", why: `sparse array detected${path ? ` at '${path}[${i}]'` : ""}` };
+      }
+      if (desc.get || desc.set) {
+        seen.delete(val);
+        return { ok: false, refused: "invalid-argument", why: `array element${path ? ` at '${path}[${i}]'` : ""} cannot use getter/setter accessors` };
+      }
+      const itemRes = inspectAndSnapshotJson(desc.value, `${path}[${i}]`, depth + 1, counter, seen);
+      if (!itemRes.ok) {
+        seen.delete(val);
+        return itemRes;
+      }
       arrSnapshot.push(itemRes.snapshot);
     }
     seen.delete(val);
@@ -401,25 +475,60 @@ export function inspectAndSnapshotJson(val: unknown, path = "", seen = new Set<u
   }
 
   const proto = Object.getPrototypeOf(val);
-  if (proto !== null && typeof proto !== "object") {
-    return { ok: false, why: `argument object${path ? ` at '${path}'` : ""} must be an object` };
+  if (proto !== null && proto !== Object.prototype) {
+    if (proto.constructor && proto.constructor !== Object) {
+      seen.delete(val);
+      return {
+        ok: false,
+        refused: "invalid-argument",
+        why: `argument object${path ? ` at '${path}'` : ""} cannot be an instance of ${proto.constructor.name}`,
+      };
+    }
   }
 
-  const syms = Object.getOwnPropertySymbols(val);
+  let syms: symbol[] = [];
+  try {
+    syms = Object.getOwnPropertySymbols(val);
+  } catch {
+    seen.delete(val);
+    return { ok: false, refused: "invalid-argument", why: `cannot read symbols on object${path ? ` at '${path}'` : ""}` };
+  }
   if (syms.length > 0) {
-    return { ok: false, why: `argument object${path ? ` at '${path}'` : ""} cannot contain Symbol keys` };
+    seen.delete(val);
+    return { ok: false, refused: "invalid-argument", why: `argument object${path ? ` at '${path}'` : ""} cannot contain Symbol keys` };
   }
 
-  const descriptors = Object.getOwnPropertyDescriptors(val);
-  const objSnapshot: Record<string, unknown> = {};
+  let descriptors: PropertyDescriptorMap;
+  try {
+    descriptors = Object.getOwnPropertyDescriptors(val);
+  } catch {
+    seen.delete(val);
+    return { ok: false, refused: "invalid-argument", why: `cannot read descriptors on object${path ? ` at '${path}'` : ""}` };
+  }
+
+  if (Object.hasOwn(val, "__proto__")) {
+    seen.delete(val);
+    return { ok: false, refused: "invalid-argument", why: `argument object${path ? ` at '${path}'` : ""} cannot contain '__proto__' property` };
+  }
+
+  const objSnapshot: Record<string, unknown> = Object.create(null);
   for (const [key, desc] of Object.entries(descriptors)) {
     if (!desc.enumerable) continue;
     if (desc.get || desc.set) {
-      return { ok: false, why: `argument property '${path ? `${path}.` : ""}${key}' cannot use getter/setter accessors` };
+      seen.delete(val);
+      return { ok: false, refused: "invalid-argument", why: `argument property '${path ? `${path}.` : ""}${key}' cannot use getter/setter accessors` };
     }
-    const propRes = inspectAndSnapshotJson(desc.value, path ? `${path}.${key}` : key, seen);
-    if (!propRes.ok) return propRes;
-    objSnapshot[key] = propRes.snapshot;
+    const propRes = inspectAndSnapshotJson(desc.value, path ? `${path}.${key}` : key, depth + 1, counter, seen);
+    if (!propRes.ok) {
+      seen.delete(val);
+      return propRes;
+    }
+    Object.defineProperty(objSnapshot, key, {
+      value: propRes.snapshot,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
   }
 
   seen.delete(val);
@@ -442,7 +551,7 @@ export function validateMiniAppToolArgs(
 
   const snapResult = inspectAndSnapshotJson(rawArgs);
   if (!snapResult.ok) {
-    return refusal("invalid-argument", snapResult.why || "invalid arguments");
+    return refusal(snapResult.refused || "invalid-argument", snapResult.why || "invalid arguments");
   }
 
   let jsonStr = "";
@@ -463,7 +572,7 @@ export function validateMiniAppToolArgs(
     );
   }
 
-  const args = JSON.parse(jsonStr) as Record<string, unknown>;
+  const args = snapResult.snapshot as Record<string, unknown>;
 
   const params = tool?.parameters ?? { type: "object", properties: {} };
   const properties = (params.properties && typeof params.properties === "object" && !Array.isArray(params.properties))

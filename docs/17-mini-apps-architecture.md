@@ -106,6 +106,7 @@ window.webMcp.ready();
 | **Max Tool Output** | `64 KiB` (`65,536` bytes) | Outer Bridge | Refused with `"output over budget (max 64KB)"`. |
 | **Tool Execution Timeout** | `5,000ms` | Outer Bridge | Refused with `"tool execution timed out after 5000ms"`. |
 | **Tool Arguments Schema & Bounds** | Declared JSON schema, max 64 KiB | Host & Outer Bridge | Refused with `missing-argument`, `invalid-argument-type`, `invalid-argument-enum`, or `invalid-tool-arguments`. |
+| **Tool Arguments Depth & Nodes** | Max 32 nesting levels, max 2048 nodes | Host & Outer Bridge | Refused with `invalid-argument-bounds`. |
 | **Tool Name Format** | `1–64` chars (`a-zA-Z0-9_-`) | `validateWebMcpTool()` | Refused with `invalid-tool-name`. |
 | **Handshake Source** | `inner.contentWindow` / `window.parent` | Outer Bridge & Inner SDK | Drops unverified postMessage frames from decoy frames. |
 
