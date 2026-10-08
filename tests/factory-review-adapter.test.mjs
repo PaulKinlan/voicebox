@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import {
   selectReviewStation,
   computeReviewCacheKey,
@@ -497,6 +497,32 @@ test("factory-review-trigger: getCheckoutRepoIdentity resolves normalized reposi
   assert.equal(mismatchedRes.ok, false);
   assert.equal(mismatchedRes.exitCode, 1);
   assert.ok(mismatchedRes.error.includes("does not match target repo"));
+});
+
+test("factory-review-trigger: ambient poisoned GIT_DIR does not blind diff measurement (C2 / GH #19)", () => {
+  // Negative control / regression:
+  // With ambient GIT_DIR pointing to a foreign repository (e.g. ~/agents/.git),
+  // git merge-base and git diff must still evaluate against target rootDir via lib/git-env.mjs
+  const foreignRepo = path.join(homedir(), "agents", ".git");
+  if (!existsSync(foreignRepo)) {
+    return;
+  }
+
+  const poisonedEnv = {
+    ...process.env,
+    GIT_DIR: foreignRepo,
+    GIT_WORK_TREE: path.join(homedir(), "agents"),
+  };
+
+  const res = runReviewTrigger(["--dry-run", "--tip", "HEAD"], {
+    env: poisonedEnv,
+    rootDir: ROOT,
+  });
+
+  assert.equal(res.ok, true);
+  assert.equal(res.dryRun, true);
+  // Verify station was selected for target repository changes (not blinded with 0 changed files)
+  assert.equal(res.station !== null, true, "review station must be selected for target repository diff");
 });
 
 test("factory-review-trigger: locateRunDeltaReport strictly enforces runDir provenance", () => {

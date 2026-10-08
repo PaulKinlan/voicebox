@@ -14,6 +14,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { gitEnv } from "../lib/git-env.mjs";
 import { runReviewTrigger } from "./factory-review-trigger.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -57,6 +58,7 @@ Options:
   }
 
   mkdirSync(privateDir, { recursive: true });
+  const cleanEnv = gitEnv(env);
   const cursorFile = path.join(privateDir, "review-watcher-cursor.json");
   let cursor = { processedBranches: {}, lastMainSha: "" };
   if (existsSync(cursorFile)) {
@@ -70,7 +72,7 @@ Options:
     execFileSync("git", ["fetch", "origin", "--prune"], {
       cwd: rootDir,
       encoding: "utf8",
-      env: { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined },
+      env: cleanEnv,
       timeout: 60000,
     });
   } catch {}
@@ -125,7 +127,7 @@ Options:
       tipSha = execFileSync("git", ["rev-parse", "--verify", remoteRef], {
         cwd: rootDir,
         encoding: "utf8",
-        env: { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined },
+        env: cleanEnv,
       }).trim();
     } catch {
       continue; // Remote branch does not exist
@@ -137,7 +139,7 @@ Options:
       baseSha = execFileSync("git", ["merge-base", "origin/main", tipSha], {
         cwd: rootDir,
         encoding: "utf8",
-        env: { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined },
+        env: cleanEnv,
       }).trim();
     } catch {
       continue;
@@ -208,14 +210,14 @@ Options:
     const currentMainSha = execFileSync("git", ["rev-parse", "origin/main"], {
       cwd: rootDir,
       encoding: "utf8",
-      env: { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined },
+      env: cleanEnv,
     }).trim();
 
     if (cursor.lastMainSha && cursor.lastMainSha !== currentMainSha) {
       // Fail-closed rewrite check: assert cursor.lastMainSha is an ancestor of currentMainSha
       const isAncestor = spawnSync("git", ["merge-base", "--is-ancestor", cursor.lastMainSha, currentMainSha], {
         cwd: rootDir,
-        env: { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined },
+        env: cleanEnv,
       }).status === 0;
 
       if (!isAncestor) {

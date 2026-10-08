@@ -21,6 +21,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { redactSecrets } from "../lib/redact.mjs";
+import { gitEnv } from "../lib/git-env.mjs";
 import { selectReviewStation, computeReviewCacheKey, NIGHTLY_PROJECT_AUDIT_STATIONS } from "../tools/factory-issue-router.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -135,13 +136,10 @@ export function validateStationReportProvenance(reportPath, { targetName, statio
 
 export const APPROVED_GIT_HOSTS = new Set(["github.com", "github.int.exe.xyz", "ssh.github.com"]);
 
-export function getCheckoutRepoIdentity(cwd = ROOT) {
+export function getCheckoutRepoIdentity(cwd = ROOT, env = process.env) {
   try {
-    const gitEnv = { ...process.env };
-    delete gitEnv.GIT_DIR;
-    delete gitEnv.GIT_WORK_TREE;
-    delete gitEnv.GIT_INDEX_FILE;
-    const remoteUrl = execFileSync("git", ["config", "--get", "remote.origin.url"], { cwd, env: gitEnv, encoding: "utf8" }).trim();
+    const cleanEnv = gitEnv(env);
+    const remoteUrl = execFileSync("git", ["config", "--get", "remote.origin.url"], { cwd, env: cleanEnv, encoding: "utf8" }).trim();
     const m = remoteUrl.match(/^(?:https?:\/\/([a-zA-Z0-9.-]+)(?::\d+)?\/|git@([a-zA-Z0-9.-]+):)([^/:]+\/[^/:]+?)(?:\.git)?$/i);
     if (m) {
       const host = (m[1] || m[2] || "").toLowerCase();
@@ -201,9 +199,11 @@ Options:
     console.log(`[review-trigger] DRY-RUN mode active.`);
   }
 
+  const cleanEnv = gitEnv(env);
+
   // Pre-execution validation: Refuse execution if checkout origin is known on an approved host and differs from target repo.
   // Must execute BEFORE cache lookup so cached results from previous runs cannot falsely pass on mismatched repos.
-  const checkoutRepo = getCheckoutRepoIdentity(rootDir);
+  const checkoutRepo = getCheckoutRepoIdentity(rootDir, cleanEnv);
   if (checkoutRepo && checkoutRepo !== repo.toLowerCase()) {
     console.error(`[review-trigger] Refusing execution: checkout origin '${checkoutRepo}' does not match target repo '${repo}'`);
     return { ok: false, exitCode: 1, error: `checkout origin '${checkoutRepo}' does not match target repo '${repo}'` };
@@ -212,7 +212,7 @@ Options:
   if (!baseRef) {
     // Resolve default merge base against origin/main or HEAD~1
     try {
-      baseRef = execFileSync("git", ["merge-base", "origin/main", tipRef], { cwd: rootDir, encoding: "utf8" }).trim();
+      baseRef = execFileSync("git", ["merge-base", "origin/main", tipRef], { cwd: rootDir, env: cleanEnv, encoding: "utf8" }).trim();
     } catch {
       baseRef = "HEAD~1";
     }
@@ -222,8 +222,8 @@ Options:
   let diffFilesRaw = "";
   let diffContent = "";
   try {
-    diffFilesRaw = execFileSync("git", ["diff", "--name-only", `${baseRef}..${tipRef}`], { cwd: rootDir, encoding: "utf8" }).trim();
-    diffContent = execFileSync("git", ["diff", `${baseRef}..${tipRef}`], { cwd: rootDir, encoding: "utf8" });
+    diffFilesRaw = execFileSync("git", ["diff", "--name-only", `${baseRef}..${tipRef}`], { cwd: rootDir, env: cleanEnv, encoding: "utf8" }).trim();
+    diffContent = execFileSync("git", ["diff", `${baseRef}..${tipRef}`], { cwd: rootDir, env: cleanEnv, encoding: "utf8" });
   } catch (err) {
     console.error(`[review-trigger] git diff failed between ${baseRef} and ${tipRef}: ${sanitizeLogOutput(err.message)}`);
     return { ok: false, exitCode: 1, error: sanitizeLogOutput(err.message) };
