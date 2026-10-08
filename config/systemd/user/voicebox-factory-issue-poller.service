@@ -1,0 +1,13 @@
+[Unit]
+Description=Voicebox Software Factory local inbound issue poller
+Documentation=https://github.com/PaulKinlan/voicebox/blob/main/docs/28-factory-review-adapter.md
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c "RUNNER=%h/voicebox/scripts/factory-issue-poller-runner.sh; [ -x \"$$RUNNER\" ] || RUNNER=%h/worktrees/voicebox-miniapps/scripts/factory-issue-poller-runner.sh; exec \"$$RUNNER\""
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

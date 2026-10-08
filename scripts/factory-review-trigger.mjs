@@ -121,6 +121,18 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
       dryRun = true;
     } else if (a === "--force") {
       force = true;
+    } else if (a === "--help" || a === "-h") {
+      console.log(`Usage: node scripts/factory-review-trigger.mjs [options]
+Options:
+  --base <base>       Base git ref or commit SHA (default: merge-base with origin/main)
+  --tip <tip>         Tip git ref or commit SHA (default: HEAD)
+  --bead <id>         Bead issue ID to receive review verdict comments
+  --dry-run           Plan and select stations without executing or publishing
+  --force             Bypass cache and force re-execution
+  --repo <owner/repo> Target repository for publication (default: PaulKinlan/voicebox)
+  --private-dir <dir> Directory for private delta reports (default: ~/.voicebox/factory-reports)
+  --help, -h          Show this help message`);
+      return { ok: true, exitCode: 0, help: true };
     }
   }
 
@@ -209,14 +221,14 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
   mkdirSync(runDir, { recursive: true });
   const runLog = path.join(runDir, `${station}.log`);
 
-  console.log(`[review-trigger] Executing station '${station}' with --sink file --station-only (runDir: ${runDir})...`);
+  console.log(`[review-trigger] Executing station '${station}' with --sink file (runDir: ${runDir})...`);
 
   let runExit = 0;
   try {
     const hasFleetHeavy = existsSync("/usr/local/bin/fleet-heavy") || spawnSync("which", ["fleet-heavy"]).status === 0;
     const cmd = hasFleetHeavy
-      ? ["fleet-heavy", "timeout", "900", "factory", "run", station, "--target", rootDir, "--sink", "file", "--station-only"]
-      : ["timeout", "-k", "30", "900", "factory", "run", station, "--target", rootDir, "--sink", "file", "--station-only"];
+      ? ["fleet-heavy", "timeout", "900", "factory", "run", station, "--target", rootDir, "--sink", "file"]
+      : ["timeout", "-k", "30", "900", "factory", "run", station, "--target", rootDir, "--sink", "file"];
 
     const res = spawnSync(cmd[0], cmd.slice(1), {
       cwd: rootDir,

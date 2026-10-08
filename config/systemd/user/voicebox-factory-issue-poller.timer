@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic hourly invocation of Voicebox Software Factory issue poller
+Documentation=https://github.com/PaulKinlan/voicebox/blob/main/docs/28-factory-review-adapter.md
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=120
+Persistent=true
+
+[Install]
+WantedBy=timers.target

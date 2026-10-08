@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import {
   selectReviewStation,
@@ -167,6 +167,18 @@ test("factory-issue-router: loop hazard guard rejects publisher issues independe
   const resD = routeIssue(untrustedIssue);
   assert.equal(resD.ok, false);
   assert.ok(resD.reason.includes("author_association 'NONE' is not in trusted set"));
+
+  // Case E: Pull requests skipped (handled by review trigger, not issue poller)
+  const prIssue = {
+    number: 22,
+    author_association: "OWNER",
+    title: "feat(audio): client audio improvements",
+    body: "Implements audio buffer improvements",
+    pull_request: { url: "https://api.github.com/repos/PaulKinlan/voicebox/pulls/22" },
+  };
+  const resE = routeIssue(prIssue);
+  assert.equal(resE.ok, false);
+  assert.ok(resE.reason.includes("pull request, not an issue"));
 });
 
 test("factory-issue-commenter: parses real factory delta reports, emits one comment per finding, and sanitizes credentials", () => {
@@ -503,4 +515,43 @@ test("factory-review-trigger: locateRunDeltaReport strictly enforces runDir prov
   assert.equal(found, runReport, "report in runDir must be accepted");
 
   rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("factory-activation: systemd user units, poller runner, and review gate wrappers are valid", () => {
+  const servicePath = path.join(ROOT, "config", "systemd", "user", "voicebox-factory-issue-poller.service");
+  const timerPath = path.join(ROOT, "config", "systemd", "user", "voicebox-factory-issue-poller.timer");
+  const pollerRunnerPath = path.join(ROOT, "scripts", "factory-issue-poller-runner.sh");
+  const reviewGatePath = path.join(ROOT, "scripts", "factory-review-gate.sh");
+
+  // 1. Files exist and have valid permissions/syntax
+  assert.ok(existsSync(servicePath), "systemd service unit exists");
+  assert.ok(existsSync(timerPath), "systemd timer unit exists");
+  assert.ok(existsSync(pollerRunnerPath), "poller runner script exists");
+  assert.ok(existsSync(reviewGatePath), "review gate script exists");
+
+  const serviceContent = readFileSync(servicePath, "utf8");
+  assert.ok(serviceContent.includes("[Unit]"));
+  assert.ok(serviceContent.includes("[Service]"));
+  assert.ok(serviceContent.includes("Type=oneshot"));
+  assert.ok(serviceContent.includes("factory-issue-poller-runner.sh"));
+
+  const timerContent = readFileSync(timerPath, "utf8");
+  assert.ok(timerContent.includes("[Timer]"));
+  assert.ok(timerContent.includes("OnCalendar=hourly"));
+  assert.ok(timerContent.includes("Persistent=true"));
+  assert.ok(timerContent.includes("WantedBy=timers.target"));
+
+  // 2. Review gate and poller runner scripts respond to --help
+  const gateHelp = execFileSync("bash", [reviewGatePath, "--help"], { encoding: "utf8" });
+  assert.ok(gateHelp.includes("Usage: scripts/factory-review-gate.sh"));
+  assert.ok(gateHelp.includes("--base"));
+
+  // 3. Review trigger and poller scripts respond to --help
+  const triggerRes = runReviewTrigger(["--help"], { rootDir: ROOT });
+  assert.equal(triggerRes.ok, true);
+  assert.equal(triggerRes.help, true);
+
+  const pollerRes = pollInboundIssues(["--help"], { rootDir: ROOT });
+  assert.equal(pollerRes.ok, true);
+  assert.equal(pollerRes.help, true);
 });

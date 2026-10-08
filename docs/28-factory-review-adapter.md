@@ -56,7 +56,7 @@ $$\text{CacheKey} = \text{SHA256}(\text{DiffHash} : \text{Station} : \text{Facto
 If the cache key matches a prior exit-0 run, the cached verdict is returned instantly without re-executing.
 
 ### 2.4 Heavy Queue Bounding & Failure Handling
-Execution runs under `fleet-heavy timeout 900 factory run <station> --target . --sink file --station-only`.
+Execution runs under `fleet-heavy timeout 900 factory run <station> --target . --sink file`.
 - All scanner output is redirected to `$VOICEBOX_FACTORY_PRIVATE_DIR/runs/<id>/<station>.log`.
 - Non-zero exits, kills, or timeouts (exit codes 124, 137, 143) are recorded honestly as `UNKNOWN`/`FAILED`.
 - Partial reports from aborted runs are never published or treated as passing.
@@ -111,3 +111,68 @@ Comments formatted by [`tools/factory-issue-commenter.mjs`](../tools/factory-iss
 - `factory-human-review`: presence flag emitted when the station is security-related (`secret-scan`, `vuln-discovery`, `vuln-triage`, `vuln-verify`, `threat-model`) or when the finding is flagged for human verification.
 
 These markers allow `scripts/factory-triage.mjs --review` and `--promote` to read review records from issue comments on human-submitted issues, enabling seamless conversion to Beads.
+
+---
+
+## 5. Local VM Activation & Operational Runbook (`voicebox-beads-xacp`)
+
+### 5.1 Hourly Inbound Issue Poller Timer
+The inbound issue poller is scheduled locally on the project VM using an unprivileged systemd user timer (`config/systemd/user/`):
+
+- **Service Unit**: `config/systemd/user/voicebox-factory-issue-poller.service`
+  Executes `scripts/factory-issue-poller-runner.sh` as a `Type=oneshot` task with standard journal output.
+- **Timer Unit**: `config/systemd/user/voicebox-factory-issue-poller.timer`
+  Runs hourly (`OnCalendar=hourly`) with a randomized 2-minute delay (`RandomizedDelaySec=120`) and persistent catchup (`Persistent=true`).
+- **Runner Script**: `scripts/factory-issue-poller-runner.sh`
+  Sources `~/.fleet/env` and nvm, acquires an exclusive file lock (`~/.voicebox/factory-reports/poller.lock`), and invokes `scripts/factory-issue-poller.mjs` under `fleet-heavy timeout -k 30 600`.
+
+#### Installation Commands (Unprivileged User)
+```bash
+mkdir -p ~/.config/systemd/user
+cp config/systemd/user/voicebox-factory-issue-poller.* ~/.config/systemd/user/
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user daemon-reload
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user enable --now voicebox-factory-issue-poller.timer
+```
+
+#### Verification & Inspection
+```bash
+# Check timer schedule and next scheduled run
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user list-timers voicebox-factory-issue-poller.timer
+
+# Trigger manual on-demand execution
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start voicebox-factory-issue-poller.service
+
+# View live poller logs
+tail -f ~/.voicebox/factory-reports/poller.log
+```
+
+### 5.2 Review-Time Station Invocation (`scripts/factory-review-gate.sh`)
+During `IN_REVIEW` handoff, implementers or automated review tools invoke the repo-owned review gate:
+
+```bash
+# Run review gate for branch changes against merge-base
+scripts/factory-review-gate.sh --base <merge-base> --tip HEAD --bead <bead-id>
+
+# Dry-run station selection and deferred reporting without execution
+scripts/factory-review-gate.sh --base <merge-base> --tip HEAD --dry-run
+```
+
+The script evaluates the diff, runs the highest-priority primary station under `fleet-heavy timeout 900`, records deferred secondary stations, and publishes findings via `scripts/factory-triage.mjs`.
+
+### 5.3 Nightly 5-Domain Station Coverage Audit
+The VM nightly line (`fleet-factory.timer`, running daily at 03:00 UTC via `/home/exedev/fleet/remote/factory-nightly.sh`) executes `factory line project-audit --sink file`.
+
+| Domain | Covered Stations in `project-audit.yaml` | Uncovered Stations in Target Definition (`~/agents/targets/voicebox.yaml`) | Domain Assessment & Remediation |
+|---|---|---|---|
+| **Security** | `secret-scan`, `threat-model`, `vuln-discovery`, `vuln-verify`, `vuln-triage`, `deps-supply-chain` | None | **100% complete coverage** across all static, dependency, and model-driven security stations. |
+| **Performance** | `perf-review` | `bundle-size`, `memory-profile`, `perf-hillclimb` | `perf-review` covers diff anti-patterns. `bundle-size` and `memory-profile` require browser/runtime harness runs; `perf-hillclimb` is an interactive ledger optimizer. |
+| **UX / Web Platform** | `modern-web`, `ui-ux-audit` | `accessibility`, `resilience` | `modern-web` and `ui-ux-audit` audit CSS/JS baseline and visual layout. Propose adding `accessibility` and `resilience` to an extended nightly line. |
+| **Documentation** | `docs-drift` | `docs-write` | `docs-drift` detects drift between code and docs. `docs-write` is an active code patch proposer, not an audit observer. |
+| **Ops / Maintenance** | `qa-station` | `test-gap`, `issue-triage`, `pr-fixer`, `log-check`, `release-notes` | `qa-station` audits factory quality. `issue-triage` is actively handled by our hourly issue poller. |
+
+### 5.4 Proposed Fleet Review Handoff Rule (Hub Handoff)
+To integrate `scripts/factory-review-gate.sh` into standard fleet lifecycle policies (outside the Voicebox repository), the following addition is proposed for `~/fleet/roles/implementer.md` and `~/fleet/roles/merger.md` via hub delegation:
+
+> **Factory Review Station Gate (before merge-queue)**:
+> In repositories supporting local Software Factory review triggers, run `scripts/factory-review-gate.sh --base origin/main --tip HEAD --bead <id>` before queuing on `merge-queue`. Ensure primary station verdict is PASS (exit 0) or cached PASS, and deferred stations are noted on the bead.
+

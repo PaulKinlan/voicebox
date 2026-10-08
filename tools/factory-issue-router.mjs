@@ -148,7 +148,18 @@ export function routeIssue(issue = {}) {
   const title = String(issue.title ?? "");
   const authorAssoc = String(issue.author_association ?? issue.authorAssociation ?? "NONE").toUpperCase();
 
-  // 1. Loop Hazard Guard (independent of author association):
+  // 1. Skip pull requests (they are handled by review trigger, not issue poller)
+  if (issue.pull_request || issue.is_pr) {
+    return {
+      ok: false,
+      authorTrusted: true,
+      reason: "pull request, not an issue (handled by review trigger)",
+      categories: [],
+      agents: [],
+    };
+  }
+
+  // 2. Loop Hazard Guard (independent of author association):
   // Checks body and title markers matching issues created by factory-triage or upstream factory sinks
   if (
     /<!--\s*factory-fingerprint:/i.test(body) ||
@@ -165,7 +176,7 @@ export function routeIssue(issue = {}) {
     };
   }
 
-  // 2. Author Association Trust Gate
+  // 3. Author Association Trust Gate
   const authorTrusted = TRUSTED_AUTHORS.has(authorAssoc);
   if (!authorTrusted) {
     return {
@@ -177,7 +188,7 @@ export function routeIssue(issue = {}) {
     };
   }
 
-  // 3. Keyword / Label matching across domains
+  // 4. Keyword / Label matching across domains
   const labels = Array.isArray(issue.labels)
     ? issue.labels.map((l) => (typeof l === "string" ? l.toLowerCase() : String(l.name ?? "").toLowerCase()))
     : [];
