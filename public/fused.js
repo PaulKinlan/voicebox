@@ -613,7 +613,7 @@ async function ensureScratchpadFolder(name = SCRATCHPAD_NAME) {
 async function openOpfsScratchFolder(projectName = SCRATCHPAD_NAME) {
   try {
     await ensureScratchpadFolder(projectName);
-    setReport(`Opened '${projectName}' in browser storage (OPFS) — turns and edits save here.`, "good");
+    setReport(`Opened '${projectName}' in browser storage (OPFS) — browser files and edits save here.`, "good");
     return true;
   } catch (error) {
     setReport(`Could not open browser scratchpad: ${error?.message ?? error}`, "bad");
@@ -1693,7 +1693,9 @@ function renderRoot() {
     const isOpfs = roomFolder.name === SCRATCHPAD_NAME;
     const kindPlain = isOpfs ? "browser storage" : "picked folder";
     kindEl.textContent = `${kindPlain} · ${roomFolder.name}`;
-    kindEl.title = `${kindPlain} · ${roomFolder.name} — saved in this browser`;
+    kindEl.title = isOpfs
+      ? `${kindPlain} · ${roomFolder.name} — saved in this browser`
+      : `${kindPlain} · ${roomFolder.name} — saved in this local directory`;
     if (els.envActiveRootVal) {
       els.envActiveRootVal.textContent = `${kindPlain} · ${roomFolder.name}`;
     }
@@ -4097,7 +4099,10 @@ on(els.envPickFolderBtn, "click", async () => {
   if (picked) {
     if (els.envRootStatus) {
       els.envRootStatus.dataset.ok = "true";
-      els.envRootStatus.textContent = `Opened local folder “${picked.name}” — browser files and edits save here.`;
+      const writable = roomFolder?.permission === "granted" && roomFolder?.mode === "readwrite";
+      els.envRootStatus.textContent = writable
+        ? `Opened local folder “${picked.name}” — browser files and edits save here.`
+        : `Opened read-only folder “${picked.name}” — click 'Restore access' above to write files.`;
     }
     renderRoot();
   }
