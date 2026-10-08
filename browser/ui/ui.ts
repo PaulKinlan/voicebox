@@ -133,9 +133,16 @@ function header(project?: Record<string, any>): void {
     // Who acts on this root is a FACT about the kind, and the page says it rather than letting the
     // user discover it by trying: a machine root's acts come from the loop, a picked folder's from
     // this page, an OPFS root's from this page.
+    // CORRECTED in voicebox-beads-42ir. This said "turns cannot write into this kind yet", and that
+    // was false: the server ROUTES a turn's file act to the page that owns the root and the page
+    // performs it (core/dispatch.ts routes, browser/acts.ts is the executor, the declaration answers
+    // actsVia: "page", tests/page-writes.test.mjs writes into OPFS with a real turn and reads it back).
+    // What differs by destination is WHO performs the act and WHAT it needs — not whether a turn can write.
     ["acts come from", kind === "machine"
       ? "the loop (a machine process) — this page can see it and cannot write it, and turns DO write here"
-      : "this page only — turns cannot write into this kind yet; choose a machine folder for that"],
+      : kind === "handle"
+        ? "this page — the server routes each file act here and this page performs it (a picked folder writes once you grant write access)"
+        : "this page — the server routes each file act here and this page performs it (the files live in this browser, so the page has to be connected)"],
     ["recovery", kind === "handle"
       ? `the handle is persisted in IndexedDB, so a reload does not re-pick; permission is ${project.durability?.permission ?? "unknown"}, and restoring it takes a click`
       : kind === "machine"
@@ -543,6 +550,7 @@ async function open(name: string): Promise<Reply> {
   const reply = await send({ type: "openProject", name });
   if (!reply.ok) {
     line(failure(reply), "refused");
+    dialogStatus(failure(reply), false);
     return reply;
   }
   header(reply.project);
@@ -552,6 +560,7 @@ async function open(name: string): Promise<Reply> {
       : `opened ${reply.project.id} — root: ${reply.project.root}`,
     "ok",
   );
+  closeCreateDialog();
   await declareToLoop(reply.project);
   $("gallery").textContent = "";
   for (const asset of reply.assets ?? []) {
@@ -612,14 +621,23 @@ async function declareToLoop(project: Record<string, any>): Promise<void> {
     line(
       kind === "machine"
         ? `the loop cannot write here — ${body.why ?? body.refused ?? "no reason given"}`
-        : "the loop cannot write here yet — this project is in this browser's own storage, so only this page can act on it: the page lists and reads its files",
+        : kind === "handle"
+          ? "the server cannot reach this root directly — it routes each file act to this page, which performs it; a picked folder writes once you click 'Restore write access'"
+          : "the server cannot reach this root directly — it routes each file act to this page, which performs it; these files live in this browser, so the page has to be connected",
       "note",
     );
     if (kind !== "machine") {
+      // CORRECTED in voicebox-beads-42ir: this used to say a picked folder or origin storage is
+      // "readable and writable only by the page until page-side writes land (voicebox-beads-2cf)".
+      // Page-side writes landed — 2cf no longer exists as a live bead — and the route below stays
+      // named because the machine folder is still the only kind the SERVER writes itself, with no
+      // page connected, which is a real difference and the reason to offer it. The limits are kept:
+      // a picked folder writes after the grant, browser storage while the page is connected.
       line(
-        "to have turns write, choose a folder on this machine with 'Save turns into this folder' — " +
-          "that is the root the loop acts on today; a picked folder or this origin's storage is readable " +
-          "and writable only by the page until page-side writes land (voicebox-beads-2cf)",
+        "to have the server write files itself, with no page open, choose a folder on this machine with " +
+          "'Save turns into this folder' — that is the one the server acts on. A browser-stored or picked " +
+          "root is performed by this page instead: browser storage while the page is connected, a picked " +
+          "folder once you have restored write access",
         "note",
       );
     }
@@ -638,6 +656,7 @@ async function useMachineRoot(path: string, name = "loop-project", hostToken = "
   const reply = await send({ type: "useMachineRoot", path, name, ...(token ? { hostToken: token } : {}) });
   if (!reply.ok) {
     line(failure(reply), "refused");
+    dialogStatus(failure(reply), false);
     return reply;
   }
   header(reply.project);
@@ -645,6 +664,7 @@ async function useMachineRoot(path: string, name = "loop-project", hostToken = "
     `the loop now writes into ${reply.root.path}${reply.canonical ? " (resolved to its real path)" : ""} — acts on this root come from the machine, not this page`,
     "ok",
   );
+  closeCreateDialog();
   await Promise.all([renderView("opfs"), renderView("picked"), renderView("server"), renderAgents(false)]);
   return reply;
 }
@@ -655,6 +675,7 @@ async function adopt(handle: FileSystemDirectoryHandle): Promise<Reply> {
   const reply = await send({ type: "adoptPickedProject", name, handle });
   if (!reply.ok) {
     line(failure(reply), "refused");
+    dialogStatus(failure(reply), false);
     return reply;
   }
   header(reply.project);
@@ -669,8 +690,60 @@ async function adopt(handle: FileSystemDirectoryHandle): Promise<Reply> {
     );
   }
   await declareToLoop({ ...reply.project, rootKind: "handle", name: reply.project.name });
+  closeCreateDialog();
   await Promise.all([renderView("opfs"), renderView("picked"), renderView("server")]);
   return reply;
+}
+
+// ── Create a project (voicebox-beads-6uzd) ───────────────────────────────────────────────────────
+// One button opens one dialog holding the three destinations, in the order the page states above it
+// (voicebox-beads-um5r). The dialog is this page's own pattern (`#confirm`): `showModal()` gives the
+// focus trap, the inert background and Esc, and `closedby="any"` in the markup gives click-outside —
+// the same two lines the gate dialog relies on. The ids and handlers below are the ones that already
+// existed: the boxes moved into a dialog, nothing about how a project is created was rebuilt.
+const createDialog = document.getElementById("create-project-dialog") as HTMLDialogElement | null;
+const DEST_PANELS: Record<string, string> = { opfs: "dest-opfs", picked: "dest-picked", machine: "dest-machine" };
+
+function showDestination(value: string): void {
+  for (const [dest, panel] of Object.entries(DEST_PANELS)) $(panel).hidden = dest !== value;
+}
+
+/** Closes the create dialog when it is the thing that is open. A no-op for every other way in — the
+ * drop zone, or the programmatic surface the acceptance checks drive with no dialog on screen. */
+function closeCreateDialog(): void {
+  if (createDialog?.open) createDialog.close();
+}
+
+/** A refusal has to be readable WHERE THE PERSON IS STANDING. #transcript sits behind this modal's
+ * inert background, so a failed attempt that only wrote there would be invisible until the dialog was
+ * closed — found by an independent reviewer on voicebox-beads-6uzd. No-op when no dialog is open, so
+ * the drop-zone path keeps writing to the transcript alone. */
+function dialogStatus(text: string, ok: boolean): void {
+  const el = document.getElementById("dest-status");
+  if (!el || !createDialog?.open) return;
+  el.hidden = false;
+  el.dataset.ok = String(ok);
+  el.textContent = text;
+}
+
+$("create-project").addEventListener("click", () => {
+  // Open on what is actually chosen, so the dialog and the radios cannot disagree. Clear the last
+  // attempt's status: a stale refusal next to a fresh dialog would describe an act nobody just made.
+  const status = document.getElementById("dest-status");
+  if (status) {
+    status.hidden = true;
+    status.textContent = "";
+    delete status.dataset.ok;
+  }
+  const chosen = document.querySelector<HTMLInputElement>('input[name="dest"]:checked');
+  showDestination(chosen?.value ?? "opfs");
+  createDialog?.showModal();
+});
+$("create-project-close").addEventListener("click", () => closeCreateDialog());
+for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="dest"]')) {
+  radio.addEventListener("change", () => {
+    if (radio.checked) showDestination(radio.value);
+  });
 }
 
 $("open-form").addEventListener("submit", (event) => {
@@ -717,6 +790,7 @@ $("regrant").addEventListener("click", async () => {
   else {
     line(`write access to '${handle.name}' is ${state}`, "ok");
     header(reply.project);
+    closeCreateDialog();
   }
 });
 

@@ -39,6 +39,9 @@ const WANTED = {
   envAdd: "env-add", envAddLabel: "env-add-label", envAddOrigin: "env-add-origin", envAddBtn: "env-add-btn",
   envActiveRootVal: "env-active-root-val", envUseBrowserBtn: "env-use-browser-btn", envPickFolderBtn: "env-pick-folder-btn",
   envRootPathInput: "env-root-path-input", envDeclareRootBtn: "env-declare-root-btn", envRootStatus: "env-root-status",
+  // Create a project by name from the main UI (voicebox-beads-6uzd), explained by #env-setup-guide (voicebox-beads-um5r).
+  envCreateProjectName: "env-create-project-name", envCreateProjectBtn: "env-create-project-btn",
+  envCreateProjectStatus: "env-create-project-status",
   // The extension surface (voicebox-beads-vwb): one source (/api/extensions + /api/extensions/catalogue),
   // five states in five sections, never mixed — a present-but-unreviewed extension is never green
   // and never described as running, and an admitted extension that failed to load is never silent
@@ -4170,6 +4173,81 @@ on(els.envDeclareRootBtn, "click", async () => {
   } finally {
     if (els.envDeclareRootBtn) els.envDeclareRootBtn.disabled = false;
   }
+});
+
+// Create a project BY NAME in the browser's own storage, from the main UI (voicebox-beads-6uzd, with the
+// explanation above it for voicebox-beads-um5r). It REUSES the helper the environment page's own button
+// uses — ensureScratchpadFolder(name), which creates the OPFS folder and adopts it as the active,
+// persisted room folder — rather than adding a second creation path that could drift from that one.
+on(els.envCreateProjectBtn, "click", async () => {
+  const name = (els.envCreateProjectName?.value ?? "").trim();
+  const say = (text, ok) => {
+    if (!els.envCreateProjectStatus) return;
+    els.envCreateProjectStatus.dataset.ok = String(ok);
+    els.envCreateProjectStatus.textContent = text;
+  };
+  // Refusals name the act and what would fix it, and they are written HERE, inside the dialog: a message
+  // that lands behind the open modal is a message the person never sees (the defect voicebox-beads-6uzd
+  // exists because of).
+  if (!name) {
+    say("A project needs a name — it becomes one folder in this browser's storage.", false);
+    return;
+  }
+  if (/[\\/]/.test(name)) {
+    say("A name cannot contain a slash: the name becomes one folder, so it cannot be a path.", false);
+    return;
+  }
+  els.envCreateProjectBtn.disabled = true;
+  try {
+    // Say what actually happened, and only say what we KNOW. `getDirectoryHandle(name, { create: true })`
+    // cannot tell a NEW folder from one that already exists, so the pre-check below decides the wording:
+    // true = it was already there (Opened), false = clearly absent (Created), null = we could not tell
+    // (a name that is a FILE, or a non-NotFound error) and then no sentence claims a creation at all — an
+    // independent reviewer pointed out that treating every error as "absent" made "Created" empirically
+    // rather than provably true.
+    let existed = null;
+    if (navigator.storage?.getDirectory) {
+      try {
+        const opfsRoot = await navigator.storage.getDirectory();
+        await opfsRoot.getDirectoryHandle(name);
+        existed = true;
+      } catch (err) {
+        existed = err?.name === "NotFoundError" ? false : null;
+      }
+    }
+    // The cause of a failure has to appear HERE, inside the dialog: #turn-report is outside it, behind the
+    // open modal, so it is unreadable until the person closes the dialog. Passing the helper's own onError
+    // affordance (the one miniapps added with the picker fix, and used by the button next door) is what
+    // makes the refusal visible where the person is standing — the voicebox-beads-sbrh defect class.
+    let failureMsg = null;
+    const ok = await openOpfsScratchFolder(name, { onError: (msg) => { failureMsg = msg; } });
+    if (ok) {
+      say(
+        existed === true
+          ? `Opened “${name}” — it is the folder this room acts on now.`
+          : existed === false
+            ? `Created “${name}” in this browser — it is the folder this room acts on now.`
+            : `“${name}” is the folder this room acts on now.`,
+        true,
+      );
+      renderRoot();
+    } else {
+      const verb = existed === true ? "open" : existed === false ? "create" : "make";
+      say(`Could not ${verb} “${name}”${failureMsg ? ` — ${failureMsg}` : " — the room's report line names the cause."}.`, false);
+    }
+  } catch (err) {
+    say(String(err?.message ?? `Could not create “${name}”.`), false);
+  } finally {
+    els.envCreateProjectBtn.disabled = false;
+  }
+});
+
+// Enter in the name box means the button, and must NOT submit the enclosing method="dialog" form: that
+// would close the dialog and create nothing — the silent-failure shape this work is about.
+on(els.envCreateProjectName, "keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  els.envCreateProjectBtn?.click();
 });
 
 // Light dismiss, declaratively, where the platform supports it: `closedby="any"` on the element.

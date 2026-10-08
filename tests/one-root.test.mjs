@@ -86,8 +86,20 @@ test.after(async () => {
 test("THE PAGE CANNOT DECLARE A ROOT (by name), and the host's declaration drives the loop", { timeout: 120000 }, async () => {
   // The page's own controls: type the path, submit the form. This is the act that used to succeed
   // without a credential, and it re-points every file route — voicebox-beads-cfn.
+  // voicebox-beads-6uzd: those controls now live behind the create dialog's machine destination, so
+  // the test opens the dialog and chooses it — the same clicks a person makes to reach the field.
+  await page.click("#create-project");
+  await page.waitFor(() => document.getElementById("create-project-dialog")?.open === true, { label: "the create dialog to open" });
+  await page.click('input[name="dest"][value="machine"]');
+  await page.waitFor(() => document.getElementById("dest-machine")?.hidden === false, { label: "the machine destination to be shown" });
   await page.type("#machine-path", machineRoot);
   await page.click("#machine-form button");
+  // The dialog must be CLOSED before this test ends: showModal() makes the rest of the page inert, so
+  // leaving it open breaks the NEXT tests in this file (they drop a folder on #dropzone in the
+  // background). A submission that refuses keeps the dialog open by design — the person stays where
+  // they were — so the test closes it the way a person does.
+  await page.press("Escape");
+  await page.waitFor(() => document.getElementById("create-project-dialog")?.open === false, { label: "the create dialog to close" });
 
   const refusal = await page.evaluate(async (dir) => {
     const r = await fetch("/api/root", { method: "POST", headers: { "content-type": "application/json" },
@@ -295,16 +307,20 @@ test("a declaration the loop cannot act on carries the ROUTE, not just the reaso
   assert.equal(info.reachableFromThisProcess, false, "an OPFS root must report itself unreachable from the server");
 
   const transcript = await page.evaluate(() => document.getElementById("transcript").textContent);
-  assert.match(transcript, /the loop cannot write here/, "the page does not say the loop cannot write there");
-  // The route, named with the label the button ACTUALLY has. This assertion used to demand "Use this
-  // folder for the loop" — a label no control has had for a while, kept alive by the fixture while the
-  // sentence it pinned said something else (voicebox-beads-fqq). A test that names a stale label is a
-  // test that cannot see the drift it exists to catch.
-  assert.match(transcript, /Save turns into this folder/, "the refusal names no route to a root that works");
-  assert.match(transcript, /voicebox-beads-2cf/, "the sentence does not say where the asymmetry goes away");
+  // voicebox-beads-42ir CORRECTED THIS ASSERTION. It used to demand /the loop cannot write here/ and
+  // /voicebox-beads-2cf/ — pinning a claim that page-side writes landed and a bead that no longer
+  // exists. What is true, and what the copy now says: the server cannot reach this root directly, so it
+  // ROUTES each file act to this page, which performs it.
+  assert.match(transcript, /the server cannot reach this root directly/, "the page does not say the server cannot reach this root");
+  assert.match(transcript, /routes each file act to this page, which performs it/, "the page does not say who performs the act");
+  assert.match(transcript, /Save turns into this folder/, "the refusal names the route to the root the server acts on");
+  // NEGATIVE CONTROL: the disproved wording must not come back, and neither must a pointer to a bead
+  // that is no longer in the database.
+  assert.doesNotMatch(transcript, /cannot write here yet|read-only for turns|page-side writes land|voicebox-beads-2cf/, "the page is claiming turns cannot write into a page-owned root again");
 
   const header = await page.evaluate(() => document.getElementById("project").textContent);
-  assert.match(header, /turns cannot write into this kind yet/, "the header hides which kinds turns can write into");
+  assert.match(header, /the server routes each file act here and this page performs it/, "the header does not say who performs the act");
+  assert.doesNotMatch(header, /turns cannot write into this kind yet/, "the header is hiding who performs the act again");
 
   // THE COPY CONSEQUENCE, re-driven after voicebox-beads-fqq. This block used to assert the opposite —
   // that the page's own declaration attempt ends in a refusal showing `host-token-required` — because the
@@ -325,7 +341,7 @@ test("a declaration the loop cannot act on carries the ROUTE, not just the reaso
   assert.equal(pageDeclares.body.actsVia, "page", "with the acts routed to the page");
   assert.equal(pageDeclares.body.reachableFromThisProcess, false, "and the server still unable to act on it");
   const afterOwnDeclaration = await page.evaluate(() => document.getElementById("transcript").textContent);
-  assert.match(afterOwnDeclaration, /the loop cannot write here/, "the page stopped saying what turns cannot do");
+  assert.match(afterOwnDeclaration, /the server cannot reach this root directly/, "the page stopped saying who performs the act");
 
   // And the machine-folder route really does change it — declared BY THE HOST, because the page's own
   // attempt is refused (asserted in the first test). The page's header keeps describing the page's

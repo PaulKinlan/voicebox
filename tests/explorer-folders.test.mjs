@@ -163,6 +163,10 @@ test("a page-owned (OPFS) root: the same click navigates, listed through the pag
   try {
     await env.goto(`${s.base}/environment.html`);
     await env.waitFor(() => window.e1m0 !== undefined, { label: "the environment page" });
+    // voicebox-beads-6uzd: a project starts from ONE button that opens the create dialog. The test
+    // drives that button rather than reaching into the markup — the same two clicks a person makes.
+    await env.click("#create-project");
+    await env.waitFor(() => document.getElementById("create-project-dialog")?.open === true, { label: "the create dialog to open" });
     await env.type("#project-name", "folders-opfs");
     await env.click('#open-form button[type="submit"]');
     await env.waitFor(() => /made\s+folders-opfs/i.test(document.body.textContent ?? ""), { label: "the project being made" });

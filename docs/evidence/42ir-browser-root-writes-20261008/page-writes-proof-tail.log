@@ -1,0 +1,12 @@
+# The gate log tail that proves the claim (full log: /tmp/roboticon-42ir-proof.log, exit 0)
+✔ an OPFS project: the turn writes through the page, reads back byte-for-byte, and the page is the audit's writer (3510.323984ms)
+✔ the page closing answers page-closed or no-page — the absence family, never silence (11098.189338ms)
+﹣ the live leg: a spoken write into a page-owned root lands through the channel (1.978594ms) # GEMINI_API_KEY not set
+ℹ tests 9
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 47377.20491
