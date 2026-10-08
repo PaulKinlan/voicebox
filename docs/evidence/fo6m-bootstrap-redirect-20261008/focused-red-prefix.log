@@ -1,0 +1,14 @@
+# focused test vs the PRE-FIX server (d2a2db6:server.mjs temporarily in place): the new assertions must fail
+✖ gate ON: the printed bootstrap URL redeems ONCE, and hands the address bar back the plain route (fo6m) (691.069207ms)
+✖ gate ON: an already-authenticated browser revisiting the consumed ticket URL is redirected, not refused (fo6m) (618.611881ms)
+✖ gate ON: redemption drops only the ticket — other query parameters survive the redirect (fo6m) (515.47926ms)
+✖ gate ON: the /index.html alias of the page route redeems and redirects to itself (fo6m) (587.162075ms)
+✖ gate ON: POST /api/bootstrap with the host token mints a fresh single-use ticket (588.220246ms)
+ℹ tests 18
+ℹ pass 13
+ℹ fail 5
+✖ gate ON: the printed bootstrap URL redeems ONCE, and hands the address bar back the plain route (fo6m) (691.069207ms)
+✖ gate ON: an already-authenticated browser revisiting the consumed ticket URL is redirected, not refused (fo6m) (618.611881ms)
+✖ gate ON: redemption drops only the ticket — other query parameters survive the redirect (fo6m) (515.47926ms)
+✖ gate ON: the /index.html alias of the page route redeems and redirects to itself (fo6m) (587.162075ms)
+✖ gate ON: POST /api/bootstrap with the host token mints a fresh single-use ticket (588.220246ms)

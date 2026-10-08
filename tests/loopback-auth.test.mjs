@@ -301,6 +301,28 @@ test("gate ON: redemption drops only the ticket — other query parameters survi
   }
 });
 
+test("gate ON: the /index.html alias of the page route redeems and redirects to itself (fo6m)", async () => {
+  const server = await scratchServer(GATE_ON);
+  try {
+    const match = await waitFor(() => server.stdout().match(/bootstrap=([0-9a-f]{64})/));
+    // `/index.html` is a SECOND door to the same page route — the wall exempts it by name
+    // (`pageBootstrapping` in server.mjs) — so its redemption must land on a plain route too, and
+    // that route is the alias itself. This is the pair that pins the exemption: move either half
+    // and the alias stops being a way in.
+    const res = await fetch(`${server.base}/index.html?bootstrap=${match[1]}`, { redirect: "manual" });
+    assert.equal(res.status, 303, "the /index.html alias must redeem and redirect like /");
+    assert.equal(res.headers.get("location"), "/index.html", "the alias's plain route is the alias");
+    const cookie = sessionCookieFrom(res);
+
+    const landed = await fetch(`${server.base}/index.html`, { headers: { cookie } });
+    assert.equal(landed.status, 200, "the redirect target must serve the page");
+    assert.match(landed.headers.get("content-type") ?? "", /text\/html/);
+  } finally {
+    await server.stop();
+    server.cleanup();
+  }
+});
+
 test("gate ON: POST /api/bootstrap with the host token mints a fresh single-use ticket", async () => {
   const server = await scratchServer(GATE_ON);
   try {

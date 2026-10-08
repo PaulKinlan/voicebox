@@ -81,13 +81,25 @@ into the tree.
 
 ## Focused test (the non-browser half)
 
-`node --test tests/loopback-auth.test.mjs` — **17/17 pass**, including the four added/extended cases:
+`node --test tests/loopback-auth.test.mjs` — **18/18 pass**, including the five added/extended cases:
 redemption redirects and the refresh works; an authenticated revisit of a consumed URL redirects
 (and the no-session case still refuses); other query parameters survive the redirect; the minted
-ticket redirects like the startup one.
+ticket redirects like the startup one; and the `/index.html` alias — the second door the wall
+exempts by name — redeems and lands on its own plain route.
+
+Non-vacuity, measured (`focused-red-prefix.log`): with the pre-fix `server.mjs` temporarily in
+place, **13 pass / 5 fail** and the five failures are exactly those cases — so they are a statement
+about this fix, not about the harness. `focused-green.log` is the same command on the fixed tree:
+18/18. (The pre-fix file was restored with `git diff --quiet -- server.mjs` asserting clean.)
 
 ## Notes and limits
 
+- **The redirect target cannot carry a header separator.** Only exactly `/` and `/index.html` reach
+  this route (the router keys on `url.pathname`), the pathname keeps its percent-escapes (`%0d%0a`
+  stays encoded, never CR/LF), and `URLSearchParams` percent-encodes control characters — measured,
+  not assumed. Node's own `writeHead` also refuses control characters in a header value.
+- **Other query parameters are re-encoded, not preserved byte-for-byte**: `URLSearchParams`
+  normalises escapes (`%0d%0a` → `%0D%0A`). Values survive semantically; the original bytes do not.
 - The `303` is chosen over `302` deliberately: it is the status that says "the result is elsewhere,
   re-request it with GET", and `lib/extensions.mjs` already treats `303` as a redirect status.
 - `Location: /` is relative by construction in `plainRouteWithoutTicket()`; an absolute URL would
