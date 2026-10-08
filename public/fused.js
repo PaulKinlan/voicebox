@@ -1332,14 +1332,14 @@ function renderEmptyState() {
   //    answer the first with the second one's words: it told a person "Turns cannot save into this
   //    folder" about a folder the tab in front of them could write into perfectly well once routed
   //    (voicebox-beads-*, held until the router landed: actsVia/executor from vb-resolver).
-  const serverCanAct = activeRoot === undefined || activeRoot.reachableFromThisProcess === true;
+  const serverCanAct = activeRoot === undefined || activeRoot?.reachableFromThisProcess === true;
   const pageOwnsRoot = activeRoot?.actsVia === "page";
   const pageIsHere = pageOwnsRoot && activeRoot?.executor?.connected === true;
   // The page owns this folder AND is connected: a turn is routed to it, so the room is usable and
   // says nothing about refusal. (The page may still refuse a turn it cannot serve — a picked folder
   // without a write grant answers the page's own `needs-gesture`, and that sentence arrives from the
   // side that knows rather than being guessed here.)
-  if (activeRoot !== undefined && !serverCanAct && !pageIsHere) {
+  if (!roomFolder && activeRoot !== undefined && activeRoot !== null && !serverCanAct && !pageIsHere) {
     const where = activeRoot.facts?.where ?? "this project's root";
     // Two causes, two sentences, and each names its own remedy. "The tab is not open" and "no part of
     // the system can save here" are different problems with different next steps.
@@ -1432,8 +1432,8 @@ function renderListingRoot() {
     // was called read-only by the line directly beneath the write. The folder's own mode is the answer.
     const writable = roomFolder.permission === "granted" && roomFolder.mode === "readwrite";
     line.textContent = writable
-      ? `In “${roomFolder.name}”${roomTruncated ? ` (first ${ROOM_FOLDER_MAX})` : ""} — browser files and edits save here.`
-      : `Read-only view of “${roomFolder.name}”${roomTruncated ? ` (first ${ROOM_FOLDER_MAX})` : ""} — browser files need write access to save here.`;
+      ? `In “${roomFolder.name}”${roomTruncated ? ` (first ${ROOM_FOLDER_MAX})` : ""} — turns save here.`
+      : `Read-only view of “${roomFolder.name}”${roomTruncated ? ` (first ${ROOM_FOLDER_MAX})` : ""} — turns need write access to save here.`;
     return;
   }
   if (listingRefusal) {
