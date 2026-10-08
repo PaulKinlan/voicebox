@@ -139,6 +139,14 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
         if (!fingerprint) {
           fingerprint = createHash("sha256").update(`${station}:${sev}:${rule || description}`).digest("hex");
         }
+
+        if (SECURITY_STATIONS.has(station)) {
+          // Withhold raw candidate values, payloads, and tokens for identity-critical security stations
+          description = `[withheld: ${station} finding candidate not published; requires human verification]`;
+          if (rule) rule = rule.split(/[:=]/)[0].trim();
+          if (location) location = location.split(/[:=]\s*(?:token|password|secret|key|pat)/i)[0].trim();
+        }
+
         description = sanitizeFindingText(description);
         if (rule) rule = sanitizeFindingText(rule);
         if (location) location = sanitizeFindingText(location);
@@ -148,8 +156,10 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
       }
 
       // Format B: Legacy synthetic row format (- [SEVERITY] [station] description)
+      const hasActionRequiredSection = /^## Action Required: New & Regressed Findings/m.test(report.content);
+      const isActionable = hasActionRequiredSection ? inActionableSection : true;
       const m = line.match(/^-\s+\[(CRITICAL|HIGH|MEDIUM|LOW|INFO)\]\s+\[?([a-z0-9_-]+)\]?\s+(.*)$/i);
-      if (m) {
+      if (isActionable && m) {
         totalFindings++;
         const sev = m[1].toUpperCase();
         const station = m[2];
@@ -178,6 +188,10 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
         }
         if (!fingerprint) {
           fingerprint = createHash("sha256").update(`${station}:${sev}:${description}`).digest("hex");
+        }
+
+        if (SECURITY_STATIONS.has(station)) {
+          description = `[withheld: ${station} finding candidate not published; requires human verification]`;
         }
 
         description = sanitizeFindingText(description);

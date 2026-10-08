@@ -236,18 +236,20 @@ Generated: 2026-10-07T19:32:36.485721+00:00
   assert.ok(!c1.includes("secret-scan"));
   assert.ok(!c1.includes("FALSE POSITIVE"));
 
-  // Comment 2: secret-scan finding (security station -> human-review flag; location/rule sanitized)
+  // Comment 2: secret-scan finding (security station -> human-review flag; candidate withheld; location/rule sanitized)
   const c2 = res.comments[1];
   assert.ok(c2.includes("<!-- factory-triage-comment: a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0 -->"));
   assert.ok(c2.includes("<!-- factory-station: secret-scan -->"));
   assert.ok(c2.includes("<!-- factory-severity: critical -->"));
   assert.ok(c2.includes("<!-- factory-state: new -->"));
   assert.ok(c2.includes("<!-- factory-human-review -->"));
+  assert.ok(c2.includes("[withheld: secret-scan finding candidate not published; requires human verification]"));
   assert.ok(!c2.includes("ghp_ABCDEF0123456789xyz"));
   assert.ok(!c2.includes("super-secret"));
   assert.ok(!c2.includes("supersecretkey"));
   assert.ok(!c2.includes("anothersecret"));
-  assert.ok(c2.includes("[REDACTED]"));
+  assert.ok(c2.includes("<!-- factory-rule: generic-api-key-with-token -->"));
+  assert.ok(c2.includes("config/example.env"));
   assert.ok(!c2.includes("perf-review"));
 
   // Text sanitization verification
@@ -371,13 +373,18 @@ test("factory-review-trigger: sanitizeLogOutput masks stderr and issue titles co
   assert.ok(sanitizedTitle.includes("[REDACTED]"));
 });
 
-test("factory-issue-poller: dry-run does not mutate cursor or attempt directory", () => {
+test("factory-issue-poller: dry-run does not mutate cursor or attempt directory and makes zero gh calls", () => {
   const tmpDir = path.join(ROOT, "tests", "fixtures", "test-dryrun-tmp");
   rmSync(tmpDir, { recursive: true, force: true });
+  mkdirSync(tmpDir, { recursive: true });
 
   const mockBinDir = path.join(tmpDir, "bin");
   mkdirSync(mockBinDir, { recursive: true });
   const mockGh = path.join(mockBinDir, "gh");
+  const sentinel = path.join(tmpDir, "gh-called.sentinel");
+  // If gh is executed, it touches the sentinel file
+  writeFileSync(mockGh, `#!/bin/sh\ntouch "${sentinel}"\necho '[]'\n`, { mode: 0o755 });
+
   const sampleIssues = [
     {
       number: 101,
@@ -396,22 +403,32 @@ test("factory-issue-poller: dry-run does not mutate cursor or attempt directory"
       updatedAt: "2026-10-07T00:00:00Z",
     },
   ];
-  writeFileSync(mockGh, `#!/bin/sh\necho '${JSON.stringify(sampleIssues)}'\n`, { mode: 0o755 });
 
-  const result = pollInboundIssues(["--dry-run", "--limit", "2", "--private-dir", tmpDir], {
+  // 1. Dry run without injected issues: returns immediately with zero gh calls
+  const resultCli = pollInboundIssues(["--dry-run", "--limit", "2", "--private-dir", tmpDir], {
     env: { ...process.env, PATH: `${mockBinDir}:${process.env.PATH}` },
     rootDir: ROOT,
+  });
+  assert.equal(existsSync(sentinel), false, "CLI dry run must make zero gh calls");
+  assert.equal(resultCli.ok, true);
+  assert.equal(resultCli.dryRun, true);
+
+  // 2. Dry run with injected issues: evaluates issues without calling gh or mutating cursor/fs
+  const resultInjected = pollInboundIssues(["--dry-run", "--limit", "2", "--private-dir", tmpDir], {
+    env: { ...process.env, PATH: `${mockBinDir}:${process.env.PATH}` },
+    rootDir: ROOT,
+    issues: sampleIssues,
   });
 
   const cursorFile = path.join(tmpDir, "factory-issue-cursor.json");
   const issueRunDir = path.join(tmpDir, "issue-102");
 
-  // In dry run, no cursor file is written, privateDir is not created, and no attempt directory is created
+  assert.equal(existsSync(sentinel), false, "evaluating injected issues in dry run must make zero gh calls");
   assert.equal(existsSync(cursorFile), false, "dry run must not write cursorFile");
   assert.equal(existsSync(issueRunDir), false, "dry run must not create attempt directory");
-  assert.equal(result.ok, true);
-  assert.equal(result.exitCode, 0);
-  assert.deepEqual(result.cursor.processedIssues, {}, "dry run must not mutate in-memory cursor");
+  assert.equal(resultInjected.ok, true);
+  assert.equal(resultInjected.exitCode, 0);
+  assert.deepEqual(resultInjected.cursor.processedIssues, {}, "dry run must not mutate in-memory cursor");
 
   rmSync(tmpDir, { recursive: true, force: true });
 });

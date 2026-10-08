@@ -27,7 +27,7 @@ import { sanitizeLogOutput } from "./factory-review-trigger.mjs";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 
-export function pollInboundIssues(args = process.argv.slice(2), { env = process.env, rootDir = ROOT } = {}) {
+export function pollInboundIssues(args = process.argv.slice(2), { env = process.env, rootDir = ROOT, issues: injectedIssues = null } = {}) {
   let repo = env.VOICEBOX_FACTORY_REPO || "PaulKinlan/voicebox";
   let privateDir = env.VOICEBOX_FACTORY_PRIVATE_DIR || path.join(homedir(), ".voicebox", "factory-reports");
   let cursorFile = "";
@@ -74,21 +74,29 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
     } catch {}
   }
 
-  // 2. Fetch issues via gh CLI
-  let issues = [];
-  try {
-    const raw = execFileSync("gh", [
-      "issue",
-      "list",
-      "--state", "all",
-      "--json", "number,title,body,author,createdAt,updatedAt,labels,authorAssociation",
-      "--limit", String(limit),
-      "--repo", repo,
-    ], { encoding: "utf8", env });
-    issues = JSON.parse(raw);
-  } catch (err) {
-    console.error(`[issue-poller] Failed to list issues for ${repo}: ${sanitizeLogOutput(err.message)}`);
-    return { ok: false, exitCode: 1, error: sanitizeLogOutput(err.message) };
+  // In dry-run mode without injected issues, return immediately with zero gh/bd invocations
+  if (dryRun && !injectedIssues) {
+    console.log(`[issue-poller] DRY-RUN: evaluated without external gh/bd invocations.`);
+    return { ok: true, exitCode: 0, dryRun: true, processedCount: 0, cursor };
+  }
+
+  // 2. Fetch issues via injected snapshot or gh CLI
+  let issues = injectedIssues;
+  if (!issues) {
+    try {
+      const raw = execFileSync("gh", [
+        "issue",
+        "list",
+        "--state", "all",
+        "--json", "number,title,body,author,createdAt,updatedAt,labels,authorAssociation",
+        "--limit", String(limit),
+        "--repo", repo,
+      ], { encoding: "utf8", env });
+      issues = JSON.parse(raw);
+    } catch (err) {
+      console.error(`[issue-poller] Failed to list issues for ${repo}: ${sanitizeLogOutput(err.message)}`);
+      return { ok: false, exitCode: 1, error: sanitizeLogOutput(err.message) };
+    }
   }
 
   console.log(`[issue-poller] Fetched ${issues.length} issue(s) from ${repo}. Highest recorded: #${cursor.highestIssueNumber}`);
