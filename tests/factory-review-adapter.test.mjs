@@ -572,23 +572,30 @@ test("factory-review-trigger: ambient poisoned GIT_DIR does not blind diff measu
     "fixture git ops must resolve to the fixture itself, not to a surrounding repository",
   );
 
-  // The fixture's diff, fixed by construction: a base commit and two ops-category changes on top.
+  // The fixture's diff, fixed by construction: a base commit, then TWO changes in DIFFERENT categories -
+  // a security-category file and an ops-category file. Two categories, not two files, is what makes the
+  // resolved base observable: the router picks by PRIORITY_ORDER (security before ops), so the measured
+  // diff yields 'secret-scan' while the HEAD~1 fallback would yield 'log-check' from the single ops file.
+  // The assertion at the end pins the former, so a silent fallback to HEAD~1 can no longer pass.
+  mkdirSync(path.join(repoDir, "scripts"), { recursive: true });
   writeFileSync(path.join(repoDir, "README.md"), "fixture base\n");
   git(["add", "README.md"], repoDir);
   git(["commit", "-q", "-m", "fixture base"], repoDir);
   const baseSha = git(["rev-parse", "HEAD"], repoDir).trim();
+  writeFileSync(path.join(repoDir, "scripts", "factory-fixture-probe.mjs"), "export const fixtureProbe = true;\n");
+  git(["add", "scripts/factory-fixture-probe.mjs"], repoDir);
+  git(["commit", "-q", "-m", "fixture security-category change"], repoDir);
   writeFileSync(path.join(repoDir, "ops-change.log"), "2026-01-01 INFO fixture ops change\n");
   git(["add", "ops-change.log"], repoDir);
   git(["commit", "-q", "-m", "fixture ops change"], repoDir);
-  writeFileSync(path.join(repoDir, "ops-second.log"), "2026-01-02 INFO second fixture ops change\n");
-  git(["add", "ops-second.log"], repoDir);
-  git(["commit", "-q", "-m", "fixture second ops change"], repoDir);
   const tipSha = git(["rev-parse", "HEAD"], repoDir).trim();
   assert.notEqual(baseSha, tipSha, "the fixture must have a real diff for the measurement to find");
   // Two commits above the base on purpose: origin/main points at the base, so the default base (merge-base
-  // with origin/main) and the HEAD~1 fallback are different commits, and the trigger's own log line - two
-  // changed files rather than one - shows which of the two it actually resolved. With a single commit they
-  // coincide and the test could not tell whether the default path ran at all.
+  // with origin/main) and the HEAD~1 fallback are different commits and resolve different diffs. Reading
+  // the trigger's log line is NOT enough to tell them apart - that was the review finding on this change,
+  // and a mutant that poisoned the merge-base call while leaving the diff scrubbed passed the earlier
+  // version of this test. The assertion below is what discriminates: the security-category file is only in
+  // the two-commit diff, so only the default base can select secret-scan.
 
   // No --base on purpose. The default path is the one that failed on main's own tip: the trigger resolves
   // `merge-base origin/main HEAD` for itself. So the fixture provides its own origin/main (pointing at the
@@ -620,10 +627,14 @@ test("factory-review-trigger: ambient poisoned GIT_DIR does not blind diff measu
   assert.equal(res.ok, true);
   assert.equal(res.dryRun, true);
   // Verify the station was selected for the fixture's own changes (not blinded with 0 changed files).
+  // This asserts the MEASURED DIFF, not just "some station": secret-scan can only be selected from the
+  // two-commit diff (security outranks the ops file per the router's documented PRIORITY_ORDER), so a
+  // silently blinded merge-base - which falls back to HEAD~1 and sees only the ops file - yields
+  // log-check and fails here instead of passing.
   assert.equal(
-    res.station !== null,
-    true,
-    "review station must be selected for the fixture's own diff, not blinded by the poisoned GIT_DIR"
+    res.station,
+    "secret-scan",
+    "the measured diff must be origin/main..HEAD, not a HEAD~1 fallback: expect secret-scan from the two-category diff"
   );
 });
 
