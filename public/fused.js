@@ -826,10 +826,13 @@ async function loadRoomFolder() {
   }
 }
 
-function closeRoomFolder() {
+async function closeRoomFolder() {
   roomFolder = null;
   listedRoot = null;
-  idbStore().then((idb) => idb?.putActiveRoomFolderName?.("")).catch(() => {});
+  try {
+    const idb = await idbStore();
+    await idb?.putActiveRoomFolderName?.("");
+  } catch {}
   triggerProjectChangeFlash("server folder");
   renderRoomFoldersBar();
   load();
@@ -4126,7 +4129,7 @@ on(els.envDeclareRootBtn, "click", async () => {
       body: JSON.stringify({ project: projectName, root: { kind: "machine", path: pathVal } }),
     });
     if (res && res.ok) {
-      if (roomFolder) closeRoomFolder();
+      if (roomFolder) await closeRoomFolder();
       if (els.envRootStatus) {
         els.envRootStatus.dataset.ok = "true";
         els.envRootStatus.textContent = `Machine root set to ${res.root?.path ?? pathVal} — turns save here now.`;
