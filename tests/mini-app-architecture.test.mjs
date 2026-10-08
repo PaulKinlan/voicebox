@@ -629,6 +629,33 @@ test("core: validateMiniAppToolArgs validates arguments against JSON schema and 
   assert.equal(overBound.ok, false);
   assert.equal(overBound.refused, "invalid-tool-arguments");
   assert.ok(overBound.why.includes("exceeds maximum allowed bound"));
+
+  // Additional properties constraint: additionalProperties: false
+  const strictTool = {
+    name: "strict_config",
+    description: "Strict config",
+    parameters: {
+      type: "object",
+      properties: {
+        mode: { type: "string", maxLength: 10 },
+        count: { type: "number", maximum: 100 },
+      },
+      additionalProperties: false,
+    },
+  };
+  const extraArg = validateMiniAppToolArgs(strictTool, { mode: "fast", unknownField: 123 });
+  assert.equal(extraArg.ok, false);
+  assert.equal(extraArg.refused, "invalid-argument");
+  assert.ok(extraArg.why.includes("unknownField"));
+
+  // Range and length bounds
+  const overLength = validateMiniAppToolArgs(strictTool, { mode: "a-very-long-string-value" });
+  assert.equal(overLength.ok, false);
+  assert.equal(overLength.refused, "invalid-argument-length");
+
+  const overMax = validateMiniAppToolArgs(strictTool, { count: 101 });
+  assert.equal(overMax.ok, false);
+  assert.equal(overMax.refused, "invalid-argument-range");
 });
 
 test("server: /turn validates mini-app tool arguments at host boundary before dispatch (GH #24, voicebox-beads-fdtu)", async (t) => {

@@ -162,6 +162,14 @@ export function validateMiniAppToolArgs(
     }
   }
 
+  if ((params as Record<string, unknown>).additionalProperties === false) {
+    for (const key of Object.keys(args)) {
+      if (!(key in properties)) {
+        return refusal("invalid-argument", `unrecognized argument '${key}' not permitted by tool schema`);
+      }
+    }
+  }
+
   for (const [key, val] of Object.entries(args)) {
     const schema = properties[key];
     if (schema && val !== undefined && val !== null) {
@@ -171,15 +179,33 @@ export function validateMiniAppToolArgs(
             if (typeof val !== "string") {
               return refusal("invalid-argument-type", `argument '${key}' must be a string, got ${typeof val}`);
             }
+            if (typeof schema.maxLength === "number" && val.length > schema.maxLength) {
+              return refusal("invalid-argument-length", `argument '${key}' length (${val.length}) exceeds maxLength ${schema.maxLength}`);
+            }
+            if (typeof schema.minLength === "number" && val.length < schema.minLength) {
+              return refusal("invalid-argument-length", `argument '${key}' length (${val.length}) below minLength ${schema.minLength}`);
+            }
             break;
           case "number":
             if (typeof val !== "number" || !Number.isFinite(val)) {
               return refusal("invalid-argument-type", `argument '${key}' must be a finite number, got ${typeof val === "number" ? "NaN/Infinity" : typeof val}`);
             }
+            if (typeof schema.maximum === "number" && val > schema.maximum) {
+              return refusal("invalid-argument-range", `argument '${key}' value ${val} exceeds maximum ${schema.maximum}`);
+            }
+            if (typeof schema.minimum === "number" && val < schema.minimum) {
+              return refusal("invalid-argument-range", `argument '${key}' value ${val} below minimum ${schema.minimum}`);
+            }
             break;
           case "integer":
             if (typeof val !== "number" || !Number.isInteger(val)) {
               return refusal("invalid-argument-type", `argument '${key}' must be an integer, got ${val}`);
+            }
+            if (typeof schema.maximum === "number" && val > schema.maximum) {
+              return refusal("invalid-argument-range", `argument '${key}' value ${val} exceeds maximum ${schema.maximum}`);
+            }
+            if (typeof schema.minimum === "number" && val < schema.minimum) {
+              return refusal("invalid-argument-range", `argument '${key}' value ${val} below minimum ${schema.minimum}`);
             }
             break;
           case "boolean":
