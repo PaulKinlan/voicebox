@@ -204,4 +204,16 @@ test("Create a project makes a real named project in this browser, inside the ma
   assert.equal(after.dialogOpen, true, "creating a project does not close the dialog");
   const disabled = await page.evaluate(() => document.getElementById("env-create-project-btn")?.disabled ?? null);
   assert.equal(disabled, false, "the create button is usable again after the attempt");
+
+  // SAY WHAT IS TRUE: the same name a second time OPENS the folder that already exists rather than
+  // creating it, and the status line has to say so — getDirectoryHandle(create:true) cannot tell the two
+  // apart, so this is the assertion that keeps the wording honest.
+  await page.click("#env-create-project-btn");
+  await page.waitFor(
+    () => (document.getElementById("env-create-project-status")?.textContent ?? "").startsWith("Opened"),
+    { label: "the second attempt to be reported as an open, not a creation" },
+  );
+  const second = await createStatus();
+  assert.equal(second.ok, "true", "re-opening an existing project succeeds rather than reporting an error");
+  assert.equal(await opfsHasFolder(PROJECT_NAME), "directory", "and the project is still there");
 });

@@ -4199,12 +4199,26 @@ on(els.envCreateProjectBtn, "click", async () => {
   }
   els.envCreateProjectBtn.disabled = true;
   try {
+    // Say what actually happened. `getDirectoryHandle(name, { create: true })` cannot tell a NEW folder
+    // from one that already exists, so naming an existing project would be reported as creating it. Ask
+    // first, and let the status line carry the difference — a project that says "Created" when it merely
+    // opened something is the kind of untrue copy this work exists to remove.
+    let existed = false;
+    if (navigator.storage?.getDirectory) {
+      try {
+        const opfsRoot = await navigator.storage.getDirectory();
+        await opfsRoot.getDirectoryHandle(name);
+        existed = true;
+      } catch {
+        existed = false;
+      }
+    }
     const ok = await openOpfsScratchFolder(name);
     if (ok) {
-      say(`Created “${name}” in this browser — it is the folder this room acts on now.`, true);
+      say(existed ? `Opened “${name}” — it is the folder this room acts on now.` : `Created “${name}” in this browser — it is the folder this room acts on now.`, true);
       renderRoot();
     } else {
-      say(`Could not create “${name}” — the room's report line names the cause.`, false);
+      say(`Could not ${existed ? "open" : "create"} “${name}” — the room's report line names the cause.`, false);
     }
   } catch (err) {
     say(String(err?.message ?? `Could not create “${name}”.`), false);
