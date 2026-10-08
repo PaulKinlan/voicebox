@@ -96,6 +96,17 @@ test("adoption: the three credential-comparison sites route through the owner (s
   // Both session-token sites, so a second copy cannot survive the migration unnoticed.
   // The raw primitive belongs to the owner; a direct call here would mean a second compare again.
   assert.equal(server.includes("timingSafeEqual("), false, "the server must not call the primitive directly");
+
+  // The COOKIE site needs its OWN guard, and the 9f2b1fe delta review is right that it had none:
+  // reverting sessionCookieOk to a bare equality passes every protocol outcome below, because an
+  // exact compare accepts and rejects exactly the same cookie values, and it passes the
+  // no-direct-primitive check too, because it calls no primitive at all. So the adoption is asserted
+  // where it lives - on that function's own body, positively and negatively - rather than on the file.
+  const cookieBody = /function sessionCookieOk\(req\) \{[\s\S]*?\n\}/.exec(server)?.[0] ?? "";
+  assert.ok(cookieBody, "sessionCookieOk must still exist in server.mjs for this guard to mean anything");
+  assert.match(cookieBody, /timingSafeStringEqual\(/, "sessionCookieOk must ask the owner for the cookie comparison");
+  assert.equal(cookieBody.includes("=== LOOPBACK_SESSION"), false,
+    "sessionCookieOk must not compare the cookie itself - the reviewer's mutant (reverting this call) has to fail here");
   assert.equal(server.split("timingSafeStringEqual(sessionToken, ROOM_SESSION_TOKEN)").length - 1, 2,
     "both session-token comparisons (extension authority and /api/root) must use the owner");
 });
