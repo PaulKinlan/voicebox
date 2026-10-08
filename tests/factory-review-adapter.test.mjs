@@ -356,11 +356,82 @@ test("factory-issue-commenter: fingerprint deduplication skips already-commented
   assert.ok(!pass3.comment.includes("Startup probe blocks boot banner"));
 });
 
-test("factory-review-trigger: CLI executes cleanly in dry-run mode with deterministic station selection", () => {
-  const result = runReviewTrigger(["--base", "HEAD~1", "--tip", "HEAD", "--dry-run"], { rootDir: ROOT });
+test("factory-review-trigger: CLI executes cleanly in dry-run mode with deterministic station selection", (t) => {
+  // This used to point the CLI at ROOT and assert only that SOME station was selected, so it depended on the
+  // ambient checkout happening to have a non-empty HEAD~1..HEAD diff: on a tree whose tip commit was empty,
+  // or in a fresh single-commit clone, the trigger correctly reports an empty diff, the station is null, and
+  // the test failed for a reason that has nothing to do with the CLI. The diff is now fixed by a fixture this
+  // test owns, and the station is asserted exactly - so the test fails if the fixture's diff stops being what
+  // it says it is.
+  const ownedDirs = new Set();
+  t.after(() => {
+    for (const dir of ownedDirs) rmSync(dir, { recursive: true, force: true });
+  });
+  const ownDir = (dir) => {
+    ownedDirs.add(dir);
+    return dir;
+  };
+
+  const fixtureRoot = ownDir(mkdtempSync(path.join(tmpdir(), "review-trigger-cli-fixture-")));
+  const repoDir = path.join(fixtureRoot, "repo");
+  const gitHome = path.join(fixtureRoot, "githome");
+  const gitXdg = path.join(gitHome, ".config");
+  const gitHooksDir = path.join(fixtureRoot, "empty-hooks");
+  for (const dir of [repoDir, gitHome, gitXdg, gitHooksDir]) mkdirSync(dir, { recursive: true });
+
+  // Same discipline as the other fixtures in this file: absolute trusted git, no PATH, owned HOME/XDG,
+  // system/global config and hooks pinned off, and a fail-closed check that these calls address the fixture.
+  // The origin identity is PINNED to the target repository rather than left empty, so the trigger's
+  // cross-target refusal is exercised against a known identity instead of being skipped; the trigger performs
+  // no fetch, so this URL is only ever read and never contacted.
+  const trustedGit = "/usr/bin/git";
+  accessSync(trustedGit, constants.X_OK);
+  const fixtureGitEnv = () => ({
+    HOME: gitHome,
+    XDG_CONFIG_HOME: gitXdg,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_ATTR_NOSYSTEM: "1",
+  });
+  const git = (args, cwd) => execFileSync(
+    trustedGit,
+    ["-c", `core.hooksPath=${gitHooksDir}`, "-c", `init.templateDir=${gitHooksDir}`, ...args],
+    { cwd, encoding: "utf8", env: fixtureGitEnv() },
+  );
+  git(["init", "-q", "-b", "main", repoDir], fixtureRoot);
+  const fixtureGitRoot = git(["rev-parse", "--show-toplevel"], repoDir).trim();
+  assert.equal(realpathSync(fixtureGitRoot), realpathSync(repoDir),
+    `fixture git ops must resolve to the fixture itself, not a parent repo (got ${fixtureGitRoot})`);
+  git(["config", "user.email", "trigger-cli-fixture@test.local"], repoDir);
+  git(["config", "user.name", "trigger cli fixture"], repoDir);
+  git(["remote", "add", "origin", "https://github.com/PaulKinlan/voicebox.git"], repoDir);
+
+  // The difference under test is fixed by construction: a base commit and one ops-category change on top, so
+  // HEAD~1..HEAD is exactly one file and the station cannot depend on this host's history.
+  writeFileSync(path.join(repoDir, "README.md"), "fixture base\n");
+  git(["add", "README.md"], repoDir);
+  git(["commit", "-q", "-m", "fixture base"], repoDir);
+  writeFileSync(path.join(repoDir, "ops-change.log"), "2026-01-01 INFO fixture ops change\n");
+  git(["add", "ops-change.log"], repoDir);
+  git(["commit", "-q", "-m", "fixture ops change"], repoDir);
+
+  const privateDir = ownDir(path.join(fixtureRoot, "private"));
+  mkdirSync(privateDir, { recursive: true });
+
+  const result = runReviewTrigger(
+    ["--base", "HEAD~1", "--tip", "HEAD", "--dry-run", "--repo", "PaulKinlan/voicebox", "--private-dir", privateDir],
+    { rootDir: repoDir }
+  );
+
   assert.equal(result.ok, true);
   assert.equal(result.exitCode, 0);
-  assert.ok(result.station, "selected a station");
+  assert.equal(result.dryRun, true);
+  assert.equal(
+    result.station,
+    "log-check",
+    "the fixture's single ops-category file must select log-check: an empty diff or a different category would mean the CLI is no longer reading this fixture"
+  );
   assert.ok(result.cacheKey, "computed a cacheKey");
 });
 
@@ -726,7 +797,94 @@ test("factory-review-adapter: automation diffs (scripts/factory-*, tools/factory
   assert.equal(sel.category, "security");
 });
 
-test("factory-review-watcher: discovers candidate branches matching conjunctive ownership predicate (voicebox-* bead AND fleet/* branch)", () => {
+test("factory-review-watcher: discovers candidate branches matching conjunctive ownership predicate (voicebox-* bead AND fleet/* branch)", (t) => {
+  // This used to run the watcher against ROOT, so production code ran `git fetch origin --prune` in the LIVE
+  // checkout - its cwd is the watcher's rootDir - deleting any refs/remotes/origin/* ref the remote did not
+  // have. Nothing detected that: the gate inspects file status, not refs. It also discovered nothing, because
+  // the ambient origin has no branch named for the mock bead, so the old assertions (res.ok and watcherErrors
+  // only) passed while proving nothing about the discovery this test is named for.
+  //
+  // Both are now a property of a fixture this test owns: an owned bare origin and a work clone whose origin IS
+  // that bare repo, with the candidate branch actually pushed. The fetch and its prune happen inside the
+  // fixture, and the assertions name the bead and the commit that were scanned.
+  const ownedDirs = new Set();
+  t.after(() => {
+    for (const dir of ownedDirs) rmSync(dir, { recursive: true, force: true });
+  });
+  const ownDir = (dir) => {
+    ownedDirs.add(dir);
+    return dir;
+  };
+
+  const fixtureRoot = ownDir(mkdtempSync(path.join(tmpdir(), "watcher-discovery-fixture-")));
+  const bareDir = path.join(fixtureRoot, "origin.git");
+  const workDir = path.join(fixtureRoot, "work");
+  const gitHome = path.join(fixtureRoot, "githome");
+  const gitXdg = path.join(gitHome, ".config");
+  const gitHooksDir = path.join(fixtureRoot, "empty-hooks");
+  for (const dir of [workDir, gitHome, gitXdg, gitHooksDir]) mkdirSync(dir, { recursive: true });
+
+  // Same discipline as the other fixtures in this file: absolute trusted git, no PATH, owned HOME/XDG,
+  // system/global config and hooks pinned to owned empty locations, and a fail-closed check that these calls
+  // address the fixture rather than a parent repo (voicebox-beads-guu9).
+  const trustedGit = "/usr/bin/git";
+  accessSync(trustedGit, constants.X_OK);
+  const fixtureGitEnv = () => ({
+    HOME: gitHome,
+    XDG_CONFIG_HOME: gitXdg,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_ATTR_NOSYSTEM: "1",
+  });
+  const git = (args, cwd) => execFileSync(
+    trustedGit,
+    ["-c", `core.hooksPath=${gitHooksDir}`, "-c", `init.templateDir=${gitHooksDir}`, ...args],
+    { cwd, encoding: "utf8", env: fixtureGitEnv() },
+  );
+  git(["init", "--bare", "-q", bareDir], fixtureRoot);
+  git(["init", "-q", "-b", "main", workDir], fixtureRoot);
+  const fixtureGitRoot = git(["rev-parse", "--show-toplevel"], workDir).trim();
+  assert.equal(realpathSync(fixtureGitRoot), realpathSync(workDir),
+    `fixture git ops must resolve to the fixture itself, not a parent repo (got ${fixtureGitRoot})`);
+  git(["config", "user.email", "watcher-discovery-fixture@test.local"], workDir);
+  git(["config", "user.name", "watcher discovery fixture"], workDir);
+  git(["remote", "add", "origin", bareDir], workDir);
+  // Pin the push destination and fail closed on any redirect before EACH push: the effective --push origin URL
+  // must be exactly the single owned bareDir, never a config-injected pushurl (voicebox-beads-guu9).
+  git(["config", "remote.origin.pushurl", bareDir], workDir);
+  const assertPushTarget = () => {
+    const got = git(["remote", "get-url", "--push", "--all", "origin"], workDir).trim();
+    assert.equal(got, bareDir, `fixture push target must be the owned bare repo (got ${got})`);
+  };
+  writeFileSync(path.join(workDir, "README.md"), "discovery fixture base\n");
+  git(["add", "README.md"], workDir);
+  git(["commit", "-q", "-m", "fixture base"], workDir);
+  assertPushTarget();
+  git(["push", "-q", "origin", "main"], workDir);
+
+  // The candidate the mock bead names must exist on the fixture's origin and be at least one commit ahead of
+  // origin/main, or the watcher discards it (base !== tip).
+  const candidateBranch = "fleet/miniapps-test";
+  git(["checkout", "-q", "-b", candidateBranch], workDir);
+  writeFileSync(path.join(workDir, "candidate.txt"), "candidate change\n");
+  git(["add", "candidate.txt"], workDir);
+  git(["commit", "-q", "-m", "fixture candidate"], workDir);
+  const candidateTip = git(["rev-parse", "HEAD"], workDir).trim();
+  assertPushTarget();
+  git(["push", "-q", "origin", `${candidateBranch}:refs/heads/${candidateBranch}`], workDir);
+  git(["checkout", "-q", "main"], workDir);
+
+  // Sentinel: a tracking ref the bare origin does NOT have, so the watcher's own `git fetch origin --prune`
+  // deletes it if - and only if - that fetch runs against THIS work clone. It proves the prune happened inside
+  // the fixture rather than against a shared checkout, and it keeps the test honest: deleting the fetch path
+  // from the watcher would leave the sentinel in place and fail here instead of quietly passing.
+  git(["update-ref", "refs/remotes/origin/stale-sentinel", candidateTip], workDir);
+  assert.equal(
+    git(["rev-parse", "--verify", "refs/remotes/origin/stale-sentinel"], workDir).trim(),
+    candidateTip,
+    "sentinel tracking ref must exist before the watcher's fetch --prune"
+  );
   const mockBeads = [
     {
       id: "bead-1",
@@ -751,20 +909,53 @@ test("factory-review-watcher: discovers candidate branches matching conjunctive 
     },
   ];
 
-  const tmpPrivate = path.join(ROOT, "tests", "fixtures", "watcher-test-private");
-  rmSync(tmpPrivate, { recursive: true, force: true });
+  // The private dir is owned by the fixture too: the old body wrote it inside ROOT/tests/fixtures and removed
+  // it at the end of the body, so a failure part-way through left the measured tree dirty.
+  const tmpPrivate = ownDir(path.join(fixtureRoot, "watcher-test-private"));
   mkdirSync(tmpPrivate, { recursive: true });
 
+  const triggerInvocations = [];
+  const trackingTrigger = (triggerArgs, opts) => {
+    triggerInvocations.push({ triggerArgs, opts });
+    return { ok: true, exitCode: 0, station: "log-check", verdict: "PASS" };
+  };
+
   const res = runReviewWatcher(["--dry-run", "--private-dir", tmpPrivate], {
-    rootDir: ROOT,
+    rootDir: workDir,
     mockBeads,
+    triggerRunner: trackingTrigger,
   });
 
-  // Only bead-1 has voicebox-* assignee AND non-artifact fleet/* branch
+  // Only bead-1 has a voicebox-* assignee AND a non-artifact fleet/* branch, so exactly one candidate is
+  // scanned - the property this test's title has always claimed and its old body never asserted.
   assert.equal(res.ok, true);
   assert.equal(res.watcherErrors, 0);
+  assert.equal(res.scannedCount, 1, "exactly the one bead matching the conjunctive predicate must be scanned");
+  assert.equal(triggerInvocations.length, 1, "the trigger must run exactly once");
+  assert.ok(
+    triggerInvocations[0].triggerArgs.includes("bead-1"),
+    `the scanned candidate must be bead-1 (got ${JSON.stringify(triggerInvocations[0].triggerArgs)})`
+  );
+  assert.ok(triggerInvocations[0].triggerArgs.includes("--dry-run"), "the watcher must forward --dry-run");
+  assert.ok(
+    triggerInvocations[0].triggerArgs.includes(candidateTip),
+    "the scanned candidate must be the fixture's own candidate commit"
+  );
 
-  rmSync(tmpPrivate, { recursive: true, force: true });
+  // And the prune ran HERE: the sentinel is gone because the watcher's own fetch --prune removed it inside the
+  // fixture. If the fetch path is ever removed, or rootDir is pointed back at a shared checkout, this assertion
+  // is what fails.
+  let sentinelSurvived = true;
+  try {
+    git(["rev-parse", "--verify", "refs/remotes/origin/stale-sentinel"], workDir);
+  } catch {
+    sentinelSurvived = false;
+  }
+  assert.equal(
+    sentinelSurvived,
+    false,
+    "git fetch origin --prune must have pruned the fixture's stale tracking ref, proving the fetch ran inside the fixture"
+  );
 });
 
 test("factory-review-watcher: auto-publication default, cursor recording, and second-tick deduplication", (t) => {
