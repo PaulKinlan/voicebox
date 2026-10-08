@@ -203,7 +203,38 @@ test("integrated environment flow: configure machine root and browser workspace 
   const activeFolder = await page.evaluate(() => window.__voiceboxGetActiveFolder());
   assert.equal(activeFolder, null, "active room folder is null because machine root was selected");
 
-  // 7. Assert URL stayed on main UI throughout the entire flow (no separate page visited)
+  // 7. Verify read-only folder state: when folder permission is granted but mode is read-only,
+  // empty state shows "Access to '[name]' needed", Restore access button is visible, and composer refuses.
+  await page.evaluate(() => {
+    const folders = window.__voiceboxGetRoomFolders();
+    const folder = folders.get("scratchpad");
+    if (folder) {
+      folder.mode = "read"; // simulate read-only access (granted read, but not readwrite)
+      document.querySelector('.folder-chip[data-folder="scratchpad"] .folder-select-btn')?.click();
+    }
+  });
+
+  await page.waitFor(
+    () => {
+      const headline = document.getElementById("empty-headline")?.textContent ?? "";
+      return headline.includes("Access to 'scratchpad' needed");
+    },
+    { label: "empty state to show access needed for read-only folder" },
+  );
+
+  const regrantVisible = await page.evaluate(() => {
+    const btn = document.querySelector('.folder-chip[data-folder="scratchpad"] .folder-regrant-btn');
+    return btn && !btn.hidden;
+  });
+  assert.equal(regrantVisible, true, "Restore access button is visible for read-only folder needing write access");
+
+  const composerTitle = await page.evaluate(() => document.getElementById("utterance")?.getAttribute("title") ?? "");
+  assert.ok(
+    composerTitle.includes("needs write permission — click 'Restore access' first"),
+    `composer indicates write permission is needed, got: ${composerTitle}`,
+  );
+
+  // 8. Assert URL stayed on main UI throughout the entire flow (no separate page visited)
   const currentPath = await page.evaluate(() => location.pathname);
   assert.equal(currentPath, "/", "user remained strictly on the main UI root without visiting separate environment.html");
 });

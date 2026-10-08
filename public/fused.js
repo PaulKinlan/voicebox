@@ -714,13 +714,13 @@ function renderRoomFoldersBar() {
       : "needs access";
     chip.append(badge);
 
-    // Restore access button (visible when permission is prompt)
+    // Restore access button (visible when permission is prompt or mode is read-only)
     const regrantBtn = document.createElement("button");
     regrantBtn.type = "button";
     regrantBtn.className = "quiet folder-regrant-btn";
     regrantBtn.textContent = "Restore access";
     regrantBtn.setAttribute("aria-label", `Restore access to ${folder.name}`);
-    regrantBtn.hidden = folder.permission === "granted";
+    regrantBtn.hidden = folder.permission === "granted" && folder.mode === "readwrite";
     regrantBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
       await requestFolderAccess(folder);
