@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import {
   selectReviewStation,
   computeReviewCacheKey,
@@ -451,14 +452,17 @@ test("factory-review-trigger: getCheckoutRepoIdentity resolves normalized reposi
   assert.equal(repoId, "paulkinlan/voicebox");
 
   // Same-slug on foreign/unapproved host is rejected (returns empty string)
-  const mockForeignDir = path.join(ROOT, "tests", "fixtures", "test-foreign-origin");
+  const mockForeignDir = path.join(tmpdir(), `test-foreign-origin-${Math.random().toString(36).slice(2)}`);
   rmSync(mockForeignDir, { recursive: true, force: true });
   mkdirSync(mockForeignDir, { recursive: true });
-  execFileSync("git", ["init"], { cwd: mockForeignDir });
-  execFileSync("git", ["remote", "add", "origin", "https://evil.example/PaulKinlan/voicebox.git"], { cwd: mockForeignDir });
-  const evilId = getCheckoutRepoIdentity(mockForeignDir);
-  assert.equal(evilId, "", "unapproved git host must not be treated as proof of repo identity");
-  rmSync(mockForeignDir, { recursive: true, force: true });
+  try {
+    execFileSync("git", ["init"], { cwd: mockForeignDir });
+    execFileSync("git", ["remote", "add", "origin", "https://evil.example/PaulKinlan/voicebox.git"], { cwd: mockForeignDir });
+    const evilId = getCheckoutRepoIdentity(mockForeignDir);
+    assert.equal(evilId, "", "unapproved git host must not be treated as proof of repo identity");
+  } finally {
+    rmSync(mockForeignDir, { recursive: true, force: true });
+  }
 
   // Mismatched target repo is refused before cache lookup with exitCode 1
   const mismatchedRes = runReviewTrigger(["--base", "HEAD~1", "--tip", "HEAD", "--repo", "ForeignOrg/foreign-repo"], {
