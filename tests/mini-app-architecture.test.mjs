@@ -1412,14 +1412,14 @@ test("core: validateWebMcpTool rejects contradictory and malformed constraint sc
     parameters: {
       type: "object",
       properties: {
-        level: { type: "integer", minimum: 2, maximum: 5, enum: [1, 3] },
+        level: { type: "integer", minimum: 2, maximum: 5, enum: [0, 1] },
       },
     },
   };
   const enumRangeRes = validateWebMcpTool(enumOutOfRangeTool);
   assert.equal(enumRangeRes.ok, false);
   assert.equal(enumRangeRes.refused, "invalid-tool-parameters");
-  assert.match(enumRangeRes.why, /enum members for integer property 'level' must be >= minimum/);
+  assert.match(enumRangeRes.why, /no enum members satisfy declared range bounds on property 'level'/);
 
   // 9. Array items integer enum with non-integers
   const arrayIntEnumTool = {
@@ -1451,7 +1451,63 @@ test("core: validateWebMcpTool rejects contradictory and malformed constraint sc
   const unsatRes = validateWebMcpTool(unsatisfiableStringEnumTool);
   assert.equal(unsatRes.ok, false);
   assert.equal(unsatRes.refused, "invalid-tool-parameters");
-  assert.match(unsatRes.why, /enum member 'x' length \(1\) below minLength 2/);
+  assert.match(unsatRes.why, /no enum members satisfy declared length bounds/);
+
+  // Mixed satisfiable string enum: at least one member is valid -> admitted at registration
+  const mixedStringEnumTool = {
+    name: "mixed_string_enum",
+    description: "Mixed string enum",
+    parameters: {
+      type: "object",
+      properties: {
+        code: { type: "string", minLength: 2, enum: ["x", "okay"] },
+      },
+    },
+  };
+  const mixedStringRes = validateWebMcpTool(mixedStringEnumTool);
+  assert.equal(mixedStringRes.ok, true, "mixed satisfiable string enum must be admitted at registration");
+  // Dispatch time: out-of-bounds member refused, valid member accepted
+  const mixedDispatchBad = validateMiniAppToolArgs(mixedStringEnumTool, { code: "x" });
+  assert.equal(mixedDispatchBad.ok, false);
+  assert.equal(mixedDispatchBad.refused, "invalid-argument-length");
+  const mixedDispatchGood = validateMiniAppToolArgs(mixedStringEnumTool, { code: "okay" });
+  assert.equal(mixedDispatchGood.ok, true);
+
+  // Mixed satisfiable integer enum: at least one member is valid -> admitted at registration
+  const mixedIntEnumTool = {
+    name: "mixed_int_enum",
+    description: "Mixed int enum",
+    parameters: {
+      type: "object",
+      properties: {
+        level: { type: "integer", minimum: 5, enum: [2, 10] },
+      },
+    },
+  };
+  const mixedIntRes = validateWebMcpTool(mixedIntEnumTool);
+  assert.equal(mixedIntRes.ok, true, "mixed satisfiable integer enum must be admitted at registration");
+  // Dispatch time: out-of-bounds member refused, valid member accepted
+  const mixedIntBad = validateMiniAppToolArgs(mixedIntEnumTool, { level: 2 });
+  assert.equal(mixedIntBad.ok, false);
+  assert.equal(mixedIntBad.refused, "invalid-argument-range");
+  const mixedIntGood = validateMiniAppToolArgs(mixedIntEnumTool, { level: 10 });
+  assert.equal(mixedIntGood.ok, true);
+
+  // All-invalid integer enum: rejected at registration
+  const allInvalidIntTool = {
+    name: "all_invalid_int",
+    description: "All invalid int",
+    parameters: {
+      type: "object",
+      properties: {
+        level: { type: "integer", minimum: 10, enum: [1, 2] },
+      },
+    },
+  };
+  const allInvalidIntRes = validateWebMcpTool(allInvalidIntTool);
+  assert.equal(allInvalidIntRes.ok, false);
+  assert.equal(allInvalidIntRes.refused, "invalid-tool-parameters");
+  assert.match(allInvalidIntRes.why, /no enum members satisfy declared range bounds/);
 
   // Positive control: valid string enum satisfying minLength and maxLength
   const validStringEnumTool = {
@@ -1549,7 +1605,7 @@ test("core: validateMiniAppToolArgs enforces snapshot literal invariant and reje
   assert.equal(validateMiniAppToolArgs(tool, { set: new Set() }).ok, false);
   assert.equal(validateMiniAppToolArgs(tool, { regex: /abc/ }).ok, false);
 
-  // 9. Array element accessors and sparse arrays
+  // 9. Array element accessors, sparse arrays, and non-index/symbol own properties
   const sparseArr = [];
   sparseArr[1] = "val";
   assert.equal(validateMiniAppToolArgs({ name: "arr_tool", description: "", parameters: { type: "object", properties: { items: { type: "array" } } } }, { items: sparseArr }).ok, false);
@@ -1557,6 +1613,28 @@ test("core: validateMiniAppToolArgs enforces snapshot literal invariant and reje
   const accessorArr = [1];
   Object.defineProperty(accessorArr, 0, { get: () => 1, enumerable: true });
   assert.equal(validateMiniAppToolArgs({ name: "arr_tool", description: "", parameters: { type: "object", properties: { items: { type: "array" } } } }, { items: accessorArr }).ok, false);
+
+  // Arrays with own non-index properties (enumerable or non-enumerable) or symbols must be rejected
+  const extraPropArr = [1];
+  extraPropArr.extra = "value";
+  const extraPropRes = validateMiniAppToolArgs({ name: "arr_tool", description: "", parameters: { type: "object", properties: { items: { type: "array" } } } }, { items: extraPropArr });
+  assert.equal(extraPropRes.ok, false);
+  assert.equal(extraPropRes.refused, "invalid-argument");
+  assert.match(extraPropRes.why, /cannot contain non-index or symbol properties/);
+
+  const nonEnumPropArr = [1];
+  Object.defineProperty(nonEnumPropArr, "hidden", { value: "secret", enumerable: false });
+  const nonEnumRes = validateMiniAppToolArgs({ name: "arr_tool", description: "", parameters: { type: "object", properties: { items: { type: "array" } } } }, { items: nonEnumPropArr });
+  assert.equal(nonEnumRes.ok, false);
+  assert.equal(nonEnumRes.refused, "invalid-argument");
+  assert.match(nonEnumRes.why, /cannot contain non-index or symbol properties/);
+
+  const symPropArr = [1];
+  symPropArr[Symbol("meta")] = "tag";
+  const symPropRes = validateMiniAppToolArgs({ name: "arr_tool", description: "", parameters: { type: "object", properties: { items: { type: "array" } } } }, { items: symPropArr });
+  assert.equal(symPropRes.ok, false);
+  assert.equal(symPropRes.refused, "invalid-argument");
+  assert.match(symPropRes.why, /cannot contain non-index or symbol properties/);
 
   // 10. Depth limits: 32 passes, 33 rejected with invalid-argument-bounds
   function makeNested(levels) {
@@ -1575,22 +1653,54 @@ test("core: validateMiniAppToolArgs enforces snapshot literal invariant and reje
   assert.equal(depth33Res.refused, "invalid-argument-bounds");
   assert.match(depth33Res.why, /nesting exceeds maximum depth of 32/);
 
-  // 11. Node count limits: 2048 passes, 2049 rejected with invalid-argument-bounds
-  // 1 root object + 1023 properties (each key counts as visited node during traversal)
-  // Let's create an exact object with nodes
-  const nodesArr = [];
-  for (let i = 0; i < 2047; i++) {
-    nodesArr.push(1);
-  }
-  // 1 root array + 2047 items = 2048 nodes
-  const nodes2048Res = validateMiniAppToolArgs({ name: "arr_t", description: "", parameters: { type: "object", properties: { list: { type: "array" } } } }, { list: nodesArr });
-  // Total nodes: { list: nodesArr } (root obj = 1, list arr = 2, 2047 items = 2049) -> let's test node bounds accurately
-  const bigList = [];
-  for (let i = 0; i < 2050; i++) bigList.push(1);
-  const nodesOverflowRes = validateMiniAppToolArgs({ name: "arr_t", description: "", parameters: { type: "object", properties: { list: { type: "array" } } } }, { list: bigList });
-  assert.equal(nodesOverflowRes.ok, false);
-  assert.equal(nodesOverflowRes.refused, "invalid-argument-bounds");
-  assert.match(nodesOverflowRes.why, /exceeds maximum node count of 2048/);
+  // 11. Exact Node Count Boundary:
+  // Root object (1 node) + list array (1 node) + 2046 elements = 2048 nodes -> PASS
+  const arr2046 = new Array(2046).fill(1);
+  const res2048 = validateMiniAppToolArgs(
+    { name: "arr_t", description: "", parameters: { type: "object", properties: { list: { type: "array" } } } },
+    { list: arr2046 }
+  );
+  assert.equal(res2048.ok, true, "exact 2048 nodes must pass");
+
+  // Root object (1 node) + list array (1 node) + 2047 elements = 2049 nodes -> FAIL
+  const arr2047 = new Array(2047).fill(1);
+  const res2049 = validateMiniAppToolArgs(
+    { name: "arr_t", description: "", parameters: { type: "object", properties: { list: { type: "array" } } } },
+    { list: arr2047 }
+  );
+  assert.equal(res2049.ok, false, "exact 2049 nodes must be refused");
+  assert.equal(res2049.refused, "invalid-argument-bounds");
+  assert.match(res2049.why, /exceeds maximum node count of 2048/);
+
+  // 12. Exact UTF-8 Byte Length Boundary:
+  // Entire serialized snapshot string (including braces, field name, quotes) at exactly 65536 bytes vs 65537 bytes
+  const stringTool = {
+    name: "str_tool",
+    description: "",
+    parameters: {
+      type: "object",
+      properties: {
+        text: { type: "string" },
+      },
+    },
+  };
+  const jsonWrapperPrefix = '{"text":"';
+  const jsonWrapperSuffix = '"}';
+  const overhead = Buffer.byteLength(jsonWrapperPrefix, "utf8") + Buffer.byteLength(jsonWrapperSuffix, "utf8"); // 11 bytes
+
+  const exact65536Payload = "a".repeat(65536 - overhead);
+  const serialized65536 = JSON.stringify({ text: exact65536Payload });
+  assert.equal(Buffer.byteLength(serialized65536, "utf8"), 65536, "precondition: serialized UTF-8 bytes must equal exactly 65536");
+  const res65536 = validateMiniAppToolArgs(stringTool, { text: exact65536Payload });
+  assert.equal(res65536.ok, true, "exact 65536 bytes must pass");
+
+  const exact65537Payload = "a".repeat(65537 - overhead);
+  const serialized65537 = JSON.stringify({ text: exact65537Payload });
+  assert.equal(Buffer.byteLength(serialized65537, "utf8"), 65537, "precondition: serialized UTF-8 bytes must equal exactly 65537");
+  const res65537 = validateMiniAppToolArgs(stringTool, { text: exact65537Payload });
+  assert.equal(res65537.ok, false, "exact 65537 bytes must be refused");
+  assert.equal(res65537.refused, "invalid-tool-arguments");
+  assert.match(res65537.why, /exceeds maximum allowed bound of 65536 bytes/);
 });
 
 test("core: validateMiniAppToolArgs enforces object additionalProperties: false without properties and Unicode code points (Findings P1 & P2)", () => {
@@ -1805,6 +1915,14 @@ test("browser: continuous host -> page -> bridge -> inner DOM journey with visua
   });
   assert.equal(bridgeProtoRes.ok, false);
   assert.equal(bridgeProtoRes.refused, "invalid-argument");
+
+  // Array with extra non-index property must be refused by bridge before reaching inner app
+  const bridgeArrayExtraRes = await page.evaluate(async () => {
+    const badArr = Object.assign([10], { extra: "bad" });
+    return await window.__voiceboxMiniApp.callTool("set_temperature", { target: badArr, mode: "heat" });
+  });
+  assert.equal(bridgeArrayExtraRes.ok, false);
+  assert.equal(bridgeArrayExtraRes.refused, "invalid-argument");
 
   await sleep(200);
 
