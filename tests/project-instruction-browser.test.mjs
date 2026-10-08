@@ -115,6 +115,10 @@ test("the page reports the folder it is showing, and reads a room folder's AGENT
   assert.equal(first.dir, "", "the root of the declared machine root is reported as ''");
 
   // 2. A person's navigation: into packages, then into api.
+  await page.waitFor(
+    () => [...document.querySelectorAll("button.file-open[data-kind='directory']")].some((b) => b.dataset.file === "packages"),
+    { label: "the packages folder row" },
+  );
   await page.evaluate(() => {
     const row = [...document.querySelectorAll("button.file-open[data-kind='directory']")]
       .find((b) => b.dataset.file === "packages");
