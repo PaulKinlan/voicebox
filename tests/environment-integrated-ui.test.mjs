@@ -234,6 +234,35 @@ test("integrated environment flow: configure machine root and browser workspace 
     `composer indicates write permission is needed, got: ${composerTitle}`,
   );
 
+  // Test clicking Restore access when readwrite fails and falls back to read:
+  // folder.mode must remain "read" and regrantBtn must remain visible
+  await page.evaluate(() => {
+    const folders = window.__voiceboxGetRoomFolders();
+    const folder = folders.get("scratchpad");
+    if (folder?.handle) {
+      folder.handle.requestPermission = async ({ mode }) => {
+        if (mode === "readwrite") throw new Error("User denied write permission");
+        return "granted";
+      };
+    }
+  });
+
+  await page.click('.folder-chip[data-folder="scratchpad"] .folder-regrant-btn');
+  await page.waitFor(
+    () => {
+      const mode = window.__voiceboxGetRoomFolders()?.get("scratchpad")?.mode;
+      return mode === "read";
+    },
+    { label: "folder mode to stay read after read-only fallback" },
+  );
+
+  const regrantStillVisible = await page.evaluate(() => {
+    const btn = document.querySelector('.folder-chip[data-folder="scratchpad"] .folder-regrant-btn');
+    const folder = window.__voiceboxGetRoomFolders()?.get("scratchpad");
+    return btn && !btn.hidden && folder?.mode === "read";
+  });
+  assert.equal(regrantStillVisible, true, "Restore access button remains visible and mode remains 'read' when write access was not granted");
+
   // 8. Assert URL stayed on main UI throughout the entire flow (no separate page visited)
   const currentPath = await page.evaluate(() => location.pathname);
   assert.equal(currentPath, "/", "user remained strictly on the main UI root without visiting separate environment.html");

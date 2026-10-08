@@ -746,16 +746,23 @@ function renderRoomFoldersBar() {
 async function requestFolderAccess(folder) {
   try {
     let res = "prompt";
+    let mode = "readwrite";
     try {
       res = await folder.handle.requestPermission({ mode: "readwrite" });
     } catch {
+      mode = "read";
       res = await folder.handle.requestPermission({ mode: "read" }).catch(() => "denied");
     }
     folder.permission = res;
-    folder.mode = res === "granted" ? "readwrite" : "read";
+    folder.mode = res === "granted" ? mode : "read";
     renderRoomFoldersBar();
     if (res === "granted") {
-      setReport(`Restored access to '${folder.name}'.`, "good");
+      setReport(
+        mode === "readwrite"
+          ? `Restored access to '${folder.name}'.`
+          : `Restored read-only access to '${folder.name}'.`,
+        "good",
+      );
       if (roomFolder && roomFolder.name === folder.name) {
         await loadRoomFolder();
       }
