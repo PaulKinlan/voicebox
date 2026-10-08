@@ -116,8 +116,8 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
     diffFilesRaw = execFileSync("git", ["diff", "--name-only", `${baseRef}..${tipRef}`], { cwd: rootDir, encoding: "utf8" }).trim();
     diffContent = execFileSync("git", ["diff", `${baseRef}..${tipRef}`], { cwd: rootDir, encoding: "utf8" });
   } catch (err) {
-    console.error(`[review-trigger] git diff failed between ${baseRef} and ${tipRef}: ${err.message}`);
-    return { ok: false, exitCode: 1, error: err.message };
+    console.error(`[review-trigger] git diff failed between ${baseRef} and ${tipRef}: ${sanitizeLogOutput(err.message)}`);
+    return { ok: false, exitCode: 1, error: sanitizeLogOutput(err.message) };
   }
 
   const changedFiles = diffFilesRaw.split("\n").map((f) => f.trim()).filter(Boolean);
@@ -192,7 +192,7 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
     writeFileSync(runLog, `${res.stdout || ""}\n${res.stderr || ""}`, "utf8");
     runExit = res.status ?? 1;
   } catch (e) {
-    console.error(`[review-trigger] Station run execution failed: ${e.message}`);
+    console.error(`[review-trigger] Station run execution failed: ${sanitizeLogOutput(e.message)}`);
     runExit = 1;
   }
 
@@ -214,6 +214,7 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
   const foundReportPath = locateRunDeltaReport(runDir, rootDir, station);
 
   let publishExit = 0;
+  let safeSummary = "";
   if (foundReportPath) {
     console.log(`[review-trigger] Calling h1u0 publisher (scripts/factory-triage.mjs --file-issues --include-low) for ${candidateReportName}...`);
     try {
@@ -225,7 +226,7 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
           encoding: "utf8",
         });
         publishExit = pubRes.status ?? 1;
-        const safeSummary = parsePublisherSummary(pubRes.stdout || "");
+        safeSummary = parsePublisherSummary(pubRes.stdout || "");
         console.log(`[review-trigger] Publisher summary:\n${safeSummary || "(no summary emitted)"}`);
         if (pubRes.stderr) console.error(`[review-trigger] Publisher stderr:\n${sanitizeLogOutput(pubRes.stderr)}`);
       } else {
@@ -233,7 +234,7 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
         publishExit = 1;
       }
     } catch (e) {
-      console.error(`[review-trigger] Publisher invocation error: ${e.message}`);
+      console.error(`[review-trigger] Publisher invocation error: ${sanitizeLogOutput(e.message)}`);
       publishExit = 1;
     }
   } else {
@@ -241,10 +242,12 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
   }
 
   // Distinguish genuine clean/no-action exit 2 from runs with skipped/unverifiable findings
+  // Sibling publisher returns 0 when some findings were published even if others were skipped.
+  // PASS requires zero skipped and zero failed findings across both exit 0 and exit 2.
   const hasSkippedFindings =
     /skipped:\s*[0-9a-f]{8,64}/i.test(safeSummary) ||
     /,\s*[1-9]\d*\s+skipped/i.test(safeSummary);
-  const publishOk = publishExit === 0 || (publishExit === 2 && !hasSkippedFindings);
+  const publishOk = (publishExit === 0 || publishExit === 2) && !hasSkippedFindings;
   const ok = runExit === 0 && publishOk;
   const verdict = ok ? "PASS" : "FAILED";
   const exitCode = ok ? 0 : 1;
@@ -257,7 +260,7 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
       spawnSync("bd", ["comment", beadId, beadMsg], { cwd: rootDir, encoding: "utf8" });
       console.log(`[review-trigger] Recorded review verdict on bead ${beadId}`);
     } catch (e) {
-      console.warn(`[review-trigger] Could not comment on bead ${beadId}: ${e.message}`);
+      console.warn(`[review-trigger] Could not comment on bead ${beadId}: ${sanitizeLogOutput(e.message)}`);
     }
   }
 

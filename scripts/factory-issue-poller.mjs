@@ -53,7 +53,9 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
     cursorFile = path.join(privateDir, "factory-issue-cursor.json");
   }
 
-  mkdirSync(privateDir, { recursive: true });
+  if (!dryRun) {
+    mkdirSync(privateDir, { recursive: true });
+  }
 
   // 1. Read Cursor (supports both object map and legacy array format)
   let cursor = { highestIssueNumber: 0, processedIssues: {} };
@@ -108,7 +110,9 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
     const routing = routeIssue(issue);
     if (!routing.ok) {
       console.log(`[issue-poller] Skipping issue #${num}: ${routing.reason}`);
-      cursor.processedIssues[num] = { updatedAt, skipped: true, reason: routing.reason };
+      if (!dryRun) {
+        cursor.processedIssues[num] = { updatedAt, skipped: true, reason: routing.reason };
+      }
       continue;
     }
 
@@ -116,7 +120,9 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
     console.log(`[issue-poller] Issue #${num} routed to stations: [${stations.join(", ")}]`);
 
     if (stations.length === 0) {
-      cursor.processedIssues[num] = { updatedAt, skipped: true };
+      if (!dryRun) {
+        cursor.processedIssues[num] = { updatedAt, skipped: true };
+      }
       continue;
     }
 

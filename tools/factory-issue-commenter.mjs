@@ -62,23 +62,45 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
   const findingItems = [];
 
   for (const report of reports) {
-    const derivedStation = report.file
-      ? report.file.replace(/^[^-]+-/, "").replace(/-(delta|summary|latest)\.md$/, "")
-      : "";
+    let derivedStation = "";
+    if (report.file) {
+      for (const st of stations) {
+        if (
+          report.file.endsWith(`-${st}-delta.md`) ||
+          report.file.endsWith(`-${st}-summary.md`) ||
+          report.file.endsWith(`-${st}-latest.md`)
+        ) {
+          derivedStation = st;
+          break;
+        }
+      }
+      if (!derivedStation) {
+        const mSuffix = report.file.match(/-([a-z0-9_-]+)-(?:delta|summary|latest)\.md$/);
+        if (mSuffix) derivedStation = mSuffix[1];
+      }
+    }
     const rawLines = report.content.split("\n");
+    let inActionableSection = false;
 
     for (let i = 0; i < rawLines.length; i++) {
       const line = rawLines[i].trim();
+      if (line.startsWith("## ")) {
+        inActionableSection = /^## Action Required: New & Regressed Findings/i.test(line);
+        continue;
+      }
 
       // Format A: Real Factory Delta Report (### [SEVERITY] Title (`state`))
       const headingMatch = line.match(/^###\s+\[([^\]]+)\]\s+(.*?)(?:\s+\(`([a-z]+)`\))?\s*$/);
-      if (headingMatch && !/FALSE POSITIVE/i.test(headingMatch[1])) {
-        totalFindings++;
+      if (inActionableSection && headingMatch && !/FALSE POSITIVE/i.test(headingMatch[1])) {
         const badge = headingMatch[1];
         const badgeParts = badge.split("·");
         const sev = (badgeParts[1] ? badgeParts[1].replace(/routed/i, "").trim() : badgeParts[0].trim()).toUpperCase();
         const title = headingMatch[2].trim();
         let state = headingMatch[3] ? headingMatch[3].toLowerCase() : "new";
+        if (state !== "new" && state !== "regressed") {
+          continue; // Non-actionable state (fixed, unchanged, etc.)
+        }
+        totalFindings++;
         const station = derivedStation || (stations.length === 1 ? stations[0] : "unknown");
         let humanReview = SECURITY_STATIONS.has(station);
 
@@ -118,6 +140,8 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
           fingerprint = createHash("sha256").update(`${station}:${sev}:${rule || description}`).digest("hex");
         }
         description = sanitizeFindingText(description);
+        if (rule) rule = sanitizeFindingText(rule);
+        if (location) location = sanitizeFindingText(location);
 
         findingItems.push({ severity: sev, station, description, rule, location, fingerprint, state, humanReview });
         continue;
@@ -162,8 +186,19 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
     }
   }
 
+  // Deduplicate findingItems across delta/summary/latest report variants
+  const dedupedFindings = [];
+  const seenFp = new Set();
+  for (const item of findingItems) {
+    const key = item.fingerprint.toLowerCase();
+    if (!seenFp.has(key)) {
+      seenFp.add(key);
+      dedupedFindings.push(item);
+    }
+  }
+
   // 3. Filter out findings already commented on this issue
-  const newFindings = findingItems.filter((f) => !existingFingerprints.has(f.fingerprint.toLowerCase()));
+  const newFindings = dedupedFindings.filter((f) => !existingFingerprints.has(f.fingerprint.toLowerCase()));
 
   // Deduplication check: if all reported findings are already commented on this issue, return no-op exit 2
   if (totalFindings > 0 && newFindings.length === 0) {

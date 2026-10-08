@@ -163,7 +163,7 @@ test("factory-issue-commenter: parses real factory delta reports, emits one comm
   const tmpDir = path.join(ROOT, "tests", "fixtures", "test-report-tmp");
   mkdirSync(tmpDir, { recursive: true });
 
-  // Real factory delta format for perf-review
+  // Real factory delta format with hyphenated target prefix: voicebox-miniapps-perf-review-delta.md
   const perfReport = `# Software Factory Delta Report: voicebox
 Generated: 2026-10-07T19:32:36.485838+00:00
 
@@ -180,9 +180,15 @@ Generated: 2026-10-07T19:32:36.485838+00:00
 - **Description**: the probe is awaited before the banner prints
 - **Snippet**: \`await probeAll()\`
 - **Remediation**: Do not await the probe before printing the banner
+
+## Triaged False Positives (not counted, never published)
+
+### [FALSE POSITIVE] Ignored candidate on same file (\`fixed\`)
+- **Rule**: \`ignored-rule\`
+- **Location**: \`server.mjs:220\`
 `;
 
-  // Real factory delta format for secret-scan (security station)
+  // Real factory delta format for secret-scan (security station) with credential in rule and location
   const secretReport = `# Software Factory Delta Report: voicebox
 Generated: 2026-10-07T19:32:36.485721+00:00
 
@@ -193,16 +199,18 @@ Generated: 2026-10-07T19:32:36.485721+00:00
 ## Action Required: New & Regressed Findings
 
 ### [CRITICAL · routed CRITICAL] Hardcoded API credential in config (\`new\`)
-- **Rule**: \`generic-api-key\`
-- **Location**: \`config/example.env:12\`
+- **Rule**: \`generic-api-key-with-token=supersecretkey\`
+- **Location**: \`config/example.env:password=anothersecret\`
 - **Fingerprint**: \`a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0\`
 - **Description**: credential token ghp_ABCDEF0123456789xyz and password=super-secret
 - **Snippet**: \`API_KEY="CANARY"\`
 - **Remediation**: Rotate the value
 `;
 
-  writeFileSync(path.join(tmpDir, "voicebox-perf-review-delta.md"), perfReport, "utf8");
-  writeFileSync(path.join(tmpDir, "voicebox-secret-scan-delta.md"), secretReport, "utf8");
+  // Write reports with hyphenated target names and duplicate summary variant
+  writeFileSync(path.join(tmpDir, "voicebox-miniapps-perf-review-delta.md"), perfReport, "utf8");
+  writeFileSync(path.join(tmpDir, "voicebox-miniapps-perf-review-summary.md"), perfReport, "utf8");
+  writeFileSync(path.join(tmpDir, "voicebox-miniapps-secret-scan-delta.md"), secretReport, "utf8");
 
   const res = formatTriageComment({
     stations: ["perf-review", "secret-scan"],
@@ -215,9 +223,9 @@ Generated: 2026-10-07T19:32:36.485721+00:00
   assert.equal(res.exitCode, 0);
   assert.equal(res.newFindings, 2);
   assert.ok(Array.isArray(res.comments));
-  assert.equal(res.comments.length, 2, "emits exactly one comment per finding to prevent marker conflation");
+  assert.equal(res.comments.length, 2, "duplicate report variants deduplicated; false positives ignored; 1 comment per finding");
 
-  // Comment 1: perf-review finding
+  // Comment 1: perf-review finding (station extracted accurately despite hyphenated target name)
   const c1 = res.comments[0];
   assert.ok(c1.includes("<!-- factory-triage-comment: 5939431590a573447f5b1826c33d12e4b2429002741349d1d8313deb7af5cd9a -->"));
   assert.ok(c1.includes("<!-- factory-station: perf-review -->"));
@@ -226,17 +234,19 @@ Generated: 2026-10-07T19:32:36.485721+00:00
   assert.ok(c1.includes("<!-- factory-rule: blocking-boot-probe -->"));
   assert.ok(!c1.includes("<!-- factory-human-review -->"));
   assert.ok(!c1.includes("secret-scan"));
+  assert.ok(!c1.includes("FALSE POSITIVE"));
 
-  // Comment 2: secret-scan finding (security station -> human-review flag)
+  // Comment 2: secret-scan finding (security station -> human-review flag; location/rule sanitized)
   const c2 = res.comments[1];
   assert.ok(c2.includes("<!-- factory-triage-comment: a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0 -->"));
   assert.ok(c2.includes("<!-- factory-station: secret-scan -->"));
   assert.ok(c2.includes("<!-- factory-severity: critical -->"));
   assert.ok(c2.includes("<!-- factory-state: new -->"));
-  assert.ok(c2.includes("<!-- factory-rule: generic-api-key -->"));
   assert.ok(c2.includes("<!-- factory-human-review -->"));
   assert.ok(!c2.includes("ghp_ABCDEF0123456789xyz"));
   assert.ok(!c2.includes("super-secret"));
+  assert.ok(!c2.includes("supersecretkey"));
+  assert.ok(!c2.includes("anothersecret"));
   assert.ok(c2.includes("[REDACTED]"));
   assert.ok(!c2.includes("perf-review"));
 
@@ -364,7 +374,6 @@ test("factory-review-trigger: sanitizeLogOutput masks stderr and issue titles co
 test("factory-issue-poller: dry-run does not mutate cursor or attempt directory", () => {
   const tmpDir = path.join(ROOT, "tests", "fixtures", "test-dryrun-tmp");
   rmSync(tmpDir, { recursive: true, force: true });
-  mkdirSync(tmpDir, { recursive: true });
 
   const mockBinDir = path.join(tmpDir, "bin");
   mkdirSync(mockBinDir, { recursive: true });
@@ -372,6 +381,14 @@ test("factory-issue-poller: dry-run does not mutate cursor or attempt directory"
   const sampleIssues = [
     {
       number: 101,
+      title: "[factory/high] already published loop hazard finding",
+      body: "<!-- factory-fingerprint: 1234567890abcdef -->",
+      authorAssociation: "COLLABORATOR",
+      createdAt: "2026-10-07T00:00:00Z",
+      updatedAt: "2026-10-07T00:00:00Z",
+    },
+    {
+      number: 102,
       title: "Bug: slow boot with token github_pat_11ABCD1234567890abcdefghijklmnopqrstuvwxyz",
       body: "Investigate boot latency in client",
       authorAssociation: "COLLABORATOR",
@@ -381,19 +398,20 @@ test("factory-issue-poller: dry-run does not mutate cursor or attempt directory"
   ];
   writeFileSync(mockGh, `#!/bin/sh\necho '${JSON.stringify(sampleIssues)}'\n`, { mode: 0o755 });
 
-  const result = pollInboundIssues(["--dry-run", "--limit", "1", "--private-dir", tmpDir], {
+  const result = pollInboundIssues(["--dry-run", "--limit", "2", "--private-dir", tmpDir], {
     env: { ...process.env, PATH: `${mockBinDir}:${process.env.PATH}` },
     rootDir: ROOT,
   });
 
   const cursorFile = path.join(tmpDir, "factory-issue-cursor.json");
-  const issueRunDir = path.join(tmpDir, "issue-101");
+  const issueRunDir = path.join(tmpDir, "issue-102");
 
-  // In dry run, no cursor file is written and no attempt directory is created
+  // In dry run, no cursor file is written, privateDir is not created, and no attempt directory is created
   assert.equal(existsSync(cursorFile), false, "dry run must not write cursorFile");
   assert.equal(existsSync(issueRunDir), false, "dry run must not create attempt directory");
   assert.equal(result.ok, true);
   assert.equal(result.exitCode, 0);
+  assert.deepEqual(result.cursor.processedIssues, {}, "dry run must not mutate in-memory cursor");
 
   rmSync(tmpDir, { recursive: true, force: true });
 });
