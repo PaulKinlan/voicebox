@@ -396,6 +396,34 @@
             </div>
             <p class="env-root-status" id="env-root-status" role="status" aria-live="polite"></p>
           </div>
+          <!-- WHAT SETUP DOES, WHY IT IS NEEDED, AND THE ORDER (voicebox-beads-um5r). This is the screen a
+               person reaches when nothing is configured, and it used to name controls without saying what
+               they do or in what order. The claims here are the code's own: the server ROUTES a page-owned
+               root's file acts to this page, which performs them (core/dispatch.ts, browser/acts.ts,
+               actsVia "page"), while a folder on this machine is the one the server writes itself. The
+               limits are named because they are the useful part, and they are the ones the code enforces:
+               a picked folder writes once you grant write access (needs-gesture until then), and browser
+               storage needs this page connected (no-page otherwise). voicebox-beads-42ir corrected the
+               environment page's copy to say the same thing. -->
+          <div class="env-setup-guide" id="env-setup-guide">
+            <h3 class="env-add-title">How setting up works</h3>
+            <p class="env-hint"><strong>What it does:</strong> a project is a folder plus where it lives. The turns that read and save files run in the Voicebox server, so a project needs a folder before anything can be read or written.</p>
+            <p class="env-hint"><strong>Why it is needed:</strong> with no project, reads and writes are refused — there is nowhere for them to go. Where the files live decides <strong>who performs the write</strong>: browser storage and a folder you pick are written by this page (a picked folder once you grant write access), while a folder on this machine is written by the server itself, with no page needed.</p>
+            <ol class="env-setup-steps">
+              <li>Start Voicebox on the machine whose files you want to use — that server is what saves them.</li>
+              <li>Choose where this project's files live: <strong>Use browser workspace</strong> (no path, no host token), <strong>Pick a local folder…</strong>, or <strong>Set machine root</strong> (its path and the host token — the server writes there, and the files stay openable in your own editor).</li>
+              <li>Create or name the project below, then talk to it — the files land where you chose.</li>
+            </ol>
+          </div>
+          <div class="env-create-project" id="env-create-project">
+            <h3 class="env-add-title">Create a project</h3>
+            <label class="env-hint" for="env-create-project-name">A name for a project in this browser's own storage — no path and no host token needed.</label>
+            <div class="env-create-project-row">
+              <input id="env-create-project-name" type="text" placeholder="a name for the project" autocomplete="off" />
+              <button id="env-create-project-btn" type="button">Create a project</button>
+            </div>
+            <p class="env-root-status" id="env-create-project-status" role="status" aria-live="polite"></p>
+          </div>
           <div class="env-add-block">
             <h3 class="env-add-title">Add an environment</h3>
             <p class="env-hint" id="env-hint">Add a server connection by URL. It does not start a service.</p>
