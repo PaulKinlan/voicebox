@@ -28,6 +28,7 @@ import path from "node:path";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { startServer } from "./lib/server.mjs";
+import { readJsonl } from "./lib/jsonl.mjs";
 import { upgrade } from "../lib/ws-server.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -341,7 +342,7 @@ test("revocation writes to audit trail when a machine root is declared", async (
     const auditFiles = readdirSync(auditDir);
     assert.ok(auditFiles.length > 0, "audit file must exist");
     const auditContent = readFileSync(path.join(auditDir, auditFiles[0]), "utf8");
-    const entries = auditContent.trim().split("\n").map(JSON.parse);
+    const entries = readJsonl(auditContent);
     const revokeEntry = entries.find((e) => e.act?.kind === "pairing" && e.act?.target === envKey);
     assert.ok(revokeEntry, "revocation entry must exist in audit log");
     assert.equal(revokeEntry.rule, "pairing-revoked");

@@ -8,6 +8,7 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readJsonl } from "./lib/jsonl.mjs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { liveToolDeclarations } from "../lib/wasm-shelf.mjs";
 import { startServer } from "./lib/server.mjs";
@@ -121,7 +122,7 @@ test("OpenAI browser: real function call writes and answers; invalid calls refus
   const answer = await until(() => f.answer("write-1"), "correlated write result");
   assert.equal(JSON.parse(answer.item.output).result.ok, true);
   assert.equal(readFileSync(path.join(f.workspace, "live.txt"), "utf8"), content);
-  const audit = readdirSync(path.join(f.workspace, ".audit")).filter(n => n.endsWith(".jsonl")).flatMap(n => readFileSync(path.join(f.workspace, ".audit", n), "utf8").trim().split("\n").map(JSON.parse));
+  const audit = readdirSync(path.join(f.workspace, ".audit")).filter(n => n.endsWith(".jsonl")).flatMap(n => readJsonl(readFileSync(path.join(f.workspace, ".audit", n), "utf8")));
   assert.ok(audit.some(entry => entry.turn === "live" && entry.act?.target === "live.txt"));
   assert.equal(f.row.messages.some(msg => msg.type === "response.create"), false, "generation is still active");
   f.send({ type: "response.done" });

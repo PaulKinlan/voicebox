@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { installTaskExecutor } from "../../lib/tasks.mjs";
+import { readJsonl } from "../lib/jsonl.mjs";
 import { registerLiveProvider } from "../../lib/live-session.mjs";
 
 const controls = process.env.VOICEBOX_TASK_FIXTURE;
@@ -18,7 +19,7 @@ installTaskExecutor({
   },
   run({ input, signal }) {
     const auditDir = path.join(process.env.VOICEBOX_WORKSPACE, ".audit");
-    const events = fs.readdirSync(auditDir).filter((f) => f.endsWith(".jsonl")).flatMap((f) => fs.readFileSync(path.join(auditDir, f), "utf8").trim().split("\n").map(JSON.parse));
+    const events = fs.readdirSync(auditDir).filter((f) => f.endsWith(".jsonl")).flatMap((f) => readJsonl(fs.readFileSync(path.join(auditDir, f), "utf8")));
     const admitted = events.findLast((e) => e.task?.created?.input.task === input.task);
     const running = admitted && events.some((e) => e.task?.address === admitted.task.address && e.task.state === "running");
     if (!admitted || !running) throw new Error("fixture dispatch preceded persisted admission/running record");
