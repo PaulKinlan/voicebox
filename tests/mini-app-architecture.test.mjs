@@ -738,6 +738,18 @@ test("server: /turn validates mini-app tool arguments at host boundary before di
   assert.equal(badTypeJson.result?.ok, false);
   assert.equal(badTypeJson.result?.refused, "invalid-argument-type");
   assert.ok(badTypeJson.result?.why.includes("amount"));
+
+  // Bounded request body on POST /api/mini-app/tools: payload > 65536 bytes rejected with HTTP 400 body-too-large
+  const oversizedPayload = JSON.stringify({ appId: "test-app", title: "T".repeat(70000), tools: [] });
+  const oversizedRes = await fetch(`${server.base}/api/mini-app/tools`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: oversizedPayload,
+  });
+  assert.equal(oversizedRes.status, 400);
+  const oversizedJson = await oversizedRes.json();
+  assert.equal(oversizedJson.ok, false);
+  assert.equal(oversizedJson.refused, "body-too-large");
 });
 
 test("browser: outer bridge validates mini-app tool arguments and refuses malformed calls before execution (GH #24, voicebox-beads-fdtu)", { timeout: 25000 }, async (t) => {
@@ -1509,6 +1521,33 @@ test("core: validateWebMcpTool rejects contradictory and malformed constraint sc
   assert.equal(allInvalidIntRes.refused, "invalid-tool-parameters");
   assert.match(allInvalidIntRes.why, /no enum members satisfy declared range bounds/);
 
+  // 11. Schema nesting depth limit: 16 passes, 17 rejected with invalid-tool-parameters
+  let deepSchema16 = { type: "string" };
+  for (let i = 0; i < 15; i++) {
+    deepSchema16 = { type: "object", properties: { child: deepSchema16 } };
+  }
+  const deepTool16 = {
+    name: "deep_tool_16",
+    description: "Deep schema 16",
+    parameters: deepSchema16,
+  };
+  const deepRes16 = validateWebMcpTool(deepTool16);
+  assert.equal(deepRes16.ok, true, "schema depth 16 must pass");
+
+  let deepSchema17 = { type: "string" };
+  for (let i = 0; i < 18; i++) {
+    deepSchema17 = { type: "object", properties: { child: deepSchema17 } };
+  }
+  const deepTool17 = {
+    name: "deep_tool_17",
+    description: "Deep schema 17",
+    parameters: deepSchema17,
+  };
+  const deepRes17 = validateWebMcpTool(deepTool17);
+  assert.equal(deepRes17.ok, false);
+  assert.equal(deepRes17.refused, "invalid-tool-parameters");
+  assert.match(deepRes17.why, /schema nesting exceeds maximum depth of 16/);
+
   // Positive control: valid string enum satisfying minLength and maxLength
   const validStringEnumTool = {
     name: "valid_string_enum",
@@ -1701,6 +1740,37 @@ test("core: validateMiniAppToolArgs enforces snapshot literal invariant and reje
   assert.equal(res65537.ok, false, "exact 65537 bytes must be refused");
   assert.equal(res65537.refused, "invalid-tool-arguments");
   assert.match(res65537.why, /exceeds maximum allowed bound of 65536 bytes/);
+
+  // 13. Revoked Proxy passed as rawArgs
+  const { proxy: revProxy, revoke: doRevoke } = Proxy.revocable({ count: 1 }, {});
+  doRevoke();
+  const revRes = validateMiniAppToolArgs(tool, revProxy);
+  assert.equal(revRes.ok, false);
+  assert.equal(revRes.refused, "invalid-argument");
+  assert.match(revRes.why, /failed to inspect arguments/);
+
+  // 14. Throwing Proxy with throwing message getter
+  const evilError = new Error();
+  Object.defineProperty(evilError, "message", {
+    get() { throw new Error("nested trap throw"); },
+  });
+  const throwingProxy = new Proxy({}, {
+    get() { throw evilError; },
+    ownKeys() { throw evilError; },
+    getOwnPropertyDescriptor() { throw evilError; },
+  });
+  const throwRes = validateMiniAppToolArgs(tool, throwingProxy);
+  assert.equal(throwRes.ok, false);
+  assert.equal(throwRes.refused, "invalid-argument");
+  assert.match(throwRes.why, /cannot read symbols|cannot read descriptors|failed to inspect arguments/);
+
+  // 15. Symmetric non-enumerable plain object property rejection
+  const nonEnumObj = { count: 1 };
+  Object.defineProperty(nonEnumObj, "hidden", { value: 123, enumerable: false });
+  const nonEnumObjRes = validateMiniAppToolArgs(tool, nonEnumObj);
+  assert.equal(nonEnumObjRes.ok, false);
+  assert.equal(nonEnumObjRes.refused, "invalid-argument");
+  assert.match(nonEnumObjRes.why, /cannot be non-enumerable/);
 });
 
 test("core: validateMiniAppToolArgs enforces object additionalProperties: false without properties and Unicode code points (Findings P1 & P2)", () => {

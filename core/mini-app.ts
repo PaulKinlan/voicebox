@@ -53,6 +53,8 @@ export const MINI_APP_BOUNDS = Object.freeze({
   maxArgsBytes: 65536,   // 64KB max incoming tool arguments
   maxNestingDepth: 32,   // 32 levels of object/array nesting
   maxNodeCount: 2048,    // 2048 total visited nodes
+  maxSchemaDepth: 16,    // 16 levels of schema nesting
+  maxSchemaNodes: 512,   // 512 visited schema nodes
   callTimeoutMs: 5000,   // 5s per tool execution
   maxNameLength: 64,
   maxDescriptionLength: 1024,
@@ -77,7 +79,21 @@ const ALLOWED_OBJECT_KEYS = new Set(["type", "description", "properties", "requi
 const ALLOWED_ITEMS_KEYS = new Set(["type", "description", "enum"]);
 const SUPPORTED_PRIMITIVE_ITEM_TYPES = new Set(["string", "number", "integer", "boolean"]);
 
-function validateSinglePropertySchema(propName: string, raw: unknown, path = ""): string | null {
+function validateSinglePropertySchema(
+  propName: string,
+  raw: unknown,
+  path = "",
+  depth = 0,
+  counter = { nodes: 0 }
+): string | null {
+  counter.nodes++;
+  if (counter.nodes > MINI_APP_BOUNDS.maxSchemaNodes) {
+    return `schema exceeds maximum node count of ${MINI_APP_BOUNDS.maxSchemaNodes}`;
+  }
+  if (depth > MINI_APP_BOUNDS.maxSchemaDepth) {
+    return `schema nesting exceeds maximum depth of ${MINI_APP_BOUNDS.maxSchemaDepth}`;
+  }
+
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return `property '${path}${propName}' schema must be an object`;
   }
@@ -268,7 +284,7 @@ function validateSinglePropertySchema(propName: string, raw: unknown, path = "")
     }
     if (s.properties && typeof s.properties === "object" && !Array.isArray(s.properties)) {
       for (const [nestedName, nestedSchema] of Object.entries(s.properties as Record<string, unknown>)) {
-        const err = validateSinglePropertySchema(nestedName, nestedSchema, `${path}${propName}.`);
+        const err = validateSinglePropertySchema(nestedName, nestedSchema, `${path}${propName}.`, depth + 1, counter);
         if (err) return err;
       }
     }
@@ -319,8 +335,9 @@ export function validateWebMcpTool(raw: unknown): ValidationResult<WebMcpToolDec
     ? (p.properties as Record<string, WebMcpParameterSchema>)
     : {};
 
+  const counter = { nodes: 0 };
   for (const [propName, propSchema] of Object.entries(properties)) {
-    const err = validateSinglePropertySchema(propName, propSchema);
+    const err = validateSinglePropertySchema(propName, propSchema, "", 0, counter);
     if (err) {
       return refusal("invalid-tool-parameters", err);
     }
@@ -538,7 +555,10 @@ export function inspectAndSnapshotJson(
 
     const objSnapshot: Record<string, unknown> = Object.create(null);
     for (const [key, desc] of Object.entries(descriptors)) {
-      if (!desc.enumerable) continue;
+      if (!desc.enumerable) {
+        seen.delete(val);
+        return { ok: false, refused: "invalid-argument", why: `argument property '${path ? `${path}.` : ""}${key}' cannot be non-enumerable` };
+      }
       if (desc.get || desc.set) {
         seen.delete(val);
         return { ok: false, refused: "invalid-argument", why: `argument property '${path ? `${path}.` : ""}${key}' cannot use getter/setter accessors` };
@@ -558,12 +578,12 @@ export function inspectAndSnapshotJson(
 
     seen.delete(val);
     return { ok: true, snapshot: objSnapshot };
-  } catch (err) {
+  } catch {
     seen.delete(val);
     return {
       ok: false,
       refused: "invalid-argument",
-      why: `failed to inspect arguments${path ? ` at '${path}'` : ""}: ${err && typeof err === "object" && "message" in err ? (err as Error).message : String(err)}`,
+      why: `failed to inspect arguments${path ? ` at '${path}'` : ""}`,
     };
   }
 }
@@ -575,43 +595,50 @@ export function validateMiniAppToolArgs(
   tool: WebMcpToolDeclaration,
   rawArgs: unknown
 ): ValidationResult<Record<string, unknown>> {
-  if (rawArgs === null || rawArgs === undefined) {
-    rawArgs = {};
-  }
-  if (typeof rawArgs !== "object" || Array.isArray(rawArgs)) {
-    return refusal("invalid-tool-arguments", `tool arguments must be an object, got ${Array.isArray(rawArgs) ? "array" : typeof rawArgs}`);
-  }
-
-  const snapResult = inspectAndSnapshotJson(rawArgs);
-  if (!snapResult.ok) {
-    return refusal(snapResult.refused || "invalid-argument", snapResult.why || "invalid arguments");
-  }
-
-  let jsonStr = "";
   try {
-    jsonStr = JSON.stringify(snapResult.snapshot);
-  } catch {
-    return refusal("invalid-tool-arguments", "tool arguments must be serializable JSON");
-  }
+    if (rawArgs === null || rawArgs === undefined) {
+      rawArgs = {};
+    }
+    let isArr = false;
+    try {
+      isArr = Array.isArray(rawArgs);
+    } catch {
+      return refusal("invalid-argument", "failed to inspect arguments: revoked or inaccessible proxy");
+    }
+    if (typeof rawArgs !== "object" || isArr) {
+      return refusal("invalid-tool-arguments", `tool arguments must be an object, got ${isArr ? "array" : typeof rawArgs}`);
+    }
 
-  const byteLen = typeof Buffer !== "undefined"
-    ? Buffer.byteLength(jsonStr, "utf8")
-    : (typeof TextEncoder !== "undefined" ? new TextEncoder().encode(jsonStr).length : jsonStr.length);
+    const snapResult = inspectAndSnapshotJson(rawArgs);
+    if (!snapResult.ok) {
+      return refusal(snapResult.refused || "invalid-argument", snapResult.why || "invalid arguments");
+    }
 
-  if (byteLen > MINI_APP_BOUNDS.maxArgsBytes) {
-    return refusal(
-      "invalid-tool-arguments",
-      `tool arguments size (${byteLen} bytes) exceeds maximum allowed bound of ${MINI_APP_BOUNDS.maxArgsBytes} bytes`
-    );
-  }
+    let jsonStr = "";
+    try {
+      jsonStr = JSON.stringify(snapResult.snapshot);
+    } catch {
+      return refusal("invalid-tool-arguments", "tool arguments must be serializable JSON");
+    }
 
-  const args = snapResult.snapshot as Record<string, unknown>;
+    const byteLen = typeof Buffer !== "undefined"
+      ? Buffer.byteLength(jsonStr, "utf8")
+      : (typeof TextEncoder !== "undefined" ? new TextEncoder().encode(jsonStr).length : jsonStr.length);
 
-  const params = tool?.parameters ?? { type: "object", properties: {} };
-  const properties = (params.properties && typeof params.properties === "object" && !Array.isArray(params.properties))
-    ? params.properties
-    : {};
-  const required = Array.isArray(params.required) ? params.required : [];
+    if (byteLen > MINI_APP_BOUNDS.maxArgsBytes) {
+      return refusal(
+        "invalid-tool-arguments",
+        `tool arguments size (${byteLen} bytes) exceeds maximum allowed bound of ${MINI_APP_BOUNDS.maxArgsBytes} bytes`
+      );
+    }
+
+    const args = snapResult.snapshot as Record<string, unknown>;
+
+    const params = tool?.parameters ?? { type: "object", properties: {} };
+    const properties = (params.properties && typeof params.properties === "object" && !Array.isArray(params.properties))
+      ? params.properties
+      : {};
+    const required = Array.isArray(params.required) ? params.required : [];
 
   for (const reqKey of required) {
     if (typeof reqKey === "string" && (!Object.hasOwn(args, reqKey) || args[reqKey] === undefined || args[reqKey] === null)) {
@@ -753,4 +780,7 @@ export function validateMiniAppToolArgs(
   }
 
   return { ok: true, value: args };
+  } catch {
+    return refusal("invalid-argument", "failed to inspect arguments");
+  }
 }

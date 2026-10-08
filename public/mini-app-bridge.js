@@ -24,8 +24,11 @@ try {
 const BOUNDS = {
   maxTools: 16,
   maxOutputBytes: 65536,
+  maxArgsBytes: 65536,
   maxNestingDepth: 32,
   maxNodeCount: 2048,
+  maxSchemaDepth: 16,
+  maxSchemaNodes: 512,
   callTimeoutMs: 5000,
 };
 
@@ -156,7 +159,15 @@ const ALLOWED_OBJECT_KEYS = new Set(["type", "description", "properties", "requi
 const ALLOWED_ITEMS_KEYS = new Set(["type", "description", "enum"]);
 const SUPPORTED_PRIMITIVE_ITEM_TYPES = new Set(["string", "number", "integer", "boolean"]);
 
-function validateSinglePropertySchema(propName, raw, path = "") {
+function validateSinglePropertySchema(propName, raw, path = "", depth = 0, counter = { nodes: 0 }) {
+  counter.nodes++;
+  if (counter.nodes > BOUNDS.maxSchemaNodes) {
+    return `schema exceeds maximum node count of ${BOUNDS.maxSchemaNodes}`;
+  }
+  if (depth > BOUNDS.maxSchemaDepth) {
+    return `schema nesting exceeds maximum depth of ${BOUNDS.maxSchemaDepth}`;
+  }
+
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return `property '${path}${propName}' schema must be an object`;
   }
@@ -346,7 +357,7 @@ function validateSinglePropertySchema(propName, raw, path = "") {
     }
     if (raw.properties && typeof raw.properties === "object" && !Array.isArray(raw.properties)) {
       for (const [nestedName, nestedSchema] of Object.entries(raw.properties)) {
-        const err = validateSinglePropertySchema(nestedName, nestedSchema, `${path}${propName}.`);
+        const err = validateSinglePropertySchema(nestedName, nestedSchema, `${path}${propName}.`, depth + 1, counter);
         if (err) return err;
       }
     }
@@ -387,8 +398,9 @@ function validateTool(raw) {
 
   const properties = (p.properties && typeof p.properties === "object" && !Array.isArray(p.properties)) ? p.properties : {};
 
+  const counter = { nodes: 0 };
   for (const [propName, propSchema] of Object.entries(properties)) {
-    const err = validateSinglePropertySchema(propName, propSchema);
+    const err = validateSinglePropertySchema(propName, propSchema, "", 0, counter);
     if (err) {
       return { ok: false, error: err };
     }
@@ -587,7 +599,10 @@ function inspectAndSnapshotJson(
 
     const objSnapshot = Object.create(null);
     for (const [key, desc] of Object.entries(descriptors)) {
-      if (!desc.enumerable) continue;
+      if (!desc.enumerable) {
+        seen.delete(val);
+        return { ok: false, refused: "invalid-argument", why: `argument property '${path ? `${path}.` : ""}${key}' cannot be non-enumerable` };
+      }
       if (desc.get || desc.set) {
         seen.delete(val);
         return { ok: false, refused: "invalid-argument", why: `argument property '${path ? `${path}.` : ""}${key}' cannot use getter/setter accessors` };
@@ -607,46 +622,53 @@ function inspectAndSnapshotJson(
 
     seen.delete(val);
     return { ok: true, snapshot: objSnapshot };
-  } catch (err) {
+  } catch {
     seen.delete(val);
     return {
       ok: false,
       refused: "invalid-argument",
-      why: `failed to inspect arguments${path ? ` at '${path}'` : ""}: ${err && typeof err === "object" && "message" in err ? err.message : String(err)}`,
+      why: `failed to inspect arguments${path ? ` at '${path}'` : ""}`,
     };
   }
 }
 
 function validateToolArgs(params, rawArgs) {
-  let inArgs = rawArgs;
-  if (inArgs === null || inArgs === undefined) {
-    inArgs = {};
-  }
-  if (typeof inArgs !== "object" || Array.isArray(inArgs)) {
-    return { ok: false, refused: "invalid-tool-arguments", why: `tool arguments must be an object, got ${Array.isArray(inArgs) ? "array" : typeof inArgs}` };
-  }
-
-  const snapResult = inspectAndSnapshotJson(inArgs);
-  if (!snapResult.ok) {
-    return { ok: false, refused: snapResult.refused || "invalid-argument", why: snapResult.why || "invalid argument" };
-  }
-
-  let jsonStr = "";
   try {
-    jsonStr = JSON.stringify(snapResult.snapshot);
-  } catch {
-    return { ok: false, refused: "invalid-tool-arguments", why: "tool arguments must be serializable JSON" };
-  }
+    let inArgs = rawArgs;
+    if (inArgs === null || inArgs === undefined) {
+      inArgs = {};
+    }
+    let isArr = false;
+    try {
+      isArr = Array.isArray(inArgs);
+    } catch {
+      return { ok: false, refused: "invalid-argument", why: "failed to inspect arguments: revoked or inaccessible proxy" };
+    }
+    if (typeof inArgs !== "object" || isArr) {
+      return { ok: false, refused: "invalid-tool-arguments", why: `tool arguments must be an object, got ${isArr ? "array" : typeof inArgs}` };
+    }
 
-  const byteLen = typeof TextEncoder !== "undefined"
-    ? new TextEncoder().encode(jsonStr).length
-    : (typeof Buffer !== "undefined" ? Buffer.byteLength(jsonStr, "utf8") : jsonStr.length);
+    const snapResult = inspectAndSnapshotJson(inArgs);
+    if (!snapResult.ok) {
+      return { ok: false, refused: snapResult.refused || "invalid-argument", why: snapResult.why || "invalid argument" };
+    }
 
-  if (byteLen > BOUNDS.maxOutputBytes) {
-    return { ok: false, refused: "invalid-tool-arguments", why: `tool arguments size (${byteLen} bytes) exceeds maximum allowed bound of ${BOUNDS.maxOutputBytes} bytes` };
-  }
+    let jsonStr = "";
+    try {
+      jsonStr = JSON.stringify(snapResult.snapshot);
+    } catch {
+      return { ok: false, refused: "invalid-tool-arguments", why: "tool arguments must be serializable JSON" };
+    }
 
-  const args = snapResult.snapshot;
+    const byteLen = typeof TextEncoder !== "undefined"
+      ? new TextEncoder().encode(jsonStr).length
+      : (typeof Buffer !== "undefined" ? Buffer.byteLength(jsonStr, "utf8") : jsonStr.length);
+
+    if (byteLen > BOUNDS.maxArgsBytes) {
+      return { ok: false, refused: "invalid-tool-arguments", why: `tool arguments size (${byteLen} bytes) exceeds maximum allowed bound of ${BOUNDS.maxArgsBytes} bytes` };
+    }
+
+    const args = snapResult.snapshot;
 
   const p = params || { type: "object", properties: {} };
   const properties = (p.properties && typeof p.properties === "object" && !Array.isArray(p.properties)) ? p.properties : {};
@@ -785,6 +807,9 @@ function validateToolArgs(params, rawArgs) {
   }
 
   return { ok: true, value: args };
+} catch {
+  return { ok: false, refused: "invalid-argument", why: "failed to inspect arguments" };
+}
 }
 
 function handleInnerMessage(event) {
