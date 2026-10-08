@@ -14,13 +14,15 @@
  *    to publish actionable findings across all severities to public GitHub issues.
  */
 
+import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { redactSecrets } from "../lib/redact.mjs";
-import { selectReviewStation, computeReviewCacheKey } from "../tools/factory-issue-router.mjs";
+import { gitEnv } from "../lib/git-env.mjs";
+import { selectReviewStation, computeReviewCacheKey, NIGHTLY_PROJECT_AUDIT_STATIONS } from "../tools/factory-issue-router.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -72,15 +74,72 @@ export function locateRunDeltaReport(runDir, rootDir, station) {
   return existsSync(candidateReportPath) ? candidateReportPath : "";
 }
 
+/**
+ * Verifies that a station delta report was genuinely produced by the current station attempt:
+ * - File exists and is non-empty.
+ * - Hash differs from pre-run hash (report was modified or freshly created).
+ * - Frontmatter header matches target name (or voicebox).
+ * - If header declares a station, it matches the requested station.
+ * - Generated timestamp is present, valid, and >= run start time.
+ */
+export function validateStationReportProvenance(reportPath, { targetName, station, startTime, hashBefore = null, rootDir = ROOT }) {
+  if (!existsSync(reportPath)) {
+    return { ok: false, error: "report_not_found" };
+  }
+  let content = "";
+  try {
+    content = readFileSync(reportPath, "utf8");
+  } catch (e) {
+    return { ok: false, error: "report_unreadable" };
+  }
+  if (!content.trim()) {
+    return { ok: false, error: "report_empty" };
+  }
+
+  // Hash check: if pre-run file existed, ensure content was rewritten
+  const hashAfter = createHash("sha256").update(content).digest("hex");
+  if (hashBefore && hashAfter === hashBefore) {
+    return { ok: false, error: "report_unchanged_from_prior_attempt" };
+  }
+
+  // Header and Target Check
+  const headerMatch = content.match(/^# Software Factory Delta Report:\s*([^\n]+)/m);
+  if (!headerMatch) {
+    return { ok: false, error: "missing_factory_delta_header" };
+  }
+  const headerTarget = headerMatch[1].trim();
+  const validTarget = headerTarget.toLowerCase().includes(targetName.toLowerCase()) || headerTarget.toLowerCase().includes("voicebox");
+  if (!validTarget) {
+    return { ok: false, error: `target_mismatch: header '${headerTarget}' does not match '${targetName}'` };
+  }
+
+  // Station check if present in header
+  if (headerTarget.includes(" / ")) {
+    const reportedStation = headerTarget.split(" / ")[1].trim();
+    if (reportedStation !== station) {
+      return { ok: false, error: `station_mismatch: header specifies '${reportedStation}', expected '${station}'` };
+    }
+  }
+
+  // Timestamp check
+  const genMatch = content.match(/^Generated:\s*([^\n]+)/m);
+  if (!genMatch) {
+    return { ok: false, error: "missing_generated_timestamp" };
+  }
+  const reportTime = new Date(genMatch[1]).getTime();
+  if (isNaN(reportTime) || reportTime < startTime - 5000) {
+    return { ok: false, error: `stale_report_timestamp: generated at ${genMatch[1]}, run started at ${new Date(startTime).toISOString()}` };
+  }
+
+  return { ok: true, hash: hashAfter, generated: genMatch[1] };
+}
+
 export const APPROVED_GIT_HOSTS = new Set(["github.com", "github.int.exe.xyz", "ssh.github.com"]);
 
-export function getCheckoutRepoIdentity(cwd = ROOT) {
+export function getCheckoutRepoIdentity(cwd = ROOT, env = process.env) {
   try {
-    const gitEnv = { ...process.env };
-    delete gitEnv.GIT_DIR;
-    delete gitEnv.GIT_WORK_TREE;
-    delete gitEnv.GIT_INDEX_FILE;
-    const remoteUrl = execFileSync("git", ["config", "--get", "remote.origin.url"], { cwd, env: gitEnv, encoding: "utf8" }).trim();
+    const cleanEnv = gitEnv(env);
+    const remoteUrl = execFileSync("git", ["config", "--get", "remote.origin.url"], { cwd, env: cleanEnv, encoding: "utf8" }).trim();
     const m = remoteUrl.match(/^(?:https?:\/\/([a-zA-Z0-9.-]+)(?::\d+)?\/|git@([a-zA-Z0-9.-]+):)([^/:]+\/[^/:]+?)(?:\.git)?$/i);
     if (m) {
       const host = (m[1] || m[2] || "").toLowerCase();
@@ -121,6 +180,18 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
       dryRun = true;
     } else if (a === "--force") {
       force = true;
+    } else if (a === "--help" || a === "-h") {
+      console.log(`Usage: node scripts/factory-review-trigger.mjs [options]
+Options:
+  --base <base>       Base git ref or commit SHA (default: merge-base with origin/main)
+  --tip <tip>         Tip git ref or commit SHA (default: HEAD)
+  --bead <id>         Bead issue ID to receive review verdict comments
+  --dry-run           Plan and select stations without executing or publishing
+  --force             Bypass cache and force re-execution
+  --repo <owner/repo> Target repository for publication (default: PaulKinlan/voicebox)
+  --private-dir <dir> Directory for private delta reports (default: ~/.voicebox/factory-reports)
+  --help, -h          Show this help message`);
+      return { ok: true, exitCode: 0, help: true };
     }
   }
 
@@ -128,9 +199,11 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
     console.log(`[review-trigger] DRY-RUN mode active.`);
   }
 
+  const cleanEnv = gitEnv(env);
+
   // Pre-execution validation: Refuse execution if checkout origin is known on an approved host and differs from target repo.
   // Must execute BEFORE cache lookup so cached results from previous runs cannot falsely pass on mismatched repos.
-  const checkoutRepo = getCheckoutRepoIdentity(rootDir);
+  const checkoutRepo = getCheckoutRepoIdentity(rootDir, cleanEnv);
   if (checkoutRepo && checkoutRepo !== repo.toLowerCase()) {
     console.error(`[review-trigger] Refusing execution: checkout origin '${checkoutRepo}' does not match target repo '${repo}'`);
     return { ok: false, exitCode: 1, error: `checkout origin '${checkoutRepo}' does not match target repo '${repo}'` };
@@ -139,7 +212,7 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
   if (!baseRef) {
     // Resolve default merge base against origin/main or HEAD~1
     try {
-      baseRef = execFileSync("git", ["merge-base", "origin/main", tipRef], { cwd: rootDir, encoding: "utf8" }).trim();
+      baseRef = execFileSync("git", ["merge-base", "origin/main", tipRef], { cwd: rootDir, env: cleanEnv, encoding: "utf8" }).trim();
     } catch {
       baseRef = "HEAD~1";
     }
@@ -149,8 +222,8 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
   let diffFilesRaw = "";
   let diffContent = "";
   try {
-    diffFilesRaw = execFileSync("git", ["diff", "--name-only", `${baseRef}..${tipRef}`], { cwd: rootDir, encoding: "utf8" }).trim();
-    diffContent = execFileSync("git", ["diff", `${baseRef}..${tipRef}`], { cwd: rootDir, encoding: "utf8" });
+    diffFilesRaw = execFileSync("git", ["diff", "--name-only", `${baseRef}..${tipRef}`], { cwd: rootDir, env: cleanEnv, encoding: "utf8" }).trim();
+    diffContent = execFileSync("git", ["diff", `${baseRef}..${tipRef}`], { cwd: rootDir, env: cleanEnv, encoding: "utf8" });
   } catch (err) {
     console.error(`[review-trigger] git diff failed between ${baseRef} and ${tipRef}: ${sanitizeLogOutput(err.message)}`);
     return { ok: false, exitCode: 1, error: sanitizeLogOutput(err.message) };
@@ -203,24 +276,59 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
     return { ok: true, exitCode: 0, dryRun: true, station, deferred, cacheKey };
   }
 
-  // 4. Bounded execution via fleet-heavy / timeout 900
+  // 4. Bounded execution via fleet-heavy / timeout 900 under per-target exclusive lock
   const runId = `run-${Date.now()}`;
   const runDir = path.join(privateDir, runId);
   mkdirSync(runDir, { recursive: true });
   const runLog = path.join(runDir, `${station}.log`);
+  const targetName = path.basename(rootDir);
 
-  console.log(`[review-trigger] Executing station '${station}' with --sink file --station-only (runDir: ${runDir})...`);
+  const startTime = Date.now();
+  const lockDir = path.join(homedir(), ".voicebox", "factory-reports");
+  mkdirSync(lockDir, { recursive: true });
+  const targetLockPath = path.join(lockDir, `${targetName}.lock`);
+
+  const findingsDir = path.join(homedir(), "agents", "findings");
+  const defaultReportName = `${targetName}-delta.md`;
+  const defaultReportPath = path.join(findingsDir, defaultReportName);
+  const hashBefore = existsSync(defaultReportPath)
+    ? createHash("sha256").update(readFileSync(defaultReportPath)).digest("hex")
+    : null;
+
+  const isolatedReportName = `${targetName}-${station}-delta.md`;
+  const isolatedReportPath = path.join(runDir, isolatedReportName);
+
+  console.log(`[review-trigger] Executing station '${station}' under target lock ${targetName}.lock (runDir: ${runDir})...`);
 
   let runExit = 0;
   try {
     const hasFleetHeavy = existsSync("/usr/local/bin/fleet-heavy") || spawnSync("which", ["fleet-heavy"]).status === 0;
-    const cmd = hasFleetHeavy
-      ? ["fleet-heavy", "timeout", "900", "factory", "run", station, "--target", rootDir, "--sink", "file", "--station-only"]
-      : ["timeout", "-k", "30", "900", "factory", "run", station, "--target", rootDir, "--sink", "file", "--station-only"];
+    const innerCmd = hasFleetHeavy
+      ? ["fleet-heavy", "timeout", "900", "factory", "run", station, "--target", rootDir, "--sink", "file"]
+      : ["timeout", "-k", "30", "900", "factory", "run", station, "--target", rootDir, "--sink", "file"];
 
-    const res = spawnSync(cmd[0], cmd.slice(1), {
+    // Hold per-target exclusive lock covering BOTH factory invocation AND exact report copy into runDir
+    const runnerScript = `
+      set -uo pipefail
+      exec 200>"$1"
+      flock -x 200
+      shift
+      "$@"
+      rc=$?
+      if [ $rc -eq 0 ] && [ -f "$DEFAULT_REPORT" ]; then
+        cp -f "$DEFAULT_REPORT" "$ISOLATED_REPORT"
+      fi
+      exit $rc
+    `;
+
+    const res = spawnSync("bash", ["-c", runnerScript, "_", targetLockPath, ...innerCmd], {
       cwd: rootDir,
-      env: { ...env, VOICEBOX_FACTORY_PRIVATE_DIR: runDir },
+      env: {
+        ...env,
+        VOICEBOX_FACTORY_PRIVATE_DIR: runDir,
+        DEFAULT_REPORT: defaultReportPath,
+        ISOLATED_REPORT: isolatedReportPath,
+      },
       encoding: "utf8",
       maxBuffer: 10 * 1024 * 1024,
     });
@@ -243,11 +351,25 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
     return { ok: false, exitCode: runExit, verdict, station };
   }
 
-  // 5. Locate Delta Report and publish via h1u0 publisher
-  // Strictly enforce attempt provenance: the report MUST be produced in this attempt's runDir
-  const targetName = path.basename(rootDir);
-  const candidateReportName = `${targetName}-${station}-delta.md`;
-  const foundReportPath = locateRunDeltaReport(runDir, rootDir, station);
+  // 5. Verify isolated report provenance, target, and station identity
+  const valRes = validateStationReportProvenance(isolatedReportPath, {
+    targetName,
+    station,
+    startTime,
+    hashBefore,
+    rootDir,
+  });
+
+  if (!valRes.ok) {
+    console.error(`[review-trigger] Station report provenance check failed: ${valRes.error}`);
+    if (existsSync(isolatedReportPath)) {
+      rmSync(isolatedReportPath, { force: true });
+    }
+    return { ok: false, exitCode: 1, error: valRes.error, station };
+  }
+
+  const candidateReportName = isolatedReportName;
+  const foundReportPath = isolatedReportPath;
 
   let publishExit = 0;
   let safeSummary = "";
@@ -283,6 +405,7 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
             cwd: rootDir,
             env: { ...env, VOICEBOX_FACTORY_PRIVATE_DIR: runDir },
             encoding: "utf8",
+            timeout: 120000,
           });
           publishExit = pubRes.status ?? 1;
           safeSummary = parsePublisherSummary(pubRes.stdout || "");
@@ -298,7 +421,8 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
       }
     }
   } else {
-    console.log(`[review-trigger] Notice: No delta report produced by station '${station}' (clean pass).`);
+    console.error(`[review-trigger] Error: No delta report produced by station '${station}' (execution unconfirmed, failing closed).`);
+    publishExit = 1;
   }
 
   // Distinguish genuine clean/no-action exit 2 from runs with skipped/unverifiable findings
@@ -314,7 +438,19 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
 
   // 6. Record on Bead if requested
   if (beadId) {
-    const defNote = deferred.length > 0 ? ` (deferred for nightly: ${deferred.map((d) => d.station).join(", ")})` : "";
+    let defNote = "";
+    if (deferred.length > 0) {
+      const nightlyStations = deferred.filter((d) => NIGHTLY_PROJECT_AUDIT_STATIONS.has(d.station)).map((d) => d.station);
+      const unscheduledStations = deferred.filter((d) => !NIGHTLY_PROJECT_AUDIT_STATIONS.has(d.station)).map((d) => d.station);
+      const parts = [];
+      if (nightlyStations.length > 0) {
+        parts.push(`deferred for nightly project-audit: ${nightlyStations.join(", ")}`);
+      }
+      if (unscheduledStations.length > 0) {
+        parts.push(`NOT SCHEDULED NIGHTLY (manual follow-up required): ${unscheduledStations.join(", ")}`);
+      }
+      defNote = ` (${parts.join("; ")})`;
+    }
     const beadMsg = `Factory review: station '${station}', verdict ${verdict}${defNote}, cacheKey ${cacheKey.slice(0, 10)}`;
     try {
       spawnSync("bd", ["comment", beadId, beadMsg], { cwd: rootDir, encoding: "utf8" });

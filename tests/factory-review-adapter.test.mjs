@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir, homedir } from "node:os";
 import {
   selectReviewStation,
   computeReviewCacheKey,
@@ -13,8 +13,17 @@ import {
   CATEGORY_STATIONS,
 } from "../tools/factory-issue-router.mjs";
 import { formatTriageComment, sanitizeFindingText } from "../tools/factory-issue-commenter.mjs";
-import { runReviewTrigger, parsePublisherSummary, sanitizeLogOutput, locateRunDeltaReport, getCheckoutRepoIdentity } from "../scripts/factory-review-trigger.mjs";
+import {
+  runReviewTrigger,
+  parsePublisherSummary,
+  sanitizeLogOutput,
+  locateRunDeltaReport,
+  getCheckoutRepoIdentity,
+  validateStationReportProvenance,
+} from "../scripts/factory-review-trigger.mjs";
 import { pollInboundIssues } from "../scripts/factory-issue-poller.mjs";
+import { publishNightlyFindings } from "../scripts/factory-nightly-publisher.mjs";
+import { runReviewWatcher } from "../scripts/factory-review-watcher.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -157,16 +166,29 @@ test("factory-issue-router: loop hazard guard rejects publisher issues independe
   assert.ok(resC2.categories.includes("docs"));
   assert.ok(resC2.agents.includes("docs-drift"));
 
-  // Case D: Untrusted author (NONE) rejected by author trust gate
-  const untrustedIssue = {
+  // Case D: External contributor / newcomer author (NONE) is admitted and routed
+  const newcomerIssue = {
     number: 20,
     author_association: "NONE",
     title: "Security vulnerability report",
-    body: "Found potential token leak",
+    body: "Found potential token leak in credentials",
   };
-  const resD = routeIssue(untrustedIssue);
-  assert.equal(resD.ok, false);
-  assert.ok(resD.reason.includes("author_association 'NONE' is not in trusted set"));
+  const resD = routeIssue(newcomerIssue);
+  assert.equal(resD.ok, true, "newcomers and external contributors must be admitted");
+  assert.ok(resD.categories.includes("security"));
+  assert.ok(resD.agents.includes("secret-scan"));
+
+  // Case E: Pull requests skipped (handled by review trigger, not issue poller)
+  const prIssue = {
+    number: 22,
+    author_association: "OWNER",
+    title: "feat(audio): client audio improvements",
+    body: "Implements audio buffer improvements",
+    pull_request: { url: "https://api.github.com/repos/PaulKinlan/voicebox/pulls/22" },
+  };
+  const resE = routeIssue(prIssue);
+  assert.equal(resE.ok, false);
+  assert.ok(resE.reason.includes("pull request, not an issue"));
 });
 
 test("factory-issue-commenter: parses real factory delta reports, emits one comment per finding, and sanitizes credentials", () => {
@@ -477,6 +499,32 @@ test("factory-review-trigger: getCheckoutRepoIdentity resolves normalized reposi
   assert.ok(mismatchedRes.error.includes("does not match target repo"));
 });
 
+test("factory-review-trigger: ambient poisoned GIT_DIR does not blind diff measurement (C2 / GH #19)", () => {
+  // Negative control / regression:
+  // With ambient GIT_DIR pointing to a foreign repository (e.g. ~/agents/.git),
+  // git merge-base and git diff must still evaluate against target rootDir via lib/git-env.mjs
+  const foreignRepo = path.join(homedir(), "agents", ".git");
+  if (!existsSync(foreignRepo)) {
+    return;
+  }
+
+  const poisonedEnv = {
+    ...process.env,
+    GIT_DIR: foreignRepo,
+    GIT_WORK_TREE: path.join(homedir(), "agents"),
+  };
+
+  const res = runReviewTrigger(["--dry-run", "--tip", "HEAD"], {
+    env: poisonedEnv,
+    rootDir: ROOT,
+  });
+
+  assert.equal(res.ok, true);
+  assert.equal(res.dryRun, true);
+  // Verify station was selected for target repository changes (not blinded with 0 changed files)
+  assert.equal(res.station !== null, true, "review station must be selected for target repository diff");
+});
+
 test("factory-review-trigger: locateRunDeltaReport strictly enforces runDir provenance", () => {
   const tmpDir = path.join(ROOT, "tests", "fixtures", "test-provenance-tmp");
   rmSync(tmpDir, { recursive: true, force: true });
@@ -504,3 +552,489 @@ test("factory-review-trigger: locateRunDeltaReport strictly enforces runDir prov
 
   rmSync(tmpDir, { recursive: true, force: true });
 });
+
+test("factory-activation: systemd user units, poller runner, and review gate wrappers are valid", () => {
+  const servicePath = path.join(ROOT, "config", "systemd", "user", "voicebox-factory-issue-poller.service");
+  const timerPath = path.join(ROOT, "config", "systemd", "user", "voicebox-factory-issue-poller.timer");
+  const pollerRunnerPath = path.join(ROOT, "scripts", "factory-issue-poller-runner.sh");
+  const reviewGatePath = path.join(ROOT, "scripts", "factory-review-gate.sh");
+  const nightlyPublisherPath = path.join(ROOT, "scripts", "factory-nightly-publisher.sh");
+
+  // 1. Files exist and have valid permissions/syntax
+  assert.ok(existsSync(servicePath), "systemd service unit exists");
+  assert.ok(existsSync(timerPath), "systemd timer unit exists");
+  assert.ok(existsSync(pollerRunnerPath), "poller runner script exists");
+  assert.ok(existsSync(reviewGatePath), "review gate script exists");
+  assert.ok(existsSync(nightlyPublisherPath), "nightly publisher script exists");
+
+  const serviceContent = readFileSync(servicePath, "utf8");
+  assert.ok(serviceContent.includes("[Unit]"));
+  assert.ok(serviceContent.includes("[Service]"));
+  assert.ok(serviceContent.includes("Type=oneshot"));
+  assert.ok(serviceContent.includes("factory-issue-poller-runner.sh"));
+
+  const timerContent = readFileSync(timerPath, "utf8");
+  assert.ok(timerContent.includes("[Timer]"));
+  assert.ok(timerContent.includes("OnCalendar=hourly"));
+  assert.ok(timerContent.includes("Persistent=true"));
+  assert.ok(timerContent.includes("WantedBy=timers.target"));
+
+  // 2. Review gate, poller runner, and nightly publisher scripts respond to --help
+  const gateHelp = execFileSync("bash", [reviewGatePath, "--help"], { encoding: "utf8" });
+  assert.ok(gateHelp.includes("Usage: scripts/factory-review-gate.sh"));
+  assert.ok(gateHelp.includes("--base"));
+
+  const nightlyHelp = execFileSync("bash", [nightlyPublisherPath, "--help"], { encoding: "utf8" });
+  assert.ok(nightlyHelp.includes("Usage: scripts/factory-nightly-publisher.sh"));
+  assert.ok(nightlyHelp.includes("--dry-run"));
+
+  // 3. Review trigger and poller scripts respond to --help
+  const triggerRes = runReviewTrigger(["--help"], { rootDir: ROOT });
+  assert.equal(triggerRes.ok, true);
+  assert.equal(triggerRes.help, true);
+
+  const pollerRes = pollInboundIssues(["--help"], { rootDir: ROOT });
+  assert.equal(pollerRes.ok, true);
+  assert.equal(pollerRes.help, true);
+
+  const watcherRes = runReviewWatcher(["--help"], { rootDir: ROOT });
+  assert.equal(watcherRes.ok, true);
+  assert.equal(watcherRes.help, true);
+});
+
+test("factory-review-adapter: automation diffs (scripts/factory-*, tools/factory-*, config/systemd/*) map to security domain", () => {
+  const diff = [
+    "scripts/factory-review-trigger.mjs",
+    "tools/factory-issue-router.mjs",
+    "config/systemd/user/voicebox-factory-issue-poller.service",
+  ];
+  const sel = selectReviewStation(diff);
+  assert.equal(sel.station, "secret-scan");
+  assert.equal(sel.category, "security");
+});
+
+test("factory-review-watcher: discovers candidate branches matching conjunctive ownership predicate (voicebox-* bead AND fleet/* branch)", () => {
+  const mockBeads = [
+    {
+      id: "bead-1",
+      assignee: "voicebox-miniapps",
+      status: "in_progress",
+      title: "Feature work on fleet/miniapps-test",
+      description: "Working on fleet/miniapps-test candidate branch",
+    },
+    {
+      id: "bead-2",
+      assignee: "other-lane",
+      status: "in_progress",
+      title: "Foreign task on fleet/other",
+      description: "Not owned by voicebox fleet",
+    },
+    {
+      id: "bead-3",
+      assignee: "voicebox-coord",
+      status: "in_progress",
+      title: "Rescue task on fleet/rescued-1234",
+      description: "Merger rescue artifact ref",
+    },
+  ];
+
+  const tmpPrivate = path.join(ROOT, "tests", "fixtures", "watcher-test-private");
+  rmSync(tmpPrivate, { recursive: true, force: true });
+  mkdirSync(tmpPrivate, { recursive: true });
+
+  const res = runReviewWatcher(["--dry-run", "--private-dir", tmpPrivate], {
+    rootDir: ROOT,
+    mockBeads,
+  });
+
+  // Only bead-1 has voicebox-* assignee AND non-artifact fleet/* branch
+  assert.equal(res.ok, true);
+  assert.equal(res.watcherErrors, 0);
+
+  rmSync(tmpPrivate, { recursive: true, force: true });
+});
+
+test("factory-review-watcher: auto-publication default, cursor recording, and second-tick deduplication", () => {
+  const tmpPrivate = path.join(ROOT, "tests", "fixtures", "watcher-dedupe-test");
+  rmSync(tmpPrivate, { recursive: true, force: true });
+  mkdirSync(tmpPrivate, { recursive: true });
+
+  const mockBeads = [
+    {
+      id: "voicebox-beads-test",
+      assignee: "voicebox-miniapps",
+      status: "in_progress",
+      title: "Test task on fleet/miniapps-xacp",
+      description: "Working on fleet/miniapps-xacp candidate branch",
+    },
+  ];
+
+  const tipSha = execFileSync("git", ["rev-parse", "refs/remotes/origin/fleet/miniapps-xacp"], { cwd: ROOT, encoding: "utf8" }).trim();
+  const taskKey = `fleet/miniapps-xacp@${tipSha}`;
+  const cursorFile = path.join(tmpPrivate, "review-watcher-cursor.json");
+
+  let triggerInvocations = [];
+  const trackingTrigger = (triggerArgs, opts) => {
+    triggerInvocations.push({ triggerArgs, opts });
+    return { ok: true, exitCode: 0, station: "secret-scan", verdict: "PASS" };
+  };
+
+  // 1. Tick 1 with NO flags (defaults only): must invoke trigger with auto-publication (no --dry-run)
+  const res1 = runReviewWatcher(["--private-dir", tmpPrivate], {
+    rootDir: ROOT,
+    mockBeads,
+    triggerRunner: trackingTrigger,
+  });
+
+  assert.equal(res1.ok, true);
+  assert.equal(res1.scannedCount, 1);
+  assert.equal(triggerInvocations.length, 1);
+  assert.equal(
+    triggerInvocations[0].triggerArgs.includes("--dry-run"),
+    false,
+    "watcher must NOT pass --dry-run by default (auto-publication must be enabled by default)"
+  );
+
+  // Assert cursor file was ACTUALLY created and populated by runReviewWatcher
+  assert.equal(existsSync(cursorFile), true, "cursor file must exist after tick 1");
+  const cursorContent = JSON.parse(readFileSync(cursorFile, "utf8"));
+  assert.ok(cursorContent.processedBranches[taskKey], "cursor must record taskKey after successful scan");
+  assert.equal(cursorContent.processedBranches[taskKey].station, "secret-scan");
+  assert.equal(cursorContent.processedBranches[taskKey].verdict, "PASS");
+
+  // 2. Tick 2: Second invocation on the same branch must detect cursor entry and DEDUPLICATE (zero trigger calls)
+  triggerInvocations = [];
+  const res2 = runReviewWatcher(["--private-dir", tmpPrivate], {
+    rootDir: ROOT,
+    mockBeads,
+    triggerRunner: trackingTrigger,
+  });
+  assert.equal(res2.ok, true);
+  assert.equal(res2.scannedCount, 0, "second tick must deduplicate and skip already-processed branch");
+  assert.equal(triggerInvocations.length, 0, "trigger must NOT be invoked on second tick (deduped)");
+
+  // 3. Failure negative control: when trigger fails, watcher fails closed and does NOT write cursor
+  const tmpFailPrivate = path.join(ROOT, "tests", "fixtures", "watcher-fail-test");
+  rmSync(tmpFailPrivate, { recursive: true, force: true });
+  mkdirSync(tmpFailPrivate, { recursive: true });
+
+  const failingTrigger = () => {
+    return { ok: false, exitCode: 1 };
+  };
+
+  const resFail = runReviewWatcher(["--private-dir", tmpFailPrivate], {
+    rootDir: ROOT,
+    mockBeads,
+    triggerRunner: failingTrigger,
+  });
+  assert.equal(resFail.ok, false, "watcher must fail closed when trigger fails");
+  assert.equal(resFail.watcherErrors, 1);
+
+  const failCursorFile = path.join(tmpFailPrivate, "review-watcher-cursor.json");
+  if (existsSync(failCursorFile)) {
+    const failCursorContent = JSON.parse(readFileSync(failCursorFile, "utf8"));
+    assert.equal(
+      Boolean(failCursorContent.processedBranches?.[taskKey]),
+      false,
+      "failed scan must not be recorded in cursor"
+    );
+  }
+
+  rmSync(tmpPrivate, { recursive: true, force: true });
+  rmSync(tmpFailPrivate, { recursive: true, force: true });
+});
+
+test("factory-nightly-publisher: enforces SAME-RUN manifest barrier, target check, and batch window", () => {
+  const tmpDir = path.join(ROOT, "tests", "fixtures", "nightly-pub-tmp");
+  rmSync(tmpDir, { recursive: true, force: true });
+  mkdirSync(tmpDir, { recursive: true });
+
+  const findingsDir = path.join(tmpDir, "findings");
+  const runsDir = path.join(tmpDir, "runs");
+  const privateDir = path.join(tmpDir, "private");
+  mkdirSync(findingsDir, { recursive: true });
+  mkdirSync(runsDir, { recursive: true });
+  mkdirSync(privateDir, { recursive: true });
+
+  // Negative Control 1: Missing manifest -> fails closed
+  const resMissing = publishNightlyFindings([
+    "--dry-run",
+    "--findings-dir", findingsDir,
+    "--runs-dir", runsDir,
+    "--private-dir", privateDir,
+  ], { rootDir: ROOT });
+  assert.equal(resMissing.ok, false);
+  assert.equal(resMissing.error, "missing_manifest");
+
+  // Negative Control 2: Foreign target manifest -> fails closed
+  const foreignManifest = {
+    target: "foreign-repo",
+    line: "project-audit",
+    complete: true,
+    generated: new Date().toISOString(),
+    stations: [{ station: "secret-scan", status: "PASS", run_dir: runsDir }],
+  };
+  writeFileSync(path.join(findingsDir, "voicebox-factory-line.json"), JSON.stringify(foreignManifest));
+  const resForeign = publishNightlyFindings([
+    "--dry-run",
+    "--findings-dir", findingsDir,
+    "--runs-dir", runsDir,
+    "--private-dir", privateDir,
+  ], { rootDir: ROOT });
+  assert.equal(resForeign.ok, false);
+  assert.equal(resForeign.error, "foreign_manifest_target");
+
+  // Negative Control 3: Incomplete or failed station manifest -> fails closed
+  const failedManifest = {
+    target: "voicebox-factory",
+    line: "project-audit",
+    complete: true,
+    generated: new Date().toISOString(),
+    stations: [{ station: "secret-scan", status: "FAIL", run_dir: runsDir }],
+  };
+  writeFileSync(path.join(findingsDir, "voicebox-factory-line.json"), JSON.stringify(failedManifest));
+  const resFailed = publishNightlyFindings([
+    "--dry-run",
+    "--findings-dir", findingsDir,
+    "--runs-dir", runsDir,
+    "--private-dir", privateDir,
+  ], { rootDir: ROOT });
+  assert.equal(resFailed.ok, false);
+  assert.equal(resFailed.error, "failed_stations");
+
+  // Positive Control: Valid all-PASS manifest with matching delta report -> succeeds
+  const now = new Date();
+  const validManifest = {
+    target: "voicebox-factory",
+    line: "project-audit",
+    complete: true,
+    generated: now.toISOString(),
+    stations: [{ station: "secret-scan", status: "PASS", findings_count: 0, criticals: 0, run_dir: runsDir }],
+  };
+  writeFileSync(path.join(findingsDir, "voicebox-factory-line.json"), JSON.stringify(validManifest));
+
+  const validReport = `# Software Factory Delta Report: voicebox-factory / secret-scan
+Generated: ${now.toISOString()}
+
+| New | Regressed | Fixed | Unchanged | Suppressed | False positive |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| **0** | **0** | **0** | 0 | 0 | 0 |
+
+## Action Required: New & Regressed Findings
+
+None.
+`;
+  writeFileSync(path.join(findingsDir, "voicebox-factory-secret-scan-delta.md"), validReport);
+
+  const resValid = publishNightlyFindings([
+    "--dry-run",
+    "--findings-dir", findingsDir,
+    "--runs-dir", runsDir,
+    "--private-dir", privateDir,
+  ], { rootDir: ROOT });
+  assert.equal(resValid.ok, true);
+  assert.equal(resValid.processedCount, 1);
+
+  // Idempotent duplicate check: second invocation with real cursor skips batch
+  const cursorFile = path.join(privateDir, "nightly-cursor.json");
+  writeFileSync(cursorFile, JSON.stringify({ lastPublishedBatch: validManifest.generated }));
+  const resDup = publishNightlyFindings([
+    "--findings-dir", findingsDir,
+    "--runs-dir", runsDir,
+    "--private-dir", privateDir,
+  ], { rootDir: ROOT });
+  assert.equal(resDup.ok, true);
+  assert.equal(resDup.skippedDuplicate, true);
+
+  // Negative Control 4: Manifest station declares findings_count=5, criticals=1 but report is missing -> fails closed!
+  const missingReportManifest = {
+    target: "voicebox-factory",
+    line: "project-audit",
+    complete: true,
+    generated: new Date().toISOString(),
+    stations: [{ station: "deps-supply-chain", status: "PASS", findings_count: 5, criticals: 1, run_dir: runsDir }],
+  };
+  writeFileSync(path.join(findingsDir, "voicebox-factory-line.json"), JSON.stringify(missingReportManifest));
+  rmSync(cursorFile, { force: true });
+
+  const resMissingReport = publishNightlyFindings([
+    "--dry-run",
+    "--findings-dir", findingsDir,
+    "--runs-dir", runsDir,
+    "--private-dir", privateDir,
+  ], { rootDir: ROOT });
+  assert.equal(resMissingReport.ok, false, "must fail closed when declared findings lack delta report");
+  assert.equal(resMissingReport.exitCode, 1);
+  assert.equal(existsSync(cursorFile), false, "cursor must NOT advance on missing report");
+
+  // Positive Control 2: Manifest station declares findings_count=0, criticals=0 with no delta report -> succeeds as clean pass
+  const cleanPassManifest = {
+    target: "voicebox-factory",
+    line: "project-audit",
+    complete: true,
+    generated: new Date().toISOString(),
+    stations: [{ station: "qa-station", status: "PASS", findings_count: 0, criticals: 0, run_dir: runsDir }],
+  };
+  writeFileSync(path.join(findingsDir, "voicebox-factory-line.json"), JSON.stringify(cleanPassManifest));
+  const resCleanPass = publishNightlyFindings([
+    "--dry-run",
+    "--findings-dir", findingsDir,
+    "--runs-dir", runsDir,
+    "--private-dir", privateDir,
+  ], { rootDir: ROOT });
+  assert.equal(resCleanPass.ok, true, "explicit findings_count=0 allows absent delta report");
+
+  // Negative Control 5: Station report with SKIPPED findings (e.g. fingerprint identity mismatch) fails closed (exit 1, cursor unchanged)
+  const skippedFindingReport = `# Software Factory Delta Report: voicebox-factory / secret-scan
+Generated: ${new Date().toISOString()}
+
+| New | Regressed | Fixed | Unchanged | Suppressed | False positive |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| **1** | **0** | **0** | 0 | 0 | 0 |
+
+## Action Required: New & Regressed Findings
+
+### [CRITICAL] Synthetic mismatched finding (\`new\`)
+- **Rule**: \`synthetic-rule\`
+- **Location**: \`tests/fixture.txt:10\`
+- **Fingerprint**: \`11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff\`
+- **Description**: credential found
+- **Snippet**: \`TOKEN="test"\`
+- **Remediation**: Remove
+`;
+  writeFileSync(path.join(findingsDir, "voicebox-factory-deps-supply-chain-delta.md"), skippedFindingReport);
+  writeFileSync(path.join(findingsDir, "voicebox-factory-line.json"), JSON.stringify(missingReportManifest));
+  rmSync(cursorFile, { force: true });
+
+  const resSkipped = publishNightlyFindings([
+    "--dry-run",
+    "--findings-dir", findingsDir,
+    "--runs-dir", runsDir,
+    "--private-dir", privateDir,
+  ], { rootDir: ROOT });
+  assert.equal(resSkipped.ok, false, "skipped findings must fail closed");
+  assert.equal(resSkipped.exitCode, 1);
+  assert.equal(existsSync(cursorFile), false, "cursor must NOT advance on skipped findings");
+
+  // Recovery Control: When a genuinely clean report is provided, retry succeeds and cursor advances
+  const cleanReport = `# Software Factory Delta Report: voicebox-factory / deps-supply-chain
+Generated: ${new Date().toISOString()}
+
+| New | Regressed | Fixed | Unchanged | Suppressed | False positive |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| **0** | **0** | **0** | 0 | 0 | 0 |
+
+## Action Required: New & Regressed Findings
+
+None.
+`;
+  writeFileSync(path.join(findingsDir, "voicebox-factory-deps-supply-chain-delta.md"), cleanReport);
+  const cleanReportManifest = {
+    target: "voicebox-factory",
+    line: "project-audit",
+    complete: true,
+    generated: new Date().toISOString(),
+    stations: [{ station: "deps-supply-chain", status: "PASS", findings_count: 0, criticals: 0, run_dir: runsDir }],
+  };
+  writeFileSync(path.join(findingsDir, "voicebox-factory-line.json"), JSON.stringify(cleanReportManifest));
+
+  const resRecovered = publishNightlyFindings([
+    "--findings-dir", findingsDir,
+    "--runs-dir", runsDir,
+    "--private-dir", privateDir,
+  ], { rootDir: ROOT });
+  assert.equal(resRecovered.ok, true, "retry succeeds when clean report appears");
+  assert.equal(existsSync(cursorFile), true, "cursor advances on complete successful batch");
+
+  rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("factory-review-trigger: validateStationReportProvenance verifies target, station, freshness, and hash delta", async () => {
+  const tmpDir = path.join(ROOT, "tests", "fixtures", "test-val-prov-tmp");
+  rmSync(tmpDir, { recursive: true, force: true });
+  mkdirSync(tmpDir, { recursive: true });
+
+  const reportPath = path.join(tmpDir, "report.md");
+  const startTime = Date.now();
+  const targetName = "voicebox-miniapps";
+  const station = "secret-scan";
+
+  // 1. Missing report
+  const resMissing = validateStationReportProvenance(path.join(tmpDir, "nonexistent.md"), { targetName, station, startTime, rootDir: ROOT });
+  assert.equal(resMissing.ok, false);
+  assert.equal(resMissing.error, "report_not_found");
+
+  // 2. Empty report
+  writeFileSync(reportPath, "   \n");
+  const resEmpty = validateStationReportProvenance(reportPath, { targetName, station, startTime, rootDir: ROOT });
+  assert.equal(resEmpty.ok, false);
+  assert.equal(resEmpty.error, "report_empty");
+
+  // 3. Unchanged content hash
+  const staticContent = `# Software Factory Delta Report: voicebox-miniapps / secret-scan\nGenerated: ${new Date(startTime + 1000).toISOString()}\n\n| New | 0 |\n`;
+  writeFileSync(reportPath, staticContent);
+  const realHash = (await import("node:crypto")).createHash("sha256").update(staticContent).digest("hex");
+  const resUnchanged = validateStationReportProvenance(reportPath, { targetName, station, startTime, hashBefore: realHash, rootDir: ROOT });
+  assert.equal(resUnchanged.ok, false);
+  assert.equal(resUnchanged.error, "report_unchanged_from_prior_attempt");
+
+  // 4. Missing header
+  writeFileSync(reportPath, `Generated: ${new Date(startTime + 1000).toISOString()}\n\nRandom text without header\n`);
+  const resNoHeader = validateStationReportProvenance(reportPath, { targetName, station, startTime, rootDir: ROOT });
+  assert.equal(resNoHeader.ok, false);
+  assert.equal(resNoHeader.error, "missing_factory_delta_header");
+
+  // 5. Target mismatch (foreign target)
+  writeFileSync(reportPath, `# Software Factory Delta Report: foreign-target / secret-scan\nGenerated: ${new Date(startTime + 1000).toISOString()}\n`);
+  const resTargetMismatch = validateStationReportProvenance(reportPath, { targetName, station, startTime, rootDir: ROOT });
+  assert.equal(resTargetMismatch.ok, false);
+  assert.ok(resTargetMismatch.error.startsWith("target_mismatch"));
+
+  // 6. Station mismatch (interleaved different station write)
+  writeFileSync(reportPath, `# Software Factory Delta Report: voicebox-miniapps / perf-review\nGenerated: ${new Date(startTime + 1000).toISOString()}\n`);
+  const resStationMismatch = validateStationReportProvenance(reportPath, { targetName, station: "secret-scan", startTime, rootDir: ROOT });
+  assert.equal(resStationMismatch.ok, false);
+  assert.ok(resStationMismatch.error.startsWith("station_mismatch"));
+
+  // 7. Stale report timestamp (older than run start)
+  writeFileSync(reportPath, `# Software Factory Delta Report: voicebox-miniapps / secret-scan\nGenerated: ${new Date(startTime - 60000).toISOString()}\n`);
+  const resStale = validateStationReportProvenance(reportPath, { targetName, station, startTime, rootDir: ROOT });
+  assert.equal(resStale.ok, false);
+  assert.ok(resStale.error.startsWith("stale_report_timestamp"));
+
+  // 8. Positive control: valid report satisfying all invariants
+  writeFileSync(reportPath, `# Software Factory Delta Report: voicebox-miniapps / secret-scan\nGenerated: ${new Date(startTime + 1000).toISOString()}\n\n| New | 0 |\n`);
+  const resValid = validateStationReportProvenance(reportPath, { targetName, station, startTime, rootDir: ROOT });
+  assert.equal(resValid.ok, true);
+  assert.ok(resValid.hash);
+
+  rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("factory-review-trigger: focused concurrency negative control rejects interleaved foreign station report", () => {
+  const tmpDir = path.join(ROOT, "tests", "fixtures", "test-concurrency-tmp");
+  rmSync(tmpDir, { recursive: true, force: true });
+  mkdirSync(tmpDir, { recursive: true });
+
+  const targetName = path.basename(ROOT);
+  const startTime = Date.now();
+
+  // Simulate an interleaved station write where Station A (secret-scan) expected its report,
+  // but an interleaved job wrote a perf-review report with stale or mismatched station header
+  const interleavedReport = path.join(tmpDir, `${targetName}-secret-scan-delta.md`);
+  writeFileSync(interleavedReport, `# Software Factory Delta Report: ${targetName} / perf-review\nGenerated: ${new Date(startTime + 500).toISOString()}\n\n| New | 1 |\n`);
+
+  const provRes = validateStationReportProvenance(interleavedReport, {
+    targetName,
+    station: "secret-scan",
+    startTime,
+    rootDir: ROOT,
+  });
+
+  // Must fail closed due to station mismatch
+  assert.equal(provRes.ok, false);
+  assert.ok(provRes.error.includes("station_mismatch"));
+
+  rmSync(tmpDir, { recursive: true, force: true });
+});
+

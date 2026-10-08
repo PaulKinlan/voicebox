@@ -56,7 +56,7 @@ $$\text{CacheKey} = \text{SHA256}(\text{DiffHash} : \text{Station} : \text{Facto
 If the cache key matches a prior exit-0 run, the cached verdict is returned instantly without re-executing.
 
 ### 2.4 Heavy Queue Bounding & Failure Handling
-Execution runs under `fleet-heavy timeout 900 factory run <station> --target . --sink file --station-only`.
+Execution runs under `fleet-heavy timeout 900 factory run <station> --target . --sink file`.
 - All scanner output is redirected to `$VOICEBOX_FACTORY_PRIVATE_DIR/runs/<id>/<station>.log`.
 - Non-zero exits, kills, or timeouts (exit codes 124, 137, 143) are recorded honestly as `UNKNOWN`/`FAILED`.
 - Partial reports from aborted runs are never published or treated as passing.
@@ -111,3 +111,96 @@ Comments formatted by [`tools/factory-issue-commenter.mjs`](../tools/factory-iss
 - `factory-human-review`: presence flag emitted when the station is security-related (`secret-scan`, `vuln-discovery`, `vuln-triage`, `vuln-verify`, `threat-model`) or when the finding is flagged for human verification.
 
 These markers allow `scripts/factory-triage.mjs --review` and `--promote` to read review records from issue comments on human-submitted issues, enabling seamless conversion to Beads.
+
+---
+
+## 5. Local VM Activation & Operational Runbook (`voicebox-beads-xacp`)
+
+### 5.1 Hourly Inbound Issue Poller Timer
+The inbound issue poller is scheduled locally on the project VM using an unprivileged systemd user timer (`config/systemd/user/`):
+
+- **Service Unit**: `config/systemd/user/voicebox-factory-issue-poller.service`
+  Executes `scripts/factory-issue-poller-runner.sh` as a `Type=oneshot` task with standard journal output.
+- **Timer Unit**: `config/systemd/user/voicebox-factory-issue-poller.timer`
+  Runs hourly (`OnCalendar=hourly`) with a randomized 2-minute delay (`RandomizedDelaySec=120`) and persistent catchup (`Persistent=true`).
+- **Runner Script**: `scripts/factory-issue-poller-runner.sh`
+  Sources `~/.fleet/env` and nvm, acquires an exclusive file lock (`~/.voicebox/factory-reports/poller.lock`), and invokes `scripts/factory-issue-poller.mjs` under `fleet-heavy timeout -k 30 600`.
+
+#### Installation Commands (Unprivileged User)
+```bash
+mkdir -p ~/.config/systemd/user
+cp config/systemd/user/voicebox-factory-issue-poller.* ~/.config/systemd/user/
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user daemon-reload
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user enable --now voicebox-factory-issue-poller.timer
+```
+
+#### Verification & Inspection
+```bash
+# Check timer schedule and next scheduled run
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user list-timers voicebox-factory-issue-poller.timer
+
+# Trigger manual on-demand execution
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start voicebox-factory-issue-poller.service
+
+# View live poller logs
+tail -f ~/.voicebox/factory-reports/poller.log
+```
+
+### 5.2 Pre-Merge Review Watcher & Review Gate (`scripts/factory-review-watcher.sh`)
+To eliminate any dependency on manual merger ceremonies or shared `~/fleet` role edits, review-time station gating is automated via a repository-owned watcher (`scripts/factory-review-watcher.sh` & `scripts/factory-review-watcher.mjs`):
+
+- **Timer Unit**: `config/systemd/user/voicebox-factory-review-watcher.timer`
+  Runs periodically every 15 minutes (`OnCalendar=*:0/15`).
+- **Conjunctive (`AND`) Ownership Predicate**:
+  The watcher monitors **only** active beads assigned to `voicebox-*` (with status `in_progress` or label `merge-queue`) **AND** carrying an explicit candidate branch ref matching an owned `refs/remotes/origin/fleet/*` tip.
+  Stale historical branches, third-party branches, and merger artifact refs (`fleet/rescued-*`, `fleet/backup-*`, `fleet/merger-*`) are strictly excluded.
+- **Pre-Merge Execution & Bounding**:
+  For each candidate branch, computes `base = git merge-base origin/main <tip>` and executes `scripts/factory-review-trigger.mjs` under `fleet-heavy timeout 900` capping at 1 primary station.
+- **Landed Backstop & Rewrite Safety**:
+  Monitors newly landed commits on `origin/main` (`lastMainSha..origin/main`) as an automated backstop. If `lastMainSha` is not an ancestor of `origin/main` (indicating an upstream rebase or history rewrite), the watcher fails closed with exit 1, halting and requiring explicit operator reconciliation (preventing broad or corrupted diffs).
+- **Execution Safety**:
+  Invokes only canonical `factory run <station> --sink file`, never executing untrusted scripts from candidate branches.
+
+Manual invocation during `IN_REVIEW` handoff remains available:
+```bash
+scripts/factory-review-gate.sh --base <merge-base> --tip HEAD --bead <bead-id>
+```
+
+### 5.3 Nightly 5-Domain Station Coverage Audit
+The VM nightly line (`fleet-factory.timer`, running daily at 03:00 UTC via `/home/exedev/fleet/remote/factory-nightly.sh`) executes `factory line project-audit --sink file`.
+
+| Domain | Covered Stations in `project-audit.yaml` | Uncovered Stations in Target Definition (`~/agents/targets/voicebox.yaml`) | Domain Assessment & Remediation |
+|---|---|---|---|
+| **Security** | `secret-scan`, `threat-model`, `vuln-discovery`, `vuln-verify`, `vuln-triage`, `deps-supply-chain` | None | **100% complete coverage** across all static, dependency, and model-driven security stations. |
+| **Performance** | `perf-review` | `bundle-size`, `memory-profile`, `perf-hillclimb` | `perf-review` covers diff anti-patterns. `bundle-size` and `memory-profile` require browser/runtime harness runs; `perf-hillclimb` is an interactive ledger optimizer. |
+| **UX / Web Platform** | `modern-web`, `ui-ux-audit` | `accessibility`, `resilience` | `modern-web` and `ui-ux-audit` audit CSS/JS baseline and visual layout. Propose adding `accessibility` and `resilience` to an extended nightly line. |
+| **Documentation** | `docs-drift` | `docs-write` | `docs-drift` detects drift between code and docs. `docs-write` is an active code patch proposer, not an audit observer. |
+| **Ops / Maintenance** | `qa-station` | `test-gap`, `issue-triage`, `pr-fixer`, `log-check`, `release-notes` | `qa-station` audits factory quality. `issue-triage` is actively handled by our hourly issue poller. |
+
+*Honest Deferral Accounting*: Stations deferred during a diff review are compared against `NIGHTLY_PROJECT_AUDIT_STATIONS`. Unmatched stations (e.g. `log-check`, `accessibility`) are explicitly recorded as `NOT SCHEDULED NIGHTLY (manual follow-up required)`, ensuring no domain is falsely claimed covered.
+
+### 5.4 Nightly Findings Publication & SAME-RUN Manifest Barrier (`scripts/factory-nightly-publisher.sh`)
+While the nightly systemd service (`fleet-factory.service` running `/home/exedev/fleet/remote/factory-nightly.sh`) runs `factory line project-audit --sink file`, its default output remains strictly on disk in `~/agents/findings/`.
+
+To complete the issue-first chain across all severities (with literal secrets masked), Voicebox provides `scripts/factory-nightly-publisher.sh` and `scripts/factory-nightly-publisher.mjs`:
+- **SAME-RUN Manifest Completion Barrier**:
+  Inspects `~/agents/findings/voicebox-factory-line.json`. Asserts `target === "voicebox-factory"`, `line === "project-audit"`, `complete === true`, and every station record in `manifest.stations` has `status === "PASS"`. Rejects incomplete, failed, or missing manifests with zero `gh` calls.
+- **Active Service Guard**:
+  Asserts `fleet-factory.service` is inactive (i.e. not actively running mid-batch) before publishing.
+- **Batch Window & Freshness**:
+  Asserts station report `mtime` is within `(manifest.generated - 3h) <= report.mtime <= (manifest.generated + 60s)`, rejecting stale prior-day reports.
+- **Canonical Path Containment**:
+  Station `run_dir` and report paths are resolved via `realpath`, asserting strict containment within authorized runs/findings directories and rejecting `..` or symlink escapes.
+- **Report Target Verification**:
+  Validates report frontmatter explicitly targets `voicebox-factory` or `voicebox`. Any foreign or missing target report is rejected with zero `gh` invocations.
+- **Idempotent Batch Cursor**:
+  Records `manifest.generated` in `~/.voicebox/factory-reports/nightly-cursor.json` only after all findings across all stations publish successfully, ensuring failed batches remain retryable on the next tick.
+- *Stated Operational Limitation*: Publication binds strictly to manifest `target`, `line`, report freshness, and `run_dir` provenance; the factory manifest contains no git commit SHA, so exact source revision cannot be asserted from the manifest alone.
+
+### 5.5 Systemd User Units Installation
+To install the systemd user service and timer definitions on the VM:
+```bash
+scripts/factory-install-systemd.sh
+```
+Timers remain disabled until the canonical checkout (`~/voicebox`) is populated after landing on `origin/main`.
+

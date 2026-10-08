@@ -46,6 +46,16 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
       limit = parseInt(args[++i], 10) || 30;
     } else if (a === "--dry-run") {
       dryRun = true;
+    } else if (a === "--help" || a === "-h") {
+      console.log(`Usage: node scripts/factory-issue-poller.mjs [options]
+Options:
+  --repo <owner/repo>   Target repository (default: PaulKinlan/voicebox)
+  --cursor-file <file>  File tracking processed issue state
+  --private-dir <dir>   Directory for private report artifacts (default: ~/.voicebox/factory-reports)
+  --limit <num>         Maximum issues to fetch from GitHub (default: 30)
+  --dry-run             Evaluate issues without external mutations or comments
+  --help, -h            Show this help message`);
+      return { ok: true, exitCode: 0, help: true };
     }
   }
 
@@ -80,22 +90,45 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
     return { ok: true, exitCode: 0, dryRun: true, processedCount: 0, cursor };
   }
 
-  // 2. Fetch issues via injected snapshot or gh CLI
+  // 2. Fetch issues via injected snapshot or gh CLI (gh api preferred for author_association)
   let issues = injectedIssues;
   if (!issues) {
     try {
       const raw = execFileSync("gh", [
-        "issue",
-        "list",
-        "--state", "all",
-        "--json", "number,title,body,author,createdAt,updatedAt,labels,authorAssociation",
-        "--limit", String(limit),
-        "--repo", repo,
+        "api",
+        `repos/${repo}/issues?state=all&per_page=${limit}`,
       ], { encoding: "utf8", env });
-      issues = JSON.parse(raw);
-    } catch (err) {
-      console.error(`[issue-poller] Failed to list issues for ${repo}: ${sanitizeLogOutput(err.message)}`);
-      return { ok: false, exitCode: 1, error: sanitizeLogOutput(err.message) };
+      const apiIssues = JSON.parse(raw);
+      issues = apiIssues.map((iss) => ({
+        number: iss.number,
+        title: iss.title,
+        body: iss.body,
+        createdAt: iss.created_at || iss.createdAt,
+        updatedAt: iss.updated_at || iss.updatedAt,
+        author: iss.author || (iss.user ? { login: iss.user.login, is_bot: iss.user.type === "Bot" } : null),
+        authorAssociation: (iss.author_association || iss.authorAssociation || "NONE").toUpperCase(),
+        labels: iss.labels || [],
+        pull_request: iss.pull_request || null,
+      }));
+    } catch (apiErr) {
+      try {
+        const raw = execFileSync("gh", [
+          "issue",
+          "list",
+          "--state", "all",
+          "--json", "number,title,body,author,createdAt,updatedAt,labels",
+          "--limit", String(limit),
+          "--repo", repo,
+        ], { encoding: "utf8", env });
+        const listIssues = JSON.parse(raw);
+        issues = listIssues.map((iss) => ({
+          ...iss,
+          authorAssociation: iss.authorAssociation || (iss.author?.login === repo.split("/")[0] ? "OWNER" : "NONE"),
+        }));
+      } catch (err) {
+        console.error(`[issue-poller] Failed to list issues for ${repo}: ${sanitizeLogOutput(err.message)}`);
+        return { ok: false, exitCode: 1, error: sanitizeLogOutput(err.message) };
+      }
     }
   }
 
@@ -120,6 +153,9 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
       console.log(`[issue-poller] Skipping issue #${num}: ${routing.reason}`);
       if (!dryRun) {
         cursor.processedIssues[num] = { updatedAt, skipped: true, reason: routing.reason };
+        try {
+          writeFileSync(cursorFile, JSON.stringify(cursor, null, 2), "utf8");
+        } catch {}
       }
       continue;
     }
@@ -130,6 +166,9 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
     if (stations.length === 0) {
       if (!dryRun) {
         cursor.processedIssues[num] = { updatedAt, skipped: true };
+        try {
+          writeFileSync(cursorFile, JSON.stringify(cursor, null, 2), "utf8");
+        } catch {}
       }
       continue;
     }
@@ -144,7 +183,7 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
       for (const st of stations) {
         console.log(`[issue-poller] Running station '${st}' for issue #${num}...`);
         try {
-          const res = spawnSync("factory", ["run", st, "--target", rootDir, "--sink", "file", "--station-only"], {
+          const res = spawnSync("factory", ["run", st, "--target", rootDir, "--sink", "file"], {
             cwd: rootDir,
             env: { ...env, VOICEBOX_FACTORY_PRIVATE_DIR: issueRunDir },
             encoding: "utf8",
@@ -228,6 +267,11 @@ export function pollInboundIssues(args = process.argv.slice(2), { env = process.
         cursor.highestIssueNumber = num;
       }
       newProcessed++;
+      if (!dryRun) {
+        try {
+          writeFileSync(cursorFile, JSON.stringify(cursor, null, 2), "utf8");
+        } catch {}
+      }
     } else {
       console.log(`[issue-poller] DRY-RUN: would scan stations [${stations.join(", ")}] and comment on issue #${num}`);
     }
