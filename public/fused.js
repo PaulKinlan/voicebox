@@ -1429,8 +1429,8 @@ function renderListingRoot() {
     // was called read-only by the line directly beneath the write. The folder's own mode is the answer.
     const writable = roomFolder.permission === "granted" && roomFolder.mode === "readwrite";
     line.textContent = writable
-      ? `In “${roomFolder.name}”${roomTruncated ? ` (first ${ROOM_FOLDER_MAX})` : ""} — turns save here.`
-      : `Read-only view of “${roomFolder.name}”${roomTruncated ? ` (first ${ROOM_FOLDER_MAX})` : ""} — turns need write access to save here.`;
+      ? `In “${roomFolder.name}”${roomTruncated ? ` (first ${ROOM_FOLDER_MAX})` : ""} — browser files and edits save here.`
+      : `Read-only view of “${roomFolder.name}”${roomTruncated ? ` (first ${ROOM_FOLDER_MAX})` : ""} — browser files need write access to save here.`;
     return;
   }
   if (listingRefusal) {
@@ -4071,16 +4071,10 @@ on(els.envUseBrowserBtn, "click", async () => {
     if (els.envUseBrowserBtn) els.envUseBrowserBtn.disabled = true;
     const ok = await openOpfsScratchFolder();
     if (ok) {
-      await request("/api/root", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ project: "scratchpad", root: { kind: "opfs", path: "scratchpad" } }),
-      }).catch(() => {});
       if (els.envRootStatus) {
         els.envRootStatus.dataset.ok = "true";
-        els.envRootStatus.textContent = "Switched to browser storage (OPFS) — turns and edits save here.";
+        els.envRootStatus.textContent = "Switched to browser storage (OPFS) — browser files and edits save here.";
       }
-      await loadRoot();
       renderRoot();
     } else {
       if (els.envRootStatus) {
@@ -4101,16 +4095,10 @@ on(els.envUseBrowserBtn, "click", async () => {
 on(els.envPickFolderBtn, "click", async () => {
   const picked = await openRoomFolder();
   if (picked) {
-    await request("/api/root", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ project: picked.name, root: { kind: "handle", id: picked.name } }),
-    }).catch(() => {});
     if (els.envRootStatus) {
       els.envRootStatus.dataset.ok = "true";
-      els.envRootStatus.textContent = `Opened local folder “${picked.name}”.`;
+      els.envRootStatus.textContent = `Opened local folder “${picked.name}” — browser files and edits save here.`;
     }
-    await loadRoot();
     renderRoot();
   }
 });

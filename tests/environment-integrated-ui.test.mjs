@@ -185,12 +185,9 @@ test("integrated environment flow: configure machine root and browser workspace 
   });
   assert.equal(opfsContent.trim(), "hello-from-opfs", "bytes read back directly from OPFS match written content");
 
-  // Assert server root is aligned with OPFS
-  const serverRootKind = await page.evaluate(async () => {
-    const res = await fetch("/api/root").then((r) => r.json());
-    return res.root?.kind;
-  });
-  assert.equal(serverRootKind, "opfs", "server active root is aligned with browser storage (OPFS)");
+  // Assert header chip describes browser storage
+  const headerChipText = await page.evaluate(() => document.getElementById("root-kind")?.textContent ?? "");
+  assert.ok(headerChipText.includes("browser storage"), `header chip reflects browser storage: ${headerChipText}`);
 
   // 6. Switch back to machine root and reload: verify machine root survives reload
   await page.click("#envs-open");
