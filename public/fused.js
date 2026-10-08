@@ -614,13 +614,15 @@ async function ensureScratchpadFolder(name = SCRATCHPAD_NAME) {
   return handle;
 }
 
-async function openOpfsScratchFolder(projectName = SCRATCHPAD_NAME) {
+async function openOpfsScratchFolder(projectName = SCRATCHPAD_NAME, { onError } = {}) {
   try {
-    await ensureScratchpadFolder(projectName);
+    const handle = await ensureScratchpadFolder(projectName);
     setReport(`Opened '${projectName}' in browser storage (OPFS) — browser files and edits save here.`, "good");
-    return true;
+    return handle || true;
   } catch (error) {
-    setReport(`Could not open browser scratchpad: ${error?.message ?? error}`, "bad");
+    const msg = error?.message ?? String(error);
+    setReport(`Could not open browser scratchpad: ${msg}`, "bad");
+    if (typeof onError === "function") onError(msg);
     return false;
   }
 }
@@ -4081,7 +4083,10 @@ on(els.envs, "close", () => {
 on(els.envUseBrowserBtn, "click", async () => {
   try {
     if (els.envUseBrowserBtn) els.envUseBrowserBtn.disabled = true;
-    const ok = await openOpfsScratchFolder();
+    let failureMsg = null;
+    const ok = await openOpfsScratchFolder(SCRATCHPAD_NAME, {
+      onError: (msg) => { failureMsg = msg; },
+    });
     if (ok) {
       if (els.envRootStatus) {
         els.envRootStatus.dataset.ok = "true";
@@ -4091,7 +4096,7 @@ on(els.envUseBrowserBtn, "click", async () => {
     } else {
       if (els.envRootStatus) {
         els.envRootStatus.dataset.ok = "false";
-        els.envRootStatus.textContent = "Could not switch to browser storage (OPFS).";
+        els.envRootStatus.textContent = `Could not switch to browser storage (OPFS): ${failureMsg || "unavailable"}`;
       }
     }
   } catch (err) {

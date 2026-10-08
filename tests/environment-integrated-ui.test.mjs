@@ -327,11 +327,52 @@ test("integrated environment flow: configure machine root and browser workspace 
     { label: "folder picker error refusal visible inside #envs dialog" },
   );
 
+  // (c) showDirectoryPicker throwing AbortError (user cancel) — negative control
+  await page.evaluate(() => {
+    const err = new Error("User cancelled");
+    err.name = "AbortError";
+    window.showDirectoryPicker = () => Promise.reject(err);
+    const el = document.getElementById("env-root-status");
+    el.textContent = "cancel-sentinel";
+    el.dataset.ok = "true";
+  });
+  await page.click("#env-pick-folder-btn");
+  await new Promise((r) => setTimeout(r, 100));
+  const cancelStatus = await page.evaluate(() => ({
+    text: document.getElementById("env-root-status")?.textContent,
+    ok: document.getElementById("env-root-status")?.dataset.ok,
+  }));
+  assert.equal(cancelStatus.text, "cancel-sentinel", "cancelling folder picker does not show error in dialog");
+  assert.equal(cancelStatus.ok, "true", "cancelling folder picker does not mark failure in dialog");
+
   // Restore showDirectoryPicker
   await page.evaluate(() => {
     if (window.__origShowDirectoryPicker) {
       window.showDirectoryPicker = window.__origShowDirectoryPicker;
       delete window.__origShowDirectoryPicker;
+    }
+  });
+
+  // (d) OPFS negative path: navigator.storage.getDirectory failure surfaces specific reason in dialog
+  await page.evaluate(() => {
+    window.__origGetDirectory = navigator.storage.getDirectory;
+    navigator.storage.getDirectory = undefined;
+  });
+  await page.click("#env-use-browser-btn");
+  await page.waitFor(
+    () => {
+      const el = document.getElementById("env-root-status");
+      return (
+        el?.dataset.ok === "false" &&
+        el?.textContent.includes("Could not switch to browser storage (OPFS): this browser does not support Origin Private File System (OPFS) storage")
+      );
+    },
+    { label: "OPFS absence refusal visible inside #envs dialog" },
+  );
+  await page.evaluate(() => {
+    if (window.__origGetDirectory) {
+      navigator.storage.getDirectory = window.__origGetDirectory;
+      delete window.__origGetDirectory;
     }
   });
   await page.click("#envs-close");
