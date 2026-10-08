@@ -181,8 +181,15 @@ Options:
     }
 
     if (!reportPath) {
-      console.warn(`[nightly-publisher] Station '${stationName}' has no delta report file (checked: ${reportCandidates.join(", ")}).`);
-      continue;
+      const explicitZero = st.findings_count === 0 && (st.criticals ?? 0) === 0 && (st.highs ?? 0) === 0;
+      if (explicitZero) {
+        console.log(`[nightly-publisher] Station '${stationName}' has no delta report but explicitly declared findings_count=0. Clean pass.`);
+        continue;
+      } else {
+        console.error(`[nightly-publisher] Error: Station '${stationName}' has no delta report and did not declare findings_count=0 (findings_count=${st.findings_count}, criticals=${st.criticals}). Failing closed.`);
+        publishErrors++;
+        continue;
+      }
     }
 
     // Canonical containment check: reportPath must resolve inside findingsDir or runDir (reject ../ and symlink escapes)
@@ -257,12 +264,23 @@ Options:
         timeout: 180000,
       });
 
-      if (res.status !== 0 && res.status !== 2) {
-        console.error(`[nightly-publisher] Warning: Publisher returned non-zero exit ${res.status} for ${stationName}:\n${res.stderr || res.stdout}`);
+      const stdout = res.stdout || "";
+      const hasSkippedFindings =
+        /skipped:\s*[0-9a-f]{8,64}/i.test(stdout) ||
+        /,\s*[1-9]\d*\s+skipped/i.test(stdout);
+      const hasFailedFindings =
+        /,\s*[1-9]\d*\s+FAILED/i.test(stdout) ||
+        /failed:\s*[0-9a-f]{8,64}/i.test(stdout);
+
+      if (hasSkippedFindings || hasFailedFindings) {
+        console.error(`[nightly-publisher] Warning: Publisher had skipped or failed findings for '${stationName}' (exit ${res.status}):\n${stdout}`);
         publishErrors++;
-      } else {
+      } else if (res.status === 0 || res.status === 2) {
         processedCount++;
         console.log(`[nightly-publisher] Successfully processed ${stationName} (exit: ${res.status})`);
+      } else {
+        console.error(`[nightly-publisher] Warning: Publisher returned non-zero exit ${res.status} for ${stationName}:\n${res.stderr || stdout}`);
+        publishErrors++;
       }
     } catch (e) {
       console.error(`[nightly-publisher] Execution error publishing ${stationName}: ${e.message}`);

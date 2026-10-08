@@ -693,26 +693,20 @@ test("factory-nightly-publisher: enforces SAME-RUN manifest barrier, target chec
     line: "project-audit",
     complete: true,
     generated: now.toISOString(),
-    stations: [{ station: "secret-scan", status: "PASS", run_dir: runsDir }],
+    stations: [{ station: "secret-scan", status: "PASS", findings_count: 0, criticals: 0, run_dir: runsDir }],
   };
   writeFileSync(path.join(findingsDir, "voicebox-factory-line.json"), JSON.stringify(validManifest));
 
-  const validReport = `# Software Factory Delta Report: voicebox-factory
+  const validReport = `# Software Factory Delta Report: voicebox-factory / secret-scan
 Generated: ${now.toISOString()}
 
 | New | Regressed | Fixed | Unchanged | Suppressed | False positive |
 |:---:|:---:|:---:|:---:|:---:|:---:|
-| **1** | **0** | **0** | 0 | 0 | 0 |
+| **0** | **0** | **0** | 0 | 0 | 0 |
 
 ## Action Required: New & Regressed Findings
 
-### [HIGH] Hardcoded dummy secret in test fixture (\`new\`)
-- **Rule**: \`generic-secret\`
-- **Location**: \`tests/fixture.txt:10\`
-- **Fingerprint**: \`11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff\`
-- **Description**: credential found: ghp_SECRETTOKENXYZ123456
-- **Snippet**: \`TOKEN="ghp_SECRETTOKENXYZ123456"\`
-- **Remediation**: Use environment variable
+None.
 `;
   writeFileSync(path.join(findingsDir, "voicebox-factory-secret-scan-delta.md"), validReport);
 
@@ -735,6 +729,106 @@ Generated: ${now.toISOString()}
   ], { rootDir: ROOT });
   assert.equal(resDup.ok, true);
   assert.equal(resDup.skippedDuplicate, true);
+
+  // Negative Control 4: Manifest station declares findings_count=5, criticals=1 but report is missing -> fails closed!
+  const missingReportManifest = {
+    target: "voicebox-factory",
+    line: "project-audit",
+    complete: true,
+    generated: new Date().toISOString(),
+    stations: [{ station: "deps-supply-chain", status: "PASS", findings_count: 5, criticals: 1, run_dir: runsDir }],
+  };
+  writeFileSync(path.join(findingsDir, "voicebox-factory-line.json"), JSON.stringify(missingReportManifest));
+  rmSync(cursorFile, { force: true });
+
+  const resMissingReport = publishNightlyFindings([
+    "--dry-run",
+    "--findings-dir", findingsDir,
+    "--runs-dir", runsDir,
+    "--private-dir", privateDir,
+  ], { rootDir: ROOT });
+  assert.equal(resMissingReport.ok, false, "must fail closed when declared findings lack delta report");
+  assert.equal(resMissingReport.exitCode, 1);
+  assert.equal(existsSync(cursorFile), false, "cursor must NOT advance on missing report");
+
+  // Positive Control 2: Manifest station declares findings_count=0, criticals=0 with no delta report -> succeeds as clean pass
+  const cleanPassManifest = {
+    target: "voicebox-factory",
+    line: "project-audit",
+    complete: true,
+    generated: new Date().toISOString(),
+    stations: [{ station: "qa-station", status: "PASS", findings_count: 0, criticals: 0, run_dir: runsDir }],
+  };
+  writeFileSync(path.join(findingsDir, "voicebox-factory-line.json"), JSON.stringify(cleanPassManifest));
+  const resCleanPass = publishNightlyFindings([
+    "--dry-run",
+    "--findings-dir", findingsDir,
+    "--runs-dir", runsDir,
+    "--private-dir", privateDir,
+  ], { rootDir: ROOT });
+  assert.equal(resCleanPass.ok, true, "explicit findings_count=0 allows absent delta report");
+
+  // Negative Control 5: Station report with SKIPPED findings (e.g. fingerprint identity mismatch) fails closed (exit 1, cursor unchanged)
+  const skippedFindingReport = `# Software Factory Delta Report: voicebox-factory / secret-scan
+Generated: ${new Date().toISOString()}
+
+| New | Regressed | Fixed | Unchanged | Suppressed | False positive |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| **1** | **0** | **0** | 0 | 0 | 0 |
+
+## Action Required: New & Regressed Findings
+
+### [CRITICAL] Synthetic mismatched finding (\`new\`)
+- **Rule**: \`synthetic-rule\`
+- **Location**: \`tests/fixture.txt:10\`
+- **Fingerprint**: \`11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff\`
+- **Description**: credential found
+- **Snippet**: \`TOKEN="test"\`
+- **Remediation**: Remove
+`;
+  writeFileSync(path.join(findingsDir, "voicebox-factory-deps-supply-chain-delta.md"), skippedFindingReport);
+  writeFileSync(path.join(findingsDir, "voicebox-factory-line.json"), JSON.stringify(missingReportManifest));
+  rmSync(cursorFile, { force: true });
+
+  const resSkipped = publishNightlyFindings([
+    "--dry-run",
+    "--findings-dir", findingsDir,
+    "--runs-dir", runsDir,
+    "--private-dir", privateDir,
+  ], { rootDir: ROOT });
+  assert.equal(resSkipped.ok, false, "skipped findings must fail closed");
+  assert.equal(resSkipped.exitCode, 1);
+  assert.equal(existsSync(cursorFile), false, "cursor must NOT advance on skipped findings");
+
+  // Recovery Control: When a genuinely clean report is provided, retry succeeds and cursor advances
+  const cleanReport = `# Software Factory Delta Report: voicebox-factory / deps-supply-chain
+Generated: ${new Date().toISOString()}
+
+| New | Regressed | Fixed | Unchanged | Suppressed | False positive |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| **0** | **0** | **0** | 0 | 0 | 0 |
+
+## Action Required: New & Regressed Findings
+
+None.
+`;
+  writeFileSync(path.join(findingsDir, "voicebox-factory-deps-supply-chain-delta.md"), cleanReport);
+  const cleanReportManifest = {
+    target: "voicebox-factory",
+    line: "project-audit",
+    complete: true,
+    generated: new Date().toISOString(),
+    stations: [{ station: "deps-supply-chain", status: "PASS", findings_count: 0, criticals: 0, run_dir: runsDir }],
+  };
+  writeFileSync(path.join(findingsDir, "voicebox-factory-line.json"), JSON.stringify(cleanReportManifest));
+
+  const resRecovered = publishNightlyFindings([
+    "--findings-dir", findingsDir,
+    "--runs-dir", runsDir,
+    "--private-dir", privateDir,
+  ], { rootDir: ROOT });
+  assert.equal(resRecovered.ok, true, "retry succeeds when clean report appears");
+  assert.equal(existsSync(cursorFile), true, "cursor advances on complete successful batch");
 
   rmSync(tmpDir, { recursive: true, force: true });
 });
