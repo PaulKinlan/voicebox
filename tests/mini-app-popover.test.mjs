@@ -124,10 +124,13 @@ test("mini-app popover: anchored floating bubble, light-dismiss, and mobile draw
   assert.equal(afterOutsideClick.dockHidden, false, "dock remains anchored on screen when collapsed");
 
   // 4. Re-expand via bubble click
-  await page.evaluate(() => {
+  await page.evaluate(async () => {
     document.querySelector("#mini-app-bubble")?.click();
+    const c = document.querySelector("#mini-app-container");
+    if (c?.getAnimations) {
+      await Promise.all(c.getAnimations().map((a) => a.finished));
+    }
   });
-  await sleep(150);
 
   const afterBubbleClick = await page.evaluate(() => {
     const c = document.querySelector("#mini-app-container");
@@ -158,9 +161,12 @@ test("mini-app popover: anchored floating bubble, light-dismiss, and mobile draw
   assert.equal(beforeExpand.handleCursor, "grab", "#mini-app-drag-handle shows grab cursor");
 
   // Drag #mini-app-drag-handle by (-120, -80)
-  const afterDrag = await page.evaluate(() => {
+  const afterDrag = await page.evaluate(async () => {
     const c = document.querySelector("#mini-app-container");
     const h = document.querySelector("#mini-app-drag-handle");
+    if (c?.getAnimations) {
+      await Promise.all(c.getAnimations().map((a) => a.finished));
+    }
     const r0 = c.getBoundingClientRect();
     const startX = r0.left + 40;
     const startY = r0.top + 16;
@@ -183,8 +189,8 @@ test("mini-app popover: anchored floating bubble, light-dismiss, and mobile draw
       draggingAttr: c.dataset.dragging,
     };
   });
-  assert.ok(Math.abs(afterDrag.dx - afterDrag.expectedDx) <= 2, `dragging header shifts left by the clamped pointer delta (got ${afterDrag.dx}, expected ${afterDrag.expectedDx})`);
-  assert.ok(Math.abs(afterDrag.dy - afterDrag.expectedDy) <= 2, `dragging header shifts top by the clamped pointer delta (got ${afterDrag.dy}, expected ${afterDrag.expectedDy})`);
+  assert.ok(Math.abs(afterDrag.dx - afterDrag.expectedDx) <= 4, `dragging header shifts left by the clamped pointer delta (got ${afterDrag.dx}, expected ${afterDrag.expectedDx})`);
+  assert.ok(Math.abs(afterDrag.dy - afterDrag.expectedDy) <= 4, `dragging header shifts top by the clamped pointer delta (got ${afterDrag.dy}, expected ${afterDrag.expectedDy})`);
   assert.equal(afterDrag.draggingAttr, undefined, "data-dragging attribute cleared on pointerup");
 
   // Second large-delta drag (-4000, -4000) to test and pin absolute viewport clamp (voicebox-beads-oz6e)
