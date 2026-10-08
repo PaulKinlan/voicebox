@@ -103,6 +103,22 @@ test("the main UI explains what setup does, why it is needed, and the order — 
   assert.match(guide.text, /What it does:/, "it says what setting up does");
   assert.match(guide.text, /Why it is needed:/, "it says why it is needed");
 
+  // ORDER IS PART OF THE CLAIM, not a detail of it: Paul asked to explain what setup does and why "then
+  // the order", so the explanation has to be met BEFORE the choices it explains. The first version of
+  // this block sat after the controls while its own comment claimed it came first — an independent
+  // reviewer caught the contradiction, and this assertion is what makes the placement a fact rather
+  // than a comment.
+  const placed = await page.evaluate(() => {
+    const guide = document.getElementById("env-setup-guide");
+    const config = document.getElementById("env-config-block");
+    const create = document.getElementById("env-create-project");
+    const precedes = (a, b) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    return { guideBeforeConfig: precedes(guide, config), guideBeforeCreate: precedes(guide, create), configBeforeCreate: precedes(config, create) };
+  });
+  assert.equal(placed.guideBeforeConfig, true, "the reader meets the explanation before the controls that choose where files live");
+  assert.equal(placed.guideBeforeCreate, true, "and before the create control step 3 talks about");
+  assert.equal(placed.configBeforeCreate, true, "the order the copy states (choose, then create) is the order on the screen");
+
   // An <ol> is a claim about sequence, not decoration: the numbering a reader sees comes from here.
   assert.equal(guide.listTag, "OL", "the order is a real ordered list, so the numbering is the sequence");
   assert.equal(guide.steps.length, 3, "three steps, no more");

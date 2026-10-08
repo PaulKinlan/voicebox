@@ -378,24 +378,6 @@
             </ol>
           </div>
           <ul class="env-list" id="env-list"></ul>
-          <div class="env-config-block" id="env-config-block">
-            <h3 class="env-add-title">Active workspace &amp; project folder</h3>
-            <p class="env-hint" id="env-root-hint">Set a machine directory for server agents and tools, or switch to browser storage for in-room files and edits.</p>
-            <div class="env-root-current">
-              <span class="env-root-current-label">Active root:</span>
-              <strong class="env-root-val" id="env-active-root-val">no folder chosen yet</strong>
-            </div>
-            <div class="env-root-actions">
-              <button class="small-button" id="env-use-browser-btn" type="button">Use browser workspace</button>
-              <button class="small-button" id="env-pick-folder-btn" type="button">Pick a local folder…</button>
-            </div>
-            <div class="env-declare-root" id="env-declare-root-area">
-              <label for="env-root-path-input" class="sr-only">Machine folder path</label>
-              <input id="env-root-path-input" type="text" placeholder="Folder path on this machine (e.g. /home/.../project)" autocomplete="off" />
-              <button id="env-declare-root-btn" type="button">Set machine root</button>
-            </div>
-            <p class="env-root-status" id="env-root-status" role="status" aria-live="polite"></p>
-          </div>
           <!-- WHAT SETUP DOES, WHY IT IS NEEDED, AND THE ORDER (voicebox-beads-um5r). This is the screen a
                person reaches when nothing is configured, and it used to name controls without saying what
                they do or in what order. The claims here are the code's own: the server ROUTES a page-owned
@@ -414,6 +396,24 @@
               <li>Choose where this project's files live: <strong>Use browser workspace</strong> (no path, no host token), <strong>Pick a local folder…</strong>, or <strong>Set machine root</strong> (its path and the host token — the server writes there, and the files stay openable in your own editor).</li>
               <li>Create or name the project below, then talk to it — the files land where you chose.</li>
             </ol>
+          </div>
+          <div class="env-config-block" id="env-config-block">
+            <h3 class="env-add-title">Active workspace &amp; project folder</h3>
+            <p class="env-hint" id="env-root-hint">Set a machine directory for server agents and tools, or switch to browser storage for in-room files and edits.</p>
+            <div class="env-root-current">
+              <span class="env-root-current-label">Active root:</span>
+              <strong class="env-root-val" id="env-active-root-val">no folder chosen yet</strong>
+            </div>
+            <div class="env-root-actions">
+              <button class="small-button" id="env-use-browser-btn" type="button">Use browser workspace</button>
+              <button class="small-button" id="env-pick-folder-btn" type="button">Pick a local folder…</button>
+            </div>
+            <div class="env-declare-root" id="env-declare-root-area">
+              <label for="env-root-path-input" class="sr-only">Machine folder path</label>
+              <input id="env-root-path-input" type="text" placeholder="Folder path on this machine (e.g. /home/.../project)" autocomplete="off" />
+              <button id="env-declare-root-btn" type="button">Set machine root</button>
+            </div>
+            <p class="env-root-status" id="env-root-status" role="status" aria-live="polite"></p>
           </div>
           <div class="env-create-project" id="env-create-project">
             <h3 class="env-add-title">Create a project</h3>
