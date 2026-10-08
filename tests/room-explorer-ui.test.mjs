@@ -133,11 +133,10 @@ test("room explorer: scannable rows, native actions, narrow containers and both 
     assert.equal((await fetch(server.base + "/api/root", { method: "DELETE", headers })).status, 200);
     await page.reload();
     await page.waitFor(() => document.querySelector("#empty-link").checkVisibility());
-    assert.match(await page.evaluate(() => document.querySelector("#empty-link").getAttribute("href")), /environment\.html/);
     await page.evaluate(() => document.querySelector("#made-list").scrollIntoView({ block: "start" }));
     await screen("no-project");
     await page.click("#empty-link");
-    await page.waitFor(() => location.pathname === "/environment.html");
+    await page.waitFor(() => document.getElementById("envs")?.hasAttribute("open"));
     assert.deepEqual(failures, []);
   } finally {
     if (evidence) writeFileSync(path.join(evidence, "layout.json"), JSON.stringify({ observations, failures }, null, 2) + "\n");

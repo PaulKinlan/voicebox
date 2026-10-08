@@ -378,6 +378,24 @@
             </ol>
           </div>
           <ul class="env-list" id="env-list"></ul>
+          <div class="env-config-block" id="env-config-block">
+            <h3 class="env-add-title">Active workspace &amp; project folder</h3>
+            <p class="env-hint" id="env-root-hint">Set a machine directory for server agents and tools, or switch to browser storage for in-room files and edits.</p>
+            <div class="env-root-current">
+              <span class="env-root-current-label">Active root:</span>
+              <strong class="env-root-val" id="env-active-root-val">no folder chosen yet</strong>
+            </div>
+            <div class="env-root-actions">
+              <button class="small-button" id="env-use-browser-btn" type="button">Use browser workspace</button>
+              <button class="small-button" id="env-pick-folder-btn" type="button">Pick a local folder…</button>
+            </div>
+            <div class="env-declare-root" id="env-declare-root-area">
+              <label for="env-root-path-input" class="sr-only">Machine folder path</label>
+              <input id="env-root-path-input" type="text" placeholder="Folder path on this machine (e.g. /home/.../project)" aria-label="machine folder path" autocomplete="off" />
+              <button id="env-declare-root-btn" type="button">Set machine root</button>
+            </div>
+            <p class="env-root-status" id="env-root-status" role="status" aria-live="polite"></p>
+          </div>
           <div class="env-add-block">
             <h3 class="env-add-title">Add an environment</h3>
             <p class="env-hint" id="env-hint">Add a server connection by URL. It does not start a service.</p>
@@ -525,7 +543,9 @@
           <h3 id="empty-headline">Say or type something that names a file.</h3>
           <p id="empty-next">Speak or type a request to create or edit files in this workspace.</p>
           <p class="empty-why" id="empty-why" hidden></p>
-          <p class="empty-action" id="empty-action" hidden><a class="small-button" id="empty-link" href="/environment.html">Open a project</a></p>
+          <p class="empty-action" id="empty-action" hidden>
+            <button class="small-button" id="empty-link" type="button">Configure workspace</button>
+          </p>
           <!-- A LABEL, because these sit inside the "Made while we talk" section: without one, a count of
                "3 files" above three imperative sentences told a person those sentences were made things
                (voicebox-beads-kcs, finding 3). The typography already distinguished them; this says so. -->

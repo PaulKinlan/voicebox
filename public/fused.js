@@ -37,6 +37,8 @@ const WANTED = {
   micHotkey: "mic-hotkey", micHotkeyState: "mic-hotkey-state", micHotkeyBadge: "mic-hotkey-badge",
   envs: "envs", envsOpen: "envs-open", envsClose: "envs-close", envsHelp: "envs-help", envsHelpPanel: "envs-help-panel", envList: "env-list", envCount: "envs-count", envNote: "env-note",
   envAdd: "env-add", envAddLabel: "env-add-label", envAddOrigin: "env-add-origin", envAddBtn: "env-add-btn",
+  envActiveRootVal: "env-active-root-val", envUseBrowserBtn: "env-use-browser-btn", envPickFolderBtn: "env-pick-folder-btn",
+  envRootPathInput: "env-root-path-input", envDeclareRootBtn: "env-declare-root-btn", envRootStatus: "env-root-status",
   // The extension surface (voicebox-beads-vwb): one source (/api/extensions + /api/extensions/catalogue),
   // five states in five sections, never mixed — a present-but-unreviewed extension is never green
   // and never described as running, and an admitted extension that failed to load is never silent
@@ -579,12 +581,14 @@ async function openRoomFolder() {
     }
     if (handle) {
       await adoptRoomFolder(handle);
+      return handle;
     }
   } catch (error) {
     if (error?.name !== "AbortError") {
       setReport(`Could not open that folder: ${error?.message ?? error}`, "bad");
     }
   }
+  return null;
 }
 
 // THE BROWSER'S OWN FOLDER, BY NAME (voicebox-beads-vnos): the button opens it and a file-creation turn
@@ -609,9 +613,11 @@ async function ensureScratchpadFolder(name = SCRATCHPAD_NAME) {
 async function openOpfsScratchFolder(projectName = SCRATCHPAD_NAME) {
   try {
     await ensureScratchpadFolder(projectName);
-    setReport(`Opened '${projectName}' in browser storage (OPFS) — turns and edits save here.`, "good");
+    setReport(`Opened '${projectName}' in browser storage (OPFS) — browser files and edits save here.`, "good");
+    return true;
   } catch (error) {
     setReport(`Could not open browser scratchpad: ${error?.message ?? error}`, "bad");
+    return false;
   }
 }
 
@@ -708,13 +714,13 @@ function renderRoomFoldersBar() {
       : "needs access";
     chip.append(badge);
 
-    // Restore access button (visible when permission is prompt)
+    // Restore access button (visible when permission is prompt or mode is read-only)
     const regrantBtn = document.createElement("button");
     regrantBtn.type = "button";
     regrantBtn.className = "quiet folder-regrant-btn";
     regrantBtn.textContent = "Restore access";
     regrantBtn.setAttribute("aria-label", `Restore access to ${folder.name}`);
-    regrantBtn.hidden = folder.permission === "granted";
+    regrantBtn.hidden = folder.permission === "granted" && folder.mode === "readwrite";
     regrantBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
       await requestFolderAccess(folder);
@@ -740,16 +746,23 @@ function renderRoomFoldersBar() {
 async function requestFolderAccess(folder) {
   try {
     let res = "prompt";
+    let mode = "readwrite";
     try {
       res = await folder.handle.requestPermission({ mode: "readwrite" });
     } catch {
+      mode = "read";
       res = await folder.handle.requestPermission({ mode: "read" }).catch(() => "denied");
     }
     folder.permission = res;
-    folder.mode = res === "granted" ? "readwrite" : "read";
+    folder.mode = res === "granted" ? mode : "read";
     renderRoomFoldersBar();
     if (res === "granted") {
-      setReport(`Restored access to '${folder.name}'.`, "good");
+      setReport(
+        mode === "readwrite"
+          ? `Restored access to '${folder.name}'.`
+          : `Restored read-only access to '${folder.name}'.`,
+        "good",
+      );
       if (roomFolder && roomFolder.name === folder.name) {
         await loadRoomFolder();
       }
@@ -813,10 +826,13 @@ async function loadRoomFolder() {
   }
 }
 
-function closeRoomFolder() {
+async function closeRoomFolder() {
   roomFolder = null;
   listedRoot = null;
-  idbStore().then((idb) => idb?.putActiveRoomFolderName?.("")).catch(() => {});
+  try {
+    const idb = await idbStore();
+    await idb?.putActiveRoomFolderName?.("");
+  } catch {}
   triggerProjectChangeFlash("server folder");
   renderRoomFoldersBar();
   load();
@@ -945,21 +961,28 @@ async function initRoomFolders() {
   if (roomFolders.size > 0) {
     const idb = await idbStore();
     const storedActive = await idb?.getActiveRoomFolderName?.().catch(() => null);
-    const active = (storedActive && roomFolders.get(storedActive)) || roomFolders.values().next().value;
-    roomFolder = active;
-    listingDir = "";
-    renderRoomFoldersBar();
-    if (active.permission === "granted") {
-      loadRoomFolder();
-    } else {
-      if (els.files) {
-        els.files.replaceChildren();
-        const li = document.createElement("li");
-        li.className = "file-placeholder";
-        li.textContent = `Access to '${active.name}' needs to be restored after reload — click 'Restore access' above.`;
-        els.files.append(li);
+    if (storedActive === "" || storedActive === "__server__") {
+      roomFolder = null;
+      renderRoomFoldersBar();
+      return;
+    }
+    const active = (storedActive && roomFolders.get(storedActive)) || (storedActive === null ? roomFolders.values().next().value : null);
+    if (active) {
+      roomFolder = active;
+      listingDir = "";
+      renderRoomFoldersBar();
+      if (active.permission === "granted") {
+        loadRoomFolder();
+      } else {
+        if (els.files) {
+          els.files.replaceChildren();
+          const li = document.createElement("li");
+          li.className = "file-placeholder";
+          li.textContent = `Access to '${active.name}' needs to be restored after reload — click 'Restore access' above.`;
+          els.files.append(li);
+        }
+        if (els.count) els.count.textContent = "needs access";
       }
-      if (els.count) els.count.textContent = "needs access";
     }
   }
 }
@@ -1270,19 +1293,31 @@ function renderEmptyState() {
     next.textContent = "The Voicebox server is not responding. Ensure it is running and click Refresh.";
     if (els.emptyWhy) { els.emptyWhy.hidden = true; }
     if (els.emptyAction) els.emptyAction.hidden = true;
-    if (els.emptyLink) els.emptyLink.textContent = "Open the environment page";
+    if (els.emptyLink) els.emptyLink.textContent = "Configure workspace";
     showSamples(false);
     setComposerEnabled(false, "the local server is not answering, so a turn cannot be written");
     return;
   }
 
+  // 1b. active browser folder needs write access restored:
+  if (roomFolder && (roomFolder.permission !== "granted" || roomFolder.mode !== "readwrite")) {
+    headline.textContent = `Access to '${roomFolder.name}' needed.`;
+    next.textContent = `This tab needs permission to write files into '${roomFolder.name}'. Click 'Restore access' above or choose another folder in environments.`;
+    if (els.emptyWhy) els.emptyWhy.hidden = true;
+    if (els.emptyAction) els.emptyAction.hidden = false;
+    if (els.emptyLink) els.emptyLink.textContent = "Configure workspace";
+    showSamples(false);
+    setComposerEnabled(false, `'${roomFolder.name}' needs write permission — click 'Restore access' first`);
+    return;
+  }
+
   // 2. no root declared: the next action is to open a project, and that is a
   //    different page, so the page points at it.
-  if (activeRoot === null) {
+  if (!roomFolder && activeRoot === null) {
     headline.textContent = "Open a project.";
     next.textContent = "Open a folder above to save files locally, or speak to create files in the browser scratchpad.";
     if (els.emptyAction) els.emptyAction.hidden = false;
-    if (els.emptyLink) els.emptyLink.textContent = "Open the environment page";
+    if (els.emptyLink) els.emptyLink.textContent = "Configure workspace";
     if (els.emptyWhy) { els.emptyWhy.hidden = true; }
     showSamples(true, "file");
     // The composer is never disabled by capability, only titled by it — and here the honest title is not a
@@ -1297,23 +1332,23 @@ function renderEmptyState() {
   //    answer the first with the second one's words: it told a person "Turns cannot save into this
   //    folder" about a folder the tab in front of them could write into perfectly well once routed
   //    (voicebox-beads-*, held until the router landed: actsVia/executor from vb-resolver).
-  const serverCanAct = activeRoot === undefined || activeRoot.reachableFromThisProcess === true;
+  const serverCanAct = activeRoot === undefined || activeRoot?.reachableFromThisProcess === true;
   const pageOwnsRoot = activeRoot?.actsVia === "page";
   const pageIsHere = pageOwnsRoot && activeRoot?.executor?.connected === true;
   // The page owns this folder AND is connected: a turn is routed to it, so the room is usable and
   // says nothing about refusal. (The page may still refuse a turn it cannot serve — a picked folder
   // without a write grant answers the page's own `needs-gesture`, and that sentence arrives from the
   // side that knows rather than being guessed here.)
-  if (activeRoot !== undefined && !serverCanAct && !pageIsHere) {
+  if (!roomFolder && activeRoot !== undefined && activeRoot !== null && !serverCanAct && !pageIsHere) {
     const where = activeRoot.facts?.where ?? "this project's root";
     // Two causes, two sentences, and each names its own remedy. "The tab is not open" and "no part of
     // the system can save here" are different problems with different next steps.
     if (pageOwnsRoot) {
       headline.textContent = "The tab that holds this folder is not open.";
-      next.textContent = `${where} belongs to a browser tab, and that tab is not connected to this server right now — so a typed turn has nothing to hand the work to. Open the tab that holds this folder, or choose a folder on this machine in the environment page.`;
+      next.textContent = `${where} belongs to a browser tab, and that tab is not connected to this server right now — so a typed turn has nothing to hand the work to. Open the tab that holds this folder, or configure a folder in the environments dialog.`;
     } else {
       headline.textContent = "Turns cannot save into this folder.";
-      next.textContent = `This folder belongs to this browser tab, and turns run in the local server — so a typed turn is refused: ${where} is not somewhere the server can save. Choose a folder on this machine in the environment page, or do the work in the tab that holds this folder.`;
+      next.textContent = `This folder belongs to this browser tab, and turns run in the local server — so a typed turn is refused: ${where} is not somewhere the server can save. Configure a folder on this machine in the environments dialog, or do the work in the tab that holds this folder.`;
     }
     // The detail line: the CAUSE in plain words, with the seam's own sentence kept on the element's
     // title for anyone who asks for it. Its `why` for a page-owned root is written to explain the
@@ -1329,7 +1364,7 @@ function renderEmptyState() {
       if (activeRoot.why) els.emptyWhy.title = activeRoot.why;
     }
     if (els.emptyAction) els.emptyAction.hidden = false;
-    if (els.emptyLink) els.emptyLink.textContent = "Open the environment page";
+    if (els.emptyLink) els.emptyLink.textContent = "Configure workspace";
     showSamples(false);
     // The composer's reason is written for the person reading it, not inherited from the seam: the
     // server's `why` for a page-owned root is written to explain the router ("this placement is the
@@ -1344,8 +1379,9 @@ function renderEmptyState() {
 
   // 4. a writable root and nothing made: NOW the promise is true, and the
   //    samples are the shortcut to keeping it.
-  const root = activeRoot?.root;
-  const base = root?.path ?? root?.name ?? root?.label ?? "";
+  const base = roomFolder
+    ? roomFolder.name
+    : (activeRoot?.root?.path ?? activeRoot?.root?.name ?? activeRoot?.root?.label ?? "");
   headline.textContent = "Say or type something that names a file.";
   next.textContent = base
     ? `It lands in ${base.replace(/\/$/, "")}/ — or try one:`
@@ -1656,6 +1692,20 @@ function renderRoot() {
   const kindEl = els.rootKind;
   if (!kindEl) return;
 
+  if (roomFolder) {
+    const isOpfs = roomFolder.name === SCRATCHPAD_NAME;
+    const kindPlain = isOpfs ? "browser storage" : "picked folder";
+    kindEl.textContent = `${kindPlain} · ${roomFolder.name}`;
+    kindEl.title = isOpfs
+      ? `${kindPlain} · ${roomFolder.name} — saved in this browser`
+      : `${kindPlain} · ${roomFolder.name} — saved in this local directory`;
+    if (els.envActiveRootVal) {
+      els.envActiveRootVal.textContent = `${kindPlain} · ${roomFolder.name}`;
+    }
+    renderAbout();
+    return;
+  }
+
   if (activeRoot === undefined) {
     kindEl.textContent = "folder not reported";
     kindEl.title = "this server does not say which folder it saves into";
@@ -1688,6 +1738,13 @@ function renderRoot() {
   } else if (currentKey !== lastPaintedRootKey) {
     lastPaintedRootKey = currentKey;
     triggerProjectChangeFlash(kindEl.textContent);
+  }
+  if (els.envActiveRootVal) {
+    if (activeRoot === null) {
+      els.envActiveRootVal.textContent = "no folder chosen yet";
+    } else if (activeRoot) {
+      els.envActiveRootVal.textContent = fullPath ? `${kindPlain} · ${fullPath}` : kindPlain;
+    }
   }
   renderAbout();
 }
@@ -2131,6 +2188,21 @@ async function renderExtensions() {
 }
 
 async function renderEnvironments() {
+  if (els.envActiveRootVal) {
+    if (roomFolder) {
+      const isOpfs = roomFolder.name === SCRATCHPAD_NAME;
+      const kindPlain = isOpfs ? "browser storage" : "picked folder";
+      els.envActiveRootVal.textContent = `${kindPlain} · ${roomFolder.name}`;
+    } else if (activeRoot === null) {
+      els.envActiveRootVal.textContent = "no folder chosen yet";
+    } else if (activeRoot) {
+      const fullPath = activeRoot.root?.path ?? activeRoot.root?.name ?? activeRoot.root?.label ?? "";
+      const kind = activeRoot.root?.kind ?? "";
+      const kindPlain = { machine: "machine folder", opfs: "browser storage", handle: "picked folder" }[kind]
+        ?? activeRoot.facts?.where ?? kind ?? "a root";
+      els.envActiveRootVal.textContent = fullPath ? `${kindPlain} · ${fullPath}` : kindPlain;
+    }
+  }
   if (!els.envList) return;
   try {
     const answer = await request("/api/environments");
@@ -3988,9 +4060,97 @@ on(els.envsOpen, "click", () => {
   els.envsOpen.setAttribute("aria-expanded", "true");
   void renderEnvironments();
 });
+on(els.emptyLink, "click", () => {
+  if (!els.envs || els.envs.open) return;
+  els.envs.showModal();
+  els.envsOpen?.setAttribute("aria-expanded", "true");
+  void renderEnvironments();
+});
 on(els.envs, "close", () => {
   els.envsOpen.setAttribute("aria-expanded", "false");
   els.envsOpen.focus();
+});
+
+on(els.envUseBrowserBtn, "click", async () => {
+  try {
+    if (els.envUseBrowserBtn) els.envUseBrowserBtn.disabled = true;
+    const ok = await openOpfsScratchFolder();
+    if (ok) {
+      if (els.envRootStatus) {
+        els.envRootStatus.dataset.ok = "true";
+        els.envRootStatus.textContent = "Switched to browser storage (OPFS) — browser files and edits save here.";
+      }
+      renderRoot();
+    } else {
+      if (els.envRootStatus) {
+        els.envRootStatus.dataset.ok = "false";
+        els.envRootStatus.textContent = "Could not switch to browser storage (OPFS).";
+      }
+    }
+  } catch (err) {
+    if (els.envRootStatus) {
+      els.envRootStatus.dataset.ok = "false";
+      els.envRootStatus.textContent = String(err?.message ?? "Error switching to browser workspace.");
+    }
+  } finally {
+    if (els.envUseBrowserBtn) els.envUseBrowserBtn.disabled = false;
+  }
+});
+
+on(els.envPickFolderBtn, "click", async () => {
+  const picked = await openRoomFolder();
+  if (picked) {
+    if (els.envRootStatus) {
+      els.envRootStatus.dataset.ok = "true";
+      const writable = roomFolder?.permission === "granted" && roomFolder?.mode === "readwrite";
+      els.envRootStatus.textContent = writable
+        ? `Opened local folder “${picked.name}” — browser files and edits save here.`
+        : `Opened read-only folder “${picked.name}” — click 'Restore access' above to write files.`;
+    }
+    renderRoot();
+  }
+});
+
+on(els.envDeclareRootBtn, "click", async () => {
+  const pathVal = els.envRootPathInput?.value.trim() ?? "";
+  if (!pathVal) {
+    if (els.envRootStatus) {
+      els.envRootStatus.dataset.ok = "false";
+      els.envRootStatus.textContent = "Please enter a folder path on this machine.";
+    }
+    return;
+  }
+  const projectName = pathVal.split("/").filter(Boolean).pop() || "project";
+  if (els.envDeclareRootBtn) els.envDeclareRootBtn.disabled = true;
+  try {
+    const res = await request("/api/root", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ project: projectName, root: { kind: "machine", path: pathVal } }),
+    });
+    if (res && res.ok) {
+      if (roomFolder) await closeRoomFolder();
+      if (els.envRootStatus) {
+        els.envRootStatus.dataset.ok = "true";
+        els.envRootStatus.textContent = `Machine root set to ${res.root?.path ?? pathVal} — turns save here now.`;
+      }
+      if (els.envRootPathInput) els.envRootPathInput.value = "";
+      await loadRoot();
+      await load();
+    } else {
+      if (els.envRootStatus) {
+        els.envRootStatus.dataset.ok = "false";
+        els.envRootStatus.textContent = res?.why || res?.refused || "Could not set machine root.";
+      }
+    }
+  } catch (err) {
+    if (els.envRootStatus) {
+      els.envRootStatus.dataset.ok = "false";
+      els.envRootStatus.textContent = String(err?.message ?? "Error declaring machine root.");
+    }
+  } finally {
+    if (els.envDeclareRootBtn) els.envDeclareRootBtn.disabled = false;
+  }
 });
 
 // Light dismiss, declaratively, where the platform supports it: `closedby="any"` on the element.
