@@ -171,6 +171,80 @@ function validateTool(raw) {
   };
 }
 
+function validateToolArgs(params, rawArgs) {
+  let args = rawArgs;
+  if (args === null || args === undefined) {
+    args = {};
+  }
+  if (typeof args !== "object" || Array.isArray(args)) {
+    return { ok: false, refused: "invalid-tool-arguments", why: `tool arguments must be an object, got ${Array.isArray(args) ? "array" : typeof args}` };
+  }
+  let jsonStr = "";
+  try {
+    jsonStr = JSON.stringify(args);
+  } catch {
+    return { ok: false, refused: "invalid-tool-arguments", why: "tool arguments must be serializable JSON" };
+  }
+  if (jsonStr.length > BOUNDS.maxOutputBytes) {
+    return { ok: false, refused: "invalid-tool-arguments", why: `tool arguments size (${jsonStr.length} bytes) exceeds maximum allowed bound of ${BOUNDS.maxOutputBytes} bytes` };
+  }
+
+  const p = params || { type: "object", properties: {} };
+  const properties = (p.properties && typeof p.properties === "object" && !Array.isArray(p.properties)) ? p.properties : {};
+  const required = Array.isArray(p.required) ? p.required : [];
+
+  for (const reqKey of required) {
+    if (typeof reqKey === "string" && (!(reqKey in args) || args[reqKey] === undefined || args[reqKey] === null)) {
+      return { ok: false, refused: "missing-argument", why: `missing required argument '${reqKey}'` };
+    }
+  }
+
+  for (const [key, val] of Object.entries(args)) {
+    const schema = properties[key];
+    if (schema && val !== undefined && val !== null) {
+      if (schema.type) {
+        switch (schema.type) {
+          case "string":
+            if (typeof val !== "string") {
+              return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be a string, got ${typeof val}` };
+            }
+            break;
+          case "number":
+            if (typeof val !== "number" || !Number.isFinite(val)) {
+              return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be a finite number, got ${typeof val === "number" ? "NaN/Infinity" : typeof val}` };
+            }
+            break;
+          case "integer":
+            if (typeof val !== "number" || !Number.isInteger(val)) {
+              return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be an integer, got ${val}` };
+            }
+            break;
+          case "boolean":
+            if (typeof val !== "boolean") {
+              return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be a boolean, got ${typeof val}` };
+            }
+            break;
+          case "array":
+            if (!Array.isArray(val)) {
+              return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be an array, got ${typeof val}` };
+            }
+            break;
+          case "object":
+            if (typeof val !== "object" || val === null || Array.isArray(val)) {
+              return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be an object, got ${Array.isArray(val) ? "array" : typeof val}` };
+            }
+            break;
+        }
+      }
+      if (Array.isArray(schema.enum) && !schema.enum.includes(val)) {
+        return { ok: false, refused: "invalid-argument-enum", why: `argument '${key}' value ${JSON.stringify(val)} is not one of allowed enum values` };
+      }
+    }
+  }
+
+  return { ok: true, value: args };
+}
+
 function handleInnerMessage(event) {
   const data = event.data;
   if (!data) return;
@@ -244,6 +318,22 @@ function dispatchCallTool(data) {
       error: "mini-app bridge is not connected to an app",
     });
     return;
+  }
+
+  const registered = registeredTools.get(name);
+  if (registered && registered.parameters) {
+    const valid = validateToolArgs(registered.parameters, args);
+    if (!valid.ok) {
+      postToHost({
+        type: "tool_result",
+        callId,
+        appId: currentAppId,
+        ok: false,
+        refused: valid.refused,
+        error: `refused: ${valid.refused} — ${valid.why}`,
+      });
+      return;
+    }
   }
 
   const timer = setTimeout(() => {

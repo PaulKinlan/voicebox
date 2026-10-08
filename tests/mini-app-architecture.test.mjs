@@ -22,6 +22,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   validateWebMcpTool,
+  validateMiniAppToolArgs,
   toolsToFunctionDeclarations,
   MINI_APP_BOUNDS,
   MiniAppRegistry,
@@ -557,5 +558,243 @@ test("browser: decoy frame cannot trigger port transfer via mini_app_ready or hi
   assert.equal(results.legitimateHandshakeCompleted, true, "legitimate inner app completed handshake");
   assert.equal(results.legitimateToolResult?.ok, true, "legitimate tool execution succeeded");
   assert.equal(results.legitimateToolResult?.result?.status, "secure_pong");
+});
+
+test("core: validateMiniAppToolArgs validates arguments against JSON schema and enforces bounds (GH #24, voicebox-beads-fdtu)", () => {
+  const tool = {
+    name: "configure_widget",
+    description: "Configure widget settings",
+    parameters: {
+      type: "object",
+      properties: {
+        theme: { type: "string", enum: ["light", "dark", "system"] },
+        refreshInterval: { type: "number", description: "Refresh interval in seconds" },
+        enabled: { type: "boolean" },
+        tags: { type: "array" },
+        meta: { type: "object" },
+      },
+      required: ["theme", "refreshInterval"],
+    },
+  };
+
+  // Valid calls
+  const valid = validateMiniAppToolArgs(tool, { theme: "dark", refreshInterval: 30, enabled: true });
+  assert.equal(valid.ok, true);
+  assert.equal(valid.value.theme, "dark");
+  assert.equal(valid.value.refreshInterval, 30);
+  assert.equal(valid.value.enabled, true);
+
+  // Missing required argument
+  const missing = validateMiniAppToolArgs(tool, { theme: "dark" });
+  assert.equal(missing.ok, false);
+  assert.equal(missing.refused, "missing-argument");
+  assert.ok(missing.why.includes("refreshInterval"));
+
+  // Invalid argument type
+  const badType = validateMiniAppToolArgs(tool, { theme: "dark", refreshInterval: "thirty" });
+  assert.equal(badType.ok, false);
+  assert.equal(badType.refused, "invalid-argument-type");
+  assert.ok(badType.why.includes("refreshInterval"));
+
+  // Invalid enum value
+  const badEnum = validateMiniAppToolArgs(tool, { theme: "neon", refreshInterval: 10 });
+  assert.equal(badEnum.ok, false);
+  assert.equal(badEnum.refused, "invalid-argument-enum");
+  assert.ok(badEnum.why.includes("neon"));
+
+  // Non-object arguments
+  const notObj = validateMiniAppToolArgs(tool, "bad-string");
+  assert.equal(notObj.ok, false);
+  assert.equal(notObj.refused, "invalid-tool-arguments");
+
+  // Array arguments
+  const isArr = validateMiniAppToolArgs(tool, [1, 2, 3]);
+  assert.equal(isArr.ok, false);
+  assert.equal(isArr.refused, "invalid-tool-arguments");
+
+  // Omitted optional arguments with no required fields
+  const noReqTool = {
+    name: "ping",
+    description: "Ping",
+    parameters: { type: "object", properties: {} },
+  };
+  const emptyPass = validateMiniAppToolArgs(noReqTool, {});
+  assert.equal(emptyPass.ok, true);
+  const nullPass = validateMiniAppToolArgs(noReqTool, null);
+  assert.equal(nullPass.ok, true);
+
+  // Bounds enforcement: oversized payload > 64KB
+  const hugePayload = { theme: "light", refreshInterval: 5, meta: { big: "x".repeat(70000) } };
+  const overBound = validateMiniAppToolArgs(tool, hugePayload);
+  assert.equal(overBound.ok, false);
+  assert.equal(overBound.refused, "invalid-tool-arguments");
+  assert.ok(overBound.why.includes("exceeds maximum allowed bound"));
+});
+
+test("server: /turn validates mini-app tool arguments at host boundary before dispatch (GH #24, voicebox-beads-fdtu)", async (t) => {
+  const server = await startServer();
+  t.after(() => server.stop());
+
+  // Register an app with a schema-bearing tool
+  const regRes = await fetch(`${server.base}/api/mini-app/tools`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      appId: "app-test-args",
+      title: "Arg Test App",
+      tools: [
+        {
+          name: "calculate_tax",
+          description: "Calculate sales tax",
+          parameters: {
+            type: "object",
+            properties: {
+              amount: { type: "number" },
+              rate: { type: "number" },
+            },
+            required: ["amount", "rate"],
+          },
+        },
+      ],
+    }),
+  });
+  assert.equal(regRes.status, 200);
+
+  // Valid /turn invocation: passes validation and returns dispatched action
+  const validTurn = await fetch(`${server.base}/api/turn`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: {
+        verb: "mini_app_tool",
+        name: "calculate_tax",
+        args: { amount: 100, rate: 0.05 },
+      },
+    }),
+  });
+  const validJson = await validTurn.json();
+  assert.equal(validJson.result?.ok, true);
+  assert.equal(validJson.miniAppToolCall?.name, "calculate_tax");
+  assert.deepEqual(validJson.miniAppToolCall?.args, { amount: 100, rate: 0.05 });
+
+  // Malformed /turn invocation: missing required argument
+  const missingTurn = await fetch(`${server.base}/api/turn`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: {
+        verb: "mini_app_tool",
+        name: "calculate_tax",
+        args: { amount: 100 },
+      },
+    }),
+  });
+  const missingJson = await missingTurn.json();
+  assert.equal(missingJson.result?.ok, false);
+  assert.equal(missingJson.result?.refused, "missing-argument");
+  assert.ok(missingJson.result?.why.includes("rate"));
+
+  // Malformed /turn invocation: invalid type
+  const badTypeTurn = await fetch(`${server.base}/api/turn`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: {
+        verb: "mini_app_tool",
+        name: "calculate_tax",
+        args: { amount: "one hundred", rate: 0.05 },
+      },
+    }),
+  });
+  const badTypeJson = await badTypeTurn.json();
+  assert.equal(badTypeJson.result?.ok, false);
+  assert.equal(badTypeJson.result?.refused, "invalid-argument-type");
+  assert.ok(badTypeJson.result?.why.includes("amount"));
+});
+
+test("browser: outer bridge validates mini-app tool arguments and refuses malformed calls before execution (GH #24, voicebox-beads-fdtu)", { timeout: 25000 }, async (t) => {
+  const server = await startServer();
+  t.after(() => server.stop());
+
+  const page = await launch({ width: 1000, height: 800 });
+  t.after(() => page.close());
+
+  await page.goto(`${server.base}/`);
+
+  const results = await page.evaluate(async (base) => {
+    return new Promise((resolve, reject) => {
+      const outer = document.createElement("iframe");
+      outer.id = "outer-bridge-args";
+      outer.src = `${base}/mini-app-bridge.html`;
+
+      const recordedEvents = {
+        appExecutedValidCall: false,
+        appReceivedMalformedCall: false,
+        validResult: null,
+        malformedResult: null,
+      };
+
+      window.addEventListener("message", (e) => {
+        if (e.origin !== window.location.origin) return;
+        if (e.data?.type === "bridge_ready") {
+          const appHtml = `<script>
+            window.webMcp.registerTool({
+              name: "set_temperature",
+              description: "Set thermostat target temperature",
+              parameters: {
+                type: "object",
+                properties: {
+                  target: { type: "number", description: "Target degrees Celsius" },
+                  mode: { type: "string", enum: ["heat", "cool", "auto"] }
+                },
+                required: ["target", "mode"]
+              },
+              execute: async (args) => {
+                if (typeof args.target !== "number") {
+                  window.__receivedMalformedCall = true;
+                }
+                return { currentTarget: args.target, mode: args.mode };
+              }
+            });
+            window.webMcp.ready();
+          <\/script>`;
+          outer.contentWindow.postMessage({ type: "load_app", appId: "fdtu-browser-test", html: appHtml }, window.location.origin);
+        } else if (e.data?.type === "tools_updated") {
+          // 1. Dispatch valid call
+          outer.contentWindow.postMessage({
+            type: "call_tool",
+            callId: "call-valid-1",
+            name: "set_temperature",
+            args: { target: 21.5, mode: "heat" },
+          }, window.location.origin);
+        } else if (e.data?.type === "tool_result" && e.data?.callId === "call-valid-1") {
+          recordedEvents.validResult = e.data;
+          // 2. Dispatch malformed call (target is string instead of number, mode is invalid enum)
+          outer.contentWindow.postMessage({
+            type: "call_tool",
+            callId: "call-malformed-1",
+            name: "set_temperature",
+            args: { target: "twenty-one", mode: "turbo" },
+          }, window.location.origin);
+        } else if (e.data?.type === "tool_result" && e.data?.callId === "call-malformed-1") {
+          recordedEvents.malformedResult = e.data;
+          resolve(recordedEvents);
+        }
+      });
+
+      document.body.appendChild(outer);
+      setTimeout(() => reject(new Error("timed out waiting for mini-app tool arg tests")), 12000);
+    });
+  }, server.base);
+
+  // Positive verification: legitimate call succeeded with valid result
+  assert.equal(results.validResult?.ok, true, `valid tool call must succeed: ${JSON.stringify(results.validResult)}`);
+  assert.equal(results.validResult?.result?.currentTarget, 21.5);
+  assert.equal(results.validResult?.result?.mode, "heat");
+
+  // Negative verification: malformed call was intercepted and refused by bridge
+  assert.equal(results.malformedResult?.ok, false, `malformed tool call must be refused: ${JSON.stringify(results.malformedResult)}`);
+  assert.equal(results.malformedResult?.refused, "invalid-argument-type");
+  assert.ok(results.malformedResult?.error?.includes("must be a finite number"));
 });
 

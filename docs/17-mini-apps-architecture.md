@@ -14,6 +14,7 @@ An untrusted mini-app executes arbitrary HTML, CSS, and JavaScript. The sandbox 
 3. **Hijacking Navigation or Modals**: Top-level navigation, popups, and blocking `alert()`/`prompt()` dialogs are disabled by the iframe `sandbox` attribute.
 4. **Spoofing Ambient `postMessage` Events**: All communication travels over a private, transferred `MessagePort` rather than ambient window messages.
 5. **Hanging or Exhausting the Host**: Tool calls are bounded by a 5,000ms timeout and a 64 KiB output limit.
+6. **Malformed or Unbounded Tool Arguments**: Inbound tool arguments from models or external callers are validated against each tool's declared JSON schema (`validateMiniAppToolArgs()`), rejecting missing required parameters, type/enum mismatches, or oversized argument payloads before dispatching to the sandboxed app (`voicebox-beads-fdtu`).
 
 ---
 
@@ -88,7 +89,7 @@ window.webMcp.ready();
 1. **Registration**: The inner app calls `window.webMcp.registerTool(...)`, sending `{ type: "register_tool", tool }` over the private `MessagePort`.
 2. **Schema Validation (`core/mini-app.ts`)**: `validateWebMcpTool()` verifies the tool name (`^[a-zA-Z0-9_-]{1,64}$`), description (≤ 1,024 chars), JSON Schema parameters (`type: "object"`), and per-app tool count (`maxTools: 16`).
 3. **Live Voice Exposure**: `MiniAppRegistry` converts registered tools into function declarations (`toolsToFunctionDeclarations()`) for the active live voice session.
-4. **Voice Execution**: When the user says *"Add three points to the home team"*, the model calls `set_score`, the bridge dispatches `{ type: "call_tool", callId, name, args }` to the inner app, enforces the 5,000ms timeout and 64 KiB response cap, and returns the result to the voice model.
+4. **Voice Execution & Host Argument Validation**: When the user says *"Add three points to the home team"*, the voice model calls `set_score`. The host (`server.mjs`) and outer bridge validate the incoming arguments against the tool's declared JSON schema (`validateMiniAppToolArgs()`). Malformed payloads (missing required properties, type/enum mismatches, non-object arguments, or argument payloads exceeding 64 KiB) are refused before dispatch with a structured refusal (`refused: missing-argument`, `invalid-argument-type`, `invalid-argument-enum`, or `invalid-tool-arguments`). Valid invocations dispatch `{ type: "call_tool", callId, name, args }` to the inner app, enforce the 5,000ms timeout and 64 KiB response cap, and return the result to the voice model.
 
 ---
 
@@ -100,6 +101,7 @@ window.webMcp.ready();
 | **Max Tools per App** | `16` | Outer Bridge & `MiniAppRegistry` | Excess tool registrations are rejected. |
 | **Max Tool Output** | `64 KiB` (`65,536` bytes) | Outer Bridge | Refused with `"output over budget (max 64KB)"`. |
 | **Tool Execution Timeout** | `5,000ms` | Outer Bridge | Refused with `"tool execution timed out after 5000ms"`. |
+| **Tool Arguments Schema & Bounds** | Declared JSON schema, max 64 KiB | Host & Outer Bridge | Refused with `missing-argument`, `invalid-argument-type`, `invalid-argument-enum`, or `invalid-tool-arguments`. |
 | **Tool Name Format** | `1–64` chars (`a-zA-Z0-9_-`) | `validateWebMcpTool()` | Refused with `invalid-tool-name`. |
 | **Handshake Source** | `inner.contentWindow` / `window.parent` | Outer Bridge & Inner SDK | Drops unverified postMessage frames from decoy frames. |
 

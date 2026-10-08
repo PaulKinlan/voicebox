@@ -48,7 +48,7 @@ import { createPermissionPolicy } from "./lib/permission-policy.mjs";
 import { createPiAcpExecutor, describeAdapterInstall } from "./lib/pi-acp.mjs";
 import { liveToolDeclarations } from "./lib/wasm-shelf.mjs";
 import { redactSecrets, redactObject } from "./lib/redact.mjs";
-import { MiniAppRegistry } from "./lib/mini-app-host.mjs";
+import { MiniAppRegistry, validateMiniAppToolArgs } from "./lib/mini-app-host.mjs";
 import { saveMiniApp, discoverMiniApps, getMiniApp, deleteMiniApp } from "./lib/mini-app-store.mjs";
 import { createClaudeAcpExecutor, describeClaudeAdapterInstall } from "./lib/claude-acp.mjs";
 import {
@@ -2408,6 +2408,17 @@ async function execute(action) {
         root: active?.root ?? null,
       };
     }
+    const validated = validateMiniAppToolArgs(registeredTool, action.args ?? {});
+    if (!validated.ok) {
+      return {
+        ok: false,
+        refused: validated.refused,
+        error: `refused: ${validated.refused}`,
+        why: validated.why,
+        root: active?.root ?? null,
+      };
+    }
+    const cleanArgs = validated.value;
     if (action.turn === "live" && runningSession?.socket) {
       const callId = `mcall_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`;
       try {
@@ -2415,7 +2426,7 @@ async function execute(action) {
           type: "mini_app_call",
           callId,
           name: action.name,
-          args: action.args ?? {},
+          args: cleanArgs,
         }));
       } catch (err) {
         return {
@@ -2467,7 +2478,7 @@ async function execute(action) {
       action: `dispatched mini-app tool '${action.name}'`,
       miniAppToolCall: {
         name: action.name,
-        args: action.args ?? {},
+        args: cleanArgs,
       },
       root: active?.root ?? null,
     };
