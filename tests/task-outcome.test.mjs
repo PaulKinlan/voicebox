@@ -10,6 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { readJsonlFile } from "./lib/jsonl.mjs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -29,7 +30,7 @@ function fixture(t, implementation, deadlineMs = 2000) {
     executor: () => ({ check: () => ({ ok: true, mechanism: "closed-no-effects-unit-fixture", bounds: { deadlineMs, maxOutputBytes: 4096 } }), run: implementation }),
   });
   const file = path.join(dir, ".audit", auditFileName("fixture", `machine:${dir}`));
-  const entries = () => (fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim().split("\n").map(JSON.parse) : []);
+  const entries = () => readJsonlFile(file);
   const authority = { owner: "authenticated-owner-A", callId: "call-one" };
   return {
     host, entries, authority,

@@ -3,6 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readJsonl } from "./lib/jsonl.mjs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -128,7 +129,7 @@ for (const provider of ["gemini", "openai"]) {
       assert.deepEqual(listed.extensions, inventory.extensions, "model and app inventory agree");
       const typed = await post("/api/turn", { transcript: "list extensions" });
       assert.deepEqual(typed.result.extensions, inventory.extensions);
-      const audit = readFileSync(path.join(workspace, "audit.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+      const audit = readJsonl(readFileSync(path.join(workspace, "audit.jsonl"), "utf8"));
       assert(audit.some(row => row.act?.tool === "search_fixture" && row.result === "ok"), "extension invocation audited");
     } finally {
       live?.close();

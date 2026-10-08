@@ -5,6 +5,7 @@ import http from "node:http";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 import { startServer } from "./server.mjs";
+import { readJsonlFile } from "./jsonl.mjs";
 
 export async function post(base, route, body, headers = {}) {
   const response = await fetch(`${base}${route}`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
@@ -82,8 +83,7 @@ export async function taskFixture(t, { runtime = true, env: extraEnv = {} } = {}
   return {
     get server() { return server; }, workspace, secondRoot, hostDir, controls, pair, stop, start,
     starts() {
-      const file = path.join(controls, "starts.jsonl");
-      return fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim().split("\n").map(JSON.parse) : [];
+      return readJsonlFile(path.join(controls, "starts.jsonl"));
     },
   };
 }

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { freshExecute, post, taskFixture } from "./lib/task-fixture.mjs";
+import { readJsonl } from "./lib/jsonl.mjs";
 
 async function waitFor(read, accept) {
   for (let i = 0; i < 150; i++) {
@@ -111,7 +112,7 @@ test("D1 real HTTP: separate authenticated connections, private/pinned record, k
   assert.equal(f.starts().length, 1, "neither restart, readback, nor retry replayed the task");
   assert.equal((await freshExecute(f.server.base, other, "task_status", { address })).body.refused, "task-owner-mismatch");
 
-  const entries = fs.readFileSync(logPath, "utf8").trim().split("\n").map(JSON.parse);
+  const entries = readJsonl(fs.readFileSync(logPath, "utf8"));
   assert.deepEqual(entries.filter((e) => e.task?.address === address).map((e) => e.task.state), ["queued", "running", "interrupted"]);
   const receipt = {
     scope: "author real HTTP/process drive; closed host fixture, no ACP/model acceptance",
@@ -142,7 +143,7 @@ test("stock server has no task executor: a CLI-looking name and descriptor data 
   }
   const dir = path.join(f.workspace, ".audit");
   if (fs.existsSync(dir)) {
-    const entries = fs.readdirSync(dir).flatMap((p) => fs.readFileSync(path.join(dir, p), "utf8").trim().split("\n").map(JSON.parse));
+    const entries = fs.readdirSync(dir).flatMap((p) => readJsonl(fs.readFileSync(path.join(dir, p), "utf8")));
     assert.ok(entries.every((e) => e.kind !== "task"));
   }
 });

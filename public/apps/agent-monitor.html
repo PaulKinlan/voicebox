@@ -128,6 +128,11 @@
       gap: 8px;
     }
 
+    :focus-visible {
+      outline: 2px solid var(--accent-primary);
+      outline-offset: 2px;
+    }
+
     .btn {
       appearance: none;
       border: 1px solid var(--border-strong);
@@ -143,6 +148,15 @@
 
     .btn:hover {
       background: var(--bg-muted);
+    }
+
+    .btn:focus-visible {
+      outline: 2px solid var(--accent-primary);
+      outline-offset: 2px;
+    }
+
+    .btn:active {
+      transform: translateY(1px);
     }
 
     .btn-primary {
@@ -529,6 +543,7 @@
             id="task-prompt-input"
             class="prompt-input"
             type="text"
+            aria-label="Multi-harness task prompt"
             placeholder="Ask selected harnesses to build, test, or investigate in parallel..."
             required
           />

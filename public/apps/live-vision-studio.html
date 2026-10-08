@@ -188,6 +188,11 @@
       gap: 8px;
     }
 
+    :focus-visible {
+      outline: 2px solid var(--accent-primary);
+      outline-offset: 2px;
+    }
+
     .btn {
       appearance: none;
       border: 1px solid var(--border-strong);
@@ -203,6 +208,16 @@
 
     .btn:hover:not(:disabled) {
       background: var(--bg-muted);
+    }
+
+    .btn:focus-visible:not(:disabled) {
+      outline: 2px solid var(--accent-primary);
+      outline-offset: 2px;
+      border-color: var(--accent-primary);
+    }
+
+    .btn:active:not(:disabled) {
+      transform: translateY(1px);
     }
 
     .btn:disabled {

@@ -1493,7 +1493,7 @@ dialog.changelog-modal .commit-meta {
   align-items: center;
 }
 .task-badge {
-  font-size: 11px;
+  font-size: 0.75rem;
   padding: 2px 8px;
   border-radius: 12px;
   text-transform: capitalize;
@@ -1681,7 +1681,7 @@ dialog.changelog-modal .commit-meta {
   gap: 8px;
 }
 .mini-app-badge {
-  font-size: 11px;
+  font-size: 0.75rem;
   font-weight: 600;
   text-transform: uppercase;
   padding: 2px 6px;
@@ -1697,7 +1697,7 @@ dialog.changelog-modal .commit-meta {
   color: var(--ink);
 }
 .mini-app-source-badge {
-  font-size: 11px;
+  font-size: 0.75rem;
   font-weight: 500;
   padding: 2px 7px;
   border-radius: 9999px;

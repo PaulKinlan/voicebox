@@ -16,6 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { auditFileName } from "../core/audit.ts";
+import { readJsonlFile } from "./lib/jsonl.mjs";
 import { reduceTask } from "../core/tasks.ts";
 import { createTaskHost } from "../lib/tasks.mjs";
 import { createCodexExecutor } from "../lib/cli-harness-executor.mjs";
@@ -34,7 +35,7 @@ function fixture(t, implementation, deadlineMs = 2000) {
     executor: () => ({ check: () => ({ ok: true, mechanism: "closed-no-effects-unit-fixture", bounds: { deadlineMs, maxOutputBytes: 4096 } }), run: implementation }),
   });
   const file = path.join(dir, ".audit", auditFileName("fixture", `machine:${dir}`));
-  const entries = () => (fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim().split("\n").map(JSON.parse) : []);
+  const entries = () => readJsonlFile(file);
   const raw = () => (fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "");
   const authority = { owner: "authenticated-owner-A", callId: "call-one" };
   return {
