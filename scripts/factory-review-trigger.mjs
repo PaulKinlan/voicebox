@@ -72,6 +72,17 @@ export function locateRunDeltaReport(runDir, rootDir, station) {
   return existsSync(candidateReportPath) ? candidateReportPath : "";
 }
 
+export function getCheckoutRepoIdentity(cwd = ROOT) {
+  try {
+    const remoteUrl = execFileSync("git", ["config", "--get", "remote.origin.url"], { cwd, encoding: "utf8" }).trim();
+    const m = remoteUrl.match(/[:/]([^/:]+\/[^/:]+?)(?:\.git)?$/);
+    if (m) {
+      return m[1].toLowerCase();
+    }
+  } catch {}
+  return "";
+}
+
 export function runReviewTrigger(args = process.argv.slice(2), { env = process.env, rootDir = ROOT } = {}) {
   let baseRef = "";
   let tipRef = "HEAD";
@@ -220,7 +231,26 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
     try {
       const triageScript = path.join(rootDir, "scripts", "factory-triage.mjs");
       if (existsSync(triageScript)) {
-        const pubRes = spawnSync("node", [triageScript, "--report", foundReportPath, "--repo", repo, "--file-issues", "--include-low"], {
+        const publisherArgs = [
+          triageScript,
+          "--report", foundReportPath,
+          "--repo", repo,
+          "--file-issues",
+          "--include-low",
+        ];
+
+        // Deliberate cross-target validation: If the worktree directory name differs from the repo name
+        // (e.g. 'voicebox-miniapps' vs 'voicebox'), but we validated that the worktree's origin remote matches
+        // the target repository, pass --allow-foreign-target so the publisher admits the local worktree report.
+        const checkoutRepo = getCheckoutRepoIdentity(rootDir);
+        const repoName = repo.split(/[\\/]/).filter(Boolean).pop()?.toLowerCase();
+        const targetDirName = path.basename(rootDir).toLowerCase();
+        if (checkoutRepo && checkoutRepo === repo.toLowerCase() && targetDirName !== repoName) {
+          console.log(`[review-trigger] Worktree '${targetDirName}' verified as checkout of '${repo}'; passing --allow-foreign-target`);
+          publisherArgs.push("--allow-foreign-target");
+        }
+
+        const pubRes = spawnSync("node", publisherArgs, {
           cwd: rootDir,
           env: { ...env, VOICEBOX_FACTORY_PRIVATE_DIR: runDir },
           encoding: "utf8",

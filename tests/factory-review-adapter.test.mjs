@@ -12,7 +12,7 @@ import {
   CATEGORY_STATIONS,
 } from "../tools/factory-issue-router.mjs";
 import { formatTriageComment, sanitizeFindingText } from "../tools/factory-issue-commenter.mjs";
-import { runReviewTrigger, parsePublisherSummary, sanitizeLogOutput, locateRunDeltaReport } from "../scripts/factory-review-trigger.mjs";
+import { runReviewTrigger, parsePublisherSummary, sanitizeLogOutput, locateRunDeltaReport, getCheckoutRepoIdentity } from "../scripts/factory-review-trigger.mjs";
 import { pollInboundIssues } from "../scripts/factory-issue-poller.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -200,7 +200,7 @@ Generated: 2026-10-07T19:32:36.485721+00:00
 
 ### [CRITICAL · routed CRITICAL] Hardcoded API credential in config (\`new\`)
 - **Rule**: \`generic-api-key-with-token=supersecretkey\`
-- **Location**: \`config/example.env:password=anothersecret\`
+- **Location**: \`config/session.txt?sid=violetfox\`
 - **Fingerprint**: \`a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0\`
 - **Description**: credential token ghp_ABCDEF0123456789xyz and password=super-secret
 - **Snippet**: \`API_KEY="CANARY"\`
@@ -249,7 +249,10 @@ Generated: 2026-10-07T19:32:36.485721+00:00
   assert.ok(!c2.includes("supersecretkey"));
   assert.ok(!c2.includes("anothersecret"));
   assert.ok(c2.includes("<!-- factory-rule: generic-api-key-with-token -->"));
-  assert.ok(c2.includes("config/example.env"));
+  assert.ok(c2.includes("config/session.txt"));
+  assert.ok(!c2.includes("violetfox"));
+  assert.ok(!c2.includes("sid="));
+  assert.ok(!c2.includes("anothersecret"));
   assert.ok(!c2.includes("perf-review"));
 
   // Text sanitization verification
@@ -431,6 +434,11 @@ test("factory-issue-poller: dry-run does not mutate cursor or attempt directory 
   assert.deepEqual(resultInjected.cursor.processedIssues, {}, "dry run must not mutate in-memory cursor");
 
   rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("factory-review-trigger: getCheckoutRepoIdentity resolves normalized repository slug", () => {
+  const repoId = getCheckoutRepoIdentity(ROOT);
+  assert.equal(repoId, "paulkinlan/voicebox");
 });
 
 test("factory-review-trigger: locateRunDeltaReport strictly enforces runDir provenance", () => {

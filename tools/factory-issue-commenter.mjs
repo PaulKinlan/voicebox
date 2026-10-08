@@ -143,8 +143,13 @@ export function formatTriageComment({ stations = [], findingsDir = "", commitSha
         if (SECURITY_STATIONS.has(station)) {
           // Withhold raw candidate values, payloads, and tokens for identity-critical security stations
           description = `[withheld: ${station} finding candidate not published; requires human verification]`;
-          if (rule) rule = rule.split(/[:=]/)[0].trim();
-          if (location) location = location.split(/[:=]\s*(?:token|password|secret|key|pat)/i)[0].trim();
+          const rulePrefix = rule ? rule.split(/[=:]/)[0].trim() : "";
+          const safeRule = rulePrefix.match(/^[a-zA-Z0-9_-]+$/)?.[0];
+          rule = safeRule || "security-finding";
+
+          const cleanLoc = location ? location.split(/[?=;&\s]/)[0].trim() : "";
+          const safeLoc = cleanLoc.match(/^(?:[a-zA-Z0-9_.-]+\/)*[a-zA-Z0-9_.-]+(?::\d+)?$/)?.[0];
+          location = safeLoc || "[withheld]";
         }
 
         description = sanitizeFindingText(description);
