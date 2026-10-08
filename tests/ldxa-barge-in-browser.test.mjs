@@ -38,6 +38,13 @@ const RATE = 48000;
 // makes the interrupt counts below deterministic, so it is derived rather than repeated as prose.
 const WAV_SPEC = [[3, 0.01], [2.5, 0.2]];
 const UTTERANCE_MS = WAV_SPEC.reduce((ms, [seconds]) => ms + seconds * 1000, 0);
+// Measured on this fixture: the app's `inputFloor` (public/audio-client.js, which tracks the captured
+// input) sits at room tone ~0.0064 while the WAV plays its quiet passage, stands above 0.06 once the
+// 0.2-peak voice is being tracked, and falls below 0.015 the moment the voice stops. Room tone is the
+// signal this test needs: it says the person has stopped talking, and unlike a wall clock it cannot be
+// fooled by the audio device lagging under load. The voice needs roughly ten frames (~0.4s) to lift the
+// floor off room tone, which is what INPUT_FLOOR_MIN_RISE_MS guards against.
+const INPUT_FLOOR_ROOM_TONE = 0.02;
 
 /** A mono 16-bit PCM wav: `spec` is [seconds, peak amplitude] pairs, one clean sine throughout. */
 function writeWav(dir, spec, frequency = 220) {
@@ -140,7 +147,6 @@ test("barge-in in the real audio path: quiet speech does not interrupt; speech o
     window.__voiceboxLiveClient.handleMessage(JSON.stringify({ type: "state", state: "ready", model: "test" }));
     return window.__voiceboxLiveClient.startCapture();
   });
-  const stimulusStartedAt = Date.now();
 
   const speaking = await until(async () => {
     const s = await snapshot();
@@ -154,6 +160,10 @@ test("barge-in in the real audio path: quiet speech does not interrupt; speech o
     const s = await snapshot();
     return s && s.bargeIns >= 1 ? s : null;
   }, "the person's speech to interrupt the speaking agent");
+  const speechOnsetAt = Date.now();
+  // The floor climbs at most 0.004 per captured frame (public/audio-client.js), so ~0.4s of voice lifts it
+  // off room tone; 1200ms is a comfortable multiple of that and still well inside the 2.5s passage.
+  const INPUT_FLOOR_MIN_RISE_MS = 1200;
 
   assert.equal(interrupted.playbackActive, false, "playback must be flushed, not left playing");
   assert.notEqual(interrupted.phase, "agent-speaking", "the phase must leave agent-speaking");
@@ -169,11 +179,23 @@ test("barge-in in the real audio path: quiet speech does not interrupt; speech o
   // the client arms its detector again for every new speaking phase by design (tests/client-audio.test.mjs,
   // "one utterance sends ONE interrupt, and a new speaking phase arms the detector again"), so a second
   // {type:"interrupt",source:"page"} there is the detector working, not a fault. Counting across that window
-  // is what failed under load as "2 !== 1". The input is quiet after UTTERANCE_MS, so nothing can fire and
-  // the counts here are about the page's behaviour rather than about how fast this box delivered a 20ms echo.
+  // is what failed under load as "2 !== 1".
+  //
+  // The end of the utterance is read from the APP's own view of the input, not from the clock. A wall clock
+  // was wrong here in exactly the direction that matters: Chromium's fake-audio device lags its file under
+  // load (measured +76ms idle, +366ms at 4-core load, and the flake this bead records happened at load ~8),
+  // so `UTTERANCE_MS + 400` could expire while the person was still speaking and the baseline below would be
+  // taken mid-utterance. The floor is a lower bound (it can only make this wait longer), so it cannot cause
+  // that; the wait is still bounded, at the fixture's own duration plus a grace, so it cannot hang either.
   await until(
-    async () => (Date.now() >= stimulusStartedAt + UTTERANCE_MS + 400 ? true : null),
-    `the fixture's ${UTTERANCE_MS}ms utterance to end (so no new barge-in can fire while we count)`,
+    async () => {
+      const s = await snapshot();
+      if (!s) return null;
+      if (Date.now() - speechOnsetAt < INPUT_FLOOR_MIN_RISE_MS) return null;
+      return s.inputFloor < INPUT_FLOOR_ROOM_TONE ? s : null;
+    },
+    "the person to stop talking (the app's own input floor back to room tone)",
+    UTTERANCE_MS + 8000,
   );
 
   // The baseline for the comparison below is taken HERE, after the person has stopped talking: while the
