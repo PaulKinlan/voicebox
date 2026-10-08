@@ -107,7 +107,7 @@ import { installColorConsole } from "./lib/logger.mjs";
 // The state directories have ONE owner; this file no longer computes its own copy of any of them
 // (voicebox-beads-y5k: `VOICEBOX_WORKSPACE` and `VOICEBOX_EXTENSIONS_DIR` were each resolved here
 // AND in lib/extensions.mjs, with the same fallbacks written twice).
-import { workspaceDir, workspaceDeclared, extensionsDir, wasmShelfDir, sandboxHomesDir } from "./lib/state-dirs.mjs";
+import { workspaceDir, workspaceDeclared, extensionsDir, wasmShelfDir, sandboxHomesDir, sandboxHomesDeclared, expandHome } from "./lib/state-dirs.mjs";
 
 installColorConsole();
 
@@ -791,14 +791,24 @@ let boundPort = null;
 // provider spend, and this number is what makes 'nothing was created' assertable from outside.
 let liveSessionsCreated = 0;
 
-/** A declaration made by the operator at boot (VOICEBOX_WORKSPACE), which is a decision, not a default. */
-const bootRoot = workspaceDeclared();
+/** A declaration made by the operator at boot (VOICEBOX_WORKSPACE or VOICEBOX_SANDBOX_HOMES), which is a decision, not a default. */
+const bootWorkspace = workspaceDeclared();
+const bootSandboxHomes = sandboxHomesDeclared();
+const bootRoot = bootWorkspace ?? bootSandboxHomes;
+const bootDeclaredBy = bootWorkspace ? "VOICEBOX_WORKSPACE" : bootSandboxHomes ? "VOICEBOX_SANDBOX_HOMES" : null;
 if (bootRoot) {
-  const declared = path.resolve(bootRoot);
+  const declared = path.resolve(expandHome(bootRoot));
+  if (!existsSync(declared)) {
+    try {
+      mkdirSync(declared, { recursive: true });
+    } catch (err) {
+      console.error(`[root] failed to create directory for ${bootDeclaredBy}='${bootRoot}': ${err.message}`);
+    }
+  }
   if (existsSync(declared) && statSync(declared).isDirectory()) {
-    active = { project: path.basename(declared), root: { kind: "machine", path: realpathSync(declared), environment: SELF_ENVIRONMENT }, declaredAt: new Date().toISOString(), declaredBy: "VOICEBOX_WORKSPACE" };
+    active = { project: path.basename(declared), root: { kind: "machine", path: realpathSync(declared), environment: SELF_ENVIRONMENT }, declaredAt: new Date().toISOString(), declaredBy: bootDeclaredBy };
   } else {
-    console.error(`[root] VOICEBOX_WORKSPACE='${bootRoot}' is not a directory — no root is declared`);
+    console.error(`[root] ${bootDeclaredBy}='${bootRoot}' is not a directory — no root is declared`);
   }
 }
 
@@ -1838,7 +1848,7 @@ VERDICT`);
   for (const admissionLine of renderHarnessTable(harnessAdmission.rows, { environment: SELF_ENVIRONMENT })) {
     console.log(admissionLine);
   }
-  console.log(`  root at boot      ${workspaceDeclared() ?? "none — declare one from the page, or set VOICEBOX_WORKSPACE"}`);
+  console.log(`  root at boot      ${active ? `${active.root.path} (${active.declaredBy})` : (workspaceDeclared() ?? "none — declare one from the page, or set VOICEBOX_WORKSPACE")}`);
   if (missing.length === 0) {
     console.log(`  credentials       present for what is selected`);
   } else {
