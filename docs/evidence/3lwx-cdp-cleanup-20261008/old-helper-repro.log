@@ -1,0 +1,31 @@
+1. a terminated process whose collector is stopped (a real zombie)
+  truth:       TERMINATED — the slot holds only a zombie; it runs nothing
+  old check:   SURVIVOR — reported as a leak
+  new witness: terminated
+  detail:      PID    PPID STAT COMMAND | 2163689 2163676 Zs   sleep · kill(pid,0) on the same pid answers "true"
+
+2. a teardown the kernel collects at 1800ms (the reported failure, without load)
+  truth:       TERMINATED — the slot is free
+  old check:   SURVIVOR after 1037ms — reported as a leak
+  new witness: terminated after 1845ms
+  detail:      the same process, asked again afterwards: absent from /proc (provably collected)
+
+3. a process that is really still running (the leak the test exists for)
+  truth:       RUNNING — PID    PPID STAT COMMAND | 2163839 2163669 Ss   sleep
+  old check:   SURVIVOR
+  new witness: SURVIVOR
+  detail:      both checks must say SURVIVOR here: the fix must not blank the leak check
+
+SUMMARY
+- 1. a terminated process whose collector is stopped (a real zombie)
+    truth: TERMINATED — the slot holds only a zombie; it runs nothing
+    old:   SURVIVOR — reported as a leak
+    new:   terminated
+- 2. a teardown the kernel collects at 1800ms (the reported failure, without load)
+    truth: TERMINATED — the slot is free
+    old:   SURVIVOR after 1037ms — reported as a leak
+    new:   terminated after 1845ms
+- 3. a process that is really still running (the leak the test exists for)
+    truth: RUNNING — PID    PPID STAT COMMAND | 2163839 2163669 Ss   sleep
+    old:   SURVIVOR
+    new:   SURVIVOR
