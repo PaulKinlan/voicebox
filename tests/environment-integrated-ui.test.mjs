@@ -235,12 +235,14 @@ test("integrated environment flow: configure machine root and browser workspace 
   );
 
   // Test clicking Restore access when readwrite fails and falls back to read:
-  // folder.mode must remain "read" and regrantBtn must remain visible
+  // folder.mode must remain "read", regrantBtn must remain visible, and both permission attempts must run
   await page.evaluate(() => {
+    window.__regrantCalls = [];
     const folders = window.__voiceboxGetRoomFolders();
     const folder = folders.get("scratchpad");
     if (folder?.handle) {
       folder.handle.requestPermission = async ({ mode }) => {
+        window.__regrantCalls.push(mode);
         if (mode === "readwrite") throw new Error("User denied write permission");
         return "granted";
       };
@@ -250,11 +252,15 @@ test("integrated environment flow: configure machine root and browser workspace 
   await page.click('.folder-chip[data-folder="scratchpad"] .folder-regrant-btn');
   await page.waitFor(
     () => {
-      const mode = window.__voiceboxGetRoomFolders()?.get("scratchpad")?.mode;
-      return mode === "read";
+      const calls = window.__regrantCalls ?? [];
+      const report = document.getElementById("turn-report")?.textContent ?? "";
+      return calls.includes("readwrite") && calls.includes("read") && report.includes("Restored read-only access");
     },
-    { label: "folder mode to stay read after read-only fallback" },
+    { label: "regrant handler to execute both permission attempts and report read-only access" },
   );
+
+  const regrantCalls = await page.evaluate(() => window.__regrantCalls);
+  assert.deepEqual(regrantCalls, ["readwrite", "read"], "exercised readwrite attempt followed by read-only fallback");
 
   const regrantStillVisible = await page.evaluate(() => {
     const btn = document.querySelector('.folder-chip[data-folder="scratchpad"] .folder-regrant-btn');
