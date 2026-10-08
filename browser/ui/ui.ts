@@ -140,7 +140,9 @@ function header(project?: Record<string, any>): void {
     // What differs by destination is WHO performs the act and WHAT it needs — not whether a turn can write.
     ["acts come from", kind === "machine"
       ? "the loop (a machine process) — this page can see it and cannot write it, and turns DO write here"
-      : "this page — the server routes each file act here and this page performs it (a picked folder writes once you grant write access)"],
+      : kind === "handle"
+        ? "this page — the server routes each file act here and this page performs it (a picked folder writes once you grant write access)"
+        : "this page — the server routes each file act here and this page performs it (the files live in this browser, so the page has to be connected)"],
     ["recovery", kind === "handle"
       ? `the handle is persisted in IndexedDB, so a reload does not re-pick; permission is ${project.durability?.permission ?? "unknown"}, and restoring it takes a click`
       : kind === "machine"

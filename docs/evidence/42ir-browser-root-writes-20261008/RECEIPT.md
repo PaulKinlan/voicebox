@@ -32,6 +32,13 @@ What differs by destination is **who performs the act and what it needs** — no
 — **exit 0**, 8 pass / 0 fail / 1 skipped (the live leg needs `GEMINI_API_KEY`; unrelated to this claim).
 Log: `/tmp/roboticon-42ir-proof.log`.
 
+**Provenance, stated only as far as the artifacts go:** the run was made on branch
+`fleet/roboticon-42ir`, created from `a816486` (`origin/main` at that moment), *before* the copy edit
+was written — which is why a known-before result is evidence about the old claim rather than about the
+fix. The gate log records no commit id, so that provenance is asserted here rather than demonstrated by
+the log (an independent reviewer flagged exactly this); the behaviour it proves is copy-independent, and
+the same tests are green on the fixed tree (`focused-16-green.log`).
+
 | Check | What it proves |
 |---|---|
 | ✔ *an OPFS project: the turn writes through the page, reads back byte-for-byte, and the page is the audit's writer* | a **turn** writes into browser storage and the bytes read back — the claim is false |

@@ -77,7 +77,7 @@ test("the page explains what setup does, why it is needed, and the order — bef
   // here as copy, with a negative control that the old wording cannot come back.
   assert.match(guide.text, /this page has to be open and answering/, "the browser-storage limit is still stated");
   assert.match(guide.text, /Restore write access/, "the picked-folder grant is still stated");
-  assert.doesNotMatch(guide.text, /cannot write here yet|read-only for turns|page-side writes land/, "the disproved claim that turns cannot write into these destinations is back");
+  assert.doesNotMatch(guide.text, /cannot write here yet|cannot write into it yet|read-only for turns|page-side writes land/, "the disproved claim that turns cannot write into these destinations is back");
 
   // Order, not just presence: the index of each step's key phrase must ascend.
   const at = (needle) => guide.text.indexOf(needle);
@@ -250,8 +250,10 @@ test("a failed creation says why INSIDE the dialog, where the person is standing
   assert.equal(shown.role, "status", "it is a status region, so it is announced");
   assert.equal(shown.live, "polite", "and announced politely rather than interrupting");
   assert.ok(shown.text.length > 10, `the refusal says something: ${JSON.stringify(shown.text)}`);
-  // The transcript still carries it too — the dialog status is an addition, not a replacement.
-  assert.ok(shown.transcript.includes(shown.text) || shown.transcript.length > 0, "the transcript keeps its own record of the refusal");
+  // The transcript keeps its own record of the same refusal — asserted as the SAME text, not merely as
+  // "non-empty": the transcript carries the host-ready line from page load, so a length check here would
+  // be satisfied by anything (reported by an independent reviewer).
+  assert.ok(shown.transcript.includes(shown.text), `the transcript does not carry the refusal: ${JSON.stringify(shown.text)}`);
 
   await page.press("Escape");
   await page.waitFor(() => document.getElementById("create-project-dialog")?.open === false, { label: "the dialog to close" });
