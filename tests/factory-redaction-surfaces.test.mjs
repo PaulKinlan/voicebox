@@ -121,3 +121,42 @@ test("the probes that disagreed before the single owner agree now", () => {
   const issue = buildIssue(findingFor(githubOther), routeFinding(findingFor(githubOther)), { repo: "owner/voicebox" });
   assert.ok(!`${issue.title}\n${issue.body}`.includes(githubOther), "body: the whole github family, not only ghp_");
 });
+
+// A redactor has two failure directions, and this file has to catch both. The assertions above catch
+// UNDER-matching (a token that got out). These catch OVER-matching, which is not the safe direction it
+// sounds like: the first version of this change dropped the owner's word-boundary guards, and `sk-`
+// matched inside `task-runner`, so the body, the comment and the log all published
+// "ta[redacted:openai-key]" - six mangled words in one sentence, in a product whose whole vocabulary is
+// task-*. A redactor that rewrites ordinary prose destroys the report it is protecting (reviewer P1).
+const ORDINARY_PROSE = [
+  "task-runner",
+  "task-status",
+  "task-action",
+  "task-worker",
+  "task-deadline",
+  "task-cancelled",
+  "flask-server",
+  "desk-drawer",
+  "disk-format",
+  "risk-assessment",
+];
+
+test("ordinary hyphenated words are not redacted on any surface", () => {
+  const sentence = `The ${ORDINARY_PROSE.join(" and ")} all stayed intact.`;
+  const surfaces = {
+    "issue body": (text) => {
+      const finding = { ...findingFor("placeholder"), description: text, title: text, snippet: text };
+      const issue = buildIssue(finding, routeFinding(finding), { repo: "owner/voicebox" });
+      return `${issue.title}\n${issue.body}`;
+    },
+    comment: (text) => sanitizeFindingText(text),
+    log: (text) => sanitizeLogOutput(text),
+  };
+  for (const [name, drive] of Object.entries(surfaces)) {
+    const published = drive(sentence);
+    for (const word of ORDINARY_PROSE) {
+      assert.ok(published.includes(word), `the ${name} must leave the ordinary word '${word}' alone`);
+    }
+    assert.ok(!published.includes("[redacted"), `the ${name} must not redact ordinary prose`);
+  }
+});
