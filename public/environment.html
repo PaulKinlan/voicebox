@@ -33,7 +33,8 @@
          font: 15px/1.5 ui-sans-serif, system-ui, sans-serif; }
   .back-nav { margin: 0 0 12px; font-size: 13px; }
   .back-nav a { color: var(--accent); text-decoration: none; font-weight: 500; }
-  .back-nav a:hover { text-decoration: underline; }
+  .back-nav a:hover, .back-nav a:focus-visible { text-decoration: underline; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   h1 { font-size: 18px; margin: 0 0 4px; }
   h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 24px 0 8px; }
   .sub { color: var(--muted); margin: 0 0 20px; font-size: 13px; max-width: 70ch; }
@@ -86,7 +87,7 @@
   #dropzone.over { border-color: var(--accent); color: var(--ink); }
   .chooser { max-width: 78ch; font-size: 13px; line-height: 1.6; color: var(--muted); margin: 0 0 14px; }
   .chooser strong { color: var(--ink); font-weight: 600; }
-  .tag { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 4px; font-size: 11px;
+  .tag { display: inline-block; margin-left: 6px; padding: 2px 7px; border-radius: 4px; font-size: 0.75rem;
          color: var(--muted); background: var(--btn-bg); border: 1px solid var(--line); }
   .tag-good { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, var(--line)); }
   .views { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }

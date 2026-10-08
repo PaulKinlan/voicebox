@@ -1,5 +1,11 @@
-<!doctype html><meta charset="utf-8"><title>Does a handle operation follow a symlink out of a picked folder?</title>
-<body style="font:15px/1.5 system-ui;max-width:52rem;margin:2rem auto;padding:0 1rem">
+<!doctype html><meta charset="utf-8"><meta name="color-scheme" content="light dark"><title>Does a handle operation follow a symlink out of a picked folder?</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 52rem; margin: 2rem auto; padding: 0 1rem; background: light-dark(#ffffff, #101014); color: light-dark(#111111, #e8e8ee); }
+  pre#out { background: light-dark(#f4f4f4, #181822); color: light-dark(#111111, #e8e8ee); border: 1px solid light-dark(#dddddd, #333344); padding: 1rem; white-space: pre-wrap; border-radius: 6px; }
+  button:focus-visible, input:focus-visible { outline: 2px solid light-dark(#1f3fd0, #abc8ff); outline-offset: 2px; }
+</style>
+<body>
 <h1>Does a handle walk follow a symlink?</h1>
 
 <p><b>What this page does and does not do.</b> It reads only what you pick. It makes <b>no network
@@ -28,7 +34,7 @@ echo secret &gt; inside/real.txt</pre>
   <label style="margin-left:1rem"><input type="checkbox" id="write" /> also probe the write path
   (creates and removes one file through the link)</label>
 </p>
-<pre id="out" style="background:#f4f4f4;padding:1rem;white-space:pre-wrap">waiting…</pre>
+<pre id="out">waiting…</pre>
 
 <script>
 const out = document.getElementById("out");

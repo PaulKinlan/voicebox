@@ -1,12 +1,24 @@
-:root { color-scheme: dark; font: 16px/1.5 system-ui, sans-serif; background: #101014; color: #e8e8ee; }
+:root {
+  color-scheme: dark;
+  --surface: #101014;
+  --surface-raised: #181822;
+  --text: #e8e8ee;
+  --text-strong: #ffffff;
+  --muted: #9999aa;
+  --line: #333344;
+  --accent: #abc8ff;
+  font: 16px/1.5 system-ui, sans-serif;
+  background: var(--surface);
+  color: var(--text);
+}
 body { margin: 0; }
 main { max-width: 76ch; margin: auto; padding: 24px; overflow-wrap: anywhere; }
-a { color: #abc8ff; }
+a { color: var(--accent); }
 h1 { font-size: 1.6rem; margin-bottom: 8px; }
 .commits { list-style: none; padding: 0; margin: 24px 0; display: flex; flex-direction: column; gap: 12px; }
-.commit-card { border: 1px solid #333344; border-radius: 8px; padding: 14px 16px; background: #181822; }
+.commit-card { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; background: var(--surface-raised); }
 .commit-header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; flex-wrap: wrap; }
 .commit-sha { font: .8125rem/1.4 ui-monospace, monospace; }
-.commit-subject { font-weight: 500; color: #ffffff; }
-.commit-meta { font-size: .8125rem; color: #9999aa; }
-:focus-visible { outline: 3px solid #abc8ff; outline-offset: 3px; }
+.commit-subject { font-weight: 500; color: var(--text-strong); }
+.commit-meta { font-size: .8125rem; color: var(--muted); }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
