@@ -455,9 +455,13 @@ test("factory-review-trigger: getCheckoutRepoIdentity resolves normalized reposi
   const mockForeignDir = path.join(tmpdir(), `test-foreign-origin-${Math.random().toString(36).slice(2)}`);
   rmSync(mockForeignDir, { recursive: true, force: true });
   mkdirSync(mockForeignDir, { recursive: true });
+  const cleanGitEnv = { ...process.env };
+  delete cleanGitEnv.GIT_DIR;
+  delete cleanGitEnv.GIT_WORK_TREE;
+  delete cleanGitEnv.GIT_INDEX_FILE;
   try {
-    execFileSync("git", ["init"], { cwd: mockForeignDir });
-    execFileSync("git", ["remote", "add", "origin", "https://evil.example/PaulKinlan/voicebox.git"], { cwd: mockForeignDir });
+    execFileSync("git", ["init"], { cwd: mockForeignDir, env: cleanGitEnv });
+    execFileSync("git", ["remote", "add", "origin", "https://evil.example/PaulKinlan/voicebox.git"], { cwd: mockForeignDir, env: cleanGitEnv });
     const evilId = getCheckoutRepoIdentity(mockForeignDir);
     assert.equal(evilId, "", "unapproved git host must not be treated as proof of repo identity");
   } finally {
