@@ -40,6 +40,7 @@ VOICEBOX_LOOPBACK_AUTH=1 npm start
    - Reusing an already consumed or invalid ticket returns HTTP `401` (`bootstrap-ticket-refused`). Subsequent page reloads authenticate automatically via the `vb_session` cookie.
 4. **HTTP & API Wall**:
    - Every HTTP request lacking a valid `vb_session` cookie or `x-voicebox-host-token` header is refused before reaching any route with HTTP `401` (`loopback-unauthenticated`).
+   - Credential comparison has one owner, `lib/timing-safe.mjs` (`timingSafeStringEqual`): equal lengths first, then `crypto.timingSafeEqual`, because the primitive throws on a length mismatch and a bad token must be a refusal rather than a crashed request. The `vb_session` cookie check here, the host token in `lib/extensions.mjs` (`hostTokenOk`), and both in-room session-token comparisons in `server.mjs` (extension authority and `POST /api/root`) now answer with that one implementation instead of four inline ones (voicebox-beads-sseh / GH #26). The gate still reveals the expected length, and no timing exploit is claimed for this local posture — this is hardening.
    - **Exempt Endpoints**:
      - `GET /api/health` (remains open for process supervisors and readiness checks; exposes no files or credentials).
      - `POST /api/bootstrap` (validates `x-voicebox-host-token` to mint a fresh ticket).
