@@ -654,8 +654,25 @@ test("factory-review-watcher: discovers candidate branches matching conjunctive 
   rmSync(tmpPrivate, { recursive: true, force: true });
 });
 
-test("factory-review-watcher: auto-publication default, cursor recording, and second-tick deduplication", () => {
-  const tmpPrivate = path.join(ROOT, "tests", "fixtures", "watcher-dedupe-test");
+test("factory-review-watcher: auto-publication default, cursor recording, and second-tick deduplication", (t) => {
+  // voicebox-beads-7nto / GH #29: this fixture owns directories in /tmp and under tests/fixtures, and its
+  // cleanup used to sit at the very bottom of the test - so an assertion failure part way through left the
+  // bare origin, the work clone and the private cursor dirs behind. The cleanup is registered with t.after
+  // BEFORE the first directory is created, so it runs on pass AND on fail, including a failure during
+  // fixture setup. t.after is already the idiom in this suite (acp-browser, acp-console-ui, activity-log).
+  // Nothing about the fixture's own guards changes: the trusted-git pin, the owned env, the fixture-root
+  // assertion and the push-target assertion all still run, and the cursor, dry-run and fail-closed
+  // assertions below are untouched.
+  const ownedDirs = new Set();
+  t.after(() => {
+    for (const dir of ownedDirs) rmSync(dir, { recursive: true, force: true });
+  });
+  const ownDir = (dir) => {
+    ownedDirs.add(dir);
+    return dir;
+  };
+
+  const tmpPrivate = ownDir(path.join(ROOT, "tests", "fixtures", "watcher-dedupe-test"));
   rmSync(tmpPrivate, { recursive: true, force: true });
   mkdirSync(tmpPrivate, { recursive: true });
 
@@ -680,7 +697,7 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
   const fixtureBranch = "fleet/watcher-fixture-candidate";
   // OUTSIDE the repo tree on purpose: an in-tree fixture that creates a nested repo can end up
   // committing into the surrounding worktree (it did, once, and added a junk commit to the branch).
-  const fixtureRoot = mkdtempSync(path.join(tmpdir(), "watcher-fixture-remote-"));
+  const fixtureRoot = ownDir(mkdtempSync(path.join(tmpdir(), "watcher-fixture-remote-")));
   rmSync(fixtureRoot, { recursive: true, force: true });
   const bareDir = path.join(fixtureRoot, "origin.git");
   const workDir = path.join(fixtureRoot, "work");
@@ -810,7 +827,7 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
   assert.equal(triggerInvocations.length, 0, "trigger must NOT be invoked on second tick (deduped)");
 
   // 3. Failure negative control: when trigger fails, watcher fails closed and does NOT write cursor
-  const tmpFailPrivate = path.join(ROOT, "tests", "fixtures", "watcher-fail-test");
+  const tmpFailPrivate = ownDir(path.join(ROOT, "tests", "fixtures", "watcher-fail-test"));
   rmSync(tmpFailPrivate, { recursive: true, force: true });
   mkdirSync(tmpFailPrivate, { recursive: true });
 
@@ -839,9 +856,8 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
     );
   }
 
-  rmSync(tmpPrivate, { recursive: true, force: true });
-  rmSync(tmpFailPrivate, { recursive: true, force: true });
-  rmSync(fixtureRoot, { recursive: true, force: true });
+  // Cleanup is owned by the t.after hook registered at the top of this test (voicebox-beads-7nto), so it
+  // runs whether the assertions above pass or fail.
 });
 
 test("factory-nightly-publisher: enforces SAME-RUN manifest barrier, target check, and batch window", () => {
