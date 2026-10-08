@@ -614,8 +614,10 @@ async function openOpfsScratchFolder(projectName = SCRATCHPAD_NAME) {
   try {
     await ensureScratchpadFolder(projectName);
     setReport(`Opened '${projectName}' in browser storage (OPFS) — turns and edits save here.`, "good");
+    return true;
   } catch (error) {
     setReport(`Could not open browser scratchpad: ${error?.message ?? error}`, "bad");
+    return false;
   }
 }
 
@@ -949,21 +951,28 @@ async function initRoomFolders() {
   if (roomFolders.size > 0) {
     const idb = await idbStore();
     const storedActive = await idb?.getActiveRoomFolderName?.().catch(() => null);
-    const active = (storedActive && roomFolders.get(storedActive)) || roomFolders.values().next().value;
-    roomFolder = active;
-    listingDir = "";
-    renderRoomFoldersBar();
-    if (active.permission === "granted") {
-      loadRoomFolder();
-    } else {
-      if (els.files) {
-        els.files.replaceChildren();
-        const li = document.createElement("li");
-        li.className = "file-placeholder";
-        li.textContent = `Access to '${active.name}' needs to be restored after reload — click 'Restore access' above.`;
-        els.files.append(li);
+    if (storedActive === "" || storedActive === "__server__") {
+      roomFolder = null;
+      renderRoomFoldersBar();
+      return;
+    }
+    const active = (storedActive && roomFolders.get(storedActive)) || (storedActive === null ? roomFolders.values().next().value : null);
+    if (active) {
+      roomFolder = active;
+      listingDir = "";
+      renderRoomFoldersBar();
+      if (active.permission === "granted") {
+        loadRoomFolder();
+      } else {
+        if (els.files) {
+          els.files.replaceChildren();
+          const li = document.createElement("li");
+          li.className = "file-placeholder";
+          li.textContent = `Access to '${active.name}' needs to be restored after reload — click 'Restore access' above.`;
+          els.files.append(li);
+        }
+        if (els.count) els.count.textContent = "needs access";
       }
-      if (els.count) els.count.textContent = "needs access";
     }
   }
 }
@@ -1282,7 +1291,7 @@ function renderEmptyState() {
 
   // 2. no root declared: the next action is to open a project, and that is a
   //    different page, so the page points at it.
-  if (activeRoot === null) {
+  if (!roomFolder && activeRoot === null) {
     headline.textContent = "Open a project.";
     next.textContent = "Open a folder above to save files locally, or speak to create files in the browser scratchpad.";
     if (els.emptyAction) els.emptyAction.hidden = false;
@@ -1348,8 +1357,9 @@ function renderEmptyState() {
 
   // 4. a writable root and nothing made: NOW the promise is true, and the
   //    samples are the shortcut to keeping it.
-  const root = activeRoot?.root;
-  const base = root?.path ?? root?.name ?? root?.label ?? "";
+  const base = roomFolder
+    ? roomFolder.name
+    : (activeRoot?.root?.path ?? activeRoot?.root?.name ?? activeRoot?.root?.label ?? "");
   headline.textContent = "Say or type something that names a file.";
   next.textContent = base
     ? `It lands in ${base.replace(/\/$/, "")}/ — or try one:`
@@ -4040,12 +4050,19 @@ on(els.envs, "close", () => {
 on(els.envUseBrowserBtn, "click", async () => {
   try {
     if (els.envUseBrowserBtn) els.envUseBrowserBtn.disabled = true;
-    await openOpfsScratchFolder();
-    if (els.envRootStatus) {
-      els.envRootStatus.dataset.ok = "true";
-      els.envRootStatus.textContent = "Switched to browser storage (OPFS) — turns and edits save here.";
+    const ok = await openOpfsScratchFolder();
+    if (ok) {
+      if (els.envRootStatus) {
+        els.envRootStatus.dataset.ok = "true";
+        els.envRootStatus.textContent = "Switched to browser storage (OPFS) — turns and edits save here.";
+      }
+      renderRoot();
+    } else {
+      if (els.envRootStatus) {
+        els.envRootStatus.dataset.ok = "false";
+        els.envRootStatus.textContent = "Could not switch to browser storage (OPFS).";
+      }
     }
-    renderRoot();
   } catch (err) {
     if (els.envRootStatus) {
       els.envRootStatus.dataset.ok = "false";

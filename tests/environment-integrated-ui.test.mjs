@@ -68,10 +68,14 @@ test.after(async () => {
 test("integrated environment flow: configure machine root and browser workspace in main UI dialog without navigating away", { timeout: 90000 }, async () => {
   await page.goto(`${BASE}/`);
 
-  // Wait for main UI to load
-  await page.waitFor(() => document.getElementById("root-kind") && document.getElementById("envs-open"), {
-    label: "the main room UI",
-  });
+  // Wait for main UI to load and initial root check to settle
+  await page.waitFor(
+    () => {
+      const text = document.getElementById("root-kind")?.textContent?.trim() ?? "";
+      return text !== "" && text !== "checking which root…" && text !== "folder not reported";
+    },
+    { label: "initial root check to settle" },
+  );
 
   // Verify initial state: no root declared
   const initialRoot = await page.evaluate(() => document.getElementById("root-kind")?.textContent?.trim() ?? "");
@@ -171,7 +175,30 @@ test("integrated environment flow: configure machine root and browser workspace 
   const opfsTurn = await say(page, "create file opfs-note.txt with hello-from-opfs");
   assert.ok(opfsTurn.cards.includes("opfs-note.txt"), "opfs-note.txt appears in browser storage files list");
 
-  // 6. Assert URL stayed on main UI throughout the entire flow (no separate page visited)
+  // 6. Switch back to machine root and reload: verify machine root survives reload
+  await page.click("#envs-open");
+  await page.waitFor(() => document.getElementById("envs")?.hasAttribute("open"));
+  await page.evaluate((dirPath) => {
+    document.getElementById("env-root-path-input").value = dirPath;
+  }, testRoot);
+  await page.click("#env-declare-root-btn");
+  await page.waitFor(() => {
+    const status = document.getElementById("env-root-status")?.textContent ?? "";
+    return status.includes("Machine root set to");
+  });
+  await page.click("#envs-close");
+  await page.waitFor(() => !document.getElementById("envs")?.hasAttribute("open"));
+
+  // Reload page
+  await page.reload();
+  await page.waitFor(() => document.getElementById("root-kind"));
+  const reloadedRoot = await page.evaluate(() => document.getElementById("root-kind")?.textContent ?? "");
+  assert.ok(
+    reloadedRoot.includes("machine folder") && reloadedRoot.includes("sample-project"),
+    `machine root selection survives reload even with persisted browser folders, got: ${reloadedRoot}`,
+  );
+
+  // 7. Assert URL stayed on main UI throughout the entire flow (no separate page visited)
   const currentPath = await page.evaluate(() => location.pathname);
   assert.equal(currentPath, "/", "user remained strictly on the main UI root without visiting separate environment.html");
 });
