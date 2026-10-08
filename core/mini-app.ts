@@ -83,7 +83,7 @@ function validateSinglePropertySchema(
   propName: string,
   raw: unknown,
   path = "",
-  depth = 0,
+  depth = 1,
   counter = { nodes: 0 }
 ): string | null {
   counter.nodes++;
@@ -92,6 +92,10 @@ function validateSinglePropertySchema(
   }
   if (depth > MINI_APP_BOUNDS.maxSchemaDepth) {
     return `schema nesting exceeds maximum depth of ${MINI_APP_BOUNDS.maxSchemaDepth}`;
+  }
+
+  if (propName === "__proto__") {
+    return `property name cannot be '__proto__'`;
   }
 
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -261,6 +265,9 @@ function validateSinglePropertySchema(
       if (!s.properties || typeof s.properties !== "object" || Array.isArray(s.properties)) {
         return `properties for object property '${path}${propName}' must be an object`;
       }
+      if (Object.hasOwn(s.properties, "__proto__")) {
+        return `object property '${path}${propName}' cannot declare '__proto__' property`;
+      }
     }
     if (s.additionalProperties !== undefined && typeof s.additionalProperties !== "boolean") {
       return `additionalProperties for object property '${path}${propName}' must be a boolean`;
@@ -268,6 +275,9 @@ function validateSinglePropertySchema(
     if (s.required !== undefined) {
       if (!Array.isArray(s.required) || !s.required.every((r) => typeof r === "string" && r.length > 0)) {
         return `required for object property '${path}${propName}' must be an array of non-empty strings`;
+      }
+      if (s.required.includes("__proto__")) {
+        return `object property '${path}${propName}' required cannot include '__proto__'`;
       }
     }
     if (s.additionalProperties === false) {
@@ -329,6 +339,9 @@ export function validateWebMcpTool(raw: unknown): ValidationResult<WebMcpToolDec
     if (!p.properties || typeof p.properties !== "object" || Array.isArray(p.properties)) {
       return refusal("invalid-tool-parameters", "tool parameters properties must be an object");
     }
+    if (Object.hasOwn(p.properties, "__proto__")) {
+      return refusal("invalid-tool-parameters", "tool parameters cannot declare '__proto__' property");
+    }
   }
 
   const properties = (p.properties && typeof p.properties === "object" && !Array.isArray(p.properties))
@@ -337,7 +350,7 @@ export function validateWebMcpTool(raw: unknown): ValidationResult<WebMcpToolDec
 
   const counter = { nodes: 0 };
   for (const [propName, propSchema] of Object.entries(properties)) {
-    const err = validateSinglePropertySchema(propName, propSchema, "", 0, counter);
+    const err = validateSinglePropertySchema(propName, propSchema, "", 1, counter);
     if (err) {
       return refusal("invalid-tool-parameters", err);
     }
@@ -347,6 +360,9 @@ export function validateWebMcpTool(raw: unknown): ValidationResult<WebMcpToolDec
   if (p.required !== undefined) {
     if (!Array.isArray(p.required) || !p.required.every((r) => typeof r === "string" && r.length > 0)) {
       return refusal("invalid-tool-parameters", "tool parameters required must be an array of non-empty strings");
+    }
+    if (p.required.includes("__proto__")) {
+      return refusal("invalid-tool-parameters", "tool parameters required cannot include '__proto__'");
     }
   }
 

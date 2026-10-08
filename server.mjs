@@ -4680,12 +4680,35 @@ async function handle(req, res) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/mini-app/tools") {
-    const body = await readJson(65536);
-    if (!body) {
+    let bodyStr = "", bytes = 0, tooLarge = false;
+    await new Promise((resolve) => {
+      req.on("data", (chunk) => {
+        bytes += chunk.length;
+        if (bytes > 65536) {
+          tooLarge = true;
+        } else {
+          bodyStr += chunk;
+        }
+      });
+      req.on("end", resolve);
+    });
+
+    if (tooLarge) {
       return json(res, 400, { ok: false, refused: "body-too-large", why: "request body exceeds maximum allowed bound of 65536 bytes" });
     }
-    const appId = String(body?.appId ?? "").trim();
-    const tools = Array.isArray(body?.tools) ? body.tools : [];
+
+    let body;
+    try {
+      body = JSON.parse(bodyStr || "{}");
+    } catch {
+      return json(res, 400, { ok: false, refused: "bad-json", why: "request body must be valid JSON" });
+    }
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return json(res, 400, { ok: false, refused: "bad-json", why: "request body must be a JSON object" });
+    }
+
+    const appId = String(body.appId ?? "").trim();
+    const tools = Array.isArray(body.tools) ? body.tools : [];
     for (const prevId of [...activeMiniAppRegistry.apps.keys()]) {
       if (prevId !== appId) activeMiniAppRegistry.unregisterApp(prevId);
     }

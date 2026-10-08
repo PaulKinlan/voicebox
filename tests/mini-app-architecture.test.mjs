@@ -739,17 +739,42 @@ test("server: /turn validates mini-app tool arguments at host boundary before di
   assert.equal(badTypeJson.result?.refused, "invalid-argument-type");
   assert.ok(badTypeJson.result?.why.includes("amount"));
 
-  // Bounded request body on POST /api/mini-app/tools: payload > 65536 bytes rejected with HTTP 400 body-too-large
-  const oversizedPayload = JSON.stringify({ appId: "test-app", title: "T".repeat(70000), tools: [] });
-  const oversizedRes = await fetch(`${server.base}/api/mini-app/tools`, {
+  // Bounded request body on POST /api/mini-app/tools: exact 65536 vs 65537 envelope bytes
+  const envPrefix = '{"appId":"test-app","title":"';
+  const envSuffix = '","tools":[]}';
+  const envOverhead = Buffer.byteLength(envPrefix, "utf8") + Buffer.byteLength(envSuffix, "utf8");
+
+  const exact65536Envelope = envPrefix + "T".repeat(65536 - envOverhead) + envSuffix;
+  assert.equal(Buffer.byteLength(exact65536Envelope, "utf8"), 65536);
+  const exact65536Res = await fetch(`${server.base}/api/mini-app/tools`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: oversizedPayload,
+    body: exact65536Envelope,
   });
-  assert.equal(oversizedRes.status, 400);
-  const oversizedJson = await oversizedRes.json();
-  assert.equal(oversizedJson.ok, false);
-  assert.equal(oversizedJson.refused, "body-too-large");
+  assert.equal(exact65536Res.status, 200, "exact 65536 bytes envelope must succeed");
+
+  const exact65537Envelope = envPrefix + "T".repeat(65537 - envOverhead) + envSuffix;
+  assert.equal(Buffer.byteLength(exact65537Envelope, "utf8"), 65537);
+  const exact65537Res = await fetch(`${server.base}/api/mini-app/tools`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: exact65537Envelope,
+  });
+  assert.equal(exact65537Res.status, 400);
+  const exact65537Json = await exact65537Res.json();
+  assert.equal(exact65537Json.ok, false);
+  assert.equal(exact65537Json.refused, "body-too-large");
+
+  // Malformed JSON body returns HTTP 400 bad-json (distinguished from body-too-large)
+  const malformedJsonRes = await fetch(`${server.base}/api/mini-app/tools`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{ broken json",
+  });
+  assert.equal(malformedJsonRes.status, 400);
+  const malformedBodyJson = await malformedJsonRes.json();
+  assert.equal(malformedBodyJson.ok, false);
+  assert.equal(malformedBodyJson.refused, "bad-json");
 });
 
 test("browser: outer bridge validates mini-app tool arguments and refuses malformed calls before execution (GH #24, voicebox-beads-fdtu)", { timeout: 25000 }, async (t) => {
@@ -1521,32 +1546,139 @@ test("core: validateWebMcpTool rejects contradictory and malformed constraint sc
   assert.equal(allInvalidIntRes.refused, "invalid-tool-parameters");
   assert.match(allInvalidIntRes.why, /no enum members satisfy declared range bounds/);
 
-  // 11. Schema nesting depth limit: 16 passes, 17 rejected with invalid-tool-parameters
-  let deepSchema16 = { type: "string" };
-  for (let i = 0; i < 15; i++) {
-    deepSchema16 = { type: "object", properties: { child: deepSchema16 } };
+  // 11. Schema rejection of __proto__ in properties and required (Codex P1)
+  const protoPropTool = {
+    name: "proto_prop_tool",
+    description: "Proto prop tool",
+    parameters: {
+      type: "object",
+      properties: {
+        ["__proto__"]: { type: "string" },
+      },
+    },
+  };
+  const protoPropRes = validateWebMcpTool(protoPropTool);
+  assert.equal(protoPropRes.ok, false);
+  assert.equal(protoPropRes.refused, "invalid-tool-parameters");
+  assert.match(protoPropRes.why, /cannot declare '__proto__' property/);
+
+  const protoReqTool = {
+    name: "proto_req_tool",
+    description: "Proto req tool",
+    parameters: {
+      type: "object",
+      properties: {
+        valid_prop: { type: "string" },
+      },
+      required: ["__proto__"],
+    },
+  };
+  const protoReqRes = validateWebMcpTool(protoReqTool);
+  assert.equal(protoReqRes.ok, false);
+  assert.equal(protoReqRes.refused, "invalid-tool-parameters");
+  assert.match(protoReqRes.why, /required cannot include '__proto__'/);
+
+  const nestedProtoPropTool = {
+    name: "nested_proto_prop",
+    description: "Nested proto prop",
+    parameters: {
+      type: "object",
+      properties: {
+        nested: {
+          type: "object",
+          properties: {
+            ["__proto__"]: { type: "string" },
+          },
+        },
+      },
+    },
+  };
+  const nestedProtoPropRes = validateWebMcpTool(nestedProtoPropTool);
+  assert.equal(nestedProtoPropRes.ok, false);
+  assert.equal(nestedProtoPropRes.refused, "invalid-tool-parameters");
+  assert.match(nestedProtoPropRes.why, /cannot declare '__proto__' property/);
+
+  const nestedProtoReqTool = {
+    name: "nested_proto_req",
+    description: "Nested proto req",
+    parameters: {
+      type: "object",
+      properties: {
+        nested: {
+          type: "object",
+          properties: {
+            safe: { type: "string" },
+          },
+          required: ["__proto__"],
+        },
+      },
+    },
+  };
+  const nestedProtoReqRes = validateWebMcpTool(nestedProtoReqTool);
+  assert.equal(nestedProtoReqRes.ok, false);
+  assert.equal(nestedProtoReqRes.refused, "invalid-tool-parameters");
+  assert.match(nestedProtoReqRes.why, /required cannot include '__proto__'/);
+
+  // Positive control: valid properties and required pass
+  const validProtoControlTool = {
+    name: "valid_control",
+    description: "Valid control",
+    parameters: {
+      type: "object",
+      properties: {
+        safe: { type: "string" },
+      },
+      required: ["safe"],
+    },
+  };
+  assert.equal(validateWebMcpTool(validProtoControlTool).ok, true);
+
+  // 12. Schema nesting depth limit: exact 16 passes, 17 rejected with invalid-tool-parameters
+  function makeNestedSchema(depth) {
+    let cur = { type: "string" };
+    for (let i = 1; i < depth; i++) {
+      cur = { type: "object", properties: { p: cur } };
+    }
+    return { type: "object", properties: { p: cur } };
   }
   const deepTool16 = {
     name: "deep_tool_16",
     description: "Deep schema 16",
-    parameters: deepSchema16,
+    parameters: makeNestedSchema(16),
   };
   const deepRes16 = validateWebMcpTool(deepTool16);
   assert.equal(deepRes16.ok, true, "schema depth 16 must pass");
 
-  let deepSchema17 = { type: "string" };
-  for (let i = 0; i < 18; i++) {
-    deepSchema17 = { type: "object", properties: { child: deepSchema17 } };
-  }
   const deepTool17 = {
     name: "deep_tool_17",
     description: "Deep schema 17",
-    parameters: deepSchema17,
+    parameters: makeNestedSchema(17),
   };
   const deepRes17 = validateWebMcpTool(deepTool17);
   assert.equal(deepRes17.ok, false);
   assert.equal(deepRes17.refused, "invalid-tool-parameters");
   assert.match(deepRes17.why, /schema nesting exceeds maximum depth of 16/);
+
+  // 13. Schema node count limit: exact 512 passes, 513 rejected with invalid-tool-parameters
+  const props512 = {};
+  for (let i = 0; i < 512; i++) props512[`p${i}`] = { type: "string" };
+  const nodes512Res = validateWebMcpTool({
+    name: "nodes512",
+    description: "Nodes 512",
+    parameters: { type: "object", properties: props512 },
+  });
+  assert.equal(nodes512Res.ok, true, "schema nodes 512 must pass");
+
+  const props513 = {};
+  for (let i = 0; i < 513; i++) props513[`p${i}`] = { type: "string" };
+  const nodes513Res = validateWebMcpTool({
+    name: "nodes513",
+    description: "Nodes 513",
+    parameters: { type: "object", properties: props513 },
+  });
+  assert.equal(nodes513Res.ok, false);
+  assert.equal(nodes513Res.refused, "invalid-tool-parameters");
+  assert.match(nodes513Res.why, /schema exceeds maximum node count of 512/);
 
   // Positive control: valid string enum satisfying minLength and maxLength
   const validStringEnumTool = {

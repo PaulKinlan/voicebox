@@ -159,13 +159,17 @@ const ALLOWED_OBJECT_KEYS = new Set(["type", "description", "properties", "requi
 const ALLOWED_ITEMS_KEYS = new Set(["type", "description", "enum"]);
 const SUPPORTED_PRIMITIVE_ITEM_TYPES = new Set(["string", "number", "integer", "boolean"]);
 
-function validateSinglePropertySchema(propName, raw, path = "", depth = 0, counter = { nodes: 0 }) {
+function validateSinglePropertySchema(propName, raw, path = "", depth = 1, counter = { nodes: 0 }) {
   counter.nodes++;
   if (counter.nodes > BOUNDS.maxSchemaNodes) {
     return `schema exceeds maximum node count of ${BOUNDS.maxSchemaNodes}`;
   }
   if (depth > BOUNDS.maxSchemaDepth) {
     return `schema nesting exceeds maximum depth of ${BOUNDS.maxSchemaDepth}`;
+  }
+
+  if (propName === "__proto__") {
+    return `property name cannot be '__proto__'`;
   }
 
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -334,6 +338,9 @@ function validateSinglePropertySchema(propName, raw, path = "", depth = 0, count
       if (!raw.properties || typeof raw.properties !== "object" || Array.isArray(raw.properties)) {
         return `properties for object property '${path}${propName}' must be an object`;
       }
+      if (Object.hasOwn(raw.properties, "__proto__")) {
+        return `object property '${path}${propName}' cannot declare '__proto__' property`;
+      }
     }
     if (raw.additionalProperties !== undefined && typeof raw.additionalProperties !== "boolean") {
       return `additionalProperties for object property '${path}${propName}' must be a boolean`;
@@ -341,6 +348,9 @@ function validateSinglePropertySchema(propName, raw, path = "", depth = 0, count
     if (raw.required !== undefined) {
       if (!Array.isArray(raw.required) || !raw.required.every((r) => typeof r === "string" && r.length > 0)) {
         return `required for object property '${path}${propName}' must be an array of non-empty strings`;
+      }
+      if (raw.required.includes("__proto__")) {
+        return `object property '${path}${propName}' required cannot include '__proto__'`;
       }
     }
     if (raw.additionalProperties === false) {
@@ -394,13 +404,16 @@ function validateTool(raw) {
     if (!p.properties || typeof p.properties !== "object" || Array.isArray(p.properties)) {
       return { ok: false, error: "tool parameters properties must be an object" };
     }
+    if (Object.hasOwn(p.properties, "__proto__")) {
+      return { ok: false, error: "tool parameters cannot declare '__proto__' property" };
+    }
   }
 
   const properties = (p.properties && typeof p.properties === "object" && !Array.isArray(p.properties)) ? p.properties : {};
 
   const counter = { nodes: 0 };
   for (const [propName, propSchema] of Object.entries(properties)) {
-    const err = validateSinglePropertySchema(propName, propSchema, "", 0, counter);
+    const err = validateSinglePropertySchema(propName, propSchema, "", 1, counter);
     if (err) {
       return { ok: false, error: err };
     }
@@ -410,6 +423,9 @@ function validateTool(raw) {
   if (p.required !== undefined) {
     if (!Array.isArray(p.required) || !p.required.every((r) => typeof r === "string" && r.length > 0)) {
       return { ok: false, error: "tool parameters required must be an array of non-empty strings" };
+    }
+    if (p.required.includes("__proto__")) {
+      return { ok: false, error: "tool parameters required cannot include '__proto__'" };
     }
   }
 
