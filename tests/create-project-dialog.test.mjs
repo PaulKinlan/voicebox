@@ -69,12 +69,20 @@ test("the page explains what setup does, why it is needed, and the order — bef
   const [start, create, writes] = guide.steps.map((s) => s.text);
   assert.match(start, /Start Voicebox on the machine whose files you want to use/, "step 1 is starting the server that saves the files");
   assert.match(create, /Create a project and choose where its files live/, "step 2 is creating the project and choosing where its files live");
-  assert.match(writes, /the loop writes there and turns save into it/, "step 3 is what the machine-folder choice buys you");
+  assert.match(writes, /the server writes there itself/, "step 3 says who writes into a machine folder");
+
+  // voicebox-beads-42ir — the limits are the point, and so are the disproved claims. A turn DOES write
+  // into browser storage and into a picked folder (the server routes the act to this page); what
+  // differs is who performs it. This page used to claim the opposite, so the correction is asserted
+  // here as copy, with a negative control that the old wording cannot come back.
+  assert.match(guide.text, /this page has to be open and answering/, "the browser-storage limit is still stated");
+  assert.match(guide.text, /Restore write access/, "the picked-folder grant is still stated");
+  assert.doesNotMatch(guide.text, /cannot write here yet|read-only for turns|page-side writes land/, "the disproved claim that turns cannot write into these destinations is back");
 
   // Order, not just presence: the index of each step's key phrase must ascend.
   const at = (needle) => guide.text.indexOf(needle);
   assert.ok(at("Start Voicebox on the machine") < at("Create a project and choose where"), "starting the server is stated before creating the project");
-  assert.ok(at("Create a project and choose where") < at("the loop writes there"), "creating the project is stated before what the loop then does");
+  assert.ok(at("Create a project and choose where") < at("the server writes there itself"), "creating the project is stated before who then writes");
 });
 
 test("one Create a project button opens one dialog: the boxes are not exposed, and each destination shows its own controls", { timeout: 60000 }, async () => {
@@ -121,9 +129,13 @@ test("one Create a project button opens one dialog: the boxes are not exposed, a
   assert.equal(opened.radios, 3, "three destinations, one choice");
   assert.deepEqual(opened.checked, ["opfs"], "exactly one destination is chosen, and it is the browser's own storage");
   assert.deepEqual(opened.visiblePanels, ["dest-opfs"], "only the chosen destination's controls are shown");
-  assert.match(opened.opfsLabel, /turns cannot write here yet/, "the browser-storage choice still says turns cannot write there yet");
-  assert.match(opened.pickedLabel, /read-only for turns/, "the picked-folder choice still says read-only for turns");
+  assert.match(opened.opfsLabel, /turns write via this page/, "the browser-storage choice says who performs the act");
+  assert.match(opened.pickedLabel, /write needs one click/, "the picked-folder choice keeps the grant it needs");
   assert.match(opened.machineLabel, /turns can write here/, "the machine-folder choice still says turns can write here");
+  // voicebox-beads-42ir: the old labels ("turns cannot write here yet", "read-only for turns") were
+  // disproved by tests/page-writes.test.mjs — a turn's write into OPFS lands — so their absence is an
+  // assertion, not a hope.
+  assert.doesNotMatch(`${opened.opfsLabel} ${opened.pickedLabel}`, /cannot write here yet|read-only for turns/, "a label claims turns cannot write into a destination that takes routed writes");
 
   // Each radio brings its own controls and takes the others away.
   for (const [value, panel] of [["machine", "dest-machine"], ["picked", "dest-picked"], ["opfs", "dest-opfs"]]) {
@@ -184,4 +196,63 @@ test("creating a project in this browser goes through the dialog and really crea
   const mine = projects.find((p) => p.name === name);
   assert.ok(mine, `the page's registry does not hold ${name}: ${JSON.stringify(projects)}`);
   assert.equal(mine.rootKind, "opfs", "the project was made in this browser's own storage, not on disk");
+});
+
+// Reported by an independent reviewer (voicebox-beads-6uzd), and the reason it matters: a refusal that
+// only reaches #transcript sits BEHIND the modal's inert background, so a person whose attempt failed
+// would see nothing until they closed the dialog — the failure would look like a button that does
+// nothing. The status has to be inside the dialog, announced, and it must not pretend success.
+test("a failed creation says why INSIDE the dialog, where the person is standing", { timeout: 60000 }, async () => {
+  await openPage();
+  await page.click("#create-project");
+  await page.waitFor(() => document.getElementById("create-project-dialog")?.open === true, { label: "the dialog to open" });
+
+  // The machine destination fails without a host token (the page cannot hold one — tests/one-root.test.mjs
+  // proves the server refuses it), which makes this a deterministic refusal to observe.
+  await page.click('input[name="dest"][value="machine"]');
+  await page.waitFor(() => document.getElementById("dest-machine")?.hidden === false, { label: "the machine destination to be shown" });
+  // NEGATIVE CONTROL before the act: no status is shown yet, so the assertion below cannot pass on a
+  // dialog that always has some text in it.
+  const before = await page.evaluate(() => {
+    const el = document.getElementById("dest-status");
+    return { hidden: el?.hidden ?? null, text: (el?.textContent ?? "").trim() };
+  });
+  assert.equal(before.hidden, true, "no status is shown before anything is attempted");
+  assert.equal(before.text, "", "and it is empty, so a later match is this attempt's refusal");
+
+  await page.type("#machine-path", "/nonexistent/voicebox-refusal-probe");
+  await page.click("#machine-form button");
+  await page.waitFor(
+    () => {
+      const el = document.getElementById("dest-status");
+      return Boolean(el && el.hidden === false && (el.textContent ?? "").trim().length > 0);
+    },
+    { label: "a refusal inside the dialog" },
+  );
+
+  const shown = await page.evaluate(() => {
+    const el = document.getElementById("dest-status");
+    const dialog = document.getElementById("create-project-dialog");
+    return {
+      text: (el?.textContent ?? "").trim(),
+      ok: el?.dataset.ok ?? null,
+      role: el?.getAttribute("role") ?? null,
+      live: el?.getAttribute("aria-live") ?? null,
+      visible: Boolean(el?.checkVisibility()),
+      dialogOpen: dialog?.open ?? null,
+      transcript: document.getElementById("transcript")?.textContent ?? "",
+    };
+  });
+
+  assert.equal(shown.visible, true, "the refusal is VISIBLE while the dialog is open, not behind an inert background");
+  assert.equal(shown.dialogOpen, true, "a refusal leaves the dialog open — the person stays where they were");
+  assert.equal(shown.ok, "false", "the status is marked as a failure, not as a success");
+  assert.equal(shown.role, "status", "it is a status region, so it is announced");
+  assert.equal(shown.live, "polite", "and announced politely rather than interrupting");
+  assert.ok(shown.text.length > 10, `the refusal says something: ${JSON.stringify(shown.text)}`);
+  // The transcript still carries it too — the dialog status is an addition, not a replacement.
+  assert.ok(shown.transcript.includes(shown.text) || shown.transcript.length > 0, "the transcript keeps its own record of the refusal");
+
+  await page.press("Escape");
+  await page.waitFor(() => document.getElementById("create-project-dialog")?.open === false, { label: "the dialog to close" });
 });

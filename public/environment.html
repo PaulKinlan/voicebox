@@ -80,6 +80,9 @@
   #confirm button { margin-right: 8px; }
   /* What setup does, why, and the order: this page's whole job, said once (voicebox-beads-um5r). */
   .setup-guide { max-width: 78ch; font-size: 13px; line-height: 1.6; }
+  .dest-status { margin: 10px 0 0; font-size: 13px; line-height: 1.5; }
+  .dest-status[data-ok="false"] { color: var(--bad); }
+  .dest-status[data-ok="true"] { color: var(--good); }
   .setup-guide p { margin: 0 0 8px; }
   .setup-guide h3 { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 14px 0 6px; }
   .setup-steps { margin: 0; padding-left: 1.4rem; }
@@ -133,21 +136,25 @@
   <!-- WHAT SETUP DOES, WHY IT IS NEEDED, AND THE ORDER — said once, here, because this page's whole
        job is that explanation and it used to state the trade-offs in three places while never stating
        the order (Paul, 2026-10-08: "explain more about how it works and what it's doing and why we
-       need to start it setting things up then the order"). Every claim below is one the code already
-       makes: a machine root is where "turns DO write" and the other two kinds are "readable and
-       writable only by the page until page-side writes land" (browser/ui/ui.ts, declareToLoop). -->
+       need to start it setting things up then the order").
+       THE FACTS WERE CORRECTED in voicebox-beads-42ir. This page used to say a turn cannot write into
+       browser storage or into a picked folder, and that is false: the server ROUTES the act to the
+       page that owns the root and the page writes it (core/dispatch.ts routes, browser/acts.ts is the
+       executor, the declaration answers actsVia: "page", and tests/page-writes.test.mjs writes a file
+       into OPFS with a real turn and reads it back byte for byte). What differs by destination is WHO
+       performs the act and WHAT it needs — not whether a turn can write at all. -->
   <div class="setup-guide">
-    <p><strong>What setup does:</strong> a project is a folder plus the environment that holds it. The turns that read and save files run in the Voicebox server, so that server needs a folder it can name before it can do anything.</p>
-    <p><strong>Why it is needed:</strong> with no project, reads and writes are refused — there is nowhere for them to go. This browser's own storage needs no path and no host token, but turns cannot write into it yet; a folder you pick is the same, read-only for turns. A folder on this machine is the one turns can write into, and it is where the files stay openable in your own editor.</p>
+    <p><strong>What setup does:</strong> a project is a folder plus the environment that holds it. The turns that read and save files run in the Voicebox server, so a project has to name a folder before anything can be read or written.</p>
+    <p><strong>Why it is needed:</strong> with no project, reads and writes are refused — there is nowhere for them to go. Where the files live decides who performs a turn's file act. This browser's own storage needs no path and no host token, and the act is routed to this page, which does the writing — so this page has to be open and answering. A folder you pick is the same, except the browser lets this page write only after you click <strong>Restore write access</strong>. A folder on this machine is the one the server itself writes into: it needs the path and the host token, no page has to be open, and the files stay where your own editor can open them.</p>
     <h3>The order</h3>
     <ol class="setup-steps">
       <li>Start Voicebox on the machine whose files you want to use — that server is what saves them.</li>
       <li>Create a project and choose where its files live: this browser's storage, a folder you pick, or a folder on this machine.</li>
-      <li>If you chose a folder on this machine, the loop writes there and turns save into it. The other two are held by this page; turns cannot write there yet.</li>
+      <li>A folder on this machine then needs its path and the host token, and the server writes there itself. The other two are performed by this page: browser storage writes while the page is connected, and a folder you pick writes once you have clicked <strong>Restore write access</strong>.</li>
     </ol>
   </div>
   <p class="create-row"><button type="button" id="create-project" aria-haspopup="dialog" aria-controls="create-project-dialog">Create a project</button></p>
-  <div id="dropzone">or drop a folder here to open it read-only for turns — the files stay where they are and this page becomes a window onto them. <span class="tag">read-only for turns</span></div>
+  <div id="dropzone">or drop a folder here to open it for this page to write — the files stay where they are and this page becomes a window onto them, writing only after you restore write access. <span class="tag">write needs one click</span></div>
 
   <dialog id="create-project-dialog" class="modal" closedby="any" aria-labelledby="create-project-title">
     <!-- The order above, applied: ONE dialog holds all three destinations, so the choice is made in
@@ -161,8 +168,8 @@
     <p class="gate-note">Step 2: choose where this project's files live. Esc or a click outside closes this without creating anything.</p>
     <fieldset id="dest-choices">
       <legend>Where should the files live?</legend>
-      <label><input type="radio" name="dest" value="opfs" checked> In this browser's own storage <span class="tag">turns cannot write here yet</span></label>
-      <label><input type="radio" name="dest" value="picked"> A folder you pick <span class="tag">read-only for turns</span></label>
+      <label><input type="radio" name="dest" value="opfs" checked> In this browser's own storage <span class="tag">turns write via this page</span></label>
+      <label><input type="radio" name="dest" value="picked"> A folder you pick <span class="tag">write needs one click</span></label>
       <label><input type="radio" name="dest" value="machine"> A folder on this machine <span class="tag tag-good">turns can write here</span></label>
     </fieldset>
     <div class="dest-panel" id="dest-opfs">
@@ -173,10 +180,10 @@
         <input id="project-name" placeholder="a name for a project in this browser" aria-label="project name" autocomplete="off">
         <button type="submit" title="Makes a project in this browser's own storage (OPFS) and makes it the one this page acts on. It is not a folder on your disk. A name you have used before opens that project instead of making a new one.">Create project in this browser</button>
       </form>
-      <p class="chooser-note">Kept in <strong>this browser's own storage</strong> (origin storage, OPFS) — not a folder on your disk, and it asks for no host token and no path. A name you have used before opens that project instead of making a new one. Turns cannot write here yet; this page lists, reads and writes these files.</p>
+      <p class="chooser-note">Kept in <strong>this browser's own storage</strong> (origin storage, OPFS) — not a folder on your disk, and it asks for no host token and no path. A name you have used before opens that project instead of making a new one. A turn's file act is routed to this page and lands here while the page is open and connected; with nothing connected the act is refused, named <code>no-page</code>.</p>
     </div>
     <div class="dest-panel" id="dest-picked" hidden>
-      <button type="button" id="pick">Pick a folder… <span class="tag">read-only for turns</span></button>
+      <button type="button" id="pick">Pick a folder… <span class="tag">write needs one click</span></button>
       <button type="button" id="regrant" hidden>Restore write access</button>
     </div>
     <div class="dest-panel" id="dest-machine" hidden>
@@ -200,6 +207,10 @@
         <p id="declare-result" hidden></p>
       </div>
     </div>
+    <!-- THE REFUSAL HAS TO BE READABLE WHERE THE PERSON IS STANDING. A refusal written only to
+         #transcript is outside this modal's inert background, so a failure would be invisible until the
+         dialog was closed — reported by an independent reviewer (voicebox-beads-6uzd) and fixed here. -->
+    <p class="dest-status" id="dest-status" role="status" aria-live="polite" hidden></p>
   </dialog>
 
   <h2>Where the files are</h2>
