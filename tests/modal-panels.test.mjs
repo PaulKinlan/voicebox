@@ -71,7 +71,29 @@ async function waitForDialogFullyClosed(name, dialogId, triggerId) {
 // This waits for the dialog's shape to stop changing, not for a particular text: any terminal state
 // counts, including an empty list or an error, so it does not depend on what an endpoint returned on this
 // box. Bounded at 15s because the app's own changelog fetch aborts at 10s and renders its outcome.
+// Shape stability alone is NOT enough, and that blind spot is the flake itself under the load it was
+// filed for: while a fetch is in flight and nothing has changed yet, two samples a poll apart are
+// identical, so a shape-only wait returns with the payload still coming and the close click races the
+// relayout it was supposed to avoid (driven with the payload delayed 1200ms: 640x197 twice, then the dialog
+// grew to 606px underneath the click; review 380e13b1 P1). A panel that says it is working has to be waited
+// on by that statement - terse, and it accepts any terminal outcome, including an empty list or an error,
+// because those are finished states too. An absent or already-finished status returns at once, so this
+// costs nothing on a panel that is not fetching.
+const PANEL_LOADING = {
+  "changelog-dialog": { selector: "#changelog-status", working: "Loading changes\u2026" },
+  "harnesses-dialog": { selector: "#harnesses-status", working: "Checking host programs\u2026" },
+};
 async function waitForPanelContentSettled(name, dialogId) {
+  const loading = PANEL_LOADING[dialogId];
+  if (loading) {
+    await page.waitFor(
+      (sel, working) => {
+        const node = document.querySelector(sel);
+        return !node || node.textContent.trim() !== working;
+      },
+      { args: [loading.selector, loading.working], label: `${name} to stop working`, timeout: 15000 },
+    );
+  }
   const shape = () =>
     page.evaluate((dId) => {
       const dialog = document.getElementById(dId);
