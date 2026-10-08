@@ -24,6 +24,11 @@ try {
 const BOUNDS = {
   maxTools: 16,
   maxOutputBytes: 65536,
+  maxArgsBytes: 65536,
+  maxNestingDepth: 32,
+  maxNodeCount: 2048,
+  maxSchemaDepth: 16,
+  maxSchemaNodes: 512,
   callTimeoutMs: 5000,
 };
 
@@ -145,6 +150,236 @@ function postToHost(msg) {
   }
 }
 
+const ALLOWED_TOP_PARAM_KEYS = new Set(["type", "properties", "required", "additionalProperties"]);
+const ALLOWED_STRING_KEYS = new Set(["type", "description", "enum", "maxLength", "minLength"]);
+const ALLOWED_NUMBER_KEYS = new Set(["type", "description", "enum", "maximum", "minimum"]);
+const ALLOWED_BOOLEAN_KEYS = new Set(["type", "description"]);
+const ALLOWED_ARRAY_KEYS = new Set(["type", "description", "items"]);
+const ALLOWED_OBJECT_KEYS = new Set(["type", "description", "properties", "required", "additionalProperties"]);
+const ALLOWED_ITEMS_KEYS = new Set(["type", "description", "enum"]);
+const SUPPORTED_PRIMITIVE_ITEM_TYPES = new Set(["string", "number", "integer", "boolean"]);
+
+function validateSinglePropertySchema(propName, raw, path = "", depth = 1, counter = { nodes: 0 }) {
+  counter.nodes++;
+  if (counter.nodes > BOUNDS.maxSchemaNodes) {
+    return `schema exceeds maximum node count of ${BOUNDS.maxSchemaNodes}`;
+  }
+  if (depth > BOUNDS.maxSchemaDepth) {
+    return `schema nesting exceeds maximum depth of ${BOUNDS.maxSchemaDepth}`;
+  }
+
+  if (propName === "__proto__") {
+    return `property name cannot be '__proto__'`;
+  }
+
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return `property '${path}${propName}' schema must be an object`;
+  }
+  if (typeof raw.type !== "string") {
+    return `property '${path}${propName}' must declare a string 'type'`;
+  }
+
+  let allowedKeys;
+  switch (raw.type) {
+    case "string":
+      allowedKeys = ALLOWED_STRING_KEYS;
+      break;
+    case "number":
+    case "integer":
+      allowedKeys = ALLOWED_NUMBER_KEYS;
+      break;
+    case "boolean":
+      allowedKeys = ALLOWED_BOOLEAN_KEYS;
+      break;
+    case "array":
+      allowedKeys = ALLOWED_ARRAY_KEYS;
+      break;
+    case "object":
+      allowedKeys = ALLOWED_OBJECT_KEYS;
+      break;
+    default:
+      return `unsupported parameter type '${raw.type}' for property '${path}${propName}'`;
+  }
+
+  for (const k of Object.keys(raw)) {
+    if (!allowedKeys.has(k)) {
+      return `unsupported schema keyword '${k}' on property '${path}${propName}' of type '${raw.type}'`;
+    }
+  }
+
+  if (raw.type === "string") {
+    if (raw.maxLength !== undefined) {
+      if (typeof raw.maxLength !== "number" || !Number.isInteger(raw.maxLength) || raw.maxLength < 0) {
+        return `maxLength on property '${path}${propName}' must be a non-negative integer`;
+      }
+    }
+    if (raw.minLength !== undefined) {
+      if (typeof raw.minLength !== "number" || !Number.isInteger(raw.minLength) || raw.minLength < 0) {
+        return `minLength on property '${path}${propName}' must be a non-negative integer`;
+      }
+    }
+    if (typeof raw.maxLength === "number" && typeof raw.minLength === "number" && raw.minLength > raw.maxLength) {
+      return `minLength cannot exceed maxLength on property '${path}${propName}'`;
+    }
+    if (raw.enum !== undefined) {
+      if (!Array.isArray(raw.enum) || raw.enum.length === 0 || !raw.enum.every((item) => typeof item === "string")) {
+        return `enum for string property '${path}${propName}' must be a non-empty array of strings`;
+      }
+      if (typeof raw.minLength === "number" || typeof raw.maxLength === "number") {
+        const hasSatisfiable = raw.enum.some((item) => {
+          const len = Array.from(item).length;
+          if (typeof raw.minLength === "number" && len < raw.minLength) return false;
+          if (typeof raw.maxLength === "number" && len > raw.maxLength) return false;
+          return true;
+        });
+        if (!hasSatisfiable) {
+          return `no enum members satisfy declared length bounds on property '${path}${propName}'`;
+        }
+      }
+    }
+  }
+
+  if (raw.type === "integer") {
+    if (raw.maximum !== undefined) {
+      if (typeof raw.maximum !== "number" || !Number.isInteger(raw.maximum)) {
+        return `maximum on integer property '${path}${propName}' must be an integer`;
+      }
+    }
+    if (raw.minimum !== undefined) {
+      if (typeof raw.minimum !== "number" || !Number.isInteger(raw.minimum)) {
+        return `minimum on integer property '${path}${propName}' must be an integer`;
+      }
+    }
+    if (typeof raw.maximum === "number" && typeof raw.minimum === "number" && raw.minimum > raw.maximum) {
+      return `minimum cannot exceed maximum on property '${path}${propName}'`;
+    }
+    if (raw.enum !== undefined) {
+      if (!Array.isArray(raw.enum) || raw.enum.length === 0 || !raw.enum.every((item) => typeof item === "number" && Number.isInteger(item))) {
+        return `enum for integer property '${path}${propName}' must be a non-empty array of integers`;
+      }
+      if (typeof raw.minimum === "number" || typeof raw.maximum === "number") {
+        const hasSatisfiable = raw.enum.some((item) => {
+          if (typeof raw.minimum === "number" && item < raw.minimum) return false;
+          if (typeof raw.maximum === "number" && item > raw.maximum) return false;
+          return true;
+        });
+        if (!hasSatisfiable) {
+          return `no enum members satisfy declared range bounds on property '${path}${propName}'`;
+        }
+      }
+    }
+  }
+
+  if (raw.type === "number") {
+    if (raw.maximum !== undefined) {
+      if (typeof raw.maximum !== "number" || !Number.isFinite(raw.maximum)) {
+        return `maximum on property '${path}${propName}' must be a finite number`;
+      }
+    }
+    if (raw.minimum !== undefined) {
+      if (typeof raw.minimum !== "number" || !Number.isFinite(raw.minimum)) {
+        return `minimum on property '${path}${propName}' must be a finite number`;
+      }
+    }
+    if (typeof raw.maximum === "number" && typeof raw.minimum === "number" && raw.minimum > raw.maximum) {
+      return `minimum cannot exceed maximum on property '${path}${propName}'`;
+    }
+    if (raw.enum !== undefined) {
+      if (!Array.isArray(raw.enum) || raw.enum.length === 0 || !raw.enum.every((item) => typeof item === "number" && Number.isFinite(item))) {
+        return `enum for numeric property '${path}${propName}' must be a non-empty array of numbers`;
+      }
+      if (typeof raw.minimum === "number" || typeof raw.maximum === "number") {
+        const hasSatisfiable = raw.enum.some((item) => {
+          if (typeof raw.minimum === "number" && item < raw.minimum) return false;
+          if (typeof raw.maximum === "number" && item > raw.maximum) return false;
+          return true;
+        });
+        if (!hasSatisfiable) {
+          return `no enum members satisfy declared range bounds on property '${path}${propName}'`;
+        }
+      }
+    }
+  }
+
+  if (raw.type === "array" && raw.items !== undefined) {
+    counter.nodes++;
+    if (counter.nodes > BOUNDS.maxSchemaNodes) {
+      return `schema exceeds maximum node count of ${BOUNDS.maxSchemaNodes}`;
+    }
+    if (!raw.items || typeof raw.items !== "object" || Array.isArray(raw.items)) {
+      return `items schema for array property '${path}${propName}' must be an object`;
+    }
+    const itemSchema = raw.items;
+    for (const k of Object.keys(itemSchema)) {
+      if (!ALLOWED_ITEMS_KEYS.has(k)) {
+        return `unsupported schema keyword '${k}' in items schema of array property '${path}${propName}'`;
+      }
+    }
+    if (typeof itemSchema.type !== "string" || !SUPPORTED_PRIMITIVE_ITEM_TYPES.has(itemSchema.type)) {
+      return `unsupported items type '${String(itemSchema.type)}' for array property '${path}${propName}' (only primitive types string, number, integer, boolean supported)`;
+    }
+    if (itemSchema.enum !== undefined) {
+      if (!Array.isArray(itemSchema.enum) || itemSchema.enum.length === 0) {
+        return `enum in items schema of array property '${path}${propName}' must be a non-empty array`;
+      }
+      if (itemSchema.type === "string" && !itemSchema.enum.every((item) => typeof item === "string")) {
+        return `enum in items schema of array property '${path}${propName}' must contain strings matching type '${itemSchema.type}'`;
+      }
+      if (itemSchema.type === "number" && !itemSchema.enum.every((item) => typeof item === "number" && Number.isFinite(item))) {
+        return `enum in items schema of array property '${path}${propName}' must contain numbers matching type '${itemSchema.type}'`;
+      }
+      if (itemSchema.type === "integer" && !itemSchema.enum.every((item) => typeof item === "number" && Number.isInteger(item))) {
+        return `enum in items schema of array property '${path}${propName}' must contain integers matching type '${itemSchema.type}'`;
+      }
+      if (itemSchema.type === "boolean" && !itemSchema.enum.every((item) => typeof item === "boolean")) {
+        return `enum in items schema of array property '${path}${propName}' must contain booleans matching type '${itemSchema.type}'`;
+      }
+    }
+  }
+
+  if (raw.type === "object") {
+    if (raw.properties !== undefined) {
+      if (!raw.properties || typeof raw.properties !== "object" || Array.isArray(raw.properties)) {
+        return `properties for object property '${path}${propName}' must be an object`;
+      }
+      if (Object.hasOwn(raw.properties, "__proto__")) {
+        return `object property '${path}${propName}' cannot declare '__proto__' property`;
+      }
+    }
+    if (raw.additionalProperties !== undefined && typeof raw.additionalProperties !== "boolean") {
+      return `additionalProperties for object property '${path}${propName}' must be a boolean`;
+    }
+    if (raw.required !== undefined) {
+      if (!Array.isArray(raw.required) || !raw.required.every((r) => typeof r === "string" && r.length > 0)) {
+        return `required for object property '${path}${propName}' must be an array of non-empty strings`;
+      }
+      if (raw.required.includes("__proto__")) {
+        return `object property '${path}${propName}' required cannot include '__proto__'`;
+      }
+    }
+    if (raw.additionalProperties === false) {
+      const nestedPropNames = (raw.properties && typeof raw.properties === "object" && !Array.isArray(raw.properties))
+        ? Object.keys(raw.properties)
+        : [];
+      if (Array.isArray(raw.required)) {
+        for (const reqKey of raw.required) {
+          if (!nestedPropNames.includes(reqKey)) {
+            return `contradictory schema on property '${path}${propName}': required property '${reqKey}' is not declared in properties when additionalProperties: false`;
+          }
+        }
+      }
+    }
+    if (raw.properties && typeof raw.properties === "object" && !Array.isArray(raw.properties)) {
+      for (const [nestedName, nestedSchema] of Object.entries(raw.properties)) {
+        const err = validateSinglePropertySchema(nestedName, nestedSchema, `${path}${propName}.`, depth + 1, counter);
+        if (err) return err;
+      }
+    }
+  }
+
+  return null;
+}
+
 function validateTool(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { ok: false, error: "tool declaration must be an object" };
@@ -157,6 +392,64 @@ function validateTool(raw) {
   if (!raw.parameters || typeof raw.parameters !== "object" || Array.isArray(raw.parameters)) {
     return { ok: false, error: "tool parameters must be an object" };
   }
+  const p = raw.parameters;
+  for (const k of Object.keys(p)) {
+    if (!ALLOWED_TOP_PARAM_KEYS.has(k)) {
+      return { ok: false, error: `unsupported top-level schema keyword '${k}' in tool parameters` };
+    }
+  }
+  if (p.type !== "object") {
+    return { ok: false, error: "tool parameters schema must specify type: 'object'" };
+  }
+  if (p.additionalProperties !== undefined && typeof p.additionalProperties !== "boolean") {
+    return { ok: false, error: "additionalProperties must be a boolean if specified" };
+  }
+  if (p.properties !== undefined) {
+    if (!p.properties || typeof p.properties !== "object" || Array.isArray(p.properties)) {
+      return { ok: false, error: "tool parameters properties must be an object" };
+    }
+    if (Object.hasOwn(p.properties, "__proto__")) {
+      return { ok: false, error: "tool parameters cannot declare '__proto__' property" };
+    }
+  }
+
+  const properties = (p.properties && typeof p.properties === "object" && !Array.isArray(p.properties)) ? p.properties : {};
+
+  const counter = { nodes: 1 }; // Root parameters schema is node 1
+  for (const [propName, propSchema] of Object.entries(properties)) {
+    const err = validateSinglePropertySchema(propName, propSchema, "", 1, counter);
+    if (err) {
+      return { ok: false, error: err };
+    }
+  }
+
+  const required = Array.isArray(p.required) ? p.required : [];
+  if (p.required !== undefined) {
+    if (!Array.isArray(p.required) || !p.required.every((r) => typeof r === "string" && r.length > 0)) {
+      return { ok: false, error: "tool parameters required must be an array of non-empty strings" };
+    }
+    if (p.required.includes("__proto__")) {
+      return { ok: false, error: "tool parameters required cannot include '__proto__'" };
+    }
+  }
+
+  const propNames = (p.properties && typeof p.properties === "object" && !Array.isArray(p.properties))
+    ? Object.keys(p.properties)
+    : [];
+
+  if (p.additionalProperties === false && Array.isArray(p.required)) {
+    for (const reqKey of p.required) {
+      if (!propNames.includes(reqKey)) {
+        return {
+          ok: false,
+          error: `contradictory schema: required property '${reqKey}' is not declared in properties when additionalProperties: false`,
+        };
+      }
+    }
+  }
+
+  const additionalProperties = p.additionalProperties === false ? false : undefined;
+
   return {
     ok: true,
     tool: {
@@ -164,11 +457,379 @@ function validateTool(raw) {
       description: description.slice(0, 1024),
       parameters: {
         type: "object",
-        properties: (raw.parameters.properties && typeof raw.parameters.properties === "object") ? raw.parameters.properties : {},
-        required: Array.isArray(raw.parameters.required) ? raw.parameters.required : [],
+        properties,
+        required: Array.isArray(p.required) ? p.required.filter(k => typeof k === "string") : [],
+        ...(additionalProperties === false ? { additionalProperties: false } : {}),
       },
     },
   };
+}
+
+function inspectAndSnapshotJson(
+  val,
+  path = "",
+  depth = 0,
+  counter = { nodes: 0 },
+  seen = new Set()
+) {
+  try {
+    counter.nodes++;
+    if (counter.nodes > BOUNDS.maxNodeCount) {
+      return {
+        ok: false,
+        refused: "invalid-argument-bounds",
+        why: `argument exceeds maximum node count of ${BOUNDS.maxNodeCount}`,
+      };
+    }
+
+    if (depth > BOUNDS.maxNestingDepth) {
+      return {
+        ok: false,
+        refused: "invalid-argument-bounds",
+        why: `argument nesting exceeds maximum depth of ${BOUNDS.maxNestingDepth}`,
+      };
+    }
+
+    if (val === undefined) {
+      return { ok: false, refused: "invalid-argument", why: `argument${path ? ` at '${path}'` : ""} cannot be undefined` };
+    }
+    if (val === null || typeof val === "boolean") {
+      return { ok: true, snapshot: val };
+    }
+    if (typeof val === "number") {
+      if (!Number.isFinite(val)) {
+        return { ok: false, refused: "invalid-argument", why: `number${path ? ` at '${path}'` : ""} must be a finite number, got ${val}` };
+      }
+      return { ok: true, snapshot: val };
+    }
+    if (typeof val === "string") {
+      return { ok: true, snapshot: val };
+    }
+    if (typeof val === "bigint" || typeof val === "symbol" || typeof val === "function") {
+      return { ok: false, refused: "invalid-argument", why: `argument${path ? ` at '${path}'` : ""} has unsupported type '${typeof val}'` };
+    }
+    if (typeof val !== "object") {
+      return { ok: false, refused: "invalid-argument", why: `argument${path ? ` at '${path}'` : ""} has invalid type '${typeof val}'` };
+    }
+
+    // Reject non-plain objects: Date, RegExp, Map, Set, Promise, Error, ArrayBuffer, ArrayBuffer views
+    if (
+      val instanceof Date ||
+      val instanceof RegExp ||
+      val instanceof Map ||
+      val instanceof Set ||
+      val instanceof Promise ||
+      val instanceof Error ||
+      val instanceof ArrayBuffer ||
+      ArrayBuffer.isView(val)
+    ) {
+      return {
+        ok: false,
+        refused: "invalid-argument",
+        why: `argument${path ? ` at '${path}'` : ""} cannot be an instance of ${Object.prototype.toString.call(val).slice(8, -1)}`,
+      };
+    }
+
+    if (seen.has(val)) {
+      return { ok: false, refused: "invalid-argument", why: `circular reference detected${path ? ` at '${path}'` : ""}` };
+    }
+    seen.add(val);
+
+    if (Array.isArray(val)) {
+      const len = val.length;
+      let ownKeys;
+      try {
+        ownKeys = Reflect.ownKeys(val);
+      } catch {
+        seen.delete(val);
+        return { ok: false, refused: "invalid-argument", why: `cannot read keys on array${path ? ` at '${path}'` : ""}` };
+      }
+
+      if (ownKeys.length !== len + 1) {
+        seen.delete(val);
+        return { ok: false, refused: "invalid-argument", why: `array${path ? ` at '${path}'` : ""} cannot contain non-index or symbol properties` };
+      }
+
+      let descriptors;
+      try {
+        descriptors = Object.getOwnPropertyDescriptors(val);
+      } catch {
+        seen.delete(val);
+        return { ok: false, refused: "invalid-argument", why: `cannot read descriptors on array${path ? ` at '${path}'` : ""}` };
+      }
+
+      const arrSnapshot = [];
+      for (let i = 0; i < len; i++) {
+        const desc = descriptors[String(i)];
+        if (!desc) {
+          seen.delete(val);
+          return { ok: false, refused: "invalid-argument", why: `sparse array detected${path ? ` at '${path}[${i}]'` : ""}` };
+        }
+        if (desc.get || desc.set) {
+          seen.delete(val);
+          return { ok: false, refused: "invalid-argument", why: `array element${path ? ` at '${path}[${i}]'` : ""} cannot use getter/setter accessors` };
+        }
+        const itemRes = inspectAndSnapshotJson(desc.value, `${path}[${i}]`, depth + 1, counter, seen);
+        if (!itemRes.ok) {
+          seen.delete(val);
+          return itemRes;
+        }
+        arrSnapshot.push(itemRes.snapshot);
+      }
+      seen.delete(val);
+      return { ok: true, snapshot: arrSnapshot };
+    }
+
+    const proto = Object.getPrototypeOf(val);
+    if (proto !== null && proto !== Object.prototype) {
+      if (Object.prototype.toString.call(val) !== "[object Object]" || (proto && Object.prototype.toString.call(proto) !== "[object Object]")) {
+        seen.delete(val);
+        return {
+          ok: false,
+          refused: "invalid-argument",
+          why: `argument object${path ? ` at '${path}'` : ""} must be a plain object`,
+        };
+      }
+    }
+
+    let syms = [];
+    try {
+      syms = Object.getOwnPropertySymbols(val);
+    } catch {
+      seen.delete(val);
+      return { ok: false, refused: "invalid-argument", why: `cannot read symbols on object${path ? ` at '${path}'` : ""}` };
+    }
+    if (syms.length > 0) {
+      seen.delete(val);
+      return { ok: false, refused: "invalid-argument", why: `argument object${path ? ` at '${path}'` : ""} cannot contain Symbol keys` };
+    }
+
+    let descriptors;
+    try {
+      descriptors = Object.getOwnPropertyDescriptors(val);
+    } catch {
+      seen.delete(val);
+      return { ok: false, refused: "invalid-argument", why: `cannot read descriptors on object${path ? ` at '${path}'` : ""}` };
+    }
+
+    if (Object.hasOwn(val, "__proto__")) {
+      seen.delete(val);
+      return { ok: false, refused: "invalid-argument", why: `argument object${path ? ` at '${path}'` : ""} cannot contain '__proto__' property` };
+    }
+
+    const objSnapshot = Object.create(null);
+    for (const [key, desc] of Object.entries(descriptors)) {
+      if (!desc.enumerable) {
+        seen.delete(val);
+        return { ok: false, refused: "invalid-argument", why: `argument property '${path ? `${path}.` : ""}${key}' cannot be non-enumerable` };
+      }
+      if (desc.get || desc.set) {
+        seen.delete(val);
+        return { ok: false, refused: "invalid-argument", why: `argument property '${path ? `${path}.` : ""}${key}' cannot use getter/setter accessors` };
+      }
+      const propRes = inspectAndSnapshotJson(desc.value, path ? `${path}.${key}` : key, depth + 1, counter, seen);
+      if (!propRes.ok) {
+        seen.delete(val);
+        return propRes;
+      }
+      Object.defineProperty(objSnapshot, key, {
+        value: propRes.snapshot,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
+    }
+
+    seen.delete(val);
+    return { ok: true, snapshot: objSnapshot };
+  } catch {
+    seen.delete(val);
+    return {
+      ok: false,
+      refused: "invalid-argument",
+      why: `failed to inspect arguments${path ? ` at '${path}'` : ""}`,
+    };
+  }
+}
+
+function validateToolArgs(params, rawArgs) {
+  try {
+    let inArgs = rawArgs;
+    if (inArgs === null || inArgs === undefined) {
+      inArgs = {};
+    }
+    let isArr = false;
+    try {
+      isArr = Array.isArray(inArgs);
+    } catch {
+      return { ok: false, refused: "invalid-argument", why: "failed to inspect arguments: revoked or inaccessible proxy" };
+    }
+    if (typeof inArgs !== "object" || isArr) {
+      return { ok: false, refused: "invalid-tool-arguments", why: `tool arguments must be an object, got ${isArr ? "array" : typeof inArgs}` };
+    }
+
+    const snapResult = inspectAndSnapshotJson(inArgs);
+    if (!snapResult.ok) {
+      return { ok: false, refused: snapResult.refused || "invalid-argument", why: snapResult.why || "invalid argument" };
+    }
+
+    let jsonStr = "";
+    try {
+      jsonStr = JSON.stringify(snapResult.snapshot);
+    } catch {
+      return { ok: false, refused: "invalid-tool-arguments", why: "tool arguments must be serializable JSON" };
+    }
+
+    const byteLen = typeof TextEncoder !== "undefined"
+      ? new TextEncoder().encode(jsonStr).length
+      : (typeof Buffer !== "undefined" ? Buffer.byteLength(jsonStr, "utf8") : jsonStr.length);
+
+    if (byteLen > BOUNDS.maxArgsBytes) {
+      return { ok: false, refused: "invalid-tool-arguments", why: `tool arguments size (${byteLen} bytes) exceeds maximum allowed bound of ${BOUNDS.maxArgsBytes} bytes` };
+    }
+
+    const args = snapResult.snapshot;
+
+  const p = params || { type: "object", properties: {} };
+  const properties = (p.properties && typeof p.properties === "object" && !Array.isArray(p.properties)) ? p.properties : {};
+  const required = Array.isArray(p.required) ? p.required : [];
+
+  for (const reqKey of required) {
+    if (typeof reqKey === "string" && (!Object.hasOwn(args, reqKey) || args[reqKey] === undefined || args[reqKey] === null)) {
+      return { ok: false, refused: "missing-argument", why: `missing required argument '${reqKey}'` };
+    }
+  }
+
+  if (p.additionalProperties === false) {
+    for (const key of Object.keys(args)) {
+      if (!Object.hasOwn(properties, key)) {
+        return { ok: false, refused: "invalid-argument", why: `unrecognized argument '${key}' not permitted by tool schema` };
+      }
+    }
+  }
+
+  for (const [key, val] of Object.entries(args)) {
+    if (!Object.hasOwn(properties, key)) continue;
+    const schema = properties[key];
+    if (schema) {
+      if (val === null) {
+        return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' cannot be null` };
+      }
+      if (val !== undefined) {
+        if (schema.type) {
+          switch (schema.type) {
+            case "string": {
+              if (typeof val !== "string") {
+                return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be a string, got ${typeof val}` };
+              }
+              const charCount = Array.from(val).length;
+              if (typeof schema.maxLength === "number" && charCount > schema.maxLength) {
+                return { ok: false, refused: "invalid-argument-length", why: `argument '${key}' length (${charCount}) exceeds maxLength ${schema.maxLength}` };
+              }
+              if (typeof schema.minLength === "number" && charCount < schema.minLength) {
+                return { ok: false, refused: "invalid-argument-length", why: `argument '${key}' length (${charCount}) below minLength ${schema.minLength}` };
+              }
+              break;
+            }
+            case "number":
+              if (typeof val !== "number" || !Number.isFinite(val)) {
+                return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be a finite number, got ${typeof val === "number" ? "NaN/Infinity" : typeof val}` };
+              }
+              if (typeof schema.maximum === "number" && val > schema.maximum) {
+                return { ok: false, refused: "invalid-argument-range", why: `argument '${key}' value ${val} exceeds maximum ${schema.maximum}` };
+              }
+              if (typeof schema.minimum === "number" && val < schema.minimum) {
+                return { ok: false, refused: "invalid-argument-range", why: `argument '${key}' value ${val} below minimum ${schema.minimum}` };
+              }
+              break;
+            case "integer":
+              if (typeof val !== "number" || !Number.isInteger(val)) {
+                return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be an integer, got ${val}` };
+              }
+              if (typeof schema.maximum === "number" && val > schema.maximum) {
+                return { ok: false, refused: "invalid-argument-range", why: `argument '${key}' value ${val} exceeds maximum ${schema.maximum}` };
+              }
+              if (typeof schema.minimum === "number" && val < schema.minimum) {
+                return { ok: false, refused: "invalid-argument-range", why: `argument '${key}' value ${val} below minimum ${schema.minimum}` };
+              }
+              break;
+            case "boolean":
+              if (typeof val !== "boolean") {
+                return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be a boolean, got ${typeof val}` };
+              }
+              break;
+            case "array":
+              if (!Array.isArray(val)) {
+                return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be an array, got ${typeof val}` };
+              }
+              if (schema.items && typeof schema.items === "object" && !Array.isArray(schema.items)) {
+                const itemSchema = schema.items;
+                const itemType = typeof itemSchema.type === "string" ? itemSchema.type : null;
+                for (let i = 0; i < val.length; i++) {
+                  const item = val[i];
+                  if (item === null) {
+                    return { ok: false, refused: "invalid-argument-type", why: `array item at index ${i} in '${key}' cannot be null` };
+                  }
+                  if (itemType) {
+                    if (itemType === "string" && typeof item !== "string") {
+                      return { ok: false, refused: "invalid-argument-type", why: `array item at index ${i} in '${key}' must be a string, got ${typeof item}` };
+                    }
+                    if (itemType === "number" && (typeof item !== "number" || !Number.isFinite(item))) {
+                      return { ok: false, refused: "invalid-argument-type", why: `array item at index ${i} in '${key}' must be a number, got ${typeof item}` };
+                    }
+                    if (itemType === "integer" && (typeof item !== "number" || !Number.isInteger(item))) {
+                      return { ok: false, refused: "invalid-argument-type", why: `array item at index ${i} in '${key}' must be an integer, got ${typeof item}` };
+                    }
+                    if (itemType === "boolean" && typeof item !== "boolean") {
+                      return { ok: false, refused: "invalid-argument-type", why: `array item at index ${i} in '${key}' must be a boolean, got ${typeof item}` };
+                    }
+                    if (itemType === "object" && (typeof item !== "object" || Array.isArray(item))) {
+                      return { ok: false, refused: "invalid-argument-type", why: `array item at index ${i} in '${key}' must be an object, got ${Array.isArray(item) ? "array" : typeof item}` };
+                    }
+                  }
+                  if (Array.isArray(itemSchema.enum) && !itemSchema.enum.includes(item)) {
+                    return { ok: false, refused: "invalid-argument-enum", why: `array item at index ${i} in '${key}' value ${JSON.stringify(item)} is not one of allowed enum values` };
+                  }
+                }
+              }
+              break;
+            case "object":
+              if (typeof val !== "object" || Array.isArray(val)) {
+                return { ok: false, refused: "invalid-argument-type", why: `argument '${key}' must be an object, got ${Array.isArray(val) ? "array" : typeof val}` };
+              }
+              {
+                const nestedProps = (schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties))
+                  ? schema.properties
+                  : {};
+                const nestedReq = Array.isArray(schema.required) ? schema.required : [];
+                const nestedAddl = schema.additionalProperties === false ? false : undefined;
+                if (nestedReq.length > 0 || nestedAddl === false || Object.keys(nestedProps).length > 0) {
+                  const nestedParams = {
+                    type: "object",
+                    properties: nestedProps,
+                    ...(nestedReq.length ? { required: nestedReq } : {}),
+                    ...(nestedAddl === false ? { additionalProperties: false } : {}),
+                  };
+                  const nestedRes = validateToolArgs(nestedParams, val);
+                  if (!nestedRes.ok) {
+                    return { ok: false, refused: nestedRes.refused, why: `in argument '${key}': ${nestedRes.why}` };
+                  }
+                }
+              }
+              break;
+          }
+        }
+        if (Array.isArray(schema.enum) && !schema.enum.includes(val)) {
+          return { ok: false, refused: "invalid-argument-enum", why: `argument '${key}' value ${JSON.stringify(val)} is not one of allowed enum values` };
+        }
+      }
+    }
+  }
+
+  return { ok: true, value: args };
+} catch {
+  return { ok: false, refused: "invalid-argument", why: "failed to inspect arguments" };
+}
 }
 
 function handleInnerMessage(event) {
@@ -246,6 +907,33 @@ function dispatchCallTool(data) {
     return;
   }
 
+  const registered = registeredTools.get(name);
+  if (!registered) {
+    postToHost({
+      type: "tool_result",
+      callId,
+      appId: currentAppId,
+      ok: false,
+      refused: "unknown-tool",
+      error: `refused: unknown-tool — tool '${name}' is not registered in this mini-app`,
+    });
+    return;
+  }
+
+  const valid = validateToolArgs(registered.parameters || { type: "object", properties: {} }, args);
+  if (!valid.ok) {
+    postToHost({
+      type: "tool_result",
+      callId,
+      appId: currentAppId,
+      ok: false,
+      refused: valid.refused,
+      error: `refused: ${valid.refused} — ${valid.why}`,
+    });
+    return;
+  }
+  const cleanArgs = valid.value;
+
   const timer = setTimeout(() => {
     pendingCalls.delete(callId);
     postToHost({
@@ -268,7 +956,7 @@ function dispatchCallTool(data) {
     type: "call_tool",
     callId,
     name,
-    args,
+    args: cleanArgs,
   });
 }
 

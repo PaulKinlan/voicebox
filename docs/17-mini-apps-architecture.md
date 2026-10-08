@@ -14,6 +14,7 @@ An untrusted mini-app executes arbitrary HTML, CSS, and JavaScript. The sandbox 
 3. **Hijacking Navigation or Modals**: Top-level navigation, popups, and blocking `alert()`/`prompt()` dialogs are disabled by the iframe `sandbox` attribute.
 4. **Spoofing Ambient `postMessage` Events**: All communication travels over a private, transferred `MessagePort` rather than ambient window messages.
 5. **Hanging or Exhausting the Host**: Tool calls are bounded by a 5,000ms timeout and a 64 KiB output limit.
+6. **Malformed or Unbounded Tool Arguments**: Inbound tool arguments from models or external callers are validated against each tool's declared JSON schema (`validateMiniAppToolArgs()`), rejecting missing required parameters, type/enum mismatches, or oversized argument payloads before dispatching to the sandboxed app (`voicebox-beads-fdtu`).
 
 ---
 
@@ -88,7 +89,12 @@ window.webMcp.ready();
 1. **Registration**: The inner app calls `window.webMcp.registerTool(...)`, sending `{ type: "register_tool", tool }` over the private `MessagePort`.
 2. **Schema Validation (`core/mini-app.ts`)**: `validateWebMcpTool()` verifies the tool name (`^[a-zA-Z0-9_-]{1,64}$`), description (≤ 1,024 chars), JSON Schema parameters (`type: "object"`), and per-app tool count (`maxTools: 16`).
 3. **Live Voice Exposure**: `MiniAppRegistry` converts registered tools into function declarations (`toolsToFunctionDeclarations()`) for the active live voice session.
-4. **Voice Execution**: When the user says *"Add three points to the home team"*, the model calls `set_score`, the bridge dispatches `{ type: "call_tool", callId, name, args }` to the inner app, enforces the 5,000ms timeout and 64 KiB response cap, and returns the result to the voice model.
+4. **Voice Execution & Host Argument Validation**: When the user says *"Add three points to the home team"*, the voice model calls `set_score`. The host (`server.mjs`) and outer bridge validate the incoming arguments against the tool's declared JSON schema (`validateMiniAppToolArgs()`). Parameter schemas are strictly validated at registration against an enforceably validated subset:
+   - Supported property types: `string`, `number`, `integer`, `boolean`, `array`, `object`.
+   - Allowed keyword allowlists per type: `string` (`maxLength`, `minLength`, `enum`), `number`/`integer` (`maximum`, `minimum`, `enum`), `boolean`, `array` (`items` with primitive `type` and `enum`), `object` (`properties`, `required`, `additionalProperties`).
+   - Declarations with unsupported keywords (such as `pattern`, `format`, `default`, `items.minLength`, or nested `items.type: "array" | "object"`) or declaring `"__proto__"` in `properties` or `required` are intentionally rejected at registration with `invalid-tool-parameters` to ensure the host only registers schemas it strictly verifies at dispatch.
+   - Declarations declaring `enum` alongside bounds (`minLength`, `maxLength`, `minimum`, `maximum`) require all members to match the primitive `type` and at least one member to satisfy declared bounds (rejected at registration if unsatisfiable); individual out-of-bounds members are refused at dispatch.
+   - Malformed payloads (missing required properties, prototype-inherited properties, type/enum mismatches, out-of-bounds numbers/strings, unrecognized keys when `additionalProperties: false` is set, array item mismatches, non-index array metadata, own `__proto__` properties, or argument payloads exceeding 64 KiB in UTF-8 bytes) are refused before dispatch with a structured refusal (`refused: missing-argument`, `invalid-argument`, `invalid-argument-type`, `invalid-argument-enum`, `invalid-argument-range`, `invalid-argument-length`, or `invalid-tool-arguments`). Legitimate data keys (`constructor`, `prototype`) are preserved safely on null-prototype snapshots. Unknown tool names fail closed immediately with `refused: unknown-tool`. Valid invocations dispatch `{ type: "call_tool", callId, name, args }` to the inner app, enforce the 5,000ms timeout and 64 KiB response cap, and return the result to the voice model.
 
 ---
 
@@ -100,6 +106,10 @@ window.webMcp.ready();
 | **Max Tools per App** | `16` | Outer Bridge & `MiniAppRegistry` | Excess tool registrations are rejected. |
 | **Max Tool Output** | `64 KiB` (`65,536` bytes) | Outer Bridge | Refused with `"output over budget (max 64KB)"`. |
 | **Tool Execution Timeout** | `5,000ms` | Outer Bridge | Refused with `"tool execution timed out after 5000ms"`. |
+| **Tool Arguments Schema & Bounds** | Declared JSON schema, max 64 KiB | Host & Outer Bridge | Refused with `missing-argument`, `invalid-argument-type`, `invalid-argument-enum`, or `invalid-tool-arguments`. |
+| **Tool Arguments Depth & Nodes** | Max 32 nesting levels, max 2048 nodes | Host & Outer Bridge | Refused with `invalid-argument-bounds`. |
+| **Tool Schema Depth & Nodes** | Max 16 nesting levels, max 512 nodes | Host (`validateWebMcpTool`) & Bridge | Refused with `invalid-tool-parameters`. |
+| **Tools Registration Body** | Max 64 KiB (`65,536` bytes) | Host (`POST /api/mini-app/tools`) | Refused with HTTP 400 (`body-too-large`). |
 | **Tool Name Format** | `1–64` chars (`a-zA-Z0-9_-`) | `validateWebMcpTool()` | Refused with `invalid-tool-name`. |
 | **Handshake Source** | `inner.contentWindow` / `window.parent` | Outer Bridge & Inner SDK | Drops unverified postMessage frames from decoy frames. |
 

@@ -49,7 +49,7 @@ import { createPiAcpExecutor, describeAdapterInstall } from "./lib/pi-acp.mjs";
 import { liveToolDeclarations } from "./lib/wasm-shelf.mjs";
 import { redactSecrets, redactObject } from "./lib/redact.mjs";
 import { timingSafeStringEqual } from "./lib/timing-safe.mjs";
-import { MiniAppRegistry } from "./lib/mini-app-host.mjs";
+import { MiniAppRegistry, validateMiniAppToolArgs } from "./lib/mini-app-host.mjs";
 import { saveMiniApp, discoverMiniApps, getMiniApp, deleteMiniApp } from "./lib/mini-app-store.mjs";
 import { createClaudeAcpExecutor, describeClaudeAdapterInstall } from "./lib/claude-acp.mjs";
 import {
@@ -2408,6 +2408,17 @@ async function execute(action) {
         root: active?.root ?? null,
       };
     }
+    const validated = validateMiniAppToolArgs(registeredTool, action.args ?? {});
+    if (!validated.ok) {
+      return {
+        ok: false,
+        refused: validated.refused,
+        error: `refused: ${validated.refused}`,
+        why: validated.why,
+        root: active?.root ?? null,
+      };
+    }
+    const cleanArgs = validated.value;
     if (action.turn === "live" && runningSession?.socket) {
       const callId = `mcall_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`;
       try {
@@ -2415,7 +2426,7 @@ async function execute(action) {
           type: "mini_app_call",
           callId,
           name: action.name,
-          args: action.args ?? {},
+          args: cleanArgs,
         }));
       } catch (err) {
         return {
@@ -2467,7 +2478,7 @@ async function execute(action) {
       action: `dispatched mini-app tool '${action.name}'`,
       miniAppToolCall: {
         name: action.name,
-        args: action.args ?? {},
+        args: cleanArgs,
       },
       root: active?.root ?? null,
     };
@@ -4669,9 +4680,35 @@ async function handle(req, res) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/mini-app/tools") {
-    const body = await readJson();
-    const appId = String(body?.appId ?? "").trim();
-    const tools = Array.isArray(body?.tools) ? body.tools : [];
+    let bodyStr = "", bytes = 0, tooLarge = false;
+    await new Promise((resolve) => {
+      req.on("data", (chunk) => {
+        bytes += chunk.length;
+        if (bytes > 65536) {
+          tooLarge = true;
+        } else {
+          bodyStr += chunk;
+        }
+      });
+      req.on("end", resolve);
+    });
+
+    if (tooLarge) {
+      return json(res, 400, { ok: false, refused: "body-too-large", why: "request body exceeds maximum allowed bound of 65536 bytes" });
+    }
+
+    let body;
+    try {
+      body = JSON.parse(bodyStr || "{}");
+    } catch {
+      return json(res, 400, { ok: false, refused: "bad-json", why: "request body must be valid JSON" });
+    }
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return json(res, 400, { ok: false, refused: "bad-json", why: "request body must be a JSON object" });
+    }
+
+    const appId = String(body.appId ?? "").trim();
+    const tools = Array.isArray(body.tools) ? body.tools : [];
     for (const prevId of [...activeMiniAppRegistry.apps.keys()]) {
       if (prevId !== appId) activeMiniAppRegistry.unregisterApp(prevId);
     }
