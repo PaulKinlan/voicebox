@@ -4199,26 +4199,41 @@ on(els.envCreateProjectBtn, "click", async () => {
   }
   els.envCreateProjectBtn.disabled = true;
   try {
-    // Say what actually happened. `getDirectoryHandle(name, { create: true })` cannot tell a NEW folder
-    // from one that already exists, so naming an existing project would be reported as creating it. Ask
-    // first, and let the status line carry the difference — a project that says "Created" when it merely
-    // opened something is the kind of untrue copy this work exists to remove.
-    let existed = false;
+    // Say what actually happened, and only say what we KNOW. `getDirectoryHandle(name, { create: true })`
+    // cannot tell a NEW folder from one that already exists, so the pre-check below decides the wording:
+    // true = it was already there (Opened), false = clearly absent (Created), null = we could not tell
+    // (a name that is a FILE, or a non-NotFound error) and then no sentence claims a creation at all — an
+    // independent reviewer pointed out that treating every error as "absent" made "Created" empirically
+    // rather than provably true.
+    let existed = null;
     if (navigator.storage?.getDirectory) {
       try {
         const opfsRoot = await navigator.storage.getDirectory();
         await opfsRoot.getDirectoryHandle(name);
         existed = true;
-      } catch {
-        existed = false;
+      } catch (err) {
+        existed = err?.name === "NotFoundError" ? false : null;
       }
     }
-    const ok = await openOpfsScratchFolder(name);
+    // The cause of a failure has to appear HERE, inside the dialog: #turn-report is outside it, behind the
+    // open modal, so it is unreadable until the person closes the dialog. Passing the helper's own onError
+    // affordance (the one miniapps added with the picker fix, and used by the button next door) is what
+    // makes the refusal visible where the person is standing — the voicebox-beads-sbrh defect class.
+    let failureMsg = null;
+    const ok = await openOpfsScratchFolder(name, { onError: (msg) => { failureMsg = msg; } });
     if (ok) {
-      say(existed ? `Opened “${name}” — it is the folder this room acts on now.` : `Created “${name}” in this browser — it is the folder this room acts on now.`, true);
+      say(
+        existed === true
+          ? `Opened “${name}” — it is the folder this room acts on now.`
+          : existed === false
+            ? `Created “${name}” in this browser — it is the folder this room acts on now.`
+            : `“${name}” is the folder this room acts on now.`,
+        true,
+      );
       renderRoot();
     } else {
-      say(`Could not ${existed ? "open" : "create"} “${name}” — the room's report line names the cause.`, false);
+      const verb = existed === true ? "open" : existed === false ? "create" : "make";
+      say(`Could not ${verb} “${name}”${failureMsg ? ` — ${failureMsg}` : " — the room's report line names the cause."}.`, false);
     }
   } catch (err) {
     say(String(err?.message ?? `Could not create “${name}”.`), false);

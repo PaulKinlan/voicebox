@@ -393,7 +393,7 @@
             <p class="env-hint"><strong>Why it is needed:</strong> with no project, reads and writes are refused — there is nowhere for them to go. Where the files live decides <strong>who performs the write</strong>: browser storage and a folder you pick are written by this page (a picked folder once you grant write access), while a folder on this machine is written by the server itself, with no page needed.</p>
             <ol class="env-setup-steps">
               <li>Start Voicebox on the machine whose files you want to use — that server is what saves them.</li>
-              <li>Choose where this project's files live: <strong>Use browser workspace</strong> (no path, no host token), <strong>Pick a local folder…</strong>, or <strong>Set machine root</strong> (its path and the host token — the server writes there, and the files stay openable in your own editor).</li>
+              <li>Choose where this project's files live: <strong>Use browser workspace</strong> (no path, no host token), <strong>Pick a local folder…</strong>, or <strong>Set machine root</strong> (its path — this page is already authorized to declare it, and the server writes there, so the files stay openable in your own editor).</li>
               <li>Create or name the project below, then talk to it — the files land where you chose.</li>
             </ol>
           </div>

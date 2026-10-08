@@ -216,4 +216,68 @@ test("Create a project makes a real named project in this browser, inside the ma
   const second = await createStatus();
   assert.equal(second.ok, "true", "re-opening an existing project succeeds rather than reporting an error");
   assert.equal(await opfsHasFolder(PROJECT_NAME), "directory", "and the project is still there");
+
+  // THE ENTER GUARD, DRIVEN (voicebox-beads-6uzd). The name box sits inside <form class="envs-form"
+  // method="dialog">, so an unguarded Enter would SUBMIT that form and close the dialog without creating
+  // anything — and #envs-close is itself type="submit", so the failure mode is real, not theoretical.
+  // Synthetic clicks never exercise this; a real key press does, which is why the keydown handler exists.
+  // An independent reviewer pointed out that nothing drove it: deleting the handler would have restored
+  // close-without-creating with every test still green.
+  await page.type("#env-create-project-name", "enter-probe-project");
+  await page.press("Enter");
+  await page.waitFor(
+    () => {
+      const el = document.getElementById("env-create-project-status");
+      return el?.dataset.ok === "true" && (el.textContent ?? "").includes("enter-probe-project");
+    },
+    { label: "Enter in the name box to create the project" },
+  );
+  assert.equal(
+    await page.evaluate(() => document.getElementById("envs")?.hasAttribute("open")),
+    true,
+    "Enter must not submit the dialog's form and close the dialog",
+  );
+  assert.equal(await opfsHasFolder("enter-probe-project"), "directory", "and Enter really creates the project in browser storage");
+  await page.press("Escape");
+  await page.waitFor(() => document.getElementById("envs")?.hasAttribute("open") === false, { label: "the dialog to close" });
+});
+
+// Its own test, because it is its own concern (coord required this separation): the difference between a
+// refusal the person can READ and one that lands in the room report line — public/fused.js:23 puts
+// els.report at #turn-report, which is OUTSIDE #envs and therefore behind the open modal. That is the
+// voicebox-beads-sbrh defect class, and the thing that fixes it is passing the helper's onError
+// affordance. Burying this assertion inside a passing creation flow would let the onError wiring regress
+// silently.
+// LAST IN THIS FILE on purpose: it disables browser storage, and it restores it afterwards so the shared
+// page is left as it was found.
+test("a storage failure says why INSIDE this dialog, not only in the room behind it", { timeout: 60000 }, async () => {
+  await openEnvs();
+  // Make browser storage genuinely unavailable rather than stubbing Voicebox's own code: the refusal then
+  // comes from the real guard a real unsupported browser hits
+  // ("this browser does not support Origin Private File System (OPFS) storage").
+  await page.evaluate(() => {
+    window.__voiceboxOrigStorage = navigator.storage;
+    Object.defineProperty(navigator, "storage", { value: undefined, configurable: true });
+  });
+
+  const before = await createStatus();
+  assert.equal(before.text, "", "no status is shown before the attempt, so the match below is this attempt's");
+
+  await page.type("#env-create-project-name", "no-storage-project");
+  await page.click("#env-create-project-btn");
+  await page.waitFor(() => document.getElementById("env-create-project-status")?.dataset.ok === "false", {
+    label: "the storage refusal to appear in the dialog",
+  });
+
+  const shown = await createStatus();
+  assert.equal(shown.visible, true, "the refusal is visible INSIDE the dialog while it is open");
+  assert.equal(shown.dialogOpen, true, "and the dialog stays open — the person stays where they were");
+  assert.match(shown.text, /OPFS|Origin Private File System|storage/i, `the refusal names the cause: ${JSON.stringify(shown.text)}`);
+  // THE ASSERTION THIS TEST EXISTS FOR: the dialog carries the cause itself, instead of pointing at the
+  // report line that the open modal is covering.
+  assert.doesNotMatch(shown.text, /report line names the cause/, "the dialog points behind the modal instead of naming the cause itself");
+
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "storage", { value: window.__voiceboxOrigStorage, configurable: true });
+  });
 });
