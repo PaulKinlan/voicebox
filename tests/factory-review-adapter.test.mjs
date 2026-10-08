@@ -91,6 +91,15 @@ test("factory-review-adapter: deterministic cache key includes diff content, sta
   });
   assert.notEqual(key1, keyStation);
 
+  // Repository target change invalidates
+  const keyRepo = computeReviewCacheKey({
+    diffContent: "diff --git a/foo b/foo\n+line",
+    station: "perf-review",
+    factoryRef: "1e970d595748a7c38b7fd39417e055165d7edecd",
+    repo: "OtherOwner/voicebox",
+  });
+  assert.notEqual(key1, keyRepo, "different repository target produces distinct cache key");
+
   // Factory ref change invalidates
   const keyRef = computeReviewCacheKey({
     diffContent: "diff --git a/foo b/foo\n+line",
@@ -440,6 +449,24 @@ test("factory-issue-poller: dry-run does not mutate cursor or attempt directory 
 test("factory-review-trigger: getCheckoutRepoIdentity resolves normalized repository slug and refuses cross-target publication", () => {
   const repoId = getCheckoutRepoIdentity(ROOT);
   assert.equal(repoId, "paulkinlan/voicebox");
+
+  // Same-slug on foreign/unapproved host is rejected (returns empty string)
+  const mockForeignDir = path.join(ROOT, "tests", "fixtures", "test-foreign-origin");
+  rmSync(mockForeignDir, { recursive: true, force: true });
+  mkdirSync(mockForeignDir, { recursive: true });
+  execFileSync("git", ["init"], { cwd: mockForeignDir });
+  execFileSync("git", ["remote", "add", "origin", "https://evil.example/PaulKinlan/voicebox.git"], { cwd: mockForeignDir });
+  const evilId = getCheckoutRepoIdentity(mockForeignDir);
+  assert.equal(evilId, "", "unapproved git host must not be treated as proof of repo identity");
+  rmSync(mockForeignDir, { recursive: true, force: true });
+
+  // Mismatched target repo is refused before cache lookup with exitCode 1
+  const mismatchedRes = runReviewTrigger(["--base", "HEAD~1", "--tip", "HEAD", "--repo", "ForeignOrg/foreign-repo"], {
+    rootDir: ROOT,
+  });
+  assert.equal(mismatchedRes.ok, false);
+  assert.equal(mismatchedRes.exitCode, 1);
+  assert.ok(mismatchedRes.error.includes("does not match target repo"));
 });
 
 test("factory-review-trigger: locateRunDeltaReport strictly enforces runDir provenance", () => {

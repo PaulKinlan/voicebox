@@ -72,15 +72,24 @@ export function locateRunDeltaReport(runDir, rootDir, station) {
   return existsSync(candidateReportPath) ? candidateReportPath : "";
 }
 
+export const APPROVED_GIT_HOSTS = new Set(["github.com", "github.int.exe.xyz", "ssh.github.com"]);
+
 export function getCheckoutRepoIdentity(cwd = ROOT) {
   try {
     const remoteUrl = execFileSync("git", ["config", "--get", "remote.origin.url"], { cwd, encoding: "utf8" }).trim();
-    const m = remoteUrl.match(/^(?:https?:\/\/[a-zA-Z0-9.-]+(?::\d+)?\/|git@[a-zA-Z0-9.-]+:)([^/:]+\/[^/:]+?)(?:\.git)?$/i);
+    const m = remoteUrl.match(/^(?:https?:\/\/([a-zA-Z0-9.-]+)(?::\d+)?\/|git@([a-zA-Z0-9.-]+):)([^/:]+\/[^/:]+?)(?:\.git)?$/i);
     if (m) {
-      return m[1].toLowerCase();
+      const host = (m[1] || m[2] || "").toLowerCase();
+      if (APPROVED_GIT_HOSTS.has(host)) {
+        return m[3].toLowerCase();
+      }
     }
   } catch {}
   return "";
+}
+
+export function calculateDiffHash(diffContent, station, factoryRef, repo = "") {
+  return computeReviewCacheKey({ diffContent, station, factoryRef, repo });
 }
 
 export function runReviewTrigger(args = process.argv.slice(2), { env = process.env, rootDir = ROOT } = {}) {
@@ -109,6 +118,18 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
     } else if (a === "--force") {
       force = true;
     }
+  }
+
+  if (dryRun) {
+    console.log(`[review-trigger] DRY-RUN mode active.`);
+  }
+
+  // Pre-execution validation: Refuse execution if checkout origin is known on an approved host and differs from target repo.
+  // Must execute BEFORE cache lookup so cached results from previous runs cannot falsely pass on mismatched repos.
+  const checkoutRepo = getCheckoutRepoIdentity(rootDir);
+  if (checkoutRepo && checkoutRepo !== repo.toLowerCase()) {
+    console.error(`[review-trigger] Refusing execution: checkout origin '${checkoutRepo}' does not match target repo '${repo}'`);
+    return { ok: false, exitCode: 1, error: `checkout origin '${checkoutRepo}' does not match target repo '${repo}'` };
   }
 
   if (!baseRef) {
@@ -157,7 +178,7 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
     }
   } catch {}
 
-  const cacheKey = computeReviewCacheKey({ diffContent, station, factoryRef });
+  const cacheKey = computeReviewCacheKey({ diffContent, station, factoryRef, repo });
   const cacheFile = path.join(privateDir, "review-cache.json");
   mkdirSync(privateDir, { recursive: true });
 
@@ -226,7 +247,6 @@ export function runReviewTrigger(args = process.argv.slice(2), { env = process.e
 
   let publishExit = 0;
   let safeSummary = "";
-  const checkoutRepo = getCheckoutRepoIdentity(rootDir);
 
   if (foundReportPath) {
     if (checkoutRepo && checkoutRepo !== repo.toLowerCase()) {

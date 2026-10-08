@@ -130,10 +130,10 @@ export function selectReviewStation(changedFiles = []) {
  * @param {string} params.factoryRef - pinned factory commit hash or version
  * @returns {string} SHA-256 fingerprint hex
  */
-export function computeReviewCacheKey({ diffContent = "", station = "", factoryRef = "" } = {}) {
+export function computeReviewCacheKey({ diffContent = "", station = "", factoryRef = "", repo = "" } = {}) {
   const diffHash = createHash("sha256").update(diffContent).digest("hex");
   return createHash("sha256")
-    .update(`${diffHash}:${station}:${factoryRef}`)
+    .update(`${diffHash}:${station}:${factoryRef}:${String(repo).toLowerCase()}`)
     .digest("hex");
 }
 
