@@ -133,7 +133,34 @@ function validateSinglePropertySchema(propName: string, raw: unknown, path = "")
     }
   }
 
-  if (s.type === "number" || s.type === "integer") {
+  if (s.type === "integer") {
+    if (s.maximum !== undefined) {
+      if (typeof s.maximum !== "number" || !Number.isInteger(s.maximum)) {
+        return `maximum on integer property '${path}${propName}' must be an integer`;
+      }
+    }
+    if (s.minimum !== undefined) {
+      if (typeof s.minimum !== "number" || !Number.isInteger(s.minimum)) {
+        return `minimum on integer property '${path}${propName}' must be an integer`;
+      }
+    }
+    if (typeof s.maximum === "number" && typeof s.minimum === "number" && s.minimum > s.maximum) {
+      return `minimum cannot exceed maximum on property '${path}${propName}'`;
+    }
+    if (s.enum !== undefined) {
+      if (!Array.isArray(s.enum) || s.enum.length === 0 || !s.enum.every((item) => typeof item === "number" && Number.isInteger(item))) {
+        return `enum for integer property '${path}${propName}' must be a non-empty array of integers`;
+      }
+      if (typeof s.minimum === "number" && !s.enum.every((item) => (item as number) >= (s.minimum as number))) {
+        return `enum members for integer property '${path}${propName}' must be >= minimum (${s.minimum})`;
+      }
+      if (typeof s.maximum === "number" && !s.enum.every((item) => (item as number) <= (s.maximum as number))) {
+        return `enum members for integer property '${path}${propName}' must be <= maximum (${s.maximum})`;
+      }
+    }
+  }
+
+  if (s.type === "number") {
     if (s.maximum !== undefined) {
       if (typeof s.maximum !== "number" || !Number.isFinite(s.maximum)) {
         return `maximum on property '${path}${propName}' must be a finite number`;
@@ -150,6 +177,12 @@ function validateSinglePropertySchema(propName: string, raw: unknown, path = "")
     if (s.enum !== undefined) {
       if (!Array.isArray(s.enum) || s.enum.length === 0 || !s.enum.every((item) => typeof item === "number" && Number.isFinite(item))) {
         return `enum for numeric property '${path}${propName}' must be a non-empty array of numbers`;
+      }
+      if (typeof s.minimum === "number" && !s.enum.every((item) => (item as number) >= (s.minimum as number))) {
+        return `enum members for numeric property '${path}${propName}' must be >= minimum (${s.minimum})`;
+      }
+      if (typeof s.maximum === "number" && !s.enum.every((item) => (item as number) <= (s.maximum as number))) {
+        return `enum members for numeric property '${path}${propName}' must be <= maximum (${s.maximum})`;
       }
     }
   }
@@ -322,6 +355,77 @@ export function toolsToFunctionDeclarations(tools: WebMcpToolDeclaration[]) {
   }));
 }
 
+interface SnapshotResult {
+  ok: boolean;
+  snapshot?: unknown;
+  why?: string;
+}
+
+export function inspectAndSnapshotJson(val: unknown, path = "", seen = new Set<unknown>()): SnapshotResult {
+  if (val === undefined) {
+    return { ok: false, why: `argument${path ? ` at '${path}'` : ""} cannot be undefined` };
+  }
+  if (val === null || typeof val === "boolean") {
+    return { ok: true, snapshot: val };
+  }
+  if (typeof val === "number") {
+    if (!Number.isFinite(val)) {
+      return { ok: false, why: `number${path ? ` at '${path}'` : ""} must be a finite number, got ${val}` };
+    }
+    return { ok: true, snapshot: val };
+  }
+  if (typeof val === "string") {
+    return { ok: true, snapshot: val };
+  }
+  if (typeof val === "bigint" || typeof val === "symbol" || typeof val === "function") {
+    return { ok: false, why: `argument${path ? ` at '${path}'` : ""} has unsupported type '${typeof val}'` };
+  }
+  if (typeof val !== "object") {
+    return { ok: false, why: `argument${path ? ` at '${path}'` : ""} has invalid type '${typeof val}'` };
+  }
+
+  if (seen.has(val)) {
+    return { ok: false, why: `circular reference detected${path ? ` at '${path}'` : ""}` };
+  }
+  seen.add(val);
+
+  if (Array.isArray(val)) {
+    const arrSnapshot: unknown[] = [];
+    for (let i = 0; i < val.length; i++) {
+      const itemRes = inspectAndSnapshotJson(val[i], `${path}[${i}]`, seen);
+      if (!itemRes.ok) return itemRes;
+      arrSnapshot.push(itemRes.snapshot);
+    }
+    seen.delete(val);
+    return { ok: true, snapshot: arrSnapshot };
+  }
+
+  const proto = Object.getPrototypeOf(val);
+  if (proto !== null && typeof proto !== "object") {
+    return { ok: false, why: `argument object${path ? ` at '${path}'` : ""} must be an object` };
+  }
+
+  const syms = Object.getOwnPropertySymbols(val);
+  if (syms.length > 0) {
+    return { ok: false, why: `argument object${path ? ` at '${path}'` : ""} cannot contain Symbol keys` };
+  }
+
+  const descriptors = Object.getOwnPropertyDescriptors(val);
+  const objSnapshot: Record<string, unknown> = {};
+  for (const [key, desc] of Object.entries(descriptors)) {
+    if (!desc.enumerable) continue;
+    if (desc.get || desc.set) {
+      return { ok: false, why: `argument property '${path ? `${path}.` : ""}${key}' cannot use getter/setter accessors` };
+    }
+    const propRes = inspectAndSnapshotJson(desc.value, path ? `${path}.${key}` : key, seen);
+    if (!propRes.ok) return propRes;
+    objSnapshot[key] = propRes.snapshot;
+  }
+
+  seen.delete(val);
+  return { ok: true, snapshot: objSnapshot };
+}
+
 /**
  * Validate arguments supplied to a mini-app tool against its declared JSON schema.
  */
@@ -336,11 +440,14 @@ export function validateMiniAppToolArgs(
     return refusal("invalid-tool-arguments", `tool arguments must be an object, got ${Array.isArray(rawArgs) ? "array" : typeof rawArgs}`);
   }
 
-  const args = rawArgs as Record<string, unknown>;
+  const snapResult = inspectAndSnapshotJson(rawArgs);
+  if (!snapResult.ok) {
+    return refusal("invalid-argument", snapResult.why || "invalid arguments");
+  }
 
   let jsonStr = "";
   try {
-    jsonStr = JSON.stringify(args);
+    jsonStr = JSON.stringify(snapResult.snapshot);
   } catch {
     return refusal("invalid-tool-arguments", "tool arguments must be serializable JSON");
   }
@@ -355,6 +462,8 @@ export function validateMiniAppToolArgs(
       `tool arguments size (${byteLen} bytes) exceeds maximum allowed bound of ${MINI_APP_BOUNDS.maxArgsBytes} bytes`
     );
   }
+
+  const args = JSON.parse(jsonStr) as Record<string, unknown>;
 
   const params = tool?.parameters ?? { type: "object", properties: {} };
   const properties = (params.properties && typeof params.properties === "object" && !Array.isArray(params.properties))

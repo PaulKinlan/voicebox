@@ -1336,6 +1336,119 @@ test("core: validateWebMcpTool rejects contradictory and malformed constraint sc
   assert.equal(badItemsEnumRes.ok, false);
   assert.equal(badItemsEnumRes.refused, "invalid-tool-parameters");
   assert.match(badItemsEnumRes.why, /enum in items schema of array property 'tags' must contain strings matching type 'string'/);
+
+  // 7. Integer enum containing non-integers (e.g. 1.5)
+  const nonIntegerEnumTool = {
+    name: "non_integer_enum",
+    description: "Non-integer enum",
+    parameters: {
+      type: "object",
+      properties: {
+        level: { type: "integer", enum: [1, 1.5, 2] },
+      },
+    },
+  };
+  const nonIntRes = validateWebMcpTool(nonIntegerEnumTool);
+  assert.equal(nonIntRes.ok, false);
+  assert.equal(nonIntRes.refused, "invalid-tool-parameters");
+  assert.match(nonIntRes.why, /enum for integer property 'level' must be a non-empty array of integers/);
+
+  // 8. Integer bounds consistency: minimum/maximum non-integer or enum out of bounds
+  const badIntBoundsTool = {
+    name: "bad_int_bounds",
+    description: "Bad int bounds",
+    parameters: {
+      type: "object",
+      properties: {
+        level: { type: "integer", minimum: 2.5 },
+      },
+    },
+  };
+  const badIntBoundsRes = validateWebMcpTool(badIntBoundsTool);
+  assert.equal(badIntBoundsRes.ok, false);
+  assert.equal(badIntBoundsRes.refused, "invalid-tool-parameters");
+  assert.match(badIntBoundsRes.why, /minimum on integer property 'level' must be an integer/);
+
+  const enumOutOfRangeTool = {
+    name: "enum_out_of_range",
+    description: "Enum out of range",
+    parameters: {
+      type: "object",
+      properties: {
+        level: { type: "integer", minimum: 2, maximum: 5, enum: [1, 3] },
+      },
+    },
+  };
+  const enumRangeRes = validateWebMcpTool(enumOutOfRangeTool);
+  assert.equal(enumRangeRes.ok, false);
+  assert.equal(enumRangeRes.refused, "invalid-tool-parameters");
+  assert.match(enumRangeRes.why, /enum members for integer property 'level' must be >= minimum/);
+
+  // 9. Array items integer enum with non-integers
+  const arrayIntEnumTool = {
+    name: "array_int_enum",
+    description: "Array int enum",
+    parameters: {
+      type: "object",
+      properties: {
+        scores: { type: "array", items: { type: "integer", enum: [2.5] } },
+      },
+    },
+  };
+  const arrayIntRes = validateWebMcpTool(arrayIntEnumTool);
+  assert.equal(arrayIntRes.ok, false);
+  assert.equal(arrayIntRes.refused, "invalid-tool-parameters");
+  assert.match(arrayIntRes.why, /enum in items schema of array property 'scores' must contain integers matching type 'integer'/);
+});
+
+test("core: validateMiniAppToolArgs enforces snapshot literal invariant and rejects non-JSON / undefined values (Finding P2)", () => {
+  const tool = {
+    name: "test_tool",
+    description: "Test tool",
+    parameters: {
+      type: "object",
+      properties: {
+        count: { type: "integer" },
+      },
+    },
+  };
+
+  // 1. Oversized key with undefined value
+  const badKey = "k".repeat(70000);
+  const badArgObj = { [badKey]: undefined };
+  const undefRes = validateMiniAppToolArgs(tool, badArgObj);
+  assert.equal(undefRes.ok, false);
+  assert.equal(undefRes.refused, "invalid-argument");
+  assert.match(undefRes.why, /cannot be undefined/);
+
+  // 2. Non-finite number
+  const nanRes = validateMiniAppToolArgs(tool, { count: NaN });
+  assert.equal(nanRes.ok, false);
+  assert.equal(nanRes.refused, "invalid-argument");
+  assert.match(nanRes.why, /must be a finite number/);
+
+  // 3. Circular reference
+  const cyclic = { count: 1 };
+  cyclic.self = cyclic;
+  const cyclicRes = validateMiniAppToolArgs(tool, cyclic);
+  assert.equal(cyclicRes.ok, false);
+  assert.equal(cyclicRes.refused, "invalid-argument");
+  assert.match(cyclicRes.why, /circular reference/);
+
+  // 4. Accessor property
+  const accessorObj = {};
+  Object.defineProperty(accessorObj, "rogue", { get: () => 1, enumerable: true });
+  const accessorRes = validateMiniAppToolArgs(tool, accessorObj);
+  assert.equal(accessorRes.ok, false);
+  assert.equal(accessorRes.refused, "invalid-argument");
+  assert.match(accessorRes.why, /cannot use getter\/setter/);
+
+  // 5. Positive control: valid snapshot normalization
+  const validArgs = { count: 5 };
+  const validRes = validateMiniAppToolArgs(tool, validArgs);
+  assert.equal(validRes.ok, true);
+  assert.deepEqual(validRes.value, { count: 5 });
+  assert.notEqual(validRes.value, validArgs, "returned snapshot must be a normalized copy");
 });
 
 test("core: validateMiniAppToolArgs enforces object additionalProperties: false without properties and Unicode code points (Findings P1 & P2)", () => {
@@ -1427,7 +1540,7 @@ test("browser: continuous host -> page -> bridge -> inner DOM journey with visua
         executionCount++;
         document.getElementById("temp-val").textContent = args.target.toFixed(1) + "°C";
         document.getElementById("mode-val").textContent = args.mode.toUpperCase();
-        return { ok: true, currentTarget: args.target, mode: args.mode, count: executionCount };
+        return { ok: true, currentTarget: args.target, mode: args.mode, count: executionCount, received: args };
       }
     });
     window.webMcp.ready();
@@ -1501,6 +1614,7 @@ test("browser: continuous host -> page -> bridge -> inner DOM journey with visua
   assert.equal(appRes.result.currentTarget, 24.5);
   assert.equal(appRes.result.mode, "heat");
   assert.equal(appRes.result.count, 1);
+  assert.deepEqual(appRes.result.received, { target: 24.5, mode: "heat" }, "forwarded args must match validated normalized snapshot");
 
   await sleep(200);
 
@@ -1536,6 +1650,13 @@ test("browser: continuous host -> page -> bridge -> inner DOM journey with visua
   assert.equal(bridgeBadRes.ok, false);
   assert.equal(bridgeBadRes.refused, "invalid-argument-type");
 
+  // Reachable bypass test: key >64KiB with undefined value must be refused before reaching inner app
+  const bridgeUndefRes = await page.evaluate(async () => {
+    return await window.__voiceboxMiniApp.callTool("set_temperature", { ["k".repeat(70000)]: undefined });
+  });
+  assert.equal(bridgeUndefRes.ok, false);
+  assert.equal(bridgeUndefRes.refused, "invalid-argument");
+
   await sleep(200);
 
   // Capture AFTER-MALFORMED screenshot
@@ -1553,6 +1674,7 @@ test("browser: continuous host -> page -> bridge -> inner DOM journey with visua
   assert.equal(nextRes.result.currentTarget, 22.0);
   assert.equal(nextRes.result.mode, "cool");
   assert.equal(nextRes.result.count, 2, "execution count MUST advance to exactly 2 (refused calls were never executed)");
+  assert.deepEqual(nextRes.result.received, { target: 22.0, mode: "cool" }, "next valid call forwarded exact normalized snapshot");
 
   await sleep(200);
 

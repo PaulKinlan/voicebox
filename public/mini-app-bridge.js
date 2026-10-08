@@ -211,7 +211,34 @@ function validateSinglePropertySchema(propName, raw, path = "") {
     }
   }
 
-  if (raw.type === "number" || raw.type === "integer") {
+  if (raw.type === "integer") {
+    if (raw.maximum !== undefined) {
+      if (typeof raw.maximum !== "number" || !Number.isInteger(raw.maximum)) {
+        return `maximum on integer property '${path}${propName}' must be an integer`;
+      }
+    }
+    if (raw.minimum !== undefined) {
+      if (typeof raw.minimum !== "number" || !Number.isInteger(raw.minimum)) {
+        return `minimum on integer property '${path}${propName}' must be an integer`;
+      }
+    }
+    if (typeof raw.maximum === "number" && typeof raw.minimum === "number" && raw.minimum > raw.maximum) {
+      return `minimum cannot exceed maximum on property '${path}${propName}'`;
+    }
+    if (raw.enum !== undefined) {
+      if (!Array.isArray(raw.enum) || raw.enum.length === 0 || !raw.enum.every((item) => typeof item === "number" && Number.isInteger(item))) {
+        return `enum for integer property '${path}${propName}' must be a non-empty array of integers`;
+      }
+      if (typeof raw.minimum === "number" && !raw.enum.every((item) => item >= raw.minimum)) {
+        return `enum members for integer property '${path}${propName}' must be >= minimum (${raw.minimum})`;
+      }
+      if (typeof raw.maximum === "number" && !raw.enum.every((item) => item <= raw.maximum)) {
+        return `enum members for integer property '${path}${propName}' must be <= maximum (${raw.maximum})`;
+      }
+    }
+  }
+
+  if (raw.type === "number") {
     if (raw.maximum !== undefined) {
       if (typeof raw.maximum !== "number" || !Number.isFinite(raw.maximum)) {
         return `maximum on property '${path}${propName}' must be a finite number`;
@@ -228,6 +255,12 @@ function validateSinglePropertySchema(propName, raw, path = "") {
     if (raw.enum !== undefined) {
       if (!Array.isArray(raw.enum) || raw.enum.length === 0 || !raw.enum.every((item) => typeof item === "number" && Number.isFinite(item))) {
         return `enum for numeric property '${path}${propName}' must be a non-empty array of numbers`;
+      }
+      if (typeof raw.minimum === "number" && !raw.enum.every((item) => item >= raw.minimum)) {
+        return `enum members for numeric property '${path}${propName}' must be >= minimum (${raw.minimum})`;
+      }
+      if (typeof raw.maximum === "number" && !raw.enum.every((item) => item <= raw.maximum)) {
+        return `enum members for numeric property '${path}${propName}' must be <= maximum (${raw.maximum})`;
       }
     }
   }
@@ -379,17 +412,88 @@ function validateTool(raw) {
   };
 }
 
+function inspectAndSnapshotJson(val, path = "", seen = new Set()) {
+  if (val === undefined) {
+    return { ok: false, why: `argument${path ? ` at '${path}'` : ""} cannot be undefined` };
+  }
+  if (val === null || typeof val === "boolean") {
+    return { ok: true, snapshot: val };
+  }
+  if (typeof val === "number") {
+    if (!Number.isFinite(val)) {
+      return { ok: false, why: `number${path ? ` at '${path}'` : ""} must be a finite number, got ${val}` };
+    }
+    return { ok: true, snapshot: val };
+  }
+  if (typeof val === "string") {
+    return { ok: true, snapshot: val };
+  }
+  if (typeof val === "bigint" || typeof val === "symbol" || typeof val === "function") {
+    return { ok: false, why: `argument${path ? ` at '${path}'` : ""} has unsupported type '${typeof val}'` };
+  }
+  if (typeof val !== "object") {
+    return { ok: false, why: `argument${path ? ` at '${path}'` : ""} has invalid type '${typeof val}'` };
+  }
+
+  if (seen.has(val)) {
+    return { ok: false, why: `circular reference detected${path ? ` at '${path}'` : ""}` };
+  }
+  seen.add(val);
+
+  if (Array.isArray(val)) {
+    const arrSnapshot = [];
+    for (let i = 0; i < val.length; i++) {
+      const itemRes = inspectAndSnapshotJson(val[i], `${path}[${i}]`, seen);
+      if (!itemRes.ok) return itemRes;
+      arrSnapshot.push(itemRes.snapshot);
+    }
+    seen.delete(val);
+    return { ok: true, snapshot: arrSnapshot };
+  }
+
+  const proto = Object.getPrototypeOf(val);
+  if (proto !== null && typeof proto !== "object") {
+    return { ok: false, why: `argument object${path ? ` at '${path}'` : ""} must be an object` };
+  }
+
+  const syms = Object.getOwnPropertySymbols(val);
+  if (syms.length > 0) {
+    return { ok: false, why: `argument object${path ? ` at '${path}'` : ""} cannot contain Symbol keys` };
+  }
+
+  const descriptors = Object.getOwnPropertyDescriptors(val);
+  const objSnapshot = {};
+  for (const [key, desc] of Object.entries(descriptors)) {
+    if (!desc.enumerable) continue;
+    if (desc.get || desc.set) {
+      return { ok: false, why: `argument property '${path ? `${path}.` : ""}${key}' cannot use getter/setter accessors` };
+    }
+    const propRes = inspectAndSnapshotJson(desc.value, path ? `${path}.${key}` : key, seen);
+    if (!propRes.ok) return propRes;
+    objSnapshot[key] = propRes.snapshot;
+  }
+
+  seen.delete(val);
+  return { ok: true, snapshot: objSnapshot };
+}
+
 function validateToolArgs(params, rawArgs) {
-  let args = rawArgs;
-  if (args === null || args === undefined) {
-    args = {};
+  let inArgs = rawArgs;
+  if (inArgs === null || inArgs === undefined) {
+    inArgs = {};
   }
-  if (typeof args !== "object" || Array.isArray(args)) {
-    return { ok: false, refused: "invalid-tool-arguments", why: `tool arguments must be an object, got ${Array.isArray(args) ? "array" : typeof args}` };
+  if (typeof inArgs !== "object" || Array.isArray(inArgs)) {
+    return { ok: false, refused: "invalid-tool-arguments", why: `tool arguments must be an object, got ${Array.isArray(inArgs) ? "array" : typeof inArgs}` };
   }
+
+  const snapResult = inspectAndSnapshotJson(inArgs);
+  if (!snapResult.ok) {
+    return { ok: false, refused: "invalid-argument", why: snapResult.why || "invalid argument" };
+  }
+
   let jsonStr = "";
   try {
-    jsonStr = JSON.stringify(args);
+    jsonStr = JSON.stringify(snapResult.snapshot);
   } catch {
     return { ok: false, refused: "invalid-tool-arguments", why: "tool arguments must be serializable JSON" };
   }
@@ -401,6 +505,8 @@ function validateToolArgs(params, rawArgs) {
   if (byteLen > BOUNDS.maxOutputBytes) {
     return { ok: false, refused: "invalid-tool-arguments", why: `tool arguments size (${byteLen} bytes) exceeds maximum allowed bound of ${BOUNDS.maxOutputBytes} bytes` };
   }
+
+  const args = JSON.parse(jsonStr);
 
   const p = params || { type: "object", properties: {} };
   const properties = (p.properties && typeof p.properties === "object" && !Array.isArray(p.properties)) ? p.properties : {};
@@ -629,20 +735,19 @@ function dispatchCallTool(data) {
     return;
   }
 
-  if (registered.parameters) {
-    const valid = validateToolArgs(registered.parameters, args);
-    if (!valid.ok) {
-      postToHost({
-        type: "tool_result",
-        callId,
-        appId: currentAppId,
-        ok: false,
-        refused: valid.refused,
-        error: `refused: ${valid.refused} — ${valid.why}`,
-      });
-      return;
-    }
+  const valid = validateToolArgs(registered.parameters || { type: "object", properties: {} }, args);
+  if (!valid.ok) {
+    postToHost({
+      type: "tool_result",
+      callId,
+      appId: currentAppId,
+      ok: false,
+      refused: valid.refused,
+      error: `refused: ${valid.refused} — ${valid.why}`,
+    });
+    return;
   }
+  const cleanArgs = valid.value;
 
   const timer = setTimeout(() => {
     pendingCalls.delete(callId);
@@ -666,7 +771,7 @@ function dispatchCallTool(data) {
     type: "call_tool",
     callId,
     name,
-    args,
+    args: cleanArgs,
   });
 }
 
