@@ -47,6 +47,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 
+import { BARE_TOKEN_SHAPES } from "../lib/redact.mjs";
 // ---------------------------------------------------------------------------------------------
 // Mirrored policy constants (upstream module named in each comment)
 // ---------------------------------------------------------------------------------------------
@@ -124,27 +125,39 @@ const FUNCTIONALITY_CHANGE_SIGNALS = [
   /\bmigrat(?:e|ion)\b/i,
 ];
 
-// Mirrors `lib/redaction.py:ALL_PATTERNS` (BLOCK + BARE + PATTERNS), same names and order.
+// Mirrors `lib/redaction.py:ALL_PATTERNS` (BLOCK + BARE + PATTERNS), same names and order - but the
+// bare token shapes are NOT declared here any more. `lib/redact.mjs` owns them, and this table asks it
+// for each one by name, so there is exactly one definition of every bare shape (voicebox-beads-7cvr,
+// GH #20). Two entries stay local because they are not bare token shapes: `private-key` matches only the
+// BEGIN header of a block (the whole block is the shared `pem-block`) and `generic-api-key` is a labelled
+// key/value form. A name the owner no longer has THROWS: this module must not fall back to a stale
+// private copy, because that is the duplication this change removes.
+const SHARED_BARE_SHAPES = new Map(BARE_TOKEN_SHAPES);
+const sharedBareShape = (name) => {
+  const pattern = SHARED_BARE_SHAPES.get(name);
+  if (!pattern) {
+    throw new Error(
+      `factory-triage: lib/redact.mjs no longer owns the '${name}' bare-token shape; refusing to mask with a local copy`
+    );
+  }
+  // Clone: these carry /g and lastIndex is per-object state, so sharing the owner's objects would let
+  // another consumer's test()/exec() advance them under this module.
+  return new RegExp(pattern.source, pattern.flags);
+};
 const CREDENTIAL_SHAPES = [
-  ["pem-block", /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g],
-  ["openai-key", /sk-(?:proj-|live-|test-)?[A-Za-z0-9_-]{16,}/g],
-  ["stripe-key", /(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}/g],
-  ["google-api-key", /AIza[0-9A-Za-z_-]{35}/g],
-  ["google-oauth", /ya29\.[0-9A-Za-z_-]{20,}/g],
-  ["gitlab-pat", /glpat-[A-Za-z0-9_-]{20,}/g],
-  ["npm-token", /npm_[A-Za-z0-9]{36}/g],
+  ["pem-block", sharedBareShape("pem-block")],
+  ["openai-key", sharedBareShape("openai-key")],
+  ["stripe-key", sharedBareShape("stripe-key")],
+  ["google-api-key", sharedBareShape("google-api-key")],
+  ["google-oauth", sharedBareShape("google-oauth")],
+  ["gitlab-pat", sharedBareShape("gitlab-pat")],
+  ["npm-token", sharedBareShape("npm-token")],
   ["private-key", /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/g],
-  [
-    "aws-access-key",
-    /(?:A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}/g,
-  ],
-  ["github-pat", /ghp_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59}/g],
-  ["slack-token", /xox[baprs]-[0-9]{10,13}-[0-9]{10,13}[a-zA-Z0-9-]*/g],
-  [
-    "generic-api-key",
-    /(?:api_key|apikey|secret|token|password)\s*[:=]\s*['"][a-zA-Z0-9_\-]{20,80}['"]/gi,
-  ],
-  ["jwt-token", /ey[A-Za-z0-9_-]{10,}\.ey[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g],
+  ["aws-access-key", sharedBareShape("aws-access-key")],
+  ["github-pat", sharedBareShape("github-pat")],
+  ["slack-token", sharedBareShape("slack-token")],
+  ["generic-api-key", /(?:api_key|apikey|secret|token|password)\s*[:=]\s*['"][a-zA-Z0-9_\-]{20,80}['"]/gi],
+  ["jwt-token", sharedBareShape("jwt-token")],
 ];
 
 // ---------------------------------------------------------------------------------------------
