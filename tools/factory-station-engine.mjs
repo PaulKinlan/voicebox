@@ -101,11 +101,14 @@ export const WRITE_CAPABLE_ENGINES = Object.freeze(new Set(["pi", "claude"]));
 export const READ_ONLY_CLASSES = Object.freeze(new Set(["observer", "optimizer"]));
 export const WRITE_CLASSES = Object.freeze(new Set(["proposer"]));
 
-/** The model each engine reports for evidence; the adapters read it from their own env vars. */
+/**
+ * The model variable each engine's adapter actually reads. Only the engines that consume one are
+ * listed: the `pi` and `claude` adapters pass no model flag at all, so reporting a model for them
+ * would be a claim about the run that nothing verifies (and it would key the review cache on an
+ * unrelated caller's PI_MODEL).
+ */
 const ENGINE_MODEL_VARS = Object.freeze({
   deepseek: ["DEEPSEEK_MODEL"],
-  pi: ["PI_MODEL"],
-  claude: ["CLAUDE_MODEL", "ANTHROPIC_MODEL"],
 });
 
 function envValue(env, name) {
