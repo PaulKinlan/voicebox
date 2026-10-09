@@ -5068,7 +5068,8 @@ function renderAgentSettings() {
 }
 
 async function saveAgentSetting(patch) {
-  const answer = await request("/api/agent-settings", { method: "PUT", body: JSON.stringify(patch) });
+  // Declared JSON: the server's bounded body door refuses an undeclared text/plain body with 415 (voicebox-beads-d808).
+  const answer = await request("/api/agent-settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) });
   if (!answer || answer.ok === false) {
     const why = answer?.why ?? "the server did not accept that";
     for (const id of [

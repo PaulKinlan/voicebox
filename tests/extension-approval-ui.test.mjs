@@ -86,11 +86,21 @@ test("extension approval in Chromium: console code admits and runs, replay/tampe
       }
       throw new Error(`No approval code appeared on the host console for ${requestId} within 5s; terminal output: ${terminal.slice(-200)}`);
     };
-    assert.equal((await post("/api/extensions/approval-request", { id: "../escape" })).body.refused, "approval-invalid-id");
+    const invalidId = await post("/api/extensions/approval-request", { id: "../escape" });
+    assert.equal(invalidId.status, 400);
+    assert.equal(invalidId.body.refused, "approval-invalid-id");
     assert.equal((await post("/api/extensions/approval-request", { id: "absent" })).body.refused, "approval-no-proposal");
-    assert.equal((await post("/api/extensions/approval-request", { id: "absent", excess: "x".repeat(4096) })).status, 400);
+    // A body past this route's 4096-byte cap is refused BY NAME at the bounded JSON door
+    // (voicebox-beads-d808) — 413 body-too-large — where it used to fall through to a misleading
+    // 400 approval-invalid-id after the oversize read silently resolved null.
+    const excess = await post("/api/extensions/approval-request", { id: "absent", excess: "x".repeat(4096) });
+    assert.equal(excess.status, 413);
+    assert.equal(excess.body.refused, "body-too-large");
     const formPost = await fetch(server.base + "/api/extensions/approval-request", { method: "POST", body: "id=clock" });
     assert.equal(formPost.status, 415);
+    // The route's OWN pre-door JSON-only check answers this one (fetch sets text/plain for a string
+    // body) — name it so the door's 415 (unsupported-content-type) cannot silently take its place.
+    assert.equal((await formPost.json()).refused, "approval-json-required");
     await stage("approvalclock");
     assert.equal((await post("/api/extensions/admit", { id: "approvalclock", confirm: true })).body.refused, "host-token-required");
     page = await launch();
