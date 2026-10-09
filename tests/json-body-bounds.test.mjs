@@ -40,13 +40,18 @@ test.after(async () => {
 });
 
 /**
- * A raw POST so the body can be streamed in chunks and oversized. The server cuts an oversized
- * upload by destroying the socket once the 413 has flushed, so a late write fails with EPIPE and
- * the response's 'end' may never fire — the request settles on the FIRST of (response fully read,
- * socket error after the response headers arrived), because both carry the answer.
+ * A raw request so the body can be streamed in chunks and oversized. The server answers a refused
+ * body with `connection: close` and drains the rest of the upload unread (it does NOT destroy the
+ * socket — an early destroy RST-clobbers the answer), so a late write may still fail with EPIPE and
+ * the response's 'end' may never fire: the request settles on the FIRST of (response fully read,
+ * response stream closed, socket error once the response is COMPLETE), because each carries the
+ * answer. An error with only headers in does NOT settle — the body may still be in flight.
  */
-function postRaw({ route = "/api/exec", headers = {}, chunks = [] }) {
+function postRaw({ route = "/api/exec", method = "POST", headers = {}, chunks = [] }) {
   return new Promise((resolve, reject) => {
+    // Content-Length, always: Node's HTTP parser rejects a CHUNKED body on DELETE outright (bare
+    // 400, connection close, no route — measured), so a raw DELETE without it never reaches the door.
+    const bodyHeaders = { "content-length": chunks.reduce((n, c) => n + (typeof c === "string" ? Buffer.byteLength(c) : c.length), 0), ...headers };
     let settled = false;
     let seen = null; // the ServerResponse, once headers are in
     let text = "";
@@ -56,7 +61,8 @@ function postRaw({ route = "/api/exec", headers = {}, chunks = [] }) {
       let parsed = null;
       try { parsed = JSON.parse(text); } catch { /* asserted by callers that need it */ }
       resolve({ status: seen.statusCode, text, body: parsed });
-    };    const req = http.request({ host: "127.0.0.1", port: PORT, path: route, method: "POST", headers }, (res) => {
+    };
+    const req = http.request({ host: "127.0.0.1", port: PORT, path: route, method, headers: bodyHeaders }, (res) => {
       seen = res;
       res.on("data", (c) => (text += c));
       res.on("end", settle);
@@ -64,7 +70,10 @@ function postRaw({ route = "/api/exec", headers = {}, chunks = [] }) {
     });
     req.on("error", (err) => {
       if (settled) return; // the answer is in; the teardown cut a late write
-      if (seen) return settle(); // headers arrived before the cut — the status IS the answer
+      // Headers alone are not the answer: only settle early if the response is complete;
+      // otherwise the response stream's own 'close' settles with whatever arrived whole.
+      if (seen?.complete) return settle();
+      if (seen) return;
       reject(err);
     });
     for (const chunk of chunks) {
@@ -144,16 +153,37 @@ test("the route never runs on a refused body (no side effect)", async () => {
 });
 
 test("a content route accepts a body past the 1 MiB default (8 MiB content cap)", async () => {
-  // POST /api/mini-apps carries the app's html — content. A ~2 MiB app must NOT meet the default
-  // cap: any answer that is not 413 proves the door passed it (validation may still 400 it).
+  // POST /api/mini-apps carries the app's html — content. A ~2 MiB app must PASS the door and be
+  // saved: a positive proof (200 + the app reads back), not just the absence of a 413.
   const res = await postRaw({
     route: "/api/mini-apps",
     headers: { "content-type": "application/json" },
     chunks: [JSON.stringify({ appId: "big-app", html: "<!--" + "y".repeat(2 * 1024 * 1024) + "-->" })],
   });
   assert.ok(res.body, "the answer body arrived whole");
-  assert.notEqual(res.status, 413, "a content route does not answer 413 at 2 MiB");
-  assert.notEqual(res.body?.refused, "body-too-large");
+  assert.equal(res.status, 200, `a 2 MiB mini-app saves through the content cap, got ${res.status}: ${res.text.slice(0, 200)}`);
+  assert.equal(res.body.ok, true);
+  const readBack = await fetch(`http://127.0.0.1:${PORT}/api/mini-apps?id=big-app`).then((r) => r.json());
+  assert.ok(readBack.ok && (readBack.miniApp?.html?.length ?? readBack.app?.html?.length ?? 0) > 2 * 1024 * 1024,
+    "the saved app reads back with its full 2 MiB html — the door passed the whole body");
+});
+
+test("a refused body at a .catch-rethrow call site answers 413 exactly once", async () => {
+  // DELETE /api/mini-apps is one of the three `readJson().catch(err => ...)` callers: a swallowed
+  // BodyRefusal there would run the route on a refused body and answer TWICE. The one answer must
+  // be the door's 413.
+  const res = await postRaw({
+    route: "/api/mini-apps",
+    method: "DELETE",
+    headers: { "content-type": "application/json" },
+    chunks: [JSON.stringify({ appId: "big-app", pad: "z".repeat(2 * 1024 * 1024) })],
+  });
+  assert.equal(res.status, 413);
+  assert.ok(res.body, "the refusal body arrived whole");
+  assert.equal(res.body.refused, "body-too-large");
+  // And the app saved by the previous test is untouched — the delete route never ran.
+  const stillThere = await fetch(`http://127.0.0.1:${PORT}/api/mini-apps?id=big-app`).then((r) => r.json());
+  assert.ok(stillThere.ok, "the refused DELETE did not run");
 });
 
 test("an absent Content-Type with an empty body is still allowed (parses as {})", async () => {

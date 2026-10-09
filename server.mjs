@@ -3620,7 +3620,8 @@ const routes = {
         kind,
       } = parsed ?? {};
       let result;
-      if (action === "join" || action === "joinParticipant") {        result = roomPresence.joinParticipant({
+      if (action === "join" || action === "joinParticipant") {
+        result = roomPresence.joinParticipant({
           participantId,
           name,
           role,
