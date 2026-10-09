@@ -67,7 +67,9 @@ import { startActs } from "./acts.ts";
  * tab re-claims its dead predecessor's name and keeps writing the same file. A worker without
  * the parameter (tests do that) keeps the M0 default; `identify` still wins.
  */
-const requestedInstance = new URL(String(self.location)).searchParams.get("instance")?.trim();
+const requestedInstance = typeof self !== "undefined" && typeof self.location !== "undefined"
+  ? new URL(String(self.location)).searchParams.get("instance")?.trim()
+  : null;
 let instance = requestedInstance || M0_INSTANCE;
 let actor: Actor = { name: instance, harness: null, session: null, cwd: null };
 const ASSET_DIR = "assets";
@@ -343,6 +345,24 @@ async function readAudit(): Promise<AuditEntry[]> {
  * fact), and asking a `prompt` handle for a folder that will never exist there is one of the calls
  * that BLOCKS rather than failing — so the permission decides before we knock.
  */
+/** Maximum concurrent audit log file reads to bound memory and file handles while avoiding waterfalls (voicebox-beads-rw7o). */
+export const MAX_CONCURRENT_AUDIT_READS = 16;
+
+/** Map an array with bounded concurrency, preserving input order. */
+export async function mapConcurrent<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  if (items.length <= limit) return Promise.all(items.map(fn));
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const idx = cursor++;
+      results[idx] = await fn(items[idx]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 async function logFilesFor(project: ProjectRecord): Promise<{ name: string; root: string; entries: AuditEntry[]; unreachable?: string }[]> {
   const boundary = virtualRoot(project);
   const files: { name: string; root: string; entries: AuditEntry[]; unreachable?: string }[] = [];
@@ -354,22 +374,27 @@ async function logFilesFor(project: ProjectRecord): Promise<{ name: string; root
   const readable = project.root.kind === "opfs" || (await permission(project, "read")) === "granted";
   if (readable) {
     const listing = await (store as Storage).listChildren(`${boundary}/${AUDIT_DIR}`, 500).catch(() => ({ entries: [] }));
-    for (const file of listing.entries) {
-      if (file.kind !== "file" || !file.name.endsWith(".jsonl")) continue;
+    const targetFiles = listing.entries.filter((file) => file.kind === "file" && file.name.endsWith(".jsonl"));
+    const loaded = await mapConcurrent(targetFiles, MAX_CONCURRENT_AUDIT_READS, async (file) => {
       const lines = await (store as Storage).readLines(`${boundary}/${AUDIT_DIR}/${file.name}`);
-      files.push({ name: file.name, root: boundary, entries: lines.map(parseEntry).filter((e): e is AuditEntry => e !== null) });
-    }
+      return { name: file.name, root: boundary, entries: lines.map(parseEntry).filter((e): e is AuditEntry => e !== null) };
+    });
+    files.push(...loaded);
   }
 
   // The origin-side fallback is keyed by root hash, so a file is only this root's if its entries say
   // so — which is why each entry's own `root` is checked rather than trusting a file name.
   const fallback = await opfsStorage("v1/audit-fallback");
-  const fallbackNames = (await fallback.listChildren("v1/audit-fallback", 500).catch(() => ({ entries: [] }))).entries.map((e) => e.name);
-  for (const name of fallbackNames) {
-    if (!name.endsWith(".jsonl")) continue;
+  const fallbackNames = (await fallback.listChildren("v1/audit-fallback", 500).catch(() => ({ entries: [] }))).entries
+    .map((e) => e.name)
+    .filter((name) => name.endsWith(".jsonl"));
+  const loadedFallback = await mapConcurrent(fallbackNames, MAX_CONCURRENT_AUDIT_READS, async (name) => {
     const lines = await fallback.readLines(`v1/audit-fallback/${name}`);
     const entries = lines.map(parseEntry).filter((e): e is AuditEntry => e !== null && e.root === boundary);
-    if (entries.length) files.push({ name: `${name} (origin-side)`, root: boundary, entries });
+    return entries.length ? { name: `${name} (origin-side)`, root: boundary, entries } : null;
+  });
+  for (const item of loadedFallback) {
+    if (item) files.push(item);
   }
 
   return files;
@@ -1323,37 +1348,39 @@ async function handle(message: Message) {
   }
 }
 
-self.onmessage = async (event: MessageEvent) => {
-  const message = event.data as Message;
-  const id = message?.id ?? null;
-  // A measurement must not measure itself: reading the counters is not work the counters count.
-  if (message?.type !== "stats") stats.messages++;
-  try {
-    const result = await handle(message);
-    (self as unknown as Worker).postMessage({ ...result, id });
-  } catch (e) {
-    // Nothing the page sends can take the host down. The reply is an error and the host is still
-    // here for the next message — which is check 7, and the reason this catch exists.
-    (self as unknown as Worker).postMessage({
-      ...fail("root-unreachable", String((e as Error)?.message ?? e), (e as Error)?.stack),
-      id,
-    });
-  }
-};
+if (typeof self !== "undefined" && typeof (self as unknown as Worker).postMessage === "function") {
+  self.onmessage = async (event: MessageEvent) => {
+    const message = event.data as Message;
+    const id = message?.id ?? null;
+    // A measurement must not measure itself: reading the counters is not work the counters count.
+    if (message?.type !== "stats") stats.messages++;
+    try {
+      const result = await handle(message);
+      (self as unknown as Worker).postMessage({ ...result, id });
+    } catch (e) {
+      // Nothing the page sends can take the host down. The reply is an error and the host is still
+      // here for the next message — which is check 7, and the reason this catch exists.
+      (self as unknown as Worker).postMessage({
+        ...fail("root-unreachable", String((e as Error)?.message ?? e), (e as Error)?.stack),
+        id,
+      });
+    }
+  };
 
-export { wasmInstance };
+  // ── the routed-acts door (core/dispatch.ts's page half) ─────────────────────
+  // The server asks over /channel when the ACTIVE root is one only the page can act on; this
+  // page performs the act against the CURRENT project's storage and answers observed facts.
+  // Everything is injected — acts.ts imports no browser module — so the same door runs in a
+  // node test. The hooks read the live `current`/`storage` at call time, so a project change
+  // needs no notification: the next call sees it.
+  startActs({
+    getCurrentDescriptor: () => (current ? descriptorOf(current) : null),
+    getStorage: () => storage,
+    checkWritable: () => writable(""),
+    checkReachable: () => reachable(),
+    recordAct: (act, decision, rule, result, observed, turn) => record(act, decision, rule, result, observed, turn),
+    log: (line) => console.error(line),
+  });
+}
 
-// ── the routed-acts door (core/dispatch.ts's page half) ─────────────────────
-// The server asks over /channel when the ACTIVE root is one only the page can act on; this
-// page performs the act against the CURRENT project's storage and answers observed facts.
-// Everything is injected — acts.ts imports no browser module — so the same door runs in a
-// node test. The hooks read the live `current`/`storage` at call time, so a project change
-// needs no notification: the next call sees it.
-startActs({
-  getCurrentDescriptor: () => (current ? descriptorOf(current) : null),
-  getStorage: () => storage,
-  checkWritable: () => writable(""),
-  checkReachable: () => reachable(),
-  recordAct: (act, decision, rule, result, observed, turn) => record(act, decision, rule, result, observed, turn),
-  log: (line) => console.error(line),
-});
+export { wasmInstance, logFilesFor };
