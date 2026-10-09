@@ -23,11 +23,34 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { openPiAcpProbe } from "../lib/pi-acp.mjs";
+import { spawnSync } from "node:child_process";
+import { openPiAcpProbe, resolveLib64 } from "../lib/pi-acp.mjs";
 import { ACP_AGENT } from "../lib/acp-client.mjs";
 
 const LIB = fileURLToPath(new URL("../lib/", import.meta.url));
-const hasBwrap = fs.existsSync("/usr/bin/bwrap");
+
+/**
+ * Functional canary for bubblewrap unprivileged user-namespace execution.
+ * Accepts injectable runner and existence check to allow unit testing of failure modes.
+ */
+export function canBwrap(spawnFn = spawnSync, existsFn = fs.existsSync) {
+  if (!existsFn("/usr/bin/bwrap")) return false;
+  const lib64 = resolveLib64();
+  try {
+    const res = spawnFn("/usr/bin/bwrap", [
+      "--unshare-all",
+      "--ro-bind", "/usr", "/usr",
+      "--symlink", lib64, "/lib64",
+      "--proc", "/proc",
+      "--dev", "/dev",
+      "/usr/bin/true",
+    ], { stdio: "ignore", timeout: 3000 });
+    return res?.status === 0;
+  } catch {
+    return false;
+  }
+}
+const hasBwrap = canBwrap();
 
 // The stand-in adapter answers the handshake and reports facts only a process INSIDE the fence can
 // know (cwd=/work, PI_ACP_PI_COMMAND=/harness/pi), so trusting a reply is trusting the sandbox ran.
@@ -44,7 +67,7 @@ process.stdin.on("data", (chunk) => {
       reply(message.id, {
         protocolVersion: 1,
         agentInfo: { name: "${ACP_AGENT.name}", version: "${ACP_AGENT.version}" },
-        standIn: { cwd: process.cwd(), piCommand: process.env.PI_ACP_PI_COMMAND ?? null },
+        standIn: { cwd: process.cwd(), piCommand: process.env.PI_ACP_PI_COMMAND ?? null, execPath: process.execPath },
       });
     } else if (message.method === "session/new") reply(message.id, { sessionId: "stand-in-session" });
     else if (message.id !== undefined) reply(message.id, {});
@@ -103,6 +126,7 @@ test("openPiAcpProbe walks its real path against a stand-in adapter without VOIC
   // The reply carries facts only the fenced child can report: the fence's cwd and its own env.
   assert.equal(probe.info.standIn.cwd, "/work", "the adapter ran INSIDE the fence, at the fence's cwd");
   assert.equal(probe.info.standIn.piCommand, "/harness/pi", "the adapter saw the fence's own environment");
+  assert.equal(probe.info.standIn.execPath, "/packages/node", "the adapter executed under the sandboxed /packages/node runtime");
   // The temp dir the probe created is removed when the child exits (x5lg's P0 was that creation).
   assert.equal(await probe.newSession(), "stand-in-session");
 });
@@ -123,4 +147,43 @@ test("negative control: removing the probe's temp-dir binding makes the same cal
     (error) => error instanceof ReferenceError && /dir is not defined/.test(error.message),
     "the same call must fail loudly on the exact defect this file exists to catch",
   );
+});
+
+test("fenced probe reports exit status without leaking arbitrary stderr or unlabelled secrets (voicebox-beads-7i5j)", { timeout: 30000 }, async (t) => {
+  if (!hasBwrap) {
+    t.skip("no functional bwrap on this host");
+    return;
+  }
+  const { adapterDir, piBinary } = standIn(t);
+  // Break the adapter to emit arbitrary unlabelled secret material on stderr and exit with code 42
+  fs.writeFileSync(path.join(adapterDir, "dist", "index.js"), [
+    'console.log(JSON.stringify({ jsonrpc: "2.0", method: "notification/stdout_canary" }));',
+    'console.error("CONFIDENTIAL_ARBITRARY_SECRET_DATA_XYZ_987654321");',
+    'process.exit(42);',
+  ].join("\n"));
+  await assert.rejects(
+    openPiAcpProbe({ adapterDir, piBinary, timeoutMs: 15000 }),
+    (error) => {
+      assert.equal(error.refused, "harness-ended-outcome-unknown");
+      assert.equal(error.detail, "exit 42");
+      assert.match(error.message, /exit 42/);
+      assert.doesNotMatch(error.message, /CONFIDENTIAL_ARBITRARY_SECRET_DATA/);
+      assert.doesNotMatch(String(error.detail), /CONFIDENTIAL_ARBITRARY_SECRET_DATA/);
+      assert.doesNotMatch(String(error.detail), /stdout_canary/);
+      return true;
+    },
+    "an unexpected child failure must report exit status without exposing arbitrary child stderr",
+  );
+});
+
+test("canBwrap canary: returns false on execution error or non-zero status (voicebox-beads-y63q P2)", () => {
+  // Mock runner simulating non-zero exit status (e.g. userns clone denied or bad flag)
+  assert.equal(canBwrap(() => ({ status: 1 })), false, "status 1 must return false");
+  assert.equal(canBwrap(() => ({ status: 127 })), false, "status 127 must return false");
+  // Mock runner simulating process spawn failure/throw
+  assert.equal(canBwrap(() => { throw new Error("EPERM: operation not permitted"); }), false, "thrown spawn must return false");
+  // Mock runner simulating missing bwrap binary
+  assert.equal(canBwrap(spawnSync, () => false), false, "missing binary must return false");
+  // Mock runner simulating successful unshare execution (positive control)
+  assert.equal(canBwrap(() => ({ status: 0 }), () => true), true, "status 0 with present binary must return true");
 });
