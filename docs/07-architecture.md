@@ -204,6 +204,8 @@ Static frontend assets are served from `public/`. `GET /api/health` reports the 
 A WEBSOCKET UPGRADE ON /live IS ACCEPTED (101) — the zero-dependency server owns it.
 <!-- END GENERATED: routes -->
 
+Every route that reads a JSON body reads it through one bounded door in `server.mjs` (`readJson`, voicebox-beads-d808): a body past the cap (1 MiB by default; the file-content routes pass 8 MiB) is refused `413 body-too-large` with the rest of the upload discarded unread, and a declared non-JSON `Content-Type` is refused `415 unsupported-content-type` before a byte is read. A refused body never reaches the route.
+
 <!-- BEGIN GENERATED: page — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 `public/index.html` loads `fused.js`, `pip-mic.mjs`, `live-voice.js` from `public/`.
 AudioWorklet modules loaded by the frontend audio engine: `pcm-worklet.js`.

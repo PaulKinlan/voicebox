@@ -2052,6 +2052,19 @@ function rootMissing() {
 }
 
 /**
+ * THE ROUTE NEVER RUNS ON A REFUSED BODY (voicebox-beads-d808). readJson answers a refused body
+ * itself — 413 body-too-large, 415 unsupported-content-type — and stops the route by throwing this,
+ * so no handler can act on a body the door already answered. The createServer catch recognises it
+ * and does not answer a second time; every other throw it logs and answers 500. A caller that
+ * catches readJson's rejection (`.catch(() => ({}))`) MUST rethrow a BodyRefusal — swallowing it
+ * would run the route on a body that was already refused, and answer twice.
+ */
+class BodyRefusal extends Error {}
+
+/** The default cap on a JSON request body; routes that move FILE CONTENTS pass their own (larger) cap. */
+const DEFAULT_JSON_BODY_MAX_BYTES = 1024 * 1024; // 1 MiB
+
+/**
  * EVERY REQUEST GETS AN ANSWER. A route body that throws used to hang the caller: the async callback
  * was never awaited, so nothing wrote a response — measured, with the directory deleted under a live
  * declaration. The named refusal above is the product fix; this is the structural one, because a
@@ -4247,10 +4260,52 @@ const routes = {
 };
 
 async function handle(req, res) {
-  const readJson = (maxBytes = Infinity) => new Promise((resolve) => {
-    let body = "", bytes = 0;
-    req.on("data", (c) => { bytes += c.length; if (bytes <= maxBytes) body += c; });
-    req.on("end", () => { try { resolve(bytes > maxBytes ? null : JSON.parse(body || "{}")); } catch { resolve(null); } });
+  // A JSON BODY HAS TWO BOUNDS, answered by name at this one site (voicebox-beads-d808). The old
+  // helper read with maxBytes = Infinity and accepted any Content-Type: on the default posture (the
+  // loopback wall is opt-in) an unauthenticated POST could stream an unbounded body into this
+  // process's memory, and an oversized or non-JSON body silently resolved null — indistinguishable
+  // from "no body". Now:
+  //   · a DECLARED Content-Type that is not JSON is refused 415 before a byte is read (an absent
+  //     Content-Type stays allowed — an empty body parses as {} and always has);
+  //   · a body past the cap (1 MiB by default; file-content routes pass more) is refused 413 BY
+  //     NAME the moment the cap is crossed, and the rest of the upload is DISCARDED unread — memory
+  //     stays bounded no matter how much more the peer sends;
+  //   · a malformed body still resolves null, exactly as before — the route's own 400 answers it.
+  // Both refusals answer with `connection: close` and drain rather than destroy the socket: an
+  // early destroy RSTs the connection and can clobber the refusal before the client reads it
+  // (measured in tests/json-body-bounds.test.mjs as EPIPE racing the 413).
+  // Both refusals are answered HERE and the route is stopped by a BodyRefusal throw.
+  const readJson = (maxBytes = DEFAULT_JSON_BODY_MAX_BYTES) => new Promise((resolve, reject) => {
+    // Answer the refusal, then discard whatever else the peer sends and close after the response.
+    const refuse = (code, payload, refusal) => {
+      res.setHeader("connection", "close");
+      json(res, code, payload);
+      req.removeAllListeners("data");
+      req.resume(); // drain: unread body must not RST the answer
+      reject(new BodyRefusal(refusal));
+    };
+    const contentType = req.headers["content-type"];
+    if (typeof contentType === "string") {
+      const mediaType = contentType.split(";", 1)[0].trim().toLowerCase();
+      if (mediaType && mediaType !== "application/json" && !mediaType.endsWith("+json")) {
+        return refuse(415, { ok: false, refused: "unsupported-content-type", why: `this route reads a JSON body and the request declared Content-Type '${mediaType}' — send application/json` }, "unsupported-content-type");
+      }
+    }
+    let body = "", bytes = 0, refused = false;
+    req.on("data", (chunk) => {
+      if (refused) return;
+      bytes += chunk.length;
+      if (bytes > maxBytes) {
+        refused = true;
+        return refuse(413, { ok: false, refused: "body-too-large", why: `this route accepts a JSON body of at most ${maxBytes} bytes and this request streamed past it — nothing was parsed, and the rest of the upload is discarded unread` }, "body-too-large");
+      }
+      body += chunk;
+    });
+    req.on("end", () => {
+      if (refused) return;
+      try { resolve(JSON.parse(body || "{}")); } catch { resolve(null); }
+    });
+    req.on("error", () => { if (!refused) resolve(null); });
   });
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   const key = `${req.method} ${url.pathname}`;
@@ -4692,7 +4747,8 @@ async function handle(req, res) {
   }
 
   if (req.method === "DELETE" && url.pathname === "/api/mini-apps") {
-    const body = await readJson().catch(() => ({}));
+    // A BodyRefusal must propagate — the door already answered it (voicebox-beads-d808).
+    const body = await readJson().catch((err) => { if (err instanceof BodyRefusal) throw err; return {}; });
     const id = String(body?.appId ?? body?.id ?? url.searchParams.get("id") ?? url.searchParams.get("appId") ?? "").trim();
     const rootPath = active?.root?.kind === "machine" ? active.root.path : WORKSPACE;
     const deleted = deleteMiniApp(id, { rootPath });
@@ -4772,22 +4828,24 @@ async function handle(req, res) {
     return json(res, 200, result);
   }
 
+  // File CONTENT crosses these three routes, and a real file can exceed the 1 MiB default —
+  // they pass the same larger cap the transport import already used (voicebox-beads-d808).
   if (req.method === "PUT" && url.pathname === "/api/file") {
-    const body = await readJson();
+    const body = await readJson(8 * 1024 * 1024);
     const result = await execute({ verb: "write", name: body?.name, content: body?.content });
     if (!result.ok) return json(res, result.refused === "not-found" ? 404 : 400, result);
     return json(res, 200, result);
   }
 
   if (req.method === "PATCH" && url.pathname === "/api/file") {
-    const body = await readJson();
+    const body = await readJson(8 * 1024 * 1024);
     const result = await execute({ verb: "edit", name: body?.name, oldText: body?.oldText, newText: body?.newText });
     if (!result.ok) return json(res, result.refused === "not-found" ? 404 : 400, result);
     return json(res, 200, result);
   }
 
   if (req.method === "POST" && url.pathname === "/api/file/diff") {
-    const body = await readJson();
+    const body = await readJson(8 * 1024 * 1024);
     const result = await execute({ verb: "diff", name: body?.name, content: body?.content });
     if (!result.ok) return json(res, 400, result);
     return json(res, 200, result);
@@ -5288,7 +5346,7 @@ async function handle(req, res) {
     if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
       return json(res, 403, { ok: false, refused: "host-token-required", why: "resolving a permission request requires the host token (x-voicebox-host-token); the page cannot hold it" });
     }
-    const body = await readJson().catch(() => ({}));
+    const body = await readJson().catch((err) => { if (err instanceof BodyRefusal) throw err; return {}; });
     const requestId = typeof body?.requestId === "string" ? body.requestId : null;
     if (!requestId) return json(res, 400, { ok: false, refused: "bad-request", why: "resolving a permission request names the requestId" });
     const result = permissions.resolve(requestId, {
@@ -5400,7 +5458,7 @@ async function handle(req, res) {
     if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
       return json(res, 403, { ok: false, refused: "host-token-required", why: "revoking a pairing is the host's act and requires the host token (x-voicebox-host-token); the page cannot hold it" });
     }
-    const body = await readJson().catch(() => ({}));
+    const body = await readJson().catch((err) => { if (err instanceof BodyRefusal) throw err; return {}; });
     const envKey = (typeof body?.envKey === "string" ? body.envKey : null) ?? url.searchParams.get("envKey");
     if (!envKey) {
       return json(res, 400, { ok: false, refused: "bad-request", why: "revoking a pairing names the environment key (envKey)" });
@@ -5522,6 +5580,9 @@ const server = createServer(async (req, res) => {
   try {
     await handle(req, res);
   } catch (e) {
+    // The door already answered this refusal by name (413/415) — the route was stopped, and the
+    // host survives without a second answer or an error log for an expected refusal.
+    if (e instanceof BodyRefusal) return;
     console.error(`[audit] ${new Date().toISOString()} ${req.method} ${req.url}:`, e?.message ?? e);
     try { json(res, 500, { error: "internal error — the turn was not executed" }); } catch { /* response gone */ }
   }
