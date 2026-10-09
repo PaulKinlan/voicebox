@@ -56,8 +56,7 @@ function postRaw({ route = "/api/exec", headers = {}, chunks = [] }) {
       let parsed = null;
       try { parsed = JSON.parse(text); } catch { /* asserted by callers that need it */ }
       resolve({ status: seen.statusCode, text, body: parsed });
-    };
-    const req = http.request({ host: "127.0.0.1", port: PORT, path: route, method: "POST", headers }, (res) => {
+    };    const req = http.request({ host: "127.0.0.1", port: PORT, path: route, method: "POST", headers }, (res) => {
       seen = res;
       res.on("data", (c) => (text += c));
       res.on("end", settle);
@@ -94,9 +93,20 @@ test("a declared non-JSON Content-Type is refused 415 before parsing", async () 
     chunks: ['{"command":""}'],
   });
   assert.equal(res.status, 415);
+  assert.ok(res.body, "the refusal body arrived whole");
   assert.equal(res.body.ok, false);
   assert.equal(res.body.refused, "unsupported-content-type");
   assert.match(res.body.why, /text\/plain/);
+});
+
+test("a declared but EMPTY media type is still a declared non-JSON type — 415", async () => {
+  const res = await postRaw({
+    headers: { "content-type": ";charset=utf-8" },
+    chunks: ['{"command":""}'],
+  });
+  assert.equal(res.status, 415);
+  assert.ok(res.body, "the refusal body arrived whole");
+  assert.equal(res.body.refused, "unsupported-content-type");
 });
 
 test("an oversized body is refused 413 by name, and the rest is discarded unread", async () => {
@@ -107,13 +117,49 @@ test("an oversized body is refused 413 by name, and the rest is discarded unread
     chunks,
   });
   assert.equal(res.status, 413);
+  assert.ok(res.body, "the refusal body arrived whole");
   assert.equal(res.body.ok, false);
   assert.equal(res.body.refused, "body-too-large");
+});
+
+test("the route never runs on a refused body (no side effect)", async () => {
+  // POST /api/environments WRITES to the registry when the body is accepted — so a refused body
+  // must leave the registry untouched. Drive it with an oversized but otherwise valid declaration.
+  const before = await fetch(`http://127.0.0.1:${PORT}/api/environments`).then((r) => r.json());
+  const descriptor = JSON.stringify({ label: "never-registered", kind: "server", origin: "http://127.0.0.1:1", pad: "x".repeat(2 * 1024 * 1024) });
+  const res = await postRaw({
+    route: "/api/environments",
+    headers: { "content-type": "application/json" },
+    chunks: [descriptor],
+  });
+  assert.equal(res.status, 413);
+  assert.ok(res.body, "the refusal body arrived whole");
+  assert.equal(res.body.refused, "body-too-large");
+  const after = await fetch(`http://127.0.0.1:${PORT}/api/environments`).then((r) => r.json());
+  assert.deepEqual(
+    (after.environments ?? []).map((e) => e.label),
+    (before.environments ?? []).map((e) => e.label),
+    "the refused declaration was never registered — the route never ran",
+  );
+});
+
+test("a content route accepts a body past the 1 MiB default (8 MiB content cap)", async () => {
+  // POST /api/mini-apps carries the app's html — content. A ~2 MiB app must NOT meet the default
+  // cap: any answer that is not 413 proves the door passed it (validation may still 400 it).
+  const res = await postRaw({
+    route: "/api/mini-apps",
+    headers: { "content-type": "application/json" },
+    chunks: [JSON.stringify({ appId: "big-app", html: "<!--" + "y".repeat(2 * 1024 * 1024) + "-->" })],
+  });
+  assert.ok(res.body, "the answer body arrived whole");
+  assert.notEqual(res.status, 413, "a content route does not answer 413 at 2 MiB");
+  assert.notEqual(res.body?.refused, "body-too-large");
 });
 
 test("an absent Content-Type with an empty body is still allowed (parses as {})", async () => {
   const res = await postRaw({ headers: {}, chunks: [] });
   assert.equal(res.status, 400);
+  assert.ok(res.body, "the answer body arrived whole");
   assert.equal(res.body.ok, false);
   assert.notEqual(res.body.refused, "unsupported-content-type");
   assert.notEqual(res.body.refused, "body-too-large");
@@ -128,4 +174,5 @@ test("the host survives both refusals and keeps serving", async () => {
     chunks: [JSON.stringify({ command: "" })],
   });
   assert.equal(res.status, 400);
+  assert.ok(res.body, "the answer body arrived whole");
 });

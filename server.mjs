@@ -2064,6 +2064,62 @@ class BodyRefusal extends Error {}
 /** The default cap on a JSON request body; routes that move FILE CONTENTS pass their own (larger) cap. */
 const DEFAULT_JSON_BODY_MAX_BYTES = 1024 * 1024; // 1 MiB
 
+/** Routes whose body CARRIES content — file text, mini-app HTML, extension source, tool args — get the larger cap. */
+const CONTENT_JSON_BODY_MAX_BYTES = 8 * 1024 * 1024; // 8 MiB
+
+/**
+ * THE BOUNDED JSON DOOR — the ONE way a route reads a JSON body (voicebox-beads-d808). The old
+ * shape read with no cap and accepted any Content-Type (and a dozen routes hand-rolled the same
+ * unbounded read): on the default posture (the loopback wall is opt-in) an unauthenticated POST
+ * could stream an unbounded body into this process's memory, and an oversized or non-JSON body
+ * silently resolved null — indistinguishable from "no body". Now, at this one site:
+ *   · a DECLARED Content-Type that is not JSON is refused 415 before a byte is read — an empty
+ *     media type (`Content-Type: ;charset=utf-8`) is a declared non-JSON type; only an ABSENT
+ *     Content-Type is allowed through (an empty body parses as {} and always has);
+ *   · a body past the cap (1 MiB by default; content routes pass CONTENT_JSON_BODY_MAX_BYTES) is
+ *     refused 413 BY NAME the moment the cap is crossed, and the rest of the upload is DISCARDED
+ *     unread — memory stays bounded no matter how much more the peer sends;
+ *   · a malformed body still resolves null, exactly as before — the route's own 400 answers it.
+ * Both refusals answer with `connection: close` and drain rather than destroy the socket: an early
+ * destroy RSTs the connection and can clobber the refusal before the client reads it (measured in
+ * tests/json-body-bounds.test.mjs as EPIPE racing the 413). Both are answered HERE and the route
+ * is stopped by a BodyRefusal throw.
+ */
+function readJsonBody(req, res, maxBytes = DEFAULT_JSON_BODY_MAX_BYTES) {
+  return new Promise((resolve, reject) => {
+    // Answer the refusal, then discard whatever else the peer sends and close after the response.
+    const refuse = (code, payload, refusal) => {
+      res.setHeader("connection", "close");
+      json(res, code, payload);
+      req.removeAllListeners("data");
+      req.resume(); // drain: unread body must not RST the answer
+      reject(new BodyRefusal(refusal));
+    };
+    const contentType = req.headers["content-type"];
+    if (typeof contentType === "string") {
+      const mediaType = contentType.split(";", 1)[0].trim().toLowerCase();
+      if (mediaType !== "application/json" && !mediaType.endsWith("+json")) {
+        return refuse(415, { ok: false, refused: "unsupported-content-type", why: `this route reads a JSON body and the request declared Content-Type '${mediaType || contentType}' — send application/json` }, "unsupported-content-type");
+      }
+    }
+    let body = "", bytes = 0, refused = false;
+    req.on("data", (chunk) => {
+      if (refused) return;
+      bytes += chunk.length;
+      if (bytes > maxBytes) {
+        refused = true;
+        return refuse(413, { ok: false, refused: "body-too-large", why: `this route accepts a JSON body of at most ${maxBytes} bytes and this request streamed past it — nothing was parsed, and the rest of the upload is discarded unread` }, "body-too-large");
+      }
+      body += chunk;
+    });
+    req.on("end", () => {
+      if (refused) return;
+      try { resolve(JSON.parse(body || "{}")); } catch { resolve(null); }
+    });
+    req.on("error", () => { if (!refused) resolve(null); });
+  });
+}
+
 /**
  * EVERY REQUEST GETS AN ANSWER. A route body that throws used to hang the caller: the async callback
  * was never awaited, so nothing wrote a response — measured, with the directory deleted under a live
@@ -3544,16 +3600,12 @@ const harnessInventory = createHarnessInventory();
 const roomPresence = createRoomPresenceCoordinator();
 const routes = {
   "GET /api/presence": (_req, res) => json(res, 200, roomPresence.snapshot()),
-  "POST /api/presence": (req, res) => {
-    let body = "";
-    req.on("data", (c) => (body += c));
-    req.on("end", () => answerOnce(res, async () => {
-      let parsed = {};
-      try {
-        parsed = JSON.parse(body || "{}");
-      } catch {
-        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
-      }
+  "POST /api/presence": async (req, res) => {
+    const parsed = await readJsonBody(req, res);
+    if (parsed === null || typeof parsed !== "object") {
+      return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
+    }
+    return answerOnce(res, async () => {
       const {
         action = "heartbeat",
         participantId,
@@ -3568,8 +3620,7 @@ const routes = {
         kind,
       } = parsed ?? {};
       let result;
-      if (action === "join" || action === "joinParticipant") {
-        result = roomPresence.joinParticipant({
+      if (action === "join" || action === "joinParticipant") {        result = roomPresence.joinParticipant({
           participantId,
           name,
           role,
@@ -3604,7 +3655,7 @@ const routes = {
       }
       broadcastChannel({ type: "presence", ...roomPresence.snapshot() });
       return json(res, result.ok === false ? 409 : 200, result);
-    }));
+    });
   },
   "GET /api/agents": (req, res, url) => {
     const environmentKey = url.searchParams.get("environment") || undefined;
@@ -3631,14 +3682,12 @@ const routes = {
     const fleet = await fleetManager.listAgents({ environmentKey, harness });
     return json(res, 200, { ok: true, fleet: fleet.map(publicFleetProjection) });
   },
-  "POST /api/fleet/contact": (req, res) => {
-    let body = "";
-    req.on("data", (c) => (body += c));
-    req.on("end", () => answerOnce(res, async () => {
-      let parsed = {};
-      try { parsed = JSON.parse(body || "{}"); } catch {
-        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
-      }
+  "POST /api/fleet/contact": async (req, res) => {
+    const parsed = await readJsonBody(req, res);
+    if (parsed === null || typeof parsed !== "object") {
+      return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
+    }
+    return answerOnce(res, async () => {
       const authority = {
         owner: createHash("sha256").update(`voicebox-fleet-contact\0${SELF_ENVIRONMENT}`).digest("hex"),
         callId: `contact_${Date.now().toString(36)}`,
@@ -3652,23 +3701,19 @@ const routes = {
       });
       const status = resContact.ok ? 200 : (["cross-environment-unauthorized", "environment-not-paired"].includes(resContact.refused) ? 403 : 400);
       return json(res, status, resContact);
-    }));
+    });
   },
   "GET /api/harnesses": async (req, res) => {
     const inv = await harnessInventory();
     const combined = await listHarnessesWithConfiguredAgents(inv, agentRegistry);
     return json(res, 200, { ...combined, activeHarness, activeHarnesses: [...activeHarnesses] });
   },
-  "POST /api/harnesses/configure": (req, res) => {
-    let body = "";
-    req.on("data", (c) => (body += c));
-    req.on("end", () => answerOnce(res, async () => {
-      let parsed = {};
-      try {
-        parsed = JSON.parse(body || "{}");
-      } catch {
-        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
-      }
+  "POST /api/harnesses/configure": async (req, res) => {
+    const parsed = await readJsonBody(req, res);
+    if (parsed === null || typeof parsed !== "object") {
+      return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
+    }
+    return answerOnce(res, async () => {
       if (Array.isArray(parsed?.harnesses)) {
         const validList = [];
         for (const h of parsed.harnesses) {
@@ -3730,7 +3775,7 @@ const routes = {
       const inv = await harnessInventory();
       const combined = await listHarnessesWithConfiguredAgents(inv, agentRegistry);
       return json(res, 200, { ok: true, activeHarness, activeHarnesses: [...activeHarnesses], ...combined });
-    }));
+    });
   },
   "GET /api/tasks": (req, res) => {
     const rootPath = active?.root?.kind === "machine" ? active.root.path : WORKSPACE;
@@ -3742,7 +3787,7 @@ const routes = {
       activeHarnesses: [...activeHarnesses],
     });
   },
-  "POST /api/tasks/delegate": (req, res) => {
+  "POST /api/tasks/delegate": async (req, res) => {
     if (!hasExtensionAuthority(req)) {
       return json(res, 403, {
         ok: false,
@@ -3750,15 +3795,11 @@ const routes = {
         why: "delegating tasks requires the host token (x-voicebox-host-token) or an authorized in-room session",
       });
     }
-    let body = "";
-    req.on("data", (c) => (body += c));
-    req.on("end", () => answerOnce(res, async () => {
-      let parsed = {};
-      try {
-        parsed = JSON.parse(body || "{}");
-      } catch {
-        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
-      }
+    const parsed = await readJsonBody(req, res);
+    if (parsed === null || typeof parsed !== "object") {
+      return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
+    }
+    return answerOnce(res, async () => {
       const taskText = typeof parsed?.task === "string" ? parsed.task.trim() : "";
       if (!taskText) {
         return json(res, 400, { ok: false, refused: "invalid-task", why: "the task must contain text" });
@@ -3818,7 +3859,7 @@ const routes = {
         }),
       );
       return json(res, 200, { ok: true, delegated: results, results });
-    }));
+    });
   },
   "GET /api/tools": async (req, res, url) => {
     const q = (url.searchParams.get("q") ?? "").trim();
@@ -3839,16 +3880,12 @@ const routes = {
     return json(res, 200, result);
   },
   "GET /api/keys": (req, res) => json(res, 200, apiKeysStatusPayload()),
-  "PUT /api/keys": (req, res) => {
-    let body = "";
-    req.on("data", (c) => (body += c));
-    req.on("end", () => answerOnce(res, async () => {
-      let parsed;
-      try {
-        parsed = JSON.parse(body || "{}");
-      } catch {
-        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
-      }
+  "PUT /api/keys": async (req, res) => {
+    const parsed = await readJsonBody(req, res);
+    if (parsed === null) {
+      return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
+    }
+    return answerOnce(res, async () => {
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
         return json(res, 400, { ok: false, refused: "bad-request", why: "body must be a JSON object" });
       }
@@ -3874,7 +3911,7 @@ const routes = {
       }
       writePersistedApiKeys(persistedKeys);
       return json(res, 200, { ...apiKeysStatusPayload(), agentSettings: agentSettingsPayload() });
-    }));
+    });
   },
   // THE AGENT'S SETTINGS, and the distinction this whole surface exists to keep:
   //   requested — what a person asked for, stored whether or not anything can use it yet
@@ -3882,16 +3919,12 @@ const routes = {
   //   pending   — for each setting that is stored but not yet read by a session, WHY
   // A setting that silently does nothing is worse than no setting, so the gap is in the payload.
   "GET /api/agent-settings": (req, res, url) => json(res, 200, agentSettingsPayload()),
-  "PUT /api/agent-settings": (req, res, url) => {
-    let body = "";
-    req.on("data", (c) => (body += c));
-    req.on("end", () => answerOnce(res, async () => {
-      let asked;
-      try {
-        asked = JSON.parse(body || "{}");
-      } catch {
-        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON: {provider?, voice?, personality?}" });
-      }
+  "PUT /api/agent-settings": async (req, res, url) => {
+    const asked = await readJsonBody(req, res);
+    if (asked === null) {
+      return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON: {provider?, voice?, personality?}" });
+    }
+    return answerOnce(res, async () => {
       const checked = validateAgentSettings(asked, agentSettings);
       if (!checked.ok) return json(res, 400, { ok: false, refused: checked.refused, why: checked.why });
       // Changing the provider does NOT start a session: the next one this page opens will use it, and
@@ -3906,8 +3939,7 @@ const routes = {
           ? "stored — the live session already running keeps the provider it started with"
           : "stored — no live session is running, so the next one this page opens will use it",
       }));
-    }));
-    return;
+    });
   },
 
   "GET /api/activity": (req, res, url) => json(res, 200, { ok: true, entries: workActivityLog }),
@@ -3922,16 +3954,13 @@ const routes = {
       liveConfigCatalogue: GEMINI_LIVE_CONFIG_CATALOGUE,
     });
   },
-  "POST /api/gemini/image": (req, res) => {
-    let body = "";
-    req.on("data", (c) => (body += c));
-    req.on("end", () => answerOnce(res, async () => {
-      let parsed = {};
-      try {
-        parsed = JSON.parse(body || "{}");
-      } catch {
-        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
-      }
+  // referenceImages are base64 pictures — a content body, so the larger cap (voicebox-beads-d808).
+  "POST /api/gemini/image": async (req, res) => {
+    const parsed = await readJsonBody(req, res, CONTENT_JSON_BODY_MAX_BYTES);
+    if (parsed === null || typeof parsed !== "object") {
+      return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
+    }
+    return answerOnce(res, async () => {
       const generated = await generateGeminiImage({
         prompt: parsed?.prompt,
         model: parsed?.model,
@@ -3956,18 +3985,14 @@ const routes = {
         caption: generated.caption,
         savedFile,
       });
-    }));
+    });
   },
-  "POST /api/gemini/video": (req, res) => {
-    let body = "";
-    req.on("data", (c) => (body += c));
-    req.on("end", () => answerOnce(res, async () => {
-      let parsed = {};
-      try {
-        parsed = JSON.parse(body || "{}");
-      } catch {
-        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
-      }
+  "POST /api/gemini/video": async (req, res) => {
+    const parsed = await readJsonBody(req, res);
+    if (parsed === null || typeof parsed !== "object") {
+      return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
+    }
+    return answerOnce(res, async () => {
       if (typeof parsed?.operationName === "string" && parsed.operationName.trim()) {
         const polled = await pollGeminiVideoOperation({ operationName: parsed.operationName.trim() });
         return json(res, polled.ok ? 200 : 400, polled);
@@ -3979,18 +4004,14 @@ const routes = {
         durationSeconds: parsed?.durationSeconds,
       });
       return json(res, started.ok ? 200 : 400, started);
-    }));
+    });
   },
-  "POST /api/gemini/embed": (req, res) => {
-    let body = "";
-    req.on("data", (c) => (body += c));
-    req.on("end", () => answerOnce(res, async () => {
-      let parsed = {};
-      try {
-        parsed = JSON.parse(body || "{}");
-      } catch {
-        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
-      }
+  "POST /api/gemini/embed": async (req, res) => {
+    const parsed = await readJsonBody(req, res);
+    if (parsed === null || typeof parsed !== "object") {
+      return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
+    }
+    return answerOnce(res, async () => {
       if (typeof parsed?.query === "string" && Array.isArray(parsed?.documents)) {
         const searchResult = await semanticSearchDocuments({
           query: parsed.query,
@@ -4007,7 +4028,7 @@ const routes = {
         outputDimensionality: parsed?.outputDimensionality,
       });
       return json(res, embedded.ok ? 200 : 400, embedded);
-    }));
+    });
   },
 
   // UN-DECLARE: back to `root-not-declared`, deliberately and by request. The gate asserts that
@@ -4260,53 +4281,9 @@ const routes = {
 };
 
 async function handle(req, res) {
-  // A JSON BODY HAS TWO BOUNDS, answered by name at this one site (voicebox-beads-d808). The old
-  // helper read with maxBytes = Infinity and accepted any Content-Type: on the default posture (the
-  // loopback wall is opt-in) an unauthenticated POST could stream an unbounded body into this
-  // process's memory, and an oversized or non-JSON body silently resolved null — indistinguishable
-  // from "no body". Now:
-  //   · a DECLARED Content-Type that is not JSON is refused 415 before a byte is read (an absent
-  //     Content-Type stays allowed — an empty body parses as {} and always has);
-  //   · a body past the cap (1 MiB by default; file-content routes pass more) is refused 413 BY
-  //     NAME the moment the cap is crossed, and the rest of the upload is DISCARDED unread — memory
-  //     stays bounded no matter how much more the peer sends;
-  //   · a malformed body still resolves null, exactly as before — the route's own 400 answers it.
-  // Both refusals answer with `connection: close` and drain rather than destroy the socket: an
-  // early destroy RSTs the connection and can clobber the refusal before the client reads it
-  // (measured in tests/json-body-bounds.test.mjs as EPIPE racing the 413).
-  // Both refusals are answered HERE and the route is stopped by a BodyRefusal throw.
-  const readJson = (maxBytes = DEFAULT_JSON_BODY_MAX_BYTES) => new Promise((resolve, reject) => {
-    // Answer the refusal, then discard whatever else the peer sends and close after the response.
-    const refuse = (code, payload, refusal) => {
-      res.setHeader("connection", "close");
-      json(res, code, payload);
-      req.removeAllListeners("data");
-      req.resume(); // drain: unread body must not RST the answer
-      reject(new BodyRefusal(refusal));
-    };
-    const contentType = req.headers["content-type"];
-    if (typeof contentType === "string") {
-      const mediaType = contentType.split(";", 1)[0].trim().toLowerCase();
-      if (mediaType && mediaType !== "application/json" && !mediaType.endsWith("+json")) {
-        return refuse(415, { ok: false, refused: "unsupported-content-type", why: `this route reads a JSON body and the request declared Content-Type '${mediaType}' — send application/json` }, "unsupported-content-type");
-      }
-    }
-    let body = "", bytes = 0, refused = false;
-    req.on("data", (chunk) => {
-      if (refused) return;
-      bytes += chunk.length;
-      if (bytes > maxBytes) {
-        refused = true;
-        return refuse(413, { ok: false, refused: "body-too-large", why: `this route accepts a JSON body of at most ${maxBytes} bytes and this request streamed past it — nothing was parsed, and the rest of the upload is discarded unread` }, "body-too-large");
-      }
-      body += chunk;
-    });
-    req.on("end", () => {
-      if (refused) return;
-      try { resolve(JSON.parse(body || "{}")); } catch { resolve(null); }
-    });
-    req.on("error", () => { if (!refused) resolve(null); });
-  });
+  // The bounded JSON door lives at module scope (readJsonBody, voicebox-beads-d808) so the routes
+  // table uses it too; this closure keeps the ~25 inline call sites spelling it `readJson(...)`.
+  const readJson = (maxBytes) => readJsonBody(req, res, maxBytes);
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   const key = `${req.method} ${url.pathname}`;
   // THE WALL (opt-in, docs/13 §4): with the gate on, an unauthenticated request gets a named
@@ -4390,15 +4367,11 @@ async function handle(req, res) {
     //
     // This is the defect voicebox-beads-fqq names: the page could not hold a token, so a browser-stored
     // project could never be declared, so a fresh room could not list or write anything at all.
-    let body = "";
-    req.on("data", (c) => (body += c));
-    req.on("end", () => answerOnce(res, async () => {
-      let declared;
-      try {
-        declared = JSON.parse(body);
-      } catch {
-        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON: {project, root}" });
-      }
+    const declared = await readJson();
+    if (declared === null) {
+      return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON: {project, root}" });
+    }
+    return answerOnce(res, async () => {
       const isSelfRequest =
         declared?.self === true ||
         declared?.target === "self" ||
@@ -4507,8 +4480,7 @@ async function handle(req, res) {
         executor: { page: "environment", connected: pageExecutorConnected() },
         declaredAt: active.declaredAt,
       });
-    }));
-    return;
+    });
   }
 
   if (req.method === "GET" && url.pathname === "/api/audit") {
@@ -4728,7 +4700,8 @@ async function handle(req, res) {
   }
 
   if ((req.method === "POST" || req.method === "PUT") && url.pathname === "/api/mini-apps") {
-    const body = await readJson();
+    // The body CARRIES the mini-app's html — content, so the larger cap (voicebox-beads-d808).
+    const body = await readJson(CONTENT_JSON_BODY_MAX_BYTES);
     if (!body || typeof body !== "object") {
       return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
     }
@@ -4829,23 +4802,23 @@ async function handle(req, res) {
   }
 
   // File CONTENT crosses these three routes, and a real file can exceed the 1 MiB default —
-  // they pass the same larger cap the transport import already used (voicebox-beads-d808).
+  // they pass the same content cap the transport import already used (voicebox-beads-d808).
   if (req.method === "PUT" && url.pathname === "/api/file") {
-    const body = await readJson(8 * 1024 * 1024);
+    const body = await readJson(CONTENT_JSON_BODY_MAX_BYTES);
     const result = await execute({ verb: "write", name: body?.name, content: body?.content });
     if (!result.ok) return json(res, result.refused === "not-found" ? 404 : 400, result);
     return json(res, 200, result);
   }
 
   if (req.method === "PATCH" && url.pathname === "/api/file") {
-    const body = await readJson(8 * 1024 * 1024);
+    const body = await readJson(CONTENT_JSON_BODY_MAX_BYTES);
     const result = await execute({ verb: "edit", name: body?.name, oldText: body?.oldText, newText: body?.newText });
     if (!result.ok) return json(res, result.refused === "not-found" ? 404 : 400, result);
     return json(res, 200, result);
   }
 
   if (req.method === "POST" && url.pathname === "/api/file/diff") {
-    const body = await readJson(8 * 1024 * 1024);
+    const body = await readJson(CONTENT_JSON_BODY_MAX_BYTES);
     const result = await execute({ verb: "diff", name: body?.name, content: body?.content });
     if (!result.ok) return json(res, 400, result);
     return json(res, 200, result);
@@ -4916,7 +4889,7 @@ async function handle(req, res) {
         root: active.root,
       });
     }
-    const body = await readJson(8 * 1024 * 1024);
+    const body = await readJson(CONTENT_JSON_BODY_MAX_BYTES);
     const rawBundle = body?.bundle ?? body;
     const imported = importWorkspaceBundle(active.root.path, rawBundle, {
       overwrite: body?.overwrite !== false,
@@ -4971,15 +4944,11 @@ async function handle(req, res) {
     // The "+" button: declare an environment. It is written to the list, NOT started — a declared
     // host that is not running will say so by name the next time the list is read. The server
     // generates the key; the person supplies the label and the origin.
-    let body = "";
-    req.on("data", (c) => (body += c));
-    req.on("end", async () => {
-      let parsed;
-      try {
-        parsed = JSON.parse(body);
-      } catch {
-        return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON: {label, kind, origin, home?}" });
-      }
+    const parsed = await readJson();
+    if (parsed === null) {
+      return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON: {label, kind, origin, home?}" });
+    }
+    {
       const candidate = parseEnvironment({ ...parsed, key: `env_${randomBytes(8).toString("hex")}` });
       if (!candidate.ok) return json(res, 400, candidate);
       const stored = readEnvironments();
@@ -5025,20 +4994,15 @@ async function handle(req, res) {
       if (existing) return json(res, 200, { ok: true, environment: existing, deduped: true });
       writeEnvironments([...stored.environments, descriptor]);
       return json(res, 200, { ok: true, environment: descriptor });
-    });
-    return;
+    }
   }
 
   if (req.method === "POST" && url.pathname === "/api/turn") {
-    let body = "";
-    req.on("data", (c) => (body += c));
-    req.on("end", () => answerOnce(res, async () => {
-      let parsed = {};
-      try {
-        parsed = JSON.parse(body);
-      } catch {
-        return json(res, 400, { ok: false, error: "body must be JSON" });
-      }
+    const parsed = await readJson();
+    if (parsed === null || typeof parsed !== "object") {
+      return json(res, 400, { ok: false, error: "body must be JSON" });
+    }
+    return answerOnce(res, async () => {
       let transcript = typeof parsed.transcript === "string" ? parsed.transcript.trim() : "";
       let action = null;
 
@@ -5099,8 +5063,7 @@ async function handle(req, res) {
         responsePayload.say = executionResult.say;
       }
       return json(res, 200, responsePayload);
-    }));
-    return;
+    });
   }
 
   // ── the extension surface (N17): discover, inventory, sideload ──────────
@@ -5158,7 +5121,8 @@ async function handle(req, res) {
   if (req.method === "POST" && url.pathname === "/api/extensions/proposals") {
     // The model's door over HTTP (what a model resolver calls): the same
     // destination as the transcript path — a PENDING proposal, nothing loaded.
-    const body = await readJson();
+    // descriptor.source is extension CODE — a content body, so the larger cap (voicebox-beads-d808).
+    const body = await readJson(CONTENT_JSON_BODY_MAX_BYTES);
     const r = extensions.propose(body?.descriptor, body?.descriptor?.source ?? "model");
     return r.ok ? json(res, 200, { ...r, note: "staged as a pending proposal — NOT loaded; the host admits it" }) : json(res, 400, r);
   }
@@ -5166,7 +5130,8 @@ async function handle(req, res) {
     // Create and locally add new extensions (voicebox-beads-b1p).
     // Host-owned admission gate: staging creates a pending proposal with source "local".
     // Direct admission requires the host token (x-voicebox-host-token); without it, direct admission is refused.
-    const body = await readJson();
+    // descriptor.source is extension CODE — a content body, so the larger cap (voicebox-beads-d808).
+    const body = await readJson(CONTENT_JSON_BODY_MAX_BYTES);
     const descriptor = body?.descriptor ?? body;
     if (!descriptor || typeof descriptor !== "object") {
       return json(res, 400, { ok: false, refused: "bad-request", why: "extension descriptor object required" });
@@ -5485,7 +5450,8 @@ async function handle(req, res) {
   if (req.method === "POST" && url.pathname === "/api/call") {
     // The LOCAL side (the proxy): the page names an environment by key; the host looks up the bearer
     // it holds for that key, attaches it, and forwards the call. The page never sees the bearer.
-    const body = await readJson();
+    // args carries tool payloads — write_file's content among them — so the content cap (voicebox-beads-d808).
+    const body = await readJson(CONTENT_JSON_BODY_MAX_BYTES);
     const envKey = typeof body?.envKey === "string" ? body.envKey : null;
     const tool = typeof body?.tool === "string" ? body.tool : null;
     const args = body?.args && typeof body.args === "object" ? body.args : {};
@@ -5549,7 +5515,8 @@ async function handle(req, res) {
     // never echoed in the refusal.
     const auth = String(req.headers["authorization"] ?? "");
     const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-    const body = await readJson();
+    // args carries tool payloads — write_file's content among them — so the content cap (voicebox-beads-d808).
+    const body = await readJson(CONTENT_JSON_BODY_MAX_BYTES);
     const envKey = typeof body?.envKey === "string" ? body.envKey : null;
     if (!envKey) return json(res, 400, { ok: false, refused: "bad-request", why: "an execute names the environment key it is for" });
     const known = await resolveEnvironment(envKey);
