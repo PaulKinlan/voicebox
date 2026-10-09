@@ -13,8 +13,8 @@
 body { margin: 0; }
 main { max-width: 76ch; margin: auto; padding: 24px; overflow-wrap: anywhere; }
 a { color: var(--accent); }
-h1 { font-size: 1.6rem; }
-h2 { font-size: 1.15rem; }
+h1 { font-size: 1.6rem; text-wrap: balance; }
+h2 { font-size: 1.15rem; text-wrap: balance; }
 button { font: inherit; padding: 10px 16px; color: inherit; background: var(--surface-raised); border: 1px solid var(--muted); border-radius: 6px; cursor: pointer; }
 button:disabled { opacity: .6; cursor: wait; }
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }

@@ -3,7 +3,7 @@ const list = document.getElementById("commits");
 
 async function loadChangelog() {
   try {
-    const res = await fetch("/api/changelog", { signal: AbortSignal.timeout(10000) });
+    const res = await fetch("/api/changelog", { signal: AbortSignal.timeout(10000), priority: "low" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (!data.ok || !Array.isArray(data.commits)) throw new Error("invalid changelog response");

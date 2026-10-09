@@ -4690,12 +4690,12 @@ function formatCommitDescription(commit) {
   };
 }
 
-async function loadRoomChangelog() {
+async function loadRoomChangelog(options = {}) {
   if (!els.changelogCommits || !els.changelogStatus) return;
   if (els.changelogRefresh) els.changelogRefresh.disabled = true;
   els.changelogStatus.textContent = "Loading changes…";
   try {
-    const res = await fetch("/api/changelog", { signal: AbortSignal.timeout(10000) });
+    const res = await fetch("/api/changelog", { signal: AbortSignal.timeout(10000), priority: options.priority ?? "low" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (!data.ok || !Array.isArray(data.commits)) throw new Error("invalid changelog response");
@@ -4791,7 +4791,7 @@ on(els.changelogDialog, "close", () => {
   (lastChangelogTrigger || els.changelogOpen)?.focus();
   lastChangelogTrigger = null;
 });
-on(els.changelogRefresh, "click", () => void loadRoomChangelog());
+on(els.changelogRefresh, "click", () => void loadRoomChangelog({ priority: "high" }));
 
 // ── Provider API keys configuration (voicebox-beads-5drl) ─────────────────
 function describeProviderKeySlot(slot) {
