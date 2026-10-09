@@ -58,6 +58,10 @@ test("extension network logging: query-string credentials are scrubbed from fetc
   const secretKey = "super-secret-key-abc111";
 
   const server = http.createServer((req, res) => {
+    if (req.url?.startsWith("/redirect-disallowed")) {
+      res.writeHead(302, { location: `http://127.0.0.2:${port}/forbidden?token=${secretToken}&key=${secretKey}` });
+      return res.end();
+    }
     if (req.url?.startsWith("/redirect")) {
       res.writeHead(302, { location: `/api/endpoint?token=${secretToken}&key=${secretKey}&q=redirected` });
       return res.end();
@@ -145,5 +149,21 @@ test("extension network logging: query-string credentials are scrubbed from fetc
     assert.match(rLog, /token=\[redacted\]/);
     assert.match(rLog, /key=\[redacted\]/);
     assert.match(rLog, /q=redirected/);
+  }
+
+  // 3. Redirect refusal assertion: redirect to disallowed host with query credentials is scrubbed from stderr
+  logs.length = 0;
+  errors.length = 0;
+  const disallowedRes = await callTool("probe_fetch", { url: `http://127.0.0.1:${port}/redirect-disallowed` });
+  assert.equal(disallowedRes.ok, false);
+  assert.equal(disallowedRes.refused, "redirect-host-not-allowed");
+  assert.equal(errors.some((e) => e.includes(secretToken)), false, "secret token leaked to stderr on redirect refusal");
+  assert.equal(errors.some((e) => e.includes(secretKey)), false, "secret key leaked to stderr on redirect refusal");
+  const refusalErrors = errors.filter((e) => e.includes("[extension:refused] redirect-host-not-allowed"));
+  assert.ok(refusalErrors.length >= 1, "missing [extension:refused] redirect-host-not-allowed error");
+  for (const rErr of refusalErrors) {
+    assert.match(rErr, /token=\[redacted\]/);
+    assert.match(rErr, /key=\[redacted\]/);
+    assert.match(rErr, /chain:/);
   }
 });
