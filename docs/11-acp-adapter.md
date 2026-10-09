@@ -41,7 +41,7 @@ When no harness is active, calling `delegate_task` returns `executor-unavailable
 
 ### Pi ACP Adapter (`lib/pi-acp.mjs`)
 - Targets `pi-acp` (`0.0.34`) with `pi` (`0.87.1`). Override binary paths via `VOICEBOX_ACP_ADAPTER` and `VOICEBOX_ACP_PI`.
-- Also provides `openPiAcpProbe()` for credential-free handshake verification inside bubblewrap isolation.
+- Also provides `openPiAcpProbe()` for credential-free handshake verification inside bubblewrap isolation. Binds the active Node runtime (`process.execPath`) to `/packages/node` so the probe runs independent of host `/usr/bin/node` symlinks or user-profile locations (for Node runtimes depending on system libraries under `/usr/lib` and `/lib64`), and reports exit status on abnormal termination without exposing raw child stderr (`voicebox-beads-7i5j`).
 - **Anthropic Key Fallback**: Passes `ANTHROPIC_API_KEY` through to the `pi-acp` child environment so Anthropic-backed model selections succeed when Pi's internal auth store has no separate credential (`tests/pi-acp-options.test.mjs`).
 
 ### Claude Code ACP Adapter (`lib/claude-acp.mjs`)
