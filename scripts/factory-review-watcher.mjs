@@ -86,7 +86,10 @@ Options:
       const raw = execFileSync("bd", ["list", "--json"], {
         cwd: rootDir,
         encoding: "utf8",
-        env,
+        // cleanEnv, not env: bd must answer about THIS repo's tracker; an inherited
+        // GIT_DIR/GIT_WORK_TREE would steer it at whatever the caller happens to be inside
+        // (946i/lumm/a8p5 class — voicebox-beads-8f8u).
+        env: cleanEnv,
         timeout: 30000,
       });
       beadsList = JSON.parse(raw);
