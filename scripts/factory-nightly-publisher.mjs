@@ -12,6 +12,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { containedIn } from "../lib/path-auth.mjs";
+import { gitEnv } from "../lib/git-env.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -136,7 +137,9 @@ Options:
         const originUrl = execFileSync("git", ["config", "--get", "remote.origin.url"], {
           cwd: t,
           encoding: "utf8",
-          env: { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined },
+          // gitEnv, not a hand-rolled 3-name strip: GIT_COMMON_DIR / GIT_CONFIG_PARAMETERS /
+          // GIT_CONFIG_COUNT steer this read just as surely as GIT_DIR does (voicebox-beads-8f8u).
+          env: gitEnv(env),
         }).trim();
         if (originUrl.toLowerCase().includes("paulkinlan/voicebox")) {
           verifiedTarget = t;
@@ -260,7 +263,9 @@ Options:
       const res = spawnSync(process.execPath, pubArgs, {
         cwd: rootDir,
         encoding: "utf8",
-        env,
+        // gitEnv parity (voicebox-beads-8f8u): the triage child runs gh/bd against verifiedTarget;
+        // inherited git plumbing vars would steer those at the wrong repo.
+        env: gitEnv(env),
         timeout: 180000,
       });
 
