@@ -306,7 +306,9 @@ Options:
 
   let runExit = 0;
   try {
-    const hasFleetHeavy = existsSync("/usr/local/bin/fleet-heavy") || spawnSync("which", ["fleet-heavy"]).status === 0;
+    // cleanEnv here as well: this PATH probe should answer about the SAME environment the bash
+    // child will run in, not the ambient one (voicebox-beads-a8p5 review).
+    const hasFleetHeavy = existsSync("/usr/local/bin/fleet-heavy") || spawnSync("which", ["fleet-heavy"], { env: cleanEnv }).status === 0;
     const innerCmd = hasFleetHeavy
       ? ["fleet-heavy", "timeout", "900", "factory", "run", station, "--target", rootDir, "--sink", "file"]
       : ["timeout", "-k", "30", "900", "factory", "run", station, "--target", rootDir, "--sink", "file"];
@@ -327,8 +329,10 @@ Options:
 
     const res = spawnSync("bash", ["-c", runnerScript, "_", targetLockPath, ...innerCmd], {
       cwd: rootDir,
+      // cleanEnv, not env: the factory child runs git against --target rootDir, and an inherited
+      // GIT_DIR/GIT_WORK_TREE would outrank it — the 946i/lumm class (voicebox-beads-a8p5).
       env: {
-        ...env,
+        ...cleanEnv,
         VOICEBOX_FACTORY_PRIVATE_DIR: runDir,
         DEFAULT_REPORT: defaultReportPath,
         ISOLATED_REPORT: isolatedReportPath,
@@ -407,7 +411,7 @@ Options:
 
           const pubRes = spawnSync("node", publisherArgs, {
             cwd: rootDir,
-            env: { ...env, VOICEBOX_FACTORY_PRIVATE_DIR: runDir },
+            env: { ...cleanEnv, VOICEBOX_FACTORY_PRIVATE_DIR: runDir },
             encoding: "utf8",
             timeout: 120000,
           });
@@ -457,7 +461,9 @@ Options:
     }
     const beadMsg = `Factory review: station '${station}', verdict ${verdict}${defNote}, cacheKey ${cacheKey.slice(0, 10)}`;
     try {
-      spawnSync("bd", ["comment", beadId, beadMsg], { cwd: rootDir, encoding: "utf8" });
+      // cleanEnv here too: bd comments on THIS repo's tracker, and an inherited GIT_DIR would
+      // point it somewhere else (voicebox-beads-a8p5).
+      spawnSync("bd", ["comment", beadId, beadMsg], { cwd: rootDir, env: cleanEnv, encoding: "utf8" });
       console.log(`[review-trigger] Recorded review verdict on bead ${beadId}`);
     } catch (e) {
       console.warn(`[review-trigger] Could not comment on bead ${beadId}: ${sanitizeLogOutput(e.message)}`);

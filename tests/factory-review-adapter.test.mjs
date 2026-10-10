@@ -1517,3 +1517,144 @@ test("factory-review-trigger: focused concurrency negative control rejects inter
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
+
+test("factory-review-trigger: a poisoned GIT_DIR/GIT_WORK_TREE reaches neither the trigger's own diff nor its spawned bash/node/bd children (voicebox-beads-a8p5)", (t) => {
+  // The direct git calls already ran on gitEnv; the spawned children (the bash runner, the node
+  // publisher, the bd comment) inherited the ambient environment verbatim — the 946i/lumm class at
+  // a new site. This test poisons GIT_DIR/GIT_WORK_TREE at a DECOY repo with a different history:
+  // if the trigger's diff or any child's env leaked it, either the station comes out wrong (the
+  // decoy has no ops change) or the child's env record shows the poison.
+  const ownedDirs = new Set();
+  t.after(() => {
+    for (const dir of ownedDirs) rmSync(dir, { recursive: true, force: true });
+  });
+  const ownDir = (dir) => {
+    ownedDirs.add(dir);
+    return dir;
+  };
+
+  const fixtureRoot = ownDir(mkdtempSync(path.join(tmpdir(), "review-trigger-poison-")));
+  const repoDir = path.join(fixtureRoot, "voicebox-poisoned");
+  const decoyDir = path.join(fixtureRoot, "decoy");
+  const gitHome = path.join(fixtureRoot, "githome");
+  const gitXdg = path.join(gitHome, ".config");
+  const gitHooksDir = path.join(fixtureRoot, "empty-hooks");
+  const fakeBin = path.join(fixtureRoot, "fakebin");
+  const recordDir = path.join(fixtureRoot, "records");
+  const privateDir = path.join(fixtureRoot, "private");
+  for (const dir of [repoDir, decoyDir, gitHome, gitXdg, gitHooksDir, fakeBin, recordDir, privateDir]) mkdirSync(dir, { recursive: true });
+
+  // Same discipline as the dry-run fixture above: absolute trusted git, owned HOME/XDG, system and
+  // global config and hooks pinned off.
+  const trustedGit = "/usr/bin/git";
+  accessSync(trustedGit, constants.X_OK);
+  const fixtureGitEnv = () => ({
+    HOME: gitHome,
+    XDG_CONFIG_HOME: gitXdg,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_ATTR_NOSYSTEM: "1",
+  });
+  const git = (args, cwd) => execFileSync(
+    trustedGit,
+    ["-c", `core.hooksPath=${gitHooksDir}`, "-c", `init.templateDir=${gitHooksDir}`, ...args],
+    { cwd, encoding: "utf8", env: fixtureGitEnv() },
+  );
+
+  // The fixture repo: a base commit plus one ops-category change, so HEAD~1..HEAD selects log-check.
+  git(["init", "-q", "-b", "main", repoDir], fixtureRoot);
+  assert.equal(
+    realpathSync(git(["rev-parse", "--show-toplevel"], repoDir).trim()),
+    realpathSync(repoDir),
+    "fixture git ops must resolve to the fixture itself",
+  );
+  git(["config", "user.email", "poison-fixture@test.local"], repoDir);
+  git(["config", "user.name", "poison fixture"], repoDir);
+  git(["remote", "add", "origin", "https://github.com/PaulKinlan/voicebox.git"], repoDir);
+  writeFileSync(path.join(repoDir, "README.md"), "fixture base\n");
+  git(["add", "README.md"], repoDir);
+  git(["commit", "-q", "-m", "fixture base"], repoDir);
+  writeFileSync(path.join(repoDir, "ops-change.log"), "2026-01-01 INFO fixture ops change\n");
+  git(["add", "ops-change.log"], repoDir);
+  git(["commit", "-q", "-m", "fixture ops change"], repoDir);
+
+  // The DECOY the poison points at: a different repo with no ops change in its history.
+  git(["init", "-q", "-b", "main", decoyDir], fixtureRoot);
+  git(["config", "user.email", "decoy@test.local"], decoyDir);
+  git(["config", "user.name", "decoy"], decoyDir);
+  writeFileSync(path.join(decoyDir, "DECOY.md"), "decoy\n");
+  git(["add", "DECOY.md"], decoyDir);
+  git(["commit", "-q", "-m", "decoy"], decoyDir);
+
+  // Fake bash, bd AND node on a fixture PATH (Node resolves the command against the spawn env's
+  // PATH): each records the git-plumbing variables it inherited. The fake bash also writes a VALID
+  // isolated delta report so the pipeline proceeds to the publisher and bd steps; the fixture gets
+  // an empty scripts/factory-triage.mjs so the publisher spawn fires, and the fake node answers it.
+  // timeout/fleet-heavy/factory stubs make the seam FAIL CLOSED in the case they cover: if the
+  // fixture's bash wrapper ever dropped out while the fixture PATH still held, the real
+  // runnerScript would invoke these stubs, which record the escape and fail — not run the station.
+  // (If the env: option itself were dropped, the child would inherit the runner's real PATH and
+  // neither these stubs nor the fake bash would resolve; the test still goes red on the missing
+  // bash.env record, just after that spawn rather than instead of it.)
+  mkdirSync(path.join(repoDir, "scripts"), { recursive: true });
+  writeFileSync(path.join(repoDir, "scripts", "factory-triage.mjs"), "// placeholder: presence is all the trigger checks\n");
+  writeFileSync(path.join(fakeBin, "bash"), [
+    "#!/bin/sh",
+    'echo "GIT_DIR=${GIT_DIR-<unset>} GIT_WORK_TREE=${GIT_WORK_TREE-<unset>}" >> "$RECORD_DIR/bash.env"',
+    'printf "# Software Factory Delta Report: %s\\nGenerated: %s\\n\\n| New |\\n|:---:|\n| **0** |\n" "$(basename "$PWD")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$ISOLATED_REPORT"',
+    "exit 0",
+    "",
+  ].join("\n"), { mode: 0o755 });
+  writeFileSync(path.join(fakeBin, "bd"), [
+    "#!/bin/sh",
+    'echo "GIT_DIR=${GIT_DIR-<unset>} GIT_WORK_TREE=${GIT_WORK_TREE-<unset>} args=$*" >> "$RECORD_DIR/bd.env"',
+    "exit 0",
+    "",
+  ].join("\n"), { mode: 0o755 });
+  writeFileSync(path.join(fakeBin, "node"), [
+    "#!/bin/sh",
+    'echo "GIT_DIR=${GIT_DIR-<unset>} GIT_WORK_TREE=${GIT_WORK_TREE-<unset>} args=$*" >> "$RECORD_DIR/node.env"',
+    "exit 0",
+    "",
+  ].join("\n"), { mode: 0o755 });
+  for (const escapee of ["timeout", "fleet-heavy", "factory"]) {
+    writeFileSync(path.join(fakeBin, escapee), [
+      "#!/bin/sh",
+      `echo "${escapee} escaped the seam: $*" >> "$RECORD_DIR/escape.env"`,
+      "exit 1",
+      "",
+    ].join("\n"), { mode: 0o755 });
+  }
+
+  const poisonEnv = {
+    ...fixtureGitEnv(),
+    PATH: `${fakeBin}:/usr/bin:/bin`,
+    RECORD_DIR: recordDir,
+    GIT_DIR: path.join(decoyDir, ".git"),
+    GIT_WORK_TREE: decoyDir,
+  };
+
+  const result = runReviewTrigger(
+    ["--base", "HEAD~1", "--tip", "HEAD", "--repo", "PaulKinlan/voicebox", "--private-dir", privateDir, "--bead", "voicebox-beads-a8p5-test"],
+    { rootDir: repoDir, env: poisonEnv },
+  );
+
+  // The trigger's own diff answered about the fixture despite the poison: the fixture's
+  // HEAD~1..HEAD is the ops change and selects log-check; the decoy's history could not produce it.
+  assert.equal(result.station, "log-check", "the diff was computed in the fixture repo, not the decoy GIT_DIR");
+
+  // All three spawned children ran (the pipeline reached them) and NONE saw the poisoned variables.
+  const bashRecord = readFileSync(path.join(recordDir, "bash.env"), "utf8");
+  assert.ok(bashRecord.includes("GIT_DIR=<unset>"), `bash child inherited GIT_DIR: ${bashRecord}`);
+  assert.ok(bashRecord.includes("GIT_WORK_TREE=<unset>"), `bash child inherited GIT_WORK_TREE: ${bashRecord}`);
+  const nodeRecord = readFileSync(path.join(recordDir, "node.env"), "utf8");
+  assert.ok(nodeRecord.includes("factory-triage.mjs"), `the publisher spawn ran: ${nodeRecord}`);
+  assert.ok(nodeRecord.includes("GIT_DIR=<unset>"), `node publisher inherited GIT_DIR: ${nodeRecord}`);
+  assert.ok(nodeRecord.includes("GIT_WORK_TREE=<unset>"), `node publisher inherited GIT_WORK_TREE: ${nodeRecord}`);
+  const bdRecord = readFileSync(path.join(recordDir, "bd.env"), "utf8");
+  assert.ok(bdRecord.includes("voicebox-beads-a8p5-test"), `the bd comment step ran: ${bdRecord}`);
+  assert.ok(bdRecord.includes("GIT_DIR=<unset>"), `bd child inherited GIT_DIR: ${bdRecord}`);
+  assert.ok(bdRecord.includes("GIT_WORK_TREE=<unset>"), `bd child inherited GIT_WORK_TREE: ${bdRecord}`);
+  assert.ok(!existsSync(path.join(recordDir, "escape.env")), "a real timeout/fleet-heavy/factory escaped the fake seam");
+});
