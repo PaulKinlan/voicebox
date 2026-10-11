@@ -106,12 +106,24 @@ test("barge-in in the real audio path: quiet speech does not interrupt; speech o
       readyState: 1,
       sent: [],
       paused: false, // set when the page interrupts: a real model stops sending audio after that
+      deferredEcho: null,
+      echoedAfterInterrupt: false,
+      acceptedAfterInterrupt: 0,
       binaryType: "arraybuffer",
       send(data) {
         this.sent.push(data);
         if (typeof data === "string" && data.includes('"type":"interrupt"')) {
           this.paused = true;
           if (this.timer) clearInterval(this.timer);
+          // Force a queued echo callback to run after the client's synchronous flush. A busy browser
+          // can produce this ordering naturally; driving it here makes the race reproducible without load.
+          if (this.deferredEcho) {
+            this.echoedAfterInterrupt = true;
+            const before = window.__voiceboxLiveClient.snapshot().framesReceived;
+            this.deferredEcho();
+            this.acceptedAfterInterrupt = window.__voiceboxLiveClient.snapshot().framesReceived - before;
+            this.deferredEcho = null;
+          }
           return;
         }
         // THE AGENT'S LOUDNESS IS INJECTED, DECOUPLED FROM THE MICROPHONE (the review's probe shape): a loud
@@ -136,7 +148,15 @@ test("barge-in in the real audio path: quiet speech does not interrupt; speech o
             const scaled = Math.max(-32768, Math.min(32767, Math.round(sample * 0.3)));
             quiet[i] = scaled & 0xff; quiet[i + 1] = (scaled >> 8) & 0xff;
           }
-          setTimeout(() => window.__voiceboxLiveClient.handleMessage(quiet.buffer), 20);
+          // A timer queued before the interrupt can fire after it. Check at delivery as well as
+          // scheduling: the synthetic provider promised to stop echoing once interrupted.
+          const echo = () => {
+            if (!this.paused) window.__voiceboxLiveClient.handleMessage(quiet.buffer);
+          };
+          // Hold the echo of the frame immediately before the third qualifying speech frame.
+          // The browser then exercises exactly the load-delayed callback ordering that flakes.
+          if (window.__voiceboxLiveClient.snapshot().bargeInStreak === 2 && !this.deferredEcho) this.deferredEcho = echo;
+          else setTimeout(echo, 20);
         }
       },
       close() { this.readyState = 3; },
@@ -165,9 +185,16 @@ test("barge-in in the real audio path: quiet speech does not interrupt; speech o
   // off room tone; 1200ms is a comfortable multiple of that and still well inside the 2.5s passage.
   const INPUT_FLOOR_MIN_RISE_MS = 1200;
 
+  const echoRace = await page.evaluate(() => ({ exercised: window.__testSocket.echoedAfterInterrupt, accepted: window.__testSocket.acceptedAfterInterrupt }));
+  assert.equal(echoRace.exercised, true, "a deferred echo must exercise the post-flush race");
+  assert.equal(echoRace.accepted, 0, "a synthetic provider must not deliver its queued echo after interrupt");
   assert.equal(interrupted.playbackActive, false, "playback must be flushed, not left playing");
   assert.notEqual(interrupted.phase, "agent-speaking", "the phase must leave agent-speaking");
   assert.equal(interrupted.capture, true, "capture keeps running after a barge-in");
+  if (process.env.VOICEBOX_BARGE_EVIDENCE) {
+    const { data } = await page.send("Page.captureScreenshot", { format: "png" });
+    writeFileSync(process.env.VOICEBOX_BARGE_EVIDENCE, Buffer.from(data, "base64"));
+  }
 
   const sent = await page.evaluate(() => window.__testSocket.sent.filter((s) => typeof s === "string"));
   const interrupts = sent.filter((s) => s.includes('"type":"interrupt"'));
