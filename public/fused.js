@@ -265,7 +265,15 @@ async function executeBrowserSystemCommand(cmd) {
     else if (p === "environments") els.envsOpen?.click?.();
     else if (p === "changelog") els.changelogOpen?.click?.();
     else if (p === "agent-tracker") void openAgentProgressTracker();
-    else if (p === "close") sqehSetState("deck");
+    else if (p === "close") {
+      // "close panel" closes what is actually open: any modal sheet on the page, then the deck home,
+      // which closes the open windows. Closing only the deck would leave a person with the Settings
+      // sheet in front of them after asking for it to be closed, which is the plain reading of the
+      // command. The dialogs are all <dialog closedby="any">, so the platform closes them for a
+      // click or Escape already — this is the same action, from a voice command.
+      for (const dialog of document.querySelectorAll("dialog[open]")) dialog.close();
+      sqehSetState("deck");
+    }
     else if (p === "files" || p === "history" || p === "activity" || p === "deck") sqehSetState(p);
     return { ok: true, panel: p };
   }

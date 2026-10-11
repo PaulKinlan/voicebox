@@ -45,7 +45,7 @@ When `execute(action)` in `server.mjs` receives `action.verb === "system"`:
 | `open_panel` | `target` | `settings` | opens the Settings dialog |
 | `open_panel` | `target` | `harnesses` | opens Harnesses |
 | `open_panel` | `target` | `agent-tracker` | mounts the built-in Agent Progress Tracker mini-app |
-| `open_panel` | `target` | `close` | `sqehSetState("deck")` — back to the deck, closing open windows |
+| `open_panel` | `target` | `close` | closes any open modal sheet, then `sqehSetState("deck")` — back to the deck, closing open windows |
 | `copy`, `paste` | `text` | | clipboard, as before |
 | `stop_speaking` | — | — | NO consumer yet (voicebox-beads-cv4g): parsed, broadcast and logged, but nothing performs it |
 | `clear_activity` | — | — | server-side only — `server.mjs` clears the work activity log |

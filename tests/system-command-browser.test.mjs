@@ -103,7 +103,13 @@ test("system commands: a typed command reaches the browser and changes the UI (v
   await say("open settings");
   const settings = await read();
   assert.equal(settings.settingsOpen, true, "'open settings' really opens the settings dialog");
-  await page.evaluate(() => document.getElementById("settings")?.close());
+
+  // "close panel" must close what is actually open, including the modal sheet above — the plain
+  // reading of the command. Deck windows and the sheet are different mechanisms, so both are asserted.
+  await say("close panel");
+  const closed = await read();
+  assert.equal(closed.settingsOpen, false, "'close panel' closes the settings sheet that is open in front of you");
+  assert.equal(closed.sqehState, "deck", "'close panel' also returns the deck home");
 
   await say("open files");
   assert.equal((await read()).sqehState, "files", "'open files' moves the deck to the files panel");
@@ -125,6 +131,8 @@ test("system commands: a typed command reaches the browser and changes the UI (v
   );
 
   // ── And `close`, which also had no branch ───────────────────────────────────────────────────
+  await say("open files");
+  assert.equal((await read()).sqehState, "files", "the deck moved away before we close it");
   await say("close panel");
   assert.equal((await read()).sqehState, "deck", "'close panel' returns to the deck");
 });
