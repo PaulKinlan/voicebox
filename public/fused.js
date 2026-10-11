@@ -8,6 +8,7 @@
 import { debugEnabled, isDebugEnabled, setDebugEnabled, openTranscriptDialog, recordDebug, redact } from "./debug-transcript.js";
 import { createRoomUndoStack, deleteHandleFile, diffHandleFile, editHandleFile, grepHandleFolder, miniAppSyncName, parseRoomFolderTurn } from "./room-folder-ops.js";
 import { installWindowManager } from "./window-manager.mjs";
+import { applyTheme, initTheme } from "./theme.mjs";
 
 const $ = (id) => document.getElementById(id);
 const SVG = "http://www.w3.org/2000/svg";
@@ -149,55 +150,10 @@ function on(el, type, handler) {
   return null;
 }
 
-// ── Theme preference: tri-state (light / dark / system), light by default, persisted to localStorage ──
-const THEME_KEY = "voicebox:theme";
-function applyTheme(mode, { persist = false } = {}) {
-  const pref = (mode === "dark" || mode === "light" || mode === "system") ? mode : "light";
-  const effective = pref === "system"
-    ? (window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ? "dark" : "light")
-    : pref;
-  document.documentElement.dataset.theme = effective;
-  document.documentElement.dataset.themeMode = pref;
-  if (persist) {
-    try { localStorage.setItem(THEME_KEY, pref); } catch { /* private mode */ }
-  }
-  if (els.themeSelect) {
-    els.themeSelect.value = pref;
-  }
-  if (els.themeSelectState) {
-    els.themeSelectState.textContent = pref === "system"
-      ? `System (${effective})`
-      : `${effective.charAt(0).toUpperCase() + effective.slice(1)} mode`;
-  }
-  if (els.themeToggle) {
-    const isDark = effective === "dark";
-    const label = isDark ? "Switch to light mode" : "Switch to dark mode";
-    els.themeToggle.setAttribute("aria-label", label);
-    els.themeToggle.setAttribute("title", label);
-    els.themeToggle.setAttribute("aria-pressed", String(isDark));
-    const use = els.themeToggle.querySelector("use");
-    if (use) use.setAttribute("href", isDark ? "#i-sun" : "#i-moon");
-  }
-}
-{
-  let initialTheme = "light";
-  try {
-    const savedTheme = localStorage.getItem(THEME_KEY);
-    if (savedTheme === "dark" || savedTheme === "light" || savedTheme === "system") initialTheme = savedTheme;
-  } catch { /* ignore */ }
-  applyTheme(initialTheme);
-  on(els.themeToggle, "click", () => {
-    const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-    applyTheme(next, { persist: true });
-  });
-  on(els.themeSelect, "change", () => {
-    const next = els.themeSelect.value;
-    applyTheme(next, { persist: true });
-  });
-  window.matchMedia?.("(prefers-color-scheme: dark)")?.addEventListener?.("change", () => {
-    if (document.documentElement.dataset.themeMode === "system") applyTheme("system");
-  });
-}
+// ── Theme preference lives in ./theme.mjs (voicebox-beads-ri9x, first slice of voicebox-beads-mvxl).
+//    Handed the three controls it syncs, so it depends on nothing else in this file; the system-command
+//    branch below still calls its applyTheme. Booted here, where this file used to do the work itself. ──
+initTheme({ themeSelect: els.themeSelect, themeSelectState: els.themeSelectState, themeToggle: els.themeToggle });
 
 // ── Progressive Web App Service Worker registration ──
 if ("serviceWorker" in navigator) {
