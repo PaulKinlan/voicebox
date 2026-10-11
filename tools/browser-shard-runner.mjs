@@ -178,13 +178,21 @@ console.log("");
 console.log(`[shards] ${WORKERS} workers, ${files.length} files, wall ${(wall / 1000).toFixed(1)}s`);
 console.log(`[shards] tests=${total("tests")} pass=${total("pass")} fail=${total("fail")} skipped=${total("skipped")} files-failed=${failed.length}`);
 console.log(`[shards] slowest: ${slowest.map((r) => `${r.file}=${(r.ms / 1000).toFixed(1)}s`).join(" ")}`);
+// COVERAGE IS DECIDED, NOT HOPED FOR: every file the tier was told to run produced a result.
+// It is reported BEFORE the failure exit (a red run is exactly when a reader needs to know whether
+// the tier also ran less — the first red run this file produced printed no coverage line at all,
+// because the failure path exited first). Distinct-file counting rather than a length compare, so a
+// file that somehow reported twice cannot stand in for one that never ran.
+const reported = new Set(results.map((r) => r.file)).size;
+const covered = reported === files.length && results.length === files.length;
+console.log(
+  `[shards] coverage ${covered ? "ok" : "INCOMPLETE"}: ${results.length} result(s) for ${files.length} queued file(s), ${reported} distinct, each in its own process`,
+);
 if (failed.length) {
   console.log(`[shards] FAILED: ${failed.map((r) => `${r.file} (exit ${r.code}${r.notOk.length ? `: ${r.notOk.slice(0, 3).join(" | ")}` : r.fail > 0 ? `: ${r.fail} failing test(s)` : ": no test counts were reported"})`).join("; ")}`);
   process.exit(1);
 }
-// COVERAGE IS DECIDED, NOT HOPED FOR: every file the tier was told to run produced a result.
-if (results.length !== files.length) {
-  console.log(`[shards] FAILED: ${files.length} files were queued but only ${results.length} reported a result`);
+if (!covered) {
+  console.log(`[shards] FAILED: ${files.length} files were queued but ${results.length} reported a result (${reported} distinct)`);
   process.exit(1);
 }
-console.log(`[shards] coverage ok: every one of ${files.length} queued files ran, each in its own process`);
