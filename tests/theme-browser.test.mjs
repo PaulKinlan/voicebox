@@ -10,9 +10,17 @@
 // moved, because it runs on every page load) had no cover.
 //
 // NOT driven here, deliberately: the system-command path (executeBrowserSystemCommand with
-// switch_theme). That path is broken independently of this extraction — see voicebox-beads-ucak,
-// where the producer emits `mode` and the client guards on `theme` — so asserting it here would make
-// this file red for a reason that is not this bead's. It belongs with ucak's fix.
+// switch_theme). That belongs to voicebox-beads-ucak, whose own browser test
+// (tests/system-command-browser.test.mjs) drives it end to end; the split is the point — this file owns
+// "does the theme preference behave", that file owns "does the voice command reach it".
+//
+// That path WAS broken when this file was first written — the producer emitted `mode` while the client
+// guarded on `theme`, which is why asserting it here would then have made this file red for a reason
+// that was not this bead's. ucak fixed it and landed on main as 6dc6314, and this branch is rebased on
+// top of that, so the two now compose: switch_theme arrives as `mode` and reaches applyTheme here.
+// (That staleness was caught in review of this rebase — voicebox-beads-ri9x review finding — and is
+// corrected rather than left standing, because a comment claiming a fixed bug is still broken misleads
+// the next reader exactly where the fix landed.)
 //
 //   node --test tests/theme-browser.test.mjs
 import test from "node:test";
