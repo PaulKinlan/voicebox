@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { resolveTurn, resolveWorkspaceCandidate, recoverLiveSystemErrorTurn } from "./lib/resolver.mjs";
 import { authorizeMachinePath, containedIn } from "./lib/path-auth.mjs";
 import { createWorkspaceRoutes } from "./lib/routes/workspace.mjs";
+import { createExtensionRoutes } from "./lib/routes/extensions.mjs";
 import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, reachableFromEnvironment, rootVanished } from "./core/root.ts";
 import { normaliseRelativeDir, parentDir } from "./core/paths.ts";
 import { CORE_FS_DESCRIPTOR, createUnifiedDiff, dispatchFor } from "./core/dispatch.ts";
@@ -4296,6 +4297,12 @@ const workspaceRoutes = createWorkspaceRoutes({
   contentJsonBodyMaxBytes: CONTENT_JSON_BODY_MAX_BYTES,
   selfEnvironment: SELF_ENVIRONMENT,
 });
+const extensionRoutes = createExtensionRoutes({
+  json,
+  readJsonBody,
+  contentJsonBodyMaxBytes: CONTENT_JSON_BODY_MAX_BYTES,
+  extensionRuntime: extensions,
+});
 
 async function handle(req, res) {
   // The bounded JSON door lives at module scope (readJsonBody, voicebox-beads-d808) so the routes
@@ -4926,58 +4933,8 @@ async function handle(req, res) {
     return json(res, 200, { ok: true, agent: publicAgentProjection(updated.agent) });
   }
 
-  if (req.method === "GET" && url.pathname === "/api/extensions") {
-    return json(res, 200, extensions.inventory());
-  }
-  if (req.method === "GET" && url.pathname === "/api/extensions/catalogue") {
-    return json(res, 200, { catalogue: extensions.catalogue() });
-  }
-  if (req.method === "POST" && url.pathname === "/api/extensions/proposals") {
-    // The model's door over HTTP (what a model resolver calls): the same
-    // destination as the transcript path — a PENDING proposal, nothing loaded.
-    // descriptor.source is extension CODE — a content body, so the larger cap (voicebox-beads-d808).
-    const body = await readJson(CONTENT_JSON_BODY_MAX_BYTES);
-    const r = extensions.propose(body?.descriptor, body?.descriptor?.source ?? "model");
-    return r.ok ? json(res, 200, { ...r, note: "staged as a pending proposal — NOT loaded; the host admits it" }) : json(res, 400, r);
-  }
-  if (req.method === "POST" && ["/api/extensions/local", "/api/extensions/create"].includes(url.pathname)) {
-    // Create and locally add new extensions (voicebox-beads-b1p).
-    // Host-owned admission gate: staging creates a pending proposal with source "local".
-    // Direct admission requires the host token (x-voicebox-host-token); without it, direct admission is refused.
-    // descriptor.source is extension CODE — a content body, so the larger cap (voicebox-beads-d808).
-    const body = await readJson(CONTENT_JSON_BODY_MAX_BYTES);
-    const descriptor = body?.descriptor ?? body;
-    if (!descriptor || typeof descriptor !== "object") {
-      return json(res, 400, { ok: false, refused: "bad-request", why: "extension descriptor object required" });
-    }
-    const wantsAdmit = Boolean(body?.admit);
-    if (wantsAdmit) {
-      if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
-        return json(res, 403, { ok: false, refused: "host-token-required", why: "direct admission is the host's act — this requires the host token (x-voicebox-host-token); stage as proposal first" });
-      }
-      const r = extensions.createAndAdmitExtension(descriptor, "host");
-      return json(res, r.ok ? 200 : 400, r);
-    }
-    const r = extensions.createExtension(descriptor, descriptor.source ?? "local");
-    return json(res, r.ok ? 200 : 400, r);
-  }
-  const planMatch = url.pathname.match(/^\/api\/extensions\/(proposals|catalogue)\/([a-z0-9_-]+)\/plan$/);
-  if (req.method === "GET" && planMatch) {
-    const plan = planMatch[1] === "proposals" ? extensions.proposalPlan(planMatch[2]) : extensions.cataloguePlan(planMatch[2]);
-    return plan ? json(res, 200, plan) : json(res, 404, { error: `no ${planMatch[1].replace(/s$/, "")} '${planMatch[2]}'` });
-  }
-  if (req.method === "POST" && url.pathname === "/api/extensions/sideload") {
-    const body = await readJson();
-    if (!body?.id) return json(res, 400, { error: "body must be JSON with an id" });
-    const plan = extensions.cataloguePlan(body.id);
-    if (!plan) return json(res, 404, { error: `no catalogue entry '${body.id}'` });
-    if (body.confirm !== true) {
-      // Confirm-first: show the plan, stage nothing.
-      return json(res, 200, { confirmFirst: true, plan, note: "nothing staged — repeat with confirm:true to stage the sideload as a PENDING proposal (it does not load; admission is still the host's)" });
-    }
-    const r = extensions.sideload(body.id);
-    return r.ok ? json(res, 200, { ...r, note: "staged as a pending proposal — NOT loaded; the host admits it" }) : json(res, 400, r);
-  }
+  // Only inventory and staging are extracted: host decisions below retain their original owner.
+  if (await extensionRoutes(req, res, url)) return;
   if (req.method === "POST" && ["/api/extensions/approval-request", "/api/extensions/approve"].includes(url.pathname)) {
     // JSON-only stops cross-site form submissions; no CORS permission is granted. The console
     // code, not an Origin claim or page-held host credential, authorizes this specific plan.
