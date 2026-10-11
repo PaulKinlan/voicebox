@@ -1110,6 +1110,19 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
     ["-c", `core.hooksPath=${gitHooksDir}`, "-c", `init.templateDir=${gitHooksDir}`, ...args],
     { cwd, encoding: "utf8", env: fixtureGitEnv() },
   );
+  // The fixture once wrote its identity into the real checkout's local config.
+  // Snapshot only those two production keys, and check on pass AND on failure.
+  const productionIdentity = () => Object.fromEntries(["user.name", "user.email"].map((key) => {
+    try {
+      return [key, git(["-C", ROOT, "config", "--local", "--get-all", key], ROOT).trim()];
+    } catch (error) {
+      if (error.status === 1) return [key, null]; // an unset local key is also a valid baseline
+      throw error;
+    }
+  }));
+  const identityBefore = productionIdentity();
+  t.after(() => assert.deepEqual(productionIdentity(), identityBefore,
+    "the watcher fixture must not change the real repository's local user.name/user.email"));
   git(["init", "--bare", "-q", bareDir], fixtureRoot);
   git(["init", "-q", "-b", "main", workDir], fixtureRoot);
   // FAIL CLOSED, before any config/add/commit/remote: prove which repo these calls address. If the git
@@ -1117,11 +1130,14 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
   const fixtureGitRoot = git(["rev-parse", "--show-toplevel"], workDir).trim();
   assert.equal(realpathSync(fixtureGitRoot), realpathSync(workDir),
     `fixture git ops must resolve to the fixture itself, not a parent repo (got ${fixtureGitRoot})`);
-  git(["config", "user.email", "watcher-fixture@test.local"], workDir);
-  git(["config", "user.name", "watcher fixture"], workDir);
+  // Identity belongs to these two fixture commits, never to any repository config.
+  const fixtureCommit = (message) => git([
+    "-c", "user.name=watcher fixture", "-c", "user.email=watcher-fixture@test.local",
+    "commit", "-q", "-m", message,
+  ], workDir);
   writeFileSync(path.join(workDir, "README.md"), "watcher fixture base\n");
   git(["add", "README.md"], workDir);
-  git(["commit", "-q", "-m", "fixture base"], workDir);
+  fixtureCommit("fixture base");
   git(["remote", "add", "origin", bareDir], workDir);
   // Pin the push destination and fail closed on any redirect before EACH push: the effective --push
   // origin URL must be exactly the single owned bareDir, never a config-injected pushurl (voicebox-beads-guu9).
@@ -1138,7 +1154,11 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
   git(["checkout", "-q", "-b", fixtureBranch], workDir);
   writeFileSync(path.join(workDir, "candidate.txt"), "candidate change\n");
   git(["add", "candidate.txt"], workDir);
-  git(["commit", "-q", "-m", "fixture candidate"], workDir);
+  fixtureCommit("fixture candidate");
+  assert.equal(git(["log", "-1", "--format=%an <%ae>"], workDir).trim(),
+    "watcher fixture <watcher-fixture@test.local>");
+  assert.throws(() => git(["config", "--local", "--get-regexp", "^user\\.(name|email)$"], workDir),
+    { status: 1 }, "commit-scoped identity must not persist even in the isolated fixture repo");
   assertPushTarget();
   git(["push", "-q", "origin", `${fixtureBranch}:refs/heads/${fixtureBranch}`], workDir);
   assert.equal(git(["rev-parse", `refs/heads/${fixtureBranch}`], bareDir).trim(),

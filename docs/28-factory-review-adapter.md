@@ -160,6 +160,8 @@ To eliminate any dependency on manual merger ceremonies or shared `~/fleet` role
   Monitors newly landed commits on `origin/main` (`lastMainSha..origin/main`) as an automated backstop. If `lastMainSha` is not an ancestor of `origin/main` (indicating an upstream rebase or history rewrite), the watcher fails closed with exit 1, halting and requiring explicit operator reconciliation (preventing broad or corrupted diffs).
 - **Execution Safety**:
   Invokes only canonical `factory run <station> --sink file`, never executing untrusted scripts from candidate branches.
+- **Watcher Test Isolation**:
+  `tests/factory-review-adapter.test.mjs` runs its candidate-branch fixture against an owned temporary work repo and bare origin. Fixture commits use inline `git -c user.name=... -c user.email=...` rather than persisting an identity, and the test checks that the real checkout's repo-local identity remains unchanged even when the fixture fails.
 
 Manual invocation during `IN_REVIEW` handoff remains available:
 ```bash
