@@ -28,11 +28,16 @@ import { launch } from "./lib/cdp.mjs";
 const SAMPLER = `
   window.__rec = { t0: performance.now(), firstRaf: null, darkAt: null };
   requestAnimationFrame(() => {
+    const cs = getComputedStyle(document.documentElement);
     window.__rec.firstRaf = {
       t: Math.round(performance.now() - window.__rec.t0),
       theme: document.documentElement.dataset.theme ?? null,
       mode: document.documentElement.dataset.themeMode ?? null,
       bg: getComputedStyle(document.body || document.documentElement).backgroundColor,
+      // The craft-floor "browser surfaces" check: the parts nobody drew - scrollbars, the caret, text
+      // selection, form controls - are themed by color-scheme, which style.css sets from data-theme. So a
+      // guard that only rewrote the color-scheme META would leave these on the old scheme at first paint.
+      colorScheme: cs.colorScheme ?? null,
     };
   });
   const tick = () => {
@@ -113,15 +118,22 @@ test("theme is applied by the first paint, from a stored preference (voicebox-be
     `a stored dark preference must be dark AT THE FIRST PAINT, not after it. First frame was ${JSON.stringify(dark.firstRaf.theme)} at ${dark.firstRaf.t}ms (bg ${dark.firstRaf.bg}); paints: ${JSON.stringify(dark.paint)}`,
   );
   assert.equal(dark.firstRaf.mode, "dark", "the preference is recorded in the first frame too, not only the scheme");
+  assert.match(
+    String(dark.firstRaf.colorScheme),
+    /dark/,
+    `color-scheme must already be dark in the first frame, so the browser-drawn surfaces (scrollbars, caret, text selection, form controls) are not left on the light scheme. Got ${JSON.stringify(dark.firstRaf.colorScheme)}`,
+  );
 
   // ── An explicit light preference must stay light even on a dark OS ─────────────────────────────
   const light = await firstPaint({ stored: "light", osDark: true, name: "2-light-stored-dark-os" });
   assert.equal(light.firstRaf.theme, "light", "an explicit light choice must be light in the first frame even when the OS is dark");
+  assert.match(String(light.firstRaf.colorScheme), /light/, "an explicit light choice keeps the browser-drawn surfaces light too");
 
   // ── system resolves against the OS before paint ───────────────────────────────────────────────
   const systemDark = await firstPaint({ stored: "system", osDark: true, name: "3-system-stored-dark-os" });
   assert.equal(systemDark.firstRaf.theme, "dark", "system on a dark OS must be dark in the first frame");
   assert.equal(systemDark.firstRaf.mode, "system", "the preference stays 'system' — only the effective scheme is resolved");
+  assert.match(String(systemDark.firstRaf.colorScheme), /dark/, "color-scheme follows the resolved system scheme before the first paint too");
 
   // ── Nothing stored: still light, and it must NOT start following the OS by itself ──────────────
   const none = await firstPaint({ stored: null, osDark: true, name: "4-nothing-stored" });
