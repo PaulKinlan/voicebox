@@ -4,13 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <!-- Pre-paint theme guard (voicebox-beads-xpwt). A CLASSIC script, not a module and not deferred, so it
        runs before the first paint; it must stay in <head> and must not gain type=module, defer or async.
-       It exists because the theme was being applied by a deferred module, which painted light first. It is
-       external rather than inline because this page's policy is script-src 'self' with no 'unsafe-inline'.
+       It exists because the theme was being applied by a deferred module, which painted light first.
+       ITS PLACEMENT BELOW THE CSP META IS DELIBERATE AND LOAD-BEARING: a <meta> CSP governs only what is
+       fetched AFTER it is parsed, so a guard placed above it would sit OUTSIDE this page's policy. Below
+       it, script-src 'self' genuinely applies and this file loading at all is proof the policy allows it.
+       That is also the precise reason it is a file and not the inline script Modern Web Guidance's FOUC
+       recipe prescribes: an inline guard placed here would be refused by the policy, and making it work
+       would mean adding 'unsafe-inline', weakening the whole page to fix six lines.
        Its restatement of theme.mjs's decisions is test-enforced by tests/theme-boot-parity.test.mjs. -->
   <script src="theme-boot.js"></script>
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>Voicebox</title>
   <!-- the revision this page was served from; Vite fills it in (vite.config.js).
        Empty when a plain server serves this file, which is the honest answer. -->
