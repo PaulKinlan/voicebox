@@ -7,8 +7,9 @@
 //
 // Two surfaces can name an icon:
 //   1. public/index.html's own <use href="#i-…">;
-//   2. JS that writes an href at runtime: fused.js's theme/folder/expand writers and the
-//      icon("i-…") / icon(pip.document, "i-…") builder in fused.js and pip-mic.mjs.
+//   2. JS that writes an href at runtime: fused.js's folder/expand writers and the theme writer that now
+//      lives in theme.mjs (voicebox-beads-ri9x moved it out of fused.js), plus the icon("i-…") /
+//      icon(pip.document, "i-…") builder in fused.js and pip-mic.mjs.
 // Both must name a <symbol id> the sprite defines, and the sprite must not define an id twice.
 //
 // Two traps, named so the next edit doesn't fall into them (deepseek-flash review, 2df426f):
@@ -49,6 +50,7 @@ function duplicates(definitions) {
 test("every icon reference in the room and its JS writers resolves to a defined symbol", () => {
   const html = readFileSync(path.join(PUBLIC, "index.html"), "utf8");
   const fusedJs = readFileSync(path.join(PUBLIC, "fused.js"), "utf8");
+  const themeJs = readFileSync(path.join(PUBLIC, "theme.mjs"), "utf8");
   const pipMic = readFileSync(path.join(PUBLIC, "pip-mic.mjs"), "utf8");
   const definitions = spriteDefinitions(html);
   assert(definitions.length > 0, "the sprite itself was not found in index.html — the extraction broke, not the page");
@@ -56,6 +58,7 @@ test("every icon reference in the room and its JS writers resolves to a defined 
 
   const htmlRefs = iconReferences(html);
   const fusedRefs = iconReferences(fusedJs);
+  const themeRefs = iconReferences(themeJs);
   const pipRefs = iconReferences(pipMic);
   // Floors pin each EXTRACTION surface itself (voicebox-beads-jvek): before them, the reviewer's
   // mutants — iconReferences body -> return [], and dropping the markup surface from the union —
@@ -65,22 +68,23 @@ test("every icon reference in the room and its JS writers resolves to a defined 
     `the markup surface shrank: ${htmlRefs.length} literal refs, ${new Set(htmlRefs).size} distinct — the markup extraction broke or the page lost icons`,
   );
   assert(
-    fusedRefs.length >= 7 && pipRefs.length >= 2,
-    `a JS literal surface shrank: fused.js ${fusedRefs.length} refs, pip-mic.mjs ${pipRefs.length}`,
+    fusedRefs.length >= 5 && themeRefs.length >= 2 && pipRefs.length >= 2,
+    `a JS literal surface shrank: fused.js ${fusedRefs.length} refs, theme.mjs ${themeRefs.length} refs, pip-mic.mjs ${pipRefs.length}`,
   );
 
   // The union must actually CARRY every extraction surface (dropping a surface from the union was
   // the reviewer's green mutant — on markup first, and again on the JS literal surfaces in the
   // jvek review): every extracted id, from every surface, is in the checked set.
-  const builderRefs = [...builderReferences(fusedJs), ...builderReferences(pipMic)];
+  const builderRefs = [...builderReferences(fusedJs), ...builderReferences(themeJs), ...builderReferences(pipMic)];
   const references = [
     ...htmlRefs,
     ...fusedRefs,
+    ...themeRefs,
     ...pipRefs,
     ...builderRefs,
   ];
   assert(references.length > 0, "no icon references found at all — the extraction broke, not the page");
-  for (const [surface, ids] of [["markup", htmlRefs], ["fused literals", fusedRefs], ["pip literals", pipRefs], ["builder sweep", builderRefs]]) {
+  for (const [surface, ids] of [["markup", htmlRefs], ["fused literals", fusedRefs], ["theme literals", themeRefs], ["pip literals", pipRefs], ["builder sweep", builderRefs]]) {
     assert(
       ids.every((id) => references.includes(id)),
       `the union no longer carries the ${surface} surface — those references are unchecked`,

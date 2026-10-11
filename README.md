@@ -64,7 +64,7 @@ node server.mjs --doctor
 
 ## Architecture Overview
 
-Voicebox pairs a zero-dependency Node.js gateway (`server.mjs`) and modular browser UI (`public/fused.js`, `public/live-voice.js`) with a pure TypeScript policy core (`core/`). Extension HTTP discovery and decisions are grouped in `lib/routes/extensions.mjs`; the server still owns the authorization checks and bounded JSON body parser.
+Voicebox pairs a zero-dependency Node.js gateway (`server.mjs`) and modular browser UI (`public/fused.js`, `public/theme.mjs`, `public/live-voice.js`) with a pure TypeScript policy core (`core/`). Extension HTTP discovery and decisions are grouped in `lib/routes/extensions.mjs`; the server still owns the authorization checks and bounded JSON body parser.
 
 ### Pluggable live-model library
 
