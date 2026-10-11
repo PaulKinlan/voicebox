@@ -13,7 +13,10 @@
        it, script-src 'self' genuinely applies and this file loading at all is proof the policy allows it.
        That is also the precise reason it is a file and not the inline script Modern Web Guidance's FOUC
        recipe prescribes: an inline guard placed here would be refused by the policy, and making it work
-       would mean adding 'unsafe-inline', weakening the whole page to fix six lines.
+       would mean widening script-src to permit unsafe inline code, weakening the whole page to fix six
+       lines. NOTE FOR EDITORS: tests/voicebox.test.mjs scans this file's TEXT for the unsafe-inline
+       keyword, so describe that reservation without writing the quoted keyword anywhere above - a comment
+       that merely explains why we refuse it will otherwise fail that security assertion.
        Its restatement of theme.mjs's decisions is test-enforced by tests/theme-boot-parity.test.mjs. -->
   <script src="theme-boot.js"></script>
   <title>Voicebox</title>
