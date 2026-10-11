@@ -4302,6 +4302,7 @@ const extensionRoutes = createExtensionRoutes({
   readJsonBody,
   contentJsonBodyMaxBytes: CONTENT_JSON_BODY_MAX_BYTES,
   extensionRuntime: extensions,
+  hasExtensionAuthority,
 });
 
 async function handle(req, res) {
@@ -4933,147 +4934,9 @@ async function handle(req, res) {
     return json(res, 200, { ok: true, agent: publicAgentProjection(updated.agent) });
   }
 
-  // Only inventory and staging are extracted: host decisions below retain their original owner.
+  // The host retains the auth wall and its authority check; the extension route module handles
+  // discovery, staging and decisions through the same bounded JSON door.
   if (await extensionRoutes(req, res, url)) return;
-  if (req.method === "POST" && ["/api/extensions/approval-request", "/api/extensions/approve"].includes(url.pathname)) {
-    // JSON-only stops cross-site form submissions; no CORS permission is granted. The console
-    // code, not an Origin claim or page-held host credential, authorizes this specific plan.
-    if (req.headers["content-type"]?.split(";")[0].trim() !== "application/json") {
-      return json(res, 415, { ok: false, refused: "approval-json-required", why: "Send the approval request as JSON." });
-    }
-    const body = await readJson(4096);
-    if (typeof body?.id !== "string" || !/^[a-z0-9_-]{1,100}$/.test(body.id)) {
-      return json(res, 400, { ok: false, refused: "approval-invalid-id", why: "Choose an extension from the review list." });
-    }
-    const r = url.pathname.endsWith("/approval-request")
-      ? extensions.requestApproval(body.id)
-      : (!body.code && !body.requestId && hasExtensionAuthority(req))
-        ? extensions.approveInRoom(body.id, req.headers["x-voicebox-session-token"] || "room-ui")
-        : extensions.approveWithCode(body.id, body.requestId, body.code);
-    return json(res, r.ok ? 200 : 403, r);
-  }
-  if (req.method === "POST" && url.pathname === "/api/extensions/admit") {
-    // Admission is the HOST's act (bead voicebox-beads-m2i): the route requires
-    // the host token (docs/02 §1.5's mechanism — a 0600 file in the host's own
-    // directory, readable by the person's shell, by neither the page nor the
-    // model). Driven finding, 2026-09-20: without this the page admitted its
-    // own proposal in two fetches. The refusal is named, like every other one.
-    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
-      return json(res, 403, { ok: false, refused: "host-token-required", why: "admission is the host's act — this route requires the host token (x-voicebox-host-token); the page cannot hold it" });
-    }
-    const body = await readJson();
-    if (!body?.id) return json(res, 400, { error: "body must be JSON with an id" });
-    const plan = extensions.proposalPlan(body.id);
-    if (!plan) return json(res, 404, { error: `no proposal '${body.id}'` });
-    if (body.confirm !== true) {
-      // Confirm-first: the Tier 2 review act whose resolved plan is the source.
-      return json(res, 200, { confirmFirst: true, plan, note: "nothing decided — repeat with confirm:true and decision 'admit'|'deny' to decide" });
-    }
-    const r = extensions.admitProposal(body.id, body.decision === "deny" ? "deny" : "admit");
-    return json(res, 200, r);
-  }
-
-  if (req.method === "POST" && url.pathname === "/api/extensions/revoke") {
-    // REVOCATION is a protected act (voicebox-beads-qg1, voicebox-beads-5jl):
-    // Authorized via in-room session token, local room origin, or the host token.
-    if (!hasExtensionAuthority(req)) {
-      return json(res, 403, { ok: false, refused: "host-token-required", why: "revocation is a protected host act — this route requires an authorized in-room session or host token (x-voicebox-host-token)" });
-    }
-    const body = await readJson();
-    if (!body?.id) return json(res, 400, { error: "body must be JSON with an id" });
-    if (body.confirm !== true) {
-      const inv = extensions.inventory();
-      const row = inv.extensions.find((e) => e.id === body.id);
-      if (!row) return json(res, 404, { ok: false, refused: "extension-not-admitted", why: `'${body.id}' is not a running extension — nothing to revoke` });
-      return json(res, 200, { confirmFirst: true, id: body.id, plan: { enforced: row.enforced, gets: row.gets, bounds: row.bounds, tools: row.tools },
-        whatStopsWorking: { tools: row.tools, may: row.gets, bounds: row.bounds }, note: "nothing decided — repeat with confirm:true to revoke; the extension's tools stop being callable at once" });
-    }
-    const r = extensions.revokeExtension(body.id, body.actor ?? "host");
-    return json(res, r.ok ? 200 : 404, r);
-  }
-
-  // POST /api/extensions/refuse or POST /api/extensions/:id/refuse (voicebox-beads-36ul):
-  // Refuse a pending proposal without admitting anything — authorized via in-room session or host token.
-  const refuseExtMatch = req.method === "POST" && url.pathname.match(/^\/api\/extensions\/([a-z0-9_-]+)\/refuse$/);
-  if (refuseExtMatch || (req.method === "POST" && url.pathname === "/api/extensions/refuse")) {
-    if (!hasExtensionAuthority(req)) {
-      return json(res, 403, { ok: false, refused: "host-token-required", why: "refusing a proposal requires an authorized in-room session or host token (x-voicebox-host-token)" });
-    }
-    const body = refuseExtMatch ? {} : await readJson();
-    const id = refuseExtMatch ? refuseExtMatch[1] : body?.id;
-    if (!id) return json(res, 400, { ok: false, refused: "bad-request", why: "refusing a proposal requires an id" });
-    const r = extensions.admitProposal(id, "deny");
-    return json(res, r.ok ? 200 : 404, r);
-  }
-
-  // DELETE /api/extensions/:id (voicebox-beads-ud5, voicebox-beads-5jl) — REST revocation endpoint
-  const deleteExtMatch = req.method === "DELETE" && url.pathname.match(/^\/api\/extensions\/([a-z0-9_-]+)$/);
-  if (deleteExtMatch) {
-    if (!hasExtensionAuthority(req)) {
-      return json(res, 403, { ok: false, refused: "host-token-required", why: "revocation is a protected host act — this route requires an authorized in-room session or host token (x-voicebox-host-token)" });
-    }
-    const id = deleteExtMatch[1];
-    const r = extensions.revokeExtension(id, "host");
-    return json(res, r.ok ? 200 : 404, r);
-  }
-
-  // POST /api/extensions/reconfigure (voicebox-beads-ud5, voicebox-beads-5jl) — confirm-first or apply reconfigured bounds
-  if (req.method === "POST" && url.pathname === "/api/extensions/reconfigure") {
-    if (!hasExtensionAuthority(req)) {
-      return json(res, 403, { ok: false, refused: "host-token-required", why: "reconfiguring an extension is a protected host act — this route requires an authorized in-room session or host token (x-voicebox-host-token)" });
-    }
-    const body = await readJson();
-    if (!body?.id) return json(res, 400, { ok: false, refused: "bad-request", why: "reconfiguration requires an extension id" });
-    const inv = extensions.inventory();
-    const row = inv.extensions.find((e) => e.id === body.id);
-    if (!row) return json(res, 404, { ok: false, refused: "extension-not-admitted", why: `'${body.id}' is not a running extension — nothing to reconfigure` });
-
-    if (body.bounds !== undefined) {
-      if (typeof body.bounds !== "object" || body.bounds === null) {
-        return json(res, 400, { ok: false, refused: "bounds-invalid", why: "bounds must be an object with parameters" });
-      }
-      if (body.bounds.maxRequests !== undefined) {
-        const parsed = Number(body.bounds.maxRequests);
-        if (!Number.isInteger(parsed) || parsed < 0) {
-          return json(res, 400, { ok: false, refused: "bounds-invalid", why: `maxRequests must be a non-negative integer (received ${body.bounds.maxRequests})` });
-        }
-      }
-      if (body.bounds.maxBytes !== undefined) {
-        const parsed = Number(body.bounds.maxBytes);
-        if (!Number.isInteger(parsed) || parsed < 0) {
-          return json(res, 400, { ok: false, refused: "bounds-invalid", why: `maxBytes must be a non-negative integer (received ${body.bounds.maxBytes})` });
-        }
-      }
-      if (body.bounds.hosts !== undefined && !Array.isArray(body.bounds.hosts) && typeof body.bounds.hosts !== "string") {
-        return json(res, 400, { ok: false, refused: "bounds-invalid", why: "hosts must be an array of hostnames or a comma-separated string" });
-      }
-    }
-
-    if (body.confirm !== true) {
-      return json(res, 200, {
-        confirmFirst: true,
-        id: body.id,
-        current: { bounds: row.bounds, declared: row.declared, tools: row.tools },
-        proposed: { bounds: body.bounds ?? row.bounds },
-        note: "nothing decided — repeat with confirm:true to apply reconfiguration",
-      });
-    }
-    const r = extensions.reconfigureExtension(body.id, { bounds: body.bounds, tools: body.tools, params: body.params }, body.actor ?? "host");
-    return json(res, r.ok ? 200 : 400, r);
-  }
-
-  // PATCH /api/extensions/:id (voicebox-beads-ud5, voicebox-beads-5jl) — REST reconfiguration endpoint
-  const patchExtMatch = req.method === "PATCH" && url.pathname.match(/^\/api\/extensions\/([a-z0-9_-]+)$/);
-  if (patchExtMatch) {
-    if (!hasExtensionAuthority(req)) {
-      return json(res, 403, { ok: false, refused: "host-token-required", why: "reconfiguring an extension is a protected host act — this route requires an authorized in-room session or host token (x-voicebox-host-token)" });
-    }
-    const id = patchExtMatch[1];
-    const body = await readJson();
-    const r = extensions.reconfigureExtension(id, { bounds: body?.bounds, tools: body?.tools, params: body?.params }, body?.actor ?? "host");
-    return json(res, r.ok ? 200 : 400, r);
-  }
-
   if (req.method === "GET" && url.pathname === "/api/permissions/pending") {
     return json(res, 200, { ok: true, pending: permissions.pending() });
   }
