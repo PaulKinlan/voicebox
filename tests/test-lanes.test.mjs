@@ -82,7 +82,10 @@ test("the lane scripts exist and swap out at the same files npm test runs", () =
   const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
   assert.match(pkg.scripts["test:unit"], /test-lanes\.mjs --lane unit/);
   assert.match(pkg.scripts["test:live"], /--test-concurrency=4.*--lane server/);
-  assert.match(pkg.scripts["test:live"], /--test-concurrency=1.*--lane browser/);
+  // The browser tier is no longer a `--test-concurrency` invocation of its own: it runs through the
+  // shard runner, which asks the classifier for the browser lane and refuses a queue that does not
+  // cover it exactly once (voicebox-beads-hhkg). tests/test-shards.test.mjs holds that wiring.
+  assert.match(pkg.scripts["test:live"], /browser-shard-runner\.mjs/);
   // `npm test` stays the whole suite for humans and CI: the split is the GATE's,
   // not a redefinition of what the repository's test command means.
   assert.equal(pkg.scripts.test, "node --test tests/*.mjs");

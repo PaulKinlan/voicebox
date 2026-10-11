@@ -318,10 +318,23 @@ export function classify(root = TESTS) {
   return { unit, live, server, browser };
 }
 
+// THE CLI RUNS ONLY WHEN THIS FILE IS THE PROGRAM (voicebox-beads-hhkg). `classify()` is the one
+// owner of "which file is in which lane", and the browser tier's shard runner needs to ask it in
+// process rather than parse this file's stdout into a list of paths. Before the guard the CLI ran on
+// IMPORT too, so any importer inherited the current `--lane`/`--check` argv and printed a lane dump
+// as a side effect of loading a module.
+if (import.meta.main) {
+// THE CLI RUNS ONLY WHEN THIS FILE IS THE PROGRAM (voicebox-beads-hhkg). `classify()` is the one
+// owner of "which file is in which lane", and the browser tier's shard runner asks it in process
+// rather than parsing this file's stdout back into paths. Before this guard the CLI ran on IMPORT
+// too, so an importer inherited the caller's `--lane`/`--check` argv and printed a lane dump as a
+// side effect of loading a module. `classify()` itself still runs at top level: it is pure, it reads
+// the tests directory, and it prints nothing.
+const CLI = import.meta.main;
 const laneArg = process.argv.includes("--lane") ? process.argv[process.argv.indexOf("--lane") + 1] : null;
 const { unit, live, server, browser } = classify();
 
-if (process.argv.includes("--check")) {
+if (CLI && process.argv.includes("--check")) {
   const seen = new Set();
   const problems = [];
   for (const { file } of [...unit, ...live]) {
@@ -342,12 +355,15 @@ if (process.argv.includes("--check")) {
   process.exit(0);
 }
 
-if (laneArg === "unit" || laneArg === "live" || laneArg === "server" || laneArg === "browser") {
+if (CLI && (laneArg === "unit" || laneArg === "live" || laneArg === "server" || laneArg === "browser")) {
   const map = { unit, live, server, browser };
   const files = map[laneArg].map(({ file }) => `tests/${file}`);
   console.log(files.join(" "));
   process.exit(0);
 }
 
-console.log(`unit: ${unit.length} files\nlive: ${live.length} files`);
-for (const { file, why } of live) console.log(`  live  ${file} — ${why}`);
+if (CLI) {
+  console.log(`unit: ${unit.length} files\nlive: ${live.length} files`);
+  for (const { file, why } of live) console.log(`  live  ${file} — ${why}`);
+}
+}

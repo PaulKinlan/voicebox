@@ -154,12 +154,29 @@ run_stage() {
 # or a server out of the concurrent pass.
 #
 #   unit  — no browser, no server of its own: normal concurrency, fast
-#   live  — launches Chromium over CDP or a server process: ONE FILE AT A TIME
+#   live  — launches Chromium over CDP or a server process, split by WHAT it owns:
+#           the server tier (4 files at a time, no browser) and the browser tier (the
+#           shard runner: 4 files at a time, each still its own process, server and
+#           browser — see tools/browser-shard-runner.mjs, voicebox-beads-hhkg).
+#
+# THE BROWSER TIER IS NO LONGER ONE FILE AT A TIME (voicebox-beads-hhkg, 2026-10-11).
+# It was, because a raw --test-concurrency put an unknown set of browser files in flight
+# together; measured on this tree, 63 files ran 284.3s serially and 395.5s in the box's
+# own last full-gate log under load, against this stage's 400s bound — the stage could be
+# killed for finishing rather than for failing. Four workers with work-stealing run the
+# SAME 63 files the SAME count of tests (249 tests / 247 pass / 0 fail / 2 skipped,
+# identical to the serial lane) in ~128s. Per-file isolation is unchanged: each file still
+# gets its own process, its own ephemeral-port server and its own browser. A shared
+# long-lived server or browser is NOT available to these fixtures — 44 of the 63 files
+# hand startServer() their own instance/workspace/extensions environment and 10 need
+# browser-level flags (fakeMedia, a prepared profile) — and the parallelism, not instance
+# reuse, is where the time was: per-file launch overhead measures ~0.6s of a ~4.5s file.
 #
 # Both lanes swap out at the same file list `npm test` uses (scripts/test-lanes.mjs
-# classifies every tests/*.mjs, and --check fails if a file is in neither lane).
-# Measured: unit 15s concurrent (175 tests), live 186s serial (182 tests), at load
-# 19.5. The budgets are headroom over those measurements, not a guess.
+# classifies every tests/*.mjs, and --check fails if a file is in neither lane), and the
+# browser tier's queue is asserted to cover the browser lane exactly once before it runs
+# (scripts/test-shards.mjs, --check). The budgets are headroom over those measurements,
+# not a guess.
 #
 # UNIT BUDGET RE-SIZED FOR THE STARVED BOX (voicebox-beads-lq8s). 90s turned out
 # to sit INSIDE the unit suite's own run-to-run swing on this 2-vCPU VM: four
