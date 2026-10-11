@@ -28,6 +28,18 @@ import { runReviewWatcher } from "../scripts/factory-review-watcher.mjs";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 
+function localGitIdentity(dir, env) {
+  return Object.fromEntries(["user.name", "user.email"].map((key) => {
+    try {
+      return [key, execFileSync("/usr/bin/git", ["-C", dir, "config", "--local", "--get-all", key],
+        { encoding: "utf8", env }).trim()];
+    } catch (error) {
+      if (error.status === 1) return [key, null];
+      throw error;
+    }
+  }));
+}
+
 test("factory-review-adapter: deterministic station selection and priority ordering (Security > Perf > UX > Docs > Ops)", () => {
   // 1. Security priority
   const secSel = selectReviewStation(["lib/redact.mjs", "lib/tasks.mjs"]);
@@ -1110,6 +1122,11 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
     ["-c", `core.hooksPath=${gitHooksDir}`, "-c", `init.templateDir=${gitHooksDir}`, ...args],
     { cwd, encoding: "utf8", env: fixtureGitEnv() },
   );
+  // The fixture once wrote its identity into the real checkout's local config.
+  // Snapshot only those two production keys, and check on pass AND on failure.
+  const identityBefore = localGitIdentity(ROOT, fixtureGitEnv());
+  t.after(() => assert.deepEqual(localGitIdentity(ROOT, fixtureGitEnv()), identityBefore,
+    "the watcher fixture must not change the real repository's local user.name/user.email"));
   git(["init", "--bare", "-q", bareDir], fixtureRoot);
   git(["init", "-q", "-b", "main", workDir], fixtureRoot);
   // FAIL CLOSED, before any config/add/commit/remote: prove which repo these calls address. If the git
@@ -1117,11 +1134,14 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
   const fixtureGitRoot = git(["rev-parse", "--show-toplevel"], workDir).trim();
   assert.equal(realpathSync(fixtureGitRoot), realpathSync(workDir),
     `fixture git ops must resolve to the fixture itself, not a parent repo (got ${fixtureGitRoot})`);
-  git(["config", "user.email", "watcher-fixture@test.local"], workDir);
-  git(["config", "user.name", "watcher fixture"], workDir);
+  // Identity belongs to these two fixture commits, never to any repository config.
+  const fixtureCommit = (message) => git([
+    "-c", "user.name=watcher fixture", "-c", "user.email=watcher-fixture@test.local",
+    "commit", "-q", "-m", message,
+  ], workDir);
   writeFileSync(path.join(workDir, "README.md"), "watcher fixture base\n");
   git(["add", "README.md"], workDir);
-  git(["commit", "-q", "-m", "fixture base"], workDir);
+  fixtureCommit("fixture base");
   git(["remote", "add", "origin", bareDir], workDir);
   // Pin the push destination and fail closed on any redirect before EACH push: the effective --push
   // origin URL must be exactly the single owned bareDir, never a config-injected pushurl (voicebox-beads-guu9).
@@ -1138,7 +1158,11 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
   git(["checkout", "-q", "-b", fixtureBranch], workDir);
   writeFileSync(path.join(workDir, "candidate.txt"), "candidate change\n");
   git(["add", "candidate.txt"], workDir);
-  git(["commit", "-q", "-m", "fixture candidate"], workDir);
+  fixtureCommit("fixture candidate");
+  assert.equal(git(["log", "-1", "--format=%an <%ae>"], workDir).trim(),
+    "watcher fixture <watcher-fixture@test.local>");
+  assert.throws(() => git(["config", "--local", "--get-regexp", "^user\\.(name|email)$"], workDir),
+    { status: 1 }, "commit-scoped identity must not persist even in the isolated fixture repo");
   assertPushTarget();
   git(["push", "-q", "origin", `${fixtureBranch}:refs/heads/${fixtureBranch}`], workDir);
   assert.equal(git(["rev-parse", `refs/heads/${fixtureBranch}`], bareDir).trim(),
@@ -1221,6 +1245,43 @@ test("factory-review-watcher: auto-publication default, cursor recording, and se
 
   // Cleanup is owned by the t.after hook registered at the top of this test (voicebox-beads-7nto), so it
   // runs whether the assertions above pass or fail.
+});
+
+test("watcher fixture cannot redirect identity writes through a poisoned Git environment", (t) => {
+  // This reproduces the pre-push hook's GIT_DIR/GIT_WORK_TREE shape without ever
+  // pointing it at the real checkout. Run the watcher test in a disposable child:
+  // no poison enters the shared test runner's process.env or a sibling test.
+  const scratch = mkdtempSync(path.join(tmpdir(), "watcher-identity-poison-"));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+  const home = path.join(scratch, "home");
+  const sentinel = path.join(scratch, "sentinel");
+  mkdirSync(home, { recursive: true });
+  mkdirSync(sentinel, { recursive: true });
+  const safeEnv = {
+    HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), PATH: "/usr/bin:/bin",
+    GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null",
+  };
+  execFileSync("/usr/bin/git", ["init", "-q", sentinel], { env: safeEnv });
+  // Only this disposable stand-in receives persistent sentinel identity values.
+  execFileSync("/usr/bin/git", ["-C", sentinel, "config", "--local", "user.name", "poison sentinel"], { env: safeEnv });
+  execFileSync("/usr/bin/git", ["-C", sentinel, "config", "--local", "user.email", "sentinel@test.local"], { env: safeEnv });
+  const sentinelBefore = localGitIdentity(sentinel, safeEnv);
+  const productionBefore = localGitIdentity(ROOT, safeEnv);
+  const childEnv = { ...safeEnv, GIT_DIR: path.join(sentinel, ".git"), GIT_WORK_TREE: sentinel };
+  let output = "";
+  try {
+    output = execFileSync(process.execPath, [
+      "--test", "--test-name-pattern=^factory-review-watcher: auto-publication default",
+      fileURLToPath(import.meta.url),
+    ], { cwd: ROOT, env: childEnv, encoding: "utf8", timeout: 30000 });
+  } finally {
+    assert.deepEqual(localGitIdentity(sentinel, safeEnv), sentinelBefore,
+      "a leaked GIT_DIR must never redirect the fixture's identity into the sentinel repo");
+    assert.deepEqual(localGitIdentity(ROOT, safeEnv), productionBefore,
+      "the real checkout's local identity must remain untouched even on child failure");
+  }
+  assert.match(output, /factory-review-watcher: auto-publication default, cursor recording/,
+    "poisoned child must actually run the watcher fixture, not vacuously skip it");
 });
 
 test("factory-nightly-publisher: enforces SAME-RUN manifest barrier, target check, and batch window", () => {
