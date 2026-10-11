@@ -46,7 +46,7 @@ node server.mjs --doctor
 
 1. **Centered Hero Microphone & Composer**:
    - Click the central microphone button (`#mic`) or press `M` to start or stop a live voice session.
-   - **Barge-In**: Speak at any time while the assistant is talking to interrupt playback immediately and redirect the conversation.
+   - **Barge-In**: Speak at any time while the assistant is talking to interrupt playback immediately and redirect the conversation. The real-browser regression in `tests/ldxa-barge-in-browser.test.mjs` also holds an echo until after the flush to verify the synthetic provider does not resume playback from a queued response.
    - **Text Composer (`#text-form`)**: Type commands or questions directly when working in quiet environments or testing with the deterministic `script` resolver.
 2. **Pop-Over Bubbles (`#sqeh-deck`)**:
    - **Files (`#sqeh-files-bubble`)**: Opens your active workspace file list (`#made-list`) in a compact floating pop-over card. Switch between a local directory (via the browser's File System Access API) or the persistent in-browser OPFS scratchpad.
