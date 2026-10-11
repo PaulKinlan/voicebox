@@ -20,7 +20,7 @@ Voicebox enforces a multi-stage verification gate on `git push` via `.githooks/p
 |---|---|---|---|
 | **Docs Touched** | `node scripts/docs-touched.mjs` | Static `git diff` check | Immediate |
 | **Unit Suite** | `npm run test:unit` | Concurrent across files | `180s` |
-| **Live Suite** | `npm run test:live` | Server lane (`--test-concurrency=4`) + Browser CDP lane (`--test-concurrency=1`) | `400s` |
+| **Live Suite** | `npm run test:live` | Server lane (`--test-concurrency=4`) + Browser CDP shard runner (4 workers, one file each) | `400s` |
 | **Acceptance** | `npm run accept` | End-to-end headless Chromium verification (`page-acceptance.mjs`) | `45s` |
 
 ### Budget Overrides
@@ -35,7 +35,13 @@ A refusal names the variable to raise, so the remedy is copy-pasteable. `tests/p
 - **`unit` lane**: Pure logic, state machine, and worker tests (including `tests/wasm-shelf.test.mjs` and `tests/docs-drift.test.mjs`) that do not spawn `server.mjs`, `createServer`, `task-fixture.mjs`, or headless Chromium.
 - **`live` lane**:
   - **Server sub-lane (`--lane server`)**: Spawns `server.mjs` or HTTP servers without launching a browser; runs with `--test-concurrency=4`.
-  - **Browser sub-lane (`--lane browser`)**: Launches headless Chromium over CDP; runs serially (`--test-concurrency=1`) to prevent browser CPU contention.
+  - **Browser sub-lane (`--lane browser`)**: Launches headless Chromium over CDP. It ran one file at a time until 2026-10-11, and now runs through `tools/browser-shard-runner.mjs`, which takes its work queue from the classifier and runs up to four files at a time, handing the next file to whichever worker is free (`voicebox-beads-hhkg`). Per-file isolation is unchanged — each file still gets its own process, its own ephemeral-port server and its own browser — so this is concurrency, not a long-lived shared instance: 44 of the 63 files hand `startServer()` their own `VOICEBOX_INSTANCE`/`VOICEBOX_WORKSPACE`/`VOICEBOX_EXTENSIONS_DIR` and 10 need browser-level flags (`fakeMedia`, a prepared profile) that one shared browser cannot give a tab. Measured on the landing tree: 284.3s serial → 127.8s, with test counts identical to the serial lane (249 tests / 247 pass / 0 fail / 2 skipped) and the same 127.8s from a raw `--test-concurrency=4` on the lane.
+
+### The Browser Tier's Work Queue (`scripts/test-shards.mjs`)
+The shard runner does not expand a shell glob for its file list: it builds a queue from `classify()` and refuses it unless it covers the browser lane exactly once (`assertExactCoverage`), so a queue that drops, repeats or invents a file fails loudly before a single browser opens rather than looking like a faster gate. The queue is ordered longest-first — only the run's TAIL needs help, because work-stealing fixes everything before it — and no file's cost is predicted, so adding a roster entry cannot make the ordering wrong. `tests/test-shards.test.mjs` holds both claims as executable assertions: every browser-lane file runs exactly once, and the fast gate's file set (`npm run test:unit`) is a subset of the full gate's.
+
+### The Isolated File (`ISOLATED` in `scripts/test-shards.mjs`)
+Every browser file is independent — its own process, its own ephemeral-port server, its own browser — which is what makes the four workers safe. One file is independent of the others but not of the box: `tests/ldxa-barge-in-browser.test.mjs` drives the real audio path through Chromium's fake-audio device, which the file's own comments record as lagging under CPU load (+76ms idle, +366ms at 4-core load). It ran **alone, after the parallel queue**, because with four workers it failed `tests/ldxa-barge-in-browser.test.mjs:168` ("playback must be flushed, not left playing", `true !== false`) twice in nine concurrent runs of the whole tier while passing every focused control — alone, alone through the runner, and beside three other browser files at four-way concurrency. The same assertion with the same profile was already recorded as environmental in voicebox-beads-y82w; the open reproduction is voicebox-beads-9c3r. This is a **scheduling** change and not a repair: the file still runs, exactly once, with every assertion, and `tests/test-shards.test.mjs` proves the two phases are a partition of the queue rather than a filter, and that every name in `ISOLATED` is still a real browser-lane file (a renamed test would otherwise rejoin the parallel run silently, with its flake).
 
 ---
 
