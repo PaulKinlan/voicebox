@@ -21,7 +21,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { classify } from "../scripts/test-lanes.mjs";
-import { assertExactCoverage, buildQueue, isFailed } from "../scripts/test-shards.mjs";
+import { assertExactCoverage, buildQueue, isFailed, splitQueue } from "../scripts/test-shards.mjs";
+import { ISOLATED } from "../scripts/test-shards.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const read = (...parts) => readFileSync(path.join(root, ...parts), "utf8");
@@ -83,6 +84,35 @@ test("a file counts as failed when its exit code, its counts OR its reporter dis
   assert.equal(isFailed({ ...green, tests: -1 }), true, "a file that reported NO test counts is not a pass");
   // A skipped-only file is still a pass: tests/wasm-room-ui.test.mjs is one on this box.
   assert.equal(isFailed({ code: 0, tests: 1, fail: 0, skipped: 1, notOk: [] }), false, "a skipped test is not a failure");
+});
+
+test("the two phases are a PARTITION of the queue, and every isolated name is a real browser-lane file", () => {
+  const browserLane = lane("browser");
+  const queue = assertExactCoverage(browserLane, buildQueue(browserLane));
+  const { parallel, isolated } = splitQueue(queue);
+
+  // A partition, not a filter: nothing is dropped from both sides, nothing appears in both, and the
+  // parallel phase is not empty (an isolation list that swallowed the tier would still "pass" a
+  // coverage check while running the whole thing serially at 10x the wall clock).
+  assert.deepEqual([...parallel, ...isolated].sort(), [...queue].sort(), "the two phases must together be exactly the queue");
+  assert.equal(parallel.length + isolated.length, queue.length, "no file may be lost between the phases");
+  for (const file of isolated) {
+    assert.equal(parallel.includes(file), false, `${file} is in both phases: it would run twice`);
+  }
+  assert.ok(parallel.length > 0, "the parallel phase must not be empty");
+
+  // EVERY isolated name must be a file the lane really has. A renamed test would otherwise rejoin the
+  // parallel run silently — bringing back the CPU-contention flake the isolation exists to remove —
+  // and nothing else in the gate would notice.
+  for (const file of ISOLATED) {
+    assert.ok(browserLane.includes(file), `${file} is listed as isolated but is not in the browser lane — a renamed or deleted test leaves the isolation silently unapplied`);
+    assert.equal(isolated.includes(file), true, `${file} is listed as isolated and must actually be isolated in the queue`);
+  }
+
+  // SPLIT QUEUE IS PURE: a caller handing in its own set gets that set honoured, so the tests are not
+  // merely re-asserting the module's own constant.
+  const custom = splitQueue(["tests/a.test.mjs", "tests/b.test.mjs"], new Set(["tests/b.test.mjs"]));
+  assert.deepEqual(custom, { parallel: ["tests/a.test.mjs"], isolated: ["tests/b.test.mjs"] });
 });
 
 // ── the two gate wiring claims ────────────────────────────────────────────────────────────

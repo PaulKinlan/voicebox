@@ -41,7 +41,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { classify } from "../scripts/test-lanes.mjs";
-import { assertExactCoverage, buildQueue, isFailed } from "../scripts/test-shards.mjs";
+import { assertExactCoverage, buildQueue, isFailed, splitQueue } from "../scripts/test-shards.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -158,16 +158,34 @@ function runFile(file) {
   });
 }
 
+// TWO PHASES. The parallel queue first, with `WORKERS` shards stealing from one cursor; then the
+// isolated files one at a time, on an otherwise idle box. `phase`/`cursor` are shared across the
+// worker loops, so draining is just two runs of the same loop and there is no second scheduler to
+// keep in step with the first. `tests/test-shards.test.mjs` proves the two phases are a PARTITION of
+// the queue — a file cannot be in both, and none can be in neither.
+let phase = files;
 async function workerLoop() {
   for (;;) {
     if (stopping) return;
     const index = cursor++;
-    if (index >= files.length) return;
-    await runFile(files[index]);
+    if (index >= phase.length) return;
+    await runFile(phase[index]);
   }
 }
 
-await Promise.all(Array.from({ length: Math.min(WORKERS, files.length) }, () => workerLoop()));
+const { parallel, isolated } = splitQueue(files);
+phase = parallel;
+if (parallel.length) {
+  await Promise.all(Array.from({ length: Math.min(WORKERS, parallel.length) }, () => workerLoop()));
+}
+if (isolated.length) {
+  console.log(
+    `[shards] ${isolated.length} file(s) isolated (run alone, after the queue, still exactly once): ${isolated.join(", ")} — reason in scripts/test-shards.mjs ISOLATED`,
+  );
+  cursor = 0;
+  phase = isolated;
+  await Promise.all(Array.from({ length: Math.min(1, isolated.length) }, () => workerLoop()));
+}
 
 const wall = Date.now() - started;
 const total = (key) => results.reduce((n, r) => n + Math.max(0, r[key]), 0);
@@ -175,7 +193,7 @@ const failed = results.filter(isFailed);
 const slowest = [...results].sort((a, b) => b.ms - a.ms).slice(0, 5);
 
 console.log("");
-console.log(`[shards] ${WORKERS} workers, ${files.length} files, wall ${(wall / 1000).toFixed(1)}s`);
+console.log(`[shards] ${WORKERS} workers, ${files.length} files (${isolated.length} isolated), wall ${(wall / 1000).toFixed(1)}s`);
 console.log(`[shards] tests=${total("tests")} pass=${total("pass")} fail=${total("fail")} skipped=${total("skipped")} files-failed=${failed.length}`);
 console.log(`[shards] slowest: ${slowest.map((r) => `${r.file}=${(r.ms / 1000).toFixed(1)}s`).join(" ")}`);
 // COVERAGE IS DECIDED, NOT HOPED FOR: every file the tier was told to run produced a result.

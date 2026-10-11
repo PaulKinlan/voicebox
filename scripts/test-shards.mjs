@@ -88,6 +88,43 @@ export function isFailed({ code, tests, fail, notOk }) {
   return code !== 0 || fail > 0 || notOk.length > 0 || tests < 0;
 }
 
+/**
+ * THE FILES THAT MUST NOT RUN BESIDE ANOTHER.
+ *
+ * Every browser file is independent by construction — its own process, its own ephemeral-port server,
+ * its own browser — which is what makes the sharding safe. One file is not independent of the BOX:
+ * `tests/ldxa-barge-in-browser.test.mjs` drives the real audio path through Chromium's fake-audio
+ * device, and its own comments record that the device lags its file under CPU load (+76ms idle,
+ * +366ms at 4-core load). Measured 2026-10-11 (voicebox-beads-hhkg, filed as voicebox-beads-9c3r):
+ * with four workers it failed `tests/ldxa-barge-in-browser.test.mjs:168` — "playback must be flushed,
+ * not left playing", `true !== false` — twice in nine concurrent runs of the whole tier, and passed
+ * every focused control: alone, alone through this runner, and beside three other browser files at
+ * four-way concurrency without this runner. The same assertion, with the same "inside the full gate /
+ * green in isolation" profile, was already recorded as environmental in voicebox-beads-y82w.
+ *
+ * SO IT RUNS ALONE, AFTER THE PARALLEL QUEUE. This is a SCHEDULING change, not a repair: the file
+ * still runs, exactly once, with every assertion it has, and `tests/test-shards.test.mjs` proves the
+ * split is a partition. It is also not a claim that the flake is gone — voicebox-beads-9c3r stays
+ * open for a deterministic reproduction, and the honest reading of this list is "one measured
+ * casualty of CPU contention, isolated until somebody can fail it on demand".
+ */
+export const ISOLATED = new Set(["tests/ldxa-barge-in-browser.test.mjs"]);
+
+/**
+ * Split a queue into the part that runs with `workers` shards and the part that runs alone. Pure: it
+ * partitions and nothing else, so the caller keeps `assertExactCoverage` as the one guard on the
+ * whole queue and `tests/test-shards.test.mjs` can hold the partition property directly. A name in
+ * `isolated` that is not in the queue simply lands nowhere, which is why the unit test asserts every
+ * isolated name is a real browser-lane file: a renamed file would otherwise rejoin the parallel run
+ * silently and bring its flake back with it.
+ */
+export function splitQueue(queue, isolated = ISOLATED) {
+  return {
+    parallel: queue.filter((file) => !isolated.has(file)),
+    isolated: queue.filter((file) => isolated.has(file)),
+  };
+}
+
 if (import.meta.main) {
   const { classify } = await import("./test-lanes.mjs");
   const lane = classify().browser.map(({ file }) => `tests/${file}`);
