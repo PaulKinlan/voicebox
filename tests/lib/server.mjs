@@ -44,7 +44,8 @@ function reap(child) {
       /* already gone */
     }
   }
-  LIVE_CHILDREN.delete(child);
+  // Ownership ends only on the child's exit event. A failed or delayed kill must
+  // remain visible to the process-exit fallback (voicebox-beads-o71l).
 }
 
 process.on("exit", () => {
@@ -161,6 +162,21 @@ export async function startServer({ env = {}, cwd = ROOT, readyTimeoutMs = 20000
   // instead of re-spawning the server by hand.
   // Registered the moment it exists: a test that never reaches stop() must still be reaped.
   LIVE_CHILDREN.add(child);
+  let stopRequested = false;
+  const cleanupOwnedScratch = () => {
+    if (!ownedScratch) return;
+    try {
+      rmSync(ownedScratch, { recursive: true, force: true });
+    } catch {
+      /* best effort: an uncleared directory is safer than deleting a live host's state */
+    }
+  };
+  // A timed-out stop cannot safely remove the directory while the child is live.
+  // Once it eventually exits, this listener releases ownership and its scratch.
+  child.once("exit", () => {
+    LIVE_CHILDREN.delete(child);
+    if (stopRequested) cleanupOwnedScratch();
+  });
 
   child.stderr.on("data", (chunk) => {
     noise += String(chunk);
@@ -172,17 +188,14 @@ export async function startServer({ env = {}, cwd = ROOT, readyTimeoutMs = 20000
   // One way a child dies (the reaper, voicebox-beads-6io) and now one way it is waited for: the caller's
   // stop(), and the failure path below, which has no caller to hand a stop() to.
   const stop = async () => {
+    stopRequested = true;
     reap(child);
     if (!(await exitOf(child, STOP_BOUND_MS))) {
-      reap(child); // still not gone: SIGKILL the group once more, and leave the directory standing
-      return;
-    }
-    if (ownedScratch) {
-      try {
-        rmSync(ownedScratch, { recursive: true, force: true });
-      } catch {
-        /* best effort: a directory left behind is a leak, never a failed test */
-      }
+      reap(child); // still live: retry SIGKILL, retain ownership until the exit event
+    } else {
+      // The child may have exited before stop() was called, so its exit listener
+      // could not have seen stopRequested. Cleanup here is safely idempotent.
+      cleanupOwnedScratch();
     }
   };
 
