@@ -34,7 +34,27 @@ When `execute(action)` in `server.mjs` receives `action.verb === "system"`:
 3. For `clear_activity`, it clears `workActivityLog`; for other system commands, it appends a `"system"` entry to the work activity log.
 4. `POST /api/turn` returns `systemCommand` and `say` both inside `result` and at the top level of the JSON response.
 
-## 4. Verification (`tests/system-commands.test.mjs`)
+## 4. Browser Consumption (`public/fused.js`)
+
+`executeBrowserSystemCommand(cmd)` in `public/fused.js` is the only consumer of these commands. It reads the SAME field names the catalogue emits. That agreement is the part of this contract nothing asserted until voicebox-beads-ucak: the parser, the server broadcast and the turn response all carried `target` and `mode` while the client guarded on `panel` and `theme`, so every navigation and appearance command silently did nothing — for as long as it existed — while both sides' tests stayed green against themselves.
+
+| `command` | field read | value | browser action |
+|---|---|---|---|
+| `switch_theme` | `mode` | `dark` \| `light` \| `system` | `applyTheme(mode, { persist: true })` — sets `data-theme` / `data-theme-mode` and stores the choice |
+| `open_panel` | `target` | `files` \| `history` \| `activity` \| `deck` | `sqehSetState(target)` — moves the deck |
+| `open_panel` | `target` | `settings` | opens the Settings dialog |
+| `open_panel` | `target` | `harnesses` | opens Harnesses |
+| `open_panel` | `target` | `agent-tracker` | mounts the built-in Agent Progress Tracker mini-app |
+| `open_panel` | `target` | `close` | closes any open modal sheet, then `sqehSetState("deck")` — back to the deck, closing open windows |
+| `copy`, `paste` | `text` | | clipboard, as before |
+| `stop_speaking` | — | — | NO consumer yet (voicebox-beads-cv4g): parsed, broadcast and logged, but nothing performs it |
+| `clear_activity` | — | — | server-side only — `server.mjs` clears the work activity log |
+
+The client also accepts `extensions`, `environments` and `changelog` targets, which the catalogue does not currently emit. They are kept deliberately: the page's `window` `"message"` listener also accepts a `system_command` from outside the page, so the consumer is a superset of the in-page producer by design, and removing them would narrow a documented external entry point.
+
+Verification for this half of the contract is a BROWSER drive, not a parser assertion: `tests/system-command-browser.test.mjs` types each command into the composer, waits for the turn to land in `#session-log` (so the drive cannot pass vacuously), then asserts the observable UI.
+
+## 5. Verification (`tests/system-commands.test.mjs`)
 
 Run the scoped test suite in `tests/system-commands.test.mjs`:
 

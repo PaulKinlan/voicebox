@@ -239,17 +239,41 @@ async function executeBrowserSystemCommand(cmd) {
     }
     return { ok: false, error: "Clipboard unavailable" };
   }
-  if (cmd.command === "switch_theme" && cmd.theme) {
-    applyTheme(cmd.theme, { persist: true });
-    return { ok: true, theme: cmd.theme };
+  // THE FIELD NAMES HERE ARE THE PRODUCER'S, NOT THIS FUNCTION'S (voicebox-beads-ucak).
+  // lib/system-commands.mjs is the declared owner of the command vocabulary and emits `mode` for
+  // switch_theme and `target` for open_panel; server.mjs forwards exactly those fields on both client
+  // paths (the /channel "system_command" frame and the POST /api/turn response). This function used to
+  // read `cmd.theme` and `cmd.panel`, which NOBODY has ever produced — so the guard never matched,
+  // the branch never ran, and every navigation and appearance command silently did nothing while the
+  // server reported ok and logged it. Do not add a `cmd.mode || cmd.theme` fallback: two names for
+  // one fact is what scripts/single-owner.mjs exists to prevent.
+  if (cmd.command === "switch_theme" && cmd.mode) {
+    applyTheme(cmd.mode, { persist: true });
+    return { ok: true, theme: cmd.mode };
   }
-  if (cmd.command === "open_panel" && cmd.panel) {
-    const p = String(cmd.panel).toLowerCase();
+  if (cmd.command === "open_panel" && cmd.target) {
+    // Every target the catalogue emits is handled here, including the two that had no branch at all:
+    // `agent-tracker` (the built-in Agent Progress Tracker mini-app, openAgentProgressTracker) and
+    // `close` (back to the deck, which closes every open window). Invocation stays imperative —
+    // showModal() and the modules' own controls — deliberately: this is a vocabulary repair, and
+    // moving it to declarative Invoker Commands would need a polyfill for a feature that is only
+    // Baseline newly available.
+    const p = String(cmd.target).toLowerCase();
     if (p === "settings") els.settings?.showModal?.();
     else if (p === "harnesses") els.harnessesOpen?.click?.();
     else if (p === "extensions") els.extsOpen?.click?.();
     else if (p === "environments") els.envsOpen?.click?.();
     else if (p === "changelog") els.changelogOpen?.click?.();
+    else if (p === "agent-tracker") void openAgentProgressTracker();
+    else if (p === "close") {
+      // "close panel" closes what is actually open: any modal sheet on the page, then the deck home,
+      // which closes the open windows. Closing only the deck would leave a person with the Settings
+      // sheet in front of them after asking for it to be closed, which is the plain reading of the
+      // command. The dialogs are all <dialog closedby="any">, so the platform closes them for a
+      // click or Escape already — this is the same action, from a voice command.
+      for (const dialog of document.querySelectorAll("dialog[open]")) dialog.close();
+      sqehSetState("deck");
+    }
     else if (p === "files" || p === "history" || p === "activity" || p === "deck") sqehSetState(p);
     return { ok: true, panel: p };
   }
