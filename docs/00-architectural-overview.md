@@ -172,7 +172,7 @@ Spoken or typed system commands (`copy`, `paste`, `open files`, `open agent trac
 
 1. `parseSystemCommand(transcript)` in `lib/system-commands.mjs` parses the phrase into `{ verb: "system", command, target, text, file, mode }`.
 2. `execute(action)` in `server.mjs` records the event in the activity log and broadcasts `{ type: "system_command", ... }` over `/channel`.
-3. `applySystemCommand(cmd)` in `public/fused.js` performs the browser action immediately (copying to `navigator.clipboard`, toggling `[data-theme]`, opening the target popover or Agent Progress Tracker mini-app, or interrupting audio playback).
+3. `executeBrowserSystemCommand(cmd)` in `public/fused.js` performs the browser action immediately (copying to `navigator.clipboard`, applying the theme, opening the target popover or the Agent Progress Tracker mini-app). It reads the producer's own field names — `mode` for `switch_theme`, `target` for `open_panel` — as [docs/21](21-voice-system-commands.md) tabulates; audio session commands are parsed and broadcast but not yet consumed by the page (voicebox-beads-cv4g).
 
 ---
 
