@@ -21,7 +21,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { classify } from "../scripts/test-lanes.mjs";
-import { assertExactCoverage, buildQueue } from "../scripts/test-shards.mjs";
+import { assertExactCoverage, buildQueue, isFailed } from "../scripts/test-shards.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const read = (...parts) => readFileSync(path.join(root, ...parts), "utf8");
@@ -69,6 +69,20 @@ test("the queue is ordered longest-first, so the TAIL of the run is short", () =
   // An unreadable file sorts last rather than failing the tier — the runner reports it as a failure
   // when it runs, which is where a failure belongs.
   assert.deepEqual(buildQueue(["tests/gone.test.mjs", "tests/a.test.mjs"], { cwd: root }), ["tests/a.test.mjs", "tests/gone.test.mjs"]);
+});
+
+test("a file counts as failed when its exit code, its counts OR its reporter disagree with green", () => {
+  const green = { code: 0, tests: 8, fail: 0, notOk: [] };
+  assert.equal(isFailed(green), false, "the negative control: a green file must not be failed");
+  assert.equal(isFailed({ ...green, code: 1 }), true, "a non-zero exit code is a failure");
+  assert.equal(isFailed({ ...green, code: null }), true, "a child killed by a signal reports no code and must not be trusted as green");
+  assert.equal(isFailed({ ...green, fail: 2 }), true, "TAP's own failing count is a failure even when the exit code says otherwise");
+  assert.equal(isFailed({ ...green, notOk: ["a test"] }), true, "a `not ok` line is a failure even when the exit code says otherwise");
+  // The one that would let this tier buy speed by running less: a file whose reporter summary was
+  // never seen at all — a spawn that errored, a run cut short — must never be recorded as a pass.
+  assert.equal(isFailed({ ...green, tests: -1 }), true, "a file that reported NO test counts is not a pass");
+  // A skipped-only file is still a pass: tests/wasm-room-ui.test.mjs is one on this box.
+  assert.equal(isFailed({ code: 0, tests: 1, fail: 0, skipped: 1, notOk: [] }), false, "a skipped test is not a failure");
 });
 
 // ── the two gate wiring claims ────────────────────────────────────────────────────────────

@@ -73,6 +73,21 @@ export function assertExactCoverage(lane, queue) {
   return queue;
 }
 
+/**
+ * Whether a finished file counts as a FAILURE. The exit code is the authority — Node's test runner
+ * sets it non-zero for any failing test — and the other three conditions are there because an exit
+ * code can be lost or absent in exactly the cases where nobody is watching:
+ *   · a child killed by a signal reports `code === null`, so it cannot be trusted to be green;
+ *   · a TAP run that reported `fail > 0` or an `not ok` line is failing whatever the code says;
+ *   · `tests < 0` means the reporter's summary was never seen at all (a spawn that errored, a run
+ *     cut short), and a file that reported NO counts must never be recorded as a pass — that is the
+ *     one shape of bug that would let this tier buy speed by running less.
+ * Kept here, not inline in the runner, so the refusal is a value a test can hold.
+ */
+export function isFailed({ code, tests, fail, notOk }) {
+  return code !== 0 || fail > 0 || notOk.length > 0 || tests < 0;
+}
+
 if (import.meta.main) {
   const { classify } = await import("./test-lanes.mjs");
   const lane = classify().browser.map(({ file }) => `tests/${file}`);

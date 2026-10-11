@@ -319,12 +319,6 @@ export function classify(root = TESTS) {
 }
 
 // THE CLI RUNS ONLY WHEN THIS FILE IS THE PROGRAM (voicebox-beads-hhkg). `classify()` is the one
-// owner of "which file is in which lane", and the browser tier's shard runner needs to ask it in
-// process rather than parse this file's stdout into a list of paths. Before the guard the CLI ran on
-// IMPORT too, so any importer inherited the current `--lane`/`--check` argv and printed a lane dump
-// as a side effect of loading a module.
-if (import.meta.main) {
-// THE CLI RUNS ONLY WHEN THIS FILE IS THE PROGRAM (voicebox-beads-hhkg). `classify()` is the one
 // owner of "which file is in which lane", and the browser tier's shard runner asks it in process
 // rather than parsing this file's stdout back into paths. Before this guard the CLI ran on IMPORT
 // too, so an importer inherited the caller's `--lane`/`--check` argv and printed a lane dump as a
@@ -365,5 +359,4 @@ if (CLI && (laneArg === "unit" || laneArg === "live" || laneArg === "server" || 
 if (CLI) {
   console.log(`unit: ${unit.length} files\nlive: ${live.length} files`);
   for (const { file, why } of live) console.log(`  live  ${file} — ${why}`);
-}
 }

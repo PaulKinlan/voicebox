@@ -41,7 +41,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { classify } from "../scripts/test-lanes.mjs";
-import { assertExactCoverage, buildQueue } from "../scripts/test-shards.mjs";
+import { assertExactCoverage, buildQueue, isFailed } from "../scripts/test-shards.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -119,7 +119,15 @@ function runFile(file) {
     }, FILE_TIMEOUT_MS);
     const entry = { file, child };
     running.set(child.pid, entry);
-    child.on("exit", (code, signal) => {
+    // EXACTLY ONE RESULT PER FILE, whichever way the child ends (reviewer finding, P2). `exit` is
+    // not the only ending: a `spawn` that fails asynchronously (EMFILE, ENOMEM, EAGAIN) emits
+    // `error` and may never emit `exit` at all — and an unhandled `error` on a child process takes
+    // the whole runner down with an uncaught EventEmitter exception, which is a crash rather than a
+    // reported failure. `settled` keeps the two paths from double-counting a file that does both.
+    let settled = false;
+    const settle = (code, signal, note = "") => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       running.delete(child.pid);
       const ms = Date.now() - at;
@@ -132,19 +140,21 @@ function runFile(file) {
         fail: counts(out, "fail"),
         skipped: counts(out, "skipped"),
         notOk: notOk(out),
-        out,
+        out: note ? `${note}\n${out}` : out,
       };
       results.push(result);
-      const status = result.code === 0 ? "ok  " : "FAIL";
+      const status = isFailed(result) ? "FAIL" : "ok  ";
       console.log(
         `[shards] ${status} ${String(ms).padStart(7)}ms tests=${result.tests} pass=${result.pass} fail=${result.fail} skipped=${result.skipped} ${file}`,
       );
-      if (result.code !== 0) {
+      if (isFailed(result)) {
         const tail = out.split("\n").slice(-60).join("\n");
         console.log(`[shards] ---- output of ${file} ----\n${tail}\n[shards] ---- end ${file} ----`);
       }
       resolve(result);
-    });
+    };
+    child.on("exit", (code, signal) => settle(code, signal));
+    child.on("error", (error) => settle(1, null, `the test file could not be spawned: ${error.message}`));
   });
 }
 
@@ -161,7 +171,7 @@ await Promise.all(Array.from({ length: Math.min(WORKERS, files.length) }, () => 
 
 const wall = Date.now() - started;
 const total = (key) => results.reduce((n, r) => n + Math.max(0, r[key]), 0);
-const failed = results.filter((r) => r.code !== 0);
+const failed = results.filter(isFailed);
 const slowest = [...results].sort((a, b) => b.ms - a.ms).slice(0, 5);
 
 console.log("");
@@ -169,7 +179,7 @@ console.log(`[shards] ${WORKERS} workers, ${files.length} files, wall ${(wall / 
 console.log(`[shards] tests=${total("tests")} pass=${total("pass")} fail=${total("fail")} skipped=${total("skipped")} files-failed=${failed.length}`);
 console.log(`[shards] slowest: ${slowest.map((r) => `${r.file}=${(r.ms / 1000).toFixed(1)}s`).join(" ")}`);
 if (failed.length) {
-  console.log(`[shards] FAILED: ${failed.map((r) => `${r.file} (exit ${r.code}${r.notOk.length ? `: ${r.notOk.slice(0, 3).join(" | ")}` : ""})`).join("; ")}`);
+  console.log(`[shards] FAILED: ${failed.map((r) => `${r.file} (exit ${r.code}${r.notOk.length ? `: ${r.notOk.slice(0, 3).join(" | ")}` : r.fail > 0 ? `: ${r.fail} failing test(s)` : ": no test counts were reported"})`).join("; ")}`);
   process.exit(1);
 }
 // COVERAGE IS DECIDED, NOT HOPED FOR: every file the tier was told to run produced a result.
