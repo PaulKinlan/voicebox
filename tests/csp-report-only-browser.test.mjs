@@ -534,3 +534,283 @@ test("with the declaration script blocked, the page declares nothing, so the ass
     "and nothing is declared: if this passed, the assertions above would be passing on a page whose script never ran",
   );
 });
+
+// ── 6. The create-project opener, which must exist before anyone can click it and is the one case where a ──
+// late script cannot repair itself. Section 5 shows a settled search being re-applied when a deferred file
+// finally attaches; a CLICK leaves nothing to re-apply, so an opener that arrives late leaves a button that
+// silently does nothing. `browser/ui/ui.ts` is a module — deferred by definition — so the page is
+// interactive with none of its handlers bound. Measured before the fix (voicebox-beads-5tv3): a mouse click
+// and an Enter on the focused button both opened nothing and were never replayed when the module arrived,
+// while a SECOND activation worked, which is what proved the module itself was healthy.
+//
+// The opener is now a parser-time classic script, and the module's own binding is gone: it is the ONLY
+// owner, because a second listener would call showModal() on an already-open dialog and throw.
+test("the create-project opener works while the deferred module is still in flight, by mouse and keyboard (voicebox-beads-5tv3)", { timeout: 180000 }, async (t) => {
+  const evidence = process.env.VOICEBOX_OPENER_EVIDENCE;
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-csp-opener-"));
+  const workspace = path.join(scratch, "project");
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.writeFileSync(path.join(workspace, "notes.md"), "# Notes\n", "utf8");
+
+  const server = await startServer({
+    env: {
+      VOICEBOX_WORKSPACE: workspace,
+      VOICEBOX_RESOLVER: "script",
+      VOICEBOX_SANDBOX_HOMES: path.join(scratch, "sandbox-homes"),
+    },
+  });
+  t.after(async () => {
+    await server.stop();
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+
+  const page = await launch({ width: 1180, height: 980 });
+  t.after(() => page.close());
+
+  await page.send("Fetch.enable", { patterns: [{ urlPattern: "*ui.ts*", requestStage: "Request" }] });
+  await page.send("Page.navigate", { url: `${server.base}/environment.html` });
+  await page.waitFor(() => document.readyState === "interactive", { label: "the document to become interactive with the module held", timeout: 20000 });
+
+  // The module really is absent, and this is the observable that says so: the close button is one of ITS
+  // controls, so opening the dialog by hand and pressing it must leave the dialog open. Without this the test
+  // could be measuring an ordinary page and proving nothing about the window it exists for.
+  const absent = await page.evaluate(() => {
+    const dialog = document.getElementById("create-project-dialog");
+    dialog.showModal();
+    document.getElementById("create-project-close").click();
+    const stillOpen = dialog.open;
+    dialog.close();
+    return { moduleControlsBound: !stillOpen };
+  });
+  assert.equal(
+    absent.moduleControlsBound,
+    false,
+    "the deferred module must not have bound its controls yet — otherwise this is not measuring the window this test exists for",
+  );
+
+  // MOUSE: the interaction that used to do nothing at all.
+  await page.evaluate(() => document.getElementById("create-project").click());
+  assert.equal(
+    await page.evaluate(() => document.getElementById("create-project-dialog").open),
+    true,
+    "a mouse click must open the dialog the instant the page is interactive — this is the interaction that was lost while the module was in flight",
+  );
+  if (evidence) await page.screenshot(path.join(evidence, "opener-mouse.png"));
+
+  // THE THREE OPENER EFFECTS, each asserted separately because each can be dropped on its own. A stale
+  // refusal must not survive into a fresh dialog, and the dialog must open on the destination that is
+  // actually chosen, so the dialog and its radios cannot disagree.
+  await page.evaluate(() => {
+    const dialog = document.getElementById("create-project-dialog");
+    dialog.close();
+    const status = document.getElementById("dest-status");
+    status.hidden = false;
+    status.textContent = "a refusal from an earlier attempt";
+    status.dataset.ok = "false";
+    document.querySelector('input[name="dest"][value="machine"]').checked = true;
+    document.getElementById("create-project").click();
+  });
+  const opened = await page.evaluate(() => {
+    const status = document.getElementById("dest-status");
+    return {
+      open: document.getElementById("create-project-dialog").open,
+      statusHidden: status.hidden,
+      statusText: status.textContent,
+      statusOk: status.dataset.ok ?? null,
+      panels: {
+        opfs: document.getElementById("dest-opfs").hidden,
+        picked: document.getElementById("dest-picked").hidden,
+        machine: document.getElementById("dest-machine").hidden,
+      },
+    };
+  });
+  assert.equal(opened.open, true, "the dialog must be open");
+  assert.equal(opened.statusHidden, true, "a stale refusal must be cleared when the dialog opens — otherwise it describes an act nobody just made");
+  assert.equal(opened.statusText, "", "the stale refusal's text must be gone, not merely hidden");
+  assert.equal(opened.statusOk, null, "the stale refusal's ok/failed marking must be gone too, or the next message inherits it");
+  assert.deepEqual(
+    opened.panels,
+    { opfs: true, picked: true, machine: false },
+    "the dialog must open on the destination that is actually chosen — if this is wrong the visible panel and the checked radio disagree",
+  );
+  if (evidence) await page.screenshot(path.join(evidence, "opener-panel-and-status.png"));
+
+  // KEYBOARD: the same interaction, and the one an accessibility pass names — a working control that does
+  // nothing when activated from the keyboard. Driven with real input, not a synthetic event.
+  //
+  // `text` is NOT optional here. Without it Chrome dispatches no keypress, so the button is never activated
+  // and a broken dispatch is indistinguishable from a lost click — which is exactly the mistake I made when
+  // first measuring this defect: the dialog stayed shut, and I read that as "the keyboard path is lost too"
+  // when it only proved the key had not arrived. The control for it is below: once the module is loaded, the
+  // SAME dispatch presses the close button and must shut the dialog.
+  const focusCreate = async () => await page.evaluate(() => {
+    // The dialog must be CLOSED first: while a modal is open the rest of the page is inert, so focusing the
+    // button behind it silently does nothing and the keystroke would go nowhere.
+    const dialog = document.getElementById("create-project-dialog");
+    if (dialog.open) dialog.close();
+    document.getElementById("create-project").focus();
+    return document.activeElement?.id ?? null;
+  });
+  const pressEnter = async () => {
+    await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", text: "\r", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+    await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+  };
+  const focusWasOn = await focusCreate();
+  assert.equal(focusWasOn, "create-project", `the button must actually hold focus before the keystroke, or this measures the wrong thing (focus was on ${focusWasOn})`);
+  await pressEnter();
+  assert.equal(
+    await page.evaluate(() => document.getElementById("create-project-dialog").open),
+    true,
+    "Enter on the focused button must open the dialog exactly as the mouse does — the same loss by another route, and the one the craft floor names as 'working controls ... keyboard focus'",
+  );
+  if (evidence) await page.screenshot(path.join(evidence, "opener-keyboard.png"));
+
+  // THE MODULE ARRIVES. Its radio handler is bound now and reads the destination sync from the seam the
+  // classic opener published, so this both proves the module's own controls came alive and exercises the
+  // seam rather than trusting it.
+  await page.send("Fetch.disable");
+  await page.waitFor(() => document.readyState === "complete", { label: "the document to finish loading", timeout: 20000 });
+  await page.evaluate(() => {
+    document.getElementById("create-project-dialog").close();
+    const radio = document.querySelector('input[name="dest"][value="picked"]');
+    radio.checked = true;
+    radio.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await page.waitFor(() => !document.getElementById("dest-picked").hidden, {
+    label: "the module's radio handler to sync the panel through the seam",
+    timeout: 15000,
+  });
+  const closedByModule = await page.evaluate(() => {
+    document.getElementById("create-project").click();
+    return { opened: document.getElementById("create-project-dialog").open };
+  });
+  assert.equal(closedByModule.opened, true, "the opener must keep working after the module has loaded");
+
+  // THE DISPATCH CONTROL, and the reason the keyboard assertion above can be trusted: this is the same
+  // keystroke sent to a control the MODULE owns. It must close the dialog. If it does not, the problem is
+  // the synthetic input rather than the page, and the assertion above would be measuring nothing.
+  await page.evaluate(() => {
+    document.getElementById("create-project-close").focus();
+  });
+  await pressEnter();
+  const afterCloseKey = await page.evaluate(() => ({
+    open: document.getElementById("create-project-dialog").open,
+    focused: document.activeElement?.id ?? null,
+  }));
+  assert.equal(
+    afterCloseKey.open,
+    false,
+    `Enter sent to the close button must close the dialog, which proves this dispatch really activates buttons on this page (focused: ${afterCloseKey.focused}). If this fails, the keyboard assertion above is not evidence about the opener`,
+  );
+  if (evidence) await page.screenshot(path.join(evidence, "opener-module-loaded.png"));
+});
+
+// Opening the same dialog twice must not raise. Until this change the module bound that click too, and after
+// adding a second owner a single click would fire BOTH listeners: the first showModal() opens the dialog and
+// the second throws InvalidStateError on an already-open one. So the assertion is not that the dialog opens
+// — it is that opening it captures NO uncaught error, with a canary proving the detector works.
+test("the opener is the only owner: opening and closing captures no exception (voicebox-beads-5tv3)", { timeout: 120000 }, async (t) => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-csp-owner-"));
+  const workspace = path.join(scratch, "project");
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.writeFileSync(path.join(workspace, "notes.md"), "# Notes\n", "utf8");
+
+  const server = await startServer({
+    env: {
+      VOICEBOX_WORKSPACE: workspace,
+      VOICEBOX_RESOLVER: "script",
+      VOICEBOX_SANDBOX_HOMES: path.join(scratch, "sandbox-homes"),
+    },
+  });
+  t.after(async () => {
+    await server.stop();
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+
+  const page = await launch({ width: 1180, height: 980 });
+  t.after(() => page.close());
+
+  await page.send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `window.__pageErrors = []; window.addEventListener("error", (e) => window.__pageErrors.push(String(e.message || e.error || e)));`,
+  });
+  await page.goto(`${server.base}/environment.html`);
+  await page.waitFor(() => document.readyState === "complete", { label: "the document to finish loading", timeout: 20000 });
+
+  // The canary: a detector that cannot see a real uncaught error would make the assertion below meaningless.
+  const canary = await page.evaluate(async () => {
+    window.__pageErrors.length = 0;
+    setTimeout(() => {
+      throw new Error("canary: this error is expected and must be captured");
+    }, 0);
+    await new Promise((r) => setTimeout(r, 200));
+    return window.__pageErrors.slice();
+  });
+  assert.equal(canary.length, 1, `the error detector must see a genuine uncaught error before its silence means anything (saw ${JSON.stringify(canary)})`);
+
+  const cycles = await page.evaluate(async () => {
+    window.__pageErrors.length = 0;
+    const dialog = document.getElementById("create-project-dialog");
+    const opened = [];
+    for (let i = 0; i < 3; i++) {
+      document.getElementById("create-project").click();
+      opened.push(dialog.open);
+      document.getElementById("create-project-close").click();
+      opened.push(dialog.open);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return { opened, errors: window.__pageErrors.slice() };
+  });
+  assert.deepEqual(
+    cycles.opened,
+    [true, false, true, false, true, false],
+    "each click must open the dialog and each close must shut it — three cycles, so a second owner that only misbehaves on a later pass would still show up",
+  );
+  assert.deepEqual(
+    cycles.errors,
+    [],
+    `opening the dialog must raise nothing. A second listener for this button — the module binding it alongside the opener — would call showModal() on an already-open dialog and throw InvalidStateError, which is exactly what this capture would show. Got ${JSON.stringify(cycles.errors)}`,
+  );
+});
+
+// And the opener script must be load-bearing, not decoration: with it blocked the button does nothing at
+// all. That is also the strongest statement of "one owner" — the module does NOT quietly take over.
+test("with the opener script blocked the button does nothing, so the module is not a second owner (voicebox-beads-5tv3)", { timeout: 120000 }, async (t) => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-csp-opener-blocked-"));
+  const workspace = path.join(scratch, "project");
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.writeFileSync(path.join(workspace, "notes.md"), "# Notes\n", "utf8");
+
+  const server = await startServer({
+    env: {
+      VOICEBOX_WORKSPACE: workspace,
+      VOICEBOX_RESOLVER: "script",
+      VOICEBOX_SANDBOX_HOMES: path.join(scratch, "sandbox-homes"),
+    },
+  });
+  t.after(async () => {
+    await server.stop();
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+
+  const page = await launch({ width: 1180, height: 980 });
+  t.after(() => page.close());
+
+  await page.send("Network.enable");
+  await page.send("Network.setBlockedURLs", { urls: ["*environment-dialogs.js*"] });
+  await page.goto(`${server.base}/environment.html`);
+  await page.waitFor(() => document.readyState === "complete", { label: "the document to finish with the opener blocked", timeout: 20000 });
+
+  const blocked = await page.evaluate(() => {
+    document.getElementById("create-project").click();
+    return {
+      open: document.getElementById("create-project-dialog").open,
+      seam: typeof window.__voiceboxCreateProject,
+    };
+  });
+  assert.equal(blocked.seam, "undefined", "the blocked opener must not have published its seam");
+  assert.equal(
+    blocked.open,
+    false,
+    "with the opener script blocked, clicking the button must do NOTHING. If the dialog opens, some other file is opening it — which is precisely the second owner this change removes, and it would also mean the opener assertions above are not driven by the file they name",
+  );
+});

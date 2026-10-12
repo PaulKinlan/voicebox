@@ -224,10 +224,15 @@ test("the extracted documents carry no inline script, and the declaration script
   // The browser test asserts the same property behaviourally by holding the file; this is the cheap,
   // deterministic guard that names the cause.
   const environment = fs.readFileSync(path.join(publicDir, "environment.html"), "utf8");
-  const tag = environment.match(/<script\s+src="\/environment-root\.js"[^>]*>/);
-  assert.ok(tag, 'public/environment.html must load its declaration script from /environment-root.js as a classic script tag');
-  assert.ok(
-    !/\b(defer|async)\b/.test(tag[0]) && !/\btype\s*=\s*["']module["']/.test(tag[0]),
-    `the declaration script must stay CLASSIC and parser-blocking — defer, async or type="module" all attach the listener after the document is interactive, where a click is lost with nothing able to recover it. Got ${tag[0]}`,
-  );
+  for (const [file, why] of [
+    ["environment-root.js", "the root declaration's click handler"],
+    ["environment-dialogs.js", "the create-project opener's click handler (voicebox-beads-5tv3)"],
+  ]) {
+    const tag = environment.match(new RegExp(`<script\\s+src="/${file.replace(".", "\\.")}"[^>]*>`));
+    assert.ok(tag, `public/environment.html must load ${file} as a classic script tag`);
+    assert.ok(
+      !/\b(defer|async)\b/.test(tag[0]) && !/\btype\s*=\s*["']module["']/.test(tag[0]),
+      `${file} must stay CLASSIC and parser-blocking — defer, async or type="module" all attach the listener after the document is interactive, and a click landing in that window is lost with nothing able to recover it (a click, unlike a search value, cannot be re-applied on attach). ${why} would then silently do nothing. Got ${tag[0]}`,
+    );
+  }
 });
