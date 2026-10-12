@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { resolveTurn, resolveWorkspaceCandidate, recoverLiveSystemErrorTurn } from "./lib/resolver.mjs";
 import { authorizeMachinePath, containedIn } from "./lib/path-auth.mjs";
 import { createWorkspaceRoutes } from "./lib/routes/workspace.mjs";
+import { createPresenceRoutes } from "./lib/routes/presence.mjs";
 import { createExtensionRoutes } from "./lib/routes/extensions.mjs";
 import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, reachableFromEnvironment, rootVanished } from "./core/root.ts";
 import { normaliseRelativeDir, parentDir } from "./core/paths.ts";
@@ -3652,66 +3653,9 @@ function facts_why(provider) {
 
 const harnessInventory = createHarnessInventory();
 const roomPresence = createRoomPresenceCoordinator();
+const presenceRoutes = createPresenceRoutes({ roomPresence, json, readJsonBody, answerOnce, broadcastChannel });
 const routes = {
-  "GET /api/presence": (_req, res) => json(res, 200, roomPresence.snapshot()),
-  "POST /api/presence": async (req, res) => {
-    const parsed = await readJsonBody(req, res);
-    if (parsed === null || typeof parsed !== "object") {
-      return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
-    }
-    return answerOnce(res, async () => {
-      const {
-        action = "heartbeat",
-        participantId,
-        name,
-        role,
-        device,
-        voiceState,
-        activeFile,
-        caption,
-        speaker,
-        text,
-        kind,
-      } = parsed ?? {};
-      let result;
-      if (action === "join" || action === "joinParticipant") {
-        result = roomPresence.joinParticipant({
-          participantId,
-          name,
-          role,
-          device,
-          voiceState,
-          activeFile,
-        });
-      } else if (action === "leave" || action === "leaveParticipant") {
-        result = roomPresence.leaveParticipant(participantId);
-      } else if (action === "requestFloor" || action === "request_floor") {
-        result = roomPresence.requestFloor(participantId);
-      } else if (action === "releaseFloor" || action === "release_floor") {
-        result = roomPresence.releaseFloor(participantId);
-      } else if (
-        action === "recordSharedCaption" ||
-        action === "record_caption" ||
-        action === "caption"
-      ) {
-        result = roomPresence.recordSharedCaption({
-          participantId,
-          speaker: speaker ?? name,
-          text: text ?? caption ?? "",
-          kind,
-        });
-      } else {
-        result = roomPresence.heartbeatParticipant(participantId, {
-          name,
-          voiceState,
-          activeFile,
-          caption: caption ?? text,
-        });
-      }
-      broadcastChannel({ type: "presence", ...roomPresence.snapshot() });
-      return json(res, result.ok === false ? 409 : 200, result);
-    });
-  },
+  ...presenceRoutes,
   "GET /api/agents": (req, res, url) => {
     const environmentKey = url.searchParams.get("environment") || undefined;
     const harness = url.searchParams.get("harness") || undefined;
