@@ -302,6 +302,13 @@ rmSync(path.join(HOST_DIR, ".pending-approval.json"), { force: true });
 sweepOrphanedProbeMarkers(ROOT);
 if (process.cwd() !== ROOT) sweepOrphanedProbeMarkers(process.cwd());
 
+// THE DEV FRONT (vite.config.js: `server.port: 5173`, strictPort): the second local origin a person
+// browses, and the one the `?bootstrap=` proxy hop forwards for. One NAME per origin, because the
+// banner that hands out a ticket, the refusal clause that explains a missing cookie, and the origin
+// allowlist below must never disagree about what the dev front is (voicebox-beads-t43w).
+const DEV_FRONT_ORIGIN = "http://localhost:5173";
+const DEV_FRONT_ALIAS_ORIGIN = "http://127.0.0.1:5173";
+
 // ── IN-ROOM SESSION AUTHORIZATION (voicebox-beads-5jl) ──────────────────────────
 // Minted per server process and embedded into the served index.html. Allows in-room UI actions
 // (like reconfiguring bounds or revoking extensions) without exposing or discovering .token on disk.
@@ -323,8 +330,8 @@ function hasExtensionAuthority(req) {
     `http://127.0.0.1:${selfPort}`,
     `http://localhost:${selfPort}`,
     `http://[::1]:${selfPort}`,
-    `http://127.0.0.1:5173`,
-    `http://localhost:5173`,
+    DEV_FRONT_ALIAS_ORIGIN,
+    DEV_FRONT_ORIGIN,
   ]);
   if (typeof req.headers.origin === "string" && localOrigins.has(req.headers.origin)) {
     return true;
@@ -363,6 +370,44 @@ function consumeBootstrapTicket(ticket) {
   if (typeof ticket !== "string" || !outstandingBootstrapTickets.has(ticket)) return false;
   outstandingBootstrapTickets.delete(ticket);
   return true;
+}
+// ONE TICKET, PRINTED ONCE, WITH THE HOST IT MUST BE OPENED ON NAMED (voicebox-beads-t43w). The
+// redemption's Set-Cookie carries no Domain attribute, so the browser scopes the session to the HOST
+// that redeemed it: a ticket opened at 127.0.0.1:8787 logs in the page served there and is simply
+// not sent to a page browsed at localhost:5173. The dev front already proxies `?bootstrap=` to this
+// server and returns the Set-Cookie on :5173 (vite.config.js loopback-bootstrap-proxy), so the one
+// ticket reaches either origin — what has to match the browsing page is the HOST IN THE URL, which
+// is why the startup text names it. ISSUANCE IS UNCHANGED: one single-use ticket, minted once per
+// call, never one per origin (coord HOLD 2026-10-12 — one global ticket is the credential boundary;
+// guidance may name the other host, it may not mint for it).
+const apiOrigin = () => `http://127.0.0.1:${boundPort ?? PORT}`;
+function bootstrapUrlOn(origin) {
+  return `${origin}/?bootstrap=${mintBootstrapTicket()}`;
+}
+// WHERE A REFUSED REQUEST CAME IN FROM — guidance text only, never a decision. The wall has already
+// refused by the time this runs and nothing here can admit a request; it answers the question the
+// operator actually has ("I did open the URL it printed") when the page they are on is the dev
+// front. The signal is the request's own Host header — the Vite proxy hop PRESERVES it (changeOrigin
+// is not set; measured 2026-10-12 on the real dev front: a request to localhost:5173/api/... arrives
+// with `host: localhost:5173` while `origin` is rewritten to the API and `referer` is forwarded
+// as-is),
+// so Host names the front the browser addressed while a request to the API itself names the API.
+// Only the two :5173 fronts are answered for, because those are the hosts the startup text names a
+// ticket for; anywhere else the clause says nothing rather than naming a remedy it cannot describe.
+const DEV_FRONT_ORIGINS = new Set([DEV_FRONT_ORIGIN, DEV_FRONT_ALIAS_ORIGIN]);
+function frontOfRequest(req) {
+  const host = req.headers.host;
+  return typeof host === "string" && host ? `http://${host}` : null;
+}
+function frontRefusalClause(req) {
+  const front = frontOfRequest(req);
+  if (!front || !DEV_FRONT_ORIGINS.has(front)) return "";
+  return (
+    ` — this request came in on ${front} and holds no session cookie for it: the cookie is scoped to ` +
+    `the host that redeemed the ticket, so a session minted at ${apiOrigin()} is never sent here. ` +
+    `Redeem a ticket on the host you browse: the startup URL (or a fresh one from POST /api/bootstrap) ` +
+    `redeems on whichever host you open it on, so swap ${apiOrigin()} for the host in your address bar.`
+  );
 }
 // WHERE A REDEMPTION LANDS: the same route with the single-use ticket removed from the query, so what
 // is left in the address bar is the plain page a person can refresh. Relative on purpose — on the dev
@@ -4231,7 +4276,8 @@ async function handle(req, res) {
         "this server was started with VOICEBOX_LOOPBACK_AUTH=1: open the bootstrap URL it printed at startup " +
         "(one-time), or mint a fresh ticket with POST /api/bootstrap and the x-voicebox-host-token header. " +
         "Requests carrying the host token pass directly. Everything else answers only with the session " +
-        "cookie that the bootstrap exchange mints.";
+        "cookie that the bootstrap exchange mints." +
+        frontRefusalClause(req);
       if (url.pathname.startsWith("/api/")) {
         return json(res, 401, { ok: false, refused: "loopback-unauthenticated", why });
       }
@@ -4969,8 +5015,10 @@ async function handle(req, res) {
     if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
       return json(res, 403, { ok: false, refused: "host-token-refused", why: "minting a bootstrap ticket requires the host token (x-voicebox-host-token) — the same authority that admits extensions and declares roots" });
     }
-    const ticket = mintBootstrapTicket();
-    return json(res, 200, { ok: true, url: `http://127.0.0.1:${boundPort ?? PORT}/?bootstrap=${ticket}` });
+    // ONE TICKET, AS BEFORE (coord HOLD 2026-10-12): the re-entry door mints exactly what the startup
+    // door mints, and its URL names this server's origin. The dev-front remedy is the host swap the
+    // 401 clause states (voicebox-beads-t43w) — issuing a second credential is not mine to authorize.
+    return json(res, 200, { ok: true, url: bootstrapUrlOn(apiOrigin()) });
   }
 
   if (req.method === "POST" && url.pathname === "/api/call") {
@@ -5776,10 +5824,17 @@ try {
     // The bootstrap URL is the ONLY way in while the gate is on (docs/13 §4): one-time ticket,
     // redeemed by the first browser that opens it into the session cookie. Printed, not written
     // to a file, for the same reason Jupyter prints its token: the terminal is the boundary.
-    const ticket = mintBootstrapTicket();
-    console.log(`bootstrap  http://127.0.0.1:${bound}/?bootstrap=${ticket}`);
-    console.log(`  the page and every API/WS route answer only with the session cookie that URL mints (one-time; HttpOnly; SameSite=Strict).`);
-    console.log(`  lost the cookie? mint another without restarting: curl -X POST -H "x-voicebox-host-token: $(cat "${HOST_DIR}/.host-token")" http://127.0.0.1:${bound}/api/bootstrap`);
+    // GUIDANCE, NOT A SECOND ISSUANCE (voicebox-beads-t43w, coord HOLD 2026-10-12 12:33/12:40): one
+    // single-use ticket is minted and printed, as before. The extra text only names the HOST it must
+    // be opened on, because a cookie is scoped to the redeeming host — the alternative is the operator
+    // following the printed instruction on the dev front, getting a session that page can never
+    // present, and spending the only ticket doing it.
+    console.log(`bootstrap  ${bootstrapUrlOn(apiOrigin())}`);
+    console.log(`  one-time; the page and every API/WS route answer only with the session cookie it mints (HttpOnly; SameSite=Strict).`);
+    console.log(`  browsing the dev front (localhost:5173, npm run dev)? Cookies are per-host, so open the SAME ticket on that host:`);
+    console.log(`  http://localhost:5173/?bootstrap=<the ticket above> — Vite proxies the redemption and the cookie stays on :5173.`);
+    console.log(`  it redeems once, on whichever host you open it first, so open the host whose page you browse.`);
+    console.log(`  lost the cookie? mint a fresh ticket without restarting: curl -X POST -H "x-voicebox-host-token: $(cat "${HOST_DIR}/.host-token")" http://127.0.0.1:${bound}/api/bootstrap`);
   } else {
     // THE DEFAULT IS NOT SILENT ABOUT WHAT IT LEAVES OPEN (voicebox-beads-k74h, owner ruling
     // 2026-10-06: the gate stays OFF by default for testing — an accepted posture, but it must
