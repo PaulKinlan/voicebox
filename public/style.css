@@ -1110,7 +1110,17 @@ body[data-voice="speaking"] .mic-dock {
 .composer:focus-within { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--card) 85%, var(--ground)); }
 .composer input { flex: 1; min-width: 0; min-inline-size: 15ch; min-height: 38px; padding: 8px 14px; border: 0; border-radius: 999px; background: none; color: var(--ink); font-size: .875rem; text-overflow: ellipsis; field-sizing: content; }
 .composer input:focus { outline: none; }
-.composer input::placeholder { color: color-mix(in srgb, var(--muted) 62%, transparent); }
+/* voicebox-beads-8wm8: the composer's placeholder is deliberately quieter than the text you type, which is
+   why it is a translucent mix of `--muted` rather than the token itself. At 62% it composited to only 2.68:1
+   light / 3.46:1 dark against the field's own ground, under the 4.5:1 floor this project applies to placeholder
+   text. 90% is the mix this change chooses, and it is chosen for HEADROOM rather than because it is the bare
+   minimum: 88% is the bare clearing candidate, measuring 4.54:1 light and 5.61:1 dark, only 0.04 above the floor
+   in light, which is inside rendering variance. At 90% the placeholder has alpha 0.902 and measures 4.81:1 light
+   and 5.87:1 dark against typed text at 14.91:1 and 17.11:1, so it stays roughly a third of the entered text's
+   contrast and is not flattened to the opaque token. Measured by injecting the exact declaration
+   into a disposable browser and reading pixels rather than parsing colour strings; focus leaves the ground
+   unchanged up to one unit, and the composer input is never disabled. */
+.composer input::placeholder { color: color-mix(in srgb, var(--muted) 90%, transparent); }
 .send { color: light-dark(#fff, #141c34); border: 0; border-radius: 999px; padding: 0 18px; min-height: 36px; font-weight: 500; background: var(--accent); }
 .send:hover { filter: brightness(1.06); }
 .send:disabled { background: color-mix(in srgb, var(--ink) 9%, transparent); color: color-mix(in srgb, var(--muted) 50%, transparent); opacity: 1; }
@@ -2738,7 +2748,9 @@ dialog.changelog-modal .commit-file {
    The wrapper is `:where()`, and that is load-bearing rather than stylistic. `.room input::placeholder`
    and `.composer input::placeholder` have EQUAL specificity - one class plus one type, since
    `::placeholder` counts as a type - so on a tie source order decides, and a plain container rule
-   added here would override the composer's deliberate 62% alpha and flatten it to a solid colour.
+   added here would override the composer's deliberate alpha and flatten it to a solid colour. The composer's
+   alpha was raised from 62% to 90% separately in voicebox-beads-8wm8; this wrapper is what keeps the rule
+   above from touching it.
    `:where()` contributes zero specificity, so this rule cannot outrank any authored rule: it fills the
    gap the user agent leaves and leaves `.composer` and `.list-tools` exactly as they are. Verified by
    injecting the candidate rule into a live page and reading computed colours, opacity and contrast for
