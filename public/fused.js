@@ -218,7 +218,7 @@ async function executeBrowserSystemCommand(cmd) {
     // moving it to declarative Invoker Commands would need a polyfill for a feature that is only
     // Baseline newly available.
     const p = String(cmd.target).toLowerCase();
-    if (p === "settings") els.settings?.showModal?.();
+    if (p === "settings") els.settingsOpen?.click();
     else if (p === "harnesses") els.harnessesOpen?.click?.();
     else if (p === "extensions") els.extsOpen?.click?.();
     else if (p === "environments") els.envsOpen?.click?.();
@@ -5724,7 +5724,7 @@ function sqehWire() {
     sqehOpenSheet(sheet?.hidden !== false);
   });
   document.getElementById("sqeh-sheet-close")?.addEventListener("click", () => sqehOpenSheet(false));
-  document.getElementById("sqeh-dock-settings")?.addEventListener("click", () => document.getElementById("settings")?.showModal?.());
+  document.getElementById("sqeh-dock-settings")?.addEventListener("click", () => els.settingsOpen?.click());
   document.getElementById("sqeh-act-mute")?.addEventListener("click", () => {
     // THE MIC BUTTON OWNS THE TRUTH and one click toggles capture. Mute means STOP:
     // only click when capture is actually live, so the tile can never double-toggle
