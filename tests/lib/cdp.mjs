@@ -218,6 +218,9 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
     sessionId,
     pid: child.pid,
     send: (method, params) => send(method, params, sessionId),
+    sendBrowser: (method, params) => send(method, params),
+    // A second tab in the SAME browser/profile can be driven without launching another Chrome.
+    sendTo: (targetSessionId, method, params) => send(method, params, targetSessionId),
     // Read-only protocol evidence: observe real frames without patching the page's WebSocket.
     events: (method) => events.filter((event) => event.sessionId === sessionId && event.method === method).map((event) => event.params),
     async close() {
