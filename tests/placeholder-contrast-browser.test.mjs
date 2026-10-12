@@ -6,8 +6,10 @@
 // 4.45:1 light / 4.16:1 dark, and the two transcript fields 4.19:1 / 3.17:1 on their darker ground.
 //
 // Two things this test deliberately does NOT assert, because asserting them would be false:
-//   1. That EVERY placeholder passes. `#utterance` in the composer still does not, by design: it is a
-//      62%-alpha composite that voicebox-beads-8wm8 owns, and it depends on this change landing first.
+//   1. That EVERY placeholder is governed by this rule. `#utterance` in the composer is deliberately NOT:
+//      it is a translucent mix of `--muted` kept quieter than typed text, so it has its own declaration and
+//      its own assertions at the end of this file, which hold it to the same floor while requiring that it
+//      stay translucent. It was 62% (2.68:1 light / 3.46:1 dark) until voicebox-beads-8wm8 raised it to 90%.
 //   2. That the fix works because of a selector's specificity. It does not; see the assertion on the
 //      rule's shape below. `.room input::placeholder` and `.composer input::placeholder` are at EQUAL
 //      specificity, so source order decides and a plain container rule would flatten the composer.
@@ -79,6 +81,32 @@ const MEASURE = () => {
   };
 };
 
+// Composer-specific measurement, in pixels. The placeholder colour here is a color-mix() that resolves to a
+// syntax this file's other helper would have to parse; painting it over the field's real ground and reading
+// bytes avoids assuming any format, and alpha comes from a black/white pixel pair.
+const CANONICAL = () => {
+  const el = document.querySelector("#utterance");
+  if (!el) return { found: false };
+  const cv = document.createElement("canvas"); cv.width = 1; cv.height = 1;
+  const ctx = cv.getContext("2d", { willReadFrequently: true });
+  const paint = (bg, fg) => { ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = bg; ctx.fillRect(0, 0, 1, 1);
+    if (fg) { ctx.fillStyle = fg; ctx.fillRect(0, 0, 1, 1); } const d = ctx.getImageData(0, 0, 1, 1).data; return [d[0], d[1], d[2]]; };
+  let ground = [255, 255, 255];
+  for (let node = el; node; node = node.parentElement) {
+    const c = getComputedStyle(node).backgroundColor;
+    if (c && c !== "rgba(0, 0, 0, 0)" && c !== "transparent") { ground = paint("rgb(255,255,255)", c); break; }
+  }
+  const raw = getComputedStyle(el, "::placeholder").color;
+  const composited = paint(`rgb(${ground.join(",")})`, raw);
+  const ob = paint("rgb(0,0,0)", raw), ow = paint("rgb(255,255,255)", raw);
+  const alpha = Math.min(1, Math.max(0, 1 - (ow[1] - ob[1]) / 255));
+  const lum = ([r, g, b]) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
+  const ratio = (a, b) => { const x = lum(a), y = lum(b); return +((Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)).toFixed(2); };
+  return { found: true, alpha: +alpha.toFixed(3), ratio: ratio(composited, ground),
+    inkRatio: ratio(paint("rgb(255,255,255)", getComputedStyle(el).color), ground) };
+};
+
 test("browser: room and Help placeholder text clears 4.5:1 in both stored themes", async () => {
   // The rule must be present and must be the zero-specificity form. If someone rewrites it without
   // :where(), the composer silently flattens - that was measured, not theorised - so the shape is
@@ -99,11 +127,14 @@ test("browser: room and Help placeholder text clears 4.5:1 in both stored themes
     "a plain .room placeholder rule would tie with .composer's and win on source order, flattening the composer",
   );
 
-  // The composer's own declaration must survive untouched. voicebox-beads-8wm8 owns changing it.
+  // The composer keeps its own declaration, deliberately translucent and deliberately quieter than typed
+  // text. Pinned by shape so a silent reduction back under the floor fails here as well as on the computed
+  // ratio below. 90% is the smallest single mix clearing 4.5:1 in both stored themes; 88% clears both with
+  // only 0.04 of headroom in light, inside rendering variance (voicebox-beads-8wm8).
   assert.match(
     styleRules,
-    /\.composer input::placeholder\s*\{\s*color:\s*color-mix\(in srgb,\s*var\(--muted\)\s*62%,\s*transparent\);\s*\}/,
-    "the composer's deliberate 62% alpha must not be replaced by this change",
+    /\.composer input::placeholder\s*\{\s*color:\s*color-mix\(in srgb,\s*var\(--muted\)\s*90%,\s*transparent\);\s*\}/,
+    "the composer must keep its own translucent 90% mix; a weaker percentage drops it back under the floor",
   );
 
   const server = await startServer();
@@ -169,18 +200,28 @@ test("browser: room and Help placeholder text clears 4.5:1 in both stored themes
           );
         }
 
-        // Protected elements: unchanged by this bead, whatever they measure. #utterance stays a 62%
-        // alpha composite (voicebox-beads-8wm8) and #file-filter keeps its two-class rule.
+        // The composer is its own rule with its own bar (voicebox-beads-8wm8): it must clear the same floor
+        // while staying VISIBLY quieter than typed text, i.e. translucent and clearly below it. Measured with
+        // canvas pixels rather than by parsing a colour string, so an oklch()/color() value cannot fool it.
         const composer = rows.find((r) => r.id === "utterance");
-        if (composer) {
-          assert.equal(
-            composer.opacity, "1",
-            `${where}: #utterance placeholder opacity computed to ${composer.opacity}, expected 1`,
+        if (pagePath === "/") {
+          assert.ok(composer, `${where}: #utterance must be enumerated; the composer guard would be vacuous`);
+          const c = await page.evaluate(CANONICAL);
+          assert.ok(c.found, `${where}: #utterance must exist in the live UI`);
+          assert.ok(
+            c.ratio >= FLOOR,
+            `${where}: composer placeholder composites to ${c.ratio}:1 over its own ground ` +
+            `(alpha ${c.alpha}), below the ${FLOOR}:1 floor`,
           );
-          assert.match(
-            composer.color, /\/\s*0\.62\s*\)|62%/,
-            `${where}: #utterance must keep its 62% alpha composite, but its colour is ${composer.color} - ` +
-            "this change flattened the composer, which is voicebox-beads-8wm8's decision to make, not this bead's",
+          assert.ok(
+            c.alpha < 1,
+            `${where}: composer placeholder alpha measured ${c.alpha}; it must stay translucent rather than ` +
+            "be flattened to the opaque --muted token",
+          );
+          assert.ok(
+            c.inkRatio > c.ratio + 1,
+            `${where}: the composer placeholder (${c.ratio}:1) must stay clearly quieter than typed text ` +
+            `(${c.inkRatio}:1); the de-emphasis is the point of the mix`,
           );
         }
         const listTools = rows.find((r) => r.id === "file-filter");
