@@ -734,7 +734,11 @@ function dialogStatus(text: string, ok: boolean): void {
 // interactive before this file runs, and a click or an Enter made in that window used to do nothing at all
 // — with no state left behind to re-apply once the module arrived. Binding it in a parser-time classic
 // script (`public/environment-dialogs.js`) is what makes the button work the instant it exists. Binding it
-// here as well would call `showModal()` on an already-open dialog and throw `InvalidStateError`: one owner.
+// here as well would re-run the opener on every activation — a second status reset, a second panel sync and
+// a second `showModal()` — so its effects would happen twice: one owner. That second `showModal()` is a
+// silent NO-OP, not the `InvalidStateError` this comment first claimed from reading the spec; measured in
+// this Chromium, and it is why the one-owner test counts invocations instead of expecting a throw
+// (voicebox-beads-r3xp).
 $("create-project-close").addEventListener("click", () => closeCreateDialog());
 for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="dest"]')) {
   radio.addEventListener("change", () => {

@@ -16,7 +16,11 @@
  * parsing, exactly where the inline handler it replaces used to run.
  *
  * ONE OWNER, and the module is not a second one. `ui.ts` deliberately does NOT bind this button any more:
- * a second listener would call `showModal()` on an already-open dialog, which throws `InvalidStateError`.
+ * a second listener would re-run the whole opener — clearing the status, re-syncing the panel and opening a
+ * dialog that is already open — so the button's effects would happen twice on every activation. (That second
+ * `showModal()` is a silent no-op rather than the `InvalidStateError` this comment originally asserted from
+ * the spec; measured, and the reason the one-owner test counts invocations instead of expecting a throw:
+ * `voicebox-beads-r3xp`.)
  * Opening lives here; closing, the status line inside the dialog, and every submit path stay in the
  * module, which reads `showDestination` from the seam below instead of keeping a copy of it.
  *

@@ -721,10 +721,14 @@ test("the create-project opener works while the deferred module is still in flig
   if (evidence) await page.screenshot(path.join(evidence, "opener-module-loaded.png"));
 });
 
-// Opening the same dialog twice must not raise. Until this change the module bound that click too, and after
-// adding a second owner a single click would fire BOTH listeners: the first showModal() opens the dialog and
-// the second throws InvalidStateError on an already-open one. So the assertion is not that the dialog opens
-// — it is that opening it captures NO uncaught error, with a canary proving the detector works.
+// ONE OWNER, proved by COUNTING the opener's effect rather than by expecting a crash (voicebox-beads-r3xp).
+// I first wrote this test to assert that opening raises no uncaught error, on the belief that a duplicate
+// listener's second `showModal()` would throw `InvalidStateError` on an already-open dialog. A reviewer
+// falsified that with a live CDP run and I reproduced it: in this Chromium the second call is a silent
+// NO-OP, so a duplicate owner is invisible to an error listener and this test stayed green with the deleted
+// binding restored. What a duplicate actually produces is a SECOND pass of the opener — a second status
+// reset, a second panel sync, a second open — so the assertions below count `showModal` invocations and
+// require exactly one per activation. The mutant at the end proves that count can see a duplicate at all.
 test("the opener is the only owner: opening and closing captures no exception (voicebox-beads-5tv3)", { timeout: 120000 }, async (t) => {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-csp-owner-"));
   const workspace = path.join(scratch, "project");
@@ -747,7 +751,11 @@ test("the opener is the only owner: opening and closing captures no exception (v
   t.after(() => page.close());
 
   await page.send("Page.addScriptToEvaluateOnNewDocument", {
-    source: `window.__pageErrors = []; window.addEventListener("error", (e) => window.__pageErrors.push(String(e.message || e.error || e)));`,
+    source:
+      `window.__pageErrors = []; window.addEventListener("error", (e) => window.__pageErrors.push(String(e.message || e.error || e)));` +
+      // Installed before any page script runs, so the count covers the opener itself and not just later code.
+      `window.__showModalCalls = 0;` +
+      `(() => { const original = HTMLDialogElement.prototype.showModal; HTMLDialogElement.prototype.showModal = function (...args) { window.__showModalCalls += 1; return original.apply(this, args); }; })();`,
   });
   await page.goto(`${server.base}/environment.html`);
   await page.waitFor(() => document.readyState === "complete", { label: "the document to finish loading", timeout: 20000 });
@@ -765,12 +773,16 @@ test("the opener is the only owner: opening and closing captures no exception (v
 
   const cycles = await page.evaluate(async () => {
     window.__pageErrors.length = 0;
+    window.__showModalCalls = 0;
     const dialog = document.getElementById("create-project-dialog");
     const close = document.getElementById("create-project-close");
     const opened = [];
+    const opensPerActivation = [];
     for (let i = 0; i < 3; i++) {
+      const before = window.__showModalCalls;
       document.getElementById("create-project").click();
       opened.push(dialog.open);
+      opensPerActivation.push(window.__showModalCalls - before);
       // The close button is the MODULE's control, and `complete` is not proof that the module has bound it
       // (voicebox-beads-fl3g), so this waits for the effect instead of assuming it. Bounded rather than
       // open-ended: if the close never takes, the recorded `false` below is what fails the test, and the
@@ -783,7 +795,7 @@ test("the opener is the only owner: opening and closing captures no exception (v
       }
       opened.push(dialog.open);
     }
-    return { opened, errors: window.__pageErrors.slice() };
+    return { opened, opensPerActivation, errors: window.__pageErrors.slice() };
   });
   assert.deepEqual(
     cycles.opened,
@@ -791,9 +803,41 @@ test("the opener is the only owner: opening and closing captures no exception (v
     "each click must open the dialog and each close must shut it — three cycles, so a second owner that only misbehaves on a later pass would still show up",
   );
   assert.deepEqual(
+    cycles.opensPerActivation,
+    [1, 1, 1],
+    `each activation must invoke showModal EXACTLY ONCE, because a second owner would run the whole opener again — a second status reset, a second panel sync, and a second open that is silently ignored — rather than throwing. Got ${JSON.stringify(cycles.opensPerActivation)}`,
+  );
+  assert.deepEqual(
     cycles.errors,
     [],
-    `opening the dialog must raise nothing. A second listener for this button — the module binding it alongside the opener — would call showModal() on an already-open dialog and throw InvalidStateError, which is exactly what this capture would show. Got ${JSON.stringify(cycles.errors)}`,
+    `opening the dialog must raise nothing. This is the WEAKER half of the proof: a duplicate owner raises nothing either, so it is the invocation count above that detects one (voicebox-beads-r3xp). Got ${JSON.stringify(cycles.errors)}`,
+  );
+
+  // THE MUTANT THAT MAKES THAT COUNT MEANINGFUL, and the finding's own instruction: restoring the deleted
+  // binding must MOVE the count, or a counter that counted nothing would look exactly like one owner. This is
+  // also the run that proves the assertion above would have caught the regression the finding describes.
+  const mutant = await page.evaluate(async () => {
+    window.__pageErrors.length = 0;
+    const dialog = document.getElementById("create-project-dialog");
+    const button = document.getElementById("create-project");
+    if (dialog.open) dialog.close();
+    const before = window.__showModalCalls;
+    button.addEventListener("click", () => dialog.showModal());
+    button.click();
+    const callsForTwoOwners = window.__showModalCalls - before;
+    const raisedNothing = window.__pageErrors.length === 0;
+    if (dialog.open) dialog.close();
+    return { callsForTwoOwners, raisedNothing };
+  });
+  assert.equal(
+    mutant.callsForTwoOwners,
+    2,
+    `with the second binding restored, one activation must invoke showModal TWICE — otherwise the count above proves nothing (saw ${mutant.callsForTwoOwners})`,
+  );
+  assert.equal(
+    mutant.raisedNothing,
+    true,
+    "and the duplicate raises nothing at all, which is exactly why this needed a count rather than an error listener (voicebox-beads-r3xp)",
   );
 });
 
