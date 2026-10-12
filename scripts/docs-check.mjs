@@ -420,7 +420,7 @@ function refusalNames() {
   // Direct declarations and the task module's small refusal helpers; no AST dependency needed.
   const sources = {
     "Extension admission gate (`core/extensions.ts`)": ["core/extensions.ts", /rule:\s*"([a-z][a-z0-9-]*)"/g],
-    "HTTP routes and workspace root boundary (`server.mjs`, `lib/routes/workspace.mjs`, `lib/routes/extensions.mjs`, `core/root.ts`, `browser/acts.ts`)": ["server.mjs lib/routes/workspace.mjs lib/routes/extensions.mjs core/root.ts browser/acts.ts", /refused:\s*"([a-z][a-z0-9-]*)"/g],
+    "HTTP routes and workspace root boundary (`server.mjs`, `lib/routes/workspace.mjs`, `lib/routes/extensions.mjs`, `lib/routes/presence.mjs`, `core/root.ts`, `browser/acts.ts`)": ["server.mjs lib/routes/workspace.mjs lib/routes/extensions.mjs lib/routes/presence.mjs core/root.ts browser/acts.ts", /refused:\s*"([a-z][a-z0-9-]*)"/g],
     "Extension runtime (`lib/extensions.mjs`)": ["lib/extensions.mjs", /refused:\s*"([a-z][a-z0-9-]*)"/g],
     "Task delegation and lifecycle (`core/tasks.ts`, `lib/tasks.mjs`)": ["core/tasks.ts lib/tasks.mjs", /(?:refused:\s*|(?:refusal|fail|no)\(\s*)"([a-z][a-z0-9-]*)"/g],
   };
