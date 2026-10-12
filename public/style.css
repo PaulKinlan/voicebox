@@ -3,35 +3,34 @@
    this file is self-contained and is the only stylesheet the page loads. */
 @font-face { font-family: Inter; font-style: normal; font-weight: 100 900; font-display: swap; src: url("fonts/inter-latin.woff2") format("woff2"); }
 
-:root,
-:root[data-theme="light"] {
-  color-scheme: light;
-  --ground: #fbfbf9;
-  --card: #ffffff;
-  --shade: #f3f4f6;
-  --line: #d8dcdf;
-  --ink: #23262b;
-  --muted: #59636d;
-  --accent: #1f3fd0;
-  --good: #1d6b32;
-  --warn: #8a4b00;
-  --bad: #b3261e;
-  --shadow: 0 18px 40px -20px rgba(38, 48, 60, 0.2);
+:root {
+  /* THE OS DECIDES BY DEFAULT (voicebox-beads-7xse). Declaring `light dark` here rather than pinning
+     `light` is what lets a browser with JavaScript disabled follow the person's system setting at all,
+     and it is also what themes the browser-drawn surfaces - scrollbars, the caret, text selection,
+     form controls - from the same decision. An explicit choice, below, overrides it. */
+  color-scheme: light dark;
+  /* One declaration per token, resolved by the colour scheme above, so the light and dark values can
+     never drift apart and there is no second place computing them. */
+  --ground: light-dark(#fbfbf9, #0b0f19);
+  --card: light-dark(#ffffff, #151d2f);
+  --shade: light-dark(#f3f4f6, #1e293b);
+  --line: light-dark(#d8dcdf, rgba(255, 255, 255, 0.12));
+  --ink: light-dark(#23262b, #f8fafc);
+  --muted: light-dark(#59636d, #94a3b8);
+  --accent: light-dark(#1f3fd0, #38bdf8);
+  --good: light-dark(#1d6b32, #34d399);
+  --warn: light-dark(#8a4b00, #fbbf24);
+  --bad: light-dark(#b3261e, #f87171);
+  /* light-dark() resolves to a <color>, so a box-shadow must NOT be wrapped in one: that makes the
+     declaration invalid and the computed shadow `none` - silently, with no error, measured in
+     Chromium. Only the shadow's COLOUR is a light-dark() pair; its offset and blur stay as they are. */
+  --shadow-ink: light-dark(rgba(38, 48, 60, 0.2), rgba(0, 0, 0, 0.7));
+  --shadow: 0 18px 40px -20px var(--shadow-ink);
 }
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --ground: #0b0f19;
-  --card: #151d2f;
-  --shade: #1e293b;
-  --line: rgba(255, 255, 255, 0.12);
-  --ink: #f8fafc;
-  --muted: #94a3b8;
-  --accent: #38bdf8;
-  --good: #34d399;
-  --warn: #fbbf24;
-  --bad: #f87171;
-  --shadow: 0 18px 40px -20px rgba(0, 0, 0, 0.7);
-}
+/* An explicit choice is expressed ONLY as a colour scheme, and setting it is the whole of the
+   override: `light` and `dark` both outrank the OS. `system` sets neither, so the OS applies. */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 body { margin: 0; min-block-size: 100svh; background: var(--ground); color: var(--ink); font: 14px/1.5 Inter, system-ui, sans-serif; letter-spacing: -.006em; }

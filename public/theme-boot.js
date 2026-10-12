@@ -1,23 +1,30 @@
 // public/theme-boot.js — the pre-paint theme guard (voicebox-beads-xpwt).
 //
-// WHY THIS EXISTS. public/index.html:2 hardcodes data-theme="light" and style.css:5 puts the whole light
-// token set on an un-attributed :root, so a document is light until JS runs. The theme is applied by
-// public/theme.mjs, which fused.js imports — and a module script is ALWAYS deferred, so it runs after
-// the first paint. Measured before this file existed: with dark stored, the page painted at FCP 76ms and
-// turned dark at 78ms. A person who chose dark saw light first, on every load.
+// WHY THIS EXISTS. The theme is applied by public/theme.mjs, which fused.js imports — and a module
+// script is ALWAYS deferred, so it runs after the first paint. Measured before this file existed: with
+// dark stored, the page painted at FCP 76ms and turned dark at 78ms, so a person who chose dark saw
+// light first, on every load. This file applies the STORED choice before anything is painted.
+//
+// WHAT IT IS NOT RESPONSIBLE FOR, since voicebox-beads-7xse. A browser with no scripting at all is no
+// longer a broken case, and this guard is not what fixes it: style.css now sets `color-scheme: light
+// dark` with every colour token written as a light-dark() pair, and neither page forces a scheme on
+// <html>, so with no script the OS decides. This file's job is the narrower, older one — honour a stored
+// choice ahead of the first paint. Its absence now costs a flash, not a permanently wrong scheme.
 //
 // WHY IT IS A CLASSIC (NOT MODULE) SCRIPT, AND WHY IT IS NOT INLINE. It must run before the first paint,
 // so it is loaded WITHOUT type=module and WITHOUT defer/async: a classic script in <head> blocks parsing
 // and executes before anything is painted. Modern Web Guidance's FOUC section prescribes an INLINE script
-// for this, but this page sends `script-src 'self'` (public/index.html:7) with no 'unsafe-inline', no
-// nonce and no hash, so an inline script is blocked by the page's own policy. An external same-origin
-// classic script is the CSP-compatible equivalent, and it keeps the policy strict rather than weakening
-// the whole page to fix six lines.
+// for this, but this page sends `script-src 'self'` (the Content-Security-Policy meta in public/index.html)
+// with no 'unsafe-inline', no nonce and no hash, so an inline script is blocked by the page's own policy.
+// An external same-origin classic script is the CSP-compatible equivalent, and it keeps the policy strict
+// rather than weakening the whole page to fix six lines. The tag deliberately sits BELOW that meta: a
+// <meta> CSP governs only what is fetched after it is parsed, so a guard above it would not be governed
+// by the policy at all.
 //
-// IT SETS data-theme AND data-theme-mode, NOT the color-scheme meta. The guidance's example rewrites the
-// `color-scheme` meta and lets light-dark() follow; that is not how this repo paints. Its tokens hang off
-// :root[data-theme="light"|"dark"] (style.css:5-31) and only two rules in style.css use light-dark(), so
-// a guard that only touched the meta would fix UA-painted surfaces and leave the page's own tokens light.
+// IT WORKS THROUGH color-scheme, WHICH IS WHY IT ONLY WRITES ATTRIBUTES. style.css gives `light` and
+// `dark` their own color-scheme rules and every token resolves from that scheme through light-dark(), so
+// setting data-theme is what re-themes the page — including the browser-drawn surfaces (scrollbars, the
+// caret, text selection, form controls) that follow color-scheme rather than any token.
 //
 // ONE FACT, ONE PLACE — the trap this file is most likely to fall into. This guard cannot import
 // public/theme.mjs (that is the deferred module being worked around), so it necessarily restates that

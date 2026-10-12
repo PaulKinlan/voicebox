@@ -25,13 +25,13 @@ This folder (`designs/`) contains the root-cause UX audit, Nano Banana visual mo
 ### 2.1 Forced Dark Slate Theme (`#0b0f19`)
 - **Why it felt bad**: `public/index.html` hardcoded `data-theme="dark"` on `<html>`, and legacy deck styling (now consolidated into `public/style.css`) overrode the room palette with heavy dark-slate glass (`#0b0f19` background, `rgba(15, 23, 42, 0.72)` cards, `#f8fafc` text) regardless of user preference. The result felt brooding, high-glare in daylight, and visually disconnected from Voicebox's original tactile paper tokens in `public/style.css`.
 - **The Fix**:
-  - Default `<html>` to `data-theme="light"` using the **Warm Tactile Paper** palette:
-    - `--ground: #fbfbf9` (warm off-white paper canvas)
-    - `--card: #ffffff` (crisp elevated surface with subtle `1px solid rgba(35, 38, 43, 0.10)` hairlines and soft ambient shadow)
-    - `--ink: #23262b` / `--muted: #5a6069` (high-contrast legible typography)
-    - `--accent: #1f3fd0` (cobalt focus & interactive ring)
-    - `--good: #1d6b32` (emerald listening & live indicators)
-  - Provide an explicit `#theme-toggle` button in the header (`☀️ Light` / `🌙 Dark`) persisted in `localStorage.getItem('voicebox.theme')`, keeping dark mode purely opt-in (`html[data-theme="dark"]`).
+  - Use the **Warm Tactile Paper** palette as the light scheme and **Dark Slate** as the dark scheme, and let the operating system decide when the person has expressed no preference: `public/style.css` sets `color-scheme: light dark` and writes every colour token as one `light-dark(light, dark)` pair. The earlier form of this decision defaulted `<html>` to `data-theme="light"`, and an attribute selector outranks any media query — so a browser with JavaScript disabled could never follow the OS, on either page (fixed in `voicebox-beads-7xse`). Deferring to the OS is not the complaint above: that was a theme applied **regardless** of preference, and this respects one the person actually set. An explicit choice still outranks it.
+    - `--ground: light-dark(#fbfbf9, #0b0f19)` (warm off-white paper canvas / dark slate)
+    - `--card: light-dark(#ffffff, #151d2f)` (crisp elevated surface with subtle `1px` hairlines and a soft ambient shadow)
+    - `--ink: light-dark(#23262b, #f8fafc)` / `--muted: light-dark(#59636d, #94a3b8)` (high-contrast legible typography in both schemes)
+    - `--accent: light-dark(#1f3fd0, #38bdf8)` (cobalt focus & interactive ring, sky on dark)
+    - `--good: light-dark(#1d6b32, #34d399)` (emerald listening & live indicators)
+  - Provide an explicit `#theme-toggle` button in the header (`☀️ Light` / `🌙 Dark`) persisted under the `localStorage` key `voicebox:theme`, keeping dark mode purely opt-in. `public/theme-boot.js` applies the stored choice before the first paint; `light` and `dark` set `color-scheme` directly, and `system` sets neither, so the OS applies.
 
 ### 2.2 Microphone Pushed Off-Centre Below the Fold
 - **Why it happened**: In `public/index.html`, `<section class="made" id="made-list">` (a 720px-wide inline file browser and breadcrumb tree) was placed *above* `<section class="voice">` in DOM flow, and a giant multi-row inline `<section id="sqeh-deck">` dashboard sat immediately underneath. Together they shoved the primary `#mic` button down the page so the user had to hunt for the microphone.
