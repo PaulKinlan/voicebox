@@ -84,9 +84,19 @@ function preUj16Markup(currentSource, samplerSource) {
   out = out.replace(/\s*<script type="module" src="\/help-theme\.mjs"><\/script>/, "");
   assert.notEqual(out, withTags, "the guard and module tags must have been present for the control to remove");
   // (2) The copy goes back at the END of <body>, which is where it was and why it ran after the paint.
-  const anchor = "    (() => {\n";
-  assert.ok(out.includes(anchor), "the body-end script must still begin with the IIFE the copy lived in");
-  out = out.replace(anchor, `${anchor}${OLD_BODY_END_COPY}\n`);
+  // This used to anchor on the search filter's inline IIFE, which sat in that exact position. That block is a
+  // same-origin file now (voicebox-beads-xggy.1), so the control anchors on the end of the body itself — which
+  // is the more faithful anchor anyway, since the POSITION is what this control is about and never the script
+  // that happened to share it. Without this the control broke the moment an unrelated block moved.
+  const anchor = "</body>";
+  assert.ok(out.includes(anchor), "help.html must still close its body so the control can put the old copy back at the end of it");
+  // The copy needs its own <script> tag now, and that is not a detail: it used to be spliced INTO the inline
+  // IIFE that shared this position, and that block is a same-origin file today. Statements dropped into the
+  // body as bare text do not run at all, which is exactly how this control first reported "dark at nullms" —
+  // a page where the choice was never applied, asserted as though the old copy had been reinstated. An inline
+  // CLASSIC script is what the pre-uj16 page actually had here, and it is what makes the copy run during
+  // parsing, before the first frame, which is the property this control exists to measure.
+  out = out.replace(anchor, `  <script>\n${OLD_BODY_END_COPY}\n  </script>\n${anchor}`);
   // (3) The measuring instrument. The old page had no head script; this one does, and that is the only
   // addition — without it there is nothing to read the first frame with.
   out = out.replace("<head>", `<head>\n  <script>${samplerSource}</script>`);

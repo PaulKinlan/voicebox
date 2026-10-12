@@ -187,3 +187,32 @@ test("the policy decision is fed a resolved file, never a client-supplied path (
     "this file must not reintroduce a private lexical containment compare — that is exactly the copy scripts/single-owner.mjs refuses; the question belongs to lib/path-auth.mjs",
   );
 });
+
+// STRUCTURAL, and it is the point of the extraction rather than a side note: the staged policy's worklist is
+// the set of inline blocks, so the set is asserted directly. Adding an inline script to any of these pages
+// should fail HERE, with a message that says which page and why, rather than silently reappearing as an extra
+// report in the browser test's expected set.
+test("the extracted documents carry no inline script, and the one that still does is named (voicebox-beads-xggy.1)", () => {
+  const publicDir = path.join(here, "..", "public");
+  const inlineScripts = (file) => {
+    const src = fs.readFileSync(path.join(publicDir, file), "utf8");
+    return [...src.matchAll(/<script(?![^>]*\bsrc=)[^>]*>/g)].length;
+  };
+  const clean = { "index.html": "the room", "help.html": "extracted to /help-search.js", "changelog.html": "never had one", "harnesses.html": "never had one" };
+  for (const [file, why] of Object.entries(clean)) {
+    assert.equal(
+      inlineScripts(file),
+      0,
+      `public/${file} must carry NO inline script (${why}) — an inline block is the one thing script-src 'self' would block, so one reappearing here re-opens the policy gap this change closes`,
+    );
+  }
+  // Named rather than skipped, so this file records what is left instead of implying the page is clean.
+  // It is the next child's job (the Environment inventory on voicebox-beads-xggy): its root-declaration
+  // script, its inline <style> block and one inline style attribute. WHEN THAT LANDS THIS EXPECTATION BECOMES
+  // 0, and the failure is the reminder to update it rather than a defect.
+  assert.equal(
+    inlineScripts("environment.html"),
+    1,
+    "public/environment.html still carries its root-declaration script — the remaining inline block after this change, and the next child's scope. If this is 0 the extraction landed and this expectation should now read 0 too",
+  );
+});

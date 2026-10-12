@@ -132,19 +132,12 @@
       </section>
     </main>
   </div>
-  <script>
-    (() => {
-      // The theme used to be applied here, at the end of <body>. It is now the shared pre-paint guard and
-      // the shared module in <head> (voicebox-beads-uj16). What remains is the help search filter.
-      const search = document.querySelector(".help-search-input");
-      const sections = document.querySelectorAll(".help-section[data-help-section]");
-      search?.addEventListener("input", () => {
-        const q = (search.value || "").trim().toLowerCase();
-        for (const sec of sections) {
-          sec.hidden = Boolean(q) && !(sec.textContent || "").toLowerCase().includes(q);
-        }
-      });
-    })();
-  </script>
+  <!-- The help search filter is a same-origin FILE rather than an inline block (voicebox-beads-xggy.1).
+       public/index.html's policy is `script-src 'self'` with no nonce, hash or 'unsafe-inline', so an inline
+       script is the one thing that policy would block if it were ever enforced; the Modern Web Guidance
+       security guide names refactoring as the alternative to nonces and hashes. `defer` runs it once
+       parsing is done, which is when an inline script at the end of <body> became observable to a user
+       anyway — a listener attached before the first keystroke is the same listener. -->
+  <script src="/help-search.js" defer></script>
 </body>
 </html>
