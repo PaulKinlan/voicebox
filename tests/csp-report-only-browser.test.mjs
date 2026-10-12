@@ -142,4 +142,20 @@ test("the staged policy reports exactly the known inline blocks, and blocks noth
     true,
     `the project-root control must still WORK while its inline script is reported (dialog open ${control.before} -> ${control.after}) — report-only blocks nothing`,
   );
+
+  // ── 4. The alias class, in the browser, which is where the reviewer found it. ─────────────────────
+  // `/help.html` by another spelling is the SAME document, and a policy that an alias steps around is
+  // not a policy: staging it would undercount what enforcement would break, and enforcement would leave
+  // the alias blind. So each spelling must produce the SAME report as the canonically-spelled document,
+  // not merely "some" report. Measured before the fix: three of these answered 200 with the same Help
+  // markup and NO header, the trailing slash among them without any encoding at all.
+  for (const alias of ["/%68elp.html", "/help%2Ehtml", "/help.html/", "/./help.html", "/x/../help.html"]) {
+    await page.goto(`${server.base}${alias}`);
+    await settle();
+    assert.deepEqual(
+      (await violations()).map((v) => v.effective).sort(),
+      ["script-src-elem"],
+      `${alias} is the same Help document as /help.html and must report identically — a spelling the policy does not reach is a document the policy does not cover`,
+    );
+  }
 });

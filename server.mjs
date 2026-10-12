@@ -2158,23 +2158,37 @@ function resolveActive(name) {
 // every would-be violation is reported. There is deliberately NO report endpoint, so the only way to see a
 // violation is the page's own `securitypolicyviolation` event, which is how the tests observe it.
 //
-// THE PATH LIST IS EXPLICIT AND IT IS A LIST OF DOCUMENTS, NEVER A CONTENT TYPE. A rule phrased as "any
+// THE LIST IS KEYED ON THE RESOLVED FILE, NOT ON THE REQUESTED URL. That distinction is the whole point of
+// `canonicalPublicPath` below, and it was learned by measurement: keyed on `url.pathname`, this allowlist
+// was bypassable. `/%68elp.html`, `/help%2Ehtml` and `/help.html/` all resolve to the same Help document
+// and were served with NO policy header, because the resolver decodes and normalises while the raw
+// pathname comparison did neither. The trailing-slash spelling needs no encoding at all, and a comparison
+// patched with `decodeURIComponent` would have fixed those three and left the next alias live. Deciding on
+// the file that is actually being served collapses every spelling to one string by construction, so the
+// class cannot come back. It is still a list of documents, never a content type: a rule phrased as "any
 // text/html response" would silently cover the mini-app pages under /apps, the iframe bridge, and every
-// document added later by someone who never read this comment. A new top-level document is covered by
-// being added here, deliberately, and a test asserts both the covered and the excluded paths.
+// document added later. The room is covered as `/index.html`, which is where `/` canonicalises to: there
+// is deliberately no separate "/" entry, because that spelling can no longer reach this comparison.
 const CSP_REPORT_ONLY_POLICY =
   "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'";
 const CSP_REPORT_ONLY_PATHS = new Set([
-  "/",
   "/index.html",
   "/help.html",
   "/changelog.html",
   "/environment.html",
   "/harnesses.html",
 ]);
-/** The header a response to `pathname` should carry, or nothing. One decision, two call sites. */
-function cspReportOnlyHeaders(pathname) {
-  return CSP_REPORT_ONLY_PATHS.has(pathname) ? { "content-security-policy-report-only": CSP_REPORT_ONLY_POLICY } : {};
+/**
+ * The one spelling this allowlist is written in: a resolved file's own path inside `public/`.
+ * Callers pass a path that has already been through the resolver's containment and realpath checks, so
+ * aliases, dot segments, encodings and trailing slashes have all collapsed before the comparison happens.
+ */
+function canonicalPublicPath(file) {
+  return "/" + path.relative(PUBLIC, file).split(path.sep).join("/");
+}
+/** The header a response for the resolved file `file` should carry, or nothing. One decision, two call sites. */
+function cspReportOnlyHeaders(file) {
+  return CSP_REPORT_ONLY_PATHS.has(canonicalPublicPath(file)) ? { "content-security-policy-report-only": CSP_REPORT_ONLY_POLICY } : {};
 }
 
 const MIME_TYPES = {
@@ -4273,7 +4287,7 @@ const routes = {
     // The stamp names THIS process's revision: the one memoized answer taken at startup
     // (voicebox-beads-4oj6), awaited BEFORE the head is written so a page is never sent half-stamped.
     const build = await buildIdentity();
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8", ...cspReportOnlyHeaders(url.pathname) });
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", ...cspReportOnlyHeaders(path.join(PUBLIC, "index.html")) });
     const where = build.ahead === null
       ? ` · no origin/${build.branch} here, so the distance from a remote is unknown`
       : build.ahead === 0
@@ -4380,9 +4394,8 @@ async function handle(req, res) {
       try {
         if (statSync(file).isFile()) {
           const type = MIME_TYPES[path.extname(file)] ?? "application/octet-stream";
-          // Keyed on the REQUEST PATH, not on `type`: see the allowlist above for why a content-type rule
-          // is the thing this must never become.
-          res.writeHead(200, { "content-type": type, ...cspReportOnlyHeaders(url.pathname) });
+          // Keyed on the RESOLVED FILE (`file`), not on the requested path: see the allowlist above for why.
+          res.writeHead(200, { "content-type": type, ...cspReportOnlyHeaders(file) });
           return res.end(readFileSync(file));
         }
       } catch {}
