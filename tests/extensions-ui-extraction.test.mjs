@@ -91,7 +91,7 @@ test("extensions ui extraction: the real wired page reads tool status live, not 
     await page.evaluate((shelf) => {
       window.__v25aShelf = shelf;
     }, FAKE_SHELF);
-    await page.evaluate(`(${STUB_EXTENSIONS.toString()})()`);
+    await page.evaluate(STUB_EXTENSIONS);
 
     // Drive the page's OWN hook - the seam live-voice.js forwards to - so fused.js's
     // lastToolStatus is written by fused.js's own code, not by the test.
