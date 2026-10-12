@@ -116,3 +116,31 @@ test("the agreed answer is the contract people rely on, stated independently of 
     assert.deepEqual(runBoot(fakeEnv(input)), want, `theme-boot.js: ${why}`);
   }
 });
+
+test("every page that themes itself loads the shared guard, and none keeps a second copy", () => {
+  // voicebox-beads-uj16. The point of one guard FILE is that a page cannot quietly go back to its own
+  // copy. help.html did exactly that — inline, at the end of <body> — and its copy drifted on the
+  // whitelist, on the second attribute, on the media listener AND on the timing, and all of it survived
+  // because the page ended up correct eventually. A page that assigns data-theme itself, or that reads the
+  // storage key itself, or that loads this script as a module/deferred, is that regression coming back.
+  for (const page of ["index.html", "help.html"]) {
+    const html = fs.readFileSync(path.join(here, "..", "public", page), "utf8");
+    assert.match(html, /<script src="\/?theme-boot\.js"><\/script>/, `${page} must load the shared guard`);
+    assert.doesNotMatch(html, /data-theme\s*=/, `${page} must not apply data-theme itself`);
+    assert.doesNotMatch(
+      html,
+      /localStorage[\s\S]{0,120}voicebox:theme/,
+      `${page} must not read the theme storage key itself — that decision belongs to theme.mjs and theme-boot.js`,
+    );
+    const tag = /<script[^>]*src="\/?theme-boot\.js"[^>]*>/.exec(html)[0];
+    assert.doesNotMatch(
+      tag,
+      /type=|defer|async/,
+      `${page}: the guard must stay a classic synchronous script, or it runs after the first paint again`,
+    );
+    assert.ok(
+      html.indexOf("theme-boot.js") < html.indexOf('<link rel="stylesheet"'),
+      `${page}: the guard belongs in <head> before the stylesheet`,
+    );
+  }
+});
