@@ -109,6 +109,17 @@ if (process.env.GATE_CASE === 'accept-failure') { console.error('fetch failed (E
     // Accelerate ONLY the stage under test, keyed on its COMMAND — never on its budget. See the
     // note above the fixture's cleanEnv: a number-keyed shim turned every future budget change into
     // an opaque failure (review findings M1/M2/M5, voicebox-beads-lq8s).
+    //
+    // THE ACCELERATED BUDGET IS 5s, NOT 2s (voicebox-beads-0nt3). The scenario asserts that the
+    // stage's own output appeared BEFORE the budget killed it, so the budget has to outlast the
+    // startup of the chain it measures (`timeout → npm → sh → node`). At 2s it did not: measured on
+    // this box, time-to-marker was 0.25s idle, 1.76–3.41s at loadavg 6 (32 CPU burners on 8 vCPU),
+    // and 5.2–6.3s at 8x oversubscription — which is what a 4-worker browser tier on a 2-vCPU box
+    // looks like, and which failed the psfw union gate (tests/pre-push.test.mjs:227, "LIVE OUTPUT
+    // BEFORE TERMINATION" absent). 5s cannot exceed the elapsed window this suite asserts (<=10s),
+    // and the file is also listed in scripts/test-shards.mjs ISOLATED so it is not raced by three
+    // sibling browser files: a budget bump alone is not enough when the latency it must beat is the
+    // contention itself.
     writeFileSync(path.join(bin, 'timeout'), `#!/bin/sh
 case "$1" in --help) exec '${timeout}' --help ;; esac
 case "$GATE_CASE" in
@@ -122,7 +133,7 @@ if [ -n "$_want" ]; then
     *"$_want"*)
       while [ $# -gt 0 ]; do case "$1" in --verbose|--kill-after=*) shift ;; *) break ;; esac; done
       [ $# -gt 0 ] && shift
-      exec '${timeout}' --verbose --kill-after=1s 2s "$@" ;;
+      exec '${timeout}' --verbose --kill-after=1s 5s "$@" ;;
   esac
 fi
 exec '${timeout}' "$@"
@@ -241,7 +252,7 @@ exec '${timeout}' "$@"
         const elapsed = Number(timeoutMatch[2]);
         assert.equal(budget, budgets[stage], `budget must match configured value: ${budget} vs ${budgets[stage]}`);
         assert.notEqual(elapsed, budget, `elapsed (${elapsed}s) must not echo the budget claim (${budget}s)`);
-        assert.ok(elapsed >= 1 && elapsed <= 10, `elapsed (${elapsed}s) must reflect actual measured execution time (~2s)`);
+        assert.ok(elapsed >= 1 && elapsed <= 10, `elapsed (${elapsed}s) must reflect actual measured execution time (~5s)`);
         assert.match(output, new RegExp(`re-run when the box is quieter, or raise the budget with ${remedyVars[stage]}=<n>`));
       }
       if (cause === 'FAILED') assert.doesNotMatch(output, /TIMED OUT/);

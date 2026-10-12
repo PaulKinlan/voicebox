@@ -107,8 +107,23 @@ export function isFailed({ code, tests, fail, notOk }) {
  * split is a partition. It is also not a claim that the flake is gone — voicebox-beads-9c3r stays
  * open for a deterministic reproduction, and the honest reading of this list is "one measured
  * casualty of CPU contention, isolated until somebody can fail it on demand".
+ *
+ * THE SECOND CASUALTY IS A FILE WHOSE SUBJECT IS WALL-CLOCK BUDGET ENFORCEMENT (voicebox-beads-0nt3).
+ * `tests/pre-push.test.mjs` drives the real pre-push gate and asserts that each stage's output
+ * appeared BEFORE the stage's budget killed it, using an accelerated budget in its `timeout` shim:
+ * the stage must print, then be killed, then be reported as TIMED OUT. The thing it measures is the
+ * startup of `timeout → npm → sh → node`, and on a loaded box that startup is longer than the
+ * budget it is given. Measured 2026-10-12 on this VM: time-to-marker 0.25s idle, 1.76–3.41s at
+ * loadavg 6 (32 CPU burners on 8 vCPU), and 5.2–6.3s at 8x oversubscription — while the shim's
+ * budget was 2s and the suite's own elapsed assertion accepts at most 10s. So there is no budget
+ * value that is both large enough for a contended box and small enough for that assertion: at 4
+ * workers the file failed the psfw union full gate (tests/pre-push.test.mjs:227, "LIVE OUTPUT
+ * BEFORE TERMINATION" absent, slowest file 62.6s) and passed the xzrr union on the identical
+ * blobs. It is also the tier's slowest file (67.3s under 4 workers vs 23.3s alone), so it is
+ * paying the contention twice: once in its duration, once in the race that only exists because of
+ * it. Run alone, its shim keeps a 5×–20× margin over the same chain.
  */
-export const ISOLATED = new Set(["tests/ldxa-barge-in-browser.test.mjs"]);
+export const ISOLATED = new Set(["tests/ldxa-barge-in-browser.test.mjs", "tests/pre-push.test.mjs"]);
 
 /**
  * Split a queue into the part that runs with `workers` shards and the part that runs alone. Pure: it
