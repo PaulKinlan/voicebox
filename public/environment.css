@@ -115,3 +115,10 @@
    outranks every stylesheet rule, so the computed value is asserted rather than assumed: 16rem
    resolves to 256px and must stay 256px. */
 #asset-name { min-width: 16rem; }
+
+/* The user agent's placeholder grey (#757575) measures 4.34:1 light and 3.87:1 dark on this input,
+   which is under the floor the craft floor sets for placeholder text (>= 4.5:1) and under Modern Web
+   Guidance's minimum for normal text; it is also a grey on a coloured surface, which the floor calls
+   out by name. --muted is the colour this page's secondary text already uses, so this replaces the
+   value rather than adding one: 5.76:1 light, 6.45:1 dark (voicebox-beads-sv2n). */
+#asset-name::placeholder { color: var(--muted); }
