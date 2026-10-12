@@ -19,11 +19,13 @@ export const THEME_KEY = "voicebox:theme";
 // The elements this module was handed, and nothing else. Module-owned state: the theme preference is
 // this module's concern now, which is what lets a test drive it with fake elements.
 let elements = {};
+let disposeThemeListeners = null;
 
 /** Null-safe listener wiring, so a page missing one of the three elements still boots. */
 function on(el, type, handler) {
-  if (el) return el.addEventListener(type, handler);
-  return null;
+  if (!el) return () => {};
+  el.addEventListener(type, handler);
+  return () => el.removeEventListener?.(type, handler);
 }
 
 /**
@@ -66,22 +68,57 @@ export function applyTheme(mode, { persist = false } = {}) {
  * fused.js used to run its own copy, so the timing of the first applyTheme is unchanged.
  */
 export function initTheme(ui = {}) {
+  // A re-entry replaces only listeners owned by this module, never other page listeners.
+  disposeThemeListeners?.();
   elements = ui;
+  const hostWindow = window;
+  const removers = [];
   let initialTheme = "light";
   try {
     const savedTheme = localStorage.getItem(THEME_KEY);
     if (savedTheme === "dark" || savedTheme === "light" || savedTheme === "system") initialTheme = savedTheme;
   } catch { /* ignore */ }
   applyTheme(initialTheme);
-  on(ui.themeToggle, "click", () => {
+  removers.push(on(ui.themeToggle, "click", () => {
     const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
     applyTheme(next, { persist: true });
-  });
-  on(ui.themeSelect, "change", () => {
+  }));
+  removers.push(on(ui.themeSelect, "change", () => {
     const next = ui.themeSelect.value;
     applyTheme(next, { persist: true });
-  });
-  window.matchMedia?.("(prefers-color-scheme: dark)")?.addEventListener?.("change", () => {
+  }));
+  const media = hostWindow.matchMedia?.("(prefers-color-scheme: dark)");
+  const onSystemChange = () => {
     if (document.documentElement.dataset.themeMode === "system") applyTheme("system");
-  });
+  };
+  media?.addEventListener?.("change", onSystemChange);
+  removers.push(() => media?.removeEventListener?.("change", onSystemChange));
+
+  const onStorage = (event) => {
+    let storage;
+    try { storage = localStorage; } catch { return; /* blocked site data */ }
+    if (event.storageArea !== storage || (event.key !== THEME_KEY && event.key !== null)) return;
+    let value = event.newValue;
+    // clear() has key=null; re-read the key rather than assuming an unrelated clear changed it.
+    if (event.key === null) {
+      try { value = storage.getItem(THEME_KEY); } catch { value = null; }
+    }
+    // applyTheme owns the light fallback for missing/poisoned values. Never echo to storage.
+    applyTheme(value);
+  };
+  hostWindow.addEventListener?.("storage", onStorage);
+  removers.push(() => hostWindow.removeEventListener?.("storage", onStorage));
+
+  let active = true;
+  const dispose = () => {
+    if (!active) return;
+    active = false;
+    for (const remove of removers) remove();
+    if (disposeThemeListeners === dispose) {
+      disposeThemeListeners = null;
+      elements = {};
+    }
+  };
+  disposeThemeListeners = dispose;
+  return dispose;
 }
