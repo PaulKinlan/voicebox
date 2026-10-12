@@ -253,7 +253,7 @@ AudioWorklet modules loaded by the frontend audio engine: `pcm-worklet.js`.
   7.47:1 dark on those fields. The `:where()` wrapper is load-bearing: `.room input::placeholder` and
   `.composer input::placeholder` are at EQUAL specificity (one class plus one type, since `::placeholder` counts
   as a type), so on a tie source order decides and a plain container rule overrides the composer's deliberate
-  62% alpha composite. `:where()` contributes zero specificity, so the rule fills only the gap the user agent
+  alpha composite. `:where()` contributes zero specificity, so the rule fills only the gap the user agent
   leaves and cannot outrank an authored rule. `tests/placeholder-contrast-browser.test.mjs` drives the
   application's own theme preference into stored light and stored dark and holds every opaque placeholder field
   in both themes to the floor, and holds the composer to its own separate rule rather than to this one.
