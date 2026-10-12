@@ -492,58 +492,53 @@ test("gate ON: /live — the cookie-carrying page is entitled without a hello", 
   }
 });
 
-// ── ONE TICKET PER BROWSED ORIGIN (voicebox-beads-t43w) ──────────────────────
+// ── ONE TICKET, AND THE HOST IT MUST BE OPENED ON (voicebox-beads-t43w) ─────
 //
 // THE DEFECT: a redemption's Set-Cookie carries no Domain attribute, so the browser scopes the
 // session to the HOST that redeemed it. The startup banner printed 127.0.0.1:8787 only, so the
 // person whose page is the dev front (localhost:5173, vite.config.js strictPort) opened it, got a
 // live cookie for the wrong host, and every /api call then answered 401 while the page itself —
-// served by Vite — stayed 200. The ticket is single-use, so the wrong click also killed the only
-// door. THE FIX under test: one single-use ticket per printed origin, and a refusal clause that
-// names the front a refused request came in on (voicebox-beads-t43w).
+// served by Vite — stayed 200. The ticket is single-use, so the wrong click also spent the only
+// door. THE FIX under test: the startup text names the host the ticket must be opened on, and a
+// refusal from the dev front names that front. ISSUANCE IS UNCHANGED — every test here asserts
+// exactly ONE ticket is minted, because one global ticket is the credential boundary (coord HOLD
+// 2026-10-12).
 
-const FRONT = "http://localhost:5173";
 const FRONT_HOST = "localhost:5173";
 
-async function printedBootstrapUrls(server) {
-  const api = await waitFor(() => server.stdout().match(new RegExp(`bootstrap  http://127\\.0\\.0\\.1:${server.port}/\\?bootstrap=([0-9a-f]{64})`)));
-  const front = await waitFor(() => server.stdout().match(/bootstrap  http:\/\/localhost:5173\/\?bootstrap=([0-9a-f]{64})/));
-  assert.ok(api, `the banner must print the API origin's ticket; stdout was:\n${server.stdout()}`);
-  assert.ok(front, `the banner must print the dev front's ticket; stdout was:\n${server.stdout()}`);
-  assert.notEqual(api[1], front[1], "the two origins must not share one ticket — a single ticket spent by the wrong click is the defect");
-  return { api: api[0].replace(/^bootstrap  /, ""), front: front[0].replace(/^bootstrap  /, "") };
+async function printedTicket(server) {
+  const match = await waitFor(() => server.stdout().match(new RegExp(`bootstrap  http://127\\.0\\.0\\.1:${server.port}/\\?bootstrap=([0-9a-f]{64})`)));
+  assert.ok(match, `the banner must print its bootstrap URL at startup; stdout was:\n${server.stdout()}`);
+  return match[1];
 }
 
-// The Vite hop forwards the redemption verbatim (the `loopback-bootstrap-proxy` plugin), so the
-// ticket's own URL is what redeems here; what the FRONT then holds is proven by the API call below
-// carrying the front's Host — and the browser half (that the 127.0.0.1 cookie is not sent to
-// localhost:5173) is cookie scoping, which only a real browser can show.
-async function redeemOnFront(server, frontUrl) {
-  const printed = new URL(frontUrl);
-  const res = await fetch(`${server.base}${printed.pathname}${printed.search}`, { redirect: "manual" });
-  assert.equal(res.status, 303, "the dev front's ticket must redeem exactly like the API's");
-  assert.equal(res.headers.get("location"), "/", "the redemption stays on the front's own route (relative Location)");
-  return sessionCookieFrom(res);
-}
-
-test("gate ON: the banner prints one ticket per browsed origin, and opening one does not spend the other (t43w)", async () => {
+test("gate ON: the banner mints exactly ONE ticket and names the host it must be opened on (t43w)", async () => {
   const server = await scratchServer(GATE_ON);
   try {
-    const printed = await printedBootstrapUrls(server);
-    assert.equal(new URL(printed.front).origin, FRONT, "the dev-front line names the front a person actually browses");
+    const ticket = await printedTicket(server);
+    const seen = new Set(server.stdout().match(/[0-9a-f]{64}/g) ?? []);
+    assert.equal(seen.size, 1, `startup must issue ONE ticket, never one per origin; stdout was:\n${server.stdout()}`);
+    assert.ok(seen.has(ticket), "and the URL it prints must carry that ticket");
+    assert.match(server.stdout(), /localhost:5173\/\?bootstrap=<the ticket above>/, "the dev front is named as the OTHER HOST FOR THE SAME ticket");
+    assert.match(server.stdout(), /redeems once, on whichever host you open it first/, "and the one-time/host choice is stated, not left to be discovered");
 
-    const cookie = await redeemOnFront(server, printed.front);
+    // The dev-front redemption is the SAME redemption on the same ticket, arriving the way the Vite
+    // hop delivers it (Host preserved): 303 to the plain route, relative Location so the browser
+    // stays on the front, and the Set-Cookie the front then holds. The browser half — that a cookie
+    // minted on 127.0.0.1 is not sent to localhost:5173 — is cookie scoping, proven in the browser.
+    const redeemed = await rawGet(server.base, `/?bootstrap=${ticket}`, { host: FRONT_HOST });
+    assert.equal(redeemed.status, 303, "the printed ticket must redeem on the dev front too");
+    assert.equal(redeemed.headers.location, "/", "and stay on the front's own route (relative Location)");
+    const cookie = String(redeemed.headers["set-cookie"]).split(";")[0];
+    assert.match(cookie, /^vb_session=[0-9a-f]{64}/, "the redemption must set the per-process session cookie");
 
-    // THE PROPERTY THE SECOND LINE EXISTS FOR: spending the dev front's ticket leaves the API
-    // origin's own ticket redeemable, so neither door is lost by clicking the other.
-    const api = await fetch(printed.api, { redirect: "manual" });
-    assert.equal(api.status, 303, "the API ticket must survive the dev front's redemption — they are independent tickets");
-    sessionCookieFrom(api);
+    const throughFront = await rawGet(server.base, "/api/environments", { host: FRONT_HOST, cookie });
+    assert.equal(throughFront.status, 200, "the cookie redeemed on the front must open the APIs that page calls");
 
-    // A request arriving the way the Vite hop delivers it (Host preserved) is authenticated by the
-    // cookie the front redeemed — this is the 401-with-a-live-cookie symptom, inverted.
-    const throughFront = await fetch(`${server.base}/api/environments`, { headers: { host: FRONT_HOST, cookie } });
-    assert.equal(throughFront.status, 200, "the front's cookie must open the APIs the page calls");
+    // And it is still ONE single-use ticket: the front's redemption consumed it for everyone.
+    const again = await rawGet(server.base, `/?bootstrap=${ticket}`, { host: FRONT_HOST });
+    assert.equal(again.status, 401, "one ticket redeems once, on one host");
+    assert.match(again.body, /bootstrap-ticket-refused/);
   } finally {
     await server.stop();
     server.cleanup();
@@ -561,7 +556,7 @@ test("gate ON: a refusal from the dev front names the host and the per-host cook
     assert.equal(body.refused, "loopback-unauthenticated");
     assert.match(body.why, /came in on http:\/\/localhost:5173/, "the refusal names the front the request came in on");
     assert.match(body.why, /scoped to the host that redeemed the ticket/, "and says WHY that front holds no cookie");
-    assert.match(body.why, /Redeem a bootstrap URL on the host you browse/, "and what to do about it");
+    assert.match(body.why, /Redeem a ticket on the host you browse/, "and what to do about it");
     assert.doesNotMatch(body.why, /[0-9a-f]{32}/, "no ticket, host token or other secret may appear in a refusal");
 
     // The API's own origin is not a front: its refusal keeps the wording every existing suite pins.
