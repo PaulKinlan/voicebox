@@ -138,8 +138,11 @@ test("browser: secondary UI surfaces render visible focus rings, readable typogr
   // 4. Environment: back-nav focus, status tag >= 12px, and the placeholder contrast floor. The floor
   // is voicebox-beads-sv2n: the user agent's placeholder grey resolves to #757575 in BOTH schemes, in
   // which it measured 4.34:1 light and 3.87:1 dark against a 4.5:1 requirement, so a light-only
-  // assertion would have missed half of it. --muted replaced it (5.76:1 / 6.45:1). The ratio has to be
-  // computed in the page: the colour belongs to a pseudo-element, and only getComputedStyle reads it.
+  // assertion would have missed half of it. --muted replaced it (5.76:1 / 6.45:1).
+  // The assertion enumerates EVERY element that renders placeholder text rather than naming one input:
+  // the first fix covered only #asset-name and left five others failing identically, which review filed
+  // as voicebox-beads-yd08. The ratio has to be computed in the page: the colour belongs to a
+  // pseudo-element, and only getComputedStyle reads it.
   const readEnvMetrics = () => {
     const backNav = document.querySelector(".back-nav a");
     backNav.focus();
@@ -147,10 +150,6 @@ test("browser: secondary UI surfaces render visible focus rings, readable typogr
 
     const tag = document.querySelector(".tag");
     const tagStyle = window.getComputedStyle(tag);
-
-    const input = document.querySelector("#asset-name");
-    const inputStyle = window.getComputedStyle(input);
-    const placeholderStyle = window.getComputedStyle(input, "::placeholder");
 
     const luminance = (rgb) => {
       const channels = rgb.match(/\d+(\.\d+)?/g).slice(0, 3).map(Number).map((value) => {
@@ -165,14 +164,23 @@ test("browser: secondary UI surfaces render visible focus rings, readable typogr
       return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
     };
 
+    // Every placeholder on the page, so a future element cannot quietly reintroduce the user agent grey.
+    const placeholders = [...document.querySelectorAll("[placeholder]")].map((element) => {
+      const placeholderStyle = window.getComputedStyle(element, "::placeholder");
+      return {
+        id: element.id || element.tagName.toLowerCase(),
+        color: placeholderStyle.color,
+        ratio: Number(contrast(placeholderStyle.color, window.getComputedStyle(element).backgroundColor).toFixed(2)),
+      };
+    });
+
     return {
       backOutlineStyle: backStyle.outlineStyle,
       backOutlineWidth: backStyle.outlineWidth,
       backOutlineOffset: backStyle.outlineOffset,
       backOutlineColor: backStyle.outlineColor,
       tagFontSizePx: parseFloat(tagStyle.fontSize),
-      placeholderColor: placeholderStyle.color,
-      placeholderRatio: Number(contrast(placeholderStyle.color, inputStyle.backgroundColor).toFixed(2)),
+      placeholders,
     };
   };
 
@@ -188,7 +196,11 @@ test("browser: secondary UI surfaces render visible focus rings, readable typogr
   assert.equal(envMetrics.backOutlineOffset, "2px", `back-nav focus ring offset must be 2px, got ${envMetrics.backOutlineOffset}`);
   assert.equal(envMetrics.backOutlineColor, "rgb(31, 63, 208)", `back-nav focus ring must use --accent, got ${envMetrics.backOutlineColor}`);
   assert.ok(envMetrics.tagFontSizePx >= 12, `tag font size must be >= 12px, got ${envMetrics.tagFontSizePx}px`);
-  assert.ok(envMetrics.placeholderRatio >= 4.5, `asset-name placeholder contrast must be >= 4.5:1, got ${envMetrics.placeholderRatio}:1 at ${envMetrics.placeholderColor}`);
+  // A non-empty enumeration is itself asserted: an earlier version of this test named one input and would
+  // have stayed green while five others failed, so a selector that silently matches nothing must fail.
+  assert.ok(envMetrics.placeholders.length >= 6, `expected at least the page's six placeholder elements to be measured, got ${envMetrics.placeholders.length}`);
+  const belowFloor = envMetrics.placeholders.filter((p) => p.ratio < 4.5);
+  assert.equal(belowFloor.length, 0, `${belowFloor.length} of ${envMetrics.placeholders.length} placeholders are below 4.5:1: ${belowFloor.map((p) => `${p.id} ${p.ratio}:1 at ${p.color}`).join(", ")}`);
 
   await page.screenshot(path.join(evidenceDir, "04-environment-focus-and-tag.png"));
 
@@ -198,7 +210,9 @@ test("browser: secondary UI surfaces render visible focus rings, readable typogr
   try {
     await page.goto(`${server.base}/environment.html`);
     const envMetricsDark = await page.evaluate(readEnvMetrics);
-    assert.ok(envMetricsDark.placeholderRatio >= 4.5, `asset-name placeholder contrast must be >= 4.5:1 in dark too, got ${envMetricsDark.placeholderRatio}:1 at ${envMetricsDark.placeholderColor}`);
+    assert.ok(envMetricsDark.placeholders.length >= 6, `expected at least the page's six placeholder elements in dark too, got ${envMetricsDark.placeholders.length}`);
+    const belowFloorDark = envMetricsDark.placeholders.filter((p) => p.ratio < 4.5);
+    assert.equal(belowFloorDark.length, 0, `dark: ${belowFloorDark.length} of ${envMetricsDark.placeholders.length} placeholders are below 4.5:1: ${belowFloorDark.map((p) => `${p.id} ${p.ratio}:1 at ${p.color}`).join(", ")}`);
     await page.screenshot(path.join(evidenceDir, "04b-environment-placeholder-dark.png"));
   } finally {
     await page.send("Emulation.setEmulatedMedia", { features: [] });

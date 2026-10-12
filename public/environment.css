@@ -116,9 +116,13 @@
    resolves to 256px and must stay 256px. */
 #asset-name { min-width: 16rem; }
 
-/* The user agent's placeholder grey (#757575) measures 4.34:1 light and 3.87:1 dark on this input,
-   which is under the floor the craft floor sets for placeholder text (>= 4.5:1) and under Modern Web
-   Guidance's minimum for normal text; it is also a grey on a coloured surface, which the floor calls
+/* The user agent's placeholder grey (#757575) measures 4.34:1 light and 3.87:1 dark on this page's
+   inputs, which is under the floor the craft floor sets for placeholder text (>= 4.5:1) and under Modern
+   Web Guidance's minimum for normal text; it is also a grey on a coloured surface, which the floor calls
    out by name. --muted is the colour this page's secondary text already uses, so this replaces the
-   value rather than adding one: 5.76:1 light, 6.45:1 dark (voicebox-beads-sv2n). */
-#asset-name::placeholder { color: var(--muted); }
+   value rather than adding one: 5.76:1 light, 6.45:1 dark (voicebox-beads-sv2n).
+   The selector is deliberately the bare pseudo-element rather than one input: every input and textarea on
+   this page draws its background from --input-bg, so a single-element rule left the other five
+   (project-name, machine-path, machine-host-token, root-path, asset-body) on the user agent's grey at the
+   same 4.34:1/3.87:1 - found by review as voicebox-beads-yd08. Any input added here inherits this. */
+::placeholder { color: var(--muted); }
