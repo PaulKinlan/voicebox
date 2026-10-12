@@ -19,6 +19,7 @@ import { authorizeMachinePath, containedIn } from "./lib/path-auth.mjs";
 import { createWorkspaceRoutes } from "./lib/routes/workspace.mjs";
 import { createPresenceRoutes } from "./lib/routes/presence.mjs";
 import { createActivityRoutes } from "./lib/routes/activity.mjs";
+import { createAgentsReadRoutes } from "./lib/routes/agents-read.mjs";
 import { createExtensionRoutes } from "./lib/routes/extensions.mjs";
 import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, reachableFromEnvironment, rootVanished } from "./core/root.ts";
 import { normaliseRelativeDir, parentDir } from "./core/paths.ts";
@@ -3656,27 +3657,16 @@ const harnessInventory = createHarnessInventory();
 const roomPresence = createRoomPresenceCoordinator();
 const presenceRoutes = createPresenceRoutes({ roomPresence, json, readJsonBody, answerOnce, broadcastChannel });
 const activityRoutes = createActivityRoutes({ workActivityLog, json });
+const getAdmissionContext = () => ({
+  describeAdapter: describeConfiguredAdapter,
+  implementedAdapters: new Set(adapterExecutors.keys()),
+  executorSelected: Boolean(activeHarness || activeHarnesses.size > 0),
+  hostEnvironment: SELF_ENVIRONMENT ?? "local",
+});
+const agentsReadRoutes = createAgentsReadRoutes({ agentRegistry, json, publicAgentProjection, describeAgentAdmission, getAdmissionContext });
 const routes = {
   ...presenceRoutes,
-  "GET /api/agents": (req, res, url) => {
-    const environmentKey = url.searchParams.get("environment") || undefined;
-    const harness = url.searchParams.get("harness") || undefined;
-    // Admission is the LIVE verdict for THIS environment (voicebox-beads-aaj): what a
-    // delegation to each agent would do today, refused by name when it would refuse.
-    // Live, not a boot snapshot: agents registered after boot get their verdict too.
-    // Non-local environments are marked 'not-judged-here' (voicebox-beads-ufo).
-    const admissionContext = {
-      describeAdapter: describeConfiguredAdapter,
-      implementedAdapters: new Set(adapterExecutors.keys()),
-      executorSelected: Boolean(activeHarness || activeHarnesses.size > 0),
-      hostEnvironment: SELF_ENVIRONMENT ?? "local",
-    };
-    const agents = agentRegistry.list({ environmentKey, harness }).map((a) => ({
-      ...publicAgentProjection(a),
-      admission: describeAgentAdmission(a, admissionContext),
-    }));
-    return json(res, 200, { ok: true, agents });
-  },
+  ...agentsReadRoutes,
   "GET /api/fleet": async (req, res, url) => {
     const environmentKey = url.searchParams.get("environment") || undefined;
     const harness = url.searchParams.get("harness") || undefined;
