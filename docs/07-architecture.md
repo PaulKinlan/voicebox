@@ -260,10 +260,11 @@ AudioWorklet modules loaded by the frontend audio engine: `pcm-worklet.js`.
 
   The room composer's field (`#utterance`, voicebox-beads-8wm8) is deliberately quieter than typed text, so it is
   a translucent mix of `--muted` rather than the token itself. At 62% it composited to 2.68:1 light and 3.46:1 dark
-  against the field's own ground — under the floor. It is now 90%, the smallest single mix that clears 4.5:1 in
-  BOTH stored themes while staying translucent: alpha 0.902, measuring 4.81:1 light and 5.87:1 dark against typed
-  text at 14.91:1 and 17.11:1, so it stays roughly a third of the entered text's contrast and is not flattened to
-  the opaque token. 88% also clears both, but with only 0.04 of headroom in light, inside rendering variance. The
+  against the field's own ground — under the floor. It is now 90%, chosen for HEADROOM rather than because it is
+  the bare minimum: 88% is the bare clearing candidate, at 4.54:1 light and 5.61:1 dark, only 0.04 above the floor
+  in light and so inside rendering variance. At 90% the placeholder keeps alpha 0.902 and measures 4.81:1 light and
+  5.87:1 dark against typed text at 14.91:1 and 17.11:1, so it stays roughly a third of the entered text's
+  contrast and is not flattened to the opaque token. The
   figures come from injecting the exact declaration into a disposable browser and reading composited pixels, with
   alpha taken from a black/white pixel pair instead of parsing an `oklch()`/`color()` string; the same probe
   re-reads the `0q5c` opaque fields and `.list-tools` to confirm that changing a value inside `.composer`'s own

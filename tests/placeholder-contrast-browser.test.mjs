@@ -129,8 +129,9 @@ test("browser: room and Help placeholder text clears 4.5:1 in both stored themes
 
   // The composer keeps its own declaration, deliberately translucent and deliberately quieter than typed
   // text. Pinned by shape so a silent reduction back under the floor fails here as well as on the computed
-  // ratio below. 90% is the smallest single mix clearing 4.5:1 in both stored themes; 88% clears both with
-  // only 0.04 of headroom in light, inside rendering variance (voicebox-beads-8wm8).
+  // ratio below. 90% is the percentage this change pins, chosen for HEADROOM: 88% is the bare clearing candidate,
+  // at 4.54:1 light and 5.61:1 dark, only 0.04 above the floor in light, which is inside rendering variance
+  // (voicebox-beads-8wm8). This test asserts the chosen percentage, not that it is the minimum.
   assert.match(
     styleRules,
     /\.composer input::placeholder\s*\{\s*color:\s*color-mix\(in srgb,\s*var\(--muted\)\s*90%,\s*transparent\);\s*\}/,
