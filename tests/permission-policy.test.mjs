@@ -16,6 +16,12 @@
 //      - When a task completes and settles an answer (`state: "completed"`), a late Stop / cancellation
 //        cannot rewrite the observed terminal outcome. `completed` stays `completed`.
 //
+//   OBSERVATIONS ARE EVENT-ORDERED: a transient "it is pending" state is read from the policy's
+//   own `onPending` callback, which fires synchronously inside `decide()` — never from a
+//   clock-polled projection read after an `await` while a deadline of the same magnitude is
+//   armed. Polling `policy.pending()` after a `setImmediate` raced the 80ms deadline and failed
+//   the full gate on a tree whose blobs were identical to main's base (voicebox-beads-xzrr).
+//
 //   node --test tests/permission-policy.test.mjs
 
 import test from "node:test";
@@ -31,6 +37,42 @@ import { reduceTask } from "../core/tasks.ts";
 const info = { protocolVersion: 1, agentInfo: { name: ACP_AGENT.name, version: ACP_AGENT.version } };
 const result = (m, r) => ({ jsonrpc: "2.0", id: m.id, result: r });
 
+/**
+ * A one-shot event gate. The observation is delivered by the policy's own callback
+ * (`onPending` fires synchronously inside `decide()`, `onSettled` inside the expiry timer),
+ * so it cannot be missed by a starved event loop. `open()` is bounded: a missing event fails
+ * the test loudly instead of hanging the gate.
+ */
+function gate() {
+  let fire;
+  const fired = new Promise((resolve) => { fire = resolve; });
+  return {
+    fire,
+    async open(what, ms = 5000) {
+      let timer;
+      try {
+        await Promise.race([
+          fired,
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms waiting for ${what}`)), ms);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  };
+}
+
+/** Bounded wait for an observable condition; fails closed instead of hanging the gate. */
+async function until(predicate, what, tries = 500) {
+  for (let i = 0; i < tries; i++) {
+    if (predicate()) return;
+    await new Promise((r) => setImmediate(r));
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
 /** Mock ACP harness that issues a permission request during prompt */
 function createAcpPipe(reply, policy) {
   let receive;
@@ -45,7 +87,21 @@ function createAcpPipe(reply, policy) {
 }
 
 test("EDGE 1: an unattended permission request DENIES by expiry and reaches the delegate as cancelled", async () => {
-  const policy = createPermissionPolicy({ timeoutMs: 80 });
+  const pendingGate = gate();
+  const settledGate = gate();
+  let pendingView = null;
+  let settledView = null;
+  const policy = createPermissionPolicy({
+    timeoutMs: 80,
+    onPending: (record) => {
+      pendingView = { requestId: record.requestId, title: record.title, state: record.state };
+      pendingGate.fire();
+    },
+    onSettled: (record) => {
+      settledView = { state: record.state, decision: record.decision, reason: record.reason };
+      settledGate.fire();
+    },
+  });
 
   const f = createAcpPipe((m, send) => {
     if (m.method === "initialize") send(result(m, info));
@@ -69,17 +125,20 @@ test("EDGE 1: an unattended permission request DENIES by expiry and reaches the 
   await f.client.newSession("/work");
   const promptPromise = f.client.prompt("run dangerous command");
 
-  // Verify request is pending in policy
-  await new Promise((r) => setImmediate(r));
-  const pending = policy.pending();
-  assert.equal(pending.length, 1);
-  assert.equal(pending[0].title, "Permission: delete database");
-  assert.equal(pending[0].state, "pending");
+  // Verify request is pending in policy, from the event that reports it
+  await pendingGate.open("the request to become pending");
+  assert.ok(pendingView.requestId, "the pending record names a requestId");
+  assert.equal(pendingView.title, "Permission: delete database");
+  assert.equal(pendingView.state, "pending");
 
-  // Wait for expiry (unattended timeout)
-  await new Promise((r) => setTimeout(r, 120));
+  // Wait for expiry (unattended timeout) — from the policy's own settlement event
+  await settledGate.open("the 80ms deadline to deny the unattended request");
+  assert.equal(settledView.state, "expired");
+  assert.equal(settledView.decision, false);
+  assert.equal(settledView.reason, "unattended-expired");
 
   // The denial MUST have been sent to the delegate
+  await until(() => f.sent.some((m) => m.id === "perm-call-1"), "the delegate to be answered");
   const reply = f.sent.find((m) => m.id === "perm-call-1");
   assert.ok(reply, "delegate must receive an answer upon expiry");
   assert.deepEqual(reply.result, { outcome: { outcome: "cancelled" } }, "unattended request must deny/cancel, never allow");
@@ -99,7 +158,15 @@ test("EDGE 1: an unattended permission request DENIES by expiry and reaches the 
 });
 
 test("an attended permission request ALLOWS when the attendee explicitly resolves it before deadline", async () => {
-  const policy = createPermissionPolicy({ timeoutMs: 2000 });
+  const pendingGate = gate();
+  let pendingView = null;
+  const policy = createPermissionPolicy({
+    timeoutMs: 2000,
+    onPending: (record) => {
+      pendingView = { requestId: record.requestId, title: record.title, state: record.state };
+      pendingGate.fire();
+    },
+  });
 
   const f = createAcpPipe((m, send) => {
     if (m.method === "initialize") send(result(m, info));
@@ -122,17 +189,16 @@ test("an attended permission request ALLOWS when the attendee explicitly resolve
   await f.client.newSession("/work");
   const promptPromise = f.client.prompt("write file");
 
-  await new Promise((r) => setImmediate(r));
-  const pending = policy.pending();
-  assert.equal(pending.length, 1);
-  const req = pending[0];
+  await pendingGate.open("the request to become pending");
+  assert.equal(pendingView.title, "Permission: write file");
+  assert.equal(pendingView.state, "pending");
 
   // Human attendee explicitly allows
-  const resolution = policy.resolve(req.requestId, { allow: true, optionId: "allow_write", reason: "person-approved-card" });
+  const resolution = policy.resolve(pendingView.requestId, { allow: true, optionId: "allow_write", reason: "person-approved-card" });
   assert.equal(resolution.ok, true);
   assert.equal(resolution.state, "allowed");
 
-  await new Promise((r) => setImmediate(r));
+  await until(() => f.sent.some((m) => m.id === "perm-call-2"), "the delegate to be answered");
   const reply = f.sent.find((m) => m.id === "perm-call-2");
   assert.ok(reply);
   assert.deepEqual(reply.result, { outcome: { outcome: "selected", optionId: "allow_write" } }, "allowed request selects the option on ACP wire");
@@ -146,7 +212,21 @@ test("an attended permission request ALLOWS when the attendee explicitly resolve
 });
 
 test("attendee disappearance (client disconnect) immediately denies pending requests", async () => {
-  const policy = createPermissionPolicy({ timeoutMs: 10000 });
+  const pendingGate = gate();
+  const settledGate = gate();
+  let pendingView = null;
+  let settledView = null;
+  const policy = createPermissionPolicy({
+    timeoutMs: 10000,
+    onPending: (record) => {
+      pendingView = { requestId: record.requestId, state: record.state };
+      pendingGate.fire();
+    },
+    onSettled: (record) => {
+      settledView = { state: record.state, reason: record.reason };
+      settledGate.fire();
+    },
+  });
 
   const f = createAcpPipe((m, send) => {
     if (m.method === "initialize") send(result(m, info));
@@ -169,13 +249,17 @@ test("attendee disappearance (client disconnect) immediately denies pending requ
   await f.client.newSession("/work");
   const promptPromise = f.client.prompt("egress");
 
-  await new Promise((r) => setImmediate(r));
-  assert.equal(policy.pending().length, 1);
+  await pendingGate.open("the request to become pending");
+  assert.equal(pendingView.state, "pending");
 
   // Client/browser disconnects
   policy.disconnect("sess-3");
 
-  await new Promise((r) => setImmediate(r));
+  await settledGate.open("the disconnect to deny the pending request");
+  assert.equal(settledView.state, "cancelled");
+  assert.equal(settledView.reason, "unattended-client-disconnected");
+
+  await until(() => f.sent.some((m) => m.id === "perm-call-3"), "the delegate to be answered");
   const reply = f.sent.find((m) => m.id === "perm-call-3");
   assert.ok(reply);
   assert.deepEqual(reply.result, { outcome: { outcome: "cancelled" } });
