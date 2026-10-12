@@ -2152,6 +2152,31 @@ function resolveActive(name) {
   return authorizeMachinePath(active?.root ?? null, name, { environment: SELF_ENVIRONMENT });
 }
 
+// A Content-Security-Policy delivered as a Report-Only HEADER, mirroring verbatim the policy
+// public/index.html already enforces as a meta tag (voicebox-beads-ul1m.1; parent voicebox-beads-ul1m,
+// ADR voicebox-beads-28sc). Report-Only stages the policy without enforcing it: nothing is blocked and
+// every would-be violation is reported. There is deliberately NO report endpoint, so the only way to see a
+// violation is the page's own `securitypolicyviolation` event, which is how the tests observe it.
+//
+// THE PATH LIST IS EXPLICIT AND IT IS A LIST OF DOCUMENTS, NEVER A CONTENT TYPE. A rule phrased as "any
+// text/html response" would silently cover the mini-app pages under /apps, the iframe bridge, and every
+// document added later by someone who never read this comment. A new top-level document is covered by
+// being added here, deliberately, and a test asserts both the covered and the excluded paths.
+const CSP_REPORT_ONLY_POLICY =
+  "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'";
+const CSP_REPORT_ONLY_PATHS = new Set([
+  "/",
+  "/index.html",
+  "/help.html",
+  "/changelog.html",
+  "/environment.html",
+  "/harnesses.html",
+]);
+/** The header a response to `pathname` should carry, or nothing. One decision, two call sites. */
+function cspReportOnlyHeaders(pathname) {
+  return CSP_REPORT_ONLY_PATHS.has(pathname) ? { "content-security-policy-report-only": CSP_REPORT_ONLY_POLICY } : {};
+}
+
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -4248,7 +4273,7 @@ const routes = {
     // The stamp names THIS process's revision: the one memoized answer taken at startup
     // (voicebox-beads-4oj6), awaited BEFORE the head is written so a page is never sent half-stamped.
     const build = await buildIdentity();
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", ...cspReportOnlyHeaders(url.pathname) });
     const where = build.ahead === null
       ? ` · no origin/${build.branch} here, so the distance from a remote is unknown`
       : build.ahead === 0
@@ -4355,7 +4380,9 @@ async function handle(req, res) {
       try {
         if (statSync(file).isFile()) {
           const type = MIME_TYPES[path.extname(file)] ?? "application/octet-stream";
-          res.writeHead(200, { "content-type": type });
+          // Keyed on the REQUEST PATH, not on `type`: see the allowlist above for why a content-type rule
+          // is the thing this must never become.
+          res.writeHead(200, { "content-type": type, ...cspReportOnlyHeaders(url.pathname) });
           return res.end(readFileSync(file));
         }
       } catch {}
