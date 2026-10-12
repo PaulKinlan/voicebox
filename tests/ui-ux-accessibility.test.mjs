@@ -135,25 +135,57 @@ test("browser: secondary UI surfaces render visible focus rings, readable typogr
 
   await page.screenshot(path.join(evidenceDir, "03-live-vision-studio-focus.png"));
 
-  // 4. Environment: back-nav focus & status tag >= 12px
-  await page.goto(`${server.base}/environment.html`);
-  const envMetrics = await page.evaluate(() => {
+  // 4. Environment: back-nav focus, status tag >= 12px, and the placeholder contrast floor. The floor
+  // is voicebox-beads-sv2n: the user agent's placeholder grey resolves to #757575 in BOTH schemes, in
+  // which it measured 4.34:1 light and 3.87:1 dark against a 4.5:1 requirement, so a light-only
+  // assertion would have missed half of it. --muted replaced it (5.76:1 / 6.45:1).
+  // The assertion enumerates EVERY element that renders placeholder text rather than naming one input:
+  // the first fix covered only #asset-name and left five others failing identically, which review filed
+  // as voicebox-beads-yd08. The ratio has to be computed in the page: the colour belongs to a
+  // pseudo-element, and only getComputedStyle reads it.
+  const readEnvMetrics = () => {
     const backNav = document.querySelector(".back-nav a");
     backNav.focus();
     const backStyle = window.getComputedStyle(backNav);
 
     const tag = document.querySelector(".tag");
     const tagStyle = window.getComputedStyle(tag);
-    const parsedFontSize = parseFloat(tagStyle.fontSize);
+
+    const luminance = (rgb) => {
+      const channels = rgb.match(/\d+(\.\d+)?/g).slice(0, 3).map(Number).map((value) => {
+        const c = value / 255;
+        return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+    };
+    const contrast = (a, b) => {
+      const la = luminance(a);
+      const lb = luminance(b);
+      return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+    };
+
+    // Every placeholder on the page, so a future element cannot quietly reintroduce the user agent grey.
+    const placeholders = [...document.querySelectorAll("[placeholder]")].map((element) => {
+      const placeholderStyle = window.getComputedStyle(element, "::placeholder");
+      return {
+        id: element.id || element.tagName.toLowerCase(),
+        color: placeholderStyle.color,
+        ratio: Number(contrast(placeholderStyle.color, window.getComputedStyle(element).backgroundColor).toFixed(2)),
+      };
+    });
 
     return {
       backOutlineStyle: backStyle.outlineStyle,
       backOutlineWidth: backStyle.outlineWidth,
       backOutlineOffset: backStyle.outlineOffset,
       backOutlineColor: backStyle.outlineColor,
-      tagFontSizePx: parsedFontSize,
+      tagFontSizePx: parseFloat(tagStyle.fontSize),
+      placeholders,
     };
-  });
+  };
+
+  await page.goto(`${server.base}/environment.html`);
+  const envMetrics = await page.evaluate(readEnvMetrics);
   // Pin the page's OWN ring rather than the presence of one (voicebox-beads-oiod). `!== "none"` was
   // vacuous: with public/environment.css not reaching the page the user agent still supplies its own
   // focus ring — measured as `auto` / 1px / 1px / rgb(16, 16, 16) — so the assertion stayed green with
@@ -164,8 +196,27 @@ test("browser: secondary UI surfaces render visible focus rings, readable typogr
   assert.equal(envMetrics.backOutlineOffset, "2px", `back-nav focus ring offset must be 2px, got ${envMetrics.backOutlineOffset}`);
   assert.equal(envMetrics.backOutlineColor, "rgb(31, 63, 208)", `back-nav focus ring must use --accent, got ${envMetrics.backOutlineColor}`);
   assert.ok(envMetrics.tagFontSizePx >= 12, `tag font size must be >= 12px, got ${envMetrics.tagFontSizePx}px`);
+  // A non-empty enumeration is itself asserted: an earlier version of this test named one input and would
+  // have stayed green while five others failed, so a selector that silently matches nothing must fail.
+  assert.ok(envMetrics.placeholders.length >= 6, `expected at least the page's six placeholder elements to be measured, got ${envMetrics.placeholders.length}`);
+  const belowFloor = envMetrics.placeholders.filter((p) => p.ratio < 4.5);
+  assert.equal(belowFloor.length, 0, `${belowFloor.length} of ${envMetrics.placeholders.length} placeholders are below 4.5:1: ${belowFloor.map((p) => `${p.id} ${p.ratio}:1 at ${p.color}`).join(", ")}`);
 
   await page.screenshot(path.join(evidenceDir, "04-environment-focus-and-tag.png"));
+
+  // The same floor in the dark arm. The user agent supplied the same grey in both schemes, so the
+  // shortfall was a two-scheme bug rather than a light one, and the fix is asserted the same way.
+  await page.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "dark" }] });
+  try {
+    await page.goto(`${server.base}/environment.html`);
+    const envMetricsDark = await page.evaluate(readEnvMetrics);
+    assert.ok(envMetricsDark.placeholders.length >= 6, `expected at least the page's six placeholder elements in dark too, got ${envMetricsDark.placeholders.length}`);
+    const belowFloorDark = envMetricsDark.placeholders.filter((p) => p.ratio < 4.5);
+    assert.equal(belowFloorDark.length, 0, `dark: ${belowFloorDark.length} of ${envMetricsDark.placeholders.length} placeholders are below 4.5:1: ${belowFloorDark.map((p) => `${p.id} ${p.ratio}:1 at ${p.color}`).join(", ")}`);
+    await page.screenshot(path.join(evidenceDir, "04b-environment-placeholder-dark.png"));
+  } finally {
+    await page.send("Emulation.setEmulatedMedia", { features: [] });
+  }
 
   // 5. Mini-App Bridge: mobile viewport sizing (375x667)
   // Close previous page before launching next browser instance per single-browser rule

@@ -998,10 +998,11 @@ test("with the module blocked, no number of radio changes ever syncs the panel (
 // Three proofs, because a relocation can fail in three different ways and only one of them is visible in a
 // diff:
 //   1. PARITY. The values a move must not change, measured with the same code as the pre-change baseline.
-//      The placeholder ratio is deliberately among them AT ITS FAILING VALUE: this asserts parity, not a
-//      floor the page does not meet — that shortfall is filed separately as voicebox-beads-sv2n, and
-//      pretending otherwise here would have produced a test that fails identically before and after the
-//      move and therefore says nothing about it.
+//      The placeholder ratio is among them too. It was deliberately held at its failing value while the
+//      shortfall was open as voicebox-beads-sv2n - asserting a floor the page did not meet would have
+//      made the test fail identically before and after the move. That bead has since fixed it, so the
+//      baseline here is the remediated ratio: parity still means the move changed nothing, and the
+//      >= 4.5:1 floor itself is asserted in tests/ui-ux-accessibility.test.mjs.
 //   2. THE NEGATIVE. With /environment.css held, those values must COLLAPSE. Without it, the parity
 //      assertions would also pass on a page whose stylesheet never arrived at all.
 //   3. THE META, whose effect is on the surfaces the browser draws itself and NOT on this page's own first
@@ -1065,7 +1066,7 @@ test("the environment stylesheet is a same-origin file, and every measured value
   // thing to assert instead.
   const BASELINE = {
     light: {
-      bodyBg: "rgb(251, 251, 249)", textOnBody: 14.65, mutedOnGround: 5.91, placeholderOnInput: 4.34, focus: "solid 2px rgb(31, 63, 208) 2px",
+      bodyBg: "rgb(251, 251, 249)", textOnBody: 14.65, mutedOnGround: 5.91, placeholderOnInput: 5.76, focus: "solid 2px rgb(31, 63, 208) 2px",
       tokens: {
         "--ground": "rgb(251, 251, 249)", "--card": "rgb(255, 255, 255)", "--input-bg": "rgb(247, 248, 250)",
         "--btn-bg": "rgb(236, 238, 242)", "--btn-hover": "rgb(224, 228, 235)", "--line": "rgb(216, 220, 223)",
@@ -1074,7 +1075,7 @@ test("the environment stylesheet is a same-origin file, and every measured value
       },
     },
     dark: {
-      bodyBg: "rgb(16, 16, 20)", textOnBody: 15.56, mutedOnGround: 6.86, placeholderOnInput: 3.87, focus: "solid 2px rgb(102, 153, 255) 2px",
+      bodyBg: "rgb(16, 16, 20)", textOnBody: 15.56, mutedOnGround: 6.86, placeholderOnInput: 6.45, focus: "solid 2px rgb(102, 153, 255) 2px",
       tokens: {
         "--ground": "rgb(16, 16, 20)", "--card": "rgb(21, 21, 27)", "--input-bg": "rgb(23, 23, 29)",
         "--btn-bg": "rgb(35, 35, 44)", "--btn-hover": "rgb(45, 45, 56)", "--line": "rgb(51, 51, 63)",
@@ -1183,7 +1184,7 @@ test("the environment stylesheet is a same-origin file, and every measured value
     assert.equal(m.bodyBg, want.bodyBg, `${mode}: body background`);
     assert.equal(m.textOnBody, want.textOnBody, `${mode}: body text contrast must be unchanged by the move`);
     assert.equal(m.mutedOnGround, want.mutedOnGround, `${mode}: muted contrast must be unchanged by the move`);
-    assert.equal(m.placeholderOnInput, want.placeholderOnInput, `${mode}: placeholder contrast must be unchanged by the move (its shortfall is filed as voicebox-beads-sv2n, not fixed here)`);
+    assert.equal(m.placeholderOnInput, want.placeholderOnInput, `${mode}: placeholder contrast must be unchanged by the move (now at its remediated value from voicebox-beads-sv2n, which clears the 4.5:1 floor)`);
     assert.equal(m.minWidth, "256px", `${mode}: the inline style attribute became a rule, so the computed value is what proves it (16rem must still resolve to 256px)`);
     assert.equal(m.focus, want.focus, `${mode}: the :focus-visible ring must resolve to --accent in each scheme`);
   }
