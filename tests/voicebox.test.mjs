@@ -30,6 +30,7 @@ const WORKSPACE = path.join(SCRATCH, "workspace");
 mkdirSync(WORKSPACE, { recursive: true });
 
 let server;
+let serverStart;
 let BASE;
 
 async function up() {
@@ -47,15 +48,26 @@ test.before(async () => {
   // VOICEBOX_WORKSPACE is a DECLARATION of the active root (an operator's, at boot) — it is not a
   // default the server falls back to. With it unset the loop refuses every act by name.
   process.env.VOICEBOX_WORKSPACE = WORKSPACE;
-  server = await startServer({
+  // Node can run after() before this async before() finishes when a test-name filter matches zero
+  // tests. Publish the promise before the first await so teardown always owns the spawned server.
+  serverStart = startServer({
     cwd: ROOT,
     env: { VOICEBOX_WORKSPACE: WORKSPACE },
   });
+  server = await serverStart;
   BASE = server.base;
 });
 
 test.after(async () => {
-  await server?.stop();
+  if (!serverStart) return;
+  let started;
+  try {
+    started = await serverStart;
+  } catch {
+    // startServer reaps on startup failure; preserve the original before() error.
+    return;
+  }
+  await started.stop();
 });
 
 const get = async (p) => fetch(`${BASE}${p}`);
