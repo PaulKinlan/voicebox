@@ -96,14 +96,22 @@ const CANONICAL = () => {
     const c = getComputedStyle(node).backgroundColor;
     if (c && c !== "rgba(0, 0, 0, 0)" && c !== "transparent") { ground = paint("rgb(255,255,255)", c); break; }
   }
-  const raw = getComputedStyle(el, "::placeholder").color;
+  const ph = getComputedStyle(el, "::placeholder");
+  const raw = ph.color;
+  // The pseudo-element's own opacity is applied ON TOP of the colour's alpha. A rule setting opacity: .5
+  // fades the rendered text while leaving this colour's alpha untouched, which is why the canvas ratio alone
+  // was blind to it (voicebox-beads-1g1h). Visible = the composited colour blended over the ground again by
+  // that opacity, which is what a reader's eye receives.
+  const phOpacity = Math.min(1, Math.max(0, parseFloat(ph.opacity)));
   const composited = paint(`rgb(${ground.join(",")})`, raw);
   const ob = paint("rgb(0,0,0)", raw), ow = paint("rgb(255,255,255)", raw);
   const alpha = Math.min(1, Math.max(0, 1 - (ow[1] - ob[1]) / 255));
   const lum = ([r, g, b]) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
     return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
   const ratio = (a, b) => { const x = lum(a), y = lum(b); return +((Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)).toFixed(2); };
+  const seen = composited.map((v, i) => v * phOpacity + ground[i] * (1 - phOpacity));
   return { found: true, alpha: +alpha.toFixed(3), ratio: ratio(composited, ground),
+    opacity: phOpacity, seenRatio: ratio(seen, ground),
     inkRatio: ratio(paint("rgb(255,255,255)", getComputedStyle(el).color), ground) };
 };
 
@@ -209,10 +217,30 @@ test("browser: room and Help placeholder text clears 4.5:1 in both stored themes
           assert.ok(composer, `${where}: #utterance must be enumerated; the composer guard would be vacuous`);
           const c = await page.evaluate(CANONICAL);
           assert.ok(c.found, `${where}: #utterance must exist in the live UI`);
+          // The pseudo-element's own opacity must not fade the text. 0q5c asserted exactly this and this
+          // bead's rewrite dropped it, which left the suite green against a rule that visibly halved the
+          // placeholder's contrast (voicebox-beads-1g1h). Both assertions run in each stored theme because
+          // this block sits inside the theme loop.
+          assert.equal(
+            composer.opacity, "1",
+            `${where}: #utterance ::placeholder computed opacity is ${composer.opacity}, expected 1 - ` +
+            "an opacity below 1 fades the rendered text even when the colour's own alpha is unchanged",
+          );
+          assert.equal(
+            c.opacity, 1,
+            `${where}: #utterance ::placeholder opacity measured ${c.opacity} in the pixel probe, expected 1`,
+          );
           assert.ok(
             c.ratio >= FLOOR,
             `${where}: composer placeholder composites to ${c.ratio}:1 over its own ground ` +
             `(alpha ${c.alpha}), below the ${FLOOR}:1 floor`,
+          );
+          // The ratio a reader actually sees, with the pseudo-element's opacity applied. This is the
+          // assertion that stays RED for an injected opacity: .5 while every colour-based check passes.
+          assert.ok(
+            c.seenRatio >= FLOOR,
+            `${where}: composer placeholder renders at ${c.seenRatio}:1 once the pseudo-element's own ` +
+            `opacity (${c.opacity}) is applied, below the ${FLOOR}:1 floor even though its colour is fine`,
           );
           assert.ok(
             c.alpha < 1,
