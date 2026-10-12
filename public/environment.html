@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>voicebox — projects and folders</title>
 <!--
   This is its own page rather than a change to the voice surface, because the two answer
@@ -14,113 +15,9 @@
   shown as one list), whether that storage survives closing the tab, how an undo works, and
   what to do when access has to be granted again.
 -->
-<style>
-  :root {
-    color-scheme: light dark;
-    --ground: light-dark(#fbfbf9, #101014);
-    --card: light-dark(#ffffff, #15151b);
-    --input-bg: light-dark(#f7f8fa, #17171d);
-    --btn-bg: light-dark(#eceef2, #23232c);
-    --btn-hover: light-dark(#e0e4eb, #2d2d38);
-    --line: light-dark(#d8dcdf, #33333f);
-    --ink: light-dark(#23262b, #e8e8ee);
-    --muted: light-dark(#59636d, #9a9aab);
-    --accent: light-dark(#1f3fd0, #69f);
-    --good: light-dark(#1d6b32, #8ee39a);
-    --bad: light-dark(#b3261e, #f0a6a0);
-  }
-  body { margin: 0; padding: 24px; background: var(--ground); color: var(--ink);
-         font: 15px/1.5 ui-sans-serif, system-ui, sans-serif; }
-  .back-nav { margin: 0 0 12px; font-size: 13px; }
-  .back-nav a { color: var(--accent); text-decoration: none; font-weight: 500; }
-  .back-nav a:hover, .back-nav a:focus-visible { text-decoration: underline; }
-  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  h1 { font-size: 18px; margin: 0 0 4px; }
-  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 24px 0 8px; }
-  .sub { color: var(--muted); margin: 0 0 20px; font-size: 13px; max-width: 70ch; }
-  .chooser-note { color: var(--muted); margin: -10px 0 14px; font-size: 12px; max-width: 70ch; }
-  .views-note { color: var(--muted); margin: -4px 0 8px; font-size: 12px; max-width: 70ch; }
-  .protocol { color: var(--muted); font-size: 12px; max-width: 70ch; margin: 8px 0 0; }
-  .protocol summary { cursor: pointer; color: var(--ink); }
-  .protocol p { margin: 6px 0 0; }
-  .sr-only { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); overflow: hidden; white-space: nowrap; }
-  #project { display: grid; gap: 2px; font: 13px/1.6 ui-monospace, monospace; }
-  #project .key { display: inline-block; min-width: 148px; color: var(--muted); }
-  form { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-start; margin: 0 0 16px; }
-  input, select, textarea, button { font: inherit; padding: 6px 8px; border-radius: 6px;
-    border: 1px solid var(--line); background: var(--input-bg); color: inherit; }
-  textarea { width: 100%; min-height: 68px; }
-  button { cursor: pointer; background: var(--btn-bg); }
-  button:hover { background: var(--btn-hover); }
-  ul#transcript { list-style: none; margin: 0; padding: 0; font: 13px/1.7 ui-monospace, monospace; }
-  li.line { padding: 2px 0; }
-  li.ok { color: var(--good); }
-  li.refused { color: var(--bad); }
-  #gallery { display: flex; flex-wrap: wrap; gap: 12px; }
-  figure.asset { margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px;
-    background: var(--card); max-width: 320px; }
-  figure.asset img { max-width: 100%; background: #fff; border-radius: 4px; }
-  figure.asset pre { white-space: pre-wrap; word-break: break-word; margin: 0 0 8px; font-size: 12px; }
-  figcaption { font: 12px/1.4 ui-monospace, monospace; color: var(--muted); word-break: break-all; margin-bottom: 6px; }
-  /* The tier-2 gate is a MODAL, like settings: a decision that appears off-screen is a decision
-     nobody made. (Measured before this change: the panel appeared 1419px down an 820px viewport,
-     2049px down a phone — 2.5 screens below the fold, with no scroll to it.) */
-  /* ONE modal box, worn by both dialogs on this page: the tier-2 gate and Create a project. The box,
-     the backdrop and the scroll lock live here once — a second copy of them is how two dialogs in one
-     file start behaving differently. */
-  dialog.modal { inset: 0; margin: auto; width: min(100% - 2rem, 560px); max-height: 85vh; max-height: 85dvh;
-    padding: 16px 18px calc(16px + env(safe-area-inset-bottom)); border: 1px solid var(--line);
-    border-radius: 12px; background: var(--card); color: var(--ink); overflow: auto; overscroll-behavior: contain; }
-  dialog.modal::backdrop { background: color-mix(in srgb, var(--ground) 60%, transparent); backdrop-filter: blur(10px) saturate(120%); }
-  @supports not (backdrop-filter: blur(1px)) { dialog.modal::backdrop { background: #101014e6; } }
-  html:has(dialog.modal[open]) { overflow: hidden; }
-  dialog.modal .gate-note { color: var(--muted); font-size: 12px; }
-  #confirm h2 { margin: 0 0 10px; font-size: 14px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-  #confirm p { margin: 0 0 10px; font: 13px/1.5 ui-monospace, monospace; word-break: break-all; }
-  #confirm button { margin-right: 8px; }
-  /* What setup does, why, and the order: this page's whole job, said once (voicebox-beads-um5r). */
-  .setup-guide { max-width: 78ch; font-size: 13px; line-height: 1.6; }
-  .dest-status { margin: 10px 0 0; font-size: 13px; line-height: 1.5; }
-  .dest-status[data-ok="false"] { color: var(--bad); }
-  .dest-status[data-ok="true"] { color: var(--good); }
-  .setup-guide p { margin: 0 0 8px; }
-  .setup-guide h3 { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 14px 0 6px; }
-  .setup-steps { margin: 0; padding-left: 1.4rem; }
-  .setup-steps li { margin: 0 0 6px; }
-  .create-row { margin: 14px 0; }
-  #create-project { padding: 0.6rem 1rem; background: var(--btn-bg); color: var(--ink); border: 1px solid var(--accent); border-radius: 8px; font: inherit; font-weight: 600; cursor: pointer; }
-  #dest-choices { border: 0; margin: 12px 0; padding: 0; }
-  #dest-choices legend { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 0 0 6px; }
-  #dest-choices label { display: block; margin: 0 0 6px; font-size: 13px; }
-  .dest-panel { border-top: 1px solid var(--line); padding-top: 10px; }
-  #create-project-dialog h2 { margin: 0; font-size: 14px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-  .dialog-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-  #create-project-dialog label { display: block; margin: 8px 0 4px; font-size: 13px; }
-  #declare { margin: 0.75rem 0 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-  #declare label { flex-basis: 100%; opacity: 0.8; }
-  #root-path { flex: 1 1 22rem; padding: 0.5rem 0.6rem; background: var(--input-bg); color: inherit; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
-  #declare-root { padding: 0.5rem 0.8rem; background: var(--btn-bg); color: inherit; border: 1px solid var(--line); border-radius: 6px; font: inherit; cursor: pointer; }
-  #declare-root[disabled] { opacity: 0.5; cursor: progress; }
-  #declare-result { flex-basis: 100%; margin: 0; }
-  #declare-result[data-ok="true"] { color: var(--good); }
-  #declare-result[data-ok="false"] { color: var(--bad); }
-  #dropzone { border: 1px dashed var(--line); border-radius: 8px; padding: 12px; color: var(--muted); font-size: 13px; }
-  #dropzone.over { border-color: var(--accent); color: var(--ink); }
-  .chooser { max-width: 78ch; font-size: 13px; line-height: 1.6; color: var(--muted); margin: 0 0 14px; }
-  .chooser strong { color: var(--ink); font-weight: 600; }
-  .tag { display: inline-block; margin-left: 6px; padding: 2px 7px; border-radius: 4px; font-size: 0.75rem;
-         color: var(--muted); background: var(--btn-bg); border: 1px solid var(--line); }
-  .tag-good { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, var(--line)); }
-  .views { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
-  .view { border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: var(--card); min-height: 120px; }
-  .view h3 { margin: 0 0 6px; font-size: 13px; letter-spacing: .04em; }
-  .authority { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0 0 8px; }
-  .failure { color: var(--bad); font: 12px/1.6 ui-monospace, monospace; margin: 0; word-break: break-word; }
-  ul.entries { list-style: none; margin: 0; padding: 0; font: 12px/1.7 ui-monospace, monospace; }
-  ul.entries li { display: flex; justify-content: space-between; gap: 8px; cursor: default; }
-  ul.entries li[data-kind="directory"] { cursor: pointer; color: var(--accent); }
-  ul.entries .size, ul.entries .empty, ul.entries .truncated { color: var(--muted); }
-</style>
+<!-- Styles live in public/environment.css (voicebox-beads-xggy.3). Same-origin and render-blocking,
+     exactly as the inline block was, so the cascade order and first paint are unchanged. -->
+<link rel="stylesheet" href="/environment.css">
 </head>
 <body>
   <nav class="back-nav" aria-label="Room navigation"><a href="/">← Back to the voice room</a></nav>
@@ -230,7 +127,7 @@
 
   <h2>Create an asset</h2>
   <form id="asset-form">
-    <input id="asset-name" placeholder="a name for the asset, e.g. notes.md" aria-label="asset name" style="min-width:16rem">
+    <input id="asset-name" placeholder="a name for the asset, e.g. notes.md" aria-label="asset name">
     <select id="asset-kind" aria-label="asset kind">
       <option value="svg">svg</option>
       <option value="text">text</option>

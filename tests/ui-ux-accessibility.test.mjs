@@ -19,11 +19,15 @@ test("unit: secondary UI surfaces declare explicit focus rings, 12px readability
   assert.match(styleCss, /\.mini-app-badge\s*\{[^}]*font-size:\s*0\.75rem;/);
   assert.match(styleCss, /\.mini-app-source-badge\s*\{[^}]*font-size:\s*0\.75rem;/);
 
-  // 3. environment.html declares :focus-visible and 0.75rem readability floor for .tag
-  const envHtml = fs.readFileSync(path.join(root, "public/environment.html"), "utf8");
-  assert.match(envHtml, /\.back-nav a:hover,\s*\.back-nav a:focus-visible/);
-  assert.match(envHtml, /:focus-visible\s*\{[^}]*outline:\s*2px solid/);
-  assert.match(envHtml, /\.tag\s*\{[^}]*font-size:\s*0\.75rem;/);
+  // 3. environment.css declares :focus-visible and the 0.75rem readability floor for .tag.
+  //    voicebox-beads-xggy.3 moved this block out of environment.html into a same-origin stylesheet for CSP
+  //    readiness, so these assertions follow the rules to the file that now serves them. The invariants are
+  //    NOT relaxed: a real focus ring and a 12px floor on the status tag, exactly as before. Relaxing them is
+  //    what a failure like this invites, and the whole point of the assertion is that the page keeps them.
+  const envCss = fs.readFileSync(path.join(root, "public/environment.css"), "utf8");
+  assert.match(envCss, /\.back-nav a:hover,\s*\.back-nav a:focus-visible/);
+  assert.match(envCss, /:focus-visible\s*\{[^}]*outline:\s*2px solid/);
+  assert.match(envCss, /\.tag\s*\{[^}]*font-size:\s*0\.75rem;/);
 
   // 4. secondary app pages declare :focus-visible for buttons
   const agentMonitorHtml = fs.readFileSync(path.join(root, "public/apps/agent-monitor.html"), "utf8");
