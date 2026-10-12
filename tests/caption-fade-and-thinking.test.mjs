@@ -210,16 +210,18 @@ test("live-voice: routes thought chunks to #thinking-trace without overwriting #
   assert.equal(thinkingTrace.dataset.active, "false");
 });
 
-test("fused.js: preserves Reconnected live session status across re-renders, fades #turn-report, and auto-starts #mic on vision start", () => {
+test("settings-ui.mjs preserves Reconnected live session status while fused.js fades #turn-report and starts #mic on vision start", () => {
   const fused = readFileSync(path.join(PUBLIC, "fused.js"), "utf8");
-
+  const settingsUi = readFileSync(path.join(PUBLIC, "settings-ui.mjs"), "utf8");
+  assert.match(fused, /import \{ initSettingsUi \} from "\.\/settings-ui\.mjs"/);
+  assert.match(fused, /initSettingsUi\(\{ els, request, health, refreshDevices, on \}\)/);
   assert.match(
-    fused,
+    settingsUi,
     /let reconnectedLiveModel = null;/,
-    "fused.js tracks reconnectedLiveModel across settings re-renders",
+    "the extracted Settings owner tracks reconnectedLiveModel across re-renders",
   );
   assert.match(
-    fused,
+    settingsUi,
     /reconnectedLiveModel === currentModel\s*\?\s*`Reconnected live session with \$\{currentModel\}\.`/,
     "renderAgentSettings preserves 'Reconnected live session with X.' when reconnectedLiveModel matches currentModel",
   );
