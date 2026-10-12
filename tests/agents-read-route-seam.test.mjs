@@ -5,13 +5,24 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAgentsReadRoutes } from "../lib/routes/agents-read.mjs";
 
-test("the host wires only GET /api/agents at the original table position", () => {
+function assertAgentsWiring(source) {
+  assert.match(source, /createAgentsReadRoutes\(\{ agentRegistry, json, publicAgentProjection, describeAgentAdmission, getAdmissionContext \}\)/);
+  assert.match(source, /const routes = \{\s*\.\.\.presenceRoutes,\s*\.\.\.agentsReadRoutes,\s*"GET \/api\/fleet":/,
+    "agents GET follows presence and precedes fleet without a shadowing entry");
+  assert.doesNotMatch(source, /"GET \/api\/agents":/, "no inline GET may shadow the factory");
+  assert.match(source, /req\.method === "POST" && url\.pathname === "\/api\/agents"/, "host's separate privileged POST must remain valid");
+}
+
+test("the host wires only GET /api/agents at the exact table position, rejecting missing and duplicate handlers", () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const source = readFileSync(path.join(root, "server.mjs"), "utf8");
-  assert.match(source, /createAgentsReadRoutes\(\{ agentRegistry, json, publicAgentProjection, describeAgentAdmission, getAdmissionContext \}\)/);
-  assert.match(source, /\.\.\.agentsReadRoutes,\s*"GET \/api\/fleet":/);
-  assert.doesNotMatch(source, /"GET \/api\/agents":/, "no old inline GET may shadow the factory");
-  assert.match(source, /req\.method === "POST" && url\.pathname === "\/api\/agents"/, "host's separate privileged POST must remain valid");
+  assertAgentsWiring(source);
+  const withoutSpread = source.replace("  ...agentsReadRoutes,\n", "");
+  assert.notEqual(withoutSpread, source, "the missing-spread mutant must actually change the source");
+  assert.throws(() => assertAgentsWiring(withoutSpread), { name: "AssertionError" });
+  const withDuplicate = source.replace('  "GET /api/harnesses":', '  "GET /api/agents": () => null,\n  "GET /api/harnesses":');
+  assert.notEqual(withDuplicate, source, "the duplicate-inline mutant must actually change the source");
+  assert.throws(() => assertAgentsWiring(withDuplicate), { name: "AssertionError" });
 });
 
 test("GET reads fresh host admission on every request, filters the registry and never returns secrets", () => {

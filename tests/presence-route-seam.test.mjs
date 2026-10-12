@@ -10,7 +10,7 @@ test("the host wires exactly the extracted presence table, not stale inline hand
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const server = readFileSync(path.join(root, "server.mjs"), "utf8");
   assert.match(server, /const presenceRoutes = createPresenceRoutes\(\{ roomPresence, json, readJsonBody, answerOnce, broadcastChannel \}\)/);
-  assert.match(server, /const routes = \{\s*\.\.\.presenceRoutes,\s*"GET \/api\/agents":/);
+  assert.match(server, /const routes = \{\s*\.\.\.presenceRoutes,\s*\.\.\.agentsReadRoutes,\s*"GET \/api\/fleet":/, "presence then agents-read then fleet must retain exact table order");
   assert.doesNotMatch(server, /"(?:GET|POST) \/api\/presence":/, "no duplicate inline handler can shadow the seam");
 });
 
