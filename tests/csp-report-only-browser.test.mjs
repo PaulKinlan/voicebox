@@ -1039,10 +1039,49 @@ test("the environment stylesheet is a same-origin file, and every measured value
     "--ground", "--card", "--input-bg", "--btn-bg", "--btn-hover", "--line",
     "--ink", "--muted", "--accent", "--good", "--bad",
   ];
+  // The exact pairs the inline block carried, pinned by VALUE rather than by presence. This is deliberately a
+  // constraint on future palette work: changing one is a deliberate act with its own bead, not something a
+  // relocation or a tidy-up can carry in unnoticed. A review swapped --bad for white and the previous
+  // assertion — present, and starting with `light-dark(` — stayed green through all eleven of them, which is
+  // voicebox-beads-h1oo. Fixing that means asserting the pair itself.
+  const TOKEN_PAIRS = {
+    "--ground": "light-dark(#fbfbf9, #101014)",
+    "--card": "light-dark(#ffffff, #15151b)",
+    "--input-bg": "light-dark(#f7f8fa, #17171d)",
+    "--btn-bg": "light-dark(#eceef2, #23232c)",
+    "--btn-hover": "light-dark(#e0e4eb, #2d2d38)",
+    "--line": "light-dark(#d8dcdf, #33333f)",
+    "--ink": "light-dark(#23262b, #e8e8ee)",
+    "--muted": "light-dark(#59636d, #9a9aab)",
+    "--accent": "light-dark(#1f3fd0, #69f)",
+    "--good": "light-dark(#1d6b32, #8ee39a)",
+    "--bad": "light-dark(#b3261e, #f0a6a0)",
+  };
   // Measured before the move, on the inline block, with identical code. Parity is the assertion.
+  // `tokens` is each custom property RESOLVED in that scheme, measured from the page when this was written
+  // and pasted here rather than typed — a remembered colour is an assertion that silently encodes whatever
+  // the author guessed. All eleven are colours, so resolving them through `color` is faithful; if one ever
+  // stops being a colour the resolved read stops describing it, and the shape of the value would be the
+  // thing to assert instead.
   const BASELINE = {
-    light: { bodyBg: "rgb(251, 251, 249)", textOnBody: 14.65, mutedOnGround: 5.91, placeholderOnInput: 4.34, focus: "solid 2px rgb(31, 63, 208) 2px" },
-    dark: { bodyBg: "rgb(16, 16, 20)", textOnBody: 15.56, mutedOnGround: 6.86, placeholderOnInput: 3.87, focus: "solid 2px rgb(102, 153, 255) 2px" },
+    light: {
+      bodyBg: "rgb(251, 251, 249)", textOnBody: 14.65, mutedOnGround: 5.91, placeholderOnInput: 4.34, focus: "solid 2px rgb(31, 63, 208) 2px",
+      tokens: {
+        "--ground": "rgb(251, 251, 249)", "--card": "rgb(255, 255, 255)", "--input-bg": "rgb(247, 248, 250)",
+        "--btn-bg": "rgb(236, 238, 242)", "--btn-hover": "rgb(224, 228, 235)", "--line": "rgb(216, 220, 223)",
+        "--ink": "rgb(35, 38, 43)", "--muted": "rgb(89, 99, 109)", "--accent": "rgb(31, 63, 208)",
+        "--good": "rgb(29, 107, 50)", "--bad": "rgb(179, 38, 30)",
+      },
+    },
+    dark: {
+      bodyBg: "rgb(16, 16, 20)", textOnBody: 15.56, mutedOnGround: 6.86, placeholderOnInput: 3.87, focus: "solid 2px rgb(102, 153, 255) 2px",
+      tokens: {
+        "--ground": "rgb(16, 16, 20)", "--card": "rgb(21, 21, 27)", "--input-bg": "rgb(23, 23, 29)",
+        "--btn-bg": "rgb(35, 35, 44)", "--btn-hover": "rgb(45, 45, 56)", "--line": "rgb(51, 51, 63)",
+        "--ink": "rgb(232, 232, 238)", "--muted": "rgb(154, 154, 171)", "--accent": "rgb(102, 153, 255)",
+        "--good": "rgb(142, 227, 154)", "--bad": "rgb(240, 166, 160)",
+      },
+    },
   };
   const measure = () => {
     const lum = (c) => {
@@ -1080,10 +1119,30 @@ test("the environment stylesheet is a same-origin file, and every measured value
         }
       }
     }
+    // Each token RESOLVED to the colour it produces in THIS scheme. A custom property read with
+    // getPropertyValue returns its declared text — --muted comes back as the literal `light-dark(...)` — so
+    // resolving it through a real property is the only way to measure what a user actually sees. An
+    // off-screen probe carries each token as its `color`, which the cascade resolves per scheme.
+    const resolved = {};
+    const probe = document.createElement("span");
+    probe.style.position = "absolute";
+    probe.style.visibility = "hidden";
+    probe.style.pointerEvents = "none";
+    document.body.appendChild(probe);
+    // Iterated from what the stylesheet defines rather than from a list passed in, for the same reason the
+    // discovery loop above does: this function is serialised into the page, so it cannot see anything from
+    // the test's scope. Passing the names in would work, but then the negative — with the stylesheet held and
+    // therefore nothing defined — would be resolving a list the test supplied rather than what is there.
+    for (const name of Object.keys(values)) {
+      probe.style.color = `var(${name})`;
+      resolved[name] = getComputedStyle(probe).color;
+    }
+    probe.remove();
     return {
       first: window.__first,
       computedScheme: cs.colorScheme,
       values,
+      resolved,
       tokenCount: Object.keys(values).length,
       bodyBg: body.backgroundColor,
       textOnBody: ratio(body.color, body.backgroundColor),
@@ -1108,12 +1167,14 @@ test("the environment stylesheet is a same-origin file, and every measured value
     assert.equal(m.first.bg, want.bodyBg, `${mode}: the first painted frame must already have the right ground`);
 
     // Every token survives, as a value rather than as a rule count.
-    assert.equal(
-      m.tokenCount,
-      TOKENS.length,
+    assert.deepEqual(
+      Object.keys(m.values).sort(),
+      TOKENS.slice().sort(),
       `${mode}: the stylesheet must define exactly the ${TOKENS.length} custom properties the inline block did — discovered from the file, so a token quietly dropped shows up as a smaller count`,
     );
     for (const name of TOKENS) {
+      assert.equal(m.values[name], TOKEN_PAIRS[name], `${mode}: ${name} must carry the value it carried before the move, verbatim — presence and a light-dark( prefix are not enough, which is voicebox-beads-h1oo`);
+      assert.equal(m.resolved[name], BASELINE[mode].tokens[name], `${mode}: ${name} must RESOLVE to the colour it resolved to before the move — resolving is what catches a pair whose arms were swapped or both changed`);
       assert.ok(m.values[name], `${mode}: ${name} must be defined by the external stylesheet — an empty value means the file did not load and this test is not measuring the page it thinks it is`);
       assert.match(m.values[name], /^light-dark\(/, `${mode}: ${name} must still be the light-dark() pair the baseline recorded`);
     }
