@@ -2,8 +2,10 @@
    (voicebox-beads-xggy.3) so that `style-src 'self'` can be enforced later without an inline
    exception. The 80 rules below are the original rules, verbatim and in their original order — this is
    a relocation, not a rewrite, and any visible difference would be a regression rather than a cleanup.
-   The only additions are this comment and the `#asset-name` rule at the end, which replaces the inline
-   style attribute that used to carry the same declaration. */
+   The only additions are this comment and two rules at the end: the `#asset-name` rule, which replaces
+   the inline style attribute that used to carry the same declaration, and `::placeholder { color:
+   var(--muted); }` (voicebox-beads-sv2n, widened by voicebox-beads-yd08), which takes this page's
+   placeholder text off the user agent's grey. */
   :root {
     color-scheme: light dark;
     --ground: light-dark(#fbfbf9, #101014);
