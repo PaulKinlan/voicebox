@@ -311,6 +311,20 @@ test("nested static assets serve with correct content-type and traversal is refu
   }
 });
 
+test("a decoded NUL in a static path is not found, not an internal server error", async () => {
+  const help = await get("/help.html");
+  assert.equal(help.status, 200, "the real Help document still serves");
+  assert.match(help.headers.get("content-type"), /text\/html/);
+
+  for (const requestPath of ["/help.html%00", "/HELP.HTML", "/%2e%2e/etc/passwd"]) {
+    const response = await get(requestPath);
+    const body = await response.text();
+    assert.equal(response.status, 404, `${requestPath} must be not-found, not an internal error`);
+    assert.deepEqual(JSON.parse(body), { error: "not found" }, "only the generic not-found body is exposed");
+    assert.doesNotMatch(body, /ERR_INVALID_ARG_VALUE|internal error|\/home\/|realpathSync|server\.mjs/i);
+  }
+});
+
 // ── read API endpoint: GET /api/file and GET /api/files ───────────────────
 test("read API endpoints: GET /api/file reads file without turn, and GET /api/files returns entries", async () => {
   // Create a test file
