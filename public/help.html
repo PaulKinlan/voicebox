@@ -5,14 +5,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Voicebox — Comprehensive Help &amp; User Guide</title>
   <!-- Pre-paint theme guard (voicebox-beads-uj16). This is the SAME public/theme-boot.js that
-       public/index.html loads, so this page no longer keeps its own copy of the theme decision: the block
-       that used to sit at the END of <body> applied the stored choice AFTER the first paint, so anyone
-       who chose light or dark saw the other scheme first and then watched it flip. It must stay a CLASSIC
-       script in <head> — not a module, not deferred — or it runs after the paint again, which is the whole
-       defect. Kept as a file rather than inline because a file is the form a strict policy can allow:
-       see voicebox-beads-ul1m — this document has no Content-Security-Policy at all today, and the
-       remaining inline search script below is one of the things to settle before it can have one. -->
+       public/index.html loads. help.html used to keep its own copy, inline at the END of <body>. THAT copy
+       DID NOT FLASH, which is worth stating because it is easy to assume otherwise: it was a classic inline
+       script, so it ran while the document was parsing, and measured on the pre-uj16 markup it set the
+       attribute at 1ms with the first frame at 13ms already dark. The xpwt flash came from a DEFERRED
+       MODULE, which is a different timing. What was actually wrong with that copy is that it was a fourth,
+       quietly different version of the decision: it ignored "system", never set data-theme-mode, and had no
+       listener. Loading the shared guard is what makes an explicit light/dark choice hold before the first
+       paint, and it must stay a CLASSIC script in <head> — as a module or deferred it would apply after the
+       paint. -->
   <script src="/theme-boot.js"></script>
+  <!-- The listener half (voicebox-beads-ftqe). The guard above resolves the system scheme ONCE, so with
+       "system" stored it would pin the page to whatever the OS was at load — a regression this change
+       introduced, and one the reviewer caught. This imports the SAME public/theme.mjs the room uses, whose
+       initTheme() installs the matchMedia listener that follows an operating-system switch while the page
+       stays open. It is deferred (a module), which is fine: its job is every frame after the first. -->
+  <script type="module" src="/help-theme.mjs"></script>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -126,9 +134,8 @@
   </div>
   <script>
     (() => {
-      // The theme used to be applied right here, at the end of <body>, which painted the wrong scheme
-      // first for anyone who had chosen light or dark. It is now the shared pre-paint guard in <head>
-      // (voicebox-beads-uj16). What remains is the help search filter, which is a different concern.
+      // The theme used to be applied here, at the end of <body>. It is now the shared pre-paint guard and
+      // the shared module in <head> (voicebox-beads-uj16). What remains is the help search filter.
       const search = document.querySelector(".help-search-input");
       const sections = document.querySelectorAll(".help-section[data-help-section]");
       search?.addEventListener("input", () => {
