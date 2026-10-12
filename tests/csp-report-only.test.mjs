@@ -240,7 +240,7 @@ test("the extracted documents carry no inline script, and the declaration script
   );
   assert.ok(
     /<meta name="color-scheme" content="light dark">/.test(envDoc),
-    "public/environment.html must declare its color scheme in the head BEFORE the render-blocking stylesheet — the meta is what tells the browser the scheme for surfaces it draws itself, and it is measurably not equivalent to the computed color-scheme property",
+    "public/environment.html must declare its color scheme in the head BEFORE the render-blocking stylesheet — the meta is what tells the browser the scheme for surfaces it draws itself. It does not change the page's own first painted frame, which the stylesheet already determines, and the computed color-scheme property does not reflect it either — so it is required here as a presence assertion and measured in the browser test at the canvas",
   );
 
   // AND THE LOAD STRATEGY IS PART OF THE CONTRACT, not a detail of the tag. Deferring this file would let the

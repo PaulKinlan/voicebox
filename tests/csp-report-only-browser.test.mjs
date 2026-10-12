@@ -181,6 +181,29 @@ test("the staged policy reports exactly the known inline blocks, and blocks noth
     envHeader && envHeader.length > 0,
     `the environment page must be COVERED by the report-only policy, which the response proves independently of what the page reports. Got ${JSON.stringify(envHeader)}`,
   );
+  // AND THAT PROOF IS SENSITIVE, not a constant compared with itself. The header must carry the directives
+  // the staged policy is supposed to have, must be byte-identical to the mirror the room's meta carries, and
+  // a single altered directive must be detectable by the same comparison — otherwise "covered by the policy"
+  // would be equally true of a header that had quietly lost a directive.
+  const indexHtml = await (await fetch(`${server.base}/`)).text();
+  const metaPolicy = indexHtml.match(/http-equiv="Content-Security-Policy"[^>]*content="([^"]*)"/);
+  assert.ok(metaPolicy, "the room must still carry its policy in a meta tag — the header is asserted against it, so its absence would make that comparison vacuous");
+  for (const directive of ["default-src 'self'", "script-src 'self'", "object-src 'none'", "base-uri 'none'"]) {
+    assert.ok(
+      envHeader.includes(directive),
+      `the report-only header must carry ${directive} — a header that had lost a directive is a different policy, and this is what makes its presence a positive fact rather than a non-empty string`,
+    );
+  }
+  assert.equal(
+    envHeader.replace(/\s+/g, " ").trim(),
+    metaPolicy[1].replace(/\s+/g, " ").trim(),
+    "the header and the room's meta must describe the SAME policy: one is the mirror of the other, and comparing two independently sourced values is what stops either drifting",
+  );
+  assert.notEqual(
+    envHeader.replace("object-src 'none'", "object-src 'self'"),
+    envHeader,
+    "a deliberately altered policy must not compare equal — otherwise every equality assertion in this section would be vacuous",
+  );
   assert.equal(
     envReports,
     0,
@@ -981,10 +1004,13 @@ test("with the module blocked, no number of radio changes ever syncs the panel (
 //      move and therefore says nothing about it.
 //   2. THE NEGATIVE. With /environment.css held, those values must COLLAPSE. Without it, the parity
 //      assertions would also pass on a page whose stylesheet never arrived at all.
-//   3. THE META, which only a user-agent-surface measurement can prove. `getComputedStyle(root).colorScheme`
-//      reads `normal` both with and without it, because the meta sets the scheme the browser USES rather
-//      than the computed property — so a computed-style check for it would be vacuous, and I nearly wrote
-//      one. Reading Canvas/CanvasText with the stylesheet held isolates the meta, and it must resolve dark.
+//   3. THE META, whose effect is on the surfaces the browser draws itself and NOT on this page's own first
+//      painted frame. Measured with the real external /environment.css loading normally, on both OS schemes,
+//      meta present and absent: the first frame's scheme and ground are IDENTICAL in all four cases, because
+//      the render-blocking stylesheet supplies both. Where it does show is the UA surfaces; with the stylesheet
+//      held so nothing else can account for the difference, the canvas resolves dark with the meta and light
+//      without it. A guidance-aligned preventive hint, not a measured fix for a flash — I described it as one
+//      first and the four-case measurement does not support that.
 test("the environment stylesheet is a same-origin file, and every measured value survived the move (voicebox-beads-xggy.3)", { timeout: 180000 }, async (t) => {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-csp-styles-"));
   const workspace = path.join(scratch, "project");
@@ -1136,9 +1162,20 @@ test("the environment stylesheet is a same-origin file, and every measured value
   // of one reading, and it failed here, which is the point worth recording — the value moves with how and
   // when it is read, so any assertion on it is a fact about the reading rather than about the meta. The
   // canvas colour below is the measurement that actually discriminates.
-  assert.equal(
-    ua.canvas,
-    "rgb(18, 18, 18)",
-    `the meta must give the browser a DARK canvas for its own surfaces, which is the flash this protects: without the meta, measured on an otherwise identical page, Canvas is rgb(255, 255, 255) and the scheme is light. Got ${ua.canvas} (computed color-scheme read ${ua.computedScheme} at the same moment, which is why that value is reported rather than asserted)`,
+  // A LUMINANCE BOUND RATHER THAN THE EXACT VALUE. The first version pinned `rgb(18, 18, 18)`, which is one
+  // user agent's choice of dark canvas and not a property of the page: a different build could pick another
+  // dark grey and fail a correct implementation. What matters is that the browser chose DARK, so that is what
+  // is asserted — and it is still decisive, because the meta-less page measured rgb(255, 255, 255), which is
+  // about as far from a dark bound as a colour gets. The exact reading is kept in the message for diagnosis.
+  const canvasLum = (() => {
+    const [r, g, b] = ua.canvas.match(/[\d.]+/g).slice(0, 3).map((v) => {
+      const x = Number(v) / 255;
+      return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  })();
+  assert.ok(
+    canvasLum < 0.5,
+    `the meta must give the browser a DARK canvas for its own surfaces (luminance ${canvasLum.toFixed(3)} measured, read as ${ua.canvas}), which no stylesheet of the page's own can reach: the page's first painted frame is IDENTICAL with and without the meta in both OS schemes, measured with the real external /environment.css, because the render-blocking stylesheet supplies the scheme and the ground. This is a preventive hint for the browser's own surfaces, not a measured flash fix. Without the meta, on an otherwise identical page, Canvas is rgb(255, 255, 255) and the scheme is light. Got ${ua.canvas} (computed color-scheme read ${ua.computedScheme} at the same moment, which is why that value is reported rather than asserted)`,
   );
 });
