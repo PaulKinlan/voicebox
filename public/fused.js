@@ -5509,7 +5509,6 @@ function sqehSetState(state, { scroll = false } = {}) {
 function sqehSyncMiniApps() {
   const host = document.getElementById("sqeh-actions");
   if (!host) return;
-  const htmlRows = [...document.querySelectorAll("#files .file-open")].filter((row) => isHtmlFileName(row.dataset.file));
   const seenAppIds = new Set();
   const seenTitles = new Set();
   const seenNormKeys = new Set();
@@ -5532,30 +5531,15 @@ function sqehSyncMiniApps() {
     return false;
   };
 
-  for (const row of htmlRows) {
-    const fileName = row.dataset.file ?? "";
-    const fileAppId = `file_${fileName.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
-    markSeen(fileAppId, fileName, fileName);
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "sqeh-miniapp-bubble";
-    btn.dataset.miniAppFile = fileName;
-    btn.dataset.miniAppId = fileAppId;
-    const badge = document.createElement("span");
-    badge.className = "sqeh-miniapp-bubble-badge";
-    badge.textContent = "App";
-    const title = document.createElement("span");
-    title.className = "sqeh-miniapp-bubble-title";
-    title.textContent = fileName;
-    btn.append(badge, title);
-    btn.addEventListener("click", () => {
-      void launchWorkspaceHtmlMiniApp(fileName);
-    });
-    buttons.push(btn);
-  }
-
+  // THE STRIP LISTS APPS, NOT PAGES (voicebox-beads-rtsr). A workspace `.html` file used to be
+  // scraped straight out of the Files list and badged "App" here, so browsing a folder of pages
+  // filled the Mini-App tray with them. Classification now happens where provenance lives — the
+  // store's `kind` — and this loop renders only what the store calls an app; a page stays in the
+  // Files list and is still launchable (the viewer's "Open as Mini-App", or launch_mini_app by name).
+  // A payload from an older server carries no `kind`, and that defaults to an app, as it always was.
   for (const item of catalogMiniApps) {
     if (!item) continue;
+    if (item.kind === "page") continue;
     const appId = item.appId || item.id || normalizeMiniAppKey(item.fileName || item.title);
     const label = item.title || item.fileName || appId;
     if (isAlreadySeen(appId, label, item.fileName)) continue;

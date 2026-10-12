@@ -330,28 +330,82 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
   assert.equal(closedReader.readerDisplay, "none", "#reader is hidden after close");
   assert.equal(closedReader.bubbleHidden, true, "#sqeh-reader-bubble hides after #reader-close");
 
-  // ── 4. Real Mini-App Bubbles & Inner Iframe Scrolling ────────────────────
-  const miniAppBubbles = await page.evaluate(() => {
+  // ── 4. Mini-App Bubbles: Classification, then Mounting & Inner Iframe Scrolling ──
+  // CLASSIFICATION (voicebox-beads-rtsr): counter.html is a bare workspace page — nobody saved it
+  // as an app — so it must NOT be in the Mini-App tray, and must still be in the Files list. The
+  // tray lists apps; a page is launched from the viewer's "Open as Mini-App" action.
+  const pageClassification = await page.evaluate(() => {
     const actions = document.getElementById("sqeh-actions");
     const labels = [...(actions?.querySelectorAll("button") ?? [])].map((b) => b.textContent?.trim() ?? "");
-    const htmlBubbles = [...(actions?.querySelectorAll(".sqeh-miniapp-bubble") ?? [])].map((b) => ({
+    const bubbles = [...(actions?.querySelectorAll(".sqeh-miniapp-bubble") ?? [])].map((b) => ({
       file: b.dataset.miniAppFile,
       id: b.dataset.miniAppId,
       text: b.textContent?.trim(),
     }));
-    return { labels, htmlBubbles };
+    const files = [...document.querySelectorAll("#files .file-open")].map((row) => row.dataset.file);
+    return { labels, bubbles, files };
   });
 
   for (const fakeLabel of ["Mute Mic", "Volume +", "Explorer", "Spotify"]) {
     assert.ok(
-      !miniAppBubbles.labels.some((l) => l.includes(fakeLabel)),
+      !pageClassification.labels.some((l) => l.includes(fakeLabel)),
       `#sqeh-actions must not contain fake placeholder button '${fakeLabel}'`,
     );
   }
-  assert.ok(
-    miniAppBubbles.htmlBubbles.some((b) => b.file === "counter.html"),
-    "workspace counter.html appears as a real Mini-App bubble in #sqeh-actions",
+  assert.ok(pageClassification.files.includes("counter.html"), "the workspace page is still listed in Files");
+  assert.deepEqual(
+    pageClassification.bubbles,
+    [],
+    "a bare workspace .html page is NOT a Mini-App bubble in #sqeh-actions (voicebox-beads-rtsr)",
   );
+
+  // SAVING IS WHAT MAKES IT AN APP. This drives the product's own API — the same POST the page's
+  // save path issues (syncMiniAppAfterFileSave) — reading the file back through the product's own
+  // file verb rather than posting bytes the test kept in memory.
+  const savedAsApp = await page.evaluate(async () => {
+    const readRes = await fetch("/api/file?name=counter.html");
+    const read = await readRes.json().catch(() => null);
+    // The verb's own field name is `content` (lib/routes/workspace.mjs) — read it, do not assume it.
+    const html = read?.content ?? "";
+    const saveRes = await fetch("/api/mini-apps", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ fileName: "counter.html", title: "Counter Mini-App", html }),
+    });
+    const saved = await saveRes.json().catch(() => null);
+    return {
+      readStatus: readRes.status,
+      htmlLength: html.length,
+      saveStatus: saveRes.status,
+      created: saved?.created,
+      kind: saved?.miniApp?.kind,
+    };
+  });
+  assert.equal(savedAsApp.readStatus, 200, "the page reads back through /api/file");
+  assert.ok(savedAsApp.htmlLength > 0, "the saved html is the file's own bytes");
+  assert.equal(savedAsApp.saveStatus, 200, "POST /api/mini-apps accepts the save");
+  assert.equal(savedAsApp.kind, "app", "a saved mini-app answers kind: 'app'");
+
+  // Reload so the tray is rendered from a fresh /api/mini-apps payload: same file, one save apart.
+  await page.goto(`${server.base}/`);
+  await page.waitFor(
+    () =>
+      document.querySelectorAll("#files .file-open").length === 2 &&
+      Boolean(document.querySelector("#sqeh-actions .sqeh-miniapp-bubble")),
+    { label: "reloaded page lists both files and renders the saved app in the tray" },
+  );
+
+  const miniAppBubbles = await page.evaluate(() => {
+    const actions = document.getElementById("sqeh-actions");
+    const htmlBubbles = [...(actions?.querySelectorAll(".sqeh-miniapp-bubble") ?? [])].map((b) => ({
+      file: b.dataset.miniAppFile,
+      id: b.dataset.miniAppId,
+      badge: b.querySelector(".sqeh-miniapp-bubble-badge")?.textContent?.trim(),
+      text: b.textContent?.trim(),
+    }));
+    return { htmlBubbles };
+  });
+
   assert.ok(
     !miniAppBubbles.htmlBubbles.some((b) => b.id === "agent-progress-tracker"),
     "built-in Agent Progress bubble does not appear in #sqeh-actions by default",
@@ -364,8 +418,13 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
     !miniAppBubbles.htmlBubbles.some((b) => b.id === "landing-inspector"),
     "built-in Branch Landing bubble does not appear in #sqeh-actions by default",
   );
-  assert.equal(miniAppBubbles.htmlBubbles.length, 1, "only workspace counter.html bubble appears in #sqeh-actions");
-  assert.equal(miniAppBubbles.htmlBubbles[0].file, "counter.html", "first bubble targets counter.html");
+  assert.equal(miniAppBubbles.htmlBubbles.length, 1, "only the saved counter.html app appears in #sqeh-actions");
+  assert.equal(miniAppBubbles.htmlBubbles[0].file, "counter.html", "the bubble targets counter.html");
+  assert.equal(
+    miniAppBubbles.htmlBubbles[0].badge,
+    "App",
+    "a saved workspace app is badged 'App' after the save (voicebox-beads-rtsr)",
+  );
 
   // Click the counter.html Mini-App bubble in #sqeh-actions and verify it mounts #mini-app-container
   await page.evaluate(() => {

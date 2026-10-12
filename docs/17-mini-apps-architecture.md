@@ -98,7 +98,25 @@ window.webMcp.ready();
 
 ---
 
-## 4. Enforced Bounds (`core/mini-app.ts`, `public/mini-app-bridge.js`)
+## 4. Classification: Mini-Apps vs Pages (`lib/mini-app-store.mjs`, `voicebox-beads-rtsr`)
+
+Mini-app discovery walks the workspace (depth ≤ 1), the host shelf (`<extensionsDir>/mini-apps`), and sandbox homes (depth ≤ 2). Before `voicebox-beads-rtsr` the only test was the file extension, so "mini-app" meant "a file whose name ends in `.html`" and the room's Mini-App tray (`#sqeh-actions`) rendered every page in the current folder as an App bubble.
+
+Every discovered entry now carries a **`kind`** — `"app"` or `"page"` — alongside the fields it already had (`appId`, `slug`, `title`, `fileName`, `source`, `sandbox`, `storagePath`, `sizeBytes`, `createdAt`, `updatedAt`, `html`):
+
+| Source | `kind` | Why |
+|---|---|---|
+| **Host shelf** (`<hostDir>/mini-apps`) | `app` | Only `saveMiniApp` writes there, so a file on the shelf *is* an app. |
+| **Sandbox** (`sandboxHomesDir()/<name>`, extra sandbox roots) | `app` | The file is user-authored inside a fence. Grouping these with pages would hide real apps; whether sandbox HTML belongs in the tray remains an open product question. |
+| **Workspace** (`rootPath`) | `page`, promoted to `app` only when **proven** | A workspace `.html` file is a page unless a shelf record proves it is the app that record describes. |
+
+**Proof, and why it is not the slug.** An existing shelf record names the workspace file it was saved from — `saveMiniApp` writes `workspacePath` (the file's path relative to the workspace root) into `<slug>.meta.json` — and discovery accepts a workspace file as that app only when `workspacePath` equals its own relative path. Records written before this field exist, so an older record is accepted by comparing the shelf copy byte for byte with the workspace file. Anything else is a page: it keeps its own title and `appId`, takes none of the record's metadata, and **does not claim the slug**, so the shelf file itself is still discovered as the app it is. Slug alone was never proof — an unrelated page that happened to share a slug inherited the app's `appId` and title.
+
+The classification decides the **list**, not what can be launched: `getMiniApp()` and the `launch_mini_app` verb still resolve a page by name, `file`, `slug`, `appId` or title, and the File Viewer's **Open as Mini-App** action (`#file-run-app`) launches any `.html` file. Saving a page (through the API or the assistant) writes the shelf record that promotes it to an app on the next discovery. The tray reads `kind` and defaults a payload with no `kind` to `app`, so an older server still renders as it did.
+
+---
+
+## 5. Enforced Bounds (`core/mini-app.ts`, `public/mini-app-bridge.js`)
 
 | Bound | Limit | Enforcement Point | Behavior When Exceeded |
 |---|---|---|---|

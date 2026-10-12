@@ -378,4 +378,109 @@ describe("mini-app-store: persistence, in-place updates, deletion & cross-sandbo
     assert.equal(afterDiscovery.count, 1, "App B still discovered after App A deletion");
     assert.equal(afterDiscovery.miniApps[0].fileName, "counter.html");
   });
+
+  it("every discovered entry carries a kind: a bare workspace .html is a Page, a saved one is an App (voicebox-beads-rtsr)", () => {
+    const rootPath = makeScratchDir("vb-ws-kind-");
+    const hostDir = makeScratchDir("vb-host-kind-");
+    const sandboxRootDir = makeScratchDir("vb-sb-kind-");
+
+    // A .html file in the workspace that nobody saved: a page, not a mini-app.
+    writeFileSync(
+      path.join(rootPath, "meeting-notes.html"),
+      "<!doctype html><html><head><title>Meeting Notes</title></head><body><p>raw</p></body></html>",
+      "utf8",
+    );
+    // A file saved through the API: an app.
+    const saved = saveMiniApp({
+      title: "Kanban",
+      html: "<!doctype html><html><head><title>Kanban</title></head><body><p>board</p></body></html>",
+      rootPath,
+      hostDir,
+    });
+    assert.equal(saved.ok, true);
+    // A shelf-only app (saved with no workspace root).
+    assert.equal(
+      saveMiniApp({
+        title: "Host Notes",
+        html: "<!doctype html><html><head><title>Host Notes</title></head><body></body></html>",
+        rootPath: null,
+        hostDir,
+      }).ok,
+      true,
+    );
+    // A sandbox file — user-authored inside a fence, so it stays an app (voicebox-beads-rtsr).
+    const sandboxA = path.join(sandboxRootDir, "boxA");
+    mkdirSync(sandboxA, { recursive: true });
+    writeFileSync(path.join(sandboxA, "calc.html"), "<!doctype html><html><head><title>Calc</title></head></html>", "utf8");
+
+    const discovered = discoverMiniApps({ rootPath, hostDir, sandboxRootDir });
+    const byFile = new Map(discovered.miniApps.map((app) => [app.fileName, app]));
+    assert.equal(byFile.get("meeting-notes.html")?.kind, "page", "an unsaved workspace .html file is a page");
+    assert.equal(byFile.get("meeting-notes.html")?.title, "Meeting Notes", "a page keeps its own title, not a shelf app's");
+    assert.equal(byFile.get("kanban.html")?.kind, "app", "a saved workspace app is an app");
+    assert.equal(byFile.get("host-notes.html")?.kind, "app", "a shelf app is an app");
+    assert.equal(byFile.get("calc.html")?.kind, "app", "a sandbox file stays an app");
+
+    // The shelf record names the workspace file it was saved from, which is what proves it later.
+    const meta = JSON.parse(readFileSync(path.join(hostDir, "mini-apps", "kanban.meta.json"), "utf8"));
+    assert.equal(meta.workspacePath, "kanban.html", "a workspace save records the file it came from");
+
+    // A page is still resolvable — classification separates the LIST, it does not restrict launching.
+    assert.equal(getMiniApp("Meeting Notes", { rootPath, hostDir, sandboxRootDir }).ok, true);
+  });
+
+  it("a workspace page that only shares a slug with a shelf app is a Page and keeps its own identity (voicebox-beads-rtsr)", () => {
+    const rootPath = makeScratchDir("vb-ws-collide-");
+    const hostDir = makeScratchDir("vb-host-collide-");
+    const sandboxRootDir = makeScratchDir("vb-sb-collide-");
+    const shelfDir = path.join(hostDir, "mini-apps");
+    mkdirSync(shelfDir, { recursive: true });
+
+    // 1. An OLDER record (written before this change, so no workspacePath) whose shelf copy IS the
+    // workspace file byte for byte: proved by the bytes. This is the backward-compatibility branch.
+    const legacyHtml = "<!doctype html><html><head><title>Legacy App</title></head><body><p>same</p></body></html>";
+    writeFileSync(path.join(rootPath, "legacy-app.html"), legacyHtml, "utf8");
+    writeFileSync(path.join(shelfDir, "legacy-app.html"), legacyHtml, "utf8");
+    writeFileSync(
+      path.join(shelfDir, "legacy-app.meta.json"),
+      JSON.stringify({ appId: "app_legacy-app", slug: "legacy-app", title: "Legacy App", fileName: "legacy-app.html" }),
+      "utf8",
+    );
+
+    // 2. An OLDER record whose shelf copy is a DIFFERENT file: the workspace page merely happens to
+    // share the slug. It must not steal the app's identity, and the shelf app must still be listed.
+    writeFileSync(
+      path.join(rootPath, "collision.html"),
+      "<!doctype html><html><head><title>Unrelated Page</title></head><body><p>page</p></body></html>",
+      "utf8",
+    );
+    writeFileSync(
+      path.join(shelfDir, "collision.html"),
+      "<!doctype html><html><head><title>Collision App</title></head><body><p>app</p></body></html>",
+      "utf8",
+    );
+    writeFileSync(
+      path.join(shelfDir, "collision.meta.json"),
+      JSON.stringify({ appId: "app_collision", slug: "collision", title: "Collision App", fileName: "collision.html" }),
+      "utf8",
+    );
+
+    const discovered = discoverMiniApps({ rootPath, hostDir, sandboxRootDir });
+
+    const legacy = discovered.miniApps.filter((app) => app.fileName === "legacy-app.html");
+    assert.equal(legacy.length, 1, "the legacy app is listed once, not twice");
+    assert.equal(legacy[0].kind, "app", "an identical shelf copy proves the legacy record");
+    assert.equal(legacy[0].title, "Legacy App");
+
+    const colliding = discovered.miniApps.filter((app) => app.fileName === "collision.html");
+    assert.equal(colliding.length, 2, "the page and the shelf app are two entries, not one");
+    const page = colliding.find((app) => app.kind === "page");
+    const app = colliding.find((app) => app.kind === "app");
+    assert.ok(page, "the workspace page is listed as a page");
+    assert.ok(app, "the shelf file is still discovered as the app it is");
+    assert.equal(page.title, "Unrelated Page", "the page keeps its own title");
+    assert.equal(page.source, "workspace");
+    assert.equal(app.title, "Collision App", "the app keeps the shelf title");
+    assert.equal(app.source, "host");
+  });
 });
