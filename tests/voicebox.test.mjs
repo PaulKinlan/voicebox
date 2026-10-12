@@ -12,6 +12,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import http from "node:http";
+import net from "node:net";
+import { once } from "node:events";
 import { startServer } from "./lib/server.mjs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -409,8 +412,46 @@ test("page load with files produces zero POST /api/turn calls (no phantom turns)
   // The finally below covers the ordinary path; this covers a signal, which never runs a finally
   // (voicebox-beads-selv: a SIGTERM'd runner used to leave this browser behind).
   const untrackBrowser = trackBrowserProcessGroup(chrome.pid);
+  let ws;
+  let proxy;
+  const proxySockets = new Set();
+  const receipts = [];
+  const receiptWatchers = new Set();
 
   try {
+    // A test-owned ingress counter distinguishes a CDP request from one that reached the host.
+    // Keep page assets same-origin and tunnel upgrades so the page boots as it does without the proxy.
+    proxy = http.createServer((req, res) => {
+      if (req.method === "POST" && new URL(req.url, BASE).pathname === "/api/turn") {
+        const receipt = { method: req.method, path: req.url, status: null };
+        receipts.push(receipt);
+        for (const notify of receiptWatchers) notify(receipt);
+      }
+      const upstream = http.request({
+        hostname: "127.0.0.1", port: server.port, method: req.method, path: req.url,
+        headers: { ...req.headers, host: `127.0.0.1:${server.port}` },
+      }, (reply) => {
+        if (req.method === "POST" && req.url.startsWith("/api/turn")) receipts.at(-1).status = reply.statusCode;
+        res.writeHead(reply.statusCode, reply.headers);
+        reply.pipe(res);
+      });
+      upstream.on("error", () => { if (!res.headersSent) res.writeHead(502); res.end(); });
+      req.pipe(upstream);
+    });
+    proxy.on("connection", (socket) => { proxySockets.add(socket); socket.on("close", () => proxySockets.delete(socket)); });
+    proxy.on("upgrade", (req, socket, head) => {
+      const upstream = net.connect(server.port, "127.0.0.1");
+      upstream.on("connect", () => {
+        upstream.write(`${req.method} ${req.url} HTTP/${req.httpVersion}\r\n${Object.entries(req.headers).map(([name, value]) => `${name}: ${value}`).join("\r\n")}\r\n\r\n`);
+        if (head.length) upstream.write(head);
+        socket.pipe(upstream); upstream.pipe(socket);
+      });
+      upstream.on("error", () => socket.destroy());
+      socket.on("error", () => upstream.destroy());
+    });
+    proxy.listen(0, "127.0.0.1");
+    await once(proxy, "listening");
+    const pageBase = `http://127.0.0.1:${proxy.address().port}`;
     let cdpPort = "";
     for (let i = 0; i < 60 && !cdpPort; i++) {
       try {
@@ -435,74 +476,142 @@ test("page load with files produces zero POST /api/turn calls (no phantom turns)
     }
     assert(wsUrl, "could not find page target");
 
-    const ws = new WebSocket(wsUrl);
+    ws = new WebSocket(wsUrl);
     await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
 
     let id = 1;
     const pending = new Map();
-    const networkRequests = [];
+    const events = [];
+    const watchers = new Set();
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
       if (msg.id && pending.has(msg.id)) {
-        const { resolve } = pending.get(msg.id);
+        const { resolve, reject } = pending.get(msg.id);
         pending.delete(msg.id);
-        resolve(msg.result);
-      }
-      if (msg.method === "Network.requestWillBeSent") {
-        networkRequests.push({
-          url: msg.params.request.url,
-          method: msg.params.request.method,
-        });
+        if (msg.error) reject(new Error(`${msg.error.message} (${JSON.stringify(msg.error.data ?? "")})`));
+        else resolve(msg.result);
+      } else if (msg.method) {
+        events.push(msg);
+        for (const watch of watchers) watch(msg);
       }
     };
 
-    const call = (method, params = {}) => new Promise((resolve) => {
+    const call = (method, params = {}) => new Promise((resolve, reject) => {
       const reqId = id++;
-      pending.set(reqId, { resolve });
+      pending.set(reqId, { resolve, reject });
       ws.send(JSON.stringify({ id: reqId, method, params }));
     });
+    // Register before the command: a lifecycle or network event may precede its CDP reply.
+    const waitForEvent = (from, predicate, boundMs = 15000) => new Promise((resolve) => {
+      const found = events.slice(from).find(predicate);
+      if (found) return resolve(found);
+      const finish = (event) => { clearTimeout(timer); watchers.delete(watch); resolve(event); };
+      const watch = (event) => { if (predicate(event)) finish(event); };
+      const timer = setTimeout(() => finish(null), boundMs);
+      watchers.add(watch);
+    });
+    const waitForReceipt = (from, boundMs = 15000) => new Promise((resolve) => {
+      if (receipts.length > from) return resolve(receipts[from]);
+      const finish = (receipt) => { clearTimeout(timer); receiptWatchers.delete(watch); resolve(receipt); };
+      const watch = (receipt) => finish(receipt);
+      const timer = setTimeout(() => finish(null), boundMs);
+      receiptWatchers.add(watch);
+    });
+    const turnRequests = () => events.filter((e) => e.method === "Network.requestWillBeSent" &&
+      e.params.request.method === "POST" && new URL(e.params.request.url).pathname === "/api/turn");
+    const submit = async () => {
+      const result = await call("Runtime.evaluate", {
+        expression: `(() => {
+          const input = document.getElementById("utterance");
+          const form = document.getElementById("text-form");
+          if (!input || !form) return { input: !!input, form: !!form, dispatched: false };
+          input.value = "list files";
+          const event = new Event("submit", { bubbles: true, cancelable: true });
+          form.dispatchEvent(event);
+          return { input: true, form: true, dispatched: true, canceled: event.defaultPrevented };
+        })()`,
+        returnByValue: true,
+      });
+      assert.equal(result.exceptionDetails, undefined, "submitting the form must not throw in the page");
+      return result.result?.value;
+    };
+    const submitListeners = async () => {
+      const form = await call("Runtime.evaluate", { expression: `document.getElementById("text-form")` });
+      assert.equal(form.exceptionDetails, undefined);
+      assert(form.result?.objectId, "the input form must exist before dispatch");
+      const { listeners } = await call("DOMDebugger.getEventListeners", { objectId: form.result.objectId });
+      return listeners.filter((listener) => listener.type === "submit");
+    };
+    const navigateLoaded = async (url) => {
+      const from = events.length;
+      const nav = await call("Page.navigate", { url });
+      assert(nav.loaderId, "navigation must commit a new document");
+      const load = await waitForEvent(from, (event) => event.method === "Page.lifecycleEvent" &&
+        event.params.name === "load" && event.params.frameId === nav.frameId && event.params.loaderId === nav.loaderId, 30000);
+      assert(load, "the navigated document's own load did not arrive in 30s");
+    };
 
     await call("Network.enable");
     await call("Page.enable");
+    await call("Page.setLifecycleEventsEnabled", { enabled: true });
     await call("Runtime.enable");
+    // Opt-in fixture recreates c8cq's measured early-submit race without changing app/server code.
+    // It slows a real module transfer, not the assertion's timeout or the user-action clock.
+    const constrained = process.env.VOICEBOX_TEST_PHANTOM_THROTTLE === "1";
+    if (constrained) {
+      await call("Network.emulateNetworkConditions", { offline: false, latency: 250, downloadThroughput: 64000, uploadThroughput: 64000 });
+      await call("Emulation.setCPUThrottlingRate", { rate: 4 });
+    }
 
-    // Navigate to page with files already present
-    await call("Page.navigate", { url: BASE });
-    await sleep(1500);
+    // A document load is not the readiness proof: inspect the actual app submit listener too.
+    await navigateLoaded(pageBase);
+    assert.equal((await submitListeners()).length, 1, "fused.js must bind exactly one submit listener before the user action");
+    assert.equal(turnRequests().length, 0, "page load made a phantom POST /api/turn");
+    assert.equal(receipts.length, 0, "page load reached the host with a phantom POST /api/turn");
 
-    const postTurnsBefore = networkRequests.filter(
-      (r) => r.method === "POST" && r.url.includes("/api/turn")
-    );
-    // ABSENCE ASSERTION: loading the page made ZERO POST /api/turn calls
-    assert.equal(postTurnsBefore.length, 0, `Page load produced ${postTurnsBefore.length} phantom POST /api/turn requests!`);
+    // The one user action must be intercepted by the app and reach both CDP and the host.
+    const from = events.length;
+    const before = receipts.length;
+    const requestEvent = waitForEvent(from, (e) => e.method === "Network.requestWillBeSent" &&
+      e.params.request.method === "POST" && new URL(e.params.request.url).pathname === "/api/turn");
+    const hostReceipt = waitForReceipt(before);
+    assert.deepEqual(await submit(), { input: true, form: true, dispatched: true, canceled: true },
+      "missing or uncanceled synthetic submit is an unwired page, not a passing turn");
+    const sent = await requestEvent;
+    assert(sent, "no POST /api/turn network event within 15s after the user action");
+    assert(await hostReceipt, "CDP saw a POST but the proxy/host ingress did not within 15s");
+    const response = await waitForEvent(from, (e) => e.method === "Network.responseReceived" && e.params.requestId === sent.params.requestId);
+    assert(response, "the same POST requestId did not receive an HTTP response within 15s");
+    const finished = await waitForEvent(from, (e) => e.method === "Network.loadingFinished" && e.params.requestId === sent.params.requestId);
+    assert(finished, "the same POST requestId did not complete within 15s");
+    assert.equal(receipts[0].status, response.params.response.status, "host response and CDP response must agree");
+    assert.equal(turnRequests().length, 1, "exactly one POST /api/turn after one user action");
+    assert.equal(receipts.length, 1, "exactly one POST /api/turn reached the host");
 
-    // POSITIVE CONTROL: a typed user turn DOES make a POST /api/turn call
-    await call("Runtime.evaluate", {
-      expression: `
-        const input = document.getElementById("utterance");
-        const form = document.getElementById("text-form");
-        if (input && form) {
-          input.value = "list files";
-          form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-        }
-      `,
-    });
+    // NEGATIVE CONTROL: the form still exists without fused.js, but has no handler and sends no POST.
+    if (constrained) {
+      await call("Emulation.setCPUThrottlingRate", { rate: 1 });
+      await call("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+    }
+    await call("Network.setBlockedURLs", { urls: [`${pageBase}/fused.js`] });
+    await navigateLoaded("about:blank");
+    await navigateLoaded(pageBase);
+    assert.equal((await submitListeners()).length, 0, "blocked fused.js must leave no submit listener");
+    assert.deepEqual(await submit(), { input: true, form: true, dispatched: true, canceled: false },
+      "the blocked module must not intercept a submit");
+    assert.equal(turnRequests().length, 1, "blocked fused.js must not make another POST /api/turn");
+    assert.equal(receipts.length, 1, "blocked fused.js must not reach the host with a POST");
 
-    await sleep(1000);
-
-    const postTurnsAfter = networkRequests.filter(
-      (r) => r.method === "POST" && r.url.includes("/api/turn")
-    );
-    assert.equal(postTurnsAfter.length, 1, `Expected exactly 1 POST /api/turn after user action, got ${postTurnsAfter.length}`);
-
-    ws.close();
   } finally {
+    ws?.close();
     untrackBrowser();
     try {
       process.kill(-chrome.pid, "SIGKILL");
     } catch {
       try { chrome.kill("SIGKILL"); } catch {}
     }
+    for (const socket of proxySockets) socket.destroy();
+    if (proxy) await new Promise((resolve) => proxy.close(resolve));
     try { rmSync(profile, { recursive: true, force: true }); } catch {}
     rmSync(f1, { force: true });
     rmSync(f2, { force: true });
