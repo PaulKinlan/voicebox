@@ -702,11 +702,15 @@ async function adopt(handle: FileSystemDirectoryHandle): Promise<Reply> {
 // the same two lines the gate dialog relies on. The ids and handlers below are the ones that already
 // existed: the boxes moved into a dialog, nothing about how a project is created was rebuilt.
 const createDialog = document.getElementById("create-project-dialog") as HTMLDialogElement | null;
-const DEST_PANELS: Record<string, string> = { opfs: "dest-opfs", picked: "dest-picked", machine: "dest-machine" };
 
-function showDestination(value: string): void {
-  for (const [dest, panel] of Object.entries(DEST_PANELS)) $(panel).hidden = dest !== value;
-}
+/** The destination panels and their sync now live in the parser-time opener (`public/environment-dialogs.js`,
+ * voicebox-beads-5tv3) and are published on `window.__voiceboxCreateProject`. The radio handlers below still
+ * need that sync, and one fact in one place beats a second copy of it — so read the seam rather than
+ * re-implement it. The classic script runs during parsing while this module is deferred, so the seam is
+ * always there by the time this file evaluates; a missing one is a load failure rather than a race. */
+const createProjectOpener = (
+  window as unknown as { __voiceboxCreateProject?: { showDestination(value: string): void } }
+).__voiceboxCreateProject;
 
 /** Closes the create dialog when it is the thing that is open. A no-op for every other way in — the
  * drop zone, or the programmatic surface the acceptance checks drive with no dialog on screen. */
@@ -726,23 +730,19 @@ function dialogStatus(text: string, ok: boolean): void {
   el.textContent = text;
 }
 
-$("create-project").addEventListener("click", () => {
-  // Open on what is actually chosen, so the dialog and the radios cannot disagree. Clear the last
-  // attempt's status: a stale refusal next to a fresh dialog would describe an act nobody just made.
-  const status = document.getElementById("dest-status");
-  if (status) {
-    status.hidden = true;
-    status.textContent = "";
-    delete status.dataset.ok;
-  }
-  const chosen = document.querySelector<HTMLInputElement>('input[name="dest"]:checked');
-  showDestination(chosen?.value ?? "opfs");
-  createDialog?.showModal();
-});
+// THE OPENER IS NOT BOUND HERE ANY MORE (voicebox-beads-5tv3). This is a deferred module, so the page is
+// interactive before this file runs, and a click or an Enter made in that window used to do nothing at all
+// — with no state left behind to re-apply once the module arrived. Binding it in a parser-time classic
+// script (`public/environment-dialogs.js`) is what makes the button work the instant it exists. Binding it
+// here as well would re-run the opener on every activation — a second status reset, a second panel sync and
+// a second `showModal()` — so its effects would happen twice: one owner. That second `showModal()` is a
+// silent NO-OP, not the `InvalidStateError` this comment first claimed from reading the spec; measured in
+// this Chromium, and it is why the one-owner test counts invocations instead of expecting a throw
+// (voicebox-beads-r3xp).
 $("create-project-close").addEventListener("click", () => closeCreateDialog());
 for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="dest"]')) {
   radio.addEventListener("change", () => {
-    if (radio.checked) showDestination(radio.value);
+    if (radio.checked) createProjectOpener?.showDestination(radio.value);
   });
 }
 

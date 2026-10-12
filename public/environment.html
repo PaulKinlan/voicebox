@@ -274,5 +274,14 @@
        fails if this tag ever gains defer, async or type="module" — the two together make the difference
        testable rather than merely commented. -->
   <script src="/environment-root.js"></script>
+  <!-- THE CREATE-PROJECT OPENER IS A PARSER-TIME CLASSIC SCRIPT (voicebox-beads-5tv3), and, like the
+       declaration script above, it must NOT become deferred. It binds the button that opens the dialog
+       where ui.ts no longer does: a module is deferred, so the page is interactive before ui.ts runs, and
+       a click or an Enter made in that window opened nothing and was never replayed — a click, unlike a
+       search box, leaves no state to re-apply. Being classic, this runs while the document is still
+       parsing, so the button works the instant it exists. tests/csp-report-only-browser.test.mjs drives it
+       by mouse AND by keyboard with the module held, and requires it to keep working; a blocked-file
+       control requires the button to do nothing when this file cannot load. -->
+  <script src="/environment-dialogs.js"></script>
 </body>
 </html>
