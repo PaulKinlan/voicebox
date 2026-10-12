@@ -132,12 +132,17 @@
       </section>
     </main>
   </div>
-  <!-- The help search filter is a same-origin FILE rather than an inline block (voicebox-beads-xggy.1).
-       public/index.html's policy is `script-src 'self'` with no nonce, hash or 'unsafe-inline', so an inline
-       script is the one thing that policy would block if it were ever enforced; the Modern Web Guidance
-       security guide names refactoring as the alternative to nonces and hashes. `defer` runs it once
-       parsing is done, which is when an inline script at the end of <body> became observable to a user
-       anyway — a listener attached before the first keystroke is the same listener. -->
+  <!-- The help search filter is a same-origin FILE rather than an inline block (voicebox-beads-xggy.1, and see
+       voicebox-beads-aenb): public/index.html's policy is `script-src 'self'` with no nonce, hash or
+       'unsafe-inline', so an inline script is the one thing that policy would block if it were ever enforced,
+       and the Modern Web Guidance security guide names refactoring as the alternative to nonces and hashes.
+
+       `defer` runs it once parsing is done — but NOT before a person can type, which is a difference an inline
+       body-end script did not have: the inline copy attached its listener during parsing and could not miss a
+       keystroke, while this file can still be in flight while the document is already interactive. An earlier
+       version of this comment claimed a listener attached before the first keystroke is the same listener;
+       that was wrong, and the review measured it (voicebox-beads-aenb). The filter therefore applies the
+       value already in the box when it attaches, so a query typed early is honoured rather than ignored. -->
   <script src="/help-search.js" defer></script>
 </body>
 </html>

@@ -259,3 +259,77 @@ test("the filter stops working when /help-search.js cannot load, so the assertio
     `with /help-search.js blocked the filter must NOT run, leaving every section visible — got ${result.visibleAfterNoMatchQuery} of ${result.total}. If this is 0, the filter ran anyway and the main test's assertions are not driven by the external file`,
   );
 });
+
+// A DEFERRED SCRIPT CAN MISS THE ONLY INPUT EVENT, and this is the deterministic acceptance for it
+// (voicebox-beads-aenb). It is the sharpest question anyone asked about this extraction: an inline script at
+// the end of <body> attached its listener while the document was still parsing, so it could not miss a
+// keystroke. A DEFERRED script attaches later, and a person can type while it is still in flight — by the time
+// the listener exists, the event that carried those keystrokes is gone and the query sits in the box unfiltered.
+//
+// The pause is what makes it deterministic. Fetch.enable holds help-search.js at the request stage, so the
+// document reaches `interactive` with the filter guaranteed not to have run: no timeout, no racing a fast
+// local server, no dependence on machine speed. Fetch.disable then resumes the held request — MEASURED, not
+// assumed: the document goes on to complete and a later query filters — and that resume is the moment the
+// query used to be lost.
+test("a query typed before the deferred filter loads is applied when it arrives (voicebox-beads-aenb)", { timeout: 120000 }, async (t) => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-csp-paused-"));
+  const workspace = path.join(scratch, "project");
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.writeFileSync(path.join(workspace, "notes.md"), "# Notes\n", "utf8");
+
+  const server = await startServer({
+    env: {
+      VOICEBOX_WORKSPACE: workspace,
+      VOICEBOX_RESOLVER: "script",
+      VOICEBOX_SANDBOX_HOMES: path.join(scratch, "sandbox-homes"),
+    },
+  });
+  t.after(async () => {
+    await server.stop();
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+
+  const page = await launch({ width: 1180, height: 900 });
+  t.after(() => page.close());
+
+  await page.send("Fetch.enable", { patterns: [{ urlPattern: "*help-search.js*", requestStage: "Request" }] });
+  await page.send("Page.navigate", { url: `${server.base}/help.html` });
+  // `interactive` is the state this test is about: the document is usable and the filter has not loaded.
+  await page.waitFor(() => document.readyState !== "loading", { label: "the document to become interactive", timeout: 20000 });
+
+  const early = await page.evaluate(() => {
+    const input = document.querySelector(".help-search-input");
+    const secs = [...document.querySelectorAll(".help-section[data-help-section]")];
+    input.value = "zzz-nothing-matches-this-xyzzy";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    return { ready: document.readyState, total: secs.length, visible: secs.filter((x) => !x.hidden).length };
+  });
+  assert.equal(early.ready, "interactive", "the document must be usable while the filter is still held — that is the situation this test exists for");
+  assert.ok(early.total > 0, "the sections must already be rendered");
+  assert.equal(
+    early.visible,
+    early.total,
+    `before the filter loads NOTHING can have been filtered, so every section must still be visible (got ${early.visible} of ${early.total}) — if this is already 0 the filter ran early and the pause is not doing what this test needs`,
+  );
+
+  // Resumes the held request.
+  await page.send("Fetch.disable");
+  await page.waitFor(() => document.readyState === "complete", { label: "the document to finish loading", timeout: 20000 });
+
+  const late = await page.evaluate(() => {
+    const input = document.querySelector(".help-search-input");
+    const secs = [...document.querySelectorAll(".help-section[data-help-section]")];
+    // No further typing: the value was typed by a person before the listener existed, and that is the whole point.
+    return { value: input.value, total: secs.length, visible: secs.filter((x) => !x.hidden).length };
+  });
+  assert.equal(
+    late.value,
+    "zzz-nothing-matches-this-xyzzy",
+    "the query must still be in the box — this test is about the value that was typed before the listener existed, not about typing again",
+  );
+  assert.equal(
+    late.visible,
+    0,
+    `the filter must apply the query already in the box when it attaches: a no-match query left in the box means every section is shown as though nothing had been typed, which is a person's search silently ignored (voicebox-beads-aenb). Got ${late.visible} of ${late.total} visible`,
+  );
+});
