@@ -31,26 +31,29 @@ VOICEBOX_LOOPBACK_AUTH=1 npm start
 ```
 
 1. **In-Memory Session Secret**: At startup, `server.mjs` generates a random session secret held solely in process memory. Restarting the server invalidates prior session cookies.
-2. **One-Time Bootstrap Ticket**: On boot, the server mints a single-use 64-character hex ticket and prints the bootstrap URL to stdout:
+2. **One-Time Bootstrap Ticket, one per browsed origin** (voicebox-beads-t43w): On boot, the server mints one single-use 64-character hex ticket **per printed origin** and prints a URL for each:
    ```
    bootstrap  http://127.0.0.1:8787/?bootstrap=<64-hex-ticket>
+   bootstrap  http://localhost:5173/?bootstrap=<64-hex-ticket>
    ```
+   A ticket redeemed on one origin cannot be spent on the other, so opening the wrong-origin URL never closes the door a person actually needs. **Why two:** a redemption's `Set-Cookie` carries no `Domain` attribute, so the browser scopes the session to the HOST that redeemed it — a ticket opened at `127.0.0.1:8787` mints a cookie a page served from `localhost:5173` is never sent (the symptom reported 2026-10-12). The `:5173` line presumes the dev front (§2); use the `127.0.0.1:5173` spelling in that URL if that is the host in your address bar, since the two are different hosts to a cookie.
 3. **Ticket Redemption (`GET /?bootstrap=<ticket>`)** (voicebox-beads-fo6m):
    - Opening the bootstrap URL validates and consumes the single-use ticket, sets `vb_session=<secret>; HttpOnly; SameSite=Strict; Path=/`, **and answers HTTP `303`** whose `Location` is the same route with the ticket removed (`/`, or `/?room=…` when the launch carried other parameters). The browser stores the cookie from the redirect and re-requests the plain route, so **the ticket never stays in the address bar** and the first refresh — the thing everyone does — is authenticated instead of re-presenting a consumed ticket.
    - Reusing an already consumed or invalid ticket **without a session cookie** returns HTTP `401` (`bootstrap-ticket-refused`) with the remedy in the body. Reusing one **with** a valid session — a bookmark, browser history, the back button — answers the same `303` to the plain route: an authenticated browser has no authorisation question left, and a refusal there reads as a broken server. Subsequent page reloads authenticate automatically via the `vb_session` cookie.
 4. **HTTP & API Wall**:
-   - Every HTTP request lacking a valid `vb_session` cookie or `x-voicebox-host-token` header is refused before reaching any route with HTTP `401` (`loopback-unauthenticated`).
+   - Every HTTP request lacking a valid `vb_session` cookie or `x-voicebox-host-token` header is refused before reaching any route with HTTP `401` (`loopback-unauthenticated`). When the request's `Host` names the dev front (`localhost:5173` / `127.0.0.1:5173` — the Vite hop preserves `Host`, so this survives the proxy) the refusal appends one clause naming that front and the per-host cookie reason, and points at the front's own ticket: that is the shape a dev-front user sees when every `/api` call answers `401` while the page (served by Vite) stayed `200` (voicebox-beads-t43w). No ticket, host token or other secret appears in a refusal.
    - Credential comparison has one owner, `lib/timing-safe.mjs` (`timingSafeStringEqual`): equal lengths first, then `crypto.timingSafeEqual`, because the primitive throws on a length mismatch and a bad token must be a refusal rather than a crashed request. The `vb_session` cookie check here, the host token in `lib/extensions.mjs` (`hostTokenOk`), and both in-room session-token comparisons in `server.mjs` (extension authority and `POST /api/root`) now answer with that one implementation instead of four inline ones (voicebox-beads-sseh / GH #26). The gate still reveals the expected length, and no timing exploit is claimed for this local posture — this is hardening.
    - **Exempt Endpoints**:
      - `GET /api/health` (remains open for process supervisors and readiness checks; exposes no files or credentials).
      - `POST /api/bootstrap` (validates `x-voicebox-host-token` to mint a fresh ticket).
      - `GET /?bootstrap=<ticket>` (redeems the bootstrap ticket).
 5. **Re-Entry Without Restarting (`POST /api/bootstrap`)**:
-   - If a user clears their browser cookies, they can mint a new single-use bootstrap URL from the terminal using the host token:
+   - If a user clears their browser cookies, they can mint fresh single-use bootstrap URLs from the terminal using the host token:
      ```bash
      curl -X POST http://127.0.0.1:8787/api/bootstrap \
        -H "x-voicebox-host-token: $(cat ~/.config/voicebox/.host-token)"
      ```
+   - The response carries `url` (the API origin's ticket) and `devFront` (the `localhost:5173` dev front's ticket), each single-use and independent — a shell has no idea which origin the browser is on, so it is handed both (voicebox-beads-t43w).
 6. **WebSocket Upgrade Protection (`/channel` & `/live`)**:
    - When `VOICEBOX_LOOPBACK_AUTH=1` is active, local same-origin WebSocket upgrades must present **both** a loopback `Origin` header and a valid `vb_session` cookie (`browser/acts.ts` sends the cookie automatically on same-origin upgrades).
    - Local processes that forge `Origin: http://127.0.0.1:8787` without the cookie fall through to the remote pairing-bearer check and fail with `executor-unauthenticated` (`/channel`) or `unauthenticated-call` (`/live`). Paired remote peers authenticating via `{"type":"hello","bearer":"vbx_..."}` continue to work unchanged.
@@ -59,7 +62,7 @@ VOICEBOX_LOOPBACK_AUTH=1 npm start
 
 ## 2. Vite Dev Server Integration (`vite.config.js`)
 
-When running `npm run dev` (`localhost:5173` fronting `127.0.0.1:8787`), the `loopback-bootstrap-proxy` plugin in `vite.config.js` intercepts requests carrying `?bootstrap=` and forwards them directly to `server.mjs`, returning the upstream status (including the redemption's `303` and its relative `Location`) and the `Set-Cookie` header to the browser on the `:5173` origin so subsequent proxied API and WebSocket requests carry `vb_session`. The redirect target is deliberately relative: the browser follows it back to the dev front it came in on — and stayed on the origin that now holds the cookie — instead of being handed to the `127.0.0.1:8787` API origin.
+When running `npm run dev` (`localhost:5173` fronting `127.0.0.1:8787`), the `loopback-bootstrap-proxy` plugin in `vite.config.js` intercepts requests carrying `?bootstrap=` and forwards them directly to `server.mjs`, returning the upstream status (including the redemption's `303` and its relative `Location`) and the `Set-Cookie` header to the browser on the `:5173` origin so subsequent proxied API and WebSocket requests carry `vb_session`. The redirect target is deliberately relative: the browser follows it back to the dev front it came in on — and stayed on the origin that now holds the cookie — instead of being handed to the `127.0.0.1:8787` API origin. That is why the dev front's ticket — the second line the startup banner prints (§1 item 2) — is the one to open when the page you browse is `localhost:5173`: it is the only URL whose redemption leaves a cookie on that host. The `/api`, `/live` and `/channel` hops rewrite `Origin` to the API target but preserve `Host`, which is what lets a refusal name the front a request came in on (§1 item 4).
 
 ---
 
@@ -71,7 +74,7 @@ When running `npm run dev` (`localhost:5173` fronting `127.0.0.1:8787`), the `lo
 | Local script with forged `Origin` (no ticket/token) | Allowed on loopback | **Refused** (`401` / WS `1008`) |
 | Local CLI with `.host-token` (`x-voicebox-host-token`) | Allowed | Allowed |
 | Paired remote environment (`vbx_...` bearer) | Allowed | Allowed |
-| Browser launch workflow | Open `http://localhost:8787` | Open printed `?bootstrap=` URL once (redemption redirects to the plain route) |
+| Browser launch workflow | Open `http://localhost:8787` | Open the printed `?bootstrap=` URL **for the origin you browse** (one ticket is printed per origin, §1 item 2); the redemption redirects to the plain route |
 
 ### Verification Suite
 ```bash
