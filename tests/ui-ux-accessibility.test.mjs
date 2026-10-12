@@ -148,10 +148,21 @@ test("browser: secondary UI surfaces render visible focus rings, readable typogr
 
     return {
       backOutlineStyle: backStyle.outlineStyle,
+      backOutlineWidth: backStyle.outlineWidth,
+      backOutlineOffset: backStyle.outlineOffset,
+      backOutlineColor: backStyle.outlineColor,
       tagFontSizePx: parsedFontSize,
     };
   });
-  assert.notEqual(envMetrics.backOutlineStyle, "none");
+  // Pin the page's OWN ring rather than the presence of one (voicebox-beads-oiod). `!== "none"` was
+  // vacuous: with public/environment.css not reaching the page the user agent still supplies its own
+  // focus ring — measured as `auto` / 1px / 1px / rgb(16, 16, 16) — so the assertion stayed green with
+  // the page's rule absent. With the rule present these resolve to solid / 2px / 2px / var(--accent),
+  // and that last value is the light arm, which is what this test launches in.
+  assert.equal(envMetrics.backOutlineStyle, "solid", `back-nav focus ring must be the page's own, got ${envMetrics.backOutlineStyle}`);
+  assert.equal(envMetrics.backOutlineWidth, "2px", `back-nav focus ring width must be 2px, got ${envMetrics.backOutlineWidth}`);
+  assert.equal(envMetrics.backOutlineOffset, "2px", `back-nav focus ring offset must be 2px, got ${envMetrics.backOutlineOffset}`);
+  assert.equal(envMetrics.backOutlineColor, "rgb(31, 63, 208)", `back-nav focus ring must use --accent, got ${envMetrics.backOutlineColor}`);
   assert.ok(envMetrics.tagFontSizePx >= 12, `tag font size must be >= 12px, got ${envMetrics.tagFontSizePx}px`);
 
   await page.screenshot(path.join(evidenceDir, "04-environment-focus-and-tag.png"));
