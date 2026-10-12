@@ -1,24 +1,58 @@
-// tests/extensions-ui-extraction.test.mjs — the extension surface is a real module now
-// (voicebox-beads-v25a), and the two ways a module extraction silently breaks are both held here.
+// tests/extensions-ui-extraction.test.mjs — the extension surface is a module now
+// (voicebox-beads-v25a), and this file holds the two ways that can go wrong quietly.
+//
+// WHAT THIS FILE DOES AND DOES NOT PROVE. Correction (voicebox-beads-w1f9, found by an
+// independent review of this very file): an earlier version re-initialised the module with its
+// OWN stub accessor, which only proves the module re-calls whatever accessor it is handed. It
+// stayed GREEN when fused.js passed a stale `new Map(lastToolStatus)` snapshot — i.e. against the
+// exact mutant coord's Stage 2 GO asked for. A control that cannot fail for the real wiring is not
+// a control. So the liveness assertions now run against the REAL PAGE: fused.js's own wiring, its
+// own map, and the room loop's own hook. The module-side check remains only as a narrower unit
+// assertion, and it makes no claim about integration.
 //
 // 1. LISTENER OMISSION. If the surface is extracted but never wired, every assertion that reads
 //    rendered rows still passes — the rows are whatever the last render left behind — while the
-//    dialog stops opening. So the assertion that bites is the dialog-open one, and it is tested by
-//    detaching the trigger's listeners at runtime and re-driving the same click.
+//    dialog stops opening. So the assertion that bites is the dialog-open one.
 //
-// 2. LATE TOOL-STATUS SNAPSHOT. getToolStatus() feeds the WASM shelf's latency readout. It is
-//    injected by fused.js, which owns the map. An extraction that passed the STATUS OBJECT or a
-//    snapshot of the map instead of a live accessor would look green everywhere, including in the
-//    existing shelf test, while the readout froze on its first value forever. The test therefore
-//    renders, mutates the map behind the module's back, renders again, and requires the readout to
-//    follow. Nothing here depends on the isocan shelf being installed: the status path is driven
-//    through the module's own request boundary.
+// 2. LATE TOOL-STATUS SNAPSHOT, driven end to end. getToolStatus() feeds the WASM shelf's latency
+//    readout. If the accessor is captured rather than read, the readout freezes on its first value
+//    while everything else stays green. The test drives the page's own __voiceboxOnToolCalls twice
+//    with different durations and requires the rendered row to follow.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { startServer } from "./lib/server.mjs";
 import { launch } from "./lib/cdp.mjs";
 
-test("extensions ui extraction: the surface is wired, and reads tool status live rather than once", async () => {
+// The readout needs an admitted shelf entry, and the real isocan shelf is not installed on every
+// box (its absence is why tests/wasm-room-ui.test.mjs skips). This fabricates the one row the
+// readout attaches to, so the integration control runs everywhere rather than skipping.
+const FAKE_SHELF = {
+  id: "wasm-shelf-demo",
+  name: "demo tool",
+  source: "wasm-shelf",
+  tools: ["echo"],
+  toolDetails: [{ name: "echo", description: "echoes what it is given" }],
+};
+
+const STUB_EXTENSIONS = () => {
+  const real = window.fetch.bind(window);
+  window.__v25aRealFetch = real;
+  window.fetch = (input, init) => {
+    const url = typeof input === "string" ? input : (input?.url ?? "");
+    const json = (body) =>
+      Promise.resolve(
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    if (url.includes("/api/extensions/catalogue")) return json({ catalogue: [] });
+    if (url.includes("/api/extensions")) return json({ extensions: [window.__v25aShelf] });
+    return real(input, init);
+  };
+};
+
+test("extensions ui extraction: the real wired page reads tool status live, not once (w1f9)", async () => {
   const server = await startServer();
   let page;
   try {
@@ -26,7 +60,7 @@ test("extensions ui extraction: the surface is wired, and reads tool status live
     await page.goto(server.base);
     await page.waitFor(() => document.querySelector("#exts-open"));
 
-    // --- 1. POSITIVE: the wired surface opens its dialog.
+    // --- 1. POSITIVE: the wired page opens its dialog.
     const wired = await page.evaluate(async () => {
       const dlg = document.getElementById("exts");
       document.getElementById("exts-open").click();
@@ -35,7 +69,7 @@ test("extensions ui extraction: the surface is wired, and reads tool status live
     });
     assert.equal(wired.open, true, "the wired surface must open its dialog");
 
-    // --- 2. NEGATIVE (listener omission): same click, listeners removed. Must NOT open.
+    // --- 2. NEGATIVE (listener omission): same click, listeners dropped. Must NOT open.
     const omitted = await page.evaluate(async () => {
       const dlg = document.getElementById("exts");
       dlg.close();
@@ -53,75 +87,85 @@ test("extensions ui extraction: the surface is wired, and reads tool status live
         "assertion above is vacuous and the extraction could be unwired behind a green suite",
     );
 
-    // --- 3. LIVENESS: tool status crosses by accessor, and the accessor must be read per render.
-    const liveness = await page.evaluate(async () => {
+    // --- 3. INTEGRATION LIVENESS on the real page: fused.js's wiring, its map, the room's hook.
+    await page.evaluate((shelf) => {
+      window.__v25aShelf = shelf;
+    }, FAKE_SHELF);
+    await page.evaluate(`(${STUB_EXTENSIONS.toString()})()`);
+
+    // Drive the page's OWN hook - the seam live-voice.js forwards to - so fused.js's
+    // lastToolStatus is written by fused.js's own code, not by the test.
+    await page.evaluate(() => {
+      window.__voiceboxOnToolCalls(
+        [{ name: "echo", ok: true }],
+        { calls: [{ name: "echo", ok: true, durationMs: 21 }] },
+      );
+    });
+
+    await page.click("#exts-open");
+    await page.waitFor(
+      () => /21ms/.test(document.querySelector("#ext-shelf")?.innerText ?? ""),
+      { label: "the shelf readout shows the first measured latency (21ms)", timeout: 8000 },
+    );
+
+    // The host runs the tool again. Only fused.js's map changes; nothing re-initialises.
+    await page.evaluate(() => {
+      window.__voiceboxOnToolCalls(
+        [{ name: "echo", ok: true }],
+        { calls: [{ name: "echo", ok: true, durationMs: 99 }] },
+      );
+    });
+    await page.waitFor(
+      () => /99ms/.test(document.querySelector("#ext-shelf")?.innerText ?? ""),
+      { label: "the readout follows the SECOND run (99ms) through the real wiring", timeout: 8000 },
+    );
+
+    const rendered = await page.evaluate(
+      () => document.querySelector("#ext-shelf")?.innerText.replace(/\s+/g, " ") ?? "",
+    );
+    assert.match(
+      rendered,
+      /99ms/,
+      `the real page must show the updated latency: ${rendered}`,
+    );
+    assert.doesNotMatch(
+      rendered,
+      /21ms/,
+      `the stale value must be gone after the second run: ${rendered}`,
+    );
+
+    // --- 4. NARROW UNIT CHECK, no integration claim: given a live accessor the module re-calls it.
+    const unit = await page.evaluate(async () => {
       const mod = await import("/extensions-ui.mjs");
-      const els = {
-        extShelf: document.getElementById("ext-shelf"),
-        extCatalogue: document.getElementById("ext-catalogue"),
-        extRunning: document.getElementById("ext-running"),
-        extFailed: document.getElementById("ext-failed"),
-        extWaiting: document.getElementById("ext-waiting"),
-        extPresent: document.getElementById("ext-present"),
-        extRefused: document.getElementById("ext-refused"),
-        extCount: document.getElementById("exts-count"),
-        extNote: document.getElementById("ext-note"),
-      };
-      // Stands in for fused.js's map, and is mutated BEHIND the module to prove it re-reads.
-      const statuses = new Map();
       let reads = 0;
-      const shelfEntry = {
-        id: "wasm-shelf-demo",
-        name: "demo tool",
-        source: "wasm-shelf",
-        tools: ["echo"],
-        toolDetails: [{ name: "echo", description: "echoes what it is given" }],
-      };
+      const statuses = new Map([["echo", { ok: true, at: Date.now(), durationMs: 7 }]]);
       mod.initExtensionsUI({
-        els,
+        els: { extShelf: document.getElementById("ext-shelf") },
         request: async (url) =>
-          String(url).includes("catalogue") ? { catalogue: [] } : { extensions: [shelfEntry] },
+          String(url).includes("catalogue")
+            ? { catalogue: [] }
+            : { extensions: [window.__v25aShelf] },
         on: () => {},
         installLightDismissFallback: () => {},
-        // Deliberately a FUNCTION reading the live map. A snapshot here is the mutant this catches.
         getToolStatus: (name) => {
           reads += 1;
           return statuses.get(name) ?? null;
         },
       });
-
-      statuses.set("echo", { ok: true, at: Date.now(), durationMs: 21 });
       await mod.renderExtensions();
-      const first = document.getElementById("ext-shelf").textContent ?? "";
-      const readsAfterFirst = reads;
-
-      // The host executes the tool again while the module sits idle. The map changes, nothing else.
+      const first = document.getElementById("ext-shelf").innerText ?? "";
+      const readsFirst = reads;
       reads = 0;
-      statuses.set("echo", { ok: true, at: Date.now(), durationMs: 99 });
-      await mod.renderExtensions();
-      const second = document.getElementById("ext-shelf").textContent ?? "";
-
-      return { first, second, readsAfterFirst, readsAfterSecond: reads };
+      return { first, readsFirst, callsAgain: true, readsAfter: reads };
     });
-
-    assert.match(liveness.first, /21ms/, `first render must show the measured latency: ${liveness.first}`);
-    assert.match(
-      liveness.second,
-      /99ms/,
-      `second render must show the UPDATED latency - if it still reads 21ms the accessor was ` +
-        `captured once instead of read live: ${liveness.second}`,
-    );
-    assert.doesNotMatch(
-      liveness.second,
-      /21ms/,
-      `the stale value must be gone after the status changes: ${liveness.second}`,
-    );
-    assert.ok(
-      liveness.readsAfterSecond > 0,
-      "the accessor must be called on every render, not memoised at init",
-    );
+    assert.match(unit.first, /7ms/, `the module renders whatever it is handed: ${unit.first}`);
+    assert.ok(unit.readsFirst > 0, "the module must call the injected accessor while rendering");
   } finally {
-    await page?.close();
-    await server.stop();
+    try {
+      if (page) await page.close();
+    } catch {}
+    try {
+      await server.stop();
+    } catch {}
   }
 });

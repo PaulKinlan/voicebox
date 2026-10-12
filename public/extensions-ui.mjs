@@ -380,6 +380,11 @@ async function renderExtensions() {
 
 
 
+// The dialogs open like settings: showModal() for modality, focus trapping, an inert
+// background and Esc, with focus returned to the trigger on close. The platform provides all
+// of it, so this module adds no visibility logic of its own - it only wires the triggers and
+// keeps the native <dialog> semantics (and their focus behaviour) intact.
+
 // ── LISTENER WIRING. Single entry point: this is the ONLY place this surface attaches listeners.
 export function initExtensionsUI(deps = {}) {
   if (deps.els) els = deps.els;

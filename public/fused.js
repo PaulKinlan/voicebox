@@ -1780,7 +1780,9 @@ function renderRoot() {
 
 
 // Execution status for the tools view (voicebox-beads-ri4k): the live socket's {type:"tool"}
-// frames land here via window.__voiceboxOnToolCalls, and the wasm shelf rows read it.
+// frames land here via window.__voiceboxOnToolCalls. The wasm shelf rows still read it, but no
+// longer directly: public/extensions-ui.mjs (voicebox-beads-v25a) reads it through the live
+// getToolStatus accessor handed over at initExtensionsUI() below.
 const lastToolStatus = new Map();
 
 /** ARTIFACT CHIP (voicebox-beads-2meg, voicebox-beads-np3f): a file a turn or tool wrote/edited
