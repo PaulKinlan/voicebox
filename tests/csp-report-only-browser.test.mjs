@@ -38,7 +38,7 @@ const CAPTURE = `
 // hashing before the policy could ever be enforced — that list is the point of staging report-only first.
 const EXPECTED = [
   ["/", [], "the room: its meta already enforces this exact policy, so the mirror must add NO noise"],
-  ["/help.html", ["script-src-elem"], "the help search script is the one inline block here"],
+  ["/help.html", [], "CLEAN since voicebox-beads-xggy.1: its search filter is a same-origin file now, so this page reports NOTHING — which is exactly why the alias signal in section 4 is pinned to /environment.html instead"],
   ["/changelog.html", [], "no inline blocks"],
   ["/environment.html", ["script-src-elem", "style-src-attr", "style-src-elem"], "the root script plus an inline style block and one inline style attribute"],
   ["/harnesses.html", [], "no inline blocks"],
@@ -101,27 +101,62 @@ test("the staged policy reports exactly the known inline blocks, and blocks noth
     assert.deepEqual(await violations(), [], `${doc} is excluded, so it must report nothing`);
   }
 
-  // ── 3. NOT ENFORCED, driven rather than asserted: the two interactive things on the reporting pages. ──
+  // ── 3. NOT ENFORCED, and the Help page is now CLEAN. ────────────────────────────────────────────
+  // Two things changed here when the filter moved to /help-search.js (voicebox-beads-xggy.1): the page
+  // reports ZERO instead of one, and the drive is the full accepted sequence rather than a single snapshot.
+  // The baseline is DERIVED from the page, and so is the partial-match term: Help's section count is exactly
+  // the kind of number that moves with content, and a hardcoded 7 — or a hand-picked word — would one day
+  // fail for a reason that has nothing to do with the filter.
   await page.goto(`${server.base}/help.html`);
   await settle();
-  const reportedButRunning = await page.evaluate(() => window.__cspv.length);
-  const search = await page.evaluate(() => {
-    const input = document.querySelector(".help-search-input");
-    const sections = () => [...document.querySelectorAll(".help-section[data-help-section]")];
-    const before = sections().filter((s) => !s.hidden).length;
-    input.value = "definitely-not-present-in-this-document-xyzzy";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    const hiddenAfter = sections().filter((s) => s.hidden).length;
-    input.value = "";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    return { before, hiddenAfter, total: sections().length };
-  });
-  assert.ok(reportedButRunning > 0, "the help page must have reported its inline script — otherwise this section proves nothing");
-  assert.ok(search.before > 0, "the help search must start with visible sections");
   assert.equal(
-    search.hiddenAfter,
-    search.total,
-    `the help search filter must still WORK while its own script is being reported (${search.before} visible, ${search.hiddenAfter}/${search.total} hidden after a nonsense query) — that combination is what "report-only" means`,
+    await page.evaluate(() => window.__cspv.length),
+    0,
+    "help.html must be CLEAN under the staged policy now that its one inline block is a same-origin file — a non-zero count here means something inline came back, which is the regression this extraction exists to prevent",
+  );
+  const drive = await page.evaluate(() => {
+    const secs = [...document.querySelectorAll(".help-section[data-help-section]")];
+    const input = document.querySelector(".help-search-input");
+    const visible = () => secs.filter((s) => !s.hidden).length;
+    const type = (v) => {
+      input.value = v;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    // A term that appears in SOME sections but not all, chosen by measurement and nearest the middle of the
+    // corpus, so the partial case is neither the whole page nor a single section.
+    const words = new Map();
+    for (const sec of secs) {
+      for (const w of new Set((sec.textContent || "").toLowerCase().match(/[a-z]{5,}/g) || [])) words.set(w, (words.get(w) || 0) + 1);
+    }
+    const partial = [...words.entries()]
+      .filter(([, n]) => n > 0 && n < secs.length)
+      .sort((a, b) => Math.abs(a[1] - secs.length / 2) - Math.abs(b[1] - secs.length / 2))[0]?.[0] ?? "";
+    const baseline = visible();
+    type(partial);
+    const afterPartial = visible();
+    type("zzz-nothing-matches-this-xyzzy");
+    const afterNone = visible();
+    type(partial);
+    const partialAgain = visible();
+    type("");
+    const afterClear = visible();
+    return { total: secs.length, baseline, partial, afterPartial, afterNone, partialAgain, afterClear };
+  });
+  assert.ok(drive.baseline > 0, `the help search must start with visible sections — got ${JSON.stringify(drive)}`);
+  assert.ok(
+    drive.partial.length > 0 && drive.afterPartial > 0 && drive.afterPartial < drive.baseline,
+    `a query that some sections contain and others do not must leave a PROPER subset visible — got ${drive.afterPartial} of a baseline of ${drive.baseline} for the term ${JSON.stringify(drive.partial)}. If every section matched or none did, the term is not discriminating and this assertion proves nothing`,
+  );
+  assert.equal(drive.afterNone, 0, "a query nothing matches must hide EVERY section");
+  assert.equal(
+    drive.partialAgain,
+    drive.afterPartial,
+    `the filter must be idempotent: the same query twice must give the same answer (${drive.partialAgain} vs ${drive.afterPartial})`,
+  );
+  assert.equal(
+    drive.afterClear,
+    drive.baseline,
+    `clearing the query must restore exactly what was visible before it (${drive.afterClear} vs a baseline of ${drive.baseline}) — this is the reversibility half of the accepted sequence`,
   );
 
   await page.goto(`${server.base}/environment.html`);
@@ -144,18 +179,157 @@ test("the staged policy reports exactly the known inline blocks, and blocks noth
   );
 
   // ── 4. The alias class, in the browser, which is where the reviewer found it. ─────────────────────
-  // `/help.html` by another spelling is the SAME document, and a policy that an alias steps around is
-  // not a policy: staging it would undercount what enforcement would break, and enforcement would leave
-  // the alias blind. So each spelling must produce the SAME report as the canonically-spelled document,
-  // not merely "some" report. Measured before the fix: three of these answered 200 with the same Help
-  // markup and NO header, the trailing slash among them without any encoding at all.
-  for (const alias of ["/%68elp.html", "/help%2Ehtml", "/help.html/", "/./help.html", "/x/../help.html"]) {
+  // A document reached by another spelling is the SAME document, and a policy that an alias steps around is
+  // not a policy: staging it would undercount what enforcement would break, and enforcement would leave the
+  // alias blind. Measured before the fix: three spellings answered 200 with the same Help markup and NO
+  // header, the trailing slash among them without any encoding at all.
+  //
+  // PINNED TO /environment.html, and that matters more than it looks. /help.html reports ZERO now, and a
+  // document that reports nothing cannot distinguish "covered and clean" from "not covered at all" — both
+  // are the empty list, so an alias assertion on it would keep passing even if the header disappeared. The
+  // environment page still carries inline blocks, so it still discriminates. The durable spelling-coverage
+  // proof is the header assertion in tests/csp-report-only.test.mjs, which asks over HTTP and does not depend
+  // on a page having anything to report.
+  // Pinned TO /environment.html's OWN entry in the table above rather than to a second hand-typed list, which
+  // is how this assertion first went red: I retyped the expected set and wrote `script-src-attr` where the
+  // page reports `style-src-attr`. One fact, one place.
+  const environmentExpected = [...EXPECTED.find(([doc]) => doc === "/environment.html")[1]].sort();
+  for (const alias of [
+    "/environment.html",
+    "/%65nvironment.html",
+    "/environment%2Ehtml",
+    "/environment.html/",
+    "/./environment.html",
+  ]) {
     await page.goto(`${server.base}${alias}`);
     await settle();
     assert.deepEqual(
       (await violations()).map((v) => v.effective).sort(),
-      ["script-src-elem"],
-      `${alias} is the same Help document as /help.html and must report identically — a spelling the policy does not reach is a document the policy does not cover`,
+      environmentExpected,
+      `${alias} is the same environment document as /environment.html and must report identically — a spelling the policy does not reach is a document the policy does not cover`,
     );
   }
+});
+
+// The external file is LOAD-BEARING, and that is proved by taking it away rather than by asserting it is
+// referenced. Without this, every assertion above could pass on a page whose filter never ran at all: the
+// sections start visible, so "every section is visible" is also exactly what a broken script produces.
+// Blocking the file and requiring the filter to STOP working is what tells those two apart, and it is the
+// mutant coord asked for.
+test("the filter stops working when /help-search.js cannot load, so the assertions above are driven by it (voicebox-beads-xggy.1)", { timeout: 120000 }, async (t) => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-csp-mutant-"));
+  const workspace = path.join(scratch, "project");
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.writeFileSync(path.join(workspace, "notes.md"), "# Notes\n", "utf8");
+
+  const server = await startServer({
+    env: {
+      VOICEBOX_WORKSPACE: workspace,
+      VOICEBOX_RESOLVER: "script",
+      VOICEBOX_SANDBOX_HOMES: path.join(scratch, "sandbox-homes"),
+    },
+  });
+  t.after(async () => {
+    await server.stop();
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+
+  const page = await launch({ width: 1180, height: 900 });
+  // NOTE: no t.after() to lift the block. `after` hooks run in REGISTRATION ORDER, so a tidy-up hook would run
+  // after page.close() has already shut the socket and would hang the whole file rather than clean up after it.
+  t.after(() => page.close());
+
+  await page.send("Network.enable");
+  await page.send("Network.setBlockedURLs", { urls: ["*help-search.js*"] });
+  await page.goto(`${server.base}/help.html`);
+  await new Promise((r) => setTimeout(r, 600));
+
+  const result = await page.evaluate(() => {
+    const secs = [...document.querySelectorAll(".help-section[data-help-section]")];
+    const input = document.querySelector(".help-search-input");
+    input.value = "zzz-nothing-matches-this-xyzzy";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    return { total: secs.length, visibleAfterNoMatchQuery: secs.filter((s) => !s.hidden).length };
+  });
+
+  assert.ok(result.total > 0, "the page must still render its sections with the script blocked");
+  assert.equal(
+    result.visibleAfterNoMatchQuery,
+    result.total,
+    `with /help-search.js blocked the filter must NOT run, leaving every section visible — got ${result.visibleAfterNoMatchQuery} of ${result.total}. If this is 0, the filter ran anyway and the main test's assertions are not driven by the external file`,
+  );
+});
+
+// A DEFERRED SCRIPT CAN MISS THE ONLY INPUT EVENT, and this is the deterministic acceptance for it
+// (voicebox-beads-aenb). It is the sharpest question anyone asked about this extraction: an inline script at
+// the end of <body> attached its listener while the document was still parsing, so it could not miss a
+// keystroke. A DEFERRED script attaches later, and a person can type while it is still in flight — by the time
+// the listener exists, the event that carried those keystrokes is gone and the query sits in the box unfiltered.
+//
+// The pause is what makes it deterministic. Fetch.enable holds help-search.js at the request stage, so the
+// document reaches `interactive` with the filter guaranteed not to have run: no timeout, no racing a fast
+// local server, no dependence on machine speed. Fetch.disable then resumes the held request — MEASURED, not
+// assumed: the document goes on to complete and a later query filters — and that resume is the moment the
+// query used to be lost.
+test("a query typed before the deferred filter loads is applied when it arrives (voicebox-beads-aenb)", { timeout: 120000 }, async (t) => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-csp-paused-"));
+  const workspace = path.join(scratch, "project");
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.writeFileSync(path.join(workspace, "notes.md"), "# Notes\n", "utf8");
+
+  const server = await startServer({
+    env: {
+      VOICEBOX_WORKSPACE: workspace,
+      VOICEBOX_RESOLVER: "script",
+      VOICEBOX_SANDBOX_HOMES: path.join(scratch, "sandbox-homes"),
+    },
+  });
+  t.after(async () => {
+    await server.stop();
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+
+  const page = await launch({ width: 1180, height: 900 });
+  t.after(() => page.close());
+
+  await page.send("Fetch.enable", { patterns: [{ urlPattern: "*help-search.js*", requestStage: "Request" }] });
+  await page.send("Page.navigate", { url: `${server.base}/help.html` });
+  // `interactive` is the state this test is about: the document is usable and the filter has not loaded.
+  await page.waitFor(() => document.readyState !== "loading", { label: "the document to become interactive", timeout: 20000 });
+
+  const early = await page.evaluate(() => {
+    const input = document.querySelector(".help-search-input");
+    const secs = [...document.querySelectorAll(".help-section[data-help-section]")];
+    input.value = "zzz-nothing-matches-this-xyzzy";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    return { ready: document.readyState, total: secs.length, visible: secs.filter((x) => !x.hidden).length };
+  });
+  assert.equal(early.ready, "interactive", "the document must be usable while the filter is still held — that is the situation this test exists for");
+  assert.ok(early.total > 0, "the sections must already be rendered");
+  assert.equal(
+    early.visible,
+    early.total,
+    `before the filter loads NOTHING can have been filtered, so every section must still be visible (got ${early.visible} of ${early.total}) — if this is already 0 the filter ran early and the pause is not doing what this test needs`,
+  );
+
+  // Resumes the held request.
+  await page.send("Fetch.disable");
+  await page.waitFor(() => document.readyState === "complete", { label: "the document to finish loading", timeout: 20000 });
+
+  const late = await page.evaluate(() => {
+    const input = document.querySelector(".help-search-input");
+    const secs = [...document.querySelectorAll(".help-section[data-help-section]")];
+    // No further typing: the value was typed by a person before the listener existed, and that is the whole point.
+    return { value: input.value, total: secs.length, visible: secs.filter((x) => !x.hidden).length };
+  });
+  assert.equal(
+    late.value,
+    "zzz-nothing-matches-this-xyzzy",
+    "the query must still be in the box — this test is about the value that was typed before the listener existed, not about typing again",
+  );
+  assert.equal(
+    late.visible,
+    0,
+    `the filter must apply the query already in the box when it attaches: a no-match query left in the box means every section is shown as though nothing had been typed, which is a person's search silently ignored (voicebox-beads-aenb). Got ${late.visible} of ${late.total} visible`,
+  );
 });
