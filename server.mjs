@@ -2271,6 +2271,9 @@ function resolvePublicFile(pathname) {
   } catch {
     return null;
   }
+  // A decoded NUL is not a filesystem path. Refuse it as not-found before realpathSync can throw
+  // ERR_INVALID_ARG_VALUE into the generic 500 handler; keep unexpected filesystem errors visible.
+  if (decoded.includes("\0")) return null;
   const candidate = path.resolve(PUBLIC, "." + decoded);
   if (!containedIn(PUBLIC, candidate)) return null;
   try {
