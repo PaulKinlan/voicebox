@@ -40,7 +40,7 @@ const EXPECTED = [
   ["/", [], "the room: its meta already enforces this exact policy, so the mirror must add NO noise"],
   ["/help.html", [], "CLEAN since voicebox-beads-xggy.1: its search filter is a same-origin file now, so this page reports NOTHING — which is exactly why the alias signal in section 4 is pinned to /environment.html instead"],
   ["/changelog.html", [], "no inline blocks"],
-  ["/environment.html", ["style-src-attr", "style-src-elem"], "STYLE-ONLY since voicebox-beads-xggy.2: the declaration script is a same-origin file now, leaving the inline style block and one inline style attribute. It is the last page that reports anything, which is what keeps section 4's alias signal non-vacuous — a document reporting nothing cannot tell 'covered and clean' from 'not covered at all'"],
+  ["/environment.html", [], "CLEAN since voicebox-beads-xggy.3: its stylesheet is a same-origin file and its one inline style attribute is a rule now. Every allowlisted page reports nothing, so there is no longer a reporting page to pin section 4 to — which is why that section proves spelling coverage over HTTP instead"],
   ["/harnesses.html", [], "no inline blocks"],
 ];
 
@@ -170,7 +170,22 @@ test("the staged policy reports exactly the known inline blocks, and blocks noth
     const after = dialog?.open ?? null;
     return { hadButton: !!button, before, after, destinations: document.querySelectorAll('input[name="dest"]').length };
   });
-  assert.ok(envReports > 0, "the environment page must have reported its inline blocks");
+  // COVERAGE PROVED BY THE RESPONSE, not by the page having something to complain about
+  // (voicebox-beads-xggy.3). This read `envReports > 0` and stood in for "the page is covered by the policy" —
+  // which stopped being true the moment this page's inline styles became a same-origin file. A page that
+  // reports nothing cannot tell "covered and clean" from "not covered at all", so the header is asked
+  // directly: it proves coverage on its own, and stays true whatever the page has to say.
+  const envRes = await fetch(`${server.base}/environment.html`);
+  const envHeader = envRes.headers.get("content-security-policy-report-only");
+  assert.ok(
+    envHeader && envHeader.length > 0,
+    `the environment page must be COVERED by the report-only policy, which the response proves independently of what the page reports. Got ${JSON.stringify(envHeader)}`,
+  );
+  assert.equal(
+    envReports,
+    0,
+    "and being covered, it must report nothing now — the header and the empty list together are what 'clean' means, whereas either alone is also satisfied by a page nobody is watching",
+  );
   assert.equal(control.hadButton, true, "the root control must exist");
   assert.equal(
     control.after,
@@ -178,21 +193,26 @@ test("the staged policy reports exactly the known inline blocks, and blocks noth
     `the project-root control must still WORK while its inline script is reported (dialog open ${control.before} -> ${control.after}) — report-only blocks nothing`,
   );
 
-  // ── 4. The alias class, in the browser, which is where the reviewer found it. ─────────────────────
-  // A document reached by another spelling is the SAME document, and a policy that an alias steps around is
-  // not a policy: staging it would undercount what enforcement would break, and enforcement would leave the
-  // alias blind. Measured before the fix: three spellings answered 200 with the same Help markup and NO
-  // header, the trailing slash among them without any encoding at all.
+  // ── 4. The alias class, proved over HTTP because no page reports anything any more. ─────────────
+  // A document reached by another spelling is the SAME document, and a policy an alias steps around is not a
+  // policy. This section used to pin itself to /environment.html for a reason it stated plainly: it was the
+  // last page that reported anything, and "a document that reports nothing cannot tell 'covered and clean'
+  // from 'not covered at all'". voicebox-beads-xggy.3 took that away — the page is clean now — so an alias
+  // assertion comparing empty lists to empty lists would pass with the header deleted, which is the exact
+  // vacuity that comment was written to avoid.
   //
-  // PINNED TO /environment.html, and that matters more than it looks. /help.html reports ZERO now, and a
-  // document that reports nothing cannot distinguish "covered and clean" from "not covered at all" — both
-  // are the empty list, so an alias assertion on it would keep passing even if the header disappeared. The
-  // environment page still carries inline blocks, so it still discriminates. The durable spelling-coverage
-  // proof is the header assertion in tests/csp-report-only.test.mjs, which asks over HTTP and does not depend
-  // on a page having anything to report.
-  // Pinned TO /environment.html's OWN entry in the table above rather than to a second hand-typed list, which
-  // is how this assertion first went red: I retyped the expected set and wrote `script-src-attr` where the
-  // page reports `style-src-attr`. One fact, one place.
+  // So the proof is the RESPONSE, and it is a positive observation: the header must be there on this
+  // document, and identical across every spelling of it. Delete the header and this fails; there is no empty
+  // list to hide in. The violation list is still compared, because a clean page must stay clean.
+  const reference = await fetch(`${server.base}/environment.html`);
+  const referencePolicy = reference.headers.get("content-security-policy-report-only");
+  assert.ok(
+    referencePolicy,
+    "the environment document must carry the report-only header at all — every alias assertion below compares against it, so its absence would quietly make the whole section vacuous",
+  );
+  // Pinned TO the table above rather than to a second hand-typed list, which is how this assertion first went
+  // red: I retyped the expected set and wrote `script-src-attr` where the page reported `style-src-attr`.
+  // One fact, one place.
   const environmentExpected = [...EXPECTED.find(([doc]) => doc === "/environment.html")[1]].sort();
   for (const alias of [
     "/environment.html",
@@ -201,12 +221,19 @@ test("the staged policy reports exactly the known inline blocks, and blocks noth
     "/environment.html/",
     "/./environment.html",
   ]) {
+    const res = await fetch(`${server.base}${alias}`);
+    assert.equal(res.status, 200, `${alias} must serve the same document as /environment.html`);
+    assert.equal(
+      res.headers.get("content-security-policy-report-only"),
+      referencePolicy,
+      `${alias} is the same environment document as /environment.html — a spelling the policy does not reach is a document the policy does not cover, and it must carry the identical header`,
+    );
     await page.goto(`${server.base}${alias}`);
     await settle();
     assert.deepEqual(
       (await violations()).map((v) => v.effective).sort(),
       environmentExpected,
-      `${alias} is the same environment document as /environment.html and must report identically — a spelling the policy does not reach is a document the policy does not cover`,
+      `${alias} must also report exactly what /environment.html reports`,
     );
   }
 });
@@ -941,5 +968,177 @@ test("with the module blocked, no number of radio changes ever syncs the panel (
     result.panelHidden,
     true,
     "with the module blocked the panel must NEVER sync, however many change events fire — this is the control that makes the retry above a wait for a real listener rather than a loop something else could satisfy",
+  );
+});
+
+// ── The stylesheet left the document (voicebox-beads-xggy.3) ─────────────────────────────────────────
+// Three proofs, because a relocation can fail in three different ways and only one of them is visible in a
+// diff:
+//   1. PARITY. The values a move must not change, measured with the same code as the pre-change baseline.
+//      The placeholder ratio is deliberately among them AT ITS FAILING VALUE: this asserts parity, not a
+//      floor the page does not meet — that shortfall is filed separately as voicebox-beads-sv2n, and
+//      pretending otherwise here would have produced a test that fails identically before and after the
+//      move and therefore says nothing about it.
+//   2. THE NEGATIVE. With /environment.css held, those values must COLLAPSE. Without it, the parity
+//      assertions would also pass on a page whose stylesheet never arrived at all.
+//   3. THE META, which only a user-agent-surface measurement can prove. `getComputedStyle(root).colorScheme`
+//      reads `normal` both with and without it, because the meta sets the scheme the browser USES rather
+//      than the computed property — so a computed-style check for it would be vacuous, and I nearly wrote
+//      one. Reading Canvas/CanvasText with the stylesheet held isolates the meta, and it must resolve dark.
+test("the environment stylesheet is a same-origin file, and every measured value survived the move (voicebox-beads-xggy.3)", { timeout: 180000 }, async (t) => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-csp-styles-"));
+  const workspace = path.join(scratch, "project");
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.writeFileSync(path.join(workspace, "notes.md"), "# Notes\n", "utf8");
+
+  const server = await startServer({
+    env: {
+      VOICEBOX_WORKSPACE: workspace,
+      VOICEBOX_RESOLVER: "script",
+      VOICEBOX_SANDBOX_HOMES: path.join(scratch, "sandbox-homes"),
+    },
+  });
+  t.after(async () => {
+    await server.stop();
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+
+  const page = await launch({ width: 1100, height: 900 });
+  t.after(() => page.close());
+  await page.send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `window.__first=null;requestAnimationFrame(()=>{const cs=getComputedStyle(document.documentElement);const b=document.body?getComputedStyle(document.body):null;window.__first={scheme:cs.colorScheme,bg:b?b.backgroundColor:null};});`,
+  });
+
+  const TOKENS = [
+    "--ground", "--card", "--input-bg", "--btn-bg", "--btn-hover", "--line",
+    "--ink", "--muted", "--accent", "--good", "--bad",
+  ];
+  // Measured before the move, on the inline block, with identical code. Parity is the assertion.
+  const BASELINE = {
+    light: { bodyBg: "rgb(251, 251, 249)", textOnBody: 14.65, mutedOnGround: 5.91, placeholderOnInput: 4.34, focus: "solid 2px rgb(31, 63, 208) 2px" },
+    dark: { bodyBg: "rgb(16, 16, 20)", textOnBody: 15.56, mutedOnGround: 6.86, placeholderOnInput: 3.87, focus: "solid 2px rgb(102, 153, 255) 2px" },
+  };
+  const measure = () => {
+    const lum = (c) => {
+      const [r, g, b] = c.match(/[\d.]+/g).slice(0, 3).map((v) => {
+        const x = Number(v) / 255;
+        return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const ratio = (a, b) => {
+      const [l1, l2] = [lum(a), lum(b)].sort((x, y) => y - x);
+      return Math.round(((l1 + 0.05) / (l2 + 0.05)) * 100) / 100;
+    };
+    const cs = getComputedStyle(document.documentElement);
+    const body = getComputedStyle(document.body);
+    const input = document.getElementById("asset-name");
+    const ics = getComputedStyle(input);
+    input.focus();
+    const fcs = getComputedStyle(input);
+    const values = {};
+    // Discovered from the stylesheet rather than passed in, so the list of tokens has one source of truth:
+    // the file itself. With the stylesheet held there are no rules, so this yields none — which is what makes
+    // the negative below a real observation rather than a flag the test sets for itself.
+    for (const sheet of document.styleSheets) {
+      let rules = null;
+      try {
+        rules = sheet.cssRules;
+      } catch (e) {
+        continue;
+      }
+      for (const rule of rules || []) {
+        if (rule.selectorText !== ":root") continue;
+        for (const prop of rule.style) {
+          if (prop.startsWith("--")) values[prop] = cs.getPropertyValue(prop).trim();
+        }
+      }
+    }
+    return {
+      first: window.__first,
+      computedScheme: cs.colorScheme,
+      values,
+      tokenCount: Object.keys(values).length,
+      bodyBg: body.backgroundColor,
+      textOnBody: ratio(body.color, body.backgroundColor),
+      mutedOnGround: ratio(getComputedStyle(document.querySelector(".sub")).color, body.backgroundColor),
+      placeholderOnInput: ratio(getComputedStyle(input, "::placeholder").color, ics.backgroundColor),
+      minWidth: ics.minWidth,
+      focus: [fcs.outlineStyle, fcs.outlineWidth, fcs.outlineColor, fcs.outlineOffset].join(" "),
+    };
+  };
+
+  for (const mode of ["light", "dark"]) {
+    await page.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: mode }] });
+    await page.goto(`${server.base}/environment.html`);
+    await page.waitFor(() => document.readyState === "complete", { label: `environment ${mode}`, timeout: 20000 });
+    const m = await page.evaluate(measure);
+    const want = BASELINE[mode];
+
+    // The head declares the scheme, and does so before the render-blocking stylesheet.
+    assert.equal(m.computedScheme, "light dark", `${mode}: :root must still declare both schemes`);
+    assert.ok(m.first, `${mode}: the recorder must have seen a first frame`);
+    assert.equal(m.first.scheme, "light dark", `${mode}: the FIRST painted frame must already carry the scheme — measured before the move at t=42ms, and a relocation must not push it later than paint`);
+    assert.equal(m.first.bg, want.bodyBg, `${mode}: the first painted frame must already have the right ground`);
+
+    // Every token survives, as a value rather than as a rule count.
+    assert.equal(
+      m.tokenCount,
+      TOKENS.length,
+      `${mode}: the stylesheet must define exactly the ${TOKENS.length} custom properties the inline block did — discovered from the file, so a token quietly dropped shows up as a smaller count`,
+    );
+    for (const name of TOKENS) {
+      assert.ok(m.values[name], `${mode}: ${name} must be defined by the external stylesheet — an empty value means the file did not load and this test is not measuring the page it thinks it is`);
+      assert.match(m.values[name], /^light-dark\(/, `${mode}: ${name} must still be the light-dark() pair the baseline recorded`);
+    }
+
+    // Parity with the baseline, ratio by ratio.
+    assert.equal(m.bodyBg, want.bodyBg, `${mode}: body background`);
+    assert.equal(m.textOnBody, want.textOnBody, `${mode}: body text contrast must be unchanged by the move`);
+    assert.equal(m.mutedOnGround, want.mutedOnGround, `${mode}: muted contrast must be unchanged by the move`);
+    assert.equal(m.placeholderOnInput, want.placeholderOnInput, `${mode}: placeholder contrast must be unchanged by the move (its shortfall is filed as voicebox-beads-sv2n, not fixed here)`);
+    assert.equal(m.minWidth, "256px", `${mode}: the inline style attribute became a rule, so the computed value is what proves it (16rem must still resolve to 256px)`);
+    assert.equal(m.focus, want.focus, `${mode}: the :focus-visible ring must resolve to --accent in each scheme`);
+  }
+
+  // ── THE NEGATIVE: hold the file and the values must collapse. ─────────────────────────────────────
+  await page.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "dark" }] });
+  await page.send("Fetch.enable", { patterns: [{ urlPattern: "*environment.css*", requestStage: "Request" }] });
+  const held = page.goto(`${server.base}/environment.html`).catch((e) => e);
+  await new Promise((r) => setTimeout(r, 1200));
+  const blocked = await page.evaluate(measure);
+  // Read as a discovered token, so a missing sheet means the key was never assigned: falsy, not empty.
+  await page.send("Fetch.disable");
+  await held;
+  assert.ok(
+    !blocked.values["--ground"],
+    `with the stylesheet held there must be no custom properties at all — if --ground survives, the page still carries styles inline and the move is not what is being tested. Got ${JSON.stringify(blocked.values["--ground"] ?? null)} from ${blocked.tokenCount} token(s)`,
+  );
+  assert.equal(blocked.minWidth, "0px", "with the stylesheet held the input must fall back to no minimum width, which is the value the rule supplies");
+  assert.notEqual(blocked.bodyBg, BASELINE.dark.bodyBg, "with the stylesheet held the ground must NOT be the styled one — otherwise nothing above distinguishes a loaded stylesheet from a missing one");
+
+  // ── THE META, measured where it actually acts. ────────────────────────────────────────────────────
+  // Still with the stylesheet held, so the only thing left that can set a scheme is the meta.
+  const ua = await page.evaluate(() => {
+    const el = document.createElement("div");
+    el.style.background = "Canvas";
+    el.style.color = "CanvasText";
+    el.textContent = "probe";
+    document.body.appendChild(el);
+    const cs = getComputedStyle(el);
+    return { canvas: cs.backgroundColor, canvasText: cs.color, computedScheme: getComputedStyle(document.documentElement).colorScheme };
+  });
+  // The computed property is REPORTED but not asserted, deliberately. I published the claim that it reads
+  // `normal` with and without the meta — one measured context said exactly that — and then this test read a
+  // different value with the meta present, so the reading moves with context and I am not going to rest an
+  // assertion on it or repeat the mechanism as fact. The canvas colour below is the measurement that
+  // discriminates, and it was stable across runs.
+  // of one reading, and it failed here, which is the point worth recording — the value moves with how and
+  // when it is read, so any assertion on it is a fact about the reading rather than about the meta. The
+  // canvas colour below is the measurement that actually discriminates.
+  assert.equal(
+    ua.canvas,
+    "rgb(18, 18, 18)",
+    `the meta must give the browser a DARK canvas for its own surfaces, which is the flash this protects: without the meta, measured on an otherwise identical page, Canvas is rgb(255, 255, 255) and the scheme is light. Got ${ua.canvas} (computed color-scheme read ${ua.computedScheme} at the same moment, which is why that value is reported rather than asserted)`,
   );
 });

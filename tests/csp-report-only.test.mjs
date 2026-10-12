@@ -207,7 +207,7 @@ test("the extracted documents carry no inline script, and the declaration script
     "help.html": "extracted to /help-search.js (voicebox-beads-xggy.1)",
     "changelog.html": "never had one",
     "harnesses.html": "never had one",
-    "environment.html": "extracted to /environment-root.js (voicebox-beads-xggy.2); its inline <style> block and one inline style attribute remain, for the CSS slice",
+    "environment.html": "extracted to /environment-root.js (voicebox-beads-xggy.2), and its stylesheet and single inline style attribute went to /environment.css (voicebox-beads-xggy.3)",
   };
   for (const [file, why] of Object.entries(clean)) {
     assert.equal(
@@ -216,6 +216,32 @@ test("the extracted documents carry no inline script, and the declaration script
       `public/${file} must carry NO inline script (${why}) — an inline block is the one thing script-src 'self' would block, so one reappearing here re-opens the policy gap this change closes`,
     );
   }
+
+  // AND NO INLINE STYLES REMAIN ON ANY OF THEM (voicebox-beads-xggy.3), which is the other half of what
+  // `style-src 'self'` would block. Same reasoning as the scripts above: assert it here, by name, so a
+  // style block or a style attribute cannot creep back as an extra report in the browser test instead.
+  for (const file of Object.keys(clean)) {
+    const src = fs.readFileSync(path.join(publicDir, file), "utf8");
+    assert.equal(
+      (src.match(/<style[\s>]/g) || []).length,
+      0,
+      `public/${file} must carry NO inline <style> block — an inline stylesheet is exactly what style-src 'self' would block`,
+    );
+    assert.equal(
+      (src.match(/\sstyle="/g) || []).length,
+      0,
+      `public/${file} must carry NO inline style attribute — style-src-attr blocks it, and a stylesheet rule is what replaces it`,
+    );
+  }
+  const envDoc = fs.readFileSync(path.join(publicDir, "environment.html"), "utf8");
+  assert.ok(
+    /<link rel="stylesheet" href="\/environment\.css">/.test(envDoc),
+    "public/environment.html must load its styles from /environment.css",
+  );
+  assert.ok(
+    /<meta name="color-scheme" content="light dark">/.test(envDoc),
+    "public/environment.html must declare its color scheme in the head BEFORE the render-blocking stylesheet — the meta is what tells the browser the scheme for surfaces it draws itself, and it is measurably not equivalent to the computed color-scheme property",
+  );
 
   // AND THE LOAD STRATEGY IS PART OF THE CONTRACT, not a detail of the tag. Deferring this file would let the
   // document reach `interactive` with no listener attached, and a click landing in that window is lost
