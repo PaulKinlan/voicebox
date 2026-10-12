@@ -670,16 +670,32 @@ test("the create-project opener works while the deferred module is still in flig
   // seam rather than trusting it.
   await page.send("Fetch.disable");
   await page.waitFor(() => document.readyState === "complete", { label: "the document to finish loading", timeout: 20000 });
-  await page.evaluate(() => {
-    document.getElementById("create-project-dialog").close();
-    const radio = document.querySelector('input[name="dest"][value="picked"]');
-    radio.checked = true;
-    radio.dispatchEvent(new Event("change", { bubbles: true }));
-  });
-  await page.waitFor(() => !document.getElementById("dest-picked").hidden, {
-    label: "the module's radio handler to sync the panel through the seam",
-    timeout: 15000,
-  });
+  // WAIT FOR THE MODULE'S OWN BEHAVIOUR, never for a document lifecycle flag (`voicebox-beads-fl3g`, found by
+  // review). `document.readyState === "complete"` is satisfied BEFORE the resumed module has finished
+  // evaluating — an independent reviewer reproduced it deterministically — so a single `change` dispatched
+  // here lands before `ui.ts` has bound anything, goes into the void, and the wait times out. The poll below
+  // therefore DISPATCHES AND CHECKS THE EFFECT: it re-fires the change until the panel actually syncs, which
+  // is the module's own observable work, so it cannot pass unless a listener is genuinely bound. A separate
+  // test drives the control for "never bound" — with the module blocked for good, no number of change events
+  // ever syncs the panel.
+  //
+  // That wait also acts as this test's ready signal: once the panel has synced, the module has provably
+  // evaluated, so every later module-owned control here (the close button, the dispatch control below) is
+  // bound too.
+  await page.evaluate(() => document.getElementById("create-project-dialog").close());
+  await page.waitFor(
+    () => {
+      const radio = document.querySelector('input[name="dest"][value="picked"]');
+      radio.checked = true;
+      radio.dispatchEvent(new Event("change", { bubbles: true }));
+      return !document.getElementById("dest-picked").hidden;
+    },
+    {
+      label:
+        "the module's radio handler to sync the panel through the seam (re-dispatching the change each poll, so this waits for the module's EFFECT rather than for a lifecycle flag)",
+      timeout: 20000,
+    },
+  );
   const closedByModule = await page.evaluate(() => {
     document.getElementById("create-project").click();
     return { opened: document.getElementById("create-project-dialog").open };
@@ -750,13 +766,22 @@ test("the opener is the only owner: opening and closing captures no exception (v
   const cycles = await page.evaluate(async () => {
     window.__pageErrors.length = 0;
     const dialog = document.getElementById("create-project-dialog");
+    const close = document.getElementById("create-project-close");
     const opened = [];
     for (let i = 0; i < 3; i++) {
       document.getElementById("create-project").click();
       opened.push(dialog.open);
-      document.getElementById("create-project-close").click();
+      // The close button is the MODULE's control, and `complete` is not proof that the module has bound it
+      // (voicebox-beads-fl3g), so this waits for the effect instead of assuming it. Bounded rather than
+      // open-ended: if the close never takes, the recorded `false` below is what fails the test, and the
+      // bound stops the page from spinning.
+      let waited = 0;
+      while (dialog.open && waited < 5000) {
+        close.click();
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        waited += 25;
+      }
       opened.push(dialog.open);
-      await new Promise((r) => setTimeout(r, 50));
     }
     return { opened, errors: window.__pageErrors.slice() };
   });
@@ -812,5 +837,65 @@ test("with the opener script blocked the button does nothing, so the module is n
     blocked.open,
     false,
     "with the opener script blocked, clicking the button must do NOTHING. If the dialog opens, some other file is opening it — which is precisely the second owner this change removes, and it would also mean the opener assertions above are not driven by the file they name",
+  );
+});
+
+// THE CONTROL FOR THAT RETRY (voicebox-beads-fl3g). The test above re-dispatches the radio change until the
+// panel syncs, which is only meaningful if the sync really waits for a listener: if anything else could make
+// the panel visible, the retry would pass with no module loaded at all. So with the deferred module blocked
+// for good, NO number of change events may ever sync the panel — while the classic opener must keep working,
+// because a separate file serving the button is the entire point of this change.
+test("with the module blocked, no number of radio changes ever syncs the panel (voicebox-beads-fl3g)", { timeout: 120000 }, async (t) => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-csp-sync-control-"));
+  const workspace = path.join(scratch, "project");
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.writeFileSync(path.join(workspace, "notes.md"), "# Notes\n", "utf8");
+
+  const server = await startServer({
+    env: {
+      VOICEBOX_WORKSPACE: workspace,
+      VOICEBOX_RESOLVER: "script",
+      VOICEBOX_SANDBOX_HOMES: path.join(scratch, "sandbox-homes"),
+    },
+  });
+  t.after(async () => {
+    await server.stop();
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+
+  const page = await launch({ width: 1180, height: 980 });
+  t.after(() => page.close());
+
+  await page.send("Network.enable");
+  await page.send("Network.setBlockedURLs", { urls: ["*ui.ts*"] });
+  await page.goto(`${server.base}/environment.html`);
+  await page.waitFor(() => document.readyState === "complete", { label: "the document to finish with the module blocked", timeout: 20000 });
+
+  const result = await page.evaluate(async () => {
+    const dialog = document.getElementById("create-project-dialog");
+    const radio = document.querySelector('input[name="dest"][value="picked"]');
+    const panel = document.getElementById("dest-picked");
+    // The classic opener is a different file and must be unaffected by this.
+    document.getElementById("create-project").click();
+    const openedByClassicOpener = dialog.open;
+    dialog.close();
+    // Generous: a full second of re-dispatches, far more than the retry needs once a listener exists.
+    for (let i = 0; i < 25; i++) {
+      radio.checked = true;
+      radio.dispatchEvent(new Event("change", { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    return { openedByClassicOpener, panelHidden: panel.hidden, seam: typeof window.__voiceboxCreateProject };
+  });
+  assert.equal(
+    result.openedByClassicOpener,
+    true,
+    "the classic opener must still open the dialog with the module blocked — it is a separate file, and serving this button without the module is the whole point of the change",
+  );
+  assert.equal(result.seam, "object", "the classic opener must still have published its seam");
+  assert.equal(
+    result.panelHidden,
+    true,
+    "with the module blocked the panel must NEVER sync, however many change events fire — this is the control that makes the retry above a wait for a real listener rather than a loop something else could satisfy",
   );
 });
