@@ -66,6 +66,70 @@ const post = async (p, transcript) =>
     body: JSON.stringify({ transcript }),
   }).then((r) => r.json());
 
+// Parse the served CSP, not raw HTML prose (voicebox-beads-8tk2). The server
+// currently supplies a meta policy, but a future response header is checked too.
+function assertInlineScriptsBlocked(headers, html) {
+  const policies = [];
+  const header = headers.get("content-security-policy");
+  if (header !== null) policies.push(header);
+  const withoutComments = html.replace(/<!--[\s\S]*?-->/g, "");
+  assert.equal(withoutComments.includes("<!--"), false, "unterminated HTML comment before CSP");
+  for (const [tag] of withoutComments.matchAll(/<meta\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi)) {
+    const attrs = new Map();
+    const text = tag.slice(5, -1);
+    const attr = /\s+([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/gy;
+    let offset = 0;
+    while (offset < text.length && !/^\s*\/?\s*$/.test(text.slice(offset))) {
+      attr.lastIndex = offset;
+      const match = attr.exec(text);
+      assert.ok(match, `malformed CSP meta tag: ${tag}`);
+      const name = match[1].toLowerCase();
+      assert.equal(attrs.has(name), false, `duplicate meta attribute: ${name}`);
+      attrs.set(name, match[2] ?? match[3] ?? match[4] ?? null);
+      offset = attr.lastIndex;
+    }
+    if (attrs.get("http-equiv")?.toLowerCase() === "content-security-policy") {
+      assert.ok(attrs.get("content"), "CSP meta has no content attribute");
+      policies.push(attrs.get("content"));
+    }
+  }
+  assert.ok(policies.length, "the served page has no CSP header or meta policy");
+  const inlinePermissions = [];
+  for (const policy of policies) {
+    const directives = new Map();
+    for (const segment of policy.split(";")) {
+      const tokens = segment.trim().split(/\s+/).filter(Boolean);
+      if (!tokens.length) continue;
+      const name = tokens.shift().toLowerCase();
+      assert.match(name, /^[a-z][a-z0-9-]*$/, `malformed CSP directive: ${name}`);
+      assert.equal(directives.has(name), false, `duplicate CSP directive: ${name}`);
+      directives.set(name, tokens);
+    }
+    const script = directives.get("script-src");
+    assert.ok(script?.length, "CSP must explicitly declare a nonempty script-src");
+    for (const name of ["script-src", "script-src-elem", "script-src-attr"]) {
+      const sources = directives.get(name);
+      if (!sources) continue;
+      assert.ok(sources.length, `${name} must not be empty`);
+      for (const source of sources) {
+        assert.match(source, /^(?:'[^']+'|[^'"\s]+)$/, `malformed ${name} source: ${source}`);
+      }
+    }
+    const permitsInline = (sources) => sources.some((source) =>
+      /^'(?:unsafe-inline|unsafe-hashes|nonce-|sha(?:256|384|512)-)/i.test(source));
+    inlinePermissions.push({
+      scripts: permitsInline(directives.get("script-src-elem") ?? script),
+      handlers: permitsInline(directives.get("script-src-attr") ?? script),
+    });
+  }
+  // Header and meta policies are enforced together: a stricter policy still
+  // blocks inline code even when another policy would have allowed it.
+  assert.equal(inlinePermissions.every((policy) => policy.scripts), false,
+    "effective CSP permits inline scripts");
+  assert.equal(inlinePermissions.every((policy) => policy.handlers), false,
+    "effective CSP permits inline handlers");
+}
+
 // ── 1. the server answers / from any cwd (cwd-relative static serve) ──────
 test("GET / answers regardless of the process cwd — the server does not die", async () => {
   const r = await get("/");
@@ -107,10 +171,43 @@ test("the XSS payload crosses the API as data and is never turned into elements 
     const body = readFileSync(onDisk, "utf8");
     assert.equal(body.includes("innerHTML"), false, `${src} still renders strings as markup`);
   }
-  // And the page's CSP forbids inline handlers even if markup slipped through:
-  const page = readFileSync(path.join(ROOT, "public", "index.html"), "utf8");
-  assert.match(page, /script-src 'self'/);
-  assert.doesNotMatch(page, /script-src[^;]*'unsafe-inline'/);
+  // And the ACTUALLY SERVED policy forbids inline handlers even if markup slipped through.
+  const served = await get("/");
+  assert.equal(served.status, 200);
+  assertInlineScriptsBlocked(served.headers, await served.text());
+});
+
+test("served CSP ignores comments but refuses reordered inline permission", async () => {
+  const served = await get("/");
+  assert.equal(served.status, 200);
+  const html = await served.text();
+  const commented = html.replace("</head>", "<!-- script-src 'self' says why 'unsafe-inline' is forbidden -->\n</head>");
+  assert.notEqual(commented, html, "negative control must inject the prose into the served page");
+  assertInlineScriptsBlocked(served.headers, commented);
+
+  const permissive = html.replace("script-src 'self';", "script-src 'unsafe-inline' 'self';");
+  assert.notEqual(permissive, html, "positive mutant must alter the actual meta policy");
+  assert.throws(() => assertInlineScriptsBlocked(served.headers, permissive),
+    /effective CSP permits inline scripts/);
+  // A header-only policy is also a live enforcement path; the source order must not matter.
+  assert.throws(() => assertInlineScriptsBlocked(new Headers({
+    "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline'",
+  }), "<html></html>"), /effective CSP permits inline scripts/);
+  assert.throws(() => assertInlineScriptsBlocked(new Headers({
+    "content-security-policy": "script-src 'self'; script-src-attr 'unsafe-inline'",
+  }), "<html></html>"), /effective CSP permits inline handlers/);
+  assert.throws(() => assertInlineScriptsBlocked(new Headers({
+    "content-security-policy": "script-src 'self' 'nonce-abc123'",
+  }), "<html></html>"), /effective CSP permits inline scripts/);
+  // A permissive meta does not override a restrictive response header.
+  assertInlineScriptsBlocked(new Headers({ "content-security-policy": "script-src 'self'" }), permissive);
+  assertInlineScriptsBlocked(new Headers(),
+    "<meta content=\"script-src 'self'\" http-equiv=\"Content-Security-Policy\">");
+  assert.throws(() => assertInlineScriptsBlocked(new Headers(), "<html></html>"), /no CSP/);
+  assert.throws(() => assertInlineScriptsBlocked(new Headers(),
+    "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'self'\">"), /script-src/);
+  assert.throws(() => assertInlineScriptsBlocked(new Headers(),
+    "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'self' 'unsafe-inline\">"), /malformed script-src source/);
 });
 
 // ── 3. basename is not containment: `..` as a name is REFUSED ─────────────
