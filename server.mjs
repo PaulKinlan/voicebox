@@ -18,6 +18,7 @@ import { resolveTurn, resolveWorkspaceCandidate, recoverLiveSystemErrorTurn } fr
 import { authorizeMachinePath, containedIn } from "./lib/path-auth.mjs";
 import { createWorkspaceRoutes } from "./lib/routes/workspace.mjs";
 import { createPresenceRoutes } from "./lib/routes/presence.mjs";
+import { createActivityRoutes } from "./lib/routes/activity.mjs";
 import { createExtensionRoutes } from "./lib/routes/extensions.mjs";
 import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, reachableFromEnvironment, rootVanished } from "./core/root.ts";
 import { normaliseRelativeDir, parentDir } from "./core/paths.ts";
@@ -3654,6 +3655,7 @@ function facts_why(provider) {
 const harnessInventory = createHarnessInventory();
 const roomPresence = createRoomPresenceCoordinator();
 const presenceRoutes = createPresenceRoutes({ roomPresence, json, readJsonBody, answerOnce, broadcastChannel });
+const activityRoutes = createActivityRoutes({ workActivityLog, json });
 const routes = {
   ...presenceRoutes,
   "GET /api/agents": (req, res, url) => {
@@ -3941,11 +3943,7 @@ const routes = {
     });
   },
 
-  "GET /api/activity": (req, res, url) => json(res, 200, { ok: true, entries: workActivityLog }),
-  "DELETE /api/activity": (req, res, url) => {
-    workActivityLog.length = 0;
-    return json(res, 200, { ok: true, entries: [] });
-  },
+  ...activityRoutes,
 
   "GET /api/gemini/capabilities": (req, res) => {
     return json(res, 200, {
