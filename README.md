@@ -105,6 +105,7 @@ Root-scoped CLI execution in `lib/system-tools.mjs` strips inherited Git hook pl
 - **WebAssembly Tool Shelf (`lib/wasm-shelf.mjs`, `lib/wasm-worker.mjs`)**: Executes digest-pinned `.wasm` modules in isolated worker processes with strict memory, stdout (2 MB), and wall-clock (5,000ms) ceilings. See [`docs/20-webassembly-tools.md`](docs/20-webassembly-tools.md).
 - **Coding Agent Delegation (`lib/pi-acp.mjs`, `lib/claude-acp.mjs`)**: Delegates complex multi-step coding tasks over the Agent Client Protocol (ACP) to Pi or Claude Code with bounded timeouts and output budgets.
 - **Sandboxing & Audit Trail (`lib/fence-provider.mjs`, `core/tier-table.ts`)**: Enforces capability boundaries and records every attempt, outcome, and refusal in an append-only JSONL audit log.
+- **Work Activity (`lib/routes/activity.mjs`)**: `GET /api/activity` reads the host's ephemeral work log; `DELETE /api/activity` clears that same in-memory array in place so later producer writes remain visible. The global loopback auth wall remains in `server.mjs`.
 
 <!-- BEGIN GENERATED: loop — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 The table below traces a complete turn executed against a temporary workspace during documentation generation:
