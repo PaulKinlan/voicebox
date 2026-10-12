@@ -192,13 +192,23 @@ test("the policy decision is fed a resolved file, never a client-supplied path (
 // the set of inline blocks, so the set is asserted directly. Adding an inline script to any of these pages
 // should fail HERE, with a message that says which page and why, rather than silently reappearing as an extra
 // report in the browser test's expected set.
-test("the extracted documents carry no inline script, and the one that still does is named (voicebox-beads-xggy.1)", () => {
+test("the extracted documents carry no inline script, and the declaration script cannot become deferred (voicebox-beads-xggy.1 + xggy.2)", () => {
   const publicDir = path.join(here, "..", "public");
   const inlineScripts = (file) => {
     const src = fs.readFileSync(path.join(publicDir, file), "utf8");
     return [...src.matchAll(/<script(?![^>]*\bsrc=)[^>]*>/g)].length;
   };
-  const clean = { "index.html": "the room", "help.html": "extracted to /help-search.js", "changelog.html": "never had one", "harnesses.html": "never had one" };
+  // EVERY allowlisted page is now free of inline scripts. What is left is style-only, and it is deliberately
+  // out of scope here: environment.html's inline <style> block and one inline style attribute, for the CSS
+  // slice. Named rather than skipped so that this file records what remains instead of implying the page is
+  // clean.
+  const clean = {
+    "index.html": "the room",
+    "help.html": "extracted to /help-search.js (voicebox-beads-xggy.1)",
+    "changelog.html": "never had one",
+    "harnesses.html": "never had one",
+    "environment.html": "extracted to /environment-root.js (voicebox-beads-xggy.2); its inline <style> block and one inline style attribute remain, for the CSS slice",
+  };
   for (const [file, why] of Object.entries(clean)) {
     assert.equal(
       inlineScripts(file),
@@ -206,13 +216,18 @@ test("the extracted documents carry no inline script, and the one that still doe
       `public/${file} must carry NO inline script (${why}) — an inline block is the one thing script-src 'self' would block, so one reappearing here re-opens the policy gap this change closes`,
     );
   }
-  // Named rather than skipped, so this file records what is left instead of implying the page is clean.
-  // It is the next child's job (the Environment inventory on voicebox-beads-xggy): its root-declaration
-  // script, its inline <style> block and one inline style attribute. WHEN THAT LANDS THIS EXPECTATION BECOMES
-  // 0, and the failure is the reminder to update it rather than a defect.
-  assert.equal(
-    inlineScripts("environment.html"),
-    1,
-    "public/environment.html still carries its root-declaration script — the remaining inline block after this change, and the next child's scope. If this is 0 the extraction landed and this expectation should now read 0 too",
+
+  // AND THE LOAD STRATEGY IS PART OF THE CONTRACT, not a detail of the tag. Deferring this file would let the
+  // document reach `interactive` with no listener attached, and a click landing in that window is lost
+  // permanently — a click leaves no state to re-apply, so unlike the Help page's search value it cannot be
+  // recovered in code (voicebox-beads-aenb records that window; this one cannot be closed the same way).
+  // The browser test asserts the same property behaviourally by holding the file; this is the cheap,
+  // deterministic guard that names the cause.
+  const environment = fs.readFileSync(path.join(publicDir, "environment.html"), "utf8");
+  const tag = environment.match(/<script\s+src="\/environment-root\.js"[^>]*>/);
+  assert.ok(tag, 'public/environment.html must load its declaration script from /environment-root.js as a classic script tag');
+  assert.ok(
+    !/\b(defer|async)\b/.test(tag[0]) && !/\btype\s*=\s*["']module["']/.test(tag[0]),
+    `the declaration script must stay CLASSIC and parser-blocking — defer, async or type="module" all attach the listener after the document is interactive, where a click is lost with nothing able to recover it. Got ${tag[0]}`,
   );
 });

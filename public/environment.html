@@ -258,58 +258,21 @@
   <ul id="transcript"></ul>
 
   <script type="module" src="/browser/ui/ui.ts"></script>
-<script>
-  /**
-   * **Declare a project root, from the page** (`voicebox-beads-utj`).
-   *
-   * The seam answers and nothing could reach it: GET /api/root said
-   * `refused: "root-not-declared"` with a remedy that named POST /api/root,
-   * while the page that points people here offered a dropzone with no handler
-   * and no way to declare anything. A remedy with no route reads as though the
-   * way exists and you simply cannot find it.
-   *
-   * The body is the worker's own shape (`browser/worker.ts`, `useMachineRoot`),
-   * and the server's refusals travel unchanged: `path-missing` and
-   * `not-a-directory` are the same facts a person needs, and re-wording them
-   * here would be a second vocabulary for one thing.
-   */
-  const pathInput = document.getElementById("root-path");
-  const hostTokenInput = document.getElementById("machine-host-token");
-  const declareButton = document.getElementById("declare-root");
-  const declareResult = document.getElementById("declare-result");
+  <!-- THE DECLARATION SCRIPT IS A SEPARATE FILE (voicebox-beads-xggy.2). public/index.html's policy is
+       `script-src 'self'` with no nonce, hash or 'unsafe-inline', so an inline script is the one thing that
+       policy would block if it were ever enforced, and the Modern Web Guidance security guide names
+       refactoring as the alternative to nonces and hashes.
 
-  function say(text, ok) {
-    declareResult.hidden = false;
-    declareResult.dataset.ok = String(ok);
-    declareResult.textContent = text;
-  }
-
-  declareButton.addEventListener("click", async () => {
-    const path = pathInput.value.trim();
-    if (path === "") {
-      say("a folder needs a path — the folder the loop should write into", false);
-      return;
-    }
-    const name = path.split("/").filter(Boolean).pop() ?? "project";
-    const hostToken = hostTokenInput ? hostTokenInput.value.trim() : "";
-    const headers = { "content-type": "application/json" };
-    if (hostToken) headers["x-voicebox-host-token"] = hostToken;
-    declareButton.disabled = true;
-    try {
-      const response = await fetch("/api/root", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ project: name, root: { kind: "machine", path } }),
-      });
-      const answer = await response.json();
-      if (answer && answer.ok) say("declared: " + answer.root.path + " — the loop writes here now.", true);
-      else say((answer && answer.refused ? answer.refused : "refused") + ": " + ((answer && answer.why) || "the declaration was refused"), false);
-    } catch (error) {
-      say("could not reach the server: " + error.message, false);
-    } finally {
-      declareButton.disabled = false;
-    }
-  });
-</script>
+       IT IS NOT DEFERRED AND MUST NOT BECOME DEFERRED. A classic parser-blocking script at the end of <body>
+       runs while the document is still parsing, so the click listener always exists before a person can click
+       "Declare this folder" — which is exactly what the inline block it replaces did. `defer` would attach it
+       once the document is already interactive, and a click landing in that window is lost PERMANENTLY,
+       because a click leaves no state to re-apply. (The Help page hit the same window in voicebox-beads-aenb,
+       where a persisted search value could be re-applied on attach; here it cannot, which is why the fix
+       there does not generalise.) tests/csp-report-only-browser.test.mjs holds this file at the request
+       stage and requires the document NOT to have become interactive, and tests/csp-report-only.test.mjs
+       fails if this tag ever gains defer, async or type="module" — the two together make the difference
+       testable rather than merely commented. -->
+  <script src="/environment-root.js"></script>
 </body>
 </html>
