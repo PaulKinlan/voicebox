@@ -34,13 +34,13 @@ const CAPTURE = `
   });
 `;
 
-// What each document reports today. Every one of these is an inline block that would need extracting or
+// What each document reports today. Every remaining one is an inline block that would need extracting or
 // hashing before the policy could ever be enforced — that list is the point of staging report-only first.
 const EXPECTED = [
   ["/", [], "the room: its meta already enforces this exact policy, so the mirror must add NO noise"],
   ["/help.html", [], "CLEAN since voicebox-beads-xggy.1: its search filter is a same-origin file now, so this page reports NOTHING — which is exactly why the alias signal in section 4 is pinned to /environment.html instead"],
   ["/changelog.html", [], "no inline blocks"],
-  ["/environment.html", ["script-src-elem", "style-src-attr", "style-src-elem"], "the root script plus an inline style block and one inline style attribute"],
+  ["/environment.html", ["style-src-attr", "style-src-elem"], "STYLE-ONLY since voicebox-beads-xggy.2: the declaration script is a same-origin file now, leaving the inline style block and one inline style attribute. It is the last page that reports anything, which is what keeps section 4's alias signal non-vacuous — a document reporting nothing cannot tell 'covered and clean' from 'not covered at all'"],
   ["/harnesses.html", [], "no inline blocks"],
 ];
 
@@ -331,5 +331,206 @@ test("a query typed before the deferred filter loads is applied when it arrives 
     late.visible,
     0,
     `the filter must apply the query already in the box when it attaches: a no-match query left in the box means every section is shown as though nothing had been typed, which is a person's search silently ignored (voicebox-beads-aenb). Got ${late.visible} of ${late.total} visible`,
+  );
+});
+
+// ── 5. The declaration script must exist before anyone can click it, and that is a LOAD-ORDER property. ─────
+// `voicebox-beads-xggy.2` moved this script out of the document, and the whole risk of doing that is the ORDER
+// it loads in. Inline at the end of <body> it ran while the document was still parsing, so its click listener
+// always existed before a person could click. A DEFERRED file attaches once the document is already
+// interactive, and a click landing in that window is lost PERMANENTLY: a click leaves no state behind to
+// re-apply, so the Help page's fix (apply the value already sitting in the box) does not generalise here.
+//
+// So the assertion is about the DOCUMENT, not about the file: hold the script at the request stage and the
+// document must not have become interactive, because a parser-blocking script has not let the parser finish.
+// The same technique applied to a file that IS deferred gives the opposite answer, and this test measures
+// both — so it proves it can tell the difference instead of asserting the answer it wants.
+test("the declaration script is parser-blocking, so no click can precede its listener (voicebox-beads-xggy.2)", { timeout: 180000 }, async (t) => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-csp-declare-"));
+  const workspace = path.join(scratch, "project");
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.writeFileSync(path.join(workspace, "notes.md"), "# Notes\n", "utf8");
+
+  const server = await startServer({
+    env: {
+      VOICEBOX_WORKSPACE: workspace,
+      VOICEBOX_RESOLVER: "script",
+      VOICEBOX_SANDBOX_HOMES: path.join(scratch, "sandbox-homes"),
+    },
+  });
+  t.after(async () => {
+    await server.stop();
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+
+  const page = await launch({ width: 1180, height: 900 });
+  t.after(() => page.close());
+
+  // THE CONTROL: /browser/ui/ui.ts is a `type="module"` script, which is deferred by definition. Holding it
+  // must leave the document interactive — the state in which a click can be lost — and the declaration script,
+  // which is not deferred, must meanwhile have already attached its listener. Both facts in one measurement.
+  await page.send("Fetch.enable", { patterns: [{ urlPattern: "*ui.ts*", requestStage: "Request" }] });
+  await page.send("Page.navigate", { url: `${server.base}/environment.html` });
+  await page.waitFor(() => document.readyState === "interactive", { label: "a held deferred file to leave the document interactive", timeout: 20000 });
+  const control = await page.evaluate(() => {
+    const button = document.getElementById("declare-root");
+    document.getElementById("root-path").value = "/nonexistent-xyzzy-abc";
+    button.disabled = false;
+    button.click();
+    // The listener's FIRST synchronous act, so this is about whether it ran at all and not about a fetch.
+    return { ready: document.readyState, listenerRan: button.disabled };
+  });
+  assert.equal(
+    control.ready,
+    "interactive",
+    `a HELD DEFERRED file leaves the document interactive (got ${control.ready}) — this is the control that proves the assertion below can tell the two load strategies apart`,
+  );
+  assert.equal(
+    control.listenerRan,
+    true,
+    "the declaration script, held by nothing, must already have attached its listener while the deferred module is still in flight",
+  );
+
+  // THE REAL THING: hold the declaration script itself. The parser cannot finish, so the document must not be
+  // interactive yet — and that is precisely the property that makes a lost click impossible.
+  await page.send("Fetch.disable");
+  await page.send("Fetch.enable", { patterns: [{ urlPattern: "*environment-root.js*", requestStage: "Request" }] });
+  await page.send("Page.navigate", { url: `${server.base}/environment.html` });
+  await page.waitFor(() => !!document.getElementById("declare-root"), { label: "the button to be parsed before the held script", timeout: 20000 });
+  const held = await page.evaluate(() => {
+    const button = document.getElementById("declare-root");
+    const result = document.getElementById("declare-result");
+    document.getElementById("root-path").value = "/nonexistent-xyzzy-abc";
+    button.disabled = false;
+    result.hidden = true;
+    button.click();
+    return { ready: document.readyState, listenerRan: button.disabled, resultHidden: result.hidden };
+  });
+  assert.equal(
+    held.ready,
+    "loading",
+    `the document must NOT have become interactive while the declaration script is still held — that is the whole reason this file is not deferred. Got "${held.ready}". If this ever reads "interactive", the tag has gained defer, async or type="module", and a click made in the window that opens would be lost with nothing able to recover it`,
+  );
+  assert.equal(held.listenerRan, false, "with the script held nothing has attached a listener yet, so the click cannot have been handled");
+  assert.equal(
+    held.resultHidden,
+    true,
+    "and the click is therefore dropped with no feedback — the exact failure the parser-blocking choice exists to prevent, demonstrated here rather than described",
+  );
+
+  await page.send("Fetch.disable");
+  await page.waitFor(() => document.readyState === "complete", { label: "the document to finish loading", timeout: 20000 });
+
+  // ── The page must speak the SERVER's vocabulary, so compare it against the server rather than against text
+  // typed into this test. Same body, same seam, and the page is expected to pass the answer through unchanged.
+  const fromServer = async (value, { token = server.hostToken } = {}) => {
+    const headers = { "content-type": "application/json" };
+    if (token) headers["x-voicebox-host-token"] = token;
+    const response = await fetch(`${server.base}/api/root`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ project: value.split("/").filter(Boolean).pop() ?? "project", root: { kind: "machine", path: value } }),
+    });
+    return await response.json();
+  };
+  // Both helpers default to the fixture's host token, so the two sides of every comparison below send the
+  // SAME request. They did not at first, and the failure read "the refusal travels unchanged" while the real
+  // cause was this helper sending no token at all: one fact, one place — the same lesson as the alias
+  // expectation above. Passing `null` deliberately asks for the no-token refusal.
+  const declared = async (value, token = server.hostToken) => {
+    await page.evaluate((v, tok) => {
+      const result = document.getElementById("declare-result");
+      document.getElementById("root-path").value = v;
+      document.getElementById("machine-host-token").value = tok ?? "";
+      result.textContent = "";
+      result.hidden = true;
+      document.getElementById("declare-root").click();
+    }, value, token);
+    const text = await page.waitFor(() => {
+      const result = document.getElementById("declare-result");
+      return result.hidden ? false : result.textContent;
+    }, { label: `a declaration result for ${value}`, timeout: 20000 });
+    return { text, ok: await page.evaluate(() => document.getElementById("declare-result").dataset.ok) };
+  };
+
+  // No token: the page legitimately cannot hold it, and the seam says so. Refusals first, so the only case
+  // that mutates the fixture's root is the successful one at the end.
+  const noToken = await declared("/nonexistent-xyzzy-abc", null);
+  const noTokenSeam = await fromServer("/nonexistent-xyzzy-abc", { token: null });
+  assert.equal(noTokenSeam.refused, "host-token-required", "the seam's own code, measured here so the comparison below means something");
+  assert.equal(noToken.text, `${noTokenSeam.refused}: ${noTokenSeam.why}`, "the page must show the server's refusal unchanged — not a re-worded copy of it");
+  assert.equal(noToken.ok, "false", "a refusal must be marked as not-ok");
+
+  const missing = await declared("/nonexistent-xyzzy-abc");
+  const missingSeam = await fromServer("/nonexistent-xyzzy-abc");
+  assert.equal(missingSeam.refused, "path-missing", "the seam's own code");
+  assert.equal(missing.text, `${missingSeam.refused}: ${missingSeam.why}`, "the refusal travels unchanged");
+  assert.equal(missing.ok, "false");
+
+  const aFile = path.join(scratch, "a-file-not-a-folder");
+  fs.writeFileSync(aFile, "x", "utf8");
+  const notDir = await declared(aFile);
+  const notDirSeam = await fromServer(aFile);
+  assert.equal(notDirSeam.refused, "not-a-directory", "the seam's own code");
+  assert.equal(notDir.text, `${notDirSeam.refused}: ${notDirSeam.why}`, "the refusal travels unchanged");
+  assert.equal(notDir.ok, "false");
+
+  const aFolder = path.join(scratch, "a-real-folder");
+  fs.mkdirSync(aFolder, { recursive: true });
+  const success = await declared(aFolder);
+  const successSeam = await fromServer(aFolder);
+  assert.equal(success.ok, "true", "a real folder must declare successfully");
+  assert.equal(success.text, `declared: ${successSeam.root.path} — the loop writes here now.`, "the success line names the path the seam recorded");
+  const root = await (await fetch(`${server.base}/api/root`)).json();
+  assert.equal(
+    root.root?.path,
+    aFolder,
+    "the declaration must have actually moved the server's root, not merely printed a success line — this is the write the whole page exists to make",
+  );
+});
+
+// The assertions above are only worth anything if they are driven by /environment-root.js, so this blocks it
+// and requires the page to be as inert as the held case predicted.
+test("with the declaration script blocked, the page declares nothing, so the assertions above are driven by it (voicebox-beads-xggy.2)", { timeout: 120000 }, async (t) => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-csp-declare-mutant-"));
+  const workspace = path.join(scratch, "project");
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.writeFileSync(path.join(workspace, "notes.md"), "# Notes\n", "utf8");
+
+  const server = await startServer({
+    env: {
+      VOICEBOX_WORKSPACE: workspace,
+      VOICEBOX_RESOLVER: "script",
+      VOICEBOX_SANDBOX_HOMES: path.join(scratch, "sandbox-homes"),
+    },
+  });
+  t.after(async () => {
+    await server.stop();
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+
+  const page = await launch({ width: 1180, height: 900 });
+  t.after(() => page.close());
+
+  await page.send("Network.enable");
+  await page.send("Network.setBlockedURLs", { urls: ["*environment-root.js*"] });
+  await page.goto(`${server.base}/environment.html`);
+  await page.waitFor(() => document.readyState === "complete", { label: "the document to finish with the script blocked", timeout: 20000 });
+
+  const blocked = await page.evaluate(() => {
+    const button = document.getElementById("declare-root");
+    const result = document.getElementById("declare-result");
+    document.getElementById("root-path").value = "/nonexistent-xyzzy-abc";
+    button.disabled = false;
+    result.hidden = true;
+    button.click();
+    return { listenerRan: button.disabled, resultHidden: result.hidden, sections: !!document.getElementById("declare") };
+  });
+  assert.equal(blocked.sections, true, "the page must still render the declaration control with the script blocked");
+  assert.equal(blocked.listenerRan, false, "with /environment-root.js blocked there is no listener, so the click cannot have been handled");
+  assert.equal(
+    blocked.resultHidden,
+    true,
+    "and nothing is declared: if this passed, the assertions above would be passing on a page whose script never ran",
   );
 });
