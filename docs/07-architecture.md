@@ -256,8 +256,25 @@ AudioWorklet modules loaded by the frontend audio engine: `pcm-worklet.js`.
   62% alpha composite. `:where()` contributes zero specificity, so the rule fills only the gap the user agent
   leaves and cannot outrank an authored rule. `tests/placeholder-contrast-browser.test.mjs` drives the
   application's own theme preference into stored light and stored dark and holds every opaque placeholder field
-  in both themes to the floor, while pinning that the composer's 62% composite is untouched — it is owned by
-  `voicebox-beads-8wm8`, not by this change.
+  in both themes to the floor, and holds the composer to its own separate rule rather than to this one.
+
+  The room composer's field (`#utterance`, voicebox-beads-8wm8) is deliberately quieter than typed text, so it is
+  a translucent mix of `--muted` rather than the token itself. At 62% it composited to 2.68:1 light and 3.46:1 dark
+  against the field's own ground — under the floor. It is now 90%, the smallest single mix that clears 4.5:1 in
+  BOTH stored themes while staying translucent: alpha 0.902, measuring 4.81:1 light and 5.87:1 dark against typed
+  text at 14.91:1 and 17.11:1, so it stays roughly a third of the entered text's contrast and is not flattened to
+  the opaque token. 88% also clears both, but with only 0.04 of headroom in light, inside rendering variance. The
+  figures come from injecting the exact declaration into a disposable browser and reading composited pixels, with
+  alpha taken from a black/white pixel pair instead of parsing an `oklch()`/`color()` string; the same probe
+  re-reads the `0q5c` opaque fields and `.list-tools` to confirm that changing a value inside `.composer`'s own
+  declaration leaves them untouched. Focus leaves the composer ground unchanged up to one unit, and the composer
+  input is never disabled — only the send button is.
+
+  `tests/placeholder-contrast-browser.test.mjs` drives the application's own theme preference into stored light and
+  stored dark and asserts the composer's mix percentage, its composited contrast against the resolved ground, its
+  alpha staying below 1, and that it remains a clear margin below the typed text in both themes. It enumerates the
+  composer placeholder with a non-empty guard, so a selector matching nothing fails rather than passes, and a
+  reduction mutant (90% back to 62%) must turn it red.
 - **`public/environment.css`** (voicebox-beads-xggy.3): The Environment page's own stylesheet — its 11 colour tokens, each a single `light-dark(light, dark)` pair on `:root`, plus the page's layout, table, dialog and `:focus-visible` rules. It is a **separate palette** from `style.css`'s ten: same discipline, different values (this page's dark ground is `#101014`, not `#0b0f19`). Moved out of the page's inline block for CSP readiness: the 80 original rules moved verbatim and in the same order, and the file adds a provenance header comment plus two rules: the one that replaced the single inline style attribute, and
 `::placeholder { color: var(--muted); }` (voicebox-beads-sv2n; widened from a single input to the bare pseudo-element
 by voicebox-beads-yd08), which replaces the user agent's placeholder grey — 4.34:1 light and 3.87:1 dark, under the
