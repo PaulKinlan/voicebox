@@ -2184,11 +2184,21 @@ const CSP_REPORT_ONLY_PATHS = new Set([
  * aliases, dot segments, encodings and trailing slashes have all collapsed before the comparison happens.
  */
 function canonicalPublicPath(file) {
-  return "/" + path.relative(PUBLIC, file).split(path.sep).join("/");
+  // The containment question goes to its OWNER (`lib/path-auth.mjs`) rather than being answered with a
+  // local `path.relative`/`startsWith("..")` compare. This file kept a private copy of that primitive once
+  // before (voicebox-beads-q0a3), `scripts/single-owner.mjs` is the gate that refuses it, and it refused
+  // this guard on the first attempt (voicebox-beads-y5k). It should be UNREACHABLE — both call sites pass
+  // a path the resolver has already containment-checked and realpath'd, or a literal join under PUBLIC —
+  // and it FAILS CLOSED anyway so that a future call site cannot widen the policy with a client string.
+  // Stated plainly because no request can exercise it: the resolver refuses traversal spellings first.
+  if (!containedIn(PUBLIC, file)) return null;
+  const rel = path.relative(PUBLIC, file);
+  return rel === "" ? null : "/" + rel.split(path.sep).join("/");
 }
 /** The header a response for the resolved file `file` should carry, or nothing. One decision, two call sites. */
 function cspReportOnlyHeaders(file) {
-  return CSP_REPORT_ONLY_PATHS.has(canonicalPublicPath(file)) ? { "content-security-policy-report-only": CSP_REPORT_ONLY_POLICY } : {};
+  const canonical = canonicalPublicPath(file);
+  return canonical && CSP_REPORT_ONLY_PATHS.has(canonical) ? { "content-security-policy-report-only": CSP_REPORT_ONLY_POLICY } : {};
 }
 
 const MIME_TYPES = {

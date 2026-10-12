@@ -137,3 +137,53 @@ test("the Report-Only CSP header covers its documents and nothing else, however 
     assert.equal(res.headers.get(HEADER), null, `${p} must not carry the header (${why})`);
   }
 });
+
+// A STRUCTURAL guard, and it is here because the hole it guards was real rather than hypothetical.
+// Selecting the policy from `url.pathname` is exactly what let `/%68elp.html` be served with no header,
+// and the containment check inside `canonicalPublicPath` cannot be reached by any request — the resolver
+// refuses traversal spellings before the header is ever considered. So the protection that IS reachable,
+// and therefore the one worth pinning, is that the single decision point is fed a RESOLVED FILE and never
+// a client-supplied string. Source is the only place that can be asserted; it is asserted deliberately,
+// not as a substitute for the behavioural tests above.
+test("the policy decision is fed a resolved file, never a client-supplied path (voicebox-beads-onvu)", () => {
+  const source = fs.readFileSync(path.join(here, "..", "server.mjs"), "utf8");
+
+  assert.ok(
+    !/cspReportOnlyHeaders\(\s*url\.pathname/.test(source),
+    "the header must never be selected from url.pathname — that is the onvu regression, where an encoded or trailing-slash spelling of /help.html was served with no policy at all",
+  );
+
+  // The definition matches the same pattern as a call, so it is removed first: counting it would have made
+  // this assertion pass for a file with only one call site, which is the opposite of what it is for.
+  const withoutDefinition = source.replace(/function cspReportOnlyHeaders\([^)]*\)\s*\{/, "");
+  const args = [...withoutDefinition.matchAll(/cspReportOnlyHeaders\(([^)]*)/g)].map((m) => m[1].trim());
+  assert.equal(
+    args.length,
+    2,
+    `exactly two write points are expected, the room and the catch-all static branch; found ${args.length}: ${JSON.stringify(args)}`,
+  );
+  for (const arg of args) {
+    assert.ok(
+      /^file\b/.test(arg) || /index\.html/.test(arg),
+      `every call site must pass a resolved file (or the literal room file), never a request string — got ${JSON.stringify(arg)}`,
+    );
+  }
+
+  assert.ok(
+    /path\.relative\(PUBLIC, file\)/.test(source),
+    "the canonical path must be derived with path.relative from PUBLIC, so encodings, dot segments and trailing slashes have all collapsed before the comparison",
+  );
+  assert.ok(
+    /if \(!containedIn\(PUBLIC, file\)\) return null;/.test(source),
+    "canonicalPublicPath must FAIL CLOSED for a path outside public/, and it must ask the OWNER of that fact (containedIn from lib/path-auth.mjs) rather than answering with a local compare — a private copy of the primitive is what scripts/single-owner.mjs refuses, and it refused this guard on the first attempt (voicebox-beads-y5k)",
+  );
+  // Comments are stripped before this next check, and that is not a detail: the prose above
+  // `canonicalPublicPath` NAMES the pattern it is refusing, so an assertion over raw text fails on the
+  // comment that explains why the code is right. This is the same class of mistake as splitting a CSS
+  // declaration block on ";" without stripping comments first.
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  assert.ok(
+    !/startsWith\("\.\."\)/.test(code),
+    "this file must not reintroduce a private lexical containment compare — that is exactly the copy scripts/single-owner.mjs refuses; the question belongs to lib/path-auth.mjs",
+  );
+});
