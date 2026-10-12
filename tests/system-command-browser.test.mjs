@@ -123,6 +123,18 @@ test("system commands: a typed command reaches the browser and changes the UI (v
   // ── The target that had NO branch at all: the built-in tracker mini-app ──────────────────────
   assert.equal((await read()).trackerTitle, null, "the tracker is not mounted before it is asked for");
   await say("open agent tracker");
+  // THIS EFFECT IS ASYNCHRONOUS, UNLIKE EVERY OTHER COMMAND IN THIS FILE, SO IT IS WAITED FOR
+  // RATHER THAN READ. openAgentProgressTracker() (public/fused.js:4576) awaits a fetch of
+  // /apps/agent-monitor.html and only then calls mount(), which creates the outer frame and sets its
+  // title — while `say()` above returns as soon as the TURN lands. Reading straight after the turn
+  // therefore raced that fetch: it passed whenever it resolved inside the CDP round trip, and failed
+  // the merger's union gate once with "expected 'Agent Progress Tracker', got null" under a
+  // four-worker browser lane (2026-10-11). This bound makes it deterministic without weakening it: a
+  // handler that never mounts still fails here, by timing out with this label.
+  await page.waitFor(
+    () => document.getElementById("mini-app-outer-frame")?.getAttribute("title") === "Agent Progress Tracker",
+    { label: "the Agent Progress Tracker mini-app mounted" },
+  );
   const tracker = await read();
   assert.equal(
     tracker.trackerTitle,
