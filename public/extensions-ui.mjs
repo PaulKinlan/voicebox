@@ -16,8 +16,11 @@
 // `els`, `request`, `on` and `installLightDismissFallback` — are now injected by fused.js through
 // initExtensionsUI(). `lastToolStatus` deliberately did NOT move: it is owned by fused.js (written
 // by the live websocket tool-call hook), so the module reads it through the injected
-// getToolStatus() accessor. That accessor must be LIVE — a snapshot captured at init would freeze
-// the shelf latency readout while every test still passed.
+// getToolStatus() accessor. That accessor must be LIVE. HISTORY, because the earlier wording here was
+// true when written and became false: a snapshot captured at init WOULD freeze the shelf latency
+// readout, and before voicebox-beads-w1f9 that mistake was invisible — the suite stayed green with the
+// readout wrong. It is no longer invisible. tests/extensions-ui-extraction.test.mjs drives the real
+// page's own wiring and hook, so a captured accessor now turns that test RED rather than shipping.
 
 let els = {};
 let request = () => { throw new Error("extensions-ui: request() not injected — call initExtensionsUI first"); };

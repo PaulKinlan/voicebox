@@ -3561,8 +3561,10 @@ on(els.envAddBtn, "click", async () => {
 // The extension surface now lives in public/extensions-ui.mjs (voicebox-beads-v25a). This is the one
 // place its listeners are installed, and the only place fused.js hands it anything: els is a
 // pass-through of the element map, request/on/installLightDismissFallback are the same helpers the
-// rest of the page uses, and getToolStatus is a LIVE read of the map just below — a snapshot here
-// would freeze the shelf latency readout while every test still passed. lastToolStatus stays owned by
+// rest of the page uses, and getToolStatus is a LIVE read of the map just below. A snapshot here WOULD
+// freeze the shelf latency readout - and before voicebox-beads-w1f9 that was invisible, because the
+// suite stayed green while the readout was wrong. Now tests/extensions-ui-extraction.test.mjs drives
+// the real page and a captured accessor turns it RED. lastToolStatus stays owned by
 // fused.js because the live websocket tool-call hook writes it.
 initExtensionsUI({
   els,
