@@ -4,6 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Voicebox — Comprehensive Help &amp; User Guide</title>
+  <!-- Pre-paint theme guard (voicebox-beads-uj16). This is the SAME public/theme-boot.js that
+       public/index.html loads, so this page no longer keeps its own copy of the theme decision: the block
+       that used to sit at the END of <body> applied the stored choice AFTER the first paint, so anyone
+       who chose light or dark saw the other scheme first and then watched it flip. It must stay a CLASSIC
+       script in <head> — not a module, not deferred — or it runs after the paint again, which is the whole
+       defect. Kept as a file rather than inline because a file is the form a strict policy can allow:
+       see voicebox-beads-ul1m — this document has no Content-Security-Policy at all today, and the
+       remaining inline search script below is one of the things to settle before it can have one. -->
+  <script src="/theme-boot.js"></script>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -117,12 +126,9 @@
   </div>
   <script>
     (() => {
-      try {
-        const savedTheme = localStorage.getItem("voicebox:theme");
-        if (savedTheme === "dark" || savedTheme === "light") {
-          document.documentElement.dataset.theme = savedTheme;
-        }
-      } catch {}
+      // The theme used to be applied right here, at the end of <body>, which painted the wrong scheme
+      // first for anyone who had chosen light or dark. It is now the shared pre-paint guard in <head>
+      // (voicebox-beads-uj16). What remains is the help search filter, which is a different concern.
       const search = document.querySelector(".help-search-input");
       const sections = document.querySelectorAll(".help-section[data-help-section]");
       search?.addEventListener("input", () => {
