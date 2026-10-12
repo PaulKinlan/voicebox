@@ -277,6 +277,7 @@ describe("mini-app-store: persistence, in-place updates, deletion & cross-sandbo
     assert.equal(delRes.ok, true);
     assert.equal(delRes.deleted, true);
     assert.equal(delRes.miniApp.appId, "app_temp-widget");
+    assert.equal(delRes.miniApp.kind, "app", "a deleted entry says what it was, like discovery and save do");
 
     assert.equal(existsSync(path.join(rootPath, "temp-widget.html")), false);
     assert.equal(existsSync(path.join(hostDir, "mini-apps", "temp-widget.html")), false);
