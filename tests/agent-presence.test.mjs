@@ -9,7 +9,7 @@
 //      with clean tooltip (never falsely stating 'the server answered 500').
 //   3. When the server's environment list is unreadable (mode 000 file), the presence line
 //      surfaces 'environment-list-unreadable (fix the file)' via GET /api/environments,
-//      which is distinguishable from machine-unreachable.
+//      which is distinguishable from machine-unreachable; /api/health still controls the dot.
 //   4. When live voice fails, #voice-state names the absent side (machine-unreachable).
 
 import test from "node:test";
@@ -151,7 +151,7 @@ test("presence: environment-list-unreadable surfaces via GET /api/environments, 
       };
     });
 
-    assert.equal(unreadableState.dotOk, "false", "server-dot must be false on unreadable registry");
+    assert.equal(unreadableState.dotOk, "true", "server-dot follows the healthy /api/health response, not the unreadable registry");
     // THE VISIBLE LINE IS PLAIN; THE IDENTIFIER IS THE DIAGNOSTIC (voicebox-beads-0ye). The two failure
     // classes stay distinguishable — by their sentences — while the server's own word for each lives in
     // the title, where somebody diagnosing finds it and nobody else has to read it.

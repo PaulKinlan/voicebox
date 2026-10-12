@@ -1092,6 +1092,7 @@ async function request(path, options, traceId) {
     const err = new Error(reasonFrom(body, `the server answered ${response.status}`));
     if (body?.refused) err.refused = body.refused;
     if (body?.why) err.why = body.why;
+    err.route = path;
     throw err;
   }
   if (!body) throw new Error("the server sent something that was not JSON");
@@ -1634,13 +1635,15 @@ function showSkeleton() {
 // words is lying about the system it is looking at.
 let activeRoot = undefined; // undefined = not asked yet, null = none declared
 
-async function loadRoot() {
+async function loadRoot(reportRefusal = false) {
   const before = rootIdentity();
+  let refusal;
   try {
     const answer = await request("/api/root");
     activeRoot = answer?.declared ? answer : null;
-  } catch {
+  } catch (err) {
     activeRoot = undefined; // an older server with no root seam: say so, do not invent one
+    if (reportRefusal && err?.refused) refusal = err;
   }
   // A PATH MEANS NOTHING ACROSS ROOTS (voicebox-beads-tee): `proposals` in one root is a different folder
   // — or no folder — in the next, so a root change puts the view back at the root. Only a CHANGE resets;
@@ -1652,6 +1655,7 @@ async function loadRoot() {
   // here"), so it is decided with the root facts in hand rather than before
   // they arrive.
   render();
+  if (refusal) throw refusal;
 }
 
 /** What root is this, as a string — the identity a folder path is relative to. */
@@ -2020,15 +2024,36 @@ async function renderEnvironments() {
   } catch (err) {
     // The registry could not be read, or the server is not answering: the refusal is named, not blank.
     if (els.envCount) els.envCount.textContent = "Environments";
-    if (els.envNote) els.envNote.textContent = String(err?.message ?? "the environment list could not be read");
+    if (els.envNote) els.envNote.textContent = err?.refused === "loopback-unauthenticated"
+      ? "This page has no session on this origin. Redeem a bootstrap ticket here, or restart without VOICEBOX_LOOPBACK_AUTH."
+      : String(err?.message ?? "the environment list could not be read");
     throw err;
   }
 }
 
 async function health() {
+  let answer;
   try {
-    const answer = await request("/api/health");
-    if (els.dot) els.dot.dataset.ok = "true";
+    answer = await request("/api/health");
+  } catch (err) {
+    if (els.dot) els.dot.dataset.ok = "false";
+    if (els.where) {
+      els.where.textContent = "the machine is not answering — fix the host";
+      els.where.title = `source: GET /api/health · ${err?.refused ?? "machine-unreachable"}: ${err?.why ?? err?.message ?? "the local server is not answering"}`;
+    }
+    stampBuild(null);
+    if (els.rootKind) els.rootKind.textContent = "folder unknown";
+    renderEmptyState();
+    if (els.rootNote) {
+      els.rootNote.textContent = "The local server is not answering, so which folder it saves into cannot be checked.";
+      els.rootNote.dataset.tone = "warn";
+      els.rootNote.hidden = false;
+    }
+    return;
+  }
+  if (els.dot) els.dot.dataset.ok = "true";
+  let downstreamRoute = "/api/root";
+  try {
     // State is derived from GET /api/health's provider and build fields:
     // the indicator names the agent provider so it is visible whether the
     // provider side is configured and ready.
@@ -2040,34 +2065,29 @@ async function health() {
     window.__voiceboxServerBuild = answer.build ?? null;
     stampBuild(answer.build ?? null);
     renderAbout();
-    await loadRoot();
+    await loadRoot(true);
+    downstreamRoute = "/api/environments";
     await renderEnvironments();
+    downstreamRoute = "/api/extensions";
     await renderExtensions();
   } catch (err) {
-    if (els.dot) els.dot.dataset.ok = "false";
+    // A healthy heartbeat is not invalidated by a protected or unreadable downstream route.
+    // Name the route that failed; only /api/health can mark this server offline.
+    const source = err?.route ?? downstreamRoute;
     if (els.where) {
-      // The VISIBLE line says what happened, in words; the identifier the server used lives in the
-      // title, where somebody diagnosing can find it and nobody else has to read it (voicebox-beads-0ye:
-      // `environment-list-unreadable (fix the file)` was on screen, and `machine-unreachable (fix the
-      // host)` was a hard-coded identifier that no source-literal check was even looking for).
-      if (err?.refused) {
-        els.where.textContent = "the environment list could not be read — fix the file";
-        els.where.title = `source: GET /api/environments · ${err.refused}: ${err.why || "fix the file"}`;
+      if (err?.refused === "loopback-unauthenticated") {
+        els.where.textContent = "this page has no session on this origin — redeem a bootstrap ticket here or restart without VOICEBOX_LOOPBACK_AUTH";
       } else {
-        els.where.textContent = "the machine is not answering — fix the host";
-        els.where.title = "source: GET /api/health · machine-unreachable — the local server is not answering, fix the host";
+        els.where.textContent = err?.refused === "environment-list-unreadable"
+          ? "the environment list could not be read — fix the file"
+          : source === "/api/environments"
+            ? "the environment list could not be read — check its error"
+            : "the folder details could not be read — check its error";
       }
+      els.where.title = `source: GET ${source} · ${err?.refused ?? err?.message ?? "request failed"}: ${err?.why ?? err?.message ?? "see the route error"}`;
     }
-    stampBuild(null);
-    if (els.rootKind) els.rootKind.textContent = "folder unknown";
-    if (els.dot) els.dot.dataset.ok = "false";
-    renderEmptyState();
-    if (els.rootNote) {
-      els.rootNote.textContent = err?.refused
-        ? `The local server reported ${err.refused}: ${err.why || "fix the file"}.`
-        : "The local server is not answering (machine-unreachable), so which folder it saves into cannot be checked.";
-      els.rootNote.dataset.tone = "warn";
-      els.rootNote.hidden = false;
+    if (els.envNote && err?.refused === "loopback-unauthenticated") {
+      els.envNote.textContent = "This page has no session on this origin. Redeem a bootstrap ticket here, or restart without VOICEBOX_LOOPBACK_AUTH.";
     }
   }
 }
