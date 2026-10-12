@@ -135,12 +135,28 @@ test("extensions ui extraction: the real wired page reads tool status live, not 
     );
 
     // --- 4. NARROW UNIT CHECK, no integration claim: given a live accessor the module re-calls it.
+    // It needs the full element map the real page provides, because renderExtensions renders every
+    // section; a partial els map makes it return without touching the shelf, which would look like a
+    // liveness failure when it is nothing of the sort.
     const unit = await page.evaluate(async () => {
       const mod = await import("/extensions-ui.mjs");
       let reads = 0;
       const statuses = new Map([["echo", { ok: true, at: Date.now(), durationMs: 7 }]]);
+      const els = {};
+      for (const [key, id] of Object.entries({
+        extShelf: "ext-shelf",
+        extCatalogue: "ext-catalogue",
+        extRunning: "ext-running",
+        extFailed: "ext-failed",
+        extWaiting: "ext-waiting",
+        extPresent: "ext-present",
+        extRefused: "ext-refused",
+        extCount: "exts-count",
+        extNote: "ext-note",
+      }))
+        els[key] = document.getElementById(id);
       mod.initExtensionsUI({
-        els: { extShelf: document.getElementById("ext-shelf") },
+        els,
         request: async (url) =>
           String(url).includes("catalogue")
             ? { catalogue: [] }
@@ -154,12 +170,10 @@ test("extensions ui extraction: the real wired page reads tool status live, not 
       });
       await mod.renderExtensions();
       const first = document.getElementById("ext-shelf").innerText ?? "";
-      const readsFirst = reads;
-      reads = 0;
-      return { first, readsFirst, callsAgain: true, readsAfter: reads };
+      return { first, reads };
     });
     assert.match(unit.first, /7ms/, `the module renders whatever it is handed: ${unit.first}`);
-    assert.ok(unit.readsFirst > 0, "the module must call the injected accessor while rendering");
+    assert.ok(unit.reads > 0, "the module must call the injected accessor while rendering");
   } finally {
     try {
       if (page) await page.close();
