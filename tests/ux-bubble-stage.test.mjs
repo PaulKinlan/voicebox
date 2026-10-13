@@ -1,4 +1,4 @@
-// tests/ux-bubble-stage.test.mjs — UX Overhaul: Light Mode Default, Centered Hero Mic, Files Bubble Popover, Real Mini-App Bubbles & Scroll Fix (voicebox-beads-3rcy)
+// tests/ux-bubble-stage.test.mjs — UX Overhaul: Light Mode Default, Centered Hero Mic, Files Bubble Popover, Mini-App Bubble Classification, Launch & Scroll Fix (voicebox-beads-3rcy, voicebox-beads-rtsr)
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -8,7 +8,11 @@ import path from "node:path";
 import { startServer } from "./lib/server.mjs";
 import { launch } from "./lib/cdp.mjs";
 
-test("ux-bubble-stage: light mode default, centered hero mic, files bubble popover, real mini-app bubbles, and standards-mode inner scroll", { timeout: 45000 }, async (t) => {
+// The bound is 60s rather than 45s because this test now does ONE MORE navigation: proving that a
+// bare workspace page is absent from the tray and the same file is a badged App after a save needs a
+// tray rendered from a fresh /api/mini-apps payload, and the page has no refresh hook for it. The
+// assertions are unchanged; only the document load count and the waits around it grew.
+test("ux-bubble-stage: light mode default, centered hero mic, files bubble popover, mini-app bubble classification, and standards-mode inner scroll", { timeout: 60000 }, async (t) => {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-ux-bubble-stage-"));
   const workspace = path.join(scratch, "project");
   fs.mkdirSync(workspace, { recursive: true });
@@ -387,13 +391,20 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
   assert.equal(savedAsApp.kind, "app", "a saved mini-app answers kind: 'app'");
 
   // Reload so the tray is rendered from a fresh /api/mini-apps payload: same file, one save apart.
+  // TWO waits, each bounded, because they are two different latencies and one 15s combined predicate
+  // could only say "false": the document load + file list, then the catalog fetch that renders the
+  // tray. Measured: on an idle VM both land in the first evaluation; under a loaded 2-vCPU box the
+  // catalog fetch is the slower half, and a combined wait failed there while the behaviour was right
+  // (the same flow was reproduced directly in the browser and passed — see the bead).
   await page.goto(`${server.base}/`);
-  await page.waitFor(
-    () =>
-      document.querySelectorAll("#files .file-open").length === 2 &&
-      Boolean(document.querySelector("#sqeh-actions .sqeh-miniapp-bubble")),
-    { label: "reloaded page lists both files and renders the saved app in the tray" },
-  );
+  await page.waitFor(() => document.querySelectorAll("#files .file-open").length === 2, {
+    timeout: 20000,
+    label: "reloaded page lists both files",
+  });
+  await page.waitFor(() => Boolean(document.querySelector("#sqeh-actions .sqeh-miniapp-bubble")), {
+    timeout: 30000,
+    label: "the saved app renders in the tray from a fresh /api/mini-apps payload",
+  });
 
   const miniAppBubbles = await page.evaluate(() => {
     const actions = document.getElementById("sqeh-actions");
