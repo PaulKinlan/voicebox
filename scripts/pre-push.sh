@@ -142,7 +142,11 @@ run_stage() {
     *) _cause="FAILED (exit $_status); see the command's output above" ;;
   esac
   echo >&2 "[gate] pre-push REFUSED: $_stage ($*) — $_cause."
-  exit 1
+  # RETURN, not exit: `set -e` still aborts a bare call site, so every stage that refuses on its own
+  # behaves exactly as it did when this was `exit 1`. The difference is for a caller that must say
+  # something BEFORE it refuses — the full gate's tier stages, which leave tier records behind and name
+  # where they are (voicebox-beads-wiby) — and a function that exits cannot be asked a question after.
+  return 1
 }
 
 # ── TWO TEST LANES, because the suite's own concurrency caused the flakes ────
@@ -194,6 +198,9 @@ _unit_secs="${VOICEBOX_GATE_UNIT_SECS:-${VOICEBOX_GATE_TESTS_SECS:-180}}"
 _live_secs="${VOICEBOX_GATE_LIVE_SECS:-400}"
 _accept_secs="${VOICEBOX_GATE_ACCEPT_SECS:-45}"
 _docs_secs="${VOICEBOX_GATE_DOCS_SECS:-30}"
+# The manifest stage reads what the three tier records already say (JSON + one `git diff`), so it costs
+# seconds; the bound is there because a stage without one is a stage that can hang the landing.
+_manifest_secs="${VOICEBOX_GATE_MANIFEST_SECS:-60}"
 
 # The documents' HAND-WRITTEN half (voicebox-beads-ths): a change that moves a file a document
 # describes, with no document in it, is refused here — `Docs-checked:` in the commit message is the
@@ -231,7 +238,45 @@ if [ -f scripts/single-owner.mjs ]; then
 fi
 
 node scripts/test-lanes.mjs --check
-run_stage unit "$_unit_secs" npm run test:unit
+
+# ── THE FULL GATE'S COVERAGE RECEIPT (voicebox-beads-zjpm.3, voicebox-beads-wiby) ────────────────
+# The fast gate records what it measured; the FULL gate did not, so a landing's only evidence was a log
+# line. The tiers now run per file through scripts/gate-tier.mjs (the same shape the fast gate and the
+# browser shard runner already use, so a file's record means the same thing in either gate), each writes
+# ONE tier record, and the last stage folds them into <tree>.full.manifest.json with the ONE aggregator.
+#
+# THE FALLBACK IS THE FIXTURES' PATH: tests/pre-push.test.mjs drives this file inside a disposable repo
+# whose package.json supplies test:unit/test:live, and this gate has always kept its stages pluggable
+# (docs-touched, docs-check and single-owner are conditional for the same reason). A repository with no
+# tier runner keeps the old wiring exactly.
+_use_tiers=0
+_tier_dir=""
+if [ -f scripts/gate-tier.mjs ] && [ -f scripts/gate-manifest.mjs ] && [ -d tests ]; then
+  _use_tiers=1
+  _tier_dir="$(mktemp -d "${TMPDIR:-/tmp}/voicebox-gate-tiers.XXXXXX")"
+  export VOICEBOX_GATE_TIER_DIR="$_tier_dir"
+fi
+
+# A tier stage that refuses says WHERE its records are and how to fold them: a red run is exactly the run
+# a reader wants an artifact for, and it does not get the sealed manifest (that is a receipt for a gate
+# that finished). The records are kept, not deleted, so the same fold can be run by hand.
+run_tier_stage() {
+  _stage="$1"
+  _secs="$2"
+  shift 2
+  if run_stage "$_stage" "$_secs" "$@"; then return 0; fi
+  if [ -n "$_tier_dir" ]; then
+    echo >&2 "[gate] pre-push: the $_stage tier's records are kept at $_tier_dir — fold them with:"
+    echo >&2 "[gate]   node scripts/gate-manifest.mjs aggregate --gate full --tree $_current_tree --tier-dir $_tier_dir"
+  fi
+  exit 1
+}
+
+if [ "$_use_tiers" = "1" ]; then
+  run_tier_stage unit "$_unit_secs" node scripts/gate-tier.mjs --tier unit --dir "$_tier_dir"
+else
+  run_stage unit "$_unit_secs" npm run test:unit
+fi
 
 # ── SCOPE: the lock and the long stages protect LANDINGS (voicebox-beads-uadl) ──
 # A feature-branch push is a candidate announcement: the unit lane (fast, lock-free) is
@@ -242,6 +287,9 @@ run_stage unit "$_unit_secs" npm run test:unit
 # unseen destination might be a landing, and the conservative answer is the old behaviour.
 if [ "$_had_destination" = "1" ] && [ "$_destination_is_main" != "1" ]; then
   echo "[gate] pre-push: feature-branch push — unit lane is the gate; live/acceptance run on the landing to main"
+  # The unit tier recorded what it measured, but no full manifest is sealed for a candidate push (that is a
+  # landing receipt), so the scratch directory is not evidence worth keeping.
+  [ -n "$_tier_dir" ] && rm -rf "$_tier_dir"
   echo "[gate] pre-push: ALL GATES GREEN (unit)"
   exit 0
 fi
@@ -348,6 +396,7 @@ if [ "$_ref_count" -le 1 ] && [ -n "$_diff_base" ]; then
         release_gate_lock
       fi
       echo "[gate] pre-push: docs-only push to main — docs, unit, and doc-truth passed; skipping live/acceptance stages"
+      [ -n "$_tier_dir" ] && rm -rf "$_tier_dir"
       echo "[gate] pre-push: ALL GATES GREEN (docs-only)"
       exit 0
     fi
@@ -355,12 +404,32 @@ if [ "$_ref_count" -le 1 ] && [ -n "$_diff_base" ]; then
 fi
 
 acquire_gate_lock
-run_stage live "$_live_secs" npm run test:live
+if [ "$_use_tiers" = "1" ]; then
+  run_tier_stage live "$_live_secs" node scripts/gate-tier.mjs --tier live --dir "$_tier_dir"
+else
+  run_stage live "$_live_secs" npm run test:live
+fi
 
 if [ "$VOICEBOX_SKIP_ACCEPT" != "1" ]; then
   run_stage acceptance "$_accept_secs" npm run accept
 fi
 release_gate_lock
+
+# ── THE FULL MANIFEST, AND IT IS THE LAST STAGE ON PURPOSE (voicebox-beads-wiby) ─────────────────
+# Sealed last, so its existence means every stage above ran on this tree: the docs checks, both test
+# tiers and acceptance. It reconciles all three tier records against the classifier's roster and REFUSES
+# when a file is missing, duplicated, unclassified, not terminal, zero-test or a changed source with no
+# mapped test — the same refusals the fast gate's artifact makes, over the union the merger is landing.
+if [ "$_use_tiers" = "1" ]; then
+  run_stage manifest "$_manifest_secs" node scripts/gate-manifest.mjs aggregate --gate full \
+    --tree "$_current_tree" \
+    --sha "$(git rev-parse --short HEAD 2>/dev/null || true)" \
+    --tier-dir "$_tier_dir" \
+    --changed-base origin/main
+  # The manifest carries every per-file record, so the scratch tier records are no longer needed. They are
+  # removed only here, on a gate that finished: a red gate keeps them (run_tier_stage printed where).
+  rm -rf "$_tier_dir"
+fi
 
 # ── RECORD VERIFIED TREE RECEIPT (voicebox-beads-07b9) ────────────────────────
 # Record tree SHA when all stages pass on a clean working tree

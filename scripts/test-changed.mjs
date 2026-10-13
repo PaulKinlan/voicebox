@@ -6,13 +6,12 @@
 
 import { execFileSync, spawn } from "node:child_process";
 import { readdirSync, readFileSync, existsSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { gitEnv } from "../lib/git-env.mjs";
 import { classify } from "./test-lanes.mjs";
 import { ISOLATED } from "./test-shards.mjs";
-import { createManifest, emitMarker, finalizeManifest, ManifestRefusal, recordFile, sealManifest, tapCounts, testChildEnv, verdictOf, writeManifest } from "./gate-manifest.mjs";
+import { artifactDir, createManifest, emitMarker, finalizeManifest, ManifestRefusal, recordFile, sealManifest, tapCounts, testChildEnv, verdictOf, writeManifest } from "./gate-manifest.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TESTS_DIR = path.join(ROOT, "tests");
@@ -242,9 +241,30 @@ function runStage(label, command, args) {
 //   3. RECORDED: the run writes scripts/gate-manifest.mjs's artifact and emits the `fast-gate:` markers
 //      the hub's coverage extractor reads, so the log and the artifact say the same thing.
 
-/** The gate artifact directory: the hub's own per-tree record directory, overridable by the caller. */
-export function artifactDir(explicit = null) {
-  return explicit || process.env.VOICEBOX_GATE_ARTIFACT_DIR || path.join(os.homedir(), ".fleet", "checks");
+/** The gate artifact directory — the owner is scripts/gate-manifest.mjs, which the aggregate writes to too. */
+export { artifactDir };
+
+/**
+ * The per-file children a gate has IN FLIGHT. A child leads its own process group (below) so that a
+ * per-file timeout takes down the browser or server it started with it — which means nothing else kills it
+ * when the GATE is signalled. `killRunningChildren` is how a caller (scripts/gate-tier.mjs, which runs each
+ * tier under the pre-push gate's bounded `timeout`) takes them with it instead of orphaning them for the
+ * reaper. The fast gate does not install a handler; its outer queue (`fleet-gate`) owns the process group.
+ */
+const RUNNING_CHILDREN = new Set();
+
+export function killRunningChildren(signal = "SIGTERM") {
+  for (const child of RUNNING_CHILDREN) {
+    try {
+      process.kill(-child.pid, signal);
+    } catch {
+      try {
+        child.kill(signal);
+      } catch {
+        /* already gone */
+      }
+    }
+  }
 }
 
 /**
@@ -260,6 +280,7 @@ export function runOneFile(file, { timeoutMs = 240_000, cwd = ROOT } = {}) {
     const child = spawn(process.execPath, ["--test", "--test-reporter=tap", file], {
       cwd, stdio: ["ignore", "pipe", "pipe"], detached: true, env: testChildEnv(),
     });
+    RUNNING_CHILDREN.add(child);
     let out = "";
     const eat = (chunk) => {
       out += String(chunk);
@@ -288,6 +309,7 @@ export function runOneFile(file, { timeoutMs = 240_000, cwd = ROOT } = {}) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      RUNNING_CHILDREN.delete(child);
       resolve({ file, code, signal, timedOut, counts: tapCounts(out), secs: (Date.now() - at) / 1000, out: note + out });
     };
     child.on("exit", (code, signal) => settle(code, signal));

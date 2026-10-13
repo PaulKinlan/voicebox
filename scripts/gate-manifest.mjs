@@ -41,10 +41,11 @@
 // and `unknown:` for a refusal or an incomplete dispatch. `emitMarker` still supports `running` because the
 // vocabulary belongs to the hub, and a caller whose runs cannot be killed may use it; this gate's runs can.
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import os from "node:os";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export const MANIFEST_VERSION = 1;
 export const TIERS = Object.freeze(["unit", "server", "browser"]);
@@ -378,6 +379,54 @@ export function manifestPath(dir, tree, gate) {
   return path.join(dir, `${tree}.${gate}.manifest.json`);
 }
 
+/**
+ * WHERE GATE ARTIFACTS LIVE: the hub's own per-tree record directory, overridable by the caller. ONE owner,
+ * because both gates write there — the fast gate's `<tree>.fast.manifest.json`, the full gate's
+ * `<tree>.full.manifest.json` — and a second answer to "where do receipts go" is how one of them ends up
+ * somewhere nobody looks.
+ */
+export function artifactDir(explicit = null) {
+  return explicit || process.env.VOICEBOX_GATE_ARTIFACT_DIR || path.join(os.homedir(), ".fleet", "checks");
+}
+
+/**
+ * `<dir>/<tier>.json` — one TIER RECORD per test tier, in the scratch directory the gate owns for the
+ * one run. ONE owner of this naming, because the writer (scripts/gate-tier.mjs, tools/browser-shard-runner
+ * via `VOICEBOX_GATE_TIER_RECORD`) and the reader (the aggregate below) must agree by construction: a
+ * mismatch would present as a MISSING tier — every file in that lane unaccounted for — which is refused,
+ * so it fails closed, but it would fail for a reason that is not true of the run.
+ */
+export function tierRecordPath(dir, tier) {
+  return path.join(dir, `${tier}.json`);
+}
+
+/**
+ * Is one TIER RECORD a complete account of its own lane? Answers for a tier's record against the file list
+ * that tier was told to run: a file with no record, a file recorded twice, a dispatched file with no
+ * terminal status or no duration — each named. This is the ANSWER A TIER CAN GIVE ABOUT ITSELF; the union
+ * reconciliation (`reconcile`) is the one that can speak for the whole roster, and it stays the owner of
+ * that question. Used by scripts/gate-tier.mjs so an incomplete tier is refused by the stage that ran it,
+ * with the run's own names, rather than only at the end.
+ */
+export function coverageGaps(record, files) {
+  const problems = [];
+  const wanted = new Set(files);
+  const seen = new Set();
+  for (const entry of record?.files ?? []) {
+    const file = String(entry.path ?? "");
+    if (!wanted.has(file)) {
+      problems.push(`${file} was recorded but is not in the ${record?.tier ?? "?"} tier (unexpected path)`);
+      continue;
+    }
+    if (seen.has(file)) problems.push(`${file} was recorded twice (duplicate)`);
+    seen.add(file);
+    if (!STATUS.includes(entry.status)) problems.push(`${file} has no terminal status (got ${JSON.stringify(entry.status)})`);
+    if (!Number.isFinite(entry.secs)) problems.push(`${file} was recorded with no duration — the child's exit was lost`);
+  }
+  for (const file of files) if (!seen.has(file)) problems.push(`${file} is in the ${record?.tier ?? "?"} lane but appears in no record (missing)`);
+  return problems;
+}
+
 /** Write atomically (tmp + rename), so a reader never sees a half-written manifest. Returns the path. */
 export function writeManifest(manifest, dir) {
   mkdirSync(dir, { recursive: true });
@@ -464,6 +513,50 @@ export function manifestFromTierRecords({ gate = "full", tree, sha = "", classif
   return { manifest, written };
 }
 
+/**
+ * The FULL gate's union: read the tier records the run wrote (one per tier, named by `tierRecordPath`),
+ * fold them, and answer with the manifest — plus the reasons it does not reconcile. Exported so the refusal
+ * paths are drivable without spawning a CLI, because a refusal a test cannot reach is a refusal nobody has
+ * seen work.
+ *
+ * A TIER THAT WROTE NOTHING IS DERAILED, NOT EMPTY, and it is named here rather than left to show up as a
+ * roster-sized list of MISSING files: the difference between "the browser tier ran and every file failed"
+ * and "the browser tier never started" is the first thing a reader of a red landing needs to know.
+ */
+export function aggregateTierRecords({ tierDir = null, records = [], gate = "full", tree, sha = "", classified, changed = [], unmapped = [], omittedReason = null, problems = [], dir = null }) {
+  const tierProblems = [];
+  const texts = [...records];
+  if (tierDir) {
+    for (const tier of TIERS) {
+      const file = tierRecordPath(tierDir, tier);
+      if (!existsSync(file)) {
+        tierProblems.push(`the ${tier} tier wrote no record at ${file} — that tier never completed, and its lane is not accounted for below`);
+        continue;
+      }
+      texts.push(readFileSync(file, "utf8"));
+    }
+  }
+  const { manifest, written } = manifestFromTierRecords({
+    gate,
+    tree,
+    sha,
+    classified,
+    records: texts.map((text) => JSON.parse(text)),
+    changed,
+    unmapped,
+    omittedReason,
+    dir,
+  });
+  if (tierProblems.length > 0 || problems.length > 0) {
+    // THE PROBLEM IS EVIDENCE, NOT A CRASH: the artifact is still written (that is the run a later reader
+    // has to audit), and the refusal is the exit code with the reason named.
+    manifest.problems = [...problems, ...tierProblems, ...manifest.problems];
+    manifest.reconciled = false;
+    manifest.verdict = "refused";
+  }
+  return { manifest, written, tierProblems };
+}
+
 if (import.meta.main) {
   const [command, file] = process.argv.slice(2);
   if (command === "aggregate") {
@@ -477,14 +570,48 @@ if (import.meta.main) {
     const gate = flag("gate", "full");
     const tree = flag("tree", null) ?? gitTree();
     const classifiedModule = await import("./test-lanes.mjs");
-    const { manifest, written } = manifestFromTierRecords({
+    const classified = classifiedModule.classify();
+    // ── ONE TIER RECORD PER TIER (voicebox-beads-wiby) ─────────────────────────────────────────────
+    // The full gate runs its three tiers as three processes, each of which writes its own record into the
+    // scratch directory the gate owns for this run. The DERIVATION of the union lives in
+    // `aggregateTierRecords` above, so the whole decision — including every refusal — is drivable from a
+    // test without spawning this file.
+    const tierDir = flag("tier-dir", null);
+    // A CHANGED SOURCE THAT MAPS TO NO TEST is recorded on the manifest (and refused by `reconcile`),
+    // because a landing is the last place that gap is cheap to see. Off unless the caller names a base, so
+    // an aggregate over JSON records alone behaves exactly as it did.
+    //
+    // ASKED OF THE MAPPING'S OWNER, THROUGH ITS CLI. A `await import("./test-changed.mjs")` here DEADLOCKS:
+    // this module is the process entry point and test-changed.mjs imports it, so the dynamic import never
+    // settles (measured: node exits 13, "Detected unsettled top-level await", printing nothing at all). The
+    // owner's `--json` is the developer path — a report, not a gate decision; the gate's decision is the
+    // reconciliation below, which refuses a non-empty `unmapped`.
+    const changedBase = flag("changed-base", null);
+    let changed = [];
+    let unmapped = [];
+    const scopeProblems = [];
+    if (changedBase) {
+      const probe = spawnSync(process.execPath, [fileURLToPath(new URL("./test-changed.mjs", import.meta.url)), "--base", changedBase, "--json", "--allow-unmapped"], { encoding: "utf8" });
+      try {
+        const answer = JSON.parse(probe.stdout);
+        changed = answer.changed ?? [];
+        unmapped = answer.unmapped ?? [];
+      } catch {
+        scopeProblems.push(`the changed-path map could not be computed against '${changedBase}' (exit ${probe.status}) — whether every changed source has a test is NOT known here, and an unknown scope is not an empty one`);
+      }
+    }
+    const { manifest, written } = aggregateTierRecords({
+      tierDir,
+      records,
       gate,
       tree,
       sha: flag("sha", ""),
-      classified: classifiedModule.classify(),
-      records: records.map((text) => JSON.parse(text)),
+      classified,
+      changed,
+      unmapped,
       omittedReason: flag("omitted-reason", null),
-      dir: flag("out", path.join(os.homedir(), ".fleet", "checks")),
+      problems: scopeProblems,
+      dir: flag("out", artifactDir()),
     });
     const s = manifest.summary;
     console.log(
@@ -493,11 +620,21 @@ if (import.meta.main) {
     );
     if (written) console.log(`gate-manifest: manifest ${written} (verdict ${manifest.verdict}, reconciled ${manifest.reconciled})`);
     if (!manifest.reconciled) {
-      console.error(`gate-manifest: REFUSED — ${manifest.problems.length} file(s) unaccounted for across the tier records:`);
+      console.error(`gate-manifest: REFUSED — ${manifest.problems.length} problem(s) across the tier records:`);
       for (const p of manifest.problems.slice(0, 20)) console.error(`  · ${p}`);
+      if (manifest.problems.length > 20) console.error(`  · …and ${manifest.problems.length - 20} more (all of them in ${written})`);
       process.exit(1);
     }
-    process.exit(manifest.verdict === "pass" ? 0 : 1);
+    // A RECONCILED MANIFEST CAN STILL BE A FAILED RUN, and it must say WHICH files: the count alone
+    // ("failed 3") sends the reader into the log to find them.
+    const notPassed = manifest.files.filter((f) => f.dispatch === "ran" && f.status !== "passed");
+    if (manifest.verdict !== "pass") {
+      console.error(`gate-manifest: REFUSED — the ${gate} gate's verdict is '${manifest.verdict}'`);
+      for (const f of notPassed.slice(0, 20)) console.error(`  · ${f.path} (${f.status}${f.counts ? `: tests=${f.counts.tests} fail=${f.counts.fail}` : ": no counts reported"})`);
+      if (manifest.summary.dispatched === 0) console.error("  · nothing was dispatched — a run that measured nothing is never a pass");
+      process.exit(1);
+    }
+    process.exit(0);
   }
   if (command === "verify" && file) {
     const manifest = readManifest(file);

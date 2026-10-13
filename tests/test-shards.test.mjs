@@ -123,8 +123,18 @@ test("the full gate runs every test file exactly once, and the fast gate's set i
 
   // The full gate's test stages, read from the gate itself: if either stage stopped running, the
   // "subset" claim below would be about a gate that no longer exists.
-  assert.match(prePush, /run_stage unit [^\n]*npm run test:unit/, "the full gate's unit stage must run the fast gate's own command");
-  assert.match(prePush, /run_stage live [^\n]*npm run test:live/, "the full gate's live stage must run test:live");
+  //
+  // THE STAGES RUN THE TIER RUNNER (voicebox-beads-wiby): each tier dispatches its lane file by file and
+  // writes one tier record, which the last stage folds into <tree>.full.manifest.json. The npm scripts stay
+  // as the FALLBACK a repository without the runner takes — the disposable repos in tests/pre-push.test.mjs
+  // supply their own test:unit/test:live, and this file has always kept its stages pluggable.
+  assert.match(prePush, /run_tier_stage unit [^\n]*gate-tier\.mjs --tier unit/, "the full gate's unit stage must run the unit tier through the tier runner");
+  assert.match(prePush, /run_tier_stage live [^\n]*gate-tier\.mjs --tier live/, "the full gate's live stage must run the live tiers through the tier runner");
+  assert.match(prePush, /run_stage unit [^\n]*npm run test:unit/, "a repo with no tier runner keeps the package.json fallback");
+  assert.match(prePush, /run_stage live [^\n]*npm run test:live/, "a repo with no tier runner keeps the package.json fallback");
+  assert.match(prePush, /gate-manifest\.mjs aggregate[^\n]*--tier-dir/, "the full gate must fold the tier records into the full manifest");
+  // The tier runner takes its files from the ONE classifier — no hand-kept list that can rot.
+  assert.match(read("scripts", "gate-tier.mjs"), /classify\(\)/, "the tier runner must take its lanes from the classifier");
 
   // Both stages take their file list from the ONE classifier — no hand-kept list that can rot, and
   // no second definition of "the fast gate's files" that merely happens to agree today.

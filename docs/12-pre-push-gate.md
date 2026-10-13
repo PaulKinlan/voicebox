@@ -7,10 +7,10 @@ Voicebox enforces a multi-stage verification gate on `git push` via `.githooks/p
 ## 1. Branch vs. `main` Push Policy
 
 - **Candidate Branch Pushes (`git push origin <branch>`)**:
-  Runs only `node scripts/docs-touched.mjs` and the fast `unit` test lane (`npm run test:unit`), then exits immediately. This keeps worktree branch pushes fast and lock-free.
+  Runs only `node scripts/docs-touched.mjs` and the fast `unit` test lane (`npm run test:unit`), then exits immediately. This keeps worktree branch pushes fast and lock-free. No manifest is sealed here: a receipt is for a landing.
 - **Landing on `main`**:
   - Pushing to `main` from a non-`main` branch is refused immediately (`[gate] pre-push REFUSED: non-main branch attempting to push to main ref`). Always create worktrees with `--no-track` (`git worktree add --no-track -b <branch> <dir> origin/main`) so worktree branches do not track `origin/main`.
-  - Pushing from `main` to `origin/main` runs the full verification pipeline (or fast-paths docs-only `*.md` changes through `docs-check` and `single-owner`), caching the verified `HEAD^{tree}` SHA in `.git/voicebox-gate-passed-tree`.
+  - Pushing from `main` to `origin/main` runs the full verification pipeline (or fast-paths docs-only `*.md` changes through `docs-check` and `single-owner`), caching the verified `HEAD^{tree}` SHA in `.git/voicebox-gate-passed-tree`, and seals `~/.fleet/checks/<tree>.full.manifest.json` as its last stage (voicebox-beads-wiby).
 
 ---
 
@@ -19,14 +19,42 @@ Voicebox enforces a multi-stage verification gate on `git push` via `.githooks/p
 | Stage | Command | Execution Mode | Default Timeout |
 |---|---|---|---|
 | **Docs Touched** | `node scripts/docs-touched.mjs` | Static `git diff` check | Immediate |
-| **Unit Suite** | `npm run test:unit` | Concurrent across files | `180s` |
-| **Live Suite** | `npm run test:live` | Server lane (`--test-concurrency=4`) + Browser CDP shard runner (4 workers, one file each) | `400s` |
+| **Unit Suite** | `node scripts/gate-tier.mjs --tier unit` | Unit lane, **one process per file** | `180s` |
+| **Live Suite** | `node scripts/gate-tier.mjs --tier live` | Server lane (`--test-concurrency=4`) then the Browser CDP shard runner (4 workers, one file each) — one process per file | `400s` |
 | **Acceptance** | `npm run accept` | End-to-end headless Chromium verification (`page-acceptance.mjs`) | `45s` |
+| **Full Manifest** | `node scripts/gate-manifest.mjs aggregate --gate full --tier-dir <scratch>` | Folds the three tier records into `<tree>.full.manifest.json` | `60s` |
+
+Each test tier runs its lane **file by file**, through `scripts/gate-tier.mjs`, and writes one TIER RECORD
+into the scratch directory the gate owns for the run. That is the same shape the fast gate
+(`scripts/test-changed.mjs --gate`) and the browser shard runner already use, so a file's record means the
+same thing in either gate — and it is what gives each file its own exit code, test counts, duration and
+bound. The worker counts are the concurrency the gate already ran at (`availableParallelism() - 1` for the
+unit lane, 4 for the server lane, 4 shards for the browser tier), so per-file dispatch is not a speed
+claim: measured on this tree, the unit tier is 18s either way and the server tier 38s. A file that wedges
+is killed at its own budget and recorded `timeout` — one file's failure, not the whole tier's.
+
+A stage that refuses prints where its records were kept and how to fold them:
+
+```
+[gate] pre-push: the unit tier's records are kept at /tmp/voicebox-gate-tiers.XXXXXX — fold them with:
+[gate]   node scripts/gate-manifest.mjs aggregate --gate full --tree <tree> --tier-dir /tmp/voicebox-gate-tiers.XXXXXX
+```
+
+**The manifest is the LAST stage, and a red gate seals none.** A receipt is for a gate that finished: if a
+tier stage, acceptance or the fold itself refuses, pre-push stops there and no `<tree>.full.manifest.json`
+is written for a reader to quote as a pass. The tier records are kept on the red path (above) so the same
+fold can still be run by hand.
+
+The stage commands come from the repository when it has a tier runner, and fall back to `npm run test:unit`
+/ `npm run test:live` when it does not (the disposable repositories `tests/pre-push.test.mjs` drives supply
+their own scripts, like every other pluggable stage in this file).
 
 ### Budget Overrides
 Each bound can be raised or tightened per run without editing the gate:
 - The **unit** bound resolves in order — `VOICEBOX_GATE_UNIT_SECS`, then the legacy `VOICEBOX_GATE_TESTS_SECS`, then the table's default. The primary variable wins when both are set.
 - The **live** and **acceptance** bounds are their own variables: `VOICEBOX_GATE_LIVE_SECS`, `VOICEBOX_GATE_ACCEPT_SECS`.
+- The **manifest** bound is `VOICEBOX_GATE_MANIFEST_SECS`, and the per-file budget the tier runner gives a
+  test file is `VOICEBOX_GATE_FILE_SECS` (default 240s).
 
 A refusal names the variable to raise, so the remedy is copy-pasteable. `tests/pre-push.test.mjs` pins the resolution, the legacy fallback and its precedence (voicebox-beads-03po), so removing a link is a failing test rather than a silent compat break.
 
@@ -341,12 +369,31 @@ FOLD, and `scripts/gate-manifest.mjs aggregate` is its one implementation.
 ```
 node scripts/gate-manifest.mjs aggregate --gate full --tree <tree-sha> --out <dir> \
   --record <tier-a.json> --record <tier-b.json> ...
+
+# what scripts/pre-push.sh runs: the records the three tiers wrote, and the changed set to check against
+node scripts/gate-manifest.mjs aggregate --gate full --tree <tree-sha> --tier-dir <scratch> \
+  --changed-base origin/main
 ```
 
 It builds the roster from the classifier, folds every tier record, refuses (non-zero, with the file named) a
 file no tier recorded, a file two tiers both recorded, a path no tier knows, and any omission in a full
 gate — and writes one manifest with the verdict. A deliberately narrower gate passes `--omitted-reason` so
 its unselected files are accounted for by name rather than left missing.
+
+`--tier-dir <scratch>` is the form the full gate uses: it reads `<scratch>/unit.json`, `<scratch>/server.json`
+and `<scratch>/browser.json` — one record per tier, in the directory `scripts/pre-push.sh` owns for that run,
+named by `tierRecordPath` so the writer and the reader cannot disagree. A tier that wrote NOTHING is refused
+by name (`the browser tier wrote no record at …`), because a missing process and a tier whose every file
+failed are different facts and the reader of a red landing needs the first one. `--changed-base <ref>` records
+the changed set (`<ref>...HEAD`) and refuses a changed source file that maps to no test, asked of the
+mapping's owner through its own `--json` CLI; that refusal is the same one the fast gate makes, over the union
+being landed, and it is off when no base is named so an aggregate over JSON records behaves as it always did.
+
+The wiring is held by tests rather than by this paragraph: `tests/gate-tier.test.mjs` drives the tier runner
+and the fold (including a dropped file, a duplicate, a zero-test pass, a missing tier record and a failed
+file, each refused by name), and `tests/pre-push.test.mjs` drives the real gate in a disposable repository and
+asserts that a green run seals ONE `<tree>.full.manifest.json` accounting for all three lanes while a red tier
+seals none.
 
 ### Acceptance is per phase
 

@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync, spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, chmodSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, chmodSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
 import path from 'node:path';
@@ -903,6 +903,87 @@ test('pre-push re-uses verified tree-SHA receipt on identical tree and invalidat
     assert.equal(push3.status, 0, out3);
     assert.match(out3, /LIVE RAN/, 'tree SHA change invalidates receipt and runs full gate');
     assert.equal(execFileSync('cat', [receiptFile], { encoding: 'utf8' }).trim(), tree3, 'receipt updated to new tree SHA');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── THE FULL GATE'S COVERAGE RECEIPT (voicebox-beads-zjpm.3, voicebox-beads-wiby) ─────────────────
+// The fast gate records what it measured; the merger's static preflight found the FULL gate sealed
+// nothing — `npm run gate` could print ALL GATES GREEN and leave no `<tree>.full.manifest.json` for any
+// later reader. This drives the real gate in a disposable repository and asserts the two halves of what a
+// reader gets: ONE manifest accounting for every classified file when the gate finishes, and NO manifest
+// when a tier is red (a receipt is for a gate that finished, and only then).
+test('pre-push seals ONE full manifest from the tier records, and a red tier leaves none', { timeout: 180000 }, () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-pre-push-manifest-'));
+  const repo = path.join(dir, 'repo');
+  const artifacts = path.join(dir, 'artifacts');
+  const git = (...args) => execFileSync('git', args, { cwd: repo, stdio: 'pipe', encoding: 'utf8', env: cleanEnv });
+  const gateEnv = {
+    ...cleanEnv,
+    PATH: process.env.PATH,
+    // The artifact directory is the ONE knob that decides where a receipt lands, and the gate honours it —
+    // which is what makes this fixture able to assert the file at all.
+    VOICEBOX_GATE_ARTIFACT_DIR: artifacts,
+    VOICEBOX_SKIP_ACCEPT: '1',
+    VOICEBOX_GATE_LOCK: path.join(dir, 'fixture-gate.lock'),
+    VOICEBOX_GATE_HOLDER: path.join(dir, 'fixture-gate.holder.json'),
+  };
+  // No destination on stdin: the gate then keeps the FULL path (an unseen destination might be a landing),
+  // which is exactly how the fleet's own `npm run gate` invokes it.
+  const runGate = () => spawnSync('sh', [path.join(repo, 'scripts', 'pre-push.sh')], { cwd: repo, encoding: 'utf8', timeout: 150000, env: gateEnv, input: '' });
+  try {
+    mkdirSync(repo, { recursive: true });
+    mkdirSync(path.join(repo, 'docs'), { recursive: true });
+    mkdirSync(path.join(repo, 'tests'), { recursive: true });
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 'fixture@example.invalid');
+    git('config', 'user.name', 'Gate fixture');
+    // Every file the gate RUNS, not just the gate script: the tier runner, the aggregator it folds into,
+    // and the classifier/sharding modules they import (docs-touched needs its script and lib/git-env.mjs,
+    // like every other fixture in this file).
+    for (const file of ['scripts/pre-push.sh', 'scripts/docs-touched.mjs', 'scripts/gate-tier.mjs', 'scripts/gate-manifest.mjs', 'scripts/test-lanes.mjs', 'scripts/test-shards.mjs', 'scripts/test-changed.mjs', 'tools/browser-shard-runner.mjs', 'lib/git-env.mjs']) {
+      mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
+      copyFileSync(path.join(root, file), path.join(repo, file));
+    }
+    writeFileSync(path.join(repo, 'README.md'), '# Manifest fixture\n\nA disposable repository for the gate\'s own receipt.\n');
+    writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ scripts: { 'test:unit': 'node --test', 'test:live': 'node --test', accept: 'node -e ""' } }));
+    // Three lanes, one file each: a plain test (unit), one that names a server helper (server) and one that
+    // names the browser runner (browser). Each is written as a plain string, so the classifier reads these
+    // as DATA this test writes rather than as launches this test makes.
+    writeFileSync(path.join(repo, 'tests', 'plain.test.mjs'), "import test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('plain', () => assert.equal(1 + 1, 2));\n");
+    writeFileSync(path.join(repo, 'tests', 'names-server.test.mjs'), "import test from 'node:test';\nimport assert from 'node:assert/strict';\nconst helper = 'lib/server.mjs';\ntest('server-ish', () => assert.ok(helper));\n");
+    writeFileSync(path.join(repo, 'tests', 'names-browser.test.mjs'), "import test from 'node:test';\nimport assert from 'node:assert/strict';\nconst helper = 'tools/browser-shard-runner.mjs';\ntest('browser-ish', () => assert.ok(helper));\n");
+    git('add', '-A');
+    git('commit', '-qm', 'fixture: three lanes');
+    const tree = git('rev-parse', 'HEAD^{tree}').trim();
+
+    const green = runGate();
+    const out = green.stdout + green.stderr;
+    assert.equal(green.status, 0, out);
+    assert.match(out, /ALL GATES GREEN/);
+    const manifest = JSON.parse(readFileSync(path.join(artifacts, `${tree}.full.manifest.json`), 'utf8'));
+    assert.equal(manifest.gate, 'full');
+    assert.equal(manifest.tree, tree, 'the receipt is keyed by the tree it measured');
+    assert.equal(manifest.reconciled, true, `the full gate must reconcile: ${JSON.stringify(manifest.problems)}`);
+    assert.equal(manifest.verdict, 'pass');
+    assert.equal(manifest.summary.classified, 3, 'every classified file is accounted for');
+    assert.equal(manifest.summary.dispatched, 3, 'a full gate dispatches the whole roster');
+    assert.equal(manifest.summary.unknown, 0);
+    assert.deepEqual([...new Set(manifest.files.map((f) => f.tier))].sort(), ['browser', 'server', 'unit'], 'all three tiers are in the one union');
+
+    // A RED TIER SEALS NOTHING. The manifest is a receipt for a gate that finished; the run that refused
+    // must not leave one behind for a later reader to quote as a pass.
+    writeFileSync(path.join(repo, 'tests', 'plain.test.mjs'), "import test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('plain', () => assert.equal(1 + 1, 3));\n");
+    git('add', '-A');
+    git('commit', '-qm', 'fixture: a failing test');
+    const redTree = git('rev-parse', 'HEAD^{tree}').trim();
+    const red = runGate();
+    const redOut = red.stdout + red.stderr;
+    assert.notEqual(red.status, 0, redOut);
+    assert.match(redOut, /tests\/plain\.test\.mjs/, 'the failing file is named, not merely counted');
+    assert.match(redOut, /records are kept at/, 'a red run says where the evidence it did produce is kept');
+    assert.equal(existsSync(path.join(artifacts, `${redTree}.full.manifest.json`)), false, 'a refused gate seals no manifest');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
