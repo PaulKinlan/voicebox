@@ -378,4 +378,99 @@ describe("mini-app-store: persistence, in-place updates, deletion & cross-sandbo
     assert.equal(afterDiscovery.count, 1, "App B still discovered after App A deletion");
     assert.equal(afterDiscovery.miniApps[0].fileName, "counter.html");
   });
+
+  // ── voicebox-beads-dvu8: a workspace page and a shelf app that share a slug and a file name ──
+  // Both directions reproduced on 2abb42a before this fix (see the bead): deleting the app deleted an
+  // unrelated `collision.html` from the workspace, and a save over that name overwrote the app's copy.
+  function collisionFixture() {
+    const rootPath = makeScratchDir("vb-collide-root-");
+    const hostDir = makeScratchDir("vb-collide-host-");
+    const shelfDir = path.join(hostDir, "mini-apps");
+    mkdirSync(shelfDir, { recursive: true });
+    const pageHtml = "<!doctype html><html><head><title>Unrelated Page</title></head><body><p>page</p></body></html>";
+    const appHtml = "<!doctype html><html><head><title>Collision App</title></head><body><p>app</p></body></html>";
+    writeFileSync(path.join(rootPath, "collision.html"), pageHtml, "utf8");
+    writeFileSync(path.join(shelfDir, "collision.html"), appHtml, "utf8");
+    writeFileSync(
+      path.join(shelfDir, "collision.meta.json"),
+      JSON.stringify({ appId: "app_collision", slug: "collision", title: "Collision App", fileName: "collision.html" }),
+      "utf8",
+    );
+    return { rootPath, hostDir, shelfDir, pageHtml, appHtml };
+  }
+
+  it("deleting an app leaves a workspace file the shelf record does not own (voicebox-beads-dvu8)", () => {
+    const f = collisionFixture();
+    const del = deleteMiniApp("Collision App", { rootPath: f.rootPath, hostDir: f.hostDir, sandboxRootDir: "" });
+    assert.equal(del.ok, true);
+    assert.equal(
+      readFileSync(path.join(f.rootPath, "collision.html"), "utf8"),
+      f.pageHtml,
+      "the same-named workspace file the record does not prove is left alone",
+    );
+    assert.equal(existsSync(path.join(f.shelfDir, "collision.html")), false, "the app's own shelf copy is deleted");
+    assert.equal(existsSync(path.join(f.shelfDir, "collision.meta.json")), false, "and its own record");
+  });
+
+  it("a valid saved app still deletes both its copies and its record, and its preserved copy (voicebox-beads-dvu8)", () => {
+    const rootPath = makeScratchDir("vb-valid-del-root-");
+    const hostDir = makeScratchDir("vb-valid-del-host-");
+    const shelfDir = path.join(hostDir, "mini-apps");
+    saveMiniApp({ title: "Kanban", html: "<!doctype html><title>Kanban</title><p>v1</p>", rootPath, hostDir });
+    // A second save replaces the first copy, so a preserved previous copy exists too.
+    saveMiniApp({ title: "Kanban", html: "<!doctype html><title>Kanban</title><p>v2</p>", rootPath, hostDir });
+    assert.equal(
+      readFileSync(path.join(hostDir, "mini-app-backups", "previous-kanban.html"), "utf8").includes("v1"),
+      true,
+      "the copy the second save replaced is preserved",
+    );
+
+    const del = deleteMiniApp("Kanban", { rootPath, hostDir, sandboxRootDir: "" });
+    assert.equal(del.ok, true);
+    assert.equal(existsSync(path.join(rootPath, "kanban.html")), false, "the app's own workspace copy is deleted");
+    assert.equal(existsSync(path.join(shelfDir, "kanban.html")), false, "its shelf copy is deleted");
+    assert.equal(existsSync(path.join(shelfDir, "kanban.meta.json")), false, "its record is deleted");
+    assert.equal(existsSync(path.join(hostDir, "mini-app-backups", "previous-kanban.html")), false, "and so is the preserved copy — a deleted app leaves nothing behind");
+  });
+
+  it("a save replaces a copy it cannot prove it owns, and preserves the previous copy with its record (voicebox-beads-dvu8)", () => {
+    const f = collisionFixture();
+    const saved = saveMiniApp({ fileName: "collision.html", title: "Unrelated Page", html: f.pageHtml, rootPath: f.rootPath, hostDir: f.hostDir });
+    assert.equal(saved.ok, true, "the save itself is not refused: this base cannot tell an update from a different file");
+
+    // The app's content is never DESTROYED: the copy this save replaced is beside the shelf, with the
+    // record that described it, one generation deep (the next save replaces it).
+    assert.equal(
+      readFileSync(path.join(f.hostDir, "mini-app-backups", "previous-collision.html"), "utf8"),
+      f.appHtml,
+      "the app's previous copy is preserved, byte for byte",
+    );
+    assert.equal(
+      JSON.parse(readFileSync(path.join(f.hostDir, "mini-app-backups", "previous-collision.meta.json"), "utf8")).appId,
+      "app_collision",
+      "and so is the record that described it",
+    );
+    // The record now NAMES the workspace file it was saved from, so an ownership question later is
+    // answered by reading the record rather than by comparing bytes — which a write can race.
+    assert.equal(
+      JSON.parse(readFileSync(path.join(f.shelfDir, "collision.meta.json"), "utf8")).workspacePath,
+      "collision.html",
+    );
+
+    // A host-only save has no workspace copy, so its record must not claim one.
+    const hostOnly = makeScratchDir("vb-host-only-");
+    saveMiniApp({ title: "Host Only", html: "<!doctype html><title>Host Only</title>", rootPath: null, hostDir: hostOnly });
+    const hostOnlyMeta = JSON.parse(readFileSync(path.join(hostOnly, "mini-apps", "host-only.meta.json"), "utf8"));
+    assert.equal(Object.hasOwn(hostOnlyMeta, "workspacePath"), false, "a record with no workspace copy names no workspace file");
+
+    // And a host-only app's delete does not reach a same-named workspace file it does not own.
+    const otherRoot = makeScratchDir("vb-host-only-root-");
+    writeFileSync(path.join(otherRoot, "host-only.html"), "<!doctype html><title>Somebody Else</title>", "utf8");
+    assert.equal(deleteMiniApp("Host Only", { rootPath: otherRoot, hostDir: hostOnly, sandboxRootDir: "" }).ok, true);
+    assert.equal(
+      existsSync(path.join(otherRoot, "host-only.html")),
+      true,
+      "a same-named workspace file that is not this app's copy survives its deletion",
+    );
+  });
 });

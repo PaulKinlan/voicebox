@@ -117,3 +117,14 @@ window.webMcp.ready();
 ```bash
 node --test tests/mini-app-architecture.test.mjs
 ```
+
+---
+
+## 5. A Shared Name Is Not Ownership (`voicebox-beads-dvu8`)
+
+A workspace file and a shelf app can share a slug **and** a file name — the store keys the shelf by slug, and a workspace page may happen to be called `collision.html` beside a shelf app of the same name. Deleting or overwriting on the strength of that name destroyed data in both directions, so ownership is now asked per artifact and answered by the shelf record (`<slug>.meta.json`):
+
+- **The record owns the shelf copy named inside it and its own `.meta.json`** — matched by the `appId` the record carries, never by the file name alone.
+- **The record owns a workspace file only when it proves that file is its own copy**: it names it (`workspacePath`, written by every save) or — for records written before that field existed — the shelf copy is byte-for-byte that file. Without proof the workspace file belongs to something else and is left on disk, which is what stops `DELETE /api/mini-apps?id=…` for an app from deleting a same-named page. The old extra candidates (`<slug>.html`, a second basename) are gone: a name is not evidence.
+- **A save never destroys the copy it replaces.** This base cannot distinguish an update of an app from a different file that merely shares its name — with the record and the file already written, the two states are byte-identical — so refusing the overwrite would also refuse legitimate updates of apps saved before this change. Instead the replaced copy and its record are preserved one generation deep under `<hostDir>/mini-app-backups/previous-<slug>.{html,meta.json}`, replaced by the next save rather than accumulating, invisible to discovery (which reads only `<hostDir>/mini-apps`), and removed by `deleteMiniApp` with the app. Nothing is destroyed; the previous version stays recoverable.
+- **`saveMiniApp` writes `workspacePath`** into the record for every save that has a workspace copy, so later ownership questions are answered by reading the record rather than by comparing bytes — a comparison a concurrent write can race. A host-only save omits the field rather than pointing at a file that is not there.
