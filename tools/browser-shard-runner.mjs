@@ -43,7 +43,7 @@ import { fileURLToPath } from "node:url";
 import { writeFileSync } from "node:fs";
 import { classify } from "../scripts/test-lanes.mjs";
 import { assertExactCoverage, buildQueue, isFailed, splitQueue } from "../scripts/test-shards.mjs";
-import { emitMarker } from "../scripts/gate-manifest.mjs";
+import { emitMarker, testChildEnv } from "../scripts/gate-manifest.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -116,6 +116,10 @@ function runFile(file) {
       cwd: ROOT,
       stdio: ["ignore", "pipe", "pipe"],
       detached: true,
+      // A gate child is TOP-LEVEL, not nested — `testChildEnv` owns that fact and why, including the
+      // measured case where a nested child is skipped and this runner then reports a file it never ran as
+      // failed for "no test counts were reported" (voicebox-beads-zjpm.3).
+      env: testChildEnv(),
     });
     let out = "";
     const eat = (chunk) => (out += String(chunk));

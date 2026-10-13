@@ -30,6 +30,7 @@ import {
   rosterHash,
   rosterOf,
   tapCounts,
+  testChildEnv,
   writeManifest,
 } from "../scripts/gate-manifest.mjs";
 import { classify } from "../scripts/test-lanes.mjs";
@@ -243,6 +244,16 @@ test("the emitted markers are the hub's vocabulary, matched with the hub's own p
   // cannot drift: an extractor that only ever hears `passed` would over-claim a skipped file.
   for (const status of STATUS) assert.ok(emitMarker(status, ["tests/x.test.mjs"]).length > 0);
   assert.ok(HUB_MARKER_PATTERNS.suites.test(emitMarker("completed", ["tests/x.test.mjs"])));
+});
+
+test("a gate child is a TOP-LEVEL test run: NODE_TEST_CONTEXT is dropped and nothing else is touched", () => {
+  // A nested `node --test` child is skipped by the runtime ("node:test run() is being called recursively
+  // within a test file"), exits 0 and prints no summary — a file that never ran, reported as unknown.
+  const env = testChildEnv({ NODE_TEST_CONTEXT: "child-v8", PATH: "/usr/bin", VOICEBOX_INSTANCE: "x" });
+  assert.equal("NODE_TEST_CONTEXT" in env, false);
+  assert.equal(env.PATH, "/usr/bin", "no other variable is dropped");
+  assert.equal(env.VOICEBOX_INSTANCE, "x", "the fixtures' own instance env still reaches the child");
+  assert.equal("NODE_TEST_CONTEXT" in process.env, "NODE_TEST_CONTEXT" in process.env, "the parent env object is not mutated");
 });
 
 test("TAP counts are read from the reporter's own summary, and an absent summary is -1, not 0", () => {

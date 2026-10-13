@@ -267,7 +267,9 @@ test("gate: --dry-run writes the plan's manifest without dispatching anything", 
     assert.equal(outcome.manifest.summary.dispatched, 0);
     assert.equal(outcome.manifest.summary.omitted, 2);
     assert.ok(outcome.manifest.files.every((f) => /dry-run/.test(f.reason)));
-    assert.equal(outcome.manifest.verdict, "pass");
+    // A dry run is NOT a verdict about the tree, and the artifact says so rather than lending its
+    // zero-dispatch record a `pass` a later reader could quote.
+    assert.equal(outcome.manifest.verdict, "dry-run");
   } finally {
     console.log = realLog;
     rmSync(dir, { recursive: true, force: true });

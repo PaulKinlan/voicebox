@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { gitEnv } from "../lib/git-env.mjs";
 import { classify } from "./test-lanes.mjs";
 import { ISOLATED } from "./test-shards.mjs";
-import { createManifest, emitMarker, finalizeManifest, ManifestRefusal, recordFile, sealManifest, tapCounts, writeManifest } from "./gate-manifest.mjs";
+import { createManifest, emitMarker, finalizeManifest, ManifestRefusal, recordFile, sealManifest, tapCounts, testChildEnv, writeManifest } from "./gate-manifest.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TESTS_DIR = path.join(ROOT, "tests");
@@ -261,15 +261,10 @@ export function artifactDir(explicit = null) {
 export function runOneFile(file, { timeoutMs = 240_000, cwd = ROOT } = {}) {
   return new Promise((resolve) => {
     const at = Date.now();
-    // THE CHILD IS A TOP-LEVEL TEST RUN, NOT A NESTED ONE. Node marks a spawned `--test` run as a nested
-    // run through NODE_TEST_CONTEXT, and a nested run whose parent is itself a `node:test` file is SKIPPED
-    // entirely — "node:test run() is being called recursively within a test file. skipping running files."
-    // Measured while testing this gate: the child exited 0, printed no TAP summary, and the honest reading
-    // of that is `unknown`, which is how a skipped child would have looked like a silent green here.
-    const env = { ...process.env };
-    delete env.NODE_TEST_CONTEXT;
+    // THE CHILD IS A TOP-LEVEL TEST RUN, NOT A NESTED ONE — `testChildEnv` owns that fact and why
+    // (scripts/gate-manifest.mjs): without it the child is SKIPPED and exits 0 with no summary at all.
     const child = spawn(process.execPath, ["--test", "--test-reporter=tap", file], {
-      cwd, stdio: ["ignore", "pipe", "pipe"], detached: true, env,
+      cwd, stdio: ["ignore", "pipe", "pipe"], detached: true, env: testChildEnv(),
     });
     let out = "";
     const eat = (chunk) => {
@@ -372,7 +367,7 @@ export async function runGate({
     // Nothing ran, so every classified file is omitted with the reason that is true of it.
     const reason = problems.length > 0 ? "refused: unmapped or unclassified changed path" : "dry-run: nothing dispatched";
     for (const entry of manifest.classifier.files) recordFile(manifest, { path: entry.path, dispatch: "omitted", reason });
-    manifest.verdict = problems.length > 0 ? "refused" : "pass";
+    manifest.verdict = problems.length > 0 ? "refused" : dryRun ? "dry-run" : "pass";
     sealManifest(manifest);
     const written = writeManifest(manifest, artifactDir(dir));
     console.log(`[test:changed] manifest: ${written}`);

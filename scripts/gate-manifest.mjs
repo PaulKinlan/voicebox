@@ -48,6 +48,22 @@ export const DISPATCH = Object.freeze(["ran", "omitted", "skipped"]);
 /** Terminal states of a dispatch. `unknown` is the honest answer when a child was lost or timed out. */
 export const STATUS = Object.freeze(["passed", "failed", "skipped", "timeout", "unknown"]);
 
+/**
+ * The environment a gate child process runs in. ONE owner for this fact, because both runners
+ * (scripts/test-changed.mjs's per-file gate and tools/browser-shard-runner.mjs) must agree on it: Node
+ * marks a spawned `--test` run as NESTED through NODE_TEST_CONTEXT, and a nested run whose parent is a
+ * `node:test` file is SKIPPED outright — "node:test run() is being called recursively within a test file.
+ * skipping running files." The child then exits 0 with no TAP summary at all, which every honest reader in
+ * this tree classifies as `unknown`, and the runner that spawned it reports a FAILURE for a file that was
+ * never run. Measured while testing this gate (voicebox-beads-zjpm.3): the shard runner failed a file for
+ * "no test counts were reported" when driven from inside a test file.
+ */
+export function testChildEnv(base = process.env) {
+  const env = { ...base };
+  delete env.NODE_TEST_CONTEXT;
+  return env;
+}
+
 /** The marker prefix the hub's check-coverage.py matches at line start. Not a local style choice. */
 export const MARKER_PREFIX = "fast-gate:";
 
