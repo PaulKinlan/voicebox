@@ -47,8 +47,8 @@ const fresh = (overrides = {}) =>
   createManifest({ gate: "fast", tree: "a".repeat(40), sha: "abc1234", classified, ...overrides });
 
 /** A record that reconciles: dispatched, passed, with real counts. */
-const passed = (entry) => ({ dispatch: "ran", status: "passed", counts: { tests: 3, pass: 3, fail: 0, skipped: 0 }, secs: 1.5, ...entry });
-const omitted = (entry) => ({ dispatch: "omitted", status: "omitted", reason: "fast-only: not selected by the changed-path map", ...entry });
+const passed = (entry) => ({ dispatch: "ran", status: "passed", counts: { tests: 3, pass: 3, fail: 0, skipped: 0 }, secs: 1.5, selection: "changed", ...entry });
+const omitted = (entry) => ({ dispatch: "omitted", status: "omitted", reason: "fast-only: not selected by the changed-path map", selection: "not-selected", ...entry });
 
 /** Record every classified file: the given tier dispatched, everything else omitted by name. */
 function recordAll(manifest, { dispatchTiers = ["unit"], file = passed } = {}) {
@@ -134,8 +134,8 @@ test("a dispatched file with no terminal status or no duration is a lost child, 
   assert.equal(ok, false);
   assert.ok(problems.some((p) => /exit was lost/.test(p)), problems.join(" | "));
 
-  assert.throws(() => recordFile(fresh(), { path: roster[0].path, dispatch: "ran", status: "running" }), (e) => /terminal status/.test(e.message));
-  assert.throws(() => recordFile(fresh(), { path: roster[0].path, dispatch: "ran", status: "passed" }), (e) => /lost child/.test(e.message));
+  assert.throws(() => recordFile(fresh(), { path: roster[0].path, dispatch: "ran", status: "running", selection: "changed" }), (e) => /terminal status/.test(e.message));
+  assert.throws(() => recordFile(fresh(), { path: roster[0].path, dispatch: "ran", status: "passed", selection: "changed" }), (e) => /lost child/.test(e.message));
 });
 
 test("a passing run that reported ZERO tests is refused — an empty run demonstrates nothing", () => {
@@ -164,7 +164,27 @@ test("an omitted or skipped file without a reason is refused: no unexplained gap
   assert.equal(ok, false);
   assert.ok(problems.some((p) => /no reason/.test(p)), problems.join(" | "));
 
-  assert.throws(() => recordFile(fresh(), { path: roster[0].path, dispatch: "skipped" }), (e) => /needs a reason/.test(e.message));
+  assert.throws(() => recordFile(fresh(), { path: roster[0].path, dispatch: "skipped", selection: "changed" }), (e) => /needs a reason/.test(e.message));
+});
+
+test("a record with NO selection reason is refused, and an unknown one is named: the aggregator never invents 'changed'", () => {
+  // `entry.selection ?? "changed"` was the fail-open: in a fast gate almost the whole roster is omitted, so
+  // a missing reason silently asserted that every classified file had been changed directly — a scope claim
+  // the manifest's own `changed` list contradicted. There is no default now; there is a refusal.
+  assert.throws(
+    () => recordFile(fresh(), passed({ path: roster[0].path, selection: undefined })),
+    (e) => e instanceof ManifestRefusal && /no selection reason/.test(e.message),
+  );
+  assert.throws(() => recordFile(fresh(), passed({ path: roster[0].path, selection: "because" })), (e) => /unknown selection 'because'/.test(e.message));
+  // …and the fourth reason exists precisely so an omitted file has an honest value: not selected at all.
+  const manifest = fresh();
+  recordFile(manifest, omitted({ path: roster[0].path }));
+  recordFile(manifest, passed({ path: roster[1].path, selection: "dependency" }));
+  assert.deepEqual(
+    manifest.files.map((f) => f.selection),
+    ["not-selected", "dependency"],
+    "omitted is not-selected; a dependency-selected dispatch is dependency; neither is called changed",
+  );
 });
 
 test("a SKIPPED file reconciles when it carries its reason, and is counted as skipped rather than passed", () => {
@@ -175,7 +195,7 @@ test("a SKIPPED file reconciles when it carries its reason, and is counted as sk
   const skippedPath = roster.find((r) => r.tier === "server").path;
   for (const entry of roster) {
     if (entry.tier === "unit") recordFile(manifest, passed({ path: entry.path }));
-    else if (entry.path === skippedPath) recordFile(manifest, { path: entry.path, dispatch: "skipped", reason: "skipped by the caller: the tier is holding the box for a measured reason" });
+    else if (entry.path === skippedPath) recordFile(manifest, { path: entry.path, dispatch: "skipped", reason: "skipped by the caller: the tier is holding the box for a measured reason", selection: "not-selected" });
     else recordFile(manifest, omitted({ path: entry.path }));
   }
   finalizeManifest(manifest);
@@ -427,7 +447,7 @@ test("verdictOf is the ONE answer to 'what does this manifest mean' — an unfin
     const m = fresh();
     const victim = roster.find((r) => r.tier === "unit");
     for (const entry of roster) {
-      if (entry.path === victim.path) recordFile(m, { path: entry.path, dispatch: "ran", status, counts: status === "unknown" ? null : { tests: 1, pass: 0, fail: 1, skipped: 0 }, secs: 0.4 });
+      if (entry.path === victim.path) recordFile(m, { path: entry.path, dispatch: "ran", status, counts: status === "unknown" ? null : { tests: 1, pass: 0, fail: 1, skipped: 0 }, secs: 0.4, selection: "changed" });
       else if (entry.tier === "unit") recordFile(m, passed({ path: entry.path }));
       else recordFile(m, omitted({ path: entry.path }));
     }

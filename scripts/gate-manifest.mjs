@@ -49,8 +49,14 @@ import path from "node:path";
 export const MANIFEST_VERSION = 1;
 export const TIERS = Object.freeze(["unit", "server", "browser"]);
 export const GATES = Object.freeze(["fast", "full"]);
-/** How a file came to be selected: the changed-path map, a transitive dependency, or the whole roster. */
-export const SELECTION = Object.freeze(["changed", "dependency", "full-roster"]);
+/**
+ * How a file came to be selected: the changed-path map, a transitive dependency, the whole roster, or
+ * nothing at all (a fast gate omits the files its changed-path map did not pick). `not-selected` exists so
+ * that the omitted case has an honest value: `recordFile` used to default an absent reason to `changed`, so a
+ * fast gate over 9 changed paths recorded all 223 classified files as directly changed — a scope claim the
+ * manifest's own `changed` list contradicted (voicebox-beads-zjpm.3).
+ */
+export const SELECTION = Object.freeze(["changed", "dependency", "full-roster", "not-selected"]);
 export const DISPATCH = Object.freeze(["ran", "omitted", "skipped"]);
 /** Terminal states of a dispatch. `unknown` is the honest answer when a child was lost or timed out. */
 export const STATUS = Object.freeze(["passed", "failed", "skipped", "timeout", "unknown"]);
@@ -169,6 +175,20 @@ export function recordFile(manifest, entry) {
   const dispatch = entry.dispatch ?? "ran";
   if (!DISPATCH.includes(dispatch)) throw new ManifestRefusal([`${file}: unknown dispatch '${dispatch}'`]);
 
+  // THE SELECTION REASON IS A CLAIM, SO IT IS REQUIRED, NEVER DEFAULTED. It used to fall through
+  // `entry.selection ?? "changed"`, which is the one value a caller is least likely to have meant: in a fast
+  // gate the overwhelming majority of the roster is OMITTED, so the default quietly asserted that every
+  // classified file had been changed directly. Only the caller knows whether the changed path, a dependency
+  // or the roster selected a file; a record that does not say is refused rather than answered for.
+  const selection = entry.selection;
+  if (!SELECTION.includes(selection)) {
+    throw new ManifestRefusal([
+      selection === undefined || selection === null
+        ? `${file}: no selection reason — only the caller knows whether the changed path, a dependency or the roster picked this file, and a default would record a claim nothing made`
+        : `${file}: unknown selection '${selection}' (expected one of ${SELECTION.join(", ")})`,
+    ]);
+  }
+
   // THE STATUS IS CARRIED THROUGH, NOT RE-DERIVED AT THE END. It used to be validated here as a local and
   // then stored as `entry.status ?? "omitted"`, so a `skipped` record was written with status `omitted` —
   // the dispatch and the status disagreed, the summary counted it as skipped and the record said otherwise
@@ -196,7 +216,7 @@ export function recordFile(manifest, entry) {
     path: file,
     tier: known.tier,
     why: known.why ?? null,
-    selection: entry.selection ?? "changed",
+    selection,
     dispatch,
     status,
     counts: entry.counts ?? null,
@@ -430,7 +450,9 @@ export function manifestFromTierRecords({ gate = "full", tree, sha = "", classif
     // A file no record mentions stays MISSING unless the caller says, in words, why it was not selected:
     // silence about part of the roster is not a receipt.
     if (!omittedReason) continue;
-    recordFile(manifest, { path: entry.path, dispatch: "omitted", reason: omittedReason });
+    // A file no tier ran is `not-selected` (a full gate cannot reach here with an omission; it refuses
+    // first, so `full-roster` is the honest label for the roster-complete case this is written for).
+    recordFile(manifest, { path: entry.path, dispatch: "omitted", reason: omittedReason, selection: gate === "full" ? "full-roster" : "not-selected" });
   }
   sealManifest(manifest);
   if (conflicts.length > 0) {

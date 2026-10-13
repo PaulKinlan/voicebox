@@ -169,6 +169,16 @@ test("gate: every dispatched file is recorded with its own status, counts and du
   assert.equal(record.dispatch, "ran");
   assert.deepEqual(record.counts, { tests: 2, pass: 2, fail: 0, skipped: 0 });
   assert.equal(record.selection, "changed", "the changed file IS the test, so its selection is the change itself");
+  // The rest of the roster is OMITTED, and an omitted file must not inherit a scope claim: it says
+  // `not-selected`, not the aggregator's old default of `changed` (voicebox-beads-zjpm.3).
+  const omittedRecord = outcome.manifest.files.find((f) => f.path === "tests/unselected.test.mjs");
+  assert.equal(omittedRecord.dispatch, "omitted");
+  assert.equal(omittedRecord.selection, "not-selected", "nothing selected this file, and the artifact says so");
+  assert.deepEqual(
+    [...new Set(outcome.manifest.files.map((f) => f.selection))].sort(),
+    ["changed", "not-selected"],
+    "every record states its own reason: the one changed test, and the one nothing selected",
+  );
   assert.equal(outcome.manifest.tree, "b".repeat(40));
   assert.match(readFileSync(outcome.written, "utf8"), /"reconciled": true/);
   rmSync(dir, { recursive: true, force: true });
@@ -297,9 +307,45 @@ test("gate: --dry-run writes the plan's manifest without dispatching anything", 
     assert.equal(outcome.manifest.summary.dispatched, 0);
     assert.equal(outcome.manifest.summary.omitted, 2);
     assert.ok(outcome.manifest.files.every((f) => /dry-run/.test(f.reason)));
+    // A plan that recorded the whole roster as `changed` would be a scope claim inside the plan. The plan
+    // keeps the selection reason it would have used, which is the thing a reader consults it for.
+    assert.deepEqual(
+      Object.fromEntries(outcome.manifest.files.map((f) => [f.path, f.selection])),
+      { "tests/probe.test.mjs": "changed", "tests/unselected.test.mjs": "not-selected" },
+      "the plan names what the changed-path map selected and what it did not",
+    );
     // A dry run is NOT a verdict about the tree, and the artifact says so rather than lending its
     // zero-dispatch record a `pass` a later reader could quote.
     assert.equal(outcome.manifest.verdict, "dry-run");
+  } finally {
+    console.log = realLog;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("gate: every record states its OWN selection reason, and a dependency is not called changed", async () => {
+  // Three reasons from one run: the changed test, a matched sibling the change did not touch, and a file
+  // the changed-path map never picked. The aggregator's old `?? "changed"` default collapsed all three.
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-gate-sel-"));
+  const realLog = console.log;
+  console.log = () => {};
+  try {
+    const outcome = await runGate({
+      changedFiles: ["tests/probe.test.mjs"],
+      matchedTests: ["probe.test.mjs", "side.test.mjs"],
+      partitioned: { unit: ["probe.test.mjs", "side.test.mjs"], server: [], browser: [], unclassified: [] },
+      classified: { unit: [{ file: "probe.test.mjs", why: null }, { file: "side.test.mjs", why: null }, { file: "unselected.test.mjs", why: null }], server: [], browser: [] },
+      gate: "fast",
+      tree: "d".repeat(40),
+      dir,
+      runner: async (file) => result("passed", { file }),
+    });
+    const byPath = Object.fromEntries(outcome.manifest.files.map((f) => [f.path, f.selection]));
+    assert.deepEqual(byPath, {
+      "tests/probe.test.mjs": "changed",
+      "tests/side.test.mjs": "dependency",
+      "tests/unselected.test.mjs": "not-selected",
+    });
   } finally {
     console.log = realLog;
     rmSync(dir, { recursive: true, force: true });

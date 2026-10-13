@@ -340,6 +340,11 @@ export async function runGate({
   ].filter(([, f]) => !partitioned.unclassified.includes(f));
 
   const selected = new Set(ordered.map(([, f]) => f));
+  // The selection REASON is a per-file claim and only the changed-path map can make it: `changed` means the
+  // test file itself changed, `dependency` means a changed source maps to it, and a file the map did not
+  // pick is `not-selected`. Without this, an omitted file inherited the aggregator's `changed` default, so a
+  // gate over 9 changed paths published 223 files as directly changed (voicebox-beads-zjpm.3).
+  const selectionOf = (entry) => (selected.has(path.basename(entry.path)) ? selection(path.basename(entry.path)) : "not-selected");
   const problems = [];
   if (partitioned.unclassified.length > 0) {
     problems.push(...partitioned.unclassified.map((f) => `${f} is mapped by a change but is in NO lane (unclassified)`));
@@ -360,7 +365,7 @@ export async function runGate({
   if (dryRun || problems.length > 0) {
     // Nothing ran, so every classified file is omitted with the reason that is true of it.
     const reason = problems.length > 0 ? "refused: unmapped or unclassified changed path" : "dry-run: nothing dispatched";
-    for (const entry of manifest.classifier.files) recordFile(manifest, { path: entry.path, dispatch: "omitted", reason });
+    for (const entry of manifest.classifier.files) recordFile(manifest, { path: entry.path, dispatch: "omitted", reason, selection: selectionOf(entry) });
     manifest.verdict = problems.length > 0 ? "refused" : dryRun ? "dry-run" : "pass";
     sealManifest(manifest);
     const written = writeManifest(manifest, artifactDir(dir));
@@ -381,7 +386,7 @@ export async function runGate({
     const rc = runStageOnly(script);
     if (rc !== 0) {
       for (const entry of manifest.classifier.files) {
-        recordFile(manifest, { path: entry.path, dispatch: "omitted", reason: `not dispatched: the ${label} stage failed (exit ${rc})` });
+        recordFile(manifest, { path: entry.path, dispatch: "omitted", reason: `not dispatched: the ${label} stage failed (exit ${rc})`, selection: selectionOf(entry) });
       }
       console.log(emitMarker("unknown", [`the ${label} stage failed before any test was dispatched`]));
       manifest.verdict = "fail";
@@ -454,7 +459,7 @@ export async function runGate({
   // what lets a narrow run be quoted as a wide one.
   const omittedReason = gate === "full" ? "not selected: the full roster should have been dispatched" : "fast-only: not selected by the changed-path map";
   for (const entry of manifest.classifier.files) {
-    if (!selected.has(path.basename(entry.path))) recordFile(manifest, { path: entry.path, dispatch: "omitted", reason: omittedReason, selection: gate === "full" ? "full-roster" : "dependency" });
+    if (!selected.has(path.basename(entry.path))) recordFile(manifest, { path: entry.path, dispatch: "omitted", reason: omittedReason, selection: gate === "full" ? "full-roster" : selectionOf(entry) });
   }
 
   const bad = results.filter((r) => r.status !== "passed");

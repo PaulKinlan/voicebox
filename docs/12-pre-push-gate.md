@@ -255,7 +255,17 @@ the artifact was produced over uncommitted bytes, so a dirty run cannot be quote
 
 Every classified file is accounted for exactly once: dispatched (with its terminal status, counts,
 duration and timeout) or **omitted by name with a reason** (`fast-only: not selected by the changed-path
-map`). `scripts/gate-manifest.mjs` reconciles the artifact and refuses, naming each problem, on:
+map`).
+
+**Every record also states WHY it was selected, and the aggregator never supplies that reason:** `changed`
+(the test file itself changed), `dependency` (a changed source maps to it), `full-roster` (the whole roster was
+the scope) or `not-selected` (the changed-path map did not pick it — the honest value for the files a fast gate
+omits). A record with no selection reason is a refusal, not a default. It used to fall through
+`entry.selection ?? "changed"`, which was the one value a fast gate could least often support: measured on this
+branch, a gate over 9 changed paths recorded all 223 classified files as directly changed, contradicting the
+manifest's own `changed` list (voicebox-beads-zjpm.3).
+
+`scripts/gate-manifest.mjs` reconciles the artifact and refuses, naming each problem, on:
 
 | refusal | what it catches |
 |---|---|
