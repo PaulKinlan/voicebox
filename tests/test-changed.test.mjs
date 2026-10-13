@@ -227,6 +227,35 @@ test("gate: an unclassified mapped file REFUSES by name — no implicit unit fal
   rmSync(dir, { recursive: true, force: true });
 });
 
+test("gate: a run that dispatched nothing is `empty`, never a pass", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-gate-empty-"));
+  const lines = [];
+  const realLog = console.log;
+  console.log = (...a) => lines.push(a.join(" "));
+  try {
+    const outcome = await runGate({
+      changedFiles: [],
+      matchedTests: [],
+      partitioned: { unit: [], server: [], browser: [], unclassified: [] },
+      classified: probeClassifier,
+      gate: "fast",
+      tree: "e".repeat(40),
+      dir,
+      runner: async () => {
+        throw new Error("nothing should have been dispatched");
+      },
+    });
+    assert.equal(outcome.code, 0, "an empty run is not a failure of the tree");
+    assert.equal(outcome.manifest.verdict, "empty");
+    assert.equal(outcome.manifest.summary.dispatched, 0);
+    assert.ok(lines.some((l) => /EMPTY: 0 test files were dispatched/.test(l)));
+    assert.ok(!lines.some((l) => /ALL SCOPED TESTS GREEN/.test(l)), "no green line for a run that measured nothing");
+  } finally {
+    console.log = realLog;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("gate: a full gate may not omit a classified file — the omission is the scope claim it cannot make", async () => {
   const { outcome, dir } = await driveGate({ gate: "full" });
   assert.equal(outcome.code, 1, "the full gate's own ruler refuses the omission it just made");

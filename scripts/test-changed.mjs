@@ -192,22 +192,16 @@ export function mapToTests(changedFiles, allTestFiles = null) {
  * It now comes back as `unclassified`, and the GATE refuses it by name; the developer path keeps a loud
  * warning so inner-loop use is not blocked by a classifier gap it cannot fix in that moment.
  */
-export function partitionTests(matchedTests) {
-  const getLane = (lane) => {
-    try {
-      const out = execFileSync(process.execPath, [path.join(ROOT, "scripts/test-lanes.mjs"), "--lane", lane], {
-        cwd: ROOT, env: gitEnv(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
-      }).trim();
-      return new Set(out ? out.split(/\s+/).map((f) => path.basename(f)) : []);
-    } catch (e) {
-      console.error(`[test:changed] failed to query test-lanes.mjs --lane ${lane}: ${e.message}`);
-      process.exit(1);
-    }
-  };
-
-  const unitSet = getLane("unit");
-  const serverSet = getLane("server");
-  const browserSet = getLane("browser");
+export function partitionTests(matchedTests, classified = classify()) {
+  // IN PROCESS, NOT THREE CHILD PROCESSES. This used to spawn `node scripts/test-lanes.mjs --lane <t>`
+  // three times, and each of those lexes all 221 test files to answer: measured on this tree, the three
+  // spawns were ~2.9s of the gate's per-invocation overhead (2.18/1.81/1.59s for one file run directly
+  // against 5.89/4.73/4.28s through the gate). The AUTHORITY is unchanged — `classify()` from
+  // scripts/test-lanes.mjs is still the one owner of which file is in which lane; only the transport is.
+  const names = (lane) => new Set((classified[lane] ?? []).map(({ file }) => file));
+  const unitSet = names("unit");
+  const serverSet = names("server");
+  const browserSet = names("browser");
 
   const matchedUnit = [];
   const matchedServer = [];
@@ -460,7 +454,10 @@ export async function runGate({
 
   const bad = results.filter((r) => r.status !== "passed");
   manifest.unmapped = [...unmappedSources];
-  manifest.verdict = bad.length > 0 ? "fail" : "pass";
+  // ZERO EXECUTED IS NOT A PASS (voicebox-beads-zjpm.3): a run that dispatched nothing has measured
+  // nothing, whatever the reason, so the artifact answers `empty` and never `pass`. `pass` is reserved
+  // for a run in which every dispatched file finished green — the only thing a PASS may mean here.
+  manifest.verdict = bad.length > 0 ? "fail" : results.length === 0 ? "empty" : "pass";
   try {
     finalizeManifest(manifest);
   } catch (e) {
@@ -480,8 +477,11 @@ export async function runGate({
     `[test:changed] manifest ${written} — tree ${tree ? tree.slice(0, 12) : "?"} roster ${manifest.classifier.roster.slice(0, 12)}: ` +
       `classified ${s.classified}, dispatched ${s.dispatched}, omitted ${s.omitted}, passed ${s.passed}, failed ${s.failed}`,
   );
-  if (s.dispatched === 0) console.log("[test:changed] NOTE: 0 test files were dispatched — this run measured nothing (all files omitted by name).");
-  if (bad.length === 0) console.log("[test:changed] ALL SCOPED TESTS GREEN (every dispatched file has a terminal status).");
+  if (s.dispatched === 0) {
+    console.log("[test:changed] EMPTY: 0 test files were dispatched — this run measured nothing (every file is omitted by name above).");
+    console.log("[test:changed] EMPTY is not a PASS: a change with no mapped test, or no change at all, has demonstrated nothing about the tree.");
+  }
+  if (bad.length === 0 && results.length > 0) console.log("[test:changed] ALL SCOPED TESTS GREEN (every dispatched file has a terminal status).");
   return { code: bad.length > 0 ? 1 : 0, manifest, written };
 }
 
@@ -550,7 +550,10 @@ export async function main() {
 
   if (gateMode) {
     const matchedTests = mapToTests(changedFiles, allTests);
-    const partitioned = partitionTests(matchedTests);
+    // ONE classification for the whole gate: the plan, the partition and the manifest's roster are the
+    // same pass, so a file cannot be partitioned by one reading and recorded by another.
+    const classified = classify();
+    const partitioned = partitionTests(matchedTests, classified);
     const { tree, sha, dirty } = measuredTree();
     if (!tree) {
       console.error("[test:changed] REFUSED: the gate needs the tree SHA it is measuring (not in a git worktree?)");
@@ -560,7 +563,7 @@ export async function main() {
     if (dirty) console.error("[test:changed] WARNING: the worktree is dirty — the artifact is labelled with HEAD's tree and records tree_dirty: true.");
     const { code } = await runGate({
       changedFiles, matchedTests, partitioned, unmappedSources, base: getBaseRef(customBase),
-      gate: gateKind, dir: manifestDir, dryRun, tree, sha, treeDirty: dirty,
+      gate: gateKind, dir: manifestDir, dryRun, tree, sha, treeDirty: dirty, classified,
     });
     return code;
   }

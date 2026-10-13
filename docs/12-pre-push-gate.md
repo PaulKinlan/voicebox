@@ -268,6 +268,14 @@ map`). `scripts/gate-manifest.mjs` reconciles the artifact and refuses, naming e
 | full-gate omission | any omitted file in a `--gate-kind full` run |
 | unmapped source | a changed source file that maps to no test |
 
+### The artifact's verdict
+
+`verdict` is one of `pass` (every dispatched file finished green), `fail`, `refused` (an unmapped changed
+source or an unclassified mapped test), `empty` (nothing was dispatched — a run that measured nothing,
+which is **never** called a pass) or `dry-run`. The reconciled `summary` carries `classified`, `recorded`,
+`dispatched`, `omitted`, `skipped`, `passed`, `failed`, `timeout`, `unknown`, `unmapped` and `problems`, so
+"0 dispatched" is visible in the artifact itself rather than only in the log's absence of a green line.
+
 ### The markers the hub reads
 
 Every dispatched file prints, at line start, a marker from the vocabulary `fleet-check`'s coverage
