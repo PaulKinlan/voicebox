@@ -158,11 +158,16 @@ export function recordFile(manifest, entry) {
   const dispatch = entry.dispatch ?? "ran";
   if (!DISPATCH.includes(dispatch)) throw new ManifestRefusal([`${file}: unknown dispatch '${dispatch}'`]);
 
+  // THE STATUS IS CARRIED THROUGH, NOT RE-DERIVED AT THE END. It used to be validated here as a local and
+  // then stored as `entry.status ?? "omitted"`, so a `skipped` record was written with status `omitted` —
+  // the dispatch and the status disagreed, the summary counted it as skipped and the record said otherwise
+  // (caught by the focused test for skip reasons, which is why that test exists).
+  let status = entry.status ?? null;
   if (dispatch !== "ran") {
     if (!entry.reason) {
       throw new ManifestRefusal([`${file}: '${dispatch}' needs a reason — an omitted file with no reason is an unexplained gap`]);
     }
-    const status = entry.status ?? (dispatch === "omitted" ? "omitted" : "skipped");
+    status = entry.status ?? (dispatch === "omitted" ? "omitted" : "skipped");
     if (status !== "omitted" && status !== "skipped") {
       throw new ManifestRefusal([`${file}: a ${dispatch} file's status is '${status}', not omitted/skipped`]);
     }
@@ -173,6 +178,7 @@ export function recordFile(manifest, entry) {
     if (!Number.isFinite(entry.secs)) {
       throw new ManifestRefusal([`${file}: dispatched with no duration — a lost child is not a verdict`]);
     }
+    status = entry.status;
   }
 
   const record = {
@@ -181,7 +187,7 @@ export function recordFile(manifest, entry) {
     why: known.why ?? null,
     selection: entry.selection ?? "changed",
     dispatch,
-    status: entry.status ?? "omitted",
+    status,
     counts: entry.counts ?? null,
     timeout_ms: entry.timeout_ms ?? null,
     secs: Number.isFinite(entry.secs) ? Math.round(entry.secs * 1000) / 1000 : null,

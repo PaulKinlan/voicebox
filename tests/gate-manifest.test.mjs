@@ -162,6 +162,25 @@ test("an omitted or skipped file without a reason is refused: no unexplained gap
   assert.throws(() => recordFile(fresh(), { path: roster[0].path, dispatch: "skipped" }), (e) => /needs a reason/.test(e.message));
 });
 
+test("a SKIPPED file reconciles when it carries its reason, and is counted as skipped rather than passed", () => {
+  // The schema has three dispatch states for a reason: `skipped` is a decision by a caller (a tier that
+  // chose not to run a file), and it is only legitimate WITH its reason. It must not be folded into
+  // `passed`, and it must not be counted as coverage a reader could quote.
+  const manifest = fresh();
+  const skippedPath = roster.find((r) => r.tier === "server").path;
+  for (const entry of roster) {
+    if (entry.tier === "unit") recordFile(manifest, passed({ path: entry.path }));
+    else if (entry.path === skippedPath) recordFile(manifest, { path: entry.path, dispatch: "skipped", reason: "skipped by the caller: the tier is holding the box for a measured reason" });
+    else recordFile(manifest, omitted({ path: entry.path }));
+  }
+  finalizeManifest(manifest);
+  assert.equal(manifest.reconciled, true);
+  assert.equal(manifest.summary.skipped, 1);
+  assert.equal(manifest.summary.passed, rosterCounts(roster).unit);
+  assert.equal(manifest.summary.dispatched + manifest.summary.omitted + manifest.summary.skipped, roster.length);
+  assert.equal(manifest.files.find((f) => f.path === skippedPath).status, "skipped", "a skipped file is never counted as passed");
+});
+
 test("finalizeManifest stamps the summary and REFUSES (throws) when anything is unaccounted for", () => {
   const manifest = recordAll(fresh());
   manifest.files.pop();
