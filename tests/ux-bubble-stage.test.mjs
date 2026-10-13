@@ -8,11 +8,13 @@ import path from "node:path";
 import { startServer } from "./lib/server.mjs";
 import { launch } from "./lib/cdp.mjs";
 
-// The 90s test bound is a BACKSTOP for the two post-reload content waits (20s/30s) and their
-// failure diagnostics, not a longer wait for a broken Files list. The 2026-10-13 union gate saw
-// the first wait's last value false, but had no API response, DOM state or screenshot. That cannot
-// distinguish a slow request from a refused/empty listing or a render failure (voicebox-beads-rtsr).
-test("ux-bubble-stage: light mode default, centered hero mic, files bubble popover, mini-app bubble classification, and standards-mode inner scroll", { timeout: 90000 }, async (t) => {
+// The 75s outer bound is a BACKSTOP, not a longer content wait: the 2026-10-13 failed full-gate
+// run spent 34.2s total including the first wait's full 20s (14.2s before it). A second 30s tray
+// wait plus bounded failure capture can follow a successful file wait: 14.2 + 20 + 30 + capture
+// (0.3s in the controlled negative check below) + ~10s load margin < 75s. The two inner waits still
+// have their original TOTAL budgets, and a broken Files list fails on its named wait, not at 75s.
+// The old gate logged only last=false — no API response, DOM state or screenshot to identify why.
+test("ux-bubble-stage: light mode default, centered hero mic, files bubble popover, mini-app bubble classification, and standards-mode inner scroll", { timeout: 75000 }, async (t) => {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-ux-bubble-stage-"));
   const workspace = path.join(scratch, "project");
   fs.mkdirSync(workspace, { recursive: true });
@@ -503,6 +505,30 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
     if (evidenceDir) await page.screenshot(path.join(evidenceDir, "rtsr-after-save.png"));
   } catch (error) { await reloadEvidence(error); }
   t.diagnostic(`rtsr reload: before=${JSON.stringify(pageClassification.files.sort())}, /api/files=${JSON.stringify(filesPayload.files.sort())}, after=${JSON.stringify(reloadedFiles)}, missing-file mutant=false${evidenceDir ? `, screenshots=${evidenceDir}/rtsr-{before,after}-save.png` : ""}`);
+  // Opt-in diagnostic negative control: exercise the REAL failure path with an impossible named
+  // file, but do not make every full gate take a screenshot. The same browser/server stay in use;
+  // the deliberately failed wait is caught and its evidence asserted, not mistaken for a pass.
+  if (process.env.VOICEBOX_RTSR_DIAG_CONTROL === "1") {
+    const started = Date.now();
+    let captured;
+    try {
+      await page.waitFor(hasExpectedFiles, {
+        args: [["counter.html", "missing.html"]], timeout: 200,
+        label: "missing-file negative control",
+      });
+    } catch (missing) {
+      try { await reloadEvidence(missing); } catch (withEvidence) { captured = withEvidence; }
+    }
+    assert.ok(captured?.message.includes("timed out waiting for missing-file negative control"),
+      "the impossible file must fail promptly rather than render a false pass");
+    const evidence = JSON.parse(captured.message.split("; reload evidence: ")[1]);
+    assert.deepEqual(evidence.dom.fileNames.sort(), ["counter.html", "notes.md"],
+      "failure capture names the actual visible rows");
+    assert.ok(evidence.api.some((entry) => entry.route === "/api/files" && entry.status === 200),
+      "failure capture retains the reload's real /api/files response");
+    assert.ok(evidence.screenshot && fs.existsSync(evidence.screenshot), "failure capture wrote a screenshot");
+    t.diagnostic(`rtsr negative-control failure captured in ${Date.now() - started}ms: ${evidence.screenshot}`);
+  }
 
   const miniAppBubbles = await page.evaluate(() => {
     const actions = document.getElementById("sqeh-actions");
