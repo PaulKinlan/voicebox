@@ -1,4 +1,4 @@
-// tests/ux-bubble-stage.test.mjs — UX Overhaul: Light Mode Default, Centered Hero Mic, Files Bubble Popover, Real Mini-App Bubbles & Scroll Fix (voicebox-beads-3rcy)
+// tests/ux-bubble-stage.test.mjs — UX Overhaul: Light Mode Default, Centered Hero Mic, Files Bubble Popover, Mini-App Bubble Classification, Launch & Scroll Fix (voicebox-beads-3rcy, voicebox-beads-rtsr)
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -8,7 +8,13 @@ import path from "node:path";
 import { startServer } from "./lib/server.mjs";
 import { launch } from "./lib/cdp.mjs";
 
-test("ux-bubble-stage: light mode default, centered hero mic, files bubble popover, real mini-app bubbles, and standards-mode inner scroll", { timeout: 45000 }, async (t) => {
+// The 75s outer bound is a BACKSTOP, not a longer content wait: the 2026-10-13 failed full-gate
+// run spent 34.2s total including the first wait's full 20s (14.2s before it). A second 30s tray
+// wait plus bounded failure capture can follow a successful file wait: 14.2 + 20 + 30 + capture
+// (0.3s in the controlled negative check below) + ~10s load margin < 75s. The two inner waits still
+// have their original TOTAL budgets, and a broken Files list fails on its named wait, not at 75s.
+// The old gate logged only last=false — no API response, DOM state or screenshot to identify why.
+test("ux-bubble-stage: light mode default, centered hero mic, files bubble popover, mini-app bubble classification, and standards-mode inner scroll", { timeout: 75000 }, async (t) => {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-ux-bubble-stage-"));
   const workspace = path.join(scratch, "project");
   fs.mkdirSync(workspace, { recursive: true });
@@ -330,28 +336,211 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
   assert.equal(closedReader.readerDisplay, "none", "#reader is hidden after close");
   assert.equal(closedReader.bubbleHidden, true, "#sqeh-reader-bubble hides after #reader-close");
 
-  // ── 4. Real Mini-App Bubbles & Inner Iframe Scrolling ────────────────────
-  const miniAppBubbles = await page.evaluate(() => {
+  // ── 4. Mini-App Bubbles: Classification, then Mounting & Inner Iframe Scrolling ──
+  // CLASSIFICATION (voicebox-beads-rtsr): counter.html is a bare workspace page — nobody saved it
+  // as an app — so it must NOT be in the Mini-App tray, and must still be in the Files list. The
+  // tray lists apps; a page is launched from the viewer's "Open as Mini-App" action.
+  const pageClassification = await page.evaluate(() => {
     const actions = document.getElementById("sqeh-actions");
     const labels = [...(actions?.querySelectorAll("button") ?? [])].map((b) => b.textContent?.trim() ?? "");
-    const htmlBubbles = [...(actions?.querySelectorAll(".sqeh-miniapp-bubble") ?? [])].map((b) => ({
+    const bubbles = [...(actions?.querySelectorAll(".sqeh-miniapp-bubble") ?? [])].map((b) => ({
       file: b.dataset.miniAppFile,
       id: b.dataset.miniAppId,
       text: b.textContent?.trim(),
     }));
-    return { labels, htmlBubbles };
+    const files = [...document.querySelectorAll("#files .file-open")].map((row) => row.dataset.file);
+    return { labels, bubbles, files };
   });
 
   for (const fakeLabel of ["Mute Mic", "Volume +", "Explorer", "Spotify"]) {
     assert.ok(
-      !miniAppBubbles.labels.some((l) => l.includes(fakeLabel)),
+      !pageClassification.labels.some((l) => l.includes(fakeLabel)),
       `#sqeh-actions must not contain fake placeholder button '${fakeLabel}'`,
     );
   }
-  assert.ok(
-    miniAppBubbles.htmlBubbles.some((b) => b.file === "counter.html"),
-    "workspace counter.html appears as a real Mini-App bubble in #sqeh-actions",
+  assert.ok(pageClassification.files.includes("counter.html"), "the workspace page is still listed in Files");
+  const evidenceDir = process.env.VOICEBOX_TEST_EVIDENCE_DIR;
+  if (evidenceDir) {
+    fs.mkdirSync(evidenceDir, { recursive: true });
+    await page.screenshot(path.join(evidenceDir, "rtsr-before-save.png"));
+  }
+  assert.deepEqual(
+    pageClassification.bubbles,
+    [],
+    "a bare workspace .html page is NOT a Mini-App bubble in #sqeh-actions (voicebox-beads-rtsr)",
   );
+
+  // SAVING IS WHAT MAKES IT AN APP. This drives the product's own API — the same POST the page's
+  // save path issues (syncMiniAppAfterFileSave) — reading the file back through the product's own
+  // file verb rather than posting bytes the test kept in memory.
+  const savedAsApp = await page.evaluate(async () => {
+    const readRes = await fetch("/api/file?name=counter.html");
+    const read = await readRes.json().catch(() => null);
+    // The verb's own field name is `content` (lib/routes/workspace.mjs) — read it, do not assume it.
+    const html = read?.content ?? "";
+    const saveRes = await fetch("/api/mini-apps", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ fileName: "counter.html", title: "Counter Mini-App", html }),
+    });
+    const saved = await saveRes.json().catch(() => null);
+    return {
+      readStatus: readRes.status,
+      htmlLength: html.length,
+      saveStatus: saveRes.status,
+      created: saved?.created,
+      kind: saved?.miniApp?.kind,
+    };
+  });
+  assert.equal(savedAsApp.readStatus, 200, "the page reads back through /api/file");
+  assert.ok(savedAsApp.htmlLength > 0, "the saved html is the file's own bytes");
+  assert.equal(savedAsApp.saveStatus, 200, "POST /api/mini-apps accepts the save");
+  assert.equal(savedAsApp.kind, "app", "a saved mini-app answers kind: 'app'");
+
+  // Reload to render the tray from a fresh /api/mini-apps payload: same file, one save apart.
+  // The union gate saw only "last value false" at the old file-list wait's 20s bound; that says
+  // nothing about whether /api/files was pending, refused, empty or failed to render. Observe the
+  // real reload's network outcomes before navigating, then preserve both original content-wait
+  // bounds. On failure attach the API bodies/statuses, visible Files state and a screenshot — not
+  // a longer timeout that could turn a persistent empty list into a misleading pass.
+  await page.send("Network.enable");
+  const exceptionOffset = page.events("Runtime.exceptionThrown").length;
+  await page.goto(`${server.base}/`);
+  const reloadEvidence = async (error) => {
+    const requests = page.events("Network.requestWillBeSent")
+      .filter(({ request }) => /\/api\/(files|root|mini-apps)(?:\?|$)/.test(request.url))
+      .map(({ requestId, request }) => ({ requestId, route: new URL(request.url).pathname }));
+    const responses = page.events("Network.responseReceived");
+    const finished = new Set(page.events("Network.loadingFinished").map(({ requestId }) => requestId));
+    const failed = page.events("Network.loadingFailed");
+    const api = await Promise.all(requests.map(async ({ requestId, route }) => {
+      const response = responses.find((event) => event.requestId === requestId);
+      const failure = failed.find((event) => event.requestId === requestId);
+      let body = null;
+      if (finished.has(requestId) && response) {
+        try {
+          const data = await page.send("Network.getResponseBody", { requestId });
+          body = data.base64Encoded ? Buffer.from(data.body, "base64").toString("utf8") : data.body;
+          body = JSON.parse(body);
+          body = route === "/api/files"
+            ? { ok: body.ok, refused: body.refused, files: body.files, dir: body.dir, root: body.root }
+            : route === "/api/mini-apps" ? { ok: body.ok, count: body.count } : { ok: body.ok, root: body.root };
+        } catch (cause) { body = { unreadable: String(cause) }; }
+      }
+      return { route, status: response?.response.status ?? null, finished: finished.has(requestId), failure: failure?.errorText ?? null, body };
+    }));
+    let dom;
+    try {
+      dom = await page.evaluate(() => ({
+        url: location.href,
+        readyState: document.readyState,
+        fileNames: [...document.querySelectorAll("#files .file-open")].map((row) => row.dataset.file),
+        filesText: document.getElementById("files")?.textContent?.slice(0, 300),
+        filesBusy: document.getElementById("files")?.getAttribute("aria-busy"),
+        paneState: document.getElementById("made-list")?.dataset.state,
+        countText: document.getElementById("file-count")?.textContent,
+        tray: [...document.querySelectorAll("#sqeh-actions .sqeh-miniapp-bubble")].map((b) => b.dataset.miniAppFile),
+      }));
+    } catch (cause) { dom = { unreadable: String(cause) }; }
+    const exceptions = page.events("Runtime.exceptionThrown").slice(exceptionOffset)
+      .map(({ exceptionDetails }) => exceptionDetails?.text ?? exceptionDetails?.exception?.description).slice(-5);
+    let screenshot = path.join(os.tmpdir(), `voicebox-rtsr-reload-${process.pid}.png`);
+    try { await page.screenshot(screenshot); } catch (cause) { screenshot = null; dom.screenshotError = String(cause); }
+    throw new Error(`${error.message}; reload evidence: ${JSON.stringify({ api, dom, exceptions, screenshot })}`, { cause: error });
+  };
+  // The SAME predicate must reject a missing-file mutant; otherwise a broken/empty Files pane
+  // could pass the readiness wait while the mini-app tray happened to render correctly.
+  const hasExpectedFiles = (expected) => {
+    const names = [...document.querySelectorAll("#files .file-open")].map((row) => row.dataset.file).sort();
+    return names.length === expected.length && names.every((name, index) => name === expected[index]);
+  };
+  let filesPayload;
+  let reloadedFiles;
+  try {
+    // One 20s budget for the actual reload response AND its visible render, not 20s for each.
+    // A non-200/refused/wrong-root/wrong-file response fails as soon as it arrives instead of
+    // polling the DOM until a timeout; only a good response earns the remaining render budget.
+    const deadline = Date.now() + 20000;
+    let filesRequest;
+    let filesResponse;
+    while (Date.now() < deadline) {
+      filesRequest = page.events("Network.requestWillBeSent")
+        .findLast(({ request }) => new URL(request.url).pathname === "/api/files");
+      if (filesRequest) {
+        const requestId = filesRequest.requestId;
+        const failure = page.events("Network.loadingFailed").find(({ requestId: id }) => id === requestId);
+        if (failure) throw new Error(`reload /api/files failed: ${failure.errorText}`);
+        filesResponse = page.events("Network.responseReceived").find(({ requestId: id }) => id === requestId);
+        if (filesResponse && filesResponse.response.status !== 200) {
+          throw new Error(`reload /api/files returned HTTP ${filesResponse.response.status}`);
+        }
+        if (filesResponse && page.events("Network.loadingFinished").some(({ requestId: id }) => id === requestId)) break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 40)); // CDP events are buffered, not exposed as a subscription
+    }
+    if (!filesRequest || !filesResponse || !page.events("Network.loadingFinished")
+      .some(({ requestId }) => requestId === filesRequest.requestId)) {
+      throw new Error("reload /api/files did not finish within 20s");
+    }
+    const responseBody = await page.send("Network.getResponseBody", { requestId: filesRequest.requestId });
+    filesPayload = JSON.parse(responseBody.base64Encoded
+      ? Buffer.from(responseBody.body, "base64").toString("utf8") : responseBody.body);
+    if (filesPayload.ok !== true) throw new Error(`reload /api/files refused: ${filesPayload.refused ?? "unknown"}`);
+    assert.equal(filesPayload.root?.path, workspace, "reload lists the declared workspace, not another root");
+    assert.deepEqual([...filesPayload.files].sort(), ["counter.html", "notes.md"], "reload API names both files");
+    await page.waitFor(hasExpectedFiles, {
+      args: [["counter.html", "notes.md"]], timeout: Math.max(100, deadline - Date.now()),
+      label: "reloaded page renders counter.html and notes.md after /api/files",
+    });
+    reloadedFiles = await page.evaluate(() => [...document.querySelectorAll("#files .file-open")].map((row) => row.dataset.file).sort());
+    assert.deepEqual(reloadedFiles, ["counter.html", "notes.md"], "both named workspace files survive the reload");
+    assert.equal(
+      await page.evaluate(hasExpectedFiles, ["counter.html", "missing.html"]), false,
+      "negative control: a missing file cannot satisfy the same readiness predicate",
+    );
+    await page.waitFor(() => Boolean(document.querySelector("#sqeh-actions .sqeh-miniapp-bubble")), {
+      timeout: 30000,
+      label: "the saved app renders in the tray from a fresh /api/mini-apps payload",
+    });
+    if (evidenceDir) await page.screenshot(path.join(evidenceDir, "rtsr-after-save.png"));
+  } catch (error) { await reloadEvidence(error); }
+  t.diagnostic(`rtsr reload: before=${JSON.stringify(pageClassification.files.sort())}, /api/files=${JSON.stringify(filesPayload.files.sort())}, after=${JSON.stringify(reloadedFiles)}, missing-file mutant=false${evidenceDir ? `, screenshots=${evidenceDir}/rtsr-{before,after}-save.png` : ""}`);
+  // Opt-in diagnostic negative control: exercise the REAL failure path with an impossible named
+  // file, but do not make every full gate take a screenshot. The same browser/server stay in use;
+  // the deliberately failed wait is caught and its evidence asserted, not mistaken for a pass.
+  if (process.env.VOICEBOX_RTSR_DIAG_CONTROL === "1") {
+    const started = Date.now();
+    let captured;
+    try {
+      await page.waitFor(hasExpectedFiles, {
+        args: [["counter.html", "missing.html"]], timeout: 200,
+        label: "missing-file negative control",
+      });
+    } catch (missing) {
+      try { await reloadEvidence(missing); } catch (withEvidence) { captured = withEvidence; }
+    }
+    assert.ok(captured?.message.includes("timed out waiting for missing-file negative control"),
+      "the impossible file must fail promptly rather than render a false pass");
+    const evidence = JSON.parse(captured.message.split("; reload evidence: ")[1]);
+    assert.deepEqual(evidence.dom.fileNames.sort(), ["counter.html", "notes.md"],
+      "failure capture names the actual visible rows");
+    assert.ok(evidence.api.some((entry) => entry.route === "/api/files" && entry.status === 200),
+      "failure capture retains the reload's real /api/files response");
+    assert.ok(evidence.screenshot && fs.existsSync(evidence.screenshot), "failure capture wrote a screenshot");
+    t.diagnostic(`rtsr negative-control failure captured in ${Date.now() - started}ms: ${evidence.screenshot}`);
+  }
+
+  const miniAppBubbles = await page.evaluate(() => {
+    const actions = document.getElementById("sqeh-actions");
+    const htmlBubbles = [...(actions?.querySelectorAll(".sqeh-miniapp-bubble") ?? [])].map((b) => ({
+      file: b.dataset.miniAppFile,
+      id: b.dataset.miniAppId,
+      badge: b.querySelector(".sqeh-miniapp-bubble-badge")?.textContent?.trim(),
+      text: b.textContent?.trim(),
+    }));
+    return { htmlBubbles };
+  });
+
   assert.ok(
     !miniAppBubbles.htmlBubbles.some((b) => b.id === "agent-progress-tracker"),
     "built-in Agent Progress bubble does not appear in #sqeh-actions by default",
@@ -364,8 +553,13 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
     !miniAppBubbles.htmlBubbles.some((b) => b.id === "landing-inspector"),
     "built-in Branch Landing bubble does not appear in #sqeh-actions by default",
   );
-  assert.equal(miniAppBubbles.htmlBubbles.length, 1, "only workspace counter.html bubble appears in #sqeh-actions");
-  assert.equal(miniAppBubbles.htmlBubbles[0].file, "counter.html", "first bubble targets counter.html");
+  assert.equal(miniAppBubbles.htmlBubbles.length, 1, "only the saved counter.html app appears in #sqeh-actions");
+  assert.equal(miniAppBubbles.htmlBubbles[0].file, "counter.html", "the bubble targets counter.html");
+  assert.equal(
+    miniAppBubbles.htmlBubbles[0].badge,
+    "App",
+    "a saved workspace app is badged 'App' after the save (voicebox-beads-rtsr)",
+  );
 
   // Click the counter.html Mini-App bubble in #sqeh-actions and verify it mounts #mini-app-container
   await page.evaluate(() => {

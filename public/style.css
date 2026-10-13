@@ -2159,7 +2159,7 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
 
 /* ── Mini-Apps bubble strip inside Quick Deck ── */
 .sqeh-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.sqeh-actions:empty::after { content: 'Interactive HTML apps you create appear here as bubbles'; font-size: 0.8rem; color: var(--muted); }
+.sqeh-actions:empty::after { content: 'Mini-Apps you or the assistant save appear here as bubbles — other HTML pages stay in Files'; font-size: 0.8rem; color: var(--muted); }
 .sqeh-miniapp-bubble {
   display: inline-flex;
   align-items: center;
