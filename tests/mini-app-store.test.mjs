@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -380,8 +380,9 @@ describe("mini-app-store: persistence, in-place updates, deletion & cross-sandbo
   });
 
   // ── voicebox-beads-dvu8: a workspace page and a shelf app that share a slug and a file name ──
-  // Both directions reproduced on 2abb42a before this fix (see the bead): deleting the app deleted an
-  // unrelated `collision.html` from the workspace, and a save over that name overwrote the app's copy.
+  // Both directions reproduced on 2abb42a (identical store code to 6c306f6) before this fix, in a
+  // disposable tmp fixture: deleting the app deleted an unrelated `collision.html` from the workspace,
+  // and a save over that name overwrote the app's copy and record with the page's content.
   function collisionFixture() {
     const rootPath = makeScratchDir("vb-collide-root-");
     const hostDir = makeScratchDir("vb-collide-host-");
@@ -399,74 +400,98 @@ describe("mini-app-store: persistence, in-place updates, deletion & cross-sandbo
     return { rootPath, hostDir, shelfDir, pageHtml, appHtml };
   }
 
-  it("deleting an app leaves a workspace file the shelf record does not own (voicebox-beads-dvu8)", () => {
+  it("deleting an app leaves a workspace file the shelf record does not name (voicebox-beads-dvu8)", () => {
     const f = collisionFixture();
     const del = deleteMiniApp("Collision App", { rootPath: f.rootPath, hostDir: f.hostDir, sandboxRootDir: "" });
     assert.equal(del.ok, true);
     assert.equal(
       readFileSync(path.join(f.rootPath, "collision.html"), "utf8"),
       f.pageHtml,
-      "the same-named workspace file the record does not prove is left alone",
+      "the same-named workspace file the record does not name is left alone",
     );
     assert.equal(existsSync(path.join(f.shelfDir, "collision.html")), false, "the app's own shelf copy is deleted");
     assert.equal(existsSync(path.join(f.shelfDir, "collision.meta.json")), false, "and its own record");
   });
 
-  it("a valid saved app still deletes both its copies and its record, and its preserved copy (voicebox-beads-dvu8)", () => {
+  it("a legacy record with identical bytes is not proof of ownership: the workspace copy is left (voicebox-beads-dvu8)", () => {
+    // The record predates `workspacePath`, so it cannot say which workspace file is its own. Identical
+    // bytes are not that answer: an unrelated file that happens to be identical looks the same, and the
+    // delete fails closed rather than destroying a file the app may never have owned.
+    const rootPath = makeScratchDir("vb-legacy-bytes-root-");
+    const hostDir = makeScratchDir("vb-legacy-bytes-host-");
+    const shelfDir = path.join(hostDir, "mini-apps");
+    mkdirSync(shelfDir, { recursive: true });
+    const sameHtml = "<!doctype html><html><head><title>Same Bytes</title></head><body><p>identical</p></body></html>";
+    writeFileSync(path.join(rootPath, "same-bytes.html"), sameHtml, "utf8");
+    writeFileSync(path.join(shelfDir, "same-bytes.html"), sameHtml, "utf8");
+    writeFileSync(
+      path.join(shelfDir, "same-bytes.meta.json"),
+      JSON.stringify({ appId: "app_same_bytes", slug: "same-bytes", title: "Same Bytes", fileName: "same-bytes.html" }),
+      "utf8",
+    );
+
+    const del = deleteMiniApp("Same Bytes", { rootPath, hostDir, sandboxRootDir: "" });
+    assert.equal(del.ok, true);
+    assert.equal(existsSync(path.join(rootPath, "same-bytes.html")), true, "identical bytes are not provenance");
+    assert.equal(existsSync(path.join(shelfDir, "same-bytes.html")), false, "the app's own shelf copy still goes");
+    assert.equal(existsSync(path.join(shelfDir, "same-bytes.meta.json")), false, "and its record");
+  });
+
+  it("a valid saved app is updated in place and deletes both its copies and its record (voicebox-beads-dvu8)", () => {
     const rootPath = makeScratchDir("vb-valid-del-root-");
     const hostDir = makeScratchDir("vb-valid-del-host-");
     const shelfDir = path.join(hostDir, "mini-apps");
-    saveMiniApp({ title: "Kanban", html: "<!doctype html><title>Kanban</title><p>v1</p>", rootPath, hostDir });
-    // A second save replaces the first copy, so a preserved previous copy exists too.
-    saveMiniApp({ title: "Kanban", html: "<!doctype html><title>Kanban</title><p>v2</p>", rootPath, hostDir });
+    const first = saveMiniApp({ title: "Kanban", html: "<!doctype html><title>Kanban</title><p>v1</p>", rootPath, hostDir });
+    assert.equal(first.ok, true);
     assert.equal(
-      readFileSync(path.join(hostDir, "mini-app-backups", "previous-kanban.html"), "utf8").includes("v1"),
-      true,
-      "the copy the second save replaced is preserved",
+      JSON.parse(readFileSync(path.join(shelfDir, "kanban.meta.json"), "utf8")).workspacePath,
+      "kanban.html",
+      "a save records the workspace file it wrote, which is what proves ownership later",
     );
+    // A legitimate own-app update: the record names the file being saved, so it is allowed through.
+    const second = saveMiniApp({ title: "Kanban", html: "<!doctype html><title>Kanban</title><p>v2</p>", rootPath, hostDir });
+    assert.equal(second.ok, true, "a saved app can still be updated in place");
+    assert.equal(readFileSync(path.join(rootPath, "kanban.html"), "utf8").includes("v2"), true);
 
     const del = deleteMiniApp("Kanban", { rootPath, hostDir, sandboxRootDir: "" });
     assert.equal(del.ok, true);
     assert.equal(existsSync(path.join(rootPath, "kanban.html")), false, "the app's own workspace copy is deleted");
     assert.equal(existsSync(path.join(shelfDir, "kanban.html")), false, "its shelf copy is deleted");
     assert.equal(existsSync(path.join(shelfDir, "kanban.meta.json")), false, "its record is deleted");
-    assert.equal(existsSync(path.join(hostDir, "mini-app-backups", "previous-kanban.html")), false, "and so is the preserved copy — a deleted app leaves nothing behind");
   });
 
-  it("a save replaces a copy it cannot prove it owns, and preserves the previous copy with its record (voicebox-beads-dvu8)", () => {
+  it("a save over a name it cannot prove it owns is REFUSED, and writes nothing (voicebox-beads-dvu8)", () => {
     const f = collisionFixture();
+    const metaBefore = readFileSync(path.join(f.shelfDir, "collision.meta.json"), "utf8");
+    const hostBefore = readdirSync(f.hostDir).sort();
     const saved = saveMiniApp({ fileName: "collision.html", title: "Unrelated Page", html: f.pageHtml, rootPath: f.rootPath, hostDir: f.hostDir });
-    assert.equal(saved.ok, true, "the save itself is not refused: this base cannot tell an update from a different file");
 
-    // The app's content is never DESTROYED: the copy this save replaced is beside the shelf, with the
-    // record that described it, one generation deep (the next save replaces it).
-    assert.equal(
-      readFileSync(path.join(f.hostDir, "mini-app-backups", "previous-collision.html"), "utf8"),
-      f.appHtml,
-      "the app's previous copy is preserved, byte for byte",
-    );
-    assert.equal(
-      JSON.parse(readFileSync(path.join(f.hostDir, "mini-app-backups", "previous-collision.meta.json"), "utf8")).appId,
-      "app_collision",
-      "and so is the record that described it",
-    );
-    // The record now NAMES the workspace file it was saved from, so an ownership question later is
-    // answered by reading the record rather than by comparing bytes — which a write can race.
-    assert.equal(
-      JSON.parse(readFileSync(path.join(f.shelfDir, "collision.meta.json"), "utf8")).workspacePath,
-      "collision.html",
-    );
+    assert.equal(saved.ok, false, "the save is refused rather than destroying the app's copy");
+    assert.equal(saved.refused, "mini-app-name-taken");
+    assert.match(saved.why, /Collision App/, "the refusal names the app that holds the name");
+    assert.equal(readFileSync(path.join(f.shelfDir, "collision.html"), "utf8"), f.appHtml, "the app's copy is untouched");
+    assert.equal(readFileSync(path.join(f.shelfDir, "collision.meta.json"), "utf8"), metaBefore, "its record is untouched");
+    assert.equal(readFileSync(path.join(f.rootPath, "collision.html"), "utf8"), f.pageHtml, "the page is untouched");
+    assert.deepEqual(readdirSync(f.hostDir).sort(), hostBefore, "a refusal writes nothing at all, not even an entry");
+  });
 
-    // A host-only save has no workspace copy, so its record must not claim one.
-    const hostOnly = makeScratchDir("vb-host-only-");
-    saveMiniApp({ title: "Host Only", html: "<!doctype html><title>Host Only</title>", rootPath: null, hostDir: hostOnly });
-    const hostOnlyMeta = JSON.parse(readFileSync(path.join(hostOnly, "mini-apps", "host-only.meta.json"), "utf8"));
-    assert.equal(Object.hasOwn(hostOnlyMeta, "workspacePath"), false, "a record with no workspace copy names no workspace file");
+  it("a host-only app (no workspace copy) can still be updated in place (voicebox-beads-dvu8)", () => {
+    // The refusal above must not over-fire: with no workspace target there is no file whose ownership is
+    // in question, so the app's own shelf copy is updated in place, as it always was.
+    const hostDir = makeScratchDir("vb-host-only-");
+    const first = saveMiniApp({ title: "Host Only", html: "<!doctype html><title>Host Only</title><p>v1</p>", rootPath: null, hostDir });
+    const second = saveMiniApp({ title: "Host Only", html: "<!doctype html><title>Host Only</title><p>v2</p>", rootPath: null, hostDir });
+    assert.equal(first.ok, true);
+    assert.equal(second.ok, true, "a host-only save is not a workspace save and is not refused");
+    assert.equal(second.miniApp.appId, first.miniApp.appId, "the same app, not a duplicate");
+    const meta = JSON.parse(readFileSync(path.join(hostDir, "mini-apps", "host-only.meta.json"), "utf8"));
+    assert.equal(Object.hasOwn(meta, "workspacePath"), false, "a record with no workspace copy names no workspace file");
+    assert.equal(readFileSync(path.join(hostDir, "mini-apps", "host-only.html"), "utf8").includes("v2"), true);
 
-    // And a host-only app's delete does not reach a same-named workspace file it does not own.
+    // And that host-only app's deletion does not reach a same-named workspace file it does not own.
     const otherRoot = makeScratchDir("vb-host-only-root-");
     writeFileSync(path.join(otherRoot, "host-only.html"), "<!doctype html><title>Somebody Else</title>", "utf8");
-    assert.equal(deleteMiniApp("Host Only", { rootPath: otherRoot, hostDir: hostOnly, sandboxRootDir: "" }).ok, true);
+    assert.equal(deleteMiniApp("Host Only", { rootPath: otherRoot, hostDir, sandboxRootDir: "" }).ok, true);
     assert.equal(
       existsSync(path.join(otherRoot, "host-only.html")),
       true,
