@@ -7,9 +7,11 @@
 // port goes dead, and Paul spent an evening reading a UI with no loop behind it. Three actors hit it
 // in one night.
 //
-// I COULD NOT REPRODUCE THE `--watch` TRIGGER ITSELF on this machine: forcing a restart by rewriting
-// `lib/resolver.mjs` with identical bytes produced a clean rebind and `/api/health` answered at every
-// poll. So there is no timing lottery here pretending to be a reproduction. What IS measured is the
+// I COULD NOT REPRODUCE THE `--watch` TRIGGER ITSELF on this machine: forcing a restart originally
+// produced a clean rebind and `/api/health` answered at every poll. The restart check now changes a
+// scratch marker watched by Node instead of rewriting tracked source; it exercises the supervisor's
+// rebind, not the module-graph trigger of a real landing. So there is no timing lottery here pretending
+// to be a reproduction. What IS measured is the
 // MECHANISM that produces the dead port — the old code died with an uncaught EADDRINUSE and, under
 // `--watch`, nothing restarts it until the next file change — and that is what these checks pin:
 //
@@ -21,10 +23,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import net from "node:net";
-import { readFileSync, writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
+import { makeScratchDir } from "../tools/tree-dirt.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SERVER = path.join(ROOT, "server.mjs");
@@ -214,9 +217,6 @@ test("a port held past the deadline is a NAMED refusal, not a stack trace", { ti
 });
 
 test("the reported path: a landing-triggered --watch restart leaves a port that answers", { timeout: 90000 }, async () => {
-  const watched = path.join(ROOT, "lib", "resolver.mjs");
-  const original = readFileSync(watched);
-
   // A FREE PORT IS PICKED AND THEN HANDED OVER, which races when two suites run at once — and the
   // gate runs this suite on EVERY push, so two lanes pushing together can take the same port between
   // the probe closing and the child binding. Measured: two concurrent full suites made this test the
@@ -225,11 +225,15 @@ test("the reported path: a landing-triggered --watch restart leaves a port that 
   // fix is to notice a lost race and pick again rather than to pin a port or widen the deadline.
   const attempt = async () => {
   const port = await freePort();
+  // Keep the only write outside the measured worktree, including when a port race forces a retry.
+  const scratch = makeScratchDir("vb-bind-watch-", { tree: ROOT });
+  const marker = path.join(scratch, "reload.txt");
+  writeFileSync(marker, "before\n");
 
   // `--watch` FORKS: the supervisor is the parent and the server is its child, so killing the parent
   // alone left a live supervisor holding the port — which hung this very file rather than the thing
   // under test. Its own process group is killed as a group.
-  const child = spawn(process.execPath, ["--watch", SERVER], {
+  const child = spawn(process.execPath, [`--watch-path=${scratch}`, SERVER], {
     cwd: ROOT,
     detached: true,
     env: { ...process.env, PORT: String(port) },
@@ -248,9 +252,9 @@ test("the reported path: a landing-triggered --watch restart leaves a port that 
     if (!up && /EADDRINUSE|in use/i.test(output)) return "lost the port race";
     assert.equal(up, true, `the supervised server never came up:\n${output}`);
 
-    // A landing's shape: a file under lib/ changes. Identical bytes, so the tree stays clean; the
-    // mtime is what the watcher sees.
-    writeFileSync(watched, original);
+    // Trigger Node's watch supervisor without changing a tracked inode (even an identical-byte
+    // rewrite changes ctime and makes fleet-check mark the entire gate STALE).
+    writeFileSync(marker, "after\n");
 
     // WAIT FOR THE RESTART, do not assume its latency. This slept a flat 250ms and then demanded
     // "Restarting" in the output — which is true on a quiet machine and false when two suites run at
@@ -270,6 +274,7 @@ test("the reported path: a landing-triggered --watch restart leaves a port that 
     return null;
   } finally {
     await reap(child);
+    rmSync(scratch, { recursive: true, force: true });
   }
   };
 
