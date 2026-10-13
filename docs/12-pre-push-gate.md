@@ -276,6 +276,11 @@ which is **never** called a pass) or `dry-run`. The reconciled `summary` carries
 `dispatched`, `omitted`, `skipped`, `passed`, `failed`, `timeout`, `unknown`, `unmapped` and `problems`, so
 "0 dispatched" is visible in the artifact itself rather than only in the log's absence of a green line.
 
+`verdictOf(manifest)` is the **one** answer to "what does this manifest mean" — `refused` when it does not
+reconcile, `fail` when any dispatched file is not `passed` (timeout and unknown included), `empty` when
+nothing was dispatched, else `pass`. It is exported for every orchestrator that folds records, so the
+"an unfinished file is not a pass" half cannot be re-derived differently by a second caller.
+
 ### The markers the hub reads
 
 Every dispatched file prints, at line start, a marker from the vocabulary `fleet-check`'s coverage

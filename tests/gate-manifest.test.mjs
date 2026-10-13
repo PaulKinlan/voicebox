@@ -34,6 +34,7 @@ import {
   rosterOf,
   tapCounts,
   testChildEnv,
+  verdictOf,
   writeManifest,
 } from "../scripts/gate-manifest.mjs";
 import { classify } from "../scripts/test-lanes.mjs";
@@ -414,4 +415,33 @@ test("aggregate: a narrower gate may account for what it did not run, BY NAME, a
   assert.equal(named.manifest.reconciled, true, named.manifest.problems.join(" | "));
   assert.equal(named.manifest.summary.omitted, roster.length - records[0].files.length);
   assert.ok(named.manifest.files.filter((f) => f.dispatch === "omitted").every((f) => /fast-only/.test(f.reason)));
+});
+
+test("verdictOf is the ONE answer to 'what does this manifest mean' — an unfinished file is never a pass", () => {
+  const pass = recordAll(fresh());
+  pass.summary = reconcile(pass).summary;
+  pass.reconciled = true;
+  assert.equal(verdictOf(pass), "pass");
+
+  for (const status of ["failed", "timeout", "unknown"]) {
+    const m = fresh();
+    const victim = roster.find((r) => r.tier === "unit");
+    for (const entry of roster) {
+      if (entry.path === victim.path) recordFile(m, { path: entry.path, dispatch: "ran", status, counts: status === "unknown" ? null : { tests: 1, pass: 0, fail: 1, skipped: 0 }, secs: 0.4 });
+      else if (entry.tier === "unit") recordFile(m, passed({ path: entry.path }));
+      else recordFile(m, omitted({ path: entry.path }));
+    }
+    m.summary = reconcile(m).summary;
+    m.reconciled = true;
+    assert.equal(verdictOf(m), "fail", `${status} must not read as a pass`);
+
+    const unfinished = { ...m, reconciled: false };
+    assert.equal(verdictOf(unfinished), "refused", "a manifest that does not reconcile is refused, not failed");
+  }
+
+  const empty = fresh();
+  for (const entry of roster) recordFile(empty, omitted({ path: entry.path }));
+  empty.summary = reconcile(empty).summary;
+  empty.reconciled = true;
+  assert.equal(verdictOf(empty), "empty", "nothing dispatched is never a pass");
 });

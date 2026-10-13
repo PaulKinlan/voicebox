@@ -332,6 +332,20 @@ export function sealManifest(manifest, { finishedAt = new Date().toISOString() }
   return manifest;
 }
 
+/**
+ * THE VERDICT RULE, FROZEN IN ONE PLACE (v1, for every orchestrator that folds records): a manifest that does
+ * not reconcile is `refused`; a manifest in which ANY dispatched file is not `passed` is `fail` (timeout and
+ * unknown included — an unfinished file is not a pass); a manifest that dispatched nothing is `empty` (a run
+ * that measured nothing, never a pass); otherwise `pass`. Exported so a supervisor folding per-file records
+ * cannot re-derive the rule and get the "unknown is not a pass" half wrong.
+ */
+export function verdictOf(manifest) {
+  if (!manifest.reconciled) return "refused";
+  if (manifest.files.some((f) => f.dispatch === "ran" && f.status !== "passed")) return "fail";
+  if (!manifest.summary || manifest.summary.dispatched === 0) return "empty";
+  return "pass";
+}
+
 /** Seal, then REFUSE (`ManifestRefusal`) when anything is not accounted for. */
 export function finalizeManifest(manifest, opts) {
   sealManifest(manifest, opts);
@@ -423,8 +437,7 @@ export function manifestFromTierRecords({ gate = "full", tree, sha = "", classif
     manifest.problems = [...conflicts, ...manifest.problems];
     manifest.reconciled = false;
   }
-  const bad = manifest.files.filter((f) => f.status === "failed" || f.status === "timeout" || f.status === "unknown").length;
-  manifest.verdict = !manifest.reconciled ? "refused" : bad > 0 ? "fail" : manifest.summary.dispatched === 0 ? "empty" : "pass";
+  manifest.verdict = verdictOf(manifest);
   const written = dir ? writeManifest(manifest, dir) : null;
   return { manifest, written };
 }

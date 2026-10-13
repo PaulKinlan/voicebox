@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { gitEnv } from "../lib/git-env.mjs";
 import { classify } from "./test-lanes.mjs";
 import { ISOLATED } from "./test-shards.mjs";
-import { createManifest, emitMarker, finalizeManifest, ManifestRefusal, recordFile, sealManifest, tapCounts, testChildEnv, writeManifest } from "./gate-manifest.mjs";
+import { createManifest, emitMarker, finalizeManifest, ManifestRefusal, recordFile, sealManifest, tapCounts, testChildEnv, verdictOf, writeManifest } from "./gate-manifest.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TESTS_DIR = path.join(ROOT, "tests");
@@ -459,12 +459,12 @@ export async function runGate({
 
   const bad = results.filter((r) => r.status !== "passed");
   manifest.unmapped = [...unmappedSources];
-  // ZERO EXECUTED IS NOT A PASS (voicebox-beads-zjpm.3): a run that dispatched nothing has measured
-  // nothing, whatever the reason, so the artifact answers `empty` and never `pass`. `pass` is reserved
-  // for a run in which every dispatched file finished green — the only thing a PASS may mean here.
-  manifest.verdict = bad.length > 0 ? "fail" : results.length === 0 ? "empty" : "pass";
   try {
+    // Sealed first, verdict second: `verdictOf` answers from `reconciled` and `summary`, which only exist
+    // once the manifest is closed. It carries the rule in ONE place — zero dispatched is `empty` and never
+    // `pass`; timeout and unknown are not a pass either (voicebox-beads-zjpm.3).
     finalizeManifest(manifest);
+    manifest.verdict = verdictOf(manifest);
   } catch (e) {
     if (!(e instanceof ManifestRefusal)) throw e;
     console.error("[test:changed] REFUSED: the gate manifest does not reconcile:");
