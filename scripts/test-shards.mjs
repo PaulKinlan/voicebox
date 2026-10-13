@@ -122,8 +122,27 @@ export function isFailed({ code, tests, fail, notOk }) {
  * blobs. It is also the tier's slowest file (67.3s under 4 workers vs 23.3s alone), so it is
  * paying the contention twice: once in its duration, once in the race that only exists because of
  * it. Run alone, its shim keeps a 5×–20× margin over the same chain.
+ *
+ * THE THIRD CASUALTY IS A ROOM-PAGE READINESS WAIT (voicebox-beads-rtsr). `tests/ux-bubble-stage.
+ * test.mjs` reloads the room page to prove a saved app renders in the tray from a fresh
+ * /api/mini-apps payload, then waits for the file list and the tray. Measured 2026-10-13 on the
+ * union full gate (merged tree 108f5a9, 2-vCPU, 4 shard workers, tier wall 512.5s, concurrent
+ * browser suites 108.5s/91.4s): the file failed exactly one wait — "reloaded page lists both
+ * files; last value false" at its then-20s bound — with 271 of 272 tier tests green and the #files
+ * render path byte-identical to the reviewed tip (the union diff touched lib/resolver.mjs and five
+ * test files; nothing in public/, server.mjs or lib/mini-app-store.mjs). Every focused run of the
+ * same file passed: 10.07s through this change's own browser gate, 16.4s and 7.4s under two
+ * independent reviewers' bounded runs. So the file does not contain a defect that four workers can
+ * find; it contains a wait whose 20s bound was a load question, not a behaviour question — the
+ * same profile as the two above, one measurement old. It runs alone, and its two reload waits carry
+ * 60s bounds (the test's own outer bound is 180s so a failing wait reports its own label); the
+ * honest reading stays the same as the others: isolated until somebody can fail it on demand.
  */
-export const ISOLATED = new Set(["tests/ldxa-barge-in-browser.test.mjs", "tests/pre-push.test.mjs"]);
+export const ISOLATED = new Set([
+  "tests/ldxa-barge-in-browser.test.mjs",
+  "tests/pre-push.test.mjs",
+  "tests/ux-bubble-stage.test.mjs",
+]);
 
 /**
  * Split a queue into the part that runs with `workers` shards and the part that runs alone. Pure: it

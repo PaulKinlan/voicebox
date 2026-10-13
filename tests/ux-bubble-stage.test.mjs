@@ -8,11 +8,15 @@ import path from "node:path";
 import { startServer } from "./lib/server.mjs";
 import { launch } from "./lib/cdp.mjs";
 
-// The bound is 60s rather than 45s because this test now does ONE MORE navigation: proving that a
+// The bound is 180s, and it is a BACKSTOP, not a budget: the measured run uses ~10s of it (7.4s on a
+// quiet box, 16.4s under the reviewer's load). This test does ONE EXTRA NAVIGATION — proving that a
 // bare workspace page is absent from the tray and the same file is a badged App after a save needs a
-// tray rendered from a fresh /api/mini-apps payload, and the page has no refresh hook for it. The
-// assertions are unchanged; only the document load count and the waits around it grew.
-test("ux-bubble-stage: light mode default, centered hero mic, files bubble popover, mini-app bubble classification, and standards-mode inner scroll", { timeout: 60000 }, async (t) => {
+// tray rendered from a fresh /api/mini-apps payload, and the page has no refresh hook for it — and
+// the two waits around that reload each carry a 60s bound. The outer bound must exceed the waits it
+// contains so a slow box fails on the wait's own label ("reloaded page lists both files", with the
+// last value) instead of an anonymous test-runner kill; the 2026-10-13 union gate failed exactly
+// there, at the wait, with a true product (see the reload comment and scripts/test-shards.mjs).
+test("ux-bubble-stage: light mode default, centered hero mic, files bubble popover, mini-app bubble classification, and standards-mode inner scroll", { timeout: 180000 }, async (t) => {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-ux-bubble-stage-"));
   const workspace = path.join(scratch, "project");
   fs.mkdirSync(workspace, { recursive: true });
@@ -395,14 +399,22 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
   // could only say "false": the document load + file list, then the catalog fetch that renders the
   // tray. Measured: on an idle VM both land in the first evaluation; under a loaded 2-vCPU box the
   // catalog fetch is the slower half, and a combined wait failed there while the behaviour was right
-  // (the same flow was reproduced directly in the browser and passed — see the bead).
+  // (the same flow was reproduced directly in the browser and passed — see the bead). The bounds are
+  // 60s each, not 20s/30s, because the 2026-10-13 union full gate failed the FIRST wait at its 20s
+  // bound ("reloaded page lists both files; last value false", 4 shard workers on 2 vCPU, 512.5s
+  // wall, concurrent browser suites 108.5s/91.4s) while the #files render path was byte-identical
+  // to the reviewed tip — the diff touched lib/resolver.mjs and five test files, nothing in
+  // public/ or server.mjs — and every focused run passed in 7.4–16.4s. So the bound is a question
+  // of box load, not behaviour, and it is not the only treatment: this file also runs ISOLATED
+  // (scripts/test-shards.mjs), alone after the parallel queue, so it no longer races three other
+  // browser files for two cores. The 60s waits are the belt to that brace.
   await page.goto(`${server.base}/`);
   await page.waitFor(() => document.querySelectorAll("#files .file-open").length === 2, {
-    timeout: 20000,
+    timeout: 60000,
     label: "reloaded page lists both files",
   });
   await page.waitFor(() => Boolean(document.querySelector("#sqeh-actions .sqeh-miniapp-bubble")), {
-    timeout: 30000,
+    timeout: 60000,
     label: "the saved app renders in the tray from a fresh /api/mini-apps payload",
   });
 
