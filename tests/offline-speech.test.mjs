@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -65,6 +65,52 @@ describe("Local offline speech-to-text and text-to-speech fallback", () => {
       );
     } finally {
       rmSync(scratchBin, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores relative and empty PATH entries while retaining trusted absolute speech binaries (voicebox-beads-34or)", async () => {
+    const scratch = mkdtempSync(path.join(os.tmpdir(), "vb-offline-speech-path-"));
+    try {
+      const relativeDir = path.join(scratch, "relative-bin");
+      const absoluteDir = path.join(scratch, "absolute-bin");
+      const marker = path.join(scratch, "untrusted-executed");
+      mkdirSync(relativeDir);
+      mkdirSync(absoluteDir);
+      for (const binary of ["whisper-cli", "piper"]) {
+        // The marker stub must never execute, even when the relative directory comes first.
+        const untrusted = path.join(relativeDir, binary);
+        writeFileSync(untrusted, `#!/bin/sh\nprintf executed > '${marker}'\nexit 1\n`);
+        chmodSync(untrusted, 0o755);
+        const trusted = path.join(absoluteDir, binary);
+        writeFileSync(trusted, binary === "piper" ? "#!/bin/sh\nprintf RIFF-trusted\n" : "#!/bin/sh\necho trusted-transcript\n");
+        chmodSync(trusted, 0o755);
+      }
+
+      const relativeSegment = path.relative(process.cwd(), relativeDir);
+      const ignoredEnv = { PATH: ["", relativeSegment, ""].join(path.delimiter) };
+      const ignored = detectLocalSpeechEngines({ env: ignoredEnv });
+      assert.equal(ignored.stt.binary, null);
+      assert.equal(ignored.tts.binary, null);
+      const fallback = await transcribeAudioOffline(Buffer.from([1]), { env: ignoredEnv });
+      assert.equal(fallback.fallback, "browser-speech-recognition");
+      assert.equal(existsSync(marker), false);
+
+      const trustedEnv = { PATH: ["", relativeSegment, absoluteDir, ""].join(path.delimiter) };
+      const retained = detectLocalSpeechEngines({ env: trustedEnv });
+      assert.equal(retained.stt.binary, path.join(absoluteDir, "whisper-cli"));
+      assert.equal(retained.tts.binary, path.join(absoluteDir, "piper"));
+      const transcript = await transcribeAudioOffline(Buffer.from([1]), { env: trustedEnv });
+      assert.equal(transcript.transcript, "trusted-transcript");
+      const speech = await synthesizeSpeechOffline("test", { env: trustedEnv });
+      assert.equal(Buffer.from(speech.audioBase64, "base64").toString(), "RIFF-trusted");
+      assert.equal(existsSync(marker), false);
+
+      const configured = detectLocalSpeechEngines({
+        env: { PATH: relativeSegment, VOICEBOX_WHISPER_CLI: path.join(absoluteDir, "whisper-cli") },
+      });
+      assert.equal(configured.stt.binary, path.join(absoluteDir, "whisper-cli"));
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
     }
   });
 
