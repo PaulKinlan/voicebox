@@ -452,34 +452,56 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
     const names = [...document.querySelectorAll("#files .file-open")].map((row) => row.dataset.file).sort();
     return names.length === expected.length && names.every((name, index) => name === expected[index]);
   };
+  let filesPayload;
+  let reloadedFiles;
   try {
+    // One 20s budget for the actual reload response AND its visible render, not 20s for each.
+    // A non-200/refused/wrong-root/wrong-file response fails as soon as it arrives instead of
+    // polling the DOM until a timeout; only a good response earns the remaining render budget.
+    const deadline = Date.now() + 20000;
+    let filesRequest;
+    let filesResponse;
+    while (Date.now() < deadline) {
+      filesRequest = page.events("Network.requestWillBeSent")
+        .findLast(({ request }) => new URL(request.url).pathname === "/api/files");
+      if (filesRequest) {
+        const requestId = filesRequest.requestId;
+        const failure = page.events("Network.loadingFailed").find(({ requestId: id }) => id === requestId);
+        if (failure) throw new Error(`reload /api/files failed: ${failure.errorText}`);
+        filesResponse = page.events("Network.responseReceived").find(({ requestId: id }) => id === requestId);
+        if (filesResponse && filesResponse.response.status !== 200) {
+          throw new Error(`reload /api/files returned HTTP ${filesResponse.response.status}`);
+        }
+        if (filesResponse && page.events("Network.loadingFinished").some(({ requestId: id }) => id === requestId)) break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 40)); // CDP events are buffered, not exposed as a subscription
+    }
+    if (!filesRequest || !filesResponse || !page.events("Network.loadingFinished")
+      .some(({ requestId }) => requestId === filesRequest.requestId)) {
+      throw new Error("reload /api/files did not finish within 20s");
+    }
+    const responseBody = await page.send("Network.getResponseBody", { requestId: filesRequest.requestId });
+    filesPayload = JSON.parse(responseBody.base64Encoded
+      ? Buffer.from(responseBody.body, "base64").toString("utf8") : responseBody.body);
+    if (filesPayload.ok !== true) throw new Error(`reload /api/files refused: ${filesPayload.refused ?? "unknown"}`);
+    assert.equal(filesPayload.root?.path, workspace, "reload lists the declared workspace, not another root");
+    assert.deepEqual([...filesPayload.files].sort(), ["counter.html", "notes.md"], "reload API names both files");
     await page.waitFor(hasExpectedFiles, {
-      args: [["counter.html", "notes.md"]], timeout: 20000,
-      label: "reloaded page lists counter.html and notes.md",
+      args: [["counter.html", "notes.md"]], timeout: Math.max(100, deadline - Date.now()),
+      label: "reloaded page renders counter.html and notes.md after /api/files",
     });
+    reloadedFiles = await page.evaluate(() => [...document.querySelectorAll("#files .file-open")].map((row) => row.dataset.file).sort());
+    assert.deepEqual(reloadedFiles, ["counter.html", "notes.md"], "both named workspace files survive the reload");
+    assert.equal(
+      await page.evaluate(hasExpectedFiles, ["counter.html", "missing.html"]), false,
+      "negative control: a missing file cannot satisfy the same readiness predicate",
+    );
     await page.waitFor(() => Boolean(document.querySelector("#sqeh-actions .sqeh-miniapp-bubble")), {
       timeout: 30000,
       label: "the saved app renders in the tray from a fresh /api/mini-apps payload",
     });
+    if (evidenceDir) await page.screenshot(path.join(evidenceDir, "rtsr-after-save.png"));
   } catch (error) { await reloadEvidence(error); }
-  const reloadedFiles = await page.evaluate(() => [...document.querySelectorAll("#files .file-open")].map((row) => row.dataset.file).sort());
-  assert.deepEqual(reloadedFiles, ["counter.html", "notes.md"], "both named workspace files survive the reload");
-  assert.equal(
-    await page.evaluate(hasExpectedFiles, ["counter.html", "missing.html"]), false,
-    "negative control: a missing file cannot satisfy the same readiness predicate",
-  );
-  const filesRequest = page.events("Network.requestWillBeSent")
-    .findLast(({ request }) => new URL(request.url).pathname === "/api/files");
-  assert.ok(filesRequest, "the reloaded page requested /api/files");
-  const filesResponse = page.events("Network.responseReceived")
-    .find(({ requestId }) => requestId === filesRequest.requestId);
-  assert.equal(filesResponse?.response.status, 200, "the reload's own /api/files request succeeded");
-  const responseBody = await page.send("Network.getResponseBody", { requestId: filesRequest.requestId });
-  const filesPayload = JSON.parse(responseBody.base64Encoded
-    ? Buffer.from(responseBody.body, "base64").toString("utf8") : responseBody.body);
-  assert.equal(filesPayload.ok, true, "the reload's own /api/files body was not a refusal");
-  assert.deepEqual([...filesPayload.files].sort(), reloadedFiles, "the visible Files rows match the reload's API body");
-  if (evidenceDir) await page.screenshot(path.join(evidenceDir, "rtsr-after-save.png"));
   t.diagnostic(`rtsr reload: before=${JSON.stringify(pageClassification.files.sort())}, /api/files=${JSON.stringify(filesPayload.files.sort())}, after=${JSON.stringify(reloadedFiles)}, missing-file mutant=false${evidenceDir ? `, screenshots=${evidenceDir}/rtsr-{before,after}-save.png` : ""}`);
 
   const miniAppBubbles = await page.evaluate(() => {
