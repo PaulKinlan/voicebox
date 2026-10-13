@@ -9,9 +9,11 @@
 // roster would prove only that the test agrees with itself.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   GATES,
   HUB_MARKER_PATTERNS,
@@ -21,6 +23,7 @@ import {
   createManifest,
   emitMarker,
   finalizeManifest,
+  manifestFromTierRecords,
   manifestPath,
   readManifest,
   reconcile,
@@ -35,6 +38,7 @@ import {
 } from "../scripts/gate-manifest.mjs";
 import { classify } from "../scripts/test-lanes.mjs";
 
+const root = fileURLToPath(new URL("../", import.meta.url));
 const classified = classify();
 const roster = rosterOf(classified);
 
@@ -305,4 +309,109 @@ test("a tier record folds into the one manifest: a tier never writes a manifest 
   const unknownRecord = second.files[0];
   assert.equal(unknownRecord.status, "unknown");
   assert.equal(unknownRecord.counts, null);
+});
+
+// ═══════════ the full gate's receipt: many tier records, ONE manifest ═══════════
+// The tiers are separate processes (a unit tier, a server pool, and the browser runner phased into its
+// parallel and isolated invocations), so no single runner can assert the lane. This fold is what can, and
+// the cases below are the ones that matter to a landing: a dropped file, a file claimed twice, and the
+// omission rule for a gate that is deliberately narrower than the roster.
+
+/** Two tier records whose union is the whole roster, split the way the live tier is actually phased. */
+function tierRecordsFor(roster) {
+  const unit = [], server = [], parallel = [], isolated = [];
+  for (const entry of roster) {
+    const line = { path: entry.path, status: "passed", counts: { tests: 4, pass: 4, fail: 0, skipped: 0 }, timeout_ms: 300000, secs: 1.2 };
+    if (entry.tier === "unit") unit.push(line);
+    else if (entry.tier === "server") server.push(line);
+    else (ISOLATED_NAMES.has(entry.path) ? isolated : parallel).push(line);
+  }
+  return [
+    { tier: "unit", files: unit },
+    { tier: "server", files: server },
+    { tier: "browser", phase: "parallel", files: parallel },
+    { tier: "browser", phase: "isolated", files: isolated },
+  ];
+}
+const ISOLATED_NAMES = new Set(["tests/pre-push.test.mjs", "tests/ldxa-barge-in-browser.test.mjs"]);
+
+test("aggregate: the tier records fold into one reconciled manifest over the whole roster", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-aggregate-"));
+  try {
+    const records = tierRecordsFor(roster);
+    const dirOf = path.join(dir, "records");
+    mkdirSync(dirOf, { recursive: true });
+    const paths = records.map((r, i) => {
+      const p = path.join(dirOf, `tier-${i}.json`);
+      writeFileSync(p, JSON.stringify(r));
+      return p;
+    });
+    const out = path.join(dir, "out");
+    const res = spawnSync(
+      process.execPath,
+      [path.join(root, "scripts/gate-manifest.mjs"), "aggregate", "--gate", "full", "--tree", "f".repeat(40), "--out", out, ...paths.flatMap((p) => ["--record", p])],
+      { cwd: root, encoding: "utf8" },
+    );
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    const manifest = JSON.parse(readFileSync(path.join(out, `${"f".repeat(40)}.full.manifest.json`), "utf8"));
+    assert.equal(manifest.reconciled, true);
+    assert.equal(manifest.verdict, "pass");
+    assert.equal(manifest.summary.classified, roster.length);
+    assert.equal(manifest.summary.dispatched, roster.length);
+    assert.equal(manifest.summary.omitted, 0, "a full gate omits nothing");
+    assert.equal(manifest.problems.length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("aggregate: a tier that drops a file is refused as MISSING, and one claimed twice as DUPLICATE", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-aggregate-bad-"));
+  try {
+    const write = (records, name) => {
+      const p = path.join(dir, name);
+      writeFileSync(p, JSON.stringify(records));
+      return p;
+    };
+    const dropped = tierRecordsFor(roster);
+    const victim = dropped.find((r) => r.tier === "browser" && r.phase === "parallel").files.pop();
+    const { manifest, written } = manifestFromTierRecords({
+      gate: "full",
+      tree: "0".repeat(40),
+      classified,
+      records: dropped,
+      dir: path.join(dir, "out-dropped"),
+    });
+    assert.equal(manifest.reconciled, false);
+    assert.ok(manifest.problems.some((p) => p.includes(victim.path) && /missing/.test(p)), manifest.problems.join(" | "));
+    assert.equal(manifest.verdict, "refused");
+    assert.ok(written, "a refused aggregate still writes its evidence");
+
+    const twice = tierRecordsFor(roster);
+    twice.push({ tier: "browser", phase: "parallel", files: [twice[2].files[0]] });
+    const duplicate = manifestFromTierRecords({ gate: "full", tree: "0".repeat(40), classified, records: twice, dir: null });
+    assert.equal(duplicate.manifest.reconciled, false);
+    assert.ok(duplicate.manifest.problems.some((p) => /recorded twice|duplicate/.test(p)), duplicate.manifest.problems.join(" | "));
+    assert.equal(duplicate.manifest.verdict, "refused");
+
+    // And the CLI turns a non-reconciling aggregate into a non-zero exit, not a warning.
+    const p2 = write(twice, "twice.json");
+    const res = spawnSync(process.execPath, [path.join(root, "scripts/gate-manifest.mjs"), "aggregate", "--gate", "full", "--tree", "0".repeat(40), "--out", path.join(dir, "out-twice"), "--record", p2], { cwd: root, encoding: "utf8" });
+    assert.notEqual(res.status, 0);
+    assert.match(res.stderr, /REFUSED/);
+    rmSync(p2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("aggregate: a narrower gate may account for what it did not run, BY NAME, and never by silence", () => {
+  const records = tierRecordsFor(roster).filter((r) => r.tier === "unit");
+  const silent = manifestFromTierRecords({ gate: "fast", tree: "1".repeat(40), classified, records, dir: null });
+  assert.equal(silent.manifest.reconciled, false, "silence about the rest of the roster is not a receipt");
+
+  const named = manifestFromTierRecords({ gate: "fast", tree: "1".repeat(40), classified, records, omittedReason: "fast-only: not selected by the changed-path map", dir: null });
+  assert.equal(named.manifest.reconciled, true, named.manifest.problems.join(" | "));
+  assert.equal(named.manifest.summary.omitted, roster.length - records[0].files.length);
+  assert.ok(named.manifest.files.filter((f) => f.dispatch === "omitted").every((f) => /fast-only/.test(f.reason)));
 });

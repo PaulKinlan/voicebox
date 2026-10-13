@@ -41,6 +41,8 @@
 // and `unknown:` for a refusal or an incomplete dispatch. `emitMarker` still supports `running` because the
 // vocabulary belongs to the hub, and a caller whose runs cannot be killed may use it; this gate's runs can.
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import os from "node:os";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -71,6 +73,15 @@ export function testChildEnv(base = process.env) {
 
 /** The marker prefix the hub's check-coverage.py matches at line start. Not a local style choice. */
 export const MARKER_PREFIX = "fast-gate:";
+
+/** The tree this run measured, from git — the aggregate CLI's default label. */
+export function gitTree(cwd = process.cwd()) {
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD^{tree}"], { cwd, encoding: "utf8" }).trim() || null;
+  } catch {
+    return null;
+  }
+}
 
 export class ManifestRefusal extends Error {
   constructor(problems) {
@@ -374,8 +385,85 @@ export function tapCounts(text) {
   return { tests: n("tests"), pass: n("pass"), fail: n("fail"), skipped: n("skipped") };
 }
 
+/**
+ * ONE manifest from MANY tier records — the full gate's receipt. The tiers are separate processes (the
+ * unit tier, the server pool, and the browser runner PHASED into its parallel and isolated invocations),
+ * so no single runner can assert the lane: only this fold can, and it does it against the classifier's
+ * roster. A file that no tier recorded is MISSING and refused; a file two tiers both recorded is a
+ * DUPLICATE and refused; a path no tier knows is UNCLASSIFIED and refused. `omittedReason` lets a non-full
+ * gate account for the files it deliberately did not select, by name, rather than leaving them missing.
+ */
+export function manifestFromTierRecords({ gate = "full", tree, sha = "", classified, records = [], changed = [], unmapped = [], omittedReason = null, dir = null }) {
+  if (!tree) throw new ManifestRefusal(["aggregate needs the tree SHA the records describe (--tree)"]);
+  const manifest = createManifest({ gate, tree, sha, classified, changed, unmapped });
+  // A CONFLICT BETWEEN RECORDS IS A REFUSAL WITH EVIDENCE, NOT A CRASH. `recordFile` refuses a duplicate
+  // by throwing (for a single runner that is the right shape — the bug is in its own code). An aggregate is
+  // folding records from SEVERAL processes, so the same condition is a fact about the run: it is collected
+  // here, recorded in the artifact and answered with a non-zero exit, because a landing reader needs to see
+  // which file two tiers both claimed.
+  const conflicts = [];
+  for (const record of records) {
+    try {
+      recordTier(manifest, record);
+    } catch (e) {
+      if (!(e instanceof ManifestRefusal)) throw e;
+      conflicts.push(...(e.problems ?? [e.message]));
+    }
+  }
+  const recorded = new Set(manifest.files.map((f) => f.path));
+  for (const entry of manifest.classifier.files) {
+    if (recorded.has(entry.path)) continue;
+    // A file no record mentions stays MISSING unless the caller says, in words, why it was not selected:
+    // silence about part of the roster is not a receipt.
+    if (!omittedReason) continue;
+    recordFile(manifest, { path: entry.path, dispatch: "omitted", reason: omittedReason });
+  }
+  sealManifest(manifest);
+  if (conflicts.length > 0) {
+    manifest.problems = [...conflicts, ...manifest.problems];
+    manifest.reconciled = false;
+  }
+  const bad = manifest.files.filter((f) => f.status === "failed" || f.status === "timeout" || f.status === "unknown").length;
+  manifest.verdict = !manifest.reconciled ? "refused" : bad > 0 ? "fail" : manifest.summary.dispatched === 0 ? "empty" : "pass";
+  const written = dir ? writeManifest(manifest, dir) : null;
+  return { manifest, written };
+}
+
 if (import.meta.main) {
   const [command, file] = process.argv.slice(2);
+  if (command === "aggregate") {
+    const argv = process.argv.slice(3);
+    const flag = (name, fallback = null) => {
+      const at = argv.indexOf(`--${name}`);
+      return at === -1 ? fallback : argv[at + 1];
+    };
+    const records = [];
+    for (let i = 0; i < argv.length; i++) if (argv[i] === "--record" && argv[i + 1]) records.push(readFileSync(argv[i + 1], "utf8"));
+    const gate = flag("gate", "full");
+    const tree = flag("tree", null) ?? gitTree();
+    const classifiedModule = await import("./test-lanes.mjs");
+    const { manifest, written } = manifestFromTierRecords({
+      gate,
+      tree,
+      sha: flag("sha", ""),
+      classified: classifiedModule.classify(),
+      records: records.map((text) => JSON.parse(text)),
+      omittedReason: flag("omitted-reason", null),
+      dir: flag("out", path.join(os.homedir(), ".fleet", "checks")),
+    });
+    const s = manifest.summary;
+    console.log(
+      `gate-manifest: aggregate ${gate} ${(tree || "").slice(0, 12)} — classified ${s.classified}, recorded ${s.recorded}, ` +
+        `passed ${s.passed}, failed ${s.failed}, unknown ${s.unknown}${s.omitted ? `, omitted ${s.omitted}` : ""}, problems ${s.problems}`,
+    );
+    if (written) console.log(`gate-manifest: manifest ${written} (verdict ${manifest.verdict}, reconciled ${manifest.reconciled})`);
+    if (!manifest.reconciled) {
+      console.error(`gate-manifest: REFUSED — ${manifest.problems.length} file(s) unaccounted for across the tier records:`);
+      for (const p of manifest.problems.slice(0, 20)) console.error(`  · ${p}`);
+      process.exit(1);
+    }
+    process.exit(manifest.verdict === "pass" ? 0 : 1);
+  }
   if (command === "verify" && file) {
     const manifest = readManifest(file);
     const { ok, problems, summary } = reconcile(manifest);

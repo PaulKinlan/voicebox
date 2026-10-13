@@ -303,6 +303,36 @@ happens to reconcile is a wide claim from a narrow run. Because `running:` is al
 file executed, `unknown:` is emitted together with any incomplete run — that is what makes the hub report
 the run's coverage as `UNKNOWN` (fail-closed) instead of counting a killed file as covered.
 
+### The live tier's phases, and the union receipt
+
+`tools/browser-shard-runner.mjs` can be invoked once for the whole browser lane, or PHASED so a supervisor
+runs the parallel queue beside the server pool and the isolated files afterwards on an otherwise idle box:
+
+```
+node tools/browser-shard-runner.mjs                    # whole lane: parallel queue, then ISOLATED alone
+node tools/browser-shard-runner.mjs --parallel-only    # just the parallel slice
+node tools/browser-shard-runner.mjs --isolated-only    # just the ISOLATED slice, one at a time
+```
+
+Each invocation asserts its own slice covers exactly once, and `splitQueue` (scripts/test-shards.mjs) owns
+the partition, so the two slices together are the lane — held by `tests/test-shards.test.mjs`. The two flags
+are mutually exclusive, and the per-file terminal markers and count lines are unchanged. With
+`VOICEBOX_GATE_TIER_RECORD=<path>` a PHASED run writes `<path>.parallel.json` / `<path>.isolated.json`, so a
+second invocation can never overwrite the first's record.
+
+Because the tiers are separate processes, no single runner can assert the gate's scope: the receipt is the
+FOLD, and `scripts/gate-manifest.mjs aggregate` is its one implementation.
+
+```
+node scripts/gate-manifest.mjs aggregate --gate full --tree <tree-sha> --out <dir> \
+  --record <tier-a.json> --record <tier-b.json> ...
+```
+
+It builds the roster from the classifier, folds every tier record, refuses (non-zero, with the file named) a
+file no tier recorded, a file two tiers both recorded, a path no tier knows, and any omission in a full
+gate — and writes one manifest with the verdict. A deliberately narrower gate passes `--omitted-reason` so
+its unselected files are accounted for by name rather than left missing.
+
 ### Acceptance is per phase
 
 `npm run accept` prints a verdict per phase. When the shared front could not be witnessed, phase A is

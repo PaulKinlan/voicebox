@@ -67,6 +67,49 @@ test("the runner emits a hub marker per file, and publishes a tier record a mani
   }
 });
 
+test("a phase invocation runs exactly its own slice, namespaces its tier record, and says so", () => {
+  // The live-tier supervisor runs this tier twice — the parallel queue beside the server pool, then the
+  // isolated files alone — so the phase must be explicit in the log, in the record's name, and in what is
+  // queued. The two invocations together are the lane; that partition is splitQueue's property, held by
+  // tests/test-shards.test.mjs.
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-shard-phase-"));
+  const recordPath = path.join(dir, "tier.json");
+  try {
+    const res = runRunner(["--parallel-only", "--only", PROBE, "--workers", "1"], { VOICEBOX_GATE_TIER_RECORD: recordPath });
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.match(res.stdout, /phase parallel, wall/);
+    assert.ok(res.stdout.includes(`fast-gate: passed: ${PROBE}`));
+
+    // One record PER PHASE: if both invocations wrote one path the second would overwrite the first and the
+    // union would be short by a whole phase.
+    const phased = path.join(dir, "tier.parallel.json");
+    const record = JSON.parse(readFileSync(phased, "utf8"));
+    assert.equal(record.phase, "parallel");
+    assert.deepEqual(record.files.map((f) => f.path), [PROBE]);
+    assert.throws(() => readFileSync(recordPath, "utf8"), "the un-namespaced path must not be written by a phase run");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a phase refuses a file outside it, and the two phases may not be asked for at once", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-shard-phase2-"));
+  const recordPath = path.join(dir, "tier.json");
+  try {
+    // PROBE is a parallel file, so the isolated phase has nothing to run — and nothing may open a browser.
+    const wrongPhase = runRunner(["--isolated-only", "--only", PROBE], { VOICEBOX_GATE_TIER_RECORD: recordPath });
+    assert.equal(wrongPhase.status, 2);
+    assert.match(wrongPhase.stderr, /is not in the browser lane's isolated phase/);
+    assert.throws(() => readFileSync(recordPath, "utf8"), "a refusal writes no tier record");
+
+    const both = runRunner(["--parallel-only", "--isolated-only"]);
+    assert.equal(both.status, 2);
+    assert.match(both.stderr, /mutually exclusive/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a file that is not in the browser lane is refused before a browser opens", () => {
   const res = runRunner(["--only", "tests/test-lanes.test.mjs"]);
   assert.equal(res.status, 2);
