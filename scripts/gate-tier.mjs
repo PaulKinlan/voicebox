@@ -162,10 +162,14 @@ export function writeTierRecord(record, dir) {
   return target;
 }
 
+/** The browser tier's child, while it runs: `stop()` must take it with the per-file children. */
+let browserChild = null;
+
 /**
  * The browser tier, through the runner that owns it (`tools/browser-shard-runner.mjs`). It writes its own
  * record at `VOICEBOX_GATE_TIER_RECORD` — one owner per tier — and this function's job is only to give it
- * the path, keep its output streaming, and answer with its exit code.
+ * the path, keep its output streaming, and answer with its exit code. SIGTERM is left to the runner itself:
+ * it takes its own per-file children (and their browsers) down before it goes.
  */
 export function runBrowserTier({ dir, log = console }) {
   const record = tierRecordPath(dir, "browser");
@@ -175,8 +179,13 @@ export function runBrowserTier({ dir, log = console }) {
       stdio: "inherit",
       env: { ...process.env, VOICEBOX_GATE_TIER_RECORD: record },
     });
-    child.on("exit", (code, signal) => resolve({ code: code ?? (signal ? 1 : 0), record }));
+    browserChild = child;
+    child.on("exit", (code, signal) => {
+      if (browserChild === child) browserChild = null;
+      resolve({ code: code ?? (signal ? 1 : 0), record });
+    });
     child.on("error", (error) => {
+      if (browserChild === child) browserChild = null;
       log.error(`[gate-tier] the browser tier could not be started: ${error.message}`);
       resolve({ code: 1, record });
     });
@@ -217,18 +226,22 @@ async function main() {
 
   // A gate that is terminated must not leave browsers and servers behind: the per-file children lead their
   // own process groups (so a per-file timeout can take a wedged file down with its browser), which means
-  // nothing else kills them when THIS process is signalled. The runner child is tracked the same way.
+  // nothing else kills them when THIS process is signalled. The browser-tier child is tracked the same way.
+  //
+  // THE HANDLER MUST ALSO LEAVE. Installing a signal handler SUPPRESSES node's default termination, so a
+  // process that answers SIGTERM by tidying up and then carrying on is a process the outer
+  // `timeout --kill-after` has to SIGKILL — and it would keep scanning a lane it has already given up on.
   const stop = (signal) => {
     killRunningChildren(signal);
-    for (const child of spawned) {
+    if (browserChild) {
       try {
-        child.kill(signal);
+        browserChild.kill(signal);
       } catch {
         /* already gone */
       }
     }
+    setTimeout(() => process.exit(128 + (os.constants.signals[signal] ?? 0)), 3000).unref();
   };
-  const spawned = [];
   for (const signal of ["SIGTERM", "SIGINT"]) process.once(signal, () => stop(signal));
 
   // ── LIVE = the server tier then the browser tier, in that order, which is what `npm run test:live`
