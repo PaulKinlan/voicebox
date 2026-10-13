@@ -331,6 +331,127 @@ describe("mini-app-store: persistence, in-place updates, deletion & cross-sandbo
     assert.deepEqual(finalDiscovery.miniApps, []);
   });
 
+  // ── voicebox-beads-dvu8 / voicebox-beads-p7p1: the colliding-name case, from both sides ──
+  // A bare workspace page and a shelf app can share BOTH a slug and a file name. Deleting one must
+  // never take the other's artifacts, and every ambiguous name must resolve to the app.
+  function collisionFixture() {
+    const rootPath = makeScratchDir("vb-collide-root-");
+    const hostDir = makeScratchDir("vb-collide-host-");
+    const shelfDir = path.join(hostDir, "mini-apps");
+    mkdirSync(shelfDir, { recursive: true });
+    const pageHtml = "<!doctype html><html><head><title>Unrelated Page</title></head><body><p>page</p></body></html>";
+    const appHtml = "<!doctype html><html><head><title>Collision App</title></head><body><p>app</p></body></html>";
+    writeFileSync(path.join(rootPath, "collision.html"), pageHtml, "utf8");
+    writeFileSync(path.join(shelfDir, "collision.html"), appHtml, "utf8");
+    writeFileSync(
+      path.join(shelfDir, "collision.meta.json"),
+      JSON.stringify({ appId: "app_collision", slug: "collision", title: "Collision App", fileName: "collision.html" }),
+      "utf8",
+    );
+    return { rootPath, hostDir, shelfDir, pageHtml, appHtml };
+  }
+
+  it("deleting a page never deletes the shelf app, and deleting the shelf app never deletes the page (voicebox-beads-dvu8)", () => {
+    // Forward: delete the page by its own title. The shelf app's copy and record must survive.
+    const forward = collisionFixture();
+    const forwardDel = deleteMiniApp("Unrelated Page", { rootPath: forward.rootPath, hostDir: forward.hostDir, sandboxRootDir: "" });
+    assert.equal(forwardDel.ok, true);
+    assert.equal(existsSync(path.join(forward.rootPath, "collision.html")), false, "the page's own file is deleted");
+    assert.equal(
+      readFileSync(path.join(forward.shelfDir, "collision.html"), "utf8"),
+      forward.appHtml,
+      "the same-slug shelf app's copy is untouched by deleting the page",
+    );
+    assert.equal(existsSync(path.join(forward.shelfDir, "collision.meta.json")), true, "and so is its record");
+
+    // Reverse: delete the shelf app by its title. The unrelated page must survive.
+    const reverse = collisionFixture();
+    const reverseDel = deleteMiniApp("Collision App", { rootPath: reverse.rootPath, hostDir: reverse.hostDir, sandboxRootDir: "" });
+    assert.equal(reverseDel.ok, true);
+    assert.equal(existsSync(path.join(reverse.rootPath, "collision.html")), true, "the unrelated page survives deleting the app");
+    assert.equal(
+      readFileSync(path.join(reverse.rootPath, "collision.html"), "utf8"),
+      reverse.pageHtml,
+      "and its content is untouched",
+    );
+    assert.equal(existsSync(path.join(reverse.shelfDir, "collision.html")), false, "the app's own shelf copy is deleted");
+    assert.equal(existsSync(path.join(reverse.shelfDir, "collision.meta.json")), false, "and its own record");
+  });
+
+  it("an unproven page does not duplicate the shelf app's id and never shadows it in a lookup (voicebox-beads-p7p1)", () => {
+    const f = collisionFixture();
+    const opts = { rootPath: f.rootPath, hostDir: f.hostDir, sandboxRootDir: "" };
+
+    const discovered = discoverMiniApps(opts);
+    assert.equal(discovered.count, 2, "the page and the shelf app are two entries");
+    const page = discovered.miniApps.find((a) => a.kind === "page");
+    const app = discovered.miniApps.find((a) => a.kind === "app");
+    assert.equal(page.appId, "page_collision", "a page gets its own id space");
+    assert.equal(app.appId, "app_collision", "the app keeps its own id");
+    assert.notEqual(page.appId, app.appId, "no two entries share an id");
+
+    // Every ambiguous name resolves to the APP...
+    for (const query of ["app_collision", "collision", "collision.html", "Collision App"]) {
+      const found = getMiniApp(query, opts);
+      assert.equal(found.ok, true, `'${query}' resolves`);
+      assert.equal(found.miniApp.appId, "app_collision", `'${query}' resolves to the app, not the page`);
+      assert.equal(found.miniApp.kind, "app");
+    }
+    // ...and the page is still reachable by what only the page answers to.
+    for (const query of ["Unrelated Page", "page_collision"]) {
+      const found = getMiniApp(query, opts);
+      assert.equal(found.ok, true, `'${query}' resolves`);
+      assert.equal(found.miniApp.kind, "page", `'${query}' resolves to the page`);
+    }
+
+    // A MODERN record that names a different workspace file leaves the same protection in place.
+    writeFileSync(
+      path.join(f.shelfDir, "collision.meta.json"),
+      JSON.stringify({ appId: "app_collision", slug: "collision", title: "Collision App", fileName: "collision.html", workspacePath: "elsewhere.html" }),
+      "utf8",
+    );
+    const after = discoverMiniApps(opts);
+    assert.equal(after.miniApps.find((a) => a.kind === "page")?.appId, "page_collision");
+    assert.equal(getMiniApp("collision.html", opts).miniApp.kind, "app");
+  });
+
+  it("saving a page whose file name already belongs to a shelf app is REFUSED rather than overwriting it (voicebox-beads-dvu8)", () => {
+    const f = collisionFixture();
+    const opts = { rootPath: f.rootPath, hostDir: f.hostDir, sandboxRootDir: "" };
+
+    const saved = saveMiniApp({ fileName: "collision.html", title: "Unrelated Page", html: f.pageHtml, ...opts });
+    assert.equal(saved.ok, false, "the save is refused");
+    assert.equal(saved.refused, "mini-app-name-taken", "refused by name, naming the app that holds the name");
+    assert.match(saved.why, /Collision App/, "the refusal names the mini-app that owns the shelf name");
+    assert.equal(
+      readFileSync(path.join(f.shelfDir, "collision.html"), "utf8"),
+      f.appHtml,
+      "the other app's copy is untouched — nothing was written",
+    );
+    assert.equal(
+      JSON.parse(readFileSync(path.join(f.shelfDir, "collision.meta.json"), "utf8")).appId,
+      "app_collision",
+      "and neither is its record",
+    );
+
+    // The promotion DOES work when the name is free — that is how a page becomes an app.
+    const free = makeScratchDir("vb-promote-root-");
+    const freeHost = makeScratchDir("vb-promote-host-");
+    writeFileSync(path.join(free, "draft.html"), "<!doctype html><title>Draft</title>", "utf8");
+    const promoted = saveMiniApp({
+      fileName: "draft.html",
+      title: "Draft",
+      html: "<!doctype html><title>Draft</title>",
+      rootPath: free,
+      hostDir: freeHost,
+    });
+    assert.equal(promoted.ok, true);
+    assert.equal(promoted.miniApp.kind, "app", "a promoted page is an app");
+    assert.equal(promoted.miniApp.appId, "app_draft", "with the canonical app id for its slug");
+    assert.equal(existsSync(path.join(freeHost, "mini-apps", "draft.html")), true, "and a shelf copy");
+    assert.equal(getMiniApp("draft.html", { rootPath: free, hostDir: freeHost, sandboxRootDir: "" }).miniApp.kind, "app");
+  });
+
   it("deleting a mini-app does not destroy an unrelated app that shares a title slug", () => {
     const rootPath = makeScratchDir("vb-ws-iso-");
     const hostDir = makeScratchDir("vb-host-iso-");

@@ -114,6 +114,13 @@ Every discovered entry now carries a **`kind`** — `"app"` or `"page"` — alon
 
 The classification decides the **list**, not what can be launched: `getMiniApp()` and the `launch_mini_app` verb still resolve a page by name, `file`, `slug`, `appId` or title, and the File Viewer's **Open as Mini-App** action (`#file-run-app`) launches any `.html` file. Saving a page (through the API or the assistant) writes the shelf record that promotes it to an app on the next discovery. The tray reads `kind` and defaults a payload with no `kind` to `app`, so an older server still renders as it did.
 
+### Identity, lookup, deletion and saving, per artifact (`voicebox-beads-dvu8`, `voicebox-beads-p7p1`)
+A page carries its own id space — `page_<slug>` beside an app's `app_<slug>` — so two entries never share an id. When a name is ambiguous (a page and a shelf app that share a slug, a file name or a title), the first resolution step that matches anything decides the answer, and **within that step an app outranks a page**: `getMiniApp("collision.html")`, the `launch_mini_app` verb and `DELETE /api/mini-apps?id=…` all mean the app. A page is still found by what only it answers to — its own title, or `page_<slug>` — so launching a page by name is unchanged.
+
+Deletion asks **ownership per artifact**, never per name: an entry deletes its own `storagePath` (for a page, its own workspace file); shelf artifacts are deleted only when the entry is an **app** and the shelf record there is that app's record (matched by the `appId` inside it); a workspace file is deleted only for a **proven workspace app** — a shelf entry that merely shares the page's name owes the workspace nothing. That closes cross-deletion in both directions: deleting an unrelated page no longer destroys the same-slug shelf app, and deleting a shelf app no longer deletes the page.
+
+Saving asks the same question: the target is the **file** the caller named (a workspace entry with that name wins), and a save that would take a shelf name already owned by a **different** app is refused `mini-app-name-taken`, naming the app, with nothing written — rather than overwriting that app's copy and record. Promoting a page whose name is free stays the supported path, and the promoted app takes the canonical `app_<slug>` id.
+
 ---
 
 ## 5. Enforced Bounds (`core/mini-app.ts`, `public/mini-app-bridge.js`)
