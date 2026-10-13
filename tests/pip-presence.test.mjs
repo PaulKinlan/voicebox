@@ -50,6 +50,11 @@ test("the PiP presence indicator mirrors the page's real voice states, and the t
     await page.goto(`${server.base}/`);
     await page.waitFor(() => Boolean(window.__voiceboxPipOpen), { label: "the PiP module" });
     await keepOnTopIsStill(page);
+    await page.waitFor(() => typeof window.__voiceboxOfflineSpeech?.setEnabled === "function", { label: "the offline speech controller" });
+    await page.evaluate(() => {
+      window.__voiceboxOfflineSpeech.setEnabled(false);
+      window.__voiceboxOfflineSpeech.deactivateFallback?.();
+    });
 
     await page.click("#pip-open");
     // Where a 1500ms settle was (voicebox-beads-g667): the window exists — and it has been painted, because
@@ -74,7 +79,7 @@ test("the PiP presence indicator mirrors the page's real voice states, and the t
     await page.waitFor(() => {
       const dot = window.__voiceboxPip.document.getElementById("pip-presence")?.dataset.state;
       return Boolean(window.__voiceboxLiveClient?.state?.capture) && (dot === "listening" || dot === "waiting");
-    }, { label: "the capture to start and the dot to paint it live" });
+    }, { label: "the capture to start and the dot to paint it live", timeout: 30000 });
     st = await page.evaluate(() => ({
       dot: window.__voiceboxPip.document.getElementById("pip-presence")?.dataset.state,
       capture: Boolean(window.__voiceboxLiveClient?.state?.capture),

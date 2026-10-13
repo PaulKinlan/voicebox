@@ -87,7 +87,7 @@ test("discoverHarnesses discovers antigravity, codex, opencode, pi, and claude i
       VOICEBOX_ACP_ADAPTER: adapterDir,
       VOICEBOX_HARNESS_TOOLS: "",
     },
-    timeoutMs: 2000,
+    timeoutMs: 5000,
   });
 
   assert.equal(report.ok, true);

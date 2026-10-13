@@ -251,7 +251,11 @@ Options:
     ];
 
     // Deliberate cross-target allowance only when verifiedTarget origin is proven to match repo
-    if (path.basename(verifiedTarget).toLowerCase() !== repo.split("/")[1]?.toLowerCase()) {
+    const repoName = repo.split("/")[1]?.toLowerCase();
+    if (
+      path.basename(verifiedTarget).toLowerCase() !== repoName ||
+      manifest.target.toLowerCase() !== repoName
+    ) {
       pubArgs.push("--allow-foreign-target");
     }
 

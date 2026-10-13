@@ -14,7 +14,11 @@ function isRunning(pid) {
   try {
     // Reparented zombies can remain in /proc until init reaps them. They are no
     // longer live servers even though kill(pid, 0) temporarily succeeds.
-    return readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1][0] !== "Z";
+    if (process.platform === "linux" && existsSync(`/proc/${pid}/stat`)) {
+      return readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1][0] !== "Z";
+    }
+    process.kill(pid, 0);
+    return true;
   } catch {
     return false;
   }

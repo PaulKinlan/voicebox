@@ -7,6 +7,7 @@ import {
   deleteMiniApp,
   discoverMiniApps,
   getMiniApp,
+  isMiniAppHtml,
   normalizeAppId,
   saveMiniApp,
   slugifyMiniApp,
@@ -202,12 +203,12 @@ describe("mini-app-store: persistence, in-place updates, deletion & cross-sandbo
 
     writeFileSync(
       path.join(sandboxA, "calc.html"),
-      "<!doctype html><html><head><title>Sandbox Calculator</title></head><body><button>1+1=2</button></body></html>",
+      "<!doctype html><html><head><title>Sandbox Calculator</title><meta name=\"voicebox-app\" content=\"true\"></head><body><button>1+1=2</button></body></html>",
       "utf8",
     );
     writeFileSync(
       path.join(sandboxB, "flappy_bird.html"),
-      "<!doctype html><html><body><canvas id='game'>flappy</canvas></body></html>",
+      "<!doctype html><html><head><script src=\"mini-app-sdk.js\"></script></head><body><canvas id='game'>flappy</canvas></body></html>",
       "utf8",
     );
 

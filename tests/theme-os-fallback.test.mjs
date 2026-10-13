@@ -30,7 +30,7 @@ const LIGHT_GROUND = "rgb(251, 251, 249)";
 const DARK_GROUND = "rgb(11, 15, 25)";
 
 test("theme: the OS decides when no script can, and an explicit choice still wins (voicebox-beads-7xse)", { timeout: 180000 }, async (t) => {
-  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vb-7xse-"));
+  const scratch = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "vb-7xse-")));
   const workspace = path.join(scratch, "project");
   fs.mkdirSync(workspace, { recursive: true });
   fs.writeFileSync(path.join(workspace, "notes.md"), "# Notes\n", "utf8");

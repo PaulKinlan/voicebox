@@ -17,6 +17,8 @@ import {
   landCandidateBranch,
   keepBranchSeparate,
 } from "../lib/branch-landing.mjs";
+import { createBranchRoutes } from "../lib/routes/branches.mjs";
+import { createBranchLandingController } from "../public/branch-landing-ui.mjs";
 import {
   ID_PATTERNS,
   JARGON,
@@ -236,10 +238,16 @@ test("branch-landing: exports valid Standards-Mode mini-app HTML and passes plai
   assert.match(html, /id="diff-viewer"/);
   assert.match(html, /id="land-branch-btn"/);
   assert.match(html, /id="keep-separate-btn"/);
-  assert.match(html, /window\.voicebox\?\.registerTool/);
-  assert.match(html, /list_candidate_branches/);
-  assert.match(html, /inspect_branch_diff/);
-  assert.match(html, /land_candidate_branch/);
+  assert.match(html, /<script\s+src="\/apps\/landing-inspector\.js"><\/script>/);
+
+  const js = fs.readFileSync(
+    new URL("../public/apps/landing-inspector.js", import.meta.url),
+    "utf8",
+  );
+  assert.match(js, /window\.voicebox\?\.registerTool/);
+  assert.match(js, /list_candidate_branches/);
+  assert.match(js, /inspect_branch_diff/);
+  assert.match(js, /land_candidate_branch/);
 
   const rawHtml = fs.readFileSync(
     new URL("../public/apps/landing-inspector.html", import.meta.url),
@@ -290,4 +298,107 @@ test("branch-landing: a poisoned GIT_DIR does not steer candidate branch discove
     if (savedGitWorkTree === undefined) delete process.env.GIT_WORK_TREE;
     else process.env.GIT_WORK_TREE = savedGitWorkTree;
   }
+});
+
+test("branch-landing: createBranchRoutes provides candidate inspection and landing endpoints", async (t) => {
+  const repoDir = createTempGitRepo();
+  t.after(() => {
+    fs.rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  let capturedStatus = 0;
+  let capturedBody = null;
+  const jsonMock = (_res, status, body) => {
+    capturedStatus = status;
+    capturedBody = body;
+    return body;
+  };
+  const answerOnceMock = (_res, fn) => fn();
+
+  const routes = createBranchRoutes({
+    repoRoot: repoDir,
+    json: jsonMock,
+    readJsonBody: async () => ({ branch: "feat/agent-patch" }),
+    answerOnce: answerOnceMock,
+  });
+
+  assert.ok(routes["GET /api/branches/candidates"]);
+  assert.ok(routes["GET /api/branches/diff"]);
+  assert.ok(routes["POST /api/branches/merge"]);
+  assert.ok(routes["POST /api/branches/keep-separate"]);
+
+  // 1. GET /api/branches/candidates
+  await routes["GET /api/branches/candidates"]({}, {}, new URL("http://localhost/api/branches/candidates"));
+  assert.equal(capturedStatus, 200);
+  assert.equal(capturedBody.ok, true);
+  assert.equal(capturedBody.branches.length, 1);
+  assert.equal(capturedBody.branches[0].name, "feat/agent-patch");
+
+  // 2. GET /api/branches/diff
+  await routes["GET /api/branches/diff"]({}, {}, new URL("http://localhost/api/branches/diff?branch=feat/agent-patch"));
+  assert.equal(capturedStatus, 200);
+  assert.equal(capturedBody.ok, true);
+  assert.equal(capturedBody.cleanMergePossible, true);
+  assert.equal(capturedBody.files.length, 2);
+
+  // 3. POST /api/branches/keep-separate
+  await routes["POST /api/branches/keep-separate"]({}, {});
+  assert.equal(capturedStatus, 200);
+  assert.equal(capturedBody.ok, true);
+  assert.equal(capturedBody.action, "kept-separate");
+
+  // 4. POST /api/branches/merge
+  await routes["POST /api/branches/merge"]({}, {});
+  assert.equal(capturedStatus, 200);
+  assert.equal(capturedBody.ok, true);
+  assert.equal(capturedBody.action, "landed");
+});
+
+test("branch-landing: main room UI dialog and buttons pass plain-language scan with zero violations", () => {
+  const indexHtml = fs.readFileSync(
+    new URL("../public/index.html", import.meta.url),
+    "utf8",
+  );
+  const match = indexHtml.match(/<dialog[^>]*id="branch-landing-dialog"[\s\S]*?<\/dialog>/i);
+  assert.ok(match, "branch-landing-dialog must exist in public/index.html");
+
+  const hits = scanPlainLanguage(match[0]);
+  assert.deepEqual(
+    hits,
+    [],
+    `Expected zero plain-language violations in branch-landing-dialog, found: ${JSON.stringify(hits)}`,
+  );
+});
+
+test("branch-landing: createBranchLandingController exports clean interface and manages state", () => {
+  let opened = false;
+  let closed = false;
+  const mockDialog = {
+    showModal: () => { opened = true; },
+    close: () => { closed = true; },
+    addEventListener: () => {},
+  };
+  const mockBtn = {
+    setAttribute: () => {},
+    removeAttribute: () => {},
+    addEventListener: () => {},
+    focus: () => {},
+  };
+  const mockBadge = { textContent: "" };
+
+  const controller = createBranchLandingController({
+    openBtn: mockBtn,
+    badgeEl: mockBadge,
+    dialog: mockDialog,
+  });
+
+  assert.equal(typeof controller.fetchCandidates, "function");
+  assert.equal(typeof controller.openDialog, "function");
+  assert.equal(typeof controller.closeDialog, "function");
+  assert.equal(typeof controller.selectBranch, "function");
+  assert.equal(typeof controller.landSelectedBranch, "function");
+  assert.equal(typeof controller.keepSelectedBranchSeparate, "function");
+
+  controller.openDialog();
+  assert.equal(opened, true);
 });

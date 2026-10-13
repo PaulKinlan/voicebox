@@ -2,10 +2,23 @@
 // group; only this worker injects failed kill calls, never the shared test runner.
 import { existsSync, readFileSync } from "node:fs";
 import { once } from "node:events";
+import { execFileSync } from "node:child_process";
 import { startServer } from "../lib/server.mjs";
 
 const server = await startServer({ readyTimeoutMs: 5000 });
-const processGroup = (pid) => Number(readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1].split(" ")[2]);
+const processGroup = (pid) => {
+  if (process.platform === "linux" && existsSync(`/proc/${pid}/stat`)) {
+    try {
+      return Number(readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1].split(" ")[2]);
+    } catch {}
+  }
+  try {
+    const out = execFileSync("ps", ["-o", "pgid=", "-p", String(pid)], { encoding: "utf8" }).trim();
+    return Number(out);
+  } catch {
+    return pid;
+  }
+};
 const send = (payload) => new Promise((resolve, reject) => {
   process.send(payload, (error) => error ? reject(error) : resolve());
 });

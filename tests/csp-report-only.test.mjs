@@ -127,14 +127,19 @@ test("the Report-Only CSP header covers its documents and nothing else, however 
   // The negative controls for that class: spellings that do NOT resolve to an allowlisted document stay
   // uncovered, and spellings that try to leave public/ must not resolve at all. Without these, "every
   // alias has the header" could be satisfied by covering everything.
+  const isCaseSensitiveFs = !fs.existsSync(path.join(here, "..", "public", "HELP.HTML"));
   for (const [p, why] of [
     ["/%2e%2e/%2e%2e/etc/passwd", "escapes public/"],
     ["/../server.mjs", "escapes public/"],
-    ["/HELP.HTML", "no such file on a case-sensitive filesystem"],
+    ...(isCaseSensitiveFs ? [["/HELP.HTML", "no such file on a case-sensitive filesystem"]] : []),
   ]) {
     const res = await get(p);
     assert.notEqual(res.status, 200, `${p} must not resolve (${why})`);
     assert.equal(res.headers.get(HEADER), null, `${p} must not carry the header (${why})`);
+  }
+  if (!isCaseSensitiveFs) {
+    const res = await get("/HELP.HTML");
+    assert.equal(res.headers.get(HEADER), null, "/HELP.HTML on case-insensitive fs must not carry the header");
   }
 });
 
@@ -259,6 +264,33 @@ test("the extracted documents carry no inline script, and the declaration script
     assert.ok(
       !/\b(defer|async)\b/.test(tag[0]) && !/\btype\s*=\s*["']module["']/.test(tag[0]),
       `${file} must stay CLASSIC and parser-blocking — defer, async or type="module" all attach the listener after the document is interactive, and a click landing in that window is lost with nothing able to recover it (a click, unlike a search value, cannot be re-applied on attach). ${why} would then silently do nothing. Got ${tag[0]}`,
+    );
+  }
+});
+
+test("built-in mini-apps carry no inline scripts and reference their external scripts (voicebox-beads-xggy.4)", () => {
+  const publicDir = path.join(here, "..", "public");
+  const inlineScripts = (file) => {
+    const src = fs.readFileSync(path.join(publicDir, file), "utf8");
+    return [...src.matchAll(/<script(?![^>]*\bsrc=)[^>]*>/g)].length;
+  };
+
+  const miniApps = [
+    { html: "apps/agent-monitor.html", js: "/apps/agent-monitor.js" },
+    { html: "apps/landing-inspector.html", js: "/apps/landing-inspector.js" },
+    { html: "apps/live-vision-studio.html", js: "/apps/live-vision-studio.js" },
+  ];
+
+  for (const { html, js } of miniApps) {
+    assert.equal(
+      inlineScripts(html),
+      0,
+      `public/${html} must carry NO inline script for CSP readiness (voicebox-beads-xggy.4)`,
+    );
+    const content = fs.readFileSync(path.join(publicDir, html), "utf8");
+    assert.ok(
+      content.includes(`src="${js}"`),
+      `public/${html} must link to its external script ${js}`,
     );
   }
 });

@@ -74,6 +74,8 @@ test("default hotkey 'M': badge rendered, aria-keyshortcuts set, and pressing 'm
 test("typing in composer input does NOT trigger mic hotkey", async () => {
   await page.evaluate(() => {
     window.__micClickedCount = 0;
+    const form = document.getElementById("text-form");
+    if (form) form.hidden = false;
     const input = document.getElementById("utterance");
     input?.focus();
   });
@@ -86,7 +88,11 @@ test("typing in composer input does NOT trigger mic hotkey", async () => {
   assert.equal(count, 0, "typing 'm' in text input must NOT toggle the microphone");
 
   // Blur input
-  await page.evaluate(() => document.getElementById("utterance")?.blur());
+  await page.evaluate(() => {
+    document.getElementById("utterance")?.blur();
+    const form = document.getElementById("text-form");
+    if (form) form.hidden = true;
+  });
 });
 
 test("hotkey is disabled when a modal dialog is open (modal-bypass pin)", async () => {

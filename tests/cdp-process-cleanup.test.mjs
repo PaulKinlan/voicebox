@@ -89,13 +89,14 @@ function isPidAlive(pid) {
  * by start time. False only while a live process still holds the identity we killed.
  */
 function pidTerminated(pid, identity) {
+  if (!PROC_FS) return !isPidAlive(pid);
   const now = procSnapshot(pid);
   if (now === null) return true;
   if (now.state === "Z") return true;
   if (!identity || identity.starttime === undefined || identity.starttime === null) {
     // No identity was available to compare, so anything still here that is NOT a zombie is a
     // different process than the one that was already gone at capture time.
-    return PROC_FS ? true : !isPidAlive(pid);
+    return true;
   }
   return now.starttime !== identity.starttime;
 }
@@ -105,6 +106,11 @@ function describePid(pid) {
   const snap = procSnapshot(pid);
   const ps = spawnSync("ps", ["-o", "pid,ppid,stat,etime,comm", "-p", String(pid)], { encoding: "utf8" });
   const table = (ps.stdout || "").trim().split("\n").join(" | ");
+  if (!PROC_FS) {
+    return isPidAlive(pid)
+      ? `pid ${pid} is STILL RUNNING (no /proc; ps: ${table})`
+      : `pid ${pid} is absent${table ? ` (ps: ${table})` : ""}`;
+  }
   if (snap === null) return `pid ${pid} is absent from /proc${table ? ` (ps: ${table})` : ""}`;
   const verdict = snap.state === "Z" ? "a ZOMBIE — terminated, awaiting collection" : `STILL RUNNING (state ${snap.state})`;
   return `pid ${pid} is ${verdict}; ps: ${table}`;
@@ -165,7 +171,9 @@ test("cdp-process-cleanup: normal page.close() terminates browser process group 
   const identity = procSnapshot(browserPid); // taken while it is alive: the identity a reused PID cannot fake
   assert.ok(browserPid > 0, "page must expose browser child PID");
   assert.equal(isPidAlive(browserPid), true, "browser process must be alive before close");
-  assert.ok(identity, "the browser's own /proc record must be readable before the kill — the identity check needs it");
+  if (PROC_FS) {
+    assert.ok(identity, "the browser's own /proc record must be readable before the kill — the identity check needs it");
+  }
 
   await page.close();
 
@@ -378,8 +386,10 @@ test("cdp-process-cleanup: a teardown that outlasts one second is not read as a 
   // 50ms for one second, so a teardown collected later than that was reported as a survivor. This
   // process is killed at 1.8s — collected inside the load-tolerant bound, outside the old one.
   const child = spawn("sleep", ["600"], { detached: true, stdio: "ignore" });
+  child.unref();
   const killTimer = setTimeout(() => {
     try { process.kill(-child.pid, "SIGKILL"); } catch {}
+    try { child.kill("SIGKILL"); } catch {}
   }, 1800);
   const startedAt = Date.now();
   try {
@@ -397,6 +407,7 @@ test("cdp-process-cleanup: a teardown that outlasts one second is not read as a 
   } finally {
     clearTimeout(killTimer);
     try { process.kill(-child.pid, "SIGKILL"); } catch {}
+    try { child.kill("SIGKILL"); } catch {}
   }
 });
 
@@ -405,6 +416,7 @@ test("cdp-process-cleanup: a process that is really still running is still repor
   // the helper must answer `terminated: false` — with a deliberately short bound, because its answer
   // is the whole point of the case.
   const child = spawn("sleep", ["600"], { detached: true, stdio: "ignore" });
+  child.unref();
   try {
     const identity = procSnapshot(child.pid);
     const gone = await waitForPidGone(child.pid, identity, { maxAttempts: 3, delayMs: 50 });
@@ -412,5 +424,6 @@ test("cdp-process-cleanup: a process that is really still running is still repor
     assert.match(describePid(child.pid), /STILL RUNNING/);
   } finally {
     try { process.kill(-child.pid, "SIGKILL"); } catch {}
+    try { child.kill("SIGKILL"); } catch {}
   }
 });

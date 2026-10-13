@@ -101,6 +101,10 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
         ? [`--use-file-for-fake-audio-capture=${fakeAudioFile}`, "--disable-features=AudioServiceOutOfProcess,AudioServiceSandbox"]
         : []),
       "--disable-gpu",
+      "--disable-extensions",
+      "--disable-component-extensions-with-background-pages",
+      "--disable-background-networking",
+      "--disable-component-update",
       "--no-first-run",
       "--no-default-browser-check",
       "--disable-dev-shm-usage",
@@ -121,6 +125,9 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
   // A browser that dies, never answers, or refuses the socket is killed and its scratch profile
   // removed — not left running behind the error (voicebox-beads-9mqc).
   const abandon = () => {
+    try { child.stdout?.destroy(); } catch {}
+    try { child.stderr?.destroy(); } catch {}
+    try { child.unref(); } catch {}
     activeBrowserPids.delete(child.pid);
     killBrowserProcessGroup(child.pid);
     try {
@@ -227,6 +234,9 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
       try {
         socket.close();
       } catch {}
+      try { child.stdout?.destroy(); } catch {}
+      try { child.stderr?.destroy(); } catch {}
+      try { child.unref(); } catch {}
       activeBrowserPids.delete(child.pid);
       killBrowserProcessGroup(child.pid);
       try {

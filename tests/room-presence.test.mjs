@@ -4,10 +4,17 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   DEFAULT_PRESENCE_TTL_MS,
   createRoomPresenceCoordinator,
 } from "../lib/room-presence.mjs";
+import { createPresenceUIController } from "../public/presence-ui.mjs";
+import { identifiersInRenderedText } from "../tools/rendered-plain-language.mjs";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 test("joinParticipant, heartbeatParticipant, and leaveParticipant track multi-participant state", () => {
   const coordinator = createRoomPresenceCoordinator({ ttlMs: 10000, maxCaptions: 10 });
@@ -184,5 +191,125 @@ test("recordSharedCaption appends entries and bounds ring buffer to maxCaptions"
   assert.deepEqual(
     c4.snapshot.sharedCaptions.map((c) => c.text),
     ["Second turn", "Third turn", "Fourth turn"],
+  );
+});
+
+test("createPresenceUIController manages strip visibility, roster, and floor button states", () => {
+  const attributes = new Map();
+  const mockStrip = {
+    setAttribute: (k, v) => attributes.set(k, v),
+    removeAttribute: (k) => attributes.delete(k),
+    hasAttribute: (k) => attributes.has(k),
+  };
+  const mockCount = { textContent: "" };
+  const mockBadge = {
+    textContent: "",
+    setAttribute: (k, v) => attributes.set(`badge_${k}`, v),
+    removeAttribute: (k) => attributes.delete(`badge_${k}`),
+    hasAttribute: (k) => attributes.has(`badge_${k}`),
+  };
+  const mockBtn = {
+    textContent: "",
+    disabled: false,
+    classList: {
+      add: () => {},
+      remove: () => {},
+    },
+    addEventListener: () => {},
+  };
+  const appendedChildren = [];
+  const mockRoster = {
+    replaceChildren: () => { appendedChildren.length = 0; },
+    append: (child) => appendedChildren.push(child),
+  };
+  const mockDocument = {
+    createElement: (tag) => ({
+      tagName: tag.toUpperCase(),
+      className: "",
+      classList: {
+        add: () => {},
+        remove: () => {},
+      },
+      dataset: {},
+      setAttribute: () => {},
+      append: () => {},
+    }),
+  };
+
+  const ui = createPresenceUIController({
+    documentObj: mockDocument,
+    stripEl: mockStrip,
+    countEl: mockCount,
+    rosterEl: mockRoster,
+    floorBtn: mockBtn,
+    floorBadgeEl: mockBadge,
+    localParticipantId: "peer-local",
+    localName: "Alice",
+  });
+
+  // 1. Solo participant with free floor -> hidden strip
+  ui.render({
+    count: 1,
+    floorHolderId: null,
+    participants: [{ participantId: "peer-local", name: "Alice", voiceState: "off" }],
+  });
+  assert.equal(mockStrip.hasAttribute("hidden"), true);
+  assert.equal(mockCount.textContent, "1 participant");
+  assert.equal(mockBtn.textContent, "Request Floor");
+
+  // 2. Multi-participant -> unhides strip and renders roster chips
+  ui.render({
+    count: 2,
+    floorHolderId: null,
+    participants: [
+      { participantId: "peer-local", name: "Alice", voiceState: "listening" },
+      { participantId: "peer-remote", name: "Bob", voiceState: "speaking", activeFile: "app.js" },
+    ],
+  });
+  assert.equal(mockStrip.hasAttribute("hidden"), false);
+  assert.equal(mockCount.textContent, "2 participants");
+  assert.equal(mockBtn.textContent, "Request Floor");
+  assert.equal(mockBtn.disabled, false);
+
+  // 3. Local participant holds floor
+  ui.render({
+    count: 2,
+    floorHolderId: "peer-local",
+    participants: [
+      { participantId: "peer-local", name: "Alice", voiceState: "speaking" },
+      { participantId: "peer-remote", name: "Bob", voiceState: "off" },
+    ],
+  });
+  assert.equal(mockBtn.textContent, "Release Floor");
+  assert.equal(mockBadge.textContent, "You hold the floor");
+  assert.equal(mockBtn.disabled, false);
+
+  // 4. Remote participant holds floor
+  ui.render({
+    count: 2,
+    floorHolderId: "peer-remote",
+    participants: [
+      { participantId: "peer-local", name: "Alice", voiceState: "off" },
+      { participantId: "peer-remote", name: "Bob", voiceState: "speaking" },
+    ],
+  });
+  assert.equal(mockBtn.textContent, "Floor held by Bob");
+  assert.equal(mockBtn.disabled, true);
+});
+
+test("public/index.html includes room presence strip and passes plain-language scan", () => {
+  const indexHtml = fs.readFileSync(path.join(ROOT, "public", "index.html"), "utf8");
+  assert.match(indexHtml, /id="room-presence-strip"/);
+  assert.match(indexHtml, /id="presence-count"/);
+  assert.match(indexHtml, /id="presence-floor-btn"/);
+
+  const match = indexHtml.match(/<div[^>]*id="room-presence-strip"[\s\S]*?<\/div>/i);
+  assert.ok(match, "room-presence-strip must exist in public/index.html");
+
+  const hits = identifiersInRenderedText(match[0]);
+  assert.deepEqual(
+    hits,
+    [],
+    `Expected 0 plain-language hits in room-presence-strip, got: ${JSON.stringify(hits)}`,
   );
 });

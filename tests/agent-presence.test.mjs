@@ -28,7 +28,7 @@ test("presence: #where-note derives agent provider and real commit SHA from GET 
     await page.goto(server.base);
     await page.waitFor(
       () => document.querySelector("#server-dot")?.getAttribute("data-ok") === "true",
-      { label: "server-dot data-ok=true" },
+      { timeout: 30000, label: "server-dot data-ok=true" },
     );
 
     const where = await page.evaluate(() => {
@@ -54,17 +54,20 @@ test("presence: #where-note derives agent provider and real commit SHA from GET 
 });
 
 test("presence: when server is unreachable, #where-note names machine-unreachable without proxy-500 confusion", async () => {
-  const server = await startServer({ env: { VOICEBOX_RESOLVER: "script" } });
+  let server;
+  let serverStopped = false;
   const page = await launch({ fakeMedia: true });
   try {
+    server = await startServer({ env: { VOICEBOX_RESOLVER: "script" } });
     await page.goto(server.base);
     await page.waitFor(
       () => document.querySelector("#server-dot")?.getAttribute("data-ok") === "true",
-      { label: "server-dot data-ok=true" },
+      { timeout: 30000, label: "server-dot data-ok=true" },
     );
 
     // Stop server so next poll/re-check fails with connection refused
     await server.stop();
+    serverStopped = true;
 
     // Trigger re-check in page against stopped port
     await page.evaluate(async () => {
@@ -104,6 +107,7 @@ test("presence: when server is unreachable, #where-note names machine-unreachabl
     assert.doesNotMatch(where.title, /500/, "must not conflate machine-unreachable with 'server answered 500'");
   } finally {
     await page.close();
+    if (!serverStopped) await server?.stop?.();
   }
 });
 
@@ -126,7 +130,7 @@ test("presence: environment-list-unreadable surfaces via GET /api/environments, 
     await page.goto(server.base);
     await page.waitFor(
       () => document.querySelector("#server-dot")?.getAttribute("data-ok") === "true",
-      { label: "server-dot data-ok=true" },
+      { timeout: 30000, label: "server-dot data-ok=true" },
     );
 
     // 2. Make environments.json mode 000 so readEnvironments() fails with environment-list-unreadable

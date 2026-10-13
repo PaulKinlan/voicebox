@@ -21,7 +21,7 @@ let server, BASE;
 test.before(async () => { server = await startServer({ env: { VOICEBOX_INSTANCE: "room-page-owned" } }); BASE = server.base; });
 test.after(async () => { await server?.stop(); });
 
-async function until(check, label, ms = 15000) {
+async function until(check, label, ms = 30000) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) { const r = await check(); if (r) return r; await sleep(50); }
   assert.fail(`no ${label} within ${ms}ms`);

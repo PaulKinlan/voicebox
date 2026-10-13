@@ -20,7 +20,7 @@ test("the host wires only GET /api/agents at the exact table position, rejecting
   const withoutSpread = source.replace("  ...agentsReadRoutes,\n", "");
   assert.notEqual(withoutSpread, source, "the missing-spread mutant must actually change the source");
   assert.throws(() => assertAgentsWiring(withoutSpread), { name: "AssertionError" });
-  const withDuplicate = source.replace('  "GET /api/harnesses":', '  "GET /api/agents": () => null,\n  "GET /api/harnesses":');
+  const withDuplicate = source.replace('  "GET /api/fleet":', '  "GET /api/agents": () => null,\n  "GET /api/fleet":');
   assert.notEqual(withDuplicate, source, "the duplicate-inline mutant must actually change the source");
   assert.throws(() => assertAgentsWiring(withDuplicate), { name: "AssertionError" });
 });

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { startServer } from "./lib/server.mjs";
@@ -357,7 +357,7 @@ test("git_status over subrepos: parallel probes preserve discovery order and iso
 });
 
 test("git_status caps discovery at 15 and bounds probe fan-out (voicebox-beads-8d3n)", async (t) => {
-  const sandboxRoot = mkdtempSync(path.join(os.tmpdir(), "vb-8d3n-"));
+  const sandboxRoot = realpathSync(mkdtempSync(path.join(os.tmpdir(), "vb-8d3n-")));
   t.after(() => rmSync(sandboxRoot, { recursive: true, force: true }));
   // 50 repos in ONE directory: the pre-fix traversal pushed all 50 (the cap was checked only at
   // walk entry), and since 3017 all 50 probes fanned out in one Promise.all.

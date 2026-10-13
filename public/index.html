@@ -74,6 +74,7 @@
       <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
       <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></symbol>
       <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></symbol>
+      <symbol id="i-git-branch" viewBox="0 0 24 24"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></symbol>
     </defs>
   </svg>
 
@@ -152,6 +153,41 @@
             <span class="harness-status" id="changelog-status" role="status" aria-live="polite">Not loaded yet.</span>
           </div>
           <ol id="changelog-commits" class="commits" aria-label="Recent changes"></ol>
+        </form>
+      </dialog>
+      <button class="quiet icon-button branches-open-btn" id="branches-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="branch-landing-dialog" aria-label="Waiting branches" title="Candidate branches waiting to land" hidden><svg class="icon" aria-hidden="true"><use href="#i-git-branch"/></svg><span class="badge" id="branches-badge" aria-hidden="true">0</span><span class="sr-only" id="branches-count-wrap">Waiting to Land</span></button>
+      <dialog class="envs branches-modal" id="branch-landing-dialog" closedby="any" aria-labelledby="branch-landing-title">
+        <form class="envs-form" method="dialog">
+          <div class="settings-head">
+            <h2 id="branch-landing-title">Branches Waiting to Land</h2>
+            <button class="icon-button" id="branch-landing-close" type="submit" aria-label="Close branch landing inspector"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+          </div>
+          <p class="env-hint">Candidate task branches created by coding agents ready for review and landing.</p>
+          <div class="harness-actions">
+            <button class="quiet" id="branch-refresh-btn" type="button">Refresh branches</button>
+            <span class="harness-status" id="branch-landing-status" role="status" aria-live="polite">Ready.</span>
+          </div>
+          <div class="branches-container">
+            <div class="branches-sidebar">
+              <h3>Candidate Branches</h3>
+              <ul class="branches-list" id="branches-list" role="listbox" aria-label="Candidate branches"></ul>
+            </div>
+            <div class="branch-detail-panel" id="branch-detail-panel" hidden>
+              <div class="branch-meta-row">
+                <span class="branch-name-title" id="branch-detail-name"></span>
+                <span class="branch-merge-badge" id="branch-merge-badge"></span>
+              </div>
+              <div class="modal-actions branch-actions">
+                <button class="quiet branch-action-land" id="branch-land-btn" type="button">Merge into Workspace</button>
+                <button class="quiet branch-action-keep" id="branch-keep-btn" type="button">Keep Separate</button>
+              </div>
+              <p class="env-note" id="branch-action-result" role="status" aria-live="polite"></p>
+              <h4>Changed Files (<span id="branch-files-count">0</span>)</h4>
+              <ul class="branch-files-list" id="branch-files-list"></ul>
+              <h4>Diff</h4>
+              <pre class="branch-diff-viewer" id="branch-diff-viewer"><code></code></pre>
+            </div>
+          </div>
         </form>
       </dialog>
       <button class="quiet icon-button" id="envs-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="envs" aria-label="Environments" title="Environments"><svg class="icon" aria-hidden="true"><use href="#i-globe"/></svg><span class="sr-only" id="envs-count">Environments</span></button>
@@ -497,8 +533,19 @@
           <button class="quiet" id="vision-screen-btn" type="button" aria-pressed="false" title="Share screen or window with live session">Share screen</button>
           <button class="quiet" id="vision-ptt-btn" type="button" aria-pressed="false" title="Signal manual speech activity start or end" hidden>Push to talk</button>
         </div>
+        <div class="room-presence-strip" id="room-presence-strip" hidden>
+          <div class="presence-meta">
+            <span class="presence-count" id="presence-count">1 participant</span>
+            <span class="presence-floor-badge" id="presence-floor-badge" hidden>Floor locked</span>
+          </div>
+          <div class="presence-roster" id="presence-roster" role="list" aria-label="Room participants"></div>
+          <button class="quiet presence-floor-btn" id="presence-floor-btn" type="button">Request Floor</button>
+        </div>
         <div class="vision-core-card" id="vision-core-card" hidden>
-          <video id="vision-core-video" autoplay playsinline muted></video>
+          <div class="vision-stage-wrap" id="vision-stage-wrap">
+            <video id="vision-core-video" autoplay playsinline muted></video>
+            <canvas id="vision-grounding-overlay" class="vision-grounding-overlay" aria-hidden="true"></canvas>
+          </div>
           <canvas id="vision-core-canvas" hidden></canvas>
           <div class="vision-core-controls">
             <span class="vision-core-meta" id="vision-core-meta">Camera off</span>
@@ -936,6 +983,21 @@
               <h3 id="setting-debug-label">Debug details</h3>
               <label class="setting-checkbox-label"><input type="checkbox" id="setting-debug-enabled" aria-labelledby="setting-debug-label"> Show detailed error diagnostics and console traces</label>
               <p class="device-state" id="setting-debug-state">Standard error reporting</p>
+            </div>
+            <div class="settings-actions">
+              <button class="quiet" id="settings-run-doctor" type="button">Run system check</button>
+              <span class="device-state" id="settings-doctor-status" role="status" aria-live="polite"></span>
+            </div>
+            <div class="doctor-results" id="settings-doctor-results" hidden>
+              <ul class="doctor-checks-list" id="settings-doctor-list"></ul>
+            </div>
+          </fieldset>
+          <fieldset class="settings-group" id="settings-offline-voice-group">
+            <legend>Offline voice fallback</legend>
+            <div class="device-row" id="offline-speech-row">
+              <h3 id="setting-offline-speech-label">On-device speech mode</h3>
+              <label class="setting-checkbox-label"><input type="checkbox" id="setting-offline-speech-enabled" aria-labelledby="setting-offline-speech-label" checked> Enable on-device speech recognition &amp; synthesis fallback</label>
+              <p class="device-state" id="setting-offline-speech-state">Automatic — falls back to browser voice when cloud is unavailable</p>
             </div>
           </fieldset>
           <details class="about" id="agent-rules">

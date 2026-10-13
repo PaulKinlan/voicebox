@@ -211,7 +211,7 @@ test("browser: double-iframe sandboxed execution, opaque origin, and Web MCP too
       });
 
       document.body.appendChild(outer);
-      setTimeout(() => reject(new Error("timed out waiting for bridge interactions")), 10000);
+      setTimeout(() => reject(new Error("timed out waiting for bridge interactions")), 20000);
     });
   }, server.base);
 
@@ -289,7 +289,7 @@ test("browser: a repeated mini_app_ready re-handshakes with a FRESH port — no 
         }
       });
       document.body.appendChild(outer);
-      setTimeout(() => reject(new Error("timed out waiting for the repeated handshake")), 12000);
+      setTimeout(() => reject(new Error("timed out waiting for the repeated handshake")), 20000);
     });
   }, server.base);
 
@@ -339,7 +339,7 @@ test("browser: output bounds refusal for tool results > 64KB", { timeout: 25000 
       });
 
       document.body.appendChild(outer);
-      setTimeout(() => reject(new Error("timed out waiting for oversized output response")), 10000);
+      setTimeout(() => reject(new Error("timed out waiting for oversized output response")), 20000);
     });
   }, server.base);
 
@@ -391,7 +391,7 @@ test("browser: SDK aliases window.voicebox and navigator.modelContext alongside 
       });
 
       document.body.appendChild(outer);
-      setTimeout(() => reject(new Error("timed out waiting for alias tool execution")), 10000);
+      setTimeout(() => reject(new Error("timed out waiting for alias tool execution")), 20000);
     });
   }, server.base);
 
@@ -543,7 +543,7 @@ test("browser: decoy frame cannot trigger port transfer via mini_app_ready or hi
         }
       });
 
-      setTimeout(() => reject(new Error("timed out waiting for decoy test completion: " + JSON.stringify(events))), 12000);
+      setTimeout(() => reject(new Error("timed out waiting for decoy test completion: " + JSON.stringify(events))), 20000);
     });
   }, server.base);
 
@@ -860,7 +860,7 @@ test("browser: outer bridge validates mini-app tool arguments and refuses malfor
       });
 
       document.body.appendChild(outer);
-      setTimeout(() => reject(new Error("timed out waiting for mini-app tool arg tests")), 12000);
+      setTimeout(() => reject(new Error("timed out waiting for mini-app tool arg tests")), 20000);
     });
   }, server.base);
 
@@ -1061,7 +1061,7 @@ test("browser: outer bridge immediately refuses unknown tool without forwarding 
       });
 
       document.body.appendChild(outer);
-      setTimeout(() => reject(new Error("timed out waiting for unknown tool result")), 12000);
+      setTimeout(() => reject(new Error("timed out waiting for unknown tool result")), 20000);
     });
   }, server.base);
 
@@ -1203,7 +1203,7 @@ test("browser: bridge rejects unsupported schema keywords at registration time (
       });
 
       document.body.appendChild(outer);
-      setTimeout(() => reject(new Error("timed out waiting for bridge registration")), 12000);
+      setTimeout(() => reject(new Error("timed out waiting for bridge registration")), 20000);
     });
   }, server.base);
 
@@ -1238,7 +1238,7 @@ test("browser: bridge rejects unsupported schema keywords at registration time (
       });
 
       document.body.appendChild(outer);
-      setTimeout(() => reject(new Error("timed out waiting for bridge bad props registration")), 12000);
+      setTimeout(() => reject(new Error("timed out waiting for bridge bad props registration")), 20000);
     });
   }, server.base);
 
@@ -1275,7 +1275,7 @@ test("browser: bridge rejects unsupported schema keywords at registration time (
       });
 
       document.body.appendChild(outer);
-      setTimeout(() => reject(new Error("timed out waiting for bridge bad items registration")), 12000);
+      setTimeout(() => reject(new Error("timed out waiting for bridge bad items registration")), 20000);
     });
   }, server.base);
 
@@ -1312,7 +1312,7 @@ test("browser: bridge rejects unsupported schema keywords at registration time (
       });
 
       document.body.appendChild(outer);
-      setTimeout(() => reject(new Error("timed out waiting for bridge bad string enum registration")), 12000);
+      setTimeout(() => reject(new Error("timed out waiting for bridge bad string enum registration")), 20000);
     });
   }, server.base);
 

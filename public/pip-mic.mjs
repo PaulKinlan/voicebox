@@ -66,7 +66,7 @@ function readLevel() {
   const c = client();
   try {
     // THE STATE IS THE TRUTH, and the meter is only a picture of it. `level().capture` is a DECAYING
-    // ENVELOPE for drawing — it decays per animation frame, so when frames stop it FREEZES at its last
+    // AMPLITUDE CURVE for drawing — it decays per animation frame, so when frames stop it FREEZES at its last
     // value. My first version used it as the listening state, and the window went on saying "Listening —
     // the mic is live" indefinitely after the capture had stopped. Found by driving; the fix is to read the
     // authoritative `state.capture` and treat the meter purely as amplitude.
@@ -130,6 +130,7 @@ function addKeepOnTopButton(controls) {
  * whatever used them.
  */
 function copyStylesInto(target) {
+  if (typeof document === "undefined") return 0;
   let copied = 0;
   // THE BASE FIRST, AND BEFORE ANY LINK (voicebox-beads-9d3). This document is `about:blank`, so a
   // relative URL in it has no origin to resolve against: the cloned `<link href="style.css">` asked for
@@ -196,6 +197,7 @@ function icon(doc, id) {
  * document while holding the PiP document, so leaving it attached outlives the thing it is for.
  */
 function keepStylesInSync(pip) {
+  if (typeof document === "undefined") return () => {};
   let pending = false;
   const recopy = () => {
     if (pending) return;
@@ -296,6 +298,16 @@ function buildPip(pip, controls) {
     button.quiet:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
     button.quiet:disabled { opacity: .5; cursor: default; }
     .actions { display: flex; flex-wrap: wrap; gap: .4rem; }
+    .pip-companion { display: flex; flex-direction: column; gap: .4rem; }
+    #pip-vision-thumbnail { inline-size: 100%; max-block-size: 110px; border-radius: 8px; object-fit: cover; background: var(--card); border: 1px solid var(--line); }
+    #pip-vision-thumbnail[hidden] { display: none !important; }
+    .pip-task-chip { display: inline-flex; align-items: center; gap: .4rem; padding: .3rem .6rem; border-radius: 999px;
+                     background: color-mix(in srgb, var(--accent) 12%, var(--card)); border: 1px solid var(--line);
+                     font-size: 11px; font-weight: 500; color: var(--ink); max-inline-size: 100%; }
+    .pip-task-chip[hidden] { display: none !important; }
+    .pip-task-dot { inline-size: .5rem; block-size: .5rem; border-radius: 50%; background: var(--accent);
+                    animation: pip-wait 1.4s ease-in-out infinite; flex: none; }
+    #pip-task-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   `);
   pip.document.adoptedStyleSheets = [...pip.document.adoptedStyleSheets, own];
   // Reported rather than assumed: if the opener had no sheets to copy, this window is unstyled and the number
@@ -306,9 +318,9 @@ function buildPip(pip, controls) {
   // THE SPRITE TRAVELS WITH THE WINDOW (voicebox-beads-9d3). `<use href="#i-mic">` resolves against the
   // document it lives in, so the symbols must be IN this document — a copy that leaves them behind draws
   // an empty circle where the mic should be, which is exactly how the window looked.
-  const defs = document.querySelector(".icon-definitions");
+  const defs = typeof document !== "undefined" ? document.querySelector(".icon-definitions") : null;
   if (defs) body.append(pip.document.importNode(defs, true));
-  else console.warn("[pip-mic] the opener has no .icon-definitions — the icons in this window will be blank");
+  else if (typeof document !== "undefined") console.warn("[pip-mic] the opener has no .icon-definitions — the icons in this window will be blank");
 
   // The mic leads, centred: it is the one control a person presses here, and the state belongs under it.
   const lead = pip.document.createElement("div");
@@ -409,8 +421,83 @@ function buildPip(pip, controls) {
     }
   });
 
-  body.append(lead, meters, actions, log, form);
-  return { micButton, stateText, presenceDot, hint, stop, inFill, outFill, log, input };
+  const companion = pip.document.createElement("div");
+  companion.className = "pip-companion";
+
+  const videoThumb = pip.document.createElement("video");
+  videoThumb.id = "pip-vision-thumbnail";
+  videoThumb.autoplay = true;
+  videoThumb.playsInline = true;
+  videoThumb.muted = true;
+  videoThumb.hidden = true;
+
+  const taskChip = pip.document.createElement("div");
+  taskChip.id = "pip-task-chip";
+  taskChip.className = "pip-task-chip";
+  taskChip.hidden = true;
+
+  const taskDot = pip.document.createElement("span");
+  taskDot.className = "pip-task-dot";
+  taskDot.setAttribute("aria-hidden", "true");
+
+  const taskText = pip.document.createElement("span");
+  taskText.id = "pip-task-text";
+  taskText.textContent = "No active task";
+
+  taskChip.append(taskDot, taskText);
+  companion.append(videoThumb, taskChip);
+
+  const setVisionStream = (stream) => {
+    if (stream) {
+      videoThumb.srcObject = stream;
+      videoThumb.hidden = false;
+      videoThumb.play?.().catch(() => {});
+    } else {
+      videoThumb.srcObject = null;
+      videoThumb.hidden = true;
+    }
+  };
+
+  const setTaskStatus = (taskInfo) => {
+    if (!taskInfo || !taskInfo.active) {
+      taskChip.hidden = true;
+      taskText.textContent = "";
+    } else {
+      taskChip.hidden = false;
+      const desc = taskInfo.task || taskInfo.prompt || "Running agent task";
+      const harnessSuffix = taskInfo.harness ? ` [${taskInfo.harness}]` : "";
+      taskText.textContent = `${desc}${harnessSuffix}`;
+    }
+  };
+
+  const companionController = {
+    setVisionStream,
+    setTaskStatus,
+    videoThumb,
+    taskChip,
+    taskText,
+  };
+  pip.__companionController = companionController;
+  if (typeof window !== "undefined") {
+    window.__voiceboxPipCompanion = companionController;
+  }
+
+  body.append(lead, companion, meters, actions, log, form);
+  return {
+    micButton,
+    stateText,
+    presenceDot,
+    hint,
+    stop,
+    inFill,
+    outFill,
+    log,
+    input,
+    companionController,
+    videoThumb,
+    taskChip,
+    taskText,
+  };
 }
 
 async function openPipWindow(options = {}) {
@@ -489,6 +576,29 @@ async function openPipWindow(options = {}) {
     // A level that is not being measured is not a level: zero, always, when capture is off.
     ui.inFill.style.width = `${capturing ? Math.min(100, Math.round(input * 100)) : 0}%`;
     ui.outFill.style.width = `${capturing ? Math.min(100, Math.round(output * 100)) : 0}%`;
+
+    // Sync companion video thumbnail with main room video stream
+    const liveVideo = document.getElementById("vision-core-video");
+    const stream = liveVideo?.srcObject ?? null;
+    const isVisionActive = Boolean(stream && liveVideo && !liveVideo.closest("[hidden]"));
+    if (isVisionActive && ui.videoThumb.srcObject !== stream) {
+      ui.companionController.setVisionStream(stream);
+    } else if (!isVisionActive && !ui.videoThumb.hidden) {
+      ui.companionController.setVisionStream(null);
+    }
+
+    // Sync companion active task chip
+    const activeTaskEl = document.querySelector("#tasks-board .task-item");
+    const isRunning = activeTaskEl?.querySelector?.('[data-state="running"]');
+    if (isRunning) {
+      const promptText = activeTaskEl.querySelector(".task-prompt-text")?.textContent?.trim() || "Active task";
+      const harness = activeTaskEl.querySelector(".harness-tag")?.textContent?.trim() || "";
+      ui.companionController.setTaskStatus({ active: true, task: promptText, harness });
+    } else if (window.__voiceboxActiveTask) {
+      ui.companionController.setTaskStatus(window.__voiceboxActiveTask);
+    } else {
+      ui.companionController.setTaskStatus({ active: false });
+    }
   };
   paint();
   timer = setInterval(paint, 200); // timers fire in an unrendered window; rAF does not
@@ -499,6 +609,7 @@ async function openPipWindow(options = {}) {
     observer?.disconnect();
     try { clearInterval(timer); } catch { /* gone */ }
     window.__voiceboxPip = null;
+    window.__voiceboxPipCompanion = null;
   });
 
   return pip;
@@ -539,10 +650,23 @@ function start() {
   window.addEventListener("pagehide", onPageHidePopOut);
 }
 
-if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
-else start();
+if (typeof document !== "undefined") {
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
+  else start();
+}
 
 // Exported for the acceptance drive: it must be able to open the window without hunting for a button.
-window.__voiceboxPip = null;
-window.__voiceboxPipOpen = openPipWindow;
-window.__voiceboxPipOnPageHide = () => openPipWindow({ reason: "page-hide" });
+if (typeof window !== "undefined") {
+  window.__voiceboxPip = null;
+  window.__voiceboxPipOpen = openPipWindow;
+  window.__voiceboxPipOnPageHide = () => openPipWindow({ reason: "page-hide" });
+}
+
+export {
+  buildPip,
+  openPipWindow,
+  copyStylesInto,
+  readPresence,
+  readLevel,
+  syncMediaSessionCaptureState,
+};

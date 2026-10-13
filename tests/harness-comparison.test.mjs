@@ -215,13 +215,18 @@ test("agent-monitor.html includes side-by-side comparison UI, compare_harness_re
     new URL("../public/apps/agent-monitor.html", import.meta.url),
     "utf8",
   );
+  const rawJs = fs.readFileSync(
+    new URL("../public/apps/agent-monitor.js", import.meta.url),
+    "utf8",
+  );
 
   assert.match(rawHtml, /id="compare-results-panel"/);
   assert.match(rawHtml, /id="synthesis-summary"/);
   assert.match(rawHtml, /id="comparison-grid"/);
-  assert.match(rawHtml, /Select Winning Patch/);
-  assert.match(rawHtml, /data-select-winner/);
-  assert.match(rawHtml, /compare_harness_results/);
+  assert.match(rawHtml, /<script\s+src="\/apps\/agent-monitor\.js"><\/script>/);
+  assert.match(rawJs, /Select Winning Patch/);
+  assert.match(rawJs, /data-select-winner/);
+  assert.match(rawJs, /compare_harness_results/);
 
   const hits = scanPlainLanguage(rawHtml);
   assert.deepEqual(

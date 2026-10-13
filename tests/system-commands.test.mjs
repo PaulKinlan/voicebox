@@ -13,7 +13,7 @@ import { startServer } from "./lib/server.mjs";
 
 test("SYSTEM_COMMAND_CATALOGUE exposes structured voice command entries", () => {
   assert.ok(Array.isArray(SYSTEM_COMMAND_CATALOGUE));
-  assert.equal(SYSTEM_COMMAND_CATALOGUE.length, 6);
+  assert.equal(SYSTEM_COMMAND_CATALOGUE.length, 10);
   const commands = new Set(SYSTEM_COMMAND_CATALOGUE.map((entry) => entry.command));
   for (const expectedCommand of [
     "copy",
@@ -22,6 +22,10 @@ test("SYSTEM_COMMAND_CATALOGUE exposes structured voice command entries", () => 
     "switch_theme",
     "stop_speaking",
     "clear_activity",
+    "show_waiting_branches",
+    "land_branch",
+    "keep_branch_separate",
+    "compare_harnesses",
   ]) {
     assert.ok(commands.has(expectedCommand), `expected catalogue to contain '${expectedCommand}'`);
   }
@@ -131,6 +135,54 @@ test("parseSystemCommand deterministically parses clipboard, navigation, theme, 
     verb: "system",
     command: "stop_speaking",
     mode: "unmute",
+  });
+
+  // Branch landing & diff inspector commands
+  assert.deepEqual(parseSystemCommand("show waiting branches"), {
+    verb: "system",
+    command: "show_waiting_branches",
+  });
+  assert.deepEqual(parseSystemCommand("review merge"), {
+    verb: "system",
+    command: "show_waiting_branches",
+  });
+  assert.deepEqual(parseSystemCommand("inspect candidate branches"), {
+    verb: "system",
+    command: "show_waiting_branches",
+  });
+  assert.deepEqual(parseSystemCommand("land branch"), {
+    verb: "system",
+    command: "land_branch",
+  });
+  assert.deepEqual(parseSystemCommand("merge branch"), {
+    verb: "system",
+    command: "land_branch",
+  });
+  assert.deepEqual(parseSystemCommand("merge into workspace"), {
+    verb: "system",
+    command: "land_branch",
+  });
+  assert.deepEqual(parseSystemCommand("keep branch separate"), {
+    verb: "system",
+    command: "keep_branch_separate",
+  });
+  assert.deepEqual(parseSystemCommand("keep separate"), {
+    verb: "system",
+    command: "keep_branch_separate",
+  });
+
+  // Multi-harness comparison commands
+  assert.deepEqual(parseSystemCommand("compare harnesses"), {
+    verb: "system",
+    command: "compare_harnesses",
+  });
+  assert.deepEqual(parseSystemCommand("harness comparison"), {
+    verb: "system",
+    command: "compare_harnesses",
+  });
+  assert.deepEqual(parseSystemCommand("open harness tracker"), {
+    verb: "system",
+    command: "compare_harnesses",
   });
 
   // Non-system phrases return null
@@ -260,6 +312,37 @@ test("Server integration: POST /api/turn system commands, multi-harness configur
     const tasksBody = await tasksRes.json();
     assert.equal(tasksBody.ok, true);
     assert.ok(Array.isArray(tasksBody.tasks));
+
+    // Verify stop_speaking turn execution
+    const stopRes = await fetch(`${base}/api/turn`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ transcript: "stop speaking" }),
+    });
+    assert.equal(stopRes.status, 200);
+    const stopBody = await stopRes.json();
+    assert.equal(stopBody.action.command, "stop_speaking");
+    assert.equal(stopBody.action.mode, "interrupt");
+
+    const muteRes = await fetch(`${base}/api/turn`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ transcript: "mute" }),
+    });
+    assert.equal(muteRes.status, 200);
+    const muteBody = await muteRes.json();
+    assert.equal(muteBody.action.command, "stop_speaking");
+    assert.equal(muteBody.action.mode, "mute");
+
+    const unmuteRes = await fetch(`${base}/api/turn`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ transcript: "unmute" }),
+    });
+    assert.equal(unmuteRes.status, 200);
+    const unmuteBody = await unmuteRes.json();
+    assert.equal(unmuteBody.action.command, "stop_speaking");
+    assert.equal(unmuteBody.action.mode, "unmute");
   } finally {
     await server.stop();
     fs.rmSync(workspace, { recursive: true, force: true });

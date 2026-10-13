@@ -297,4 +297,20 @@ describe("Local offline speech-to-text and text-to-speech fallback", () => {
       `Expected 0 plain-language hits in public/offline-speech-client.mjs, got: ${JSON.stringify(hits)}`,
     );
   });
+
+  it("public/index.html includes offline voice fallback settings and passes plain-language scan", () => {
+    const indexHtml = readFileSync(path.join(ROOT, "public", "index.html"), "utf8");
+    assert.match(indexHtml, /id="setting-offline-speech-enabled"/);
+    assert.match(indexHtml, /id="setting-offline-speech-state"/);
+
+    const match = indexHtml.match(/<fieldset[^>]*id="settings-offline-voice-group"[\s\S]*?<\/fieldset>/i);
+    assert.ok(match, "settings-offline-voice-group must exist in public/index.html");
+
+    const hits = identifiersInRenderedText(match[0]);
+    assert.deepEqual(
+      hits,
+      [],
+      `Expected 0 plain-language hits in settings-offline-voice-group, got: ${JSON.stringify(hits)}`,
+    );
+  });
 });

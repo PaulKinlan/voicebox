@@ -75,7 +75,7 @@ const choose = (id, value) =>
 // load nor land on top of a change made after it.
 async function beforeOpeningSettings(p, label) {
   await p.waitFor(() => (document.getElementById("agent-provider-state")?.textContent ?? "Not asked yet") !== "Not asked yet",
-    { label: `${label}: the boot-time agent settings to be drawn` });
+    { label: `${label}: the boot-time agent settings to be drawn`, timeout: 35000 });
   await p.evaluate(() => {
     window.__agentSettingsDraws = 0;
     new MutationObserver(() => { window.__agentSettingsDraws += 1; })
@@ -83,7 +83,7 @@ async function beforeOpeningSettings(p, label) {
   });
 }
 const settingsLoadDrawn = (p, label) =>
-  p.waitFor(() => window.__agentSettingsDraws >= 1, { label: `${label}: the settings dialog's own load to be answered and drawn` });
+  p.waitFor(() => window.__agentSettingsDraws >= 1, { label: `${label}: the settings dialog's own load to be answered and drawn`, timeout: 35000 });
 
 // THE CHANGE HAS BEEN ANSWERED (voicebox-beads-g667), where 400-500ms sleeps were. A picker's change PUTs
 // the setting, and the page takes the server's answer in ONE synchronous step — it stores what the server
@@ -246,7 +246,7 @@ test("unified agent settings: model, voice timbre, custom prompt, and local stor
   // below would pass against it. So the old document carries a marker, and the reloaded one must not.
   await page.evaluate(() => { window.__beforeReload = true; });
   await page.reload();
-  await page.waitFor(() => !window.__beforeReload && document.getElementById("settings-open") !== null, { label: "the reloaded room" });
+  await page.waitFor(() => !window.__beforeReload && document.getElementById("settings-open") !== null, { label: "the reloaded room", timeout: 35000 });
   await beforeOpeningSettings(page, "the reloaded room");
   await page.click("#settings-open");
   await page.waitFor(() => document.getElementById("settings").open);

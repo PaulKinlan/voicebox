@@ -437,6 +437,11 @@ test("public/live-video-experiment.mjs and public/apps/live-vision-studio.html p
     "utf8",
   );
 
+  const studioJs = fs.readFileSync(
+    new URL("../public/apps/live-vision-studio.js", import.meta.url),
+    "utf8",
+  );
+
   const moduleHits = scanPlainLanguage(moduleSource);
   assert.deepEqual(
     moduleHits,
@@ -453,6 +458,7 @@ test("public/live-video-experiment.mjs and public/apps/live-vision-studio.html p
 
   // Verify Live Vision Studio controls and WebMCP tools
   assert.match(studioHtml, /^<!DOCTYPE html>/i);
+  assert.match(studioHtml, /<script\s+type="module"\s+src="\/apps\/live-vision-studio\.js"><\/script>/);
   assert.match(studioHtml, /id="start-camera-btn"/);
   assert.match(studioHtml, /id="start-screen-btn"/);
   assert.match(studioHtml, /id="stop-video-btn"/);
@@ -469,9 +475,9 @@ test("public/live-video-experiment.mjs and public/apps/live-vision-studio.html p
   assert.match(studioHtml, /id="capture-canvas"/);
   assert.match(studioHtml, /id="frame-counter"/);
   assert.match(studioHtml, /id="live-config-form"/);
-  assert.match(studioHtml, /get_live_vision_status/);
-  assert.match(studioHtml, /capture_live_frame/);
-  assert.match(studioHtml, /configure_live_session/);
+  assert.match(studioJs, /get_live_vision_status/);
+  assert.match(studioJs, /capture_live_frame/);
+  assert.match(studioJs, /configure_live_session/);
 });
 
 test("buildGeminiLiveSetupPayload configures thinkingLevel and NON_BLOCKING tools for gemini-3.8-live-extended-thinking and omits thinkingLevel for gemini-3.8-live", () => {

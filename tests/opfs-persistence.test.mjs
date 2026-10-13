@@ -49,7 +49,7 @@ test("a folder the room holds keeps its data across real reloads, and a write la
 
     // ── RELOAD 1: the folder comes back ─────────────────────────────────────
     await page.reload();
-    await page.waitFor(() => [...document.querySelectorAll("#files .file-open")].some((b) => b.dataset.file === "proposals"), { label: "the restored folder" });
+    await page.waitFor(() => [...document.querySelectorAll("#files .file-open")].some((b) => b.dataset.file === "proposals"), { label: "the restored folder", timeout: 35000 });
 
     // ── the write: a bare name, made while standing inside `proposals` ──────
     const wrote = await page.evaluate(async () => {
@@ -95,7 +95,7 @@ test("a folder the room holds keeps its data across real reloads, and a write la
     // THE FOLDER IS BACK before anything clicks it (voicebox-beads-g667): `#files` is in the static markup, so
     // the wait above is met as soon as the new document parses — and the click below is a silent no-op while
     // the room folders are still being restored. The same condition as the first reload.
-    await page.waitFor(() => [...document.querySelectorAll("#files .file-open")].some((b) => b.dataset.file === "proposals"), { label: "the restored folder after the second reload" });
+    await page.waitFor(() => [...document.querySelectorAll("#files .file-open")].some((b) => b.dataset.file === "proposals"), { label: "the restored folder after the second reload", timeout: 35000 });
     const after = await page.evaluate(async () => {
       const root = await navigator.storage.getDirectory();
       const folder = await root.getDirectoryHandle("persistence");

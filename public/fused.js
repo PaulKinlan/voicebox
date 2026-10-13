@@ -12,6 +12,12 @@ import { applyTheme, initTheme } from "./theme.mjs";
 
 import { initExtensionsUI, renderExtensions } from "./extensions-ui.mjs";
 import { initSettingsUi } from "./settings-ui.mjs";
+import { createBoundedSeenSet, encodeVisionFrame } from "./vision-frame-encoder.mjs";
+import { drawInputWave, drawOutputRing, meterLevel, mixSpeechAndMic } from "./audio-meters.mjs";
+import { createBranchLandingController } from "./branch-landing-ui.mjs";
+import { createOfflineSpeechController } from "./offline-speech-client.mjs";
+import { createPresenceUIController } from "./presence-ui.mjs";
+import { createVisionGroundingController } from "./vision-grounding.mjs";
 
 const $ = (id) => document.getElementById(id);
 const SVG = "http://www.w3.org/2000/svg";
@@ -106,6 +112,14 @@ const WANTED = {
   changelogOpen: "changelog-open", changelogDialog: "changelog-dialog",
   changelogClose: "changelog-close", changelogRefresh: "changelog-refresh",
   changelogStatus: "changelog-status", changelogCommits: "changelog-commits",
+  branchesOpen: "branches-open", branchesBadge: "branches-badge",
+  branchLandingDialog: "branch-landing-dialog", branchLandingClose: "branch-landing-close",
+  branchRefreshBtn: "branch-refresh-btn", branchLandingStatus: "branch-landing-status",
+  branchesList: "branches-list", branchDetailPanel: "branch-detail-panel",
+  branchDetailName: "branch-detail-name", branchMergeBadge: "branch-merge-badge",
+  branchLandBtn: "branch-land-btn", branchKeepBtn: "branch-keep-btn",
+  branchActionResult: "branch-action-result", branchFilesCount: "branch-files-count",
+  branchFilesList: "branch-files-list", branchDiffViewer: "branch-diff-viewer",
   folderPath: "folder-path",
   themeToggle: "theme-toggle",
   themeSelect: "theme-select",
@@ -128,13 +142,20 @@ const WANTED = {
   helpRootVal: "help-root-val", helpVoiceVal: "help-voice-val", helpSections: "help-sections",
   visionCameraBtn: "vision-camera-btn", visionScreenBtn: "vision-screen-btn", visionPttBtn: "vision-ptt-btn",
   visionCoreCard: "vision-core-card", visionCoreVideo: "vision-core-video", visionCoreCanvas: "vision-core-canvas",
+  visionGroundingOverlay: "vision-grounding-overlay",
   visionCoreMeta: "vision-core-meta", visionSnapshotBtn: "vision-snapshot-btn", visionStopBtn: "vision-stop-btn",
   settingPttEnabled: "setting-ptt-enabled", settingPttState: "setting-ptt-state",
   settingDebugEnabled: "setting-debug-enabled", settingDebugState: "setting-debug-state",
+  settingOfflineSpeechEnabled: "setting-offline-speech-enabled", settingOfflineSpeechState: "setting-offline-speech-state",
   settingVisionResolution: "setting-vision-resolution", settingVisionFps: "setting-vision-fps",
   settingThinkingLevel: "setting-thinking-level", settingThinkingLevelState: "setting-thinking-level-state",
   settingStartCamera: "setting-start-camera", settingStartScreen: "setting-start-screen",
   thinkingTrace: "thinking-trace", thinkingTraceBody: "thinking-trace-body", thinkingTraceLabel: "thinking-trace-label",
+  roomPresenceStrip: "room-presence-strip", presenceCount: "presence-count",
+  presenceFloorBadge: "presence-floor-badge", presenceRoster: "presence-roster",
+  presenceFloorBtn: "presence-floor-btn",
+  settingsRunDoctor: "settings-run-doctor", settingsDoctorStatus: "settings-doctor-status",
+  settingsDoctorResults: "settings-doctor-results", settingsDoctorList: "settings-doctor-list",
 };
 const els = {};
 const missing = [];
@@ -223,6 +244,10 @@ async function executeBrowserSystemCommand(cmd) {
     else if (p === "extensions") els.extsOpen?.click?.();
     else if (p === "environments") els.envsOpen?.click?.();
     else if (p === "changelog") els.changelogOpen?.click?.();
+    else if (p === "branches" || p === "waiting-branches") {
+      if (window.__voiceboxBranchLanding?.openDialog) window.__voiceboxBranchLanding.openDialog();
+      else els.branchesOpen?.click?.();
+    }
     else if (p === "agent-tracker") void openAgentProgressTracker();
     else if (p === "close") {
       // "close panel" closes what is actually open: any modal sheet on the page, then the deck home,
@@ -235,6 +260,49 @@ async function executeBrowserSystemCommand(cmd) {
     }
     else if (p === "files" || p === "history" || p === "activity" || p === "deck") sqehSetState(p);
     return { ok: true, panel: p };
+  }
+  if (cmd.command === "stop_speaking") {
+    try { window.speechSynthesis?.cancel?.(); } catch {}
+    const mode = cmd.mode || (/unmute/i.test(cmd.text || "") ? "unmute" : /mute/i.test(cmd.text || "") ? "mute" : "interrupt");
+    const micPressed = els.mic?.getAttribute("aria-pressed") === "true";
+    if (mode === "unmute") {
+      if (!micPressed) {
+        els.mic?.click();
+      }
+      return { ok: true, action: "unmute", message: "Microphone unmuted." };
+    }
+    if (mode === "mute") {
+      if (micPressed) {
+        els.mic?.click();
+      }
+      return { ok: true, action: "mute", message: "Microphone muted." };
+    }
+    els.interrupt?.click();
+    return { ok: true, action: "interrupt", message: "Stopped speaking." };
+  }
+  if (cmd.command === "show_waiting_branches") {
+    if (window.__voiceboxBranchLanding?.openDialog) {
+      window.__voiceboxBranchLanding.openDialog();
+    } else {
+      els.branchesOpen?.click?.();
+    }
+    return { ok: true, action: "show_waiting_branches" };
+  }
+  if (cmd.command === "land_branch") {
+    if (window.__voiceboxBranchLanding?.landSelectedBranch) {
+      void window.__voiceboxBranchLanding.landSelectedBranch();
+    }
+    return { ok: true, action: "land_branch" };
+  }
+  if (cmd.command === "keep_branch_separate") {
+    if (window.__voiceboxBranchLanding?.keepSelectedBranchSeparate) {
+      void window.__voiceboxBranchLanding.keepSelectedBranchSeparate();
+    }
+    return { ok: true, action: "keep_branch_separate" };
+  }
+  if (cmd.command === "compare_harnesses") {
+    void openAgentProgressTracker();
+    return { ok: true, action: "compare_harnesses" };
   }
   return { ok: false };
 }
@@ -250,7 +318,7 @@ window.addEventListener("message", (e) => {
 // ── Project / folder change flash & Work Activity Log ──
 let projectFlashTimer = null;
 let lastPaintedRootKey = null;
-const workActivitySeenIds = new Set();
+const workActivitySeenIds = createBoundedSeenSet(200);
 let workActivitySeq = 0;
 
 function sanitizePlainActivityText(raw) {
@@ -2791,6 +2859,9 @@ function finish(said, outcome, tone) {
     label: tone === "bad" ? "Refusal" : "Turn",
     summary: said ? `“${said}” → ${outcome}` : outcome,
   });
+  if (window.__voiceboxOfflineSpeech?.isFallbackActive?.() && outcome) {
+    window.__voiceboxOfflineSpeech.speak(outcome);
+  }
 }
 
 /**
@@ -3095,6 +3166,63 @@ async function send(said) {
   }
 }
 
+// ── Offline Speech Fallback (voicebox-beads-ijtf) ─────────────────────────
+const offlineSpeechController = createOfflineSpeechController({
+  onTranscript: (transcript, { isFinal } = {}) => {
+    if (transcript) {
+      if (els.utterance) {
+        if (els.form?.hidden) els.form.hidden = false;
+        els.utterance.value = transcript;
+        if (els.send) els.send.disabled = !transcript.trim();
+      }
+      if (isFinal) {
+        setState("Heard it — sending your turn…");
+        void send(transcript);
+      }
+    }
+  },
+  onStateChange: (vState) => {
+    if (vState === "listening") {
+      listening(true);
+      setState("Listening offline — speak your turn, then pause.");
+    } else if (vState === "speaking") {
+      setState("Assistant speaking (offline speech synthesis)…");
+    } else {
+      listening(false);
+    }
+  },
+});
+
+let offlineFallbackActive = false;
+let offlineFallbackEnabled = true;
+
+window.__voiceboxOfflineSpeech = {
+  controller: offlineSpeechController,
+  isEnabled: () => offlineFallbackEnabled,
+  setEnabled: (val) => {
+    offlineFallbackEnabled = Boolean(val);
+    if (!offlineFallbackEnabled && offlineFallbackActive) {
+      offlineSpeechController.stopListening();
+      offlineSpeechController.stopSpeaking();
+      offlineFallbackActive = false;
+    }
+  },
+  isFallbackActive: () => offlineFallbackActive,
+  activateFallback: () => {
+    offlineFallbackActive = true;
+    setState("Live cloud voice unavailable — switched to on-device speech fallback.", "warn");
+  },
+  deactivateFallback: () => {
+    offlineFallbackActive = false;
+    offlineSpeechController.stopListening();
+    offlineSpeechController.stopSpeaking();
+  },
+  speak: (text, opts) => offlineSpeechController.speak(text, opts),
+  startListening: (opts) => offlineSpeechController.startListening(opts),
+  stopListening: () => offlineSpeechController.stopListening(),
+  stopSpeaking: () => offlineSpeechController.stopSpeaking(),
+};
+
 // ── the microphone: the browser's dictation, and nothing more ─────────────
 let recognition = null;
 
@@ -3104,6 +3232,13 @@ function listening(on) {
 }
 
 function startListening() {
+  if (window.__voiceboxOfflineSpeech?.isFallbackActive?.()) {
+    const res = window.__voiceboxOfflineSpeech.startListening();
+    if (!res?.ok) {
+      setState("No speech recognition in this browser — type your turn below.", "warn");
+    }
+    return;
+  }
   // live-voice.js owns the microphone when it is on the page: dictation and a
   // live session must never both answer one click (module order is not a
   // guarantee, so this is checked at click time, not at attach time).
@@ -3817,6 +3952,7 @@ installLightDismissFallback(els.envs);
 installLightDismissFallback(els.settings);
 installLightDismissFallback(els.harnessesDialog);
 installLightDismissFallback(els.changelogDialog);
+installLightDismissFallback(els.branchLandingDialog);
 
 // ── Harnesses modal dialog (voicebox-beads-f1o) ───────────────────────────
 function textNode(parent, tag, value) {
@@ -4323,248 +4459,54 @@ on(els.changelogDialog, "close", () => {
 });
 on(els.changelogRefresh, "click", () => void loadRoomChangelog({ priority: "high" }));
 
+// ── Branch Landing Inspector (voicebox-beads-8kfa) ─────────────────────────
+const branchLandingController = createBranchLandingController({
+  openBtn: els.branchesOpen,
+  badgeEl: els.branchesBadge,
+  dialog: els.branchLandingDialog,
+  closeBtn: els.branchLandingClose,
+  refreshBtn: els.branchRefreshBtn,
+  statusEl: els.branchLandingStatus,
+  branchesList: els.branchesList,
+  detailPanel: els.branchDetailPanel,
+  detailName: els.branchDetailName,
+  mergeBadge: els.branchMergeBadge,
+  landBtn: els.branchLandBtn,
+  keepBtn: els.branchKeepBtn,
+  actionResult: els.branchActionResult,
+  filesCount: els.branchFilesCount,
+  filesList: els.branchFilesList,
+  diffViewer: els.branchDiffViewer,
+  onLanded: () => {
+    void loadListing();
+  },
+});
+window.__voiceboxBranchLanding = branchLandingController;
+void branchLandingController.fetchCandidates();
+
+// ── Room Presence & Floor Control (voicebox-beads-2mi8) ────────────────────
+const presenceUIController = createPresenceUIController({
+  stripEl: els.roomPresenceStrip,
+  countEl: els.presenceCount,
+  rosterEl: els.presenceRoster,
+  floorBtn: els.presenceFloorBtn,
+  floorBadgeEl: els.presenceFloorBadge,
+});
+window.__voiceboxPresenceUI = presenceUIController;
+presenceUIController.start();
+
+// ── Visual Grounding & Callout Pointer (voicebox-beads-gnf2) ───────────────
+const visionGroundingController = createVisionGroundingController({
+  canvas: els.visionGroundingOverlay,
+});
+window.__voiceboxVisionGrounding = visionGroundingController;
+
 // Settings dialog, agent preferences and provider keys have one UI owner.
 const { loadAgentSettings, loadApiKeysSettings } = initSettingsUi({ els, request, health, refreshDevices, on });
 
-// ── the two meters: your voice, and the agent's ───────────────────────────
-// Driven by the real PCM the client already has (audio-client.js `level()`):
-// input energy at the microphone, and one radius per output sample around the
-// circle. No audio, no picture — a meter that animates while nothing is being
-// heard is the same lie as a "listening" label with the mic off.
-const OUTPUT_SAMPLES = 64;
-const INPUT_BARS_PAGE = 28;
-const OUTPUT_CENTRE = 120;
-const OUTPUT_BASE = 62; // hugs the button (radius ~55 in these units)
-const OUTPUT_AMPLITUDE = 13; // a contour hugging the button, lightly textured by real audio
-
-// Mean-absolute energy from real speech is small (a quiet room reads ~0.01, a
-// talking voice ~0.03-0.1), so a linear meter sits at zero and never moves.
-// The square root spreads the quiet end and saturates at the loud end — a meter
-// you can read, still driven entirely by the real signal.
-function meterLevel(value) {
-  const energy = Number(value);
-  if (!Number.isFinite(energy) || energy <= 0) return 0;
-  return Math.min(1, Math.sqrt(energy) * 1.9);
-}
-
-// ── the output ring: a smooth closed curve that morphs at frame rate ───────
-//
-// Two separate problems made this look "stilted and jilted" (Paul, 2026-09-20):
-//
-//   1. GEOMETRY. The old path joined 64 sample points with straight `L`
-//      segments, so the ring was a 64-gon and its edges were visible.
-//   2. DATA RATE. Samples arrive with the audio — around 12 a second — while
-//      the loop draws at 60. Redrawing the same numbers 58 times a second is
-//      not animation: what the eye sees is ~12 discrete jumps a second, each
-//      one shifting the whole ring by a whole sample.
-//
-// So the ring keeps a *fractional phase* that eases toward the newest data and
-// samples the ring between its points, and the polyline is turned into a closed
-// Catmull-Rom curve through denser points. The picture then changes every frame
-// (measured 60/s, see the drive note in the commit) while the data underneath
-// still arrives at the audio rate — the honest way to interpolate a coarse
-// signal rather than pretending it is faster than it is.
-const RENDER_POINTS = 160; // drawn points around the ring (was 64, straight-joined)
-const RING_COS = new Float64Array(RENDER_POINTS);
-const RING_SIN = new Float64Array(RENDER_POINTS);
-for (let i = 0; i < RENDER_POINTS; i++) {
-  const angle = (i / RENDER_POINTS) * Math.PI * 2 - Math.PI / 2;
-  RING_COS[i] = Math.cos(angle);
-  RING_SIN[i] = Math.sin(angle);
-}
-let ringPhase = 0;         // where we are rendering, in ring positions
-let ringTarget = 0;        // where the newest data has arrived, in ring positions
-let ringSeen = null;       // the newest sample we have already counted
-let ringFlowPhase = 0;     // continuous carrier phase for smooth wave motion
-// THE POINT RADII ARE FOLLOWED, NOT SET (voicebox-beads-u03k). The raw data can step the whole amplitude
-// between two frames — measured on the landed ring: 13.0 units in ONE frame when speech stopped, and 9.5 at
-// a loud onset — so each point's radius chases its target with a fast attack and a slower decay, and a pause
-// settles over ~20 frames instead of collapsing.
-const ringRadii = new Float64Array(RENDER_POINTS).fill(OUTPUT_BASE);
-
-/**
- * Sample the ring with a MIRRORED (triangle-folded) traversal (voicebox-beads-u03k, from the d2ji branch's
- * measurement). The ring is a history wrapped around a circle: position 0 is the OLDEST entry and n-1 the
- * NEWEST, so an index-wrapping sampler draws two unrelated moments next to each other and puts a step in the
- * contour — measured at 9.5 units of a 13-unit amplitude on a fixture whose only discontinuity is that wrap.
- * Folding traverses 0…n-1 and back, so those two entries are never adjacent. Nothing here invents a value: it
- * shows the history twice, mirrored, and the contour is continuous everywhere.
- */
-function ringAt(samples, position) {
-  const n = samples.length;
-  if (n === 0) return 0;
-  const turn = ((position / n) % 1 + 1) % 1;
-  const folded = turn <= 0.5 ? turn * 2 : (1 - turn) * 2;
-  const at = folded * (n - 1);
-  const i = Math.floor(at);
-  const j = Math.min(n - 1, i + 1);
-  const t = at - i;
-  return samples[i] * (1 - t) + samples[j] * t;
-}
-
-/** Closed Catmull-Rom through the points, as cubic Béziers — no visible facets. */
-function closedCurve(points) {
-  const n = points.length;
-  const at = (i) => points[(i % n + n) % n];
-  let d = `M${at(0)[0].toFixed(2)},${at(0)[1].toFixed(2)}`;
-  for (let i = 0; i < n; i++) {
-    const p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
-    const c1x = p1[0] + (p2[0] - p0[0]) / 6;
-    const c1y = p1[1] + (p2[1] - p0[1]) / 6;
-    const c2x = p2[0] - (p3[0] - p1[0]) / 6;
-    const c2y = p2[1] - (p3[1] - p1[1]) / 6;
-    d += `C${c1x.toFixed(2)},${c1y.toFixed(2)} ${c2x.toFixed(2)},${c2y.toFixed(2)} ${p2[0].toFixed(2)},${p2[1].toFixed(2)}`;
-  }
-  return `${d}Z`;
-}
-
-function drawOutputRing(samples) {
-  const path = document.getElementById("output-path");
-  if (!path) return;
-  if (!samples) {
-    path.removeAttribute("d");
-    ringSeen = null;
-    ringPhase = 0;
-    ringTarget = 0;
-    ringFlowPhase = 0;
-    ringRadii.fill(OUTPUT_BASE);
-    return;
-  }
-  // Count a new sample once: the newest value changing is the signal that the
-  // client's ring advanced (it advances on PLAYBACK, not on arrival).
-  const newest = samples[samples.length - 1];
-  if (ringSeen === null || Math.abs(newest - ringSeen) > 1e-6) {
-    ringSeen = newest;
-    ringTarget += 1;
-  }
-  // Ease the render phase toward the data, and advance a gentle continuous carrier wave.
-  ringPhase += (ringTarget - ringPhase) * 0.14;
-  ringFlowPhase += 0.045;
-
-  const points = new Array(RENDER_POINTS);
-  for (let i = 0; i < RENDER_POINTS; i++) {
-    const position = ringPhase + (i / RENDER_POINTS) * OUTPUT_SAMPLES;
-    const target = OUTPUT_BASE + meterLevel(ringAt(samples, position)) * OUTPUT_AMPLITUDE;
-    // Fast attack, slower decay (voicebox-beads-u03k): a syllable arrives at once, a pause settles.
-    ringRadii[i] += (target - ringRadii[i]) * (target > ringRadii[i] ? 0.35 : 0.16);
-    const shown = ringRadii[i];
-    // THE CARRIER IS THE LANDED ONE and it stays: it keeps the contour moving on a steady note, and it is
-    // driven by the FOLLOWED level rather than the raw sample, so it cannot put a step back into the picture.
-    const level = Math.max(0, Math.min(1, (shown - OUTPUT_BASE) / OUTPUT_AMPLITUDE));
-    const harmonic = level > 0.01 ? Math.sin((i / RENDER_POINTS) * Math.PI * 6 + ringFlowPhase) * level * 1.8 : 0;
-    const radius = shown + harmonic;
-    points[i] = [OUTPUT_CENTRE + RING_COS[i] * radius, OUTPUT_CENTRE + RING_SIN[i] * radius];
-  }
-  path.setAttribute("d", closedCurve(points));
-}
-
-// ── the input wave: fills the button, clipped by its inner circle ─────────
-//
-// Paul, 2026-09-20: "It just looks like a little blue bar that kind of grows…
-// I'd expect it to be bigger and maybe kind of clipped to the inner circle of
-// the big button." The old version was capped at ±11 units in a 40-tall box on
-// purpose; this one uses the whole 100-unit circle and lets the clip do the
-// framing, with attack/decay so quiet speech still moves instead of sitting on
-// the floor (attack is fast, decay is slow — the eye reads movement, and a
-// meter that snaps back to nothing between syllables reads as broken).
-let inputDisplay = new Float32Array(INPUT_BARS_PAGE);
-let inputInit = false;
-// A running peak, decaying slowly, so the wave uses the space it has at ANY
-// speaking level instead of sitting near the floor for quiet speech. Below a
-// floor it stops amplifying: a silent room must not be drawn as a loud one,
-// which is the difference between a normalised meter and a lie.
-let inputPeak = 0;
-const INPUT_GATE = 0.12;
-/**
- * THE WAVE'S OWN SPREAD — the same square-root curve as meterLevel, WITHOUT its clamp.
- *
- * The clamp is right for the outer ring and wrong here, and it is the second half of voicebox-beads-korz: it
- * saturates at an energy of 0.277 while a played-back chunk's energy is routinely above that, so every bar of a
- * real agent-speech envelope arrived as exactly 1 and the wave was drawn as a solid bar across the clipper —
- * the "flat-topped" picture, which no blend could show through. A wave that is normalised by its own running
- * peak does not need a hard ceiling to stay inside the circle (the peak does that), and a monotone curve keeps
- * the SHAPE of loud audio instead of flattening it.
- */
-const waveLevel = (value) => Math.sqrt(Math.max(0, Number(value) || 0)) * 1.9;
-
-function drawInputWave(samples, { gain: givenGain = null } = {}) {
-  const path = document.getElementById("input-path");
-  if (!path) return;
-  if (!samples) {
-    path.removeAttribute("d");
-    inputInit = false;
-    return;
-  }
-  const n = samples.length;
-  if (!inputInit || inputDisplay.length !== n) {
-    inputDisplay = new Float32Array(n);
-    inputInit = true;
-  }
-  const middle = 50;
-  const maxHalf = 46; // the clip circle's radius: the wave fills it, the circle trims it
-  // A CALLER THAT HAS ALREADY SCALED FOR ITSELF passes its gain — see mixSpeechAndMic for why the blended wave
-  // must not be re-normalised here — and the running peak that drives the single-source paths is left alone.
-  // Everything else keeps the AGC described above (a decaying running peak, and no amplification below the
-  // gate).
-  let gain = givenGain;
-  if (gain === null) {
-    let peak = 0;
-    for (let i = 0; i < n; i++) peak = Math.max(peak, waveLevel(samples[i]));
-    inputPeak = Math.max(peak, inputPeak * 0.94);
-    gain = inputPeak >= INPUT_GATE ? 1 / inputPeak : 1;
-  }
-  let top = "";
-  let bottom = "";
-  for (let i = 0; i < n; i++) {
-    const target = Math.min(maxHalf, waveLevel(samples[i]) * gain * maxHalf * 0.85);
-    // attack fast, decay slow
-    inputDisplay[i] += (target - inputDisplay[i]) * (target > inputDisplay[i] ? 0.6 : 0.12);
-    const half = Math.max(0.8, inputDisplay[i]);
-    // x spans the full width; the ends are cut by the circle rather than padded
-    const x = ((i / (n - 1)) * 108 - 4).toFixed(2);
-    top += `${i ? "L" : "M"}${x},${(middle - half).toFixed(2)}`;
-    bottom = `L${x},${(middle + half).toFixed(2)}` + bottom;
-  }
-  path.setAttribute("d", `${top}${bottom}Z`);
-}
-
-// ── the wave while the agent speaks AND the microphone is open (voicebox-beads-korz) ──────────────────
-//
-// WHAT WAS WRONG. The first version of this blend was `Math.max(output[i], input[i])` handed to the function
-// above, which re-scaled every frame to its OWN peak. Two things followed, and both were visible on the real
-// page: the quieter side DISAPPEARED — max keeps the louder contribution bar by bar, so a microphone quieter
-// than the playback never showed at all — and every frame landed at the same height, because the frame's own
-// peak is always drawn at the top. Four frames of a steady envelope rendered as ONE distinct path: a solid bar
-// across the clipper, frozen. (Measured: a full-duplex passage at output 0.5 and one at 0.25, with the mic
-// open at 0.05, drew byte-identical paths at 39.1 units on every bar.)
-//
-// WHAT IT IS NOW. The two energies are ADDED — no fudge factor is needed, because both are `energy()` from the
-// same module (public/pcm.js: the mean absolute amplitude of a frame), so the sum is what the room is carrying:
-// the agent's syllables plus the person's voice, in one number per bar. Neither can erase the other; a voice
-// over the agent lifts the wave on its own bars. And the scale is FIXED, not self-normalised: a wave that re-fits
-// itself to each frame's own peak cannot show that a voice joined the agent, because the added energy raises the
-// peak, the gain falls, and the difference cancels (measured while writing this: opening the microphone on the
-// same playback moved the mean height by −0.5 units). MIX_FULL_SCALE is the mixed energy that fills the circle —
-// the agent at its own loud level with a voice over it — so everything below it draws in proportion, a quiet
-// room draws a small wave, and a voice arriving is a rise you can see. The listening path keeps its own AGC:
-// there the wave is the only cue there is, and a whisper must not sit on the floor.
-const MIX_FULL_SCALE = 0.5;
-const MIX_GAIN = 1 / waveLevel(MIX_FULL_SCALE);
-
-/**
- * The blended wave's samples and its own gain — one array of energies, both sides visible, level intact.
- * Exported on `window.__voiceboxMeters` so the blend can be driven and compared frame by frame.
- */
-function mixSpeechAndMic(output, input) {
-  const n = output.length;
-  const samples = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    // The 28 microphone bars are stretched across the 64 wave bars — the same shape the ring has on screen.
-    const at = Math.min(input.length - 1, Math.floor((i / n) * input.length));
-    samples[i] = output[i] + (input[at] ?? 0);
-  }
-  return { samples, gain: MIX_GAIN };
-}
+// ── the two meters: your voice, and the agent's (public/audio-meters.mjs, voicebox-beads-uei2.1) ──
+// Driven by the real PCM the client already has (audio-client.js level()).
+// Animation loop and frame management stay on window.__voiceboxMeterFrame.
 
 // The animation handle lives on the window, not in a module variable: after a
 // hot update two module instances can both hold a loop, and two loops writing
@@ -4779,24 +4721,25 @@ if (els.stage) new MutationObserver(startMeters).observe(els.stage, { attributes
 // ── the task / result card (voicebox-beads-snp) ──────────────────────────
 let taskCardController = null;
 if (els.taskCard) {
-  try {
-    const { createTaskCard, RemoteTaskClient } = await import(/* @vite-ignore */ "/browser/task-card.ts");
-    const client = new RemoteTaskClient();
-    taskCardController = createTaskCard(els.taskCard, {
-      client,
-      onViewFiles: async () => {
-        await load();
-        const target = els.made ?? els.files;
-        if (target) target.scrollIntoView({ behavior: "smooth" });
-      },
-      onDismiss: () => {
-        taskCardController.setTask(null);
-      },
+  import(/* @vite-ignore */ "/browser/task-card.ts")
+    .then(({ createTaskCard, RemoteTaskClient }) => {
+      const client = new RemoteTaskClient();
+      taskCardController = createTaskCard(els.taskCard, {
+        client,
+        onViewFiles: async () => {
+          await load();
+          const target = els.made ?? els.files;
+          if (target) target.scrollIntoView({ behavior: "smooth" });
+        },
+        onDismiss: () => {
+          taskCardController?.setTask(null);
+        },
+      });
+      window.__voiceboxTaskCard = taskCardController;
+    })
+    .catch((err) => {
+      console.warn("[voicebox] task card component failed to load:", err?.message ?? err);
     });
-    window.__voiceboxTaskCard = taskCardController;
-  } catch (err) {
-    console.warn("[voicebox] task card component failed to load:", err?.message ?? err);
-  }
 }
 
 // The empty state teaches the loop with turns the resolver really answers. `kind` separates the commands
@@ -5943,7 +5886,9 @@ function sqehWire() {
       : "Hidden — automatic voice detection active";
   }
 
-  const captureAndSendVisionFrame = () => {
+  let visionEncodingInFlight = false;
+  const captureAndSendVisionFrame = async () => {
+    if (visionEncodingInFlight) return false;
     const video = els.visionCoreVideo;
     const canvas = els.visionCoreCanvas;
     if (!video || !canvas || !visionStream) return false;
@@ -5952,21 +5897,24 @@ function sqehWire() {
     const vw = video.videoWidth || targetWidth;
     const vh = video.videoHeight || Math.round(targetWidth * 0.75);
     const scale = Math.min(1, targetWidth / Math.max(1, vw));
-    canvas.width = Math.max(1, Math.round(vw * scale));
-    canvas.height = Math.max(1, Math.round(vh * scale));
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return false;
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.78);
-    const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : "";
-    const liveActive = Boolean(window.__voiceboxIsLiveSessionActive?.());
-    const sent = liveActive ? (window.__voiceboxSendLiveVideo?.(base64, "image/jpeg") ?? false) : false;
-    if (els.visionCoreMeta) {
-      els.visionCoreMeta.textContent = sent
-        ? `${visionMode === "screen" ? "Screen" : "Camera"} live (${canvas.width}×${canvas.height})`
-        : `${visionMode === "screen" ? "Screen" : "Camera"} preview ready (start mic to stream)`;
+    const targetW = Math.max(1, Math.round(vw * scale));
+    const targetH = Math.max(1, Math.round(vh * scale));
+
+    visionEncodingInFlight = true;
+    try {
+      const result = await encodeVisionFrame(video, targetW, targetH, 0.78, canvas);
+      const base64 = result?.base64 || "";
+      const liveActive = Boolean(window.__voiceboxIsLiveSessionActive?.());
+      const sent = liveActive && base64 ? (window.__voiceboxSendLiveVideo?.(base64, "image/jpeg") ?? false) : false;
+      if (els.visionCoreMeta) {
+        els.visionCoreMeta.textContent = sent
+          ? `${visionMode === "screen" ? "Screen" : "Camera"} live (${targetW}×${targetH})`
+          : `${visionMode === "screen" ? "Screen" : "Camera"} preview ready (start mic to stream)`;
+      }
+      return sent;
+    } finally {
+      visionEncodingInFlight = false;
     }
-    return sent;
   };
 
   const stopVisionStream = () => {
@@ -5981,6 +5929,8 @@ function sqehWire() {
       visionStream = null;
     }
     visionMode = null;
+    visionGroundingController?.clearCallouts();
+    window.__voiceboxPipCompanion?.setVisionStream(null);
     if (els.visionCoreVideo) els.visionCoreVideo.srcObject = null;
     if (els.visionCoreCard) els.visionCoreCard.hidden = true;
     if (els.visionCameraBtn) els.visionCameraBtn.setAttribute("aria-pressed", "false");
@@ -6012,11 +5962,18 @@ function sqehWire() {
       if (els.visionCoreVideo) {
         els.visionCoreVideo.srcObject = stream;
         await els.visionCoreVideo.play?.().catch(() => {});
+        els.visionCoreVideo.onloadedmetadata = () => {
+          visionGroundingController?.resizeOverlay(
+            els.visionCoreVideo.videoWidth || 320,
+            els.visionCoreVideo.videoHeight || 180,
+          );
+        };
       }
       if (els.visionCoreCard) els.visionCoreCard.hidden = false;
       if (els.visionCameraBtn) els.visionCameraBtn.setAttribute("aria-pressed", String(mode === "camera"));
       if (els.visionScreenBtn) els.visionScreenBtn.setAttribute("aria-pressed", String(mode === "screen"));
       if (els.visionCoreMeta) els.visionCoreMeta.textContent = `${mode === "screen" ? "Screen share" : "Camera"} active`;
+      window.__voiceboxPipCompanion?.setVisionStream(stream);
       captureAndSendVisionFrame();
       restartVisionTimer();
       if (!window.__voiceboxIsLiveSessionActive?.() && els.mic && els.mic.getAttribute("aria-pressed") !== "true") {
@@ -6088,6 +6045,68 @@ function sqehWire() {
       console.log(checked ? "[voicebox] Debug logging enabled" : "[voicebox] Debug logging disabled");
     });
   }
+  if (els.settingOfflineSpeechEnabled) {
+    const isOfflineEnabled = window.__voiceboxOfflineSpeech?.isEnabled?.() ?? true;
+    els.settingOfflineSpeechEnabled.checked = isOfflineEnabled;
+    if (els.settingOfflineSpeechState) {
+      els.settingOfflineSpeechState.textContent = isOfflineEnabled
+        ? "Automatic — falls back to browser voice when cloud is unavailable"
+        : "Disabled — cloud voice only";
+    }
+    els.settingOfflineSpeechEnabled.addEventListener("change", () => {
+      const checked = Boolean(els.settingOfflineSpeechEnabled.checked);
+      window.__voiceboxOfflineSpeech?.setEnabled(checked);
+      if (els.settingOfflineSpeechState) {
+        els.settingOfflineSpeechState.textContent = checked
+          ? "Automatic — falls back to browser voice when cloud is unavailable"
+          : "Disabled — cloud voice only";
+      }
+    });
+  }
+  els.settingsRunDoctor?.addEventListener("click", async () => {
+    if (!els.settingsDoctorList || !els.settingsDoctorStatus) return;
+    els.settingsDoctorStatus.textContent = "Checking host environment…";
+    if (els.settingsRunDoctor) els.settingsRunDoctor.disabled = true;
+    try {
+      const res = await fetch("/api/doctor", { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (!data.ok || !Array.isArray(data.checks)) throw new Error("Invalid report");
+
+      els.settingsDoctorList.replaceChildren();
+      for (const check of data.checks) {
+        const li = document.createElement("li");
+        li.className = "doctor-check-item";
+
+        const labelSpan = document.createElement("span");
+        labelSpan.className = "doctor-check-label";
+        labelSpan.textContent = check.label;
+        li.append(labelSpan);
+
+        const rightDiv = document.createElement("div");
+        rightDiv.className = "doctor-check-right";
+
+        const statusSpan = document.createElement("span");
+        statusSpan.className = `doctor-check-status status-${check.status || "ok"}`;
+        statusSpan.textContent = check.status || "ok";
+        rightDiv.append(statusSpan);
+
+        const detailSpan = document.createElement("span");
+        detailSpan.className = "doctor-check-detail";
+        detailSpan.textContent = check.detail || "";
+        rightDiv.append(detailSpan);
+
+        li.append(rightDiv);
+        els.settingsDoctorList.append(li);
+      }
+      if (els.settingsDoctorResults) els.settingsDoctorResults.removeAttribute("hidden");
+      els.settingsDoctorStatus.textContent = `Completed (${data.checks.length} checks)`;
+    } catch (err) {
+      els.settingsDoctorStatus.textContent = `Check failed: ${err.message}`;
+    } finally {
+      if (els.settingsRunDoctor) els.settingsRunDoctor.disabled = false;
+    }
+  });
   els.visionPttBtn?.addEventListener("click", () => {
     pttActive = !pttActive;
     els.visionPttBtn.setAttribute("aria-pressed", String(pttActive));

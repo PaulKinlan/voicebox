@@ -19,6 +19,10 @@ The canonical command catalogue and parser live in `lib/system-commands.mjs`.
 | `switch_theme` | `appearance` | `"dark mode"`, `"light mode"`, `"system theme"`, `"switch to dark mode"`, `"switch to light mode"` | `{ verb: "system", command: "switch_theme", mode: "dark" \| "light" \| "system" }` |
 | `stop_speaking` | `audio_session` | `"stop speaking"`, `"quiet"`, `"mute"`, `"unmute"` | `{ verb: "system", command: "stop_speaking", mode: "interrupt" \| "mute" \| "unmute" }` |
 | `clear_activity` | `audio_session` | `"clear activity log"`, `"clear work log"` | `{ verb: "system", command: "clear_activity" }` |
+| `show_waiting_branches` | `branch_landing` | `"show waiting branches"`, `"inspect candidate branches"`, `"review merge"`, `"branches waiting to land"` | `{ verb: "system", command: "show_waiting_branches" }` |
+| `land_branch` | `branch_landing` | `"merge branch"`, `"land branch"`, `"merge into workspace"` | `{ verb: "system", command: "land_branch" }` |
+| `keep_branch_separate` | `branch_landing` | `"keep branch separate"`, `"keep separate"` | `{ verb: "system", command: "keep_branch_separate" }` |
+| `compare_harnesses` | `harness_comparison` | `"compare harnesses"`, `"harness comparison"`, `"compare agents"`, `"harness tracker"` | `{ verb: "system", command: "compare_harnesses" }` |
 
 ## 2. Turn Resolution (`lib/resolver.mjs`)
 
@@ -47,7 +51,11 @@ When `execute(action)` in `server.mjs` receives `action.verb === "system"`:
 | `open_panel` | `target` | `agent-tracker` | mounts the built-in Agent Progress Tracker mini-app |
 | `open_panel` | `target` | `close` | closes any open modal sheet, then `sqehSetState("deck")` — back to the deck, closing open windows |
 | `copy`, `paste` | `text` | | clipboard, as before |
-| `stop_speaking` | — | — | NO consumer yet (voicebox-beads-cv4g): parsed, broadcast and logged, but nothing performs it |
+| `stop_speaking` | `mode` | `interrupt` \| `mute` \| `unmute` | cancels speech synthesis, triggers interrupt (`#interrupt`) or toggles microphone (`#mic`) |
+| `show_waiting_branches` | — | — | opens the candidate branch landing inspector dialog (`#branch-landing-dialog`) |
+| `land_branch` | — | — | triggers landing (merging) the selected candidate branch into the workspace |
+| `keep_branch_separate` | — | — | marks the candidate branch to remain separate without merging |
+| `compare_harnesses` | — | — | opens the Agent Progress Tracker comparison mini-app |
 | `clear_activity` | — | — | server-side only — `server.mjs` clears the work activity log |
 
 The client also accepts `extensions`, `environments` and `changelog` targets, which the catalogue does not currently emit. They are kept deliberately: the page's `window` `"message"` listener also accepts a `system_command` from outside the page, so the consumer is a superset of the in-page producer by design, and removing them would narrow a documented external entry point.

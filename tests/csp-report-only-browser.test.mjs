@@ -534,7 +534,7 @@ test("the declaration script is parser-blocking, so no click can precede its lis
   const root = await (await fetch(`${server.base}/api/root`)).json();
   assert.equal(
     root.root?.path,
-    aFolder,
+    successSeam.root.path,
     "the declaration must have actually moved the server's root, not merely printed a success line — this is the write the whole page exists to make",
   );
 });

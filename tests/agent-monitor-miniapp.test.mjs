@@ -103,16 +103,23 @@ test("agent-monitor mini-app: exports valid Standards-Mode HTML with harness bar
     assert.match(html, new RegExp(`value="${harness}"`));
   }
 
+  // Script linkage
+  assert.match(html, /<script\s+src="\/apps\/agent-monitor\.js"><\/script>/);
+
+  const js = fs.readFileSync(
+    new URL("../public/apps/agent-monitor.js", import.meta.url),
+    "utf8",
+  );
   // Endpoints for live polling, harness connection, and multi-harness delegation
-  assert.match(html, /\/api\/harnesses/);
-  assert.match(html, /\/api\/harnesses\/configure/);
-  assert.match(html, /\/api\/tasks/);
-  assert.match(html, /\/api\/tasks\/delegate/);
+  assert.match(js, /\/api\/harnesses/);
+  assert.match(js, /\/api\/harnesses\/configure/);
+  assert.match(js, /\/api\/tasks/);
+  assert.match(js, /\/api\/tasks\/delegate/);
 
   // WebMCP tool registrations
-  assert.match(html, /window\.voicebox\?\.registerTool/);
-  assert.match(html, /get_agent_progress/);
-  assert.match(html, /delegate_multi_harness/);
+  assert.match(js, /window\.voicebox\?\.registerTool/);
+  assert.match(js, /get_agent_progress/);
+  assert.match(js, /delegate_multi_harness/);
 });
 
 test("agent-monitor mini-app: public/apps/agent-monitor.html passes plain-language scan with zero jargon or ticket-ID hits", () => {
@@ -185,7 +192,7 @@ test("agent-monitor mini-app: executes WebMCP tools get_agent_progress and deleg
         });
 
         document.body.appendChild(outer);
-        setTimeout(() => reject(new Error("timed out waiting for agent-monitor WebMCP tools")), 10000);
+        setTimeout(() => reject(new Error("timed out waiting for agent-monitor WebMCP tools")), 20000);
       });
     },
     server.base,

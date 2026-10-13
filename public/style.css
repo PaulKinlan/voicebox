@@ -1020,6 +1020,156 @@ html:has(dialog.settings[open]) { overflow: hidden; }
   background: color-mix(in srgb, var(--accent) 12%, var(--card));
   color: var(--accent);
 }
+
+/* ── Multi-participant room presence strip (voicebox-beads-2mi8) ────────── */
+.room-presence-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 6px 14px;
+  margin: 10px auto;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--shade) 70%, var(--card));
+  border: 1px solid var(--line);
+  font-size: 13px;
+  max-width: 90%;
+}
+.room-presence-strip[hidden] {
+  display: none;
+}
+.presence-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.presence-count {
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 12px;
+}
+.presence-floor-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 15%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+  color: var(--accent);
+}
+.presence-roster {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.presence-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--ink);
+}
+.presence-chip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.presence-chip[data-voice="speaking"] .presence-chip-dot {
+  background: var(--good);
+  box-shadow: 0 0 6px var(--good);
+}
+.presence-chip[data-voice="listening"] .presence-chip-dot {
+  background: var(--accent);
+}
+.presence-chip.has-floor {
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.presence-floor-btn {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+.presence-floor-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+/* ── In-browser diagnostics & doctor (voicebox-beads-7z2y) ──────────────── */
+.doctor-results {
+  margin-top: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--ground);
+  padding: 8px 10px;
+}
+.doctor-results[hidden] {
+  display: none;
+}
+.doctor-checks-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.doctor-check-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: var(--card);
+}
+.doctor-check-label {
+  font-weight: 600;
+  color: var(--ink);
+}
+.doctor-check-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  justify-content: flex-end;
+}
+.doctor-check-status {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 999px;
+  margin-right: 6px;
+}
+.doctor-check-status.status-ok {
+  background: color-mix(in srgb, var(--good) 15%, var(--card));
+  color: var(--good);
+}
+.doctor-check-status.status-warn {
+  background: color-mix(in srgb, var(--warn) 15%, var(--card));
+  color: var(--warn);
+}
+.doctor-check-status.status-error {
+  background: color-mix(in srgb, var(--warn) 25%, var(--card));
+  color: var(--warn);
+}
+.doctor-check-detail {
+  font-size: 11px;
+  color: var(--muted);
+  flex: 1;
+  text-align: right;
+  word-break: break-all;
+}
 .vision-core-card {
   display: flex;
   flex-direction: column;
@@ -1034,6 +1184,20 @@ html:has(dialog.settings[open]) { overflow: hidden; }
 }
 .vision-core-card[hidden] {
   display: none !important;
+}
+.vision-stage-wrap {
+  position: relative;
+  inline-size: 100%;
+  display: flex;
+  justify-content: center;
+}
+.vision-grounding-overlay {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  pointer-events: none;
+  border-radius: 10px;
 }
 .vision-core-card video {
   inline-size: 100%;
@@ -1479,6 +1643,214 @@ dialog.changelog-modal .commit-subject {
 dialog.changelog-modal .commit-meta {
   font-size: 12px;
   color: var(--muted);
+}
+
+/* ── Branch Landing modal dialog ────────────────────────────── */
+.branches-open-btn {
+  position: relative;
+}
+.branches-open-btn .badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+dialog.branches-modal {
+  width: min(100% - 2rem, 760px);
+  max-height: 85vh;
+}
+.branches-container {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) 1fr;
+  gap: 16px;
+  margin-top: 14px;
+  max-height: 60vh;
+  overflow: hidden;
+}
+@media (max-width: 640px) {
+  .branches-container {
+    grid-template-columns: 1fr;
+    max-height: none;
+  }
+}
+.branches-sidebar {
+  border-right: 1px solid var(--line);
+  padding-right: 12px;
+  overflow-y: auto;
+}
+.branches-sidebar h3 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 8px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.branches-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.branch-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--card);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.branch-item:hover, .branch-item:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+.branch-item.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--card));
+}
+.branch-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 6px;
+}
+.branch-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ink);
+  word-break: break-all;
+}
+.branch-commit-sha {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--muted);
+}
+.branch-subject {
+  font-size: 12px;
+  color: var(--ink);
+  margin: 2px 0 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.branch-meta-info {
+  font-size: 11px;
+  color: var(--muted);
+}
+.branch-empty {
+  font-size: 13px;
+  color: var(--muted);
+  padding: 12px 4px;
+}
+.branch-detail-panel {
+  overflow-y: auto;
+  padding-left: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.branch-meta-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.branch-name-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+  word-break: break-all;
+}
+.branch-merge-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  border: 1px solid var(--line);
+}
+.branch-merge-badge.ready {
+  background: color-mix(in srgb, var(--good) 14%, var(--card));
+  border-color: color-mix(in srgb, var(--good) 45%, var(--line));
+  color: var(--good);
+}
+.branch-merge-badge.conflict {
+  background: color-mix(in srgb, var(--warn) 14%, var(--card));
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+  color: var(--warn);
+}
+.branch-merge-badge.checking {
+  background: var(--shade);
+  color: var(--muted);
+}
+.branch-actions {
+  display: flex;
+  gap: 8px;
+  margin: 4px 0;
+}
+.branch-files-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.branch-file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--ground);
+}
+.branch-file-item .file-status {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-weight: 700;
+  font-size: 11px;
+  width: 14px;
+  text-align: center;
+}
+.branch-file-item .file-status.status-a { color: var(--good); }
+.branch-file-item .file-status.status-d { color: var(--warn); }
+.branch-file-item .file-status.status-m { color: var(--accent); }
+.branch-file-item .file-path {
+  font-family: var(--mono, ui-monospace, monospace);
+  flex: 1;
+  word-break: break-all;
+}
+.branch-file-item .file-stats {
+  font-size: 11px;
+  color: var(--muted);
+}
+.branch-diff-viewer {
+  margin: 0;
+  padding: 10px;
+  background: var(--ground);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  max-height: 220px;
+  overflow: auto;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre;
 }
 .harness-article summary {
   cursor: pointer;

@@ -1285,9 +1285,7 @@ test("watcher fixture cannot redirect identity writes through a poisoned Git env
 });
 
 test("factory-nightly-publisher: enforces SAME-RUN manifest barrier, target check, and batch window", () => {
-  const tmpDir = path.join(ROOT, "tests", "fixtures", "nightly-pub-tmp");
-  rmSync(tmpDir, { recursive: true, force: true });
-  mkdirSync(tmpDir, { recursive: true });
+  const tmpDir = mkdtempSync(path.join(tmpdir(), "nightly-pub-tmp-"));
 
   const findingsDir = path.join(tmpDir, "findings");
   const runsDir = path.join(tmpDir, "runs");

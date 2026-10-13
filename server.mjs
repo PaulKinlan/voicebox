@@ -21,6 +21,9 @@ import { createPresenceRoutes } from "./lib/routes/presence.mjs";
 import { createActivityRoutes } from "./lib/routes/activity.mjs";
 import { createAgentsReadRoutes } from "./lib/routes/agents-read.mjs";
 import { createChangelogRoutes } from "./lib/routes/changelog.mjs";
+import { createBranchRoutes } from "./lib/routes/branches.mjs";
+import { createDoctorRoutes } from "./lib/routes/doctor.mjs";
+import { createHarnessRoutes } from "./lib/routes/harnesses.mjs";
 import { createExtensionRoutes } from "./lib/routes/extensions.mjs";
 import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, reachableFromEnvironment, rootVanished } from "./core/root.ts";
 import { normaliseRelativeDir, parentDir } from "./core/paths.ts";
@@ -2325,8 +2328,9 @@ function resolvePublicFile(pathname) {
   const candidate = path.resolve(PUBLIC, "." + decoded);
   if (!containedIn(PUBLIC, candidate)) return null;
   try {
-    const real = realpathSync(candidate);
+    const real = (realpathSync.native || realpathSync)(candidate);
     if (!containedIn(PUBLIC, real)) return null;
+    if (path.relative(PUBLIC, candidate) !== path.relative(PUBLIC, real)) return null;
     return real;
   } catch (e) {
     if (e.code === "ENOENT") return null;
@@ -3710,6 +3714,38 @@ const getAdmissionContext = () => ({
 });
 const agentsReadRoutes = createAgentsReadRoutes({ agentRegistry, json, publicAgentProjection, describeAgentAdmission, getAdmissionContext });
 const changelogRoutes = createChangelogRoutes({ repoRoot: ROOT, json, execFileAsync });
+const branchRoutes = createBranchRoutes({
+  repoRoot: ROOT,
+  getRepoRoot: () => (active?.root?.kind === "machine" ? active.root.path : ROOT),
+  json,
+  readJsonBody,
+  answerOnce,
+});
+const doctorRoutes = createDoctorRoutes({
+  getActive: () => active,
+  getApiKeys: () => apiKeysStatusPayload(),
+  getHarnessInventory: () => harnessInventory(),
+  loopbackAuth: Boolean(LOOPBACK_AUTH),
+  json,
+});
+const harnessRoutes = createHarnessRoutes({
+  harnessInventory,
+  listHarnessesWithConfiguredAgents,
+  agentRegistry,
+  getActiveHarness: () => activeHarness,
+  setActiveHarness: (h) => { activeHarness = h; },
+  activeHarnesses,
+  supportedHarnessDefaults: SUPPORTED_HARNESS_DEFAULTS,
+  normalizeHarnessId,
+  activateHarnessInProcess,
+  deactivateHarnessInProcess,
+  installTaskExecutor,
+  writePersistedHarnessSettings,
+  recordWorkActivity,
+  json,
+  readJsonBody,
+  answerOnce,
+});
 const routes = {
   ...presenceRoutes,
   ...agentsReadRoutes,
@@ -3740,80 +3776,7 @@ const routes = {
       return json(res, status, resContact);
     });
   },
-  "GET /api/harnesses": async (req, res) => {
-    const inv = await harnessInventory();
-    const combined = await listHarnessesWithConfiguredAgents(inv, agentRegistry);
-    return json(res, 200, { ...combined, activeHarness, activeHarnesses: [...activeHarnesses] });
-  },
-  "POST /api/harnesses/configure": async (req, res) => {
-    const parsed = await readJsonBody(req, res);
-    if (parsed === null || typeof parsed !== "object") {
-      return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
-    }
-    return answerOnce(res, async () => {
-      if (Array.isArray(parsed?.harnesses)) {
-        const validList = [];
-        for (const h of parsed.harnesses) {
-          const trimmed = String(h ?? "").trim();
-          if (!trimmed || !SUPPORTED_HARNESS_DEFAULTS[trimmed]) {
-            return json(res, 400, {
-              ok: false,
-              refused: "bad-request",
-              why: `harness must be one of: ${["pi", "claude", "antigravity", "codex", "gemini", "opencode", "aider"].join(", ")}`,
-            });
-          }
-          validList.push(trimmed);
-        }
-        activeHarnesses.clear();
-        activeHarness = null;
-        for (const h of validList) {
-          activateHarnessInProcess(h);
-        }
-        if (typeof parsed.harness === "string" && SUPPORTED_HARNESS_DEFAULTS[parsed.harness.trim()]) {
-          activeHarness = normalizeHarnessId(parsed.harness.trim());
-        }
-        if (activeHarnesses.size === 0) {
-          installTaskExecutor(null);
-        }
-        writePersistedHarnessSettings(activeHarness, activeHarnesses);
-        recordWorkActivity({
-          kind: "harness",
-          summary: `Connected harnesses: ${[...activeHarnesses].join(", ") || "none"}`,
-          status: "ok",
-        });
-      } else {
-        const harnessRaw = String(parsed?.harness ?? parsed?.id ?? "").trim();
-        if (!harnessRaw || !SUPPORTED_HARNESS_DEFAULTS[harnessRaw]) {
-          return json(res, 400, {
-            ok: false,
-            refused: "bad-request",
-            why: `harness must be one of: ${["pi", "claude", "antigravity", "codex", "gemini", "opencode", "aider"].join(", ")}`,
-          });
-        }
-        const normalized = normalizeHarnessId(harnessRaw);
-        if (parsed?.active === false) {
-          deactivateHarnessInProcess(normalized);
-          writePersistedHarnessSettings(activeHarness, activeHarnesses);
-          recordWorkActivity({
-            kind: "harness",
-            summary: `Disconnected harness ${normalized}`,
-            status: "info",
-          });
-        } else {
-          activateHarnessInProcess(harnessRaw, parsed);
-          writePersistedHarnessSettings(activeHarness, activeHarnesses);
-          recordWorkActivity({
-            kind: "harness",
-            summary: `Connected harness ${normalized}`,
-            status: "ok",
-          });
-        }
-      }
-      const inv = await harnessInventory();
-      const combined = await listHarnessesWithConfiguredAgents(inv, agentRegistry);
-      return json(res, 200, { ok: true, activeHarness, activeHarnesses: [...activeHarnesses], ...combined });
-    });
-  },
+  ...harnessRoutes,
   "GET /api/tasks": (req, res) => {
     const rootPath = active?.root?.kind === "machine" ? active.root.path : WORKSPACE;
     const taskList = readWorkspaceTasks(rootPath);
@@ -4096,6 +4059,8 @@ const routes = {
       why: noRootDeclared().why,
     });
   },
+  ...branchRoutes,
+  ...doctorRoutes,
   ...changelogRoutes,
   // A HEAD is a liveness question too — the dev proxy and the currency gate probe with it, and
   // without this entry a HEAD falls past the route table to the proxy's 500 (voicebox-beads-sdxn).

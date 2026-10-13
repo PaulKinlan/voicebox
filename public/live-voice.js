@@ -323,7 +323,7 @@ async function startLive() {
   });
 
   await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("machine-timeout (no response to the /live upgrade within 4s)")), 4000);
+    const timer = setTimeout(() => reject(new Error("machine-timeout (no response to the /live upgrade within 15s)")), 15000);
     socket.onopen = () => {
       clearTimeout(timer);
       // THE FOLDER THE VOICE IS WORKING IN (voicebox-beads-0zi4): the page owns navigation, so it
@@ -355,9 +355,14 @@ async function startLive() {
       try { socket?.close(); } catch { /* already closed */ }
       const why = await explainFailedUpgrade();
       if (voiceState) {
-        voiceState.textContent = why.transient
-          ? `Live voice is not connected: ${why.text}. Try the mic again in a moment; the text path still works.`
-          : `Live voice unavailable: ${why.text}. The mic stays off.`;
+        if (window.__voiceboxOfflineSpeech?.isEnabled?.()) {
+          voiceState.textContent = `Live voice unavailable: ${why.text}. On-device speech fallback active — click mic to speak.`;
+          window.__voiceboxOfflineSpeech.activateFallback?.();
+        } else {
+          voiceState.textContent = why.transient
+            ? `Live voice is not connected: ${why.text}. Try the mic again in a moment; the text path still works.`
+            : `Live voice unavailable: ${why.text}. The mic stays off.`;
+        }
       }
       setVoice("off");
       renderMic(audioClient.snapshot());
@@ -369,6 +374,24 @@ renderMic(audioClient.snapshot());
 if (voiceState) voiceState.textContent = audioClient.label();
 
 mic?.addEventListener("click", async () => {
+  if (window.__voiceboxOfflineSpeech?.isFallbackActive?.()) {
+    if (!capturing) {
+      const res = window.__voiceboxOfflineSpeech.startListening?.();
+      if (res?.ok) {
+        capturing = true;
+        setVoice("listening");
+        renderMic({ capture: true });
+        if (voiceState) voiceState.textContent = "Listening offline — speak your turn, then pause.";
+      }
+      return;
+    }
+    window.__voiceboxOfflineSpeech.stopListening?.();
+    capturing = false;
+    setVoice("off");
+    renderMic({ capture: false });
+    if (voiceState) voiceState.textContent = "Mic off · press to speak";
+    return;
+  }
   if (!capturing) {
     try {
       await startLive();
@@ -396,6 +419,7 @@ mic?.addEventListener("click", async () => {
 interrupt?.addEventListener("click", () => {
   // Flushes playback only; capture keeps running (that is the tested boundary).
   audioClient.stopReply();
+  window.__voiceboxOfflineSpeech?.stopSpeaking?.();
 });
 
 window.__voiceboxLiveClient = audioClient;
