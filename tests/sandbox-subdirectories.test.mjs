@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { startServer } from "./lib/server.mjs";
@@ -259,6 +259,58 @@ test("mini-app persistence and harness configure aliases in server.mjs", async (
   assert.ok(customAgy, "expected custom-agy in registered agents");
   assert.equal(customAgy.name, "Custom Anti-Gravity");
   assert.equal(customAgy.url, "http://127.0.0.1:3284");
+});
+
+// A colliding workspace page and shelf app, driven through the REAL routes rather than the store:
+// the refusal has to reach the caller with its name and a status, and the delete has to leave the
+// page that the app never owned (voicebox-beads-dvu8).
+test("a colliding page and shelf app: the save is refused by name and deleting the app leaves the page (voicebox-beads-dvu8)", async (t) => {
+  const scratchRoot = mkdtempSync(path.join(os.tmpdir(), "vb-collide-srv-root-"));
+  const extensionsDir = mkdtempSync(path.join(os.tmpdir(), "vb-collide-srv-ext-"));
+  const shelfDir = path.join(extensionsDir, "mini-apps");
+  mkdirSync(shelfDir, { recursive: true });
+  const pageHtml = "<!doctype html><html><head><title>Unrelated Page</title></head><body><p>page</p></body></html>";
+  const appHtml = "<!doctype html><html><head><title>Collision App</title></head><body><p>app</p></body></html>";
+  writeFileSync(path.join(scratchRoot, "collision.html"), pageHtml, "utf8");
+  writeFileSync(path.join(shelfDir, "collision.html"), appHtml, "utf8");
+  writeFileSync(
+    path.join(shelfDir, "collision.meta.json"),
+    JSON.stringify({ appId: "app_collision", slug: "collision", title: "Collision App", fileName: "collision.html" }),
+    "utf8",
+  );
+
+  const srv = await startServer({
+    env: {
+      VOICEBOX_WORKSPACE: scratchRoot,
+      VOICEBOX_EXTENSIONS_DIR: extensionsDir,
+    },
+  });
+  t.after(async () => {
+    await srv.stop();
+    rmSync(scratchRoot, { recursive: true, force: true });
+    rmSync(extensionsDir, { recursive: true, force: true });
+  });
+
+  // 1. Saving the page as a mini-app is refused by NAME, with 400 and nothing written: the app's copy
+  //    is untouched, because on this base the two are one entry and the save cannot tell them apart.
+  const savePage = await fetch(`${srv.base}/api/mini-apps`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ fileName: "collision.html", title: "Unrelated Page", html: pageHtml }),
+  });
+  assert.equal(savePage.status, 400, "a refused save is not a 200");
+  const saveBody = await savePage.json();
+  assert.equal(saveBody.ok, false);
+  assert.equal(saveBody.refused, "mini-app-name-taken");
+  assert.match(saveBody.why, /Collision App/);
+  assert.equal(readFileSync(path.join(shelfDir, "collision.html"), "utf8"), appHtml, "the app's own copy is untouched");
+
+  // 2. Deleting the app removes its own shelf copy and record and leaves the workspace page standing.
+  const del = await fetch(`${srv.base}/api/mini-apps?id=app_collision`, { method: "DELETE" }).then((r) => r.json());
+  assert.equal(del.ok, true);
+  assert.equal(readFileSync(path.join(scratchRoot, "collision.html"), "utf8"), pageHtml, "the page the app never owned survives");
+  assert.equal(existsSync(path.join(shelfDir, "collision.html")), false, "the app's own copy is deleted");
+  assert.equal(existsSync(path.join(shelfDir, "collision.meta.json")), false, "and its record");
 });
 
 test("git_status over subrepos: parallel probes preserve discovery order and isolate one broken subrepo (voicebox-beads-3017)", async (t) => {

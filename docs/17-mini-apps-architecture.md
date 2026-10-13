@@ -142,3 +142,14 @@ Saving asks the same question: the target is the **file** the caller named (a wo
 ```bash
 node --test tests/mini-app-architecture.test.mjs
 ```
+
+---
+
+## 5. A Shared Name Is Not Ownership (`voicebox-beads-dvu8`)
+
+A workspace file and a shelf app can share a slug **and** a file name — the store keys the shelf by slug, and a workspace page may happen to be called `collision.html` beside a shelf app of the same name. Deleting or overwriting on the strength of that name destroyed data in both directions, so ownership is asked per artifact and answered only by explicit provenance:
+
+- **The record owns the shelf copy named inside it and its own `.meta.json`** — matched by the `appId` the record carries, never by the file name alone.
+- **A workspace file is deleted only when the record NAMES it** as its own copy (`workspacePath`, written by every save that has a workspace copy). Two weaker signals are deliberately not accepted: a matching `appId` — a workspace file inherits the appId of the record at its slug, so the two always agree and the comparison proves nothing — and byte-for-byte equality, because an unrelated file that happens to be identical is indistinguishable from a copy. A record written before `workspacePath` existed therefore proves nothing about the workspace, and the file is left in place: failing closed costs a leftover file, failing open costs the file.
+- **A save that would write a workspace copy is REFUSED (`mini-app-name-taken`) when the record at that slug does not name the file being saved** — before any write of any kind, not even a directory, so "refused" cannot hide a side effect. An update of an app and a different file that merely shares its name are byte-identical states, so the save does not guess; the refusal message names the app that holds the name and the way forward. A save with no workspace root still updates such an app's own shelf copy in place, and deleting the app is what lets a colliding file be saved as an app of its own. This is the transitional cost of the rule: an app saved by a build that predates `workspacePath` cannot be updated *through its workspace file* until its record names one, so the app is deleted and re-saved once. The mini-app/page classification makes an app and a page distinct entries, so the refusal names the right owner rather than resting on provenance alone; it does not by itself answer the question for a record that names no file.
+- **`saveMiniApp` writes `workspacePath`** into the record for every save that has a workspace copy, so later ownership is decided by reading the record rather than by comparing bytes — a comparison a concurrent write can race. A host-only save omits the field rather than pointing at a file that is not there.
