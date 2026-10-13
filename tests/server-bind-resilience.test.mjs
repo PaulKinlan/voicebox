@@ -18,7 +18,8 @@
 //   1. a held port at boot is retried, and the server binds when the holder leaves;
 //   2. if the port stays held past the deadline, the process exits with a NAMED sentence rather than
 //      a stack trace, so whoever started it can tell a taken port from a crash;
-//   3. the reported path — a landing-triggered `--watch` restart — leaves a port that answers.
+//   3. the reported path — a `--watch` supervisor restart — leaves a port that answers. (The restart is
+//      triggered by a scratch marker, NOT by the landing's module-graph change: see the note above.)
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -216,7 +217,7 @@ test("a port held past the deadline is a NAMED refusal, not a stack trace", { ti
   }
 });
 
-test("the reported path: a landing-triggered --watch restart leaves a port that answers", { timeout: 90000 }, async () => {
+test("the reported path: a --watch supervisor restart leaves a port that answers", { timeout: 90000 }, async () => {
   // A FREE PORT IS PICKED AND THEN HANDED OVER, which races when two suites run at once — and the
   // gate runs this suite on EVERY push, so two lanes pushing together can take the same port between
   // the probe closing and the child binding. Measured: two concurrent full suites made this test the
