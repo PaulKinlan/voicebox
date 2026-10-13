@@ -4,11 +4,15 @@
 // Inspects changed files against git HEAD or a base ref, maps them to the tests/*.test.mjs
 // files that import or exercise them, and runs only the relevant scoped tests.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { readdirSync, readFileSync, existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { gitEnv } from "../lib/git-env.mjs";
+import { classify } from "./test-lanes.mjs";
+import { ISOLATED } from "./test-shards.mjs";
+import { createManifest, emitMarker, finalizeManifest, ManifestRefusal, recordFile, sealManifest, tapCounts, writeManifest } from "./gate-manifest.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TESTS_DIR = path.join(ROOT, "tests");
@@ -178,7 +182,16 @@ export function mapToTests(changedFiles, allTestFiles = null) {
   return [...matched].sort();
 }
 
-/** Partition mapped tests into unit, server, and browser lanes using test-lanes authority */
+/**
+ * Partition mapped tests into unit, server, and browser lanes using test-lanes authority.
+ *
+ * THE OLD ELSE-BRANCH WAS THE FALSE GREEN (voicebox-beads-zjpm.3): an unclassified match was pushed
+ * into `unit` and run there, so a file the classifier had never seen - a new test that the lexer could
+ * not read, or a match from outside tests/ - was dispatched to a lane chosen by the fallback rather than
+ * by what the file launches, and the run reported a green for a lane the classifier does not know exists.
+ * It now comes back as `unclassified`, and the GATE refuses it by name; the developer path keeps a loud
+ * warning so inner-loop use is not blocked by a classifier gap it cannot fix in that moment.
+ */
 export function partitionTests(matchedTests) {
   const getLane = (lane) => {
     try {
@@ -199,15 +212,16 @@ export function partitionTests(matchedTests) {
   const matchedUnit = [];
   const matchedServer = [];
   const matchedBrowser = [];
+  const unclassified = [];
 
   for (const file of matchedTests) {
     if (unitSet.has(file)) matchedUnit.push(file);
     else if (browserSet.has(file)) matchedBrowser.push(file);
     else if (serverSet.has(file)) matchedServer.push(file);
-    else matchedUnit.push(file); // fallback to unit
+    else unclassified.push(file);
   }
 
-  return { unit: matchedUnit, server: matchedServer, browser: matchedBrowser };
+  return { unit: matchedUnit, server: matchedServer, browser: matchedBrowser, unclassified };
 }
 
 function runStage(label, command, args) {
@@ -221,23 +235,340 @@ function runStage(label, command, args) {
   }
 }
 
-export function main() {
+// ════════════════ THE GATE MODE (voicebox-beads-zjpm.3) ════════════════
+//
+// `--gate` is the same selection as the developer path with three differences that matter, and each is
+// the reason the fast verdict is quotable at all:
+//   1. STRICT: an unclassified test file and an unmapped changed source are REFUSED, by name. There is no
+//      `--allow-unmapped` in the gate — a gate that may be told to ignore a path it cannot map has no
+//      scope, and its PASS is a statement about nothing.
+//   2. PER-FILE DISPATCH: every selected file runs in its own process, so the artifact records that
+//      file's own exit, TAP counts, and duration. One `node --test a b c` gives a single aggregate and
+//      cannot answer "which file is this PASS about".
+//   3. RECORDED: the run writes scripts/gate-manifest.mjs's artifact and emits the `fast-gate:` markers
+//      the hub's coverage extractor reads, so the log and the artifact say the same thing.
+
+/** The gate artifact directory: the hub's own per-tree record directory, overridable by the caller. */
+export function artifactDir(explicit = null) {
+  return explicit || process.env.VOICEBOX_GATE_ARTIFACT_DIR || path.join(os.homedir(), ".fleet", "checks");
+}
+
+/**
+ * Run ONE test file in its own process and report what it actually said. The child leads its own process
+ * group so a timeout can take down the browser or server it started with it — a SIGKILL to the file alone
+ * would orphan every Chromium it launched, which is the reaper's problem instead of ours.
+ */
+export function runOneFile(file, { timeoutMs = 240_000, cwd = ROOT } = {}) {
+  return new Promise((resolve) => {
+    const at = Date.now();
+    // THE CHILD IS A TOP-LEVEL TEST RUN, NOT A NESTED ONE. Node marks a spawned `--test` run as a nested
+    // run through NODE_TEST_CONTEXT, and a nested run whose parent is itself a `node:test` file is SKIPPED
+    // entirely — "node:test run() is being called recursively within a test file. skipping running files."
+    // Measured while testing this gate: the child exited 0, printed no TAP summary, and the honest reading
+    // of that is `unknown`, which is how a skipped child would have looked like a silent green here.
+    const env = { ...process.env };
+    delete env.NODE_TEST_CONTEXT;
+    const child = spawn(process.execPath, ["--test", "--test-reporter=tap", file], {
+      cwd, stdio: ["ignore", "pipe", "pipe"], detached: true, env,
+    });
+    let out = "";
+    const eat = (chunk) => {
+      out += String(chunk);
+    };
+    child.stdout.on("data", eat);
+    child.stderr.on("data", eat);
+    const kill = (signal) => {
+      try {
+        process.kill(-child.pid, signal);
+      } catch {
+        try {
+          child.kill(signal);
+        } catch {
+          /* already gone */
+        }
+      }
+    };
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      kill("SIGTERM");
+      setTimeout(() => kill("SIGKILL"), 5000).unref();
+    }, timeoutMs);
+    let settled = false;
+    const settle = (code, signal, note = "") => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ file, code, signal, timedOut, counts: tapCounts(out), secs: (Date.now() - at) / 1000, out: note + out });
+    };
+    child.on("exit", (code, signal) => settle(code, signal));
+    child.on("error", (error) => settle(null, null, `the file could not be spawned: ${error.message}\n`));
+  });
+}
+
+/**
+ * A finished child's terminal status. `unknown` is NOT a synonym for failure and it is not a pass: it is
+ * "this child never told us how it ended" — a kill, a crash before the reporter's summary, an exit 0 with
+ * no summary at all. The gate refuses on it, and the log says `fast-gate: unknown:` so the hub's coverage
+ * extraction degrades to UNKNOWN rather than counting the file as covered.
+ */
+export function statusOf(result) {
+  const reported = result.counts.tests >= 0;
+  if (result.timedOut) return "timeout";
+  if (result.code === 0 && reported) return "passed";
+  if (result.code !== 0 && reported) return "failed";
+  return "unknown";
+}
+
+/**
+ * One run of the gate: select nothing, dispatch what was selected, account for the rest, write the
+ * artifact, and answer with an exit code. Returns `{ code, manifest }` so a test can drive the whole
+ * thing in-process rather than by parsing this script's stdout.
+ */
+export async function runGate({
+  changedFiles = [],
+  matchedTests = [],
+  partitioned = { unit: [], server: [], browser: [], unclassified: [] },
+  unmappedSources = [],
+  base = "",
+  gate = "fast",
+  dir = null,
+  workers = Number(process.env.VOICEBOX_FAST_WORKERS ?? 2),
+  timeoutMs = Number(process.env.VOICEBOX_FAST_FILE_SECS ?? 240) * 1000,
+  dryRun = false,
+  classified = classify(),
+  tree = null,
+  sha = "",
+  treeDirty = null,
+  runner = runOneFile,
+} = {}) {
+  const manifest = createManifest({ gate, tree, sha, classified, changed: changedFiles, base, treeDirty: treeDirty, unmapped: [...unmappedSources] });
+  const selection = (name) => (changedFiles.includes(`tests/${name}`) ? "changed" : "dependency");
+  const ordered = [
+    ...partitioned.unit.map((f) => ["unit", f]),
+    ...partitioned.server.map((f) => ["server", f]),
+    ...partitioned.browser.map((f) => ["browser", f]),
+  ].filter(([, f]) => !partitioned.unclassified.includes(f));
+
+  const selected = new Set(ordered.map(([, f]) => f));
+  const problems = [];
+  if (partitioned.unclassified.length > 0) {
+    problems.push(...partitioned.unclassified.map((f) => `${f} is mapped by a change but is in NO lane (unclassified)`));
+  }
+  if (unmappedSources.length > 0) {
+    problems.push(...unmappedSources.map((f) => `${f} changed and maps to no test file (unmapped source)`));
+  }
+
+  if (problems.length > 0) {
+    console.error("[test:changed] REFUSED: " + problems.join("; "));
+    for (const p of problems) console.error(`  · ${p}`);
+    console.error("[test:changed] The gate does not have an --allow-unmapped escape: a PASS measured over an");
+    console.error("[test:changed] unknown scope is a statement about nothing. Add the test (or the lane), or run the full suite.");
+    console.log(emitMarker("unmapped", [...unmappedSources, ...partitioned.unclassified]));
+    console.log(emitMarker("unknown", ["the gate refused before dispatching: " + problems.length + " mapped path(s) with no lane or no test"]));
+  }
+
+  if (dryRun || problems.length > 0) {
+    // Nothing ran, so every classified file is omitted with the reason that is true of it.
+    const reason = problems.length > 0 ? "refused: unmapped or unclassified changed path" : "dry-run: nothing dispatched";
+    for (const entry of manifest.classifier.files) recordFile(manifest, { path: entry.path, dispatch: "omitted", reason });
+    manifest.verdict = problems.length > 0 ? "refused" : "pass";
+    sealManifest(manifest);
+    const written = writeManifest(manifest, artifactDir(dir));
+    console.log(`[test:changed] manifest: ${written}`);
+    return { code: problems.length > 0 ? 1 : 0, manifest, written };
+  }
+
+  // Static checks first — they are one `git diff` and they decide whether the dispatched tests are even
+  // the question. A failure here is `unknown` for coverage, never a silent narrowing to "no suites".
+  const relevant = checkStaticRelevance(changedFiles);
+  for (const [label, script] of [
+    ["single-owner", "scripts/single-owner.mjs"],
+    ["docs-check", "scripts/docs-check.mjs"],
+    ["docs-touched", "scripts/docs-touched.mjs"],
+  ]) {
+    const needed = (label === "single-owner" && relevant.singleOwner) || (label !== "single-owner" && (relevant.docsCheck || relevant.docsTouched));
+    if (!needed || !existsSync(path.join(ROOT, script))) continue;
+    const rc = runStageOnly(script);
+    if (rc !== 0) {
+      for (const entry of manifest.classifier.files) {
+        recordFile(manifest, { path: entry.path, dispatch: "omitted", reason: `not dispatched: the ${label} stage failed (exit ${rc})` });
+      }
+      console.log(emitMarker("unknown", [`the ${label} stage failed before any test was dispatched`]));
+      manifest.verdict = "fail";
+      manifest.static_failure = { stage: label, exit: rc };
+      sealManifest(manifest);
+      const written = writeManifest(manifest, artifactDir(dir));
+      console.log(`[test:changed] manifest: ${written}`);
+      return { code: rc, manifest, written };
+    }
+  }
+
+  const results = [];
+  let cursor = 0;
+  const runTierFiles = async (files) => {
+    const run = async (file) => {
+      const relPath = `tests/${file}`;
+      console.log(emitMarker("running", [relPath]));
+      const result = await runner(relPath, { timeoutMs });
+      const status = statusOf(result);
+      results.push({ file, status, result });
+      if (status === "passed") console.log(emitMarker("passed", [relPath]));
+      else if (status === "failed") console.log(emitMarker("failed", [relPath]));
+      else console.log(emitMarker("unknown", [`${relPath} (${status}${result.timedOut ? ` after ${timeoutMs}ms` : ", no summary reported"})`]));
+      console.log(
+        `[test:changed] ${status.toUpperCase().padEnd(7)} ${String(Math.round(result.secs * 1000)).padStart(7)}ms ` +
+          `tests=${result.counts.tests} pass=${result.counts.pass} fail=${result.counts.fail} skipped=${result.counts.skipped} ${relPath}`,
+      );
+      if (status !== "passed") {
+        const tail = result.out.split("\n").slice(-40).join("\n");
+        console.log(`[test:changed] ---- output of ${relPath} ----\n${tail}\n[test:changed] ---- end ${relPath} ----`);
+      }
+      recordFile(manifest, {
+        path: relPath,
+        dispatch: "ran",
+        status,
+        counts: result.counts.tests >= 0 ? result.counts : null,
+        timeout_ms: timeoutMs,
+        secs: result.secs,
+        selection: selection(file),
+      });
+    };
+    // The files that measure the box run alone, on an otherwise idle gate — the same partition the
+    // browser tier uses (scripts/test-shards.mjs owns ISOLATED), reused rather than re-derived.
+    const parallel = files.filter((f) => !ISOLATED.has(`tests/${f}`));
+    const alone = files.filter((f) => ISOLATED.has(`tests/${f}`));
+    cursor = 0;
+    const workerLoop = async () => {
+      for (;;) {
+        const i = cursor++;
+        if (i >= parallel.length) return;
+        await run(parallel[i]);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(Math.max(1, workers), parallel.length) }, () => workerLoop()));
+    for (const file of alone) await run(file);
+  };
+
+  for (const tier of ["unit", "server", "browser"]) {
+    const files = ordered.filter(([t]) => t === tier).map(([, f]) => f);
+    if (files.length > 0) await runTierFiles(files);
+  }
+
+  // Every classified file that was not selected is OMITTED BY NAME WITH ITS REASON. This is the
+  // reconciliation the artifact is for: a fast gate's scope is a decision, and an unexplained gap is
+  // what lets a narrow run be quoted as a wide one.
+  const omittedReason = gate === "full" ? "not selected: the full roster should have been dispatched" : "fast-only: not selected by the changed-path map";
+  for (const entry of manifest.classifier.files) {
+    if (!selected.has(path.basename(entry.path))) recordFile(manifest, { path: entry.path, dispatch: "omitted", reason: omittedReason, selection: gate === "full" ? "full-roster" : "dependency" });
+  }
+
+  const bad = results.filter((r) => r.status !== "passed");
+  manifest.unmapped = [...unmappedSources];
+  manifest.verdict = bad.length > 0 ? "fail" : "pass";
+  try {
+    finalizeManifest(manifest);
+  } catch (e) {
+    if (!(e instanceof ManifestRefusal)) throw e;
+    console.error("[test:changed] REFUSED: the gate manifest does not reconcile:");
+    for (const p of e.problems ?? []) console.error(`  · ${p}`);
+    console.log(emitMarker("unknown", [`the gate manifest does not reconcile: ${(e.problems ?? []).join("; ")}`]));
+    manifest.verdict = "refused";
+    const written = writeManifest(manifest, artifactDir(dir));
+    console.log(`[test:changed] manifest: ${written}`);
+    return { code: 1, manifest, written };
+  }
+
+  const written = writeManifest(manifest, artifactDir(dir));
+  const s = manifest.summary;
+  console.log(
+    `[test:changed] manifest ${written} — tree ${tree ? tree.slice(0, 12) : "?"} roster ${manifest.classifier.roster.slice(0, 12)}: ` +
+      `classified ${s.classified}, dispatched ${s.dispatched}, omitted ${s.omitted}, passed ${s.passed}, failed ${s.failed}`,
+  );
+  if (s.dispatched === 0) console.log("[test:changed] NOTE: 0 test files were dispatched — this run measured nothing (all files omitted by name).");
+  if (bad.length === 0) console.log("[test:changed] ALL SCOPED TESTS GREEN (every dispatched file has a terminal status).");
+  return { code: bad.length > 0 ? 1 : 0, manifest, written };
+}
+
+/** Run one static-stage script and return its exit code (used by the gate, which owns the verdict). */
+function runStageOnly(script) {
+  console.log(`[test:changed] ${script}`);
+  try {
+    execFileSync(process.execPath, [script], { cwd: ROOT, stdio: "inherit", env: process.env });
+    return 0;
+  } catch (e) {
+    console.error(`[test:changed] ${script} FAILED (exit ${e.status ?? 1})`);
+    return e.status ?? 1;
+  }
+}
+
+/** The tree and sha the manifest is keyed by: what the gate actually measured, never the branch tip. */
+export function measuredTree() {
+  const tree = git(["rev-parse", "HEAD^{tree}"]);
+  const sha = git(["rev-parse", "--short", "HEAD"]);
+  // The tree SHA names the COMMITTED tree. A dirty worktree is still measured under that label, so the
+  // dirt is recorded rather than hidden: a reader must be able to see that this artifact was produced
+  // over uncommitted bytes (fleet-check refuses a dirty worktree for exactly this reason).
+  const dirty = git(["status", "--porcelain"]) !== "";
+  return { tree: tree || null, sha: sha || "", dirty };
+}
+
+export async function main() {
   const args = process.argv.slice(2);
   const dryRun = args.includes("--dry-run");
   const jsonOutput = args.includes("--json");
+  const gateMode = args.includes("--gate");
   const allowUnmapped = args.includes("--allow-unmapped");
   let customBase = null;
+  let manifestDir = null;
+  let gateKind = "fast";
 
   const filesArg = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--base" && args[i + 1]) {
       customBase = args[++i];
+    } else if (args[i] === "--manifest-dir" && args[i + 1]) {
+      manifestDir = args[++i];
+    } else if (args[i] === "--gate-kind" && args[i + 1]) {
+      gateKind = args[++i];
     } else if (!args[i].startsWith("--")) {
       filesArg.push(args[i]);
     }
   }
 
+  // THE GATE HAS NO ALLOW-UNMAPPED ESCAPE (voicebox-beads-zjpm.3). The developer flag exists so an
+  // inner-loop run is not blocked by a mapping gap; a GATE that accepts it has declared its own scope
+  // unbounded and its PASS untestable. This is refused before any selection is even computed.
+  if (gateMode && allowUnmapped) {
+    console.error("[test:changed] REFUSED: --allow-unmapped is a developer escape and is not available to the gate");
+    console.error("[test:changed]   the gate's PASS must be a statement about a scope it can name and reconcile.");
+    return 2;
+  }
+  if (gateMode && !["fast", "full"].includes(gateKind)) {
+    console.error(`[test:changed] REFUSED: --gate-kind must be fast or full (got '${gateKind}')`);
+    return 2;
+  }
+
   const changedFiles = filesArg.length > 0 ? filesArg : getChangedFiles(customBase);
+  const allTests = readdirSync(TESTS_DIR).filter((f) => f.endsWith(".test.mjs"));
+  const unmappedSources = changedFiles.filter((f) => isSourceFile(f) && mapToTests([f], allTests).length === 0);
+
+  if (gateMode) {
+    const matchedTests = mapToTests(changedFiles, allTests);
+    const partitioned = partitionTests(matchedTests);
+    const { tree, sha, dirty } = measuredTree();
+    if (!tree) {
+      console.error("[test:changed] REFUSED: the gate needs the tree SHA it is measuring (not in a git worktree?)");
+      return 2;
+    }
+    console.log(`[test:changed] gate=${gateKind} tree=${tree.slice(0, 12)}${dirty ? " (DIRTY worktree)" : ""} changed=${changedFiles.length} selected=${matchedTests.length}`);
+    if (dirty) console.error("[test:changed] WARNING: the worktree is dirty — the artifact is labelled with HEAD's tree and records tree_dirty: true.");
+    const { code } = await runGate({
+      changedFiles, matchedTests, partitioned, unmappedSources, base: getBaseRef(customBase),
+      gate: gateKind, dir: manifestDir, dryRun, tree, sha, treeDirty: dirty,
+    });
+    return code;
+  }
 
   if (changedFiles.length === 0) {
     if (jsonOutput) {
@@ -248,22 +579,24 @@ export function main() {
     return 0;
   }
 
-  // F1 Guard: Ensure every modified source file maps to at least one test
-  const allTests = readdirSync(TESTS_DIR).filter((f) => f.endsWith(".test.mjs"));
-  const unmappedSources = changedFiles.filter((f) => isSourceFile(f) && mapToTests([f], allTests).length === 0);
-
   if (unmappedSources.length > 0 && !allowUnmapped) {
     console.error("[test:changed] REFUSED: unmapped-source-file");
     console.error("The following changed source file(s) have no mapped tests:");
     for (const f of unmappedSources) console.error(`  · ${f}`);
     console.error("Every changed source file must map to at least one test. Refusing to report green on unverified code.");
     console.error("Remedy: add a test for the changed file, pass --allow-unmapped, or run the full suite (npm test).");
-    process.exit(1);
+    return 1;
   }
 
   const relevant = checkStaticRelevance(changedFiles);
   const matchedTests = mapToTests(changedFiles, allTests);
   const partitioned = partitionTests(matchedTests);
+
+  if (partitioned.unclassified.length > 0) {
+    console.error(`[test:changed] WARNING: ${partitioned.unclassified.length} mapped test file(s) are in NO lane (a classifier gap): ${partitioned.unclassified.join(", ")}`);
+    console.error("[test:changed] WARNING: running them in the unit lane for this inner-loop run; the GATE refuses them (--gate).");
+    partitioned.unit.push(...partitioned.unclassified);
+  }
 
   if (jsonOutput) {
     console.log(JSON.stringify({
@@ -320,5 +653,5 @@ export function main() {
 }
 
 if (process.argv[1] && process.argv[1].endsWith("test-changed.mjs")) {
-  process.exit(main());
+  process.exit(await main());
 }

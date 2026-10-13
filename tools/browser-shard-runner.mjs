@@ -40,8 +40,10 @@ import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { writeFileSync } from "node:fs";
 import { classify } from "../scripts/test-lanes.mjs";
 import { assertExactCoverage, buildQueue, isFailed, splitQueue } from "../scripts/test-shards.mjs";
+import { emitMarker } from "../scripts/gate-manifest.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -104,6 +106,12 @@ let cursor = 0;
 function runFile(file) {
   return new Promise((resolve) => {
     const at = Date.now();
+    // THE LOG IS THE HUB'S COVERAGE EVIDENCE (voicebox-beads-zjpm.3). `fleet-check` reads this gate log
+    // with the hub's check-coverage.py, which recognises `fast-gate: <kind>: <path>` at line start; without
+    // it a full-gate PASS carries no runner evidence and the hub can only report coverage UNKNOWN. The
+    // marker is emitted per FILE, from this file's own result, so the log cannot claim a file ran after
+    // the run that would have said so was killed.
+    console.log(emitMarker("running", [file]));
     const child = spawn(process.execPath, ["--test", "--test-reporter=tap", file], {
       cwd: ROOT,
       stdio: ["ignore", "pipe", "pipe"],
@@ -144,6 +152,10 @@ function runFile(file) {
       };
       results.push(result);
       const status = isFailed(result) ? "FAIL" : "ok  ";
+      // The marker follows this runner's own verdict (`isFailed`, which refuses to trust an exit code
+      // alone); a file that produced no counts is `unknown`, never a pass, and the hub then reports the
+      // whole run's coverage as UNKNOWN rather than counting the file as covered.
+      console.log(emitMarker(!isFailed(result) ? "passed" : result.tests >= 0 ? "failed" : "unknown", [file]));
       console.log(
         `[shards] ${status} ${String(ms).padStart(7)}ms tests=${result.tests} pass=${result.pass} fail=${result.fail} skipped=${result.skipped} ${file}`,
       );
@@ -185,6 +197,29 @@ if (isolated.length) {
   cursor = 0;
   phase = isolated;
   await Promise.all(Array.from({ length: Math.min(1, isolated.length) }, () => workerLoop()));
+}
+
+// A TIER RECORD, not a manifest: this runner knows what IT dispatched and nothing about the roster the
+// unit and server tiers cover, so it publishes records and leaves reconciliation to the one aggregator
+// (scripts/gate-manifest.mjs, `recordTier`). Writing a partial manifest here would be a second, weaker
+// answer to a question that already has an owner.
+if (process.env.VOICEBOX_GATE_TIER_RECORD) {
+  const record = {
+    tier: "browser",
+    files: results.map((r) => ({
+      path: r.file,
+      status: !isFailed(r) ? "passed" : r.tests >= 0 ? "failed" : "unknown",
+      counts: r.tests >= 0 ? { tests: r.tests, pass: r.pass, fail: r.fail, skipped: r.skipped } : null,
+      timeout_ms: FILE_TIMEOUT_MS,
+      secs: Math.round(r.ms) / 1000,
+    })),
+  };
+  try {
+    writeFileSync(process.env.VOICEBOX_GATE_TIER_RECORD, `${JSON.stringify(record, null, 2)}\n`);
+    console.log(`[shards] tier record: ${process.env.VOICEBOX_GATE_TIER_RECORD}`);
+  } catch (error) {
+    console.log(`[shards] tier record could not be written (${error.message}) — the markers above remain the log's evidence`);
+  }
 }
 
 const wall = Date.now() - started;

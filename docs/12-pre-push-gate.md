@@ -217,3 +217,79 @@ which is why nothing else could see it. A message that merely NAMES the variable
 not a read (the same call `single-owner.mjs` makes for comments); `public/verify.mjs` is a named
 exemption for its own `CHROME` variable and single literal, and the guard speaks if it grows a list
 or reads `VOICEBOX_CHROME` (voicebox-beads-phs9).
+
+---
+
+## 5. The Scoped Fast Gate and its Coverage Record (`--gate`)
+
+`scripts/test-changed.mjs --gate` is the repository's own fast tier: the same changed-path selection the
+inner-loop runner uses, with the three differences that make its verdict quotable (voicebox-beads-zjpm.3,
+ADR voicebox-beads-zjpm.1).
+
+```
+node scripts/test-changed.mjs --gate                 # the fast gate for the branch's changed paths
+node scripts/test-changed.mjs --gate --dry-run       # select and record, dispatch nothing
+node scripts/gate-manifest.mjs verify <artifact>     # reconcile an artifact without re-running anything
+```
+
+It is the command a lane should point `CHECK_FAST_CMD` at. It is deliberately **not** a second
+orchestrator for the full suite: `--gate-kind full` exists so the same accounting can be applied to a
+merger's union, and a full gate may not omit a classified file at all.
+
+- **Strict scope.** `--allow-unmapped` is a developer escape and the gate refuses it outright (exit 2): a
+  gate that may be told to ignore a path it cannot map has no scope, and its PASS is a statement about
+  nothing. A mapped test file that is in **no** lane is refused by name rather than quietly run in the
+  unit lane, which is what the old `else matchedUnit.push(file)` fallback did.
+- **Per-file dispatch.** Each selected file runs in its own process with its own exit code, TAP counts,
+  duration and bound, so "PASS" can be attributed to a file. The `ISOLATED` files (`tests/pre-push.test.mjs`,
+  `tests/ldxa-barge-in-browser.test.mjs`) run alone, after the parallel queue.
+- **A lost child is not a pass.** A file that produced no TAP summary is `unknown` — never `passed` — and
+  the gate refuses on it.
+
+### The artifact
+
+`~/.fleet/checks/<tree>.<fast|full>.manifest.json` (override with `--manifest-dir` or
+`VOICEBOX_GATE_ARTIFACT_DIR`), written atomically and keyed by the **tree SHA** it describes, the gate
+kind, and a **roster hash** over the classifier's `(file, tier, why)` output. `tree_dirty` records that
+the artifact was produced over uncommitted bytes, so a dirty run cannot be quoted as if it were clean.
+
+Every classified file is accounted for exactly once: dispatched (with its terminal status, counts,
+duration and timeout) or **omitted by name with a reason** (`fast-only: not selected by the changed-path
+map`). `scripts/gate-manifest.mjs` reconciles the artifact and refuses, naming each problem, on:
+
+| refusal | what it catches |
+|---|---|
+| duplicate / unclassified / missing path | a file recorded twice, recorded but not in the roster, or neither dispatched nor omitted |
+| malformed tier / status / marker | a tier that disagrees with the classifier, a non-terminal status, a missing counts block |
+| lost child | dispatched with no duration — the exit was lost, which is not a verdict |
+| zero-test result | a **passing** run that reported zero tests: an empty run demonstrates nothing |
+| contradictory counts | a passing record whose own counts carry failures |
+| omission without a reason | an unexplained gap in scope |
+| full-gate omission | any omitted file in a `--gate-kind full` run |
+| unmapped source | a changed source file that maps to no test |
+
+### The markers the hub reads
+
+Every dispatched file prints, at line start, a marker from the vocabulary `fleet-check`'s coverage
+extractor matches:
+
+```
+fast-gate: running: tests/<file>
+fast-gate: passed:  tests/<file>      # or failed:, or unknown: with the reason
+fast-gate: unmapped: <changed file>   # a changed path the gate could not map
+fast-gate: unknown: <reason>          # emitted whenever the run is incomplete
+```
+
+`tools/browser-shard-runner.mjs` emits the same per-file markers for the full gate's browser tier, and
+with `VOICEBOX_GATE_TIER_RECORD=<path>` writes a **tier record** (what that tier dispatched) which the one
+aggregator folds in with `recordTier`. A tier never writes a manifest of its own: a partial manifest that
+happens to reconcile is a wide claim from a narrow run. Because `running:` is also read as evidence that a
+file executed, `unknown:` is emitted together with any incomplete run — that is what makes the hub report
+the run's coverage as `UNKNOWN` (fail-closed) instead of counting a killed file as covered.
+
+### Acceptance is per phase
+
+`npm run accept` prints a verdict per phase. When the shared front could not be witnessed, phase A is
+reported `UNKNOWN` for the shared front and the run ends `ALL CLEAR (PHASE B ONLY)` with the statement
+that the shared front was **not** verified: green code tests and an approved phase-B-only posture may
+coexist, but no reader (or gate log) may quote that run as having measured the served front.
