@@ -398,7 +398,12 @@ export async function runGate({
   const runTierFiles = async (files) => {
     const run = async (file) => {
       const relPath = `tests/${file}`;
-      console.log(emitMarker("running", [relPath]));
+      // NOT `fast-gate: running:` — the hub's extractor reads that marker as proof the suite EXECUTED, so a
+      // run that is killed before this file finishes would leave a coverage claim it cannot retract (see
+      // the note in scripts/gate-manifest.mjs; measured: a killed 19-file run reported coverage KNOWN over
+      // a file that was only ever printed as running). Progress is a plain line; only terminal states are
+      // published as markers.
+      console.log(`[test:changed] running ${relPath}`);
       const result = await runner(relPath, { timeoutMs });
       const status = statusOf(result);
       results.push({ file, status, result });

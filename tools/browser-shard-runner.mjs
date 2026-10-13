@@ -108,10 +108,10 @@ function runFile(file) {
     const at = Date.now();
     // THE LOG IS THE HUB'S COVERAGE EVIDENCE (voicebox-beads-zjpm.3). `fleet-check` reads this gate log
     // with the hub's check-coverage.py, which recognises `fast-gate: <kind>: <path>` at line start; without
-    // it a full-gate PASS carries no runner evidence and the hub can only report coverage UNKNOWN. The
-    // marker is emitted per FILE, from this file's own result, so the log cannot claim a file ran after
-    // the run that would have said so was killed.
-    console.log(emitMarker("running", [file]));
+    // it a full-gate PASS carries no runner evidence and the hub can only report coverage UNKNOWN. Only
+    // TERMINAL markers are emitted, below, from this file's own result: `running:` is read by that
+    // extractor as proof of execution, and a killed run cannot retract it (see scripts/gate-manifest.mjs).
+    console.log(`[shards] running ${file}`);
     const child = spawn(process.execPath, ["--test", "--test-reporter=tap", file], {
       cwd: ROOT,
       stdio: ["ignore", "pipe", "pipe"],

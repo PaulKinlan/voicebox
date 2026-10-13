@@ -30,11 +30,16 @@
 // `emitMarker` produces exactly those shapes and nothing else, because a marker that is nearly right is
 // read as no marker at all and the coverage silently degrades to UNKNOWN.
 //
-// A NOTE ON `running`: the hub's extractor unions every marker into the set of suites it believes ran, so
-// a `running:` line for a file that never finished would read as coverage. That is only safe because an
-// incomplete run ALSO emits `unknown:`, which the hub reads as gate_unknown and turns into coverage
-// UNKNOWN (fail-closed). The two markers are therefore emitted together by contract — see
-// `finalizeManifest`, which is the only place that decides.
+// A NOTE ON `running`, MEASURED AGAINST THE HUB'S OWN EXTRACTOR (voicebox-beads-zjpm.3): check-coverage.py
+// unions EVERY marker it matches — `running` included — into the set of suites it believes executed. So a
+// `running:` line for a file that never finished is read as COVERAGE. Measured on a real killed run (a
+// 19-file selection stopped at file 19): the extractor answered `coverage: KNOWN, indeterminate: false`
+// and listed `tests/pre-push.test.mjs` — a file that had been printed as running and then SIGTERMed — so
+// the hub reported every changed path as demonstrated. A process that can be killed cannot retract a line
+// it has already written, so the gate DOES NOT PUBLISH `running:` at all: it prints its progress in a
+// plain line and only ever publishes TERMINAL per-file markers (passed/failed/unknown) plus `unmapped:`
+// and `unknown:` for a refusal or an incomplete dispatch. `emitMarker` still supports `running` because the
+// vocabulary belongs to the hub, and a caller whose runs cannot be killed may use it; this gate's runs can.
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -341,6 +346,8 @@ export function readManifest(file) {
  * hub's vocabulary: running, ran, passed, completed, failed, unmapped, unknown.
  */
 export function emitMarker(kind, values = []) {
+  // `running` is deliberately never emitted by the gate's own dispatch: see the note above. It stays
+  // supported because the vocabulary is the hub's, not ours.
   const body = Array.isArray(values) ? values.join(" ") : String(values);
   return `${MARKER_PREFIX} ${kind}:${body ? ` ${body}` : ""}`;
 }

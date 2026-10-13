@@ -282,11 +282,19 @@ Every dispatched file prints, at line start, a marker from the vocabulary `fleet
 extractor matches:
 
 ```
-fast-gate: running: tests/<file>
 fast-gate: passed:  tests/<file>      # or failed:, or unknown: with the reason
 fast-gate: unmapped: <changed file>   # a changed path the gate could not map
 fast-gate: unknown: <reason>          # emitted whenever the run is incomplete
 ```
+
+**Only TERMINAL markers are published, and `running:` deliberately is not.** The hub's extractor unions
+every marker it matches — `running` included — into the set of suites it believes ran, so a `running:`
+line for a file that was later killed is read as *coverage*, and a killed process cannot retract it.
+Measured on a real stopped run (19 selected files, stopped part-way): the extractor answered
+`coverage: KNOWN, indeterminate: false` and listed the file that had only ever been printed as running.
+Progress is therefore a plain log line (`[test:changed] running tests/<file>`); a file appears in the
+marker vocabulary only once it has a terminal status, and an unfinished dispatch is a gap the hub reports
+as uncovered rather than as a suite that ran.
 
 `tools/browser-shard-runner.mjs` emits the same per-file markers for the full gate's browser tier, and
 with `VOICEBOX_GATE_TIER_RECORD=<path>` writes a **tier record** (what that tier dispatched) which the one

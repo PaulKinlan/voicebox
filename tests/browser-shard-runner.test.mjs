@@ -43,8 +43,11 @@ test("the runner emits a hub marker per file, and publishes a tier record a mani
     // The markers are the hub's vocabulary, anchored at line start. A marker nested inside other text is
     // not a marker to the extractor, so the anchor is the assertion.
     const lines = res.stdout.split("\n");
-    assert.ok(lines.includes(`fast-gate: running: ${PROBE}`), "the dispatched file is named before it runs");
-    assert.ok(lines.includes(`fast-gate: passed: ${PROBE}`), "its terminal status is named after it");
+    assert.ok(lines.includes(`[shards] running ${PROBE}`), "progress is a plain line");
+    assert.ok(lines.includes(`fast-gate: passed: ${PROBE}`), "its terminal status is published as a marker");
+    // The hub's extractor reads `running:` as proof the suite EXECUTED, so publishing it for a file a kill
+    // can interrupt is a coverage claim nothing can retract (see scripts/gate-manifest.mjs).
+    assert.equal(lines.some((l) => l.startsWith("fast-gate: running:")), false, "a killed file must leave no coverage claim");
     assert.match(res.stdout, /\[shards\] coverage ok: 1 result\(s\) for 1 queued file\(s\)/);
 
     const record = JSON.parse(readFileSync(recordPath, "utf8"));

@@ -180,6 +180,7 @@ test("gate: a failing file refuses the gate, names it, and still writes the arti
   assert.equal(outcome.manifest.verdict, "fail");
   assert.equal(outcome.manifest.summary.failed, 1);
   assert.ok(lines.some((l) => /^fast-gate: failed: tests\/probe\.test\.mjs$/.test(l)), "the log names the failing file");
+  assert.equal(lines.some((l) => /^fast-gate: running:/.test(l)), false, "no `running:` marker: the extractor reads it as coverage");
   assert.ok(!lines.some((l) => /ALL SCOPED TESTS GREEN/.test(l)), "a red run never prints the green line");
   assert.ok(readFileSync(outcome.written, "utf8").length > 0, "the artifact exists for the run that failed");
   rmSync(dir, { recursive: true, force: true });
@@ -317,8 +318,11 @@ test("CLI gate: a genuine changed test file dispatches, emits the hub's markers 
   try {
     const res = spawnSync(process.execPath, [SCRIPT, "--gate", "--manifest-dir", dir, "tests/gate-manifest.test.mjs"], { cwd: root, encoding: "utf8" });
     assert.equal(res.status, 0, res.stdout + res.stderr);
-    assert.match(res.stdout, /^fast-gate: running: tests\/gate-manifest\.test\.mjs$/m);
+    assert.match(res.stdout, /^\[test:changed\] running tests\/gate-manifest\.test\.mjs$/m);
     assert.match(res.stdout, /^fast-gate: passed: tests\/gate-manifest\.test\.mjs$/m);
+    // `running:` is read as coverage by the hub's extractor and cannot be retracted by a killed process,
+    // so the gate publishes terminal markers only.
+    assert.equal(/^fast-gate: running:/m.test(res.stdout), false, "no coverage claim for a file a kill could interrupt");
     assert.match(res.stdout, /classified \d+, dispatched 1, omitted \d+, passed 1, failed 0/);
     assert.match(res.stdout, /ALL SCOPED TESTS GREEN/);
     const written = res.stdout.match(/manifest (\S+\.fast\.manifest\.json)/)[1];
