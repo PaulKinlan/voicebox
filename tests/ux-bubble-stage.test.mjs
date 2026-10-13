@@ -357,6 +357,11 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
     );
   }
   assert.ok(pageClassification.files.includes("counter.html"), "the workspace page is still listed in Files");
+  const evidenceDir = process.env.VOICEBOX_TEST_EVIDENCE_DIR;
+  if (evidenceDir) {
+    fs.mkdirSync(evidenceDir, { recursive: true });
+    await page.screenshot(path.join(evidenceDir, "rtsr-before-save.png"));
+  }
   assert.deepEqual(
     pageClassification.bubbles,
     [],
@@ -441,21 +446,41 @@ test("ux-bubble-stage: light mode default, centered hero mic, files bubble popov
     try { await page.screenshot(screenshot); } catch (cause) { screenshot = null; dom.screenshotError = String(cause); }
     throw new Error(`${error.message}; reload evidence: ${JSON.stringify({ api, dom, exceptions, screenshot })}`, { cause: error });
   };
+  // The SAME predicate must reject a missing-file mutant; otherwise a broken/empty Files pane
+  // could pass the readiness wait while the mini-app tray happened to render correctly.
+  const hasExpectedFiles = (expected) => {
+    const names = [...document.querySelectorAll("#files .file-open")].map((row) => row.dataset.file).sort();
+    return names.length === expected.length && names.every((name, index) => name === expected[index]);
+  };
   try {
-    await page.waitFor(() => {
-      const names = [...document.querySelectorAll("#files .file-open")].map((row) => row.dataset.file).sort();
-      return names.length === 2 && names[0] === "counter.html" && names[1] === "notes.md";
-    }, { timeout: 20000, label: "reloaded page lists counter.html and notes.md" });
+    await page.waitFor(hasExpectedFiles, {
+      args: [["counter.html", "notes.md"]], timeout: 20000,
+      label: "reloaded page lists counter.html and notes.md",
+    });
     await page.waitFor(() => Boolean(document.querySelector("#sqeh-actions .sqeh-miniapp-bubble")), {
       timeout: 30000,
       label: "the saved app renders in the tray from a fresh /api/mini-apps payload",
     });
   } catch (error) { await reloadEvidence(error); }
-  assert.deepEqual(
-    await page.evaluate(() => [...document.querySelectorAll("#files .file-open")].map((row) => row.dataset.file).sort()),
-    ["counter.html", "notes.md"],
-    "both named workspace files survive the reload (not merely two arbitrary rows)",
+  const reloadedFiles = await page.evaluate(() => [...document.querySelectorAll("#files .file-open")].map((row) => row.dataset.file).sort());
+  assert.deepEqual(reloadedFiles, ["counter.html", "notes.md"], "both named workspace files survive the reload");
+  assert.equal(
+    await page.evaluate(hasExpectedFiles, ["counter.html", "missing.html"]), false,
+    "negative control: a missing file cannot satisfy the same readiness predicate",
   );
+  const filesRequest = page.events("Network.requestWillBeSent")
+    .findLast(({ request }) => new URL(request.url).pathname === "/api/files");
+  assert.ok(filesRequest, "the reloaded page requested /api/files");
+  const filesResponse = page.events("Network.responseReceived")
+    .find(({ requestId }) => requestId === filesRequest.requestId);
+  assert.equal(filesResponse?.response.status, 200, "the reload's own /api/files request succeeded");
+  const responseBody = await page.send("Network.getResponseBody", { requestId: filesRequest.requestId });
+  const filesPayload = JSON.parse(responseBody.base64Encoded
+    ? Buffer.from(responseBody.body, "base64").toString("utf8") : responseBody.body);
+  assert.equal(filesPayload.ok, true, "the reload's own /api/files body was not a refusal");
+  assert.deepEqual([...filesPayload.files].sort(), reloadedFiles, "the visible Files rows match the reload's API body");
+  if (evidenceDir) await page.screenshot(path.join(evidenceDir, "rtsr-after-save.png"));
+  t.diagnostic(`rtsr reload: before=${JSON.stringify(pageClassification.files.sort())}, /api/files=${JSON.stringify(filesPayload.files.sort())}, after=${JSON.stringify(reloadedFiles)}, missing-file mutant=false${evidenceDir ? `, screenshots=${evidenceDir}/rtsr-{before,after}-save.png` : ""}`);
 
   const miniAppBubbles = await page.evaluate(() => {
     const actions = document.getElementById("sqeh-actions");
