@@ -506,10 +506,30 @@ test("gate ON: /live — the cookie-carrying page is entitled without a hello", 
 
 const FRONT_HOST = "localhost:5173";
 
+// THE BANNER IS SEVEN SEPARATE PIPE WRITES, AND `stdout()` IS A LIVE READ (voicebox-beads-35xr).
+//
+// server.mjs prints the gate-on banner as seven `console.log` calls — seven pipe writes
+// (server.mjs:5820-5839) — and tests/lib/server.mjs:82-88 states the contract for reading it: lines
+// printed after the startup banner "may arrive in a later chunk … a suite that needs such a line WAITS
+// FOR IT". Waiting on the ticket alone proved only the SECOND of the seven, so the dev-front guidance
+// the test asserts on was whatever had arrived by then: on the merged gate's loaded box that was line 4
+// of 7, and it failed a branch that cannot change a banner byte (2026-10-13). stdout is ONE ordered
+// stream, so waiting for the LAST line this test reads proves every line before it — which is the wait
+// `printedTicket` below now does.
+const BANNER_DEV_FRONT = /localhost:5173\/\?bootstrap=<the ticket above>/;
+const BANNER_ONE_TIME = /redeems once, on whichever host you open it first/;
+
 async function printedTicket(server) {
-  const match = await waitFor(() => server.stdout().match(new RegExp(`bootstrap  http://127\\.0\\.0\\.1:${server.port}/\\?bootstrap=([0-9a-f]{64})`)));
-  assert.ok(match, `the banner must print its bootstrap URL at startup; stdout was:\n${server.stdout()}`);
-  return match[1];
+  const ticketUrl = new RegExp(`bootstrap  http://127\\.0\\.0\\.1:${server.port}/\\?bootstrap=([0-9a-f]{64})`);
+  const printed = await waitFor(() => {
+    const out = server.stdout();
+    return ticketUrl.test(out) && BANNER_DEV_FRONT.test(out) && BANNER_ONE_TIME.test(out) ? out : null;
+  });
+  assert.ok(
+    printed,
+    `the banner must print its bootstrap URL and the dev-front guidance that follows it (seven pipe writes; wait for the last one); stdout was:\n${server.stdout()}`,
+  );
+  return printed.match(ticketUrl)[1];
 }
 
 test("gate ON: the banner mints exactly ONE ticket and names the host it must be opened on (t43w)", async () => {
@@ -519,8 +539,8 @@ test("gate ON: the banner mints exactly ONE ticket and names the host it must be
     const seen = new Set(server.stdout().match(/[0-9a-f]{64}/g) ?? []);
     assert.equal(seen.size, 1, `startup must issue ONE ticket, never one per origin; stdout was:\n${server.stdout()}`);
     assert.ok(seen.has(ticket), "and the URL it prints must carry that ticket");
-    assert.match(server.stdout(), /localhost:5173\/\?bootstrap=<the ticket above>/, "the dev front is named as the OTHER HOST FOR THE SAME ticket");
-    assert.match(server.stdout(), /redeems once, on whichever host you open it first/, "and the one-time/host choice is stated, not left to be discovered");
+    assert.match(server.stdout(), BANNER_DEV_FRONT, "the dev front is named as the OTHER HOST FOR THE SAME ticket");
+    assert.match(server.stdout(), BANNER_ONE_TIME, "and the one-time/host choice is stated, not left to be discovered");
 
     // The dev-front redemption is the SAME redemption on the same ticket, arriving the way the Vite
     // hop delivers it (Host preserved): 303 to the plain route, relative Location so the browser

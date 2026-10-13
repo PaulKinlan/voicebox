@@ -209,12 +209,36 @@ for (const provider of ["gemini", "openai"]) test(`Debug transcript: ${provider}
   assert.equal(stages.find(e => e.type === "tool.delivery").delivery, "transport-accepted");
   assert.equal(stages.find(e => e.type === "tool.delivery").modelReceipt, "unknown");
 
-  // Real typed turns are also captured, beyond the eight visible recent turns.
-  for (let i = 0; i < 9; i++) {
-    await f.page.type("#utterance", `read debug-missing-${i}.txt`);
-    await f.page.click("#send");
-    await f.page.waitFor(() => document.querySelector("#send").textContent === "Send");
-  }
+  // Prove a real keyboard/mouse turn reaches the recorder, then exercise its nine-turn history
+  // through the same form handler in-page. The remaining submissions avoid repeated CDP typing,
+  // clicking and polling round trips while still waiting for each real /api/turn response.
+  await f.page.type("#utterance", "read debug-missing-0.txt");
+  await f.page.click("#send");
+  await f.page.waitFor(() => document.querySelector("#send").textContent === "Send");
+  await f.page.evaluate(async () => {
+    const form = document.querySelector("#utterance").form;
+    const input = document.querySelector("#utterance");
+    const send = document.querySelector("#send");
+    for (let i = 1; i < 9; i++) {
+      input.value = `read debug-missing-${i}.txt`;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      if (send.disabled) throw new Error(`turn ${i}: Send stayed disabled`);
+      form.requestSubmit(send);
+      await new Promise((resolve, reject) => {
+        const observer = new MutationObserver(() => {
+          if (send.textContent !== "Send") return;
+          clearTimeout(timer);
+          observer.disconnect();
+          resolve();
+        });
+        const timer = setTimeout(() => {
+          observer.disconnect();
+          reject(new Error(`turn ${i}: Send did not recover`));
+        }, 10000);
+        observer.observe(send, { childList: true, characterData: true, subtree: true });
+      });
+    }
+  });
   await f.page.click("#debug-copy");
   await f.page.waitFor(() => document.querySelector("#debug-export").value.includes("debug-missing-8.txt"));
   const typed = (await f.page.evaluate(() => document.querySelector("#debug-export").value)).trim().split("\n").map(JSON.parse);
@@ -237,4 +261,5 @@ for (const provider of ["gemini", "openai"]) test(`Debug transcript: ${provider}
     const out = document.querySelector("#debug-export");
     return !out.hidden && out.selectionEnd === out.value.length && out.selectionStart === 0;
   }), true);
+  if (process.env.VOICEBOX_LIVE_FIX_EVIDENCE) await f.record("debug-export");
 });
