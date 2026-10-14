@@ -1668,7 +1668,10 @@ dialog.changelog-modal .commit-meta {
   top: -4px;
   right: -4px;
   min-width: 18px;
-  height: 18px;
+  /* min-, not `height` (voicebox-beads-3674): a fixed 18px box holds 12px text at 1x but not the 24px
+     `var(--text-xs)` resolves to at a doubled root font size, so the count overflowed its own circle.
+     min-height keeps the 18px pill at 1x and lets it grow with the user's text scale. */
+  min-height: 18px;
   padding: 0 4px;
   font-size: var(--text-xs);
   font-weight: 700;

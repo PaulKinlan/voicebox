@@ -131,7 +131,7 @@ test("browser: computed font sizes meet or exceed 12px across room, mobile, and 
   assert.ok(protoMetrics.badgePx !== null && protoMetrics.badgePx >= FLOOR_PX, `prototype bubble-badge font-size must be >= ${FLOOR_PX}px, got ${protoMetrics.badgePx}`);
 });
 
-test("browser: the lifted sizes are rem, so they follow the root font size (voicebox-beads-3674)", { timeout: 60000 }, async (t) => {
+test("browser: the lifted sizes are rem, and their boxes grow with the root font size (voicebox-beads-3674)", { timeout: 60000 }, async (t) => {
   const server = await startServer({
     cwd: ROOT,
     env: { VOICEBOX_WORKSPACE: undefined },
@@ -169,6 +169,40 @@ test("browser: the lifted sizes are rem, so they follow the root font size (voic
       `${rule.label} (${rule.selector}) must scale with a 32px root font size (>= 24px), got ${rule.px}`,
     );
   }
+
+  // The other half of the same guidance: a container has to be able to GROW with the text it holds. The
+  // waiting-branches count badge carried `height: 18px`, which holds 12px text at 1x but not the 24px the
+  // token resolves to here — the label overflowed its own pill. It carries `min-height` now. The control arm
+  // puts the fixed height back, so the probe is proven to SEE the overflow rather than being silent on both.
+  const badge = await page.evaluate((markup) => {
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;top:-9999px;left:-9999px;";
+    document.body.append(host);
+    const before = document.documentElement.style.fontSize;
+    document.documentElement.style.fontSize = "32px";
+    host.innerHTML = markup;
+    const el = host.querySelector(".badge");
+    if (!el) throw new Error("the badge markup did not produce a .badge");
+    const measure = () => ({ font: getComputedStyle(el).fontSize, client: el.clientHeight, scroll: el.scrollHeight });
+    const asShipped = measure();
+    el.style.minHeight = "";
+    el.style.height = "18px";
+    const control = measure();
+    el.style.height = "";
+    el.style.minHeight = "";
+    host.remove();
+    document.documentElement.style.fontSize = before;
+    return { asShipped, control };
+  }, `<button class="quiet branches-open-btn"><span class="badge" aria-hidden="true">2</span></button>`);
+
+  assert.ok(
+    badge.control.scroll > badge.control.client,
+    `control arm: a fixed 18px badge box at a 32px root font must overflow its own label (so the probe can see the defect), got ${JSON.stringify(badge.control)}`,
+  );
+  assert.ok(
+    badge.asShipped.scroll <= badge.asShipped.client + 1,
+    `the count badge must hold its own label at a 32px root font (${badge.asShipped.font}): client ${badge.asShipped.client}, scroll ${badge.asShipped.scroll}`,
+  );
 });
 
 test("browser: room .sr-only elements clip with zero scroll containers and preserve accessible button names (voicebox-beads-dche)", { timeout: 60000 }, async (t) => {

@@ -7,7 +7,7 @@
 // serialised browser tier (voicebox-beads-buy8, voicebox-beads-zjpm).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,35 +27,60 @@ const TOKENS = {
   "text-2xl": "1.25rem",
 };
 
-/** Surfaces the floor applies to. `designs/prototype.html` is not shipped, but it is the design spec
- *  the shipped surfaces are supposed to model, so a size below the floor there would be imported back. */
+function htmlFiles(dir, prefix) {
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    if (entry.isDirectory()) out.push(...htmlFiles(path.join(dir, entry.name), `${prefix}${entry.name}/`));
+    else if (entry.name.endsWith(".html")) out.push([`${prefix}${entry.name}`, path.join(dir, entry.name)]);
+  }
+  return out;
+}
+
+/**
+ * Surfaces the floor applies to: every stylesheet the browser can load (`public/*.css`), every page that can
+ * carry an inline `style` attribute or its own `<style>` block (every page under public/, plus
+ * designs/prototype.html),
+ * and the one JS module that injects a stylesheet of its own (public/pip-mic.mjs, the Document-PiP window).
+ * `designs/prototype.html` is not shipped, but it is the design spec the shipped surfaces model, so a size
+ * below the floor there would be imported back.
+ *
+ * NAMED LIMIT (voicebox-beads-3674): this reads source text, so a size a script sets at runtime
+ * (`element.style.fontSize = "11px"`) is not seen. `tests/type-scale.test.mjs` measures what actually ships.
+ */
 const SURFACES = [
-  ["public/style.css", path.join(PUBLIC, "style.css")],
-  ["public/apps/agent-monitor.html", path.join(PUBLIC, "apps", "agent-monitor.html")],
-  ["public/apps/landing-inspector.html", path.join(PUBLIC, "apps", "landing-inspector.html")],
+  ...readdirSync(PUBLIC)
+    .filter((f) => f.endsWith(".css"))
+    .sort()
+    .map((f) => [`public/${f}`, path.join(PUBLIC, f)]),
+  ["public/pip-mic.mjs", path.join(PUBLIC, "pip-mic.mjs")],
+  ...htmlFiles(PUBLIC, "public/"),
   ["designs/prototype.html", path.join(ROOT, "designs", "prototype.html")],
 ];
 
-/** A comment is not a declaration. Blank them out but keep every newline, so a failure still names the
- *  real line of the file. */
-const withoutComments = (text) => text.replace(/\/\*[\s\S]*?\*\//g, (block) => block.replace(/[^\n]/g, " "));
+/** A comment is not a declaration — CSS or HTML. Blank them out but keep every newline, so a failure still
+ *  names the real line of the file. */
+const withoutComments = (text) =>
+  text
+    .replace(/\/\*[\s\S]*?\*\//g, (block) => block.replace(/[^\n]/g, " "))
+    .replace(/<!--[\s\S]*?-->/g, (block) => block.replace(/[^\n]/g, " "));
 
 /**
- * Every font size a stylesheet declares, as {line, decl, px}. Reads `font-size: <length>` and the size
- * slot of the `font:` shorthand (`font: 13px/1.4 …`) — a shorthand is how three sizes in this repo are
- * spelled, and the earlier regex-only check could not see them. A value it cannot resolve to a number
- * is reported with `px: null` and is not a floor violation.
+ * Every font size a stylesheet declares, as {line, decl, px}. Reads `font-size: <length>` and the size slot
+ * of the `font:` shorthand — `font: 13px/1.4 …`, but equally `font: 600 11px/1.4 …` or `font: italic 11px
+ * …`, because the shorthand's size is the first length AFTER any style/variant/weight/stretch, not the first
+ * token. (A regex anchored to the start of the value read only the first shape, which is how four sizes hid
+ * here — the whole reason this scanner exists.) A value it cannot resolve to a number is reported with
+ * `px: null` and is not a floor violation.
  */
 function declaredSizes(text) {
   const out = [];
   const length = /(\d*\.?\d+)(rem|px)/g;
   const toPx = (num, unit) => (unit === "rem" ? num * 16 : num);
   withoutComments(text).split("\n").forEach((line, i) => {
-    for (const match of line.matchAll(/(?:^|[\s;{])(font-size|font)\s*:\s*([^;}]+)/g)) {
+    for (const match of line.matchAll(/(?:^|[\s;{"'])(font-size|font)\s*:\s*([^;}"']+)/g)) {
       const [, prop, value] = match;
       if (prop === "font") {
-        // In the shorthand the SIZE is the first length, optionally followed by `/line-height`.
-        const size = /^\s*(\d*\.?\d+)(rem|px)(?=\s*\/|\s|$)/.exec(value);
+        const size = /(?:^|\s)(\d*\.?\d+)(rem|px)(?=\s*\/|\s|$)/.exec(value);
         if (size) {
           out.push({ line: i + 1, decl: `${prop}:${value.trim()}`, px: toPx(parseFloat(size[1]), size[2]) });
         }
@@ -71,18 +96,28 @@ function declaredSizes(text) {
 
 const belowFloor = (text) => declaredSizes(text).filter((d) => d.px !== null && d.px < FLOOR_PX);
 
+/** The surfaces that declare the scale themselves: the room owns the full scale, and the pages that stand
+ *  alone carry the floor token their own rules reference (they do not load style.css). */
+const TOKEN_OWNERS = [
+  { label: "public/style.css", file: path.join(PUBLIC, "style.css"), tokens: Object.keys(TOKENS) },
+  { label: "public/apps/agent-monitor.html", file: path.join(PUBLIC, "apps", "agent-monitor.html"), tokens: ["text-xs"] },
+  { label: "public/apps/landing-inspector.html", file: path.join(PUBLIC, "apps", "landing-inspector.html"), tokens: ["text-xs"] },
+  { label: "designs/prototype.html", file: path.join(ROOT, "designs", "prototype.html"), tokens: ["text-xs"] },
+];
+
 test("the room declares the legible type scale as named tokens with a 0.75rem floor", () => {
-  const css = readFileSync(path.join(PUBLIC, "style.css"), "utf8");
-  for (const [name, value] of Object.entries(TOKENS)) {
-    const escaped = value.replace(/[.]/g, "\\.");
-    assert.match(css, new RegExp(`--${name}:\\s*${escaped}\\s*;`), `public/style.css must declare --${name}: ${value}`);
-  }
-  for (const [label, file] of SURFACES.slice(1)) {
-    assert.match(readFileSync(file, "utf8"), /--text-xs:\s*0\.75rem\s*;/, `${label} must declare --text-xs: 0.75rem`);
+  for (const { label, file, tokens } of TOKEN_OWNERS) {
+    const text = readFileSync(file, "utf8");
+    for (const name of tokens) {
+      const value = TOKENS[name];
+      const escaped = value.replace(/[.]/g, "\\.");
+      assert.match(text, new RegExp(`--${name}:\\s*${escaped}\\s*;`), `${label} must declare --${name}: ${value}`);
+    }
   }
 });
 
 test("no shipped surface declares a font size below the 12px floor", () => {
+  assert.ok(SURFACES.length >= 15, `the surface list must enumerate the shipped trees, got ${SURFACES.length}`);
   for (const [label, file] of SURFACES) {
     const offenders = belowFloor(readFileSync(file, "utf8"));
     assert.deepEqual(

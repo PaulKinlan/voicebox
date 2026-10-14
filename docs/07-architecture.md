@@ -248,15 +248,20 @@ AudioWorklet modules loaded by the frontend audio engine: `pcm-worklet.js`.
 
   The stylesheet also establishes a legible type scale on `:root` (`--text-xs` 0.75rem through `--text-2xl` 1.25rem,
   voicebox-beads-3674) with an enforced 0.75rem (12px) readability floor for all secondary text, badges, hotkey tags,
-  and timestamps across desktop and responsive mobile viewports. Every sub-12px size in `public/style.css` — the 19
-  `font-size` literals (including `.mic-hotkey-badge`, `.sqeh-dock-label`, `.sqeh-action`, and `.harness-badge`) plus four
-  more hiding in `font:` shorthands — and the same in the secondary surfaces (`public/apps/agent-monitor.html`,
-  `public/apps/landing-inspector.html`, and `designs/prototype.html`) is lifted to the 0.75rem floor (`var(--text-xs)`),
-  eliminating sub-12px text across shipped surfaces while maintaining responsive proportions under zoom. The floor is
-  pinned in two tiers: `tests/type-scale-tokens.test.mjs` reads the declarations with no browser — comments stripped and
-  the `font:` shorthand read, so a shorthand cannot hide a 11px the way a `font-size:`-only scan would miss it — and runs
-  in the fast gate; `tests/type-scale.test.mjs` browser-verifies computed font sizes (>= 12px) across desktop, mobile, and
-  secondary apps, and proves the lifted rules are `rem` by doubling the root font size and watching them grow with it.
+  and timestamps across desktop and responsive mobile viewports. Every sub-12px declaration in the four surfaces at
+  `a26fb12` — 43 of them: 28 `font-size` literals and four `font:` shorthands in `public/style.css` (including
+  `.mic-hotkey-badge`, `.sqeh-dock-label`, `.sqeh-action`, and `.harness-badge`), and 11 across
+  `public/apps/agent-monitor.html`, `public/apps/landing-inspector.html` and `designs/prototype.html` — is lifted to
+  the 0.75rem floor (`var(--text-xs)`), and the Document-PiP window's `.pip-task-chip` moves off its own `11px`
+  (`public/pip-mic.mjs`, the one module that injects a stylesheet of its own). The floor is pinned in two tiers:
+  `tests/type-scale-tokens.test.mjs` reads the declarations with no browser — comments stripped, the `font:` shorthand
+  read past any style or weight (`font: 600 11px/1.4 …` counts, which is how four sizes hid from the first
+  `font-size:`-only scan) — across every `public/*.css`, every page under `public/`, `designs/prototype.html` and
+  `public/pip-mic.mjs`, so the fast gate refuses a reintroduced sub-12px size; `tests/type-scale.test.mjs`
+  browser-verifies computed font sizes (>= 12px) across desktop, mobile, and secondary apps, and proves the lifted
+  rules are `rem` by doubling the root font size and watching them grow with it. The one row that did not survive that
+  doubling, the waiting-branches count badge, whose fixed `height: 18px` box could not hold the 24px the token resolves
+  to, now carries `min-height` so it grows with the user's text scale instead of overflowing its own circle.
 
   The `.sr-only` utility in `public/style.css` uses `overflow: clip` rather than `overflow: hidden` (voicebox-beads-dche,
   the live room copy of voicebox-beads-y5dr). Under `overflow: hidden` the 1px box was a scroll container with a 65x20
