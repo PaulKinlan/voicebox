@@ -53,7 +53,7 @@ test("presence: #where-note derives agent provider and real commit SHA from GET 
   }
 });
 
-test("presence: when server is unreachable, #where-note names machine-unreachable without proxy-500 confusion", async () => {
+test("presence: when server is unreachable, #where-note names machine-unreachable without proxy-500 confusion", { timeout: 180000 }, async () => {
   let server;
   let serverStopped = false;
   const page = await launch({ fakeMedia: true });
@@ -65,28 +65,22 @@ test("presence: when server is unreachable, #where-note names machine-unreachabl
       { timeout: 30000, label: "server-dot data-ok=true" },
     );
 
-    // Stop server so next poll/re-check fails with connection refused
+    // Stop server so the room's own re-check fails with connection refused.
     await server.stop();
     serverStopped = true;
 
-    // Trigger re-check in page against stopped port
-    await page.evaluate(async () => {
-      // Re-invoke health() in the page
-      try {
-        const res = await fetch("/api/health", { cache: "no-store" });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      } catch (err) {
-        const els = {
-          dot: document.getElementById("server-dot"),
-          where: document.getElementById("where-note"),
-        };
-        if (els.dot) els.dot.dataset.ok = "false";
-        if (els.where) {
-          els.where.textContent = "machine-unreachable (fix the host)";
-          els.where.title = "source: GET /api/health · machine-unreachable — the local server is not answering, fix the host";
-        }
-      }
-    });
+    // DRIVE THE PAGE'S OWN PATH AND WAIT FOR ITS OWN SENTENCE (voicebox-beads-y1db). This arm used to write
+    // "machine-unreachable (fix the host)" into #where-note itself and read it back in the next tick, which
+    // made the test a SECOND WRITER racing the page. The room re-asks /api/health every ROOT_POLL_MS (20s),
+    // and a poll that answered /api/health just before the stop still lands its downstream
+    // /api/environments refusal AFTERWARDS, writing "the environment list could not be read — check its
+    // error" over whatever was there — which is exactly the text the shard queue observed at line 56. With
+    // the assertion on the page's own settled sentence there is no second writer, and no race: the arm
+    // measures the product instead of measuring its own edit.
+    await page.waitFor(
+      () => /the machine is not answering — fix the host/.test(document.querySelector("#where-note")?.textContent ?? ""),
+      { timeout: 120000, label: "the room's own poll to name the unreachable machine" },
+    );
 
     const where = await page.evaluate(() => {
       const el = document.querySelector("#where-note");
@@ -99,9 +93,10 @@ test("presence: when server is unreachable, #where-note names machine-unreachabl
     });
 
     assert.equal(where.dotOk, "false", "server-dot must show data-ok=false");
-    assert.ok(
-      where.text === "machine-unreachable (fix the host)" || where.text === "the machine is not answering — fix the host",
-      `must name machine-unreachable with remedy, got: ${where.text}`,
+    assert.equal(
+      where.text,
+      "the machine is not answering — fix the host",
+      "the room's own machine-unreachable sentence must be the settled text, not a downstream route's refusal",
     );
     assert.match(where.title, /machine-unreachable/, "tooltip must state machine-unreachable");
     assert.doesNotMatch(where.title, /500/, "must not conflate machine-unreachable with 'server answered 500'");
