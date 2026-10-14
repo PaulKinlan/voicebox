@@ -162,16 +162,49 @@ test("changelog dialog extraction: the returned handle opens it from the build s
 
     // 3. CLOSE ASKS FOR FOCUS ON THE TRIGGER THAT OPENED IT — the build link, not the header button.
     //    This is the module's `lastChangelogTrigger`, and it is measured as a call count, never as
-    //    `document.activeElement`: the platform's restore races this handler (see the header).
+    //    `document.activeElement`: the platform's own focus restore races this handler (see the header).
+    //
+    //    THE WAIT WATCHES THE OBSERVABLES THE ASSERTIONS BELOW DEPEND ON — dialog closed AND the trigger
+    //    collapsed — because a native <dialog> fires `close` in a SEPARATE task from the one that flips `open`
+    //    false: the house rule written up in tests/modal-panels.test.mjs and measured as voicebox-beads-tnxm,
+    //    which the sibling tests/changelog-links.test.mjs follows the same way. This test did not, and that is
+    //    the whole defect: it waited on `open === false` alone and then READ `aria-expanded`, which SAMPLES that
+    //    window instead of waiting for it to end. Measured on the real page: sampling right after `close()` and
+    //    again after a microtask both read `open=false, aria-expanded=true`, and only a macrotask later reads
+    //    "false". On a quiet box the CDP round trip outlasted that task, so this always passed; in the merger's
+    //    browser shard queue it did not, and line 175 failed with "expected false, got true"
+    //    (voicebox-beads-ezu7, a recurrence of voicebox-beads-tnxm). `document.activeElement` is deliberately NOT
+    //    part of this wait, unlike tests/modal-panels.test.mjs, because this test counts focus() calls rather
+    //    than asserting where focus ended up.
     await page.click("#changelog-close");
-    await page.waitFor(() => document.getElementById("changelog-dialog")?.open === false, {
-      label: "the dialog to close",
-    });
+    await page.waitFor(
+      () => {
+        const dialog = document.getElementById("changelog-dialog");
+        const trigger = document.getElementById("changelog-open");
+        return dialog?.open === false && trigger?.getAttribute("aria-expanded") === "false";
+      },
+      { label: "changelog dialog closed and its trigger collapsed", timeout: 15000 },
+    );
+    // THE FOCUS HALF SETTLES LATER THAN THE MODULE'S HANDLER, so waiting for the handler is not enough for the
+    // focus assertions either (voicebox-beads-ezu7, second instance of the same defect). Measured on the real
+    // page with focus starting inside the dialog: after `close()` a closed dialog still CONTAINED
+    // document.activeElement in 3 of 4 timing samples — synchronously, after a microtask AND after a macrotask,
+    // only settling later. Waiting on the close handler therefore does not imply the assertion below, and
+    // sampling it would be the same race that failed the merger's full gate on tree a07a559d, one assertion
+    // earlier. So wait for the exact observable this step asserts — focus no longer trapped inside — which is
+    // the house rule (tests/modal-panels.test.mjs) and cannot resolve early. If the trap is ever real, the
+    // label fails loudly instead of the test quietly sampling a moment before it would have escaped.
+    await page.waitFor(
+      () => !document.getElementById("changelog-dialog")?.contains(document.activeElement),
+      { label: "focus to leave the closed dialog", timeout: 15000 },
+    );
     const afterClose = await page.evaluate(() => ({
+      dialogOpen: document.getElementById("changelog-dialog")?.open,
       expanded: document.getElementById("changelog-open")?.getAttribute("aria-expanded"),
       focusCalls: window.__focusCalls,
       focusInsideDialog: Boolean(document.getElementById("changelog-dialog")?.contains(document.activeElement)),
     }));
+    assert.equal(afterClose.dialogOpen, false, "the dialog must actually be closed, not only collapsed");
     assert.equal(afterClose.expanded, "false", "closing must collapse the trigger again");
     assert.equal(
       afterClose.focusCalls.buildLink,
