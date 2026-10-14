@@ -93,6 +93,21 @@ function movedRegionFromHostAtBase() {
   return region;
 }
 
+// THE ONE DELIBERATE BEHAVIOUR CHANGE SINCE THE EXTRACTION (voicebox-beads-cqrd): the refusal branch of
+// the output-change handler repaints BEFORE it writes the reason, and puts the picker back, because the
+// repaint's generic line was overwriting the refusal the person needed to read. That branch is therefore
+// NORMALISED OUT of the byte-identity comparison below and pinned by its own ORDERED arm instead — so
+// every OTHER statement still has to be byte-identical, and the cited fix is asserted rather than excused.
+const REFUSAL_BRANCH_OPENS = "if (applied && !applied.ok) {";
+const REFUSAL_BRANCH_TOKEN = "[the refusal branch: pinned by its own ordered arm, voicebox-beads-cqrd]";
+const normaliseRefusalBranch = (text) => {
+  const start = text.indexOf(REFUSAL_BRANCH_OPENS);
+  if (start < 0) return text;
+  const end = text.indexOf("\n    return;\n  }", start);
+  if (end < 0) return text;
+  return text.slice(0, start) + REFUSAL_BRANCH_TOKEN + text.slice(end + "\n    return;\n  }".length);
+};
+
 function assertMovedOutOfHost(hostSource, moduleSource) {
   for (const marker of MOVED_MARKERS) {
     assert.ok(!hasMarker(hostSource, marker), `${marker} must no longer be inline in fused.js`);
@@ -104,12 +119,30 @@ function assertMovedOutOfHost(hostSource, moduleSource) {
 }
 
 function assertByteIdentical(moduleSource, region) {
+  const expected = normaliseRefusalBranch(region);
+  const actual = normaliseRefusalBranch(moduleSource);
   assert.ok(
-    moduleSource.includes(region),
-    "the moved region must appear in the module BYTE-IDENTICALLY, apart from the two documented seams (getLiveClient and storage) — a rewritten statement is a behaviour change",
+    actual.includes(expected),
+    "the moved region must appear in the module BYTE-IDENTICALLY, apart from the two documented seams (getLiveClient and storage) and the one cited refusal-order fix (voicebox-beads-cqrd) — a rewritten statement anywhere else is a behaviour change",
   );
   // Sensitivity: the comparison above must be able to fail. One altered character in the region is enough.
-  assert.ok(!moduleSource.includes(region.replace("policy: \"stop\"", 'policy: "fallback"')), "the byte-identity check must be sensitive to a single changed statement");
+  assert.ok(!actual.includes(expected.replace("policy: \"stop\"", 'policy: "fallback"')), "the byte-identity check must be sensitive to a single changed statement");
+}
+
+/** The refusal branch's own contract, asserted as ORDER because the order is the whole defect. */
+function assertRefusalOrder(moduleSource) {
+  const start = moduleSource.indexOf(REFUSAL_BRANCH_OPENS);
+  assert.ok(start > -1, "the output-change handler must keep its refusal branch");
+  const end = moduleSource.indexOf("\n    return;\n  }", start);
+  assert.ok(end > start, "the refusal branch must still end by returning");
+  const branch = moduleSource.slice(start, end);
+  const repaint = branch.indexOf("renderDevices();");
+  const restorePicker = branch.indexOf('els.outSelect.value = devices.prefs.out.id ?? ""');
+  const reason = branch.indexOf("Could not use ");
+  assert.ok(repaint > -1 && restorePicker > -1 && reason > -1, "the refusal branch must repaint, put the picker back, and name the reason");
+  assert.ok(repaint < reason, "the generic repaint must happen BEFORE the refusal is written: writing it first is the clobbering this fix removes (voicebox-beads-cqrd)");
+  assert.ok(restorePicker < reason, "the picker must be put back before the reason is written, so the last thing the reader sees is the refusal and the control beside it names the device actually in use");
+  assert.match(branch, /`Could not use \$\{choice\?\.name \|\| "that output"\}\. \$\{applied\.reason\}\.`/, "the refusal must name the device AND the reason the client gave");
 }
 
 function assertHostContract(hostSource, moduleSource) {
@@ -136,6 +169,7 @@ test("the region is byte-identical in the module and gone from the host, and the
 
   assertMovedOutOfHost(host, mod);
   assertByteIdentical(mod, region);
+  assertRefusalOrder(mod);
   assertHostContract(host, mod);
 
   // NEGATIVE MUTANTS: each guard must fail when the thing it checks is undone.
@@ -160,6 +194,18 @@ test("the region is byte-identical in the module and gone from the host, and the
   const hostWithStaleGlobal = host.replace("state: audioDeviceController.state,", "state: () => ({}),");
   assert.notEqual(hostWithStaleGlobal, host, "the stale-global mutant must change the host");
   assert.throws(() => assertHostContract(hostWithStaleGlobal, mod), { name: "AssertionError" }, "a global that no longer reaches the module must be caught");
+
+  // THE CQRD DEFECT, REINTRODUCED: write the refusal first and repaint after it, exactly as main did
+  // before the fix. The ordered arm must refuse that order (voicebox-beads-cqrd).
+  const clobbering = [
+    "    // moved back before the reason: the voicebox-beads-cqrd defect reintroduced",
+    '    if (els.outDeviceState) els.outDeviceState.textContent = `Could not use ${choice?.name || "that output"}. ${applied.reason}.`;',
+    "    renderDevices();",
+  ].join("\n");
+  const modWithClobberedRefusal = mod.replace("    renderDevices();\n    // The picker is put back explicitly as well", `${clobbering}\n    // The picker is put back explicitly as well`);
+  assert.notEqual(modWithClobberedRefusal, mod, "the clobbering-order mutant must change the module");
+  assert.throws(() => assertRefusalOrder(modWithClobberedRefusal), { name: "AssertionError" },
+    "writing the refusal BEFORE the repaint must be refused by the ordered arm: that order is the defect voicebox-beads-cqrd fixed");
 });
 
 test("one open costs exactly one device enumeration, and the counter can see a second copy", async () => {

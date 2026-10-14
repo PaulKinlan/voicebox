@@ -186,8 +186,16 @@ on(els.outSelect, "change", async () => {
   if (applied && !applied.ok) {
     devices.prefs.out = previous;
     savePrefs();
-    if (els.outDeviceState) els.outDeviceState.textContent = `Could not use ${choice?.name || "that output"}. ${applied.reason}.`;
+    // REPAINT FIRST, THEN SAY WHY (voicebox-beads-cqrd). The row is repainted from the RESTORED
+    // preference, and renderDevices() writes the generic "No reply playing" line while doing it — so a
+    // refusal written before this call was the one line the reader never saw. The refusal goes last.
     renderDevices();
+    // The picker is put back explicitly as well: fillPicker() deliberately skips rebuilding an unchanged
+    // option list, so it cannot undo the value the person just picked here. Without this the row says the
+    // switch failed while the control beside it still names the device that is NOT in use — the same lie
+    // one control to the left, measured on main as selectValue "out-b" against a preference of "out-a".
+    if (els.outSelect) els.outSelect.value = devices.prefs.out.id ?? "";
+    if (els.outDeviceState) els.outDeviceState.textContent = `Could not use ${choice?.name || "that output"}. ${applied.reason}.`;
     return;
   }
   renderDevices();
