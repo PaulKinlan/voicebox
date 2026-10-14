@@ -306,7 +306,15 @@ _holder_file="${VOICEBOX_GATE_HOLDER:-/tmp/voicebox-gate.holder.json}"
 release_gate_lock() {
   if [ "$_gate_lock_held" = "1" ]; then
     rm -f "$_holder_file" 2>/dev/null || true
-    exec 9>&- 2>/dev/null || true
+    # THE `2>/dev/null` MUST BE GROUPED, OR IT SILENCES THE REST OF THE GATE. `exec 9>&- 2>/dev/null`
+    # has no command word, so POSIX makes BOTH redirections permanent for the shell — the second one
+    # sends fd 2 to /dev/null for every line printed after the lock is released. That is the manifest
+    # stage's whole diagnostic (measured: `sh -c 'exec 9>&- 2>/dev/null; echo x >&2'` prints nothing),
+    # so a full gate refused for a dirty tree or an unreconciled roster exited 1 with a clean stderr and
+    # no reason a reader could act on. Grouped, the fd-2 redirect is restored when the group ends and
+    # only the (intended) close of fd 9 survives. Measured on this fix: the same run prints
+    # `gate-manifest: REFUSED — … working tree was DIRTY …` and the gate's own `REFUSED: manifest` line.
+    { exec 9>&-; } 2>/dev/null || true
     _gate_lock_held=0
   fi
 }

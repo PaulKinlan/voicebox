@@ -97,6 +97,14 @@ Isolation remains a **scheduling** mitigation rather than the repair: the file s
 
 Before entering the `live` and `acceptance` stages on `main`, `scripts/pre-push.sh` acquires a host-wide file lock (`VOICEBOX_GATE_LOCK`, default `/tmp/voicebox-gate.lock`) and writes holder metadata to `VOICEBOX_GATE_HOLDER` (`/tmp/voicebox-gate.holder.json`). Concurrent landings wait for the lock rather than competing for Chromium instances (configurable via `VOICEBOX_GATE_LOCK_WAIT_SECS` or `VOICEBOX_GATE_LOCK_DISABLE=1`). `tests/pre-push.test.mjs` verifies serialization through event-driven observable synchronization (holding until the runner enters waiting, then releasing) and asserts negative controls for timeout refusal and free-lock acquisition.
 
+**Releasing the lock must not silence the gate.** The close of the lock descriptor is guarded by a fd-2
+redirect that has to stay **grouped** — `{ exec 9>&-; } 2>/dev/null` — because `exec 9>&- 2>/dev/null` has no
+command word, and POSIX then makes *both* redirections permanent: fd 2 went to `/dev/null` for every line
+printed after the release. The manifest stage is the only stage that runs after it, so a full gate refused
+for a dirty worktree or an unreconciled roster exited 1 with a clean stderr and no reason a reader could act
+on (measured: `sh -c 'exec 9>&- 2>/dev/null; echo x >&2'` prints nothing). `tests/pre-push.test.mjs` asserts
+the manifest-stage refusal is readable, naming both the aggregator's line and the gate's own.
+
 Each stage is bounded by GNU `timeout` with a 5-second kill grace period:
 - **Exit `124` (`TIMED OUT`)**: Reports the stage name, command, and budget without mislabeling an unfinished run as a test assertion failure.
 - **Exit `137` (`KILLED`)**: Reports that the process received `SIGKILL`.

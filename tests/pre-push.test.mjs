@@ -1012,11 +1012,19 @@ test('pre-push seals ONE full manifest from the tier records, and a red tier lea
     // A DIRTY TREE SEALS NOTHING EITHER, and the run that refuses says so by name. This also holds the
     // wiring rather than the policy: the worktree fact is computed by the GATE (the fold cannot see it), so
     // `--tree-dirty` has to travel from scripts/pre-push.sh to scripts/gate-manifest.mjs.
+    //
+    // IT ALSO HOLDS THAT THE MESSAGE EXISTS. The manifest stage is the only stage that runs AFTER
+    // `release_gate_lock`, and that function used to end with `exec 9>&- 2>/dev/null`: with no command
+    // word, POSIX makes that fd-2 redirect PERMANENT, so the gate exited 1 with an empty stderr and the
+    // reader got an exit code with no reason (measured before the fix: this run's stderr was 0 bytes while
+    // the artifact on disk said `refused`). Both the aggregator's refusal and the gate's own are asserted
+    // here, because either one alone would pass while the other was being thrown away.
     writeFileSync(path.join(repo, 'untracked-while-gating.txt'), 'uncommitted bytes\n');
     const dirty = runGate();
     const dirtyOut = dirty.stdout + dirty.stderr;
     assert.notEqual(dirty.status, 0, dirtyOut);
     assert.match(dirtyOut, /working tree was DIRTY/, 'the refusal names the dirty worktree it will not seal');
+    assert.match(dirtyOut, /pre-push REFUSED: manifest/, 'and the gate names the stage that refused, after the lock was released');
     const dirtyManifest = JSON.parse(readFileSync(path.join(artifacts, `${tree}.full.manifest.json`), 'utf8'));
     assert.equal(dirtyManifest.tree_dirty, true, 'the artifact records the state it refused for');
     assert.equal(dirtyManifest.reconciled, false);
