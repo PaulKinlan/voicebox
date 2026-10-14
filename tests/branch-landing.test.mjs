@@ -354,19 +354,20 @@ test("branch-landing: createBranchRoutes provides candidate inspection and landi
   assert.equal(capturedBody.action, "landed");
 });
 
-test("branch-landing: main room UI dialog and buttons pass plain-language scan with zero violations", () => {
+test("branch-landing: main room UI does not clutter header with unrequested branch-landing dialog", () => {
   const indexHtml = fs.readFileSync(
     new URL("../public/index.html", import.meta.url),
     "utf8",
   );
-  const match = indexHtml.match(/<dialog[^>]*id="branch-landing-dialog"[\s\S]*?<\/dialog>/i);
-  assert.ok(match, "branch-landing-dialog must exist in public/index.html");
-
-  const hits = scanPlainLanguage(match[0]);
-  assert.deepEqual(
-    hits,
-    [],
-    `Expected zero plain-language violations in branch-landing-dialog, found: ${JSON.stringify(hits)}`,
+  assert.equal(
+    indexHtml.includes('id="branches-open"'),
+    false,
+    "branches-open button should not exist in public/index.html",
+  );
+  assert.equal(
+    indexHtml.includes('id="branch-landing-dialog"'),
+    false,
+    "branch-landing-dialog should not exist in public/index.html",
   );
 });
 

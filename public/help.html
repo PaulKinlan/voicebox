@@ -74,13 +74,14 @@
         </ul>
       </section>
 
-      <section class="help-section" data-help-section>
-        <h3>4. Workspace Files, File Viewer &amp; Interactive Mini-Apps</h3>
+      <section class="help-section" id="mini-apps-help" data-help-section>
+        <h3>4. Workspace Files, File Viewer &amp; Mini-Apps</h3>
         <p>Browse, read, edit, and run files from your active project folder:</p>
         <ul>
           <li><strong>Files Bubble &amp; Explorer:</strong> Click the <strong>Files</strong> bubble in the Home deck (or bottom dock) to open the project file list, navigate into subfolders, filter files by name, create a new file, or open a local folder from your computer.</li>
           <li><strong>File Viewer &amp; In-Place Editor:</strong> Click any file card (or say <em>"open notes.md"</em>) to inspect its contents in the floating File Viewer. Click <strong>Edit</strong> to modify and save text directly, <strong>Copy</strong> to copy to your clipboard, or <strong>Download</strong> to save a copy.</li>
-          <li><strong>Interactive Mini-Apps:</strong> HTML applications in your workspace can be launched as live interactive Mini-Apps right inside the room. Use the Mini-App header bar to expand full-screen, reload, edit source, or minimize the app into the bottom-right bubble dock.</li>
+          <li><strong>Ordinary Pages vs Mini-Apps:</strong> HTML files in your workspace or sandbox stay in the <strong>Files</strong> list as ordinary pages so they don't clutter your workspace. To turn an HTML file into an interactive Mini-App in the tray, open the file and click <strong>Open as Mini-App</strong>, or say <em>"Make [filename] a mini-app"</em>.</li>
+          <li><strong>Interactive Mini-Apps:</strong> Saved Mini-Apps appear in the Apps tray right inside the room. Use the Mini-App header bar to expand full-screen, reload, edit source, or minimize the app into the bottom-right bubble dock.</li>
         </ul>
       </section>
 
@@ -128,6 +129,16 @@
           <li><strong>Microphone is unavailable or permission denied:</strong> Check your browser address bar permissions for microphone access, or select a specific input device under <strong>Settings &rarr; Microphone</strong>. You can always use the text composer below the microphone while audio is off.</li>
           <li><strong>Live voice says a model is unavailable:</strong> Open <strong>Settings &rarr; Model</strong> and select <strong>Gemini 3.8 Live (default)</strong> or <strong>Gemini 3.8 Live Extended Thinking</strong>, and verify your provider API key is configured under <strong>Provider API Keys</strong>.</li>
           <li><strong>Folder access needs to be restored after reload:</strong> When using a browser-picked local directory, click <strong>Restore access</strong> in the folders bar so the browser re-grants read/write permission for the current session.</li>
+        </ul>
+      </section>
+
+      <section class="help-section" id="shared-room" data-help-section>
+        <h3>8. Shared Room &amp; Speaking Turns</h3>
+        <p>Voicebox supports multi-participant collaboration in the same live room:</p>
+        <ul>
+          <li><strong>Participant Presence:</strong> When multiple people connect to the same Voicebox room, the presence bar appears at the top showing connected participants. In solo mode (one browser), this bar stays hidden automatically.</li>
+          <li><strong>Speaking Turns (Mic Control):</strong> Click <strong>Hold mic</strong> to reserve the speaking turn when multiple people share the room, ensuring voices do not talk over each other. While held, your status displays <em>Your speaking turn</em> and others see that you are speaking.</li>
+          <li><strong>Releasing the Mic:</strong> Click <strong>Release mic</strong> when finished to return the room to shared conversation so another participant can speak.</li>
         </ul>
       </section>
     </main>

@@ -155,41 +155,6 @@
           <ol id="changelog-commits" class="commits" aria-label="Recent changes"></ol>
         </form>
       </dialog>
-      <button class="quiet icon-button branches-open-btn" id="branches-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="branch-landing-dialog" aria-label="Waiting branches" title="Candidate branches waiting to land" hidden><svg class="icon" aria-hidden="true"><use href="#i-git-branch"/></svg><span class="badge" id="branches-badge" aria-hidden="true">0</span><span class="sr-only" id="branches-count-wrap">Waiting to Land</span></button>
-      <dialog class="envs branches-modal" id="branch-landing-dialog" closedby="any" aria-labelledby="branch-landing-title">
-        <form class="envs-form" method="dialog">
-          <div class="settings-head">
-            <h2 id="branch-landing-title">Branches Waiting to Land</h2>
-            <button class="icon-button" id="branch-landing-close" type="submit" aria-label="Close branch landing inspector"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
-          </div>
-          <p class="env-hint">Candidate task branches created by coding agents ready for review and landing.</p>
-          <div class="harness-actions">
-            <button class="quiet" id="branch-refresh-btn" type="button">Refresh branches</button>
-            <span class="harness-status" id="branch-landing-status" role="status" aria-live="polite">Ready.</span>
-          </div>
-          <div class="branches-container">
-            <div class="branches-sidebar">
-              <h3>Candidate Branches</h3>
-              <ul class="branches-list" id="branches-list" role="listbox" aria-label="Candidate branches"></ul>
-            </div>
-            <div class="branch-detail-panel" id="branch-detail-panel" hidden>
-              <div class="branch-meta-row">
-                <span class="branch-name-title" id="branch-detail-name"></span>
-                <span class="branch-merge-badge" id="branch-merge-badge"></span>
-              </div>
-              <div class="modal-actions branch-actions">
-                <button class="quiet branch-action-land" id="branch-land-btn" type="button">Merge into Workspace</button>
-                <button class="quiet branch-action-keep" id="branch-keep-btn" type="button">Keep Separate</button>
-              </div>
-              <p class="env-note" id="branch-action-result" role="status" aria-live="polite"></p>
-              <h4>Changed Files (<span id="branch-files-count">0</span>)</h4>
-              <ul class="branch-files-list" id="branch-files-list"></ul>
-              <h4>Diff</h4>
-              <pre class="branch-diff-viewer" id="branch-diff-viewer"><code></code></pre>
-            </div>
-          </div>
-        </form>
-      </dialog>
       <button class="quiet icon-button" id="envs-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="envs" aria-label="Environments" title="Environments"><svg class="icon" aria-hidden="true"><use href="#i-globe"/></svg><span class="sr-only" id="envs-count">Environments</span></button>
       <!-- The extension surface (voicebox-beads-vwb): the same registry the host enforces, read
            once and rendered in plain language. Four states a person must never confuse: RUNNING
@@ -536,10 +501,11 @@
         <div class="room-presence-strip" id="room-presence-strip" hidden>
           <div class="presence-meta">
             <span class="presence-count" id="presence-count">1 participant</span>
-            <span class="presence-floor-badge" id="presence-floor-badge" hidden>Floor locked</span>
+            <span class="presence-floor-badge" id="presence-floor-badge" hidden>Your speaking turn</span>
+            <a class="presence-help-link" href="/help.html#shared-room" title="What is shared room presence?">?</a>
           </div>
           <div class="presence-roster" id="presence-roster" role="list" aria-label="Room participants"></div>
-          <button class="quiet presence-floor-btn" id="presence-floor-btn" type="button">Request Floor</button>
+          <button class="quiet presence-floor-btn" id="presence-floor-btn" type="button">Hold mic</button>
         </div>
         <div class="vision-core-card" id="vision-core-card" hidden>
           <div class="vision-stage-wrap" id="vision-stage-wrap">

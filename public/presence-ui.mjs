@@ -11,12 +11,25 @@ export function createPresenceUIController({
   floorBtn,
   floorBadgeEl,
   localParticipantId = null,
-  localName = "Operator",
+  localName = "You",
   localRole = "host",
   pollIntervalMs = 8000,
 } = {}) {
-  let participantId =
-    localParticipantId || `peer_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+  let participantId = localParticipantId;
+  if (!participantId) {
+    try {
+      if (typeof localStorage !== "undefined") {
+        participantId = localStorage.getItem("voicebox.participantId");
+        if (!participantId) {
+          participantId = `peer_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+          localStorage.setItem("voicebox.participantId", participantId);
+        }
+      }
+    } catch {}
+    if (!participantId) {
+      participantId = `peer_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+    }
+  }
   let currentSnapshot = {
     count: 1,
     floorHolderId: null,
@@ -150,7 +163,7 @@ export function createPresenceUIController({
       if (snapshot.floorHolderId) {
         floorBadgeEl.removeAttribute("hidden");
         const holder = participants.find((p) => p.participantId === snapshot.floorHolderId);
-        floorBadgeEl.textContent = hasFloor ? "You hold the floor" : `Floor: ${holder?.name || snapshot.floorHolderId}`;
+        floorBadgeEl.textContent = hasFloor ? "Your speaking turn" : `Speaking: ${holder?.name || snapshot.floorHolderId}`;
       } else {
         floorBadgeEl.setAttribute("hidden", "");
       }
@@ -158,16 +171,21 @@ export function createPresenceUIController({
 
     if (floorBtn) {
       if (hasFloor) {
-        floorBtn.textContent = "Release Floor";
+        floorBtn.textContent = "Release mic";
+        if (typeof floorBtn.removeAttribute === "function") floorBtn.removeAttribute("title");
+        else floorBtn.title = "";
         floorBtn.classList.add("active");
         floorBtn.disabled = false;
       } else if (isFloorHeldByOther) {
         const holder = participants.find((p) => p.participantId === snapshot.floorHolderId);
-        floorBtn.textContent = `Floor held by ${holder?.name || "peer"}`;
+        floorBtn.textContent = `Speaking: ${holder?.name || "Guest"}`;
+        if (typeof floorBtn.removeAttribute === "function") floorBtn.removeAttribute("title");
+        else floorBtn.title = "";
         floorBtn.classList.remove("active");
         floorBtn.disabled = true;
       } else {
-        floorBtn.textContent = "Request Floor";
+        floorBtn.textContent = "Hold mic";
+        floorBtn.title = "Reserve the speaking turn when multiple people share this room";
         floorBtn.classList.remove("active");
         floorBtn.disabled = false;
       }
@@ -191,7 +209,9 @@ export function createPresenceUIController({
         const nameSpan = documentObj.createElement("span");
         nameSpan.className = "presence-chip-name";
         const isSelf = p.participantId === participantId;
-        nameSpan.textContent = isSelf ? `${p.name} (You)` : p.name;
+        nameSpan.textContent = isSelf
+          ? (p.name === "You" ? "You" : `${p.name} (You)`)
+          : p.name;
         chip.append(nameSpan);
 
         if (p.activeFile) {

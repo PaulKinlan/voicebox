@@ -1072,6 +1072,26 @@ html:has(dialog.settings[open]) { overflow: hidden; }
   border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
   color: var(--accent);
 }
+.presence-help-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-decoration: none;
+  line-height: 1;
+}
+.presence-help-link:hover,
+.presence-help-link:focus-visible {
+  color: var(--accent);
+  border-color: var(--accent);
+}
 .presence-roster {
   display: flex;
   align-items: center;

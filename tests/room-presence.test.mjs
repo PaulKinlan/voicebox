@@ -210,12 +210,15 @@ test("createPresenceUIController manages strip visibility, roster, and floor but
   };
   const mockBtn = {
     textContent: "",
+    title: "",
     disabled: false,
     classList: {
       add: () => {},
       remove: () => {},
     },
     addEventListener: () => {},
+    removeAttribute: () => {},
+    setAttribute: () => {},
   };
   const appendedChildren = [];
   const mockRoster = {
@@ -255,7 +258,7 @@ test("createPresenceUIController manages strip visibility, roster, and floor but
   });
   assert.equal(mockStrip.hasAttribute("hidden"), true);
   assert.equal(mockCount.textContent, "1 participant");
-  assert.equal(mockBtn.textContent, "Request Floor");
+  assert.equal(mockBtn.textContent, "Hold mic");
 
   // 2. Multi-participant -> unhides strip and renders roster chips
   ui.render({
@@ -268,7 +271,7 @@ test("createPresenceUIController manages strip visibility, roster, and floor but
   });
   assert.equal(mockStrip.hasAttribute("hidden"), false);
   assert.equal(mockCount.textContent, "2 participants");
-  assert.equal(mockBtn.textContent, "Request Floor");
+  assert.equal(mockBtn.textContent, "Hold mic");
   assert.equal(mockBtn.disabled, false);
 
   // 3. Local participant holds floor
@@ -280,8 +283,8 @@ test("createPresenceUIController manages strip visibility, roster, and floor but
       { participantId: "peer-remote", name: "Bob", voiceState: "off" },
     ],
   });
-  assert.equal(mockBtn.textContent, "Release Floor");
-  assert.equal(mockBadge.textContent, "You hold the floor");
+  assert.equal(mockBtn.textContent, "Release mic");
+  assert.equal(mockBadge.textContent, "Your speaking turn");
   assert.equal(mockBtn.disabled, false);
 
   // 4. Remote participant holds floor
@@ -293,8 +296,62 @@ test("createPresenceUIController manages strip visibility, roster, and floor but
       { participantId: "peer-remote", name: "Bob", voiceState: "speaking" },
     ],
   });
-  assert.equal(mockBtn.textContent, "Floor held by Bob");
+  assert.equal(mockBtn.textContent, "Speaking: Bob");
   assert.equal(mockBtn.disabled, true);
+});
+
+test("createPresenceUIController persists participantId in localStorage and formats self chip", () => {
+  const storage = new Map();
+  const originalLocalStorage = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem: (k) => storage.get(k) ?? null,
+    setItem: (k, v) => storage.set(k, String(v)),
+  };
+
+  try {
+    const createdElements = [];
+    const mockDocument = {
+      createElement: (tag) => {
+        const el = {
+          tagName: tag.toUpperCase(),
+          textContent: "",
+          className: "",
+          classList: { add: () => {}, remove: () => {} },
+          dataset: {},
+          setAttribute: () => {},
+          append: (...children) => { el.children = children; },
+        };
+        createdElements.push(el);
+        return el;
+      },
+    };
+    const mockRoster = {
+      replaceChildren: () => {},
+      append: () => {},
+    };
+
+    // Controller with no localParticipantId generates and persists one
+    const ui1 = createPresenceUIController({
+      documentObj: mockDocument,
+      rosterEl: mockRoster,
+    });
+    const id1 = ui1.getParticipantId();
+    assert.ok(id1.startsWith("peer_"));
+    assert.equal(storage.get("voicebox.participantId"), id1);
+
+    // Second controller reuses the same participantId from localStorage
+    const ui2 = createPresenceUIController({
+      documentObj: mockDocument,
+      rosterEl: mockRoster,
+    });
+    assert.equal(ui2.getParticipantId(), id1);
+  } finally {
+    if (originalLocalStorage) {
+      globalThis.localStorage = originalLocalStorage;
+    } else {
+      delete globalThis.localStorage;
+    }
+  }
 });
 
 test("public/index.html includes room presence strip and passes plain-language scan", () => {

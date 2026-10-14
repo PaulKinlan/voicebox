@@ -52,7 +52,7 @@ When `execute(action)` in `server.mjs` receives `action.verb === "system"`:
 | `open_panel` | `target` | `close` | closes any open modal sheet, then `sqehSetState("deck")` — back to the deck, closing open windows |
 | `copy`, `paste` | `text` | | clipboard, as before |
 | `stop_speaking` | `mode` | `interrupt` \| `mute` \| `unmute` | cancels speech synthesis, triggers interrupt (`#interrupt`) or toggles microphone (`#mic`) |
-| `show_waiting_branches` | — | — | opens the candidate branch landing inspector dialog (`#branch-landing-dialog`) |
+| `show_waiting_branches` | — | — | mounts the candidate branch landing inspector mini-app (`/apps/landing-inspector.html`) |
 | `land_branch` | — | — | triggers landing (merging) the selected candidate branch into the workspace |
 | `keep_branch_separate` | — | — | marks the candidate branch to remain separate without merging |
 | `compare_harnesses` | — | — | opens the Agent Progress Tracker comparison mini-app |

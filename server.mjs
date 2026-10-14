@@ -2687,39 +2687,65 @@ async function execute(action) {
   if (action.verb === "tool") {
     return callTool(action.name, action.args ?? {});
   }
-  if (action.verb === "mini_app") {
+  if (action.verb === "mini_app" || action.verb === "launch_mini_app") {
     const rootPath = active?.root?.kind === "machine" ? active.root.path : WORKSPACE;
-    const saved = saveMiniApp({
-      appId: action.appId || action.id,
-      title: action.title || "Interactive App",
-      html: action.html || "<!doctype html><html><body></body></html>",
-      fileName: action.fileName || action.name,
-      rootPath,
-    });
-    const miniApp = saved.ok
+    const target = (action.target || action.fileName || action.name || "").trim();
+    let found = null;
+    if (target) {
+      found = getMiniApp(target, { rootPath });
+    }
+    const miniAppTitle = action.title || (found?.ok ? found.miniApp.title : target) || "Interactive App";
+    const miniAppHtml = action.html || (found?.ok ? found.miniApp.html : "");
+    const miniAppFileName = action.fileName || (found?.ok ? path.basename(found.miniApp.fileName) : target);
+
+    let saved = null;
+    const shouldSave = Boolean(action.html || action.promote || (found?.ok && found.miniApp.kind === "page"));
+    if (shouldSave && miniAppHtml) {
+      saved = saveMiniApp({
+        appId: action.appId || action.id,
+        title: miniAppTitle,
+        html: miniAppHtml,
+        fileName: miniAppFileName,
+        rootPath,
+      });
+    }
+
+    if (!found?.ok && !miniAppHtml) {
+      return {
+        ok: false,
+        refused: found?.refused || "mini-app-not-found",
+        why: found?.why || `Mini-app '${target}' was not found.`,
+        action: `mini-app "${target}" not found: ${found?.why || "no file or HTML provided"}`,
+        root: active?.root ?? null,
+      };
+    }
+
+    const miniApp = saved?.ok
       ? saved.miniApp
-      : {
-          appId: `app_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`,
-          title: action.title || "Interactive App",
-          html: action.html || "<!doctype html><html><body></body></html>",
-        };
+      : (found?.ok
+          ? found.miniApp
+          : {
+              appId: `app_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`,
+              title: miniAppTitle,
+              html: miniAppHtml || "<!doctype html><html><body></body></html>",
+            });
     const frame = JSON.stringify({
       type: "mini_app",
       miniApp,
-      created: saved.ok ? saved.created : true,
-      updated: saved.ok ? saved.updated : false,
+      created: saved?.ok ? saved.created : true,
+      updated: saved?.ok ? saved.updated : false,
     });
     try { pageSocket?.send(frame); } catch {}
     try { runningSession?.socket?.send(frame); } catch {}
     // A REFUSED SAVE IS STILL NAMED IN THE RESULT (review round 2, voicebox-beads-owit): the room
     // still shows the html (that is this verb's product), but the answer must not claim a
     // persistence that did not happen — the model reads this result to decide what to do next.
-    if (!saved.ok) {
+    if (saved && !saved.ok) {
       return {
         ok: false,
         refused: saved.refused,
         why: saved.why,
-        action: `mini-app "${action.title || "Interactive App"}" was shown in the room but NOT saved: ${saved.refused} — ${saved.why}`,
+        action: `mini-app "${miniAppTitle}" was shown in the room but NOT saved: ${saved.refused} — ${saved.why}`,
         miniApp,
         shownNotSaved: true,
         root: active?.root ?? null,
@@ -2727,10 +2753,10 @@ async function execute(action) {
     }
     return {
       ok: true,
-      action: `${saved.updated ? "updated" : "launched"} mini-app "${miniApp.title}" (${miniApp.appId})`,
+      action: `${saved?.updated ? "updated" : (saved?.created ? "saved and launched" : "launched")} mini-app "${miniApp.title}" (${miniApp.appId})`,
       miniApp,
-      created: saved.ok ? saved.created : true,
-      updated: saved.ok ? saved.updated : false,
+      created: saved?.ok ? saved.created : false,
+      updated: saved?.ok ? saved.updated : false,
       root: active?.root ?? null,
     };
   }
@@ -4387,7 +4413,11 @@ async function handle(req, res) {
       return json(res, found.ok ? 200 : 404, found);
     }
     const discovered = discoverMiniApps({ rootPath });
-    const apps = discovered.miniApps ?? [];
+    let apps = discovered.miniApps ?? [];
+    const kindFilter = (url.searchParams.get("kind") ?? "").trim().toLowerCase();
+    if (kindFilter) {
+      apps = apps.filter((a) => (a.kind ?? "app") === kindFilter);
+    }
     return json(res, 200, { ok: true, apps, miniApps: apps, count: apps.length });
   }
 
@@ -4667,7 +4697,7 @@ async function handle(req, res) {
           return json(res, 400, { ok: false, refused: "bad-request", error: "refused: bad-request", why: "action must be an object with a verb" });
         }
         const verb = parsed.action.verb;
-        if (typeof verb !== "string" || (!COMMAND_VERBS.has(verb) && verb !== "mini_app_tool" && verb !== "system")) {
+        if (typeof verb !== "string" || (!COMMAND_VERBS.has(verb) && verb !== "launch_mini_app" && verb !== "mini_app_tool" && verb !== "system")) {
           return json(res, 400, {
             ok: false,
             refused: "unknown-command",

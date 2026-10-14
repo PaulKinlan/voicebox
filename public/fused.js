@@ -14,7 +14,6 @@ import { initExtensionsUI, renderExtensions } from "./extensions-ui.mjs";
 import { initSettingsUi } from "./settings-ui.mjs";
 import { createBoundedSeenSet, encodeVisionFrame } from "./vision-frame-encoder.mjs";
 import { drawInputWave, drawOutputRing, meterLevel, mixSpeechAndMic } from "./audio-meters.mjs";
-import { createBranchLandingController } from "./branch-landing-ui.mjs";
 import { createOfflineSpeechController } from "./offline-speech-client.mjs";
 import { createPresenceUIController } from "./presence-ui.mjs";
 import { createVisionGroundingController } from "./vision-grounding.mjs";
@@ -122,14 +121,6 @@ const WANTED = {
   changelogOpen: "changelog-open", changelogDialog: "changelog-dialog",
   changelogClose: "changelog-close", changelogRefresh: "changelog-refresh",
   changelogStatus: "changelog-status", changelogCommits: "changelog-commits",
-  branchesOpen: "branches-open", branchesBadge: "branches-badge",
-  branchLandingDialog: "branch-landing-dialog", branchLandingClose: "branch-landing-close",
-  branchRefreshBtn: "branch-refresh-btn", branchLandingStatus: "branch-landing-status",
-  branchesList: "branches-list", branchDetailPanel: "branch-detail-panel",
-  branchDetailName: "branch-detail-name", branchMergeBadge: "branch-merge-badge",
-  branchLandBtn: "branch-land-btn", branchKeepBtn: "branch-keep-btn",
-  branchActionResult: "branch-action-result", branchFilesCount: "branch-files-count",
-  branchFilesList: "branch-files-list", branchDiffViewer: "branch-diff-viewer",
   folderPath: "folder-path",
   themeToggle: "theme-toggle",
   themeSelect: "theme-select",
@@ -255,8 +246,7 @@ async function executeBrowserSystemCommand(cmd) {
     else if (p === "environments") els.envsOpen?.click?.();
     else if (p === "changelog") els.changelogOpen?.click?.();
     else if (p === "branches" || p === "waiting-branches") {
-      if (window.__voiceboxBranchLanding?.openDialog) window.__voiceboxBranchLanding.openDialog();
-      else els.branchesOpen?.click?.();
+      void openBranchLandingInspector();
     }
     else if (p === "agent-tracker") void openAgentProgressTracker();
     else if (p === "close") {
@@ -291,23 +281,13 @@ async function executeBrowserSystemCommand(cmd) {
     return { ok: true, action: "interrupt", message: "Stopped speaking." };
   }
   if (cmd.command === "show_waiting_branches") {
-    if (window.__voiceboxBranchLanding?.openDialog) {
-      window.__voiceboxBranchLanding.openDialog();
-    } else {
-      els.branchesOpen?.click?.();
-    }
+    void openBranchLandingInspector();
     return { ok: true, action: "show_waiting_branches" };
   }
   if (cmd.command === "land_branch") {
-    if (window.__voiceboxBranchLanding?.landSelectedBranch) {
-      void window.__voiceboxBranchLanding.landSelectedBranch();
-    }
     return { ok: true, action: "land_branch" };
   }
   if (cmd.command === "keep_branch_separate") {
-    if (window.__voiceboxBranchLanding?.keepSelectedBranchSeparate) {
-      void window.__voiceboxBranchLanding.keepSelectedBranchSeparate();
-    }
     return { ok: true, action: "keep_branch_separate" };
   }
   if (cmd.command === "compare_harnesses") {
@@ -2027,7 +2007,7 @@ let catalogMiniApps = [];
 
 async function refreshCatalogMiniApps() {
   try {
-    const res = await fetch("/api/mini-apps", { signal: AbortSignal.timeout(6000) });
+    const res = await fetch("/api/mini-apps?kind=app", { signal: AbortSignal.timeout(6000) });
     if (!res.ok) return;
     const data = await res.json().catch(() => null);
     if (data && Array.isArray(data.miniApps)) {
@@ -2050,6 +2030,7 @@ function syncMiniAppAfterFileSave(fileName, content) {
   const name = miniAppSyncName(fileName);
   if (!isHtmlFileName(name)) return;
   const norm = normalizeMiniAppKey(name);
+
   void fetch("/api/mini-apps", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -2350,6 +2331,14 @@ on(els.fileRunApp, "click", () => {
     source: "workspace",
     html,
   });
+  const name = miniAppSyncName(shownFile);
+  void fetch("/api/mini-apps", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ fileName: name, title: shownFile, html }),
+  }).then((r) => {
+    if (r.ok) void refreshCatalogMiniApps();
+  }).catch(() => {});
 });
 
 on(els.fileEdit, "click", () => {
@@ -3366,7 +3355,6 @@ installLightDismissFallback(els.envs);
 installLightDismissFallback(els.settings);
 installLightDismissFallback(els.harnessesDialog);
 installLightDismissFallback(els.changelogDialog);
-installLightDismissFallback(els.branchLandingDialog);
 
 // ── Harnesses modal dialog (voicebox-beads-f1o) ──────────────────────
 // The dialog's own surface — the host-inventory check, the harness rows and their actions, the config form,
@@ -3414,29 +3402,24 @@ const { openChangelogDialog } = initChangelogDialog({
 
 
 // ── Branch Landing Inspector (voicebox-beads-8kfa) ─────────────────────────
-const branchLandingController = createBranchLandingController({
-  openBtn: els.branchesOpen,
-  badgeEl: els.branchesBadge,
-  dialog: els.branchLandingDialog,
-  closeBtn: els.branchLandingClose,
-  refreshBtn: els.branchRefreshBtn,
-  statusEl: els.branchLandingStatus,
-  branchesList: els.branchesList,
-  detailPanel: els.branchDetailPanel,
-  detailName: els.branchDetailName,
-  mergeBadge: els.branchMergeBadge,
-  landBtn: els.branchLandBtn,
-  keepBtn: els.branchKeepBtn,
-  actionResult: els.branchActionResult,
-  filesCount: els.branchFilesCount,
-  filesList: els.branchFilesList,
-  diffViewer: els.branchDiffViewer,
-  onLanded: () => {
-    void loadListing();
-  },
-});
-window.__voiceboxBranchLanding = branchLandingController;
-void branchLandingController.fetchCandidates();
+async function openBranchLandingInspector() {
+  let html = "";
+  try {
+    const res = await fetch("/apps/landing-inspector.html");
+    if (res.ok) html = await res.text();
+  } catch { /* fallback below */ }
+  if (!html) {
+    html = `<!doctype html><html><body style="font-family:system-ui;padding:16px"><h2>Branch Landing Inspector</h2><p>Review and land candidate task branches.</p></body></html>`;
+  }
+  if (miniAppController) {
+    miniAppController.mount({
+      appId: "branch-landing-inspector",
+      title: "Branch Landing Inspector",
+      html,
+    });
+  }
+}
+window.__voiceboxOpenBranchInspector = openBranchLandingInspector;
 
 // ── Room Presence & Floor Control (voicebox-beads-2mi8) ────────────────────
 const presenceUIController = createPresenceUIController({

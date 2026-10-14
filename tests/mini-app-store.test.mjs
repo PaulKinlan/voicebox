@@ -662,7 +662,7 @@ describe("mini-app-store: persistence, in-place updates, deletion & cross-sandbo
     assert.equal(byFile.get("meeting-notes.html")?.title, "Meeting Notes", "a page keeps its own title, not a shelf app's");
     assert.equal(byFile.get("kanban.html")?.kind, "app", "a saved workspace app is an app");
     assert.equal(byFile.get("host-notes.html")?.kind, "app", "a shelf app is an app");
-    assert.equal(byFile.get("calc.html")?.kind, "app", "a sandbox file stays an app");
+    assert.equal(byFile.get("calc.html")?.kind, "page", "a sandbox file stays a page until explicitly saved or promoted");
 
     // The shelf record names the workspace file it was saved from, which is what proves it later.
     const meta = JSON.parse(readFileSync(path.join(hostDir, "mini-apps", "kanban.meta.json"), "utf8"));
