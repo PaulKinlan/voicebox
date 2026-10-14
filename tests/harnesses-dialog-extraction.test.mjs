@@ -117,91 +117,126 @@ test("on the real page: one check is exactly ONE /api/harnesses fetch, a listene
     { label: "the open-triggered host inventory check to finish" },
   );
 
-  // Count the inventory fetches. Exactly one per click is the double-wiring detector: a leftover copy of the
-  // old inline handler in fused.js would send two. The clone is taken BEFORE the real click, while the real
-  // button is enabled, so "the clone fetches nothing" is evidence about listeners and not about disabled.
-  const counted = await page.evaluate(async () => {
+  // Count the inventory fetches — WITH a 1200 ms delay injected on /api/harnesses (voicebox-beads-a8rg).
+  // This arm used to read the painted status and rows after a fixed 400 ms, which a slower inventory response
+  // turns into a FALSE failure (reproduced with a 1200 ms injection). The fix is to wait for the observable the
+  // assertions actually need, and the delay stays IN the arm so that independence from wall time is proven
+  // on every run rather than assumed. Exactly one fetch per click is the double-wiring detector: a leftover
+  // copy of the old inline handler in fused.js would send two.
+  const counts = await page.evaluate(() => {
     const realFetch = window.fetch;
-    const calls = [];
-    window.fetch = function countingFetch(input, init) {
+    window.__a8rgRealFetch = realFetch;
+    window.__a8rgCalls = [];
+    window.fetch = function delayedCountingFetch(input, init) {
       const url = typeof input === "string" ? input : input?.url ?? String(input);
-      calls.push(url);
-      return realFetch.call(this, input, init);
+      if (url.includes("/api/harnesses")) {
+        window.__a8rgCalls.push(url);
+        return new Promise((r) => setTimeout(r, 1200)).then(() => realFetch.call(window, input, init));
+      }
+      return realFetch.call(window, input, init);
     };
-    const count = () => calls.filter((u) => u.includes("/api/harnesses")).length;
     const btn = document.getElementById("harnesses-check");
     const clone = btn.cloneNode(true);
+    window.__a8rgClone = clone;
     btn.parentElement.appendChild(clone);
-    calls.length = 0;
+    window.__a8rgCalls.length = 0;
+    // Both counts are taken in the SAME TICK as the click: the handler issues its fetch synchronously, so a
+    // wired-but-hidden second path would show up here without waiting on anything. And the clone is taken while
+    // the real button is ENABLED, so "the clone fetches nothing" is evidence about listeners, not about disabled.
     btn.click();
-    await new Promise((r) => setTimeout(r, 400));
-    const first = count();
+    const afterReal = window.__a8rgCalls.length;
     clone.click();
-    await new Promise((r) => setTimeout(r, 300));
-    const afterClone = count() - first;
-    clone.remove();
-    window.fetch = realFetch;
-    return { first, afterClone, status: document.getElementById("harnesses-status")?.textContent ?? "", rows: document.getElementById("harnesses-list")?.childElementCount ?? 0 };
+    const afterClone = window.__a8rgCalls.length - afterReal;
+    return { first: afterReal, afterClone };
   });
-  assert.equal(counted.first, 1, "one click on the check button must be exactly one /api/harnesses fetch — two means a leftover wiring");
-  assert.equal(counted.afterClone, 0, "a listener-free clone must fetch nothing, which is what makes that count evidence about wiring rather than markup");
-  assert.match(counted.status, /harnesses ready on this host/, "the check must paint the host inventory it read");
-  assert.ok(counted.rows > 0, "and render the harness rows");
+  assert.equal(counts.first, 1, "one click on the check button must be exactly one /api/harnesses fetch — two means a leftover wiring");
+  assert.equal(counts.afterClone, 0, "a listener-free clone must fetch nothing, which is what makes that count evidence about wiring rather than markup");
+
+  // Now wait for the OBSERVABLE those assertions are about: the delayed inventory response actually painted.
+  // Under the injected delay this is the only reason the arm still passes; if the paint never arrives the wait
+  // throws rather than passing on a stale read (see the control test at the end of this file).
+  const painted = await page.waitFor(
+    () => {
+      const status = document.getElementById("harnesses-status")?.textContent ?? "";
+      const rows = document.getElementById("harnesses-list")?.childElementCount ?? 0;
+      return /harnesses ready on this host/.test(status) && rows > 0 ? { status, rows } : false;
+    },
+    { label: "the (deliberately delayed) host inventory response to be painted", timeout: 25000 },
+  );
+  await page.evaluate(() => {
+    window.__a8rgClone.remove();
+    window.fetch = window.__a8rgRealFetch;
+  });
+  assert.match(painted.status, /harnesses ready on this host/, "the check must paint the host inventory it read");
+  assert.ok(painted.rows > 0, "and render the harness rows");
 
   // THE SEAM, through the host's own path. __voiceboxOnTask writes lastHarnessOutput (the binding the host
   // kept) and calls renderHarnessChangedFiles (the callback the module returned). Both directions are
   // exercised by one call, and only the accessor PAIR can carry the value across.
-  const seam = await page.evaluate(async () => {
+  await page.evaluate(() => {
     const changed = document.getElementById("harness-changed-files");
     changed.hidden = true;
     window.__voiceboxOnTask({ output: "PROBE_TASK_OUTPUT", changedFiles: ["probe-changed-a.md"], agent: "probe", state: "running" });
-    await new Promise((r) => setTimeout(r, 150));
-    const afterTask = { hidden: changed.hidden, text: changed.textContent ?? "" };
+  });
+  // Wait for the observable, not for a delay: the task path paints through the RETURNED callback.
+  const taskPaint = await page.waitFor(
+    () => {
+      const el = document.getElementById("harness-changed-files");
+      const text = el?.textContent ?? "";
+      return el && !el.hidden && /probe-changed-a\.md/.test(text) ? { hidden: el.hidden, text } : false;
+    },
+    { label: "the task path's changed files to be painted through the returned callback", timeout: 15000 },
+  );
+  // The save handler READS the pair first: `if (!getLastHarnessOutput()) return;`. A sentinel in the status line
+  // makes that read observable, and the wait below is on the OBSERVABLE — the sentinel being replaced — not on a
+  // fixed 600 ms: a stale snapshot would leave the sentinel untouched and this wait FAILS, which is the same
+  // semantics as the explicit assertion it replaces.
+  await page.evaluate(() => {
+    window.__a8rgBodies = [];
     const realFetch = window.fetch;
-    const bodies = [];
-    window.fetch = function spy(input, init) {
-      if (init?.body) bodies.push(String(init.body));
+    window.__a8rgRealFetchSave = realFetch;
+    window.fetch = function bodySpy(input, init) {
+      if (init?.body) window.__a8rgBodies.push(String(init.body));
       return realFetch.call(this, input, init);
     };
-    // The save handler READS the pair first: `if (!getLastHarnessOutput()) return;`. A sentinel in the status
-    // line makes that read observable — a stale snapshot would leave the sentinel untouched, while a live pair
-    // lets the handler proceed (whether the save itself can succeed in this environment or not).
-    const status = document.getElementById("harness-loop-status");
-    status.textContent = "PROBE_SENTINEL_BEFORE_SAVE";
+    document.getElementById("harness-loop-status").textContent = "PROBE_SENTINEL_BEFORE_SAVE";
     document.getElementById("harness-save-output").hidden = false;
     document.getElementById("harness-save-output").click();
-    await new Promise((r) => setTimeout(r, 600));
-    window.fetch = realFetch;
-    return {
-      afterTask,
-      saveStatus: status.textContent ?? "",
-      changedAfterSave: changed.textContent ?? "",
-      bodies,
-    };
   });
-  assert.equal(seam.afterTask.hidden, false, "the returned renderHarnessChangedFiles must paint the dialog's changed-files element");
-  assert.match(seam.afterTask.text, /probe-changed-a\.md/, "with the file the task reported");
-  assert.notEqual(
-    seam.saveStatus,
-    "PROBE_SENTINEL_BEFORE_SAVE",
-    "the save handler must have got PAST its `if (!getLastHarnessOutput()) return;` — that read is the accessor pair, and a stale snapshot would leave this sentinel untouched",
+  const saveStatus = await page.waitFor(
+    () => {
+      const text = document.getElementById("harness-loop-status")?.textContent ?? "";
+      return text !== "PROBE_SENTINEL_BEFORE_SAVE" ? text : false;
+    },
+    { label: "the save handler to get past its read of the pair (a stale snapshot would leave the sentinel untouched)", timeout: 20000 },
   );
-  assert.match(seam.saveStatus, /Saved output to harness-analysis\.md|Could not save/, `the save must have been attempted against the value the host wrote: ${JSON.stringify(seam.saveStatus)}`);
-  if (seam.bodies.length > 0) {
-    assert.ok(seam.bodies.some((b) => b.includes("PROBE_TASK_OUTPUT")), "when the save goes over HTTP the body must carry the value the host wrote into the pair");
+  const saveRest = await page.evaluate(() => ({
+    bodies: window.__a8rgBodies,
+    changed: document.getElementById("harness-changed-files")?.textContent ?? "",
+  }));
+  await page.evaluate(() => {
+    window.fetch = window.__a8rgRealFetchSave;
+  });
+  assert.equal(taskPaint.hidden, false, "the returned renderHarnessChangedFiles must paint the dialog's changed-files element");
+  assert.match(taskPaint.text, /probe-changed-a\.md/, "with the file the task reported");
+  assert.match(saveStatus, /Saved output to harness-analysis\.md|Could not save/, `the save must have been attempted against the value the host wrote: ${JSON.stringify(saveStatus)}`);
+  if (saveRest.bodies.length > 0) {
+    assert.ok(saveRest.bodies.some((b) => b.includes("PROBE_TASK_OUTPUT")), "when the save goes over HTTP the body must carry the value the host wrote into the pair");
   }
-  if (/Saved output to harness-analysis\.md/.test(seam.saveStatus)) {
-    assert.match(seam.changedAfterSave, /harness-analysis\.md/, "and a successful save renders the saved name through the returned callback");
+  if (/Saved output to harness-analysis\.md/.test(saveStatus)) {
+    assert.match(saveRest.changed, /harness-analysis\.md/, "and a successful save renders the saved name through the returned callback");
   }
 
   // The miniAppController accessor must be LIVE: it is declared AFTER this surface in the host, so a snapshot
   // taken at init would be null and the tracker's mount would silently do nothing.
-  const tracker = await page.evaluate(async () => {
-    window.__voiceboxOpenAgentTracker();
-    await new Promise((r) => setTimeout(r, 500));
-    const frame = document.querySelector('#mini-app-viewport iframe, iframe#mini-app-outer-frame');
-    return { src: frame?.getAttribute("src") ?? "" };
-  });
+  await page.evaluate(() => window.__voiceboxOpenAgentTracker());
+  const tracker = await page.waitFor(
+    () => {
+      const frame = document.querySelector('iframe#mini-app-outer-frame[src*="appId=agent-progress-tracker"]');
+      return frame ? { src: frame.getAttribute("src") ?? "" } : false;
+    },
+    { label: "the agent tracker's mini-app to mount through the live controller", timeout: 20000 },
+  );
   assert.match(tracker.src, /appId=agent-progress-tracker/, "the tracker must mount the mini-app through the LIVE controller — a snapshot of miniAppController would be null here and nothing would mount");
 });
 
@@ -272,4 +307,47 @@ test("standalone with spies: the injected pair and the returned callbacks are th
   assert.ok(result.afterSave.loadRoomFolder > 0, "and refresh the room folder it wrote into");
   assert.deepEqual(result.afterSave.showFile, ["harness-analysis.md"], "and open the saved file");
   assert.ok(result.afterTracker.miniReads, "the tracker asks for the mini-app controller when it runs, so the accessor is never a stale handle");
+});
+
+// CONTROL for the waits above (voicebox-beads-a8rg). A wait that replaced a fixed delay must still FAIL CLOSED
+// when the state genuinely never arrives — otherwise every false failure becomes a hung suite instead of a red
+// one. This drives the same observable (the painted inventory) with an /api/harnesses response that NEVER
+// settles, and requires the same `page.waitFor` primitive the arm above uses to reject, bounded.
+// It runs last because it deliberately leaves the dialog's check disabled.
+test("control: the same wait still FAILS when the inventory genuinely never resolves", async () => {
+  await page.evaluate(() => {
+    const realFetch = window.fetch;
+    window.__a8rgRealFetchControl = realFetch;
+    window.fetch = function neverResolvingFetch(input, init) {
+      const url = typeof input === "string" ? input : input?.url ?? String(input);
+      if (url.includes("/api/harnesses")) return new Promise(() => {});
+      return realFetch.call(this, input, init);
+    };
+    const btn = document.getElementById("harnesses-check");
+    btn.disabled = false;
+    btn.click();
+  });
+
+  await assert.rejects(
+    () =>
+      page.waitFor(
+        () => {
+          const status = document.getElementById("harnesses-status")?.textContent ?? "";
+          return /harnesses ready on this host/.test(status) ? status : false;
+        },
+        { label: "an inventory that genuinely never resolves", timeout: 2500 },
+      ),
+    /timed out waiting for an inventory that genuinely never resolves/,
+    "the wait must reject rather than hang or pass: that is what keeps it a real assertion",
+  );
+
+  const state = await page.evaluate(() => ({
+    status: document.getElementById("harnesses-status")?.textContent ?? "",
+    disabled: document.getElementById("harnesses-check")?.disabled,
+  }));
+  assert.match(state.status, /Checking host programs|CONTROL/, "the control is honest: the check started and never completed");
+  assert.equal(state.disabled, true, "and the button is still disabled, which is what a never-resolving check looks like");
+  await page.evaluate(() => {
+    window.fetch = window.__a8rgRealFetchControl;
+  });
 });
