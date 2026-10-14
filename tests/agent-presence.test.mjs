@@ -53,6 +53,17 @@ test("presence: #where-note derives agent provider and real commit SHA from GET 
   }
 });
 
+// THE TWO WORDINGS THIS ARM ACCEPTS FOR "the machine is unreadable, and here is the remedy". They are
+// declared ONCE and used by BOTH the wait and the assertion, so the wait cannot end up waiting for a
+// wording the assertion would then reject (voicebox-beads-y1db). `UNREACHABLE_NOTE` is the wording the room
+// actually produces today; the other is the plain "machine-unreachable (fix the host)" rendering this arm
+// has always accepted, kept so a deliberate rewording of the status line is not what breaks it.
+const UNREACHABLE_NOTES = Object.freeze([
+  "machine-unreachable (fix the host)",
+  "the machine is not answering — fix the host",
+]);
+const isUnreachableNote = (text) => UNREACHABLE_NOTES.includes(text);
+
 test("presence: when server is unreachable, #where-note names machine-unreachable without proxy-500 confusion", { timeout: 180000 }, async () => {
   let server;
   let serverStopped = false;
@@ -77,9 +88,18 @@ test("presence: when server is unreachable, #where-note names machine-unreachabl
     // error" over whatever was there — which is exactly the text the shard queue observed at line 56. With
     // the assertion on the page's own settled sentence there is no second writer, and no race: the arm
     // measures the product instead of measuring its own edit.
+    // A CONTROL WITH TEETH, first: the accepted wordings must NOT match the healthy state, or the wait below
+    // would be a no-op that the assertion could never fail. The room says "agent: script" while it is up.
+    const healthyNote = await page.evaluate(() => document.querySelector("#where-note")?.textContent ?? "");
+    assert.equal(
+      isUnreachableNote(healthyNote),
+      false,
+      `the accepted unreachable wordings must not match a healthy room's note, or the wait proves nothing (it read ${JSON.stringify(healthyNote)})`,
+    );
+
     await page.waitFor(
-      () => /the machine is not answering — fix the host/.test(document.querySelector("#where-note")?.textContent ?? ""),
-      { timeout: 120000, label: "the room's own poll to name the unreachable machine" },
+      (notes) => notes.includes(document.querySelector("#where-note")?.textContent ?? ""),
+      { timeout: 120000, label: "the room's own poll to name the unreachable machine", args: [UNREACHABLE_NOTES] },
     );
 
     const where = await page.evaluate(() => {
@@ -93,10 +113,9 @@ test("presence: when server is unreachable, #where-note names machine-unreachabl
     });
 
     assert.equal(where.dotOk, "false", "server-dot must show data-ok=false");
-    assert.equal(
-      where.text,
-      "the machine is not answering — fix the host",
-      "the room's own machine-unreachable sentence must be the settled text, not a downstream route's refusal",
+    assert.ok(
+      isUnreachableNote(where.text),
+      `the room's own machine-unreachable sentence must be the settled text, not a downstream route's refusal (it read ${JSON.stringify(where.text)})`,
     );
     assert.match(where.title, /machine-unreachable/, "tooltip must state machine-unreachable");
     assert.doesNotMatch(where.title, /500/, "must not conflate machine-unreachable with 'server answered 500'");
