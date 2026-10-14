@@ -64,37 +64,192 @@ const withoutComments = (text) =>
     .replace(/\/\*[\s\S]*?\*\//g, (block) => block.replace(/[^\n]/g, " "))
     .replace(/<!--[\s\S]*?-->/g, (block) => block.replace(/[^\n]/g, " "));
 
+/** CSS-wide keywords, and the system-font keywords `font:` accepts: neither of those is a declared size. */
+const NOT_A_SIZE = /^(?:inherit|initial|unset|revert|revert-layer|caption|icon|menu|message-box|small-caption|status-bar)$/i;
+
+/** A length in any unit. `rem` and `px` are the two the floor can be computed in; every other unit is a size
+ *  this check cannot answer for, which is a refusal rather than a pass (voicebox-beads-94of). */
+const LENGTH = /(-?\d*\.?\d+)(px|rem|em|%|pt|pc|q|mm|cm|in|ch|ex|cap|ic|lh|rlh|vw|vh|vmin|vmax)/g;
+
 /**
- * Every font size a stylesheet declares, as {line, decl, px}. Reads `font-size: <length>` and the size slot
- * of the `font:` shorthand — `font: 13px/1.4 …`, but equally `font: 600 11px/1.4 …` or `font: italic 11px
- * …`, because the shorthand's size is the first length AFTER any style/variant/weight/stretch, not the first
- * token. (A regex anchored to the start of the value read only the first shape, which is how four sizes hid
- * here — the whole reason this scanner exists.) A value it cannot resolve to a number is reported with
- * `px: null` and is not a floor violation.
+ * Every custom property the file declares, by name, in EVERY scope — plus the pinned `--text-*` scale as the
+ * default a page may lean on without declaring it (public/style.css's `:root` owns the scale, and the pages
+ * that load it share the cascade). A scoped override is a real size for the elements it applies to, so all
+ * declared values are kept and the floor is applied to the smallest of them: that is what catches
+ * `.foot-fact { --text-xs: 0.6rem; font-size: var(--text-xs) }` (voicebox-beads-94of).
+ */
+function customProperties(text) {
+  const props = new Map();
+  const add = (name, value, line) => props.set(name, [...(props.get(name) ?? []), { value, line }]);
+  for (const [name, value] of Object.entries(TOKENS)) add(`--${name}`, value, 0);
+  text.split("\n").forEach((line, i) => {
+    for (const [, name, value] of line.matchAll(/(--[A-Za-z0-9_-]+)\s*:\s*([^;}]+)/g)) add(name, value.trim(), i + 1);
+  });
+  return props;
+}
+
+/** The `var(--x[, fallback])` calls in a value, with a nested fallback read to its own matching paren. */
+function varCalls(value) {
+  const calls = [];
+  let at = value.indexOf("var(");
+  while (at !== -1) {
+    let depth = 0;
+    let end = at;
+    for (; end < value.length; end++) {
+      if (value[end] === "(") depth++;
+      else if (value[end] === ")" && --depth === 0) {
+        end++;
+        break;
+      }
+    }
+    const body = value.slice(at + 4, end - 1);
+    let inner = 0;
+    let comma = -1;
+    for (let k = 0; k < body.length; k++) {
+      if (body[k] === "(") inner++;
+      else if (body[k] === ")") inner--;
+      else if (body[k] === "," && inner === 0) {
+        comma = k;
+        break;
+      }
+    }
+    calls.push({
+      name: (comma === -1 ? body : body.slice(0, comma)).trim(),
+      fallback: comma === -1 ? null : body.slice(comma + 1).trim(),
+    });
+    at = value.indexOf("var(", end);
+  }
+  return calls;
+}
+
+/**
+ * Every size a value can resolve to, as `{px, unresolved}`. A `var()` is resolved from the file's own
+ * declarations — all scopes — or from the pinned scale; failing both, its fallback is followed; failing
+ * that too, the size is UNRESOLVED and reported, never quietly passed. A floor check that cannot see a
+ * size is the defect this file exists to prevent, so the instrument never answers "fine" to a question it
+ * could not read (voicebox-beads-94of).
+ */
+function resolveValue(value, props, depth = 0) {
+  const out = { sizes: [], unresolved: [] };
+  if (depth > 5) {
+    out.unresolved.push(value.trim());
+    return out;
+  }
+  const trimmed = value.trim();
+  if (NOT_A_SIZE.test(trimmed)) return out;
+  for (const [, number, unit] of trimmed.matchAll(LENGTH)) {
+    if (unit === "rem" || unit === "px") {
+      out.sizes.push({ px: unit === "rem" ? parseFloat(number) * 16 : parseFloat(number), via: null });
+    } else {
+      out.unresolved.push(`${number}${unit}`);
+    }
+  }
+  for (const { name, fallback } of varCalls(trimmed)) {
+    const declared = props.get(name) ?? [];
+    const candidates = declared.length > 0 ? declared : fallback === null ? [] : [{ value: fallback, line: 0 }];
+    if (candidates.length === 0) {
+      out.unresolved.push(`var(${name})`);
+      continue;
+    }
+    for (const candidate of candidates) {
+      const resolved = resolveValue(candidate.value, props, depth + 1);
+      for (const size of resolved.sizes) {
+        // A size that came out of a custom property is attributed to the DECLARATION that set it, so a
+        // refusal names the cause rather than every use site of that token (voicebox-beads-94of).
+        out.sizes.push({ px: size.px, via: size.via ?? { name, value: candidate.value, line: candidate.line } });
+      }
+      out.unresolved.push(...resolved.unresolved);
+    }
+  }
+  return out;
+}
+
+/**
+ * The size slot of a `font:` shorthand: the first length or `var()`, after any style/variant/weight/stretch
+ * (`font: 600 11px/1.4 …`, `font: var(--text-xs)/1.45 …`). `null` when the value declares no size at all —
+ * `font: inherit`, or a system font such as `font: menu` — which is not a floor question.
+ */
+function shorthandSize(value) {
+  const SIZE = /^-?\d*\.?\d+(px|rem|em|%|pt|pc|q|mm|cm|in|ch|ex|cap|ic|lh|rlh|vw|vh|vmin|vmax)$/;
+  let at = 0;
+  while (at < value.length) {
+    while (at < value.length && /\s/.test(value[at])) at++;
+    if (at >= value.length) return null;
+    let token;
+    if (value.startsWith("var(", at)) {
+      let depth = 0;
+      let end = at;
+      for (; end < value.length; end++) {
+        if (value[end] === "(") depth++;
+        else if (value[end] === ")" && --depth === 0) {
+          end++;
+          break;
+        }
+      }
+      token = value.slice(at, end);
+      at = end;
+    } else {
+      let end = at;
+      while (end < value.length && !/\s/.test(value[end])) end++;
+      token = value.slice(at, end);
+      at = end;
+    }
+    const head = token.split("/")[0];
+    if (head.startsWith("var(") || SIZE.test(head)) return head;
+  }
+  return null;
+}
+
+/**
+ * Every size a stylesheet declares, as `{line, decl, px, why}` — one entry per size it resolves to, plus one
+ * entry per size it could not resolve (`px: null`, with the reason in `why`). Reads `font-size: <value>` and
+ * the size slot of the `font:` shorthand; values carried by a custom property are resolved, so a sub-12px
+ * size cannot travel through a token, a scoped override, or a nested fallback unseen.
  */
 function declaredSizes(text) {
+  const clean = withoutComments(text);
+  const props = customProperties(clean);
   const out = [];
-  const length = /(\d*\.?\d+)(rem|px)/g;
-  const toPx = (num, unit) => (unit === "rem" ? num * 16 : num);
-  withoutComments(text).split("\n").forEach((line, i) => {
+  clean.split("\n").forEach((line, i) => {
     for (const match of line.matchAll(/(?:^|[\s;{"'])(font-size|font)\s*:\s*([^;}"']+)/g)) {
       const [, prop, value] = match;
-      if (prop === "font") {
-        const size = /(?:^|\s)(\d*\.?\d+)(rem|px)(?=\s*\/|\s|$)/.exec(value);
-        if (size) {
-          out.push({ line: i + 1, decl: `${prop}:${value.trim()}`, px: toPx(parseFloat(size[1]), size[2]) });
-        }
-        continue;
-      }
-      for (const size of value.matchAll(length)) {
-        out.push({ line: i + 1, decl: `${prop}: ${value.trim()}`, px: toPx(parseFloat(size[1]), size[2]) });
+      const size = prop === "font" ? shorthandSize(value) : value.trim();
+      if (size === null) continue;
+      const { sizes, unresolved } = resolveValue(size, props);
+      const decl = `${prop}: ${value.trim()}`;
+      for (const { px, via } of sizes) out.push({ line: i + 1, decl, px, via, why: null });
+      for (const unknown of unresolved) {
+        out.push({ line: i + 1, decl, px: null, via: null, why: `cannot be resolved: ${unknown}` });
       }
     }
   });
   return out;
 }
 
-const belowFloor = (text) => declaredSizes(text).filter((d) => d.px !== null && d.px < FLOOR_PX);
+/** Every declaration the floor refuses: a size below it, or a size this check could not resolve at all. */
+const belowFloor = (text) => declaredSizes(text).filter((d) => d.px === null || d.px < FLOOR_PX);
+
+/**
+ * A refusal a person can act on, one line per CAUSE. A size that arrived through a custom property is
+ * reported at the declaration that set it, with the first use site, and the rest of the file's uses of that
+ * same token collapse into one line instead of one per site.
+ */
+function floorReport(label, text) {
+  const causes = new Map();
+  for (const d of belowFloor(text)) {
+    const key = d.via ? `${label}:${d.via.line}:${d.via.name}` : `${label}:${d.line}:${d.decl}`;
+    causes.set(key, [...(causes.get(key) ?? []), d]);
+  }
+  return [...causes.values()].map((uses) => {
+    // Prefer the use site on the declaration's own line (a one-liner override); otherwise the first one.
+    const d = uses.find((u) => u.via && u.line === u.via.line) ?? uses[0];
+    if (d.px === null) return `${label}:${d.line} ${d.decl} — ${d.why}`;
+    if (!d.via) return `${label}:${d.line} ${d.decl} = ${d.px}px`;
+    const sites = new Set(uses.map((u) => u.line)).size;
+    const more = sites > 1 ? ` (and ${sites - 1} more site${sites > 2 ? "s" : ""} using ${d.via.name})` : "";
+    return `${label}:${d.via.line} ${d.via.name}: ${d.via.value} = ${d.px}px — used by \`${d.decl}\` at line ${d.line}${more}`;
+  });
+}
 
 /** The surfaces that declare the scale themselves: the room owns the full scale, and the pages that stand
  *  alone carry the floor token their own rules reference (they do not load style.css). */
@@ -119,13 +274,39 @@ test("the room declares the legible type scale as named tokens with a 0.75rem fl
 test("no shipped surface declares a font size below the 12px floor", () => {
   assert.ok(SURFACES.length >= 15, `the surface list must enumerate the shipped trees, got ${SURFACES.length}`);
   for (const [label, file] of SURFACES) {
-    const offenders = belowFloor(readFileSync(file, "utf8"));
+    const report = floorReport(label, readFileSync(file, "utf8"));
     assert.deepEqual(
-      offenders.map((d) => `${label}:${d.line} ${d.decl} = ${d.px}px`),
+      report,
       [],
-      `${label} must declare no font size below ${FLOOR_PX}px — lift it to var(--text-xs) (voicebox-beads-3674); above is the full list`,
+      `${label} must declare no size below ${FLOOR_PX}px and no size this check cannot resolve (express it in rem or px, or via a --text-* token) — voicebox-beads-3674; above is the full list`,
     );
   }
+});
+
+test("the floor scanner refuses a sub-12px size carried by a custom property (voicebox-beads-94of)", () => {
+  // The mutant the reviewer filed: the size never appears as a literal in the declaration, so a
+  // literal-only scan passes it while the browser renders 9.6px on a shipped page.
+  assert.equal(belowFloor(`.foot-fact { --text-xs: 0.6rem; font-size: var(--text-xs); }`).length, 1,
+    "a scoped override of a pinned token that goes below the floor must be refused");
+  assert.equal(belowFloor(`:root { --text-2xs: 0.65rem; } .x { font-size: var(--text-2xs); }`).length, 1,
+    "a brand-new token that goes below the floor must be refused");
+  assert.equal(belowFloor(`.x { font-size: var(--mystery); }`).length, 1,
+    "a size the scanner cannot resolve must be refused, not silently passed");
+  assert.equal(belowFloor(`.x { font-size: 1.2em; }`).length, 1,
+    "a size in a unit the floor cannot be computed in must be refused, not silently passed");
+  assert.equal(belowFloor(`.x { font: var(--tiny)/1.4 monospace; }`).length, 1,
+    "the same must hold for the size slot of the font: shorthand");
+
+  // The honest shapes stay green: the refusal must not be a check that always fails.
+  assert.deepEqual(belowFloor(`:root { --text-2xs: 0.75rem; } .x { font-size: var(--text-2xs); }`), [],
+    "a new token AT the floor is fine");
+  assert.deepEqual(belowFloor(`.x { font-size: var(--text-xs); }`), [], "the pinned token is fine");
+  assert.deepEqual(belowFloor(`.x { font-size: var(--nope, var(--text-xs)); }`), [],
+    "an unknown token with a fallback to the pinned scale is fine — public/style.css carries this shape");
+  assert.deepEqual(belowFloor(`.x { font-size: var(--text-xs, 0.75rem); }`), [], "a literal fallback is fine");
+  assert.deepEqual(belowFloor(`.x { font: 13px/1.4 var(--mono, monospace); }`), [],
+    "a var in the shorthand's FAMILY is not the size slot");
+  assert.deepEqual(belowFloor(`.x { font: inherit; }`), [], "a CSS-wide keyword declares no size");
 });
 
 test("the room's .sr-only clips instead of scrolling (voicebox-beads-dche)", () => {
