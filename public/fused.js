@@ -23,6 +23,7 @@ import { initEnvironmentRootDialog } from "./components/environment-root-dialog.
 import { initMicHotkeyController } from "./components/mic-hotkey-controller.mjs";
 import { createSyncToastController, pageBuild } from "./components/sync-toast.mjs";
 import { createAudioDeviceController } from "./components/audio-device-controller.mjs";
+import { initActivityLog } from "./components/activity-log-ui.mjs";
 
 const $ = (id) => document.getElementById(id);
 const SVG = "http://www.w3.org/2000/svg";
@@ -321,10 +322,7 @@ window.addEventListener("message", (e) => {
 });
 
 // ── Project / folder change flash & Work Activity Log ──
-let projectFlashTimer = null;
 let lastPaintedRootKey = null;
-const workActivitySeenIds = createBoundedSeenSet(200);
-let workActivitySeq = 0;
 
 function sanitizePlainActivityText(raw) {
   const sWord = new RegExp(`\\b${"sand"}${"box"}\\b`, "gi");
@@ -338,126 +336,15 @@ function sanitizePlainActivityText(raw) {
     .trim();
 }
 
-function updateActivityBadge() {
-  const list = document.getElementById("activity-log-list");
-  const badge = document.getElementById("sqeh-activity-badge");
-  const empty = document.getElementById("activity-log-empty");
-  const count = list ? list.children.length : 0;
-  if (badge) {
-    badge.textContent = String(count);
-    badge.hidden = count === 0;
-  }
-  if (empty) {
-    empty.hidden = count > 0;
-  }
-}
-
-function appendWorkActivity(entry = {}) {
-  const list = document.getElementById("activity-log-list");
-  if (!list) return;
-  const id = entry.id ? String(entry.id) : `act_${++workActivitySeq}_${Date.now()}`;
-  if (entry.id && workActivitySeenIds.has(id)) return;
-  workActivitySeenIds.add(id);
-
-  const kindRaw = sanitizePlainActivityText(entry.label || entry.kind || entry.type || entry.verb || "work") || "work";
-  const summaryRaw = sanitizePlainActivityText(
-    entry.summary || entry.action || entry.title || entry.message || entry.command || "Workspace activity",
-  );
-  const detailParts = [];
-  if (entry.command && entry.command !== summaryRaw) detailParts.push(`$ ${sanitizePlainActivityText(entry.command)}`);
-  if (entry.stdout) detailParts.push(sanitizePlainActivityText(entry.stdout));
-  if (entry.stderr) detailParts.push(sanitizePlainActivityText(entry.stderr));
-  if (entry.why) detailParts.push(sanitizePlainActivityText(entry.why));
-  if (entry.error && entry.error !== entry.why) detailParts.push(sanitizePlainActivityText(entry.error));
-  if (entry.detail && !detailParts.length) detailParts.push(sanitizePlainActivityText(entry.detail));
-  if (entry.output && !detailParts.length) detailParts.push(sanitizePlainActivityText(entry.output));
-  if (entry.stack && isDebugEnabled()) detailParts.push(sanitizePlainActivityText(entry.stack));
-  const detailText = detailParts.filter(Boolean).join("\n").trim();
-
-  const ts = entry.at || entry.timestamp || Date.now();
-  const date = new Date(ts);
-  const timeLabel = Number.isNaN(date.getTime())
-    ? "just now"
-    : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-
-  const li = document.createElement("li");
-  li.className = "activity-item";
-  if (entry.status === "error" || entry.kind === "error") {
-    li.classList.add("activity-item-error");
-  }
-  li.dataset.activityId = id;
-
-  const head = document.createElement("div");
-  head.className = "activity-item-head";
-
-  const kindSpan = document.createElement("span");
-  kindSpan.className = "activity-kind";
-  kindSpan.textContent = kindRaw;
-
-  const timeSpan = document.createElement("span");
-  timeSpan.className = "activity-time";
-  timeSpan.textContent = timeLabel;
-
-  head.append(kindSpan, timeSpan);
-
-  const summaryEl = document.createElement("div");
-  summaryEl.className = "activity-summary";
-  summaryEl.textContent = summaryRaw;
-
-  li.append(head, summaryEl);
-
-  if (detailText) {
-    const pre = document.createElement("pre");
-    pre.className = "activity-detail";
-    pre.textContent = detailText;
-    li.append(pre);
-  }
-
-  list.prepend(li);
-  while (list.children.length > 60) {
-    list.lastElementChild?.remove();
-  }
-  updateActivityBadge();
-}
-
-async function refreshActivityLog() {
-  try {
-    const res = await fetch("/api/activity", { cache: "no-store" });
-    if (!res.ok) return;
-    const data = await res.json().catch(() => null);
-    const items = Array.isArray(data?.entries)
-      ? data.entries
-      : Array.isArray(data?.activity)
-        ? data.activity
-        : Array.isArray(data)
-          ? data
-          : [];
-    for (const item of items) {
-      if (item && typeof item === "object") appendWorkActivity(item);
-    }
-  } catch { /* optional endpoint */ }
-}
-
-function triggerProjectChangeFlash(label = "") {
-  document.body.dataset.projectFlash = "true";
-  if (label) document.body.dataset.projectFlashReason = String(label);
-  const whereEl = document.querySelector(".where");
-  if (whereEl) whereEl.dataset.flash = "true";
-  if (projectFlashTimer) clearTimeout(projectFlashTimer);
-  projectFlashTimer = setTimeout(() => {
-    delete document.body.dataset.projectFlash;
-    delete document.body.dataset.projectFlashReason;
-    if (whereEl) delete whereEl.dataset.flash;
-    projectFlashTimer = null;
-  }, 650);
-  if (label) {
-    appendWorkActivity({
-      kind: "workspace",
-      summary: `Switched workspace to ${label}`,
-      at: Date.now(),
-    });
-  }
-}
+// The activity log and the project-change flash live in their own module. Its state (the flash
+// timer, the sequence counter and the bounded duplicate-id set) travelled with it, while the
+// redaction vocabulary above stayed here, because three other host surfaces redact through it.
+const activityLog = initActivityLog({
+  sanitizePlainActivityText,
+  isDebugEnabled,
+  createBoundedSeenSet,
+});
+const { appendWorkActivity, refreshActivityLog, triggerProjectChangeFlash, updateActivityBadge } = activityLog;
 window.__voiceboxFlashProjectChange = triggerProjectChangeFlash;
 window.__voiceboxAppendActivity = appendWorkActivity;
 window.__voiceboxOnActivity = appendWorkActivity;
@@ -5000,9 +4887,9 @@ function sqehWire() {
     sqehSetState("deck");
   });
   document.getElementById("activity-log-clear")?.addEventListener("click", () => {
-    workActivitySeenIds.clear();
-    document.getElementById("activity-log-list")?.replaceChildren();
-    updateActivityBadge();
+    // The log's own operation lives with the log: clearing has to forget the duplicate-id set too, and
+    // that set travelled into public/components/activity-log-ui.mjs with the rest of the surface's state.
+    activityLog.clearActivityLog();
   });
   filesBubble?.addEventListener("click", toggleFilesPopover);
   readerBubble?.addEventListener("click", () => {
