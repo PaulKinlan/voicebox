@@ -90,3 +90,25 @@ test("public/index.html includes system check doctor elements and passes plain-l
     `Expected 0 plain-language hits in settings-debug-group, got: ${JSON.stringify(hits)}`,
   );
 });
+
+test("doctor route unwraps { ok: true, entries } and admits state: configured harnesses (voicebox-beads-cs4l)", async () => {
+  let capturedBody = null;
+  const routes = createDoctorRoutes({
+    getActive: () => ({ project: "p", root: { kind: "machine", path: "/tmp" } }),
+    getApiKeys: () => ({ ok: true, keys: {} }),
+    getHarnessInventory: async () => ({
+      ok: true,
+      entries: [
+        { id: "claude", name: "Claude Code", state: "configured", delegation: { ok: true } },
+        { id: "pi", name: "Pi coding agent", state: "present", delegation: { ok: true } },
+        { id: "aider", name: "Aider", state: "absent" },
+      ],
+    }),
+    json: (_res, _status, body) => { capturedBody = body; return body; },
+  });
+
+  await routes["GET /api/doctor"]({}, {});
+  const harnessCheck = capturedBody.checks.find((c) => c.id === "coding_harnesses");
+  assert.equal(harnessCheck.status, "ok");
+  assert.match(harnessCheck.detail, /2 detected: Claude Code, Pi coding agent/);
+});

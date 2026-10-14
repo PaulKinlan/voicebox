@@ -54,8 +54,13 @@ function protocolHarness(options = {}) {
           if (options.requestPermission) {
             state.receive({ jsonrpc: "2.0", id: "perm-1", method: "session/request_permission", params: {
               sessionId: state.session,
-              title: `Permission: ${options.requestPermission.tool}`,
-              toolCall: { name: options.requestPermission.tool },
+              title: options.requestPermission.title ?? `Permission: ${options.requestPermission.tool}`,
+              toolCall: {
+                name: options.requestPermission.tool,
+                title: options.requestPermission.toolTitle ?? options.requestPermission.tool,
+                rawInput: options.requestPermission.rawInput,
+                locations: options.requestPermission.locations,
+              },
               options: [{ optionId: "a", kind: "allow_once" }],
             } });
           }
@@ -282,5 +287,117 @@ test("diagnostics: when the spawned ACP process writes to stderr and exits non-z
     },
   );
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("workspace-scoped default decider allows in-workspace files and refuses escaping paths (voicebox-beads-cs4l)", async () => {
+  const dir = stubAdapterDir();
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "vb-work-"));
+
+  // 1. In-workspace tool call is allowed
+  const allowedHarness = protocolHarness({
+    requestPermission: {
+      tool: "write_file",
+      toolTitle: "Write src/app.js",
+      rawInput: { file_path: "src/app.js" },
+    },
+  });
+  const reports = [];
+  const executor = createClaudeAcpExecutor({
+    adapterDir: dir,
+    transportFactory: () => ({ transport: allowedHarness.transport, kill: () => {} }),
+  });
+  await executor.run({
+    input: { task: "edit" },
+    root: { path: workDir, kind: "git" },
+    report: (msg) => reports.push(msg),
+  });
+  assert.equal(allowedHarness.state.permissions.length, 1);
+  assert.equal(allowedHarness.state.permissions[0]?.outcome?.outcome, "selected");
+  assert.ok(reports.some((r) => r.includes("claude-code: using tool Write src/app.js")));
+
+  // 2. Out-of-workspace tool call is denied
+  const deniedHarness = protocolHarness({
+    requestPermission: {
+      tool: "write_file",
+      toolTitle: "Write /etc/shadow",
+      rawInput: { file_path: "/etc/shadow" },
+    },
+  });
+  const deniedExecutor = createClaudeAcpExecutor({
+    adapterDir: dir,
+    transportFactory: () => ({ transport: deniedHarness.transport, kill: () => {} }),
+  });
+  await deniedExecutor.run({
+    input: { task: "escape" },
+    root: { path: workDir, kind: "git" },
+  });
+  assert.equal(deniedHarness.state.permissions.length, 1);
+  assert.equal(deniedHarness.state.permissions[0]?.outcome?.outcome, "cancelled");
+
+  fs.rmSync(workDir, { recursive: true, force: true });
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("reach scoping: empty tools array allows all tools, and Claude tool names map to reach categories (voicebox-beads-cs4l)", async () => {
+  const dir = stubAdapterDir();
+
+  // 1. Empty tools array allows all tools
+  const emptyToolsHarness = protocolHarness({
+    requestPermission: { tool: "Write", toolTitle: "Write test.txt" },
+  });
+  const executor = createClaudeAcpExecutor({
+    adapterDir: dir,
+    transportFactory: () => ({ transport: emptyToolsHarness.transport, kill: () => {} }),
+  });
+  await executor.run({
+    input: { task: "write" },
+    agentConfig: { reach: { tools: [] } },
+  });
+  assert.equal(emptyToolsHarness.state.permissions[0]?.outcome?.outcome, "selected");
+
+  // 2. Claude tool 'Write' mapped to 'write' reach category
+  const writeMappedHarness = protocolHarness({
+    requestPermission: { tool: "Write", toolTitle: "Write file" },
+  });
+  const writeExecutor = createClaudeAcpExecutor({
+    adapterDir: dir,
+    transportFactory: () => ({ transport: writeMappedHarness.transport, kill: () => {} }),
+  });
+  await writeExecutor.run({
+    input: { task: "write" },
+    agentConfig: { reach: { tools: ["write"] } },
+  });
+  assert.equal(writeMappedHarness.state.permissions[0]?.outcome?.outcome, "selected");
+
+  // 3. Claude tool 'Bash' denied when 'bash' not in reach
+  const bashDeniedHarness = protocolHarness({
+    requestPermission: { tool: "Bash", toolTitle: "Run echo" },
+  });
+  const bashExecutor = createClaudeAcpExecutor({
+    adapterDir: dir,
+    transportFactory: () => ({ transport: bashDeniedHarness.transport, kill: () => {} }),
+  });
+  await bashExecutor.run({
+    input: { task: "bash" },
+    agentConfig: { reach: { tools: ["write"] } },
+  });
+  assert.equal(bashDeniedHarness.state.permissions[0]?.outcome?.outcome, "cancelled");
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("resolveClaudeCli and npxOnPath expand leading tilde (voicebox-beads-cs4l)", () => {
+  const testDir = path.join(os.homedir(), ".voicebox-test-tilde-" + Date.now());
+  fs.mkdirSync(testDir, { recursive: true });
+  const scriptPath = path.join(testDir, "fake-claude");
+  fs.writeFileSync(scriptPath, "#!/bin/sh\necho 1.0.0\n", { mode: 0o755 });
+  try {
+    const tildePath = "~/" + path.relative(os.homedir(), scriptPath);
+    const resolved = resolveClaudeCli({ claudeCli: tildePath });
+    assert.equal(resolved.ok, true);
+    assert.equal(resolved.path, scriptPath);
+  } finally {
+    fs.rmSync(testDir, { recursive: true, force: true });
+  }
 });
 

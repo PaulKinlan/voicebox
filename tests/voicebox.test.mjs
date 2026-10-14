@@ -299,8 +299,13 @@ test("the page references only files that exist in public/", () => {
   for (const m of css.matchAll(/url\("([^"]+)"\)/g)) refs.add(m[1]);
   for (const ref of refs) {
     if (/^https?:/.test(ref)) continue;
-    const file = path.join(ROOT, "public", ref);
+    const [relPath, hash] = ref.split("#");
+    const file = path.join(ROOT, "public", relPath);
     assert(existsSync(file), `the page references ${ref} and it does not exist — a silent miss`);
+    if (hash && file.endsWith(".html")) {
+      const html = readFileSync(file, "utf8");
+      assert(html.includes(`id="${hash}"`), `the page references ${ref} but #${hash} does not exist in ${relPath}`);
+    }
   }
 });
 

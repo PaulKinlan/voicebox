@@ -246,7 +246,9 @@ export function validateConfiguredAgent(
 
   // 7. Validate bounds
   const rawBounds = (o.bounds && typeof o.bounds === "object" ? o.bounds : {}) as Record<string, unknown>;
-  const deadlineMs = Number(rawBounds.deadlineMs ?? 60000);
+  const isClaude = harness === "claude" || harness === "claude-code" || adapter === "claude-code" || adapter === "claude";
+  const defaultDeadline = isClaude ? 120000 : 60000;
+  const deadlineMs = Number(rawBounds.deadlineMs ?? defaultDeadline);
   const maxOutputBytes = Number(rawBounds.maxOutputBytes ?? 65536);
   if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 100 || deadlineMs > 600000) {
     return { ok: false, refused: "bad-request", why: "deadlineMs must be between 100 and 600000 ms" };

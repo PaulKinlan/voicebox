@@ -63,7 +63,7 @@ import { redactSecrets, redactObject } from "./lib/redact.mjs";
 import { timingSafeStringEqual } from "./lib/timing-safe.mjs";
 import { MiniAppRegistry, validateMiniAppToolArgs } from "./lib/mini-app-host.mjs";
 import { saveMiniApp, discoverMiniApps, getMiniApp, deleteMiniApp } from "./lib/mini-app-store.mjs";
-import { createClaudeAcpExecutor, describeClaudeAdapterInstall } from "./lib/claude-acp.mjs";
+import { createClaudeAcpExecutor, describeClaudeAdapterInstall, CLAUDE_ACP_TIMEOUT_CEILING_MS } from "./lib/claude-acp.mjs";
 import {
   createAntigravityExecutor,
   createCodexExecutor,
@@ -909,6 +909,21 @@ const serverAgentStorage = {
   },
 };
 const agentRegistry = createAgentRegistry({ storage: serverAgentStorage });
+try {
+  for (const agent of agentRegistry.list()) {
+    if ((agent.harness === "claude" || agent.harness === "claude-code" || agent.adapter === "claude-code" || agent.adapter === "claude") &&
+        Number(agent.bounds?.deadlineMs ?? 0) < CLAUDE_ACP_TIMEOUT_CEILING_MS) {
+      agentRegistry.update(agent.id, {
+        bounds: {
+          ...agent.bounds,
+          deadlineMs: CLAUDE_ACP_TIMEOUT_CEILING_MS,
+        },
+      });
+    }
+  }
+} catch (err) {
+  serverLog("harness", `Failed to migrate claude agents to default timeout ceiling: ${err?.message}`);
+}
 
 // ── WORK ACTIVITY RING BUFFER & LIVE STREAM (voicebox-beads-okgg, voicebox-beads-5319) ────────
 const MAX_ACTIVITY_ENTRIES = 200;
@@ -1280,6 +1295,7 @@ const piExecutor = createPiAcpExecutor({
   onProjectIntegration: broadcastHarnessIntegration,
 });
 const claudeExecutor = createClaudeAcpExecutor({
+  root: () => active?.root,
   onProjectIntegration: broadcastHarnessIntegration,
 });
 const antigravityExecutor = createAntigravityExecutor({ root: () => active?.root, onProjectIntegration: broadcastHarnessIntegration });
@@ -1384,6 +1400,8 @@ function activateHarnessInProcess(harnessId, options = {}) {
       : (typeof options.id === "string" && options.id.trim() && !isAliasId
           ? options.id.trim()
           : preset.id);
+    const isClaude = preset.harness === "claude" || preset.harness === "claude-code" || preset.adapter === "claude-code" || preset.adapter === "claude";
+    const defaultDeadline = isClaude ? CLAUDE_ACP_TIMEOUT_CEILING_MS : 60000;
     const agentSpec = {
       id: agentId,
       name: typeof options.name === "string" && options.name.trim() ? options.name.trim() : preset.name,
@@ -1392,6 +1410,7 @@ function activateHarnessInProcess(harnessId, options = {}) {
       transport: "stdio",
       environmentKey: SELF_ENVIRONMENT,
       isDefault: options.isDefault !== false,
+      bounds: options.bounds ?? { deadlineMs: defaultDeadline, maxOutputBytes: 65536 },
       ...(typeof options.description === "string" ? { description: options.description } : {}),
       ...(typeof options.url === "string" && options.url.trim() ? { url: options.url.trim() } : {}),
     };
