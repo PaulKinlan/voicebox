@@ -28,13 +28,29 @@
 //   4. NEGATIVE CONTROL — the assertions above are not vacuous. Dropping the button's listeners
 //      (cloneNode copies markup, never listeners) must make the click do nothing at all, which is why
 //      1–3 can only be passing because fused.js called initEnvironmentRootDialog().
+//
+//   5. THE ax2v ORDERING SURVIVES THE EXTRACTION (voicebox-beads-3auh). gate-recover's ax2v fix moved
+//      the repaint (`loadRoot()`/`load()`) ahead of the "Machine root set to …" line, because the dialog
+//      could otherwise announce success while its own root line still read the previous root. The
+//      extraction was taken from BEFORE that fix, so integrating them naively reverted it. The
+//      behavioural half of the guard is gate-recover's own control in tests/environment-integrated-ui.test.mjs
+//      (it delays the /api/root GET by 400ms to force the window open) and it was driven RED against the
+//      pre-ax2v ordering of THIS module. The static arm below is the deterministic half: a timing-based
+//      control only catches a reorder when the delayed fetch actually interleaves, so the ORDER itself is
+//      asserted here, inside the one handler that owns it.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { startServer } from "./lib/server.mjs";
 import { launch } from "./lib/cdp.mjs";
+
+// The static arm below reads the module this file is about, so it needs its own path: unlike the
+// changelog extraction test this file had no ROOT constant, and referring to one that does not exist is
+// how that arm first went red on a CORRECT tree (a ReferenceError, not an assertion).
+const MODULE = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public", "components", "environment-root-dialog.mjs");
 
 const PICKED = "extraction-probe-folder";
 
@@ -163,4 +179,31 @@ test("environment root dialog extraction: one live-wired handler, and a listener
     } catch {}
     rmSync(scratch, { recursive: true, force: true });
   }
+});
+
+// The deterministic half of the ax2v guard (see point 5 in the header): whatever the timing, this
+// module's declare-root handler must clear the path box and repaint the dialog's own root line BEFORE it
+// writes the success line. Driven RED by restoring the pre-ax2v order in the module, which is exactly the
+// state a naive merge of this extraction with the ax2v fix produces.
+test("the extracted declare-root handler repaints before it announces, as ax2v ordered (voicebox-beads-3auh)", () => {
+  const src = readFileSync(MODULE, "utf8");
+  const start = src.indexOf("on(els.envDeclareRootBtn");
+  assert.ok(start > -1, "the module must still own the declare-root handler");
+
+  // Anchor on the CODE, not on prose: the comment above this handler quotes the same sentence ("Machine
+  // root set to <path>"), and anchoring on that text measured the comment's position instead of the
+  // write's — which made this arm fail on a correct tree when it was first written.
+  const success = src.indexOf("Machine root set to ${res.root?.path", start);
+  const repaint = src.indexOf("await loadRoot();", start);
+  const reload = src.indexOf("await load();", start);
+  const clearBox = src.indexOf('els.envRootPathInput.value = ""', start);
+  assert.ok(
+    success > -1 && repaint > -1 && reload > -1 && clearBox > -1,
+    "the handler must still clear the path box, repaint the root line and write the success line",
+  );
+  assert.ok(
+    repaint < success && reload < success,
+    "the repaint (loadRoot then load) must run BEFORE the success line is written — otherwise the dialog can announce a root its own root line has not drawn yet, which is the voicebox-beads-ax2v symptom",
+  );
+  assert.ok(clearBox < repaint, "and the path box must be cleared before those awaits, as ax2v ordered it");
 });
