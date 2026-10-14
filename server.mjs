@@ -20,6 +20,7 @@ import { createWorkspaceRoutes } from "./lib/routes/workspace.mjs";
 import { createPresenceRoutes } from "./lib/routes/presence.mjs";
 import { createActivityRoutes } from "./lib/routes/activity.mjs";
 import { createAgentsReadRoutes } from "./lib/routes/agents-read.mjs";
+import { createFleetRoutes } from "./lib/routes/fleet.mjs";
 import { createChangelogRoutes } from "./lib/routes/changelog.mjs";
 import { createBranchRoutes } from "./lib/routes/branches.mjs";
 import { createDoctorRoutes } from "./lib/routes/doctor.mjs";
@@ -3715,6 +3716,7 @@ const getAdmissionContext = () => ({
   hostEnvironment: SELF_ENVIRONMENT ?? "local",
 });
 const agentsReadRoutes = createAgentsReadRoutes({ agentRegistry, json, publicAgentProjection, describeAgentAdmission, getAdmissionContext });
+const fleetRoutes = createFleetRoutes({ fleetManager, publicFleetProjection, json });
 const changelogRoutes = createChangelogRoutes({ repoRoot: ROOT, json, execFileAsync });
 const branchRoutes = createBranchRoutes({
   repoRoot: ROOT,
@@ -3781,12 +3783,7 @@ const geminiMediaRoutes = createGeminiMediaRoutes({
 const routes = {
   ...presenceRoutes,
   ...agentsReadRoutes,
-  "GET /api/fleet": async (req, res, url) => {
-    const environmentKey = url.searchParams.get("environment") || undefined;
-    const harness = url.searchParams.get("harness") || undefined;
-    const fleet = await fleetManager.listAgents({ environmentKey, harness });
-    return json(res, 200, { ok: true, fleet: fleet.map(publicFleetProjection) });
-  },
+  ...fleetRoutes,
   "POST /api/fleet/contact": async (req, res) => {
     const parsed = await readJsonBody(req, res);
     if (parsed === null || typeof parsed !== "object") {
