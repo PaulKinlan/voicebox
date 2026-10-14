@@ -496,9 +496,9 @@ export function tapCounts(text) {
  * DUPLICATE and refused; a path no tier knows is UNCLASSIFIED and refused. `omittedReason` lets a non-full
  * gate account for the files it deliberately did not select, by name, rather than leaving them missing.
  */
-export function manifestFromTierRecords({ gate = "full", tree, sha = "", classified, records = [], changed = [], unmapped = [], base = "", omittedReason = null, dir = null }) {
+export function manifestFromTierRecords({ gate = "full", tree, sha = "", classified, records = [], changed = [], unmapped = [], base = "", treeDirty = null, omittedReason = null, dir = null }) {
   if (!tree) throw new ManifestRefusal(["aggregate needs the tree SHA the records describe (--tree)"]);
-  const manifest = createManifest({ gate, tree, sha, classified, changed, unmapped, base });
+  const manifest = createManifest({ gate, tree, sha, classified, changed, unmapped, base, treeDirty });
   // A CONFLICT BETWEEN RECORDS IS A REFUSAL WITH EVIDENCE, NOT A CRASH. `recordFile` refuses a duplicate
   // by throwing (for a single runner that is the right shape — the bug is in its own code). An aggregate is
   // folding records from SEVERAL processes, so the same condition is a fact about the run: it is collected
@@ -543,7 +543,7 @@ export function manifestFromTierRecords({ gate = "full", tree, sha = "", classif
  * roster-sized list of MISSING files: the difference between "the browser tier ran and every file failed"
  * and "the browser tier never started" is the first thing a reader of a red landing needs to know.
  */
-export function aggregateTierRecords({ tierDir = null, records = [], gate = "full", tree, sha = "", classified, changed = [], unmapped = [], base = "", omittedReason = null, problems = [], dir = null }) {
+export function aggregateTierRecords({ tierDir = null, records = [], gate = "full", tree, sha = "", classified, changed = [], unmapped = [], base = "", treeDirty = null, omittedReason = null, problems = [], dir = null }) {
   const tierProblems = [];
   const texts = [...records];
   if (tierDir) {
@@ -565,10 +565,23 @@ export function aggregateTierRecords({ tierDir = null, records = [], gate = "ful
     changed,
     unmapped,
     base,
+    treeDirty,
     omittedReason,
     dir,
   });
-  if (tierProblems.length > 0 || problems.length > 0) {
+  // A FULL-GATE RECEIPT DESCRIBES A COMMIT, SO A DIRTY RUN IS NOT ONE. The tiers run over the WORKING TREE,
+  // and the artifact is keyed by the committed tree: when the two differ the receipt is a claim about bytes
+  // nobody measured. The fast gate may run over uncommitted work (that is its job) and records
+  // `tree_dirty: true` without refusing — a landing receipt refuses, and says why. The fact is computed by
+  // the caller that can see the worktree (scripts/pre-push.sh passes --tree-dirty), so this fold never has to
+  // guess.
+  const dirtyProblems = [];
+  if (treeDirty === true && gate === "full") {
+    dirtyProblems.push(
+      "the working tree was DIRTY when this gate ran: a full-gate receipt is keyed by a tree, and a dirty run's bytes are not that tree — refusing (the fast gate may run over uncommitted bytes and records tree_dirty: true; a landing receipt describes a commit)",
+    );
+  }
+  if (tierProblems.length > 0 || problems.length > 0 || dirtyProblems.length > 0) {
     // THE PROBLEM IS EVIDENCE, NOT A CRASH: the artifact is still written (that is the run a later reader
     // has to audit), and the refusal is the exit code with the reason named.
     //
@@ -577,7 +590,7 @@ export function aggregateTierRecords({ tierDir = null, records = [], gate = "ful
     // that wrote no record), so the artifact is REWRITTEN here. Measured: an aggregate refused for a base
     // that names no commit still left `"reconciled": true` on disk — a receipt contradicting the gate that
     // produced it, which is the defect this bead exists to remove.
-    manifest.problems = [...problems, ...tierProblems, ...manifest.problems];
+    manifest.problems = [...problems, ...tierProblems, ...dirtyProblems, ...manifest.problems];
     manifest.reconciled = false;
     manifest.verdict = "refused";
     if (written) writeManifest(manifest, dir);
@@ -650,6 +663,7 @@ if (import.meta.main) {
       changed,
       unmapped,
       base: changedBase ?? "",
+      treeDirty: argv.includes("--tree-dirty") ? true : null,
       omittedReason: flag("omitted-reason", null),
       problems: scopeProblems,
       dir: flag("out", artifactDir()),

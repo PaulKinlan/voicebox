@@ -168,12 +168,12 @@ test("a tier with a failed or a zero-test file is NOT green — the aggregate is
 
 // ── the aggregate: three tier records, one manifest ─────────────────────────────────────────────
 
-function aggregateTiers(records, { out = null } = {}) {
+function aggregateTiers(records, { out = null, gate = "full", treeDirty = null } = {}) {
   const dir = out ?? mkdtempSync(path.join(os.tmpdir(), "voicebox-artifacts-"));
   const recordDir = mkdtempSync(path.join(os.tmpdir(), "voicebox-tier-records-"));
   // `null` means "this tier wrote NOTHING", which is a different fact from an empty record.
   for (const tier of TIERS) if (records[tier] !== null) writeFileSync(tierRecordPath(recordDir, tier), `${JSON.stringify(records[tier] ?? tierRecord(tier), null, 2)}\n`);
-  const { manifest, written, tierProblems } = aggregateTierRecords({ tierDir: recordDir, gate: "full", tree: MANIFEST_TREE, sha: "1234abc", classified: classifyOnce(), dir });
+  const { manifest, written, tierProblems } = aggregateTierRecords({ tierDir: recordDir, gate, tree: MANIFEST_TREE, sha: "1234abc", classified: classifyOnce(), treeDirty, dir });
   rmSync(recordDir, { recursive: true, force: true });
   if (out === null) rmSync(dir, { recursive: true, force: true });
   return { manifest, written, tierProblems };
@@ -225,6 +225,27 @@ test("the aggregate REFUSES a dropped file, a zero-test pass, a failed file and 
   assert.match(noTier.tierProblems.join("\n"), /the browser tier wrote no record at .*browser\.json/, "the missing TIER is named, not left as a roster-sized list of missing files");
 });
 
+test("a DIRTY tree seals no landing receipt, and the artifact says which fact refused it", () => {
+  // The tiers run over the WORKING TREE and the receipt is keyed by the COMMITTED tree: when those two
+  // differ the artifact is a claim about bytes nobody measured. The fast gate MAY run over uncommitted work
+  // (that is its job) and only records the fact — the asymmetry is deliberate, and it is asserted here so
+  // neither half is changed by accident.
+  const all = () => ({ unit: tierRecord("unit"), server: tierRecord("server"), browser: tierRecord("browser") });
+  const cleanFull = aggregateTiers(all(), { out: null });
+  assert.equal(cleanFull.manifest.verdict, "pass", "a clean full run is the case that seals a receipt");
+  assert.equal(cleanFull.manifest.tree_dirty, null, "a run that never asked about the worktree does not claim it was clean");
+
+  const dirty = aggregateTiers(all(), { treeDirty: true });
+  assert.equal(dirty.manifest.tree_dirty, true, "the artifact records the worktree's state");
+  assert.equal(dirty.manifest.reconciled, false, "a dirty full run does not reconcile");
+  assert.equal(dirty.manifest.verdict, "refused");
+  assert.match(dirty.manifest.problems.join("\n"), /working tree was DIRTY/);
+
+  const dirtyFast = aggregateTiers(all(), { gate: "fast", treeDirty: true });
+  assert.equal(dirtyFast.manifest.tree_dirty, true);
+  assert.equal(dirtyFast.manifest.verdict, "pass", "a fast gate may run over uncommitted work; it records the fact instead of refusing");
+});
+
 test("the aggregate CLI is the same decision, keyed by tree, and answers with the verdict's exit code", () => {
   // ONE CLI run, because the flags -> manifest -> exit-code wiring is the only thing the in-process cases
   // above cannot see (they drive `aggregateTierRecords`, so there is no node startup per case).
@@ -255,6 +276,20 @@ test("the aggregate CLI is the same decision, keyed by tree, and answers with th
   assert.match(bogus.stderr, /--changed-base 'no\/such\/ref' does not name a commit/);
   assert.match(bogus.stderr, /UNKNOWN/);
   assert.match(readFileSync(path.join(out, `${tree}.full.manifest.json`), "utf8"), /"reconciled": false/);
+
+  // A DIRTY WORKTREE SEALS NO LANDING RECEIPT. The fact lives with the caller that can see the worktree
+  // (scripts/pre-push.sh checks `git status --porcelain`), and the flag is how it reaches the fold.
+  const dirty = spawnSync(process.execPath, ["scripts/gate-manifest.mjs", "aggregate", "--gate", "full", "--tree", tree, "--tier-dir", recordDir, "--out", out, "--tree-dirty"], {
+    cwd: root,
+    encoding: "utf8",
+    env: cleanEnv,
+  });
+  assert.notEqual(dirty.status, 0, `a dirty run must refuse a LANDING receipt: ${dirty.stdout}`);
+  assert.match(dirty.stderr, /working tree was DIRTY/);
+  const dirtyArtifact = JSON.parse(readFileSync(path.join(out, `${tree}.full.manifest.json`), "utf8"));
+  assert.equal(dirtyArtifact.tree_dirty, true, "the artifact records the worktree state it refused for");
+  assert.equal(dirtyArtifact.reconciled, false);
+  assert.equal(dirtyArtifact.verdict, "refused");
   rmSync(recordDir, { recursive: true, force: true });
   rmSync(out, { recursive: true, force: true });
 });

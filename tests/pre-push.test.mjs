@@ -64,6 +64,38 @@ for (const key of execFileSync('git', ['rev-parse', '--local-env-vars'], { encod
 for (const key of ['VOICEBOX_GATE_UNIT_SECS', 'VOICEBOX_GATE_TESTS_SECS', 'VOICEBOX_GATE_LIVE_SECS', 'VOICEBOX_GATE_ACCEPT_SECS', 'VOICEBOX_PUSH_DESTINATIONS', 'VOICEBOX_GATE_LOCK_WAIT_SECS', 'VOICEBOX_GATE_LOCK_DISABLE']) delete cleanEnv[key];
 const hasFlock = (() => { try { execFileSync('which', ['flock'], { stdio: 'ignore' }); return true; } catch { return false; } })();
 
+// DASH, NOT BASH — AND FOR THIS SCRIPT A BASHISM IS NOT A STYLE FINDING, IT IS THE WHOLE GATE.
+// scripts/pre-push.sh is `#!/usr/bin/env sh` (dash: `/bin/sh -> dash` here), and a bash-only construct is a
+// PARSE error there: the hook dies with exit 2 before running a single stage, so every push fails with no
+// stage output and the reader sees a red gate that never tested anything. That is exactly what happened
+// while the full-manifest stage was written — `_dirty_args=()` (a bash array) made all nine gate fixtures
+// fail at once with `2 !== 0`, looking like a behaviour regression rather than a syntax error, and only
+// `sh -n` named it (measured line 428, "Syntax error: \"(\" unexpected").
+//
+// scripts/landing-preflight.sh carries this same guard for its own file (tests/landing-preflight.test.mjs,
+// "DASH, NOT BASH"), which is why its class was fixed there and not here. This is the cheap half of the
+// same guard for the gate: `sh -n` parses the whole file, and the scan catches the constructs dash PARSES
+// but that mean something else (PIPESTATUS is unset in dash, `[[ ]]` is a `[` invocation, pipefail is
+// silently ignored) — which `sh -n` alone would let through. Comments are stripped so the check reads the
+// CODE: this comment names arrays and [[ ]] without ever tripping its own scan.
+test('the gate script is POSIX sh: it parses under dash, and no bash-only construct is in the code path', () => {
+  const file = path.join(root, 'scripts', 'pre-push.sh');
+  const src = readFileSync(file, 'utf8');
+  assert.match(src, /^#!\/usr\/bin\/env sh/, 'it must keep the sh shebang the hook runs it under');
+  const code = src.split('\n').filter((line, i) => i === 0 || !/^\s*#/.test(line)).join('\n');
+  // An array assignment is a STATEMENT, so the check is anchored at the start of a line: this file embeds
+  // JavaScript inside a quoted `node -e` string (`const sigGroup = (sig) => …`), and a scan that reads the
+  // whole text would call that JS an array — a false positive that would have to be silenced by deleting
+  // the guard. `[^$(]` keeps POSIX arithmetic expansion (`_n=$(( _n + 1 ))`, which dash parses fine) out too.
+  assert.doesNotMatch(code, /^\s*[A-Za-z_][A-Za-z0-9_]*=\s*\(/m, 'no arrays — dash cannot PARSE x=() at all (measured: exit 2, with no stage output)');
+  assert.doesNotMatch(code, /\$\{\w+\[@\]/, 'no array expansion — a bash array is a parse error here');
+  assert.doesNotMatch(code, /PIPESTATUS/, 'no PIPESTATUS — dash has none (the class fixed by 221c44d)');
+  assert.doesNotMatch(code, /set -o pipefail/, 'no pipefail — dash ignores it silently');
+  assert.doesNotMatch(code, /\[\[[^:[:space:]]|\[\[ /, 'no [[ ]] test keyword (POSIX classes like [[:blank:]] are fine)');
+  const parsed = spawnSync('/bin/sh', ['-n', file], { encoding: 'utf8' });
+  assert.equal(parsed.status, 0, `the gate must parse under /bin/sh (dash) — a parse error is exit 2 with no stage output:\n${parsed.stderr}`);
+});
+
 test('pre-push names the stage and cause, streams output, and refuses real failing tests', { timeout: 60000 }, () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-pre-push-'));
   const repo = path.join(dir, 'repo');
@@ -976,6 +1008,20 @@ test('pre-push seals ONE full manifest from the tier records, and a red tier lea
     assert.equal(manifest.summary.dispatched, 3, 'a full gate dispatches the whole roster');
     assert.equal(manifest.summary.unknown, 0);
     assert.deepEqual([...new Set(manifest.files.map((f) => f.tier))].sort(), ['browser', 'server', 'unit'], 'all three tiers are in the one union');
+
+    // A DIRTY TREE SEALS NOTHING EITHER, and the run that refuses says so by name. This also holds the
+    // wiring rather than the policy: the worktree fact is computed by the GATE (the fold cannot see it), so
+    // `--tree-dirty` has to travel from scripts/pre-push.sh to scripts/gate-manifest.mjs.
+    writeFileSync(path.join(repo, 'untracked-while-gating.txt'), 'uncommitted bytes\n');
+    const dirty = runGate();
+    const dirtyOut = dirty.stdout + dirty.stderr;
+    assert.notEqual(dirty.status, 0, dirtyOut);
+    assert.match(dirtyOut, /working tree was DIRTY/, 'the refusal names the dirty worktree it will not seal');
+    const dirtyManifest = JSON.parse(readFileSync(path.join(artifacts, `${tree}.full.manifest.json`), 'utf8'));
+    assert.equal(dirtyManifest.tree_dirty, true, 'the artifact records the state it refused for');
+    assert.equal(dirtyManifest.reconciled, false);
+    assert.equal(dirtyManifest.verdict, 'refused');
+    rmSync(path.join(repo, 'untracked-while-gating.txt'));
 
     // A RED TIER SEALS NOTHING. The manifest is a receipt for a gate that finished; the run that refused
     // must not leave one behind for a later reader to quote as a pass.

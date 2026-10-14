@@ -48,6 +48,12 @@ refuses — a changed source with no mapped test, a `--changed-base` that names 
 records those problems is written, says `refused`, and the push is still refused. Only a run that reconciles
 and dispatches every file with a green terminal status is ever labelled `pass`.)
 
+**And a DIRTY worktree seals no landing receipt.** The tiers run over the working tree while the receipt is
+keyed by the committed tree, so on a push that lands, `scripts/pre-push.sh` passes `--tree-dirty` to the fold
+and a dirty run is refused by name (`working tree was DIRTY`), with the refusal recorded on the artifact it
+declines to seal. The `fast` gate runs over uncommitted work by design and only *records* the fact
+(`tree_dirty: true`) — commit before you push a landing, or the receipt will not exist.
+
 The stage commands come from the repository when it has a tier runner, and fall back to `npm run test:unit`
 / `npm run test:live` when it does not (the disposable repositories `tests/pre-push.test.mjs` drives supply
 their own scripts, like every other pluggable stage in this file).
@@ -75,6 +81,8 @@ The shard runner does not expand a shell glob for its file list: it builds a que
 Every browser file is independent — its own process, its own ephemeral-port server, its own browser — which is what makes the four workers safe. Two files are independent of the others but not of the box, and both run **alone, after the parallel queue**, with every assertion and exactly once.
 
 **`tests/ldxa-barge-in-browser.test.mjs`** drives the real audio path through Chromium's fake-audio device, which the file's own comments record as lagging under CPU load (+76ms idle, +366ms at 4-core load). It was isolated because with four workers it failed `tests/ldxa-barge-in-browser.test.mjs:168` ("playback must be flushed, not left playing", `true !== false`) twice in nine concurrent runs of the whole tier while passing every focused control — alone, alone through the runner, and beside three other browser files at four-way concurrency. The same assertion with the same profile was already recorded as environmental in voicebox-beads-y82w. voicebox-beads-9c3r reproduced the timing deterministically: the synthetic socket scheduled echoes before the page's interrupt but delivered a queued echo after the client's synchronous flush, restarting playback. The fixture now checks whether it is paused when an echo is **delivered**, not only when it is scheduled; its browser regression deliberately defers one echo until after the flush, proving that playback stays off without weakening the existing assertion.
+
+**A bashism in a `#!/usr/bin/env sh` gate is a parse error, not a style finding, so the file pins the shell.** `scripts/pre-push.sh` runs under dash (`/bin/sh -> dash` here), where `_x=()` and `${_x[@]}` are syntax errors: the hook then dies with exit 2 before any stage runs, and every push fails with no stage output — which reads as a red gate rather than a gate that never parsed. Measured while the full-manifest stage was written: adding one bash array made all nine fixtures in this file fail at once with `2 !== 0`, and only `sh -n scripts/pre-push.sh` named the line. `tests/pre-push.test.mjs` therefore checks the shebang, scans the comment-stripped code for arrays, `${x[@]}`, `PIPESTATUS`, `set -o pipefail` and `[[ ]]`, and runs `/bin/sh -n` (the same guard `tests/landing-preflight.test.mjs` holds for `scripts/landing-preflight.sh`).
 
 **`tests/pre-push.test.mjs`** measures wall-clock budget enforcement, so the box is part of its subject. Its fixture accelerates each stage's budget through a `timeout` shim and asserts that the stage's output appeared BEFORE the budget killed it ("LIVE OUTPUT BEFORE TERMINATION"), then that the refusal reports the measured elapsed time rather than the configured budget. The chain it must outlast is `timeout → npm → sh → node`, and on a contended box that chain's startup is longer than the budget: measured 2026-10-12 on this VM, time-to-marker was 0.25s idle, 1.76–3.41s at loadavg 6 (32 CPU burners on 8 vCPU) and 5.2–6.3s at 8× oversubscription, while the shim's budget was 2s and the suite's own elapsed assertion accepts at most 10s — so no budget value was both large enough for a contended box and small enough for that assertion. At four workers the file failed the psfw union full gate (`tests/pre-push.test.mjs:227`, marker absent, slowest file 62.6s) and passed the xzrr union gate on identical blobs. It is also the tier's slowest file (67.3s under four workers versus 32.6s alone), so contention was costing it twice. It now runs alone, and its shim budget is 5s — a measured margin over the same chain rather than a coin flip (voicebox-beads-0nt3).
 
@@ -282,7 +290,9 @@ merger's union, and a full gate may not omit a classified file at all.
 `~/.fleet/checks/<tree>.<fast|full>.manifest.json` (override with `--manifest-dir` or
 `VOICEBOX_GATE_ARTIFACT_DIR`), written atomically and keyed by the **tree SHA** it describes, the gate
 kind, and a **roster hash** over the classifier's `(file, tier, why)` output. `tree_dirty` records that
-the artifact was produced over uncommitted bytes, so a dirty run cannot be quoted as if it were clean.
+the artifact was produced over uncommitted bytes, so a dirty run cannot be quoted as if it were clean — and
+on a **full** (landing) gate it is a refusal rather than a note: only the `fast` gate marks a dirty run and
+continues, because that is the gate you run on work you have not committed yet.
 
 Every classified file is accounted for exactly once: dispatched (with its terminal status, counts,
 duration and timeout) or **omitted by name with a reason** (`fast-only: not selected by the changed-path

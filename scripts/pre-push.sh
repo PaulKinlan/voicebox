@@ -421,11 +421,22 @@ release_gate_lock
 # when a file is missing, duplicated, unclassified, not terminal, zero-test or a changed source with no
 # mapped test — the same refusals the fast gate's artifact makes, over the union the merger is landing.
 if [ "$_use_tiers" = "1" ]; then
+  # Is the tree dirty AT SEAL TIME? The tiers ran over the WORKING TREE; the receipt is keyed by the
+  # COMMITTED tree, so a dirty run is refused by the aggregate rather than sealed as a claim about bytes
+  # nobody measured (voicebox-beads-wiby). Same test the verified-tree receipt below uses, so the two
+  # cannot disagree about what "clean" meant on this run.
+  #
+  # AND THE FLAG IS A PLAIN STRING, NOT AN ARRAY: this file is `#!/usr/bin/env sh` (dash), where `_a=()`
+  # and `${_a[@]}` are syntax errors — the script then dies at PARSE time, before any stage runs, so every
+  # push fails with exit 2 and no stage output at all (measured: `sh -n scripts/pre-push.sh` → line 428
+  # "Syntax error: \"(\" unexpected"). A gate that cannot be parsed is not a gate that passed.
+  _dirty_flag=""
+  if [ -n "$(git status --porcelain 2>/dev/null)" ]; then _dirty_flag="--tree-dirty"; fi
   run_stage manifest "$_manifest_secs" node scripts/gate-manifest.mjs aggregate --gate full \
     --tree "$_current_tree" \
     --sha "$(git rev-parse --short HEAD 2>/dev/null || true)" \
     --tier-dir "$_tier_dir" \
-    --changed-base origin/main
+    --changed-base origin/main ${_dirty_flag:+"$_dirty_flag"}
   # The manifest carries every per-file record, so the scratch tier records are no longer needed. They are
   # removed only here, on a gate that finished: a red gate keeps them (run_tier_stage printed where).
   rm -rf "$_tier_dir"
