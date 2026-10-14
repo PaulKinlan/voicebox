@@ -56,7 +56,7 @@ node server.mjs --doctor
 3. **Top Bar Controls**:
    - **Theme Toggle (`#theme-toggle`)**: Switch between Warm Paper (light), Dark, and **System (match device)**. The choice is remembered and applied *before* the page is first painted by `public/theme-boot.js`, so reloading never flashes the wrong scheme first. A browser with JavaScript disabled cannot read that choice but no longer has to: `public/style.css` declares `color-scheme: light dark` with a `light-dark()` palette and no page forces a scheme, so a scriptless load follows the operating system. The two paths differ on purpose — with scripting, nothing stored still means light, because `System` is the opt-in for following the device.
    - **Harnesses**: Inspect and activate installed coding agent harnesses (such as Pi or Claude Code) directly in the UI without setting environment variables.
-   - **Environments**: Manage local, fenced sandbox, and paired remote execution environments. Declaring the same host twice keeps one row, and each row shows the origin it points at; a host that is not running is named unreachable with the remedy.
+   - **Environments**: Manage local, fenced sandbox, and paired remote execution environments. Declaring the same host twice keeps one row, and each row shows the origin it points at; a host that is not running is named unreachable with the remedy. The root surface — “Use browser workspace”, “Pick a local folder…”, “Set machine root” and creating a project by name — is owned by `public/components/environment-root-dialog.mjs`; the host still owns the folder picker, OPFS adoption, the active-folder state and the header chip it repaints.
    - **Extensions**: Review extension capability disclosures, approve pending proposals, and inspect the WebAssembly tool shelf.
    - **Settings (⚙)**: Configure voice selection, assistant instructions, audio input/output devices, and provider API keys. `public/settings-ui.mjs` owns the dialog, agent preferences and masked key controls; the host retains audio device routing, microphone hotkey, theme and workspace facts. The header gear, system-command “open settings” and quick-dock Settings control use the same dialog opener, so each refreshes the displayed device, agent and key states.
 
@@ -64,7 +64,7 @@ node server.mjs --doctor
 
 ## Architecture Overview
 
-Voicebox pairs a zero-dependency Node.js gateway (`server.mjs`) and modular browser UI (`public/fused.js`, `public/theme.mjs`, `public/extensions-ui.mjs`, `public/settings-ui.mjs`, `public/live-voice.js`) with a pure TypeScript policy core (`core/`). Extension HTTP discovery and decisions are grouped in `lib/routes/extensions.mjs`; the server still owns the authorization checks and bounded JSON body parser.
+Voicebox pairs a zero-dependency Node.js gateway (`server.mjs`) and modular browser UI (`public/fused.js`, `public/theme.mjs`, `public/extensions-ui.mjs`, `public/settings-ui.mjs`, `public/components/environment-root-dialog.mjs`, `public/live-voice.js`) with a pure TypeScript policy core (`core/`). Extension HTTP discovery and decisions are grouped in `lib/routes/extensions.mjs`; the server still owns the authorization checks and bounded JSON body parser.
 
 ### Pluggable live-model library
 
