@@ -18,6 +18,8 @@ import { createBranchLandingController } from "./branch-landing-ui.mjs";
 import { createOfflineSpeechController } from "./offline-speech-client.mjs";
 import { createPresenceUIController } from "./presence-ui.mjs";
 import { createVisionGroundingController } from "./vision-grounding.mjs";
+import { initChangelogDialog } from "./components/changelog-dialog.mjs";
+import { initEnvironmentRootDialog } from "./components/environment-root-dialog.mjs";
 
 const $ = (id) => document.getElementById(id);
 const SVG = "http://www.w3.org/2000/svg";
@@ -3765,178 +3767,26 @@ on(els.envs, "close", () => {
   (envsTriggerEl || els.envsOpen)?.focus?.();
 });
 
-on(els.envUseBrowserBtn, "click", async () => {
-  try {
-    if (els.envUseBrowserBtn) els.envUseBrowserBtn.disabled = true;
-    let failureMsg = null;
-    const ok = await openOpfsScratchFolder(SCRATCHPAD_NAME, {
-      onError: (msg) => { failureMsg = msg; },
-    });
-    if (ok) {
-      if (els.envRootStatus) {
-        els.envRootStatus.dataset.ok = "true";
-        els.envRootStatus.textContent = "Switched to browser storage (OPFS) — browser files and edits save here.";
-      }
-      renderRoot();
-    } else {
-      if (els.envRootStatus) {
-        els.envRootStatus.dataset.ok = "false";
-        els.envRootStatus.textContent = `Could not switch to browser storage (OPFS): ${failureMsg || "unavailable"}`;
-      }
-    }
-  } catch (err) {
-    if (els.envRootStatus) {
-      els.envRootStatus.dataset.ok = "false";
-      els.envRootStatus.textContent = `Could not switch to browser storage (OPFS): ${err?.message || "unavailable"}`;
-    }
-  } finally {
-    if (els.envUseBrowserBtn) els.envUseBrowserBtn.disabled = false;
-  }
-});
-
-on(els.envPickFolderBtn, "click", async () => {
-  const picked = await openRoomFolder({
-    onError: (msg) => {
-      if (els.envRootStatus) {
-        els.envRootStatus.dataset.ok = "false";
-        els.envRootStatus.textContent = msg;
-      }
-    },
-  });
-  if (picked) {
-    if (els.envRootStatus) {
-      els.envRootStatus.dataset.ok = "true";
-      const writable = roomFolder?.permission === "granted" && roomFolder?.mode === "readwrite";
-      els.envRootStatus.textContent = writable
-        ? `Opened local folder “${picked.name}” — browser files and edits save here.`
-        : `Opened read-only folder “${picked.name}” — close this dialog, then click 'Restore access' on the folder chip to write files.`;
-    }
-    renderRoot();
-  }
-});
-
-on(els.envDeclareRootBtn, "click", async () => {
-  const pathVal = els.envRootPathInput?.value.trim() ?? "";
-  if (!pathVal) {
-    if (els.envRootStatus) {
-      els.envRootStatus.dataset.ok = "false";
-      els.envRootStatus.textContent = "Please enter a folder path on this machine.";
-    }
-    return;
-  }
-  const projectName = pathVal.split("/").filter(Boolean).pop() || "project";
-  if (els.envDeclareRootBtn) els.envDeclareRootBtn.disabled = true;
-  try {
-    const res = await request("/api/root", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ project: projectName, root: { kind: "machine", path: pathVal } }),
-    });
-    if (res && res.ok) {
-      if (roomFolder) await closeRoomFolder();
-      if (els.envRootPathInput) els.envRootPathInput.value = "";
-      // THE SUCCESS LINE IS WRITTEN AFTER THE DIALOG'S OWN ROOT LINE AGREES WITH IT. It used to be written
-      // straight from the POST's answer, while the refresh that repaints `#env-active-root-val`
-      // (`loadRoot()` -> `renderRoot()`) still had a network round trip to run — so for that round trip the
-      // dialog could say "Machine root set to <path>" next to "no folder chosen yet". That window is one
-      // fetch wide, which is why it is invisible on a quiet box and reproducible with a few browsers in
-      // flight (tests/environment-integrated-ui.test.mjs:118 on union tree 0c34af3d). Announcing the change
-      // only after the surface has drawn it closes the window instead of racing it.
-      await loadRoot();
-      await load();
-      if (els.envRootStatus) {
-        els.envRootStatus.dataset.ok = "true";
-        els.envRootStatus.textContent = `Machine root set to ${res.root?.path ?? pathVal} — turns save here now.`;
-      }
-    } else {
-      if (els.envRootStatus) {
-        els.envRootStatus.dataset.ok = "false";
-        els.envRootStatus.textContent = res?.why || res?.refused || "Could not set machine root.";
-      }
-    }
-  } catch (err) {
-    if (els.envRootStatus) {
-      els.envRootStatus.dataset.ok = "false";
-      els.envRootStatus.textContent = String(err?.message ?? "Error declaring machine root.");
-    }
-  } finally {
-    if (els.envDeclareRootBtn) els.envDeclareRootBtn.disabled = false;
-  }
-});
-
-// Create a project BY NAME in the browser's own storage, from the main UI (voicebox-beads-6uzd, with the
-// explanation above it for voicebox-beads-um5r). It REUSES the helper the environment page's own button
-// uses — ensureScratchpadFolder(name), which creates the OPFS folder and adopts it as the active,
-// persisted room folder — rather than adding a second creation path that could drift from that one.
-on(els.envCreateProjectBtn, "click", async () => {
-  const name = (els.envCreateProjectName?.value ?? "").trim();
-  const say = (text, ok) => {
-    if (!els.envCreateProjectStatus) return;
-    els.envCreateProjectStatus.dataset.ok = String(ok);
-    els.envCreateProjectStatus.textContent = text;
-  };
-  // Refusals name the act and what would fix it, and they are written HERE, inside the dialog: a message
-  // that lands behind the open modal is a message the person never sees (the defect voicebox-beads-6uzd
-  // exists because of).
-  if (!name) {
-    say("A project needs a name — it becomes one folder in this browser's storage.", false);
-    return;
-  }
-  if (/[\\/]/.test(name)) {
-    say("A name cannot contain a slash: the name becomes one folder, so it cannot be a path.", false);
-    return;
-  }
-  els.envCreateProjectBtn.disabled = true;
-  try {
-    // Say what actually happened, and only say what we KNOW. `getDirectoryHandle(name, { create: true })`
-    // cannot tell a NEW folder from one that already exists, so the pre-check below decides the wording:
-    // true = it was already there (Opened), false = clearly absent (Created), null = we could not tell
-    // (a name that is a FILE, or a non-NotFound error) and then no sentence claims a creation at all — an
-    // independent reviewer pointed out that treating every error as "absent" made "Created" empirically
-    // rather than provably true.
-    let existed = null;
-    if (navigator.storage?.getDirectory) {
-      try {
-        const opfsRoot = await navigator.storage.getDirectory();
-        await opfsRoot.getDirectoryHandle(name);
-        existed = true;
-      } catch (err) {
-        existed = err?.name === "NotFoundError" ? false : null;
-      }
-    }
-    // The cause of a failure has to appear HERE, inside the dialog: #turn-report is outside it, behind the
-    // open modal, so it is unreadable until the person closes the dialog. Passing the helper's own onError
-    // affordance (the one miniapps added with the picker fix, and used by the button next door) is what
-    // makes the refusal visible where the person is standing — the voicebox-beads-sbrh defect class.
-    let failureMsg = null;
-    const ok = await openOpfsScratchFolder(name, { onError: (msg) => { failureMsg = msg; } });
-    if (ok) {
-      say(
-        existed === true
-          ? `Opened “${name}” — it is the folder this room acts on now.`
-          : existed === false
-            ? `Created “${name}” in this browser — it is the folder this room acts on now.`
-            : `“${name}” is the folder this room acts on now.`,
-        true,
-      );
-      renderRoot();
-    } else {
-      const verb = existed === true ? "open" : existed === false ? "create" : "make";
-      say(`Could not ${verb} “${name}”${failureMsg ? ` — ${failureMsg}` : " — the room's report line names the cause."}.`, false);
-    }
-  } catch (err) {
-    say(String(err?.message ?? `Could not create “${name}”.`), false);
-  } finally {
-    els.envCreateProjectBtn.disabled = false;
-  }
-});
-
-// Enter in the name box means the button, and must NOT submit the enclosing method="dialog" form: that
-// would close the dialog and create nothing — the silent-failure shape this work is about.
-on(els.envCreateProjectName, "keydown", (event) => {
-  if (event.key !== "Enter") return;
-  event.preventDefault();
-  els.envCreateProjectBtn?.click();
+// ── The Environments dialog's root surface now lives in
+// public/components/environment-root-dialog.mjs (voicebox-beads-mvxl). This is the one place its
+// listeners are installed, and the only place fused.js hands it anything: els is a pass-through of the
+// element map, on/request are the same helpers the rest of the page uses, the room/root helpers are the
+// functions above, and getRoomFolder is a LIVE read of fused.js's own `roomFolder` binding — the
+// picked-folder line is worded from the folder that is active at click time, and a snapshot taken here
+// WOULD call a folder the person can write "read-only". tests/environment-root-dialog-extraction.test.mjs
+// drives the real page, so that mistake turns it RED instead of shipping (the voicebox-beads-w1f9 shape).
+initEnvironmentRootDialog({
+  els,
+  on,
+  request,
+  openOpfsScratchFolder,
+  openRoomFolder,
+  closeRoomFolder,
+  renderRoot,
+  loadRoot,
+  load,
+  scratchpadName: SCRATCHPAD_NAME,
+  getRoomFolder: () => roomFolder,
 });
 
 // Light dismiss, declaratively, where the platform supports it: `closedby="any"` on the element.
@@ -4321,150 +4171,18 @@ on(els.harnessesCheck, "click", () => void checkHarnesses());
 on(els.harnessesOpenTracker, "click", () => void openAgentProgressTracker());
 
 // ── Change log modal dialog (voicebox-beads-n1pq, voicebox-beads-je4i) ────
-let lastChangelogTrigger = null;
-
-function formatCommitDescription(commit) {
-  const rawSubject = String(commit?.subject ?? "").trim();
-  const rawBody = String(commit?.body ?? commit?.description ?? "").trim();
-  const typeMatch = rawSubject.match(/^([a-z]+)(?:\(([^)]+)\))?!?:\s*(.+)$/i);
-  const typeMap = {
-    feat: { badge: "Feature", kind: "feat", verb: "Added or improved capability" },
-    fix: { badge: "Fix", kind: "fix", verb: "Resolved issue" },
-    perf: { badge: "Performance", kind: "perf", verb: "Optimized speed or responsiveness" },
-    docs: { badge: "Docs", kind: "docs", verb: "Updated documentation" },
-    refactor: { badge: "Refactor", kind: "refactor", verb: "Simplified internal structure" },
-    test: { badge: "Tests", kind: "test", verb: "Expanded automated verification" },
-    chore: { badge: "Maintenance", kind: "chore", verb: "Routine maintenance update" },
-    style: { badge: "Design", kind: "style", verb: "Refined visual layout and styling" },
-  };
-  const rawType = typeMatch ? typeMatch[1].toLowerCase() : "";
-  const scope = typeMatch && typeMatch[2] ? sanitizePlainActivityText(typeMatch[2]) : "";
-  const cleanSubject = sanitizePlainActivityText(typeMatch ? typeMatch[3] : rawSubject) || "Updated room";
-  const mapped = typeMap[rawType] || {
-    badge: scope || "Update",
-    kind: "update",
-    verb: "Updated workspace",
-  };
-  let description = sanitizePlainActivityText(rawBody);
-  if (!description) {
-    const scopePhrase = scope ? ` in ${scope}` : "";
-    description = `${mapped.verb}${scopePhrase}: ${cleanSubject.charAt(0).toUpperCase()}${cleanSubject.slice(1)}`;
-    if (!/[.!?]$/.test(description)) description += ".";
-  }
-  const files = Array.isArray(commit?.files)
-    ? commit.files.map((f) => sanitizePlainActivityText(f)).filter(Boolean).slice(0, 6)
-    : [];
-  return {
-    badge: mapped.badge,
-    kind: mapped.kind,
-    subject: sanitizePlainActivityText(rawSubject) || cleanSubject,
-    description,
-    files,
-  };
-}
-
-async function loadRoomChangelog(options = {}) {
-  if (!els.changelogCommits || !els.changelogStatus) return;
-  if (els.changelogRefresh) els.changelogRefresh.disabled = true;
-  els.changelogStatus.textContent = "Loading changes…";
-  try {
-    const res = await fetch("/api/changelog", { signal: AbortSignal.timeout(10000), priority: options.priority ?? "low" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    if (!data.ok || !Array.isArray(data.commits)) throw new Error("invalid changelog response");
-    els.changelogCommits.replaceChildren();
-    if (data.commits.length === 0) {
-      els.changelogStatus.textContent = "No recent commits found.";
-      return;
-    }
-    els.changelogStatus.textContent = `Showing ${data.commits.length} recent commits:`;
-    for (const c of data.commits) {
-      const info = formatCommitDescription(c);
-      const li = document.createElement("li");
-      li.className = "commit-card";
-      li.dataset.commitKind = info.kind;
-
-      const header = document.createElement("div");
-      header.className = "commit-header";
-
-      const link = document.createElement("a");
-      link.className = "commit-sha";
-      link.href = c.url || `https://github.com/PaulKinlan/voicebox/commit/${c.sha}`;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      link.textContent = c.shortSha || (c.sha ? c.sha.slice(0, 7) : "");
-      header.append(link);
-
-      const badge = document.createElement("span");
-      badge.className = "commit-badge";
-      badge.dataset.kind = info.kind;
-      badge.textContent = info.badge;
-      header.append(badge);
-
-      const subject = document.createElement("span");
-      subject.className = "commit-subject";
-      subject.textContent = info.subject;
-      header.append(subject);
-
-      li.append(header);
-
-      const desc = document.createElement("p");
-      desc.className = "commit-description";
-      desc.textContent = info.description;
-      li.append(desc);
-
-      if (info.files.length > 0) {
-        const filesRow = document.createElement("div");
-        filesRow.className = "commit-details";
-        for (const f of info.files) {
-          const pill = document.createElement("span");
-          pill.className = "commit-file";
-          pill.textContent = f;
-          filesRow.append(pill);
-        }
-        li.append(filesRow);
-      }
-
-      const meta = document.createElement("div");
-      meta.className = "commit-meta";
-      const relDate = c.relativeDate || c.age ? ` (${c.relativeDate || c.age})` : "";
-      meta.textContent = `${c.author || "Unknown"} · ${c.date || ""}${relDate}`;
-      li.append(meta);
-
-      els.changelogCommits.append(li);
-    }
-  } catch (err) {
-    els.changelogStatus.replaceChildren();
-    els.changelogStatus.append(document.createTextNode(`Could not load local changelog (${err.message}). View `));
-    const gh = document.createElement("a");
-    gh.href = "https://github.com/PaulKinlan/voicebox/commits/main";
-    gh.target = "_blank";
-    gh.rel = "noopener noreferrer";
-    gh.textContent = "all commits on GitHub";
-    els.changelogStatus.append(gh, document.createTextNode("."));
-  } finally {
-    if (els.changelogRefresh) els.changelogRefresh.disabled = false;
-  }
-}
-
-function openChangelogDialog(triggerEl = els.changelogOpen) {
-  if (!els.changelogDialog || els.changelogDialog.open) return;
-  lastChangelogTrigger = triggerEl || els.changelogOpen;
-  els.changelogDialog.showModal();
-  els.changelogOpen?.setAttribute("aria-expanded", "true");
-  if (els.changelogCommits && els.changelogCommits.children.length === 0) {
-    void loadRoomChangelog();
-  }
-}
-
-on(els.changelogOpen, "click", () => openChangelogDialog(els.changelogOpen));
-on(els.changelogClose, "click", () => els.changelogDialog?.close());
-on(els.changelogDialog, "close", () => {
-  els.changelogOpen?.setAttribute("aria-expanded", "false");
-  (lastChangelogTrigger || els.changelogOpen)?.focus();
-  lastChangelogTrigger = null;
+// The dialog's own surface — its fetch, its commit formatting and its open/close/refresh handling —
+// now lives in public/components/changelog-dialog.mjs (voicebox-beads-mvxl). This is the one place its
+// listeners are installed, and the only place fused.js hands it anything: els is a pass-through of the
+// element map, on is the same helper the rest of the page uses, and sanitizeText is this file's own
+// sanitizePlainActivityText, so the Activity log and this dialog still redact with one vocabulary.
+// openChangelogDialog comes back the other way, because the build stamp's commit link opens it.
+const { openChangelogDialog } = initChangelogDialog({
+  els,
+  on,
+  sanitizeText: sanitizePlainActivityText,
 });
-on(els.changelogRefresh, "click", () => void loadRoomChangelog({ priority: "high" }));
+
 
 // ── Branch Landing Inspector (voicebox-beads-8kfa) ─────────────────────────
 const branchLandingController = createBranchLandingController({
