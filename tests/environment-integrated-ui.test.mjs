@@ -423,15 +423,44 @@ test("the dialog cannot announce a machine root before its own root line says th
   await page.evaluate((dir) => {
     document.getElementById("env-root-path-input").value = dir;
   }, second);
+
+  // THE INVARIANT IS WATCHED, NOT SAMPLED. "Wait for the success line, then read the other element" is
+  // itself a race with the window it is looking for: measured, the same delayed-refresh flow read a
+  // CONSISTENT pair (reader arrived after the window closed) while the union run read the stale one, so a
+  // sampling check can pass on broken code. An observer in the page sees every paint of either element in
+  // order, so one frame with the success line readable beside a root line that does not name the new root is
+  // recorded no matter how fast the reader is.
+  await page.evaluate((expected) => {
+    window.__ax2v = { successPaints: 0, disagreements: [] };
+    const status = document.getElementById("env-root-status");
+    const value = document.getElementById("env-active-root-val");
+    const look = () => {
+      const line = (status?.textContent ?? "").trim();
+      if (!line.includes("Machine root set to")) return;
+      window.__ax2v.successPaints += 1;
+      const shown = (value?.textContent ?? "").trim();
+      if (!shown.includes(expected)) window.__ax2v.disagreements.push({ line, shown });
+    };
+    new MutationObserver(look).observe(document.getElementById("envs"), {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true,
+    });
+    look();
+  }, "sample-project-2");
+
   await page.click("#env-declare-root-btn");
   await page.waitFor(
     () => (document.getElementById("env-root-status")?.textContent ?? "").includes("Machine root set to"),
     { label: "the declaration's success line" },
   );
 
-  const valueAtSuccess = await page.evaluate(() => document.getElementById("env-active-root-val")?.textContent?.trim() ?? "");
-  assert.ok(
-    valueAtSuccess.includes("sample-project-2"),
-    `the success line must not be readable before the dialog's own root line says the same thing — it read "${valueAtSuccess}" while #env-root-status already claimed the new root was set`,
+  const seen = await page.evaluate(() => window.__ax2v);
+  assert.ok(seen.successPaints > 0, `the success line was never painted, so this control proved nothing: ${JSON.stringify(seen)}`);
+  assert.deepEqual(
+    seen.disagreements,
+    [],
+    `the dialog announced the new root while its own root line said otherwise — a reader inside that window sees success next to the previous root: ${JSON.stringify(seen.disagreements)}`,
   );
 });
