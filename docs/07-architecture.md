@@ -255,6 +255,12 @@ AudioWorklet modules loaded by the frontend audio engine: `pcm-worklet.js`.
   proportions under zoom. `tests/type-scale.test.mjs` pins the declared `--text-*` scale, ensures zero sub-12px font
   declarations remain, and browser-verifies computed font sizes (>= 12px) across desktop, mobile, and secondary apps.
 
+  The `.sr-only` utility in `public/style.css` uses `overflow: clip` rather than `overflow: hidden` (voicebox-beads-dche,
+  the live room copy of voicebox-beads-y5dr). Under `overflow: hidden` the 1px box was a scroll container with a 65x20
+  scroll area on 6 of the room's 18 labels that script could scroll to (`scrollLeft = 999` moving to 64). `overflow: clip`
+  clips identically without creating a scroll container, reducing scroll containers from 6 to 0 while keeping the accessible
+  name in the accessibility tree intact. Pinned by `tests/type-scale.test.mjs`.
+
   The same file carries the room and Help placeholder fix (voicebox-beads-0q5c): those pages drew placeholder
   text from the user agent's grey, measuring 4.45:1 light and 4.16:1 dark against the fields' own backgrounds
   (and 4.19:1 / 3.17:1 on the two transcript fields' darker ground), under the 4.5:1 floor this project applies

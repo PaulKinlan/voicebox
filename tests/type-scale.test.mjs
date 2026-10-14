@@ -154,3 +154,69 @@ test("browser: computed font sizes meet or exceed 12px across room, mobile, and 
   assert.ok(protoMetrics.trayPx !== null && protoMetrics.trayPx >= 12, `prototype bubble-tray-label font-size must be >= 12px, got ${protoMetrics.trayPx}`);
   assert.ok(protoMetrics.badgePx !== null && protoMetrics.badgePx >= 12, `prototype bubble-badge font-size must be >= 12px, got ${protoMetrics.badgePx}`);
 });
+
+test("static: public/style.css .sr-only clips without creating a scroll container (voicebox-beads-dche)", () => {
+  const css = readFileSync(path.join(PUBLIC, "style.css"), "utf8");
+  const srOnlyRule = /\.sr-only\s*\{([^}]*)\}/.exec(css);
+  assert.ok(srOnlyRule, "public/style.css must declare a .sr-only rule");
+  assert.match(srOnlyRule[1], /overflow:\s*clip/, "public/style.css .sr-only must clip without a scroll container");
+  assert.doesNotMatch(srOnlyRule[1], /overflow:\s*(?:hidden|auto|scroll)/, "public/style.css .sr-only must not create a scroll container");
+});
+
+test("browser: room .sr-only elements clip with zero scroll containers and preserve accessible button names (voicebox-beads-dche)", { timeout: 60000 }, async (t) => {
+  const server = await startServer({
+    cwd: ROOT,
+    env: { VOICEBOX_WORKSPACE: undefined },
+  });
+  t.after(() => server.stop());
+
+  const page = await launch();
+  t.after(() => page.close());
+
+  await page.goto(`${server.base}/`);
+  await page.waitFor(() => document.body !== null);
+
+  // Live room .sr-only nodes (all 18 nodes) have 0 scroll containers + control arms
+  const liveCheck = await page.evaluate(() => {
+    const arm = (overflow) => {
+      const box = document.createElement("span");
+      box.textContent = "Harnesses Controls Long Text Overflow";
+      box.style.cssText = `position:absolute;width:1px;height:1px;clip-path:inset(50%);white-space:nowrap;overflow:${overflow};`;
+      document.body.append(box);
+      box.scrollLeft = 999;
+      box.scrollTop = 999;
+      const scrolled = box.scrollLeft !== 0 || box.scrollTop !== 0;
+      box.remove();
+      return scrolled;
+    };
+
+    const nodes = [...document.querySelectorAll(".sr-only")];
+    const scrollable = [];
+    nodes.forEach((node, i) => {
+      node.scrollLeft = 999;
+      node.scrollTop = 999;
+      if (node.scrollLeft !== 0 || node.scrollTop !== 0) {
+        scrollable.push({ index: i, text: node.textContent, scrollLeft: node.scrollLeft });
+      }
+    });
+
+    return {
+      total: nodes.length,
+      scrollableCount: scrollable.length,
+      scrollable,
+      controlHidden: arm("hidden"),
+      controlClip: arm("clip"),
+    };
+  });
+
+  assert.equal(liveCheck.total, 18, "room must carry exactly 18 .sr-only elements");
+  assert.equal(liveCheck.controlHidden, true, "control arm: overflow:hidden 1px box MUST be scrollable (detecting the defect)");
+  assert.equal(liveCheck.controlClip, false, "control arm: overflow:clip 1px box must have nothing to scroll");
+  assert.equal(liveCheck.scrollableCount, 0, `all 18 live .sr-only boxes must have 0 scroll containers (was 6 before fix), got ${liveCheck.scrollableCount}`);
+
+  // Accessibility tree read: .sr-only text must still name the button
+  await page.send("Accessibility.enable");
+  const axTree = await page.send("Accessibility.getFullAXTree");
+  const harnessesBtn = axTree.nodes.find((n) => n.role?.value === "button" && n.name?.value === "Harnesses");
+  assert.ok(harnessesBtn, "the .sr-only text 'Harnesses' must still name its button in the full accessibility tree");
+});

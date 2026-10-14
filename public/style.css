@@ -53,7 +53,12 @@ input { caret-color: var(--accent); }
 * { scrollbar-color: var(--line) transparent; scrollbar-width: thin; }
 .icon-definitions { position: absolute; width: 0; height: 0; overflow: hidden; }
 .icon { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
-.sr-only { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); overflow: hidden; white-space: nowrap; }
+/* `clip`, not `hidden` (voicebox-beads-dche). The 1px box is a SCROLL CONTAINER under `hidden`, so the
+   label text inside it has scrollable overflow that script can scroll to - measured on this page: a
+   65x20 scroll area inside a 1x1 client box, and `scrollLeft = 999` really moved it to 64. `clip` clips
+   identically and creates no scroll container, so there is nothing to scroll to. Baseline widely
+   available since 2022-09-12 (Chrome/Edge 90, Firefox 81, Safari 16), so no fallback is needed. */
+.sr-only { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); overflow: clip; white-space: nowrap; }
 .skip-link { position: fixed; top: 12px; left: 12px; z-index: 10; padding: 12px; border-radius: 8px; background: var(--card); transform: translateY(-200%); }
 .skip-link:focus { transform: none; }
 .quiet { display: inline-flex; align-items: center; gap: 7px; min-height: 40px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: .8125rem; }
