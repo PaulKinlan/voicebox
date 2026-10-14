@@ -190,7 +190,35 @@ test("the rows still tell the truth after the move, and a listener-free clone of
   await page.evaluate(() => localStorage.setItem("voicebox.devices", JSON.stringify({ mic: { id: "mic-that-left", name: "Desk microphone" }, out: { id: "out-that-left", name: "Studio monitors" } })));
   await page.reload();
   await page.waitFor(() => window.__voiceboxDevices !== undefined, { label: "the host to republish the device surface after reload" });
+
+  // DRIVE THE REFRESH THE ROW NEEDS, instead of reading whatever the BOOT refresh happened to paint
+  // (voicebox-beads-jeye). The output row's first branch reads a fact only the live client knows
+  // (`canChooseOutput`), and the client is published by a DIFFERENT module script (live-voice.js) than
+  // the one that boots this surface (fused.js) — two module scripts whose completion order is not fixed,
+  // because fused.js's body awaits. So on a box where live-voice.js lost that race, the boot refresh
+  // painted "This browser uses system output. Change the output in your device's sound settings." and
+  // the assertion below failed on a correct module. Waiting for the client and then refreshing is
+  // exactly what the real user path does — opening the settings dialog refreshes the device state —
+  // and it makes this arm independent of load order rather than dependent on it.
+  await page.waitFor(() => typeof window.__voiceboxLiveClient === "object" && window.__voiceboxLiveClient !== null, { label: "the live client to be published (the output row's canChooseOutput fact)" });
+  await page.evaluate(async () => { await window.__voiceboxDevices.refresh(); });
+  await page.waitFor(() => document.getElementById("out-device-state")?.textContent?.includes("Studio monitors"), { label: "the output row to name its own saved device after a refresh" });
   await page.waitFor(() => document.getElementById("mic-device-state")?.textContent?.includes("Desk microphone"), { label: "the stored microphone to be named after a reload" });
+
+  // SENSITIVITY, and the race documented rather than hidden: take the client away (the exact state the
+  // boot refresh can genuinely be in), refresh, and the SAME row paints the system-output line instead —
+  // so the wait above is load-bearing and the row really is reading the client fact, not a constant.
+  const stale = await page.evaluate(async () => {
+    const client = window.__voiceboxLiveClient;
+    window.__voiceboxLiveClient = null;
+    await window.__voiceboxDevices.refresh();
+    const withoutClient = document.getElementById("out-device-state").textContent;
+    window.__voiceboxLiveClient = client;
+    await window.__voiceboxDevices.refresh();
+    return { withoutClient, withClient: document.getElementById("out-device-state").textContent };
+  });
+  assert.match(stale.withoutClient, /This browser uses system output/, "with no live client the canChooseOutput fact is unknown and the row must say so — this is the line the un-refreshed arm was reading on the box that failed");
+  assert.match(stale.withClient, /Studio monitors/, "with the client back, the refresh must name the saved device again");
 
   const rows = await page.evaluate(() => ({
     mic: document.getElementById("mic-device-state").textContent,
