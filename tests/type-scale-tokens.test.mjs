@@ -71,20 +71,30 @@ const NOT_A_SIZE = /^(?:inherit|initial|unset|revert|revert-layer|caption|icon|m
  *  this check cannot answer for, which is a refusal rather than a pass (voicebox-beads-94of). */
 const LENGTH = /(-?\d*\.?\d+)(px|rem|em|%|pt|pc|q|mm|cm|in|ch|ex|cap|ic|lh|rlh|vw|vh|vmin|vmax)/g;
 
+/** The 1-based line an offset falls on, so a refusal still names the real line of the file. */
+const lineAt = (text, index) => text.slice(0, index).split("\n").length;
+
+/** A declaration value as a person reads it: one line, internal whitespace collapsed. */
+const tidy = (value) => value.trim().replace(/\s+/g, " ");
+
 /**
  * Every custom property the file declares, by name, in EVERY scope — plus the pinned `--text-*` scale as the
  * default a page may lean on without declaring it (public/style.css's `:root` owns the scale, and the pages
  * that load it share the cascade). A scoped override is a real size for the elements it applies to, so all
  * declared values are kept and the floor is applied to the smallest of them: that is what catches
  * `.foot-fact { --text-xs: 0.6rem; font-size: var(--text-xs) }` (voicebox-beads-94of).
+ *
+ * Read over the whole text rather than line by line, because a declaration's value may start on the next
+ * line — `--text-2xs:` then `0.75rem;` is valid CSS, and a line-at-a-time scan cannot see it
+ * (voicebox-beads-jlfq). Custom property names are case-SENSITIVE in CSS, so this stays case-sensitive.
  */
 function customProperties(text) {
   const props = new Map();
   const add = (name, value, line) => props.set(name, [...(props.get(name) ?? []), { value, line }]);
   for (const [name, value] of Object.entries(TOKENS)) add(`--${name}`, value, 0);
-  text.split("\n").forEach((line, i) => {
-    for (const [, name, value] of line.matchAll(/(--[A-Za-z0-9_-]+)\s*:\s*([^;}]+)/g)) add(name, value.trim(), i + 1);
-  });
+  for (const match of text.matchAll(/(--[A-Za-z0-9_-]+)\s*:\s*([^;}]+)/g)) {
+    add(match[1], tidy(match[2]), lineAt(text, match.index));
+  }
   return props;
 }
 
@@ -201,28 +211,34 @@ function shorthandSize(value) {
 }
 
 /**
- * Every size a stylesheet declares, as `{line, decl, px, why}` — one entry per size it resolves to, plus one
- * entry per size it could not resolve (`px: null`, with the reason in `why`). Reads `font-size: <value>` and
- * the size slot of the `font:` shorthand; values carried by a custom property are resolved, so a sub-12px
+ * Every size a stylesheet declares, as `{line, decl, px, via, why}` — one entry per size it resolves to, plus
+ * one entry per size it could not resolve (`px: null`, with the reason in `why`). Reads `font-size: <value>`
+ * and the size slot of the `font:` shorthand; values carried by a custom property are resolved, so a sub-12px
  * size cannot travel through a token, a scoped override, or a nested fallback unseen.
+ *
+ * The text is read as DECLARATION text, not one line at a time, and property names are case-folded: the two
+ * valid CSS spellings a line-at-a-time, case-sensitive scan is blind to are a value that starts on the next
+ * line (`font-size:` then `0.6rem;`) and an upper-cased property name (`FONT-SIZE:`) — both shipped sub-floor
+ * text past the gate while it reported green (voicebox-beads-jlfq). The source offset is kept so a refusal
+ * still names the real line of the file.
  */
 function declaredSizes(text) {
   const clean = withoutComments(text);
   const props = customProperties(clean);
   const out = [];
-  clean.split("\n").forEach((line, i) => {
-    for (const match of line.matchAll(/(?:^|[\s;{"'])(font-size|font)\s*:\s*([^;}"']+)/g)) {
-      const [, prop, value] = match;
-      const size = prop === "font" ? shorthandSize(value) : value.trim();
-      if (size === null) continue;
-      const { sizes, unresolved } = resolveValue(size, props);
-      const decl = `${prop}: ${value.trim()}`;
-      for (const { px, via } of sizes) out.push({ line: i + 1, decl, px, via, why: null });
-      for (const unknown of unresolved) {
-        out.push({ line: i + 1, decl, px: null, via: null, why: `cannot be resolved: ${unknown}` });
-      }
+  for (const match of clean.matchAll(/(?:^|[\s;{"'])(font-size|font)\s*:\s*([^;}"']+)/gi)) {
+    const prop = match[1].toLowerCase();
+    const value = tidy(match[2]);
+    const line = lineAt(clean, match.index + match[0].indexOf(match[1]));
+    const size = prop === "font" ? shorthandSize(value) : value;
+    if (size === null) continue;
+    const { sizes, unresolved } = resolveValue(size, props);
+    const decl = `${prop}: ${value}`;
+    for (const { px, via } of sizes) out.push({ line, decl, px, via, why: null });
+    for (const unknown of unresolved) {
+      out.push({ line, decl, px: null, via: null, why: `cannot be resolved: ${unknown}` });
     }
-  });
+  }
   return out;
 }
 
@@ -307,6 +323,27 @@ test("the floor scanner refuses a sub-12px size carried by a custom property (vo
   assert.deepEqual(belowFloor(`.x { font: 13px/1.4 var(--mono, monospace); }`), [],
     "a var in the shorthand's FAMILY is not the size slot");
   assert.deepEqual(belowFloor(`.x { font: inherit; }`), [], "a CSS-wide keyword declares no size");
+});
+
+test("the floor scanner reads a declaration as declaration text, not one line at a time (voicebox-beads-jlfq)", () => {
+  // Two valid CSS spellings a line-at-a-time, case-sensitive scan is blind to. Both are non-equivalent
+  // mutants, measured in a real Chromium against a 12px control: the appended `.rev-wrapped` computed to
+  // 9.6px and `.rev-case` to 11px on a shipped page while the scanner reported the floor green.
+  const wrapped = belowFloor(`.rev-wrapped {\n  font-size:\n  0.6rem;\n}`);
+  assert.equal(wrapped.length, 1, "a value that starts on the next line must still be read");
+  assert.equal(wrapped[0].line, 2, "the refusal must name the property's own line, not the value's");
+  assert.equal(belowFloor(`.rev-case { FONT-SIZE: 11px; }`).length, 1, "an upper-cased property name must still be read");
+  assert.equal(belowFloor(`.x { FONT: 600 11px/1.4 monospace; }`).length, 1, "the font: shorthand is case-folded too");
+  assert.equal(belowFloor(`.x { Font-Size: var(--mystery); }`).length, 1, "an unreadable size is refused in any casing");
+  assert.equal(belowFloor(`.x {\n  --text-2xs:\n  0.65rem;\n  font-size: var(--text-2xs);\n}`).length, 1,
+    "a custom property whose value starts on the next line must still be resolved and floored");
+
+  // …and the honest spellings stay green: the refusal must not be a check that always fails.
+  assert.deepEqual(belowFloor(`.x { FONT-SIZE: 0.75rem; }`), [], "an upper-cased size AT the floor is fine");
+  assert.deepEqual(belowFloor(`.x {\n  font-size:\n  var(--text-xs);\n}`), [], "a line-split pinned token is fine");
+  assert.deepEqual(belowFloor(`.x {\n  --text-2xs:\n  0.75rem;\n  font-size: var(--text-2xs);\n}`), [],
+    "a line-split new token AT the floor is fine");
+  assert.deepEqual(belowFloor(`.x { FONT: inherit; }`), [], "a case-folded CSS-wide keyword still declares no size");
 });
 
 test("the room's .sr-only clips instead of scrolling (voicebox-beads-dche)", () => {

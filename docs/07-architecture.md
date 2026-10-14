@@ -256,8 +256,10 @@ AudioWorklet modules loaded by the frontend audio engine: `pcm-worklet.js`.
   (`public/pip-mic.mjs`, the one module that injects a stylesheet of its own). The floor is pinned in two tiers:
   `tests/type-scale-tokens.test.mjs` reads the declarations with no browser — comments stripped, the `font:` shorthand
   read past any style or weight (`font: 600 11px/1.4 …` counts, which is how four sizes hid from the first
-  `font-size:`-only scan) — across every `public/*.css`, every page under `public/`, `designs/prototype.html` and
-  `public/pip-mic.mjs`, so the fast gate refuses a reintroduced sub-12px size. It also resolves a size carried by a
+  `font-size:`-only scan), read as declaration text rather than one line at a time and case-folded, so a value that
+  starts on the next line and an upper-cased property name are read too (voicebox-beads-jlfq) — across every
+  `public/*.css`, every page under `public/`, `designs/prototype.html` and `public/pip-mic.mjs`, so the fast gate
+  refuses a reintroduced sub-12px size. It also resolves a size carried by a
   custom property, in every scope: a scoped override of a pinned token (`--text-xs: 0.6rem` inside one rule) and a
   brand-new token are both refused, and the refusal names the declaration that set the size rather than every use of
   it. A size the check cannot read at all — an unknown `var()` with no fallback, or a unit it cannot convert to px —
