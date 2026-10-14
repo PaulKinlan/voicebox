@@ -16,10 +16,14 @@
 //   - the scan reads RAW TEXT, so prose counts: write "#i-whatever" in a comment here or in
 //     index.html and the guard will demand a symbol for it. Mention icons unquoted, like this.
 //   - the surface list below is hardcoded and complete TODAY (repo-wide grep). The invariant:
-//     if you add a file that names an icon, add it to the file list in the test below.
+//     if you add a file that names an icon, add it to the file list in the test below. The extracted
+//     `public/components/*.mjs` modules are swept by GLOB for exactly that reason: voicebox-beads-uei2.7
+//     moved the mini-app card's four literals into `public/components/mini-app-surface.mjs` and this
+//     guard caught it (fused.js fell to 1 ref against a floor of 5), so the next slice must not be able
+//     to repeat that by forgetting a line here.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -52,6 +56,12 @@ test("every icon reference in the room and its JS writers resolves to a defined 
   const fusedJs = readFileSync(path.join(PUBLIC, "fused.js"), "utf8");
   const themeJs = readFileSync(path.join(PUBLIC, "theme.mjs"), "utf8");
   const pipMic = readFileSync(path.join(PUBLIC, "pip-mic.mjs"), "utf8");
+  // Every extracted room component is swept by glob, so a slice that moves icon writers out of fused.js
+  // keeps being checked without a hardcoded list to forget (voicebox-beads-uei2.7).
+  const componentFiles = readdirSync(path.join(PUBLIC, "components"))
+    .filter((f) => f.endsWith(".mjs"))
+    .sort();
+  const componentTexts = componentFiles.map((f) => [f, readFileSync(path.join(PUBLIC, "components", f), "utf8")]);
   const definitions = spriteDefinitions(html);
   assert(definitions.length > 0, "the sprite itself was not found in index.html — the extraction broke, not the page");
   assert.deepEqual(duplicates(definitions), [], "the sprite defines an id twice");
@@ -60,6 +70,7 @@ test("every icon reference in the room and its JS writers resolves to a defined 
   const fusedRefs = iconReferences(fusedJs);
   const themeRefs = iconReferences(themeJs);
   const pipRefs = iconReferences(pipMic);
+  const componentRefs = componentTexts.flatMap(([, text]) => iconReferences(text));
   // Floors pin each EXTRACTION surface itself (voicebox-beads-jvek): before them, the reviewer's
   // mutants — iconReferences body -> return [], and dropping the markup surface from the union —
   // both passed 2/2 because every assertion was satisfiable from the builder sweep alone.
@@ -68,23 +79,44 @@ test("every icon reference in the room and its JS writers resolves to a defined 
     `the markup surface shrank: ${htmlRefs.length} literal refs, ${new Set(htmlRefs).size} distinct — the markup extraction broke or the page lost icons`,
   );
   assert(
-    fusedRefs.length >= 5 && themeRefs.length >= 2 && pipRefs.length >= 2,
-    `a JS literal surface shrank: fused.js ${fusedRefs.length} refs, theme.mjs ${themeRefs.length} refs, pip-mic.mjs ${pipRefs.length}`,
+    fusedRefs.length + componentRefs.length >= 5 && themeRefs.length >= 2 && pipRefs.length >= 2,
+    `a JS literal surface shrank: fused.js ${fusedRefs.length} + components ${componentRefs.length} refs, theme.mjs ${themeRefs.length} refs, pip-mic.mjs ${pipRefs.length}`,
+  );
+  // The component surface has its own floor: the literals that moved must still exist where they moved
+  // TO, or the floor above would be satisfiable after a slice silently dropped them.
+  assert(
+    componentRefs.length >= 4,
+    `the extracted component literal surface shrank: ${componentRefs.length} refs in public/components/*.mjs`,
   );
 
   // The union must actually CARRY every extraction surface (dropping a surface from the union was
   // the reviewer's green mutant — on markup first, and again on the JS literal surfaces in the
   // jvek review): every extracted id, from every surface, is in the checked set.
-  const builderRefs = [...builderReferences(fusedJs), ...builderReferences(themeJs), ...builderReferences(pipMic)];
+  const builderRefs = [
+    ...builderReferences(fusedJs),
+    ...builderReferences(themeJs),
+    ...builderReferences(pipMic),
+    ...componentTexts.flatMap(([, text]) => builderReferences(text)),
+  ];
   const references = [
     ...htmlRefs,
     ...fusedRefs,
     ...themeRefs,
     ...pipRefs,
+    ...componentRefs,
     ...builderRefs,
   ];
   assert(references.length > 0, "no icon references found at all — the extraction broke, not the page");
-  for (const [surface, ids] of [["markup", htmlRefs], ["fused literals", fusedRefs], ["theme literals", themeRefs], ["pip literals", pipRefs], ["builder sweep", builderRefs]]) {
+  // The subset loop below is BLIND when a dropped surface's ids also appear in another surface (i-maximize
+  // and i-minimize are written by index.html's markup too, so removing a surface from the union stayed
+  // GREEN in a probe — voicebox-beads-uei2.7). Pin the arithmetic instead: the union must be exactly the
+  // surfaces it claims to carry, so dropping or duplicating one fails whatever the ids are.
+  assert.equal(
+    references.length,
+    htmlRefs.length + fusedRefs.length + themeRefs.length + pipRefs.length + componentRefs.length + builderRefs.length,
+    "the union no longer equals the surfaces it claims to carry — a surface was dropped from it (or counted twice)",
+  );
+  for (const [surface, ids] of [["markup", htmlRefs], ["fused literals", fusedRefs], ["theme literals", themeRefs], ["pip literals", pipRefs], ["component literals", componentRefs], ["builder sweep", builderRefs]]) {
     assert(
       ids.every((id) => references.includes(id)),
       `the union no longer carries the ${surface} surface — those references are unchecked`,
