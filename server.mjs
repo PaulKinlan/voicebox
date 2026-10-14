@@ -24,6 +24,7 @@ import { createChangelogRoutes } from "./lib/routes/changelog.mjs";
 import { createBranchRoutes } from "./lib/routes/branches.mjs";
 import { createDoctorRoutes } from "./lib/routes/doctor.mjs";
 import { createHarnessRoutes } from "./lib/routes/harnesses.mjs";
+import { createToolCatalogRoutes } from "./lib/routes/tool-catalog.mjs";
 import { createExtensionRoutes } from "./lib/routes/extensions.mjs";
 import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, reachableFromEnvironment, rootVanished } from "./core/root.ts";
 import { normaliseRelativeDir, parentDir } from "./core/paths.ts";
@@ -3746,6 +3747,19 @@ const harnessRoutes = createHarnessRoutes({
   readJsonBody,
   answerOnce,
 });
+const toolCatalogRoutes = createToolCatalogRoutes({
+  json,
+  searchTools,
+  listTools,
+  // LIVE, not a snapshot: `active` is reassigned when a machine root is declared or deleted, and this
+  // route lists the ACTIVE tree. Handing over the value would freeze the boot-time root (voicebox-beads-w1f9).
+  getActiveRoot: () => active,
+  rootDir: ROOT,
+  activeMiniAppRegistry,
+  harnessInventory,
+  listHarnessesWithConfiguredAgents,
+  agentRegistry,
+});
 const routes = {
   ...presenceRoutes,
   ...agentsReadRoutes,
@@ -3861,24 +3875,7 @@ const routes = {
       return json(res, 200, { ok: true, delegated: results, results });
     });
   },
-  "GET /api/tools": async (req, res, url) => {
-    const q = (url.searchParams.get("q") ?? "").trim();
-    const kind = (url.searchParams.get("kind") ?? "").trim() || undefined;
-    const limitParam = url.searchParams.get("limit");
-    const limit = limitParam ? Number(limitParam) : undefined;
-    const miniAppTools = activeMiniAppRegistry.getAllTools();
-    let harnesses = [];
-    try {
-      const inv = await harnessInventory();
-      const combined = await listHarnessesWithConfiguredAgents(inv, agentRegistry);
-      harnesses = combined.harnesses ?? [];
-    } catch {}
-    const rootPath = active?.root?.kind === "machine" ? active.root.path : ROOT;
-    const result = q
-      ? await searchTools(q, { rootPath, kind, limit, miniAppTools, harnesses })
-      : await listTools({ rootPath, kind, miniAppTools, harnesses });
-    return json(res, 200, result);
-  },
+  ...toolCatalogRoutes,
   "GET /api/keys": (req, res) => json(res, 200, apiKeysStatusPayload()),
   "PUT /api/keys": async (req, res) => {
     const parsed = await readJsonBody(req, res);
