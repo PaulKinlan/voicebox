@@ -22,11 +22,23 @@ test("the host wires presence once at the first table position, without shadowin
   const server = readFileSync(path.join(root, "server.mjs"), "utf8");
   assertPresenceWiring(server);
 
-  // The REAL source has extracted the neighbouring fleet GET to a spread. The old literal-neighbour
-  // assertion is required to fail on that source, while the new order-based guard passes it.
-  assert.match(server, /\n  \.\.\.fleetRoutes,\n/);
-  assert.throws(() => assert.match(server, /const routes = \{\s*\.\.\.presenceRoutes,\s*\.\.\.agentsReadRoutes,\s*"GET \/api\/fleet":/),
-    { name: "AssertionError" }, "the former assertion wrongly refused this real neighbour extraction");
+  // Both versions of the REAL table (before and after extracting its fleet neighbour) must satisfy
+  // the presence guard. Only the retired adjacency check should disagree. This proof can itself run
+  // on either version of the host, instead of assuming fleet GET was already extracted.
+  const inlineRoute = /  "GET \/api\/fleet": async \(req, res, url\) => \{\n(?:.*\n)*?  \},\n/;
+  const extractedFleet = server.includes("  ...fleetRoutes,\n")
+    ? server
+    : server.replace(inlineRoute, "  ...fleetRoutes,\n");
+  const inlineFleet = server.includes("  ...fleetRoutes,\n")
+    ? server.replace("  ...fleetRoutes,\n", '  "GET /api/fleet": () => null,\n')
+    : server;
+  assert.notEqual(extractedFleet, inlineFleet, "the neighbour-extraction control must actually alter the source");
+  assertPresenceWiring(inlineFleet);
+  assertPresenceWiring(extractedFleet);
+  const oldAdjacency = /const routes = \{\s*\.\.\.presenceRoutes,\s*\.\.\.agentsReadRoutes,\s*"GET \/api\/fleet":/;
+  assert.match(inlineFleet, oldAdjacency, "the old guard accepted the inline fleet neighbour");
+  assert.throws(() => assert.match(extractedFleet, oldAdjacency), { name: "AssertionError" },
+    "the old guard wrongly refused only the neighbour extraction, not a presence route change");
 
   const mutants = [
     server.replace("  ...presenceRoutes,\n", ""),
