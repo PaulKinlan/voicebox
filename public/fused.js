@@ -20,6 +20,7 @@ import { createPresenceUIController } from "./presence-ui.mjs";
 import { createVisionGroundingController } from "./vision-grounding.mjs";
 import { initChangelogDialog } from "./components/changelog-dialog.mjs";
 import { initEnvironmentRootDialog } from "./components/environment-root-dialog.mjs";
+import { initMicHotkeyController } from "./components/mic-hotkey-controller.mjs";
 
 const $ = (id) => document.getElementById(id);
 const SVG = "http://www.w3.org/2000/svg";
@@ -3596,57 +3597,8 @@ on(els.outSelect, "change", async () => {
   renderDevices();
 });
 
-// ── Configurable microphone hotkey (voicebox-beads-ebu) ───────────────────
-const HOTKEY_KEY = "voicebox-mic-hotkey";
-let micHotkey = "M";
 
-function updateHotkeyUI() {
-  if (els.micHotkey && els.micHotkey.value !== micHotkey) {
-    els.micHotkey.value = micHotkey;
-  }
-  if (els.micHotkeyState) {
-    els.micHotkeyState.textContent = `Press '${micHotkey}' to toggle mic`;
-  }
-  if (els.micHotkeyBadge) {
-    els.micHotkeyBadge.textContent = micHotkey;
-  }
-  if (els.mic) {
-    els.mic.setAttribute("aria-keyshortcuts", micHotkey);
-    els.mic.title = `Speak a turn (hotkey: ${micHotkey})`;
-  }
-}
-
-function loadHotkey() {
-  try {
-    const saved = localStorage.getItem(HOTKEY_KEY);
-    if (saved && typeof saved === "string" && saved.trim()) {
-      micHotkey = saved.trim().charAt(0).toUpperCase();
-    }
-  } catch {}
-  updateHotkeyUI();
-}
-
-function setHotkey(key) {
-  const clean = (key || "M").trim().charAt(0).toUpperCase() || "M";
-  micHotkey = clean;
-  try { localStorage.setItem(HOTKEY_KEY, micHotkey); } catch {}
-  updateHotkeyUI();
-}
-
-on(els.micHotkey, "input", () => {
-  const val = (els.micHotkey?.value ?? "").trim();
-  if (val) {
-    setHotkey(val);
-  }
-});
-
-on(els.micHotkey, "keydown", (e) => {
-  if (e.key === "Escape" || e.key === "Tab") return;
-  if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-    e.preventDefault();
-    setHotkey(e.key);
-  }
-});
+const micHotkeyController = initMicHotkeyController({ els, on, storage: localStorage });
 
 window.addEventListener("keydown", (e) => {
   if (e.defaultPrevented) return;
@@ -3680,13 +3632,9 @@ window.addEventListener("keydown", (e) => {
     els.utterance?.focus();
     return;
   }
-  if (e.key && e.key.toUpperCase() === micHotkey.toUpperCase()) {
+  if (micHotkeyController.matchesHotkey(e.key)) {
     e.preventDefault();
-    if (els.mic) {
-      els.mic.classList.add("hotkey-active");
-      setTimeout(() => els.mic?.classList.remove("hotkey-active"), 300);
-      els.mic.click();
-    }
+    micHotkeyController.toggleMic();
   }
 });
 
@@ -4279,8 +4227,8 @@ function startMeters() {
 stopMeters();
 
 loadPrefs();
-loadHotkey();
-window.__voiceboxHotkey = { get: () => micHotkey, set: setHotkey };
+micHotkeyController.loadHotkey();
+window.__voiceboxHotkey = { get: micHotkeyController.getHotkey, set: micHotkeyController.setHotkey };
 window.__voiceboxDevices = {
   micId: () => devices.prefs.mic.id || null,
   outputId: () => devices.prefs.out.id || null,
