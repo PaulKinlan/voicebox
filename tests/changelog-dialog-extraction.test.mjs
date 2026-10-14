@@ -76,13 +76,22 @@ test("changelog dialog extraction: the returned handle opens it from the build s
     // it was asked for — the extraction must leave that call byte-for-byte as it was.
     await page.evaluate(() => {
       window.__changelogFetches = [];
+      // ALSO counted: how many of them have SETTLED. "Exactly one fetch is issued per click" needs a
+      // moment when no further request can still be issued, and the previous version of this test guessed
+      // that moment with a 400ms sleep (voicebox-beads-zjpm.5): a slow server then made the count read 1 and
+      // failed the gate, while a second listener slower than 400ms was missed. Two listeners on one click
+      // dispatch in the SAME synchronous task, so waiting for the request to settle is a real bound rather
+      // than a guess — see the assertion that uses it.
+      window.__changelogSettled = 0;
       const realFetch = window.fetch.bind(window);
       window.fetch = (input, init) => {
         const url = typeof input === "string" ? input : input?.url ?? "";
-        if (url.includes("/api/changelog")) {
+        const counted = url.includes("/api/changelog");
+        if (counted) {
           window.__changelogFetches.push({ url, priority: init?.priority ?? null });
         }
-        return realFetch(input, init);
+        const answer = realFetch(input, init);
+        return counted ? answer.finally(() => { window.__changelogSettled += 1; }) : answer;
       };
     });
 
@@ -154,11 +163,57 @@ test("changelog dialog extraction: the returned handle opens it from the build s
       label: "the refresh click to reach the server",
       timeout: 15000,
     });
-    // Give a hypothetical second listener the same window to fetch before counting.
-    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 400)));
+    // WAIT FOR THE OBSERVABLE THE COUNT DEPENDS ON, not for a guessed delay (voicebox-beads-zjpm.5). Two
+    // listeners on the same click run in the SAME synchronous dispatch, so once this request has SETTLED no
+    // further request can be issued by that click — a real bound, where the 400ms sleep that used to sit
+    // here was both a flake (a slow server made the count read 1) and a weaker mutant (a second listener
+    // slower than 400ms escaped the count entirely).
+    await page.waitFor(() => window.__changelogSettled >= 2, {
+      label: "both the open and the refresh fetch to settle",
+      timeout: 15000,
+    });
+    // THE CONTROL THAT GIVES THE COUNT ITS TEETH: with a SECOND listener on the same button, one click
+    // must count TWO. Without this, a counter that had quietly stopped counting would still satisfy a
+    // "exactly one" assertion, and the numbers below would prove nothing.
+    const doubled = await page.evaluate(async () => {
+      window.__changelogFetches.length = 0;
+      window.__changelogSettled = 0;
+      const button = document.getElementById("changelog-refresh");
+      const extra = () => fetch("/api/changelog", { priority: "high" });
+      button.addEventListener("click", extra);
+      button.click();
+      const deadline = Date.now() + 15000;
+      while (window.__changelogSettled < 2 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      button.removeEventListener("click", extra);
+      await new Promise((resolve) => setTimeout(resolve, 250)); // a removed listener must not fire late either
+      return { count: window.__changelogFetches.length, settled: window.__changelogSettled };
+    });
+    assert.equal(doubled.count, 2, `the counter must see a second listener's request, or the count below proves nothing (it read ${doubled.count})`);
+    assert.equal(doubled.settled, 2, "and the settled counter must see it too");
+
+    // 2c. THE CLICK UNDER TEST, from a clean count: one click, one request, and it stays one after the
+    //     request has settled — the wait is on the observable the count depends on, not on a guessed delay.
+    await page.evaluate(() => { window.__changelogFetches.length = 0; window.__changelogSettled = 0; });
+    await page.click("#changelog-refresh");
+    await page.waitFor(() => window.__changelogFetches.length >= 1, {
+      label: "the refresh click's request to be issued",
+      timeout: 15000,
+    });
+    await page.waitFor(() => window.__changelogSettled >= 1, {
+      label: "that request to settle",
+      timeout: 15000,
+    });
+    // AN ABSENCE NEEDS A WINDOW — there is nothing to wait FOR when the claim is that NO further request is
+    // issued — but this one now starts from a SETTLED state instead of from a guessed delay, which is the
+    // real change here (voicebox-beads-zjpm.5). 250ms rather than the 400ms it replaces, because the mutant
+    // it guards (a leftover second listener) fires either in the same dispatch or on a short timer, and the
+    // control above proves the counter would see it when it does.
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 250)));
     const afterRefresh = await page.evaluate(() => window.__changelogFetches.slice());
-    assert.equal(afterRefresh.length, 2, `one refresh click must fetch exactly once more, got ${afterRefresh.length - 1}`);
-    assert.equal(afterRefresh[1].priority, "high", "the refresh click asks for priority 'high', as it did in fused.js");
+    assert.equal(afterRefresh.length, 1, `one refresh click must fetch exactly once, got ${afterRefresh.length}`);
+    assert.equal(afterRefresh[0].priority, "high", "the refresh click asks for priority 'high', as it did in fused.js");
 
     // 3. CLOSE ASKS FOR FOCUS ON THE TRIGGER THAT OPENED IT — the build link, not the header button.
     //    This is the module's `lastChangelogTrigger`, and it is measured as a call count, never as
