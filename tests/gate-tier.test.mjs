@@ -17,7 +17,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { TIERS, aggregateTierRecords, tierRecordPath } from "../scripts/gate-manifest.mjs";
+import { TIERS, aggregateTierRecords, baseNamesACommit, tierRecordPath } from "../scripts/gate-manifest.mjs";
 import { TIER_WORKERS, recordOf, runOneTier, testCounts, tierFiles, tierVerdict } from "../scripts/gate-tier.mjs";
 import { classify } from "../scripts/test-lanes.mjs";
 
@@ -240,6 +240,28 @@ test("the aggregate CLI is the same decision, keyed by tree, and answers with th
   assert.equal(result.status, 0, `a complete gate must exit 0: ${result.stdout}${result.stderr}`);
   assert.match(result.stdout, /verdict pass, reconciled true/);
   assert.match(readFileSync(path.join(out, `${tree}.full.manifest.json`), "utf8"), /"reconciled": true/);
+
+  // A BASE THAT DOES NOT RESOLVE IS AN UNKNOWN SCOPE, NOT AN EMPTY ONE. The changed-path map's `--json`
+  // developer path answers a base it cannot resolve with `{"changed":[],"unmapped":[]}` and exit 0 (git's
+  // "ambiguous argument" goes to stderr), so asking it and believing the answer would skip the
+  // unmapped-source refusal for a typo'd or unfetched base — the artifact would say `pass` about a scope
+  // nobody read. Measured before the fix: this gate sealed a manifest for a tree it could not describe.
+  const bogus = spawnSync(process.execPath, ["scripts/gate-manifest.mjs", "aggregate", "--gate", "full", "--tree", tree, "--tier-dir", recordDir, "--out", out, "--changed-base", "no/such/ref"], {
+    cwd: root,
+    encoding: "utf8",
+    env: cleanEnv,
+  });
+  assert.notEqual(bogus.status, 0, `a base that names no commit must refuse this gate: ${bogus.stdout}`);
+  assert.match(bogus.stderr, /--changed-base 'no\/such\/ref' does not name a commit/);
+  assert.match(bogus.stderr, /UNKNOWN/);
+  assert.match(readFileSync(path.join(out, `${tree}.full.manifest.json`), "utf8"), /"reconciled": false/);
   rmSync(recordDir, { recursive: true, force: true });
   rmSync(out, { recursive: true, force: true });
+});
+
+test("the base is resolved before the changed-path map is asked, and only a commit counts", () => {
+  assert.equal(baseNamesACommit("HEAD"), true, "HEAD is always a commit in this repository");
+  assert.equal(baseNamesACommit("no/such/ref"), false, "a base that resolves to nothing is not a commit");
+  assert.equal(baseNamesACommit("HEAD~999999"), false, "a base that walks off the history is not a commit");
+  assert.equal(baseNamesACommit("tests"), false, "an existing PATH is not a commit, and `--verify` says so rather than guessing");
 });

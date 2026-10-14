@@ -46,6 +46,10 @@ import os from "node:os";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { gitEnv } from "../lib/git-env.mjs";
+
+/** The repository this script lives in: the aggregate asks git about THIS tree, never about the caller's. */
+const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 export const MANIFEST_VERSION = 1;
 export const TIERS = Object.freeze(["unit", "server", "browser"]);
@@ -80,6 +84,22 @@ export function testChildEnv(base = process.env) {
 
 /** The marker prefix the hub's check-coverage.py matches at line start. Not a local style choice. */
 export const MARKER_PREFIX = "fast-gate:";
+
+/**
+ * Does `base` name a commit in THIS repository? Asked with git's local plumbing stripped (`gitEnv`), because
+ * a pre-push hook exports GIT_DIR and it outranks `-c`/`cwd` — a measurement of a tree must not be steerable
+ * by the environment of whatever ran it (voicebox-beads-bp8). Exported so the refusal is drivable without a
+ * repository that lacks the ref.
+ */
+export function baseNamesACommit(base, root = ROOT) {
+  try {
+    return Boolean(
+      execFileSync("git", ["rev-parse", "--verify", "--quiet", `${base}^{commit}`], { cwd: root, env: gitEnv(), encoding: "utf8" }).trim(),
+    );
+  } catch {
+    return false;
+  }
+}
 
 /** The tree this run measured, from git — the aggregate CLI's default label. */
 export function gitTree(cwd = process.cwd()) {
@@ -476,9 +496,9 @@ export function tapCounts(text) {
  * DUPLICATE and refused; a path no tier knows is UNCLASSIFIED and refused. `omittedReason` lets a non-full
  * gate account for the files it deliberately did not select, by name, rather than leaving them missing.
  */
-export function manifestFromTierRecords({ gate = "full", tree, sha = "", classified, records = [], changed = [], unmapped = [], omittedReason = null, dir = null }) {
+export function manifestFromTierRecords({ gate = "full", tree, sha = "", classified, records = [], changed = [], unmapped = [], base = "", omittedReason = null, dir = null }) {
   if (!tree) throw new ManifestRefusal(["aggregate needs the tree SHA the records describe (--tree)"]);
-  const manifest = createManifest({ gate, tree, sha, classified, changed, unmapped });
+  const manifest = createManifest({ gate, tree, sha, classified, changed, unmapped, base });
   // A CONFLICT BETWEEN RECORDS IS A REFUSAL WITH EVIDENCE, NOT A CRASH. `recordFile` refuses a duplicate
   // by throwing (for a single runner that is the right shape — the bug is in its own code). An aggregate is
   // folding records from SEVERAL processes, so the same condition is a fact about the run: it is collected
@@ -523,7 +543,7 @@ export function manifestFromTierRecords({ gate = "full", tree, sha = "", classif
  * roster-sized list of MISSING files: the difference between "the browser tier ran and every file failed"
  * and "the browser tier never started" is the first thing a reader of a red landing needs to know.
  */
-export function aggregateTierRecords({ tierDir = null, records = [], gate = "full", tree, sha = "", classified, changed = [], unmapped = [], omittedReason = null, problems = [], dir = null }) {
+export function aggregateTierRecords({ tierDir = null, records = [], gate = "full", tree, sha = "", classified, changed = [], unmapped = [], base = "", omittedReason = null, problems = [], dir = null }) {
   const tierProblems = [];
   const texts = [...records];
   if (tierDir) {
@@ -544,15 +564,23 @@ export function aggregateTierRecords({ tierDir = null, records = [], gate = "ful
     records: texts.map((text) => JSON.parse(text)),
     changed,
     unmapped,
+    base,
     omittedReason,
     dir,
   });
   if (tierProblems.length > 0 || problems.length > 0) {
     // THE PROBLEM IS EVIDENCE, NOT A CRASH: the artifact is still written (that is the run a later reader
     // has to audit), and the refusal is the exit code with the reason named.
+    //
+    // AND THE FILE ON DISK MUST SAY WHAT THE EXIT CODE SAYS. `manifestFromTierRecords` has already written
+    // the artifact by the time a caller's own problems are known (a scope that could not be read, a tier
+    // that wrote no record), so the artifact is REWRITTEN here. Measured: an aggregate refused for a base
+    // that names no commit still left `"reconciled": true` on disk — a receipt contradicting the gate that
+    // produced it, which is the defect this bead exists to remove.
     manifest.problems = [...problems, ...tierProblems, ...manifest.problems];
     manifest.reconciled = false;
     manifest.verdict = "refused";
+    if (written) writeManifest(manifest, dir);
   }
   return { manifest, written, tierProblems };
 }
@@ -591,13 +619,25 @@ if (import.meta.main) {
     let unmapped = [];
     const scopeProblems = [];
     if (changedBase) {
-      const probe = spawnSync(process.execPath, [fileURLToPath(new URL("./test-changed.mjs", import.meta.url)), "--base", changedBase, "--json", "--allow-unmapped"], { encoding: "utf8" });
-      try {
-        const answer = JSON.parse(probe.stdout);
-        changed = answer.changed ?? [];
-        unmapped = answer.unmapped ?? [];
-      } catch {
-        scopeProblems.push(`the changed-path map could not be computed against '${changedBase}' (exit ${probe.status}) — whether every changed source has a test is NOT known here, and an unknown scope is not an empty one`);
+      // THE BASE MUST NAME A COMMIT BEFORE THE MAP IS ASKED, because the mapping's `--json` developer path
+      // answers a base it cannot resolve with an EMPTY change set — git's "ambiguous argument" goes to
+      // stderr while the process still exits 0 (measured: `--base no/such/ref --json --allow-unmapped`
+      // prints `{"changed":[],"unmapped":[]}`). Read as an answer, that would skip the unmapped-source
+      // refusal for a typo'd or unfetched base and the artifact would say `pass` about a scope nobody read.
+      // Unknown is not empty, and a gate that cannot say what it measured cannot call itself a pass.
+      if (!baseNamesACommit(changedBase)) {
+        scopeProblems.push(
+          `--changed-base '${changedBase}' does not name a commit in this repository, so the changed set is UNKNOWN — refusing: a scope that cannot be read is not an empty scope`,
+        );
+      } else {
+        const probe = spawnSync(process.execPath, [fileURLToPath(new URL("./test-changed.mjs", import.meta.url)), "--base", changedBase, "--json", "--allow-unmapped"], { encoding: "utf8" });
+        try {
+          const answer = JSON.parse(probe.stdout);
+          changed = answer.changed ?? [];
+          unmapped = answer.unmapped ?? [];
+        } catch {
+          scopeProblems.push(`the changed-path map could not be computed against '${changedBase}' (exit ${probe.status}) — whether every changed source has a test is NOT known here, and an unknown scope is not an empty one`);
+        }
       }
     }
     const { manifest, written } = aggregateTierRecords({
@@ -609,6 +649,7 @@ if (import.meta.main) {
       classified,
       changed,
       unmapped,
+      base: changedBase ?? "",
       omittedReason: flag("omitted-reason", null),
       problems: scopeProblems,
       dir: flag("out", artifactDir()),

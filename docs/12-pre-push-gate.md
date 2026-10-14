@@ -40,10 +40,13 @@ A stage that refuses prints where its records were kept and how to fold them:
 [gate]   node scripts/gate-manifest.mjs aggregate --gate full --tree <tree> --tier-dir /tmp/voicebox-gate-tiers.XXXXXX
 ```
 
-**The manifest is the LAST stage, and a red gate seals none.** A receipt is for a gate that finished: if a
+**The manifest is the LAST stage, and a red TIER seals none.** A receipt is for a gate that finished: if a
 tier stage, acceptance or the fold itself refuses, pre-push stops there and no `<tree>.full.manifest.json`
-is written for a reader to quote as a pass. The tier records are kept on the red path (above) so the same
-fold can still be run by hand.
+carrying a `pass` is written for a reader to quote. The tier records are kept on the red path (above) so the
+same fold can still be run by hand. (One case is not "no artifact at all": when the FOLD is the stage that
+refuses — a changed source with no mapped test, a `--changed-base` that names no commit — the artifact that
+records those problems is written, says `refused`, and the push is still refused. Only a run that reconciles
+and dispatches every file with a green terminal status is ever labelled `pass`.)
 
 The stage commands come from the repository when it has a tier runner, and fall back to `npm run test:unit`
 / `npm run test:live` when it does not (the disposable repositories `tests/pre-push.test.mjs` drives supply
@@ -384,10 +387,16 @@ its unselected files are accounted for by name rather than left missing.
 and `<scratch>/browser.json` — one record per tier, in the directory `scripts/pre-push.sh` owns for that run,
 named by `tierRecordPath` so the writer and the reader cannot disagree. A tier that wrote NOTHING is refused
 by name (`the browser tier wrote no record at …`), because a missing process and a tier whose every file
-failed are different facts and the reader of a red landing needs the first one. `--changed-base <ref>` records
-the changed set (`<ref>...HEAD`) and refuses a changed source file that maps to no test, asked of the
-mapping's owner through its own `--json` CLI; that refusal is the same one the fast gate makes, over the union
-being landed, and it is off when no base is named so an aggregate over JSON records behaves as it always did.
+failed are different facts and the reader of a red landing needs the first one. The artifact records that
+refusal ON DISK, not only on stdout: a run the fold refuses is rewritten as `reconciled: false`,
+`verdict: refused` — an earlier version left the `pass` it had written before the caller's own problems were
+known, which is a receipt contradicting the gate that produced it. `--changed-base <ref>` records the changed
+set (`<ref>...HEAD`), records the ref itself as `base`, and refuses a changed source file that maps to no
+test, asked of the mapping's owner through its own `--json` CLI; that refusal is the same one the fast gate
+makes, over the union being landed. **The base must name a commit**: the mapping's `--json` developer path
+answers a base it cannot resolve with an empty change set and exit 0 (git's `ambiguous argument` goes to
+stderr), so the fold resolves the ref first and refuses when it does not — unknown scope is not empty scope.
+The whole check is off when no base is named, so an aggregate over JSON records behaves as it always did.
 
 The wiring is held by tests rather than by this paragraph: `tests/gate-tier.test.mjs` drives the tier runner
 and the fold (including a dropped file, a duplicate, a zero-test pass, a missing tier record and a failed

@@ -956,6 +956,10 @@ test('pre-push seals ONE full manifest from the tier records, and a red tier lea
     writeFileSync(path.join(repo, 'tests', 'names-browser.test.mjs'), "import test from 'node:test';\nimport assert from 'node:assert/strict';\nconst helper = 'tools/browser-shard-runner.mjs';\ntest('browser-ish', () => assert.ok(helper));\n");
     git('add', '-A');
     git('commit', '-qm', 'fixture: three lanes');
+    // The gate asks the changed-path map against `origin/main` — the branch a landing is compared to — so the
+    // fixture's landing ref has to exist. It is not decoration: without it the fold REFUSES (a base that
+    // names no commit is an unknown scope, not an empty one), which tests/gate-tier.test.mjs drives directly.
+    git('update-ref', 'refs/remotes/origin/main', 'HEAD');
     const tree = git('rev-parse', 'HEAD^{tree}').trim();
 
     const green = runGate();
@@ -966,6 +970,7 @@ test('pre-push seals ONE full manifest from the tier records, and a red tier lea
     assert.equal(manifest.gate, 'full');
     assert.equal(manifest.tree, tree, 'the receipt is keyed by the tree it measured');
     assert.equal(manifest.reconciled, true, `the full gate must reconcile: ${JSON.stringify(manifest.problems)}`);
+    assert.equal(manifest.base, 'origin/main', 'the receipt says which ref the changed set was read against');
     assert.equal(manifest.verdict, 'pass');
     assert.equal(manifest.summary.classified, 3, 'every classified file is accounted for');
     assert.equal(manifest.summary.dispatched, 3, 'a full gate dispatches the whole roster');
