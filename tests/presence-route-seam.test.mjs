@@ -2,16 +2,44 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createPresenceRoutes } from "../lib/routes/presence.mjs";
 import { createRoomPresenceCoordinator } from "../lib/room-presence.mjs";
+import { assertRouteGroupWiring } from "./lib/route-table.mjs";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-test("the host wires exactly the extracted presence table, not stale inline handlers", () => {
+function assertPresenceWiring(source) {
+  assert.match(source, /const presenceRoutes = createPresenceRoutes\(\{ roomPresence, json, readJsonBody, answerOnce, broadcastChannel \}\)/);
+  const members = assertRouteGroupWiring(source, {
+    group: "...presenceRoutes",
+    shadow: ["GET /api/presence", "POST /api/presence"],
+  });
+  assert.deepEqual(members.slice(0, 2), ["...presenceRoutes", "...agentsReadRoutes"],
+    "presence owns the first table position; the agents group follows it without shadowing");
+}
+
+test("the host wires presence once at the first table position, without shadowing or neighbour coupling", () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const server = readFileSync(path.join(root, "server.mjs"), "utf8");
-  assert.match(server, /const presenceRoutes = createPresenceRoutes\(\{ roomPresence, json, readJsonBody, answerOnce, broadcastChannel \}\)/);
-  assert.match(server, /const routes = \{\s*\.\.\.presenceRoutes,\s*\.\.\.agentsReadRoutes,\s*"GET \/api\/fleet":/, "presence then agents-read then fleet must retain exact table order");
-  assert.doesNotMatch(server, /"(?:GET|POST) \/api\/presence":/, "no duplicate inline handler can shadow the seam");
+  assertPresenceWiring(server);
+
+  // The REAL source has extracted the neighbouring fleet GET to a spread. The old literal-neighbour
+  // assertion is required to fail on that source, while the new order-based guard passes it.
+  assert.match(server, /\n  \.\.\.fleetRoutes,\n/);
+  assert.throws(() => assert.match(server, /const routes = \{\s*\.\.\.presenceRoutes,\s*\.\.\.agentsReadRoutes,\s*"GET \/api\/fleet":/),
+    { name: "AssertionError" }, "the former assertion wrongly refused this real neighbour extraction");
+
+  const mutants = [
+    server.replace("  ...presenceRoutes,\n", ""),
+    server.replace("  ...presenceRoutes,\n", "  ...presenceRoutes,\n  ...presenceRoutes,\n"),
+    server.replace("  ...presenceRoutes,\n  ...agentsReadRoutes,", "  ...agentsReadRoutes,\n  ...presenceRoutes,"),
+    server.replace("  ...presenceRoutes,\n", '  ...presenceRoutes,\n  "GET /api/presence": () => null,\n'),
+    server.replace("  ...presenceRoutes,\n", '  ...presenceRoutes,\n  "POST /api/presence": () => null,\n'),
+  ];
+  for (const [index, mutant] of mutants.entries()) {
+    assert.notEqual(mutant, server, `mutant ${index} must alter the real source`);
+    assert.throws(() => assertPresenceWiring(mutant), { name: "AssertionError" },
+      `mutant ${index} must refuse a missing, duplicated, reordered or shadowed presence group`);
+  }
 });
 
 function harness() {
