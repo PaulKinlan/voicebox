@@ -185,6 +185,19 @@ test("changelog dialog extraction: the returned handle opens it from the build s
       },
       { label: "changelog dialog closed and its trigger collapsed", timeout: 15000 },
     );
+    // THE FOCUS HALF SETTLES LATER THAN THE MODULE'S HANDLER, so waiting for the handler is not enough for the
+    // focus assertions either (voicebox-beads-ezu7, second instance of the same defect). Measured on the real
+    // page with focus starting inside the dialog: after `close()` a closed dialog still CONTAINED
+    // document.activeElement in 3 of 4 timing samples — synchronously, after a microtask AND after a macrotask,
+    // only settling later. Waiting on the close handler therefore does not imply the assertion below, and
+    // sampling it would be the same race that failed the merger's full gate on tree a07a559d, one assertion
+    // earlier. So wait for the exact observable this step asserts — focus no longer trapped inside — which is
+    // the house rule (tests/modal-panels.test.mjs) and cannot resolve early. If the trap is ever real, the
+    // label fails loudly instead of the test quietly sampling a moment before it would have escaped.
+    await page.waitFor(
+      () => !document.getElementById("changelog-dialog")?.contains(document.activeElement),
+      { label: "focus to leave the closed dialog", timeout: 15000 },
+    );
     const afterClose = await page.evaluate(() => ({
       dialogOpen: document.getElementById("changelog-dialog")?.open,
       expanded: document.getElementById("changelog-open")?.getAttribute("aria-expanded"),
