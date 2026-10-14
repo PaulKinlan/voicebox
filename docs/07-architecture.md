@@ -248,18 +248,24 @@ AudioWorklet modules loaded by the frontend audio engine: `pcm-worklet.js`.
 
   The stylesheet also establishes a legible type scale on `:root` (`--text-xs` 0.75rem through `--text-2xl` 1.25rem,
   voicebox-beads-3674) with an enforced 0.75rem (12px) readability floor for all secondary text, badges, hotkey tags,
-  and timestamps across desktop and responsive mobile viewports. All 19 sub-12px rem literals in `public/style.css`
-  (including `.mic-hotkey-badge`, `.sqeh-dock-label`, `.sqeh-action`, and `.harness-badge`) plus secondary surfaces
-  (`public/apps/agent-monitor.html`, `public/apps/landing-inspector.html`, and `designs/prototype.html`) are lifted to
-  the 0.75rem floor (`var(--text-xs)`), eliminating sub-12px text across shipped surfaces while maintaining responsive
-  proportions under zoom. `tests/type-scale.test.mjs` pins the declared `--text-*` scale, ensures zero sub-12px font
-  declarations remain, and browser-verifies computed font sizes (>= 12px) across desktop, mobile, and secondary apps.
+  and timestamps across desktop and responsive mobile viewports. Every sub-12px size in `public/style.css` — the 19
+  `font-size` literals (including `.mic-hotkey-badge`, `.sqeh-dock-label`, `.sqeh-action`, and `.harness-badge`) plus four
+  more hiding in `font:` shorthands — and the same in the secondary surfaces (`public/apps/agent-monitor.html`,
+  `public/apps/landing-inspector.html`, and `designs/prototype.html`) is lifted to the 0.75rem floor (`var(--text-xs)`),
+  eliminating sub-12px text across shipped surfaces while maintaining responsive proportions under zoom. The floor is
+  pinned in two tiers: `tests/type-scale-tokens.test.mjs` reads the declarations with no browser — comments stripped and
+  the `font:` shorthand read, so a shorthand cannot hide a 11px the way a `font-size:`-only scan would miss it — and runs
+  in the fast gate; `tests/type-scale.test.mjs` browser-verifies computed font sizes (>= 12px) across desktop, mobile, and
+  secondary apps, and proves the lifted rules are `rem` by doubling the root font size and watching them grow with it.
 
   The `.sr-only` utility in `public/style.css` uses `overflow: clip` rather than `overflow: hidden` (voicebox-beads-dche,
   the live room copy of voicebox-beads-y5dr). Under `overflow: hidden` the 1px box was a scroll container with a 65x20
-  scroll area on 6 of the room's 18 labels that script could scroll to (`scrollLeft = 999` moving to 64). `overflow: clip`
-  clips identically without creating a scroll container, reducing scroll containers from 6 to 0 while keeping the accessible
-  name in the accessibility tree intact. Pinned by `tests/type-scale.test.mjs`.
+  scroll area on 6 of the 18 labels that existed when it was measured, which script could scroll to (`scrollLeft = 999`
+  moving to 64). `overflow: clip` clips identically without creating a scroll container, and every label now measures 0
+  while its accessible name stays in the accessibility tree. The test does not pin the label count — a toolbar button added
+  on `main` took it from 18 to 19 — and instead asserts the invariant over whatever `.sr-only` nodes the page renders,
+  backed by a control arm that proves the probe still detects an `overflow: hidden` 1px box. Pinned by
+  `tests/type-scale.test.mjs`.
 
   The same file carries the room and Help placeholder fix (voicebox-beads-0q5c): those pages drew placeholder
   text from the user agent's grey, measuring 4.45:1 light and 4.16:1 dark against the fields' own backgrounds

@@ -1,81 +1,36 @@
-// tests/type-scale.test.mjs — verify legible type scale tokens and sub-12px text lifting (voicebox-beads-3674)
+// tests/type-scale.test.mjs — the type scale's BROWSER contract (voicebox-beads-3674, voicebox-beads-dche).
+//
+// Everything here launches a real Chromium over CDP, so this file is LIVE tier and is covered by the full
+// gate (and by the room's acceptance harness). The static half of the same contract — the tokens, the
+// 12px floor, the `.sr-only` declaration — needs no browser and lives in tests/type-scale-tokens.test.mjs,
+// which is UNIT tier and therefore runs in the fast gate.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startServer } from "./lib/server.mjs";
 import { launch } from "./lib/cdp.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const PUBLIC = path.join(ROOT, "public");
 
-test("static: public/style.css defines legible --text-* type scale tokens with 0.75rem floor", () => {
-  const css = readFileSync(path.join(PUBLIC, "style.css"), "utf8");
-  assert.match(css, /--text-xs:\s*0\.75rem;/, "style.css must declare --text-xs: 0.75rem");
-  assert.match(css, /--text-sm:\s*0\.8125rem;/, "style.css must declare --text-sm: 0.8125rem");
-  assert.match(css, /--text-base:\s*0\.875rem;/, "style.css must declare --text-base: 0.875rem");
-  assert.match(css, /--text-md:\s*0\.9375rem;/, "style.css must declare --text-md: 0.9375rem");
-  assert.match(css, /--text-lg:\s*1rem;/, "style.css must declare --text-lg: 1rem");
-  assert.match(css, /--text-xl:\s*1\.125rem;/, "style.css must declare --text-xl: 1.125rem");
-  assert.match(css, /--text-2xl:\s*1\.25rem;/, "style.css must declare --text-2xl: 1.25rem");
-});
+/**
+ * The room rules this bead lifted off sub-12px literal sizes, with the markup each one needs to apply.
+ * Read as computed sizes so a rule that stops resolving (`var(--text-xs)` renamed, a rule deleted, the
+ * token shadowed) fails here instead of on somebody's screen. [label, selector, markup]
+ */
+const LIFTED_ROOM_RULES = [
+  ["presence floor badge", ".presence-floor-badge", `<span class="presence-floor-badge">1</span>`],
+  ["doctor check status", ".doctor-check-status", `<span class="doctor-check-status">ok</span>`],
+  ["doctor check detail", ".doctor-check-detail", `<span class="doctor-check-detail">3 checks ran</span>`],
+  ["waiting-branches badge", ".badge", `<button class="quiet branches-open-btn"><span class="badge" aria-hidden="true">2</span></button>`],
+  ["branch commit sha", ".branch-commit-sha", `<span class="branch-commit-sha">a26fb12</span>`],
+  ["branch meta info", ".branch-meta-info", `<span class="branch-meta-info">2 files changed</span>`],
+  ["branch merge badge", ".branch-merge-badge", `<span class="branch-merge-badge">ready</span>`],
+  ["branch file status", ".file-status", `<div class="branch-file-item"><span class="file-status status-a">A</span></div>`],
+  ["branch file stats", ".file-stats", `<div class="branch-file-item"><span class="file-stats">+2 −1</span></div>`],
+];
 
-test("static: public/style.css contains zero sub-12px font-size declarations", () => {
-  const css = readFileSync(path.join(PUBLIC, "style.css"), "utf8");
-  const lines = css.split("\n");
-  const sub12px = [];
-  lines.forEach((line, idx) => {
-    const matches = line.matchAll(/font-size:\s*([^;]+);/g);
-    for (const match of matches) {
-      const val = match[1].trim();
-      let px = null;
-      if (val.endsWith("rem")) {
-        const num = parseFloat(val.replace("rem", ""));
-        px = num * 16;
-      } else if (val.endsWith("px")) {
-        px = parseFloat(val.replace("px", ""));
-      }
-      if (px !== null && px < 12) {
-        sub12px.push({ line: idx + 1, val, px, text: line.trim() });
-      }
-    }
-  });
-  assert.deepEqual(sub12px, [], "style.css must contain no sub-12px font-size declarations");
-});
-
-test("static: secondary app pages and prototype define type tokens and contain zero sub-12px font-size", () => {
-  const files = [
-    path.join(PUBLIC, "apps", "agent-monitor.html"),
-    path.join(PUBLIC, "apps", "landing-inspector.html"),
-    path.join(ROOT, "designs", "prototype.html"),
-  ];
-
-  for (const file of files) {
-    const content = readFileSync(file, "utf8");
-    assert.match(content, /--text-xs:\s*0\.75rem;/, `${path.basename(file)} must declare --text-xs`);
-
-    const lines = content.split("\n");
-    const sub12px = [];
-    lines.forEach((line, idx) => {
-      const matches = line.matchAll(/font-size:\s*([^;]+);/g);
-      for (const match of matches) {
-        const val = match[1].trim();
-        let px = null;
-        if (val.endsWith("rem")) {
-          const num = parseFloat(val.replace("rem", ""));
-          px = num * 16;
-        } else if (val.endsWith("px")) {
-          px = parseFloat(val.replace("px", ""));
-        }
-        if (px !== null && px < 12) {
-          sub12px.push({ file: path.basename(file), line: idx + 1, val, px });
-        }
-      }
-    });
-    assert.deepEqual(sub12px, [], `${path.basename(file)} must contain no sub-12px font-size declarations`);
-  }
-});
+const FLOOR_PX = 12;
 
 test("browser: computed font sizes meet or exceed 12px across room, mobile, and secondary apps (voicebox-beads-3674)", { timeout: 60000 }, async (t) => {
   const server = await startServer({
@@ -99,8 +54,29 @@ test("browser: computed font sizes meet or exceed 12px across room, mobile, and 
       dockPx: dock ? parseFloat(window.getComputedStyle(dock).fontSize) : null,
     };
   });
-  assert.ok(roomMetrics.micPx !== null && roomMetrics.micPx >= 12, `desktop mic badge font-size must be >= 12px, got ${roomMetrics.micPx}`);
-  assert.ok(roomMetrics.dockPx !== null && roomMetrics.dockPx >= 12, `sqeh-dock-label font-size must be >= 12px, got ${roomMetrics.dockPx}`);
+  assert.ok(roomMetrics.micPx !== null && roomMetrics.micPx >= FLOOR_PX, `desktop mic badge font-size must be >= ${FLOOR_PX}px, got ${roomMetrics.micPx}`);
+  assert.ok(roomMetrics.dockPx !== null && roomMetrics.dockPx >= FLOOR_PX, `sqeh-dock-label font-size must be >= ${FLOOR_PX}px, got ${roomMetrics.dockPx}`);
+
+  // 1b. Every rule this bead lifted, measured off its own markup on the live page
+  const lifted = await page.evaluate((rules) => {
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;top:-9999px;left:-9999px;";
+    document.body.append(host);
+    const measured = rules.map(([label, selector, markup]) => {
+      host.innerHTML = markup;
+      const el = host.querySelector(selector);
+      if (!el) return { label, selector, px: null };
+      return { label, selector, px: parseFloat(getComputedStyle(el).fontSize) };
+    });
+    host.remove();
+    return measured;
+  }, LIFTED_ROOM_RULES);
+  for (const rule of lifted) {
+    assert.ok(
+      rule.px !== null && rule.px >= FLOOR_PX,
+      `${rule.label} (${rule.selector}) must compute to >= ${FLOOR_PX}px, got ${rule.px}`,
+    );
+  }
 
   // 2. Room mobile viewport
   await page.emulateViewport({ width: 375, height: 667, mobile: true, scale: 2 });
@@ -108,7 +84,7 @@ test("browser: computed font sizes meet or exceed 12px across room, mobile, and 
     const mic = document.getElementById("mic-hotkey-badge");
     return mic ? parseFloat(window.getComputedStyle(mic).fontSize) : null;
   });
-  assert.ok(mobileMicPx !== null && mobileMicPx >= 12, `mobile mic badge font-size must be >= 12px, got ${mobileMicPx}`);
+  assert.ok(mobileMicPx !== null && mobileMicPx >= FLOOR_PX, `mobile mic badge font-size must be >= ${FLOOR_PX}px, got ${mobileMicPx}`);
   await page.clearViewport();
 
   // 3. Agent monitor
@@ -118,7 +94,7 @@ test("browser: computed font sizes meet or exceed 12px across room, mobile, and 
     const pill = document.querySelector(".pill-toggle-btn");
     return pill ? parseFloat(window.getComputedStyle(pill).fontSize) : null;
   });
-  assert.ok(agentPillPx !== null && agentPillPx >= 12, `agent-monitor pill-toggle-btn font-size must be >= 12px, got ${agentPillPx}`);
+  assert.ok(agentPillPx !== null && agentPillPx >= FLOOR_PX, `agent-monitor pill-toggle-btn font-size must be >= ${FLOOR_PX}px, got ${agentPillPx}`);
 
   // 4. Landing inspector
   await page.goto(`${server.base}/apps/landing-inspector.html`);
@@ -133,9 +109,9 @@ test("browser: computed font sizes meet or exceed 12px across room, mobile, and 
       tagPx: tag ? parseFloat(window.getComputedStyle(tag).fontSize) : null,
     };
   });
-  assert.ok(landingMetrics.commitPx !== null && landingMetrics.commitPx >= 12, `branch-commit font-size must be >= 12px, got ${landingMetrics.commitPx}`);
-  assert.ok(landingMetrics.metaPx !== null && landingMetrics.metaPx >= 12, `branch-meta font-size must be >= 12px, got ${landingMetrics.metaPx}`);
-  assert.ok(landingMetrics.tagPx !== null && landingMetrics.tagPx >= 12, `file-status-tag font-size must be >= 12px, got ${landingMetrics.tagPx}`);
+  assert.ok(landingMetrics.commitPx !== null && landingMetrics.commitPx >= FLOOR_PX, `branch-commit font-size must be >= ${FLOOR_PX}px, got ${landingMetrics.commitPx}`);
+  assert.ok(landingMetrics.metaPx !== null && landingMetrics.metaPx >= FLOOR_PX, `branch-meta font-size must be >= ${FLOOR_PX}px, got ${landingMetrics.metaPx}`);
+  assert.ok(landingMetrics.tagPx !== null && landingMetrics.tagPx >= FLOOR_PX, `file-status-tag font-size must be >= ${FLOOR_PX}px, got ${landingMetrics.tagPx}`);
 
   // 5. Prototype
   await page.goto(`file://${path.join(ROOT, "designs", "prototype.html")}`);
@@ -150,17 +126,49 @@ test("browser: computed font sizes meet or exceed 12px across room, mobile, and 
       badgePx: badge ? parseFloat(window.getComputedStyle(badge).fontSize) : null,
     };
   });
-  assert.ok(protoMetrics.kbdPx !== null && protoMetrics.kbdPx >= 12, `prototype mic-kbd font-size must be >= 12px, got ${protoMetrics.kbdPx}`);
-  assert.ok(protoMetrics.trayPx !== null && protoMetrics.trayPx >= 12, `prototype bubble-tray-label font-size must be >= 12px, got ${protoMetrics.trayPx}`);
-  assert.ok(protoMetrics.badgePx !== null && protoMetrics.badgePx >= 12, `prototype bubble-badge font-size must be >= 12px, got ${protoMetrics.badgePx}`);
+  assert.ok(protoMetrics.kbdPx !== null && protoMetrics.kbdPx >= FLOOR_PX, `prototype mic-kbd font-size must be >= ${FLOOR_PX}px, got ${protoMetrics.kbdPx}`);
+  assert.ok(protoMetrics.trayPx !== null && protoMetrics.trayPx >= FLOOR_PX, `prototype bubble-tray-label font-size must be >= ${FLOOR_PX}px, got ${protoMetrics.trayPx}`);
+  assert.ok(protoMetrics.badgePx !== null && protoMetrics.badgePx >= FLOOR_PX, `prototype bubble-badge font-size must be >= ${FLOOR_PX}px, got ${protoMetrics.badgePx}`);
 });
 
-test("static: public/style.css .sr-only clips without creating a scroll container (voicebox-beads-dche)", () => {
-  const css = readFileSync(path.join(PUBLIC, "style.css"), "utf8");
-  const srOnlyRule = /\.sr-only\s*\{([^}]*)\}/.exec(css);
-  assert.ok(srOnlyRule, "public/style.css must declare a .sr-only rule");
-  assert.match(srOnlyRule[1], /overflow:\s*clip/, "public/style.css .sr-only must clip without a scroll container");
-  assert.doesNotMatch(srOnlyRule[1], /overflow:\s*(?:hidden|auto|scroll)/, "public/style.css .sr-only must not create a scroll container");
+test("browser: the lifted sizes are rem, so they follow the root font size (voicebox-beads-3674)", { timeout: 60000 }, async (t) => {
+  const server = await startServer({
+    cwd: ROOT,
+    env: { VOICEBOX_WORKSPACE: undefined },
+  });
+  t.after(() => server.stop());
+
+  const page = await launch();
+  t.after(() => page.close());
+
+  await page.goto(`${server.base}/`);
+  await page.waitFor(() => document.body !== null);
+
+  // 2x root font size is the user-preference / text-scale case: a px literal would not move at all,
+  // a rem token doubles. This is the behaviour the bead adopted instead of hardcoded px (voicebox-beads-3674).
+  const scaled = await page.evaluate((rules) => {
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;top:-9999px;left:-9999px;";
+    document.body.append(host);
+    const before = document.documentElement.style.fontSize;
+    document.documentElement.style.fontSize = "32px";
+    const measured = rules.map(([label, selector, markup]) => {
+      host.innerHTML = markup;
+      const el = host.querySelector(selector);
+      return { label, selector, px: el ? parseFloat(getComputedStyle(el).fontSize) : null };
+    });
+    host.remove();
+    document.documentElement.style.fontSize = before;
+    return measured;
+  }, LIFTED_ROOM_RULES);
+
+  for (const rule of scaled) {
+    // 0.75rem at a 32px root is 24px; >= 24 asserts it grew with the user's text scale at all.
+    assert.ok(
+      rule.px !== null && rule.px >= 24,
+      `${rule.label} (${rule.selector}) must scale with a 32px root font size (>= 24px), got ${rule.px}`,
+    );
+  }
 });
 
 test("browser: room .sr-only elements clip with zero scroll containers and preserve accessible button names (voicebox-beads-dche)", { timeout: 60000 }, async (t) => {
@@ -176,8 +184,9 @@ test("browser: room .sr-only elements clip with zero scroll containers and prese
   await page.goto(`${server.base}/`);
   await page.waitFor(() => document.body !== null);
 
-  // Live room .sr-only nodes (all 18 nodes) have 0 scroll containers + control arms
   const liveCheck = await page.evaluate(() => {
+    // The control arm is what makes this test honest: it proves the probe CAN see a scroll container,
+    // so a room of zero is a measurement rather than a broken detector.
     const arm = (overflow) => {
       const box = document.createElement("span");
       box.textContent = "Harnesses Controls Long Text Overflow";
@@ -209,10 +218,13 @@ test("browser: room .sr-only elements clip with zero scroll containers and prese
     };
   });
 
-  assert.equal(liveCheck.total, 18, "room must carry exactly 18 .sr-only elements");
+  // The COUNT is deliberately not pinned: 18 became 19 the moment main added a toolbar button
+  // (voicebox-beads-dche), and a count is machine state the next lane would have to update. The
+  // invariant is the one this bead owns — every .sr-only node that exists clips without scrolling.
+  assert.ok(liveCheck.total > 0, "the room must render at least one .sr-only element for this check to mean anything");
   assert.equal(liveCheck.controlHidden, true, "control arm: overflow:hidden 1px box MUST be scrollable (detecting the defect)");
   assert.equal(liveCheck.controlClip, false, "control arm: overflow:clip 1px box must have nothing to scroll");
-  assert.equal(liveCheck.scrollableCount, 0, `all 18 live .sr-only boxes must have 0 scroll containers (was 6 before fix), got ${liveCheck.scrollableCount}`);
+  assert.equal(liveCheck.scrollableCount, 0, `all ${liveCheck.total} live .sr-only boxes must have 0 scroll containers (6 of 18 measured before the fix), got ${liveCheck.scrollableCount}`);
 
   // Accessibility tree read: .sr-only text must still name the button
   await page.send("Accessibility.enable");
