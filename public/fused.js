@@ -3834,13 +3834,20 @@ on(els.envDeclareRootBtn, "click", async () => {
     });
     if (res && res.ok) {
       if (roomFolder) await closeRoomFolder();
+      if (els.envRootPathInput) els.envRootPathInput.value = "";
+      // THE SUCCESS LINE IS WRITTEN AFTER THE DIALOG'S OWN ROOT LINE AGREES WITH IT. It used to be written
+      // straight from the POST's answer, while the refresh that repaints `#env-active-root-val`
+      // (`loadRoot()` -> `renderRoot()`) still had a network round trip to run — so for that round trip the
+      // dialog could say "Machine root set to <path>" next to "no folder chosen yet". That window is one
+      // fetch wide, which is why it is invisible on a quiet box and reproducible with a few browsers in
+      // flight (tests/environment-integrated-ui.test.mjs:118 on union tree 0c34af3d). Announcing the change
+      // only after the surface has drawn it closes the window instead of racing it.
+      await loadRoot();
+      await load();
       if (els.envRootStatus) {
         els.envRootStatus.dataset.ok = "true";
         els.envRootStatus.textContent = `Machine root set to ${res.root?.path ?? pathVal} — turns save here now.`;
       }
-      if (els.envRootPathInput) els.envRootPathInput.value = "";
-      await loadRoot();
-      await load();
     } else {
       if (els.envRootStatus) {
         els.envRootStatus.dataset.ok = "false";
