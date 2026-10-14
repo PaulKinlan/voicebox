@@ -214,7 +214,7 @@ test("settings-ui.mjs preserves Reconnected live session status while fused.js f
   const fused = readFileSync(path.join(PUBLIC, "fused.js"), "utf8");
   const settingsUi = readFileSync(path.join(PUBLIC, "settings-ui.mjs"), "utf8");
   assert.match(fused, /import \{ initSettingsUi \} from "\.\/settings-ui\.mjs"/);
-  assert.match(fused, /initSettingsUi\(\{ els, request, health, refreshDevices, on \}\)/);
+  assert.match(fused, /initSettingsUi\(\{ els, request, health, refreshDevices: audioDeviceController\.refresh, on \}\)/, "the settings owner is wired once, with the device controller's own refresh (voicebox-beads-uei2.6 moved the device surface out of fused.js, so the wiring names the module rather than a host-local function)");
   assert.match(
     settingsUi,
     /let reconnectedLiveModel = null;/,

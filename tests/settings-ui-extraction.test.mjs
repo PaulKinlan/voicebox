@@ -62,7 +62,7 @@ function setup(t, { stored = null, active = false } = {}) {
 test("host has one settings owner and still boots exactly two loaders without import-time requests", () => {
   const source = readFileSync(path.join(root, "public/fused.js"), "utf8");
   assert.match(source, /import \{ initSettingsUi \} from "\.\/settings-ui\.mjs"/);
-  assert.match(source, /initSettingsUi\(\{ els, request, health, refreshDevices, on \}\)/);
+  assert.match(source, /initSettingsUi\(\{ els, request, health, refreshDevices: audioDeviceController\.refresh, on \}\)/, "the settings owner is wired once, with the device controller's own refresh (voicebox-beads-uei2.6)");
   assert.equal((source.match(/loadAgentSettings\(\); \/\/ the dialog has real state/g) || []).length, 1);
   assert.equal((source.match(/void loadApiKeysSettings\(\);/g) || []).length, 1);
   assert.doesNotMatch(source, /function describeProviderKeySlot\(/);
