@@ -25,6 +25,7 @@ import { createBranchRoutes } from "./lib/routes/branches.mjs";
 import { createDoctorRoutes } from "./lib/routes/doctor.mjs";
 import { createHarnessRoutes } from "./lib/routes/harnesses.mjs";
 import { createToolCatalogRoutes } from "./lib/routes/tool-catalog.mjs";
+import { createGeminiMediaRoutes } from "./lib/routes/gemini-media.mjs";
 import { createExtensionRoutes } from "./lib/routes/extensions.mjs";
 import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, reachableFromEnvironment, rootVanished } from "./core/root.ts";
 import { normaliseRelativeDir, parentDir } from "./core/paths.ts";
@@ -3760,6 +3761,23 @@ const toolCatalogRoutes = createToolCatalogRoutes({
   listHarnessesWithConfiguredAgents,
   agentRegistry,
 });
+const geminiMediaRoutes = createGeminiMediaRoutes({
+  json,
+  readJsonBody,
+  answerOnce,
+  resolveActive,
+  // LIVE, not a snapshot: the image route only honours saveAs when the ACTIVE root is a machine root,
+  // and `active` is reassigned when a root is declared or deleted (voicebox-beads-w1f9).
+  getActiveRoot: () => active,
+  contentBodyMaxBytes: CONTENT_JSON_BODY_MAX_BYTES,
+  listGeminiCapabilities,
+  liveConfigCatalogue: GEMINI_LIVE_CONFIG_CATALOGUE,
+  generateGeminiImage,
+  startGeminiVideoGeneration,
+  pollGeminiVideoOperation,
+  embedGeminiTexts,
+  semanticSearchDocuments,
+});
 const routes = {
   ...presenceRoutes,
   ...agentsReadRoutes,
@@ -3941,88 +3959,7 @@ const routes = {
 
   ...activityRoutes,
 
-  "GET /api/gemini/capabilities": (req, res) => {
-    return json(res, 200, {
-      ...listGeminiCapabilities(),
-      liveConfigCatalogue: GEMINI_LIVE_CONFIG_CATALOGUE,
-    });
-  },
-  // referenceImages are base64 pictures — a content body, so the larger cap (voicebox-beads-d808).
-  "POST /api/gemini/image": async (req, res) => {
-    const parsed = await readJsonBody(req, res, CONTENT_JSON_BODY_MAX_BYTES);
-    if (parsed === null || typeof parsed !== "object") {
-      return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
-    }
-    return answerOnce(res, async () => {
-      const generated = await generateGeminiImage({
-        prompt: parsed?.prompt,
-        model: parsed?.model,
-        aspectRatio: parsed?.aspectRatio,
-        referenceImages: Array.isArray(parsed?.referenceImages) ? parsed.referenceImages : [],
-      });
-      if (!generated.ok) return json(res, 400, generated);
-      let savedFile = null;
-      if (typeof parsed?.saveAs === "string" && parsed.saveAs.trim() && active?.root?.kind === "machine") {
-        const target = resolveActive(parsed.saveAs.trim());
-        if (target.ok) {
-          mkdirSync(path.dirname(target.path), { recursive: true });
-          writeFileSync(target.path, generated.bytes);
-          savedFile = parsed.saveAs.trim();
-        }
-      }
-      return json(res, 200, {
-        ok: true,
-        model: generated.model,
-        mimeType: generated.mimeType,
-        data: generated.data,
-        caption: generated.caption,
-        savedFile,
-      });
-    });
-  },
-  "POST /api/gemini/video": async (req, res) => {
-    const parsed = await readJsonBody(req, res);
-    if (parsed === null || typeof parsed !== "object") {
-      return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
-    }
-    return answerOnce(res, async () => {
-      if (typeof parsed?.operationName === "string" && parsed.operationName.trim()) {
-        const polled = await pollGeminiVideoOperation({ operationName: parsed.operationName.trim() });
-        return json(res, polled.ok ? 200 : 400, polled);
-      }
-      const started = await startGeminiVideoGeneration({
-        prompt: parsed?.prompt,
-        model: parsed?.model,
-        aspectRatio: parsed?.aspectRatio,
-        durationSeconds: parsed?.durationSeconds,
-      });
-      return json(res, started.ok ? 200 : 400, started);
-    });
-  },
-  "POST /api/gemini/embed": async (req, res) => {
-    const parsed = await readJsonBody(req, res);
-    if (parsed === null || typeof parsed !== "object") {
-      return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
-    }
-    return answerOnce(res, async () => {
-      if (typeof parsed?.query === "string" && Array.isArray(parsed?.documents)) {
-        const searchResult = await semanticSearchDocuments({
-          query: parsed.query,
-          documents: parsed.documents,
-          model: parsed?.model,
-          topK: parsed?.topK,
-        });
-        return json(res, searchResult.ok ? 200 : 400, searchResult);
-      }
-      const embedded = await embedGeminiTexts({
-        texts: Array.isArray(parsed?.texts) ? parsed.texts : (typeof parsed?.text === "string" ? [parsed.text] : []),
-        model: parsed?.model,
-        taskType: parsed?.taskType,
-        outputDimensionality: parsed?.outputDimensionality,
-      });
-      return json(res, embedded.ok ? 200 : 400, embedded);
-    });
-  },
+  ...geminiMediaRoutes,
 
   // UN-DECLARE: back to `root-not-declared`, deliberately and by request. The gate asserts that
   // state positively, and a state you cannot return to is one you can only test once per process —
