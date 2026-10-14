@@ -21,6 +21,7 @@ import { createVisionGroundingController } from "./vision-grounding.mjs";
 import { initChangelogDialog } from "./components/changelog-dialog.mjs";
 import { initEnvironmentRootDialog } from "./components/environment-root-dialog.mjs";
 import { initMicHotkeyController } from "./components/mic-hotkey-controller.mjs";
+import { createSyncToastController, pageBuild } from "./components/sync-toast.mjs";
 
 const $ = (id) => document.getElementById(id);
 const SVG = "http://www.w3.org/2000/svg";
@@ -2112,7 +2113,7 @@ async function health() {
       els.where.textContent = "the machine is not answering — fix the host";
       els.where.title = `source: GET /api/health · ${err?.refused ?? "machine-unreachable"}: ${err?.why ?? err?.message ?? "the local server is not answering"}`;
     }
-    stampBuild(null);
+    syncToastController.stampBuild(null);
     if (els.rootKind) els.rootKind.textContent = "folder unknown";
     renderEmptyState();
     if (els.rootNote) {
@@ -2134,7 +2135,7 @@ async function health() {
       els.where.title = `source: GET /api/health · provider: ${provider}, build: ${answer.build?.commit || "dev"}`;
     }
     window.__voiceboxServerBuild = answer.build ?? null;
-    stampBuild(answer.build ?? null);
+    syncToastController.stampBuild(answer.build ?? null);
     renderAbout();
     await loadRoot(true);
     downstreamRoute = "/api/environments";
@@ -4245,150 +4246,10 @@ refreshDevices();
 // picture responds to data rather than being decoration.
 window.__voiceboxMeters = { drawInputWave, drawOutputRing, startMeters, mixSpeechAndMic };
 
-// ── which revision is this? ───────────────────────────────────────────────
-// The dev server bakes the identity of its own checkout into this document at
-// serve time (vite.config.js, transformIndexHtml). A server that did not stamp
-// the page leaves the marker empty and this line stays blank: naming a revision
-// the server never sent is the lie this whole line exists to prevent.
-let dismissedSyncKey = null;
-let currentSyncKey = "";
-let initialServerCommit = null;
+const syncToastController = createSyncToastController({ els, on, openChangelogDialog });
+window.__voiceboxSyncToast = { update: syncToastController.update };
 
-function updateSyncToast({ outOfSync = false, reason = "", key = "" } = {}) {
-  const toast = els.syncToast ?? document.getElementById("sync-toast");
-  const msgEl = els.syncToastMessage ?? document.getElementById("sync-toast-message");
-  if (!toast) return;
-  if (!outOfSync) {
-    currentSyncKey = "";
-    dismissedSyncKey = null;
-    toast.hidden = true;
-    delete toast.dataset.state;
-    return;
-  }
-  const effectiveKey = key || reason || "out-of-sync";
-  currentSyncKey = effectiveKey;
-  if (dismissedSyncKey && dismissedSyncKey === effectiveKey) {
-    toast.hidden = true;
-    return;
-  }
-  if (msgEl && reason) {
-    msgEl.textContent = reason;
-  }
-  toast.dataset.state = "out-of-sync";
-  toast.hidden = false;
-}
-window.__voiceboxSyncToast = { update: updateSyncToast };
-on(els.syncToastReload, "click", () => window.location.reload());
-on(els.syncToastDismiss, "click", () => {
-  dismissedSyncKey = currentSyncKey || "out-of-sync";
-  if (els.syncToast) els.syncToast.hidden = true;
-});
-
-function pageBuild() {
-  const content = document.querySelector('meta[name="voicebox-build"]')?.getAttribute("content") ?? "";
-  if (!content || content.includes("__VOICEBOX_BUILD_STAMP__")) return "";
-  return content;
-}
-
-function stampBuild(server) {
-  const line = document.getElementById("build");
-  const page = pageBuild();
-  const sha = (text) => (text.match(/@\s*([0-9a-f]{7,40})/) ?? [])[1] ?? null;
-  const pageSha = sha(page);
-
-  if (server?.commit && !initialServerCommit) {
-    initialServerCommit = server.commit;
-  }
-  const mismatch = Boolean(server?.commit) && pageSha !== null && server.commit !== pageSha;
-  const serverRestartedNewCommit = Boolean(server?.commit) && Boolean(initialServerCommit) && server.commit !== initialServerCommit;
-  const serverUnreachable = server === null && (pageSha !== null || initialServerCommit !== null);
-
-  if (mismatch || serverRestartedNewCommit) {
-    updateSyncToast({
-      outOfSync: true,
-      reason: "UI and server are on different revisions. Reload the page or restart the server.",
-      key: `rev:${pageSha || initialServerCommit}->${server.commit}`,
-    });
-  } else if (serverUnreachable) {
-    updateSyncToast({
-      outOfSync: true,
-      reason: "Local server is not responding — UI and server are out of sync.",
-      key: "offline",
-    });
-  } else if (server?.commit) {
-    updateSyncToast({ outOfSync: false, reason: "", key: "" });
-  }
-
-  if (!line) return;
-  if (!page && !server?.commit) return;
-
-  const repo = "https://github.com/PaulKinlan/voicebox";
-
-  line.replaceChildren();
-
-  const addSep = () => line.append(document.createTextNode(" · "));
-
-  const addCommitLink = (textBefore, commitSha, textAfter) => {
-    line.append(document.createTextNode(textBefore));
-    if (commitSha && /^[0-9a-f]{7,40}$/i.test(commitSha)) {
-      const a = document.createElement("a");
-      a.href = `${repo}/commit/${commitSha}`;
-      a.target = "_blank";
-      a.rel = "noopener noreferrer";
-      a.textContent = commitSha;
-      line.append(a);
-    } else if (commitSha) {
-      line.append(document.createTextNode(commitSha));
-    }
-    if (textAfter) line.append(document.createTextNode(textAfter));
-  };
-
-  let hasPrev = false;
-  if (page) {
-    if (pageSha) {
-      const atIdx = page.indexOf(`@ ${pageSha}`);
-      const before = `page ${page.slice(0, atIdx)}@ `;
-      const after = page.slice(atIdx + 2 + pageSha.length);
-      addCommitLink(before, pageSha, after);
-    } else {
-      line.append(document.createTextNode(`page ${page}`));
-    }
-    hasPrev = true;
-  }
-
-  if (server?.commit) {
-    if (hasPrev) addSep();
-    const after = server.dirty ? " · uncommitted changes" : "";
-    addCommitLink(`server ${server.branch} @ `, server.commit, after);
-    hasPrev = true;
-  } else if (server === null) {
-    if (hasPrev) addSep();
-    line.append(document.createTextNode("server revision unknown"));
-    hasPrev = true;
-  }
-
-  if (mismatch) {
-    if (hasPrev) addSep();
-    line.append(document.createTextNode("the server is a different revision — restart it"));
-    hasPrev = true;
-  }
-
-  if (hasPrev) addSep();
-  const clLink = document.createElement("a");
-  clLink.href = "#changelog-dialog";
-  clLink.textContent = "change log";
-  clLink.setAttribute("aria-haspopup", "dialog");
-  clLink.setAttribute("aria-controls", "changelog-dialog");
-  clLink.addEventListener("click", (event) => {
-    event.preventDefault();
-    openChangelogDialog(clLink);
-  });
-  line.append(clLink);
-
-  line.dataset.dirty = String(mismatch || Boolean(server?.dirty) || page.includes("uncommitted"));
-}
-
-stampBuild(undefined);
+syncToastController.stampBuild(undefined);
 if (els.stage) new MutationObserver(startMeters).observe(els.stage, { attributes: true, attributeFilter: ["data-voice"] });
 
 // ── the task / result card (voicebox-beads-snp) ──────────────────────────
