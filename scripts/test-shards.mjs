@@ -16,9 +16,26 @@
 // the only part of the run work-stealing cannot fix — but no file's cost is predicted here, so a
 // roster change cannot make this file wrong.
 import { readFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+
+/**
+ * THE CONCURRENCY EACH TIER RUNS AT, for every dispatcher that runs a tier file by file.
+ *
+ * ONE OWNER (voicebox-beads-buy8). These counts used to live in `scripts/gate-tier.mjs`, which was the
+ * full gate's dispatcher, and the fast gate (`scripts/test-changed.mjs --gate`) carried its own default of
+ * 2 — a number no tier has ever run at. The two dispatchers run the SAME lanes, so a tier's concurrency is
+ * one fact and it is this one: `npm run test:unit` is one `node --test` over the unit lane (default
+ * concurrency = availableParallelism - 1) and `npm run test:live` passes `--test-concurrency=4` to the
+ * server lane, while the browser tier is `tools/browser-shard-runner.mjs`'s four shards. Nothing here
+ * raises a lane's concurrency above what the full gate already runs: the point is that a scoped run may not
+ * be MORE serial than the gate it is a strict subset of. Measured on the fast gate's own 159-file fused.js
+ * scope (2026-10-14): the accidental 2-worker default cost 273s of wall clock where the tier's own
+ * concurrency costs 190s.
+ */
+export const TIER_WORKERS = Object.freeze({ unit: Math.max(1, os.availableParallelism() - 1), server: 4, browser: 4 });
 
 /**
  * A file's cost, used ONLY to order the queue (above). Bytes are a crude proxy — measured against

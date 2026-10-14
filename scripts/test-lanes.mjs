@@ -60,6 +60,11 @@ const TESTS = path.join(ROOT, "tests");
  */
 const BROWSER_SIGNALS = [
   { what: "a browser over CDP", re: /["'`][^"'`]*\bcdp\.mjs["'`]/ },
+  // The shard runner IS a browser launch — it spawns one Chromium per file it dispatches — so a test that
+  // spawns it owns a browser and must not be filed in the concurrent lane beside three of its siblings
+  // (voicebox-beads-zjpm.3). Named by PATH, like the helpers above, because the launch is on the other
+  // side of the spawn.
+  { what: "a browser via the shard runner", re: /["'`][^"'`]*\bbrowser-shard-runner\.mjs["'`]/ },
   { what: "a browser via page-acceptance", re: /\bpage-acceptance\.mjs\b/ },
   { what: "a browser over raw CDP", re: /--remote-debugging-port|DevToolsActivePort/ },
 ];
