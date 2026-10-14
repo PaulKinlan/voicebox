@@ -26,6 +26,15 @@
      Chromium. Only the shadow's COLOUR is a light-dark() pair; its offset and blur stay as they are. */
   --shadow-ink: light-dark(rgba(38, 48, 60, 0.2), rgba(0, 0, 0, 0.7));
   --shadow: 0 18px 40px -20px var(--shadow-ink);
+
+  /* Type scale — consistent, legible font sizing tokens with a 0.75rem (12px) floor */
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-md: 0.9375rem;
+  --text-lg: 1rem;
+  --text-xl: 1.125rem;
+  --text-2xl: 1.25rem;
 }
 /* An explicit choice is expressed ONLY as a colour scheme, and setting it is the whole of the
    override: `light` and `dark` both outrank the OS. `system` sets neither, so the OS applies. */
@@ -245,7 +254,7 @@ body:has(#server-dot[data-ok="false"]) .wordmark-dot {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  font-size: 0.68rem;
+  font-size: var(--text-xs);
   color: var(--muted);
 }
 .help-sections {
@@ -520,7 +529,7 @@ body:has(#server-dot[data-ok="false"]) .wordmark-dot {
 .mic-hotkey-badge {
   position: absolute;
   bottom: 8px;
-  font-size: 0.625rem;
+  font-size: var(--text-xs);
   font-weight: 700;
   font-family: inherit;
   padding: 1px 5px;
@@ -674,7 +683,7 @@ html:has(dialog.envs[open]) { overflow: hidden; }
 .env-state {
   margin-left: auto;
   color: var(--muted);
-  font-size: var(--step--1, .75rem);
+  font-size: var(--step--1, var(--text-xs));
   max-inline-size: 100%;
   white-space: normal;
   overflow-wrap: break-word;
@@ -700,9 +709,9 @@ html:has(dialog.envs[open]) { overflow: hidden; }
 .env-cap { margin-left: 14px; color: var(--muted); font-size: .75rem; }
 .env-cap > summary { cursor: pointer; }
 .env-cap-list { max-height: 7em; overflow-y: auto; overscroll-behavior: contain; overflow-wrap: anywhere; }
-.env-cap-note { margin: 4px 0 6px; max-width: 56ch; font-size: .72rem; color: var(--muted); }
+.env-cap-note { margin: 4px 0 6px; max-width: 56ch; font-size: var(--text-xs); color: var(--muted); }
 .env-cap-none { margin-left: 14px; color: var(--muted); font-size: .75rem; font-style: italic; }
-.env-origin { margin: 0 0 0 14px; color: var(--muted); font-size: .72rem; overflow-wrap: anywhere; }
+.env-origin { margin: 0 0 0 14px; color: var(--muted); font-size: var(--text-xs); overflow-wrap: anywhere; }
 .env-add-block { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .env-add-title { margin: 0 0 2px; font-size: .8125rem; font-weight: 600; }
 .env-hint { margin: 0 0 8px; color: var(--muted); font-size: .75rem; }
@@ -982,7 +991,7 @@ html:has(dialog.settings[open]) { overflow: hidden; }
 .settings-section-title { margin: 0; font-size: .75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink); }
 .device-row { padding: 10px 0; }
 .device-row + .device-row { border-top: 1px solid var(--line); }
-.device-row h3 { margin: 0 0 8px; font-size: .6875rem; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.device-row h3 { margin: 0 0 8px; font-size: var(--text-xs); font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
 .device-row select { width: 100%; min-height: 38px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--ground); color: var(--ink); font-size: .8125rem; }
 .device-state { margin: 8px 0 0; font-size: .8125rem; color: color-mix(in srgb, var(--muted) 85%, var(--ink)); }
 .about { margin-top: 12px; }
@@ -1396,7 +1405,7 @@ body[data-voice="speaking"] .mic-dock {
   .mic-stage { width: 180px; }
   .mic { width: 88px; height: 88px; }
   .mic-glyph { width: 30px; height: 30px; }
-  .mic-hotkey-badge { bottom: 4px; font-size: .5625rem; }
+  .mic-hotkey-badge { bottom: 4px; font-size: var(--text-xs); }
   .stage { gap: 20px; }
   #file-body { max-height: 26svh; }
 }
@@ -1411,7 +1420,7 @@ body:has(#reader[data-state="ready"]) .stage, body:has(.session:not([hidden])) .
 body:has(#reader[data-state="ready"]) .mic-stage { width: 200px; }
 body:has(#reader[data-state="ready"]) .mic { width: 92px; height: 92px; }
 body:has(#reader[data-state="ready"]) .mic-glyph { width: 30px; height: 30px; }
-body:has(#reader[data-state="ready"]) .mic-hotkey-badge { bottom: 5px; font-size: .5625rem; }
+body:has(#reader[data-state="ready"]) .mic-hotkey-badge { bottom: 5px; font-size: var(--text-xs); }
 body:has(#reader[data-state="ready"]) #file-body { max-height: 26svh; }
 
 /* The extension surface (voicebox-beads-vwb): four states, four sections. "present" is its
@@ -1550,7 +1559,7 @@ dialog.harnesses-modal {
   color: var(--ink);
 }
 .harness-badge {
-  font-size: 0.7rem;
+  font-size: var(--text-xs);
   font-weight: 600;
   padding: 2px 8px;
   border-radius: 999px;
@@ -2468,7 +2477,7 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
   border-radius: 999px;
   background: transparent;
   color: var(--muted);
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
   font-weight: 700;
   letter-spacing: 0.08em;
   cursor: pointer;
@@ -2488,7 +2497,7 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
   border-radius: 999px;
   background: color-mix(in srgb, var(--ink) 12%, transparent);
   color: inherit;
-  font-size: 0.68rem;
+  font-size: var(--text-xs);
   font-weight: 700;
   letter-spacing: 0;
 }
@@ -2503,7 +2512,7 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
 }
 .sqeh-group { margin-block: 10px; }
 .sqeh-group[hidden] { display: none !important; }
-.sqeh-group-title { margin: 0 0 8px; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.sqeh-group-title { margin: 0 0 8px; font-size: var(--text-xs); font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
 .sqeh-quick-files { display: flex; flex-wrap: wrap; gap: 8px; padding-block: 2px 4px; }
 .sqeh-quick-files[hidden] { display: none !important; }
 .sqeh-quick-files:empty::after { content: 'files you touch appear here'; font-size: 0.8rem; color: var(--muted); }
@@ -2554,7 +2563,7 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
   box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 .sqeh-miniapp-bubble-badge {
-  font-size: 0.65rem;
+  font-size: var(--text-xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -2572,7 +2581,7 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
 
 /* ── System actions inside the Systems sheet ── */
 .sqeh-system-actions { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; margin-block-start: 10px; }
-.sqeh-action { display: grid; gap: 6px; justify-items: center; padding: 12px 8px; border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--sqeh-slate-2) 65%, transparent); color: var(--ink); font-size: 0.72rem; cursor: pointer; }
+.sqeh-action { display: grid; gap: 6px; justify-items: center; padding: 12px 8px; border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--sqeh-slate-2) 65%, transparent); color: var(--ink); font-size: var(--text-xs); cursor: pointer; }
 .sqeh-action:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .sqeh-action:disabled { opacity: 0.45; cursor: not-allowed; }
 
@@ -2593,7 +2602,7 @@ html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
   cursor: pointer;
 }
 .sqeh-dock-label {
-  font-size: 0.65rem;
+  font-size: var(--text-xs);
   font-weight: 500;
   letter-spacing: -0.01em;
   line-height: 1;
@@ -2830,7 +2839,7 @@ body:not([data-multi-window="true"]):has(#reader:not([data-state="empty"]):not([
   width: 100%;
 }
 .sqeh-artifact-badge {
-  font-size: 0.65rem;
+  font-size: var(--text-xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -2844,7 +2853,7 @@ body:not([data-multi-window="true"]):has(#reader:not([data-state="empty"]):not([
   color: var(--ink);
 }
 .sqeh-artifact-size {
-  font-size: 0.7rem;
+  font-size: var(--text-xs);
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
@@ -3038,7 +3047,7 @@ body[data-sqeh-state="activity"] .activity-panel {
   flex-wrap: wrap;
 }
 .activity-kind {
-  font-size: 0.65rem;
+  font-size: var(--text-xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -3048,7 +3057,7 @@ body[data-sqeh-state="activity"] .activity-panel {
   color: var(--accent);
 }
 .activity-time {
-  font-size: 0.7rem;
+  font-size: var(--text-xs);
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
@@ -3078,7 +3087,7 @@ body[data-sqeh-state="activity"] .activity-panel {
 
 /* ── Descriptive Change log commit cards ── */
 dialog.changelog-modal .commit-badge {
-  font-size: 0.65rem;
+  font-size: var(--text-xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
