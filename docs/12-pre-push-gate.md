@@ -7,10 +7,10 @@ Voicebox enforces a multi-stage verification gate on `git push` via `.githooks/p
 ## 1. Branch vs. `main` Push Policy
 
 - **Candidate Branch Pushes (`git push origin <branch>`)**:
-  Runs only `node scripts/docs-touched.mjs` and the fast `unit` test lane (`npm run test:unit`), then exits immediately. This keeps worktree branch pushes fast and lock-free.
+  Runs only `node scripts/docs-touched.mjs` and the fast `unit` test lane (`npm run test:unit`), then exits immediately. This keeps worktree branch pushes fast and lock-free. No manifest is sealed here: a receipt is for a landing.
 - **Landing on `main`**:
   - Pushing to `main` from a non-`main` branch is refused immediately (`[gate] pre-push REFUSED: non-main branch attempting to push to main ref`). Always create worktrees with `--no-track` (`git worktree add --no-track -b <branch> <dir> origin/main`) so worktree branches do not track `origin/main`.
-  - Pushing from `main` to `origin/main` runs the full verification pipeline (or fast-paths docs-only `*.md` changes through `docs-check` and `single-owner`), caching the verified `HEAD^{tree}` SHA in `.git/voicebox-gate-passed-tree`.
+  - Pushing from `main` to `origin/main` runs the full verification pipeline (or fast-paths docs-only `*.md` changes through `docs-check` and `single-owner`), caching the verified `HEAD^{tree}` SHA in `.git/voicebox-gate-passed-tree`, and seals `~/.fleet/checks/<tree>.full.manifest.json` as its last stage (voicebox-beads-wiby).
 
 ---
 
@@ -19,14 +19,51 @@ Voicebox enforces a multi-stage verification gate on `git push` via `.githooks/p
 | Stage | Command | Execution Mode | Default Timeout |
 |---|---|---|---|
 | **Docs Touched** | `node scripts/docs-touched.mjs` | Static `git diff` check | Immediate |
-| **Unit Suite** | `npm run test:unit` | Concurrent across files | `180s` |
-| **Live Suite** | `npm run test:live` | Server lane (`--test-concurrency=4`) + Browser CDP shard runner (4 workers, one file each) | `400s` |
+| **Unit Suite** | `node scripts/gate-tier.mjs --tier unit` | Unit lane, **one process per file** | `180s` |
+| **Live Suite** | `node scripts/gate-tier.mjs --tier live` | Server lane (`--test-concurrency=4`) then the Browser CDP shard runner (4 workers, one file each) — one process per file | `400s` |
 | **Acceptance** | `npm run accept` | End-to-end headless Chromium verification (`page-acceptance.mjs`) | `45s` |
+| **Full Manifest** | `node scripts/gate-manifest.mjs aggregate --gate full --tier-dir <scratch>` | Folds the three tier records into `<tree>.full.manifest.json` | `60s` |
+
+Each test tier runs its lane **file by file**, through `scripts/gate-tier.mjs`, and writes one TIER RECORD
+into the scratch directory the gate owns for the run. That is the same shape the fast gate
+(`scripts/test-changed.mjs --gate`) and the browser shard runner already use, so a file's record means the
+same thing in either gate — and it is what gives each file its own exit code, test counts, duration and
+bound. The worker counts are the concurrency the gate already ran at (`availableParallelism() - 1` for the
+unit lane, 4 for the server lane, 4 shards for the browser tier), so per-file dispatch is not a speed
+claim: measured on this tree, the unit tier is 18s either way and the server tier 38s. A file that wedges
+is killed at its own budget and recorded `timeout` — one file's failure, not the whole tier's.
+
+A stage that refuses prints where its records were kept and how to fold them:
+
+```
+[gate] pre-push: the unit tier's records are kept at /tmp/voicebox-gate-tiers.XXXXXX — fold them with:
+[gate]   node scripts/gate-manifest.mjs aggregate --gate full --tree <tree> --tier-dir /tmp/voicebox-gate-tiers.XXXXXX
+```
+
+**The manifest is the LAST stage, and a red TIER seals none.** A receipt is for a gate that finished: if a
+tier stage, acceptance or the fold itself refuses, pre-push stops there and no `<tree>.full.manifest.json`
+carrying a `pass` is written for a reader to quote. The tier records are kept on the red path (above) so the
+same fold can still be run by hand. (One case is not "no artifact at all": when the FOLD is the stage that
+refuses — a changed source with no mapped test, a `--changed-base` that names no commit — the artifact that
+records those problems is written, says `refused`, and the push is still refused. Only a run that reconciles
+and dispatches every file with a green terminal status is ever labelled `pass`.)
+
+**And a DIRTY worktree seals no landing receipt.** The tiers run over the working tree while the receipt is
+keyed by the committed tree, so on a push that lands, `scripts/pre-push.sh` passes `--tree-dirty` to the fold
+and a dirty run is refused by name (`working tree was DIRTY`), with the refusal recorded on the artifact it
+declines to seal. The `fast` gate runs over uncommitted work by design and only *records* the fact
+(`tree_dirty: true`) — commit before you push a landing, or the receipt will not exist.
+
+The stage commands come from the repository when it has a tier runner, and fall back to `npm run test:unit`
+/ `npm run test:live` when it does not (the disposable repositories `tests/pre-push.test.mjs` drives supply
+their own scripts, like every other pluggable stage in this file).
 
 ### Budget Overrides
 Each bound can be raised or tightened per run without editing the gate:
 - The **unit** bound resolves in order — `VOICEBOX_GATE_UNIT_SECS`, then the legacy `VOICEBOX_GATE_TESTS_SECS`, then the table's default. The primary variable wins when both are set.
 - The **live** and **acceptance** bounds are their own variables: `VOICEBOX_GATE_LIVE_SECS`, `VOICEBOX_GATE_ACCEPT_SECS`.
+- The **manifest** bound is `VOICEBOX_GATE_MANIFEST_SECS`, and the per-file budget the tier runner gives a
+  test file is `VOICEBOX_GATE_FILE_SECS` (default 240s).
 
 A refusal names the variable to raise, so the remedy is copy-pasteable. `tests/pre-push.test.mjs` pins the resolution, the legacy fallback and its precedence (voicebox-beads-03po), so removing a link is a failing test rather than a silent compat break.
 
@@ -45,6 +82,8 @@ Every browser file is independent — its own process, its own ephemeral-port se
 
 **`tests/ldxa-barge-in-browser.test.mjs`** drives the real audio path through Chromium's fake-audio device, which the file's own comments record as lagging under CPU load (+76ms idle, +366ms at 4-core load). It was isolated because with four workers it failed `tests/ldxa-barge-in-browser.test.mjs:168` ("playback must be flushed, not left playing", `true !== false`) twice in nine concurrent runs of the whole tier while passing every focused control — alone, alone through the runner, and beside three other browser files at four-way concurrency. The same assertion with the same profile was already recorded as environmental in voicebox-beads-y82w. voicebox-beads-9c3r reproduced the timing deterministically: the synthetic socket scheduled echoes before the page's interrupt but delivered a queued echo after the client's synchronous flush, restarting playback. The fixture now checks whether it is paused when an echo is **delivered**, not only when it is scheduled; its browser regression deliberately defers one echo until after the flush, proving that playback stays off without weakening the existing assertion.
 
+**A bashism in a `#!/usr/bin/env sh` gate is a parse error, not a style finding, so the file pins the shell.** `scripts/pre-push.sh` runs under dash (`/bin/sh -> dash` here), where `_x=()` and `${_x[@]}` are syntax errors: the hook then dies with exit 2 before any stage runs, and every push fails with no stage output — which reads as a red gate rather than a gate that never parsed. Measured while the full-manifest stage was written: adding one bash array made all nine fixtures in this file fail at once with `2 !== 0`, and only `sh -n scripts/pre-push.sh` named the line. `tests/pre-push.test.mjs` therefore checks the shebang, scans the comment-stripped code for arrays, `${x[@]}`, `PIPESTATUS`, `set -o pipefail` and `[[ ]]`, and runs `/bin/sh -n` (the same guard `tests/landing-preflight.test.mjs` holds for `scripts/landing-preflight.sh`).
+
 **`tests/pre-push.test.mjs`** measures wall-clock budget enforcement, so the box is part of its subject. Its fixture accelerates each stage's budget through a `timeout` shim and asserts that the stage's output appeared BEFORE the budget killed it ("LIVE OUTPUT BEFORE TERMINATION"), then that the refusal reports the measured elapsed time rather than the configured budget. The chain it must outlast is `timeout → npm → sh → node`, and on a contended box that chain's startup is longer than the budget: measured 2026-10-12 on this VM, time-to-marker was 0.25s idle, 1.76–3.41s at loadavg 6 (32 CPU burners on 8 vCPU) and 5.2–6.3s at 8× oversubscription, while the shim's budget was 2s and the suite's own elapsed assertion accepts at most 10s — so no budget value was both large enough for a contended box and small enough for that assertion. At four workers the file failed the psfw union full gate (`tests/pre-push.test.mjs:227`, marker absent, slowest file 62.6s) and passed the xzrr union gate on identical blobs. It is also the tier's slowest file (67.3s under four workers versus 32.6s alone), so contention was costing it twice. It now runs alone, and its shim budget is 5s — a measured margin over the same chain rather than a coin flip (voicebox-beads-0nt3).
 
 
@@ -57,6 +96,14 @@ Isolation remains a **scheduling** mitigation rather than the repair: the file s
 ## 3. Cross-Worktree Gate Locking & Exit Diagnostics
 
 Before entering the `live` and `acceptance` stages on `main`, `scripts/pre-push.sh` acquires a host-wide file lock (`VOICEBOX_GATE_LOCK`, default `/tmp/voicebox-gate.lock`) and writes holder metadata to `VOICEBOX_GATE_HOLDER` (`/tmp/voicebox-gate.holder.json`). Concurrent landings wait for the lock rather than competing for Chromium instances (configurable via `VOICEBOX_GATE_LOCK_WAIT_SECS` or `VOICEBOX_GATE_LOCK_DISABLE=1`). `tests/pre-push.test.mjs` verifies serialization through event-driven observable synchronization (holding until the runner enters waiting, then releasing) and asserts negative controls for timeout refusal and free-lock acquisition.
+
+**Releasing the lock must not silence the gate.** The close of the lock descriptor is guarded by a fd-2
+redirect that has to stay **grouped** — `{ exec 9>&-; } 2>/dev/null` — because `exec 9>&- 2>/dev/null` has no
+command word, and POSIX then makes *both* redirections permanent: fd 2 went to `/dev/null` for every line
+printed after the release. The manifest stage is the only stage that runs after it, so a full gate refused
+for a dirty worktree or an unreconciled roster exited 1 with a clean stderr and no reason a reader could act
+on (measured: `sh -c 'exec 9>&- 2>/dev/null; echo x >&2'` prints nothing). `tests/pre-push.test.mjs` asserts
+the manifest-stage refusal is readable, naming both the aggregator's line and the gate's own.
 
 Each stage is bounded by GNU `timeout` with a 5-second kill grace period:
 - **Exit `124` (`TIMED OUT`)**: Reports the stage name, command, and budget without mislabeling an unfinished run as a test assertion failure.
@@ -217,3 +264,206 @@ which is why nothing else could see it. A message that merely NAMES the variable
 not a read (the same call `single-owner.mjs` makes for comments); `public/verify.mjs` is a named
 exemption for its own `CHROME` variable and single literal, and the guard speaks if it grows a list
 or reads `VOICEBOX_CHROME` (voicebox-beads-phs9).
+
+---
+
+## 5. The Scoped Fast Gate and its Coverage Record (`--gate`)
+
+`scripts/test-changed.mjs --gate` is the repository's own fast tier: the same changed-path selection the
+inner-loop runner uses, with the three differences that make its verdict quotable (voicebox-beads-zjpm.3,
+ADR voicebox-beads-zjpm.1).
+
+```
+node scripts/test-changed.mjs --gate                 # the fast gate for the branch's changed paths
+node scripts/test-changed.mjs --gate --dry-run       # select and record, dispatch nothing
+node scripts/gate-manifest.mjs verify <artifact>     # reconcile an artifact without re-running anything
+```
+
+It is the command a lane should point `CHECK_FAST_CMD` at. It is deliberately **not** a second
+orchestrator for the full suite: `--gate-kind full` exists so the same accounting can be applied to a
+merger's union, and a full gate may not omit a classified file at all.
+
+- **Strict scope.** `--allow-unmapped` is a developer escape and the gate refuses it outright (exit 2): a
+  gate that may be told to ignore a path it cannot map has no scope, and its PASS is a statement about
+  nothing. A mapped test file that is in **no** lane is refused by name rather than quietly run in the
+  unit lane, which is what the old `else matchedUnit.push(file)` fallback did.
+- **Per-file dispatch.** Each selected file runs in its own process with its own exit code, TAP counts,
+  duration and bound, so "PASS" can be attributed to a file. The `ISOLATED` files (`tests/pre-push.test.mjs`,
+  `tests/ldxa-barge-in-browser.test.mjs`) run alone, after the parallel queue.
+- **The tier's own concurrency and queue.** Each tier runs at `TIER_WORKERS` — the one owner in
+  `scripts/test-shards.mjs`, the same counts the full gate dispatches at (`availableParallelism() - 1` for
+  unit, 4 for the server lane, 4 for the browser tier's shards), overridable for a loaded box with
+  `VOICEBOX_FAST_WORKERS`. The parallel pool is ordered by `buildQueue` from that same module, i.e. the
+  queue the browser tier already runs from, heaviest-first. Both are scheduling facts and neither changes
+  the scope: nothing is dropped, reordered INTO omission, or narrowed — a file the changed-path map selects
+  is dispatched exactly once. This was a measured defect, not a preference (`voicebox-beads-buy8`): the gate
+  hard-coded **2** files in flight, a number no tier runs at, so a change to `public/fused.js` — whose
+  dependency closure is 159 of the 224 classified files — was killed at the fleet's 180s fast bound twice
+  (exit 124, STALE) where the tier's own concurrency costs **190s** on the same tree, and taking the pool's
+  order from `buildQueue` takes the modeled tier-serial total from 207.4s to 181.7s (longest-first ideal:
+  179.2s). The fleet speed standard's R2 budget for the median fast gate is **≤60s** and this does not
+  reach it: a UI-monolith change pays a browser-heavy closure, and the structural route is the
+  `public/fused.js` decomposition (`voicebox-beads-mvxl` / `uei2`), not a narrower map.
+- **A lost child is not a pass.** A file that produced no TAP summary is `unknown` — never `passed` — and
+  the gate refuses on it.
+
+### The coverage contract for a page-loaded module (`voicebox-beads-buy8`)
+
+`.fleet/coverage-contract.json` declares, per source path, the suites that exercise it. It exists because
+**the fleet's independent coverage oracle cannot see a module the page loads**: `~/fleet/remote/check-coverage.py`
+(`find_candidate_tests_for_file`) looks for a candidate suite by import/require/subprocess reference or by
+filename stem, and `public/fused.js` — the UI monolith, loaded by `public/index.html` as
+`<script type="module" src="fused.js">` — is neither imported nor named after any suite. The oracle therefore
+found zero candidates for it and published `coverage: PARTIAL, unmapped: ["public/fused.js"]` on a run whose
+own manifest recorded **159 dispatched, 0 unmapped** (`voicebox-beads-zjpm.3`).
+
+The contract is the mechanism the oracle already supports for exactly this case (fleet-`1n0z` mode b); no
+fleet tooling change is involved. Its rule is the reason it is trustworthy: **every suite it names must be
+dispatched, or the record is PARTIAL again** — a suite that has stopped covering the file is named, not
+ignored. The witnesses here are the suites the changed-path map dispatches for `public/fused.js` that drive
+it directly: the browser suites that serve the real page (which loads the module) plus
+`tests/served-vs-disk.test.mjs`, which asserts the served copy of every module reference matches disk.
+
+Measured 2026-10-14 against the real fast-gate log for tree `7a5e9157` (`fast-gate` markers for 159 suites):
+
+| contract | oracle verdict |
+|---|---|
+| as committed | `coverage: KNOWN`, `unmapped: []`, `omitted: []` |
+| removed | `coverage: PARTIAL`, `unmapped: ["public/fused.js"]` — the reported defect |
+| one witness replaced by a suite that never ran | `coverage: PARTIAL`, `unmapped: ["public/fused.js"]`, `omitted: ["tests/a-suite-that-never-ran.test.mjs"]` |
+
+### The artifact
+
+`~/.fleet/checks/<tree>.<fast|full>.manifest.json` (override with `--manifest-dir` or
+`VOICEBOX_GATE_ARTIFACT_DIR`), written atomically and keyed by the **tree SHA** it describes, the gate
+kind, and a **roster hash** over the classifier's `(file, tier, why)` output. `tree_dirty` records that
+the artifact was produced over uncommitted bytes, so a dirty run cannot be quoted as if it were clean — and
+on a **full** (landing) gate it is a refusal rather than a note: only the `fast` gate marks a dirty run and
+continues, because that is the gate you run on work you have not committed yet.
+
+Every classified file is accounted for exactly once: dispatched (with its terminal status, counts,
+duration and timeout) or **omitted by name with a reason** (`fast-only: not selected by the changed-path
+map`).
+
+**Every record also states WHY it was selected, and the aggregator never supplies that reason:** `changed`
+(the test file itself changed), `dependency` (a changed source maps to it), `full-roster` (the whole roster was
+the scope) or `not-selected` (the changed-path map did not pick it — the honest value for the files a fast gate
+omits). A record with no selection reason is a refusal, not a default. It used to fall through
+`entry.selection ?? "changed"`, which was the one value a fast gate could least often support: measured on this
+branch, a gate over 9 changed paths recorded all 223 classified files as directly changed, contradicting the
+manifest's own `changed` list (voicebox-beads-zjpm.3).
+
+`scripts/gate-manifest.mjs` reconciles the artifact and refuses, naming each problem, on:
+
+| refusal | what it catches |
+|---|---|
+| duplicate / unclassified / missing path | a file recorded twice, recorded but not in the roster, or neither dispatched nor omitted |
+| malformed tier / status / marker | a tier that disagrees with the classifier, a non-terminal status, a missing counts block |
+| lost child | dispatched with no duration — the exit was lost, which is not a verdict |
+| zero-test result | a **passing** run that reported zero tests: an empty run demonstrates nothing |
+| contradictory counts | a passing record whose own counts carry failures |
+| omission without a reason | an unexplained gap in scope |
+| full-gate omission | any omitted file in a `--gate-kind full` run |
+| unmapped source | a changed source file that maps to no test |
+
+### The artifact's verdict
+
+`verdict` is one of `pass` (every dispatched file finished green), `fail`, `refused` (an unmapped changed
+source or an unclassified mapped test), `empty` (nothing was dispatched — a run that measured nothing,
+which is **never** called a pass) or `dry-run`. The reconciled `summary` carries `classified`, `recorded`,
+`dispatched`, `omitted`, `skipped`, `passed`, `failed`, `timeout`, `unknown`, `unmapped` and `problems`, so
+"0 dispatched" is visible in the artifact itself rather than only in the log's absence of a green line.
+
+`verdictOf(manifest)` is the **one** answer to "what does this manifest mean" — `refused` when it does not
+reconcile, `fail` when any dispatched file is not `passed` (timeout and unknown included), `empty` when
+nothing was dispatched, else `pass`. It is exported for every orchestrator that folds records, so the
+"an unfinished file is not a pass" half cannot be re-derived differently by a second caller.
+
+### The markers the hub reads
+
+Every dispatched file prints, at line start, a marker from the vocabulary `fleet-check`'s coverage
+extractor matches:
+
+```
+fast-gate: passed:  tests/<file>      # or failed:, or unknown: with the reason
+fast-gate: unmapped: <changed file>   # a changed path the gate could not map
+fast-gate: unknown: <reason>          # emitted whenever the run is incomplete
+```
+
+**Only TERMINAL markers are published, and `running:` deliberately is not.** The hub's extractor unions
+every marker it matches — `running` included — into the set of suites it believes ran, so a `running:`
+line for a file that was later killed is read as *coverage*, and a killed process cannot retract it.
+Measured on a real stopped run (19 selected files, stopped part-way): the extractor answered
+`coverage: KNOWN, indeterminate: false` and listed the file that had only ever been printed as running.
+Progress is therefore a plain log line (`[test:changed] running tests/<file>`); a file appears in the
+marker vocabulary only once it has a terminal status, and an unfinished dispatch is a gap the hub reports
+as uncovered rather than as a suite that ran.
+
+`tools/browser-shard-runner.mjs` emits the same per-file markers for the full gate's browser tier, and
+with `VOICEBOX_GATE_TIER_RECORD=<path>` writes a **tier record** (what that tier dispatched) which the one
+aggregator folds in with `recordTier`. A tier never writes a manifest of its own: a partial manifest that
+happens to reconcile is a wide claim from a narrow run. Because `running:` is also read as evidence that a
+file executed, `unknown:` is emitted together with any incomplete run — that is what makes the hub report
+the run's coverage as `UNKNOWN` (fail-closed) instead of counting a killed file as covered.
+
+### The live tier's phases, and the union receipt
+
+`tools/browser-shard-runner.mjs` can be invoked once for the whole browser lane, or PHASED so a supervisor
+runs the parallel queue beside the server pool and the isolated files afterwards on an otherwise idle box:
+
+```
+node tools/browser-shard-runner.mjs                    # whole lane: parallel queue, then ISOLATED alone
+node tools/browser-shard-runner.mjs --parallel-only    # just the parallel slice
+node tools/browser-shard-runner.mjs --isolated-only    # just the ISOLATED slice, one at a time
+```
+
+Each invocation asserts its own slice covers exactly once, and `splitQueue` (scripts/test-shards.mjs) owns
+the partition, so the two slices together are the lane — held by `tests/test-shards.test.mjs`. The two flags
+are mutually exclusive, and the per-file terminal markers and count lines are unchanged. With
+`VOICEBOX_GATE_TIER_RECORD=<path>` a PHASED run writes `<path>.parallel.json` / `<path>.isolated.json`, so a
+second invocation can never overwrite the first's record.
+
+Because the tiers are separate processes, no single runner can assert the gate's scope: the receipt is the
+FOLD, and `scripts/gate-manifest.mjs aggregate` is its one implementation.
+
+```
+node scripts/gate-manifest.mjs aggregate --gate full --tree <tree-sha> --out <dir> \
+  --record <tier-a.json> --record <tier-b.json> ...
+
+# what scripts/pre-push.sh runs: the records the three tiers wrote, and the changed set to check against
+node scripts/gate-manifest.mjs aggregate --gate full --tree <tree-sha> --tier-dir <scratch> \
+  --changed-base origin/main
+```
+
+It builds the roster from the classifier, folds every tier record, refuses (non-zero, with the file named) a
+file no tier recorded, a file two tiers both recorded, a path no tier knows, and any omission in a full
+gate — and writes one manifest with the verdict. A deliberately narrower gate passes `--omitted-reason` so
+its unselected files are accounted for by name rather than left missing.
+
+`--tier-dir <scratch>` is the form the full gate uses: it reads `<scratch>/unit.json`, `<scratch>/server.json`
+and `<scratch>/browser.json` — one record per tier, in the directory `scripts/pre-push.sh` owns for that run,
+named by `tierRecordPath` so the writer and the reader cannot disagree. A tier that wrote NOTHING is refused
+by name (`the browser tier wrote no record at …`), because a missing process and a tier whose every file
+failed are different facts and the reader of a red landing needs the first one. The artifact records that
+refusal ON DISK, not only on stdout: a run the fold refuses is rewritten as `reconciled: false`,
+`verdict: refused` — an earlier version left the `pass` it had written before the caller's own problems were
+known, which is a receipt contradicting the gate that produced it. `--changed-base <ref>` records the changed
+set (`<ref>...HEAD`), records the ref itself as `base`, and refuses a changed source file that maps to no
+test, asked of the mapping's owner through its own `--json` CLI; that refusal is the same one the fast gate
+makes, over the union being landed. **The base must name a commit**: the mapping's `--json` developer path
+answers a base it cannot resolve with an empty change set and exit 0 (git's `ambiguous argument` goes to
+stderr), so the fold resolves the ref first and refuses when it does not — unknown scope is not empty scope.
+The whole check is off when no base is named, so an aggregate over JSON records behaves as it always did.
+
+The wiring is held by tests rather than by this paragraph: `tests/gate-tier.test.mjs` drives the tier runner
+and the fold (including a dropped file, a duplicate, a zero-test pass, a missing tier record and a failed
+file, each refused by name), and `tests/pre-push.test.mjs` drives the real gate in a disposable repository and
+asserts that a green run seals ONE `<tree>.full.manifest.json` accounting for all three lanes while a red tier
+seals none.
+
+### Acceptance is per phase
+
+`npm run accept` prints a verdict per phase. When the shared front could not be witnessed, phase A is
+reported `UNKNOWN` for the shared front and the run ends `ALL CLEAR (PHASE B ONLY)` with the statement
+that the shared front was **not** verified: green code tests and an approved phase-B-only posture may
+coexist, but no reader (or gate log) may quote that run as having measured the served front.

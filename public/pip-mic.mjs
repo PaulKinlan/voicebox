@@ -303,7 +303,7 @@ function buildPip(pip, controls) {
     #pip-vision-thumbnail[hidden] { display: none !important; }
     .pip-task-chip { display: inline-flex; align-items: center; gap: .4rem; padding: .3rem .6rem; border-radius: 999px;
                      background: color-mix(in srgb, var(--accent) 12%, var(--card)); border: 1px solid var(--line);
-                     font-size: 11px; font-weight: 500; color: var(--ink); max-inline-size: 100%; }
+                     font-size: var(--text-xs, 0.75rem); font-weight: 500; color: var(--ink); max-inline-size: 100%; }
     .pip-task-chip[hidden] { display: none !important; }
     .pip-task-dot { inline-size: .5rem; block-size: .5rem; border-radius: 50%; background: var(--accent);
                     animation: pip-wait 1.4s ease-in-out infinite; flex: none; }

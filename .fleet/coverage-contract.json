@@ -1,0 +1,21 @@
+{
+  "public/fused.js": [
+    "tests/served-vs-disk.test.mjs",
+    "tests/voicebox.test.mjs",
+    "tests/theme-browser.test.mjs",
+    "tests/theme-first-paint.test.mjs",
+    "tests/ui-modern-polish.test.mjs",
+    "tests/ux-bubble-stage.test.mjs",
+    "tests/settings-dialog.test.mjs",
+    "tests/mini-app-architecture.test.mjs",
+    "tests/agent-settings-ui.test.mjs",
+    "tests/extensions-ui.test.mjs",
+    "tests/extensions-ui-extraction.test.mjs",
+    "tests/mic-waveform-animation.test.mjs",
+    "tests/env-create-project.test.mjs",
+    "tests/project-instruction-browser.test.mjs",
+    "tests/room-folders.test.mjs",
+    "tests/room-scratchpad-default.test.mjs",
+    "tests/system-command-browser.test.mjs"
+  ]
+}

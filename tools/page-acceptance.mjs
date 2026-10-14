@@ -833,12 +833,18 @@ console.log(
   failed !== 0
     ? `\n${failed} CHECK(S) FAILED — named above`
     : !sharedServersRunning
-      ? `\nALL CLEAR — PHASE B ONLY; phase A could not witness the served front ` +
-        `(${sharedFrontFailure?.code ?? "unreachable"} at ${sharedFrontFailure?.url ?? SHARED_API}). ` +
-        `Nothing in this run says the served front is current.`
+      ? // PER-PHASE VERDICT (voicebox-beads-zjpm.3). "ALL CLEAR" is a claim about the whole acceptance
+        // run, and a phase-B-only run did not measure the shared front at all — so the phase that was
+        // not witnessed is named UNKNOWN and the verdict says outright that it was not verified. A reader
+        // (or a gate log) must not be able to quote this run as covering the served front.
+        `\nPHASE A [shared-front]: UNKNOWN — the served front was not witnessed ` +
+        `(${sharedFrontFailure?.code ?? "unreachable"} at ${sharedFrontFailure?.url ?? SHARED_API}).\n` +
+        `PHASE B [private]: ALL CLEAR\n` +
+        `VERDICT: ALL CLEAR (PHASE B ONLY) — the shared front was NOT verified by this run, and nothing here says it is current.`
       : currencySkipReason
-        ? `\nALL CLEAR — but the currency check was skipped: ${currencySkipReason}. ` +
-          `Everything else passed; nothing here says the served front is current.`
+        ? `\nPHASE A [shared-front]: UNKNOWN — the currency check was skipped: ${currencySkipReason}.\n` +
+          `PHASE B [private]: ALL CLEAR\n` +
+          `VERDICT: ALL CLEAR (PHASE B ONLY) — everything else passed, but nothing here says the served front is current.`
         : "\nALL CLEAR",
 );
 console.log("(served-vs-disk markers on the shared front + the root-declaration lifecycle on a private instance answer \"is this environment current\" better than the old workspace field ever did)");

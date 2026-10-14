@@ -1,0 +1,118 @@
+// tests/browser-shard-runner.test.mjs — the browser tier's runner, driven as a child process.
+//
+// WHY THIS EXISTS (voicebox-beads-zjpm.3): the runner is the only thing that decides which browser files
+// ran and how they ended, and it had no test naming it, so `node scripts/test-changed.mjs --gate` refused
+// the change that added its coverage markers ("tools/browser-shard-runner.mjs changed and maps to no test
+// file"). The refusal was right. A runner whose file set can silently change is the exact thing the shard
+// queue asserts against (`assertExactCoverage`), and its LOG is what `fleet-check` reads for coverage, so
+// the marker lines are part of the contract too, not decoration.
+//
+// It is a BROWSER-lane test, and the classifier knows that by name: the runner launches Chromium, so a
+// test that spawns it owns a browser. That is why scripts/test-lanes.mjs names it among the browser
+// signals rather than guessing from a comment.
+import test from "node:test";
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = fileURLToPath(new URL("../", import.meta.url));
+const RUNNER = path.join(root, "tools/browser-shard-runner.mjs");
+// The cheapest browser-lane file measured on this tree (~0.2s): this test is about the runner's
+// accounting, not about any one fixture's behaviour.
+const PROBE = "tests/wasm-room-ui.test.mjs";
+
+const runRunner = (args, env = {}) =>
+  spawnSync(process.execPath, [RUNNER, ...args], {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, ...env },
+    timeout: 240_000,
+    killSignal: "SIGKILL",
+  });
+
+test("the runner emits a hub marker per file, and publishes a tier record a manifest can fold in", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-shard-"));
+  const recordPath = path.join(dir, "browser-tier.json");
+  try {
+    const res = runRunner(["--only", PROBE, "--workers", "1"], { VOICEBOX_GATE_TIER_RECORD: recordPath });
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+
+    // The markers are the hub's vocabulary, anchored at line start. A marker nested inside other text is
+    // not a marker to the extractor, so the anchor is the assertion.
+    const lines = res.stdout.split("\n");
+    assert.ok(lines.includes(`[shards] running ${PROBE}`), "progress is a plain line");
+    assert.ok(lines.includes(`fast-gate: passed: ${PROBE}`), "its terminal status is published as a marker");
+    // The hub's extractor reads `running:` as proof the suite EXECUTED, so publishing it for a file a kill
+    // can interrupt is a coverage claim nothing can retract (see scripts/gate-manifest.mjs).
+    assert.equal(lines.some((l) => l.startsWith("fast-gate: running:")), false, "a killed file must leave no coverage claim");
+    assert.match(res.stdout, /\[shards\] coverage ok: 1 result\(s\) for 1 queued file\(s\)/);
+
+    const record = JSON.parse(readFileSync(recordPath, "utf8"));
+    assert.equal(record.tier, "browser");
+    assert.equal(record.files.length, 1);
+    const [entry] = record.files;
+    assert.equal(entry.path, PROBE);
+    assert.ok(["passed", "failed", "unknown"].includes(entry.status), entry.status);
+    assert.equal(entry.timeout_ms, 300_000, "the record carries the bound the child ran under");
+    assert.ok(entry.secs > 0);
+    // A tier record is not a manifest: it names its own tier and carries no roster claim, because only the
+    // one aggregator (scripts/gate-manifest.mjs) may answer for the whole gate's scope.
+    assert.equal(record.classifier, undefined);
+    assert.equal(record.reconciled, undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a phase invocation runs exactly its own slice, namespaces its tier record, and says so", () => {
+  // The live-tier supervisor runs this tier twice — the parallel queue beside the server pool, then the
+  // isolated files alone — so the phase must be explicit in the log, in the record's name, and in what is
+  // queued. The two invocations together are the lane; that partition is splitQueue's property, held by
+  // tests/test-shards.test.mjs.
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-shard-phase-"));
+  const recordPath = path.join(dir, "tier.json");
+  try {
+    const res = runRunner(["--parallel-only", "--only", PROBE, "--workers", "1"], { VOICEBOX_GATE_TIER_RECORD: recordPath });
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.match(res.stdout, /phase parallel, wall/);
+    assert.ok(res.stdout.includes(`fast-gate: passed: ${PROBE}`));
+
+    // One record PER PHASE: if both invocations wrote one path the second would overwrite the first and the
+    // union would be short by a whole phase.
+    const phased = path.join(dir, "tier.parallel.json");
+    const record = JSON.parse(readFileSync(phased, "utf8"));
+    assert.equal(record.phase, "parallel");
+    assert.deepEqual(record.files.map((f) => f.path), [PROBE]);
+    assert.throws(() => readFileSync(recordPath, "utf8"), "the un-namespaced path must not be written by a phase run");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a phase refuses a file outside it, and the two phases may not be asked for at once", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-shard-phase2-"));
+  const recordPath = path.join(dir, "tier.json");
+  try {
+    // PROBE is a parallel file, so the isolated phase has nothing to run — and nothing may open a browser.
+    const wrongPhase = runRunner(["--isolated-only", "--only", PROBE], { VOICEBOX_GATE_TIER_RECORD: recordPath });
+    assert.equal(wrongPhase.status, 2);
+    assert.match(wrongPhase.stderr, /is not in the browser lane's isolated phase/);
+    assert.throws(() => readFileSync(recordPath, "utf8"), "a refusal writes no tier record");
+
+    const both = runRunner(["--parallel-only", "--isolated-only"]);
+    assert.equal(both.status, 2);
+    assert.match(both.stderr, /mutually exclusive/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a file that is not in the browser lane is refused before a browser opens", () => {
+  const res = runRunner(["--only", "tests/test-lanes.test.mjs"]);
+  assert.equal(res.status, 2);
+  assert.match(res.stderr, /is not in the browser lane; nothing to run/);
+  assert.equal(res.stdout.includes("fast-gate:"), false, "nothing was dispatched, so nothing claims to have run");
+});
