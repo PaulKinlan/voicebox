@@ -18,8 +18,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TIERS, aggregateTierRecords, baseNamesACommit, tierRecordPath } from "../scripts/gate-manifest.mjs";
-import { TIER_WORKERS, recordOf, runOneTier, testCounts, tierFiles, tierVerdict } from "../scripts/gate-tier.mjs";
+import { recordOf, runOneTier, testCounts, tierFiles, tierVerdict } from "../scripts/gate-tier.mjs";
 import { classify } from "../scripts/test-lanes.mjs";
+import { TIER_WORKERS } from "../scripts/test-shards.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const lane = (name) => classifyOnce()[name].map(({ file }) => `tests/${file}`);
@@ -52,6 +53,8 @@ test("the tier roster IS the classifier's lanes — every classified file, in th
 test("the workers are the concurrency the gate already ran at, so per-file dispatch is not a speed claim", () => {
   // `npm run test:unit` is one `node --test` over the unit lane (node's default file concurrency is
   // availableParallelism - 1) and `npm run test:live` passes --test-concurrency=4 to the server lane.
+  // ONE OWNER (scripts/test-shards.mjs): the fast gate reads this same value, so a scoped run cannot be
+  // more serial than the tier it is a strict subset of (voicebox-beads-buy8).
   assert.equal(TIER_WORKERS.unit, Math.max(1, os.availableParallelism() - 1));
   assert.equal(TIER_WORKERS.server, 4);
   assert.equal(TIER_WORKERS.browser, 4);

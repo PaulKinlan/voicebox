@@ -290,8 +290,47 @@ merger's union, and a full gate may not omit a classified file at all.
 - **Per-file dispatch.** Each selected file runs in its own process with its own exit code, TAP counts,
   duration and bound, so "PASS" can be attributed to a file. The `ISOLATED` files (`tests/pre-push.test.mjs`,
   `tests/ldxa-barge-in-browser.test.mjs`) run alone, after the parallel queue.
+- **The tier's own concurrency and queue.** Each tier runs at `TIER_WORKERS` — the one owner in
+  `scripts/test-shards.mjs`, the same counts the full gate dispatches at (`availableParallelism() - 1` for
+  unit, 4 for the server lane, 4 for the browser tier's shards), overridable for a loaded box with
+  `VOICEBOX_FAST_WORKERS`. The parallel pool is ordered by `buildQueue` from that same module, i.e. the
+  queue the browser tier already runs from, heaviest-first. Both are scheduling facts and neither changes
+  the scope: nothing is dropped, reordered INTO omission, or narrowed — a file the changed-path map selects
+  is dispatched exactly once. This was a measured defect, not a preference (`voicebox-beads-buy8`): the gate
+  hard-coded **2** files in flight, a number no tier runs at, so a change to `public/fused.js` — whose
+  dependency closure is 159 of the 224 classified files — was killed at the fleet's 180s fast bound twice
+  (exit 124, STALE) where the tier's own concurrency costs **190s** on the same tree, and taking the pool's
+  order from `buildQueue` takes the modeled tier-serial total from 207.4s to 181.7s (longest-first ideal:
+  179.2s). The fleet speed standard's R2 budget for the median fast gate is **≤60s** and this does not
+  reach it: a UI-monolith change pays a browser-heavy closure, and the structural route is the
+  `public/fused.js` decomposition (`voicebox-beads-mvxl` / `uei2`), not a narrower map.
 - **A lost child is not a pass.** A file that produced no TAP summary is `unknown` — never `passed` — and
   the gate refuses on it.
+
+### The coverage contract for a page-loaded module (`voicebox-beads-buy8`)
+
+`.fleet/coverage-contract.json` declares, per source path, the suites that exercise it. It exists because
+**the fleet's independent coverage oracle cannot see a module the page loads**: `~/fleet/remote/check-coverage.py`
+(`find_candidate_tests_for_file`) looks for a candidate suite by import/require/subprocess reference or by
+filename stem, and `public/fused.js` — the UI monolith, loaded by `public/index.html` as
+`<script type="module" src="fused.js">` — is neither imported nor named after any suite. The oracle therefore
+found zero candidates for it and published `coverage: PARTIAL, unmapped: ["public/fused.js"]` on a run whose
+own manifest recorded **159 dispatched, 0 unmapped** (`voicebox-beads-zjpm.3`).
+
+The contract is the mechanism the oracle already supports for exactly this case (fleet-`1n0z` mode b); no
+fleet tooling change is involved. Its rule is the reason it is trustworthy: **every suite it names must be
+dispatched, or the record is PARTIAL again** — a suite that has stopped covering the file is named, not
+ignored. The witnesses here are the suites the changed-path map dispatches for `public/fused.js` that drive
+it directly: the browser suites that serve the real page (which loads the module) plus
+`tests/served-vs-disk.test.mjs`, which asserts the served copy of every module reference matches disk.
+
+Measured 2026-10-14 against the real fast-gate log for tree `7a5e9157` (`fast-gate` markers for 159 suites):
+
+| contract | oracle verdict |
+|---|---|
+| as committed | `coverage: KNOWN`, `unmapped: []`, `omitted: []` |
+| removed | `coverage: PARTIAL`, `unmapped: ["public/fused.js"]` — the reported defect |
+| one witness replaced by a suite that never ran | `coverage: PARTIAL`, `unmapped: ["public/fused.js"]`, `omitted: ["tests/a-suite-that-never-ran.test.mjs"]` |
 
 ### The artifact
 

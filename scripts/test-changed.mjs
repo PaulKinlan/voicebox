@@ -10,7 +10,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { gitEnv } from "../lib/git-env.mjs";
 import { classify } from "./test-lanes.mjs";
-import { ISOLATED } from "./test-shards.mjs";
+import { buildQueue, ISOLATED, TIER_WORKERS } from "./test-shards.mjs";
 import { artifactDir, createManifest, emitMarker, finalizeManifest, ManifestRefusal, recordFile, sealManifest, tapCounts, testChildEnv, verdictOf, writeManifest } from "./gate-manifest.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -344,7 +344,7 @@ export async function runGate({
   base = "",
   gate = "fast",
   dir = null,
-  workers = Number(process.env.VOICEBOX_FAST_WORKERS ?? 2),
+  workers = process.env.VOICEBOX_FAST_WORKERS ? Number(process.env.VOICEBOX_FAST_WORKERS) : null,
   timeoutMs = Number(process.env.VOICEBOX_FAST_FILE_SECS ?? 240) * 1000,
   dryRun = false,
   classified = classify(),
@@ -422,7 +422,7 @@ export async function runGate({
 
   const results = [];
   let cursor = 0;
-  const runTierFiles = async (files) => {
+  const runTierFiles = async (tier, files) => {
     const run = async (file) => {
       const relPath = `tests/${file}`;
       // NOT `fast-gate: running:` — the hub's extractor reads that marker as proof the suite EXECUTED, so a
@@ -457,8 +457,25 @@ export async function runGate({
     };
     // The files that measure the box run alone, on an otherwise idle gate — the same partition the
     // browser tier uses (scripts/test-shards.mjs owns ISOLATED), reused rather than re-derived.
-    const parallel = files.filter((f) => !ISOLATED.has(`tests/${f}`));
     const alone = files.filter((f) => ISOLATED.has(`tests/${f}`));
+    // THE PARALLEL POOL IS THE TIER'S OWN QUEUE, ORDERED HEAVIEST-FIRST BY ITS ONE OWNER. `buildQueue`
+    // (scripts/test-shards.mjs) is the queue `tools/browser-shard-runner.mjs` already runs the browser tier
+    // from, so this is the same order, not a second opinion about it. The order is a TIE-BREAK for
+    // work-stealing, not a schedule: it selects and omits nothing, it decides which file is in flight when
+    // the queue empties, and the tail is the only part work-stealing cannot fix. Measured on the fast
+    // gate's 159-file fused.js scope (2026-10-14, voicebox-beads-buy8): the server tier's 32.4s
+    // `env-serve.test.mjs` was fifth in the alphabetical queue, and replaying the exact recorded per-file
+    // durations in this order takes the modeled tier-serial total from 207.4s to 181.7s — against 179.2s
+    // for a longest-first ideal, which is what "the order is nearly free and the tail is not" means here.
+    const parallel = buildQueue(
+      files.filter((f) => !ISOLATED.has(`tests/${f}`)).map((f) => `tests/${f}`),
+      { cwd: ROOT },
+    ).map((p) => p.replace(/^tests\//, ""));
+    // THE CONCURRENCY IS THE TIER'S OWN — `TIER_WORKERS`, the one owner both dispatchers read — and
+    // VOICEBOX_FAST_WORKERS overrides it for a loaded box. The old default here was 2, a number no tier
+    // runs at: measured on the same 159-file scope, that cost 273s of wall clock where the tier's own
+    // concurrency costs 190s (voicebox-beads-buy8).
+    const concurrency = Math.max(1, workers ?? TIER_WORKERS[tier] ?? 1);
     cursor = 0;
     const workerLoop = async () => {
       for (;;) {
@@ -467,13 +484,13 @@ export async function runGate({
         await run(parallel[i]);
       }
     };
-    await Promise.all(Array.from({ length: Math.min(Math.max(1, workers), parallel.length) }, () => workerLoop()));
+    await Promise.all(Array.from({ length: Math.min(concurrency, parallel.length) }, () => workerLoop()));
     for (const file of alone) await run(file);
   };
 
   for (const tier of ["unit", "server", "browser"]) {
     const files = ordered.filter(([t]) => t === tier).map(([, f]) => f);
-    if (files.length > 0) await runTierFiles(files);
+    if (files.length > 0) await runTierFiles(tier, files);
   }
 
   // Every classified file that was not selected is OMITTED BY NAME WITH ITS REASON. This is the

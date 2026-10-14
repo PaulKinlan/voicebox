@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mapToTests, checkStaticRelevance, partitionTests, getBaseRef, runGate } from "../scripts/test-changed.mjs";
+import { buildQueue, ISOLATED, TIER_WORKERS } from "../scripts/test-shards.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const SCRIPT = path.join(root, "scripts/test-changed.mjs");
@@ -381,4 +382,142 @@ test("CLI gate: a genuine changed test file dispatches, emits the hub's markers 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ═══════════════ the gate's concurrency and its queue (voicebox-beads-buy8) ═══════════════
+// The fast gate used to dispatch every tier at a hard-coded 2 files in flight — a number no tier runs at —
+// and hand each tier's files to the workers in the order the changed-path map produced them (alphabetical).
+// Measured on the fused.js scope (159 files, 2026-10-14): 2 workers cost 273s of wall clock where the tier's
+// own concurrency costs 190s, and taking the pool's order from the browser tier's own queue took the
+// modeled tier-serial total from 207.4s to 181.7s (longest-first ideal: 179.2s) against a 180s bound.
+//
+// Both are SCHEDULING facts, so these cases assert the schedule itself — how many files were in flight at
+// once, in what order, and that the isolated files still ran alone — through the gate's own stub runner, so
+// nothing is launched and the numbers come from this file's roster rather than from the box.
+
+/** A synthetic roster in the classifier's own shape: { unit: ["a.test.mjs", …], server: […], browser: […] }. */
+function synthetic(perTier) {
+  const classified = { unit: [], server: [], browser: [] };
+  for (const tier of ["unit", "server", "browser"]) {
+    for (const file of perTier[tier] ?? []) classified[tier].push({ file, why: null });
+  }
+  return classified;
+}
+
+/** Drive the gate over a synthetic roster with a runner that RECORDS the schedule instead of running. */
+async function driveSchedule(classified, { workers } = {}) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-gate-sched-"));
+  const tierOf = new Map();
+  for (const tier of ["unit", "server", "browser"]) for (const { file } of classified[tier]) tierOf.set(file, tier);
+  const files = [...tierOf.keys()];
+  const events = [];                      // dispatch order, with how many OTHER files were in flight
+  const dispatched = new Map();           // file -> how many times it was dispatched
+  const peak = { unit: 0, server: 0, browser: 0 };
+  const inFlight = { unit: 0, server: 0, browser: 0 };
+  const realLog = console.log;
+  const realErr = console.error;
+  console.log = () => {};
+  console.error = () => {};
+  try {
+    const outcome = await runGate({
+      changedFiles: files.map((f) => `tests/${f}`),
+      matchedTests: files,
+      partitioned: { unit: classified.unit.map((e) => e.file), server: classified.server.map((e) => e.file), browser: classified.browser.map((e) => e.file), unclassified: [] },
+      classified,
+      gate: "fast",
+      tree: "f".repeat(40),
+      sha: "deadbee",
+      dir,
+      ...(workers === undefined ? {} : { workers }),
+      runner: async (relPath) => {
+        const file = relPath.replace(/^tests\//, "");
+        const tier = tierOf.get(file);
+        dispatched.set(file, (dispatched.get(file) ?? 0) + 1);
+        events.push({ file, tier, withOthers: inFlight.unit + inFlight.server + inFlight.browser });
+        inFlight[tier] += 1;
+        peak[tier] = Math.max(peak[tier], inFlight[tier]);
+        // Yield, so the schedule is the dispatcher's and not this stub's: every worker that can start has
+        // started before any file here finishes.
+        await new Promise((resolve) => setImmediate(resolve));
+        inFlight[tier] -= 1;
+        return { file: relPath, code: 0, signal: null, timedOut: false, counts: { tests: 1, pass: 1, fail: 0, skipped: 0 }, secs: 0.01, out: "" };
+      },
+    });
+    return { outcome, events, dispatched, peak };
+  } finally {
+    console.log = realLog;
+    console.error = realErr;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("gate: each tier is dispatched at the concurrency THAT tier runs at, from the one owner (voicebox-beads-buy8)", async () => {
+  const classified = synthetic({
+    unit: Array.from({ length: 8 }, (_, i) => `u${i + 1}.test.mjs`),
+    server: Array.from({ length: 6 }, (_, i) => `s${i + 1}.test.mjs`),
+    browser: Array.from({ length: 6 }, (_, i) => `b${i + 1}.test.mjs`),
+  });
+  const before = process.env.VOICEBOX_FAST_WORKERS;
+  delete process.env.VOICEBOX_FAST_WORKERS; // this case is about the DEFAULT, so the override must not be in the air
+  try {
+    const { outcome, peak } = await driveSchedule(classified);
+    assert.equal(outcome.code, 0, "the stub runner passes every file, so the schedule is the only question");
+    for (const tier of ["unit", "server", "browser"]) {
+      const n = classified[tier].length;
+      assert.equal(
+        peak[tier],
+        Math.min(TIER_WORKERS[tier], n),
+        `${tier} must run at TIER_WORKERS.${tier} (${TIER_WORKERS[tier]}) in flight, capped by its ${n} file(s) — not the 2 the gate used to hard-code`,
+      );
+    }
+  } finally {
+    if (before === undefined) delete process.env.VOICEBOX_FAST_WORKERS;
+    else process.env.VOICEBOX_FAST_WORKERS = before;
+  }
+});
+
+test("gate: VOICEBOX_FAST_WORKERS still overrides every tier, so a loaded box can run fewer (voicebox-beads-buy8)", async () => {
+  const classified = synthetic({
+    unit: Array.from({ length: 5 }, (_, i) => `u${i + 1}.test.mjs`),
+    server: Array.from({ length: 5 }, (_, i) => `s${i + 1}.test.mjs`),
+    browser: Array.from({ length: 5 }, (_, i) => `b${i + 1}.test.mjs`),
+  });
+  const before = process.env.VOICEBOX_FAST_WORKERS;
+  process.env.VOICEBOX_FAST_WORKERS = "2";
+  try {
+    const { peak } = await driveSchedule(classified);
+    for (const tier of ["unit", "server", "browser"]) assert.equal(peak[tier], 2, `${tier} must honour the documented override`);
+  } finally {
+    if (before === undefined) delete process.env.VOICEBOX_FAST_WORKERS;
+    else process.env.VOICEBOX_FAST_WORKERS = before;
+  }
+});
+
+test("gate: the parallel pool is dispatched in the browser tier's own heaviest-first queue, not the map's order (voicebox-beads-buy8)", async () => {
+  // REAL file names, so the queue's byte weights are this tree's: the stub runner dispatches them and runs
+  // none of them. The roster is chosen so byte order is NOT alphabetical — otherwise this case would pass
+  // against the alphabetical order it replaced (mini-app-architecture is 92KB and voicebox 35KB, while
+  // theme-browser sorts first at 9KB).
+  const names = ["theme-browser.test.mjs", "settings-dialog.test.mjs", "mini-app-architecture.test.mjs", "voicebox.test.mjs"];
+  const classified = synthetic({ browser: names });
+  const { events } = await driveSchedule(classified);
+  const queue = buildQueue(names.map((f) => `tests/${f}`), { cwd: root }).map((p) => p.replace(/^tests\//, ""));
+  assert.notDeepEqual(queue, [...names].sort(), "the fixture is a roster whose byte order is not alphabetical");
+  assert.deepEqual(events.map((e) => e.file), queue, "the pool runs the tier's own queue, heaviest first");
+});
+
+test("gate: the isolated files still run ALONE, after the whole queue, exactly once (voicebox-beads-buy8)", async () => {
+  const names = ["voicebox.test.mjs", "theme-browser.test.mjs", ...ISOLATED].map((f) => f.replace(/^tests\//, ""));
+  const isolated = names.filter((f) => ISOLATED.has(`tests/${f}`));
+  assert.equal(isolated.length, 2, "the fixture keeps the real isolated pair (scripts/test-shards.mjs owns it)");
+  const classified = synthetic({ browser: names });
+  const { events, dispatched } = await driveSchedule(classified);
+  const order = events.map((e) => e.file);
+  for (const file of isolated) {
+    const at = events.find((e) => e.file === file);
+    assert.equal(at.withOthers, 0, `${file} must run with nothing else in flight — it measures the box`);
+    assert.ok(order.indexOf(file) >= names.length - isolated.length, `${file} must run after the parallel queue`);
+    assert.equal(dispatched.get(file), 1, `${file} runs exactly once, isolation is a schedule and not an omission`);
+  }
+  assert.equal(events.length, names.length, "every file in the lane is dispatched exactly once");
 });

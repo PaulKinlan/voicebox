@@ -42,21 +42,19 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { classify } from "./test-lanes.mjs";
-import { ISOLATED } from "./test-shards.mjs";
+import { ISOLATED, TIER_WORKERS } from "./test-shards.mjs";
 import { coverageGaps, emitMarker, tapCounts, tierRecordPath } from "./gate-manifest.mjs";
 import { killRunningChildren, runOneFile, statusOf } from "./test-changed.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
- * The tiers the full gate runs, and the concurrency each one has ALWAYS run at — `npm run test:unit` is one
- * `node --test` over the unit lane (default concurrency = availableParallelism - 1) and `npm run test:live`
- * passes `--test-concurrency=4` to the server lane. The counts are repeated here rather than re-derived
- * from those scripts because they are the reason this dispatcher is allowed to exist at all: it must not
- * make the full gate slower OR concurrent-er than the gate it replaces (voicebox-beads-zjpm, speed is a
- * design constraint).
+ * TIER_WORKERS — the concurrency each tier runs at — lives in `scripts/test-shards.mjs`, which both tier
+ * dispatchers already import (test-changed.mjs, for the fast gate, used to carry its own default of 2: two
+ * copies of one fact, and the wrong one was in the fast gate). The reason the counts are not re-derived from
+ * `npm run test:unit` / `npm run test:live` is unchanged: a dispatcher must not make a tier slower OR
+ * concurrent-er than the lane it replaces (voicebox-beads-zjpm, speed is a design constraint).
  */
-export const TIER_WORKERS = Object.freeze({ unit: Math.max(1, os.availableParallelism() - 1), server: 4, browser: 4 });
 
 /** A tier's lane, as the gate names the files (`tests/<name>`), from the ONE classifier. */
 export function tierFiles(tier, classified = classify()) {
