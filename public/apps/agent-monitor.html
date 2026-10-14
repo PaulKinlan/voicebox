@@ -6,6 +6,14 @@
   <title>Agent Progress Tracker</title>
   <style>
     :root {
+      /* Type scale tokens */
+      --text-xs: 0.75rem;
+      --text-sm: 0.8125rem;
+      --text-base: 0.875rem;
+      --text-md: 0.9375rem;
+      --text-lg: 1rem;
+      --text-xl: 1.125rem;
+
       --bg-page: #fbfbf9;
       --bg-card: #ffffff;
       --bg-muted: #f3f2ee;
@@ -247,7 +255,7 @@
 
     .pill-toggle-btn {
       padding: 3px 8px;
-      font-size: 0.74rem;
+      font-size: var(--text-xs, 0.75rem);
       border-radius: 6px;
     }
 

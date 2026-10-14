@@ -246,6 +246,39 @@ AudioWorklet modules loaded by the frontend audio engine: `pcm-worklet.js`.
 - **`public/theme.mjs`** (voicebox-beads-ri9x, first slice of `voicebox-beads-mvxl`): Owner of the theme preference — the tri-state (`light` / `dark` / `system`) held in `localStorage` under `voicebox:theme`, the `data-theme` (effective) and `data-theme-mode` (preference) attributes, the `prefers-color-scheme` listener that re-applies while `system` is chosen, and the select/toggle/label/icon sync. Its `storage` listener follows valid choices from another tab without writing back, falls back to light for removed/invalid values, and `initTheme` re-entry removes only its own UI/media/storage listeners. Extracted from `public/fused.js`, which had grown it inline; `fused.js` hands it its three controls at boot (`initTheme`) and calls `applyTheme` from the system-command branch, so the module depends on nothing else in the page. Driven in real Chromium by `tests/theme-browser.test.mjs` and the two-tab/Help case in `tests/theme-cross-tab-browser.test.mjs`; `tests/theme-storage.test.mjs` pins listener lifecycle.
 - **`public/style.css`** (voicebox-beads-7xse): The palette itself. All ten colour tokens are single `light-dark(light, dark)` pairs on `:root`, which declares `color-scheme: light dark`, and `:root[data-theme="light"]` / `:root[data-theme="dark"]` set ONLY `color-scheme` — so the light and dark values cannot drift apart, an explicit choice is a one-property override, and a browser that runs no script still follows the OS. The card shadow deliberately keeps box-shadow syntax with only its COLOUR in a `light-dark()` pair (`--shadow-ink`): `light-dark()` resolves to a `<color>`, so wrapping the shadow itself makes the declaration invalid and the computed value `none`, with no error anywhere — `tests/theme-tokens.test.mjs` refuses that shape and holds every token to the value it had before the refactor, while `tests/theme-os-fallback.test.mjs` asserts the computed shadow is never `none` in either scheme.
 
+  The stylesheet also establishes a legible type scale on `:root` (`--text-xs` 0.75rem through `--text-2xl` 1.25rem,
+  voicebox-beads-3674) with an enforced 0.75rem (12px) readability floor for all secondary text, badges, hotkey tags,
+  and timestamps across desktop and responsive mobile viewports. Every sub-12px declaration in the four surfaces at
+  `a26fb12` — 43 of them: 28 `font-size` literals and four `font:` shorthands in `public/style.css` (including
+  `.mic-hotkey-badge`, `.sqeh-dock-label`, `.sqeh-action`, and `.harness-badge`), and 11 across
+  `public/apps/agent-monitor.html`, `public/apps/landing-inspector.html` and `designs/prototype.html` — is lifted to
+  the 0.75rem floor (`var(--text-xs)`), and the Document-PiP window's `.pip-task-chip` moves off its own `11px`
+  (`public/pip-mic.mjs`, the one module that injects a stylesheet of its own). The floor is pinned in two tiers:
+  `tests/type-scale-tokens.test.mjs` reads the declarations with no browser — comments stripped, the `font:` shorthand
+  read past any style or weight (`font: 600 11px/1.4 …` counts, which is how four sizes hid from the first
+  `font-size:`-only scan), read as declaration text rather than one line at a time and case-folded, so a value that
+  starts on the next line and an upper-cased property name are read too (voicebox-beads-jlfq) — across every
+  `public/*.css`, every page under `public/`, `designs/prototype.html` and `public/pip-mic.mjs`, so the fast gate
+  refuses a reintroduced sub-12px size. It also resolves a size carried by a
+  custom property, in every scope: a scoped override of a pinned token (`--text-xs: 0.6rem` inside one rule) and a
+  brand-new token are both refused, and the refusal names the declaration that set the size rather than every use of
+  it. A size the check cannot read at all — an unknown `var()` with no fallback, or a unit it cannot convert to px —
+  is refused rather than passed, because a floor check that answers "fine" to a size it could not see is the defect
+  `tests/type-scale-tokens.test.mjs` exists to prevent (voicebox-beads-94of); `tests/type-scale.test.mjs`
+  browser-verifies computed font sizes (>= 12px) across desktop, mobile, and secondary apps, and proves the lifted
+  rules are `rem` by doubling the root font size and watching them grow with it. The one row that did not survive that
+  doubling, the waiting-branches count badge, whose fixed `height: 18px` box could not hold the 24px the token resolves
+  to, now carries `min-height` so it grows with the user's text scale instead of overflowing its own circle.
+
+  The `.sr-only` utility in `public/style.css` uses `overflow: clip` rather than `overflow: hidden` (voicebox-beads-dche,
+  the live room copy of voicebox-beads-y5dr). Under `overflow: hidden` the 1px box was a scroll container with a 65x20
+  scroll area on 6 of the 18 labels that existed when it was measured, which script could scroll to (`scrollLeft = 999`
+  moving to 64). `overflow: clip` clips identically without creating a scroll container, and every label now measures 0
+  while its accessible name stays in the accessibility tree. The test does not pin the label count — a toolbar button added
+  on `main` took it from 18 to 19 — and instead asserts the invariant over whatever `.sr-only` nodes the page renders,
+  backed by a control arm that proves the probe still detects an `overflow: hidden` 1px box. Pinned by
+  `tests/type-scale.test.mjs`.
+
   The same file carries the room and Help placeholder fix (voicebox-beads-0q5c): those pages drew placeholder
   text from the user agent's grey, measuring 4.45:1 light and 4.16:1 dark against the fields' own backgrounds
   (and 4.19:1 / 3.17:1 on the two transcript fields' darker ground), under the 4.5:1 floor this project applies

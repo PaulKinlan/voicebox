@@ -7,6 +7,14 @@
   <style>
     :root,
     html[data-theme="light"] {
+      /* Type scale tokens */
+      --text-xs: 0.75rem;
+      --text-sm: 0.8125rem;
+      --text-base: 0.875rem;
+      --text-md: 0.9375rem;
+      --text-lg: 1rem;
+      --text-xl: 1.125rem;
+
       --ground: #fbfbf9;
       --ground-subtle: #f3f2ee;
       --card: #ffffff;
@@ -231,7 +239,7 @@
 
     .mic-kbd {
       font-family: var(--mono);
-      font-size: 0.68rem;
+      font-size: var(--text-xs, 0.75rem);
       font-weight: 600;
       padding: 2px 7px;
       border-radius: 999px;
@@ -336,7 +344,7 @@
 
     /* Floating Bubble Tray */
     .bubble-tray-label {
-      font-size: 0.72rem;
+      font-size: var(--text-xs, 0.75rem);
       font-family: var(--mono);
       text-transform: uppercase;
       letter-spacing: 0.08em;
@@ -385,7 +393,7 @@
 
     .bubble-pill .bubble-badge {
       font-family: var(--mono);
-      font-size: 0.72rem;
+      font-size: var(--text-xs, 0.75rem);
       padding: 2px 7px;
       border-radius: 999px;
       background: var(--ground-subtle);
@@ -486,7 +494,7 @@
 
     .popover-subtitle {
       font-family: var(--mono);
-      font-size: 0.74rem;
+      font-size: var(--text-xs, 0.75rem);
       color: var(--muted);
     }
 
@@ -619,7 +627,7 @@
 
     .file-meta {
       font-family: var(--mono);
-      font-size: 0.71rem;
+      font-size: var(--text-xs, 0.75rem);
       color: var(--muted);
     }
 
@@ -628,7 +636,7 @@
       border: 1px solid var(--accent);
       background: var(--accent-soft);
       color: var(--accent);
-      font-size: 0.74rem;
+      font-size: var(--text-xs, 0.75rem);
       font-weight: 600;
       padding: 5px 10px;
       border-radius: 999px;
@@ -686,7 +694,7 @@
 
     .turn-role {
       font-family: var(--mono);
-      font-size: 0.7rem;
+      font-size: var(--text-xs, 0.75rem);
       text-transform: uppercase;
       color: var(--muted);
       margin-bottom: 4px;
