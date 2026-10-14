@@ -31,7 +31,7 @@ const devices = {
   inputs: [],
   outputs: [],
   namesVisible: false,
-  canChooseOutput: true,
+  canChooseOutput: null, // null = no client has answered yet; only a real answer may become a claim (voicebox-beads-t1k9)
   // The routing decision, made explicitly rather than inherited: when the
   // chosen output disappears mid-reply this page STOPS playback and says so. It
   // does not silently move a private reply to the system speakers, because a
@@ -87,7 +87,16 @@ function fillPicker(select, list, pref, what, namesVisible) {
 }
 
 function renderDevices() {
-  const { prefs, inputs, outputs, canChooseOutput, namesVisible } = devices;
+  const { prefs, inputs, outputs, namesVisible } = devices;
+  // THE CLIENT'S ANSWER IS READ LIVE, AND "NOT YET" IS NOT "NO" (voicebox-beads-t1k9). `canChooseOutput`
+  // is the live client's fact, and that client is published by a DIFFERENT module script
+  // (public/live-voice.js) than the one that boots this surface (public/fused.js), so on a boot where
+  // live-voice.js loses that race there is no client to ask. Caching that absence as `false` wrote "This
+  // browser uses system output. Change the output in your device's sound settings." — a negative claim
+  // about the machine — over a browser that does offer output selection. So the row may only say that
+  // once a client has actually answered, and any repaint (not just a refresh) picks a later answer up.
+  const clientCanChoose = getLiveClient()?.canChooseOutput?.();
+  const canChooseOutput = typeof clientCanChoose === "boolean" ? clientCanChoose : devices.canChooseOutput;
   fillPicker(els.micSelect, inputs, prefs.mic, "microphone", namesVisible);
   fillPicker(els.outSelect, outputs, prefs.out, "output", namesVisible);
 
@@ -119,7 +128,7 @@ function renderDevices() {
   if (canChooseOutput && !outputIdsUsable && !prefs.out.id) out = speaking
     ? "Reply playing through the system output · this browser lists no named outputs until you allow access"
     : "No reply playing · this browser lists no named outputs until you allow access";
-  else if (!canChooseOutput) out = "This browser uses system output. Change the output in your device's sound settings.";
+  else if (canChooseOutput === false) out = "This browser uses system output. Change the output in your device's sound settings.";
   else if (!prefs.out.id) out = speaking ? "Reply playing through System default" : "No reply playing";
   else if (speaking && outPresent) out = `Reply playing through ${prefs.out.name || "the chosen output"}`;
   else if (!outPresent) {
@@ -142,7 +151,8 @@ async function refreshDevices() {
   const listed = await listDevices();
   devices.inputs = listed.inputs;
   devices.outputs = listed.outputs;
-  devices.canChooseOutput = getLiveClient()?.canChooseOutput?.() ?? false;
+  const clientCanChoose = getLiveClient()?.canChooseOutput?.();
+  if (typeof clientCanChoose === "boolean") devices.canChooseOutput = clientCanChoose;
   devices.namesVisible = listed.names === true;
 
   // INPUT: a chosen microphone that has left is named; capture is never moved to
