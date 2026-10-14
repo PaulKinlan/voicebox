@@ -341,3 +341,63 @@ test("the device rows still tell the truth inside the dialog", { timeout: 90000 
   await page.waitFor(() => document.getElementById("settings").open === false, { label: "the dialog to close" });
   await page.evaluate(() => localStorage.removeItem("voicebox.devices"));
 });
+
+test("a refused output says WHICH device it could not use and WHY, and does not leave the row lying", { timeout: 60000 }, async () => {
+  // The row's whole job is to name three separate facts (what was chosen, what is available, what is
+  // happening). The refusal is the moment those can disagree: the client rejects a switch, the
+  // preference goes back to the device actually in use, and the row must say why the switch failed
+  // instead of immediately repainting over the reason with the generic line (voicebox-beads-cqrd).
+  await page.evaluate(() => localStorage.removeItem("voicebox.devices"));
+  await page.reload();
+  await waitForAppWired();
+
+  const refused = await page.evaluate(async () => {
+    const realEnumerate = navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices);
+    navigator.mediaDevices.enumerateDevices = async () => ([
+      { kind: "audioinput", deviceId: "mic-a", label: "Desk microphone", groupId: "g" },
+      { kind: "audiooutput", deviceId: "out-a", label: "Studio monitors", groupId: "g" },
+      { kind: "audiooutput", deviceId: "out-b", label: "Headset earpiece", groupId: "g" },
+    ]);
+    // The LIVE client is replaced after init on purpose: the module must read it at use time.
+    window.__voiceboxLiveClient = {
+      state: { capture: false, playbackActive: false },
+      canChooseOutput: () => true,
+      setOutputDevice: async (id) => (id === "out-a" ? { ok: true } : { ok: false, reason: "the device is in use by another application" }),
+    };
+    await window.__voiceboxDevices.refresh();
+    const select = document.getElementById("out-select");
+    const row = document.getElementById("out-device-state");
+
+    const choose = async (value) => {
+      select.value = value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 50));
+      return { text: row.textContent, stored: JSON.parse(localStorage.getItem("voicebox.devices") ?? "{}")?.out ?? null, selectValue: select.value };
+    };
+
+    const accepted = await choose("out-a");
+    const rejection = await choose("out-b");
+
+    navigator.mediaDevices.enumerateDevices = realEnumerate;
+    return { accepted, rejection };
+  });
+
+  assert.equal(refused.accepted.stored.id, "out-a", "the accepted output must be stored as the preference");
+  assert.deepEqual(
+    { id: refused.rejection.stored.id, name: refused.rejection.stored.name },
+    { id: "out-a", name: "Studio monitors" },
+    "a refused output must leave the preference on the device actually in use",
+  );
+  assert.match(
+    refused.rejection.text,
+    /Could not use Headset earpiece\. the device is in use by another application\./,
+    `the refusal must survive the repaint and name the device and the reason: the row currently reads ${JSON.stringify(refused.rejection.text)}`,
+  );
+  assert.equal(
+    refused.rejection.selectValue,
+    "out-a",
+    "the picker must go back to the device in use — leaving the refused (not in use) device selected is the same lie one control to the left",
+  );
+
+  await page.evaluate(() => localStorage.removeItem("voicebox.devices"));
+});
