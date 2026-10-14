@@ -45,7 +45,7 @@ test("static: headings declare text-wrap: balance in changelog.css and harnesses
   );
 });
 
-test("static: background changelog fetches pass priority: 'low' option in changelog.js and fused.js", () => {
+test("static: background changelog fetches pass priority: 'low' option in changelog.js and the changelog dialog module", () => {
   const changelogJs = readFileSync(path.join(PUBLIC, "changelog.js"), "utf8");
   assert.match(
     changelogJs,
@@ -53,11 +53,14 @@ test("static: background changelog fetches pass priority: 'low' option in change
     "changelog.js must pass priority: 'low' to fetch",
   );
 
-  const fusedJs = readFileSync(path.join(PUBLIC, "fused.js"), "utf8");
+  // The dialog's background fetch moved out of fused.js into
+  // public/components/changelog-dialog.mjs (voicebox-beads-mvxl). The assertion is unchanged — the
+  // same regex, on the file that now holds the call — so this is a re-point, not a dropped check.
+  const changelogDialog = readFileSync(path.join(PUBLIC, "components", "changelog-dialog.mjs"), "utf8");
   assert.match(
-    fusedJs,
+    changelogDialog,
     /fetch\("\/api\/changelog",\s*\{[^}]*priority:\s*(?:"low"|options\.priority \?\? "low")[^}]*\}\)/,
-    "fused.js must pass priority option defaulting to 'low' to fetch",
+    "public/components/changelog-dialog.mjs must pass priority option defaulting to 'low' to fetch",
   );
 });
 

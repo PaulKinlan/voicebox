@@ -64,7 +64,7 @@ node server.mjs --doctor
 
 ## Architecture Overview
 
-Voicebox pairs a zero-dependency Node.js gateway (`server.mjs`) and modular browser UI (`public/fused.js`, `public/theme.mjs`, `public/extensions-ui.mjs`, `public/settings-ui.mjs`, `public/components/environment-root-dialog.mjs`, `public/live-voice.js`) with a pure TypeScript policy core (`core/`). Extension HTTP discovery and decisions are grouped in `lib/routes/extensions.mjs`; the server still owns the authorization checks and bounded JSON body parser.
+Voicebox pairs a zero-dependency Node.js gateway (`server.mjs`) and modular browser UI (`public/fused.js`, `public/theme.mjs`, `public/extensions-ui.mjs`, `public/settings-ui.mjs`, `public/components/environment-root-dialog.mjs`, `public/components/changelog-dialog.mjs`, `public/live-voice.js`) with a pure TypeScript policy core (`core/`). Extension HTTP discovery and decisions are grouped in `lib/routes/extensions.mjs`; the server still owns the authorization checks and bounded JSON body parser.
 
 ### Pluggable live-model library
 
@@ -107,7 +107,7 @@ Root-scoped CLI execution in `lib/system-tools.mjs` strips inherited Git hook pl
 - **Agent Listing (`lib/routes/agents-read.mjs`)**: Exact `GET /api/agents` filters public agent projections and computes admission from the host's current adapter/harness state on each request. Host-owned `POST /api/agents` registration and the loopback auth wall are separate and unchanged.
 - **Sandboxing & Audit Trail (`lib/fence-provider.mjs`, `core/tier-table.ts`)**: Enforces capability boundaries and records every attempt, outcome, and refusal in an append-only JSONL audit log.
 - **Work Activity (`lib/routes/activity.mjs`)**: `GET /api/activity` reads the host's ephemeral work log; `DELETE /api/activity` clears that same in-memory array in place so later producer writes remain visible. The global loopback auth wall remains in `server.mjs`.
-- **Change Log (`lib/routes/changelog.mjs`)**: `GET /api/changelog` reads and formats recent Git commits using a private HEAD/ref-mtime cache. It retains the existing uncached behavior for worktrees with a `.git` file; the host still owns auth and adjacent health routes.
+- **Change Log (`lib/routes/changelog.mjs`)**: `GET /api/changelog` reads and formats recent Git commits using a private HEAD/ref-mtime cache. The room's own Change log dialog — the lazy fetch, the commit-card renderer and the conventional-commit badges — is owned by `public/components/changelog-dialog.mjs`. It retains the existing uncached behavior for worktrees with a `.git` file; the host still owns auth and adjacent health routes.
 
 <!-- BEGIN GENERATED: loop — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 The table below traces a complete turn executed against a temporary workspace during documentation generation:
