@@ -105,3 +105,38 @@ test("transient-state: the status-observable half is a REVIEW LIST, not a verdic
   const listing = check(sleepStmt + shape({ body: 'await page.click("#go");\n  assert.equal(await page.evaluate(() => window.__count), 1);' }));
   assert.equal(listing.code, 0, `the review list must not change the exit code — output was ${listing.out}`);
 });
+
+test("transient-state: delayed page read before assertion is offered under --list (voicebox-beads-omja)", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-omja-"));
+  const file = path.join(dir, "omja.test.mjs");
+  writeFileSync(
+    file,
+    'import test from "node:test";\nimport assert from "node:assert/strict";\nconst sleep = (ms) => new Promise((r) => setTimeout(r, ms));\ntest("omja", async () => {\n  await sleep(300);\n  const status = await page.evaluate(() => window.__status);\n  assert.equal(status, "ready");\n});\n',
+  );
+  try {
+    const res = spawnSync(process.execPath, [CHECKER, file, "--list"], { cwd: root, encoding: "utf8" });
+    assert.equal(res.status, 0);
+    assert.match(res.stdout, /— DELAYED-READ/, "named clause clears direct failure");
+    assert.match(res.stdout, /review .* delayed read of page state asserted at line 7/, "review list includes the delayed read");
+    assert.match(res.stdout, /review .* exact status assertion, no wait on it: assert\.equal\(status, "ready"\)/, "review list includes status assertion");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("transient-state: status review list captures exact strings and positive counts on unwaited observables (voicebox-beads-a2gd)", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-a2gd-"));
+  const file = path.join(dir, "a2gd.test.mjs");
+  writeFileSync(
+    file,
+    'import test from "node:test";\nimport assert from "node:assert/strict";\ntest("a2gd", async () => {\n  await page.waitForFunction(() => window.__other);\n  assert.equal(await page.evaluate(() => window.__status), "ready");\n  assert.equal(await page.evaluate(() => window.__count), 1);\n});\n',
+  );
+  try {
+    const res = spawnSync(process.execPath, [CHECKER, file, "--list"], { cwd: root, encoding: "utf8" });
+    assert.equal(res.status, 0);
+    assert.match(res.stdout, /review .* assert\.equal\(await page\.evaluate\(\(\) => window\.__status\), "ready"\)/, "exact string on unwaited observable is listed");
+    assert.match(res.stdout, /review .* assert\.equal\(await page\.evaluate\(\(\) => window\.__count\), 1\)/, "positive count on unwaited observable is listed");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

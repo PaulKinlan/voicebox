@@ -68,20 +68,22 @@ function enclosingOpener(lines, idx) {
 /** The statement that follows the delay: from the next non-blank line to the line that balances its parens. */
 function statementAfter(lines, idx) {
   let start = idx + 1;
-  while (start < lines.length && lines[start].trim() === "") start++;
-  if (start >= lines.length) return { text: "", line: null };
+  while (start < lines.length && (lines[start].trim() === "" || lines[start].trim().startsWith("//"))) start++;
+  if (start >= lines.length) return { text: "", line: null, endIdx: start };
   const parts = [];
   let balance = 0;
-  for (let i = start; i < lines.length && i - start < 12; i++) {
+  let endIdx = start;
+  for (let i = start; i < lines.length && i - start < 15; i++) {
     const line = lines[i];
     parts.push(line.trim());
     for (const ch of line) {
       if (ch === "(" || ch === "[") balance++;
       else if (ch === ")" || ch === "]") balance--;
     }
-    if (balance <= 0) break;
+    endIdx = i;
+    if (balance <= 0 && (line.trim().endsWith(";") || line.trim().endsWith("}"))) break;
   }
-  return { text: parts.join(" "), line: start + 1 };
+  return { text: parts.join(" "), line: start + 1, endIdx };
 }
 
 // AN ABSENCE IS NOT A RACE. The expected side says the thing is not there, or the assertion is explicitly a
@@ -94,10 +96,28 @@ const READS_PAGE_STATE = /page\.|window\.|document|__[a-zA-Z]/;
 export function classifyDelay({ lines, idx }) {
   const opener = enclosingOpener(lines, idx);
   const after = statementAfter(lines, idx);
-  if (!/^assert\./.test(after.text.replace(/^await\s+/, ""))) {
+  let assertStmt = after;
+  let isDelayedRead = false;
+
+  // LOOK-THROUGH FOR DELAYED PAGE READS (voicebox-beads-omja): if the statement after the delay is a variable
+  // declaration reading page state (e.g. `const status = await page.evaluate(...)`), check whether the
+  // statement immediately following it is the assertion checking that variable. A delay followed by a read and
+  // immediate assert is the same defect shape as a delay followed directly by an assert.
+  if (!/^assert\./.test(after.text.trim().replace(/^await\s+/, ""))) {
+    const varMatch = after.text.trim().match(/^(?:const|let|var)\s+(\w+)\s*=\s*(?:await\s+)?.*?(page\.|window\.|document|__[a-zA-Z])/);
+    if (varMatch) {
+      const stmt2 = statementAfter(lines, after.endIdx);
+      if (/^assert\./.test(stmt2.text.trim().replace(/^await\s+/, "")) && stmt2.text.includes(varMatch[1])) {
+        assertStmt = stmt2;
+        isDelayedRead = true;
+      }
+    }
+  }
+
+  if (!/^assert\./.test(assertStmt.text.trim().replace(/^await\s+/, ""))) {
     return { cleared: true, clause: "NOT-IMMEDIATE", detail: "the statement after the delay is not an assertion" };
   }
-  if (ABSENCE_EXPECTED.test(after.text) || ABSENCE_FORM.test(after.text)) {
+  if (ABSENCE_EXPECTED.test(assertStmt.text) || ABSENCE_FORM.test(assertStmt.text)) {
     return { cleared: true, clause: "ABSENCE", detail: "the assertion asserts that something did NOT happen" };
   }
   if (/^\s*(for|while)\s*\(/.test(opener.text.trim())) {
@@ -106,10 +126,23 @@ export function classifyDelay({ lines, idx }) {
   if (/evaluate\s*\(/.test(opener.text)) {
     return { cleared: true, clause: "IN-PAGE", detail: `the delay runs inside page.evaluate (line ${opener.line})` };
   }
-  if (!READS_PAGE_STATE.test(after.text)) {
+  if (!READS_PAGE_STATE.test(assertStmt.text) && !isDelayedRead) {
     return { cleared: true, clause: "NO-ASYNC", detail: "the assertion reads no page or global state" };
   }
-  return { cleared: false, clause: null, detail: "a FIXED delay immediately before an assertion on page state, with nothing saying what it waits for", statement: after };
+  if (assertStmt !== after) {
+    return {
+      cleared: true,
+      clause: "DELAYED-READ",
+      detail: `delay precedes a page read asserted at line ${assertStmt.line} (offered under --list for review)`,
+      statement: assertStmt,
+    };
+  }
+  return {
+    cleared: false,
+    clause: null,
+    detail: "a FIXED delay immediately before an assertion on page state, with nothing saying what it waits for",
+    statement: assertStmt,
+  };
 }
 
 // ── THE REVIEW LIST, deliberately separate and non-deciding (see the header) ──────────────────────────
@@ -120,13 +153,25 @@ function statusCandidates(file, source) {
   const out = [];
   for (const m of source.matchAll(EXACT_STATUS)) {
     const expr = m[1].trim();
-    if (!READS_PAGE_STATE.test(expr)) continue;
-    if (m[2] === "0" || /\.length\s*$/.test(expr)) {
-      // An exact zero or an exact count: the jeye/y1db shape when nothing waits for it.
-      const idents = expr.match(/__[a-zA-Z]\w+/g) ?? [];
-      if (idents.length && idents.some((i) => waits.includes(i))) continue;
-      out.push({ file, line: source.slice(0, m.index).split("\n").length, text: m[0].trim().slice(0, 100) });
+    let isPageState = READS_PAGE_STATE.test(expr);
+    let idents = expr.match(/__[a-zA-Z]\w+/g) ?? [];
+    if (!isPageState) {
+      // Look through variable assignments that read page state (voicebox-beads-omja)
+      const varMatch = expr.match(/^([a-zA-Z_]\w*)(?:\.[\w.]+)?$/);
+      if (varMatch) {
+        const varName = varMatch[1];
+        const assignRe = new RegExp(`(?:const|let|var)\\s+${varName}\\s*=[^;\\n]*(?:page\\.|window\\.|document|__[a-zA-Z])`);
+        if (assignRe.test(source)) {
+          isPageState = true;
+          const assignIdents = source.match(new RegExp(`(?:const|let|var)\\s+${varName}\\s*=[^;\\n]*(__[a-zA-Z]\\w+)`));
+          if (assignIdents) idents.push(assignIdents[1]);
+        }
+      }
     }
+    if (!isPageState) continue;
+    // An exact string or count on an unwaited status observable belongs on the review list (voicebox-beads-a2gd)
+    if (idents.length && idents.some((i) => waits.includes(i))) continue;
+    out.push({ file, line: source.slice(0, m.index).split("\n").length, text: m[0].trim().slice(0, 100) });
   }
   return out;
 }
@@ -147,8 +192,18 @@ function scan(files, { list = false } = {}) {
       if (!FIXED_DELAY.some((re) => re.test(lines[i]))) continue;
       const verdict = classifyDelay({ lines, idx: i });
       const where = `${file}:${i + 1}`;
-      if (verdict.cleared) cleared.push({ where, ...verdict });
-      else candidates.push({ where, ...verdict });
+      if (verdict.cleared) {
+        cleared.push({ where, ...verdict });
+        if (list && verdict.clause === "DELAYED-READ") {
+          review.push({
+            file,
+            line: i + 1,
+            text: `fixed delay before delayed read of page state asserted at line ${verdict.statement?.line}: ${verdict.statement?.text?.slice(0, 80)}`,
+          });
+        }
+      } else {
+        candidates.push({ where, ...verdict });
+      }
     }
     if (list) review.push(...statusCandidates(file, source));
   }
