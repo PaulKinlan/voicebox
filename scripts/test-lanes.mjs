@@ -58,20 +58,254 @@ const TESTS = path.join(ROOT, "tests");
  * NAME signal (`name: true`) counts only where its code uses the identifier
  * (voicebox-beads-k96l, the header above).
  */
+/**
+ * A harness path is DATA until something CONSUMES it (voicebox-beads-l79v, voicebox-beads-oktn).
+ * The PATH signals used to match a quoted path anywhere in the file's text, so a pure unit test that merely
+ * NAMED the CDP helper as fixture data was filed in the serial browser lane and hidden from the unit fast
+ * gate. Each path signal now requires an EDGE that makes it behaviour: an import/require, a write, a
+ * direct, variable-bound, or aliased spawn/exec/fork, or a constructed path (path.join/resolve,
+ * fileURLToPath, new URL). Tracing uses the token stream from lex(source) (ignoring comments) to bind
+ * variables and enforce argument positioning (so unrelated spawns and options properties like env.args do
+ * not promote data fixtures, voicebox-beads-oktn).
+ */
+const SPAWNS = new Set(["spawn", "spawnSync"]);
+const EXEC_FILES = new Set(["execFile", "execFileSync", "fork"]);
+const EXECS = new Set(["exec", "execSync"]);
+const ALL_WRITES = new Set(["writeFileSync", "writeFile", "appendFileSync", "appendFile", "createWriteStream"]);
+
+function parseCallArgs(code, at) {
+  const args = [[]];
+  const nest = [];
+  let j = at + 1;
+  if (code[j]?.v !== "(") return null;
+  nest.push("(");
+  j++;
+  for (; j < code.length; j++) {
+    const tok = code[j];
+    const { k, v } = tok;
+    if (k === "punct" && (v === "(" || v === "[" || v === "{" || v === "${")) {
+      nest.push(v);
+      args[args.length - 1].push(tok);
+    } else if (k === "punct" && (v === ")" || v === "]" || v === "}")) {
+      nest.pop();
+      if (nest.length === 0) break;
+      args[args.length - 1].push(tok);
+    } else if (k === "punct" && v === "," && nest.length === 1) {
+      args.push([]);
+    } else {
+      args[args.length - 1].push(tok);
+    }
+  }
+  return { args, endAt: j };
+}
+
+function checkConsumes(src, name) {
+  const nameLitRe = new RegExp(`^["'\`][^"'\\\`]*\\b${name}["'\`]$`);
+  const nameWordRe = new RegExp(`\\b${name}\\b`);
+  if (!nameWordRe.test(src)) return false;
+
+  const tokens = lex(src);
+  if (!tokens) return true; // conservative fallback if lex fails
+  const code = tokens.filter(({ k }) => k !== "com");
+
+  const matchesLit = (t) =>
+    (t.k === "str" && nameLitRe.test(src.slice(t.s, t.e))) ||
+    (t.k === "tpl" && nameWordRe.test(src.slice(t.s, t.e)));
+
+  function isPathExpr(exprTokens) {
+    if (exprTokens.length === 0) return false;
+    if (exprTokens.length === 1) {
+      const t = exprTokens[0];
+      if (t.k === "str" && nameLitRe.test(src.slice(t.s, t.e))) return true;
+      if (t.k === "word" && matchedVars.has(t.v)) return true;
+      return false;
+    }
+    if (exprTokens[0]?.v === "[" && exprTokens.at(-1)?.v === "]") {
+      for (const t of exprTokens) {
+        if (t.k === "str" && nameLitRe.test(src.slice(t.s, t.e))) return true;
+        if (t.k === "word" && matchedVars.has(t.v)) return true;
+      }
+      return false;
+    }
+    for (let k = 0; k < exprTokens.length; k++) {
+      const t = exprTokens[k];
+      if (t.k === "word" && (t.v === "join" || t.v === "resolve" || t.v === "fileURLToPath" || t.v === "URL")) {
+        for (const tok of exprTokens) {
+          if (tok.k === "str" && nameLitRe.test(src.slice(tok.s, tok.e))) return true;
+          if (tok.k === "word" && matchedVars.has(tok.v)) return true;
+        }
+        return false;
+      }
+    }
+    return false;
+  }
+
+  // Step 1: Trace variables that hold matching path literals or arrays/constructions of them
+  const matchedVars = new Set();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let i = 0; i < code.length; i++) {
+      const t = code[i];
+      if (t.k === "word" && (t.v === "const" || t.v === "let" || t.v === "var")) {
+        let j = i + 1;
+        while (j < code.length && code[j].k !== "punct" && code[j].v !== ";") {
+          if (code[j].k === "word" && code[j + 1]?.v === "=") {
+            const varName = code[j].v;
+            const nest = [];
+            let k = j + 2;
+            const exprTokens = [];
+            for (; k < code.length; k++) {
+              const cur = code[k];
+              if (cur.k === "punct" && (cur.v === "(" || cur.v === "[" || cur.v === "{" || cur.v === "${")) nest.push(cur.v);
+              else if (cur.k === "punct" && (cur.v === ")" || cur.v === "]" || cur.v === "}")) nest.pop();
+              else if (cur.k === "punct" && (cur.v === "," || cur.v === ";") && nest.length === 0) break;
+              exprTokens.push(cur);
+            }
+            if (isPathExpr(exprTokens) && !matchedVars.has(varName)) {
+              matchedVars.add(varName);
+              changed = true;
+            }
+            j = k;
+          } else {
+            j++;
+          }
+        }
+      }
+    }
+  }
+
+  // Step 2: Check for consuming edges
+  for (let i = 0; i < code.length; i++) {
+    const t = code[i];
+
+    // Edge 0: template containing staged import edge (e.g. staged-fixture.test.mjs)
+    if (t.k === "tpl") {
+      const txt = src.slice(t.s, t.e);
+      if (new RegExp(`(?:\\bfrom|\\bimport)\\b[^;]{0,160}?["'\`][^"'\`]*\\b${name}["'\`]`).test(txt)) {
+        return true;
+      }
+    }
+
+    // Edge 1: import ... from "..." or import "..." or import("...")
+    if (t.k === "word" && t.v === "import") {
+      if (code[i + 1]?.v === "(") {
+        const parsed = parseCallArgs(code, i);
+        if (parsed) {
+          const arg0 = parsed.args[0] || [];
+          if (arg0.some((tok) => matchesLit(tok) || (tok.k === "word" && matchedVars.has(tok.v)))) return true;
+        }
+      }
+      for (let j = i + 1; j < code.length && code[j].v !== ";"; j++) {
+        if (matchesLit(code[j])) return true;
+      }
+    }
+
+    // Edge 2: require("...")
+    if (t.k === "word" && t.v === "require" && code[i + 1]?.v === "(") {
+      const parsed = parseCallArgs(code, i);
+      if (parsed) {
+        const arg0 = parsed.args[0] || [];
+        if (arg0.some((tok) => matchesLit(tok) || (tok.k === "word" && matchedVars.has(tok.v)))) return true;
+      }
+    }
+
+    // Edge 3: path.join, path.resolve
+    if (t.k === "word" && (t.v === "join" || t.v === "resolve") && code[i - 1]?.v === "." && code[i - 2]?.v === "path") {
+      if (code[i + 1]?.v === "(") {
+        const parsed = parseCallArgs(code, i);
+        if (parsed) {
+          for (const arg of parsed.args) {
+            if (arg.some((tok) => matchesLit(tok) || (tok.k === "word" && matchedVars.has(tok.v)))) return true;
+          }
+        }
+      }
+    }
+
+    // Edge 4: fileURLToPath, new URL
+    if (t.k === "word" && t.v === "fileURLToPath" && code[i + 1]?.v === "(") {
+      const parsed = parseCallArgs(code, i);
+      if (parsed) {
+        const arg0 = parsed.args[0] || [];
+        if (arg0.some((tok) => matchesLit(tok) || (tok.k === "word" && matchedVars.has(tok.v)))) return true;
+      }
+    }
+    if (t.k === "word" && t.v === "URL" && code[i - 1]?.v === "new" && code[i + 1]?.v === "(") {
+      const parsed = parseCallArgs(code, i);
+      if (parsed) {
+        const arg0 = parsed.args[0] || [];
+        if (arg0.some((tok) => matchesLit(tok) || (tok.k === "word" && matchedVars.has(tok.v)))) return true;
+      }
+    }
+
+    // Edge 5: write* (arg 0 only)
+    if (t.k === "word" && ALL_WRITES.has(t.v) && code[i + 1]?.v === "(") {
+      const parsed = parseCallArgs(code, i);
+      if (parsed) {
+        const arg0 = parsed.args[0] || [];
+        if (arg0.some((tok) => matchesLit(tok) || (tok.k === "word" && matchedVars.has(tok.v)))) return true;
+      }
+    }
+
+    // Edge 6: exec, execSync (arg 0)
+    if (t.k === "word" && EXECS.has(t.v) && code[i + 1]?.v === "(") {
+      const parsed = parseCallArgs(code, i);
+      if (parsed) {
+        const arg0 = parsed.args[0] || [];
+        if (arg0.some((tok) => matchesLit(tok) || (tok.k === "word" && matchedVars.has(tok.v)))) return true;
+      }
+    }
+
+    // Edge 7: execFile, execFileSync, fork (arg 0, or arg 1 array)
+    if (t.k === "word" && EXEC_FILES.has(t.v) && code[i + 1]?.v === "(") {
+      const parsed = parseCallArgs(code, i);
+      if (parsed) {
+        const arg0 = parsed.args[0] || [];
+        if (arg0.some((tok) => matchesLit(tok) || (tok.k === "word" && matchedVars.has(tok.v)))) return true;
+        const arg1 = parsed.args[1] || [];
+        if (arg1[0]?.v !== "{") {
+          if (arg1.some((tok) => matchesLit(tok) || (tok.k === "word" && matchedVars.has(tok.v)))) return true;
+        }
+      }
+    }
+
+    // Edge 8: spawn, spawnSync (arg 0, or positional arg 1 without "{")
+    if (t.k === "word" && SPAWNS.has(t.v) && code[i + 1]?.v === "(") {
+      const parsed = parseCallArgs(code, i);
+      if (parsed) {
+        const arg0 = parsed.args[0] || [];
+        if (arg0.some((tok) => matchesLit(tok) || (tok.k === "word" && matchedVars.has(tok.v)))) return true;
+        const arg1 = parsed.args[1] || [];
+        if (arg1.length > 0 && arg1[0]?.v !== "{") {
+          if (arg1.some((tok) => matchesLit(tok) || (tok.k === "word" && matchedVars.has(tok.v)))) return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+const consumes = (name) => ({
+  test(src) {
+    return checkConsumes(src, name);
+  },
+});
+
 const BROWSER_SIGNALS = [
-  { what: "a browser over CDP", re: /["'`][^"'`]*\bcdp\.mjs["'`]/ },
+  { what: "a browser over CDP", re: consumes("cdp\\.mjs") },
   // The shard runner IS a browser launch — it spawns one Chromium per file it dispatches — so a test that
   // spawns it owns a browser and must not be filed in the concurrent lane beside three of its siblings
   // (voicebox-beads-zjpm.3). Named by PATH, like the helpers above, because the launch is on the other
   // side of the spawn.
-  { what: "a browser via the shard runner", re: /["'`][^"'`]*\bbrowser-shard-runner\.mjs["'`]/ },
-  { what: "a browser via page-acceptance", re: /\bpage-acceptance\.mjs\b/ },
+  { what: "a browser via the shard runner", re: consumes("browser-shard-runner\\.mjs") },
+  { what: "a browser via page-acceptance", re: consumes("page-acceptance\\.mjs") },
   { what: "a browser over raw CDP", re: /--remote-debugging-port|DevToolsActivePort/ },
 ];
 
 const SERVER_SIGNALS = [
-  { what: "a server process", re: /["'`][^"'`]*\bserver\.mjs["'`]/ },
-  { what: "a server via task-fixture", re: /["'`][^"'`]*\btask-fixture\.mjs["'`]/ },
+  { what: "a server process", re: consumes("server\\.mjs") },
+  { what: "a server via task-fixture", re: consumes("task-fixture\\.mjs") },
   { what: "a server via createServer", re: /\bcreateServer\b/, name: true },
   // `callWasmTool` used to be a live signal because the wasm cell was a worker that could outlive its
   // test by ~52s at ~3 cores (voicebox-beads-6io), which is why tests/wasm-shelf.test.mjs stayed out of

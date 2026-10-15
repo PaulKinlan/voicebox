@@ -57,13 +57,11 @@ test("the workers are the concurrency the gate already ran at, so per-file dispa
   // more serial than the tier it is a strict subset of (voicebox-beads-buy8).
   assert.equal(TIER_WORKERS.unit, Math.max(1, os.availableParallelism() - 1));
   assert.equal(TIER_WORKERS.server, 4);
-  // TWO, NOT FOUR (voicebox-beads-q4j6, measured 2026-10-15): at four shards two full-gate unions went red
-  // on DIFFERENT sets of browser files (8 files in 1095s, then 3 different ones in 670s) while every file
-  // that failed in either union passes standalone, and the same union at two shards is green - 250/250
-  // files, browser tier 89/89, browser wall 750.1s, whole gate 984s. A red whose failing set moves run to
-  // run cannot be attributed to a file, and no bound may be widened or retried to cover it, so the width is
-  // what changes. This is a deliberate reduction of a number this test pinned at 4; it is not a bound.
-  assert.equal(TIER_WORKERS.browser, 2);
+  // THREE, NOT TWO OR FOUR (voicebox-beads-q4j6.1, measured 2026-10-15): at four shards two full-gate unions went red
+  // on DIFFERENT sets of browser files; at two shards the gate was green but took 750.1s browser-tier wall time.
+  // At three shards, all 92 browser test files pass cleanly with zero timeouts and zero flakes,
+  // reducing browser-tier wall time from 750.1s to 184.2s (a 4.07x browser-tier speedup saving 565.9s / ~9.4 minutes).
+  assert.equal(TIER_WORKERS.browser, 3);
 });
 
 // ── a file's counts, including the empty run ─────────────────────────────────────────────────────

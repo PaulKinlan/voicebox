@@ -833,6 +833,7 @@ export function createAudioClient({
     level,
     stopCapture,
     stopReply,
+    interruptSpeech,
     sendAudioStreamEnd,
     sendText,
     snapshot,

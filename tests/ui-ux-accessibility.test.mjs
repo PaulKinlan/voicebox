@@ -65,6 +65,20 @@ test("unit: secondary UI surfaces declare explicit focus rings, 12px readability
   // 8. evidence page declares color-scheme
   const evidenceHtml = fs.readFileSync(path.join(root, "docs/evidence/picked-dir-symlink/index.html"), "utf8");
   assert.match(evidenceHtml, /color-scheme:\s*light dark;/);
+
+  // 9. `.sr-only` in public/environment.css CLIPS; it does not become a scroll container
+  //    (voicebox-beads-y5dr). Under `overflow: hidden` the 1px box is still a scroll container, so the
+  //    label text inside it has scrollable overflow a script can scroll to — measured on the room's copy
+  //    of this rule, where 6 of 18 boxes were real scroll containers: a 65x20 scroll area inside a 1x1
+  //    client box, with `scrollLeft = 999` moving it to 64. `overflow: clip` clips the same pixels and
+  //    creates nothing to scroll. The live room's copy in public/style.css was fixed in
+  //    voicebox-beads-dche (tests/type-scale.test.mjs) and public/environment.css carries the
+  //    Environment page's copy (voicebox-beads-y5dr). The browser arm below proves the behaviour,
+  //    since a text match cannot see a `clip` that some later rule overrides back to `hidden`.
+  const srOnlyRule = /\.sr-only\s*\{([^}]*)\}/.exec(envCss);
+  assert.ok(srOnlyRule, "public/environment.css must declare a .sr-only rule");
+  assert.match(srOnlyRule[1], /overflow:\s*clip/, "public/environment.css .sr-only must clip without a scroll container");
+  assert.doesNotMatch(srOnlyRule[1], /overflow:\s*(?:hidden|auto|scroll)/, "public/environment.css .sr-only must not create a scroll container");
 });
 
 test("browser: secondary UI surfaces render visible focus rings, readable typography, and responsive mobile layouts", { timeout: 45000 }, async (t) => {
@@ -217,6 +231,78 @@ test("browser: secondary UI surfaces render visible focus rings, readable typogr
   } finally {
     await page.send("Emulation.setEmulatedMedia", { features: [] });
   }
+
+  // 4c. `.sr-only` CLIPS rather than scrolls, and it still NAMES a control for assistive technology
+  // (voicebox-beads-y5dr). environment.html uses the class nowhere, so the elements under test are
+  // created here — but the rule they exercise is the SERVED stylesheet's, and the computed-`overflow`
+  // assertion is what proves the page's own CSS answered rather than a user-agent default. Four arms,
+  // because none of them alone is enough: the probe must be un-scrollable; an identical box with
+  // `overflow: hidden` must still REPORT ITSELF SCROLLABLE, or the measurement cannot see the defect it
+  // exists for; an identical box with `clip` must not, so a page where the declaration never arrives
+  // cannot pass on a user-agent default; and the accessibility tree must carry the hidden text as its
+  // button's name while a `display:none` sibling's text names nothing at all, so the read can tell a
+  // hidden label from an absent one (voicebox-beads-y5dr's dispatch asked for exactly that control).
+  // A navigation of its own: this section must not depend on which page-load arm 4 left behind.
+  await page.goto(`${server.base}/environment.html`);
+  const srProbe = await page.evaluate(() => {
+    const arm = (overflow) => {
+      const box = document.createElement("span");
+      box.textContent = "Harnesses Controls";
+      box.style.cssText = `position:absolute;width:1px;height:1px;clip-path:inset(50%);white-space:nowrap;overflow:${overflow};`;
+      document.body.append(box);
+      box.scrollLeft = 999;
+      box.scrollTop = 999;
+      const scrolled = box.scrollLeft !== 0 || box.scrollTop !== 0;
+      box.remove();
+      return scrolled;
+    };
+
+    const host = document.createElement("div");
+    host.id = "sr-only-probe-host";
+    host.innerHTML =
+      '<button id="sr-only-probe"><span class="sr-only">sr-only names this button</span></button>' +
+      '<button id="sr-only-visible"><span>visible text names this button</span></button>' +
+      '<button id="sr-only-display-none"><span style="display:none">display:none text names nothing</span></button>';
+    document.body.append(host);
+
+    const probe = host.querySelector(".sr-only");
+    const style = window.getComputedStyle(probe);
+    const rect = probe.getBoundingClientRect();
+    probe.scrollLeft = 999;
+    probe.scrollTop = 999;
+    return {
+      overflow: `${style.overflowX}/${style.overflowY}`,
+      clipPath: style.clipPath,
+      display: style.display,
+      visibility: style.visibility,
+      box: `${rect.width}x${rect.height}`,
+      scrolled: probe.scrollLeft !== 0 || probe.scrollTop !== 0,
+      controlHidden: arm("hidden"),
+      controlClip: arm("clip"),
+    };
+  });
+
+  assert.equal(srProbe.overflow, "clip/clip", `the served environment.css must answer for .sr-only, got ${srProbe.overflow}`);
+  assert.match(srProbe.clipPath, /inset\(50%\)/, `the shrinking clip-path must survive, got ${srProbe.clipPath}`);
+  assert.notEqual(srProbe.display, "none", `.sr-only must stay in the render tree, got display: ${srProbe.display}`);
+  assert.notEqual(srProbe.visibility, "hidden", `.sr-only must stay visible-but-clipped, got visibility: ${srProbe.visibility}`);
+  assert.equal(srProbe.box, "1x1", `.sr-only must still collapse to its 1x1 box, got ${srProbe.box}`);
+  assert.equal(srProbe.controlHidden, true, "control arm: an `overflow: hidden` 1px box MUST report itself scrollable, or this check cannot detect the defect it exists for");
+  assert.equal(srProbe.controlClip, false, "control arm: an `overflow: clip` 1px box must have nothing to scroll");
+  assert.equal(srProbe.scrolled, false, `.sr-only must not be a scroll container (${srProbe.box} box)`);
+
+  // The hidden text must still BE the button's name, read from the real accessibility tree rather than
+  // from `textContent` — `textContent` cannot tell a clipped label from one that left the tree, which is
+  // the regression this arm exists to catch. The visible and `display:none` buttons are its controls.
+  await page.send("Accessibility.enable");
+  const axTree = await page.send("Accessibility.getFullAXTree");
+  const namedButtons = (want) => axTree.nodes.filter((node) => node.role?.value === "button" && node.name?.value === want).length;
+  assert.equal(namedButtons("visible text names this button"), 1, "the accessibility tree read must see a plainly visible button's name, or it cannot be trusted for the hidden one");
+  assert.equal(namedButtons("sr-only names this button"), 1, "the sr-only text must still name its button for assistive technology");
+  assert.equal(namedButtons("display:none text names nothing"), 0, "control: `display:none` text must NOT name anything, so this read can tell a hidden label from an absent one");
+
+  await page.screenshot(path.join(evidenceDir, "04c-sr-only-clipped-not-scrolled.png"));
+  await page.evaluate(() => document.getElementById("sr-only-probe-host")?.remove());
 
   // 5. Mini-App Bridge: mobile viewport sizing (375x667)
   // Close previous page before launching next browser instance per single-browser rule

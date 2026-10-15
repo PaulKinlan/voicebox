@@ -2579,7 +2579,9 @@ async function execute(action) {
         ? "Copied to clipboard."
         : action.command === "paste"
           ? "Pasted from clipboard."
-          : `Ran ${action.command}.`;
+          : action.command === "stop_speaking"
+            ? (action.mode === "unmute" ? "Microphone unmuted." : action.mode === "mute" ? "Microphone muted." : "")
+            : `Ran ${action.command}.`;
     return {
       ok: true,
       action: `system:${action.command}`,
@@ -4764,7 +4766,7 @@ async function handle(req, res) {
       if (executionResult?.systemCommand) {
         responsePayload.systemCommand = executionResult.systemCommand;
       }
-      if (executionResult?.say) {
+      if (typeof executionResult?.say === "string") {
         responsePayload.say = executionResult.say;
       }
       return json(res, 200, responsePayload);

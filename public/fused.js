@@ -45,7 +45,7 @@ const WANTED = {
   listTools: "list-tools", fileFilter: "file-filter", showAll: "show-all", listBound: "list-bound",
   openFolder: "open-folder", openOpfsFolder: "open-opfs-folder", closeFolder: "close-folder", roomFolderHint: "room-folder-hint",
   dropHint: "drop-hint",
-  stage: "voice-ring-wrap", mic: "mic", state: "voice-state", micDock: "mic-dock",
+  stage: "voice-ring-wrap", mic: "mic", state: "voice-state", micDock: "mic-dock", interrupt: "interrupt",
   session: "session", log: "session-log", sessionCopy: "session-copy", sessionClose: "session-close", sessionEmpty: "session-empty", form: "text-form", utterance: "utterance", send: "send",
   reader: "reader", readerTitle: "reader-title", readerFacts: "file-facts", readerBody: "file-body",
   fileRefresh: "file-refresh",
@@ -263,7 +263,6 @@ async function executeBrowserSystemCommand(cmd) {
     return { ok: true, panel: p };
   }
   if (cmd.command === "stop_speaking") {
-    try { window.speechSynthesis?.cancel?.(); } catch {}
     const mode = cmd.mode || (/unmute/i.test(cmd.text || "") ? "unmute" : /mute/i.test(cmd.text || "") ? "mute" : "interrupt");
     const micPressed = els.mic?.getAttribute("aria-pressed") === "true";
     if (mode === "unmute") {
@@ -278,7 +277,25 @@ async function executeBrowserSystemCommand(cmd) {
       }
       return { ok: true, action: "mute", message: "Microphone muted." };
     }
-    els.interrupt?.click();
+    try { window.speechSynthesis?.cancel?.(); } catch {}
+    const interruptBtn = els.interrupt || $("interrupt");
+    if (interruptBtn) {
+      const wasDisabled = interruptBtn.disabled;
+      interruptBtn.disabled = false;
+      interruptBtn.click();
+      interruptBtn.disabled = wasDisabled;
+    } else {
+      try { window.__voiceboxOfflineSpeech?.stopSpeaking?.(); } catch {}
+      try {
+        const client = window.__voiceboxLiveClient;
+        if (typeof client?.interruptSpeech === "function") {
+          client.interruptSpeech("page");
+        } else {
+          client?.stopReply?.();
+          client?.stopPlayback?.();
+        }
+      } catch {}
+    }
     return { ok: true, action: "interrupt", message: "Stopped speaking." };
   }
   if (cmd.command === "show_waiting_branches") {

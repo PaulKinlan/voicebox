@@ -34,7 +34,13 @@
   .protocol { color: var(--muted); font-size: 12px; max-width: 70ch; margin: 8px 0 0; }
   .protocol summary { cursor: pointer; color: var(--ink); }
   .protocol p { margin: 6px 0 0; }
-  .sr-only { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); overflow: hidden; white-space: nowrap; }
+  /* .sr-only: visually hidden text for assistive technology (voicebox-beads-y5dr).
+   overflow: clip removes the unintended scroll container overflow: hidden creates
+   (a 65x20 scroll area inside a 1x1 box), while clipping the exact same pixels.
+   The live room's copy in public/style.css was fixed in voicebox-beads-dche
+   (tests/type-scale.test.mjs) and public/environment.css carries the Environment page's
+   copy (voicebox-beads-y5dr). */
+.sr-only { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); overflow: clip; white-space: nowrap; }
   #project { display: grid; gap: 2px; font: 13px/1.6 ui-monospace, monospace; }
   #project .key { display: inline-block; min-width: 148px; color: var(--muted); }
   form { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-start; margin: 0 0 16px; }

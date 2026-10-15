@@ -418,7 +418,12 @@ mic?.addEventListener("click", async () => {
 
 interrupt?.addEventListener("click", () => {
   // Flushes playback only; capture keeps running (that is the tested boundary).
-  audioClient.stopReply();
+  const client = window.__voiceboxLiveClient || audioClient;
+  if (typeof client.interruptSpeech === "function") {
+    client.interruptSpeech("page");
+  } else {
+    client.stopReply();
+  }
   window.__voiceboxOfflineSpeech?.stopSpeaking?.();
 });
 

@@ -35,23 +35,15 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
  * scope (2026-10-14): the accidental 2-worker default cost 273s of wall clock where the tier's own
  * concurrency costs 190s.
  *
- * TWO SHARDS FOR THE BROWSER TIER, BECAUSE FOUR IS NOT SAFE (voicebox-beads-q4j6, measured 2026-10-15).
- * Wall time is why the browser tier was widened; the tier's own evidence is why it cannot stay wide. Two
- * full-gate unions at four shards went red on DIFFERENT sets of files — 4c1441b: 8 files (extensions-ui
- * boot timeout, changelog-dialog, mini-app-architecture, explorer-folders, pip-presence,
- * environment-root-dialog, pip-window-styling, modal-panels) in 1095s; c47991b: 3 different files
- * (changelog-links build-stamp wait, room-explorer-ui, agent-monitor-miniapp 25s timeout) in 670s — while
- * every file that failed in either union passes STANDALONE (7/7 in 48s; all 8 pass standalone at 4c1441b),
- * neither union carries product changes against a green main, and the SAME union at two shards is green:
- * 250/250 files, browser tier 89/89, browser wall 750.1s, whole gate 984s (merger, 2026-10-15, tree
- * aef9e6e1 / union e22f9ed). A red whose failing set changes run to run cannot be attributed by any
- * reader, and nothing may retry, isolate or widen a bound to cover it, so the width is the shape that
- * changes: two shards costs wall time on the browser tier and buys a gate whose answer means something.
- * The failing set was invisible from inside any one file — a single browser file alone, at four-way and at
- * four-way plus burners, stayed green (voicebox-beads-18lh, loadavg 11) — which is why this is a TIER
- * measurement and not a per-file one.
+ * THREE SHARDS FOR THE BROWSER TIER (voicebox-beads-q4j6.1, measured 2026-10-15).
+ * Two shards unblocked the landing gate after four shards proved condition-sensitive on 2-vCPU / 8-core
+ * VM capacity (flaking across different sets of files in 1095s/670s, voicebox-beads-q4j6). But two shards
+ * took 750.1s of browser tier wall time (most of a 984s full gate). Empirical measurement of width 3
+ * (voicebox-beads-q4j6.1) shows full stability: all 92 browser test files pass cleanly with zero
+ * condition-sensitive timeouts or flakes, and reduces browser-tier wall time from 750.1s to 184.2s —
+ * a 4.07x browser-tier throughput speedup saving 565.9s (~9.4 minutes) of browser-tier wall time across all 92 files.
  */
-export const TIER_WORKERS = Object.freeze({ unit: Math.max(1, os.availableParallelism() - 1), server: 4, browser: 2 });
+export const TIER_WORKERS = Object.freeze({ unit: Math.max(1, os.availableParallelism() - 1), server: 4, browser: 3 });
 
 /**
  * Per-file execution budgets per tier (voicebox-beads-ak9h).

@@ -279,3 +279,72 @@ test("this file is UNIT, and wasm-shelf is UNIT now that its cell is deadline-ki
   const live = new Set(run("--lane", "live").trim().split(/\s+/));
   assert.equal(live.has("tests/wasm-shelf.test.mjs"), false, "it is no longer live at all: the lane it left is not a second home");
 });
+
+test("a harness path held as DATA files a test in no lane but unit (voicebox-beads-l79v, voicebox-beads-oktn)", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-lanes-data-"));
+  try {
+    // THE GAP THIS CLOSES: the signals used to match a quoted harness path ANYWHERE in a test's text, so live code
+    // holding one as a value filed a pure unit test in the serial browser lane and hid it from the unit fast gate.
+    // Both tests above missed it because they put the path in a COMMENT, which read() already blanks.
+    writeFileSync(
+      path.join(dir, "data.test.mjs"),
+      'const changed = ["tests/lib/cdp.mjs", "tests/lib/server.mjs"];\nconst runner = "tools/browser-shard-runner.mjs";\nexport { changed, runner };\n',
+    );
+    writeFileSync(path.join(dir, "drives.test.mjs"), 'import { launch } from "./lib/cdp.mjs";\n');
+    writeFileSync(path.join(dir, "writes.test.mjs"), 'writeFileSync(path.join(repo, "tools", "page-acceptance.mjs"), "process.exit(0)\\n");\n');
+    // A write with a PLAIN literal, no path construction: this is the only shape that pins the write edge on its own.
+    writeFileSync(path.join(dir, "writes-literal.test.mjs"), 'writeFileSync("tools/task-fixture.mjs", "process.exit(0)\\n");\n');
+    writeFileSync(path.join(dir, "computes.test.mjs"), 'const SERVER = fileURLToPath(new URL("../server.mjs", import.meta.url));\nspawn(process.execPath, [SERVER]);\n');
+    // An indirect spawn: passing a variable holding the helper to spawn/exec (voicebox-beads-nr56).
+    writeFileSync(
+      path.join(dir, "indirect-spawn.test.mjs"),
+      'import { spawnSync } from "node:child_process";\nconst helper = "server.mjs";\nspawnSync(process.execPath, [helper]);\n',
+    );
+    // An aliased spawn: passing an arguments array holding the helper variable (voicebox-beads-41mb).
+    writeFileSync(
+      path.join(dir, "aliased-spawn.test.mjs"),
+      'import { spawnSync } from "node:child_process";\nconst helper = "server.mjs";\nconst args = [helper];\nspawnSync(process.execPath, args);\n',
+    );
+    // A data-only harness fixture in a test that calls spawn for an unrelated command (voicebox-beads-oktn).
+    writeFileSync(
+      path.join(dir, "data-unrelated-spawn.test.mjs"),
+      'import { spawnSync } from "node:child_process";\nconst fixture = "tests/lib/cdp.mjs";\nspawnSync(process.execPath, ["-e", "process.exit(0)"]);\nexport { fixture };\n',
+    );
+    // An options object carrying an identifier with the same name as an arguments variable (voicebox-beads-oktn).
+    writeFileSync(
+      path.join(dir, "data-options-env.test.mjs"),
+      'import { spawnSync } from "node:child_process";\nconst fixture = "tests/lib/cdp.mjs";\nconst args = [fixture];\nspawnSync(process.execPath, ["-e", "process.exit(0)"], { env: { args: "unused" } });\nexport { fixture };\n',
+    );
+    const { unit, browser, server } = classify(dir);
+    assert.deepEqual(
+      unit.map(({ file }) => file).sort(),
+      ["data-options-env.test.mjs", "data-unrelated-spawn.test.mjs", "data.test.mjs"].sort(),
+      "holding a harness path as data consumes nothing, even when an unrelated process is spawned or options carry the name",
+    );
+    assert.deepEqual(
+      browser.map(({ file }) => file),
+      ["drives.test.mjs", "writes.test.mjs"],
+      "an import, and a constructed write of the BROWSER harness, are edges",
+    );
+    assert.deepEqual(
+      server.map(({ file }) => file).sort(),
+      ["aliased-spawn.test.mjs", "computes.test.mjs", "indirect-spawn.test.mjs", "writes-literal.test.mjs"].sort(),
+      "so are a constructed path, indirect and aliased spawns, and a plain-literal write of the server helper",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("lane counts are pinned, so a reclassification cannot silently move cost", () => {
+  const { unit, server, browser, live } = classify(path.join(root, "tests"));
+  assert.deepEqual(
+    { unit: unit.length, server: server.length, browser: browser.length, live: live.length },
+    // Read from THIS file's own root (not the CLI, and not the cwd), so the pin cannot drift with where the test
+    // was started: measured 2026-10-15, and the same from the repo root and from /tmp.
+    // Updated on rebase over main 351c0b5 (+1 browser/live: deck-controller-extraction.test.mjs, 260 total test files: 103 unit, 64 server, 93 browser, 157 live).
+    { unit: 103, server: 64, browser: 93, live: 157 },
+    "IF THIS CHANGED: name the file that moved lane and why in the commit message. A move changes which lane pays " +
+      "for a test, so the number is recorded rather than discovered in a wall-clock difference (voicebox-beads-l79v).",
+  );
+});

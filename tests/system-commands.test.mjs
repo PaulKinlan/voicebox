@@ -323,6 +323,7 @@ test("Server integration: POST /api/turn system commands, multi-harness configur
     const stopBody = await stopRes.json();
     assert.equal(stopBody.action.command, "stop_speaking");
     assert.equal(stopBody.action.mode, "interrupt");
+    assert.equal(stopBody.say, "");
 
     const muteRes = await fetch(`${base}/api/turn`, {
       method: "POST",
@@ -333,6 +334,7 @@ test("Server integration: POST /api/turn system commands, multi-harness configur
     const muteBody = await muteRes.json();
     assert.equal(muteBody.action.command, "stop_speaking");
     assert.equal(muteBody.action.mode, "mute");
+    assert.equal(muteBody.say, "Microphone muted.");
 
     const unmuteRes = await fetch(`${base}/api/turn`, {
       method: "POST",
@@ -343,6 +345,7 @@ test("Server integration: POST /api/turn system commands, multi-harness configur
     const unmuteBody = await unmuteRes.json();
     assert.equal(unmuteBody.action.command, "stop_speaking");
     assert.equal(unmuteBody.action.mode, "unmute");
+    assert.equal(unmuteBody.say, "Microphone unmuted.");
   } finally {
     await server.stop();
     fs.rmSync(workspace, { recursive: true, force: true });

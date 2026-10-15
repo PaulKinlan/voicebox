@@ -280,6 +280,73 @@ test("REVISE-4b: a vendor frame of JSON `null` costs a frame (the Gemini provide
   }
 });
 
+test("createGeminiProvider: interrupt() emits interrupt and suppresses in-flight turn audio until turnComplete (voicebox-beads-5fh0, voicebox-beads-df63)", async () => {
+  const { createGeminiProvider } = await import("../lib/live-providers/gemini.mjs");
+  process.env.GEMINI_API_KEY = "test-key";
+  const events = [];
+  const sent = [];
+  let onMessage;
+  const transport = {
+    connect: (_url, handlers) => {
+      onMessage = (data) => handlers.onEvent({ kind: "message", data });
+      return true;
+    },
+    send: (channel, data) => {
+      try { sent.push({ channel, data: JSON.parse(data) }); } catch {}
+      return true;
+    },
+    close: () => {},
+  };
+  try {
+    const p = createGeminiProvider({ emit: (e) => events.push(e), log: () => {}, transport });
+    await onMessage('{"setupComplete":{}}');
+    assert.ok(events.some((e) => e.type === "ready"));
+
+    // 1. In-flight turn audio before interrupt arrives normally
+    await onMessage(JSON.stringify({
+      serverContent: {
+        modelTurn: { parts: [{ inlineData: { data: "chunk-1" } }] }
+      }
+    }));
+    assert.equal(events.filter((e) => e.type === "output-audio").length, 1);
+
+    // 2. interrupt() is called (e.g. from user stop_speaking or UI interrupt button)
+    p.interrupt();
+    assert.ok(events.some((e) => e.type === "interrupt"), "emits interrupt event");
+    assert.ok(
+      sent.some((s) => s.channel === "control" && s.data?.realtimeInput?.audioStreamEnd === true),
+      "sends audioStreamEnd upstream on interrupt",
+    );
+
+    // 2b. Mic audio continues streaming during/after interrupt - must NOT clear suppression (voicebox-beads-df63)
+    p.sendAudio("bWlj");
+
+    // 3. Subsequent in-flight chunks from this turn must be suppressed
+    await onMessage(JSON.stringify({
+      serverContent: {
+        modelTurn: { parts: [{ inlineData: { data: "chunk-2" } }] }
+      }
+    }));
+    assert.equal(events.filter((e) => e.type === "output-audio").length, 1, "subsequent audio is suppressed");
+
+    // 4. turnComplete resets suppression
+    await onMessage(JSON.stringify({
+      serverContent: { turnComplete: true }
+    }));
+    assert.ok(events.some((e) => e.type === "turn-complete"));
+
+    // 5. Next turn's audio plays normally
+    await onMessage(JSON.stringify({
+      serverContent: {
+        modelTurn: { parts: [{ inlineData: { data: "chunk-3" } }] }
+      }
+    }));
+    assert.equal(events.filter((e) => e.type === "output-audio").length, 2, "next turn audio arrives");
+  } finally {
+    delete process.env.GEMINI_API_KEY;
+  }
+});
+
 // ── astra's RE-REVIEW of 805a0df: the caveat, demonstrated, and the terminal-state family ──────────────
 
 test("REVISE-2-1: the facade hands back NOTHING TO SEND WITH — the raw socket is not reachable", () => {

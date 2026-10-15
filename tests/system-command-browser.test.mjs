@@ -147,4 +147,144 @@ test("system commands: a typed command reaches the browser and changes the UI (v
   assert.equal((await read()).sqehState, "files", "the deck moved away before we close it");
   await say("close panel");
   assert.equal((await read()).sqehState, "deck", "'close panel' returns to the deck");
+
+  // ── Audio session: stop_speaking (interrupt, mute, unmute) ───────────────────
+  // Drive the real consumer paths for stop_speaking: audio client stopReply/stopPlayback,
+  // provider generation cancellation via interruptSpeech, offline speech cancellation,
+  // browser speech synthesis, and interrupt button trigger.
+  await page.evaluate(() => {
+    window.__flushedLivePlayback = false;
+    window.__providerInterruptCount = 0;
+    window.__offlineSpeechStopped = false;
+    window.__speechCancelled = false;
+    window.__interruptClicked = false;
+    window.__playbackStoppedOnMute = 0;
+
+    window.__voiceboxLiveClient = {
+      stopReply: () => { window.__flushedLivePlayback = true; return { flushed: true }; },
+      stopPlayback: () => { window.__flushedLivePlayback = true; return { flushed: true }; },
+      interruptSpeech: (source) => {
+        window.__flushedLivePlayback = true;
+        if (source === "page") window.__providerInterruptCount++;
+        return { flushed: true };
+      },
+    };
+    window.__voiceboxOfflineSpeech = {
+      stopSpeaking: () => { window.__offlineSpeechStopped = true; return { ok: true }; },
+    };
+    try {
+      if (window.speechSynthesis) {
+        window.speechSynthesis.cancel = () => { window.__speechCancelled = true; };
+      } else {
+        Object.defineProperty(window, "speechSynthesis", {
+          configurable: true,
+          value: { cancel: () => { window.__speechCancelled = true; } },
+        });
+      }
+    } catch {
+      Object.defineProperty(window, "speechSynthesis", {
+        configurable: true,
+        value: { cancel: () => { window.__speechCancelled = true; } },
+      });
+    }
+    const interrupt = document.getElementById("interrupt");
+    interrupt?.addEventListener("click", () => {
+      window.__interruptClicked = true;
+    });
+  });
+
+  await say("stop speaking");
+  const stopObs = await page.evaluate(() => ({
+    flushedLive: window.__flushedLivePlayback,
+    providerInterruptCount: window.__providerInterruptCount,
+    offlineStopped: window.__offlineSpeechStopped,
+    speechCancelled: window.__speechCancelled,
+    interruptClicked: window.__interruptClicked,
+  }));
+  assert.equal(stopObs.flushedLive, true, "'stop speaking' flushes active live audio playback");
+  assert.equal(stopObs.providerInterruptCount, 1, "'stop speaking' sends exactly one interrupt control to provider (voicebox-beads-5fh0, voicebox-beads-iicm)");
+  assert.equal(stopObs.offlineStopped, true, "'stop speaking' stops offline speech synthesis");
+  assert.equal(stopObs.speechCancelled, true, "'stop speaking' cancels browser speech synthesis");
+  assert.equal(stopObs.interruptClicked, true, "'stop speaking' triggers interrupt button");
+
+  // Reset and test "quiet"
+  await page.evaluate(() => {
+    window.__flushedLivePlayback = false;
+    window.__providerInterruptCount = 0;
+    window.__offlineSpeechStopped = false;
+    window.__speechCancelled = false;
+    window.__interruptClicked = false;
+  });
+  await say("quiet");
+  const quietObs = await page.evaluate(() => ({
+    flushedLive: window.__flushedLivePlayback,
+    providerInterruptCount: window.__providerInterruptCount,
+    offlineStopped: window.__offlineSpeechStopped,
+    speechCancelled: window.__speechCancelled,
+    interruptClicked: window.__interruptClicked,
+  }));
+  assert.equal(quietObs.flushedLive, true, "'quiet' flushes active live audio playback");
+  assert.equal(quietObs.providerInterruptCount, 1, "'quiet' sends exactly one interrupt control to provider");
+  assert.equal(quietObs.interruptClicked, true, "'quiet' triggers interrupt");
+
+  // Reset and test "be quiet"
+  await page.evaluate(() => {
+    window.__flushedLivePlayback = false;
+    window.__providerInterruptCount = 0;
+    window.__offlineSpeechStopped = false;
+    window.__speechCancelled = false;
+    window.__interruptClicked = false;
+  });
+  await say("be quiet");
+  const beQuietObs = await page.evaluate(() => ({
+    flushedLive: window.__flushedLivePlayback,
+    providerInterruptCount: window.__providerInterruptCount,
+    offlineStopped: window.__offlineSpeechStopped,
+    speechCancelled: window.__speechCancelled,
+    interruptClicked: window.__interruptClicked,
+  }));
+  assert.equal(beQuietObs.flushedLive, true, "'be quiet' flushes active live audio playback");
+  assert.equal(beQuietObs.providerInterruptCount, 1, "'be quiet' sends exactly one interrupt control to provider");
+  assert.equal(beQuietObs.interruptClicked, true, "'be quiet' triggers interrupt");
+
+  // Mute: when mic is pressed, muting triggers mic click to turn off WITHOUT stopping playback (voicebox-beads-cafm)
+  await page.evaluate(() => {
+    const mic = document.getElementById("mic");
+    window.__micClicks = 0;
+    window.__playbackStoppedOnMute = 0;
+    const client = window.__voiceboxLiveClient;
+    client.stopReply = () => { window.__playbackStoppedOnMute++; };
+    client.stopPlayback = () => { window.__playbackStoppedOnMute++; };
+    client.interruptSpeech = () => { window.__playbackStoppedOnMute++; };
+    mic.setAttribute("aria-pressed", "true");
+    mic.addEventListener("click", (e) => {
+      window.__micClicks++;
+      const current = mic.getAttribute("aria-pressed") === "true";
+      mic.setAttribute("aria-pressed", String(!current));
+      e.stopImmediatePropagation();
+    }, true);
+  });
+  await say("mute");
+  const muteObs = await page.evaluate(() => ({
+    clicks: window.__micClicks,
+    pressed: document.getElementById("mic")?.getAttribute("aria-pressed"),
+    playbackStopped: window.__playbackStoppedOnMute,
+  }));
+  assert.equal(muteObs.clicks, 1, "'mute' clicked the mic button to toggle off");
+  assert.equal(muteObs.pressed, "false", "'mute' turned off active mic");
+  assert.equal(muteObs.playbackStopped, 0, "'mute' does not stop assistant playback (voicebox-beads-cafm)");
+
+  // Unmute: when mic is unpressed, unmuting triggers mic click to turn on WITHOUT stopping playback
+  await page.evaluate(() => {
+    window.__playbackStoppedOnMute = 0;
+  });
+  await say("unmute");
+  const unmuteObs = await page.evaluate(() => ({
+    clicks: window.__micClicks,
+    pressed: document.getElementById("mic")?.getAttribute("aria-pressed"),
+    playbackStopped: window.__playbackStoppedOnMute,
+  }));
+  assert.equal(unmuteObs.clicks, 2, "'unmute' clicked the mic button to toggle on");
+  assert.equal(unmuteObs.pressed, "true", "'unmute' turned the microphone back on");
+  assert.equal(unmuteObs.playbackStopped, 0, "'unmute' does not stop assistant playback (voicebox-beads-cafm)");
 });
