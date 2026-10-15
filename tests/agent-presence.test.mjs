@@ -76,26 +76,19 @@ test("presence: when server is unreachable, #where-note names machine-unreachabl
       { timeout: 30000, label: "server-dot data-ok=true" },
     );
 
-    // Stop server so the room's own re-check fails with connection refused.
-    await server.stop();
-    serverStopped = true;
-
-    // DRIVE THE PAGE'S OWN PATH AND WAIT FOR ITS OWN SENTENCE (voicebox-beads-y1db). This arm used to write
-    // "machine-unreachable (fix the host)" into #where-note itself and read it back in the next tick, which
-    // made the test a SECOND WRITER racing the page. The room re-asks /api/health every ROOT_POLL_MS (20s),
-    // and a poll that answered /api/health just before the stop still lands its downstream
-    // /api/environments refusal AFTERWARDS, writing "the environment list could not be read — check its
-    // error" over whatever was there — which is exactly the text the shard queue observed at line 56. With
-    // the assertion on the page's own settled sentence there is no second writer, and no race: the arm
-    // measures the product instead of measuring its own edit.
     // A CONTROL WITH TEETH, first: the accepted wordings must NOT match the healthy state, or the wait below
     // would be a no-op that the assertion could never fail. The room says "agent: script" while it is up.
+    // Read and assert while the server is still running to eliminate the post-stop poll race (voicebox-beads-uqfx).
     const healthyNote = await page.evaluate(() => document.querySelector("#where-note")?.textContent ?? "");
     assert.equal(
       isUnreachableNote(healthyNote),
       false,
       `the accepted unreachable wordings must not match a healthy room's note, or the wait proves nothing (it read ${JSON.stringify(healthyNote)})`,
     );
+
+    // Stop server so the room's own re-check fails with connection refused.
+    await server.stop();
+    serverStopped = true;
 
     await page.waitFor(
       (notes) => notes.includes(document.querySelector("#where-note")?.textContent ?? ""),
