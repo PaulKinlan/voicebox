@@ -19,6 +19,7 @@
     "test:shared-log": "node --test tests/shared-log.test.mjs tests/two-agents.test.mjs",
     "build:wasm": "node tools/build-wasm.mjs",
     "docs:check": "node scripts/docs-check.mjs",
+    "transient:check": "node scripts/transient-state.mjs",
     "docs:write": "node scripts/docs-check.mjs --write",
     "doctor": "node server.mjs --doctor",
     "help": "node server.mjs --help"
