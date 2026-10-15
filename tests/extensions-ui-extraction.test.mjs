@@ -61,10 +61,13 @@ test("extensions ui extraction: the real wired page reads tool status live, not 
     await page.waitFor(() => document.querySelector("#exts-open"));
 
     // --- 1. POSITIVE: the wired page opens its dialog.
-    const wired = await page.evaluate(async () => {
+    // NO DELAY HERE (voicebox-beads-zjpm.5.1): the surface's own click handler calls showModal() synchronously
+    // (public/extensions-ui.mjs), so `open` is already true when this evaluate returns. The 400ms that used to
+    // sit here was latency, not a correctness wait - the NEGATIVE arm below keeps its window, because "must NOT
+    // open" is an absence and has nothing to wait for.
+    const wired = await page.evaluate(() => {
       const dlg = document.getElementById("exts");
       document.getElementById("exts-open").click();
-      await new Promise((r) => setTimeout(r, 400));
       return { open: dlg.open };
     });
     assert.equal(wired.open, true, "the wired surface must open its dialog");

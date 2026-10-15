@@ -22,7 +22,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { startServer } from "./lib/server.mjs";
 import { launch } from "./lib/cdp.mjs";
 
@@ -142,11 +141,19 @@ test("mini-app room UI: mounting, double-iframe sandbox, interactive controls, a
   assert.match(mountState.innerSrcdoc, /Scoreboard/);
   assert.match(mountState.innerSrcdoc, /window\.webMcp/);
 
+  // NO DELAYS BETWEEN THE CLICKS AND THE READS BELOW (voicebox-beads-zjpm.5.1). Every observable these
+  // arms assert is written SYNCHRONOUSLY by the surface's own handler, in the same task as the click:
+  // toggle() flips `dataset.collapsed` and the aria-label, mount() - reached from #mini-app-reload and from
+  // a live mini_app frame through window.__voiceboxOnMiniApp - sets `container.hidden = false` and creates
+  // the bridge frame, and close() hides the container and replaces the viewport's children. The 150-200ms
+  // sleeps that used to sit here were latency, and a delay is not an instrument: it cannot fail, it only
+  // makes the reader think the state arrives later than it does, and it costs its full length on every run.
+  // (A claim that something must NOT happen is the opposite case and keeps its window - see the absence
+  // controls elsewhere in the suite.)
   // 3. Test collapse / expand toggle
   await page.evaluate(() => {
     document.querySelector("#mini-app-toggle")?.click();
   });
-  await sleep(150);
 
   const collapsedState = await page.evaluate(() => {
     const c = document.querySelector("#mini-app-container");
@@ -163,7 +170,6 @@ test("mini-app room UI: mounting, double-iframe sandbox, interactive controls, a
   await page.evaluate(() => {
     document.querySelector("#mini-app-toggle")?.click();
   });
-  await sleep(150);
 
   const expandedState = await page.evaluate(() => {
     const c = document.querySelector("#mini-app-container");
@@ -180,7 +186,6 @@ test("mini-app room UI: mounting, double-iframe sandbox, interactive controls, a
   await page.evaluate(() => {
     document.querySelector("#mini-app-reload")?.click();
   });
-  await sleep(200);
 
   const reloadState = await page.evaluate(() => {
     const c = document.querySelector("#mini-app-container");
@@ -197,7 +202,6 @@ test("mini-app room UI: mounting, double-iframe sandbox, interactive controls, a
   await page.evaluate(() => {
     document.querySelector("#mini-app-close")?.click();
   });
-  await sleep(150);
 
   const closedState = await page.evaluate(() => {
     const c = document.querySelector("#mini-app-container");
@@ -270,7 +274,6 @@ test("mini-app producer: conversational turn dynamically launches mini-app widge
       html: "<div id='game'>Game Board Active</div>",
     });
   });
-  await sleep(200);
 
   const liveState = await page.evaluate(() => {
     const c = document.querySelector("#mini-app-container");
