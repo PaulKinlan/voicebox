@@ -190,8 +190,23 @@ test("changelog dialog extraction: the returned handle opens it from the build s
       await new Promise((resolve) => setTimeout(resolve, 250)); // a removed listener must not fire late either
       return { count: window.__changelogFetches.length, settled: window.__changelogSettled };
     });
-    assert.equal(doubled.count, 2, `the counter must see a second listener's request, or the count below proves nothing (it read ${doubled.count})`);
-    assert.equal(doubled.settled, 2, "and the settled counter must see it too");
+    // THE MESSAGE HAS TO NAME BOTH CAUSES (voicebox-beads-oh3b). This control runs BEFORE the arm under
+    // test, so when the page's OWN refresh handler is double-wired - the leftover-inline-copy extraction rot
+    // this file exists to catch - the click is counted by the counter, the counter is doing its job, and only
+    // the TOTAL is wrong. A single "must equal 2" message would send the triager to the instrument first; the
+    // two assertions below split the diagnosis: FEWER than two is an instrument fault (this control would
+    // otherwise be vacuous, and the arm under test would pass for the wrong reason), MORE than two is the
+    // wiring defect itself, already visible in the counter.
+    assert.ok(
+      doubled.count >= 2,
+      `with a second listener attached, one click must count at least TWO requests; it read ${doubled.count}, which means the counter stopped counting: this control is vacuous and the "exactly once" assertion below would pass for the wrong reason`,
+    );
+    assert.equal(
+      doubled.count,
+      2,
+      `one click with a second listener attached must count exactly TWO. It read ${doubled.count}: the counter DID see every request, so this is the page's own refresh handler firing more than once - the double-wired leftover this file exists to catch - and not an instrument fault`,
+    );
+    assert.equal(doubled.settled, 2, `and the settled counter must see both of them; it read ${doubled.settled}`);
 
     // 2c. THE CLICK UNDER TEST, from a clean count: one click, one request, and it stays one after the
     //     request has settled — the wait is on the observable the count depends on, not on a guessed delay.
