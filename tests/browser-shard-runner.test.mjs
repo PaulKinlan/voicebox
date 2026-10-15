@@ -17,6 +17,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { TIER_WORKERS } from "../scripts/test-shards.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const RUNNER = path.join(root, "tools/browser-shard-runner.mjs");
@@ -32,6 +33,39 @@ const runRunner = (args, env = {}) =>
     timeout: 240_000,
     killSignal: "SIGKILL",
   });
+
+test("the runner takes the browser width from the ONE OWNER, and carries no default of its own", () => {
+  // WHY THIS ARM EXISTS (voicebox-beads-q4j6). `scripts/gate-tier.mjs` spawns this runner with NO
+  // `--workers`, so a fallback inside the runner IS the full gate's browser width - which is how
+  // `TIER_WORKERS.browser` and the number the tier actually ran at became two facts that had drifted apart,
+  // with the gate's own log line printing the wrong one. Behaviour below proves the runner now reads the
+  // owner's number when nothing overrides it; the source arm refuses the literals that could drift again
+  // (a second `?? 2` would pass the behavioural arm by coincidence, and a `?? 4` would pass it only until
+  // someone changed the owner).
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-shard-"));
+  const recordPath = path.join(dir, "browser-tier.json");
+  const env = { ...process.env, VOICEBOX_GATE_TIER_RECORD: recordPath };
+  // The override must be ABSENT, not empty: `??` keeps an empty string, and Number("") is 0.
+  delete env.VOICEBOX_SHARD_WORKERS;
+  try {
+    const res = runRunner(["--only", PROBE], env);
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.ok(
+      res.stdout.includes(`[shards] ${TIER_WORKERS.browser} worker(s)`),
+      `with no --workers and no env override, the runner runs at the one owner's width — stdout was ${JSON.stringify(res.stdout.slice(0, 400))}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  const source = readFileSync(RUNNER, "utf8");
+  assert.match(source, /VOICEBOX_SHARD_WORKERS \?\? TIER_WORKERS\.browser/, "the runner reads TIER_WORKERS.browser - the one owner in scripts/test-shards.mjs");
+  assert.equal(
+    /VOICEBOX_SHARD_WORKERS\s*\?\?\s*\d/.test(source),
+    false,
+    "and it carries no numeric default beside the owner: the gate spawns it without --workers, so that literal would be the real width while the gate logs the owner's",
+  );
+});
 
 test("the runner emits a hub marker per file, and publishes a tier record a manifest can fold in", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-shard-"));
@@ -58,6 +92,16 @@ test("the runner emits a hub marker per file, and publishes a tier record a mani
     assert.ok(["passed", "failed", "unknown"].includes(entry.status), entry.status);
     assert.equal(entry.timeout_ms, 300_000, "the record carries the bound the child ran under");
     assert.ok(entry.secs > 0);
+    // WHAT THE BOX WAS DOING AROUND THIS FILE (voicebox-beads-zjpm.6): both ends of the child's own window,
+    // each a reading or an honest null (a platform that reports no load average) — never a zero standing in
+    // for "not measured". And a PASSING file gets no load line in the log, because the line means "read this
+    // failure", so it must not appear for a file nobody has to read.
+    assert.ok(entry.loadavg_1m, "the record names the window the file ran in");
+    assert.deepEqual(Object.keys(entry.loadavg_1m), ["start", "end"], "both ends, and nothing else");
+    for (const end of ["start", "end"]) {
+      assert.ok(entry.loadavg_1m[end] === null || entry.loadavg_1m[end] >= 0, `${end} is a non-negative reading or null, got ${entry.loadavg_1m[end]}`);
+    }
+    assert.equal(res.stdout.includes("host loadavg"), false, "a passing file gets no load line — the line belongs to failures");
     // A tier record is not a manifest: it names its own tier and carries no roster claim, because only the
     // one aggregator (scripts/gate-manifest.mjs) may answer for the whole gate's scope.
     assert.equal(record.classifier, undefined);
@@ -115,4 +159,52 @@ test("a file that is not in the browser lane is refused before a browser opens",
   assert.equal(res.status, 2);
   assert.match(res.stderr, /is not in the browser lane; nothing to run/);
   assert.equal(res.stdout.includes("fast-gate:"), false, "nothing was dispatched, so nothing claims to have run");
+});
+
+// ── THE BOX, IN THE TIER RECORD AND IN THE FAILURE BLOCK (voicebox-beads-zjpm.6) ────────────────
+// The same file measured 12.2s at four-way idle and 39.1s in a loaded gate, and the artifact held only the
+// 39.1s, so the one question worth asking about a red browser file — was it the file or the box — needed a
+// re-run to answer. These two arms hold both halves: the record carries the window the file ran in, and the
+// failure block prints it. The negative half matters as much: a PASSING file must not grow a load line, or
+// the line stops meaning "read this one".
+test("the tier record carries the load window each file ran in", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-shard-load-"));
+  const recordPath = path.join(dir, "browser-tier.json");
+  try {
+    const res = runRunner(["--only", PROBE, "--workers", "1"], { VOICEBOX_GATE_TIER_RECORD: recordPath });
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    const [entry] = JSON.parse(readFileSync(recordPath, "utf8")).files;
+    assert.ok(entry.loadavg_1m, "the record names the window the file ran in");
+    assert.deepEqual(Object.keys(entry.loadavg_1m), ["start", "end"], "both ends, and nothing else");
+    for (const end of ["start", "end"]) {
+      // A reading or an honest null (a platform that reports no load average). Never a zero standing in for
+      // "not measured": this assert is what stops a 0 being written by a template that defaulted.
+      assert.ok(entry.loadavg_1m[end] === null || entry.loadavg_1m[end] >= 0, `${end} is a non-negative reading or null, got ${entry.loadavg_1m[end]}`);
+    }
+    assert.equal(res.stdout.includes("host loadavg"), false, "a passing file gets no load line — the line belongs to failures");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a FAILING file's block prints what the box was doing, and says it is not a waiver", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-shard-loadfail-"));
+  const recordPath = path.join(dir, "browser-tier.json");
+  try {
+    // A real failure through the real runner, without waiting five minutes: the bound is a flag, so the child
+    // is killed and the file ends `unknown`/failed exactly as a starved file would.
+    const res = runRunner(["--only", PROBE, "--workers", "1", "--file-timeout-ms", "1"], { VOICEBOX_GATE_TIER_RECORD: recordPath });
+    assert.notEqual(res.status, 0, "a killed file is a red file");
+    const block = res.stdout.slice(res.stdout.indexOf(`[shards] ---- output of ${PROBE} ----`));
+    assert.ok(block.length > 0, `the failure block is printed: ${res.stdout}`);
+    assert.match(
+      block,
+      /\[shards\] host loadavg \(1m\) start (\d+(\.\d+)?|\?) end (\d+(\.\d+)?|\?) on \d+ cpu\(s\) — a reading, not a waiver: a loaded box is still a red gate/,
+      `the load line sits inside the failure block: ${block.slice(0, 400)}`,
+    );
+    const failed = JSON.parse(readFileSync(recordPath, "utf8")).files.find((f) => f.path === PROBE);
+    assert.ok(failed.loadavg_1m && "start" in failed.loadavg_1m, "and the record keeps the window even though the child was killed");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -30,8 +30,22 @@ into the scratch directory the gate owns for the run. That is the same shape the
 same thing in either gate — and it is what gives each file its own exit code, test counts, duration and
 bound. The worker counts are the concurrency the gate already ran at (`availableParallelism() - 1` for the
 unit lane, 4 for the server lane, 4 shards for the browser tier), so per-file dispatch is not a speed
-claim: measured on this tree, the unit tier is 18s either way and the server tier 38s. A file that wedges
+claim: measured on this tree, the unit tier is 18s either way and the server tier 38s — and the browser tier's width is now **two** shards, for the reason the table below the tier-worker bullet records. A file that wedges
 is killed at its own budget and recorded `timeout` — one file's failure, not the whole tier's.
+On a non-passing file, the tier log and its retained tier record keep up to three failing TAP sections
+(including indented nested subtests, before their outer suite summary)
+(at most 20 lines of 240 characters each), including the test name and assertion even when later tests
+would push them past the old last-40-lines tail. If no TAP failure exists, the last 12 bounded lines
+identify a crash or timeout. The additive `failure_evidence.version: 2` field also carries through to
+a manually folded manifest; passing files have no evidence field or extra log output. Evidence never
+changes the file status or the fail-closed verdict. Since `voicebox-beads-a8a2` the same record also names
+the arm that failed as a FIELD (`failure_evidence.test`, the leaf subtest, `null` when a crash or a kill
+named nothing — the log line then carries `arm="…"` and a failure that cannot be named says so out loud
+rather than reading like one that was), and the UNIT tier now records `loadavg_1m {start, end}` per file,
+because every file in that tier is its own child process and the box around it is therefore attributable —
+the gap that left three unit-tier failures on 2026-10-15 needing a re-run to identify. Same rule as the
+browser tier's windows: a reading or an honest null, and never a reason to retry, widen a bound or soften
+a verdict.
 
 A stage that refuses prints where its records were kept and how to fold them:
 
@@ -47,6 +61,59 @@ same fold can still be run by hand. (One case is not "no artifact at all": when 
 refuses — a changed source with no mapped test, a `--changed-base` that names no commit — the artifact that
 records those problems is written, says `refused`, and the push is still refused. Only a run that reconciles
 and dispatches every file with a green terminal status is ever labelled `pass`.)
+
+**The artifact also says what the BOX was doing (voicebox-beads-zjpm.6).** A manifest carries a `host` block —
+`cpus`, `available_parallelism`, and `loadavg_1m: {before, max, after}` with the moment it was read — and the
+browser tier keeps a `loadavg_1m: {start, end}` window on every file it dispatched, so a red file's record
+and the shard runner's failure block both say whether the file ran on an idle box or a saturated one. That
+closes a hole this file already documents twice by hand: the same browser file measures 12.2s at four-way idle
+and 39.1s in a loaded gate, and before this the artifact held only the 39.1s, so "flaky file" and "box at
+loadavg 27" were the same record and telling them apart meant re-running the suite. Two limits are recorded
+rather than papered over: `os.loadavg()[0]` is the **1-minute** average and LAGS a burst by roughly half a
+minute, so `max` is the highest of the readings taken (never a claim about the whole run) and a platform that
+reports no load average records `null`, which is not a zero. It is **attribution, not a waiver**: nothing
+retries, isolates, lengthens a bound or lowers the shard width on the strength of a high reading, and a loaded
+box is still a red gate.
+
+**A browser file can also say WHICH CONDITION it failed under (voicebox-beads-zjpm.5.2).** A record may carry a
+`conditions` array — one arm per condition, named from a closed set: `standalone` (the file alone), `heavy_slot`
+(the file while the heavy-job queue's slot is held, with the `holder` NAMED), and `shard_concurrency` (the file
+inside the shard pool at its real width). Each arm carries its own `status`, `secs`, `loadavg_1m` window,
+`worker_count`, the `command` that ran it, and optionally its `counts`; a `skipped` or `unknown` arm must say
+WHY, and an `unknown` one is not asked for a duration it never had. All three arms are required — a two-arm
+check is refused by name, because two points are not a comparison. The sealer then derives a
+`condition_verdict` from the arms: `pattern` (`standalone_only_fails`, `concurrency_only_fails`,
+`heavy_slot_only_fails`, `all_agree`, `mixed`, or `incomplete`), `disagreement`, and `agrees_with_shard`. Two
+rules make it evidence rather than commentary: an arm that was skipped or could not be measured makes the
+whole answer `incomplete` with both other fields **null** (a comparison missing one side must never read as
+agreement), and a runner may not STATE that verdict — anything stated is checked against the arms and refused
+by name when it differs, so a `disagreement: false` beside an unmeasured arm cannot be printed. `verdictOf`
+never reads any of it: the arms DESCRIBE a shape, the file's own terminal status still decides the verdict, and
+a high reading or a disagreeing arm is never a reason to retry, isolate, widen a bound or lower the shard
+width.
+
+**And a failing file must NAME the arm that failed (voicebox-beads-a8a2).** The tier records now carry
+`failure_evidence.test` — the leaf subtest that failed — and a `failed` record whose v2 evidence does not name
+it is refused by name, because a failure nobody can name costs exactly one re-run, which is the cost the
+evidence field exists to remove. The requirement is deliberately narrow, and each narrowing is asserted: it is
+version-gated on the evidence's own `version` so pre-a8a2 records still audit as the shape they declared; it
+applies only to `failed`; and it is never demanded for `timeout` or `unknown`, where a crash or a kill has no
+arm to name and its bounded tail is the name.
+
+**Targeted execution of those three conditions (voicebox-beads-zjpm.5.2)** is not a triple run of the
+248-file landing gate. A red per-file tier record carries `condition_request: "pending"`, NOT
+measurements; optional `conditions` are absent until the detached diagnosis actually runs. The tier
+prints a named command such as
+`node scripts/suite-conditions.mjs --tier unit --file tests/name.test.mjs --dir <scratch> --tier-record <scratch>/unit.json`.
+Run it **after the original heavy slot releases**: `heavy_slot` means the suite runs directly OUTSIDE the
+heavy queue while a separate controlled holder produces measured contention — never a self-held lock or a
+suite that queued behind `fleet-heavy`. The other arms run standalone and at the existing tier worker
+width/isolation, each exactly once with start/end load readings. An unavailable holder is `unknown`, never
+passed. The retained tier update is atomic and cannot change the original status, counts or gate verdict.
+Ops owns the short nightly named-list schedule; fleet tooling owns the automatic post-slot invocation.
+Until that outer hook lands, a red tier remains honestly pending and prints the completion command.
+Invoke it detached through `fleet-gate suite-diagnosis -t 130 -- node scripts/suite-conditions.mjs ...`;
+the CLI caps itself at 120s and four named files and cleans up holder and child test processes on signals.
 
 **And a DIRTY worktree seals no landing receipt.** The tiers run over the working tree while the receipt is
 keyed by the committed tree, so on a push that lands, `scripts/pre-push.sh` passes `--tree-dirty` to the fold
@@ -294,7 +361,7 @@ merger's union, and a full gate may not omit a classified file at all.
   `tests/ldxa-barge-in-browser.test.mjs`) run alone, after the parallel queue.
 - **The tier's own concurrency and queue.** Each tier runs at `TIER_WORKERS` — the one owner in
   `scripts/test-shards.mjs`, the same counts the full gate dispatches at (`availableParallelism() - 1` for
-  unit, 4 for the server lane, 4 for the browser tier's shards), overridable for a loaded box with
+  unit, 4 for the server lane, 2 for the browser tier's shards), overridable for a loaded box with
   `VOICEBOX_FAST_WORKERS`. The parallel pool is ordered by `buildQueue` from that same module, i.e. the
   queue the browser tier already runs from, heaviest-first. Both are scheduling facts and neither changes
   the scope: nothing is dropped, reordered INTO omission, or narrowed — a file the changed-path map selects
@@ -306,6 +373,40 @@ merger's union, and a full gate may not omit a classified file at all.
   179.2s). The fleet speed standard's R2 budget for the median fast gate is **≤60s** and this does not
   reach it: a UI-monolith change pays a browser-heavy closure, and the structural route is the
   `public/fused.js` decomposition (`voicebox-beads-mvxl` / `uei2`), not a narrower map.
+
+- **WHY THE BROWSER TIER IS TWO SHARDS, MEASURED (`voicebox-beads-q4j6`).** The browser tier's width is a
+  correctness fact before it is a speed one. Two full-gate unions at four shards were red on **different**
+  sets of files; the same union at two shards, with the tiers serialized, is green.
+
+  | union (tree)            | browser shards | browser tier                     | browser wall | whole gate | verdict |
+  |-------------------------|----------------|----------------------------------|--------------|------------|---------|
+  | `4c1441b` (merger batch3) | 4            | 89 files, **8 failed**           | —            | 1095s      | RED     |
+  | `c47991b` (batch3, later) | 4            | 89 files, **3 failed (different)** | —          | 670s       | RED     |
+  | `e22f9ed` (tree `aef9e6e1`) | 2          | 89 recorded, **0 not passed**    | 750.1s       | 984s       | GREEN   |
+
+  Every file that failed under four shards passes **standalone** (7/7 in 48s at the first red union; all
+  eight pass standalone at `4c1441b`), and neither red union carries product changes against a green main —
+  so four shards was not measuring the product, and it was not oversubscription outside the tier either
+  (every other lane was held off browser and burner work for `c47991b`). A red whose failing set changes run
+  to run cannot be attributed to a file by any reader, and nothing may retry, isolate or widen a bound to
+  cover it, so the width is what changed: two shards costs wall time on the browser tier (750.1s, most of a
+  984s gate) and buys a gate whose answer means something. The failing set was also invisible from inside any
+  single file: one browser file alone, at four-way concurrency and at four-way with burners, stayed green at
+  loadavg 11 (`voicebox-beads-18lh`), which is why this is a TIER measurement rather than a per-file one.
+  The width has ONE owner (`TIER_WORKERS.browser` in `scripts/test-shards.mjs`) and the runner carries no
+  default of its own, because the gate spawns it with no `--workers` — a second default there would be the
+  real width while the gate logged the owner's.
+
+  **What two shards costs the FAST path, said out loud.** The fast gate dispatches its own browser lane at
+  `TIER_WORKERS.browser` too, so this reduction applies there as well, and it is not free: on the 159-file
+  `public/fused.js` closure the same measurement (`voicebox-beads-buy8`, 2026-10-14) puts the browser lane at
+  **273s at two workers against 190s at four**, and the fast bound is 180s — so a UI-monolith change may now
+  need `VOICEBOX_FAST_WORKERS=4` for its scoped run (the documented override, and it reaches the fast gate's
+  own browser dispatch) or it will be killed at the bound and go STALE. The median fast gate is unaffected:
+  small closures pay seconds either way. This is disclosed rather than papered over with a second width in
+  the runner — the structural answer for that closure is the `public/fused.js` decomposition (`mvxl` / `uei2`),
+  and if the choice is instead an explicit longer fast bound for that scope then it is a policy decision for
+  coord, not a hidden number here.
 - **A lost child is not a pass.** A file that produced no TAP summary is `unknown` — never `passed` — and
   the gate refuses on it.
 

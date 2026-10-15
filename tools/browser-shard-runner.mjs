@@ -33,7 +33,7 @@
 // running fewer tests is the failure this file is written to make impossible, so the totals are
 // compared against what the lane is expected to contribute before the exit code is decided.
 //
-//   node tools/browser-shard-runner.mjs                  # four workers, the whole browser lane
+//   node tools/browser-shard-runner.mjs                  # two workers, the whole browser lane
 //   node tools/browser-shard-runner.mjs --workers 2      # fewer, for a loaded box
 //   node tools/browser-shard-runner.mjs --only tests/x.test.mjs
 import { spawn } from "node:child_process";
@@ -42,8 +42,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeFileSync } from "node:fs";
 import { classify } from "../scripts/test-lanes.mjs";
-import { assertExactCoverage, buildQueue, isFailed, splitQueue } from "../scripts/test-shards.mjs";
+import { assertExactCoverage, buildQueue, isFailed, splitQueue, TIER_WORKERS } from "../scripts/test-shards.mjs";
 import { emitMarker, testChildEnv } from "../scripts/gate-manifest.mjs";
+import { loadavg1m } from "../lib/host-load.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -52,7 +53,12 @@ const flag = (name, fallback) => {
   const at = argv.indexOf(`--${name}`);
   return at === -1 ? fallback : argv[at + 1];
 };
-const WORKERS = Math.max(1, Number(flag("workers", process.env.VOICEBOX_SHARD_WORKERS ?? 4)));
+// THE WIDTH COMES FROM THE ONE OWNER, AND THERE IS NO SECOND DEFAULT (voicebox-beads-q4j6). This line used
+// to be `?? 4`, and because `scripts/gate-tier.mjs` spawns this runner with NO `--workers`, that literal was
+// the FULL GATE'S browser width while the gate's own log line printed `TIER_WORKERS.browser` - two numbers
+// for one fact, which had already drifted apart by the time q4j6 was filed, and the number in the log was
+// the wrong one. The env var and `--workers` stay as the deliberate overrides for a loaded box.
+const WORKERS = Math.max(1, Number(flag("workers", process.env.VOICEBOX_SHARD_WORKERS ?? TIER_WORKERS.browser)));
 const ONLY = argv.includes("--only") ? argv[argv.indexOf("--only") + 1] : null;
 // PHASED INVOCATIONS (agreed with the live-tier supervisor, zjpm.2): a supervisor may run the tier in two
 // processes — the parallel queue first, beside the server pool, then the isolated files on an otherwise
@@ -151,6 +157,11 @@ function runFile(file) {
       killGroup(child, "SIGTERM");
       setTimeout(() => killGroup(child, "SIGKILL"), 5000).unref();
     }, FILE_TIMEOUT_MS);
+    // THE BOX, AROUND THIS FILE. Two readings bracket the child's own window (voicebox-beads-zjpm.6): the
+    // same file measured 12.2s at four-way idle and 39.1s in a loaded gate, and before this the artifact held
+    // only the 39.1s. These are 1-minute averages, so they lag a burst — which is why both ends are kept and
+    // why nothing here retries or excuses anything: a loaded box is still a red gate.
+    const loadStart = loadavg1m();
     const entry = { file, child };
     running.set(child.pid, entry);
     // EXACTLY ONE RESULT PER FILE, whichever way the child ends (reviewer finding, P2). `exit` is
@@ -175,6 +186,7 @@ function runFile(file) {
         skipped: counts(out, "skipped"),
         notOk: notOk(out),
         out: note ? `${note}\n${out}` : out,
+        loadavg_1m: { start: loadStart, end: loadavg1m() },
       };
       results.push(result);
       const status = isFailed(result) ? "FAIL" : "ok  ";
@@ -188,6 +200,13 @@ function runFile(file) {
       if (isFailed(result)) {
         const tail = out.split("\n").slice(-60).join("\n");
         console.log(`[shards] ---- output of ${file} ----\n${tail}\n[shards] ---- end ${file} ----`);
+        // ONE LINE, IN THE FAILURE BLOCK, SAYING WHAT THE BOX WAS DOING. It goes after the end marker so the
+        // file's own output stays verbatim, and it ATTRIBUTES rather than excuses: there is no retry, no
+        // isolation and no longer bound anywhere behind it. Reading a red file an hour later, "it timed out"
+        // and "the box was at 27" were previously the same log line.
+        console.log(
+          `[shards] host loadavg (1m) start ${result.loadavg_1m.start ?? "?"} end ${result.loadavg_1m.end ?? "?"} on ${os.cpus().length} cpu(s) — a reading, not a waiver: a loaded box is still a red gate`,
+        );
       }
       resolve(result);
     };
@@ -248,6 +267,9 @@ if (process.env.VOICEBOX_GATE_TIER_RECORD) {
       counts: r.tests >= 0 ? { tests: r.tests, pass: r.pass, fail: r.fail, skipped: r.skipped } : null,
       timeout_ms: FILE_TIMEOUT_MS,
       secs: Math.round(r.ms) / 1000,
+      // The manifest keeps this per file: a sweep of the browser tier can then show which files were measured
+      // on a loaded box and which were not, without anybody re-running anything (voicebox-beads-zjpm.6).
+      loadavg_1m: r.loadavg_1m ?? null,
     })),
   };
   try {
