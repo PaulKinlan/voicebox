@@ -17,6 +17,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { TIER_WORKERS } from "../scripts/test-shards.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const RUNNER = path.join(root, "tools/browser-shard-runner.mjs");
@@ -32,6 +33,39 @@ const runRunner = (args, env = {}) =>
     timeout: 240_000,
     killSignal: "SIGKILL",
   });
+
+test("the runner takes the browser width from the ONE OWNER, and carries no default of its own", () => {
+  // WHY THIS ARM EXISTS (voicebox-beads-q4j6). `scripts/gate-tier.mjs` spawns this runner with NO
+  // `--workers`, so a fallback inside the runner IS the full gate's browser width - which is how
+  // `TIER_WORKERS.browser` and the number the tier actually ran at became two facts that had drifted apart,
+  // with the gate's own log line printing the wrong one. Behaviour below proves the runner now reads the
+  // owner's number when nothing overrides it; the source arm refuses the literals that could drift again
+  // (a second `?? 2` would pass the behavioural arm by coincidence, and a `?? 4` would pass it only until
+  // someone changed the owner).
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-shard-"));
+  const recordPath = path.join(dir, "browser-tier.json");
+  const env = { ...process.env, VOICEBOX_GATE_TIER_RECORD: recordPath };
+  // The override must be ABSENT, not empty: `??` keeps an empty string, and Number("") is 0.
+  delete env.VOICEBOX_SHARD_WORKERS;
+  try {
+    const res = runRunner(["--only", PROBE], env);
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.ok(
+      res.stdout.includes(`[shards] ${TIER_WORKERS.browser} worker(s)`),
+      `with no --workers and no env override, the runner runs at the one owner's width — stdout was ${JSON.stringify(res.stdout.slice(0, 400))}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  const source = readFileSync(RUNNER, "utf8");
+  assert.match(source, /VOICEBOX_SHARD_WORKERS \?\? TIER_WORKERS\.browser/, "the runner reads TIER_WORKERS.browser - the one owner in scripts/test-shards.mjs");
+  assert.equal(
+    /VOICEBOX_SHARD_WORKERS\s*\?\?\s*\d/.test(source),
+    false,
+    "and it carries no numeric default beside the owner: the gate spawns it without --workers, so that literal would be the real width while the gate logs the owner's",
+  );
+});
 
 test("the runner emits a hub marker per file, and publishes a tier record a manifest can fold in", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-shard-"));

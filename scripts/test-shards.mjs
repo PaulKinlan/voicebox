@@ -4,7 +4,7 @@
 // WHY THIS IS A VALUE AND NOT A SHELL EXPANSION (voicebox-beads-hhkg, ADR voicebox-beads-g9jf):
 // the browser tier is the whole cost of the gate's live stage — measured 2026-10-11 on this tree,
 // 63 files and 284.3s serial, and 395.5s in the box's own last full-gate log under load. Making it
-// run in four shards is worth ~2.2x, but it also moves the tier's coverage from "whatever the shell
+// run in parallel shards is worth ~2.2x, but it also moves the tier's coverage from "whatever the shell
 // expanded" to "whatever the queue says" — and a queue that quietly drops a file looks exactly like
 // a faster gate. So the queue is built here, it can be read without running anything, and
 // `assertExactCoverage` REFUSES a queue that drops, repeats or invents a file. The runner calls it
@@ -29,13 +29,29 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
  * 2 — a number no tier has ever run at. The two dispatchers run the SAME lanes, so a tier's concurrency is
  * one fact and it is this one: `npm run test:unit` is one `node --test` over the unit lane (default
  * concurrency = availableParallelism - 1) and `npm run test:live` passes `--test-concurrency=4` to the
- * server lane, while the browser tier is `tools/browser-shard-runner.mjs`'s four shards. Nothing here
+ * server lane, while the browser tier is `tools/browser-shard-runner.mjs`'s two shards. Nothing here
  * raises a lane's concurrency above what the full gate already runs: the point is that a scoped run may not
  * be MORE serial than the gate it is a strict subset of. Measured on the fast gate's own 159-file fused.js
  * scope (2026-10-14): the accidental 2-worker default cost 273s of wall clock where the tier's own
  * concurrency costs 190s.
+ *
+ * TWO SHARDS FOR THE BROWSER TIER, BECAUSE FOUR IS NOT SAFE (voicebox-beads-q4j6, measured 2026-10-15).
+ * Wall time is why the browser tier was widened; the tier's own evidence is why it cannot stay wide. Two
+ * full-gate unions at four shards went red on DIFFERENT sets of files — 4c1441b: 8 files (extensions-ui
+ * boot timeout, changelog-dialog, mini-app-architecture, explorer-folders, pip-presence,
+ * environment-root-dialog, pip-window-styling, modal-panels) in 1095s; c47991b: 3 different files
+ * (changelog-links build-stamp wait, room-explorer-ui, agent-monitor-miniapp 25s timeout) in 670s — while
+ * every file that failed in either union passes STANDALONE (7/7 in 48s; all 8 pass standalone at 4c1441b),
+ * neither union carries product changes against a green main, and the SAME union at two shards is green:
+ * 250/250 files, browser tier 89/89, browser wall 750.1s, whole gate 984s (merger, 2026-10-15, tree
+ * aef9e6e1 / union e22f9ed). A red whose failing set changes run to run cannot be attributed by any
+ * reader, and nothing may retry, isolate or widen a bound to cover it, so the width is the shape that
+ * changes: two shards costs wall time on the browser tier and buys a gate whose answer means something.
+ * The failing set was invisible from inside any one file — a single browser file alone, at four-way and at
+ * four-way plus burners, stayed green (voicebox-beads-18lh, loadavg 11) — which is why this is a TIER
+ * measurement and not a per-file one.
  */
-export const TIER_WORKERS = Object.freeze({ unit: Math.max(1, os.availableParallelism() - 1), server: 4, browser: 4 });
+export const TIER_WORKERS = Object.freeze({ unit: Math.max(1, os.availableParallelism() - 1), server: 4, browser: 2 });
 
 /**
  * A file's cost, used ONLY to order the queue (above). Bytes are a crude proxy — measured against

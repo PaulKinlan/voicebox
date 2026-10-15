@@ -30,7 +30,7 @@ into the scratch directory the gate owns for the run. That is the same shape the
 same thing in either gate — and it is what gives each file its own exit code, test counts, duration and
 bound. The worker counts are the concurrency the gate already ran at (`availableParallelism() - 1` for the
 unit lane, 4 for the server lane, 4 shards for the browser tier), so per-file dispatch is not a speed
-claim: measured on this tree, the unit tier is 18s either way and the server tier 38s. A file that wedges
+claim: measured on this tree, the unit tier is 18s either way and the server tier 38s — and the browser tier's width is now **two** shards, for the reason the table below the tier-worker bullet records. A file that wedges
 is killed at its own budget and recorded `timeout` — one file's failure, not the whole tier's.
 On a non-passing file, the tier log and its retained tier record keep up to three failing TAP sections
 (including indented nested subtests, before their outer suite summary)
@@ -346,7 +346,7 @@ merger's union, and a full gate may not omit a classified file at all.
   `tests/ldxa-barge-in-browser.test.mjs`) run alone, after the parallel queue.
 - **The tier's own concurrency and queue.** Each tier runs at `TIER_WORKERS` — the one owner in
   `scripts/test-shards.mjs`, the same counts the full gate dispatches at (`availableParallelism() - 1` for
-  unit, 4 for the server lane, 4 for the browser tier's shards), overridable for a loaded box with
+  unit, 4 for the server lane, 2 for the browser tier's shards), overridable for a loaded box with
   `VOICEBOX_FAST_WORKERS`. The parallel pool is ordered by `buildQueue` from that same module, i.e. the
   queue the browser tier already runs from, heaviest-first. Both are scheduling facts and neither changes
   the scope: nothing is dropped, reordered INTO omission, or narrowed — a file the changed-path map selects
@@ -358,6 +358,40 @@ merger's union, and a full gate may not omit a classified file at all.
   179.2s). The fleet speed standard's R2 budget for the median fast gate is **≤60s** and this does not
   reach it: a UI-monolith change pays a browser-heavy closure, and the structural route is the
   `public/fused.js` decomposition (`voicebox-beads-mvxl` / `uei2`), not a narrower map.
+
+- **WHY THE BROWSER TIER IS TWO SHARDS, MEASURED (`voicebox-beads-q4j6`).** The browser tier's width is a
+  correctness fact before it is a speed one. Two full-gate unions at four shards were red on **different**
+  sets of files; the same union at two shards, with the tiers serialized, is green.
+
+  | union (tree)            | browser shards | browser tier                     | browser wall | whole gate | verdict |
+  |-------------------------|----------------|----------------------------------|--------------|------------|---------|
+  | `4c1441b` (merger batch3) | 4            | 89 files, **8 failed**           | —            | 1095s      | RED     |
+  | `c47991b` (batch3, later) | 4            | 89 files, **3 failed (different)** | —          | 670s       | RED     |
+  | `e22f9ed` (tree `aef9e6e1`) | 2          | 89 recorded, **0 not passed**    | 750.1s       | 984s       | GREEN   |
+
+  Every file that failed under four shards passes **standalone** (7/7 in 48s at the first red union; all
+  eight pass standalone at `4c1441b`), and neither red union carries product changes against a green main —
+  so four shards was not measuring the product, and it was not oversubscription outside the tier either
+  (every other lane was held off browser and burner work for `c47991b`). A red whose failing set changes run
+  to run cannot be attributed to a file by any reader, and nothing may retry, isolate or widen a bound to
+  cover it, so the width is what changed: two shards costs wall time on the browser tier (750.1s, most of a
+  984s gate) and buys a gate whose answer means something. The failing set was also invisible from inside any
+  single file: one browser file alone, at four-way concurrency and at four-way with burners, stayed green at
+  loadavg 11 (`voicebox-beads-18lh`), which is why this is a TIER measurement rather than a per-file one.
+  The width has ONE owner (`TIER_WORKERS.browser` in `scripts/test-shards.mjs`) and the runner carries no
+  default of its own, because the gate spawns it with no `--workers` — a second default there would be the
+  real width while the gate logged the owner's.
+
+  **What two shards costs the FAST path, said out loud.** The fast gate dispatches its own browser lane at
+  `TIER_WORKERS.browser` too, so this reduction applies there as well, and it is not free: on the 159-file
+  `public/fused.js` closure the same measurement (`voicebox-beads-buy8`, 2026-10-14) puts the browser lane at
+  **273s at two workers against 190s at four**, and the fast bound is 180s — so a UI-monolith change may now
+  need `VOICEBOX_FAST_WORKERS=4` for its scoped run (the documented override, and it reaches the fast gate's
+  own browser dispatch) or it will be killed at the bound and go STALE. The median fast gate is unaffected:
+  small closures pay seconds either way. This is disclosed rather than papered over with a second width in
+  the runner — the structural answer for that closure is the `public/fused.js` decomposition (`mvxl` / `uei2`),
+  and if the choice is instead an explicit longer fast bound for that scope then it is a policy decision for
+  coord, not a hidden number here.
 - **A lost child is not a pass.** A file that produced no TAP summary is `unknown` — never `passed` — and
   the gate refuses on it.
 

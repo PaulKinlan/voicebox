@@ -33,7 +33,7 @@
 // running fewer tests is the failure this file is written to make impossible, so the totals are
 // compared against what the lane is expected to contribute before the exit code is decided.
 //
-//   node tools/browser-shard-runner.mjs                  # four workers, the whole browser lane
+//   node tools/browser-shard-runner.mjs                  # two workers, the whole browser lane
 //   node tools/browser-shard-runner.mjs --workers 2      # fewer, for a loaded box
 //   node tools/browser-shard-runner.mjs --only tests/x.test.mjs
 import { spawn } from "node:child_process";
@@ -42,7 +42,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeFileSync } from "node:fs";
 import { classify } from "../scripts/test-lanes.mjs";
-import { assertExactCoverage, buildQueue, isFailed, splitQueue } from "../scripts/test-shards.mjs";
+import { assertExactCoverage, buildQueue, isFailed, splitQueue, TIER_WORKERS } from "../scripts/test-shards.mjs";
 import { emitMarker, testChildEnv } from "../scripts/gate-manifest.mjs";
 import { loadavg1m } from "../lib/host-load.mjs";
 
@@ -53,7 +53,12 @@ const flag = (name, fallback) => {
   const at = argv.indexOf(`--${name}`);
   return at === -1 ? fallback : argv[at + 1];
 };
-const WORKERS = Math.max(1, Number(flag("workers", process.env.VOICEBOX_SHARD_WORKERS ?? 4)));
+// THE WIDTH COMES FROM THE ONE OWNER, AND THERE IS NO SECOND DEFAULT (voicebox-beads-q4j6). This line used
+// to be `?? 4`, and because `scripts/gate-tier.mjs` spawns this runner with NO `--workers`, that literal was
+// the FULL GATE'S browser width while the gate's own log line printed `TIER_WORKERS.browser` - two numbers
+// for one fact, which had already drifted apart by the time q4j6 was filed, and the number in the log was
+// the wrong one. The env var and `--workers` stay as the deliberate overrides for a loaded box.
+const WORKERS = Math.max(1, Number(flag("workers", process.env.VOICEBOX_SHARD_WORKERS ?? TIER_WORKERS.browser)));
 const ONLY = argv.includes("--only") ? argv[argv.indexOf("--only") + 1] : null;
 // PHASED INVOCATIONS (agreed with the live-tier supervisor, zjpm.2): a supervisor may run the tier in two
 // processes — the parallel queue first, beside the server pool, then the isolated files on an otherwise
