@@ -272,8 +272,49 @@ function lexicalScopes(source) {
       let prev = i - 1;
       while (prev >= 0 && /\s/.test(chars[prev])) prev--;
       const keyword = chars.slice(Math.max(0, prev - 15), prev + 1).join("");
-      // A slash after an expression is division. Expression-opening punctuation or a keyword starts regex.
-      if (prev < 0 || "=(:,;!&|?{}[]~+*%^<>-".includes(chars[prev]) || /\b(?:return|case|throw|yield|await|of|in)$/.test(keyword)) {
+      const isSpread = prev >= 2 && chars[prev] === "." && chars[prev - 1] === "." && chars[prev - 2] === ".";
+      let isStatementSlash = false;
+      if (prev >= 0 && chars[prev] === ")") {
+        let depth = 1;
+        let j = prev - 1;
+        while (j >= 0 && depth > 0) {
+          if (chars[j] === ")") depth++;
+          else if (chars[j] === "(") depth--;
+          j--;
+        }
+        if (depth === 0) {
+          while (j >= 0 && /\s/.test(chars[j])) j--;
+          const preHeader = chars.slice(Math.max(0, j - 10), j + 1).join("");
+          const headerMatch = preHeader.match(/\b(if|while|for|with)$/);
+          if (headerMatch) {
+            const hStart = j - headerMatch[1].length + 1;
+            let beforeH = hStart - 1;
+            while (beforeH >= 0 && /\s/.test(chars[beforeH])) beforeH--;
+            if (beforeH < 0 || (chars[beforeH] !== "." && chars[beforeH] !== "?")) {
+              isStatementSlash = true;
+            }
+          }
+        }
+      }
+      let isKeyword = false;
+      const kwMatch = keyword.match(/\b(return|case|throw|yield|await|of|in|typeof|void|delete|new|instanceof|else|do)$/);
+      if (kwMatch) {
+        const kwStart = prev - kwMatch[1].length + 1;
+        let beforeKw = kwStart - 1;
+        while (beforeKw >= 0 && /\s/.test(chars[beforeKw])) beforeKw--;
+        if (beforeKw < 0 || (chars[beforeKw] !== "." && chars[beforeKw] !== "?")) {
+          isKeyword = true;
+        }
+      }
+      // A slash after an expression is division. Expression-opening punctuation (excluding closing brackets),
+      // spread, standalone statement headers, or standalone keywords start regex literals (voicebox-beads-bw70).
+      if (
+        prev < 0 ||
+        "=(:,;!&|?{}[~+*%^<>-".includes(chars[prev]) ||
+        isSpread ||
+        isStatementSlash ||
+        isKeyword
+      ) {
         chars[i] = " "; regex = true; continue;
       }
     }

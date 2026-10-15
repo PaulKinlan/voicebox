@@ -383,6 +383,95 @@ test("transient-state: regex literals never hide later live status assertions (v
   }
 });
 
+test("transient-state: regex segmentation handles keywords, statement positions, spreads, and brackets without dropping or inventing items (voicebox-beads-bw70)", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-bw70-"));
+  const assertion = 'assert.equal(await page.evaluate(() => window.__status), "ready");';
+  const fixture = (prefix) => `import test from "node:test";\nimport assert from "node:assert/strict";\ntest("fixture", async () => {\n  ${prefix}\n  ${assertion}\n});\n`;
+  const fixtures = {
+    typeofRegex: fixture('const isQuoteRe = typeof /["\x27]/ === "object";'),
+    voidRegex: fixture('void /["\x27]/;'),
+    deleteRegex: fixture('delete /["\x27]/.source;'),
+    newRegex: fixture('const r = new /["\x27]/.constructor("abc");'),
+    instanceofRegex: fixture('const isRe = x instanceof /["\x27]/;'),
+    doRegex: fixture('do /["\x27]/.test(s); while (false);'),
+    elseStatementSlash: fixture('if (flag) doSomething(); else /"/.test(s);'),
+    ifStatementSlash: fixture('if (flag) /"/.test(s);'),
+    whileStatementSlash: fixture('while (flag) /"/.test(s);'),
+    forStatementSlash: fixture('for (;;) /"/.test(s);'),
+    withStatementSlash: fixture('with (scope) /"/.test(s);'),
+    spreadSlash: fixture('const list = [.../"/];'),
+    bracketDivision: fixture("const hits = [4]; const half = hits[0] / 2;"),
+    parensDivision: fixture("const half = (hits[0] + 1) / 2;"),
+  };
+  try {
+    const files = Object.entries(fixtures).map(([name, body]) => {
+      const file = path.join(dir, `${name}.test.mjs`);
+      writeFileSync(file, body);
+      return file;
+    });
+    const res = spawnSync(process.execPath, [CHECKER, ...files, "--list"], {
+      cwd: root,
+      encoding: "utf8",
+      timeout: 60_000,
+      killSignal: "SIGKILL",
+    });
+    assert.equal(res.status, 0, `${res.stdout}${res.stderr}`);
+    const listed = [...res.stdout.matchAll(/review .*\/([^/\s:]+\.test\.mjs):/g)].map((m) => m[1]).sort();
+    assert.deepEqual(
+      listed,
+      Object.keys(fixtures).map((name) => `${name}.test.mjs`).sort(),
+      "unwaited assertions following regexes or division are properly captured in review list",
+    );
+
+    // Negative controls: division after bracket or member access must NOT mask a valid wait on the same line,
+    // and must not mask an unwaited assertion following it.
+    const waitControls = {
+      bracketDivision: "const hits = [4]; const half = hits[0] / 2;",
+      memberNewDivision: "const val = obj.new / 2;",
+      memberDeleteDivision: "const val = obj.delete / 2;",
+      memberIfDivision: "const val = obj.if(flag) / 2;",
+      memberWhileDivision: "const val = obj.while(flag) / 2;",
+    };
+    for (const [name, prefix] of Object.entries(waitControls)) {
+      // 1. With wait: wait is not masked, so review item is cleared
+      const waitFile = path.join(dir, `wait_${name}.test.mjs`);
+      writeFileSync(
+        waitFile,
+        `import test from "node:test";\nimport assert from "node:assert/strict";\ntest("fixture", async () => {\n  ${prefix} await page.waitForFunction(() => window.__status === 'ready');\n  ${assertion}\n});\n`,
+      );
+      const waitRes = spawnSync(process.execPath, [CHECKER, waitFile, "--list"], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      assert.equal(waitRes.status, 0);
+      assert.equal(
+        waitRes.stdout.includes("review"),
+        false,
+        `valid wait following ${name} is not masked and clears the review item`,
+      );
+
+      // 2. Without wait: assertion is not masked, so review item is properly listed
+      const unwaitedFile = path.join(dir, `unwaited_${name}.test.mjs`);
+      writeFileSync(
+        unwaitedFile,
+        `import test from "node:test";\nimport assert from "node:assert/strict";\ntest("fixture", async () => {\n  ${prefix}\n  ${assertion}\n});\n`,
+      );
+      const unwaitedRes = spawnSync(process.execPath, [CHECKER, unwaitedFile, "--list"], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      assert.equal(unwaitedRes.status, 0);
+      assert.equal(
+        unwaitedRes.stdout.includes("review"),
+        true,
+        `unwaited assertion following ${name} is not masked and is listed for review`,
+      );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("transient-state: status review list captures exact strings and positive counts on unwaited observables (voicebox-beads-a2gd)", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-a2gd-"));
   const file = path.join(dir, "a2gd.test.mjs");
