@@ -236,8 +236,12 @@ test("settings-ui.mjs preserves Reconnected live session status while fused.js f
     /els\.report\.dataset\.fading = "true";/,
     "setReport marks #turn-report with data-fading=\"true\" before clearing",
   );
+  // The live-session question is now an INJECTED callback (voicebox-beads-uei2.12: the surface moved to
+  // public/components/vision-controls.mjs and fused.js hands it closures over the globals), so the marker
+  // moves with the fact. Every clause is unchanged: the guard still asks whether a session is live, still
+  // requires the microphone to be present and not already pressed, and still clicks it in that case.
   assertInClientSources(ROOT,
-    /if \(!window\.__voiceboxIsLiveSessionActive\?\.\(\) && els\.mic && els\.mic\.getAttribute\("aria-pressed"\) !== "true"\)\s*\{\s*els\.mic\.click\(\);\s*\}/,
+    /if \(!isLiveSessionActive\?\.\(\) && els\.mic && els\.mic\.getAttribute\("aria-pressed"\) !== "true"\)\s*\{\s*els\.mic\.click\(\);\s*\}/,
     "startVisionStream auto-triggers els.mic.click() when starting camera or screen share while live session is inactive",
   );
 });

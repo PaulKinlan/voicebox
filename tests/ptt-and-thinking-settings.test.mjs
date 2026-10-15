@@ -85,8 +85,15 @@ test("the client wires settingPttEnabled visibility toggle and restarts active l
     /els\.visionPttBtn\.hidden\s*=\s*!enabled/,
     "the client must toggle els.visionPttBtn.hidden when #setting-ptt-enabled changes",
   );
+  // RE-POINTED TO THE HANDLER, NOT THE WIRING (voicebox-beads-uei2.12). The old marker wanted the two
+  // globals within 160 characters of each other, which the extraction made true by accident: fused.js now
+  // passes `isLiveSessionActive` and `restartLiveSession` as adjacent closures over those globals, so the
+  // assertion would have kept passing while saying nothing about the change handler at all. The fact it is
+  // meant to pin is the handler's, so it is asserted where the handler is: guarded by the live-session
+  // question, in the same block, calling the restart. tests/vision-controls-extraction.test.mjs drives the
+  // rule as well, including that the question is asked at the moment of the change (not captured at init).
   assertInClientSources(ROOT,
-    /window\.__voiceboxIsLiveSessionActive\?\.\(\)[\s\S]{0,160}window\.__voiceboxRestartLiveSession\?\.\(\)/,
+    /if \(isLiveSessionActive\?\.\(\)\)\s*\{[\s\S]{0,120}restartLiveSession\?\.\(\)/,
     "the client must restart the active live session when #setting-thinking-level changes",
   );
 });
