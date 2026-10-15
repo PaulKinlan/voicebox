@@ -1,16 +1,29 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
 import { attachConditionRecord, measureSuite, writeConditionRecord } from "../scripts/suite-conditions.mjs";
 import { TIER_WORKERS } from "../scripts/test-shards.mjs";
 import { createManifest, recordFile } from "../scripts/gate-manifest.mjs";
 import { classify } from "../scripts/test-lanes.mjs";
+import { mapToTests } from "../scripts/test-changed.mjs";
 
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const suite = "tests/suite-condition-verdict.test.mjs";
 const ok = { code: 0, signal: null, timedOut: false, secs: 0.1, counts: { tests: 1, pass: 1, fail: 0, skipped: 0 } };
 const roster = [suite, ...Array.from({ length: TIER_WORKERS.unit - 1 }, (_, n) => `tests/peer-${n}.test.mjs`)];
+
+test("suite-load-holder.mjs rejects invalid load targets before starting burner workers and maps to this focused test", () => {
+  const holder = "scripts/suite-load-holder.mjs";
+  const child = spawnSync(process.execPath, [holder, "-1"], { cwd: ROOT, timeout: 5000, encoding: "utf8" });
+  assert.equal(child.error, undefined, "the holder exits itself rather than hanging behind the heavy queue");
+  assert.equal(child.status, 2, "an invalid target is refused before worker threads are created");
+  assert.equal(child.stdout, "", "no READY handshake is claimed for an invalid target");
+  assert.ok(mapToTests([holder]).includes("suite-conditions.test.mjs"), "the changed-source mapper names this test for the holder");
+});
 
 test("three independent arms produce measured records, a named disagreement and a bounded artifact", async () => {
   let calls = 0;
