@@ -42,7 +42,7 @@ async function witness(page, task, condition) {
   }, task, condition);
 }
 
-test("D1 browser: handle first, unrelated live transport/text turn, independent page, reload and observed environment death", { timeout: 60000 }, async (t) => {
+test("D1 browser: handle first, unrelated live transport/text turn, independent page, reload and observed environment death", { timeout: 120000 }, async (t) => {
   const output = process.env.VOICEBOX_D1_EVIDENCE ?? fs.mkdtempSync(path.join(os.tmpdir(), "voicebox-d1-evidence-"));
   fs.mkdirSync(output, { recursive: true });
   const f = await taskFixture(t);
@@ -93,9 +93,130 @@ test("D1 browser: handle first, unrelated live transport/text turn, independent 
       socket.onerror = () => { clearTimeout(timer); socket.close(); reject(new Error("fixture live socket failed")); };
     }));
     assert.match(liveText, /fixture voice turn: unrelated turn/);
+    // WHAT THIS ARM WAITS ON, AND WHY IT CHANGED (voicebox-beads-18lh). The union gate failed here with a bare
+    // "timed out waiting for unrelated native text form turn completed; last value false", so the first thing
+    // measured was whether that deadline was simply too small for the shard queue. It is not: driven four-way
+    // with six CPU burners beside it (loadavg 7.05 on 8 vCPU, against the 8.5 the union gate recorded), the
+    // turn itself settled after 564ms, 604ms, 564ms and 776ms - about 20x inside the 15s default it was using.
+    // The deadline was never the defect here and is not raised as if it were.
+    //
+    // What the arm DID get wrong is the observable:
+    //
+    //   1. It waited for ONE of the report's two terminal values. The page writes its own refusals as
+    //      `tone === "bad"` WITH a sentence in the same element, so a refusal and a turn that never finished
+    //      produced the identical silent timeout. A failure has to say what the page said - the rule
+    //      tests/ux-bubble-stage.test.mjs records as voicebox-beads-rtsr. Driven: with `/api/turn` answering 503
+    //      the arm now fails with `#turn-report says {"tone":"bad","text":"“list files” the turn did not reach
+    //      the server: closed box: the turn route is refusing"}`, where the old form printed "last value false".
+    //   2. A good report LINGERS - `setReport` keeps it for REPORT_FADE_DELAY_MS (8s) before clearing it - so a
+    //      report left by an earlier turn could satisfy the wait with no new turn at all. The page prepends one
+    //      `#session-log` entry per finished turn and never clears that list, so the wait is anchored to a NEW
+    //      entry for THIS turn as well as to a settled report. Driven: with a stale good report planted and no
+    //      turn sent, the old predicate is satisfied and the new one is not.
+    //   3. Nothing asserted that the click had reached the page at all. The submit handler clears `#utterance`
+    //      synchronously in the click's own task, so the field is read before the click (after typing, where a
+    //      lost click would leave the field empty and `#send` disabled) and re-read straight after it. A real
+    //      mouse click that an overlay swallows now fails on that read with the page's state attached, instead
+    //      of looking exactly like a slow turn.
+    //
+    // The settle deadline is 30s - about 40x the measured settle - and is stated rather than inherited so a
+    // stuck arm cannot silently take the CDP default; the test's own bound is sized to accommodate it. It is
+    // not the fix and is not claimed as one.
+    const TEXT_TURN_SETTLE_MS = 30_000;
     await first.type("#utterance", "list files");
+
+    // PRECONDITION, READ - NOT WAITED, because both values persist until the form submits: `page.type` clicks
+    // the field and then inserts text, and `#send` is disabled whenever the field is empty. A click that lost a
+    // race would otherwise be indistinguishable, at failure time, from a turn that never finished.
+    const beforeSend = await first.evaluate(() => ({
+      text: document.querySelector("#utterance")?.value ?? null,
+      sendDisabled: document.querySelector("#send")?.disabled ?? null,
+    }));
+    assert.equal(
+      beforeSend.text,
+      "list files",
+      "the text form must hold the turn text before it is sent: page.type clicks the field and then inserts, so an empty field means the typing lost the click",
+    );
+    assert.equal(
+      beforeSend.sendDisabled,
+      false,
+      "and #send must be able to act on it: it is disabled whenever the field is empty, so a click here would do nothing at all",
+    );
+
+    // EVIDENCE FIRST: whatever goes wrong, the next reader gets the page's own state, the page's own /live
+    // frames and a screenshot, instead of "last value false" (voicebox-beads-rtsr).
+    const turnsBefore = await first.evaluate(() => document.querySelectorAll("#session-log li").length);
+    const turnEvidence = async () => {
+      const seen = await first.evaluate(() => ({
+        formSubmitted: document.querySelector("#utterance")?.value === "",
+        utteranceText: document.querySelector("#utterance")?.value ?? null,
+        sendLabel: document.querySelector("#send")?.textContent ?? null,
+        sendDisabled: document.querySelector("#send")?.disabled ?? null,
+        reportTone: document.querySelector("#turn-report")?.dataset.tone ?? null,
+        reportText: (document.querySelector("#turn-report")?.textContent ?? "").trim(),
+        sessionLogEntries: document.querySelectorAll("#session-log li").length,
+        logLines: [...document.querySelectorAll("#session-log li")].slice(0, 3).map((li) => li.textContent.trim()),
+      }));
+      const frames = first
+        .events("Network.webSocketFrameReceived")
+        .filter((frame) => frame.response.opcode === 1)
+        .map((frame) => {
+          try {
+            return JSON.parse(frame.response.payloadData);
+          } catch {
+            return { unparsed: frame.response.payloadData };
+          }
+        })
+        .slice(-6);
+      const screenshot = path.join(output, `06-text-turn-${Date.now()}.png`);
+      await first.screenshot(screenshot, { fullPage: true }).catch(() => {});
+      return [
+        `page state: ${JSON.stringify(seen, null, 2)}`,
+        `the page's own /live socket received (last 6 text frames): ${JSON.stringify(frames, null, 2)}`,
+        `screenshot: ${screenshot}`,
+      ].join("\n");
+    };
+
     await first.click("#send");
-    await first.waitFor(() => document.querySelector("#turn-report")?.dataset.tone === "good", { label: "unrelated native text form turn completed" });
+
+    // THE TURN STARTED? The form's own submit handler clears the field synchronously in the click's task (and
+    // `page.click` waits for the dispatched events plus its own settle), so this is a read of a state the click
+    // writes, not a race: text still in the field after the click means the real-mouse click never reached the
+    // button - an overlay swallowing it - which is a UI failure, not a slow turn, and it is named as one.
+    const afterSend = await first.evaluate(() => document.querySelector("#utterance")?.value ?? null);
+    assert.equal(
+      afterSend,
+      "",
+      `the click must submit the form: #utterance still holds the text, so the turn never started.\n${await turnEvidence()}`,
+    );
+
+    // THE TURN FINISHED, and said so: a NEW #session-log entry for this turn, with the report settled either
+    // way. `tone === "bad"` is then asserted below with the page's own sentence in the message.
+    let turnReport;
+    try {
+      await first.waitFor(
+        (before) => {
+          const tone = document.querySelector("#turn-report")?.dataset.tone;
+          const entries = document.querySelectorAll("#session-log li").length;
+          return entries > before && (tone === "good" || tone === "bad");
+        },
+        { label: "the native text form turn to be recorded and report an outcome", timeout: TEXT_TURN_SETTLE_MS, args: [turnsBefore] },
+      );
+      turnReport = await first.evaluate(() => ({
+        tone: document.querySelector("#turn-report")?.dataset.tone ?? null,
+        text: (document.querySelector("#turn-report")?.textContent ?? "").trim(),
+      }));
+    } catch (error) {
+      throw new Error(
+        `the native text form turn did not settle within ${TEXT_TURN_SETTLE_MS}ms of the click.\n` +
+          `${await turnEvidence()}\nUnderlying wait error: ${error.message}`,
+      );
+    }
+    assert.equal(
+      turnReport.tone,
+      "good",
+      `the page's own text form must answer the turn while the task is held; #turn-report says ${JSON.stringify(turnReport)}`,
+    );
     assert.equal((await call(first, owner.envKey, "task_status", { address })).task.state, "running");
 
     await first.reload();
