@@ -19,6 +19,7 @@
 // throws where the old code carried on; a miss is named on stderr instead. The sleeps that stand for
 // "the page has finished reacting" stay — after input, and after goto/reload — because only a caller
 // can state that condition, and a full browser run showed callers leaning on them (see `goto`).
+import { describeClick } from "./click-diagnostic.mjs";
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -502,6 +503,87 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
       return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
     }, selector);
 
+  // ── WHAT ACTUALLY RECEIVED THE CLICK (voicebox-beads-joxy) ───────────────────────────────────────────
+  // `rect()` above hit-tests BEFORE the event is dispatched, and under load the page can move in between, so a
+  // real mouse event lands where the element no longer is — the 18lh root cause, where the page's own hit-test
+  // and the dispatched event disagree and the click is simply lost. That failure surfaced only as a bare waitFor
+  // timeout, which cannot tell a broken handler apart from a pointer in the wrong place.
+  // So every click records where its event really went, and a wait that then times out names it.
+  let lastClick = null;
+  page.lastClick = null;
+
+  /**
+   * Arm a capture-phase recorder for the next click. The comparison against the intended element is made AT
+   * EVENT TIME, where the real nodes are in hand: comparing descriptors afterwards could not tell a click on the
+   * target's own child (a delivery) from a click on something else that merely looks similar.
+   */
+  const armClickProbe = (selector) =>
+    page.evaluate((sel) => {
+      const intended = document.querySelector(sel);
+      const name = (node) =>
+        !node
+          ? "nothing"
+          : [
+              node.tagName ? node.tagName.toLowerCase() : String(node),
+              node.id ? `#${node.id}` : "",
+              typeof node.className === "string" && node.className
+                ? `.${node.className.trim().split(/\s+/).join(".")}`
+                : "",
+            ].join("");
+      const probe = { events: [], hadIntended: Boolean(intended) };
+      probe.record = (event) => {
+        const target = event.target;
+        probe.events.push({
+          received: name(target),
+          text: (target?.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 40),
+          toIntended: Boolean(intended && target && (target === intended || intended.contains(target))),
+        });
+      };
+      document.addEventListener("click", probe.record, true);
+      window.__voiceboxClickProbe = probe;
+    }, selector);
+
+  /** Collect what the probe saw, and say it in one line a failure message can carry. */
+  const collectClickProbe = async (selector, at) => {
+    const seen = await page.evaluate((sel) => {
+      const probe = window.__voiceboxClickProbe;
+      if (!probe) return null;
+      document.removeEventListener("click", probe.record, true);
+      delete window.__voiceboxClickProbe;
+      const target = document.querySelector(sel);
+      const box = target ? target.getBoundingClientRect() : null;
+      const style = target ? getComputedStyle(target) : null;
+      return {
+        events: probe.events,
+        hadIntended: probe.hadIntended,
+        targetNow: box ? { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) } : null,
+        targetInteractive: Boolean(
+          target && box && box.width > 0 && box.height > 0 && style.visibility !== "hidden" && style.pointerEvents !== "none",
+        ),
+        // DISPLACEMENT OR REMOVAL? gate-recover's 18lh reproduction found the target still present and still
+        // enabled when no click arrived - the event was dispatched and simply did not take effect. So "no click
+        // event" must be described from the element's own state rather than guessed, or one wording would report
+        // the same thing for two different faults. The words live in tests/lib/click-diagnostic.mjs (pure, so its
+        // displacement branch is unit-tested: Chrome cannot be made to produce that case on demand).
+        targetPresent: Boolean(target && document.contains(target)),
+        targetEnabled: Boolean(target && !target.disabled),
+      };
+    }, selector);
+    if (!seen) return null;
+    return describeClick({
+      selector,
+      at,
+      events: seen.events,
+      target: {
+        hadIntended: seen.hadIntended,
+        present: seen.targetPresent,
+        enabled: seen.targetEnabled,
+        interactive: seen.targetInteractive,
+        now: seen.targetNow,
+      },
+    });
+  };
+
   /** A real mouse click at the element's centre. */
   // THE SLEEPS AFTER INPUT STAY — here and in type/press/wheel/clickAt/dropFolder (voicebox-beads-9mqc).
   // `Input.dispatch*` resolves after the page's handlers have RUN, so there is no delivery left to
@@ -513,6 +595,7 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
     if (!at) throw new Error(`no element matches ${selector}`);
     const x = Math.round(at.x);
     const y = Math.round(at.y);
+    await armClickProbe(selector);
     for (const type of ["mousePressed", "mouseReleased"]) {
       await page.send("Input.dispatchMouseEvent", {
         type,
@@ -522,6 +605,9 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
         clickCount: 1,
       });
     }
+    const line = await collectClickProbe(selector, { x, y });
+    lastClick = line ? { selector, at: { x, y }, line, atMs: Date.now() } : null;
+    page.lastClick = lastClick;
     await sleep(120);
   };
 
@@ -621,7 +707,17 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
       if (last) return last;
       await sleep(Date.now() - started < 1000 ? 20 : 120);
     }
-    throw new Error(`timed out waiting for ${label}; last value ${JSON.stringify(last)}`);
+    // WHEN THE EXPECTED EFFECT IS ABSENT, SAY WHAT THE CLICK HIT (voicebox-beads-joxy). A bare timeout cannot
+    // distinguish a broken handler from a pointer that landed where the element no longer was — which is the
+    // 18lh failure. The last click's own record is carried here, with its age, so it is clear whether it
+    // preceded this wait or happened during it.
+    let click = "";
+    if (lastClick) {
+      const before = started - lastClick.atMs;
+      const when = before >= 0 ? `${(before / 1000).toFixed(1)}s before this wait began` : "while this wait was running";
+      click = `; the last click was ${when} — ${lastClick.line}`;
+    }
+    throw new Error(`timed out waiting for ${label}; last value ${JSON.stringify(last)}${click}`);
   };
 
   return page;
