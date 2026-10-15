@@ -354,6 +354,35 @@ test("transient-state: review matches live assertions and string-form waits, nev
   }
 });
 
+test("transient-state: regex literals never hide later live status assertions (voicebox-beads-nnqj)", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-regex-mask-"));
+  const assertion = 'assert.equal(await page.evaluate(() => window.__status), "ready");';
+  const fixture = (prefix) => `test("fixture", async () => {\n  ${prefix}\n  ${assertion}\n});\n`;
+  const fixtures = {
+    attribute: fixture('const m = html.match(/href="([^"]*)"/);'),
+    apostrophe: fixture("const m = html.match(/Waiting for the host's review/);"),
+    regexClass: fixture(String.raw`const m = html.match(/[\/]host's/);`),
+    escapedSlash: fixture(String.raw`const m = html.match(/https?:\/\/host's/);`),
+    division: fixture("const ratio = total / count;"),
+    quotedText: fixture(`const label = 'href="([^\"]*)"';`),
+    commentedText: fixture(`// html.match(/href="([^"]*)"/);`),
+  };
+  try {
+    const files = Object.entries(fixtures).map(([name, body]) => {
+      const file = path.join(dir, `${name}.test.mjs`);
+      writeFileSync(file, body);
+      return file;
+    });
+    const res = spawnSync(process.execPath, [CHECKER, ...files, "--list"], { cwd: root, encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL" });
+    assert.equal(res.status, 0, `${res.stdout}${res.stderr}`);
+    const listed = [...res.stdout.matchAll(/review .*\/([^/\s:]+\.test\.mjs):/g)].map((m) => m[1]).sort();
+    assert.deepEqual(listed, Object.keys(fixtures).map((name) => `${name}.test.mjs`).sort(),
+      "a regex quote, class slash, division, string or comment before an executable assertion cannot hide it");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("transient-state: status review list captures exact strings and positive counts on unwaited observables (voicebox-beads-a2gd)", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-a2gd-"));
   const file = path.join(dir, "a2gd.test.mjs");

@@ -239,10 +239,12 @@ function writerLocation(file, source, id) {
 }
 
 // Waits can only cover assertions in the SAME test and along a scope that still encloses the assertion.
-// Preserve character offsets while masking strings/comments so a quoted `test(` cannot create a fake scope.
+// Preserve character offsets while masking strings/comments/regex literals so a quoted `test(` cannot
+// create a fake scope. Regex quotes are NOT string delimiters: masking past one could hide live assertions.
 function lexicalScopes(source) {
   const chars = source.split(""); // UTF-16 offsets must match RegExp match.index, even after emoji in test titles.
   let quote = "", escaped = false, lineComment = false, blockComment = false;
+  let regex = false, regexClass = false, regexEscaped = false;
   for (let i = 0; i < chars.length; i++) {
     const ch = source[i], next = source[i + 1];
     if (lineComment) { if (ch === "\n") lineComment = false; else chars[i] = " "; continue; }
@@ -254,8 +256,27 @@ function lexicalScopes(source) {
       else if (ch === quote) quote = "";
       continue;
     }
+    if (regex) {
+      if (ch === "\n") { regex = false; regexClass = regexEscaped = false; continue; }
+      chars[i] = " ";
+      if (regexEscaped) regexEscaped = false;
+      else if (ch === "\\") regexEscaped = true;
+      else if (ch === "[") regexClass = true;
+      else if (ch === "]") regexClass = false;
+      else if (ch === "/" && !regexClass) regex = false;
+      continue;
+    }
     if (ch === "/" && next === "/") { chars[i] = chars[++i] = " "; lineComment = true; continue; }
     if (ch === "/" && next === "*") { chars[i] = chars[++i] = " "; blockComment = true; continue; }
+    if (ch === "/") {
+      let prev = i - 1;
+      while (prev >= 0 && /\s/.test(chars[prev])) prev--;
+      const keyword = chars.slice(Math.max(0, prev - 15), prev + 1).join("");
+      // A slash after an expression is division. Expression-opening punctuation or a keyword starts regex.
+      if (prev < 0 || "=(:,;!&|?{}[]~+*%^<>-".includes(chars[prev]) || /\b(?:return|case|throw|yield|await|of|in)$/.test(keyword)) {
+        chars[i] = " "; regex = true; continue;
+      }
+    }
     if (ch === '"' || ch === "'" || ch === "`") { chars[i] = " "; quote = ch; }
   }
   const code = chars.join("");
