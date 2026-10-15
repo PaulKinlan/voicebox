@@ -205,6 +205,12 @@ Static frontend assets are served from `public/`. `GET /api/health` reports the 
 A WEBSOCKET UPGRADE ON /live IS ACCEPTED (101) — the zero-dependency server owns it.
 <!-- END GENERATED: routes -->
 
+The room presence note in `public/fused.js` treats `/api/health` as the first machine check, not as a
+promise that later requests will reach it. If a later `/api/root` or `/api/environments` fetch loses the
+connection, the note and server dot immediately say the machine is not answering; an HTTP response with
+a route-specific refusal still names that route instead. `tests/presence-downstream-drop.test.mjs` stops
+the server between the successful heartbeat and the environment fetch to guard this distinction.
+
 `lib/routes/presence.mjs` owns only exact `GET /api/presence` and `POST /api/presence` table handlers. `server.mjs` still constructs the single room-presence coordinator, applies the global loopback auth wall before dispatch, and supplies its bounded JSON reader, response writer and channel broadcaster; the route does not copy those security and lifecycle owners (`voicebox-beads-gdq2.1`).
 
 `lib/routes/activity.mjs` owns only exact `GET /api/activity` and `DELETE /api/activity` table handlers. `server.mjs` retains the one mutable activity buffer, its producers, bounded trimming and workspace-reset behavior; the route receives that same array and clears it in place, never replacing the producer's reference. The global loopback wall remains host-owned (`voicebox-beads-gdq2.2`).
