@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertAbsentInFunctionBody, assertInFunctionBody } from "./lib/client-sources.mjs";
 import {
   resolveSubpath,
   readHandleFile,
@@ -18,9 +17,6 @@ import {
 } from "../public/room-folder-ops.js";
 
 const PUBLIC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
-// The repository root, for the client-source helpers: PUBLIC is this repo's public/ directory. Declared AFTER
-// PUBLIC, because a const cannot read one that is still in its temporal dead zone (found the direct way).
-const ROOT = path.join(PUBLIC, "..");
 
 function createMockFileHandle(name, initialText = "") {
   let content = String(initialText);
@@ -363,22 +359,16 @@ describe("miniAppSyncName derives the leaf name the save API takes", () => {
   });
 });
 
-// ── the wiring: fused.js must SEND the derived name and NAME a refused sync (m4no) ───────────
-// Source-assertion follows the repo's established pattern for the browser script
-// (tests/caption-fade-and-thinking.test.mjs reads fused.js the same way); the behavioural
-// half — driving the real POST from a real page — is the browser-lane drive recorded as
-// UNVERIFIED-WITH-REASON on the bead until a quiet window.
-describe("the client asks the save API for the leaf name and surfaces a refused sync", () => {
+// ── the wiring: fused.js SENDS the derived name and NAMES a refused sync (m4no) ────────────────
+// THIS IS DRIVEN NOW, NOT PINNED (voicebox-beads-543c). These two arms used to assert fused.js's SOURCE
+// TEXT — the derived name, the one-name body, the `if (!r.ok)` warning — while recording that the
+// behavioural half, driving the real POST from a real page, had never been observed. A source slice cannot
+// see whether the save path CALLS syncMiniAppAfterFileSave at all (delete the call and the pin stays green),
+// and it cannot see the body that actually left the browser. tests/room-folder-save-sync.test.mjs now opens
+// a file inside a folder through the room's own listing, edits it in the reader, saves it with the room's own
+// button, and reads the request off the wire: the leaf name in the body, the 200, the single app under the
+// leaf slug, nothing at all for a non-HTML save, and the warning naming a refused sync while the file save
+// stands. Its mutation table is on voicebox-beads-543c: posting the shown path, removing the refusal warning,
+// removing the shape guard and removing the CALL each turn it RED, and the last of those is the one this pin
+// could not have caught.
 
-  it("the POST body carries the DERIVED name, not the shown path", () => {
-    assertInFunctionBody(ROOT, "syncMiniAppAfterFileSave", /const name = miniAppSyncName\(fileName\);/, "the name is derived first");
-    assertInFunctionBody(ROOT, "syncMiniAppAfterFileSave", /if \(!isHtmlFileName\(name\)\) return;/, "the shape guard runs on the derived name");
-    assertInFunctionBody(ROOT, "syncMiniAppAfterFileSave", /body: JSON\.stringify\(\{ fileName: name, title: name, html: content \}\)/, "the REQUEST BODY is the one-name shape the API takes");
-    assertAbsentInFunctionBody(ROOT, "syncMiniAppAfterFileSave", /body: JSON\.stringify\(\{ fileName,/, "the shown path never reaches the body");
-  });
-
-  it("a refused sync is NAMED, not swallowed — the response status is checked", () => {
-    assertInFunctionBody(ROOT, "syncMiniAppAfterFileSave", /\.then\(\(r\) => \{[\s\S]*?if \(!r\.ok\) console\.warn/, "an !ok response warns with the name and status");
-    assertInFunctionBody(ROOT, "syncMiniAppAfterFileSave", /the file itself was saved/, "the warning says the SAVE succeeded — only the sync failed");
-  });
-});
