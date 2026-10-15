@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertInClientSources } from "./lib/client-sources.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 test("footer prose moved into #status-help-popover and Help dialog is centered with blurred backdrop", () => {
   const html = readFileSync(path.join(ROOT, "public", "index.html"), "utf8");
   const css = readFileSync(path.join(ROOT, "public", "style.css"), "utf8");
-  const fused = readFileSync(path.join(ROOT, "public", "fused.js"), "utf8");
 
   // 1. <footer class="foot"> no longer contains the two turns/tools prose lines, but keeps #build.
   const footerMatch = html.match(/<footer\s+class="foot"[\s\S]*?<\/footer>/);
@@ -61,7 +61,7 @@ test("footer prose moved into #status-help-popover and Help dialog is centered w
   assert.match(popoverBlock[0], /inset-inline-start:\s*50%/, ".status-help-popover sets inset-inline-start: 50%");
   assert.match(popoverBlock[0], /transform:\s*translate\(-50%,\s*-50%\)/, ".status-help-popover centers with translate(-50%, -50%)");
 
-  // 4. fused.js wires statusHelpBackdrop in WANTED and setHelpOpen.
-  assert.match(fused, /statusHelpBackdrop:\s*"status-help-backdrop"/, "fused.js declares statusHelpBackdrop in WANTED");
-  assert.match(fused, /if\s*\(els\.statusHelpBackdrop\)\s*els\.statusHelpBackdrop\.hidden\s*=\s*!open;/, "setHelpOpen toggles statusHelpBackdrop.hidden");
+  // 4. the client wires statusHelpBackdrop in its element map and in setHelpOpen.
+  assertInClientSources(ROOT, /statusHelpBackdrop:\s*"status-help-backdrop"/, "the client declares statusHelpBackdrop in WANTED");
+  assertInClientSources(ROOT, /if\s*\(els\.statusHelpBackdrop\)\s*els\.statusHelpBackdrop\.hidden\s*=\s*!open;/, "setHelpOpen toggles statusHelpBackdrop.hidden");
 });

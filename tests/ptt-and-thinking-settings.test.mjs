@@ -9,10 +9,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertInClientSources } from "./lib/client-sources.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const indexHtml = fs.readFileSync(path.join(ROOT, "public", "index.html"), "utf8");
-const fusedJs = fs.readFileSync(path.join(ROOT, "public", "fused.js"), "utf8");
 const liveVoiceJs = fs.readFileSync(path.join(ROOT, "public", "live-voice.js"), "utf8");
 const helpHtml = fs.readFileSync(path.join(ROOT, "public", "help.html"), "utf8");
 const serverSource = fs.readFileSync(path.join(ROOT, ["server", "mjs"].join(".")), "utf8");
@@ -72,25 +72,22 @@ test("public/index.html places #setting-thinking-level inside Agent Settings rat
   );
 });
 
-test("public/fused.js wires settingPttEnabled visibility toggle and restarts active live session on settingThinkingLevel change", () => {
-  assert.match(fusedJs, /settingPttEnabled:\s*"setting-ptt-enabled"/);
-  assert.match(fusedJs, /settingPttState:\s*"setting-ptt-state"/);
-  assert.match(fusedJs, /settingThinkingLevelState:\s*"setting-thinking-level-state"/);
+test("the client wires settingPttEnabled visibility toggle and restarts active live session on settingThinkingLevel change", () => {
+  assertInClientSources(ROOT, /settingPttEnabled:\s*"setting-ptt-enabled"/);
+  assertInClientSources(ROOT, /settingPttState:\s*"setting-ptt-state"/);
+  assertInClientSources(ROOT, /settingThinkingLevelState:\s*"setting-thinking-level-state"/);
 
-  assert.match(
-    fusedJs,
+  assertInClientSources(ROOT,
     /els\.settingPttEnabled\?\.addEventListener\("change"/,
-    "public/fused.js must listen for changes on #setting-ptt-enabled",
+    "the client must listen for changes on #setting-ptt-enabled",
   );
-  assert.match(
-    fusedJs,
+  assertInClientSources(ROOT,
     /els\.visionPttBtn\.hidden\s*=\s*!enabled/,
-    "public/fused.js must toggle els.visionPttBtn.hidden when #setting-ptt-enabled changes",
+    "the client must toggle els.visionPttBtn.hidden when #setting-ptt-enabled changes",
   );
-  assert.match(
-    fusedJs,
+  assertInClientSources(ROOT,
     /window\.__voiceboxIsLiveSessionActive\?\.\(\)[\s\S]{0,160}window\.__voiceboxRestartLiveSession\?\.\(\)/,
-    "public/fused.js must restart the active live session when #setting-thinking-level changes",
+    "the client must restart the active live session when #setting-thinking-level changes",
   );
 });
 

@@ -114,4 +114,18 @@ test("settings init installs one open/close path, preserves boot PUT and keeps k
   await h.byId["agent-model"].dispatch("change");
   assert.equal(h.restarts, 1, "active model change restarts live session exactly once");
   assert.match(h.byId["agent-model-state"].textContent, /Reconnected live session with model-b/);
+
+  // AND IT MUST SURVIVE THE NEXT REDRAW. That is what "preserves Reconnected live session status" means, and it
+  // is the behaviour two source pins in tests/caption-fade-and-thinking.test.mjs used to stand in for — one of
+  // them pinning the module's own `let reconnectedLiveModel`, the other the render ternary
+  // (voicebox-beads-uei2.14). Those pins are gone because this drive covers the fact itself: with the live
+  // session still active, a redraw must re-assert the reconnected line rather than fall back to the plain one.
+  const afterRestart = h.byId["agent-model-state"].textContent;
+  await h.ui.loadAgentSettings();
+  assert.equal(
+    h.byId["agent-model-state"].textContent,
+    afterRestart,
+    "a redraw with the live session still active must re-assert the reconnected status, not fall back to the plain model line",
+  );
+  assert.match(h.byId["agent-model-state"].textContent, /Reconnected live session with model-b/);
 });
