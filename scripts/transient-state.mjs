@@ -272,8 +272,33 @@ function lexicalScopes(source) {
       let prev = i - 1;
       while (prev >= 0 && /\s/.test(chars[prev])) prev--;
       const keyword = chars.slice(Math.max(0, prev - 15), prev + 1).join("");
-      // A slash after an expression is division. Expression-opening punctuation or a keyword starts regex.
-      if (prev < 0 || "=(:,;!&|?{}[]~+*%^<>-".includes(chars[prev]) || /\b(?:return|case|throw|yield|await|of|in)$/.test(keyword)) {
+      const isSpread = prev >= 2 && chars[prev] === "." && chars[prev - 1] === "." && chars[prev - 2] === ".";
+      let isStatementSlash = false;
+      if (prev >= 0 && chars[prev] === ")") {
+        let depth = 1;
+        let j = prev - 1;
+        while (j >= 0 && depth > 0) {
+          if (chars[j] === ")") depth++;
+          else if (chars[j] === "(") depth--;
+          j--;
+        }
+        if (depth === 0) {
+          while (j >= 0 && /\s/.test(chars[j])) j--;
+          const preHeader = chars.slice(Math.max(0, j - 10), j + 1).join("");
+          if (/\b(?:if|while|for|with)$/.test(preHeader)) {
+            isStatementSlash = true;
+          }
+        }
+      }
+      // A slash after an expression is division. Expression-opening punctuation (excluding closing brackets),
+      // spread, statement headers, or keywords start regex literals (voicebox-beads-bw70).
+      if (
+        prev < 0 ||
+        "=(:,;!&|?{}[~+*%^<>-".includes(chars[prev]) ||
+        isSpread ||
+        isStatementSlash ||
+        /\b(?:return|case|throw|yield|await|of|in|typeof|void|delete|new|instanceof|else|do)$/.test(keyword)
+      ) {
         chars[i] = " "; regex = true; continue;
       }
     }
