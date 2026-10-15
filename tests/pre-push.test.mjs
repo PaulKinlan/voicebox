@@ -973,8 +973,13 @@ test('pre-push seals ONE full manifest from the tier records, and a red tier lea
     git('config', 'user.name', 'Gate fixture');
     // Every file the gate RUNS, not just the gate script: the tier runner, the aggregator it folds into,
     // and the classifier/sharding modules they import (docs-touched needs its script and lib/git-env.mjs,
-    // like every other fixture in this file).
-    for (const file of ['scripts/pre-push.sh', 'scripts/docs-touched.mjs', 'scripts/gate-tier.mjs', 'scripts/gate-manifest.mjs', 'scripts/test-lanes.mjs', 'scripts/test-shards.mjs', 'scripts/test-changed.mjs', 'tools/browser-shard-runner.mjs', 'lib/git-env.mjs']) {
+    // like every other fixture in this file). WHENEVER AN IMPORT IS ADDED TO ONE OF THESE SCRIPTS, ITS
+    // TARGET BELONGS IN THIS LIST: a missing one is not a soft failure, it is ERR_MODULE_NOT_FOUND and this
+    // fixture dies with an error that names a temp directory rather than the missing file. That is exactly
+    // how lib/host-load.mjs (voicebox-beads-zjpm.6) broke this fixture while every unit-lane check stayed
+    // green — this file is classified into the BROWSER lane (voicebox-beads-l79v), so a unit-only fast gate
+    // never runs it.
+    for (const file of ['scripts/pre-push.sh', 'scripts/docs-touched.mjs', 'scripts/gate-tier.mjs', 'scripts/gate-manifest.mjs', 'scripts/test-lanes.mjs', 'scripts/test-shards.mjs', 'scripts/test-changed.mjs', 'tools/browser-shard-runner.mjs', 'lib/git-env.mjs', 'lib/host-load.mjs']) {
       mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
       copyFileSync(path.join(root, file), path.join(repo, file));
     }
