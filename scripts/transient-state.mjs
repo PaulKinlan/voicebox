@@ -84,7 +84,7 @@ function statementAfter(lines, idx) {
       else if (ch === ")" || ch === "]") balance--;
     }
     endIdx = i;
-    if (balance <= 0 && (line.trim().endsWith(";") || line.trim().endsWith("}"))) break;
+    if (balance <= 0 && (line.trim().endsWith(";") || line.trim().endsWith("}") || /^}\s*;?\s*(?:\/\/.*)?$/.test(line.trim()))) break;
   }
   return { text: parts.join(" "), line: start + 1, endIdx };
 }
@@ -98,7 +98,13 @@ const READS_PAGE_STATE = /page\.|window\.|document|__[a-zA-Z]/;
 /** Clear a candidate by a NAMED clause, or hand it back for review. Order matters: the innermost scope first. */
 export function classifyDelay({ lines, idx }) {
   const opener = enclosingOpener(lines, idx);
-  const after = statementAfter(lines, idx);
+  let after = statementAfter(lines, idx);
+  // The loop's closing brace is not a wait: if the final statement in the loop is a fixed sleep,
+  // an assertion immediately after the loop still samples page state once, with no post-sleep re-check.
+  if (/^\s*(for|while)\s*\(/.test(opener.text.trim()) && /^}\s*;?\s*(?:\/\/.*)?$/.test(after.text)) {
+    const following = statementAfter(lines, after.endIdx);
+    if (/^assert\./.test(following.text.trim())) after = following;
+  }
   let assertStmt = after;
   let isDelayedRead = false;
 
@@ -211,9 +217,53 @@ function writerLocation(file, source, id) {
   return writerIndex().get(id) ?? "unknown (no assignment found in test or public page code)";
 }
 
+// Waits can only cover assertions in the SAME test and along a scope that still encloses the assertion.
+// Preserve character offsets while masking strings/comments so a quoted `test(` cannot create a fake scope.
+function lexicalScopes(source) {
+  const chars = source.split(""); // UTF-16 offsets must match RegExp match.index, even after emoji in test titles.
+  let quote = "", escaped = false, lineComment = false, blockComment = false;
+  for (let i = 0; i < chars.length; i++) {
+    const ch = source[i], next = source[i + 1];
+    if (lineComment) { if (ch === "\n") lineComment = false; else chars[i] = " "; continue; }
+    if (blockComment) { chars[i] = " "; if (ch === "*" && next === "/") { chars[++i] = " "; blockComment = false; } continue; }
+    if (quote) {
+      if (ch !== "\n") chars[i] = " ";
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === "/" && next === "/") { chars[i] = chars[++i] = " "; lineComment = true; continue; }
+    if (ch === "/" && next === "*") { chars[i] = chars[++i] = " "; blockComment = true; continue; }
+    if (ch === '"' || ch === "'" || ch === "`") { chars[i] = " "; quote = ch; }
+  }
+  const code = chars.join("");
+  const blocks = [], stack = [];
+  for (let i = 0; i < code.length; i++) {
+    if (code[i] === "{") stack.push(i);
+    else if (code[i] === "}" && stack.length) blocks.push({ start: stack.pop(), end: i });
+  }
+  const tests = [];
+  for (const match of code.matchAll(/\b(?:test|it)(?:\.(?:only|skip|todo))?\s*\(/g)) {
+    const open = match.index + match[0].length - 1;
+    let depth = 0;
+    for (let i = open; i < code.length; i++) {
+      if (code[i] === "(") depth++;
+      else if (code[i] === ")" && --depth === 0) { tests.push({ start: match.index, end: i }); break; }
+    }
+  }
+  const containing = (ranges, index) => ranges.filter((r) => r.start < index && index < r.end)
+    .sort((a, b) => b.start - a.start)[0] ?? null;
+  return { testAt: (index) => containing(tests, index)?.start ?? null,
+    blockAt: (index) => containing(blocks, index) };
+}
+
 function statusCandidates(file, source) {
+  const scopes = lexicalScopes(source);
   const waits = [...source.matchAll(/\b(?:page\.)?waitFor\w*\s*\(/g)].map((m) => ({
     index: m.index,
+    test: scopes.testAt(m.index),
+    block: scopes.blockAt(m.index),
     ids: new Set(firstCallArgument(source, m.index + m[0].length - 1).match(/__[A-Za-z]\w+/g) ?? []),
   }));
   const out = [];
@@ -236,7 +286,9 @@ function statusCandidates(file, source) {
     }
     if (!isPageState) continue;
     // An exact string or count on an unwaited status observable belongs on the review list (voicebox-beads-a2gd)
-    if (idents.length && idents.every((id) => waits.some((wait) => wait.index < m.index && wait.ids.has(id)))) continue;
+    const assertedTest = scopes.testAt(m.index);
+    if (idents.length && idents.every((id) => waits.some((wait) => wait.index < m.index &&
+      wait.test === assertedTest && (!wait.block || wait.block.end > m.index) && wait.ids.has(id)))) continue;
     const writers = [...new Set(idents)].map((id) => writerLocation(file, source, id));
     out.push({ file, line: source.slice(0, m.index).split("\n").length,
       text: `${m[0].trim().slice(0, 100)} — writer: ${writers.join(", ") || "unknown (no observable identifier)"} (timing needs review)` });

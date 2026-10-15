@@ -177,6 +177,47 @@ test("transient-state: nested wait scopes and page writer are named accurately f
   }
 });
 
+test("transient-state: an earlier test's wait never clears a later test's in-loop sleep and assertion (voicebox-beads-z5wb)", () => {
+  const source = `import test from "node:test";
+import assert from "node:assert/strict";
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+test("earlier", async () => {
+  await page.waitForFunction(() => window.__status === "ready");
+});
+test("later", async () => {
+  for (let i = 0; i < 3; i++) {
+    await sleep(100);
+  }
+  assert.equal(await page.evaluate(() => window.__status), "ready");
+});
+`;
+  // One scanner process over independent files keeps this unit arm bounded on the two-vCPU host.
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-z5wb-"));
+  try {
+    const fixtures = {
+      combined: source,
+      commentedBrace: source.replace('  }\n  assert.equal', '  } // end of loop\n  assert.equal'),
+      within: 'test("same", async () => {\n  await page.waitForFunction(() => window.__status === "ready");\n  assert.equal(await page.evaluate(() => window.__status), "ready");\n});\n',
+      conditional: 'test("title 😀 test( is not a scope", async () => {\n  if (enabled) {\n    await page.waitForFunction(() => window.__status === "ready");\n  }\n  assert.equal(await page.evaluate(() => window.__status), "ready");\n});\n',
+    };
+    const files = Object.entries(fixtures).map(([name, body]) => {
+      const file = path.join(dir, `${name}.test.mjs`);
+      writeFileSync(file, body);
+      return file;
+    });
+    const res = spawnSync(process.execPath, [CHECKER, ...files, "--list"], { cwd: root, encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL" });
+    const out = `${res.stdout}${res.stderr}`;
+    assert.equal(res.status, 1, `a sleep at a loop's end cannot guard a one-shot page assertion: ${out}`);
+    assert.match(out, /combined\.test\.mjs:9: a FIXED delay inside a loop/, "the in-loop sleep is a candidate");
+    assert.match(out, /commentedBrace\.test\.mjs:9: a FIXED delay inside a loop/, "a trailing brace comment cannot hide the boundary");
+    assert.match(out, /review .*combined\.test\.mjs:11.*__status/, "only the earlier test waited");
+    assert.doesNotMatch(out, /review .*within\.test\.mjs:/, "a wait in the SAME test clears its own review item");
+    assert.match(out, /review .*conditional\.test\.mjs:.*__status/, "a conditional wait cannot clear a read outside its block");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("transient-state: status review list captures exact strings and positive counts on unwaited observables (voicebox-beads-a2gd)", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-a2gd-"));
   const file = path.join(dir, "a2gd.test.mjs");
