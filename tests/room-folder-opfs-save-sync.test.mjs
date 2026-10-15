@@ -276,4 +276,26 @@ test("a room-folder save posts the LEAF name of a NESTED file, and the shown pat
   assert.equal(apps.length, 1, `saving the nested HTML made exactly one shelf app: ${JSON.stringify(catalog).slice(0, 300)}`);
   assert.equal(apps[0].title, LEAF, "the shelf app is named by the LEAF, which is what the request asked for");
   assert.equal(apps[0].slug, "nested", "and its slug is derived from that leaf, not from the folder path");
+
+  // ── SWITCHING ROOM FOLDERS: the reader must clear so edits cannot target another folder (voicebox-beads-jwmi) ──
+  await page.evaluate(async () => {
+    const opfs = await navigator.storage.getDirectory();
+    await opfs.getDirectoryHandle("other-room", { create: true });
+    globalThis.showDirectoryPicker = async () => (await navigator.storage.getDirectory()).getDirectoryHandle("other-room");
+  });
+  await page.click("#open-folder");
+  await page.waitFor(
+    () =>
+      document.querySelector("#room-folders-list")?.textContent?.includes("other-room") &&
+      document.getElementById("listing-root")?.textContent?.includes("other-room"),
+    { label: "other room to become active" },
+  );
+  const readerState = await page.evaluate(() => ({
+    title: document.getElementById("reader-title")?.textContent,
+    editDisabled: document.getElementById("file-edit")?.disabled,
+    state: document.getElementById("reader")?.dataset.state,
+  }));
+  assert.equal(readerState.title, "Nothing open", "switching room folders clears the previous room file from the reader");
+  assert.equal(readerState.editDisabled, true, "editing is disabled after switching to an empty room");
+  assert.equal(readerState.state, "empty", "reader state is reset to empty");
 });

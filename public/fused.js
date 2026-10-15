@@ -641,8 +641,11 @@ function setActiveRoomFolder(name) {
   fileFilter = "";
   if (els.fileFilter) els.fileFilter.value = "";
   idbStore().then((idb) => idb?.putActiveRoomFolderName?.(name)).catch(() => {});
-  if (changed && lastPaintedRootKey !== null) {
-    triggerProjectChangeFlash(name);
+  if (changed) {
+    clearReader();
+    if (lastPaintedRootKey !== null) {
+      triggerProjectChangeFlash(name);
+    }
   }
   renderRoomFoldersBar();
   loadRoomFolder();
@@ -802,6 +805,7 @@ async function loadRoomFolder() {
 async function closeRoomFolder() {
   roomFolder = null;
   listedRoot = null;
+  clearReader();
   try {
     const idb = await idbStore();
     await idb?.putActiveRoomFolderName?.("");
@@ -1616,7 +1620,10 @@ async function loadRoot(reportRefusal = false) {
   // — or no folder — in the next, so a root change puts the view back at the root. Only a CHANGE resets;
   // pressing Refresh while inside a folder must leave you inside it.
   const now = rootIdentity();
-  if (before !== null && before !== now) listingDir = "";
+  if (before !== null && before !== now) {
+    listingDir = "";
+    clearReader();
+  }
   renderRoot();
   // The list's placeholder chip is a promise too ("the first file appears
   // here"), so it is decided with the root facts in hand rather than before
@@ -2119,6 +2126,35 @@ function exitEditMode() {
   }
 }
 
+function clearReader({ focusListing = false } = {}) {
+  ++fileReadSeq;
+  shownFile = null;
+  exitEditMode();
+  if (els.reader) {
+    delete els.reader.dataset.collapsed;
+    els.reader.dataset.state = "empty";
+    els.reader.dataset.error = "false";
+    els.reader.dataset.loading = "false";
+  }
+  if (els.readerTitle) els.readerTitle.textContent = "Nothing open";
+  if (els.readerBody) els.readerBody.textContent = "";
+  if (els.readerFacts) {
+    els.readerFacts.textContent = "";
+    els.readerFacts.title = "";
+  }
+  if (els.copy) els.copy.disabled = true;
+  if (els.fileDownload) els.fileDownload.disabled = true;
+  if (els.fileEdit) els.fileEdit.disabled = true;
+  if (els.fileRefresh) {
+    els.fileRefresh.disabled = true;
+    els.fileRefresh.removeAttribute("aria-busy");
+    els.fileRefresh.textContent = "Reload";
+  }
+  syncFileRunAppButton();
+  showFileSelection(null);
+  if (focusListing) document.querySelector(".file-open")?.focus();
+}
+
 async function showRoomFile(name, { reloading = false } = {}) {
   const seq = ++fileReadSeq;
   shownFile = name;
@@ -2423,26 +2459,7 @@ on(els.sessionCopy, "click", () => {
 });
 
 on(els.close, "click", () => {
-  ++fileReadSeq;
-  shownFile = null;
-  exitEditMode();
-  delete els.reader.dataset.collapsed;
-  els.reader.dataset.state = "empty";
-  els.reader.dataset.error = "false";
-  els.reader.dataset.loading = "false";
-  els.readerBody.textContent = "";
-  els.readerFacts.textContent = "";
-  els.copy.disabled = true;
-  if (els.fileDownload) els.fileDownload.disabled = true;
-  if (els.fileEdit) els.fileEdit.disabled = true;
-  if (els.fileRefresh) {
-    els.fileRefresh.disabled = true;
-    els.fileRefresh.removeAttribute("aria-busy");
-    els.fileRefresh.textContent = "Reload";
-  }
-  syncFileRunAppButton();
-  showFileSelection(null);
-  document.querySelector(".file-open")?.focus();
+  clearReader({ focusListing: true });
 });
 
 function presentInspectionInReader(verb, result, action) {
