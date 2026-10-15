@@ -280,6 +280,9 @@ test("a tier with a failed or a zero-test file is NOT green — the aggregate is
   const verdict = tierVerdict(record, files);
   assert.equal(verdict.ok, false, "a red file means the tier is not green");
   assert.deepEqual(verdict.notPassed.map((f) => f.path), ["tests/a.test.mjs"]);
+  assert.equal(verdict.notPassed[0].condition_request, "pending", "a red gate requests a diagnostic without running under its own heavy slot");
+  assert.equal(Object.hasOwn(verdict.notPassed[0], "conditions"), false, "a pending request is never fabricated measurement");
+  assert.equal(Object.hasOwn(record.files[1], "conditions"), false, "a green tier record remains quiet");
   assert.deepEqual(verdict.problems, [], "the tier is COMPLETE — the failure is a verdict, not a gap, and the aggregate owns verdicts");
 
   const zeroTest = await runOneTier({

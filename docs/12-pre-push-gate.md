@@ -100,6 +100,21 @@ version-gated on the evidence's own `version` so pre-a8a2 records still audit as
 applies only to `failed`; and it is never demanded for `timeout` or `unknown`, where a crash or a kill has no
 arm to name and its bounded tail is the name.
 
+**Targeted execution of those three conditions (voicebox-beads-zjpm.5.2)** is not a triple run of the
+248-file landing gate. A red per-file tier record carries `condition_request: "pending"`, NOT
+measurements; optional `conditions` are absent until the detached diagnosis actually runs. The tier
+prints a named command such as
+`node scripts/suite-conditions.mjs --tier unit --file tests/name.test.mjs --dir <scratch> --tier-record <scratch>/unit.json`.
+Run it **after the original heavy slot releases**: `heavy_slot` means the suite runs directly OUTSIDE the
+heavy queue while a separate controlled holder produces measured contention — never a self-held lock or a
+suite that queued behind `fleet-heavy`. The other arms run standalone and at the existing tier worker
+width/isolation, each exactly once with start/end load readings. An unavailable holder is `unknown`, never
+passed. The retained tier update is atomic and cannot change the original status, counts or gate verdict.
+Ops owns the short nightly named-list schedule; fleet tooling owns the automatic post-slot invocation.
+Until that outer hook lands, a red tier remains honestly pending and prints the completion command.
+Invoke it detached through `fleet-gate suite-diagnosis -t 130 -- node scripts/suite-conditions.mjs ...`;
+the CLI caps itself at 120s and four named files and cleans up holder and child test processes on signals.
+
 **And a DIRTY worktree seals no landing receipt.** The tiers run over the working tree while the receipt is
 keyed by the committed tree, so on a push that lands, `scripts/pre-push.sh` passes `--tree-dirty` to the fold
 and a dirty run is refused by name (`working tree was DIRTY`), with the refusal recorded on the artifact it

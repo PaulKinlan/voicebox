@@ -167,6 +167,7 @@ export async function runOneTier({ tier, files, workers = TIER_WORKERS[tier] ?? 
     const loadStart = loadavg1m();
     const result = await runner(file, { timeoutMs });
     const record = recordOf(file, result, timeoutMs, { start: loadStart, end: loadavg1m() });
+    if (record.status !== "passed") record.condition_request = "pending"; // evidence request, not measured conditions
     results.push(record);
     if (record.status === "passed") log.log(emitMarker("passed", [file]));
     else if (record.status === "failed") log.log(emitMarker("failed", [file]));
@@ -313,6 +314,10 @@ async function main() {
       const files = tierFiles("browser");
       const gaps = coverageGaps(record, files);
       const notPassed = (record?.files ?? []).filter((f) => f.status !== "passed");
+      if (notPassed.length) {
+        for (const entry of notPassed) entry.condition_request = "pending";
+        writeTierRecord(record, dir); // the browser child has exited; retain pending diagnosis atomically.
+      }
       for (const f of record?.files ?? []) console.log(emitMarker(f.status === "passed" ? "passed" : f.status === "failed" ? "failed" : "unknown", [f.path]));
       console.log(`[gate-tier] browser: ${files.length} file(s) in lane, ${record?.files?.length ?? 0} recorded, ${notPassed.length} not passed, exit ${code}`);
       if (gaps.length > 0 || notPassed.length > 0 || code !== 0) {
@@ -340,7 +345,10 @@ async function main() {
   if (failed.length > 0) {
     const { tier: which, gaps = [], notPassed = [], code } = failed[0];
     console.error(`[gate-tier] REFUSED: the ${which} tier did not complete green${code === undefined ? "" : ` (exit ${code})`}`);
-    for (const file of notPassed.slice(0, 20)) console.error(`  · ${file.path} (${file.status}${file.counts ? `: tests=${file.counts.tests} fail=${file.counts.fail}` : ": no counts reported"})`);
+    for (const file of notPassed.slice(0, 20)) {
+      console.error(`  · ${file.path} (${file.status}${file.counts ? `: tests=${file.counts.tests} fail=${file.counts.fail}` : ": no counts reported"})`);
+      console.error(`    diagnosis PENDING after the heavy slot releases: node scripts/suite-conditions.mjs --tier ${which} --file ${file.path} --dir ${dir} --tier-record ${tierRecordPath(dir, which)}`);
+    }
     for (const problem of gaps.slice(0, 20)) console.error(`  · ${problem}`);
     return 1;
   }
