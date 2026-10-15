@@ -272,17 +272,34 @@ function lexicalScopes(source) {
   }
   const containing = (ranges, index) => ranges.filter((r) => r.start < index && index < r.end)
     .sort((a, b) => b.start - a.start)[0] ?? null;
-  return { testAt: (index) => containing(tests, index)?.start ?? null,
+  return { code, testAt: (index) => containing(tests, index)?.start ?? null,
     blockAt: (index) => containing(blocks, index) };
+}
+
+// A braceless control statement still guards its immediate body. Its wait does not dominate a later
+// assertion in the test even though both share the test's surrounding brace block.
+function bracelessGuardedWait(code, waitIndex) {
+  for (const match of code.slice(0, waitIndex).matchAll(/\b(?:if|for|while)\s*\(/g)) {
+    const open = match.index + match[0].length - 1;
+    let depth = 0, close = -1;
+    for (let i = open; i < waitIndex; i++) {
+      if (code[i] === "(") depth++;
+      else if (code[i] === ")" && --depth === 0) { close = i; break; }
+    }
+    if (close !== -1 && /^\s*(?:(?:await|return)\s+)*$/.test(code.slice(close + 1, waitIndex))) return true;
+  }
+  return /\belse\s+(?:(?:await|return)\s+)*$/.test(code.slice(Math.max(0, waitIndex - 100), waitIndex));
 }
 
 function statusCandidates(file, source) {
   const scopes = lexicalScopes(source);
-  const waits = [...source.matchAll(/\b(?:page\.)?waitFor\w*\s*\(/g)].map((m) => ({
+  // Match only real code. Raw source includes commented-out waits and test titles; those cannot clear a read.
+  const waits = [...scopes.code.matchAll(/\b(?:page\.)?waitFor\w*\s*\(/g)].map((m) => ({
     index: m.index,
     test: scopes.testAt(m.index),
     block: scopes.blockAt(m.index),
-    ids: new Set(firstCallArgument(source, m.index + m[0].length - 1).match(/__[A-Za-z]\w+/g) ?? []),
+    guarded: bracelessGuardedWait(scopes.code, m.index),
+    ids: new Set(firstCallArgument(scopes.code, m.index + m[0].length - 1).match(/__[A-Za-z]\w+/g) ?? []),
   }));
   const out = [];
   for (const m of source.matchAll(EXACT_STATUS)) {
@@ -306,7 +323,7 @@ function statusCandidates(file, source) {
     // An exact string or count on an unwaited status observable belongs on the review list (voicebox-beads-a2gd)
     const assertedTest = scopes.testAt(m.index);
     if (idents.length && idents.every((id) => waits.some((wait) => wait.index < m.index &&
-      wait.test === assertedTest && (!wait.block || wait.block.end > m.index) && wait.ids.has(id)))) continue;
+      wait.test === assertedTest && !wait.guarded && (!wait.block || wait.block.end > m.index) && wait.ids.has(id)))) continue;
     const writers = [...new Set(idents)].map((id) => writerLocation(file, source, id));
     out.push({ file, line: source.slice(0, m.index).split("\n").length,
       text: `${m[0].trim().slice(0, 100)} — writer: ${writers.join(", ") || "unknown (no observable identifier)"} (timing needs review)` });

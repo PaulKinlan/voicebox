@@ -291,6 +291,39 @@ test("transient-state: assertion MESSAGE is not an asynchronous operand (voicebo
   }
 });
 
+test("transient-state: only executable, unconditionally reached waits clear status review (voicebox-beads-l2te/qytr)", () => {
+  // Independent files in one checker process keep this review-only arm cheap in the unit tier.
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-wait-scopes-"));
+  const assertion = '  assert.equal(await page.evaluate(() => window.__status), "ready");\n';
+  const fixture = (body) => `test("fixture", async () => {\n${body}${assertion}});\n`;
+  const wait = 'await page.waitForFunction(() => window.__status === "ready");';
+  const fixtures = {
+    commented: fixture(`  // ${wait}\n`),
+    title: `test("${wait}", async () => {\n${assertion}});\n`,
+    bracelessIf: fixture(`  if (condition) ${wait}\n`),
+    bracelessFor: fixture(`  for (let i = 0; i < 1; i++) ${wait}\n`),
+    bracelessWhile: fixture(`  while (condition) ${wait}\n`),
+    bracelessElse: fixture(`  if (condition) doOther(); else ${wait}\n`),
+    bracedIf: fixture(`  if (condition) { ${wait} }\n`),
+    unconditional: fixture(`  ${wait}\n`),
+  };
+  try {
+    const files = Object.entries(fixtures).map(([name, body]) => {
+      const file = path.join(dir, `${name}.test.mjs`);
+      writeFileSync(file, body);
+      return file;
+    });
+    const res = spawnSync(process.execPath, [CHECKER, ...files, "--list"], { cwd: root, encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL" });
+    assert.equal(res.status, 0, `${res.stdout}${res.stderr}`);
+    for (const name of Object.keys(fixtures).filter((name) => name !== "unconditional")) {
+      assert.match(res.stdout, new RegExp(`review .*${name}\\.test\\.mjs:.*__status`), `${name} must remain a review item`);
+    }
+    assert.doesNotMatch(res.stdout, /review .*unconditional\.test\.mjs:/, "a real wait in the same test still clears");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("transient-state: status review list captures exact strings and positive counts on unwaited observables (voicebox-beads-a2gd)", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-a2gd-"));
   const file = path.join(dir, "a2gd.test.mjs");
