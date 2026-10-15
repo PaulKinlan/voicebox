@@ -309,6 +309,35 @@ merger's union, and a full gate may not omit a classified file at all.
 - **A lost child is not a pass.** A file that produced no TAP summary is `unknown` — never `passed` — and
   the gate refuses on it.
 
+### The blind spot for shared test infra, and its budget (`voicebox-beads-55wl`)
+
+`tests/lib/*.mjs` is shared by most of the suite and imported mostly from the browser tier, so the fast gate
+proves almost nothing about an edit to it. Measured with the gate's own mapper: `tests/lib/cdp.mjs` is reachable
+from 89 files of which **1** is in the unit lane, and `tests/lib/server.mjs` from 171 of which **24** — 14% of the
+harness every server test uses. The gate therefore said "tree is sound" about a change it could not see, and lanes
+hand-ran a browser subset on trust rather than ship unverified (two did, in one session).
+
+`scripts/infra-affected.mjs` closes the **selection** half: for a change touching one of those helpers it picks a
+**bounded, deterministic** subset of the affected browser tests — the helper's own name-prefixed tests first, then
+by name, at most `INFRA_CAP` (**4**) — and reports the tier's whole blast radius alongside an `affectedUnrun.browser`
+record naming what it deliberately left. The cap is a constant, not a parameter, so a branch under test cannot
+enlarge the subset that verifies it. A change that does not touch shared infra returns `applies: false` and costs
+nothing, so no implementer is taxed for this.
+
+**Budget.** The fast path is `CHECK_FAST_CMD` under a 180s bound, and the unit lane it runs today measures ~22s, so
+this class has roughly **150s** of headroom. The selector itself costs the fast gate **0.6s** (7 tests, 614ms,
+measured), and getting it there was the work: the obvious version imported `scripts/test-changed.mjs` (**4.3s** at
+import, because it builds the test inventory) and each `mapToTests` call costs ~**2.3s** with no cache, which added
+13s to a 22s lane. The **subset run's own wall time is measured from the runner that executes it**; the cap exists
+so that it stays inside this bound rather than being discovered to exceed it in the queue.
+
+**Precondition, not a preference: the accounting travels with the run.** The coverage check reads per-file
+`fast-gate:` markers, so a capped subset emitting ordinary markers would count the files it ran as covered and stay
+silent about the rest — coverage reading *better* than the truth, the same silence-reads-as-completeness trap as a
+bare `coverage: UNKNOWN`. The subset mode therefore does not run until a marker exists for affected-but-unrun (one
+new kind; that vocabulary is the hub's, not this repository's), and the artifact must carry `affectedUnrun` even
+when it is empty.
+
 ### The coverage contract for a page-loaded module (`voicebox-beads-buy8`)
 
 `.fleet/coverage-contract.json` declares, per source path, the suites that exercise it. It exists because
