@@ -130,7 +130,9 @@ Each bound can be raised or tightened per run without editing the gate:
 - The **unit** bound resolves in order — `VOICEBOX_GATE_UNIT_SECS`, then the legacy `VOICEBOX_GATE_TESTS_SECS`, then the table's default. The primary variable wins when both are set.
 - The **live** and **acceptance** bounds are their own variables: `VOICEBOX_GATE_LIVE_SECS`, `VOICEBOX_GATE_ACCEPT_SECS`.
 - The **manifest** bound is `VOICEBOX_GATE_MANIFEST_SECS`, and the per-file budget the tier runner gives a
-  test file is `VOICEBOX_GATE_FILE_SECS` (default 240s).
+  test file is derived per tier from measured headroom (`TIER_FILE_MS`: unit 120s, server 300s, browser 240s; default 240s),
+  overridable by `VOICEBOX_GATE_FILE_SECS` or `--file-secs`. Sitting under the unit stage bound (180s) ensures a wedged unit
+  file is recorded timeout by name without aborting the lane (voicebox-beads-ak9h).
 
 A refusal names the variable to raise, so the remedy is copy-pasteable. `tests/pre-push.test.mjs` pins the resolution, the legacy fallback and its precedence (voicebox-beads-03po), so removing a link is a failing test rather than a silent compat break.
 

@@ -42,7 +42,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { classify } from "./test-lanes.mjs";
-import { ISOLATED, TIER_WORKERS } from "./test-shards.mjs";
+import { ISOLATED, TIER_FILE_MS, TIER_WORKERS } from "./test-shards.mjs";
 import { coverageGaps, emitMarker, tapCounts, tierRecordPath } from "./gate-manifest.mjs";
 import { killRunningChildren, runOneFile, statusOf } from "./test-changed.mjs";
 import { loadavg1m } from "../lib/host-load.mjs";
@@ -154,11 +154,25 @@ export function recordOf(file, result, timeoutMs, loadavg = { start: null, end: 
 }
 
 /**
+ * Per-file timeout for a tier (voicebox-beads-ak9h).
+ * Precedence: explicit --file-secs > env.VOICEBOX_GATE_FILE_SECS > TIER_FILE_MS[tier] > 240_000.
+ */
+export function tierFileTimeoutMs(tier, { fileSecs = null, env = process.env } = {}) {
+  if (fileSecs !== null && fileSecs !== undefined && fileSecs !== "") {
+    return Number(fileSecs) * 1000;
+  }
+  if (env?.VOICEBOX_GATE_FILE_SECS !== undefined && env?.VOICEBOX_GATE_FILE_SECS !== "") {
+    return Number(env.VOICEBOX_GATE_FILE_SECS) * 1000;
+  }
+  return TIER_FILE_MS[tier] ?? 240_000;
+}
+
+/**
  * Run one tier's files, each in its own process. The files that measure the BOX (scripts/test-shards.mjs
  * owns that list) run alone, after the queue — the same partition the browser tier uses, reused rather than
  * re-derived. Returns the tier record; nothing is written here.
  */
-export async function runOneTier({ tier, files, workers = TIER_WORKERS[tier] ?? 1, timeoutMs = 240_000, runner = runOneFile, log = console }) {
+export async function runOneTier({ tier, files, workers = TIER_WORKERS[tier] ?? 1, timeoutMs = tierFileTimeoutMs(tier), runner = runOneFile, log = console }) {
   const results = [];
   let cursor = 0;
   const run = async (file) => {
@@ -265,7 +279,6 @@ async function main() {
   };
   const tier = flag("tier");
   const dir = flag("dir", process.env.VOICEBOX_GATE_TIER_DIR ?? null);
-  const timeoutMs = Number(flag("file-secs", process.env.VOICEBOX_GATE_FILE_SECS ?? 240)) * 1000;
 
   if (!["unit", "server", "browser", "live"].includes(tier ?? "")) {
     console.error("[gate-tier] usage: node scripts/gate-tier.mjs --tier unit|server|browser|live --dir <scratch dir>");
@@ -327,8 +340,9 @@ async function main() {
       continue;
     }
     const files = tierFiles(one);
-    console.log(`[gate-tier] ${one}: ${files.length} file(s), ${TIER_WORKERS[one] ?? 1} worker(s), ${timeoutMs / 1000}s per file`);
-    const record = await runOneTier({ tier: one, files, workers: TIER_WORKERS[one], timeoutMs });
+    const tierTimeoutMs = tierFileTimeoutMs(one, { fileSecs: flag("file-secs") });
+    console.log(`[gate-tier] ${one}: ${files.length} file(s), ${TIER_WORKERS[one] ?? 1} worker(s), ${tierTimeoutMs / 1000}s per file`);
+    const record = await runOneTier({ tier: one, files, workers: TIER_WORKERS[one], timeoutMs: tierTimeoutMs });
     const written = writeTierRecord(record, dir);
     const verdict = tierVerdict(record, files);
     console.log(`[gate-tier] tier record: ${written}`);

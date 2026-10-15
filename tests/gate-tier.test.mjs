@@ -18,9 +18,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TIERS, aggregateTierRecords, baseNamesACommit, tierRecordPath } from "../scripts/gate-manifest.mjs";
-import { failureEvidence, recordOf, runOneTier, testCounts, tierFiles, tierVerdict } from "../scripts/gate-tier.mjs";
+import { failureEvidence, recordOf, runOneTier, testCounts, tierFiles, tierFileTimeoutMs, tierVerdict } from "../scripts/gate-tier.mjs";
 import { classify } from "../scripts/test-lanes.mjs";
-import { TIER_WORKERS } from "../scripts/test-shards.mjs";
+import { TIER_FILE_MS, TIER_WORKERS } from "../scripts/test-shards.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const lane = (name) => classifyOnce()[name].map(({ file }) => `tests/${file}`);
@@ -428,4 +428,40 @@ test("the base is resolved before the changed-path map is asked, and only a comm
   assert.equal(baseNamesACommit("no/such/ref"), false, "a base that resolves to nothing is not a commit");
   assert.equal(baseNamesACommit("HEAD~999999"), false, "a base that walks off the history is not a commit");
   assert.equal(baseNamesACommit("tests"), false, "an existing PATH is not a commit, and `--verify` says so rather than guessing");
+});
+
+test("the per-tier file budget is derived from measured headroom and sits UNDER each tier's stage bound (voicebox-beads-ak9h)", () => {
+  // A wedged unit file must be recorded timeout by name rather than the 180s stage bound killing the lane.
+  // Read stage bounds directly from scripts/pre-push.sh:
+  const prepush = readFileSync(path.join(root, "scripts/pre-push.sh"), "utf8");
+  const unitMatch = prepush.match(/_unit_secs="\$\{VOICEBOX_GATE_UNIT_SECS:-\$\{VOICEBOX_GATE_TESTS_SECS:-(\d+)\}\}"/);
+  const liveMatch = prepush.match(/_live_secs="\$\{VOICEBOX_GATE_LIVE_SECS:-(\d+)\}"/);
+  assert.ok(unitMatch, "scripts/pre-push.sh must declare default _unit_secs");
+  assert.ok(liveMatch, "scripts/pre-push.sh must declare default _live_secs");
+  const unitStageBoundMs = Number(unitMatch[1]) * 1000;
+  const liveStageBoundMs = Number(liveMatch[1]) * 1000;
+
+  assert.ok(
+    TIER_FILE_MS.unit < unitStageBoundMs,
+    `unit per-file budget (${TIER_FILE_MS.unit}ms) must sit under unit stage bound (${unitStageBoundMs}ms)`,
+  );
+  assert.ok(
+    TIER_FILE_MS.server < liveStageBoundMs,
+    `server per-file budget (${TIER_FILE_MS.server}ms) must sit under live stage bound (${liveStageBoundMs}ms)`,
+  );
+  assert.ok(
+    TIER_FILE_MS.browser < liveStageBoundMs,
+    `browser per-file budget (${TIER_FILE_MS.browser}ms) must sit under live stage bound (${liveStageBoundMs}ms)`,
+  );
+
+  // Default tier resolution matches TIER_FILE_MS
+  assert.equal(tierFileTimeoutMs("unit"), TIER_FILE_MS.unit);
+  assert.equal(tierFileTimeoutMs("server"), TIER_FILE_MS.server);
+  assert.equal(tierFileTimeoutMs("browser"), TIER_FILE_MS.browser);
+  assert.equal(tierFileTimeoutMs("live"), TIER_FILE_MS.live);
+
+  // Overrides: CLI --file-secs and env.VOICEBOX_GATE_FILE_SECS take precedence over defaults
+  assert.equal(tierFileTimeoutMs("unit", { fileSecs: 45 }), 45_000);
+  assert.equal(tierFileTimeoutMs("unit", { env: { VOICEBOX_GATE_FILE_SECS: "60" } }), 60_000);
+  assert.equal(tierFileTimeoutMs("unit", { fileSecs: 45, env: { VOICEBOX_GATE_FILE_SECS: "60" } }), 45_000);
 });
