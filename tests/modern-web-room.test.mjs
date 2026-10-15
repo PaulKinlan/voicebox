@@ -16,6 +16,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertInClientSources } from "./lib/client-sources.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PUBLIC = path.join(ROOT, "public");
@@ -93,34 +94,27 @@ test("css: scrollable containers contain overscroll and stabilize scrollbar gutt
   );
 });
 
-test("fused.js: light-dismiss fallback covers #exts alongside #envs and #settings", () => {
-  const js = readFileSync(path.join(PUBLIC, "fused.js"), "utf8");
-  assert.match(
-    js,
+test("the client: light-dismiss fallback covers #exts alongside #envs and #settings", () => {
+  assertInClientSources(ROOT,
     /installLightDismissFallback\s*\(\s*els\.exts\s*\);/,
     "light dismiss fallback must be installed for els.exts",
   );
-  assert.match(
-    js,
+  assertInClientSources(ROOT,
     /installLightDismissFallback\s*\(\s*els\.envs\s*\);/,
     "light dismiss fallback must be installed for els.envs",
   );
-  assert.match(
-    js,
+  assertInClientSources(ROOT,
     /installLightDismissFallback\s*\(\s*els\.settings\s*\);/,
     "light dismiss fallback must be installed for els.settings",
   );
 });
 
-test("fused.js: IME composition prevents premature utterance input and submit", () => {
-  const js = readFileSync(path.join(PUBLIC, "fused.js"), "utf8");
-  assert.match(
-    js,
+test("the client: IME composition prevents premature utterance input and submit", () => {
+  assertInClientSources(ROOT,
     /on\(els\.utterance,\s*"input",\s*\(event\)\s*=>\s*\{[^}]*if\s*\(event\?\.isComposing\)\s*return;/s,
     "input event must guard against IME isComposing",
   );
-  assert.match(
-    js,
+  assertInClientSources(ROOT,
     /on\(els\.form,\s*"submit",\s*\(event\)\s*=>\s*\{[^}]*if\s*\(event\?\.isComposing\)\s*return;/s,
     "submit event must guard against IME isComposing",
   );

@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:f
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertInClientSources } from "./lib/client-sources.mjs";
 
 import {
   COMMANDS,
@@ -224,15 +225,12 @@ test("recoverLiveSystemErrorTurn recovers and executes open_workspace when Gemin
   assert.equal(skipped.reason, "tool-already-called");
 });
 
-test("public/fused.js refreshes loadRoot() and clears stale roomFolder when open_workspace succeeds in live or typed turns", () => {
-  const fused = readFileSync(path.join(ROOT, "public", "fused.js"), "utf8");
-  assert.match(
-    fused,
+test("the client refreshes loadRoot() and clears stale roomFolder when open_workspace succeeds in live or typed turns", () => {
+  assertInClientSources(ROOT,
     /if\s*\(switchedWorkspace\)\s*\{\s*if\s*\(roomFolder\)\s*roomFolder\s*=\s*null;\s*listingDir\s*=\s*"";\s*void\s+loadRoot\(\)\.then\(\(\)\s*=>\s*load\(\)\);/,
     "window.__voiceboxOnToolCalls refreshes loadRoot() before load() when open_workspace succeeds",
   );
-  assert.match(
-    fused,
+  assertInClientSources(ROOT,
     /if\s*\(verb\s*===\s*"open_workspace"\)\s*\{\s*if\s*\(roomFolder\)\s*roomFolder\s*=\s*null;\s*listingDir\s*=\s*"";\s*await\s+loadRoot\(\);/,
     "sendTurn refreshes loadRoot() when open_workspace succeeds",
   );

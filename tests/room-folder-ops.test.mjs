@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertAbsentInFunctionBody, assertInFunctionBody } from "./lib/client-sources.mjs";
 import {
   resolveSubpath,
   readHandleFile,
@@ -17,6 +18,9 @@ import {
 } from "../public/room-folder-ops.js";
 
 const PUBLIC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
+// The repository root, for the client-source helpers: PUBLIC is this repo's public/ directory. Declared AFTER
+// PUBLIC, because a const cannot read one that is still in its temporal dead zone (found the direct way).
+const ROOT = path.join(PUBLIC, "..");
 
 function createMockFileHandle(name, initialText = "") {
   let content = String(initialText);
@@ -364,20 +368,17 @@ describe("miniAppSyncName derives the leaf name the save API takes", () => {
 // (tests/caption-fade-and-thinking.test.mjs reads fused.js the same way); the behavioural
 // half — driving the real POST from a real page — is the browser-lane drive recorded as
 // UNVERIFIED-WITH-REASON on the bead until a quiet window.
-describe("fused.js asks the save API for the leaf name and surfaces a refused sync", () => {
-  const fused = readFileSync(path.join(PUBLIC, "fused.js"), "utf8");
+describe("the client asks the save API for the leaf name and surfaces a refused sync", () => {
 
   it("the POST body carries the DERIVED name, not the shown path", () => {
-    const sync = fused.slice(fused.indexOf("function syncMiniAppAfterFileSave"), fused.indexOf("function syncReaderBubble"));
-    assert.match(sync, /const name = miniAppSyncName\(fileName\);/, "the name is derived first");
-    assert.match(sync, /if \(!isHtmlFileName\(name\)\) return;/, "the shape guard runs on the derived name");
-    assert.match(sync, /body: JSON\.stringify\(\{ fileName: name, title: name, html: content \}\)/, "the REQUEST BODY is the one-name shape the API takes");
-    assert.doesNotMatch(sync, /body: JSON\.stringify\(\{ fileName,/, "the shown path never reaches the body");
+    assertInFunctionBody(ROOT, "syncMiniAppAfterFileSave", /const name = miniAppSyncName\(fileName\);/, "the name is derived first");
+    assertInFunctionBody(ROOT, "syncMiniAppAfterFileSave", /if \(!isHtmlFileName\(name\)\) return;/, "the shape guard runs on the derived name");
+    assertInFunctionBody(ROOT, "syncMiniAppAfterFileSave", /body: JSON\.stringify\(\{ fileName: name, title: name, html: content \}\)/, "the REQUEST BODY is the one-name shape the API takes");
+    assertAbsentInFunctionBody(ROOT, "syncMiniAppAfterFileSave", /body: JSON\.stringify\(\{ fileName,/, "the shown path never reaches the body");
   });
 
   it("a refused sync is NAMED, not swallowed — the response status is checked", () => {
-    const sync = fused.slice(fused.indexOf("function syncMiniAppAfterFileSave"), fused.indexOf("function syncReaderBubble"));
-    assert.match(sync, /\.then\(\(r\) => \{[\s\S]*?if \(!r\.ok\) console\.warn/, "an !ok response warns with the name and status");
-    assert.match(sync, /the file itself was saved/, "the warning says the SAVE succeeded — only the sync failed");
+    assertInFunctionBody(ROOT, "syncMiniAppAfterFileSave", /\.then\(\(r\) => \{[\s\S]*?if \(!r\.ok\) console\.warn/, "an !ok response warns with the name and status");
+    assertInFunctionBody(ROOT, "syncMiniAppAfterFileSave", /the file itself was saved/, "the warning says the SAVE succeeded — only the sync failed");
   });
 });

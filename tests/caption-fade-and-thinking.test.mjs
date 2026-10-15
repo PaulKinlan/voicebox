@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertInClientSources, clientSources, matchInClientSources } from "./lib/client-sources.mjs";
 import { createAudioClient } from "../public/audio-client.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -211,32 +212,31 @@ test("live-voice: routes thought chunks to #thinking-trace without overwriting #
 });
 
 test("settings-ui.mjs preserves Reconnected live session status while fused.js fades #turn-report and starts #mic on vision start", () => {
-  const fused = readFileSync(path.join(PUBLIC, "fused.js"), "utf8");
-  const settingsUi = readFileSync(path.join(PUBLIC, "settings-ui.mjs"), "utf8");
-  assert.match(fused, /import \{ initSettingsUi \} from "\.\/settings-ui\.mjs"/);
-  assert.match(fused, /initSettingsUi\(\{ els, request, health, refreshDevices: audioDeviceController\.refresh, on \}\)/, "the settings owner is wired once, with the device controller's own refresh (voicebox-beads-uei2.6 moved the device surface out of fused.js, so the wiring names the module rather than a host-local function)");
-  assert.match(
-    settingsUi,
-    /let reconnectedLiveModel = null;/,
-    "the extracted Settings owner tracks reconnectedLiveModel across re-renders",
+  assertInClientSources(ROOT, /import \{ initSettingsUi \} from "\.\/settings-ui\.mjs"/);
+  // Every dependency the factory declares must be passed by the host — checked against the factory's OWN
+  // signature rather than a frozen copy of the call text, so a new dependency cannot go unpassed and a
+  // reordering cannot go red for nothing (voicebox-beads-uei2.14).
+  const settingsModule = clientSources(ROOT).find((source) => source.file.endsWith("settings-ui.mjs"));
+  assert.ok(settingsModule, "settings-ui.mjs must exist as a client source");
+  const declared = /export function initSettingsUi\(\{([^}]*)\}/.exec(settingsModule.text);
+  assert.ok(declared, "the factory must declare its dependencies");
+  const dependencies = declared[1].split(",").map((part) => part.trim().split(":")[0]).filter(Boolean);
+  assert.ok(dependencies.length >= 5, `the factory declares its dependencies: ${dependencies.join(", ")}`);
+  const hostCall = matchInClientSources(ROOT, /initSettingsUi\(\{[^}]*\}\)/).find(
+    (found) => !found.file.endsWith("settings-ui.mjs"),
   );
-  assert.match(
-    settingsUi,
-    /reconnectedLiveModel === currentModel\s*\?\s*`Reconnected live session with \$\{currentModel\}\.`/,
-    "renderAgentSettings preserves 'Reconnected live session with X.' when reconnectedLiveModel matches currentModel",
-  );
-  assert.match(
-    fused,
+  assert.ok(hostCall, "the host must call the factory");
+  for (const dependency of dependencies) {
+    assert.match(hostCall.match[0], new RegExp(`\\b${dependency}\\b`), `the host's init must pass ${dependency}`);
+  }    assertInClientSources(ROOT,
     /const REPORT_FADE_DELAY_MS = 8000;/,
-    "fused.js defines REPORT_FADE_DELAY_MS for fading out #turn-report",
+    "the client defines REPORT_FADE_DELAY_MS for fading out #turn-report",
   );
-  assert.match(
-    fused,
+  assertInClientSources(ROOT,
     /els\.report\.dataset\.fading = "true";/,
     "setReport marks #turn-report with data-fading=\"true\" before clearing",
   );
-  assert.match(
-    fused,
+  assertInClientSources(ROOT,
     /if \(!window\.__voiceboxIsLiveSessionActive\?\.\(\) && els\.mic && els\.mic\.getAttribute\("aria-pressed"\) !== "true"\)\s*\{\s*els\.mic\.click\(\);\s*\}/,
     "startVisionStream auto-triggers els.mic.click() when starting camera or screen share while live session is inactive",
   );
