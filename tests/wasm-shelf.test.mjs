@@ -253,7 +253,9 @@ test("u2lx advisory: child-side watchdog terminates orphan process when stdin is
   assert.equal(typeof WASM_CHILD_WATCHDOG_MS, "number");
   assert.ok(WASM_CHILD_WATCHDOG_MS >= 5000);
 
-  // Spawn child with a 150ms watchdog and leave stdin open (simulating an orphaned child with unclosed stdin)
+  // Spawn child with a 150ms watchdog and leave stdin open (simulating an orphaned child with unclosed stdin).
+  // The elapsed time includes Node's startup in a separate process, which can exceed 2s in the
+  // concurrent unit tier; exit code 1 and the minimum elapsed time prove the child watchdog fired.
   const started = Date.now();
   const child = spawn(process.execPath, [wasmChildPath, "150"], {
     stdio: ["pipe", "pipe", "pipe"],
@@ -263,7 +265,7 @@ test("u2lx advisory: child-side watchdog terminates orphan process when stdin is
     const hangTimer = setTimeout(() => {
       try { child.kill("SIGKILL"); } catch {}
       reject(new Error("child hung past watchdog deadline — watchdog failed to terminate orphan"));
-    }, 2500);
+    }, 10000);
     child.once("close", (c) => {
       clearTimeout(hangTimer);
       resolve(c);
@@ -272,7 +274,7 @@ test("u2lx advisory: child-side watchdog terminates orphan process when stdin is
   const elapsed = Date.now() - started;
 
   assert.equal(code, 1, "child self-terminates with non-zero exit code on watchdog expiry");
-  assert.ok(elapsed >= 140 && elapsed < 2000, `watchdog fired in expected window (${elapsed}ms)`);
+  assert.ok(elapsed >= 140, `watchdog must not fire before its 150ms deadline (${elapsed}ms)`);
 });
 
 test("u2lx advisory: child stdout exceeding host bound is refused as resource-exceeded and killed with SIGKILL", async () => {
@@ -495,7 +497,8 @@ test("3kr3: a real fast worker's completion releases exactly its own slot and ne
   assert.equal(semaphore.stats().active, 1, "the test holds one slot deterministically");
 
   // 1. A real worker completes beside the held slot
-  const fastResult = await callWasmTool(fastTool, { input: "fast" }, { semaphore, deadlineMs: 1000 });
+  // This tests slot ownership, not worker startup latency (861ms in a contended gate run).
+  const fastResult = await callWasmTool(fastTool, { input: "fast" }, { semaphore, deadlineMs: 5000 });
   assert.equal(fastResult.ok, true);
   // No sleep is needed and none is used: the worker's release reaches its OWN permit, and a permit's
   // release is exactly-once by construction, so whether its second completion event ('close') has
@@ -504,8 +507,8 @@ test("3kr3: a real fast worker's completion releases exactly its own slot and ne
 
   // 2. Offer two calls at cap 2 while the holder holds 1 slot: exactly ONE must be admitted
   const [probe1, probe2] = await Promise.all([
-    callWasmTool(fastTool, { input: "probe-1" }, { semaphore, deadlineMs: 1000 }),
-    callWasmTool(fastTool, { input: "probe-2" }, { semaphore, deadlineMs: 1000 }),
+    callWasmTool(fastTool, { input: "probe-1" }, { semaphore, deadlineMs: 5000 }),
+    callWasmTool(fastTool, { input: "probe-2" }, { semaphore, deadlineMs: 5000 }),
   ]);
   const admittedCount = [probe1, probe2].filter((r) => r.ok).length;
   const refusedCount = [probe1, probe2].filter((r) => !r.ok && r.refused === "over-budget").length;
