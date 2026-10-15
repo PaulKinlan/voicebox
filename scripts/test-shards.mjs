@@ -54,6 +54,19 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
 export const TIER_WORKERS = Object.freeze({ unit: Math.max(1, os.availableParallelism() - 1), server: 4, browser: 2 });
 
 /**
+ * Per-file execution budgets per tier (voicebox-beads-ak9h).
+ * Measured headroom (2026-10-13): slowest unit file is ~10s and slowest server file is ~33s.
+ * The per-file budget must sit comfortably under the tier's stage bound (pre-push.sh: unit 180s, live 400s/1200s),
+ * so a wedged file is recorded 'timeout' by name while other files finish, instead of the stage bound ending the lane.
+ */
+export const TIER_FILE_MS = Object.freeze({
+  unit: 120_000,
+  server: 300_000,
+  browser: 240_000,
+  live: 300_000,
+});
+
+/**
  * A file's cost, used ONLY to order the queue (above). Bytes are a crude proxy — measured against
  * the 63 per-file durations from the 2026-10-11 baseline run, byte size correlates with wall time at
  * r=0.51 while a test count correlates at r=0.31, so bytes are the better of the two cheap
