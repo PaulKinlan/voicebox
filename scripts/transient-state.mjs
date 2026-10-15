@@ -239,10 +239,12 @@ function writerLocation(file, source, id) {
 }
 
 // Waits can only cover assertions in the SAME test and along a scope that still encloses the assertion.
-// Preserve character offsets while masking strings/comments so a quoted `test(` cannot create a fake scope.
+// Preserve character offsets while masking strings/comments/regex literals so a quoted `test(` cannot
+// create a fake scope. Regex quotes are NOT string delimiters: masking past one could hide live assertions.
 function lexicalScopes(source) {
   const chars = source.split(""); // UTF-16 offsets must match RegExp match.index, even after emoji in test titles.
   let quote = "", escaped = false, lineComment = false, blockComment = false;
+  let regex = false, regexClass = false, regexEscaped = false;
   for (let i = 0; i < chars.length; i++) {
     const ch = source[i], next = source[i + 1];
     if (lineComment) { if (ch === "\n") lineComment = false; else chars[i] = " "; continue; }
@@ -254,8 +256,27 @@ function lexicalScopes(source) {
       else if (ch === quote) quote = "";
       continue;
     }
+    if (regex) {
+      if (ch === "\n") { regex = false; regexClass = regexEscaped = false; continue; }
+      chars[i] = " ";
+      if (regexEscaped) regexEscaped = false;
+      else if (ch === "\\") regexEscaped = true;
+      else if (ch === "[") regexClass = true;
+      else if (ch === "]") regexClass = false;
+      else if (ch === "/" && !regexClass) regex = false;
+      continue;
+    }
     if (ch === "/" && next === "/") { chars[i] = chars[++i] = " "; lineComment = true; continue; }
     if (ch === "/" && next === "*") { chars[i] = chars[++i] = " "; blockComment = true; continue; }
+    if (ch === "/") {
+      let prev = i - 1;
+      while (prev >= 0 && /\s/.test(chars[prev])) prev--;
+      const keyword = chars.slice(Math.max(0, prev - 15), prev + 1).join("");
+      // A slash after an expression is division. Expression-opening punctuation or a keyword starts regex.
+      if (prev < 0 || "=(:,;!&|?{}[]~+*%^<>-".includes(chars[prev]) || /\b(?:return|case|throw|yield|await|of|in)$/.test(keyword)) {
+        chars[i] = " "; regex = true; continue;
+      }
+    }
     if (ch === '"' || ch === "'" || ch === "`") { chars[i] = " "; quote = ch; }
   }
   const code = chars.join("");
@@ -296,16 +317,24 @@ function bracelessGuardedWait(code, waitIndex) {
 
 function statusCandidates(file, source) {
   const scopes = lexicalScopes(source);
-  // Match only real code. Raw source includes commented-out waits and test titles; those cannot clear a read.
-  const waits = [...scopes.code.matchAll(/\b(?:page\.)?waitFor\w*\s*\(/g)].map((m) => ({
-    index: m.index,
-    test: scopes.testAt(m.index),
-    block: scopes.blockAt(m.index),
-    guarded: bracelessGuardedWait(scopes.code, m.index),
-    ids: new Set(firstCallArgument(scopes.code, m.index + m[0].length - 1).match(/__[A-Za-z]\w+/g) ?? []),
-  }));
+  // Recognize calls in code, not comments or titles. A string-form callback is executable too: inspect its
+  // CONTENT for ids while masking any JavaScript comments embedded within that string.
+  const waits = [...scopes.code.matchAll(/\b(?:page\.)?waitFor\w*\s*\(/g)].map((m) => {
+    const open = m.index + m[0].length - 1;
+    const argument = firstCallArgument(source, open).trim();
+    const stringCallback = argument.match(/^(['"`])([\s\S]*)\1$/);
+    const callbackCode = stringCallback ? lexicalScopes(stringCallback[2]).code : "";
+    return {
+      index: m.index,
+      test: scopes.testAt(m.index),
+      block: scopes.blockAt(m.index),
+      guarded: bracelessGuardedWait(scopes.code, m.index),
+      ids: new Set(`${firstCallArgument(scopes.code, open)} ${callbackCode}`.match(/__[A-Za-z]\w+/g) ?? []),
+    };
+  });
   const out = [];
   for (const m of source.matchAll(EXACT_STATUS)) {
+    if (!scopes.code.startsWith("assert.", m.index)) continue; // a comment/title cannot assert
     const expr = m[1].trim();
     let isPageState = READS_PAGE_STATE.test(expr);
     let idents = expr.match(/__[a-zA-Z]\w+/g) ?? [];
