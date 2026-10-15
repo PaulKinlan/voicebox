@@ -32,7 +32,7 @@ You can configure provider keys in either of two ways:
   export OPENAI_API_KEY="your-openai-api-key"
 
   # Anthropic (for Claude turn resolution and coding agent adapters)
-  export ANTHROPIC_API_KEY="your-anthropic-api-key"
+  export ANTHROPIC_API_KEY="your-api-key"
   ```
 
 To check installed coding agent harnesses and host diagnostics from the terminal:
