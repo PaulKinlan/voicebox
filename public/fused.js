@@ -1496,7 +1496,10 @@ function render() {
   if (els.roomFolderHint) els.roomFolderHint.hidden = roomFolders.size > 0 || Boolean(roomFolder);
   renderListingRoot();
   renderEmptyState();
-  if (shownFile && !entries.some((entry) => entry.name === shownFile)) shownFile = null;
+  const shownDir = shownFile && shownFile.includes("/") ? shownFile.slice(0, shownFile.lastIndexOf("/")) : "";
+  if (shownFile && shownDir === listingDir && !entries.some((entry) => joinDir(listingDir, entry.name) === shownFile)) {
+    shownFile = null;
+  }
   if (shownFile) showFileSelection(shownFile);
 }
 
