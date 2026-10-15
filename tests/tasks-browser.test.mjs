@@ -184,11 +184,16 @@ test("D1 browser: handle first, unrelated live transport/text turn, independent 
     // writes, not a race: text still in the field after the click means the real-mouse click never reached the
     // button - an overlay swallowing it - which is a UI failure, not a slow turn, and it is named as one.
     const afterSend = await first.evaluate(() => document.querySelector("#utterance")?.value ?? null);
-    assert.equal(
-      afterSend,
-      "",
-      `the click must submit the form: #utterance still holds the text, so the turn never started.\n${await turnEvidence()}`,
-    );
+    // LAZY, and that matters twice over (found while reproducing this failure at eight-way concurrency, where
+    // the capture ran on PASSING runs too): an eagerly-evaluated message captures a screenshot on every green
+    // run, which costs the tier a full-page render, litters the evidence directory with screenshots nobody
+    // asked for - and, on a test whose subject is timing, perturbs the very run it is measuring. The capture
+    // happens only on the failure path, in both places.
+    if (afterSend !== "") {
+      throw new Error(
+        `the click must submit the form: #utterance still holds the text, so the turn never started.\n${await turnEvidence()}`,
+      );
+    }
 
     // THE TURN FINISHED, and said so: a NEW #session-log entry for this turn, with the report settled either
     // way. `tone === "bad"` is then asserted below with the page's own sentence in the message.
