@@ -244,6 +244,7 @@ export function recordFile(manifest, entry) {
     timeout_ms: entry.timeout_ms ?? null,
     secs: Number.isFinite(entry.secs) ? Math.round(entry.secs * 1000) / 1000 : null,
     reason: entry.reason ?? null,
+    ...(entry.failure_evidence ? { failure_evidence: entry.failure_evidence } : {}),
   };
   manifest.files.push(record);
   return record;
@@ -268,6 +269,7 @@ export function recordTier(manifest, record) {
       timeout_ms: entry.timeout_ms ?? null,
       secs: entry.secs,
       selection: entry.selection ?? "full-roster",
+      failure_evidence: entry.failure_evidence,
     });
   }
   return manifest;

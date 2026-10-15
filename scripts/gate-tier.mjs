@@ -96,15 +96,35 @@ export function testCounts(file, text) {
   return counts;
 }
 
+/** Bounded TAP failure excerpts; never retain the entire per-file output in a tier record. */
+export function failureEvidence(output) {
+  const lines = String(output ?? "").split("\n");
+  const excerpts = [];
+  for (let i = 0; i < lines.length && excerpts.length < 3; i++) {
+    if (!/^not ok\s+\d+\s+-\s+/.test(lines[i])) continue;
+    const section = [lines[i]];
+    for (let j = i + 1; j < lines.length && section.length < 20; j++) {
+      if (/^(?:ok|not ok)\s+\d+\s+-\s+|1\.\.\d+\s*$/.test(lines[j])) break;
+      section.push(lines[j]);
+    }
+    excerpts.push(section.map((line) => line.slice(0, 240)).join("\n"));
+  }
+  // A failed process may have crashed before TAP could name a test. Retain only its bounded tail.
+  if (!excerpts.length) excerpts.push(lines.slice(-12).map((line) => line.slice(0, 240)).join("\n"));
+  return { version: 1, excerpts };
+}
+
 /** One dispatched file's record, in the shape `gate-manifest.mjs`'s `recordTier` folds. */
 export function recordOf(file, result, timeoutMs) {
   const counts = testCounts(file, result.out ?? "");
+  const status = statusOf({ ...result, counts });
   return {
     path: file,
-    status: statusOf({ ...result, counts }),
+    status,
     counts: counts.tests >= 0 ? counts : null,
     timeout_ms: timeoutMs,
     secs: Number.isFinite(result.secs) ? result.secs : null,
+    ...(status !== "passed" ? { failure_evidence: failureEvidence(result.out) } : {}),
   };
 }
 
@@ -129,8 +149,8 @@ export async function runOneTier({ tier, files, workers = TIER_WORKERS[tier] ?? 
         `tests=${record.counts?.tests ?? -1} pass=${record.counts?.pass ?? -1} fail=${record.counts?.fail ?? -1} ${file}`,
     );
     if (record.status !== "passed") {
-      const tail = String(result.out ?? "").split("\n").slice(-40).join("\n");
-      log.log(`[gate-tier] ---- output of ${file} ----\n${tail}\n[gate-tier] ---- end ${file} ----`);
+      const evidence = record.failure_evidence?.excerpts.join("\n") ?? String(result.out ?? "").split("\n").slice(-40).join("\n");
+      log.log(`[gate-tier] ---- output of ${file} ----\n${evidence}\n[gate-tier] ---- end ${file} ----`);
     }
     return record;
   };

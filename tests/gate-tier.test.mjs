@@ -18,7 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TIERS, aggregateTierRecords, baseNamesACommit, tierRecordPath } from "../scripts/gate-manifest.mjs";
-import { recordOf, runOneTier, testCounts, tierFiles, tierVerdict } from "../scripts/gate-tier.mjs";
+import { failureEvidence, recordOf, runOneTier, testCounts, tierFiles, tierVerdict } from "../scripts/gate-tier.mjs";
 import { classify } from "../scripts/test-lanes.mjs";
 import { TIER_WORKERS } from "../scripts/test-shards.mjs";
 
@@ -116,6 +116,43 @@ test("every file in the lane gets exactly one terminal record with a duration", 
     assert.ok(Number.isFinite(entry.secs), `${entry.path} must carry a duration — a record without one is a lost child`);
   }
   assert.deepEqual(tierVerdict(record, files).ok, true, "a complete, green tier reconciles against its own lane");
+});
+
+test("a tier failure retains bounded TAP diagnostics before the last 40 lines; a green tier stays quiet", async () => {
+  const early = "not ok 1 - watchdog startup under load\n  ---\n  error: child hung past watchdog deadline\n  stack: first useful line\n  ...";
+  const trailing = Array.from({ length: 80 }, (_, n) => `# later passing diagnostic ${n}`).join("\n");
+  const red = `${early}\nok 2 - later pass\n${trailing}\n1..2\n# tests 2\n# pass 1\n# fail 1\n# skipped 0\n`;
+  const green = "ok 1 - green\n1..1\n# tests 1\n# pass 1\n# fail 0\n# skipped 0\n";
+  const logged = [];
+  const record = await runOneTier({
+    tier: "unit", files: ["tests/red.test.mjs", "tests/green.test.mjs"], workers: 1,
+    runner: async (file) => ({ code: file.includes("red") ? 1 : 0, signal: null, timedOut: false, secs: 0.1, out: file.includes("red") ? red : green }),
+    log: { log(message) { logged.push(message); }, error() {} },
+  });
+  const redEntry = record.files.find((entry) => entry.path === "tests/red.test.mjs");
+  const greenEntry = record.files.find((entry) => entry.path === "tests/green.test.mjs");
+  assert.equal(tierVerdict(record, record.files.map((entry) => entry.path)).ok, false, "diagnostics must never turn a failed tier green");
+  assert.equal(redEntry.failure_evidence.version, 1, "the additive evidence field has its own version");
+  assert.match(redEntry.failure_evidence.excerpts[0], /not ok 1 - watchdog startup under load[\s\S]*child hung past watchdog deadline/);
+  assert.ok(redEntry.failure_evidence.excerpts[0].length < 5000, "a noisy test cannot make an unbounded record");
+  assert.doesNotMatch(redEntry.failure_evidence.excerpts[0], /later passing diagnostic/);
+  assert.equal(Object.hasOwn(greenEntry, "failure_evidence"), false, "green files add no evidence payload");
+  const noisy = Array.from({ length: 5 }, (_, n) => `not ok ${n + 1} - failing test ${n}\n${("  " + "x".repeat(1000) + "\n").repeat(40)}`).join("");
+  const bounded = failureEvidence(noisy);
+  assert.equal(bounded.excerpts.length, 3, "only the first three failures are retained");
+  assert.ok(bounded.excerpts.every((excerpt) => excerpt.split("\n").length <= 20 && excerpt.split("\n").every((line) => line.length <= 240)), "every section and line has a hard bound");
+  assert.match(failureEvidence("uncaught crash before TAP").excerpts[0], /uncaught crash before TAP/, "a crash without a test name is still diagnosable");
+  const output = logged.join("\n");
+  assert.match(output, /not ok 1 - watchdog startup under load[\s\S]*child hung past watchdog deadline/);
+  assert.doesNotMatch(output, /later passing diagnostic|output of tests\/green/, "the log prints only the red section");
+
+  const unit = tierRecord("unit");
+  const at = unit.files.findIndex((entry) => entry.path === "tests/gate-tier.test.mjs");
+  assert.ok(at >= 0);
+  unit.files[at] = { ...redEntry, path: unit.files[at].path };
+  const { manifest } = aggregateTiers({ unit, server: tierRecord("server"), browser: tierRecord("browser") });
+  assert.equal(manifest.verdict, "fail", "retaining evidence does not change a red manifest verdict");
+  assert.deepEqual(manifest.files.find((entry) => entry.path === unit.files[at].path).failure_evidence, redEntry.failure_evidence, "the sealed manifest carries the bounded diagnostic too");
 });
 
 test("a dropped file, a duplicate and a file with no duration are each refused BY NAME", () => {
