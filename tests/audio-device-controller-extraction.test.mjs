@@ -42,6 +42,98 @@ const SEAMS = [
   ["localStorage", "storage"],
 ];
 
+// THE CITED BEHAVIOUR DELTAS SINCE THE EXTRACTION. A span is normalised to one token on BOTH sides before
+// the comparison, so the code inside it may change — and each span names the bead that authorised that
+// change, so a difference has to be a deliberate, cited edit rather than something a refactor smuggles in.
+// Spans, not literal before/after text, because the module's own comments and wording must stay free to
+// improve: only the region OUTSIDE these spans has to match byte for byte.
+//
+// voicebox-beads-t1k9 is the only one so far: "the client has not answered yet" is not "this browser cannot
+// choose an output". The row reads the client's answer live at paint time and caches only a real answer, so
+// a boot where public/live-voice.js has not published the client yet cannot claim a negative about the
+// machine. The four spans below are its four edited places, and `assertT1k9Rules` states the rules
+// themselves so that normalising a span can never be a way to delete a behaviour.
+const CITED_SPANS = [
+  {
+    bead: "voicebox-beads-t1k9",
+    name: "the canChooseOutput default is 'no answer yet', not a claim",
+    startRe: /^ {2}canChooseOutput: /,
+    endBeforeRe: /^ {2}\/\/ The routing decision/,
+  },
+  {
+    bead: "voicebox-beads-t1k9",
+    name: "renderDevices reads the client's answer LIVE rather than trusting a cached false",
+    startRe: /^ {2}const \{ prefs, inputs, outputs/,
+    endBeforeRe: /^ {2}fillPicker\(els\.micSelect/,
+  },
+  {
+    bead: "voicebox-beads-t1k9",
+    name: "the system-output sentence is said only for an ANSWERED false",
+    startRe: /^ {2}else if \(.*canChooseOutput.*\) out = /,
+    endBeforeRe: /^ {2}else if \(!prefs\.out\.id\)/,
+  },
+  {
+    bead: "voicebox-beads-t1k9",
+    name: "refreshDevices caches only a real answer",
+    startRe: /^ {2}(devices\.canChooseOutput =|const clientCanChoose =)/,
+    endBeforeRe: /^ {2}devices\.namesVisible/,
+  },
+  {
+    // voicebox-beads-cqrd, the other cited change since the extraction: the refusal branch of the
+    // output-change handler repaints BEFORE it writes the reason, and puts the picker back, because the
+    // repaint's generic line was overwriting the refusal the person needed to read. This is the branch as
+    // a whole, not one line, so it is expressed by its END rather than by the line that follows it.
+    bead: "voicebox-beads-cqrd",
+    name: "the refusal branch repaints before it names the reason, and puts the picker back",
+    startRe: /^ {2}if \(applied && !applied\.ok\) \{/,
+    endThroughRe: /^ {4}return;$/,
+    swallowClosingBrace: true,
+  },
+];
+
+/** Replace every cited span with one token, on either side of the comparison, and report how many matched. */
+function normaliseCitedSpans(text) {
+  const lines = text.split("\n");
+  const out = [];
+  let applied = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const span = CITED_SPANS.find((s) => s.startRe.test(lines[i]));
+    if (!span) { out.push(lines[i]); continue; }
+    let j = i + 1;
+    if (span.endBeforeRe) {
+      while (j < lines.length && !span.endBeforeRe.test(lines[j])) j++;
+      assert.ok(j < lines.length, `cited span '${span.name}' (${span.bead}) must end before a line matching ${span.endBeforeRe}`);
+    } else {
+      while (j < lines.length && !span.endThroughRe.test(lines[j])) j++;
+      assert.ok(j < lines.length, `cited span '${span.name}' (${span.bead}) must reach a line matching ${span.endThroughRe}`);
+      // A span that replaces a whole BLOCK swallows the statement's closing brace too, so the brace cannot
+      // stay behind as a stray line the two sides then have to agree on.
+      if (span.swallowClosingBrace) {
+        let k = j + 1;
+        while (k < lines.length && lines[k].trim() === "") k++;
+        if (lines[k] !== undefined && /^ {2}\}$/.test(lines[k])) j = k;
+      }
+    }
+    out.push(`[cited: ${span.bead} — ${span.name}]`);
+    applied++;
+    i = j - 1;
+  }
+  return { text: out.join("\n"), applied };
+}
+
+/** The rules those spans stand for, asserted positively: normalising a span must not be a way to drop one. */
+function assertT1k9Rules(moduleSource) {
+  const rules = [
+    ["the default is 'no answer yet'", /canChooseOutput: null,/],
+    ["the row reads the client's answer LIVE at paint time", /const canChooseOutput = typeof clientCanChoose === "boolean" \? clientCanChoose : devices\.canChooseOutput;/],
+    ["only an ANSWERED false gets the system-output sentence", /else if \(canChooseOutput === false\) out = "This browser uses system output/],
+    ["the cache takes only a real answer", /if \(typeof clientCanChoose === "boolean"\) devices\.canChooseOutput = clientCanChoose;/],
+  ];
+  for (const [what, re] of rules) {
+    assert.match(moduleSource, re, `${what} must hold (voicebox-beads-t1k9)`);
+  }
+}
+
 const MOVED_MARKERS = [
   'const DEVICE_KEY = "voicebox.devices"',
   "const devices = {",
@@ -93,20 +185,10 @@ function movedRegionFromHostAtBase() {
   return region;
 }
 
-// THE ONE DELIBERATE BEHAVIOUR CHANGE SINCE THE EXTRACTION (voicebox-beads-cqrd): the refusal branch of
-// the output-change handler repaints BEFORE it writes the reason, and puts the picker back, because the
-// repaint's generic line was overwriting the refusal the person needed to read. That branch is therefore
-// NORMALISED OUT of the byte-identity comparison below and pinned by its own ORDERED arm instead — so
-// every OTHER statement still has to be byte-identical, and the cited fix is asserted rather than excused.
+// The refusal branch's own anchor: `assertRefusalOrder` reads the module from here, and the branch is also
+// one of the CITED SPANS above (voicebox-beads-cqrd), so the byte comparison is blind to it while the order
+// itself is pinned by that function.
 const REFUSAL_BRANCH_OPENS = "if (applied && !applied.ok) {";
-const REFUSAL_BRANCH_TOKEN = "[the refusal branch: pinned by its own ordered arm, voicebox-beads-cqrd]";
-const normaliseRefusalBranch = (text) => {
-  const start = text.indexOf(REFUSAL_BRANCH_OPENS);
-  if (start < 0) return text;
-  const end = text.indexOf("\n    return;\n  }", start);
-  if (end < 0) return text;
-  return text.slice(0, start) + REFUSAL_BRANCH_TOKEN + text.slice(end + "\n    return;\n  }".length);
-};
 
 function assertMovedOutOfHost(hostSource, moduleSource) {
   for (const marker of MOVED_MARKERS) {
@@ -119,17 +201,65 @@ function assertMovedOutOfHost(hostSource, moduleSource) {
 }
 
 function assertByteIdentical(moduleSource, region) {
-  const expected = normaliseRefusalBranch(region);
-  const actual = normaliseRefusalBranch(moduleSource);
-  assert.ok(
-    actual.includes(expected),
-    "the moved region must appear in the module BYTE-IDENTICALLY, apart from the two documented seams (getLiveClient and storage) and the one cited refusal-order fix (voicebox-beads-cqrd) — a rewritten statement anywhere else is a behaviour change",
+  const expected = normaliseCitedSpans(region);
+  const actual = normaliseCitedSpans(moduleSource);
+  assert.equal(
+    actual.applied,
+    expected.applied,
+    "every cited span must be found in BOTH the base region and the module: a span that stopped matching would otherwise silently widen what may differ",
   );
-  // Sensitivity: the comparison above must be able to fail. One altered character in the region is enough.
-  assert.ok(!actual.includes(expected.replace("policy: \"stop\"", 'policy: "fallback"')), "the byte-identity check must be sensitive to a single changed statement");
+  assert.equal(actual.applied, CITED_SPANS.length, "each cited span must still be present exactly once per side");
+  assert.ok(
+    actual.text.includes(expected.text),
+    "the moved region must appear in the module BYTE-IDENTICALLY apart from the two documented seams (getLiveClient and storage) and the cited behaviour spans (voicebox-beads-t1k9's device facts and voicebox-beads-cqrd's refusal order) — a rewritten statement anywhere else is a behaviour change",
+  );
+  // BOTH cited changes are asserted POSITIVELY by their own function, so normalising a span can never
+  // become a way to drop the behaviour it authorised: the refusal branch's ORDER is the defect cqrd fixed,
+  // and the four t1k9 rules are the behaviour that bead added. Keeping both functions is deliberate — each
+  // one names a different property, and a merged assertion would report neither failure precisely.
+  assertRefusalOrder(moduleSource);
+  assertT1k9Rules(moduleSource);
+
+  // SENSITIVITY, all three ways: a rewritten statement OUTSIDE the cited spans must still break the byte
+  // comparison, the cqrd ORDER must still be refused when the defect is reintroduced, and each t1k9 rule
+  // must be refused when it is reverted.
+  const moduleWithRewrittenStatement = actual.text.replace('policy: "stop"', 'policy: "fallback"');
+  assert.notEqual(moduleWithRewrittenStatement, actual.text, "the rewritten-statement mutant must change the module text");
+  assert.ok(
+    !moduleWithRewrittenStatement.includes(expected.text),
+    "a rewritten statement outside the cited spans must break the byte-identity comparison",
+  );
+  assert.throws(
+    () => assertT1k9Rules(moduleSource.replace("canChooseOutput: null,", "canChooseOutput: true,")),
+    { name: "AssertionError" },
+    "reverting the t1k9 default must be refused even though its span is allowed to differ",
+  );
+  assert.throws(
+    () => assertT1k9Rules(moduleSource.replace('else if (canChooseOutput === false) out = ', 'else if (!canChooseOutput) out = ')),
+    { name: "AssertionError" },
+    "going back to 'any falsy answer is a claim' must be refused",
+  );
+  // THE CQRD DEFECT, REINTRODUCED: write the refusal first and repaint after it, exactly as main did before
+  // the fix. The ordered arm must refuse that order even though the span is allowed to differ.
+  const clobbering = [
+    "    // moved back before the reason: the voicebox-beads-cqrd defect reintroduced",
+    '    if (els.outDeviceState) els.outDeviceState.textContent = `Could not use ${choice?.name || "that output"}. ${applied.reason}.`;',
+    "    renderDevices();",
+  ].join("\n");
+  const moduleWithClobberedRefusal = moduleSource.replace(
+    "    renderDevices();\n    // The picker is put back explicitly as well",
+    `${clobbering}\n    // The picker is put back explicitly as well`,
+  );
+  assert.notEqual(moduleWithClobberedRefusal, moduleSource, "the clobbering-order mutant must change the module");
+  assert.throws(
+    () => assertRefusalOrder(moduleWithClobberedRefusal),
+    { name: "AssertionError" },
+    "writing the refusal BEFORE the repaint must be refused by the ordered arm: that order is the defect voicebox-beads-cqrd fixed",
+  );
 }
 
-/** The refusal branch's own contract, asserted as ORDER because the order is the whole defect. */
+/** The refusal branch's own contract, asserted as ORDER because the order IS the defect (voicebox-beads-cqrd).
+ *  It reads the module, not the normalised text, so the cited span above cannot hide the order it authorises. */
 function assertRefusalOrder(moduleSource) {
   const start = moduleSource.indexOf(REFUSAL_BRANCH_OPENS);
   assert.ok(start > -1, "the output-change handler must keep its refusal branch");
@@ -251,20 +381,34 @@ test("the rows still tell the truth after the move, and a listener-free clone of
   await page.waitFor(() => document.getElementById("out-device-state")?.textContent?.includes("Studio monitors"), { label: "the output row to name its own saved device after a refresh" });
   await page.waitFor(() => document.getElementById("mic-device-state")?.textContent?.includes("Desk microphone"), { label: "the stored microphone to be named after a reload" });
 
-  // SENSITIVITY, and the race documented rather than hidden: take the client away (the exact state the
-  // boot refresh can genuinely be in), refresh, and the SAME row paints the system-output line instead —
-  // so the wait above is load-bearing and the row really is reading the client fact, not a constant.
+  // SENSITIVITY, driven through the client's own ANSWER rather than by removing the client. This arm used to
+  // take the client away and require the system-output line — which was the behaviour BEFORE voicebox-beads-t1k9,
+  // and is exactly the lie that bead removed (an absent client is not an answer, so the row may not claim the
+  // machine cannot choose an output). The three states below are the rule, and each is asserted verbatim.
   const stale = await page.evaluate(async () => {
-    const client = window.__voiceboxLiveClient;
+    const real = window.__voiceboxLiveClient;
+    const savedAnswer = real.canChooseOutput;
+    const read = () => document.getElementById("out-device-state").textContent;
+    real.canChooseOutput = () => false;
+    await window.__voiceboxDevices.refresh();
+    const answeredFalse = read();
+    real.canChooseOutput = () => true;
+    await window.__voiceboxDevices.refresh();
+    const answeredTrue = read();
+    // THE UNANSWERED CASE: the exact state the boot refresh can genuinely be in. The last REAL answer must
+    // stand — the refresh must not turn silence into a negative claim about the machine.
     window.__voiceboxLiveClient = null;
     await window.__voiceboxDevices.refresh();
-    const withoutClient = document.getElementById("out-device-state").textContent;
-    window.__voiceboxLiveClient = client;
+    const unanswered = read();
+    window.__voiceboxLiveClient = real;
+    real.canChooseOutput = savedAnswer;
     await window.__voiceboxDevices.refresh();
-    return { withoutClient, withClient: document.getElementById("out-device-state").textContent };
+    return { answeredFalse, answeredTrue, unanswered, restored: read() };
   });
-  assert.match(stale.withoutClient, /This browser uses system output/, "with no live client the canChooseOutput fact is unknown and the row must say so — this is the line the un-refreshed arm was reading on the box that failed");
-  assert.match(stale.withClient, /Studio monitors/, "with the client back, the refresh must name the saved device again");
+  assert.match(stale.answeredFalse, /This browser uses system output/, "a client that ANSWERS false must get the system-output sentence verbatim");
+  assert.match(stale.answeredTrue, /Studio monitors/, "a client that ANSWERS true must let the saved device be named");
+  assert.equal(stale.unanswered, stale.answeredTrue, "an UNANSWERED client is not a false answer: the refresh must leave the row as the last real answer left it, not assert a negative about the machine (voicebox-beads-t1k9)");
+  assert.match(stale.restored, /Studio monitors/, "and the real client restored must paint the saved device again");
 
   const rows = await page.evaluate(() => ({
     mic: document.getElementById("mic-device-state").textContent,
