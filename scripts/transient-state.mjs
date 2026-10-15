@@ -285,7 +285,7 @@ function lexicalScopes(source) {
         if (depth === 0) {
           while (j >= 0 && /\s/.test(chars[j])) j--;
           const preHeader = chars.slice(Math.max(0, j - 15), j + 1).join("");
-          const headerMatch = preHeader.match(/\b(if|while|for(?:\s+await)?)$/);
+          const headerMatch = preHeader.match(/\b(if|while|for(?:\s+await)?|with)$/);
           if (headerMatch) {
             const hStart = j - headerMatch[1].length + 1;
             let beforeH = hStart - 1;
