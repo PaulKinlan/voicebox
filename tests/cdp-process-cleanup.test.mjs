@@ -61,7 +61,17 @@ function procSnapshot(pid) {
     // other reason — EMFILE under load, EACCES where /proc hides other users' processes — says
     // nothing about whether it is running, and reading it as "gone" would turn a failed read into a
     // silent pass for a LEAKED browser, which is the one thing this file may not do (review, 3lwx).
-    if (err?.code === "ENOENT" || err?.code === "ENOTDIR") return null;
+    //
+    // ESRCH IS THE SAME ANSWER ARRIVING LATER (voicebox-beads-qx8r). A /proc read is open-then-read:
+    // the task can be collected between the two, and the read itself then fails with ESRCH — the
+    // kernel's "no such process", which is exactly what `pidTerminated` waits to hear. Raised as an
+    // exception it blamed a clean teardown in the full gate for tree 2628c6dc, in subtest 2 (the
+    // unhandled-crash arm, where the runner has already thrown so the browser is on its way out as
+    // the wait begins: `readFileSync <- procSnapshot:58 <- pidTerminated:93 <- waitForPidGone:127`).
+    // Tolerating it is not a loosened assertion: the arm asserts the process we launched is
+    // TERMINATED, ESRCH is that outcome, and every code that says nothing about the process still
+    // throws, so a leaked browser can never be read as gone.
+    if (err?.code === "ENOENT" || err?.code === "ENOTDIR" || err?.code === "ESRCH") return null;
     throw err;
   }
   const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
