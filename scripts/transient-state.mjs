@@ -17,16 +17,19 @@
 // that can be wrong — a FIXED delay immediately before an assertion — and every candidate must then be
 // cleared by a NAMED clause, or it is printed as a review item:
 //
-//   ABSENCE   the assertion asserts that something did NOT happen. A delay before an absence is the whole
-//             point of the assertion (the negative controls in changelog-dialog-extraction and
-//             opfs-scratch-room are exactly this), not a race.
-//   POLL      a real poll re-checks the observable AFTER sleeping, before asserting. That intervening
-//             condition breaks the immediate-delay shape; merely enclosing the assertion in a loop
-//             (even a many-iteration loop) never clears it.
-//   IN-PAGE   the delay runs INSIDE page.evaluate(): it is the page's own timeline being measured, not the
-//             test waiting for the page.
-//   NO-ASYNC  the assertion reads no page or global state — a fixture asserting its own arithmetic observes
-//             nothing that can arrive late.
+//   ABSENCE       the assertion asserts that something did NOT happen. A delay before an absence is the whole
+//                 point of the assertion (the negative controls in changelog-dialog-extraction and
+//                 opfs-scratch-room are exactly this), not a race.
+//   IN-PAGE       the delay runs INSIDE page.evaluate(): it is the page's own timeline being measured, not the
+//                 test waiting for the page.
+//   NO-ASYNC      the assertion reads no page or global state — a fixture asserting its own arithmetic observes
+//                 nothing that can arrive late.
+//   DELAYED-READ  the delay precedes a page read asserted on the following statement (offered under --list for review).
+//   NOT-IMMEDIATE the statement immediately after the delay is not an assertion.
+//
+// A loop alone is NOT a clearance clause: a real poll re-checks the observable AFTER sleeping, before
+// asserting, which breaks the immediate-delay shape. Merely enclosing a fixed sleep and an assertion in a
+// loop without an intervening condition is flagged as a candidate refusal.
 //
 // IT MUST NOT BE A GATE THAT IS RED BECAUSE OF THE BASE. The repository's existing delays are cleared by
 // name and printed WITH the clause that clears them; the exit code is 1 only when a candidate cannot be
