@@ -26,6 +26,7 @@ import { initEnvironmentList } from "./components/environment-list.mjs";
 import { initMiniAppHost } from "./components/mini-app-surface.mjs";
 import { initHarnessesDialog } from "./components/harnesses-dialog.mjs";
 import { createAudioDeviceController } from "./components/audio-device-controller.mjs";
+import { createVisionControls } from "./components/vision-controls.mjs";
 import { initActivityLog } from "./components/activity-log-ui.mjs";
 
 const $ = (id) => document.getElementById(id);
@@ -4222,190 +4223,22 @@ function sqehWire() {
     });
   }
 
-  // Core Live Vision & manual speech activity controls (camera, screen share, push-to-talk, settings)
-  const VISION_PREFS_KEY = "voicebox:vision-prefs";
-  let visionStream = null;
-  let visionTimer = null;
-  let visionMode = null;
-  let pttActive = false;
-
-  const readVisionPrefs = () => {
-    try {
-      const raw = localStorage.getItem(VISION_PREFS_KEY);
-      return raw ? JSON.parse(raw) : {};
-    } catch {
-      return {};
-    }
-  };
-  const writeVisionPrefs = (patch) => {
-    try {
-      const next = { ...readVisionPrefs(), ...patch };
-      localStorage.setItem(VISION_PREFS_KEY, JSON.stringify(next));
-      return next;
-    } catch {
-      return patch;
-    }
-  };
-  const formatThinkingLevelState = (level) => {
-    const normalized = String(level || "medium").toLowerCase();
-    const label = normalized === "high" ? "High" : normalized === "low" ? "Low" : "Medium";
-    return `${label} depth — applies to Gemini 3.8 Live Extended Thinking (audio & vision)`;
-  };
-  const savedVision = readVisionPrefs();
-  if (els.settingVisionResolution && savedVision.resolution) els.settingVisionResolution.value = savedVision.resolution;
-  if (els.settingVisionFps && savedVision.fps) els.settingVisionFps.value = String(savedVision.fps);
-  if (els.settingThinkingLevel && savedVision.thinkingLevel) els.settingThinkingLevel.value = savedVision.thinkingLevel;
-  if (els.settingThinkingLevelState) {
-    els.settingThinkingLevelState.textContent = formatThinkingLevelState(els.settingThinkingLevel?.value);
-  }
-  const initialPttEnabled = Boolean(savedVision.pttEnabled);
-  if (els.settingPttEnabled) els.settingPttEnabled.checked = initialPttEnabled;
-  if (els.visionPttBtn) els.visionPttBtn.hidden = !initialPttEnabled;
-  if (els.settingPttState) {
-    els.settingPttState.textContent = initialPttEnabled
-      ? "Shown — manual Push to talk button visible"
-      : "Hidden — automatic voice detection active";
-  }
-
-  let visionEncodingInFlight = false;
-  const captureAndSendVisionFrame = async () => {
-    if (visionEncodingInFlight) return false;
-    const video = els.visionCoreVideo;
-    const canvas = els.visionCoreCanvas;
-    if (!video || !canvas || !visionStream) return false;
-    const resPref = els.settingVisionResolution?.value || "MEDIA_RESOLUTION_MEDIUM";
-    const targetWidth = resPref === "MEDIA_RESOLUTION_HIGH" ? 960 : resPref === "MEDIA_RESOLUTION_LOW" ? 320 : 640;
-    const vw = video.videoWidth || targetWidth;
-    const vh = video.videoHeight || Math.round(targetWidth * 0.75);
-    const scale = Math.min(1, targetWidth / Math.max(1, vw));
-    const targetW = Math.max(1, Math.round(vw * scale));
-    const targetH = Math.max(1, Math.round(vh * scale));
-
-    visionEncodingInFlight = true;
-    try {
-      const result = await encodeVisionFrame(video, targetW, targetH, 0.78, canvas);
-      const base64 = result?.base64 || "";
-      const liveActive = Boolean(window.__voiceboxIsLiveSessionActive?.());
-      const sent = liveActive && base64 ? (window.__voiceboxSendLiveVideo?.(base64, "image/jpeg") ?? false) : false;
-      if (els.visionCoreMeta) {
-        els.visionCoreMeta.textContent = sent
-          ? `${visionMode === "screen" ? "Screen" : "Camera"} live (${targetW}×${targetH})`
-          : `${visionMode === "screen" ? "Screen" : "Camera"} preview ready (start mic to stream)`;
-      }
-      return sent;
-    } finally {
-      visionEncodingInFlight = false;
-    }
-  };
-
-  const stopVisionStream = () => {
-    if (visionTimer) {
-      clearInterval(visionTimer);
-      visionTimer = null;
-    }
-    if (visionStream) {
-      for (const track of visionStream.getTracks?.() ?? []) {
-        try { track.stop(); } catch {}
-      }
-      visionStream = null;
-    }
-    visionMode = null;
-    visionGroundingController?.clearCallouts();
-    window.__voiceboxPipCompanion?.setVisionStream(null);
-    if (els.visionCoreVideo) els.visionCoreVideo.srcObject = null;
-    if (els.visionCoreCard) els.visionCoreCard.hidden = true;
-    if (els.visionCameraBtn) els.visionCameraBtn.setAttribute("aria-pressed", "false");
-    if (els.visionScreenBtn) els.visionScreenBtn.setAttribute("aria-pressed", "false");
-    if (els.visionCoreMeta) els.visionCoreMeta.textContent = "Camera off";
-  };
-
-  const restartVisionTimer = () => {
-    if (visionTimer) clearInterval(visionTimer);
-    if (!visionStream) return;
-    const fps = Math.max(0.25, Math.min(5, Number(els.settingVisionFps?.value) || 1));
-    visionTimer = setInterval(captureAndSendVisionFrame, Math.round(1000 / fps));
-  };
-
-  const startVisionStream = async (mode) => {
-    if (visionMode === mode && visionStream) {
-      stopVisionStream();
-      return;
-    }
-    stopVisionStream();
-    try {
-      const stream = mode === "screen"
-        ? await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false })
-        : await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
-      visionStream = stream;
-      visionMode = mode;
-      const [track] = stream.getVideoTracks?.() ?? [];
-      track?.addEventListener?.("ended", () => stopVisionStream());
-      if (els.visionCoreVideo) {
-        els.visionCoreVideo.srcObject = stream;
-        await els.visionCoreVideo.play?.().catch(() => {});
-        els.visionCoreVideo.onloadedmetadata = () => {
-          visionGroundingController?.resizeOverlay(
-            els.visionCoreVideo.videoWidth || 320,
-            els.visionCoreVideo.videoHeight || 180,
-          );
-        };
-      }
-      if (els.visionCoreCard) els.visionCoreCard.hidden = false;
-      if (els.visionCameraBtn) els.visionCameraBtn.setAttribute("aria-pressed", String(mode === "camera"));
-      if (els.visionScreenBtn) els.visionScreenBtn.setAttribute("aria-pressed", String(mode === "screen"));
-      if (els.visionCoreMeta) els.visionCoreMeta.textContent = `${mode === "screen" ? "Screen share" : "Camera"} active`;
-      window.__voiceboxPipCompanion?.setVisionStream(stream);
-      captureAndSendVisionFrame();
-      restartVisionTimer();
-      if (!window.__voiceboxIsLiveSessionActive?.() && els.mic && els.mic.getAttribute("aria-pressed") !== "true") {
-        els.mic.click();
-      }
-    } catch (error) {
-      stopVisionStream();
-      setState(`Video capture unavailable: ${error?.message ?? error}`, "warn");
-    }
-  };
-
-  els.visionCameraBtn?.addEventListener("click", () => void startVisionStream("camera"));
-  els.visionScreenBtn?.addEventListener("click", () => void startVisionStream("screen"));
-  els.visionSnapshotBtn?.addEventListener("click", () => { captureAndSendVisionFrame(); });
-  els.visionStopBtn?.addEventListener("click", () => stopVisionStream());
-  els.settingStartCamera?.addEventListener("click", () => void startVisionStream("camera"));
-  els.settingStartScreen?.addEventListener("click", () => void startVisionStream("screen"));
-  els.settingVisionResolution?.addEventListener("change", () => {
-    writeVisionPrefs({ resolution: els.settingVisionResolution.value });
-  });
-  els.settingVisionFps?.addEventListener("change", () => {
-    writeVisionPrefs({ fps: Number(els.settingVisionFps.value) || 1 });
-    restartVisionTimer();
-  });
-  els.settingThinkingLevel?.addEventListener("change", () => {
-    const level = els.settingThinkingLevel.value;
-    writeVisionPrefs({ thinkingLevel: level });
-    if (els.settingThinkingLevelState) {
-      els.settingThinkingLevelState.textContent = formatThinkingLevelState(level);
-    }
-    if (window.__voiceboxIsLiveSessionActive?.()) {
-      void window.__voiceboxRestartLiveSession?.();
-    }
-  });
-  els.settingPttEnabled?.addEventListener("change", () => {
-    const enabled = Boolean(els.settingPttEnabled.checked);
-    writeVisionPrefs({ pttEnabled: enabled });
-    if (els.visionPttBtn) {
-      els.visionPttBtn.hidden = !enabled;
-      if (!enabled && pttActive) {
-        pttActive = false;
-        els.visionPttBtn.setAttribute("aria-pressed", "false");
-        els.visionPttBtn.textContent = "Push to talk";
-        window.__voiceboxSendActivityControl?.("end");
-      }
-    }
-    if (els.settingPttState) {
-      els.settingPttState.textContent = enabled
-        ? "Shown — manual Push to talk button visible"
-        : "Hidden — automatic voice detection active";
-    }
+  // Core Live Vision & manual speech activity controls (camera, screen share, push-to-talk, settings).
+  // The slice moved to public/components/vision-controls.mjs (voicebox-beads-uei2.12). The host keeps what
+  // the surface was handed - the element map, the encoder, the grounding controller, setState - and the
+  // debug/offline/doctor handlers that sat between the slice's two discontiguous blocks. The session and PiP
+  // facts arrive as LIVE closures over the globals, never as snapshots: a captured answer would freeze the
+  // session state the module asks about (the voicebox-beads-w1f9 shape).
+  createVisionControls({
+    els,
+    encodeVisionFrame,
+    visionGroundingController,
+    setState,
+    isLiveSessionActive: () => window.__voiceboxIsLiveSessionActive?.(),
+    sendLiveVideo: (base64, mimeType) => window.__voiceboxSendLiveVideo?.(base64, mimeType),
+    restartLiveSession: () => window.__voiceboxRestartLiveSession?.(),
+    sendActivityControl: (action) => window.__voiceboxSendActivityControl?.(action),
+    setPipVisionStream: (stream) => window.__voiceboxPipCompanion?.setVisionStream(stream),
   });
   if (els.settingDebugEnabled) {
     const isDbg = isDebugEnabled();
@@ -4487,12 +4320,6 @@ function sqehWire() {
     } finally {
       if (els.settingsRunDoctor) els.settingsRunDoctor.disabled = false;
     }
-  });
-  els.visionPttBtn?.addEventListener("click", () => {
-    pttActive = !pttActive;
-    els.visionPttBtn.setAttribute("aria-pressed", String(pttActive));
-    els.visionPttBtn.textContent = pttActive ? "End turn" : "Push to talk";
-    window.__voiceboxSendActivityControl?.(pttActive ? "start" : "end");
   });
   // Quick Files sync: the file list is the source of truth; refresh the tiles when it changes.
   const files = document.getElementById("files");
