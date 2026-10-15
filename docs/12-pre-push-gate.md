@@ -335,7 +335,7 @@ so that it stays inside this bound rather than being discovered to exceed it in 
 Verified against gate-recover's `fleet/zjpm6-host-context`: `scripts/gate-manifest.mjs`'s `SELECTION` already
 includes `not-selected`, and `recordFile` **refuses** an omitted file with no reason, so recording each skipped
 affected file as `not-selected` with a reason is both the honest accounting and a manifest-level enforcement of it.
-No new field, and no manifest version bump for this class. What *does* need building is the **count at the
+The **skipped files** need no new field. The **aggregate record** does: a per-tier entry naming the subset and its counts is additive, i.e. a manifest **v3** bump inside the same combined change (`v2` is spent on the host block), with `affected_not_run` deriving from the file records' own `selection`/`dispatch` and a disagreeing count refused by name. What *does* need building is the **count at the
 reader**: `verdictOf` returns `pass` when every *dispatched* file passed, and an omitted file is never dispatched,
 so five green out of sixty affected reconciles and reads `pass` unless the reader's own line prints what was left.
 A verdict that cannot see an omission is the silence-reads-as-completeness trap with extra steps, so the subset
