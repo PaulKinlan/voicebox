@@ -1013,6 +1013,8 @@ test('pre-push seals ONE full manifest from the tier records, and a red tier lea
     assert.equal(manifest.summary.dispatched, 3, 'a full gate dispatches the whole roster');
     assert.equal(manifest.summary.unknown, 0);
     assert.deepEqual([...new Set(manifest.files.map((f) => f.tier))].sort(), ['browser', 'server', 'unit'], 'all three tiers are in the one union');
+    const unitFile = manifest.files.find((f) => f.tier === 'unit');
+    assert.ok(unitFile.loadavg_1m && 'start' in unitFile.loadavg_1m && 'end' in unitFile.loadavg_1m, 'the unit tier file carries loadavg_1m context in the full manifest (voicebox-beads-a8a2)');
 
     // A DIRTY TREE SEALS NOTHING EITHER, and the run that refuses says so by name. This also holds the
     // wiring rather than the policy: the worktree fact is computed by the GATE (the fold cannot see it), so
