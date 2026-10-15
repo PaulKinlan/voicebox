@@ -408,7 +408,9 @@ merger's union, and a full gate may not omit a classified file at all.
   and if the choice is instead an explicit longer fast bound for that scope then it is a policy decision for
   coord, not a hidden number here.
 - **A lost child is not a pass.** A file that produced no TAP summary is `unknown` — never `passed` — and
-  the gate refuses on it.
+  the gate refuses on it. Per-file results wait for the child's `close` (including drained output pipes)
+  before parsing counts: `exit` may arrive before the final TAP footer, so reading there invents a missing
+  summary. A child still silent after `close` remains `unknown` (`voicebox-beads-9xvq`).
 
 ### The blind spot for shared test infra, and its budget (`voicebox-beads-55wl`)
 

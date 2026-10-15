@@ -272,12 +272,12 @@ export function killRunningChildren(signal = "SIGTERM") {
  * group so a timeout can take down the browser or server it started with it — a SIGKILL to the file alone
  * would orphan every Chromium it launched, which is the reaper's problem instead of ours.
  */
-export function runOneFile(file, { timeoutMs = 240_000, cwd = ROOT } = {}) {
+export function runOneFile(file, { timeoutMs = 240_000, cwd = ROOT, spawnChild = spawn } = {}) {
   return new Promise((resolve) => {
     const at = Date.now();
     // THE CHILD IS A TOP-LEVEL TEST RUN, NOT A NESTED ONE — `testChildEnv` owns that fact and why
     // (scripts/gate-manifest.mjs): without it the child is SKIPPED and exits 0 with no summary at all.
-    const child = spawn(process.execPath, ["--test", "--test-reporter=tap", file], {
+    const child = spawnChild(process.execPath, ["--test", "--test-reporter=tap", file], {
       cwd, stdio: ["ignore", "pipe", "pipe"], detached: true, env: testChildEnv(),
     });
     RUNNING_CHILDREN.add(child);
@@ -312,7 +312,9 @@ export function runOneFile(file, { timeoutMs = 240_000, cwd = ROOT } = {}) {
       RUNNING_CHILDREN.delete(child);
       resolve({ file, code, signal, timedOut, counts: tapCounts(out), secs: (Date.now() - at) / 1000, out: note + out });
     };
-    child.on("exit", (code, signal) => settle(code, signal));
+    // 'exit' can precede the final stdout 'data' chunk; the TAP summary is not complete until 'close'
+    // confirms both pipes have drained. A truly silent child still has no counts and remains UNKNOWN.
+    child.on("close", (code, signal) => settle(code, signal));
     child.on("error", (error) => settle(null, null, `the file could not be spawned: ${error.message}\n`));
   });
 }
