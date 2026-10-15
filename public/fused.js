@@ -22,6 +22,7 @@ import { initChangelogDialog } from "./components/changelog-dialog.mjs";
 import { initEnvironmentRootDialog } from "./components/environment-root-dialog.mjs";
 import { initMicHotkeyController } from "./components/mic-hotkey-controller.mjs";
 import { createSyncToastController, pageBuild } from "./components/sync-toast.mjs";
+import { initEnvironmentList } from "./components/environment-list.mjs";
 import { initMiniAppHost } from "./components/mini-app-surface.mjs";
 import { createAudioDeviceController } from "./components/audio-device-controller.mjs";
 import { initActivityLog } from "./components/activity-log-ui.mjs";
@@ -1817,180 +1818,24 @@ function sqehArtifactChip(name, details = {}) {
   turn.append(chip);
 }
 
-async function renderEnvironments() {
-  if (els.envActiveRootVal) {
-    if (roomFolder) {
-      const isOpfs = roomFolder.name === SCRATCHPAD_NAME;
-      const kindPlain = isOpfs ? "browser storage" : "picked folder";
-      els.envActiveRootVal.textContent = `${kindPlain} · ${roomFolder.name}`;
-    } else if (activeRoot === null) {
-      els.envActiveRootVal.textContent = "no folder chosen yet";
-    } else if (activeRoot) {
-      const fullPath = activeRoot.root?.path ?? activeRoot.root?.name ?? activeRoot.root?.label ?? "";
-      const kind = activeRoot.root?.kind ?? "";
-      const kindPlain = { machine: "machine folder", opfs: "browser storage", handle: "picked folder" }[kind]
-        ?? activeRoot.facts?.where ?? kind ?? "a root";
-      els.envActiveRootVal.textContent = fullPath ? `${kindPlain} · ${fullPath}` : kindPlain;
-    }
-  }
-  if (!els.envList) return;
-  try {
-    const answer = await request("/api/environments");
-    const list = answer.environments ?? [];
-    els.envList.replaceChildren();
-    // The BROWSER environment is a host too — the page worker — and it is the one you are standing
-    // in: reachable by construction, always listed first. Its tools are a different set from a
-    // machine's, which is exactly what the capability report exists to show.
-    const browserRow = document.createElement("li");
-    browserRow.className = "env-item";
-    const bHead = document.createElement("div");
-    bHead.className = "env-head";
-    const bDot = document.createElement("span");
-    bDot.className = "env-dot";
-    bDot.dataset.ok = "true";
-    bHead.appendChild(bDot);
-    const bName = document.createElement("span");
-    bName.className = "env-label";
-    bName.textContent = "this browser";
-    bHead.appendChild(bName);
-    const bState = document.createElement("span");
-    bState.className = "env-state";
-    bState.textContent = "this page";
-    bHead.appendChild(bState);
-    browserRow.appendChild(bHead);
-    const bCap = document.createElement("span");
-    bCap.className = "env-cap-none";
-    bCap.textContent = "OPFS + picked folders";
-    browserRow.appendChild(bCap);
-    els.envList.appendChild(browserRow);
-    for (const env of list) {
-      const li = document.createElement("li");
-      li.className = "env-item";
-      // The ROW'S HEAD: name, reachability, and the controls — always visible, never pushed by a report.
-      const head = document.createElement("div");
-      head.className = "env-head";
-      const dot = document.createElement("span");
-      dot.className = "env-dot";
-      dot.dataset.ok = env.reachable === true ? "true" : env.reachable === false ? "false" : "pending";
-      head.appendChild(dot);
-      const name = document.createElement("span");
-      name.className = "env-label";
-      name.textContent = env.label ?? "an environment";
-      head.appendChild(name);
-      const state = document.createElement("span");
-      state.className = "env-state";
-      if (env.reachable === true) state.textContent = "reachable";
-      else if (env.reachable === false) {
-        // "not reachable" is what a person needs; WHICH refusal it was is a diagnostic, and the row
-        // already carries one as its title (voicebox-beads-0ye: the identifier was the visible label).
-        state.textContent = "not reachable";
-        state.title = [env.refused, env.why].filter(Boolean).join(" — ");
-      } else state.textContent = env.why ?? "always here";
-      head.appendChild(state);
-      if (env.key === "local") {
-        const reprobeBtn = document.createElement("button");
-        reprobeBtn.type = "button";
-        reprobeBtn.className = "quiet env-reprobe-btn";
-        reprobeBtn.textContent = "Re-probe";
-        reprobeBtn.addEventListener("click", async () => {
-          reprobeBtn.disabled = true;
-          reprobeBtn.textContent = "Probing…";
-          try {
-            await request("/api/probe", { method: "POST" });
-            if (els.envNote) els.envNote.textContent = `Re-probed ${env.label ?? "this machine"}.`;
-            await renderEnvironments();
-          } catch (err) {
-            if (els.envNote) els.envNote.textContent = String(err?.message ?? "could not re-probe this machine");
-          } finally {
-            reprobeBtn.disabled = false;
-            reprobeBtn.textContent = "Re-probe";
-          }
-        });
-        head.appendChild(reprobeBtn);
-      } else if (env.key) {
-        const removeBtn = document.createElement("button");
-        removeBtn.type = "button";
-        removeBtn.className = "quiet danger env-remove-btn";
-        removeBtn.textContent = "Remove";
-        removeBtn.addEventListener("click", async () => {
-          removeBtn.disabled = true;
-          try {
-            await request(`/api/environments/${encodeURIComponent(env.key)}`, { method: "DELETE" });
-            if (els.envNote) els.envNote.textContent = `Removed '${env.label ?? env.key}'.`;
-            await renderEnvironments();
-          } catch (err) {
-            if (els.envNote) els.envNote.textContent = String(err?.message ?? "could not remove environment");
-          } finally {
-            removeBtn.disabled = false;
-          }
-        });
-        head.appendChild(removeBtn);
-      }
-      li.appendChild(head);
-      // WHERE the row points, in plain sight (voicebox-beads-mrr7): two "Worker Alpha" rows on two
-      // different hosts are legitimate declarations, and indistinguishable without the origin.
-      if (env.key !== "local" && env.origin) {
-        const origin = document.createElement("p");
-        origin.className = "env-origin";
-        origin.textContent = env.origin;
-        li.appendChild(origin);
-      }
-      // The capability report is CONTAINED and SCROLLABLE, and it SUMMARISES: a long probe is a count
-      // with the full list behind an expansion, so it never overwrites the name or the actions.
-      // voicebox-beads-1jk: presence is not capability. The probe measured what the HOST has; the
-      // executor has no program-execution verb, so the row must not read as "my agent can use these".
-      const tools = env.capability?.tools;
-      if (tools && typeof tools === "object") {
-        const present = Object.entries(tools).filter(([, v]) => v && v.value).map(([k]) => k);
-        const cap = document.createElement("details");
-        cap.className = "env-cap";
-        const summary = document.createElement("summary");
-        summary.textContent = present.length ? `${present.length} host programs — present, not invocable` : "no programs found on this host";
-        cap.appendChild(summary);
-        if (present.length) {
-          const note = document.createElement("p");
-          note.className = "env-cap-note";
-          note.textContent = "Present on this host when probed. Voicebox tasks act on files — read, write, list, grep, edit, diff, delete — they cannot run these programs. A delegated harness runs its own tools under its own grants.";
-          const full = document.createElement("div");
-          full.className = "env-cap-list";
-          full.textContent = present.join(", ");
-          cap.append(note, full);
-        }
-        cap.title = `probed ${env.capability.when ?? "at an unknown time"}`;
-        li.appendChild(cap);
-      } else if (env.reachable !== false) {
-        // "not probed" is only worth saying about a host that COULD answer (voicebox-beads-mrr7):
-        // a host that is not running cannot be probed, so under an unreachable row the line was
-        // noise on top of the state that already says so.
-        const cap = document.createElement("span");
-        cap.className = "env-cap-none";
-        cap.textContent = "not probed";
-        li.appendChild(cap);
-      }
-      els.envList.appendChild(li);
-    }
-    if (els.envCount) {
-      const up = list.filter((e) => e.reachable === true).length;
-      els.envCount.textContent = `${list.length + 1} environments · ${up + 1} reachable`;
-    }
-    if (els.envNote) els.envNote.textContent = "";
-    // AUTO-PROBE: a reachable environment that has never been probed is asked to probe itself, on
-    // first reach (Paul: automatically, not a button). The act is recorded in the environment's own
-    // audit by the host; here we only re-render once the report exists. This loop is the local
-    // server today; a remote environment's report rides its own /api/probe the same way.
-    const unprobed = list.filter((e) => e.reachable === true && !e.capability);
-    if (unprobed.some((e) => e.key === "local")) {
-      request("/api/probe").then(() => renderEnvironments()).catch(() => {});
-    }
-  } catch (err) {
-    // The registry could not be read, or the server is not answering: the refusal is named, not blank.
-    if (els.envCount) els.envCount.textContent = "Environments";
-    if (els.envNote) els.envNote.textContent = err?.refused === "loopback-unauthenticated"
-      ? "This page has no session on this origin. Redeem a bootstrap ticket here, or restart without VOICEBOX_LOOPBACK_AUTH."
-      : String(err?.message ?? "the environment list could not be read");
-    throw err;
-  }
-}
+// ── the environment list (core/environment.ts is the seam; server.mjs owns the store) ────
+// One source: the header chip, the settings surface and the "+" all read /api/environments. A host
+// that is listed but not running is named unreachable, never shown as ready; a registry the server
+// cannot read is a different named refusal from an empty list.
+// The list itself — the /api/environments read, the rows and their Re-probe/Remove actions, the auto-probe
+// and the three states of the active-root readout — now lives in public/components/environment-list.mjs
+// (voicebox-beads-uei2.10). This is the one place it is wired: els, request and SCRATCHPAD_NAME go in as
+// plain values, and roomFolder/activeRoot go in as LIVE accessors because the host reassigns both while the
+// page lives. renderEnvironments comes back the other way, because the health poll and the root/room changes
+// call it.
+const { renderEnvironments } = initEnvironmentList({
+  els,
+  request,
+  SCRATCHPAD_NAME,
+  getRoomFolder: () => roomFolder,
+  getActiveRoot: () => activeRoot,
+});
+
 
 async function health() {
   let answer;
