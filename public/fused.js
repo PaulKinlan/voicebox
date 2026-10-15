@@ -1511,7 +1511,7 @@ function render() {
   renderListingRoot();
   renderEmptyState();
   const shownDir = shownFile && shownFile.includes("/") ? shownFile.slice(0, shownFile.lastIndexOf("/")) : "";
-  if (shownFile && shownDir === listingDir && !entries.some((entry) => joinDir(listingDir, entry.name) === shownFile)) {
+  if (shownFile && shownDir === listingDir && !entries.some((entry) => joinDir(listingDir, entry.name) === shownFile || entry.name === shownFile)) {
     shownFile = null;
   }
   if (shownFile) showFileSelection(shownFile);
@@ -2373,6 +2373,7 @@ on(els.fileCancelEdit, "click", () => {
 
 async function saveEditedFile() {
   if (!shownFile || !els.fileEditor || els.reader?.dataset.editing !== "true") return;
+  const fileToSave = shownFile;
   const content = els.fileEditor.value;
   if (els.fileSave) {
     els.fileSave.disabled = true;
@@ -2380,7 +2381,7 @@ async function saveEditedFile() {
   }
   try {
     if (roomFolder) {
-      const written = await writeRoomFile(shownFile, content);
+      const written = await writeRoomFile(fileToSave, content);
       const durable = await durableFact();
       els.readerBody.textContent = content;
       els.copy.disabled = content.length === 0;
@@ -2388,16 +2389,16 @@ async function saveEditedFile() {
       const modeLabel = roomFolder.mode === "readwrite" ? "read/write" : "read-only";
       els.readerFacts.textContent = `${written.bytes} ${written.bytes === 1 ? "byte" : "bytes"} · saved to '${roomFolder.name}' in this tab (${modeLabel})`;
       exitEditMode();
-      finish(`save ${shownFile}`, `wrote ${shownFile} (${size(written.bytes)} observed) in ${roomFolder.name}${durable}`, "good");
-      sqehArtifactChip(shownFile, { verb: "edit", content, bytes: written.bytes });
-      syncMiniAppAfterFileSave(shownFile, content);
+      finish(`save ${fileToSave}`, `wrote ${fileToSave} (${size(written.bytes)} observed) in ${roomFolder.name}${durable}`, "good");
+      sqehArtifactChip(fileToSave, { verb: "edit", content, bytes: written.bytes });
+      syncMiniAppAfterFileSave(fileToSave, content);
       await loadRoomFolder();
       return;
     }
     const answer = await request("/api/file", {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: shownFile, content }),
+      body: JSON.stringify({ name: fileToSave, content }),
     });
     if (!answer.ok) {
       const reason = reasonFrom(answer, answer.error ?? "the server refused the save");
@@ -2412,12 +2413,12 @@ async function saveEditedFile() {
     els.readerFacts.textContent = `${size(content)} · saved just now`;
     exitEditMode();
     const landed = answer.root?.path ?? answer.root?.name ?? answer.root?.label ?? "";
-    finish(`save ${shownFile}`, `${answer.action || `wrote ${shownFile}`}${landed ? ` in ${landed}` : ""}`, "good");
-    sqehArtifactChip(shownFile, { verb: "edit", content });
-    syncMiniAppAfterFileSave(shownFile, content);
+    finish(`save ${fileToSave}`, `${answer.action || `wrote ${fileToSave}`}${landed ? ` in ${landed}` : ""}`, "good");
+    sqehArtifactChip(fileToSave, { verb: "edit", content });
+    syncMiniAppAfterFileSave(fileToSave, content);
     await load();
   } catch (error) {
-    const reason = `Could not save ${shownFile}: ${error?.message ?? error}`;
+    const reason = `Could not save ${fileToSave}: ${error?.message ?? error}`;
     els.readerFacts.textContent = reason;
     if (els.readerDetails) els.readerDetails.open = true;
     setReport(reason, "bad");
