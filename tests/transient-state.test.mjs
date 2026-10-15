@@ -389,10 +389,18 @@ test("transient-state: regex segmentation handles keywords, statement positions,
   const fixture = (prefix) => `import test from "node:test";\nimport assert from "node:assert/strict";\ntest("fixture", async () => {\n  ${prefix}\n  ${assertion}\n});\n`;
   const fixtures = {
     typeofRegex: fixture('const isQuoteRe = typeof /["\x27]/ === "object";'),
-    bracketDivision: fixture("const hits = [4]; const half = hits[0] / 2;"),
-    ifStatementSlash: fixture('if (flag) /"/.test(s);'),
+    voidRegex: fixture('void /["\x27]/;'),
+    deleteRegex: fixture('delete target[/["\x27]/];'),
+    newRegex: fixture('new RegExp(/["\x27]/);'),
+    instanceofRegex: fixture('const isRe = x instanceof /["\x27]/;'),
+    doRegex: fixture('do /["\x27]/.test(s); while (false);'),
     elseStatementSlash: fixture('if (flag) doSomething(); else /"/.test(s);'),
+    ifStatementSlash: fixture('if (flag) /"/.test(s);'),
+    whileStatementSlash: fixture('while (flag) /"/.test(s);'),
+    forStatementSlash: fixture('for (;;) /"/.test(s);'),
+    withStatementSlash: fixture('with (scope) /"/.test(s);'),
     spreadSlash: fixture('const list = [.../"/];'),
+    bracketDivision: fixture("const hits = [4]; const half = hits[0] / 2;"),
     parensDivision: fixture("const half = (hits[0] + 1) / 2;"),
   };
   try {
@@ -415,22 +423,31 @@ test("transient-state: regex segmentation handles keywords, statement positions,
       "unwaited assertions following regexes or division are properly captured in review list",
     );
 
-    // Negative control: division after bracket must NOT mask a valid wait on the same line
-    const waitWithDivisionFile = path.join(dir, "waitWithDivision.test.mjs");
-    writeFileSync(
-      waitWithDivisionFile,
-      `import test from "node:test";\nimport assert from "node:assert/strict";\ntest("fixture", async () => {\n  const hits = [4]; const half = hits[0] / 2; await page.waitForFunction(() => window.__status === "ready");\n  ${assertion}\n});\n`,
-    );
-    const waitRes = spawnSync(process.execPath, [CHECKER, waitWithDivisionFile, "--list"], {
-      cwd: root,
-      encoding: "utf8",
-    });
-    assert.equal(waitRes.status, 0);
-    assert.equal(
-      waitRes.stdout.includes("review"),
-      false,
-      "valid wait following division after bracket is not masked and clears the review item",
-    );
+    // Negative controls: division after bracket or member access must NOT mask a valid wait on the same line
+    const waitControls = {
+      bracketDivision: "const hits = [4]; const half = hits[0] / 2; await page.waitForFunction(() => window.__status === 'ready');",
+      memberNewDivision: "const val = obj.new / 2; await page.waitForFunction(() => window.__status === 'ready');",
+      memberDeleteDivision: "const val = obj.delete / 2; await page.waitForFunction(() => window.__status === 'ready');",
+      memberIfDivision: "const val = obj.if(flag) / 2; await page.waitForFunction(() => window.__status === 'ready');",
+      memberWhileDivision: "const val = obj.while(flag) / 2; await page.waitForFunction(() => window.__status === 'ready');",
+    };
+    for (const [name, prefix] of Object.entries(waitControls)) {
+      const waitFile = path.join(dir, `wait_${name}.test.mjs`);
+      writeFileSync(
+        waitFile,
+        `import test from "node:test";\nimport assert from "node:assert/strict";\ntest("fixture", async () => {\n  ${prefix}\n  ${assertion}\n});\n`,
+      );
+      const waitRes = spawnSync(process.execPath, [CHECKER, waitFile, "--list"], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      assert.equal(waitRes.status, 0);
+      assert.equal(
+        waitRes.stdout.includes("review"),
+        false,
+        `valid wait following ${name} is not masked and clears the review item`,
+      );
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
