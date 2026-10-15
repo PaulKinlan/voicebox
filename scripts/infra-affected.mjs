@@ -17,6 +17,15 @@
 // emitted ordinary markers would count the files it ran as covered and stay silent about the rest, making
 // coverage look BETTER than the truth. For the same reason this is selector-driven with a hard cap: a change
 // that does not touch shared infra must pay nothing (the cap cannot be raised by the branch under test).
+//
+// HOW THE ACCOUNTING MUST BE RECORDED, verified against gate-recover's own branch rather than assumed: the
+// mechanism already exists, so this needs NO new field and NO version bump. `scripts/gate-manifest.mjs`'s
+// SELECTION already includes `not-selected`, and `recordFile` REFUSES an omitted file with no reason ("'<dispatch>'
+// needs a reason - an omitted file with no reason is an unexplained gap") - so recording every skipped affected
+// file as `not-selected` with a reason (the cap, and this module's name) is both the honest accounting and a
+// manifest-level enforcement of it. And the COUNT must reach the reader: `verdictOf` returns `pass` when every
+// DISPATCHED file passed, and an omitted file is never dispatched, so five green out of sixty affected reconciles
+// and reads `pass` unless the reader's own line prints what was left.
 
 /** The narrow class this was measured on. Widening it (tools/, scripts/, a new tests/lib subdir) is a visible
  *  change to this line with its own measurement, not something a caller can do by passing more paths. */

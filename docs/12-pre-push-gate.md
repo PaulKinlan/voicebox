@@ -331,12 +331,15 @@ import, because it builds the test inventory) and each `mapToTests` call costs ~
 13s to a 22s lane. The **subset run's own wall time is measured from the runner that executes it**; the cap exists
 so that it stays inside this bound rather than being discovered to exceed it in the queue.
 
-**Precondition, not a preference: the accounting travels with the run.** The coverage check reads per-file
-`fast-gate:` markers, so a capped subset emitting ordinary markers would count the files it ran as covered and stay
-silent about the rest — coverage reading *better* than the truth, the same silence-reads-as-completeness trap as a
-bare `coverage: UNKNOWN`. The subset mode therefore does not run until a marker exists for affected-but-unrun (one
-new kind; that vocabulary is the hub's, not this repository's), and the artifact must carry `affectedUnrun` even
-when it is empty.
+**Precondition, not a preference: the accounting travels with the run - and the mechanism already exists.**
+Verified against gate-recover's `fleet/zjpm6-host-context`: `scripts/gate-manifest.mjs`'s `SELECTION` already
+includes `not-selected`, and `recordFile` **refuses** an omitted file with no reason, so recording each skipped
+affected file as `not-selected` with a reason is both the honest accounting and a manifest-level enforcement of it.
+No new field, and no manifest version bump for this class. What *does* need building is the **count at the
+reader**: `verdictOf` returns `pass` when every *dispatched* file passed, and an omitted file is never dispatched,
+so five green out of sixty affected reconciles and reads `pass` unless the reader's own line prints what was left.
+A verdict that cannot see an omission is the silence-reads-as-completeness trap with extra steps, so the subset
+mode does not run until that line exists.
 
 ### The coverage contract for a page-loaded module (`voicebox-beads-buy8`)
 
