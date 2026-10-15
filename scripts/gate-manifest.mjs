@@ -56,12 +56,15 @@ const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
  * THE ARTIFACT SHAPE'S VERSION, BUMPED WHENEVER THE SHAPE CHANGES MEANING. v2 adds the `host` block and the
  * per-file `loadavg_1m` of the browser tier (voicebox-beads-zjpm.6): a run that cannot say what the box was
  * doing cannot attribute a slow or failed file, and before v2 an idle box and a box at loadavg 27 were the
- * same artifact. Old artifacts are still audited as the shape they declared — a v1 manifest has no host
- * block because it did not claim one, while a manifest that says v2 and carries none is refused (see
- * `hostProblems`). `verify` therefore stays useful over the checks directory's history instead of turning
- * every artifact written before today into a refusal.
+ * same artifact. v3 adds the per-file `conditions` arms and the `condition_verdict` the sealer derives from
+ * them (voicebox-beads-zjpm.5.2): a browser file that fails only under load used to leave nothing behind but
+ * a timeout, so "does this file fail alone?" was answered by RE-RUNNING it. Old artifacts are still audited
+ * as the shape they declared — a v1 or v2 manifest has no conditions because it did not claim any, while a
+ * manifest that carries conditions must carry valid ones (`conditionProblems`). `verify` therefore stays
+ * useful over the checks directory's history instead of turning every artifact written before today into a
+ * refusal.
  */
-export const MANIFEST_VERSION = 2;
+export const MANIFEST_VERSION = 3;
 export const TIERS = Object.freeze(["unit", "server", "browser"]);
 export const GATES = Object.freeze(["fast", "full"]);
 /**
@@ -75,6 +78,21 @@ export const SELECTION = Object.freeze(["changed", "dependency", "full-roster", 
 export const DISPATCH = Object.freeze(["ran", "omitted", "skipped"]);
 /** Terminal states of a dispatch. `unknown` is the honest answer when a child was lost or timed out. */
 export const STATUS = Object.freeze(["passed", "failed", "skipped", "timeout", "unknown"]);
+/**
+ * THE THREE CONDITIONS A BROWSER FILE CAN BE RUN UNDER (v3, voicebox-beads-zjpm.5.2). `standalone` is the file
+ * alone on the box, `heavy_slot` is the file while the heavy-job queue's slot is held (the holder is named),
+ * and `shard_concurrency` is the file inside the shard pool at its real width. The names are a closed set: an
+ * arm labelled anything else is refused, because a comparison against an unnamed condition is not a
+ * comparison — it is a note.
+ */
+export const CONDITIONS = Object.freeze(["standalone", "heavy_slot", "shard_concurrency"]);
+/**
+ * What the arms TOGETHER say, in a vocabulary a reader can group by. `incomplete` is not a failure and not a
+ * pass: it says an arm was skipped or could not be measured, so no comparison was made — exactly the state
+ * that must never read as agreement.
+ */
+export const CONDITION_PATTERN = Object.freeze(["standalone_only_fails", "concurrency_only_fails", "heavy_slot_only_fails", "all_agree", "mixed", "incomplete"]);
+const CONDITION_KEYS = Object.freeze(["condition", "status", "secs", "loadavg_1m", "worker_count", "command", "counts", "reason", "holder"]);
 
 /**
  * The environment a gate child process runs in. ONE owner for this fact, because both runners
@@ -210,6 +228,116 @@ function fileLoadProblems(load) {
 }
 
 /**
+ * ONE CONDITION ARM'S SOUNDNESS. Every field here exists because its absence would let a reader believe a
+ * comparison that was never made: a status with no duration, a worker count nobody recorded, a command nobody
+ * can re-run, a `skipped`/`unknown` arm with no reason, or a `heavy_slot` arm that does not say WHO held the
+ * slot — the burners are a proxy for the slot, a proxy is a claim, and an unnamed holder is a claim nobody
+ * made. `counts` is optional and validated when present, because an arm that failed should say how many tests
+ * ran, exactly as a failing file's record does.
+ */
+function conditionProblems(conditions) {
+  if (conditions === undefined || conditions === null) return [];
+  if (!Array.isArray(conditions)) return [`conditions must be an array of per-condition arms (got ${JSON.stringify(conditions)})`];
+  const problems = [];
+  const seen = new Set();
+  for (const arm of conditions) {
+    const where = `conditions[${arm && typeof arm === "object" ? JSON.stringify(arm.condition ?? "?") : "?"}]`;
+    if (!arm || typeof arm !== "object" || Array.isArray(arm)) {
+      problems.push(`${where} must be an object`);
+      continue;
+    }
+    const extra = Object.keys(arm).filter((k) => !CONDITION_KEYS.includes(k));
+    if (extra.length) problems.push(`${where} carries unexpected ${extra.join(", ")} (want exactly ${CONDITION_KEYS.join(", ")})`);
+    if (!CONDITIONS.includes(arm.condition)) {
+      problems.push(`${where} names an unknown condition '${arm.condition}' (expected one of ${CONDITIONS.join(", ")})`);
+    } else if (seen.has(arm.condition)) {
+      problems.push(`${where} is named twice — one arm per condition`);
+    } else {
+      seen.add(arm.condition);
+    }
+    if (!STATUS.includes(arm.status)) {
+      problems.push(`${where} status '${arm.status}' is not terminal (expected one of ${STATUS.join(", ")})`);
+      continue;
+    }
+    // A SKIPPED ARM never ran and an UNKNOWN one could not be measured: neither can have a duration, so neither
+    // is asked for one. Every other state has a real elapsed time and must carry it.
+    if (arm.status !== "skipped" && arm.status !== "unknown" && !Number.isFinite(arm.secs)) problems.push(`${where} recorded no duration — an arm whose duration was not measured is not a measurement`);
+    if (arm.counts !== undefined) {
+      const counts = arm.counts;
+      if (!counts || typeof counts !== "object" || Array.isArray(counts)) problems.push(`${where} counts must be {tests, pass, fail, skipped}`);
+      else {
+        for (const key of ["tests", "pass", "fail", "skipped"]) {
+          if (!isCount(counts[key])) problems.push(`${where} counts.${key} must be a non-negative integer (got ${JSON.stringify(counts[key])})`);
+        }
+      }
+    }
+    if (!Number.isInteger(arm.worker_count) || arm.worker_count < 1) problems.push(`${where} worker_count must be a positive integer (got ${JSON.stringify(arm.worker_count)})`);
+    if (typeof arm.command !== "string" || !arm.command.trim()) problems.push(`${where} must carry the command it ran, so whoever reads the artifact can repeat the arm`);
+    if ((arm.status === "skipped" || arm.status === "unknown") && !arm.reason) problems.push(`${where} is ${arm.status} with no reason — an arm that did not run must say why, and "unknown" is a statement about the measurement only`);
+    if (arm.condition === "heavy_slot" && (typeof arm.holder !== "string" || !arm.holder.trim())) problems.push(`${where} must name the holder of the heavy slot — the burners that stand in for the slot are a proxy, and a proxy is a claim`);
+    for (const p of fileLoadProblems(arm.loadavg_1m)) problems.push(`${where}: ${p}`);
+  }
+  if (conditions.length < CONDITIONS.length) {
+    problems.push(`a condition check with ${conditions.length} arm(s) is not a check — all ${CONDITIONS.length} are what make it a comparison`);
+  } else {
+    for (const c of CONDITIONS) if (!seen.has(c)) problems.push(`conditions is missing the '${c}' arm`);
+  }
+  return problems;
+}
+
+/**
+ * WHAT THE ARMS TOGETHER SAY, DERIVED AND NEVER STATED. Computed in one place so the write path and the sealer
+ * cannot disagree about it, and so a runner's own opinion of its run is never what the artifact carries. An
+ * arm that was skipped or could not be measured makes the whole answer `incomplete` with both other fields
+ * null: a comparison missing one side must not read as agreement.
+ */
+export function conditionVerdictFrom(conditions) {
+  if (!Array.isArray(conditions) || conditions.length === 0) return null;
+  if (conditions.some((a) => a?.status === "unknown" || a?.status === "skipped")) {
+    return { pattern: "incomplete", disagreement: null, agrees_with_shard: null };
+  }
+  const byName = new Map(conditions.map((a) => [a?.condition, a]));
+  const failed = CONDITIONS.filter((c) => byName.has(c) && byName.get(c).status !== "passed");
+  const pattern = failed.length === 0
+    ? "all_agree"
+    : failed.length > 1
+      ? "mixed"
+      : failed[0] === "standalone"
+        ? "standalone_only_fails"
+        : failed[0] === "heavy_slot"
+          ? "heavy_slot_only_fails"
+          : "concurrency_only_fails";
+  const standalone = byName.get("standalone");
+  const shard = byName.get("shard_concurrency");
+  return {
+    pattern,
+    disagreement: pattern !== "all_agree",
+    agrees_with_shard: standalone && shard ? (standalone.status === "passed") === (shard.status === "passed") : null,
+  };
+}
+
+/**
+ * THE FAILING ARM MUST BE NAMED (voicebox-beads-a8a2, which exists because of the cost of NOT naming it). A v2
+ * evidence record says a file failed; if it does not also name WHICH arm failed, the only way to find out is to
+ * re-run the file — the cost the evidence field was added to remove, paid again on a box whose load nobody can
+ * reproduce. Deliberately narrow: version-gated so pre-a8a2 evidence still audits as the shape it declared,
+ * required only for `failed` and only where a failure was counted, and never for `timeout` or `unknown`, where a
+ * crash or a kill has no arm to name and its own bounded tail is the name.
+ */
+function evidenceArmProblems(path, entry) {
+  const ev = entry?.failure_evidence;
+  if (!ev || typeof ev !== "object") return [];
+  if (Number(ev.version) < 2) return [];
+  if (!("test" in ev)) return [`${path}: failure_evidence version ${ev.version} carries no 'test' key — the field that names the arm that failed`];
+  const stated = typeof ev.test === "string" && ev.test.trim() !== "";
+  const fails = Number.isFinite(entry?.counts?.fail) ? entry.counts.fail : null;
+  if (entry?.status === "failed" && fails !== 0 && !stated) {
+    return [`${path} failed with evidence version ${ev.version} but names no failing arm — a failure nobody can name costs a re-run, which is exactly what that field exists to remove`];
+  }
+  return [];
+}
+
+/**
  * The `host` block's own soundness. A v2 manifest must carry one (a run that cannot say what the box was
  * doing cannot attribute a slow or failed file); a v1 manifest is audited as the shape it declared, because
  * the checks directory holds artifacts written before this field existed and `verify` is for reading history.
@@ -298,6 +426,31 @@ export function recordFile(manifest, entry) {
     status = entry.status;
   }
 
+  // THE THREE-CONDITION CHECK IS VALIDATED ON THE WRITE PATH, not only when the artifact is read back: a runner
+  // that feeds a malformed arm to `recordFile` is told now, by name, instead of after the landing it was meant
+  // to justify. The same validation runs again in `reconcile`, because a manifest can also arrive from a record
+  // built elsewhere (v3, voicebox-beads-zjpm.5.2).
+  const conditions = entry.conditions;
+  if (conditions !== undefined && dispatch !== "ran") {
+    throw new ManifestRefusal([`${file}: a '${dispatch}' record cannot carry a condition check — arms are dispatched work, and a file that did not run was not run under any condition`]);
+  }
+  const conditionProblemsForFile = conditions === undefined ? [] : conditionProblems(conditions).map((p) => `${file}: ${p}`);
+  if (conditionProblemsForFile.length) throw new ManifestRefusal(conditionProblemsForFile);
+  const derived = conditionVerdictFrom(conditions);
+  // A STATED VERDICT IS A CLAIM ABOUT THE ARMS, SO IT IS CHECKED AGAINST THEM. This is where "disagreement:
+  // false" beside an arm that was never measured is refused instead of printed: the derived answer for an
+  // unmeasured arm is `incomplete` with nulls, and anything else is a runner asserting a comparison it did not
+  // make.
+  if (entry.condition_verdict !== undefined && derived) {
+    const stated = entry.condition_verdict ?? {};
+    for (const key of ["pattern", "disagreement", "agrees_with_shard"]) {
+      if ((stated[key] ?? null) !== derived[key]) {
+        throw new ManifestRefusal([`${file}: the stated condition verdict's '${key}' is ${JSON.stringify(stated[key] ?? null)} but the arms say ${JSON.stringify(derived[key])} — the sealer derives this block, nobody states it`]);
+      }
+    }
+  }
+  for (const p of evidenceArmProblems(file, { ...entry, status })) throw new ManifestRefusal([p]);
+
   const record = {
     path: file,
     tier: known.tier,
@@ -312,6 +465,11 @@ export function recordFile(manifest, entry) {
     // runner samples os.loadavg()[0] when it spawns the file and again when the child settles); the unit and
     // server tiers publish nothing, and `null` says exactly that — an absence of evidence, not an idle box.
     loadavg_1m: entry.loadavg_1m ?? null,
+    // THE THREE ARMS, when this file was condition-checked (v3). Present only on a record that RAN: arms are
+    // dispatched work, so an omitted or skipped file carrying them is refused below rather than stored as a
+    // measurement nobody made.
+    ...(conditions !== undefined ? { conditions } : {}),
+    ...(derived ? { condition_verdict: derived } : {}),
     reason: entry.reason ?? null,
     ...(entry.failure_evidence ? { failure_evidence: entry.failure_evidence } : {}),
   };
@@ -342,6 +500,11 @@ export function recordTier(manifest, record) {
       loadavg_1m: entry.loadavg_1m ?? null,
       selection: entry.selection ?? "full-roster",
       failure_evidence: entry.failure_evidence,
+      // A TIER MAY CARRY THE CONDITION ARMS IT RAN (v3): fix-85lx's condition CLI is the producer, this is the
+      // one fold, and the sealer derives the verdict from them either way (`condition_verdict` on the way in is
+      // accepted only when it matches what the arms say).
+      conditions: entry.conditions,
+      condition_verdict: entry.condition_verdict,
     });
   }
   return manifest;
@@ -359,6 +522,12 @@ export function reconcile(manifest) {
 
   for (const f of manifest.files) {
     for (const p of fileLoadProblems(f.loadavg_1m)) problems.push(`${f.path}: ${p}`);
+    // THE ARMS AND THE FAILING ARM, validated again here for a manifest built by any route (v3 / a8a2).
+    if (f.conditions !== undefined && f.dispatch !== "ran") {
+      problems.push(`${f.path} is '${f.dispatch}' and carries a condition check — arms are dispatched work (conditions on a non-ran record)`);
+    }
+    for (const p of conditionProblems(f.conditions)) problems.push(`${f.path}: ${p}`);
+    for (const p of evidenceArmProblems(f.path, f)) problems.push(p);
     if (!roster.has(f.path)) {
       problems.push(`${f.path} was recorded but is not in the classifier roster (unclassified)`);
       continue;
@@ -454,6 +623,14 @@ export function sealManifest(manifest, { finishedAt = new Date().toISOString() }
   const started = Date.parse(manifest.started_at);
   const ended = Date.parse(manifest.finished_at);
   manifest.secs = Number.isFinite(started) && Number.isFinite(ended) ? Math.round((ended - started) / 100) / 10 : null;
+  // THE DERIVED BLOCK IS THE SEALER'S, RECOMPUTED AT SEAL TIME (v3): the artifact carries what the arms
+  // together say, so it cannot be a runner's opinion that drifted from its own measurements. A record with no
+  // arms keeps no block, and `verdictOf` never reads any of this — the arms DESCRIBE, the file's own status
+  // still decides.
+  for (const f of manifest.files) {
+    const derived = conditionVerdictFrom(f.conditions);
+    if (derived) f.condition_verdict = derived;
+  }
   const { ok, problems, summary } = reconcile(manifest);
   manifest.reconciled = ok;
   manifest.problems = problems;

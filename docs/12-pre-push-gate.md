@@ -75,6 +75,31 @@ reports no load average records `null`, which is not a zero. It is **attribution
 retries, isolates, lengthens a bound or lowers the shard width on the strength of a high reading, and a loaded
 box is still a red gate.
 
+**A browser file can also say WHICH CONDITION it failed under (voicebox-beads-zjpm.5.2).** A record may carry a
+`conditions` array — one arm per condition, named from a closed set: `standalone` (the file alone), `heavy_slot`
+(the file while the heavy-job queue's slot is held, with the `holder` NAMED), and `shard_concurrency` (the file
+inside the shard pool at its real width). Each arm carries its own `status`, `secs`, `loadavg_1m` window,
+`worker_count`, the `command` that ran it, and optionally its `counts`; a `skipped` or `unknown` arm must say
+WHY, and an `unknown` one is not asked for a duration it never had. All three arms are required — a two-arm
+check is refused by name, because two points are not a comparison. The sealer then derives a
+`condition_verdict` from the arms: `pattern` (`standalone_only_fails`, `concurrency_only_fails`,
+`heavy_slot_only_fails`, `all_agree`, `mixed`, or `incomplete`), `disagreement`, and `agrees_with_shard`. Two
+rules make it evidence rather than commentary: an arm that was skipped or could not be measured makes the
+whole answer `incomplete` with both other fields **null** (a comparison missing one side must never read as
+agreement), and a runner may not STATE that verdict — anything stated is checked against the arms and refused
+by name when it differs, so a `disagreement: false` beside an unmeasured arm cannot be printed. `verdictOf`
+never reads any of it: the arms DESCRIBE a shape, the file's own terminal status still decides the verdict, and
+a high reading or a disagreeing arm is never a reason to retry, isolate, widen a bound or lower the shard
+width.
+
+**And a failing file must NAME the arm that failed (voicebox-beads-a8a2).** The tier records now carry
+`failure_evidence.test` — the leaf subtest that failed — and a `failed` record whose v2 evidence does not name
+it is refused by name, because a failure nobody can name costs exactly one re-run, which is the cost the
+evidence field exists to remove. The requirement is deliberately narrow, and each narrowing is asserted: it is
+version-gated on the evidence's own `version` so pre-a8a2 records still audit as the shape they declared; it
+applies only to `failed`; and it is never demanded for `timeout` or `unknown`, where a crash or a kill has no
+arm to name and its bounded tail is the name.
+
 **And a DIRTY worktree seals no landing receipt.** The tiers run over the working tree while the receipt is
 keyed by the committed tree, so on a push that lands, `scripts/pre-push.sh` passes `--tree-dirty` to the fold
 and a dirty run is refused by name (`working tree was DIRTY`), with the refusal recorded on the artifact it

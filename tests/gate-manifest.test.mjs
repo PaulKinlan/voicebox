@@ -475,7 +475,7 @@ test("verdictOf is the ONE answer to 'what does this manifest mean' — an unfin
 // and a per-file window with one end missing must each be refused by name.
 test("a manifest says which box it measured: cores, load, and the moment it was read", () => {
   const manifest = fresh();
-  assert.equal(MANIFEST_VERSION, 2, "v2 is the shape that carries the host block — bump this deliberately, never by accident");
+  assert.equal(MANIFEST_VERSION, 3, "v3 is the shape that carries the host block AND the condition arms — bump this deliberately, never by accident");
   assert.ok(Number.isInteger(manifest.host.cpus) && manifest.host.cpus > 0, "the box's CPUs are recorded");
   assert.ok(Number.isInteger(manifest.host.available_parallelism) && manifest.host.available_parallelism > 0, "and how many a runner may use");
   assert.ok(Number.isFinite(Date.parse(manifest.host.sampled_at)), "and when it was read");
@@ -542,6 +542,169 @@ test("the host block is refused when it is missing on a v2 artifact or malformed
     "and a window with one end is refused: both ends are the evidence",
   );
 });
+
+// ── THE THREE ARMS A BROWSER FILE CAN BE RUN UNDER (voicebox-beads-zjpm.5.2) ─────────────────────
+// Before this, a file that failed only under load left a timeout and nothing else, so the question "does it
+// fail ALONE?" was answered by re-running it on a quiet box — the thing docs/12 refuses. These arms hold the
+// check itself: what each arm must carry, what the sealer derives from the arms together, and the states that
+// must be REFUSED rather than printed, above all a stated `disagreement: false` beside an arm nobody measured.
+const arm = (condition, over = {}) => ({
+  condition,
+  status: "passed",
+  secs: 12.5,
+  loadavg_1m: { start: 1.2, end: 1.4 },
+  worker_count: 4,
+  command: `node --test tests/measured.test.mjs #${condition}`,
+  ...over,
+});
+const browserOf = () => roster.find((r) => r.tier === "browser").path;
+/** A fast gate in which the one browser file was condition-checked and everything else is accounted for. */
+function conditioned(arms, over = {}) {
+  const manifest = fresh();
+  for (const entry of roster) {
+    if (entry.path === browserOf()) recordFile(manifest, passed({ path: entry.path, conditions: arms, ...over }));
+    else if (entry.tier === "browser") recordFile(manifest, omitted({ path: entry.path }));
+    else recordFile(manifest, passed({ path: entry.path }));
+  }
+  return manifest;
+}
+const verdictOfArms = (arms, over = {}) => {
+  const manifest = conditioned(arms, over);
+  finalizeManifest(manifest);
+  const record = manifest.files.find((f) => f.path === browserOf());
+  return { manifest, record, problems: reconcile(manifest).problems };
+};
+
+test("the sealer derives what the three arms say, and the arms DESCRIBE rather than decide", () => {
+  const allPass = verdictOfArms([arm("standalone"), arm("heavy_slot", { holder: "gate:merger" }), arm("shard_concurrency")]);
+  assert.deepEqual(allPass.record.condition_verdict, { pattern: "all_agree", disagreement: false, agrees_with_shard: true }, "three passing arms agree");
+  assert.equal(verdictOf(allPass.manifest), "pass", "and the arms never turn a passing file red — the file's own status decides");
+
+  const aloneOnly = verdictOfArms([arm("standalone", { status: "failed", counts: { tests: 3, pass: 2, fail: 1, skipped: 0 } }), arm("heavy_slot", { holder: "gate:merger" }), arm("shard_concurrency")]);
+  assert.deepEqual(aloneOnly.record.condition_verdict, { pattern: "standalone_only_fails", disagreement: true, agrees_with_shard: false }, "a file that fails alone and passes under concurrency says so, and does NOT agree with the shard arm");
+
+  const shardOnly = verdictOfArms([arm("standalone"), arm("heavy_slot", { holder: "gate:merger" }), arm("shard_concurrency", { status: "failed", counts: { tests: 3, pass: 2, fail: 1, skipped: 0 } })]);
+  assert.deepEqual(shardOnly.record.condition_verdict, { pattern: "concurrency_only_fails", disagreement: true, agrees_with_shard: false }, "the shard arm failing alone is the load-sensitive case, and it names itself");
+
+  const slotOnly = verdictOfArms([arm("standalone"), arm("heavy_slot", { holder: "gate:merger", status: "failed", counts: { tests: 3, pass: 2, fail: 1, skipped: 0 } }), arm("shard_concurrency")]);
+  assert.equal(slotOnly.record.condition_verdict.pattern, "heavy_slot_only_fails", "and the heavy-slot arm failing alone is its own answer, not a shard verdict");
+  assert.equal(slotOnly.record.condition_verdict.agrees_with_shard, true, "standalone and shard still agree with each other there, which is the fact that separates the two load stories");
+
+  const twoFail = verdictOfArms([arm("standalone", { status: "failed", counts: { tests: 3, pass: 2, fail: 1, skipped: 0 } }), arm("heavy_slot", { holder: "gate:merger", status: "failed", counts: { tests: 3, pass: 2, fail: 1, skipped: 0 } }), arm("shard_concurrency")]);
+  assert.equal(twoFail.record.condition_verdict.pattern, "mixed", "two arms failing is not a load story, it is a mixed one, and it is not flattened into either");
+
+  // AN UNMEASURED ARM IS NOT AGREEMENT: `incomplete` with both other fields null, so nothing downstream can
+  // read a comparison that was never made. It is also not a FAILURE — the file's own status is still the
+  // verdict, which is why this is a shape and not a red.
+  const unmeasured = verdictOfArms([arm("standalone"), arm("heavy_slot", { holder: "gate:merger" }), arm("shard_concurrency", { status: "unknown", secs: null, reason: "the shard child was lost with its exit" })]);
+  assert.deepEqual(unmeasured.record.condition_verdict, { pattern: "incomplete", disagreement: null, agrees_with_shard: null }, "an arm that could not be measured leaves an incomplete answer with nulls, never `all_agree` and never `disagreement: false`");
+  assert.equal(verdictOf(unmeasured.manifest), "pass", "and an incomplete comparison does not by itself fail a file whose own run passed");
+});
+
+test("the arms are refused by name when they could not support a comparison, and a STATED verdict is checked against them", () => {
+  const refuse = (arms, why, over = {}) => assert.throws(
+    () => conditioned(arms, over),
+    (error) => error instanceof ManifestRefusal && (Array.isArray(why) ? why : [why]).every((w) => error.message.includes(w)),
+    `expected a refusal naming ${JSON.stringify(why)}`,
+  );
+  const three = () => [arm("standalone"), arm("heavy_slot", { holder: "gate:merger" }), arm("shard_concurrency")];
+
+  refuse([arm("standalone"), arm("heavy_slot", { holder: "gate:merger" }), arm("rolling_shard")], "unknown condition", "rolling_shard");
+  refuse([arm("standalone"), arm("standalone"), arm("shard_concurrency")], ["named twice", "missing the 'heavy_slot' arm"], "standalone");
+  refuse([arm("standalone"), arm("heavy_slot", { holder: "gate:merger" })], "is not a check", "2 arm(s)");
+  refuse([arm("standalone"), arm("heavy_slot", { holder: "gate:merger" }), arm("shard_concurrency", { burners: 6 })], "unexpected burners", "burners");
+  refuse([arm("standalone"), arm("heavy_slot"), arm("shard_concurrency")], "must name the holder", "heavy_slot");
+  refuse([arm("standalone"), arm("heavy_slot", { holder: "gate:merger" }), arm("shard_concurrency", { status: "skipped", secs: null, reason: undefined })], "with no reason", "skipped");
+  refuse([arm("standalone"), arm("heavy_slot", { holder: "gate:merger" }), arm("shard_concurrency", { status: "unknown", secs: null, reason: undefined })], "with no reason", "unknown");
+  refuse([arm("standalone"), arm("heavy_slot", { holder: "gate:merger" }), arm("shard_concurrency", { loadavg_1m: { start: "1.2", end: 1.4 } })], "loadavg_1m.start", "1.2");
+  refuse([arm("standalone"), arm("heavy_slot", { holder: "gate:merger" }), arm("shard_concurrency", { worker_count: 0 })], "worker_count", "positive integer");
+  refuse([arm("standalone"), arm("heavy_slot", { holder: "gate:merger" }), arm("shard_concurrency", { command: "  " })], "must carry the command", "command");
+  // A skipped arm needs NO duration — it did not run, so there is nothing to time — but it does need its reason.
+  const skipped = verdictOfArms([arm("standalone"), arm("heavy_slot", { holder: "gate:merger" }), arm("shard_concurrency", { status: "skipped", secs: null, reason: "the heavy slot was held by another landing" })]);
+  assert.equal(skipped.record.condition_verdict.pattern, "incomplete", "a skipped arm with a reason is recorded and makes the answer incomplete, not refused");
+
+  // ARMS ARE DISPATCHED WORK: a file that was omitted cannot have been run under any condition.
+  assert.throws(
+    () => recordFile(fresh(), { ...omitted({ path: browserOf() }), conditions: three() }),
+    (error) => error instanceof ManifestRefusal && /cannot carry a condition check/.test(error.message),
+    "conditions on a record that did not run are refused",
+  );
+  // And the same fact is caught again when a manifest arrives by another route, because recordFile is not the
+  // only door into a record.
+  const smuggled = conditioned(three());
+  smuggled.files.find((f) => f.path === browserOf()).dispatch = "omitted";
+  assert.ok(
+    reconcile(smuggled).problems.some((p) => p.includes("conditions on a non-ran record")),
+    "reconcile refuses arms on a record that did not run, whatever path built it",
+  );
+
+  // THE ONE THE WHOLE FIELD EXISTS FOR: a runner may not assert agreement it did not measure. The derived
+  // answer beside an unmeasured arm is `incomplete` with nulls, so anything stated must match THAT.
+  assert.throws(
+    () => conditioned(
+      [arm("standalone"), arm("heavy_slot", { holder: "gate:merger" }), arm("shard_concurrency", { status: "unknown", secs: null, reason: "lost child" })],
+      { condition_verdict: { pattern: "all_agree", disagreement: false, agrees_with_shard: true } },
+    ),
+    (error) => error instanceof ManifestRefusal && /the sealer derives this block, nobody states it/.test(error.message),
+    "a stated disagreement:false beside an arm nobody measured is refused by name",
+  );
+  // A stated verdict that MATCHES the arms is accepted, so a producer that computes it correctly is not punished.
+  const statedRight = verdictOfArms(three(), { condition_verdict: { pattern: "all_agree", disagreement: false, agrees_with_shard: true } });
+  assert.equal(statedRight.record.condition_verdict.pattern, "all_agree", "a stated verdict that agrees with the arms is carried through");
+});
+
+// ── THE FAILING ARM MUST BE NAMED (voicebox-beads-a8a2) ──────────────────────────────────────────
+// The unit tier now records which arm failed; this is the half that REFUSES to let a failed file arrive
+// without it, so the next lane reads the arm's name instead of paying for a re-run on a box it no longer has.
+// Deliberately narrow, and each of the narrowings below is an arm: version-gated on the evidence's own shape,
+// required only for a real assertion failure, and never for a crash or a kill, which have no arm to name.
+test("a failed file whose evidence names no arm is refused, and the narrowings are each held", () => {
+  const evidence = (over = {}) => ({ version: 2, test: null, excerpts: ["    not ok 1 - the arm that failed\n"] , ...over });
+  const failed = (over = {}) => ({ path: roster.find((r) => r.tier === "unit").path, dispatch: "ran", status: "failed", counts: { tests: 3, pass: 2, fail: 1, skipped: 0 }, secs: 1.5, selection: "changed", failure_evidence: evidence(), ...over });
+  const refuses = (over, why) => assert.throws(
+    () => recordFile(fresh(), failed(over)),
+    (error) => error instanceof ManifestRefusal && error.message.includes(why),
+    `expected a refusal naming ${why}`,
+  );
+
+  refuses({}, "names no failing arm");
+  refuses({ failure_evidence: { version: 2, excerpts: [] } }, "carries no 'test' key");
+  refuses({ failure_evidence: evidence({ test: "   " }) }, "names no failing arm");
+
+  // HELD: a named arm is accepted, and the name survives into the sealed manifest.
+  const named = fresh();
+  for (const entry of roster) {
+    if (entry.path === roster.find((r) => r.tier === "unit").path) recordFile(named, failed({ failure_evidence: evidence({ test: "the arm that failed" }) }));
+    else recordFile(named, passed({ path: entry.path }));
+  }
+  finalizeManifest(named);
+  assert.equal(named.files.find((f) => f.status === "failed").failure_evidence.test, "the arm that failed", "the arm's name is in the artifact");
+
+  // v1 evidence predates the field: audited as the shape it declared rather than refused for not claiming it.
+  const legacy = fresh();
+  recordFile(legacy, failed({ failure_evidence: { version: 1, excerpts: ["not ok 1 - old shape"] } }));
+  assert.equal(reconcile(legacy).problems.some((p) => p.includes("names no failing arm")), false, "a v1 evidence record is not refused for a field its shape never had");
+
+  // A CRASH OR A KILL HAS NO ARM TO NAME — its bounded tail is the name, and requiring one would make an
+  // honest crash look malformed.
+  for (const status of ["timeout", "unknown"]) {
+    const crash = fresh();
+    recordFile(crash, failed({ status, counts: status === "timeout" ? { tests: -1, pass: -1, fail: -1, skipped: -1 } : null, failure_evidence: evidence() }));
+    assert.equal(reconcile(crash).problems.some((p) => p.includes("names no failing arm")), false, `a ${status} record is not required to name an arm`);
+  }
+
+  // AND NOT WHERE NO FAILURE WAS COUNTED (coord's third guard): contradictory counts are already refused as
+  // contradictory, and this refusal must not be the second voice saying so about a file with fail: 0.
+  const zeroFail = fresh();
+  recordFile(zeroFail, failed({ failure_evidence: evidence(), counts: { tests: 3, pass: 3, fail: 0, skipped: 0 } }));
+  assert.equal(reconcile(zeroFail).problems.some((p) => p.includes("names no failing arm")), false, "fail: 0 is not a counted failure, so no arm name is demanded");
+
+  // A PASSING file carries no such requirement either: the field only ever had to answer for a failure.
+  const green = fresh();
+  recordFile(green, passed({ path: roster.find((r) => r.tier === "unit").path, failure_evidence: evidence() }));
+  assert.equal(reconcile(green).problems.some((p) => p.includes("names no failing arm")), false, "a passed record with evidence is not asked to name an arm");
+});
+
 
 test("a browser tier record's load windows survive the fold into a manifest", () => {
   const manifest = fresh();
