@@ -51,11 +51,38 @@ const PROC_FS = existsSync("/proc/self/stat");
  * parentheses, so the fields are read from after the LAST ')'.
  * Returns null when the PID does not exist (or /proc does).
  */
-function procSnapshot(pid) {
+/**
+ * WHAT THE FILE SAW, WHEN /proc COULD NOT BE READ (voicebox-beads-fwed, voicebox-beads-kud3). The `ps`
+ * table this file is built around must reach the error, or an unexpected errno silences the witness: the read
+ * that failed is the one call that cannot be repeated here, so the table is collected on its own and the
+ * reason is named in the line. Deliberately does NOT call `procSnapshot` — that is the read that just failed.
+ * If `ps` cannot be executed (e.g. EMFILE / missing PATH) or fails, the reason is named rather than falsely
+ * presenting an empty process table (kud3).
+ */
+function witnessWhenUnreadable(pid, err, { spawn = spawnSync } = {}) {
+  let psResult;
+  try {
+    psResult = spawn("ps", ["-o", "pid,ppid,stat,etime,comm", "-p", String(pid)], { encoding: "utf8" });
+  } catch (spawnErr) {
+    psResult = { error: spawnErr };
+  }
+  let psSummary;
+  if (psResult?.error) {
+    psSummary = `(ps unavailable: ${psResult.error.code ?? psResult.error.message ?? "error"})`;
+  } else if (psResult?.status !== 0) {
+    psSummary = `(ps failed with exit ${psResult?.status ?? "unknown"}${psResult?.stderr ? `: ${psResult.stderr.trim()}` : ""})`;
+  } else {
+    const table = (psResult?.stdout || "").trim().split("\n").join(" | ");
+    psSummary = table || "(no rows)";
+  }
+  return `pid ${pid}: the /proc read failed with ${err?.code ?? err?.message ?? "an error"} and says NOTHING about whether it is running, so this is not a pass; ps: ${psSummary}`;
+}
+
+function procSnapshot(pid, { read = readFileSync, spawn = spawnSync } = {}) {
   if (!pid || !PROC_FS) return null;
   let stat;
   try {
-    stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    stat = read(`/proc/${pid}/stat`, "utf8");
   } catch (err) {
     // ONLY "there is no such process" is an answer about the process. A read that failed for any
     // other reason — EMFILE under load, EACCES where /proc hides other users' processes — says
@@ -72,6 +99,13 @@ function procSnapshot(pid) {
     // TERMINATED, ESRCH is that outcome, and every code that says nothing about the process still
     // throws, so a leaked browser can never be read as gone.
     if (err?.code === "ENOENT" || err?.code === "ENOTDIR" || err?.code === "ESRCH") return null;
+    // AND THE WITNESS GOES WITH IT (fwed). This rethrow used to be bare, so an unexpected errno printed a
+    // stack with no state — and because every arm, the wait loops and `describePid` itself all reach the
+    // read through here, `describePid` could not save it: the throw happened INSIDE the message builder.
+    // The state is attached AT THE SOURCE, so it reaches the failure however the read was reached. `code`
+    // and the error's class are untouched, because the tolerances that legitimately catch on them are not
+    // the thing being changed.
+    err.message = `${err.message} — ${witnessWhenUnreadable(pid, err, { spawn })}`;
     throw err;
   }
   const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
@@ -436,4 +470,72 @@ test("cdp-process-cleanup: a process that is really still running is still repor
     try { process.kill(-child.pid, "SIGKILL"); } catch {}
     try { child.kill("SIGKILL"); } catch {}
   }
+});
+
+test("cdp-process-cleanup: an unexpected /proc failure still says what the file saw (voicebox-beads-fwed, voicebox-beads-kud3)", () => {
+  // THE FAILURE MODE (fwed, kud3): every arm, the wait loops and `describePid` itself reach /proc through
+  // `procSnapshot`, so a BARE rethrow there printed an errno and a stack with no state — the witness was
+  // silenced by the thing it witnesses, and `describePid` could not save it because the throw happened
+  // inside the message builder. The read is injected so the unexpected-errno branch is DRIVEN rather than
+  // assumed, and the PID is this process, whose `ps` row really exists.
+  // kud3: when ps cannot run or fails, the error names that ps is unavailable rather than presenting an empty table.
+  if (!PROC_FS) return; // no /proc here: `procSnapshot` returns null before the read, so the branch is unreachable
+  const failing = (code) => () => {
+    throw Object.assign(new Error(`${code}: open '/proc/${process.pid}/stat'`), { code });
+  };
+
+  const psAvailable = (() => {
+    try {
+      const res = spawnSync("ps", ["-o", "pid", "-p", String(process.pid)], { encoding: "utf8" });
+      return res.status === 0;
+    } catch {
+      return false;
+    }
+  })();
+
+  assert.throws(
+    () => procSnapshot(process.pid, { read: failing("EMFILE") }),
+    (err) => {
+      assert.equal(err.code, "EMFILE", "the errno survives, so a tolerance that legitimately catches on `code` is unchanged");
+      assert.match(err.message, /the \/proc read failed with EMFILE/, "the reason for the failed read is named");
+      assert.match(err.message, /says NOTHING about whether it is running, so this is not a pass/, "and the unreadable /proc is still not a pass (3lwx)");
+      if (psAvailable) {
+        assert.match(err.message, new RegExp(`ps: .*\\b${process.pid}\\b`), "the ps table this file is built around is IN the error");
+      } else {
+        assert.match(err.message, /ps: \(ps unavailable/, "names why ps could not be executed");
+      }
+      return true;
+    },
+  );
+
+  // voicebox-beads-kud3: deterministic coverage of ps spawn error and non-zero exit
+  assert.throws(
+    () => procSnapshot(process.pid, {
+      read: failing("EMFILE"),
+      spawn: () => ({ error: Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }) }),
+    }),
+    (err) => {
+      assert.equal(err.code, "EMFILE", "the errno survives");
+      assert.match(err.message, /ps: \(ps unavailable: ENOENT\)/, "names why ps could not be executed");
+      return true;
+    },
+  );
+
+  assert.throws(
+    () => procSnapshot(process.pid, {
+      read: failing("EMFILE"),
+      spawn: () => ({ status: 127, stderr: "not found" }),
+    }),
+    (err) => {
+      assert.equal(err.code, "EMFILE", "the errno survives");
+      assert.match(err.message, /ps: \(ps failed with exit 127: not found\)/, "names ps exit and stderr");
+      return true;
+    },
+  );
+
+  // EACCES is the other code fwed names, and the tolerant codes must stay tolerant: a vanished process is an
+  // ANSWER (null), not a failure, and nothing about which codes are tolerated changed here.
+  assert.throws(() => procSnapshot(process.pid, { read: failing("EACCES") }), /EACCES/, "EACCES is reported the same way");
+  assert.equal(procSnapshot(process.pid, { read: failing("ENOENT") }), null, "ENOENT is still the answer 'there is no such process'");
+  assert.equal(procSnapshot(process.pid, { read: failing("ENOTDIR") }), null, "and so is ENOTDIR");
 });
