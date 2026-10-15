@@ -47,11 +47,21 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { gitEnv } from "../lib/git-env.mjs";
+import { hostSnapshot, isLoadavg, loadavg1m } from "../lib/host-load.mjs";
 
 /** The repository this script lives in: the aggregate asks git about THIS tree, never about the caller's. */
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
-export const MANIFEST_VERSION = 1;
+/**
+ * THE ARTIFACT SHAPE'S VERSION, BUMPED WHENEVER THE SHAPE CHANGES MEANING. v2 adds the `host` block and the
+ * per-file `loadavg_1m` of the browser tier (voicebox-beads-zjpm.6): a run that cannot say what the box was
+ * doing cannot attribute a slow or failed file, and before v2 an idle box and a box at loadavg 27 were the
+ * same artifact. Old artifacts are still audited as the shape they declared — a v1 manifest has no host
+ * block because it did not claim one, while a manifest that says v2 and carries none is refused (see
+ * `hostProblems`). `verify` therefore stays useful over the checks directory's history instead of turning
+ * every artifact written before today into a refusal.
+ */
+export const MANIFEST_VERSION = 2;
 export const TIERS = Object.freeze(["unit", "server", "browser"]);
 export const GATES = Object.freeze(["fast", "full"]);
 /**
@@ -169,6 +179,7 @@ export function createManifest({ gate, tree, sha = "", classified, changed = [],
     classifier: { roster: rosterHash(roster), files: roster, counts: rosterCounts(roster) },
     changed: [...changed],
     unmapped: [...unmapped],
+    host: hostSnapshot(startedAt),
     files: [],
     summary: null,
     reconciled: false,
@@ -177,6 +188,60 @@ export function createManifest({ gate, tree, sha = "", classified, changed = [],
 }
 
 const isCount = (n) => Number.isInteger(n) && n >= 0;
+
+/**
+ * The load readings a BROWSER file's record may carry: both ends of its own window, each a reading or an
+ * honest null. Anything else is refused by name — a record whose load context is `{}`, `"27"` or `-1` is an
+ * artifact that looks like evidence and is not, which is the one shape this whole bead exists to stop.
+ */
+function fileLoadProblems(load) {
+  if (load === null || load === undefined) return [];
+  const problems = [];
+  if (typeof load !== "object" || Array.isArray(load)) {
+    return [`loadavg_1m must be null or {start, end} (got ${JSON.stringify(load)})`];
+  }
+  for (const end of ["start", "end"]) {
+    if (!(end in load)) problems.push(`loadavg_1m is missing '${end}' — both ends of the file's window are the evidence`);
+    else if (!isLoadavg(load[end])) problems.push(`loadavg_1m.${end} must be a non-negative reading or null (got ${JSON.stringify(load[end])})`);
+  }
+  const extra = Object.keys(load).filter((k) => k !== "start" && k !== "end");
+  if (extra.length) problems.push(`loadavg_1m carries unexpected ${extra.join(", ")} (want exactly start, end)`);
+  return problems;
+}
+
+/**
+ * The `host` block's own soundness. A v2 manifest must carry one (a run that cannot say what the box was
+ * doing cannot attribute a slow or failed file); a v1 manifest is audited as the shape it declared, because
+ * the checks directory holds artifacts written before this field existed and `verify` is for reading history.
+ */
+function hostProblems(manifest) {
+  const host = manifest.host;
+  if (host === null || host === undefined) {
+    return Number(manifest.version) >= 2
+      ? [`manifest version ${manifest.version} carries no host block — the box's load, its cores and the moment of reading are what attribute a slow or failed file, and their absence here is a lie about what was measured`]
+      : [];
+  }
+  const problems = [];
+  if (typeof host !== "object" || Array.isArray(host)) return [`host must be an object (got ${JSON.stringify(host)})`];
+  for (const key of ["cpus", "available_parallelism"]) {
+    if (!Number.isInteger(host[key]) || host[key] <= 0) problems.push(`host.${key} must be a positive integer (got ${JSON.stringify(host[key])})`);
+  }
+  const load = host.loadavg_1m;
+  if (!load || typeof load !== "object" || Array.isArray(load)) {
+    problems.push(`host.loadavg_1m must be {before, max, after} (got ${JSON.stringify(load)})`);
+  } else {
+    for (const key of ["before", "max", "after"]) {
+      if (!(key in load)) problems.push(`host.loadavg_1m is missing '${key}'`);
+      else if (!isLoadavg(load[key])) problems.push(`host.loadavg_1m.${key} must be a non-negative reading or null (got ${JSON.stringify(load[key])})`);
+    }
+    const extra = Object.keys(load).filter((k) => !["before", "max", "after"].includes(k));
+    if (extra.length) problems.push(`host.loadavg_1m carries unexpected ${extra.join(", ")} (want exactly before, max, after)`);
+  }
+  if (typeof host.sampled_at !== "string" || !Number.isFinite(Date.parse(host.sampled_at))) {
+    problems.push(`host.sampled_at must be a timestamp (got ${JSON.stringify(host.sampled_at)})`);
+  }
+  return problems;
+}
 
 /**
  * Record one file's fate. Refuses, by name, a file that is not in the roster, a duplicate, a tier that
@@ -243,8 +308,14 @@ export function recordFile(manifest, entry) {
     counts: entry.counts ?? null,
     timeout_ms: entry.timeout_ms ?? null,
     secs: Number.isFinite(entry.secs) ? Math.round(entry.secs * 1000) / 1000 : null,
+    // WHAT THE BOX WAS DOING AROUND THIS FILE. The browser tier publishes both ends of its own window (the
+    // runner samples os.loadavg()[0] when it spawns the file and again when the child settles); the unit and
+    // server tiers publish nothing, and `null` says exactly that — an absence of evidence, not an idle box.
+    loadavg_1m: entry.loadavg_1m ?? null,
     reason: entry.reason ?? null,
   };
+  const badLoad = fileLoadProblems(record.loadavg_1m);
+  if (badLoad.length) throw new ManifestRefusal(badLoad.map((p) => `${file}: ${p}`));
   manifest.files.push(record);
   return record;
 }
@@ -267,6 +338,7 @@ export function recordTier(manifest, record) {
       counts: entry.counts ?? null,
       timeout_ms: entry.timeout_ms ?? null,
       secs: entry.secs,
+      loadavg_1m: entry.loadavg_1m ?? null,
       selection: entry.selection ?? "full-roster",
     });
   }
@@ -278,12 +350,13 @@ export function recordTier(manifest, record) {
  * reconciled, and the caller turns a non-empty list into a refusal (never into a green).
  */
 export function reconcile(manifest) {
-  const problems = [];
+  const problems = [...hostProblems(manifest)];
   const roster = new Map(manifest.classifier.files.map((r) => [r.path, r]));
   const seen = new Set();
   const dispatched = new Set();
 
   for (const f of manifest.files) {
+    for (const p of fileLoadProblems(f.loadavg_1m)) problems.push(`${f.path}: ${p}`);
     if (!roster.has(f.path)) {
       problems.push(`${f.path} was recorded but is not in the classifier roster (unclassified)`);
       continue;
@@ -363,6 +436,19 @@ export function reconcile(manifest) {
 export function sealManifest(manifest, { finishedAt = new Date().toISOString() } = {}) {
   manifest.finished_at = finishedAt;
   if (!manifest.started_at) manifest.started_at = finishedAt;
+  // THE RUN'S OWN READING, BEFORE THE DECISION. `after` is taken here; `max` is the highest of every reading
+  // this manifest holds — the two manifest ends plus every per-file window the browser tier published — so a
+  // spike that happened mid-run survives into the artifact instead of being averaged away. Readings that are
+  // null (not measured) are dropped rather than counted as zero.
+  if (manifest.host && typeof manifest.host === "object") {
+    const load = manifest.host.loadavg_1m;
+    if (load && typeof load === "object") {
+      load.after = loadavg1m();
+      const readings = [load.before, load.after, ...manifest.files.flatMap((f) => (f.loadavg_1m ? [f.loadavg_1m.start, f.loadavg_1m.end] : []))];
+      const measured = readings.filter((n) => Number.isFinite(n));
+      load.max = measured.length ? Math.max(...measured) : null;
+    }
+  }
   const started = Date.parse(manifest.started_at);
   const ended = Date.parse(manifest.finished_at);
   manifest.secs = Number.isFinite(started) && Number.isFinite(ended) ? Math.round((ended - started) / 100) / 10 : null;

@@ -48,6 +48,19 @@ refuses — a changed source with no mapped test, a `--changed-base` that names 
 records those problems is written, says `refused`, and the push is still refused. Only a run that reconciles
 and dispatches every file with a green terminal status is ever labelled `pass`.)
 
+**The artifact also says what the BOX was doing (voicebox-beads-zjpm.6).** A manifest carries a `host` block —
+`cpus`, `available_parallelism`, and `loadavg_1m: {before, max, after}` with the moment it was read — and the
+browser tier keeps a `loadavg_1m: {start, end}` window on every file it dispatched, so a red file's record
+and the shard runner's failure block both say whether the file ran on an idle box or a saturated one. That
+closes a hole this file already documents twice by hand: the same browser file measures 12.2s at four-way idle
+and 39.1s in a loaded gate, and before this the artifact held only the 39.1s, so "flaky file" and "box at
+loadavg 27" were the same record and telling them apart meant re-running the suite. Two limits are recorded
+rather than papered over: `os.loadavg()[0]` is the **1-minute** average and LAGS a burst by roughly half a
+minute, so `max` is the highest of the readings taken (never a claim about the whole run) and a platform that
+reports no load average records `null`, which is not a zero. It is **attribution, not a waiver**: nothing
+retries, isolates, lengthens a bound or lowers the shard width on the strength of a high reading, and a loaded
+box is still a red gate.
+
 **And a DIRTY worktree seals no landing receipt.** The tiers run over the working tree while the receipt is
 keyed by the committed tree, so on a push that lands, `scripts/pre-push.sh` passes `--tree-dirty` to the fold
 and a dirty run is refused by name (`working tree was DIRTY`), with the refusal recorded on the artifact it

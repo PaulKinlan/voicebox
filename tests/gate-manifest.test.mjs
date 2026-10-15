@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import {
   GATES,
   HUB_MARKER_PATTERNS,
+  MANIFEST_VERSION,
   ManifestRefusal,
   STATUS,
   TIERS,
@@ -464,4 +465,103 @@ test("verdictOf is the ONE answer to 'what does this manifest mean' — an unfin
   empty.summary = reconcile(empty).summary;
   empty.reconciled = true;
   assert.equal(verdictOf(empty), "empty", "nothing dispatched is never a pass");
+});
+
+// ── THE BOX THE GATE RAN ON (voicebox-beads-zjpm.6) ──────────────────────────────────────────────
+// Before this, a manifest held per-file durations and nothing about the machine they were measured on, so
+// "this file is flaky" and "this box was at loadavg 27" were the same artifact — and the only way to tell
+// them apart was to re-run the suite, which docs/12-pre-gate refuses. These arms are about the ABSENCE and
+// the MALFORMED case as much as the happy one: a missing block on a v2 artifact, a reading that is a string,
+// and a per-file window with one end missing must each be refused by name.
+test("a manifest says which box it measured: cores, load, and the moment it was read", () => {
+  const manifest = fresh();
+  assert.equal(MANIFEST_VERSION, 2, "v2 is the shape that carries the host block — bump this deliberately, never by accident");
+  assert.ok(Number.isInteger(manifest.host.cpus) && manifest.host.cpus > 0, "the box's CPUs are recorded");
+  assert.ok(Number.isInteger(manifest.host.available_parallelism) && manifest.host.available_parallelism > 0, "and how many a runner may use");
+  assert.ok(Number.isFinite(Date.parse(manifest.host.sampled_at)), "and when it was read");
+  assert.ok(manifest.host.loadavg_1m.before === null || manifest.host.loadavg_1m.before >= 0, "the reading at the start is a reading or an honest null");
+  assert.equal(manifest.host.loadavg_1m.max, null, "a run that has not finished has not been measured — null, not zero");
+  assert.equal(manifest.host.loadavg_1m.after, null, "the closing reading does not exist until the run closes");
+
+  const sealed = recordAll(fresh());
+  finalizeManifest(sealed, { finishedAt: new Date().toISOString() });
+  const load = sealed.host.loadavg_1m;
+  assert.ok(load.after === null || load.after >= 0, "the closing reading is taken when the manifest is sealed");
+  const readings = [load.before, load.after].filter((n) => Number.isFinite(n));
+  assert.equal(load.max, readings.length ? Math.max(...readings) : null, "max is the highest reading kept, and null when nothing was measured");
+});
+
+test("max keeps a spike that happened mid-run, and an unmeasured box stays null rather than 0", () => {
+  const manifest = fresh();
+  const browser = roster.find((r) => r.tier === "browser");
+  for (const entry of roster) {
+    if (entry.path === browser.path) recordFile(manifest, passed({ path: entry.path, loadavg_1m: { start: 27.82, end: 3.1 } }));
+    else recordFile(manifest, omitted({ path: entry.path }));
+  }
+  finalizeManifest(manifest);
+  assert.equal(manifest.files.find((f) => f.path === browser.path).loadavg_1m.start, 27.82, "the file's own window survives into the manifest");
+  assert.equal(manifest.host.loadavg_1m.max, 27.82, "a spike inside one file is not averaged away by the run's own ends");
+
+  // A unit-tier file carries no window at all: `null` says it was not measured there, which is a different
+  // fact from a box that was idle — and a reader must be able to tell them apart.
+  const unit = roster.find((r) => r.tier === "unit");
+  assert.equal(manifest.files.find((f) => f.path === unit.path).loadavg_1m, null, "a tier that publishes no window records an absence, not a zero");
+});
+
+test("the host block is refused when it is missing on a v2 artifact or malformed, and read as its own shape on v1", () => {
+  const missing = recordAll(fresh());
+  delete missing.host;
+  const problems = reconcile(missing).problems;
+  assert.ok(
+    problems.some((p) => p.includes("carries no host block")),
+    `a v2 manifest with no host block is refused by name: ${problems.join(" | ")}`,
+  );
+
+  // v1 artifacts predate the field: `verify` reads the checks directory's history, so an old manifest is
+  // audited as the shape it declared rather than turned into a refusal by a field it never claimed.
+  const older = recordAll(fresh());
+  older.version = 1;
+  delete older.host;
+  assert.equal(reconcile(older).ok, true, "a v1 manifest is still reconciled as v1");
+
+  const malformed = recordAll(fresh());
+  malformed.host.loadavg_1m.before = "27";
+  assert.ok(
+    reconcile(malformed).problems.some((p) => p.includes("host.loadavg_1m.before")),
+    "a reading that is a string is refused, because it looks like evidence and is not",
+  );
+
+  assert.throws(
+    () => recordFile(fresh(), passed({ path: roster.find((r) => r.tier === "browser").path, loadavg_1m: { start: "12.4" } })),
+    (error) => error instanceof ManifestRefusal && /loadavg_1m\.start/.test(error.message),
+    "a per-file window with a string reading is refused at the moment it is recorded",
+  );
+  assert.throws(
+    () => recordFile(fresh(), passed({ path: roster.find((r) => r.tier === "browser").path, loadavg_1m: { start: 1 } })),
+    (error) => error instanceof ManifestRefusal && /missing 'end'/.test(error.message),
+    "and a window with one end is refused: both ends are the evidence",
+  );
+});
+
+test("a browser tier record's load windows survive the fold into a manifest", () => {
+  const manifest = fresh();
+  const browser = roster.filter((r) => r.tier === "browser").slice(0, 2);
+  for (const entry of roster) {
+    if (browser.some((b) => b.path === entry.path)) continue;
+    recordFile(manifest, omitted({ path: entry.path }));
+  }
+  recordTier(manifest, {
+    tier: "browser",
+    files: browser.map((entry, i) => ({ path: entry.path, status: "passed", counts: { tests: 1, pass: 1, fail: 0, skipped: 0 }, secs: 2 + i, loadavg_1m: { start: 4.5 + i, end: 9.5 + i } })),
+  });
+  const folded = manifest.files.filter((f) => browser.some((b) => b.path === f.path));
+  assert.deepEqual(folded.map((f) => f.loadavg_1m), browser.map((_, i) => ({ start: 4.5 + i, end: 9.5 + i })), "what the runner read is what the manifest holds");
+  finalizeManifest(manifest);
+  // THE ASSERTION IS A RELATIONSHIP, NEVER A NUMBER: what the box's own load was while this test ran is not
+  // something a test may assert (docs/speed.md names machine-state assertions as a defect that turns someone
+  // else's change red), so the peak is checked against the manifest's OWN readings plus the injected window.
+  const load = manifest.host.loadavg_1m;
+  const expected = Math.max(...[load.before, load.after, 10.5].filter((n) => Number.isFinite(n)));
+  assert.equal(load.max, expected, "the peak includes the per-file windows as well as the run's own ends");
+  assert.ok(load.max >= 10.5, "a window read mid-file is never averaged away by ends taken on an idle box");
 });

@@ -44,6 +44,7 @@ import { writeFileSync } from "node:fs";
 import { classify } from "../scripts/test-lanes.mjs";
 import { assertExactCoverage, buildQueue, isFailed, splitQueue } from "../scripts/test-shards.mjs";
 import { emitMarker, testChildEnv } from "../scripts/gate-manifest.mjs";
+import { loadavg1m } from "../lib/host-load.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -151,6 +152,11 @@ function runFile(file) {
       killGroup(child, "SIGTERM");
       setTimeout(() => killGroup(child, "SIGKILL"), 5000).unref();
     }, FILE_TIMEOUT_MS);
+    // THE BOX, AROUND THIS FILE. Two readings bracket the child's own window (voicebox-beads-zjpm.6): the
+    // same file measured 12.2s at four-way idle and 39.1s in a loaded gate, and before this the artifact held
+    // only the 39.1s. These are 1-minute averages, so they lag a burst — which is why both ends are kept and
+    // why nothing here retries or excuses anything: a loaded box is still a red gate.
+    const loadStart = loadavg1m();
     const entry = { file, child };
     running.set(child.pid, entry);
     // EXACTLY ONE RESULT PER FILE, whichever way the child ends (reviewer finding, P2). `exit` is
@@ -175,6 +181,7 @@ function runFile(file) {
         skipped: counts(out, "skipped"),
         notOk: notOk(out),
         out: note ? `${note}\n${out}` : out,
+        loadavg_1m: { start: loadStart, end: loadavg1m() },
       };
       results.push(result);
       const status = isFailed(result) ? "FAIL" : "ok  ";
@@ -188,6 +195,13 @@ function runFile(file) {
       if (isFailed(result)) {
         const tail = out.split("\n").slice(-60).join("\n");
         console.log(`[shards] ---- output of ${file} ----\n${tail}\n[shards] ---- end ${file} ----`);
+        // ONE LINE, IN THE FAILURE BLOCK, SAYING WHAT THE BOX WAS DOING. It goes after the end marker so the
+        // file's own output stays verbatim, and it ATTRIBUTES rather than excuses: there is no retry, no
+        // isolation and no longer bound anywhere behind it. Reading a red file an hour later, "it timed out"
+        // and "the box was at 27" were previously the same log line.
+        console.log(
+          `[shards] host loadavg (1m) start ${result.loadavg_1m.start ?? "?"} end ${result.loadavg_1m.end ?? "?"} on ${os.cpus().length} cpu(s) — a reading, not a waiver: a loaded box is still a red gate`,
+        );
       }
       resolve(result);
     };
@@ -248,6 +262,9 @@ if (process.env.VOICEBOX_GATE_TIER_RECORD) {
       counts: r.tests >= 0 ? { tests: r.tests, pass: r.pass, fail: r.fail, skipped: r.skipped } : null,
       timeout_ms: FILE_TIMEOUT_MS,
       secs: Math.round(r.ms) / 1000,
+      // The manifest keeps this per file: a sweep of the browser tier can then show which files were measured
+      // on a loaded box and which were not, without anybody re-running anything (voicebox-beads-zjpm.6).
+      loadavg_1m: r.loadavg_1m ?? null,
     })),
   };
   try {
