@@ -324,6 +324,36 @@ test("transient-state: only executable, unconditionally reached waits clear stat
   }
 });
 
+test("transient-state: review matches live assertions and string-form waits, never commented text (voicebox-beads-xoxu/93oh)", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-mask-edge-"));
+  const assertion = 'assert.equal(await page.evaluate(() => window.__status), "ready");';
+  const body = (lines) => `test("fixture", async () => {\n  ${lines.join("\n  ")}\n});\n`;
+  const fixtures = {
+    commentedPair: body([`// await page.waitForFunction(() => window.__status);`, `// ${assertion}`]),
+    commentedAssertion: body([`// ${assertion}`]),
+    titleAssertion: `test('assert.equal(await page.evaluate(() => window.__status), "ready")', async () => {});\n`,
+    unwaited: body([assertion]),
+    stringWait: body([`await page.waitForFunction('window.__status === "ready"');`, assertion]),
+    stringCommentIdWait: body([`await page.waitForFunction('window.__other /* window.__status */ === "ready"');`, assertion]),
+    callbackWait: body([`await page.waitForFunction(() => window.__status === "ready");`, assertion]),
+    commentIdWait: body([`await page.waitForFunction(() => window.__other /* window.__status */ === "ready");`, assertion]),
+  };
+  try {
+    const files = Object.entries(fixtures).map(([name, fixture]) => {
+      const file = path.join(dir, `${name}.test.mjs`);
+      writeFileSync(file, fixture);
+      return file;
+    });
+    const res = spawnSync(process.execPath, [CHECKER, ...files, "--list"], { cwd: root, encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL" });
+    assert.equal(res.status, 0, `${res.stdout}${res.stderr}`);
+    const reviewFiles = [...res.stdout.matchAll(/review .*\/([^/\s:]+\.test\.mjs):/g)].map((m) => m[1]).sort();
+    assert.deepEqual(reviewFiles, ["commentIdWait.test.mjs", "stringCommentIdWait.test.mjs", "unwaited.test.mjs"],
+      "only live, unwaited assertions are review items; executable string/form waits both clear");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("transient-state: status review list captures exact strings and positive counts on unwaited observables (voicebox-beads-a2gd)", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-a2gd-"));
   const file = path.join(dir, "a2gd.test.mjs");

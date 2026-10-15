@@ -296,16 +296,24 @@ function bracelessGuardedWait(code, waitIndex) {
 
 function statusCandidates(file, source) {
   const scopes = lexicalScopes(source);
-  // Match only real code. Raw source includes commented-out waits and test titles; those cannot clear a read.
-  const waits = [...scopes.code.matchAll(/\b(?:page\.)?waitFor\w*\s*\(/g)].map((m) => ({
-    index: m.index,
-    test: scopes.testAt(m.index),
-    block: scopes.blockAt(m.index),
-    guarded: bracelessGuardedWait(scopes.code, m.index),
-    ids: new Set(firstCallArgument(scopes.code, m.index + m[0].length - 1).match(/__[A-Za-z]\w+/g) ?? []),
-  }));
+  // Recognize calls in code, not comments or titles. A string-form callback is executable too: inspect its
+  // CONTENT for ids while masking any JavaScript comments embedded within that string.
+  const waits = [...scopes.code.matchAll(/\b(?:page\.)?waitFor\w*\s*\(/g)].map((m) => {
+    const open = m.index + m[0].length - 1;
+    const argument = firstCallArgument(source, open).trim();
+    const stringCallback = argument.match(/^(['"`])([\s\S]*)\1$/);
+    const callbackCode = stringCallback ? lexicalScopes(stringCallback[2]).code : "";
+    return {
+      index: m.index,
+      test: scopes.testAt(m.index),
+      block: scopes.blockAt(m.index),
+      guarded: bracelessGuardedWait(scopes.code, m.index),
+      ids: new Set(`${firstCallArgument(scopes.code, open)} ${callbackCode}`.match(/__[A-Za-z]\w+/g) ?? []),
+    };
+  });
   const out = [];
   for (const m of source.matchAll(EXACT_STATUS)) {
+    if (!scopes.code.startsWith("assert.", m.index)) continue; // a comment/title cannot assert
     const expr = m[1].trim();
     let isPageState = READS_PAGE_STATE.test(expr);
     let idents = expr.match(/__[a-zA-Z]\w+/g) ?? [];
