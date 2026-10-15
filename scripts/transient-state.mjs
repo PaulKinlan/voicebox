@@ -126,13 +126,14 @@ export function classifyDelay({ lines, idx }) {
   if (!/^assert\./.test(assertStmt.text.trim().replace(/^await\s+/, ""))) {
     return { cleared: true, clause: "NOT-IMMEDIATE", detail: "the statement after the delay is not an assertion" };
   }
-  if (ABSENCE_EXPECTED.test(assertStmt.text) || ABSENCE_FORM.test(assertStmt.text)) {
+  const operands = comparedOperands(assertStmt.text);
+  if (ABSENCE_EXPECTED.test(operands) || ABSENCE_FORM.test(assertStmt.text)) {
     return { cleared: true, clause: "ABSENCE", detail: "the assertion asserts that something did NOT happen" };
   }
   if (/evaluate\s*\(/.test(opener.text)) {
     return { cleared: true, clause: "IN-PAGE", detail: `the delay runs inside page.evaluate (line ${opener.line})` };
   }
-  if (!READS_PAGE_STATE.test(assertStmt.text) && !isDelayedRead) {
+  if (!READS_PAGE_STATE.test(operands) && !isDelayedRead) {
     return { cleared: true, clause: "NO-ASYNC", detail: "the assertion reads no page or global state" };
   }
   if (assertStmt !== after) {
@@ -154,7 +155,7 @@ export function classifyDelay({ lines, idx }) {
 }
 
 // ── THE REVIEW LIST, deliberately separate and non-deciding (see the header) ──────────────────────────
-const EXACT_STATUS = /assert\.(?:equal|strictEqual|deepEqual)\(\s*([^,]{1,120}?),\s*("[^"]{0,60}"|\d{1,4})\s*[,)]/g;
+const EXACT_STATUS = /assert\.(?:equal|strictEqual|deepEqual)\(\s*([^,]{1,120}?),\s*("[^"\n]{0,60}"|'[^'\n]{0,60}'|\d{1,4})\s*[,)]/g;
 
 // Read only the first argument to a wait: arrow parameters and callback calls have nested parentheses.
 // A regex ending at the first ')' silently loses window.__status in `waitForFunction(() => window.__status)`.
@@ -183,6 +184,23 @@ function firstCallArgument(source, open) {
     else if (ch === "," && parens === 0 && brackets === 0 && braces === 0) return source.slice(open + 1, i);
   }
   return ""; // an incomplete wait cannot clear an assertion
+}
+
+/** Ignore the optional failure MESSAGE, but inspect both compared operands for page reads. */
+function comparedOperands(statement) {
+  const match = /^\s*assert\.(\w+)\s*\(/.exec(statement);
+  if (!match) return statement; // unknown syntax stays fail-closed
+  const open = match[0].length - 1;
+  const first = firstCallArgument(statement, open);
+  if (!first) return statement;
+  if (match[1] === "ok") return first;
+  if (!["equal", "strictEqual", "deepEqual", "notEqual", "notStrictEqual", "notDeepEqual"].includes(match[1])) {
+    return statement; // unfamiliar assertion signature: do not discard possibly relevant operands
+  }
+  const comma = open + 1 + first.length;
+  if (statement[comma] !== ",") return statement;
+  const second = firstCallArgument(statement, comma);
+  return second ? `${first}, ${second})` : statement; // closing delimiter preserves ABSENCE_EXPECTED's expected-value check
 }
 
 const PAGE_ROOT = fileURLToPath(new URL("../public/", import.meta.url));
