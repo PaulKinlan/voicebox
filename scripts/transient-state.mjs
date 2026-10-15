@@ -20,8 +20,9 @@
 //   ABSENCE   the assertion asserts that something did NOT happen. A delay before an absence is the whole
 //             point of the assertion (the negative controls in changelog-dialog-extraction and
 //             opfs-scratch-room are exactly this), not a race.
-//   POLL      the delay is a poll interval inside a loop that re-checks its own condition. The loop is the
-//             wait; the delay is how often it looks.
+//   POLL      a real poll re-checks the observable AFTER sleeping, before asserting. That intervening
+//             condition breaks the immediate-delay shape; merely enclosing the assertion in a loop
+//             (even a many-iteration loop) never clears it.
 //   IN-PAGE   the delay runs INSIDE page.evaluate(): it is the page's own timeline being measured, not the
 //             test waiting for the page.
 //   NO-ASYNC  the assertion reads no page or global state — a fixture asserting its own arithmetic observes
@@ -37,7 +38,9 @@
 // code that writes it) is a REVIEW LIST rather than a decision — it produced 12 candidates on this tree, all
 // of which need a human to say whether the writer is synchronous. A gate that fails on those would be red
 // for the base, which is the failure this repository keeps finding. `--list` prints them.
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { classify } from "./test-lanes.mjs";
 import { rosterOf } from "./gate-manifest.mjs";
 
@@ -120,9 +123,6 @@ export function classifyDelay({ lines, idx }) {
   if (ABSENCE_EXPECTED.test(assertStmt.text) || ABSENCE_FORM.test(assertStmt.text)) {
     return { cleared: true, clause: "ABSENCE", detail: "the assertion asserts that something did NOT happen" };
   }
-  if (/^\s*(for|while)\s*\(/.test(opener.text.trim())) {
-    return { cleared: true, clause: "POLL", detail: `the delay is a poll interval inside a loop (line ${opener.line})` };
-  }
   if (/evaluate\s*\(/.test(opener.text)) {
     return { cleared: true, clause: "IN-PAGE", detail: `the delay runs inside page.evaluate (line ${opener.line})` };
   }
@@ -140,7 +140,9 @@ export function classifyDelay({ lines, idx }) {
   return {
     cleared: false,
     clause: null,
-    detail: "a FIXED delay immediately before an assertion on page state, with nothing saying what it waits for",
+    detail: /^\s*(for|while)\s*\(/.test(opener.text.trim())
+      ? `a FIXED delay inside a loop (line ${opener.line}) immediately precedes a page assertion; no post-sleep condition re-checks its observable`
+      : "a FIXED delay immediately before an assertion on page state, with nothing saying what it waits for",
     statement: assertStmt,
   };
 }
@@ -148,8 +150,72 @@ export function classifyDelay({ lines, idx }) {
 // ── THE REVIEW LIST, deliberately separate and non-deciding (see the header) ──────────────────────────
 const EXACT_STATUS = /assert\.(?:equal|strictEqual|deepEqual)\(\s*([^,]{1,120}?),\s*("[^"]{0,60}"|\d{1,4})\s*[,)]/g;
 
+// Read only the first argument to a wait: arrow parameters and callback calls have nested parentheses.
+// A regex ending at the first ')' silently loses window.__status in `waitForFunction(() => window.__status)`.
+function firstCallArgument(source, open) {
+  let parens = 0, brackets = 0, braces = 0, quote = "", escaped = false;
+  let lineComment = false, blockComment = false;
+  for (let i = open + 1; i < source.length; i++) {
+    const ch = source[i], next = source[i + 1];
+    if (lineComment) { if (ch === "\n") lineComment = false; continue; }
+    if (blockComment) { if (ch === "*" && next === "/") { blockComment = false; i++; } continue; }
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === "/" && next === "/") { lineComment = true; i++; continue; }
+    if (ch === "/" && next === "*") { blockComment = true; i++; continue; }
+    if (ch === "'" || ch === '"' || ch === "`") { quote = ch; continue; }
+    if (ch === "(") parens++;
+    else if (ch === ")") { if (parens === 0) return source.slice(open + 1, i); parens--; }
+    else if (ch === "[") brackets++;
+    else if (ch === "]") brackets--;
+    else if (ch === "{") braces++;
+    else if (ch === "}") braces--;
+    else if (ch === "," && parens === 0 && brackets === 0 && braces === 0) return source.slice(open + 1, i);
+  }
+  return ""; // an incomplete wait cannot clear an assertion
+}
+
+const PAGE_ROOT = fileURLToPath(new URL("../public/", import.meta.url));
+const ROOT = fileURLToPath(new URL("../", import.meta.url));
+let pageWriters;
+function writerIndex() {
+  if (pageWriters) return pageWriters;
+  pageWriters = new Map();
+  const visit = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else if (entry.isFile() && /\.(?:js|mjs|ts)$/.test(entry.name)) {
+        const lines = readFileSync(path, "utf8").split("\n");
+        lines.forEach((line, index) => {
+          for (const match of line.matchAll(/\b(?:window|globalThis)\.(__[A-Za-z]\w*)\s*(?:=(?!=|>)|\+\+|--|\+=|-=)/g)) {
+            if (!pageWriters.has(match[1])) pageWriters.set(match[1], `${relative(ROOT, path)}:${index + 1}`);
+          }
+        });
+      }
+    }
+  };
+  visit(PAGE_ROOT);
+  return pageWriters;
+}
+
+function writerLocation(file, source, id) {
+  // Identifiers came from status assertions and contain no regex metacharacters.
+  const writer = new RegExp(`\\b(?:window|globalThis)\\.${id}\\s*(?:=(?!=|>)|\\+\\+|--|\\+=|-=)`);
+  const index = source.split("\n").findIndex((line) => writer.test(line));
+  if (index >= 0) return `${file}:${index + 1}`;
+  return writerIndex().get(id) ?? "unknown (no assignment found in test or public page code)";
+}
+
 function statusCandidates(file, source) {
-  const waits = [...source.matchAll(/waitFor\w*\(([\s\S]{0,400}?)\)/g)].map((m) => m[1]).join(" ");
+  const waits = [...source.matchAll(/\b(?:page\.)?waitFor\w*\s*\(/g)].map((m) => ({
+    index: m.index,
+    ids: new Set(firstCallArgument(source, m.index + m[0].length - 1).match(/__[A-Za-z]\w+/g) ?? []),
+  }));
   const out = [];
   for (const m of source.matchAll(EXACT_STATUS)) {
     const expr = m[1].trim();
@@ -170,8 +236,10 @@ function statusCandidates(file, source) {
     }
     if (!isPageState) continue;
     // An exact string or count on an unwaited status observable belongs on the review list (voicebox-beads-a2gd)
-    if (idents.length && idents.some((i) => waits.includes(i))) continue;
-    out.push({ file, line: source.slice(0, m.index).split("\n").length, text: m[0].trim().slice(0, 100) });
+    if (idents.length && idents.every((id) => waits.some((wait) => wait.index < m.index && wait.ids.has(id)))) continue;
+    const writers = [...new Set(idents)].map((id) => writerLocation(file, source, id));
+    out.push({ file, line: source.slice(0, m.index).split("\n").length,
+      text: `${m[0].trim().slice(0, 100)} — writer: ${writers.join(", ") || "unknown (no observable identifier)"} (timing needs review)` });
   }
   return out;
 }
