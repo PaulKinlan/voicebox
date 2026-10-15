@@ -296,12 +296,6 @@ function statusCandidates(file, source) {
   return out;
 }
 
-function resolveFilePath(file, root = ROOT) {
-  if (path.isAbsolute(file)) return file;
-  if (existsSync(file)) return path.resolve(file);
-  return path.resolve(root, file);
-}
-
 export function scan(files, { list = false, root = ROOT } = {}) {
   const cleared = [];
   const candidates = [];
@@ -309,7 +303,7 @@ export function scan(files, { list = false, root = ROOT } = {}) {
   const unreadable = [];
   let readCount = 0;
   for (const file of files) {
-    const fullPath = resolveFilePath(file, root);
+    const fullPath = path.isAbsolute(file) ? file : path.resolve(root, file);
     let source;
     try {
       source = readFileSync(fullPath, "utf8");
@@ -319,15 +313,16 @@ export function scan(files, { list = false, root = ROOT } = {}) {
       continue;
     }
     const lines = source.split("\n");
+    const displayPath = path.isAbsolute(file) && file.startsWith(root) ? relative(root, file) : file;
     for (let i = 0; i < lines.length; i++) {
       if (!FIXED_DELAY.some((re) => re.test(lines[i]))) continue;
       const verdict = classifyDelay({ lines, idx: i });
-      const where = `${file}:${i + 1}`;
+      const where = `${displayPath}:${i + 1}`;
       if (verdict.cleared) {
         cleared.push({ where, ...verdict });
         if (list && verdict.clause === "DELAYED-READ") {
           review.push({
-            file,
+            file: displayPath,
             line: i + 1,
             text: `fixed delay before delayed read of page state asserted at line ${verdict.statement?.line}: ${verdict.statement?.text?.slice(0, 80)}`,
           });
@@ -336,7 +331,7 @@ export function scan(files, { list = false, root = ROOT } = {}) {
         candidates.push({ where, ...verdict });
       }
     }
-    if (list) review.push(...statusCandidates(file, source));
+    if (list) review.push(...statusCandidates(displayPath, source));
   }
   return { cleared, candidates, review, unreadable, readCount };
 }
@@ -345,13 +340,17 @@ function main() {
   const args = process.argv.slice(2);
   const list = args.includes("--list");
   const named = args.filter((a) => !a.startsWith("--"));
-  const files = named.length ? named : rosterOf(classify()).filter((e) => e.tier === "browser").map((e) => e.path);
+  const isRoster = named.length === 0;
+  const base = isRoster ? ROOT : process.cwd();
+  const files = isRoster
+    ? rosterOf(classify()).filter((e) => e.tier === "browser").map((e) => path.resolve(ROOT, e.path))
+    : named.map((f) => (path.isAbsolute(f) ? f : path.resolve(process.cwd(), f)));
   if (files.length === 0) {
     console.error("transient-state: REFUSED — no files given and the classifier lists no browser file.");
     return 1;
   }
 
-  const { cleared, candidates, review, unreadable, readCount } = scan(files, { list });
+  const { cleared, candidates, review, unreadable, readCount } = scan(files, { list, root: base });
 
   if (unreadable.length > 0) {
     console.error(`\ntransient-state: REFUSED — could not read ${unreadable.length} of ${files.length} file(s):`);
@@ -369,8 +368,9 @@ function main() {
   for (const c of cleared) console.log(`  cleared ${c.where} — ${c.clause}: ${c.detail}`);
   if (list) for (const r of review) console.log(`  review  ${r.file}:${r.line} — exact status assertion, no wait on it: ${r.text}`);
 
+  const scopeNote = isRoster ? ` (root: ${ROOT.replace(/\/+$/, "")})` : ` (base: ${base.replace(/\/+$/, "")})`;
   if (candidates.length === 0) {
-    console.log(`transient-state: OK — ${readCount} file(s), ${cleared.length} fixed delay(s), every one cleared by a named clause`);
+    console.log(`transient-state: OK — ${readCount} file(s), ${cleared.length} fixed delay(s), every one cleared by a named clause${scopeNote}`);
     return 0;
   }
   console.error(`\ntransient-state: ${candidates.length} candidate(s) that no clause clears — review each: a delay is only a wait if something says what arrived.`);

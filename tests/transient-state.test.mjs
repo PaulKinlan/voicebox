@@ -133,6 +133,25 @@ test("transient-state: unreadable files fail closed with exit 1 naming the unrea
   assert.match(res.stderr, /definitely-missing-file\.test\.mjs/, "names the missing file");
 });
 
+test("transient-state: roster paths resolve unconditionally to repo root and summary names base/root (voicebox-beads-rm1h)", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-rm1h-"));
+  try {
+    // 1. Without args from an external directory, output reports root
+    const resRoster = spawnSync(process.execPath, [CHECKER], { cwd: dir, encoding: "utf8", timeout: 120_000, killSignal: "SIGKILL" });
+    assert.equal(resRoster.status, 0);
+    assert.match(resRoster.stdout, /transient-state: OK — \d+ file\(s\), \d+ fixed delay\(s\), every one cleared by a named clause \(root: [^)]+\)/);
+
+    // 2. With explicit named file from external directory, output reports base
+    const testFile = path.join(dir, "explicit.test.mjs");
+    writeFileSync(testFile, 'import test from "node:test";\ntest("empty", () => {});\n');
+    const resNamed = spawnSync(process.execPath, [CHECKER, testFile], { cwd: dir, encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL" });
+    assert.equal(resNamed.status, 0);
+    assert.match(resNamed.stdout, /transient-state: OK — 1 file\(s\), 0 fixed delay\(s\), every one cleared by a named clause \(base: [^)]+\)/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("transient-state: the status-observable half is a REVIEW LIST, not a verdict (it never changes the exit code)", () => {
   // The audit's second acceptance item needs a human: an exact string or count on a status observable the
   // test never waits for is only a defect if the writer is asynchronous, and that is not decidable from the
