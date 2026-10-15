@@ -26,7 +26,7 @@
 // build the frame, open a fresh MessageChannel, attach port1, install a WINDOW-level handshake
 // listener that validates BOTH e.origin and e.source before it removes itself, then transfer port2
 // (single-use: a second transfer of the same port throws DataCloneError) and post load_app plus
-// mini_app_init. tests/mini-app-host-extraction.test.mjs pins each of those invariants.
+// mini_app_init. tests/mini-app-surface-extraction.test.mjs pins each of those invariants.
 export function initMiniAppHost({
   els,
   request,
