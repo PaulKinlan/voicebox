@@ -45,6 +45,7 @@ import { classify } from "./test-lanes.mjs";
 import { ISOLATED, TIER_WORKERS } from "./test-shards.mjs";
 import { coverageGaps, emitMarker, tapCounts, tierRecordPath } from "./gate-manifest.mjs";
 import { killRunningChildren, runOneFile, statusOf } from "./test-changed.mjs";
+import { loadavg1m } from "../lib/host-load.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -96,13 +97,25 @@ export function testCounts(file, text) {
   return counts;
 }
 
-/** Bounded TAP failure excerpts; never retain the entire per-file output in a tier record. */
+/**
+ * Bounded TAP failure excerpts; never retain the entire per-file output in a tier record.
+ *
+ * v2 ADDS `test`, THE NAME OF THE ARM THAT FAILED (voicebox-beads-a8a2). v1 retained the failing TAP section,
+ * which names the arm inside its text - but only as text: a lane that has lost the log, or that greps it
+ * badly, cannot ask the artifact WHICH arm failed, and the nightly queue-sensitive list cannot group failures
+ * by name. The first `not ok` in node's TAP stream is the LEAF subtest (node prints a nested failure before
+ * the outer suite that contains it), so that is the name kept: the arm, not the suite around it. It is null
+ * when the child crashed or was killed before TAP could name anything, and the bounded tail is retained in
+ * that case - a failure nobody can name must still be diagnosable, and must never look like a named one.
+ */
 export function failureEvidence(output) {
   const lines = String(output ?? "").split("\n");
   const excerpts = [];
+  let test = null;
   for (let i = 0; i < lines.length && excerpts.length < 3; i++) {
     const failed = /^(\s*)not ok\s+\d+\s+-\s+/.exec(lines[i]);
     if (!failed) continue;
+    if (test === null) test = lines[i].replace(/^\s*not ok\s+\d+\s+-\s+/, "").replace(/\s+#\s*(SKIP|TODO)\b.*$/, "").trim();
     const section = [lines[i]];
     for (let j = i + 1; j < lines.length && section.length < 20; j++) {
       const boundary = /^(\s*)(?:(?:ok|not ok)\s+\d+\s+-\s+|1\.\.\d+\s*$)/.exec(lines[j]);
@@ -114,11 +127,19 @@ export function failureEvidence(output) {
   }
   // A failed process may have crashed before TAP could name a test. Retain only its bounded tail.
   if (!excerpts.length) excerpts.push(lines.slice(-12).map((line) => line.slice(0, 240)).join("\n"));
-  return { version: 1, excerpts };
+  return { version: 2, test, excerpts };
 }
 
-/** One dispatched file's record, in the shape `gate-manifest.mjs`'s `recordTier` folds. */
-export function recordOf(file, result, timeoutMs) {
+/**
+ * One dispatched file's record, in the shape `gate-manifest.mjs`'s `recordTier` folds.
+ *
+ * `loadavg` IS THE BOX AROUND THIS CHILD (voicebox-beads-a8a2). Every file in this tier is its own process,
+ * so the reading is attributable to the file by construction - which is exactly what the browser tier records
+ * and what the unit tier did not, leaving the three unit-tier failures of 2026-10-15 unattributable without
+ * a re-run. Each end is a reading or an honest null (a platform that reports no load average); the default is
+ * both ends null, which says "not measured here" and is never a zero.
+ */
+export function recordOf(file, result, timeoutMs, loadavg = { start: null, end: null }) {
   const counts = testCounts(file, result.out ?? "");
   const status = statusOf({ ...result, counts });
   return {
@@ -127,6 +148,7 @@ export function recordOf(file, result, timeoutMs) {
     counts: counts.tests >= 0 ? counts : null,
     timeout_ms: timeoutMs,
     secs: Number.isFinite(result.secs) ? result.secs : null,
+    loadavg_1m: { start: loadavg?.start ?? null, end: loadavg?.end ?? null },
     ...(status !== "passed" ? { failure_evidence: failureEvidence(result.out) } : {}),
   };
 }
@@ -141,19 +163,33 @@ export async function runOneTier({ tier, files, workers = TIER_WORKERS[tier] ?? 
   let cursor = 0;
   const run = async (file) => {
     log.log(`[gate-tier] running ${file}`);
+    // BOTH ENDS OF THE CHILD'S OWN WINDOW, and nothing else - no retry, no bound change, no verdict change.
+    const loadStart = loadavg1m();
     const result = await runner(file, { timeoutMs });
-    const record = recordOf(file, result, timeoutMs);
+    const record = recordOf(file, result, timeoutMs, { start: loadStart, end: loadavg1m() });
     results.push(record);
     if (record.status === "passed") log.log(emitMarker("passed", [file]));
     else if (record.status === "failed") log.log(emitMarker("failed", [file]));
     else log.log(emitMarker("unknown", [`${file} (${record.status})`]));
+    // THE FAILING ARM IS NAMED ON THE LINE A PERSON READS, not only inside the evidence block: a lane that
+    // greps the log or loses part of it should still be able to say which arm failed without a re-run.
     log.log(
       `[gate-tier] ${record.status.toUpperCase().padEnd(7)} ${String(Math.round((record.secs ?? 0) * 1000)).padStart(7)}ms ` +
-        `tests=${record.counts?.tests ?? -1} pass=${record.counts?.pass ?? -1} fail=${record.counts?.fail ?? -1} ${file}`,
+        `tests=${record.counts?.tests ?? -1} pass=${record.counts?.pass ?? -1} fail=${record.counts?.fail ?? -1}` +
+        `${record.failure_evidence?.test ? ` arm="${record.failure_evidence.test}"` : ""} ${file}`,
     );
     if (record.status !== "passed") {
       const evidence = record.failure_evidence?.excerpts.join("\n") ?? String(result.out ?? "").split("\n").slice(-40).join("\n");
       log.log(`[gate-tier] ---- output of ${file} ----\n${evidence}\n[gate-tier] ---- end ${file} ----`);
+      // A FAILURE NOBODY CAN NAME IS THE THING THIS FIELD EXISTS TO END, so it is said out loud rather than
+      // left to be discovered later. It is a warning, not a new failure: the child already failed the gate,
+      // and turning an unparseable reporter format into a second, louder failure is how a gate bricks a
+      // landing over its own logging (voicebox-beads-a8a2).
+      if (record.status === "failed" && !record.failure_evidence?.test) {
+        log.log(
+          `[gate-tier] WARNING: ${file} failed and no failing arm could be named from the child's TAP output — identifying it needs a re-run, which is the cost this record exists to remove`,
+        );
+      }
     }
     return record;
   };

@@ -36,9 +36,16 @@ On a non-passing file, the tier log and its retained tier record keep up to thre
 (including indented nested subtests, before their outer suite summary)
 (at most 20 lines of 240 characters each), including the test name and assertion even when later tests
 would push them past the old last-40-lines tail. If no TAP failure exists, the last 12 bounded lines
-identify a crash or timeout. The additive `failure_evidence.version: 1` field also carries through to
+identify a crash or timeout. The additive `failure_evidence.version: 2` field also carries through to
 a manually folded manifest; passing files have no evidence field or extra log output. Evidence never
-changes the file status or the fail-closed verdict.
+changes the file status or the fail-closed verdict. Since `voicebox-beads-a8a2` the same record also names
+the arm that failed as a FIELD (`failure_evidence.test`, the leaf subtest, `null` when a crash or a kill
+named nothing — the log line then carries `arm="…"` and a failure that cannot be named says so out loud
+rather than reading like one that was), and the UNIT tier now records `loadavg_1m {start, end}` per file,
+because every file in that tier is its own child process and the box around it is therefore attributable —
+the gap that left three unit-tier failures on 2026-10-15 needing a re-run to identify. Same rule as the
+browser tier's windows: a reading or an honest null, and never a reason to retry, widen a bound or soften
+a verdict.
 
 A stage that refuses prints where its records were kept and how to fold them:
 

@@ -132,7 +132,8 @@ test("a tier failure retains bounded TAP diagnostics before the last 40 lines; a
   const redEntry = record.files.find((entry) => entry.path === "tests/red.test.mjs");
   const greenEntry = record.files.find((entry) => entry.path === "tests/green.test.mjs");
   assert.equal(tierVerdict(record, record.files.map((entry) => entry.path)).ok, false, "diagnostics must never turn a failed tier green");
-  assert.equal(redEntry.failure_evidence.version, 1, "the additive evidence field has its own version");
+  assert.equal(redEntry.failure_evidence.version, 2, "the additive evidence field has its own version, bumped when it gained the failing arm's NAME");
+  assert.equal(redEntry.failure_evidence.test, "watchdog startup under load", "and the arm that failed is a FIELD, not just text inside the excerpt");
   assert.match(redEntry.failure_evidence.excerpts[0], /not ok 1 - watchdog startup under load[\s\S]*child hung past watchdog deadline/);
   assert.ok(redEntry.failure_evidence.excerpts[0].length < 5000, "a noisy test cannot make an unbounded record");
   assert.doesNotMatch(redEntry.failure_evidence.excerpts[0], /later passing diagnostic/);
@@ -164,6 +165,74 @@ test("a tier failure retains bounded TAP diagnostics before the last 40 lines; a
   const { manifest } = aggregateTiers({ unit, server: tierRecord("server"), browser: tierRecord("browser") });
   assert.equal(manifest.verdict, "fail", "retaining evidence does not change a red manifest verdict");
   assert.deepEqual(manifest.files.find((entry) => entry.path === unit.files[at].path).failure_evidence, redEntry.failure_evidence, "the sealed manifest carries the bounded diagnostic too");
+});
+
+test("the unit tier records WHICH ARM failed and WHAT THE BOX WAS DOING around that child (voicebox-beads-a8a2)", async () => {
+  // WHY. Three unit-tier failures on 2026-10-15 could not be attributed from the artifact: this tier
+  // recorded counts and no box context, and the failing arm's name existed only inside a log a lane had
+  // already lost. Both halves are now in the record, per child, because every file here is its own process.
+  const leaf = `# Subtest: suite
+    # Subtest: failing subtest
+    not ok 1 - failing subtest
+      ---
+      error: Expected true, got false
+      ...
+    1..1
+not ok 1 - suite
+  ---
+  error: 1 subtest failed
+  ...
+`;
+  const logged = [];
+  const record = await runOneTier({
+    tier: "unit", files: ["tests/leaf.test.mjs", "tests/green.test.mjs"], workers: 2,
+    runner: async (file) => ({
+      code: file.includes("green") ? 0 : 1, signal: null, timedOut: false, secs: 0.2,
+      out: file.includes("green") ? "ok 1 - green\n1..1\n# tests 1\n# pass 1\n# fail 0\n# skipped 0\n" : `${leaf}1..2\n# tests 2\n# pass 0\n# fail 2\n# skipped 0\n`,
+    }),
+    log: { log(message) { logged.push(message); }, error() {} },
+  });
+  const red = record.files.find((entry) => entry.path === "tests/leaf.test.mjs");
+  const green = record.files.find((entry) => entry.path === "tests/green.test.mjs");
+  assert.equal(red.failure_evidence.test, "failing subtest", "the ARM is named, not the suite that contains it (node prints the nested failure first, and that is the one a person needs)");
+  assert.equal(green.failure_evidence, undefined, "a green file still carries no evidence payload");
+  // THE BOX, per child: both ends, each a reading or an honest null - and it is recorded for a PASSING child
+  // too, because the point is what the box was doing when this file ran, not only when it went red.
+  for (const entry of [red, green]) {
+    assert.deepEqual(Object.keys(entry.loadavg_1m), ["start", "end"], "both ends of the child's own window");
+    for (const end of ["start", "end"]) {
+      assert.ok(entry.loadavg_1m[end] === null || Number.isFinite(entry.loadavg_1m[end]), `${entry.path} ${end} is a reading or null, got ${entry.loadavg_1m[end]}`);
+    }
+  }
+  assert.match(logged.join("\n"), /arm="failing subtest" tests\/leaf\.test\.mjs/, "the line a person reads names the arm, with the path still last");
+
+  // AND IT REACHES THE ARTIFACT, not just the tier record: the unit tier's readings fold through the same
+  // `recordTier` the browser tier uses, which is the whole point of the schema being additive.
+  const unit = tierRecord("unit");
+  const at = unit.files.findIndex((entry) => entry.path === "tests/gate-tier.test.mjs");
+  unit.files[at] = { ...red, path: unit.files[at].path };
+  const { manifest } = aggregateTiers({ unit, server: tierRecord("server"), browser: tierRecord("browser") });
+  const folded = manifest.files.find((entry) => entry.path === unit.files[at].path);
+  assert.deepEqual(folded.loadavg_1m, red.loadavg_1m, "a unit-tier file's box window survives into the manifest");
+  assert.equal(folded.failure_evidence?.test, "failing subtest", "and so does the name of the arm that failed");
+
+  // A FAILURE THAT CANNOT BE NAMED IS SAID OUT LOUD. A TAP summary with failures and no `not ok` line is the
+  // shape where the arm is genuinely unavailable, and it must not read like a named failure afterwards.
+  const unnamed = [];
+  const nameless = await runOneTier({
+    tier: "unit", files: ["tests/nameless.test.mjs"], workers: 1,
+    runner: async () => ({ code: 1, signal: null, timedOut: false, secs: 0.1, out: "1..1\n# tests 1\n# pass 0\n# fail 1\n# skipped 0\n" }),
+    log: { log(message) { unnamed.push(message); }, error() {} },
+  });
+  assert.equal(nameless.files[0].status, "failed");
+  assert.equal(nameless.files[0].failure_evidence.test, null, "no name was available and the record says so instead of inventing one");
+  assert.match(unnamed.join("\n"), /WARNING: tests\/nameless\.test\.mjs failed and no failing arm could be named/, "the gap is announced where it is created");
+
+  // A crash before TAP is the same field, null, with the bounded tail - a failure nobody can name is still
+  // diagnosable, and `recordOf`'s default says "not measured here" rather than zero.
+  assert.equal(failureEvidence("uncaught crash before TAP").test, null, "a crash names no arm and claims none");
+  const direct = recordOf("tests/x.test.mjs", { code: null, signal: "SIGTERM", timedOut: true, secs: 240, out: "" }, 240_000);
+  assert.deepEqual(direct.loadavg_1m, { start: null, end: null }, "a caller that measured nothing records an absence, never a zero");
 });
 
 test("a dropped file, a duplicate and a file with no duration are each refused BY NAME", () => {
