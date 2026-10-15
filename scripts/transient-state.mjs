@@ -284,13 +284,13 @@ function lexicalScopes(source) {
         }
         if (depth === 0) {
           while (j >= 0 && /\s/.test(chars[j])) j--;
-          const preHeader = chars.slice(Math.max(0, j - 10), j + 1).join("");
-          const headerMatch = preHeader.match(/\b(if|while|for|with)$/);
+          const preHeader = chars.slice(Math.max(0, j - 15), j + 1).join("");
+          const headerMatch = preHeader.match(/\b(if|while|for(?:\s+await)?)$/);
           if (headerMatch) {
             const hStart = j - headerMatch[1].length + 1;
             let beforeH = hStart - 1;
             while (beforeH >= 0 && /\s/.test(chars[beforeH])) beforeH--;
-            if (beforeH < 0 || (chars[beforeH] !== "." && chars[beforeH] !== "?")) {
+            if (beforeH < 0 || chars[beforeH] !== ".") {
               isStatementSlash = true;
             }
           }
@@ -302,7 +302,7 @@ function lexicalScopes(source) {
         const kwStart = prev - kwMatch[1].length + 1;
         let beforeKw = kwStart - 1;
         while (beforeKw >= 0 && /\s/.test(chars[beforeKw])) beforeKw--;
-        if (beforeKw < 0 || (chars[beforeKw] !== "." && chars[beforeKw] !== "?")) {
+        if (beforeKw < 0 || chars[beforeKw] !== ".") {
           isKeyword = true;
         }
       }
