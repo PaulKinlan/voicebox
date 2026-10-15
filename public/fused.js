@@ -1044,7 +1044,17 @@ async function request(path, options, traceId) {
     options = options ?? {};
     options.headers = { ...(options.headers ?? {}), "x-voicebox-session-token": sessionToken };
   }
-  const response = await fetch(path, options);
+  let response;
+  try {
+    response = await fetch(path, options);
+  } catch (err) {
+    // A transport rejection has no HTTP response. Keep it distinct from an answered route's 500/refusal.
+    if (err instanceof TypeError) {
+      err.refused = "machine-unreachable";
+      err.route = path;
+    }
+    throw err;
+  }
   const body = await response.json().catch(() => null);
   if (traceId) recordDebug({ type: "turn.result", traceId, status: response.status, body,
     severity: !response.ok || body?.result?.ok === false || body?.error || body?.note ? "error" : "info",
@@ -1839,24 +1849,28 @@ const { renderEnvironments } = initEnvironmentList({
 });
 
 
+function showHostUnreachable(err) {
+  if (els.dot) els.dot.dataset.ok = "false";
+  if (els.where) {
+    els.where.textContent = "the machine is not answering — fix the host";
+    els.where.title = `source: GET ${err?.route ?? "/api/health"} · ${err?.refused ?? "machine-unreachable"}: ${err?.why ?? err?.message ?? "the local server is not answering"}`;
+  }
+  syncToastController.stampBuild(null);
+  if (els.rootKind) els.rootKind.textContent = "folder unknown";
+  renderEmptyState();
+  if (els.rootNote) {
+    els.rootNote.textContent = "The local server is not answering, so which folder it saves into cannot be checked.";
+    els.rootNote.dataset.tone = "warn";
+    els.rootNote.hidden = false;
+  }
+}
+
 async function health() {
   let answer;
   try {
     answer = await request("/api/health");
   } catch (err) {
-    if (els.dot) els.dot.dataset.ok = "false";
-    if (els.where) {
-      els.where.textContent = "the machine is not answering — fix the host";
-      els.where.title = `source: GET /api/health · ${err?.refused ?? "machine-unreachable"}: ${err?.why ?? err?.message ?? "the local server is not answering"}`;
-    }
-    syncToastController.stampBuild(null);
-    if (els.rootKind) els.rootKind.textContent = "folder unknown";
-    renderEmptyState();
-    if (els.rootNote) {
-      els.rootNote.textContent = "The local server is not answering, so which folder it saves into cannot be checked.";
-      els.rootNote.dataset.tone = "warn";
-      els.rootNote.hidden = false;
-    }
+    showHostUnreachable(err);
     return;
   }
   if (els.dot) els.dot.dataset.ok = "true";
@@ -1879,8 +1893,12 @@ async function health() {
     downstreamRoute = "/api/extensions";
     await renderExtensions();
   } catch (err) {
-    // A healthy heartbeat is not invalidated by a protected or unreadable downstream route.
-    // Name the route that failed; only /api/health can mark this server offline.
+    // A previously healthy heartbeat cannot overrule a LATER transport failure: the machine may have
+    // disappeared between /api/health and a downstream fetch. An answered HTTP refusal is different.
+    if (err?.refused === "machine-unreachable") {
+      showHostUnreachable(err);
+      return;
+    }
     const source = err?.route ?? downstreamRoute;
     if (els.where) {
       if (err?.refused === "loopback-unauthenticated") {
