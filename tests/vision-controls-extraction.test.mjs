@@ -407,6 +407,9 @@ test("the real room: camera on and off with the tracks really released, preview 
       const realUser = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
       const realDisplay = navigator.mediaDevices.getDisplayMedia.bind(navigator.mediaDevices);
       window.__vision = { video: 0, audio: 0, display: 0, videos: [], activity: [], liveCalls: 0, live: false, streams: [] };
+      // The microphone auto-starts too: completion order cannot identify the CAMERA stream.
+      window.__vision.videoTracks = (streams = window.__vision.streams) =>
+        streams.find((stream) => stream.getVideoTracks().length > 0)?.getVideoTracks() ?? [];
       // Counted by KIND: the module auto-starts the microphone when no session is live, and how long that
       // capture takes is not this test's business — only the CAMERA request count is asserted.
       navigator.mediaDevices.getUserMedia = async (c) => {
@@ -424,6 +427,15 @@ test("the real room: camera on and off with the tracks really released, preview 
       return { hasCapture: typeof realUser === "function" };
     });
     assert.equal(prepared.hasCapture, true, "the browser must expose getUserMedia for this drive to mean anything");
+    const orderControl = await page.evaluate(() => {
+      const camera = { getVideoTracks: () => [{ readyState: "live" }] };
+      const microphone = { getVideoTracks: () => [] };
+      return [
+        window.__vision.videoTracks([camera, microphone]).map((track) => track.readyState),
+        window.__vision.videoTracks([microphone, camera]).map((track) => track.readyState),
+      ];
+    });
+    assert.deepEqual(orderControl, [["live"], ["live"]], "camera selection cannot depend on which capture resolves last");
 
     // PTT on through the room's own Settings switch: this is the module's preference handler running.
     await page.evaluate(() => {
@@ -451,7 +463,7 @@ test("the real room: camera on and off with the tracks really released, preview 
       pressed: document.getElementById("vision-camera-btn").getAttribute("aria-pressed"),
       hidden: document.getElementById("vision-core-card").hidden,
       hasStream: Boolean(document.getElementById("vision-core-video").srcObject),
-      tracks: window.__vision.streams.at(-1).getVideoTracks().map((t) => t.readyState),
+      tracks: window.__vision.videoTracks().map((t) => t.readyState),
       meta: document.getElementById("vision-core-meta").textContent,
     }));
     assert.deepEqual({ video: on.video, pressed: on.pressed, hidden: on.hidden, hasStream: on.hasStream, tracks: on.tracks }, { video: 1, pressed: "true", hidden: false, hasStream: true, tracks: ["live"] }, "one CAMERA request, the button pressed, the card shown, the stream attached and a LIVE track");
@@ -490,7 +502,7 @@ test("the real room: camera on and off with the tracks really released, preview 
     await page.click("#vision-stop-btn");
     await page.waitFor(() => document.getElementById("vision-core-meta")?.textContent === "Camera off", { label: "the metadata line to report the stop", timeout: 20000 });
     const off = await page.evaluate(() => ({
-      tracks: window.__vision.streams.at(-1).getVideoTracks().map((t) => t.readyState),
+      tracks: window.__vision.videoTracks().map((t) => t.readyState),
       hidden: document.getElementById("vision-core-card").hidden,
       src: document.getElementById("vision-core-video").srcObject,
     }));
