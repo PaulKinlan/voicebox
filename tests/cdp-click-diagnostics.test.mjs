@@ -126,14 +126,21 @@ test("a click whose target is REMOVED between press and release records that no 
 
   assert.match(
     page.lastClick.line,
-    /never reached the document/,
+    /0 click events reached the document/,
     `a click with no event must say exactly that, not blame the handler: ${page.lastClick.line}`,
   );
-  assert.match(page.lastClick.line, /the target has since left the document/, "and note that the target is gone");
+  assert.match(page.lastClick.line, /the target is no longer in it/, "and note that the target is gone");
+  // THE CROSS-MECHANISM GUARD, and the reason this file changed: gate-recover's 18lh reproduction lost a click to
+  // DISPLACEMENT - the target still present and still enabled - which also produces no click event, from a
+  // different fault with a different fix. A diagnostic that said the same thing for both would re-create the
+  // conflation one level down. Removed here, the record must NOT claim displacement, and must NOT revive the
+  // older guess that the pointer "was not over anything clickable".
+  assert.doesNotMatch(page.lastClick.line, /displacement/, `removal is not displacement: ${page.lastClick.line}`);
+  assert.doesNotMatch(page.lastClick.line, /clickable/, `and the cause must not be guessed: ${page.lastClick.line}`);
 
   await assert.rejects(
     () => page.waitFor(() => false, { label: "the effect of the vanishing button", timeout: 600 }),
-    /never reached the document/,
+    /0 click events reached the document/,
     "and the timeout carries it too",
   );
 });

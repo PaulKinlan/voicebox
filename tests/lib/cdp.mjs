@@ -19,6 +19,7 @@
 // throws where the old code carried on; a miss is named on stderr instead. The sleeps that stand for
 // "the page has finished reacting" stay — after input, and after goto/reload — because only a caller
 // can state that condition, and a full browser run showed callers leaning on them (see `goto`).
+import { describeClick } from "./click-diagnostic.mjs";
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -559,24 +560,28 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
         targetInteractive: Boolean(
           target && box && box.width > 0 && box.height > 0 && style.visibility !== "hidden" && style.pointerEvents !== "none",
         ),
+        // DISPLACEMENT OR REMOVAL? gate-recover's 18lh reproduction found the target still present and still
+        // enabled when no click arrived - the event was dispatched and simply did not take effect. So "no click
+        // event" must be described from the element's own state rather than guessed, or one wording would report
+        // the same thing for two different faults. The words live in tests/lib/click-diagnostic.mjs (pure, so its
+        // displacement branch is unit-tested: Chrome cannot be made to produce that case on demand).
+        targetPresent: Boolean(target && document.contains(target)),
+        targetEnabled: Boolean(target && !target.disabled),
       };
     }, selector);
     if (!seen) return null;
-    const hit = seen.events[0];
-    const where = `at (${at.x}, ${at.y})`;
-    let line;
-    if (!hit) {
-      line = `the click on ${selector} ${where} never reached the document — no click event at all, so the pointer was not over anything clickable`;
-    } else if (hit.toIntended) {
-      line = `the click on ${selector} ${where} did reach the target (received by ${hit.received}${hit.text ? `, "${hit.text}"` : ""})`;
-    } else {
-      line = `the click on ${selector} ${where} was received by ${hit.received}${hit.text ? `, "${hit.text}"` : ""} instead of the target`;
-    }
-    if (seen.targetNow) {
-      line += `; the target is now at (${seen.targetNow.x}, ${seen.targetNow.y})`;
-      if (!seen.targetInteractive) line += " but is hidden or no longer interactive";
-    } else if (seen.hadIntended) line += "; the target has since left the document";
-    return line;
+    return describeClick({
+      selector,
+      at,
+      events: seen.events,
+      target: {
+        hadIntended: seen.hadIntended,
+        present: seen.targetPresent,
+        enabled: seen.targetEnabled,
+        interactive: seen.targetInteractive,
+        now: seen.targetNow,
+      },
+    });
   };
 
   /** A real mouse click at the element's centre. */
