@@ -1,4 +1,4 @@
-// tests/room-folder-save-sync.test.mjs — the SAVE PATH's own POST, driven from a real page (voicebox-beads-543c).
+// tests/room-folder-save-sync.test.mjs — the SAVE PATH's own POST, driven from a real page (voicebox-beads-543c, voicebox-beads-kxts).
 //
 // WHY THIS FILE EXISTS. tests/room-folder-ops.test.mjs held a SOURCE-TEXT pin over fused.js's
 // syncMiniAppAfterFileSave — the derived leaf name, the one-name request body, and the warning for a refused
@@ -16,7 +16,9 @@
 //     shelf/workspace sync. Dropping the leaf derivation (using `fileName`) makes the body assertion fail;
 //     dropping the `if (!r.ok)` warning makes the refusal arm fail;
 //   · NEGATIVE CONTROL for the shape guard: saving a NON-HTML file must not post to the sync API at all, so
-//     "one save = one sync" is a claim about HTML rather than about a counter that fires for everything.
+//     "one save = one sync" is a claim about HTML rather than about a counter that fires for everything;
+//   · OPFS ROOM-FOLDER SAVE DRIVE (voicebox-beads-kxts): saving an HTML file inside an adopted OPFS room
+//     folder also posts the leaf name to /api/mini-apps, observing the public/fused.js:2337 call site.
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -233,4 +235,56 @@ test("the save path posts the LEAF name to the sync API and names a refused sync
     String(afterRefusal.content).includes("refused sync"),
     "the refusal is about the shelf copy only: the file inside the folder still holds what was saved",
   );
+
+  // ── 4. THE OPFS ROOM-FOLDER SAVE PATH POSTS THE LEAF NAME (voicebox-beads-kxts) ───────────────
+  // A room folder (OPFS) has its own write path (writeRoomFile) in fused.js. This arm drives that
+  // path for a nested HTML file, proving that saving a file inside an adopted folder also syncs the
+  // leaf name to /api/mini-apps. Deleting the OPFS sync call (public/fused.js:2337) turns this arm RED.
+  await page.evaluate(() => {
+    if (window.__realFetchForSyncTest) {
+      window.fetch = window.__realFetchForSyncTest;
+      delete window.__realFetchForSyncTest;
+    }
+  });
+
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle("opfs-save-sync-test", { create: true });
+    const sub = await dir.getDirectoryHandle("nested", { create: true });
+    const fh = await sub.getFileHandle("widget.html", { create: true });
+    const w = await fh.createWritable();
+    await w.write("<!doctype html><p>opfs v1</p>");
+    await w.close();
+    await window.__voiceboxAdoptFolder(dir);
+  });
+
+  await page.click("#sqeh-files-bubble");
+  await page.waitFor(() => document.body.dataset.sqehState === "files", { label: "files popover open" });
+
+  await page.waitFor(() => document.querySelector('#files .file-open[data-file="nested"]'), { label: "nested folder in room folder listing" });
+  await page.click('#files .file-open[data-file="nested"]');
+
+  await page.waitFor(() => document.querySelector('#files .file-open[data-file="widget.html"]'), { label: "widget.html in nested folder listing" });
+  await page.click('#files .file-open[data-file="widget.html"]');
+
+  await page.waitFor(() => document.getElementById("reader")?.dataset.state === "ready", { label: "reader ready for widget.html" });
+
+  await clickWhenEnabled("#file-edit");
+  await page.waitFor(() => document.getElementById("reader")?.dataset.editing === "true", { label: "reader editing mode for widget.html" });
+  await page.evaluate(() => {
+    document.getElementById("file-editor").value = "<!doctype html><p>opfs v2 — edited in room folder</p>";
+  });
+
+  const postsBeforeOpfs = syncPosts().length;
+  await clickWhenEnabled("#file-save");
+
+  const opfsPost = await until(
+    () => (syncPosts().length > postsBeforeOpfs ? syncPosts()[syncPosts().length - 1] : null),
+    "the OPFS save to POST to /api/mini-apps",
+  );
+  const opfsBody = JSON.parse(opfsPost.request.postData);
+  assert.equal(opfsBody.fileName, "widget.html", "the OPFS save sync asks for the LEAF name");
+  assert.equal(opfsBody.title, "widget.html", "and the title is that same leaf name");
+  assert.ok(String(opfsBody.html).includes("edited in room folder"), "and the body carries what was just saved");
+  assert.ok(!JSON.stringify(opfsBody).includes("nested/widget.html"), "the shown path never reaches the request body");
 });
