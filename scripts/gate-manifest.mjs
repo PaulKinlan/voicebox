@@ -313,6 +313,7 @@ export function recordFile(manifest, entry) {
     // server tiers publish nothing, and `null` says exactly that — an absence of evidence, not an idle box.
     loadavg_1m: entry.loadavg_1m ?? null,
     reason: entry.reason ?? null,
+    ...(entry.failure_evidence ? { failure_evidence: entry.failure_evidence } : {}),
   };
   const badLoad = fileLoadProblems(record.loadavg_1m);
   if (badLoad.length) throw new ManifestRefusal(badLoad.map((p) => `${file}: ${p}`));
@@ -340,6 +341,7 @@ export function recordTier(manifest, record) {
       secs: entry.secs,
       loadavg_1m: entry.loadavg_1m ?? null,
       selection: entry.selection ?? "full-roster",
+      failure_evidence: entry.failure_evidence,
     });
   }
   return manifest;
