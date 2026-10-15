@@ -254,13 +254,30 @@ test("standalone with spies: the root facts are LIVE accessors, and the readout 
 // CONTROL (voicebox-beads-a8rg, applied here before it can bite): the waits above replaced nothing, but they
 // must still FAIL CLOSED. This drives the same observable — a row appearing — with an /api/environments
 // response that never settles, and requires the same page.waitFor primitive to reject, bounded.
+//
+// It runs on a FRESH page, which is not a nicety. On a shared page an earlier arm's in-flight render can
+// repaint a list that was just cleared, and this control then reports a row that has nothing to do with the
+// never-resolving read — measured: it passed alone and went red when three files ran in one command. A fresh
+// page has no such render in flight, so the attempt counter below can only be the one this control caused.
 test("control: the same wait still FAILS when the environment list genuinely never resolves", async () => {
+  await page.close();
+  page = await launch();
+  await page.goto(`${base}/`);
+  await page.waitFor(
+    () => (document.querySelectorAll("#env-list .env-item").length > 0 ? true : false),
+    { label: "the boot render to finish before the stub is installed", timeout: 20000 },
+  );
+
   await page.evaluate(() => {
     const realFetch = window.fetch;
     window.__envProbeRealFetchControl = realFetch;
+    window.__envProbeAttempts = 0;
     window.fetch = function neverResolvingFetch(input, init) {
       const url = typeof input === "string" ? input : input?.url ?? String(input);
-      if (url.includes("/api/environments")) return new Promise(() => {});
+      if (url.includes("/api/environments")) {
+        window.__envProbeAttempts += 1;
+        return new Promise(() => {});
+      }
       return realFetch.call(this, input, init);
     };
     // Empty the list first, so "a row appears" is an honest observable for the NEXT render rather than
@@ -282,7 +299,8 @@ test("control: the same wait still FAILS when the environment list genuinely nev
 
   const state = await page.evaluate(() => {
     window.fetch = window.__envProbeRealFetchControl;
-    return { rows: document.querySelectorAll("#env-list .env-item").length };
+    return { rows: document.querySelectorAll("#env-list .env-item").length, attempts: window.__envProbeAttempts };
   });
-  assert.equal(state.rows, 0, "the control is honest: the list is still empty because the read never resolved");
+  assert.ok(state.attempts >= 1, "the control is not vacuous: the app really did try to read the list");
+  assert.equal(state.rows, 0, "and the list stayed empty because that read never resolved");
 });

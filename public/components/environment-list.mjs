@@ -99,8 +99,11 @@ async function renderEnvironments() {
           reprobeBtn.textContent = "Probing…";
           try {
             await request("/api/probe", { method: "POST" });
-            if (els.envNote) els.envNote.textContent = `Re-probed ${env.label ?? "this machine"}.`;
             await renderEnvironments();
+            // Written AFTER the refresh, not before it: renderEnvironments() clears the note as it paints, so a
+            // confirmation written first is wiped in the same turn and the user never sees it
+            // (voicebox-beads-2qxi — measured at 4 ms). The error paths below already write after the render.
+            if (els.envNote) els.envNote.textContent = `Re-probed ${env.label ?? "this machine"}.`;
           } catch (err) {
             if (els.envNote) els.envNote.textContent = String(err?.message ?? "could not re-probe this machine");
           } finally {
@@ -118,8 +121,9 @@ async function renderEnvironments() {
           removeBtn.disabled = true;
           try {
             await request(`/api/environments/${encodeURIComponent(env.key)}`, { method: "DELETE" });
-            if (els.envNote) els.envNote.textContent = `Removed '${env.label ?? env.key}'.`;
             await renderEnvironments();
+            // Same ordering as the Re-probe path, and for the same reason (voicebox-beads-2qxi).
+            if (els.envNote) els.envNote.textContent = `Removed '${env.label ?? env.key}'.`;
           } catch (err) {
             if (els.envNote) els.envNote.textContent = String(err?.message ?? "could not remove environment");
           } finally {
