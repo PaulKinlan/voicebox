@@ -390,8 +390,8 @@ test("transient-state: regex segmentation handles keywords, statement positions,
   const fixtures = {
     typeofRegex: fixture('const isQuoteRe = typeof /["\x27]/ === "object";'),
     voidRegex: fixture('void /["\x27]/;'),
-    deleteRegex: fixture('delete target[/["\x27]/];'),
-    newRegex: fixture('new RegExp(/["\x27]/);'),
+    deleteRegex: fixture('delete /["\x27]/.source;'),
+    newRegex: fixture('const r = new /["\x27]/.constructor("abc");'),
     instanceofRegex: fixture('const isRe = x instanceof /["\x27]/;'),
     doRegex: fixture('do /["\x27]/.test(s); while (false);'),
     elseStatementSlash: fixture('if (flag) doSomething(); else /"/.test(s);'),
@@ -423,19 +423,21 @@ test("transient-state: regex segmentation handles keywords, statement positions,
       "unwaited assertions following regexes or division are properly captured in review list",
     );
 
-    // Negative controls: division after bracket or member access must NOT mask a valid wait on the same line
+    // Negative controls: division after bracket or member access must NOT mask a valid wait on the same line,
+    // and must not mask an unwaited assertion following it.
     const waitControls = {
-      bracketDivision: "const hits = [4]; const half = hits[0] / 2; await page.waitForFunction(() => window.__status === 'ready');",
-      memberNewDivision: "const val = obj.new / 2; await page.waitForFunction(() => window.__status === 'ready');",
-      memberDeleteDivision: "const val = obj.delete / 2; await page.waitForFunction(() => window.__status === 'ready');",
-      memberIfDivision: "const val = obj.if(flag) / 2; await page.waitForFunction(() => window.__status === 'ready');",
-      memberWhileDivision: "const val = obj.while(flag) / 2; await page.waitForFunction(() => window.__status === 'ready');",
+      bracketDivision: "const hits = [4]; const half = hits[0] / 2;",
+      memberNewDivision: "const val = obj.new / 2;",
+      memberDeleteDivision: "const val = obj.delete / 2;",
+      memberIfDivision: "const val = obj.if(flag) / 2;",
+      memberWhileDivision: "const val = obj.while(flag) / 2;",
     };
     for (const [name, prefix] of Object.entries(waitControls)) {
+      // 1. With wait: wait is not masked, so review item is cleared
       const waitFile = path.join(dir, `wait_${name}.test.mjs`);
       writeFileSync(
         waitFile,
-        `import test from "node:test";\nimport assert from "node:assert/strict";\ntest("fixture", async () => {\n  ${prefix}\n  ${assertion}\n});\n`,
+        `import test from "node:test";\nimport assert from "node:assert/strict";\ntest("fixture", async () => {\n  ${prefix} await page.waitForFunction(() => window.__status === 'ready');\n  ${assertion}\n});\n`,
       );
       const waitRes = spawnSync(process.execPath, [CHECKER, waitFile, "--list"], {
         cwd: root,
@@ -446,6 +448,23 @@ test("transient-state: regex segmentation handles keywords, statement positions,
         waitRes.stdout.includes("review"),
         false,
         `valid wait following ${name} is not masked and clears the review item`,
+      );
+
+      // 2. Without wait: assertion is not masked, so review item is properly listed
+      const unwaitedFile = path.join(dir, `unwaited_${name}.test.mjs`);
+      writeFileSync(
+        unwaitedFile,
+        `import test from "node:test";\nimport assert from "node:assert/strict";\ntest("fixture", async () => {\n  ${prefix}\n  ${assertion}\n});\n`,
+      );
+      const unwaitedRes = spawnSync(process.execPath, [CHECKER, unwaitedFile, "--list"], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      assert.equal(unwaitedRes.status, 0);
+      assert.equal(
+        unwaitedRes.stdout.includes("review"),
+        true,
+        `unwaited assertion following ${name} is not masked and is listed for review`,
       );
     }
   } finally {
