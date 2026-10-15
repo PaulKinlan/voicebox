@@ -102,12 +102,17 @@ test("mini-app popover: anchored floating bubble, light-dismiss, and mobile draw
   assert.equal(mounted.position, "fixed", "popover container uses fixed overlay positioning (no in-flow shift)");
   assert.ok(Number(mounted.zIndex) >= 100, "popover sits on an elevated z-index");
 
+  // THE DELAYS THAT USED TO PRECEDE THE READS BELOW ARE GONE (voicebox-beads-zjpm.5.1): light dismiss and
+  // Escape both end in toggle(), the bubble click calls toggle(), close() hides, and editCurrentMiniApp()
+  // writes the reader state - all synchronously, in the handler, before this evaluate returns. Deliberately
+  // LEFT ALONE: the two 100ms settles after an Emulation.setDeviceMetricsOverride (a resize, not a click) and
+  // the 250ms after #mini-app-delete, whose handler is genuinely async (it awaits two DELETEs and a reload)
+  // and whose assertions cover the round trip as well as the synchronous removal.
   // 3. Quick light dismiss: clicking outside the popover card (e.g. on stage/header)
   await page.evaluate(() => {
     const stage = document.querySelector(".stage") || document.body;
     stage.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
   });
-  await sleep(150);
 
   const afterOutsideClick = await page.evaluate(() => {
     const c = document.querySelector("#mini-app-container");
@@ -249,7 +254,6 @@ test("mini-app popover: anchored floating bubble, light-dismiss, and mobile draw
   await page.evaluate(() => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
   });
-  await sleep(150);
 
   const afterEsc = await page.evaluate(() => {
     return document.querySelector("#mini-app-container")?.dataset.collapsed;
@@ -269,7 +273,6 @@ test("mini-app popover: anchored floating bubble, light-dismiss, and mobile draw
   await page.evaluate(() => {
     document.querySelector("#mini-app-bubble")?.click();
   });
-  await sleep(150);
 
   const mobileStyle = await page.evaluate(() => {
     const c = document.querySelector("#mini-app-container");
@@ -295,7 +298,6 @@ test("mini-app popover: anchored floating bubble, light-dismiss, and mobile draw
   await page.evaluate(() => {
     document.querySelector("#mini-app-close")?.click();
   });
-  await sleep(150);
 
   const closed = await page.evaluate(() => {
     const c = document.querySelector("#mini-app-container");
@@ -368,7 +370,6 @@ test("mini-app popover: anchored floating bubble, light-dismiss, and mobile draw
   await page.evaluate(() => {
     document.querySelector("#mini-app-edit")?.click();
   });
-  await sleep(150);
 
   const editState = await page.evaluate(() => {
     const reader = document.querySelector("#reader");
