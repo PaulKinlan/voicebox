@@ -41,7 +41,7 @@ test("a change that does not touch shared infra pays nothing", () => {
   const result = infraAffected({ changedFiles: ["public/app.js", "lib/util.mjs"], partitioned: { browser: ["a.test.mjs", "b.test.mjs"] } });
   assert.equal(result.applies, false, "the selector must not fire for an ordinary change");
   assert.deepEqual(result.run, [], "and must select nothing");
-  assert.deepEqual(result.skippedBrowser, [], "and must not claim a remainder — the gate's own handling of those tests is not this mechanism's to describe");
+  assert.deepEqual(result.affectedUnrun.browser, { files: [], count: 0 }, "and must not claim anything was left unrun — nothing was selected, so nothing was withheld");
   assert.deepEqual(result.helpers, []);
 });
 
@@ -56,13 +56,15 @@ test("a shared helper selects a hard-capped subset, reports the remainder, and n
   for (const file of result.run) {
     assert.match(file, /^tests\/[\w.-]+\.test\.mjs$/, `run entries are in the shard runner's own form: ${file}`);
   }
-  // THE PROPERTY THAT MAKES A SUBSET HONEST: what it ran plus what it left is exactly the blast radius.
+  // THE PROPERTY THAT MAKES A SUBSET HONEST, and it is now the ruled record shape: what it ran plus what it
+  // deliberately left is exactly the blast radius, and the left-over is NAMED, not just counted.
   assert.deepEqual(
-    [...result.run.map((f) => f.replace(/^tests\//, "")), ...result.skippedBrowser].sort(),
+    [...result.run.map((f) => f.replace(/^tests\//, "")), ...result.affectedUnrun.browser.files].sort(),
     [...partitioned.browser].sort(),
-    "run and skippedBrowser must partition the affected browser tests",
+    "run and affectedUnrun must partition the affected browser tests",
   );
-  assert.ok(result.skippedBrowser.length > 0, "a helper with this much reach must report a remainder");
+  assert.equal(result.affectedUnrun.browser.count, result.affectedUnrun.browser.files.length, "the count and the names must agree");
+  assert.ok(result.affectedUnrun.browser.count > 0, "a helper with this much reach must report what it left");
   assert.equal(result.tierCounts.browser, partitioned.browser.length, "the whole blast radius is stated");
   // Own tests lead, even though `aaa-first` sorts before them.
   assert.deepEqual(result.run.slice(0, 2), ["tests/alpha-core.test.mjs", "tests/alpha-work.test.mjs"]);
@@ -80,7 +82,7 @@ test("the subset is reproducible: the caller's iteration order cannot change it"
   shuffled.unit.reverse();
   const other = infraAffected({ changedFiles: [HELPER], partitioned: shuffled });
   assert.deepEqual(other.run, straight.run, "the same change must select the same subset whatever order the input arrived in");
-  assert.deepEqual(other.skippedBrowser, straight.skippedBrowser);
+  assert.deepEqual(other.affectedUnrun, straight.affectedUnrun);
   assert.deepEqual(other.tierCounts, straight.tierCounts);
 });
 
@@ -105,7 +107,13 @@ test("a helper whose tests are not name-prefixed still yields a bounded, sorted 
   const result = infraAffected({ changedFiles: ["tests/lib/gamma.mjs"], partitioned });
   assert.equal(result.applies, true);
   assert.deepEqual(result.run, ["tests/alpha-of-course.test.mjs", "tests/fig.test.mjs", "tests/kiwi.test.mjs", "tests/mango.test.mjs"]);
-  assert.deepEqual(result.skippedBrowser, ["zebra.test.mjs"]);
+  assert.deepEqual(result.affectedUnrun.browser, { files: ["zebra.test.mjs"], count: 1 });
+});
+
+test("when everything affected fits the cap, the unrun record is empty rather than absent", () => {
+  const result = infraAffected({ changedFiles: [HELPER], partitioned: { browser: ["alpha-one.test.mjs", "alpha-two.test.mjs"], unit: [], server: [] } });
+  assert.equal(result.run.length, 2);
+  assert.deepEqual(result.affectedUnrun.browser, { files: [], count: 0 }, "nothing was left, so nothing is reported as left — but the record exists, because absence must never read as covered");
 });
 
 test("the selector does not mutate the partition it was handed", () => {

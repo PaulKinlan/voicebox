@@ -60,7 +60,13 @@ const isOwnTest = (test, stems) => stems.some((stem) => stem.length > 0 && (test
  *   helpers         the changed shared-infra paths that triggered it, stable order.
  *   run             the selected subset in the runner's own form, `tests/<file>`, at most INFRA_CAP entries.
  *   tierCounts      how many affected tests each tier holds, so a reader can see the whole blast radius.
- *   skippedBrowser  the affected browser tests NOT selected (bare filenames), sorted.
+ *   affectedUnrun   WHAT WILL DELIBERATELY NOT RUN, per tier, naming the files and the count remaining —
+ *                   coord's ruling of 2026-10-15: a capped subset that stayed silent about what it skipped
+ *                   would let coverage read BETTER than the truth, the same silence-reads-as-completeness trap
+ *                   as a bare `coverage: UNKNOWN`. Only the browser tier appears, because that is the only tier
+ *                   this module selects for: it runs nothing and withholds nothing from unit or server, whose
+ *                   own rules decide what runs, so claiming them here would be a false statement in an artifact
+ *                   whose whole purpose is to be believed. Their radius is still stated, in `tierCounts`.
  * The selection is sorted here rather than inherited: the same change must yield the same subset whatever order
  * the caller iterated its files in, or the artifact is not reproducible.
  */
@@ -75,9 +81,9 @@ export function infraAffected({ changedFiles = [], partitioned = {} } = {}) {
     budgetMs: INFRA_BUDGET_MS,
     tierCounts: { ...emptyCounts(), ...Object.fromEntries(TIERS.map((tier) => [tier, (partitioned[tier] ?? []).length])) },
     // Empty when this does not apply, and that is deliberate: there is no remainder to report when nothing was
-    // selected. A record claiming "2 skipped" for a change the selector never fired on would read as a subset
-    // that ran, and the gate's own handling of those tests is not this mechanism's to describe.
-    skippedBrowser: [],
+    // selected. A record claiming "2 left unrun" for a change the selector never fired on would read as a
+    // subset that ran.
+    affectedUnrun: { browser: { files: [], count: 0 } },
   };
   if (helpers.length === 0) return result;
 
@@ -88,6 +94,6 @@ export function infraAffected({ changedFiles = [], partitioned = {} } = {}) {
   const rest = browser.filter((test) => !own.includes(test));
   const selected = [...own, ...rest].slice(0, INFRA_CAP);
   result.run = selected.map((test) => `tests/${test}`);
-  result.skippedBrowser = browser.filter((test) => !selected.includes(test));
+  result.affectedUnrun = { browser: { files: browser.filter((test) => !selected.includes(test)), count: browser.length - selected.length } };
   return result;
 }
