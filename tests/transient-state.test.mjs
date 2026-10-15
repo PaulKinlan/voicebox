@@ -253,6 +253,44 @@ test("later", async () => {
   }
 });
 
+test("transient-state: single- and double-quoted exact statuses receive the same review (voicebox-beads-ewxa)", () => {
+  const res = check(`test("status", async () => {
+  await page.waitForFunction(() => window.__other);
+  assert.equal(await page.evaluate(() => window.__status), 'ready');
+  assert.equal(await page.evaluate(() => window.__status), "ready");
+  assert.equal(await page.evaluate(() => window.__count), 1);
+});\n`, { list: true });
+  assert.equal(res.code, 0, res.out);
+  assert.match(res.out, /review .*__status\), 'ready'\)/, "single-quoted status is listed");
+  assert.match(res.out, /review .*__status\), "ready"\)/, "double-quoted status remains listed");
+  assert.match(res.out, /review .*__count\), 1\)/, "positive counts remain listed");
+  assert.equal((res.out.match(/exact status assertion/g) ?? []).length, 3, "each unwaited exact assertion is accounted for once");
+});
+
+test("transient-state: assertion MESSAGE is not an asynchronous operand (voicebox-beads-m0xq)", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-m0xq-"));
+  try {
+    const fixtures = {
+      local: 'assert.equal(2 + 2, 4, "window.__status should read ready");',
+      first: 'assert.equal(await page.evaluate(() => window.__status), "ready", "local arithmetic");',
+      second: 'assert.equal(4, await page.evaluate(() => window.__status), "local arithmetic");',
+    };
+    const files = Object.entries(fixtures).map(([name, body]) => {
+      const file = path.join(dir, `${name}.test.mjs`);
+      writeFileSync(file, sleepStmt + shape({ body }));
+      return file;
+    });
+    const res = spawnSync(process.execPath, [CHECKER, ...files], { cwd: root, encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL" });
+    assert.equal(res.status, 1, `real page operands must still refuse: ${res.stdout}${res.stderr}`);
+    assert.match(res.stdout, /cleared .*local\.test\.mjs:6 — NO-ASYNC/, "message-only page text clears by name");
+    assert.match(res.stderr, /first\.test\.mjs:6: a FIXED delay/, "the first compared operand reads page state");
+    assert.match(res.stderr, /second\.test\.mjs:6: a FIXED delay/, "the second compared operand reads page state");
+    assert.match(res.stderr, /2 candidate\(s\)/, "only the two real page reads are candidates");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("transient-state: status review list captures exact strings and positive counts on unwaited observables (voicebox-beads-a2gd)", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-a2gd-"));
   const file = path.join(dir, "a2gd.test.mjs");
