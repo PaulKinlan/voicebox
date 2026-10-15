@@ -101,11 +101,14 @@ export function failureEvidence(output) {
   const lines = String(output ?? "").split("\n");
   const excerpts = [];
   for (let i = 0; i < lines.length && excerpts.length < 3; i++) {
-    if (!/^not ok\s+\d+\s+-\s+/.test(lines[i])) continue;
+    const failed = /^(\s*)not ok\s+\d+\s+-\s+/.exec(lines[i]);
+    if (!failed) continue;
     const section = [lines[i]];
     for (let j = i + 1; j < lines.length && section.length < 20; j++) {
-      if (/^(?:ok|not ok)\s+\d+\s+-\s+|1\.\.\d+\s*$/.test(lines[j])) break;
+      const boundary = /^(\s*)(?:(?:ok|not ok)\s+\d+\s+-\s+|1\.\.\d+\s*$)/.exec(lines[j]);
+      if (boundary && boundary[1].length <= failed[1].length) break;
       section.push(lines[j]);
+      if (/^\s*\.\.\.\s*$/.test(lines[j])) break; // TAP YAML diagnostics ended; later output belongs elsewhere.
     }
     excerpts.push(section.map((line) => line.slice(0, 240)).join("\n"));
   }

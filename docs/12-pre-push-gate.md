@@ -33,6 +33,7 @@ unit lane, 4 for the server lane, 4 shards for the browser tier), so per-file di
 claim: measured on this tree, the unit tier is 18s either way and the server tier 38s. A file that wedges
 is killed at its own budget and recorded `timeout` — one file's failure, not the whole tier's.
 On a non-passing file, the tier log and its retained tier record keep up to three failing TAP sections
+(including indented nested subtests, before their outer suite summary)
 (at most 20 lines of 240 characters each), including the test name and assertion even when later tests
 would push them past the old last-40-lines tail. If no TAP failure exists, the last 12 bounded lines
 identify a crash or timeout. The additive `failure_evidence.version: 1` field also carries through to

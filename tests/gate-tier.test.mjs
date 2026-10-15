@@ -142,6 +142,17 @@ test("a tier failure retains bounded TAP diagnostics before the last 40 lines; a
   assert.equal(bounded.excerpts.length, 3, "only the first three failures are retained");
   assert.ok(bounded.excerpts.every((excerpt) => excerpt.split("\n").length <= 20 && excerpt.split("\n").every((line) => line.length <= 240)), "every section and line has a hard bound");
   assert.match(failureEvidence("uncaught crash before TAP").excerpts[0], /uncaught crash before TAP/, "a crash without a test name is still diagnosable");
+  const nestedTap = `# Subtest: suite\n    not ok 1 - failing subtest\n      ---\n      error: Expected true, got false\n      ...\n    1..1\nnot ok 1 - suite\n  ---\n  error: 1 subtest failed\n  ...\n${trailing}\n1..1\n# tests 2\n# pass 0\n# fail 2\n# skipped 0\n`;
+  const nestedLog = [];
+  const nested = await runOneTier({
+    tier: "unit", files: ["tests/nested.test.mjs"], workers: 1,
+    runner: async () => ({ code: 1, signal: null, timedOut: false, secs: 0.1, out: nestedTap }),
+    log: { log(message) { nestedLog.push(message); }, error() {} },
+  });
+  assert.equal(nested.files[0].status, "failed");
+  assert.match(nested.files[0].failure_evidence.excerpts[0], /failing subtest[\s\S]*Expected true, got false/);
+  assert.match(nestedLog.join("\n"), /failing subtest[\s\S]*Expected true, got false/, "nested assertion survives in cached log");
+  assert.doesNotMatch(nestedLog.join("\n"), /later passing diagnostic/, "the nested section is bounded too");
   const output = logged.join("\n");
   assert.match(output, /not ok 1 - watchdog startup under load[\s\S]*child hung past watchdog deadline/);
   assert.doesNotMatch(output, /later passing diagnostic|output of tests\/green/, "the log prints only the red section");
