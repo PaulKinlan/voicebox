@@ -64,7 +64,36 @@ node server.mjs --doctor
 
 ## Architecture Overview
 
-Voicebox pairs a zero-dependency Node.js gateway (`server.mjs`) and modular browser UI (`public/fused.js`, `public/theme.mjs`, `public/extensions-ui.mjs`, `public/settings-ui.mjs`, `public/components/environment-root-dialog.mjs`, `public/components/changelog-dialog.mjs`, `public/components/mic-hotkey-controller.mjs`, `public/components/sync-toast.mjs`, `public/components/audio-device-controller.mjs`, `public/components/activity-log-ui.mjs`, `public/components/mini-app-surface.mjs`, `public/components/harnesses-dialog.mjs`, `public/components/environment-list.mjs`, `public/components/vision-controls.mjs`, `public/live-voice.js`) with a pure TypeScript policy core (`core/`). Extension HTTP discovery and decisions are grouped in `lib/routes/extensions.mjs`; the server still owns the authorization checks and bounded JSON body parser.
+Voicebox pairs a zero-dependency Node.js gateway (`server.mjs`) and modular browser UI (`public/fused.js`, `public/theme.mjs`, `public/extensions-ui.mjs`, `public/settings-ui.mjs`, `public/components/environment-root-dialog.mjs`, `public/components/changelog-dialog.mjs`, `public/components/mic-hotkey-controller.mjs`, `public/components/sync-toast.mjs`, `public/components/audio-device-controller.mjs`, `public/components/activity-log-ui.mjs`, `public/components/mini-app-surface.mjs`, `public/components/harnesses-dialog.mjs`, `public/components/environment-list.mjs`, `public/components/vision-controls.mjs`, `public/components/deck-controller.mjs`, `public/components/system-command-bus.mjs`, `public/live-voice.js`) with a pure TypeScript policy core (`core/`). Extension HTTP discovery and decisions are grouped in `lib/routes/extensions.mjs`; the server still owns the authorization checks and bounded JSON body parser.
+
+### Declarative System Command Architecture (`public/components/system-command-bus.mjs`, `lib/system-commands.mjs`)
+
+System commands bridge natural voice utterances to immediate browser/room actions in two stages:
+1. **Server Speech Recognition & Vocabulary (`lib/system-commands.mjs`)**: Translates spoken transcripts into structured `{ verb: "system", command: ... }` actions. Spoken phrases are registered with `registerSystemCommandDeclaration({ command, phrases, description })`.
+2. **Browser Execution Bus (`public/components/system-command-bus.mjs`)**: Executes DOM and UI actions when a structured system command reaches the browser. UI components register client handlers declaratively:
+
+```javascript
+// 1. Browser client-side handler (public/components/*.mjs):
+import { registerSystemCommand } from "./components/system-command-bus.mjs";
+
+registerSystemCommand("toggle_preview", async (cmd, context) => {
+  // Execute feature action in browser
+  return { ok: true, active: true };
+}, {
+  category: "preview",
+  description: "Toggles markdown preview panel",
+});
+
+// 2. Server voice vocabulary registration (lib/system-commands.mjs):
+import { registerSystemCommandDeclaration } from "./lib/system-commands.mjs";
+
+registerSystemCommandDeclaration({
+  category: "preview",
+  command: "toggle_preview",
+  phrases: ["toggle preview", "preview panel"],
+  description: "Toggles markdown preview panel",
+});
+```
 
 ### Pluggable live-model library
 

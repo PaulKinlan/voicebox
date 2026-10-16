@@ -54,7 +54,7 @@ function assertSeam(host, mod) {
   // The outward call sites the whole slice exists to preserve, byte for byte.
   assert.ok(host.includes("lastHarnessOutput = outText;"), "the task handler still writes the same binding");
   assert.ok(host.includes("renderHarnessChangedFiles(changed);"), "the task handler still renders changed files");
-  assert.equal((host.match(/void openAgentProgressTracker\(\);/g) || []).length, 2, "both system-command sites still call the tracker");
+  assert.equal((host.match(/openAgentProgressTracker:\s*\(\)\s*=>/g) || []).length, 2, "both system-command wiring sites pass the tracker");
   assert.match(mod, /export function initHarnessesDialog\(\{/, "the module's seam");
   assert.match(mod, /return \{ renderHarnessChangedFiles, openAgentProgressTracker \};/, "the module returns exactly the two functions the page calls from outside");
 }
@@ -80,6 +80,10 @@ test("the dialog is in the module, gone from the host, and the host keeps the bi
   const noGlobal = host.replace("window.__voiceboxOpenAgentTracker = openAgentProgressTracker;\n", "");
   assert.notEqual(noGlobal, host);
   assert.throws(() => assertSeam(noGlobal, mod), { name: "AssertionError" }, "a dropped page global must be caught");
+
+  const noTrackerWiring = host.replace("openAgentProgressTracker: () => (typeof openAgentProgressTracker === \"function\" ? openAgentProgressTracker() : window.__voiceboxOpenAgentTracker?.()),\n", "");
+  assert.notEqual(noTrackerWiring, host);
+  assert.throws(() => assertSeam(noTrackerWiring, mod), { name: "AssertionError" }, "a dropped tracker wiring must be caught");
 
   const moduleWithoutCallbacks = mod.replace("return { renderHarnessChangedFiles, openAgentProgressTracker };", "return { renderHarnessChangedFiles };");
   assert.notEqual(moduleWithoutCallbacks, mod);
