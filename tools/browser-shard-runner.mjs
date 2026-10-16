@@ -132,11 +132,15 @@ process.on("exit", () => {
 });
 
 // Only a file whose call sites are all literally launch() can profit from the default-option pool.
-// An ambiguous call or an absent launch is cold. cdp.launch independently checks its *runtime*
-// options, so source inspection is only a conservative resource-budget hint, never permission to
-// run a specialized test with incorrect process flags.
+// An ambiguous call or an absent launch is cold. Native picked-folder tests are also cold even
+// with default launch options: their File System Access read/gesture permissions after a reload
+// differ in an off-the-record BrowserContext (n20-picked-root expects the named needs-gesture
+// refusal, but a warm context reads the folder). A real directory drag/drop must retain the
+// standalone browser's platform permission semantics, not merely isolated storage. Source
+// inspection is conservative; cdp.launch independently checks process-level options at runtime.
 function offersWarmBrowser(file) {
   const source = readFileSync(path.join(ROOT, file), "utf8");
+  if (/\.\s*dropFolder\s*\(|Input\.dispatchDragEvent|showDirectoryPicker\s*\(|getAsFileSystemHandle\s*\(|\b(?:queryPermission|requestPermission)\s*\(/.test(source)) return false;
   const calls = [...source.matchAll(/\blaunch\s*\(([^)]*)\)/g)];
   return calls.length > 0 && calls.every(([, options]) => !options.trim());
 }
