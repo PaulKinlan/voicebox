@@ -488,6 +488,26 @@ function writtenLiterals(tokens) {
  * signals are read there. CODE is TEXT without any literal at all — NAME signals are
  * read there, or in TEXT when the file evaluates source text it holds.
  */
+function topLaneDeclaration(source, tokens) {
+  // The lexer retains leading comment tokens before read() blanks them. An unreadable file still honors a
+  // top-of-file declaration: its raw-code fallback must not silently bypass a declared unit boundary.
+  const comments = [];
+  if (tokens) {
+    for (const token of tokens) {
+      if (token.k !== "com") break;
+      comments.push(source.slice(token.s, token.e));
+    }
+  } else {
+    const header = source.match(/^(?:(?:\s*\/\/[^\n]*(?:\n|$))|(?:\s*\/\*[\s\S]*?\*\/))*/)?.[0] ?? "";
+    comments.push(...header.split("\n").filter((line) => /^\s*\/\//.test(line)));
+  }
+  const directives = comments.map((text) => text.trim()).filter((text) => /^\/\/\s*@lane\b/.test(text));
+  if (directives.length === 0) return { declaredLane: null, declarationError: null };
+  if (directives.length > 1) return { declaredLane: null, declarationError: "multiple top-of-file @lane declarations" };
+  const lane = directives[0].match(/^\/\/\s*@lane\s+(unit|server|browser)\s*$/)?.[1] ?? null;
+  return { declaredLane: lane, declarationError: lane ? null : `invalid declaration ${directives[0]} (expected // @lane unit|server|browser)` };
+}
+
 function read(source) {
   const tokens = lex(source);
   if (!tokens) return null;
@@ -507,7 +527,7 @@ function read(source) {
     if (k === "str") blank(text, s + 1, e - 1);
     else blank(text, s, e);
   }
-  const views = { text: text.join(""), code: code.join("") };
+  const views = { text: text.join(""), code: code.join(""), ...topLaneDeclaration(source, tokens) };
   views.evaluates = EVALUATES.text.test(views.text) || EVALUATES.code.test(views.code);
   return views;
 }
@@ -532,12 +552,13 @@ export function classify(root = TESTS) {
   for (const file of entries.filter((f) => f.endsWith(".test.mjs")).sort()) {
     const source = readFileSync(path.join(root, file), "utf8");
     const views = read(source);
+    const declaration = views ?? topLaneDeclaration(source, null);
     const reading = ({ name }) => (!views ? source : name && !views.evaluates ? views.code : views.text);
 
     // Any browser launch puts the test in the browser lane (strictly serial, CDP contention):
     const browserLaunch = BROWSER_SIGNALS.find((signal) => signal.re.test(reading(signal)));
     if (browserLaunch) {
-      const entry = { file, why: browserLaunch.what };
+      const entry = { file, lane: "browser", why: browserLaunch.what, declaredLane: declaration.declaredLane, declarationError: declaration.declarationError };
       browser.push(entry);
       live.push(entry);
       continue;
@@ -546,15 +567,27 @@ export function classify(root = TESTS) {
     // Otherwise, any server launch puts it in the server lane (concurrent):
     const serverLaunch = SERVER_SIGNALS.find((signal) => signal.re.test(reading(signal)));
     if (serverLaunch) {
-      const entry = { file, why: serverLaunch.what };
+      const entry = { file, lane: "server", why: serverLaunch.what, declaredLane: declaration.declaredLane, declarationError: declaration.declarationError };
       server.push(entry);
       live.push(entry);
       continue;
     }
 
-    unit.push({ file, why: null });
+    unit.push({ file, lane: "unit", why: null, declaredLane: declaration.declaredLane, declarationError: declaration.declarationError });
   }
   return { unit, live, server, browser };
+}
+
+/** Report exact file-level boundaries without pinning global counts that change whenever a file is added. */
+export function checkDeclaredLanes({ unit, server, browser }) {
+  const problems = [];
+  for (const entry of [...unit, ...server, ...browser]) {
+    if (entry.declarationError) problems.push(`${entry.file}: ${entry.declarationError}`);
+    else if (entry.declaredLane && entry.lane !== entry.declaredLane) {
+      problems.push(`${entry.file}: declared @lane ${entry.declaredLane}, classified ${entry.lane} (${entry.why ?? "no browser/server launch signal"})`);
+    }
+  }
+  return problems;
 }
 
 // THE CLI RUNS ONLY WHEN THIS FILE IS THE PROGRAM (voicebox-beads-hhkg). `classify()` is the one
@@ -576,6 +609,9 @@ if (CLI && process.argv.includes("--check")) {
   }
   if (unit.length + live.length !== seen.size) problems.push("a file is in neither lane");
   if (server.length + browser.length !== live.length) problems.push("server and browser do not partition live");
+  const allTests = readdirSync(TESTS).filter((file) => file.endsWith(".test.mjs"));
+  for (const file of allTests) if (!seen.has(file)) problems.push(`${file} is in neither lane`);
+  problems.push(...checkDeclaredLanes({ unit, server, browser }));
   if (problems.length > 0) {
     console.error(`[lanes] ${problems.join("; ")}`);
     process.exit(1);

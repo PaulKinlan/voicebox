@@ -1,3 +1,4 @@
+// @lane unit
 // tests/test-lanes.test.mjs — the classification the gate now depends on
 // (`voicebox-beads-6qu`).
 //
@@ -13,11 +14,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { classify } from "../scripts/test-lanes.mjs";
+import { checkDeclaredLanes, classify } from "../scripts/test-lanes.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const run = (...args) => execFileSync(process.execPath, [path.join(root, "scripts/test-lanes.mjs"), ...args], { cwd: root, encoding: "utf8" });
@@ -205,7 +206,7 @@ test("the launch forms this suite really uses stay LIVE, each for its own reason
     // calls a wasm tool launches no browser and no server, and the hold that kept it out of the
     // concurrent lane (a worker outliving its test by ~52s, voicebox-beads-6io) is gone.
     assert.deepEqual(
-      unit,
+      unit.map(({ file, why }) => ({ file, why })),
       [{ file: "wasm-call.test.mjs", why: null }],
       `the wasm form is UNIT now; every OTHER launch form must stay LIVE — these escaped: ${unit.map(({ file }) => file).join(", ")}`,
     );
@@ -255,7 +256,7 @@ test("comments are read as a lexer reads them — a glob in a string or a regex 
     writeFileSync(path.join(dir, "unreadable.test.mjs"), '// spawns "server.mjs"\nconst broken = `never closed;\n');
     const { unit, live } = classify(dir);
     assert.deepEqual(unit.map(({ file }) => file), ["block-note.test.mjs", "trailing-note.test.mjs"]);
-    assert.deepEqual(live, [
+    assert.deepEqual(live.map(({ file, why }) => ({ file, why })), [
       { file: "glob-then-launch.test.mjs", why: "a server via createServer" },
       { file: "regex-after-if.test.mjs", why: "a server via createServer" },
       { file: "unreadable.test.mjs", why: "a server process" },
@@ -336,15 +337,64 @@ test("a harness path held as DATA files a test in no lane but unit (voicebox-bea
   }
 });
 
-test("lane counts are pinned, so a reclassification cannot silently move cost", () => {
-  const { unit, server, browser, live } = classify(path.join(root, "tests"));
-  assert.deepEqual(
-    { unit: unit.length, server: server.length, browser: browser.length, live: live.length },
-    // Read from THIS file's own root (not the CLI, and not the cwd), so the pin cannot drift with where the test
-    // was started: measured 2026-10-15, and the same from the repo root and from /tmp.
-    // Updated on rebase over main 351c0b5 (+1 browser/live: deck-controller-extraction.test.mjs, 260 total test files: 103 unit, 64 server, 93 browser, 157 live).
-    { unit: 103, server: 64, browser: 93, live: 157 },
-    "IF THIS CHANGED: name the file that moved lane and why in the commit message. A move changes which lane pays " +
-      "for a test, so the number is recorded rather than discovered in a wall-clock difference (voicebox-beads-l79v).",
-  );
+test("lane files form a complete, disjoint unit/server/browser partition, with live exactly server plus browser (voicebox-beads-a7h2)", () => {
+  const testDir = path.join(root, "tests");
+  const { unit, server, browser, live } = classify(testDir);
+  const allTestFiles = readdirSync(testDir).filter((file) => file.endsWith(".test.mjs")).sort();
+  assert.equal(unit.length + server.length + browser.length, allTestFiles.length, "all test files are classified once");
+  const seen = new Set();
+  for (const [lane, entries] of Object.entries({ unit, server, browser })) {
+    assert.equal(new Set(entries.map(({ file }) => file)).size, entries.length, `${lane} contains no duplicate file`);
+    for (const entry of entries) {
+      assert.equal(entry.lane, lane, `${entry.file} names its actual lane`);
+      assert.equal(seen.has(entry.file), false, `${entry.file} is in more than one lane`);
+      seen.add(entry.file);
+    }
+  }
+  assert.deepEqual([...seen].sort(), allTestFiles, "no test file is omitted or invented");
+  assert.equal(server.length + browser.length, live.length, "the live tier is exactly server plus browser");
+  assert.deepEqual(live.map(({ file }) => file).sort(), [...server, ...browser].map(({ file }) => file).sort(),
+    "server and browser have the same members as live");
+  assert.deepEqual(checkDeclaredLanes({ unit, server, browser }), [], "all annotated files match classifier signals");
+  for (const file of ["test-lanes.test.mjs", "wasm-shelf.test.mjs", "docs-drift.test.mjs"]) {
+    assert.ok(unit.some((entry) => entry.file === file), `${file} must remain unit regardless of roster size`);
+  }
+  assert.equal(unit.find(({ file }) => file === "test-lanes.test.mjs").declaredLane, "unit",
+    "the classifier's own header pins its lane as a file-level invariant");
+});
+
+test("top-of-file @lane declares a boundary without overriding classifier signals (voicebox-beads-a7h2)", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-lane-declaration-"));
+  try {
+    const tests = path.join(dir, "tests");
+    const scripts = path.join(dir, "scripts");
+    mkdirSync(tests);
+    mkdirSync(scripts);
+    writeFileSync(path.join(scripts, "test-lanes.mjs"), readFileSync(path.join(root, "scripts/test-lanes.mjs")));
+    const file = path.join(tests, "wrong.test.mjs");
+    writeFileSync(file, '// @lane unit\nimport { launch } from "./lib/cdp.mjs";\n');
+    const classified = classify(tests);
+    assert.equal(classified.browser[0].declaredLane, "unit");
+    assert.equal(classified.browser[0].lane, "browser", "annotation does not override the real CDP signal");
+    assert.deepEqual(checkDeclaredLanes(classified),
+      ["wrong.test.mjs: declared @lane unit, classified browser (a browser over CDP)"],
+      "mismatch names file, declaration, actual lane and classifier reason");
+    assert.throws(() => execFileSync(process.execPath, [path.join(scripts, "test-lanes.mjs"), "--check"],
+      { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }),
+    (error) => error.status === 1 && /wrong\.test\.mjs: declared @lane unit, classified browser \(a browser over CDP\)/.test(error.stderr),
+    "the real --check CLI refuses a misplaced annotation in an isolated repository");
+    writeFileSync(file, '// @lane browser\nimport { launch } from "./lib/cdp.mjs";\n');
+    assert.deepEqual(checkDeclaredLanes(classify(tests)), [], "matching declaration is accepted");
+    assert.match(execFileSync(process.execPath, [path.join(scripts, "test-lanes.mjs"), "--check"],
+      { cwd: dir, encoding: "utf8" }), /\[lanes\] ok: 0 unit, 1 live/);
+    writeFileSync(file, 'import { launch } from "./lib/cdp.mjs";\n// @lane unit\n');
+    assert.equal(classify(tests).browser[0].declaredLane, null, "a declaration after code is not top-of-file");
+    writeFileSync(file, '// @lane unknowable\nimport { launch } from "./lib/cdp.mjs";\n');
+    assert.match(checkDeclaredLanes(classify(tests))[0], /wrong\.test\.mjs: invalid declaration.*unit\|server\|browser/);
+    writeFileSync(file, '// @lane unit\nconst bad = `unterminated;\nimport { launch } from "./lib/cdp.mjs";\n');
+    assert.match(checkDeclaredLanes(classify(tests))[0], /declared @lane unit, classified browser/,
+      "an unreadable lexer must not bypass a declaration in the raw-code fallback");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
