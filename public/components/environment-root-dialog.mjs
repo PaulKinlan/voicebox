@@ -1,3 +1,6 @@
+/**
+ * @summary Environments root configuration and project creation dialog.
+ */
 // ── THE ENVIRONMENTS DIALOG'S ROOT SURFACE (extracted from public/fused.js by voicebox-beads-mvxl) ──
 // The four ways a person gives the room somewhere to save — the browser's own workspace (OPFS), a
 // local folder they pick, a folder on the machine the server runs on — plus creating a project by

@@ -1,3 +1,6 @@
+/**
+ * @summary Harness inventory, configuration, and task delegation dialog.
+ */
 // public/components/harnesses-dialog.mjs — the Harnesses modal dialog (voicebox-beads-f1o).
 //
 // A slice of the public/fused.js decomposition (voicebox-beads-uei2.9, scoped by voicebox-beads-uei2.8).

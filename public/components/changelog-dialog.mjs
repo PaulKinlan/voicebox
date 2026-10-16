@@ -1,3 +1,6 @@
+/**
+ * @summary Change log modal dialog and commit history viewer.
+ */
 // ── THE CHANGE LOG DIALOG (extracted from public/fused.js by voicebox-beads-mvxl) ──
 // The Change log modal: its commit list, and the three ways it is driven — the `#changelog-open`
 // trigger (also reached from the build stamp's commit link), the `#changelog-refresh` button, and

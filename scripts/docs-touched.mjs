@@ -43,9 +43,9 @@ const git = (args) => execFileSync("git", args, { cwd: ROOT, env: gitEnv(), enco
 const gitTry = (args) => { try { return { ok: true, out: git(args) }; } catch (e) { return { ok: false, out: String(e?.stderr ?? e?.message ?? e).trim() }; } };
 
 /** Every document a person writes in: the root markdown files and docs/, minus generated evidence. */
-export function documents() {
-  const docs = readdirSync(ROOT).filter((f) => f.endsWith(".md"));
-  for (const f of readdirSync(join(ROOT, "docs"))) if (f.endsWith(".md")) docs.push(join("docs", f));
+export function documents(root = ROOT) {
+  const docs = readdirSync(root).filter((f) => f.endsWith(".md"));
+  for (const f of readdirSync(join(root, "docs"))) if (f.endsWith(".md")) docs.push(join("docs", f));
   return docs;
 }
 
@@ -94,6 +94,64 @@ export function describedFiles() {
   return by;
 }
 
+export const isInventoryModule = (f) => f.startsWith("public/components/") || f.startsWith("lib/routes/");
+
+export function extractModuleSummary(source) {
+  const trimmed = source.replace(/^#![^\n]*\n/, "").trimStart();
+  if (!trimmed.startsWith("/**")) return null;
+  const jsdocEnd = trimmed.indexOf("*/");
+  if (jsdocEnd === -1) return null;
+  const headerJsdoc = trimmed.slice(0, jsdocEnd + 2);
+  const match = headerJsdoc.match(/@summary\s+([^\n*]+)/);
+  if (!match || !match[1].trim()) return null;
+  return match[1].trim();
+}
+
+export function stripGeneratedBlocks(text) {
+  return text.replace(/<!-- BEGIN GENERATED(?::\s*[\s\S]*?|\s+[^>]+)-->[\s\S]*?<!-- END GENERATED(?::\s*[^>]+|\s+[^>]+)-->\n?/g, "");
+}
+
+/** Check if a file path is mentioned in hand-written markdown prose (outside generated blocks). */
+export function hasHandWrittenDescription(file, root = ROOT) {
+  for (const doc of documents(root)) {
+    const docFile = join(root, doc);
+    if (!existsSync(docFile)) continue;
+    const docText = readFileSync(docFile, "utf8");
+    const prose = stripGeneratedBlocks(docText);
+    const paths = namedPaths(prose);
+    if (paths.has(file)) return true;
+  }
+  return false;
+}
+
+export function isInventoryDocumented(file, root = ROOT) {
+  const fullPath = join(root, file);
+  if (!existsSync(fullPath)) return false;
+  const content = readFileSync(fullPath, "utf8");
+  const summary = extractModuleSummary(content);
+  if (!summary) return false;
+
+  for (const doc of documents(root)) {
+    const docFile = join(root, doc);
+    if (!existsSync(docFile)) continue;
+    const docText = readFileSync(docFile, "utf8");
+    const blocks = docText.match(/<!-- BEGIN GENERATED(?::\s*(?:component|route)-inventory[^\n>]*|\s+(?:COMPONENT|ROUTE)\s+INVENTORY\s*)-->([\s\S]*?)<!-- END GENERATED(?::\s*(?:component|route)-inventory[^\n>]*|\s+(?:COMPONENT|ROUTE)\s+INVENTORY\s*)-->/g);
+    if (blocks) {
+      for (const block of blocks) {
+        for (const line of block.split("\n")) {
+          if (line.includes(`\`${file}\``)) {
+            const trimmed = line.trim();
+            if (trimmed === `| \`${file}\` | ${summary} |`) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
 const isDoc = (file) => file.endsWith(".md");
 
 function main() {
@@ -126,6 +184,19 @@ function main() {
     return 0;
   }
 
+  const unexcused = moved.filter((file) => {
+    // Inventory modules are satisfied by generated blocks ONLY IF they have no hand-written
+    // narrative prose in the documentation (Finding P1) and their generated inventory summary is current.
+    if (isInventoryModule(file) && !hasHandWrittenDescription(file) && isInventoryDocumented(file)) {
+      return false;
+    }
+    return true;
+  });
+  if (unexcused.length === 0) {
+    console.log(`docs-touched: OK — ${moved.length} described inventory module(s) changed, satisfied by generated inventory blocks`);
+    return 0;
+  }
+
   // THE EXCUSE MUST BE A REAL TRAILER WITH A REAL REASON, and git is the one that decides what a
   // trailer is. The first version matched any body line beginning `Docs-checked:`, which accepted an
   // EMPTY reason and accepted a line that is not in the terminal trailer block at all — a sentence
@@ -148,7 +219,7 @@ function main() {
   }
 
   console.error("docs-touched: FAILED — these changed files are described by documents nothing in this change touched:");
-  for (const file of moved) console.error(`  ${file}  — described in ${described.get(file).join(", ")}`);
+  for (const file of unexcused) console.error(`  ${file}  — described in ${described.get(file).join(", ")}`);
   console.error("");
   console.error("Paul's rule (voicebox-beads-ths): every update updates the docs and the README in the same change.");
   console.error("The generated blocks answer for themselves (npm run docs:write); the prose around them does not.");

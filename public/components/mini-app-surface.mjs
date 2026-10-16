@@ -1,3 +1,6 @@
+/**
+ * @summary Interactive mini-app iframe bridge and container surface.
+ */
 // public/components/mini-app-surface.mjs — the interactive mini-app surface, extracted from
 // public/fused.js (voicebox-beads-uei2.7, the bridge-bearing slice of the decomposition scoped in
 // voicebox-beads-uei2).

@@ -1,3 +1,6 @@
+/**
+ * @summary Configurable microphone push-to-talk and toggle hotkey controller.
+ */
 // public/components/mic-hotkey-controller.mjs — the configurable microphone hotkey, extracted from
 // public/fused.js (voicebox-beads-uei2.4, a slice of the fused.js decomposition scoped in
 // voicebox-beads-uei2; the feature itself is voicebox-beads-ebu).
