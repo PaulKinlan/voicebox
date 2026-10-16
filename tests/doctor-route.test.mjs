@@ -7,18 +7,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createDoctorRoutes } from "../lib/routes/doctor.mjs";
 import { identifiersInRenderedText } from "../tools/rendered-plain-language.mjs";
+import { invokeRoute, mockJson } from "./lib/route-harness.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 test("createDoctorRoutes returns structured diagnostics report without leaking secrets", async () => {
-  let capturedStatus = 0;
-  let capturedBody = null;
-  const jsonMock = (_res, status, body) => {
-    capturedStatus = status;
-    capturedBody = body;
-    return body;
-  };
-
   const routes = createDoctorRoutes({
     getActive: () => ({
       project: "test-project",
@@ -37,13 +30,14 @@ test("createDoctorRoutes returns structured diagnostics report without leaking s
       { name: "codex", status: "setup", installed: false },
     ],
     loopbackAuth: false,
-    json: jsonMock,
+    json: mockJson,
   });
 
   assert.ok(routes["GET /api/doctor"]);
 
-  await routes["GET /api/doctor"]({}, {});
-  assert.equal(capturedStatus, 200);
+  const res = await invokeRoute(routes, { method: "GET", url: "/api/doctor" });
+  assert.equal(res.status, 200);
+  const capturedBody = res.json();
   assert.equal(capturedBody.ok, true);
   assert.ok(typeof capturedBody.timestamp === "string");
   assert.ok(["ok", "warn", "error"].includes(capturedBody.verdict));
@@ -92,7 +86,6 @@ test("public/index.html includes system check doctor elements and passes plain-l
 });
 
 test("doctor route unwraps { ok: true, entries } and admits state: configured harnesses (voicebox-beads-cs4l)", async () => {
-  let capturedBody = null;
   const routes = createDoctorRoutes({
     getActive: () => ({ project: "p", root: { kind: "machine", path: "/tmp" } }),
     getApiKeys: () => ({ ok: true, keys: {} }),
@@ -104,10 +97,12 @@ test("doctor route unwraps { ok: true, entries } and admits state: configured ha
         { id: "aider", name: "Aider", state: "absent" },
       ],
     }),
-    json: (_res, _status, body) => { capturedBody = body; return body; },
+    json: mockJson,
   });
 
-  await routes["GET /api/doctor"]({}, {});
+  const res = await invokeRoute(routes, { method: "GET", url: "/api/doctor" });
+  assert.equal(res.status, 200);
+  const capturedBody = res.json();
   const harnessCheck = capturedBody.checks.find((c) => c.id === "coding_harnesses");
   assert.equal(harnessCheck.status, "ok");
   assert.match(harnessCheck.detail, /2 detected: Claude Code, Pi coding agent/);

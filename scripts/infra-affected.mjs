@@ -51,6 +51,50 @@ export const INFRA_CAP = 4;
  *  mid-run: the cap keeps the subset small, and a subset that overruns its budget is a fact the artifact states. */
 export const INFRA_BUDGET_MS = 60_000;
 
+export const ROUTE_SERVER_SMOKE = Object.freeze(["server-lifecycle.test.mjs"]);
+
+const SOURCE_PREFIXES = ["core/", "lib/", "public/", "tools/", "scripts/", "server.mjs"];
+export const isSourcePath = (f) => SOURCE_PREFIXES.some((prefix) => f === prefix || f.startsWith(prefix));
+
+/** Check if changes are exclusively under lib/routes/ (voicebox-beads-ybwq). */
+export function isExclusiveRouteChanges(changedFiles = []) {
+  const sourceFiles = changedFiles.filter((f) => isSourcePath(f));
+  return sourceFiles.length > 0 && sourceFiles.every((f) => f.startsWith("lib/routes/"));
+}
+
+/**
+ * Route-scoped change detection (voicebox-beads-ybwq).
+ *
+ * When changes are exclusively in lib/routes/*.mjs, compute targeted route tests, bounded server
+ * smoke tests, and the unrun transitive server importers that were bypassed to avoid 150+ test fan-out.
+ */
+export function routeAffected({ changedFiles = [], allServerImporters = [], directTests = [] } = {}) {
+  const applies = isExclusiveRouteChanges(changedFiles);
+  const routes = changedFiles.filter((f) => isSourcePath(f) && f.startsWith("lib/routes/"));
+  if (!applies) {
+    return {
+      applies: false,
+      routes: [],
+      smoke: [],
+      unrunTransitiveImporters: { files: [], count: 0 },
+    };
+  }
+
+  const smoke = [...ROUTE_SERVER_SMOKE];
+  const selectedSet = new Set([...directTests, ...smoke]);
+  const unrun = allServerImporters.filter((f) => !selectedSet.has(f)).sort();
+
+  return {
+    applies: true,
+    routes,
+    smoke,
+    unrunTransitiveImporters: {
+      files: unrun,
+      count: unrun.length,
+    },
+  };
+}
+
 const TIERS = Object.freeze(["unit", "server", "browser"]);
 
 const emptyCounts = () => Object.fromEntries(TIERS.map((tier) => [tier, 0]));

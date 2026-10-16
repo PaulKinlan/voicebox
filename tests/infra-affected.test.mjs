@@ -24,7 +24,7 @@
 // adding tests tomorrow does not make this file lie about the selector.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { INFRA_BUDGET_MS, INFRA_CAP, infraAffected, sharedInfraFiles } from "../scripts/infra-affected.mjs";
+import { INFRA_BUDGET_MS, INFRA_CAP, infraAffected, sharedInfraFiles, isExclusiveRouteChanges, routeAffected, ROUTE_SERVER_SMOKE } from "../scripts/infra-affected.mjs";
 
 const HELPER = "tests/lib/alpha.mjs";
 
@@ -121,4 +121,35 @@ test("the selector does not mutate the partition it was handed", () => {
   const before = structuredClone(partitioned);
   infraAffected({ changedFiles: [HELPER], partitioned });
   assert.deepEqual(partitioned, before, "the gate hands in its own partition; selection must not touch it");
+});
+
+test("isExclusiveRouteChanges: identifies route-exclusive changes vs shared/server changes (voicebox-beads-ybwq)", () => {
+  assert.equal(isExclusiveRouteChanges(["lib/routes/doctor.mjs"]), true);
+  assert.equal(isExclusiveRouteChanges(["lib/routes/doctor.mjs", "tests/doctor-route.test.mjs", "docs/07-architecture.md"]), true);
+  assert.equal(isExclusiveRouteChanges(["lib/routes/doctor.mjs", "server.mjs"]), false);
+  assert.equal(isExclusiveRouteChanges(["lib/routes/doctor.mjs", "lib/commands.mjs"]), false);
+  assert.equal(isExclusiveRouteChanges([]), false);
+});
+
+test("routeAffected: bounds route edits, reports smoke subset and bypassed server importers (voicebox-beads-ybwq)", () => {
+  const result = routeAffected({
+    changedFiles: ["lib/routes/custom.mjs"],
+    allServerImporters: ["s1.test.mjs", "s2.test.mjs", "s3.test.mjs", "custom-route.test.mjs"],
+    directTests: ["custom-route.test.mjs"],
+  });
+
+  assert.equal(result.applies, true);
+  assert.deepEqual(result.routes, ["lib/routes/custom.mjs"]);
+  assert.deepEqual(result.smoke, [...ROUTE_SERVER_SMOKE]);
+  assert.equal(result.unrunTransitiveImporters.count, 3);
+  assert.deepEqual(result.unrunTransitiveImporters.files, ["s1.test.mjs", "s2.test.mjs", "s3.test.mjs"]);
+});
+
+test("routeAffected: does not apply when server.mjs or shared lib changes alongside routes (voicebox-beads-ybwq)", () => {
+  const result = routeAffected({
+    changedFiles: ["lib/routes/custom.mjs", "server.mjs"],
+    allServerImporters: ["s1.test.mjs"],
+  });
+  assert.equal(result.applies, false);
+  assert.equal(result.unrunTransitiveImporters.count, 0);
 });
