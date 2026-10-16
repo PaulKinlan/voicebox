@@ -57,6 +57,8 @@ const flag = (name, fallback) => {
 // for one fact, which had already drifted apart by the time q4j6 was filed, and the number in the log was
 // the wrong one. The env var and `--workers` stay as the deliberate overrides for a loaded box.
 const WORKERS = Math.max(1, Number(flag("workers", process.env.VOICEBOX_SHARD_WORKERS ?? TIER_WORKERS.browser)));
+// A bounded same-tree A/B measurement and a rollback lever if shared contexts prove incompatible.
+const COLD_BROWSERS = argv.includes("--cold-browsers");
 // Repeated --only entries keep focused two-file reuse/crash tests within the actual browser lane.
 const ONLY = argv.flatMap((arg, i) => arg === "--only" ? [argv[i + 1]] : []);
 // PHASED INVOCATIONS (agreed with the live-tier supervisor, zjpm.2): a supervisor may run the tier in two
@@ -311,7 +313,7 @@ async function workerLoop(worker) {
       const index = cursor++;
       if (index >= phase.length) return;
       const file = phase[index];
-      if (!offersWarmBrowser(file)) {
+      if (COLD_BROWSERS || !offersWarmBrowser(file)) {
         // Do not hold an idle process beside a specialized test's dedicated Chromium.
         stopWarm(worker);
       } else if (!(await warmHealthy(warmBrowsers.get(worker)))) {
