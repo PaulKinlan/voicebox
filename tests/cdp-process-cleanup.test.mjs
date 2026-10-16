@@ -29,6 +29,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import os from "node:os";
@@ -235,6 +236,51 @@ test("cdp-process-cleanup: normal page.close() terminates browser process group 
   assert.equal(profileRemaining.length, 0, `no chrome processes for profile ${profileDir} should remain: ${profileRemaining.join("; ")}`);
 
   rmSync(profileDir, { recursive: true, force: true });
+});
+
+test("warm CDP contexts isolate storage and extra tabs without letting a test reap its owner's browser", async (t) => {
+  if (!findBrowserBinary()) return t.skip("Chromium is not installed");
+  const profile = mkdtempSync(path.join(os.tmpdir(), "voicebox-shared-cdp-"));
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "text/html" });
+    res.end("<!doctype html><title>context isolation</title>");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${server.address().port}/`;
+  const inherited = process.env.VOICEBOX_SHARED_CDP_URL;
+  let owner, first, second;
+  try {
+    // An explicit profile forces the standalone path, even if this test itself runs inside a shard.
+    owner = await launch({ profile });
+    process.env.VOICEBOX_SHARED_CDP_URL = owner.wsUrl;
+    first = await launch();
+    assert.equal(first.pid, null, "the test process must not own the warm browser's PID");
+    const [firstContext] = (await owner.sendBrowser("Target.getBrowserContexts")).browserContextIds;
+    assert.ok(firstContext, "a new ephemeral browser context was created");
+    await first.goto(url);
+    await first.evaluate(() => localStorage.setItem("isolation", "from the first test file"));
+    const { targetId } = await first.sendBrowser("Target.createTarget", { url: "about:blank" });
+    const { targetInfo } = await owner.sendBrowser("Target.getTargetInfo", { targetId });
+    assert.equal(targetInfo.browserContextId, firstContext, "a second tab belongs to the same isolated context");
+    await first.close();
+    first = null;
+    assert.deepEqual((await owner.sendBrowser("Target.getBrowserContexts")).browserContextIds, [], "close disposes the context and its tabs");
+
+    second = await launch();
+    const [secondContext] = (await owner.sendBrowser("Target.getBrowserContexts")).browserContextIds;
+    assert.notEqual(secondContext, firstContext);
+    await second.goto(url);
+    assert.equal(await second.evaluate(() => localStorage.getItem("isolation")), null, "a later test file cannot inherit localStorage");
+    assert.equal(await owner.evaluate(() => 6 * 7), 42, "close never killed the runner-owned browser");
+  } finally {
+    if (inherited === undefined) delete process.env.VOICEBOX_SHARED_CDP_URL;
+    else process.env.VOICEBOX_SHARED_CDP_URL = inherited;
+    await second?.close();
+    await first?.close();
+    await owner?.close();
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(profile, { recursive: true, force: true });
+  }
 });
 
 test("cdp-process-cleanup: negative throw-control — unhandled runner crash reaps browser without orphan helpers", async (t) => {
