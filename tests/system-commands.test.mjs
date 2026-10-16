@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_COMMAND_CATALOGUE, parseSystemCommand } from "../lib/system-commands.mjs";
+import { SYSTEM_COMMAND_CATALOGUE, parseSystemCommand, registerSystemCommandDeclaration, unregisterSystemCommandDeclaration, listSystemCommandCatalogue } from "../lib/system-commands.mjs";
 import { KNOWN_VERBS, resolveTurn, script } from "../lib/resolver.mjs";
 import { startServer } from "./lib/server.mjs";
 
@@ -189,6 +189,37 @@ test("parseSystemCommand deterministically parses clipboard, navigation, theme, 
   assert.equal(parseSystemCommand(""), null);
   assert.equal(parseSystemCommand("create a file called hello.txt with hi"), null);
   assert.equal(parseSystemCommand("open notes.txt in the ui"), null);
+});
+
+test("registerSystemCommandDeclaration registers dynamic voice system commands (voicebox-beads-hsr5)", () => {
+  try {
+    const entry = registerSystemCommandDeclaration({
+      category: "preview",
+      command: "toggle_preview",
+      phrases: ["toggle preview", "preview panel"],
+      description: "Toggles markdown preview",
+    });
+    assert.equal(entry.command, "toggle_preview");
+
+    // Recognizes registered phrases
+    assert.deepEqual(parseSystemCommand("toggle preview"), { verb: "system", command: "toggle_preview" });
+    assert.deepEqual(parseSystemCommand("preview panel"), { verb: "system", command: "toggle_preview" });
+
+    // Exposes in listSystemCommandCatalogue
+    const fullCatalogue = listSystemCommandCatalogue();
+    assert.ok(fullCatalogue.some((c) => c.command === "toggle_preview"));
+
+    // Duplicate registration refused
+    assert.throws(
+      () => registerSystemCommandDeclaration({ command: "toggle_preview" }),
+      /already registered/,
+    );
+  } finally {
+    unregisterSystemCommandDeclaration("toggle_preview");
+  }
+
+  // Once unregistered, no longer parses as system command
+  assert.equal(parseSystemCommand("toggle preview"), null);
 });
 
 test("resolver exports KNOWN_VERBS with 'system' and resolves system commands", async () => {
