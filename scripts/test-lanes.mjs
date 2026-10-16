@@ -609,7 +609,10 @@ if (CLI && process.argv.includes("--check")) {
   }
   if (unit.length + live.length !== seen.size) problems.push("a file is in neither lane");
   if (server.length + browser.length !== live.length) problems.push("server and browser do not partition live");
-  const allTests = readdirSync(TESTS).filter((file) => file.endsWith(".test.mjs"));
+  // Pre-push fixture repositories may omit tests/ entirely; classify() already treats that as an empty roster.
+  const allTests = [];
+  try { allTests.push(...readdirSync(TESTS).filter((file) => file.endsWith(".test.mjs"))); }
+  catch (error) { if (error.code !== "ENOENT") throw error; }
   for (const file of allTests) if (!seen.has(file)) problems.push(`${file} is in neither lane`);
   problems.push(...checkDeclaredLanes({ unit, server, browser }));
   if (problems.length > 0) {

@@ -394,6 +394,10 @@ test("top-of-file @lane declares a boundary without overriding classifier signal
     writeFileSync(file, '// @lane unit\nconst bad = `unterminated;\nimport { launch } from "./lib/cdp.mjs";\n');
     assert.match(checkDeclaredLanes(classify(tests))[0], /declared @lane unit, classified browser/,
       "an unreadable lexer must not bypass a declaration in the raw-code fallback");
+    rmSync(tests, { recursive: true, force: true });
+    assert.match(execFileSync(process.execPath, [path.join(scripts, "test-lanes.mjs"), "--check"],
+      { cwd: dir, encoding: "utf8" }), /\[lanes\] ok: 0 unit, 0 live/,
+    "a gate fixture with no tests directory is a valid empty partition");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
