@@ -296,6 +296,31 @@ test("modifying an inventory item whose summary in the generated doc block is al
   assert.match(r.out, /satisfied by generated inventory blocks/);
 });
 
+test("an inventory module that ALSO carries hand-written narrative description is REFUSED without doc updates or trailer (Finding P1)", () => {
+  const f = fixture();
+  mkdirSync(path.join(f.dir, "public", "components"), { recursive: true });
+  const compPath = "public/components/widget.mjs";
+  writeFileSync(path.join(f.dir, compPath), "/**\n * @summary Stable widget summary.\n */\nexport const widget = 1;\n");
+  f.change(
+    {
+      [compPath]: "\n",
+      "README.md": "\nDetailed prose about `public/components/widget.mjs` load ordering.\n\n<!-- BEGIN GENERATED COMPONENT INVENTORY -->\n| `public/components/widget.mjs` | Stable widget summary. |\n<!-- END GENERATED COMPONENT INVENTORY -->\n",
+    },
+    "add widget with both hand-written prose and inventory block",
+  );
+  f.base = git(["rev-parse", "HEAD"], f.dir);
+
+  // Modify code logic only, without touching README.md
+  appendFileSync(path.join(f.dir, compPath), "// changed ordering\n");
+  git(["-c", "user.name=t", "-c", "user.email=t@example.com", "add", "-A"], f.dir);
+  git(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "modify widget with hand-written doc prose"], f.dir);
+
+  const r = f.run();
+  assert.equal(r.code, 1, `modifying module with hand-written narrative prose must refuse without doc edit or trailer:\n${r.out}`);
+  assert.match(r.out, /public\/components\/widget\.mjs/);
+  assert.match(r.out, /README\.md/);
+});
+
 test("modifying an inventory item summary WITHOUT updating the doc block is refused (voicebox-beads-2pe6)", () => {
   const f = fixture();
   mkdirSync(path.join(f.dir, "public", "components"), { recursive: true });

@@ -96,13 +96,40 @@ export function describedFiles() {
 
 export const isInventoryModule = (f) => f.startsWith("public/components/") || f.startsWith("lib/routes/");
 
+export function extractModuleSummary(source) {
+  const trimmed = source.replace(/^#![^\n]*\n/, "").trimStart();
+  if (!trimmed.startsWith("/**")) return null;
+  const jsdocEnd = trimmed.indexOf("*/");
+  if (jsdocEnd === -1) return null;
+  const headerJsdoc = trimmed.slice(0, jsdocEnd + 2);
+  const match = headerJsdoc.match(/@summary\s+([^\n*]+)/);
+  if (!match || !match[1].trim()) return null;
+  return match[1].trim();
+}
+
+export function stripGeneratedBlocks(text) {
+  return text.replace(/<!-- BEGIN GENERATED(?::\s*[\s\S]*?|\s+[^>]+)-->[\s\S]*?<!-- END GENERATED(?::\s*[^>]+|\s+[^>]+)-->\n?/g, "");
+}
+
+/** Check if a file path is mentioned in hand-written markdown prose (outside generated blocks). */
+export function hasHandWrittenDescription(file, root = ROOT) {
+  for (const doc of documents()) {
+    const docFile = join(root, doc);
+    if (!existsSync(docFile)) continue;
+    const docText = readFileSync(docFile, "utf8");
+    const prose = stripGeneratedBlocks(docText);
+    const paths = namedPaths(prose);
+    if (paths.has(file)) return true;
+  }
+  return false;
+}
+
 export function isInventoryDocumented(file, root = ROOT) {
   const fullPath = join(root, file);
   if (!existsSync(fullPath)) return false;
   const content = readFileSync(fullPath, "utf8");
-  const match = content.match(/@summary\s+([^\n*]+)/);
-  if (!match || !match[1].trim()) return false;
-  const summary = match[1].trim();
+  const summary = extractModuleSummary(content);
+  if (!summary) return false;
 
   for (const doc of documents()) {
     const docFile = join(root, doc);
@@ -153,7 +180,9 @@ function main() {
   }
 
   const unexcused = moved.filter((file) => {
-    if (isInventoryModule(file) && isInventoryDocumented(file)) {
+    // Inventory modules are satisfied by generated blocks ONLY IF they have no hand-written
+    // narrative prose in the documentation (Finding P1) and their generated inventory summary is current.
+    if (isInventoryModule(file) && !hasHandWrittenDescription(file) && isInventoryDocumented(file)) {
       return false;
     }
     return true;

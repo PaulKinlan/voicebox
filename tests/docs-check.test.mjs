@@ -97,3 +97,19 @@ test("failure when a component lacks a @summary header: reports actionable error
     rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+test("failure when a component has misplaced @summary tag not in top-of-file JSDoc header (Finding P2)", () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "voicebox-misplaced-summary-"));
+  try {
+    writeFileSync(path.join(tempDir, "misplaced.mjs"), "export const a = 1;\n/**\n * @summary Misplaced summary.\n */\n");
+    writeFileSync(path.join(tempDir, "line-comment.mjs"), "// @summary Line comment summary\nexport const b = 2;\n");
+
+    const inv = moduleInventory(tempDir, "temp");
+    assert.equal(inv.items.length, 0, "no modules with misplaced summaries should be accepted");
+    assert.equal(inv.missingSummary.length, 2, "both files with misplaced summaries must be flagged");
+    assert.ok(inv.missingSummary.includes(path.join("temp", "misplaced.mjs")));
+    assert.ok(inv.missingSummary.includes(path.join("temp", "line-comment.mjs")));
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});

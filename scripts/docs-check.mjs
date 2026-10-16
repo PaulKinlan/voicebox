@@ -119,6 +119,21 @@ function pageScripts() {
 }
 
 /**
+ * Extracts the top-of-file @summary description from module source code.
+ * Requires the @summary tag to be inside a top-of-file JSDoc block (/** ... *\/).
+ */
+export function extractModuleSummary(source) {
+  const trimmed = source.replace(/^#![^\n]*\n/, "").trimStart();
+  if (!trimmed.startsWith("/**")) return null;
+  const jsdocEnd = trimmed.indexOf("*/");
+  if (jsdocEnd === -1) return null;
+  const headerJsdoc = trimmed.slice(0, jsdocEnd + 2);
+  const match = headerJsdoc.match(/@summary\s+([^\n*]+)/);
+  if (!match || !match[1].trim()) return null;
+  return match[1].trim();
+}
+
+/**
  * Scans a directory for *.mjs modules, extracts the @summary JSDoc comment from each,
  * and returns sorted items and any modules missing summaries (voicebox-beads-2pe6).
  */
@@ -131,14 +146,14 @@ export function moduleInventory(dir, relPrefix = dir) {
   for (const f of files) {
     const relPath = join(relPrefix, f);
     const content = readFileSync(join(fullDir, f), "utf8");
-    const summaryMatch = content.match(/@summary\s+([^\n*]+)/);
-    if (!summaryMatch || !summaryMatch[1].trim()) {
+    const summary = extractModuleSummary(content);
+    if (!summary) {
       missingSummary.push(relPath);
     } else {
       items.push({
         file: f,
         path: relPath,
-        summary: summaryMatch[1].trim(),
+        summary,
       });
     }
   }
