@@ -28,6 +28,7 @@ import { createAudioDeviceController } from "./components/audio-device-controlle
 import { createVisionControls } from "./components/vision-controls.mjs";
 import { createDeckController } from "./components/deck-controller.mjs";
 import { initActivityLog } from "./components/activity-log-ui.mjs";
+import { defaultBus, executeSystemCommand, registerCoreSystemCommands } from "./components/system-command-bus.mjs";
 
 const $ = (id) => document.getElementById(id);
 const SVG = "http://www.w3.org/2000/svg";
@@ -188,134 +189,33 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-// ── Browser System Commands (copy / paste / theme / panel) ──
+// ── Browser System Commands (declarative command bus, voicebox-beads-1c9d) ──
+registerCoreSystemCommands(defaultBus, {
+  els,
+  window,
+  document,
+  navigator,
+  applyTheme,
+  sqehSetState: (s, opts) => sqehSetState(s, opts),
+  openBranchLandingInspector: () => openBranchLandingInspector(),
+  openAgentProgressTracker: () => (typeof openAgentProgressTracker === "function" ? openAgentProgressTracker() : window.__voiceboxOpenAgentTracker?.()),
+});
+
 async function executeBrowserSystemCommand(cmd) {
-  if (!cmd || typeof cmd !== "object") return { ok: false };
-  if (cmd.command === "copy") {
-    const sel = window.getSelection?.()?.toString?.() ?? "";
-    const textToCopy = cmd.text || sel || els.readerBody?.textContent || els.log?.firstElementChild?.textContent || "";
-    if (textToCopy && navigator.clipboard?.writeText) {
-      try {
-        await navigator.clipboard.writeText(textToCopy);
-        return { ok: true, copied: textToCopy };
-      } catch {
-        return { ok: false, error: "Clipboard permission denied" };
-      }
-    }
-    return { ok: false, error: "Nothing to copy" };
-  }
-  if (cmd.command === "paste") {
-    if (navigator.clipboard?.readText) {
-      try {
-        const text = await navigator.clipboard.readText();
-        if (els.utterance) {
-          if (els.form?.hidden) els.form.hidden = false;
-          els.utterance.value = (els.utterance.value ? `${els.utterance.value} ` : "") + text;
-          if (els.send) els.send.disabled = !els.utterance.value.trim();
-          els.utterance.focus();
-        }
-        return { ok: true, pasted: text };
-      } catch {
-        return { ok: false, error: "Clipboard read permission denied" };
-      }
-    }
-    return { ok: false, error: "Clipboard unavailable" };
-  }
-  // THE FIELD NAMES HERE ARE THE PRODUCER'S, NOT THIS FUNCTION'S (voicebox-beads-ucak).
-  // lib/system-commands.mjs is the declared owner of the command vocabulary and emits `mode` for
-  // switch_theme and `target` for open_panel; server.mjs forwards exactly those fields on both client
-  // paths (the /channel "system_command" frame and the POST /api/turn response). This function used to
-  // read `cmd.theme` and `cmd.panel`, which NOBODY has ever produced — so the guard never matched,
-  // the branch never ran, and every navigation and appearance command silently did nothing while the
-  // server reported ok and logged it. Do not add a `cmd.mode || cmd.theme` fallback: two names for
-  // one fact is what scripts/single-owner.mjs exists to prevent.
-  if (cmd.command === "switch_theme" && cmd.mode) {
-    applyTheme(cmd.mode, { persist: true });
-    return { ok: true, theme: cmd.mode };
-  }
-  if (cmd.command === "open_panel" && cmd.target) {
-    // Every target the catalogue emits is handled here, including the two that had no branch at all:
-    // `agent-tracker` (the built-in Agent Progress Tracker mini-app, openAgentProgressTracker) and
-    // `close` (back to the deck, which closes every open window). Invocation stays imperative —
-    // showModal() and the modules' own controls — deliberately: this is a vocabulary repair, and
-    // moving it to declarative Invoker Commands would need a polyfill for a feature that is only
-    // Baseline newly available.
-    const p = String(cmd.target).toLowerCase();
-    if (p === "settings") els.settingsOpen?.click();
-    else if (p === "harnesses") els.harnessesOpen?.click?.();
-    else if (p === "extensions") els.extsOpen?.click?.();
-    else if (p === "environments") els.envsOpen?.click?.();
-    else if (p === "changelog") els.changelogOpen?.click?.();
-    else if (p === "branches" || p === "waiting-branches") {
-      void openBranchLandingInspector();
-    }
-    else if (p === "agent-tracker") void openAgentProgressTracker();
-    else if (p === "close") {
-      // "close panel" closes what is actually open: any modal sheet on the page, then the deck home,
-      // which closes the open windows. Closing only the deck would leave a person with the Settings
-      // sheet in front of them after asking for it to be closed, which is the plain reading of the
-      // command. The dialogs are all <dialog closedby="any">, so the platform closes them for a
-      // click or Escape already — this is the same action, from a voice command.
-      for (const dialog of document.querySelectorAll("dialog[open]")) dialog.close();
-      sqehSetState("deck");
-    }
-    else if (p === "files" || p === "history" || p === "activity" || p === "deck") sqehSetState(p);
-    return { ok: true, panel: p };
-  }
-  if (cmd.command === "stop_speaking") {
-    const mode = cmd.mode || (/unmute/i.test(cmd.text || "") ? "unmute" : /mute/i.test(cmd.text || "") ? "mute" : "interrupt");
-    const micPressed = els.mic?.getAttribute("aria-pressed") === "true";
-    if (mode === "unmute") {
-      if (!micPressed) {
-        els.mic?.click();
-      }
-      return { ok: true, action: "unmute", message: "Microphone unmuted." };
-    }
-    if (mode === "mute") {
-      if (micPressed) {
-        els.mic?.click();
-      }
-      return { ok: true, action: "mute", message: "Microphone muted." };
-    }
-    try { window.speechSynthesis?.cancel?.(); } catch {}
-    const interruptBtn = els.interrupt || $("interrupt");
-    if (interruptBtn) {
-      const wasDisabled = interruptBtn.disabled;
-      interruptBtn.disabled = false;
-      interruptBtn.click();
-      interruptBtn.disabled = wasDisabled;
-    } else {
-      try { window.__voiceboxOfflineSpeech?.stopSpeaking?.(); } catch {}
-      try {
-        const client = window.__voiceboxLiveClient;
-        if (typeof client?.interruptSpeech === "function") {
-          client.interruptSpeech("page");
-        } else {
-          client?.stopReply?.();
-          client?.stopPlayback?.();
-        }
-      } catch {}
-    }
-    return { ok: true, action: "interrupt", message: "Stopped speaking." };
-  }
-  if (cmd.command === "show_waiting_branches") {
-    void openBranchLandingInspector();
-    return { ok: true, action: "show_waiting_branches" };
-  }
-  if (cmd.command === "land_branch") {
-    return { ok: true, action: "land_branch" };
-  }
-  if (cmd.command === "keep_branch_separate") {
-    return { ok: true, action: "keep_branch_separate" };
-  }
-  if (cmd.command === "compare_harnesses") {
-    void openAgentProgressTracker();
-    return { ok: true, action: "compare_harnesses" };
-  }
-  return { ok: false };
+  return executeSystemCommand(cmd, {
+    els,
+    window,
+    document,
+    navigator,
+    applyTheme,
+    sqehSetState: (s, opts) => sqehSetState(s, opts),
+    openBranchLandingInspector: () => openBranchLandingInspector(),
+    openAgentProgressTracker: () => (typeof openAgentProgressTracker === "function" ? openAgentProgressTracker() : window.__voiceboxOpenAgentTracker?.()),
+  });
 }
 window.executeBrowserSystemCommand = executeBrowserSystemCommand;
 window.__voiceboxOnSystemCommand = executeBrowserSystemCommand;
+window.__voiceboxSystemCommandBus = defaultBus;
 window.addEventListener("message", (e) => {
   if (e.origin && e.origin !== window.location.origin) return;
   if (e.data?.type === "system_command") {

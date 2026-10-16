@@ -64,7 +64,23 @@ node server.mjs --doctor
 
 ## Architecture Overview
 
-Voicebox pairs a zero-dependency Node.js gateway (`server.mjs`) and modular browser UI (`public/fused.js`, `public/theme.mjs`, `public/extensions-ui.mjs`, `public/settings-ui.mjs`, `public/components/environment-root-dialog.mjs`, `public/components/changelog-dialog.mjs`, `public/components/mic-hotkey-controller.mjs`, `public/components/sync-toast.mjs`, `public/components/audio-device-controller.mjs`, `public/components/activity-log-ui.mjs`, `public/components/mini-app-surface.mjs`, `public/components/harnesses-dialog.mjs`, `public/components/environment-list.mjs`, `public/components/vision-controls.mjs`, `public/live-voice.js`) with a pure TypeScript policy core (`core/`). Extension HTTP discovery and decisions are grouped in `lib/routes/extensions.mjs`; the server still owns the authorization checks and bounded JSON body parser.
+Voicebox pairs a zero-dependency Node.js gateway (`server.mjs`) and modular browser UI (`public/fused.js`, `public/theme.mjs`, `public/extensions-ui.mjs`, `public/settings-ui.mjs`, `public/components/environment-root-dialog.mjs`, `public/components/changelog-dialog.mjs`, `public/components/mic-hotkey-controller.mjs`, `public/components/sync-toast.mjs`, `public/components/audio-device-controller.mjs`, `public/components/activity-log-ui.mjs`, `public/components/mini-app-surface.mjs`, `public/components/harnesses-dialog.mjs`, `public/components/environment-list.mjs`, `public/components/vision-controls.mjs`, `public/components/deck-controller.mjs`, `public/components/system-command-bus.mjs`, `public/live-voice.js`) with a pure TypeScript policy core (`core/`). Extension HTTP discovery and decisions are grouped in `lib/routes/extensions.mjs`; the server still owns the authorization checks and bounded JSON body parser.
+
+### Declarative System Command Bus (`public/components/system-command-bus.mjs`)
+
+Voice and text system commands (`copy`, `paste`, `switch_theme`, `open_panel`, `stop_speaking`, `show_waiting_branches`, `land_branch`, `keep_branch_separate`, `compare_harnesses`) are registered declaratively on a shared command bus rather than hardcoded into `public/fused.js`. New UI components register custom commands during initialization:
+
+```javascript
+import { registerSystemCommand } from "./components/system-command-bus.mjs";
+
+registerSystemCommand("toggle_preview", async (cmd, context) => {
+  // Execute feature action
+  return { ok: true, active: true };
+}, {
+  category: "preview",
+  description: "Toggles markdown preview panel",
+});
+```
 
 ### Pluggable live-model library
 
