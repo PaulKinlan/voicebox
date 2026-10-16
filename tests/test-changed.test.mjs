@@ -36,6 +36,26 @@ test("mapToTests: maps internal module dependencies transitively (voicebox-beads
   assert.ok(mappedMiniApp.includes("mini-app-architecture.test.mjs") || mappedMiniApp.includes("mini-app-ui.test.mjs"), "core/mini-app.ts must map to mini-app tests");
 });
 
+test("mapToTests: route edits trigger targeted tests rather than entire server suites (voicebox-beads-ybwq)", () => {
+  const doctorMapped = mapToTests(["lib/routes/doctor.mjs"]);
+  assert.ok(doctorMapped.includes("doctor-route.test.mjs"), "must include direct doctor route unit test");
+  assert.ok(doctorMapped.includes("server-lifecycle.test.mjs"), "must include bounded server smoke test");
+  assert.ok(doctorMapped.length <= 5, `expected <= 5 targeted tests, got ${doctorMapped.length}`);
+
+  const branchesMapped = mapToTests(["lib/routes/branches.mjs"]);
+  assert.ok(branchesMapped.includes("branches-route.test.mjs"), "must include direct branches route unit test");
+  assert.ok(branchesMapped.includes("server-lifecycle.test.mjs"), "must include bounded server smoke test");
+  assert.ok(branchesMapped.length <= 5, `expected <= 5 targeted tests, got ${branchesMapped.length}`);
+
+  // Untested route module maps to zero tests and is refused as unmapped (voicebox-beads-rpym)
+  const unmappedRoute = "lib/routes/" + "untested_" + Date.now() + "_route.mjs";
+  assert.equal(mapToTests([unmappedRoute]).length, 0, "untested route must not receive smoke-only mapping");
+
+  // Non-exclusive route edit (e.g. Touching server.mjs too) triggers full transitive coverage
+  const mixedMapped = mapToTests(["lib/routes/doctor.mjs", "server.mjs"]);
+  assert.ok(mixedMapped.length >= 100, `expected >= 100 tests on server.mjs change, got ${mixedMapped.length}`);
+});
+
 test("CLI: unmapped source files refuse with unmapped-source-file and exit 1 (voicebox-beads-p9bf F1)", () => {
   const unmappedName = "unmapped_" + "source_module.mjs";
   const unmappedPath = path.join("lib", unmappedName);
@@ -284,6 +304,36 @@ test("gate: a fast gate omits the files it did not select, each by name and with
   assert.match(omitted[0].reason, /fast-only: not selected by the changed-path map/);
   assert.equal(outcome.manifest.summary.classified, 2, "the roster is recorded whole, not just the selection");
   rmSync(dir, { recursive: true, force: true });
+});
+
+test("gate: route-scoped change records route_scoping in manifest and sets descriptive omitted reasons (voicebox-beads-ybwq)", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-gate-route-"));
+  const realLog = console.log;
+  console.log = () => {};
+  try {
+    const outcome = await runGate({
+      changedFiles: ["lib/routes/doctor.mjs"],
+      matchedTests: ["doctor-route.test.mjs", "server-lifecycle.test.mjs"],
+      partitioned: { unit: ["doctor-route.test.mjs"], server: ["server-lifecycle.test.mjs"], browser: [], unclassified: [] },
+      classified: {
+        unit: [{ file: "doctor-route.test.mjs", why: null }],
+        server: [{ file: "server-lifecycle.test.mjs", why: null }, { file: "unselected.test.mjs", why: null }],
+        browser: [],
+      },
+      gate: "fast",
+      tree: "r".repeat(40),
+      dir,
+      runner: async (file) => result("passed", { file }),
+    });
+
+    assert.equal(outcome.code, 0);
+    assert.ok(outcome.manifest.route_scoping);
+    assert.deepEqual(outcome.manifest.route_scoping.routes, ["lib/routes/doctor.mjs"]);
+    assert.deepEqual(outcome.manifest.route_scoping.smoke_tests, ["server-lifecycle.test.mjs"]);
+  } finally {
+    console.log = realLog;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("gate: --dry-run writes the plan's manifest without dispatching anything", async () => {

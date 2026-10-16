@@ -397,6 +397,14 @@ merger's union, and a full gate may not omit a classified file at all.
   reach it: a UI-monolith change pays a browser-heavy closure, and the structural route is the
   `public/fused.js` decomposition (`voicebox-beads-mvxl` / `uei2`), not a narrower map.
 
+- **Route-scoped change detection (`lib/routes/*.mjs`, voicebox-beads-ybwq).** When a commit modifies exclusively
+  route leaf modules in `lib/routes/*.mjs` without touching `server.mjs` or shared lib infrastructure,
+  `scripts/test-changed.mjs` avoids transitively expanding `server.mjs` to all 150+ importers. It dispatches the
+  route's direct unit and seam tests plus a bounded server smoke test (`server-lifecycle.test.mjs`), recording
+  bypassed transitive server importers explicitly in `manifest.route_scoping` and labeling omitted entries with their
+  route-scoped reason. In-memory route testing with `tests/lib/route-harness.mjs` (`invokeRoute`) allows route unit
+  tests to execute in <5ms without socket overhead.
+
 - **WHY THE BROWSER TIER IS THREE SHARDS, MEASURED (`voicebox-beads-q4j6`, `voicebox-beads-q4j6.1`).** The browser
   tier's width is a correctness fact before it is a speed one. Two full-gate unions at four shards were red on **different**
   sets of files; reducing to two shards eliminated flakes but cost 750.1s browser-tier wall time. Width 3 provides full stability

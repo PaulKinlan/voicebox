@@ -12,12 +12,14 @@ import { gitEnv } from "../lib/git-env.mjs";
 import { classify } from "./test-lanes.mjs";
 import { buildQueue, ISOLATED, TIER_WORKERS } from "./test-shards.mjs";
 import { artifactDir, createManifest, emitMarker, finalizeManifest, ManifestRefusal, recordFile, sealManifest, tapCounts, testChildEnv, verdictOf, writeManifest } from "./gate-manifest.mjs";
+import { isExclusiveRouteChanges, routeAffected, ROUTE_SERVER_SMOKE, isSourcePath } from "./infra-affected.mjs";
+
+export { isExclusiveRouteChanges, routeAffected, ROUTE_SERVER_SMOKE, isSourcePath };
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TESTS_DIR = path.join(ROOT, "tests");
 
-const SOURCE_PREFIXES = ["core/", "lib/", "public/", "tools/", "scripts/", "server.mjs"];
-export const isSourceFile = (f) => SOURCE_PREFIXES.some((prefix) => f === prefix || f.startsWith(prefix));
+export const isSourceFile = isSourcePath;
 
 const git = (args, options = {}) => {
   try {
@@ -90,7 +92,7 @@ export function checkStaticRelevance(changedFiles) {
 }
 
 /** Find internal modules in lib/tools/core/server that import or reference a file */
-export function getIntermediateImporters(changedFile) {
+export function getIntermediateImporters(changedFile, { isRouteScoped = false } = {}) {
   const norm = changedFile.replace(/^\.\//, "");
   const baseName = path.basename(norm);
   const ext = path.extname(norm);
@@ -117,14 +119,65 @@ export function getIntermediateImporters(changedFile) {
   }
   const serverPath = path.join(ROOT, "server.mjs");
   if (existsSync(serverPath) && norm !== "server.mjs") {
-    try {
-      const serverContent = readFileSync(serverPath, "utf8");
-      if (serverContent.includes(baseName) || serverContent.includes(norm) || serverContent.includes(`/${stem}.`)) {
-        importers.add("server.mjs");
-      }
-    } catch {}
+    // When changes are exclusively route-scoped (voicebox-beads-ybwq),
+    // do not add server.mjs as an unbounded transitive importer for route leaves.
+    if (!isRouteScoped || !norm.startsWith("lib/routes/")) {
+      try {
+        const serverContent = readFileSync(serverPath, "utf8");
+        if (serverContent.includes(baseName) || serverContent.includes(norm) || serverContent.includes(`/${stem}.`)) {
+          importers.add("server.mjs");
+        }
+      } catch {}
+    }
   }
   return [...importers];
+}
+
+/**
+ * Detailed route-scoping information partitioned into tier buckets for manifest reporting.
+ */
+export function getRouteScopeDetails({ changedFiles = [], allTestFiles = null } = {}) {
+  const allTests = allTestFiles ?? readdirSync(TESTS_DIR).filter((f) => f.endsWith(".test.mjs"));
+  const fullServerImporters = [];
+  for (const tf of allTests) {
+    const fullTestPath = path.join(TESTS_DIR, tf);
+    if (existsSync(fullTestPath)) {
+      try {
+        const content = readFileSync(fullTestPath, "utf8");
+        if (
+          content.includes("server.mjs") ||
+          content.includes("tests/lib/server.mjs") ||
+          content.includes("createServer")
+        ) {
+          fullServerImporters.push(tf);
+        }
+      } catch {}
+    }
+  }
+
+  const directTests = mapToTests(changedFiles, allTests);
+  const baseScope = routeAffected({ changedFiles, allServerImporters: fullServerImporters, directTests });
+
+  let classified;
+  try {
+    classified = classify();
+  } catch {
+    classified = { server: [], browser: [], unit: [] };
+  }
+  const serverSet = new Set((classified.server ?? []).map((e) => e.file));
+  const browserSet = new Set((classified.browser ?? []).map((e) => e.file));
+
+  const unrunServer = baseScope.unrunTransitiveImporters.files.filter((f) => serverSet.has(f));
+  const unrunBrowser = baseScope.unrunTransitiveImporters.files.filter((f) => browserSet.has(f));
+
+  return {
+    ...baseScope,
+    unrunTransitiveImporters: {
+      server: { files: unrunServer, count: unrunServer.length },
+      browser: { files: unrunBrowser, count: unrunBrowser.length },
+      total: baseScope.unrunTransitiveImporters.count,
+    },
+  };
 }
 
 /** Map changed files to the test files that import or exercise them */
@@ -132,9 +185,10 @@ export function mapToTests(changedFiles, allTestFiles = null) {
   const tests = allTestFiles ?? readdirSync(TESTS_DIR).filter((f) => f.endsWith(".test.mjs"));
   const matched = new Set();
   const fileQueue = new Set(changedFiles);
+  const isRouteScoped = isExclusiveRouteChanges(changedFiles);
 
   for (const f of changedFiles) {
-    for (const importer of getIntermediateImporters(f)) {
+    for (const importer of getIntermediateImporters(f, { isRouteScoped })) {
       fileQueue.add(importer);
     }
   }
@@ -174,6 +228,16 @@ export function mapToTests(changedFiles, allTestFiles = null) {
             matched.add(tf);
           }
         } catch {}
+      }
+    }
+  }
+
+  // When a commit touches exclusively routes, add the bounded server smoke subset
+  // only if at least one direct test was matched, so a route without any tests is not falsely considered mapped
+  if (isRouteScoped && matched.size > 0) {
+    for (const smokeFile of ROUTE_SERVER_SMOKE) {
+      if (tests.includes(smokeFile)) {
+        matched.add(smokeFile);
       }
     }
   }
@@ -498,9 +562,38 @@ export async function runGate({
   // Every classified file that was not selected is OMITTED BY NAME WITH ITS REASON. This is the
   // reconciliation the artifact is for: a fast gate's scope is a decision, and an unexplained gap is
   // what lets a narrow run be quoted as a wide one.
-  const omittedReason = gate === "full" ? "not selected: the full roster should have been dispatched" : "fast-only: not selected by the changed-path map";
+  const routeScope = getRouteScopeDetails({ changedFiles });
+  if (routeScope.applies) {
+    manifest.route_scoping = {
+      routes: routeScope.routes,
+      smoke_tests: routeScope.smoke,
+      bypassed_server_importers: routeScope.unrunTransitiveImporters.total,
+    };
+  }
+
+  const getOmittedReason = (entry) => {
+    if (gate === "full") return "not selected: the full roster should have been dispatched";
+    const file = path.basename(entry.path);
+    if (routeScope.applies && routeScope.unrunTransitiveImporters.total > 0) {
+      if (
+        routeScope.unrunTransitiveImporters.server.files.includes(file) ||
+        routeScope.unrunTransitiveImporters.browser.files.includes(file)
+      ) {
+        return `fast-only: route-scoped change (${routeScope.routes.join(", ")}) bypassed transitive server importer (server boot verified by ${routeScope.smoke.join(", ")})`;
+      }
+    }
+    return "fast-only: not selected by the changed-path map";
+  };
+
   for (const entry of manifest.classifier.files) {
-    if (!selected.has(path.basename(entry.path))) recordFile(manifest, { path: entry.path, dispatch: "omitted", reason: omittedReason, selection: gate === "full" ? "full-roster" : selectionOf(entry) });
+    if (!selected.has(path.basename(entry.path))) {
+      recordFile(manifest, {
+        path: entry.path,
+        dispatch: "omitted",
+        reason: getOmittedReason(entry),
+        selection: gate === "full" ? "full-roster" : selectionOf(entry),
+      });
+    }
   }
 
   const bad = results.filter((r) => r.status !== "passed");
