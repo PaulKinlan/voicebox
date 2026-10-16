@@ -2,7 +2,14 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { invokeRoute, mockJson, mockReadJsonBody } from "./lib/route-harness.mjs";
+import {
+  invokeRoute,
+  mockJson,
+  mockReadJsonBody,
+  MockRequest,
+  MockResponse,
+  BodyRefusal,
+} from "./lib/route-harness.mjs";
 
 test("route-harness: invokeRoute dispatches by method and path", async () => {
   const routes = {
@@ -113,6 +120,47 @@ test("route-harness: mockReadJsonBody resolves null on malformed JSON", async ()
 
   assert.equal(res.status, 400);
   assert.equal(res.json().why, "malformed JSON");
+});
+
+test("route-harness: mockReadJsonBody rejects with BodyRefusal and returns 413 on oversize body (voicebox-beads-hyks)", async () => {
+  const req = new MockRequest({
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: { hello: "world-overflowing-the-cap" },
+  });
+  let responseData = null;
+  const res = new MockResponse((outcome) => {
+    responseData = outcome;
+  });
+
+  await assert.rejects(
+    () => mockReadJsonBody(req, res, 10),
+    (err) => {
+      assert.ok(err instanceof BodyRefusal);
+      assert.equal(err.refusal, "body-too-large");
+      return true;
+    }
+  );
+
+  assert.equal(res.statusCode, 413);
+  const json = JSON.parse(responseData.body);
+  assert.equal(json.ok, false);
+  assert.equal(json.refused, "body-too-large");
+  assert.match(json.why, /at most 10 bytes/);
+
+  // Also assert end-to-end behavior when dispatched via invokeRoute
+  const invokedRes = await invokeRoute(
+    async (r, s) => {
+      await mockReadJsonBody(r, s, 10);
+    },
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: { hello: "world-overflowing-the-cap" },
+    }
+  );
+  assert.equal(invokedRes.status, 413);
+  assert.equal(invokedRes.json().refused, "body-too-large");
 });
 
 test("route-harness: handles direct function handlers and context injection", async () => {
