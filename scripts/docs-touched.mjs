@@ -43,9 +43,9 @@ const git = (args) => execFileSync("git", args, { cwd: ROOT, env: gitEnv(), enco
 const gitTry = (args) => { try { return { ok: true, out: git(args) }; } catch (e) { return { ok: false, out: String(e?.stderr ?? e?.message ?? e).trim() }; } };
 
 /** Every document a person writes in: the root markdown files and docs/, minus generated evidence. */
-export function documents() {
-  const docs = readdirSync(ROOT).filter((f) => f.endsWith(".md"));
-  for (const f of readdirSync(join(ROOT, "docs"))) if (f.endsWith(".md")) docs.push(join("docs", f));
+export function documents(root = ROOT) {
+  const docs = readdirSync(root).filter((f) => f.endsWith(".md"));
+  for (const f of readdirSync(join(root, "docs"))) if (f.endsWith(".md")) docs.push(join("docs", f));
   return docs;
 }
 
@@ -113,7 +113,7 @@ export function stripGeneratedBlocks(text) {
 
 /** Check if a file path is mentioned in hand-written markdown prose (outside generated blocks). */
 export function hasHandWrittenDescription(file, root = ROOT) {
-  for (const doc of documents()) {
+  for (const doc of documents(root)) {
     const docFile = join(root, doc);
     if (!existsSync(docFile)) continue;
     const docText = readFileSync(docFile, "utf8");
@@ -131,15 +131,20 @@ export function isInventoryDocumented(file, root = ROOT) {
   const summary = extractModuleSummary(content);
   if (!summary) return false;
 
-  for (const doc of documents()) {
+  for (const doc of documents(root)) {
     const docFile = join(root, doc);
     if (!existsSync(docFile)) continue;
     const docText = readFileSync(docFile, "utf8");
     const blocks = docText.match(/<!-- BEGIN GENERATED(?::\s*(?:component|route)-inventory[^\n>]*|\s+(?:COMPONENT|ROUTE)\s+INVENTORY\s*)-->([\s\S]*?)<!-- END GENERATED(?::\s*(?:component|route)-inventory[^\n>]*|\s+(?:COMPONENT|ROUTE)\s+INVENTORY\s*)-->/g);
     if (blocks) {
       for (const block of blocks) {
-        if (block.includes(`\`${file}\``) && block.includes(summary)) {
-          return true;
+        for (const line of block.split("\n")) {
+          if (line.includes(`\`${file}\``)) {
+            const trimmed = line.trim();
+            if (trimmed === `| \`${file}\` | ${summary} |`) {
+              return true;
+            }
+          }
         }
       }
     }

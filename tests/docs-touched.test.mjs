@@ -345,3 +345,27 @@ test("modifying an inventory item summary WITHOUT updating the doc block is refu
   assert.match(r.out, /public\/components\/widget\.mjs/);
 });
 
+test("a shortened summary with the old row still in README is REFUSED (voicebox-beads-0seb)", () => {
+  const f = fixture();
+  mkdirSync(path.join(f.dir, "public", "components"), { recursive: true });
+  const compPath = "public/components/widget.mjs";
+  writeFileSync(path.join(f.dir, compPath), "/**\n * @summary Alpha widget. Renders the first panel.\n */\nexport const widget = 1;\n");
+  f.change(
+    {
+      [compPath]: "\n",
+      "README.md": "\n<!-- BEGIN GENERATED COMPONENT INVENTORY -->\n| `public/components/widget.mjs` | Alpha widget. Renders the first panel. |\n<!-- END GENERATED COMPONENT INVENTORY -->\n",
+    },
+    "add widget with long summary",
+  );
+  f.base = git(["rev-parse", "HEAD"], f.dir);
+
+  // Shorten summary to "Alpha widget." and change body, but leave README unedited
+  writeFileSync(path.join(f.dir, compPath), "/**\n * @summary Alpha widget.\n */\nexport const widget = 2;\n");
+  git(["-c", "user.name=t", "-c", "user.email=t@example.com", "add", "-A"], f.dir);
+  git(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "shorten summary without docs:write"], f.dir);
+
+  const r = f.run();
+  assert.equal(r.code, 1, `shortened summary must NOT be excused by a stale row containing it as a substring:\n${r.out}`);
+  assert.match(r.out, /public\/components\/widget\.mjs/);
+});
+
