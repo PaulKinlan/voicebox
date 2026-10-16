@@ -1,0 +1,933 @@
+/* The settings BUTTON sits in the quiet control line below the microphone, outside its
+   waveform — restraint must not mean an invisible button. (Paul: "I like where it is.")
+
+   Settings themselves are a REAL MODAL DIALOG, not a block that appears in the flow. The old
+   version was a div in the document flow, so opening it displaced everything below it and on a
+   phone it landed under the fold — you had to scroll to the thing you just opened. A modal is out
+   of flow by construction: the platform puts it in the top layer, makes the room behind it inert,
+   traps focus, and treats Esc as a close request. */
+.settings {
+  /* inset:0 + margin:auto centres it in the viewport; the block above is now out of flow. */
+  inset: 0;
+  margin: auto;
+  width: min(100% - 2rem, 420px);
+  max-height: 85vh;           /* for browsers without dvh */
+  max-height: 85dvh;          /* mobile browser chrome is exactly why this is dvh, not vh */
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  overflow: hidden;           /* the FORM scrolls, not the dialog: the head stays put */
+}
+.settings-form {
+  max-height: inherit;
+  overflow: auto;             /* a long device list scrolls INSIDE the dialog */
+  overscroll-behavior: contain; /* and reaching the end does not scroll the page behind it */
+  padding: 18px 20px calc(20px + env(safe-area-inset-bottom)); /* never under the home bar */
+  text-align: left;
+}
+/* The frosting for BOTH dialogs is the single shared rule below (with the environments dialog) —
+   one declaration, so the blur and its fallback cannot drift between the two modals. */
+/* A modal that leaves the page scrollable behind it is a modal you can lose. The platform makes the
+   CONTENT inert; this is the scroll half, declaratively, with no listener and nothing to unlock. */
+html:has(dialog.settings[open]) { overflow: hidden; }
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding-bottom: 10px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.settings-head h2 {
+  margin: 0 auto 0 0;
+  font-size: .9375rem;
+  font-weight: 600;
+  letter-spacing: -.02em;
+}
+#envs-help {
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--shade);
+  color: var(--muted);
+  font-size: .75rem;
+  font-weight: 600;
+}
+#envs-help:hover,
+#envs-help[aria-expanded="true"] {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent) 12%, var(--shade));
+}
+.envs-help-panel {
+  margin-block: 8px 14px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--shade);
+  color: var(--ink);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+.envs-help-panel[hidden] {
+  display: none !important;
+}
+.envs-help-list {
+  margin: 4px 0 12px;
+  padding-inline-start: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--ink);
+}
+.envs-help-list:last-child {
+  margin-bottom: 0;
+}
+.harness-project-loop {
+  margin: 10px 0 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--shade);
+}
+.harness-changed-files {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.harness-changed-files[hidden] {
+  display: none !important;
+}
+.harness-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, var(--card));
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.harness-file-chip:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--card));
+}
+.settings-section-divider { margin: 16px 0 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.settings-section-title { margin: 0; font-size: .75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink); }
+.device-row { padding: 10px 0; }
+.device-row + .device-row { border-top: 1px solid var(--line); }
+.device-row h3 { margin: 0 0 8px; font-size: var(--text-xs); font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.device-row select { width: 100%; min-height: 38px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--ground); color: var(--ink); font-size: .8125rem; }
+.device-state { margin: 8px 0 0; font-size: .8125rem; color: color-mix(in srgb, var(--muted) 85%, var(--ink)); }
+.about { margin-top: 12px; }
+.about summary { font-size: .8125rem; color: var(--muted); }
+.about p { margin: 8px 0 0; font-size: .75rem; color: var(--muted); }
+.interrupt { display: none; }
+.voice:has(#voice-ring-wrap[data-voice="speaking"]) .interrupt { display: inline-flex; }
+.voice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.voice-actions .quiet {
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  background: var(--card);
+  color: var(--ink);
+  font-size: 0.78rem;
+  font-weight: 500;
+  transition: outline-color 180ms ease, border-color 180ms ease, background 150ms ease;
+}
+.voice-actions .quiet:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  outline-color: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/* ── In-browser diagnostics & doctor (voicebox-beads-7z2y) ──────────────── */
+.doctor-results {
+  margin-top: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--ground);
+  padding: 8px 10px;
+}
+.doctor-results[hidden] {
+  display: none;
+}
+.doctor-checks-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.doctor-check-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: var(--card);
+}
+.doctor-check-label {
+  font-weight: 600;
+  color: var(--ink);
+}
+.doctor-check-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  justify-content: flex-end;
+}
+.doctor-check-status {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 999px;
+  margin-right: 6px;
+}
+.doctor-check-status.status-ok {
+  background: color-mix(in srgb, var(--good) 15%, var(--card));
+  color: var(--good);
+}
+.doctor-check-status.status-warn {
+  background: color-mix(in srgb, var(--warn) 15%, var(--card));
+  color: var(--warn);
+}
+.doctor-check-status.status-error {
+  background: color-mix(in srgb, var(--warn) 25%, var(--card));
+  color: var(--warn);
+}
+.doctor-check-detail {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  flex: 1;
+  text-align: right;
+  word-break: break-all;
+}
+.vision-core-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  max-inline-size: 320px;
+}
+.vision-core-card[hidden] {
+  display: none !important;
+}
+.vision-stage-wrap {
+  position: relative;
+  inline-size: 100%;
+  display: flex;
+  justify-content: center;
+}
+.vision-grounding-overlay {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  pointer-events: none;
+  border-radius: 10px;
+}
+.vision-core-card video {
+  inline-size: 100%;
+  max-block-size: 160px;
+  border-radius: 10px;
+  background: var(--ground);
+  object-fit: cover;
+}
+.vision-core-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  inline-size: 100%;
+}
+.vision-core-meta {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* The docked mic (voicebox-beads-dzd): appears only when the ring has scrolled
+   out of view, so the page holds exactly one microphone control at a time.
+   Fixed to the corner with the safe-area respect a platform control gets;
+   z-index 5 is the page's one tier above in-flow content — the modals are
+   native <dialog> top layer and always stack above it. */
+.mic-dock {
+  position: fixed;
+  inset-inline-start: auto;
+  inset-inline-end: max(28px, env(safe-area-inset-right, 0px));
+  inset-block-end: max(36px, calc(28px + env(safe-area-inset-bottom, 0px)));
+  transform: none;
+  z-index: 95;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--ink) 12%, var(--line));
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  background: var(--card);
+  color: var(--accent);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  box-shadow: var(--shadow), 0 8px 20px -16px color-mix(in srgb, var(--ink) 40%, transparent);
+  transition: outline-color 180ms ease, border-color 160ms ease, color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+.mic-dock[hidden] { display: none; }
+.mic-dock:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  outline-color: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.mic-dock:active { transform: translateY(0); }
+.mic-dock:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.mic-dock .icon,
+.mic-dock .mic-icon { width: 22px; height: 22px; }
+.mic-dock[data-voice="listening"],
+body[data-voice="listening"] .mic-dock {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+.mic-dock[data-voice="speaking"],
+body[data-voice="speaking"] .mic-dock {
+  color: var(--good);
+  border-color: color-mix(in srgb, var(--good) 45%, var(--line));
+}
+@media (max-width: 640px) {
+  .mic-dock {
+    inset-inline-end: max(20px, env(safe-area-inset-right, 0px));
+    inset-block-end: max(32px, calc(24px + env(safe-area-inset-bottom, 0px)));
+  }
+}
+.composer { display: flex; align-items: center; gap: 4px; width: min(100%, 520px); margin-top: 20px; padding: 4px 4px 4px 6px; border: 1px solid color-mix(in srgb, var(--ink) 10%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--card) 55%, var(--ground)); transition: border-color 160ms ease-out, background 160ms ease-out; }
+.composer:focus-within { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--card) 85%, var(--ground)); }
+.composer input { flex: 1; min-width: 0; min-inline-size: 15ch; min-height: 38px; padding: 8px 14px; border: 0; border-radius: 999px; background: none; color: var(--ink); font-size: .875rem; text-overflow: ellipsis; field-sizing: content; }
+.composer input:focus { outline: none; }
+/* voicebox-beads-8wm8: the composer's placeholder is deliberately quieter than the text you type, which is
+   why it is a translucent mix of `--muted` rather than the token itself. At 62% it composited to only 2.68:1
+   light / 3.46:1 dark against the field's own ground, under the 4.5:1 floor this project applies to placeholder
+   text. 90% is the mix this change chooses, and it is chosen for HEADROOM rather than because it is the bare
+   minimum: 88% is the bare clearing candidate, measuring 4.54:1 light and 5.61:1 dark, only 0.04 above the floor
+   in light, which is inside rendering variance. At 90% the placeholder has alpha 0.902 and measures 4.81:1 light
+   and 5.87:1 dark against typed text at 14.91:1 and 17.11:1, so it stays roughly a third of the entered text's
+   contrast and is not flattened to the opaque token. Measured by injecting the exact declaration
+   into a disposable browser and reading pixels rather than parsing colour strings; focus leaves the ground
+   unchanged up to one unit, and the composer input is never disabled. */
+.composer input::placeholder { color: color-mix(in srgb, var(--muted) 90%, transparent); }
+.send { color: light-dark(#fff, #141c34); border: 0; border-radius: 999px; padding: 0 18px; min-height: 36px; font-weight: 500; background: var(--accent); }
+.send:hover { filter: brightness(1.06); }
+.send:disabled { background: color-mix(in srgb, var(--ink) 9%, transparent); color: color-mix(in srgb, var(--muted) 50%, transparent); opacity: 1; }
+.turn-report { min-height: 20px; max-width: 60ch; margin: 14px 0 0; font-size: .8125rem; color: var(--muted); text-align: center; overflow-wrap: anywhere; transition: opacity 0.8s ease; }
+
+/* ── Extension reconfigure & removal dialog (voicebox-beads-ud5) ─────────── */
+.setting-input {
+  width: 100%;
+  min-height: 38px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--ground);
+  color: var(--ink);
+  font-size: .8125rem;
+  box-sizing: border-box;
+}
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+.harness-actions .quiet,
+.transcript-section-head .quiet,
+.settings-actions .quiet,
+.ext-actions .quiet,
+.ext-plan > .quiet {
+  border: 1px solid var(--line);
+  background: var(--shade);
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 8px;
+  color: var(--ink);
+  font-weight: 500;
+}
+.quiet.danger {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--line));
+}
+.quiet.danger:hover {
+  background: color-mix(in srgb, var(--warn) 15%, transparent);
+}
+
+/* ── Harnesses modal dialog (voicebox-beads-f1o) ─────────────────────────── */
+dialog.harnesses-modal {
+  width: min(100% - 2rem, 640px);
+}
+.harness-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding: 10px 12px;
+  margin: 8px 0 12px;
+  border-radius: 10px;
+  background: var(--shade);
+  border: 1px solid var(--line);
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.harness-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.env-state[data-status="active"] {
+  background: color-mix(in srgb, var(--good) 14%, var(--card));
+  border-color: color-mix(in srgb, var(--good) 45%, var(--line));
+  color: var(--good);
+}
+.env-state[data-status="ready"] {
+  background: color-mix(in srgb, var(--accent) 12%, var(--card));
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  color: var(--accent);
+}
+.env-state[data-status="setup"],
+.harness-badge[data-status="setup"] {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 30%, var(--line));
+}
+.harness-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0 16px;
+  flex-wrap: wrap;
+}
+.harness-status {
+  font-size: 13px;
+  color: var(--muted);
+}
+.harnesses-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 12px 0;
+}
+.harness-article {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: var(--shade);
+}
+.harness-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.harness-article h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.harness-badge {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.harness-badge[data-status="active"] {
+  background: color-mix(in srgb, var(--good) 14%, var(--card));
+  border-color: color-mix(in srgb, var(--good) 45%, var(--line));
+  color: var(--good);
+}
+.harness-badge[data-status="ready"] {
+  background: color-mix(in srgb, var(--accent) 12%, var(--card));
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  color: var(--accent);
+}
+.harness-article p {
+  margin: 4px 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.harness-activate-btn {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+.harness-activate-btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+}
+.harness-activate-btn[data-active="true"] {
+  background: color-mix(in srgb, var(--good) 14%, var(--card));
+  border-color: color-mix(in srgb, var(--good) 45%, var(--line));
+  color: var(--good);
+}
+.harness-article .tool-catalogue {
+  border-top: 1px solid var(--line);
+  margin-top: 12px;
+  padding-top: 8px;
+}
+.sqeh-dock[hidden],
+.sqeh-sheet[hidden] {
+  display: none !important;
+}
+
+/* ── Change log modal dialog (voicebox-beads-n1pq) ───────────────────────── */
+dialog.changelog-modal {
+  width: min(100% - 2rem, 640px);
+}
+dialog.changelog-modal .commits {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+dialog.changelog-modal .commit-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--shade);
+}
+dialog.changelog-modal .commit-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+dialog.changelog-modal .commit-sha {
+  font: 13px/1.4 var(--mono, ui-monospace, monospace);
+}
+dialog.changelog-modal .commit-subject {
+  font-weight: 500;
+  color: var(--ink);
+  font-size: 14px;
+}
+dialog.changelog-modal .commit-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ── Branch Landing modal dialog ────────────────────────────── */
+.branches-open-btn {
+  position: relative;
+}
+.branches-open-btn .badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 18px;
+  /* min-, not `height` (voicebox-beads-3674): a fixed 18px box holds 12px text at 1x but not the 24px
+     `var(--text-xs)` resolves to at a doubled root font size, so the count overflowed its own circle.
+     min-height keeps the 18px pill at 1x and lets it grow with the user's text scale. */
+  min-height: 18px;
+  padding: 0 4px;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+dialog.branches-modal {
+  width: min(100% - 2rem, 760px);
+  max-height: 85vh;
+}
+.branches-container {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) 1fr;
+  gap: 16px;
+  margin-top: 14px;
+  max-height: 60vh;
+  overflow: hidden;
+}
+@media (max-width: 640px) {
+  .branches-container {
+    grid-template-columns: 1fr;
+    max-height: none;
+  }
+}
+.branches-sidebar {
+  border-right: 1px solid var(--line);
+  padding-right: 12px;
+  overflow-y: auto;
+}
+.branches-sidebar h3 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 8px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.branches-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.branch-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--card);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.branch-item:hover, .branch-item:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+.branch-item.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--card));
+}
+.branch-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 6px;
+}
+.branch-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ink);
+  word-break: break-all;
+}
+.branch-commit-sha {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.branch-subject {
+  font-size: 12px;
+  color: var(--ink);
+  margin: 2px 0 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.branch-meta-info {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.branch-empty {
+  font-size: 13px;
+  color: var(--muted);
+  padding: 12px 4px;
+}
+.branch-detail-panel {
+  overflow-y: auto;
+  padding-left: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.branch-meta-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.branch-name-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+  word-break: break-all;
+}
+.branch-merge-badge {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  border: 1px solid var(--line);
+}
+.branch-merge-badge.ready {
+  background: color-mix(in srgb, var(--good) 14%, var(--card));
+  border-color: color-mix(in srgb, var(--good) 45%, var(--line));
+  color: var(--good);
+}
+.branch-merge-badge.conflict {
+  background: color-mix(in srgb, var(--warn) 14%, var(--card));
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+  color: var(--warn);
+}
+.branch-merge-badge.checking {
+  background: var(--shade);
+  color: var(--muted);
+}
+.branch-actions {
+  display: flex;
+  gap: 8px;
+  margin: 4px 0;
+}
+.branch-files-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.branch-file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--ground);
+}
+.branch-file-item .file-status {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-weight: 700;
+  font-size: var(--text-xs);
+  width: 14px;
+  text-align: center;
+}
+.branch-file-item .file-status.status-a { color: var(--good); }
+.branch-file-item .file-status.status-d { color: var(--warn); }
+.branch-file-item .file-status.status-m { color: var(--accent); }
+.branch-file-item .file-path {
+  font-family: var(--mono, ui-monospace, monospace);
+  flex: 1;
+  word-break: break-all;
+}
+.branch-file-item .file-stats {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.branch-diff-viewer {
+  margin: 0;
+  padding: 10px;
+  background: var(--ground);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  max-height: 220px;
+  overflow: auto;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre;
+}
+.harness-article summary {
+  cursor: pointer;
+  padding-block: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.harness-article summary:hover {
+  color: var(--accent);
+}
+.harness-article dt {
+  font-weight: 600;
+  margin-top: 10px;
+  font-size: 13px;
+}
+.harness-article dd {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+
+
+/* Debugging stays in the room, but only an explicit ?debug=1 reveals it. */
+.debug-panel { margin-block: 32px; padding-block: 24px; border-top: 1px solid var(--line); min-width: 0; }
+.debug-panel h2 { font-size: 1.125rem; margin: 0 0 12px; }
+.debug-panel p { max-width: 72ch; color: var(--muted); }
+.debug-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+#debug-events { max-height: 50vh; overflow: auto; padding: 0; list-style: none; }
+#debug-events li { padding: 10px 4px; border-bottom: 1px solid var(--line); }
+#debug-events summary { cursor: pointer; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+#debug-events [data-error="true"] summary { color: var(--warn); font-weight: 600; }
+#debug-events pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8125rem; }
+#debug-export { width: 100%; min-height: 160px; padding: 12px; background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; }
+
+/* ── Session transcript & diagnostic dialog (voicebox-beads-qab1) ────────── */
+dialog.transcript-dialog {
+  inset: 0;
+  margin: auto;
+  width: min(100% - 2rem, 640px);
+  max-height: 85vh;
+  max-height: 85dvh;
+  padding: 0;
+  border: 1px solid var(--hair, var(--line));
+  border-radius: 14px;
+  background: var(--surface, var(--card));
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+html:has(dialog.transcript-dialog[open]) { overflow: hidden; }
+.transcript-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+.transcript-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.transcript-section-head .ext-section {
+  margin: 0;
+}
+.transcript-box {
+  width: 100%;
+  min-height: 96px;
+  max-height: 28svh;
+  padding: 10px 12px;
+  border: 1px solid var(--hair, var(--line));
+  border-radius: 8px;
+  background: var(--shade, var(--ground));
+  color: var(--ink);
+  font: .8125rem/1.55 Inter, system-ui, sans-serif;
+  resize: vertical;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.transcript-box-mono {
+  min-height: 140px;
+  font: .75rem/1.55 var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  white-space: pre;
+}
+.transcript-copy-status:empty {
+  display: none;
+}
+.transcript-copy-status {
+  margin: 10px 0 0;
+}
+
+
+
+/* ── Harness & API Keys UI configuration (voicebox-beads-a6jb, voicebox-beads-5drl) ── */
+.harness-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.harness-add-agent {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.harness-add-agent summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+.harness-add-grid {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 6px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.settings-group {
+  margin: 16px 0 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--shade) 40%, transparent);
+}
+.settings-group legend {
+  padding: 0 6px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+

@@ -13,6 +13,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { readComposedCss } from "./lib/css-bundle.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -231,7 +232,7 @@ test("openTranscriptDialog populates human-readable turns and redacted debug JSO
 
 test("html and css: #transcript-dialog and #debug-panel structure and styles are present", () => {
   const html = readFileSync(path.join(PUBLIC, "index.html"), "utf8");
-  const css = readFileSync(path.join(PUBLIC, "style.css"), "utf8");
+  const css = readComposedCss(path.join(PUBLIC, "style.css"));
 
   assert.match(
     html,

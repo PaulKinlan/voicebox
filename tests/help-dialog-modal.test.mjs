@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { readComposedCss } from "./lib/css-bundle.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertInClientSources } from "./lib/client-sources.mjs";
@@ -9,7 +10,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 test("footer prose moved into #status-help-popover and Help dialog is centered with blurred backdrop", () => {
   const html = readFileSync(path.join(ROOT, "public", "index.html"), "utf8");
-  const css = readFileSync(path.join(ROOT, "public", "style.css"), "utf8");
+  const css = readComposedCss(path.join(ROOT, "public", "style.css"));
 
   // 1. <footer class="foot"> no longer contains the two turns/tools prose lines, but keeps #build.
   const footerMatch = html.match(/<footer\s+class="foot"[\s\S]*?<\/footer>/);

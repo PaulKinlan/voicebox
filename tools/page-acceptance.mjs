@@ -376,6 +376,10 @@ for (const page of readdirSync(path.join(TREE, "public")).filter((f) => f.endsWi
       const { refs: workerRefs, unwalkable } = extractWorkerRefs(served, ref);
       servedRefs.push(...workerRefs);
       unwalkableWorkerSpecs.push(...unwalkable);
+    } else if (/\.css$/i.test(ref)) {
+      for (const m of served.matchAll(/@import\s+(?:url\()?["']\.\/([^"']+)["']\)?\s*;/g)) {
+        servedRefs.push(path.posix.join(path.posix.dirname(ref), m[1]));
+      }
     }
   }
   if (identityMismatch) {

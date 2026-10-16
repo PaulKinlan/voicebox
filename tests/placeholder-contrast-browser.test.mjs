@@ -21,6 +21,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { readComposedCss } from "./lib/css-bundle.mjs";
 import path from "node:path";
 import { startServer } from "./lib/server.mjs";
 import { launch } from "./lib/cdp.mjs";
@@ -119,7 +120,7 @@ test("browser: room and Help placeholder text clears 4.5:1 in both stored themes
   // The rule must be present and must be the zero-specificity form. If someone rewrites it without
   // :where(), the composer silently flattens - that was measured, not theorised - so the shape is
   // pinned here rather than left to a reviewer to notice.
-  const styleCss = fs.readFileSync(path.join(process.cwd(), "public/style.css"), "utf8");
+  const styleCss = readComposedCss(path.join(process.cwd(), "public/style.css"));
   // Assert against the stylesheet with comments stripped: the provenance comment above the rule quotes
   // the very selectors this test is checking for, and a future edit to that prose must not be able to
   // make these assertions pass or fail on its wording.

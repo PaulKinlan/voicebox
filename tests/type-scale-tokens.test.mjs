@@ -8,6 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
+import { readComposedCss } from "./lib/css-bundle.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -47,11 +48,22 @@ function htmlFiles(dir, prefix) {
  * NAMED LIMIT (voicebox-beads-3674): this reads source text, so a size a script sets at runtime
  * (`element.style.fontSize = "11px"`) is not seen. `tests/type-scale.test.mjs` measures what actually ships.
  */
+function cssFiles(dir, prefix = "") {
+  const entries = readdirSync(dir, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      files.push(...cssFiles(path.join(dir, entry.name), rel));
+    } else if (entry.isFile() && entry.name.endsWith(".css")) {
+      files.push([`public/${rel}`, path.join(dir, entry.name)]);
+    }
+  }
+  return files.sort((a, b) => a[0].localeCompare(b[0]));
+}
+
 const SURFACES = [
-  ...readdirSync(PUBLIC)
-    .filter((f) => f.endsWith(".css"))
-    .sort()
-    .map((f) => [`public/${f}`, path.join(PUBLIC, f)]),
+  ...cssFiles(PUBLIC),
   ["public/pip-mic.mjs", path.join(PUBLIC, "pip-mic.mjs")],
   ...htmlFiles(PUBLIC, "public/"),
   ["designs/prototype.html", path.join(ROOT, "designs", "prototype.html")],
@@ -271,6 +283,7 @@ function floorReport(label, text) {
  *  alone carry the floor token their own rules reference (they do not load style.css). */
 const TOKEN_OWNERS = [
   { label: "public/style.css", file: path.join(PUBLIC, "style.css"), tokens: Object.keys(TOKENS) },
+  { label: "public/styles/tokens.css", file: path.join(PUBLIC, "styles", "tokens.css"), tokens: Object.keys(TOKENS) },
   { label: "public/apps/agent-monitor.html", file: path.join(PUBLIC, "apps", "agent-monitor.html"), tokens: ["text-xs"] },
   { label: "public/apps/landing-inspector.html", file: path.join(PUBLIC, "apps", "landing-inspector.html"), tokens: ["text-xs"] },
   { label: "designs/prototype.html", file: path.join(ROOT, "designs", "prototype.html"), tokens: ["text-xs"] },
@@ -278,7 +291,7 @@ const TOKEN_OWNERS = [
 
 test("the room declares the legible type scale as named tokens with a 0.75rem floor", () => {
   for (const { label, file, tokens } of TOKEN_OWNERS) {
-    const text = readFileSync(file, "utf8");
+    const text = file.endsWith("style.css") ? readComposedCss(file) : readFileSync(file, "utf8");
     for (const name of tokens) {
       const value = TOKENS[name];
       const escaped = value.replace(/[.]/g, "\\.");
@@ -347,7 +360,7 @@ test("the floor scanner reads a declaration as declaration text, not one line at
 });
 
 test("the room's .sr-only clips instead of scrolling (voicebox-beads-dche)", () => {
-  const css = withoutComments(readFileSync(path.join(PUBLIC, "style.css"), "utf8"));
+  const css = withoutComments(readComposedCss(path.join(PUBLIC, "style.css")));
   const rule = /\.sr-only\s*\{([^}]*)\}/.exec(css);
   assert.ok(rule, "public/style.css must declare a .sr-only rule");
   assert.match(rule[1], /overflow:\s*clip/, "public/style.css .sr-only must clip without creating a scroll container");

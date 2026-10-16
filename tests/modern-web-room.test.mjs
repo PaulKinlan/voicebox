@@ -14,6 +14,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { readComposedCss } from "./lib/css-bundle.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertInClientSources } from "./lib/client-sources.mjs";
@@ -45,7 +46,7 @@ test("html: scrollable code block has tabindex='0' and accessible region role fo
 });
 
 test("css: dialog.envs establishes an inline-size container context for component queries", () => {
-  const css = readFileSync(path.join(PUBLIC, "style.css"), "utf8");
+  const css = readComposedCss(path.join(PUBLIC, "style.css"));
   assert.match(
     css,
     /dialog\.envs\s*\{[^}]*container:\s*env-dialog\s*\/\s*inline-size;/s,
@@ -59,7 +60,7 @@ test("css: dialog.envs establishes an inline-size container context for componen
 });
 
 test("css: dead duplicated .env-add and .env-note overrides are removed", () => {
-  const css = readFileSync(path.join(PUBLIC, "style.css"), "utf8");
+  const css = readComposedCss(path.join(PUBLIC, "style.css"));
   // Check that the duplicate un-wrapped flex rule from old dropdown days is gone
   assert.doesNotMatch(
     css,
@@ -76,7 +77,7 @@ test("css: dead duplicated .env-add and .env-note overrides are removed", () => 
 });
 
 test("css: scrollable containers contain overscroll and stabilize scrollbar gutters", () => {
-  const css = readFileSync(path.join(PUBLIC, "style.css"), "utf8");
+  const css = readComposedCss(path.join(PUBLIC, "style.css"));
   assert.match(
     css,
     /#file-body\s*\{[^}]*overscroll-behavior:\s*contain;[^}]*scrollbar-gutter:\s*stable;/s,
