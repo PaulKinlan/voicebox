@@ -12,15 +12,14 @@ import { gitEnv } from "../lib/git-env.mjs";
 import { classify } from "./test-lanes.mjs";
 import { buildQueue, ISOLATED, TIER_WORKERS } from "./test-shards.mjs";
 import { artifactDir, createManifest, emitMarker, finalizeManifest, ManifestRefusal, recordFile, sealManifest, tapCounts, testChildEnv, verdictOf, writeManifest } from "./gate-manifest.mjs";
-import { isExclusiveRouteChanges, routeAffected, ROUTE_SERVER_SMOKE } from "./infra-affected.mjs";
+import { isExclusiveRouteChanges, routeAffected, ROUTE_SERVER_SMOKE, isSourcePath } from "./infra-affected.mjs";
 
-export { isExclusiveRouteChanges, routeAffected, ROUTE_SERVER_SMOKE };
+export { isExclusiveRouteChanges, routeAffected, ROUTE_SERVER_SMOKE, isSourcePath };
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TESTS_DIR = path.join(ROOT, "tests");
 
-const SOURCE_PREFIXES = ["core/", "lib/", "public/", "tools/", "scripts/", "server.mjs"];
-export const isSourceFile = (f) => SOURCE_PREFIXES.some((prefix) => f === prefix || f.startsWith(prefix));
+export const isSourceFile = isSourcePath;
 
 const git = (args, options = {}) => {
   try {
@@ -194,15 +193,6 @@ export function mapToTests(changedFiles, allTestFiles = null) {
     }
   }
 
-  // When a commit touches exclusively routes, add the bounded server smoke subset
-  if (isRouteScoped) {
-    for (const smokeFile of ROUTE_SERVER_SMOKE) {
-      if (tests.includes(smokeFile)) {
-        matched.add(smokeFile);
-      }
-    }
-  }
-
   for (const changed of fileQueue) {
     const norm = changed.replace(/^\.\//, "");
     const baseName = path.basename(norm);
@@ -238,6 +228,16 @@ export function mapToTests(changedFiles, allTestFiles = null) {
             matched.add(tf);
           }
         } catch {}
+      }
+    }
+  }
+
+  // When a commit touches exclusively routes, add the bounded server smoke subset
+  // only if at least one direct test was matched, so a route without any tests is not falsely considered mapped
+  if (isRouteScoped && matched.size > 0) {
+    for (const smokeFile of ROUTE_SERVER_SMOKE) {
+      if (tests.includes(smokeFile)) {
+        matched.add(smokeFile);
       }
     }
   }
@@ -579,7 +579,7 @@ export async function runGate({
         routeScope.unrunTransitiveImporters.server.files.includes(file) ||
         routeScope.unrunTransitiveImporters.browser.files.includes(file)
       ) {
-        return `fast-only: route-scoped change (${routeScope.routes.join(", ")}) bypassed transitive server importer (smoke tested by ${routeScope.smoke.join(", ")})`;
+        return `fast-only: route-scoped change (${routeScope.routes.join(", ")}) bypassed transitive server importer (server boot verified by ${routeScope.smoke.join(", ")})`;
       }
     }
     return "fast-only: not selected by the changed-path map";

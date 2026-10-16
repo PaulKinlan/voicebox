@@ -7,7 +7,7 @@ import { invokeRoute, mockJson, mockReadJsonBody } from "./lib/route-harness.mjs
 
 test("branches-route: GET /api/branches/candidates lists branches for active repo", async () => {
   const routes = createBranchRoutes({
-    repoRoot: "/mock/repo",
+    repoRoot: process.cwd(),
     json: mockJson,
     readJsonBody: mockReadJsonBody,
     answerOnce: (_res, fn) => fn(),
@@ -19,9 +19,30 @@ test("branches-route: GET /api/branches/candidates lists branches for active rep
     query: { baseBranch: "main" },
   });
 
-  assert.equal(typeof res.status, "number");
+  assert.equal(res.status, 200);
   const body = res.json();
-  assert.equal(typeof body, "object");
+  assert.equal(body.ok, true);
+  assert.ok(Array.isArray(body.branches));
+});
+
+test("branches-route: GET /api/branches/candidates refuses non-git folder with 400 not-a-git-repo", async () => {
+  const routes = createBranchRoutes({
+    repoRoot: "/mock/nonexistent-repo",
+    json: mockJson,
+    readJsonBody: mockReadJsonBody,
+    answerOnce: (_res, fn) => fn(),
+  });
+
+  const res = await invokeRoute(routes, {
+    method: "GET",
+    url: "/api/branches/candidates",
+    query: { baseBranch: "main" },
+  });
+
+  assert.equal(res.status, 400);
+  const body = res.json();
+  assert.equal(body.ok, false);
+  assert.equal(body.refused, "not-a-git-repo");
 });
 
 test("branches-route: GET /api/branches/diff requires branch parameter", async () => {

@@ -61,6 +61,7 @@ test("route-harness: stream request body and mockReadJsonBody helper", async () 
   const res = await invokeRoute(routes, {
     method: "POST",
     url: "/api/echo",
+    headers: { "content-type": "application/json" },
     body: { hello: "world", count: 42 },
   });
 
@@ -69,6 +70,49 @@ test("route-harness: stream request body and mockReadJsonBody helper", async () 
     ok: true,
     received: { hello: "world", count: 42 },
   });
+});
+
+test("route-harness: mockReadJsonBody refuses non-JSON content-type with 415", async () => {
+  const routes = {
+    "POST /api/echo": async (req, res) => {
+      const data = await mockReadJsonBody(req, res);
+      return mockJson(res, 200, { ok: true, received: data });
+    },
+  };
+
+  const res = await invokeRoute(routes, {
+    method: "POST",
+    url: "/api/echo",
+    headers: { "content-type": "text/plain" },
+    body: "not json",
+  });
+
+  assert.equal(res.status, 415);
+  const body = res.json();
+  assert.equal(body.ok, false);
+  assert.equal(body.refused, "unsupported-content-type");
+});
+
+test("route-harness: mockReadJsonBody resolves null on malformed JSON", async () => {
+  const routes = {
+    "POST /api/echo": async (req, res) => {
+      const data = await mockReadJsonBody(req, res);
+      if (data === null) {
+        return mockJson(res, 400, { ok: false, refused: "bad-request", why: "malformed JSON" });
+      }
+      return mockJson(res, 200, { ok: true, received: data });
+    },
+  };
+
+  const res = await invokeRoute(routes, {
+    method: "POST",
+    url: "/api/echo",
+    headers: { "content-type": "application/json" },
+    body: "{ malformed json",
+  });
+
+  assert.equal(res.status, 400);
+  assert.equal(res.json().why, "malformed JSON");
 });
 
 test("route-harness: handles direct function handlers and context injection", async () => {

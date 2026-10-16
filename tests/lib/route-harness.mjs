@@ -139,36 +139,75 @@ export class MockResponse {
   }
 }
 
+export class BodyRefusal extends Error {
+  constructor(refusal) {
+    super(`Body refusal: ${refusal}`);
+    this.refusal = refusal;
+  }
+}
+
 /**
- * Standard helper simulating server.mjs readJsonBody for route testing without full server dependency.
+ * In-memory JSON body parser simulating server.mjs readJsonBody semantics for route unit testing.
+ * Enforces Content-Type 415 gate, 413 body-too-large rejection via BodyRefusal, and resolves null
+ * on malformed JSON (letting the route handler answer 400).
  */
 export async function mockReadJsonBody(req, res, maxBytes = 1024 * 1024) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    const refuse = (code, payload, refusal) => {
+      res.writeHead(code, { "content-type": "application/json" });
+      res.end(JSON.stringify(payload));
+      reject(new BodyRefusal(refusal));
+    };
+
+    const contentType = req.headers?.["content-type"];
+    if (typeof contentType === "string") {
+      const mediaType = contentType.split(";", 1)[0].trim().toLowerCase();
+      if (mediaType !== "application/json" && !mediaType.endsWith("+json")) {
+        return refuse(
+          415,
+          {
+            ok: false,
+            refused: "unsupported-content-type",
+            why: `this route reads a JSON body and the request declared Content-Type '${mediaType || contentType}' — send application/json`,
+          },
+          "unsupported-content-type",
+        );
+      }
+    }
+
     let body = "";
     let bytes = 0;
+    let refused = false;
+
     req.on("data", (chunk) => {
+      if (refused) return;
       bytes += chunk.length;
       if (bytes > maxBytes) {
-        res.writeHead(413, { "content-type": "application/json" });
-        res.end(JSON.stringify({ ok: false, refused: "body-too-large" }));
-        resolve(null);
-        return;
+        refused = true;
+        return refuse(
+          413,
+          {
+            ok: false,
+            refused: "body-too-large",
+            why: `this route accepts a JSON body of at most ${maxBytes} bytes and this request streamed past it — nothing was parsed, and the rest of the upload is discarded unread`,
+          },
+          "body-too-large",
+        );
       }
       body += chunk.toString("utf8");
     });
+
     req.on("end", () => {
-      if (res.finished) return;
-      if (!body.trim()) {
-        resolve({});
-        return;
-      }
+      if (refused) return;
       try {
-        resolve(JSON.parse(body));
+        resolve(JSON.parse(body || "{}"));
       } catch {
-        res.writeHead(400, { "content-type": "application/json" });
-        res.end(JSON.stringify({ ok: false, refused: "bad-request", why: "body must be JSON" }));
         resolve(null);
       }
+    });
+
+    req.on("error", () => {
+      if (!refused) resolve(null);
     });
   });
 }
@@ -240,12 +279,11 @@ export async function invokeRoute(routesOrHandler, {
         }
       }
     } catch (err) {
-      if (!res.finished) {
-        res.writeHead(500, { "content-type": "application/json" });
-        res.end(JSON.stringify({ ok: false, refused: "server-error", why: err.message }));
-      } else {
-        reject(err);
+      if (err instanceof BodyRefusal || res.finished) {
+        return;
       }
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: false, refused: "server-error", why: err.message }));
     }
   });
 }

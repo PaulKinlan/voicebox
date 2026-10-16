@@ -47,6 +47,10 @@ test("mapToTests: route edits trigger targeted tests rather than entire server s
   assert.ok(branchesMapped.includes("server-lifecycle.test.mjs"), "must include bounded server smoke test");
   assert.ok(branchesMapped.length <= 5, `expected <= 5 targeted tests, got ${branchesMapped.length}`);
 
+  // Untested route module maps to zero tests and is refused as unmapped (voicebox-beads-rpym)
+  const unmappedRoute = "lib/routes/" + "untested_" + Date.now() + "_route.mjs";
+  assert.equal(mapToTests([unmappedRoute]).length, 0, "untested route must not receive smoke-only mapping");
+
   // Non-exclusive route edit (e.g. Touching server.mjs too) triggers full transitive coverage
   const mixedMapped = mapToTests(["lib/routes/doctor.mjs", "server.mjs"]);
   assert.ok(mixedMapped.length >= 100, `expected >= 100 tests on server.mjs change, got ${mixedMapped.length}`);
