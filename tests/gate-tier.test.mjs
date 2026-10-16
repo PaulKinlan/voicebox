@@ -200,12 +200,12 @@ not ok 1 - suite
   const green = record.files.find((entry) => entry.path === "tests/green.test.mjs");
   assert.equal(red.failure_evidence.test, "failing subtest", "the ARM is named, not the suite that contains it (node prints the nested failure first, and that is the one a person needs)");
   assert.equal(green.failure_evidence, undefined, "a green file still carries no evidence payload");
-  // THE BOX, per child: both ends, each a reading or an honest null - and it is recorded for a PASSING child
-  // too, because the point is what the box was doing when this file ran, not only when it went red.
+  // THE BOX, per child: both ends, each a finite load reading from runOneTier - and it is recorded for a PASSING child
+  // too, because the point is what the box was doing when this file ran, not only when it went red (voicebox-beads-q1g7).
   for (const entry of [red, green]) {
     assert.deepEqual(Object.keys(entry.loadavg_1m), ["start", "end"], "both ends of the child's own window");
     for (const end of ["start", "end"]) {
-      assert.ok(entry.loadavg_1m[end] === null || Number.isFinite(entry.loadavg_1m[end]), `${entry.path} ${end} is a reading or null, got ${entry.loadavg_1m[end]}`);
+      assert.ok(Number.isFinite(entry.loadavg_1m[end]), `${entry.path} ${end} must be a finite reading, got ${entry.loadavg_1m[end]}`);
     }
   }
   assert.match(logged.join("\n"), /arm="failing subtest" tests\/leaf\.test\.mjs/, "the line a person reads names the arm, with the path still last");
