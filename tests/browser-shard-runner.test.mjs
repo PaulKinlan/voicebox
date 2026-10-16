@@ -12,12 +12,13 @@
 // signals rather than guessing from a comment.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TIER_WORKERS } from "../scripts/test-shards.mjs";
+import { findBrowserBinary } from "../lib/browser-binaries.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const RUNNER = path.join(root, "tools/browser-shard-runner.mjs");
@@ -50,6 +51,7 @@ test("the runner takes the browser width from the ONE OWNER, and carries no defa
   try {
     const res = runRunner(["--only", PROBE], env);
     assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.doesNotMatch(res.stdout, /warm browser started/, "the probe's custom window dimensions require a standalone browser");
     assert.ok(
       res.stdout.includes(`[shards] ${TIER_WORKERS.browser} worker(s)`),
       `with no --workers and no env override, the runner runs at the one owner's width — stdout was ${JSON.stringify(res.stdout.slice(0, 400))}`,
@@ -109,6 +111,53 @@ test("the runner emits a hub marker per file, and publishes a tier record a mani
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("two real default-option files reuse one warm browser and still report independent results", (t) => {
+  if (!findBrowserBinary()) return t.skip("Chromium is not installed");
+  const first = "tests/acp-browser.test.mjs";
+  const second = "tests/opfs-append.test.mjs";
+  const res = runRunner(["--only", first, "--only", second, "--workers", "1"], {
+    VOICEBOX_SHARED_CDP_URL: "ws://127.0.0.1:1/inherited-must-not-escape",
+  });
+  assert.equal(res.status, 0, res.stdout + res.stderr);
+  assert.equal((res.stdout.match(/\[shards\] warm browser started for worker 0 pid=/g) ?? []).length, 1, "one warm process spans two test-file Node processes");
+  for (const file of [first, second]) assert.ok(res.stdout.includes(`fast-gate: passed: ${file}`), `${file} still executed and passed`);
+  assert.match(res.stdout, /coverage ok: 2 result\(s\) for 2 queued file\(s\)/);
+});
+
+test("a crashed warm Chromium is replaced before the next file and the first failure stays red", { timeout: 60000 }, async (t) => {
+  if (!findBrowserBinary()) return t.skip("Chromium is not installed");
+  // buildQueue orders the longer OPFS file before the shorter ACP file, regardless of CLI order.
+  const first = "tests/opfs-append.test.mjs";
+  const next = "tests/acp-browser.test.mjs";
+  const child = spawn(process.execPath, [RUNNER, "--only", first, "--only", next, "--workers", "1"], {
+    cwd: root, detached: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env },
+  });
+  let output = "", killed = false;
+  const watch = (chunk) => {
+    output += String(chunk);
+    const pid = Number(/\[shards\] warm browser started for worker 0 pid=(\d+)/.exec(output)?.[1]);
+    if (!killed && pid && output.includes(`[shards] running ${first}`)) {
+      killed = true;
+      process.kill(-pid, "SIGKILL"); // Chromium owns its own process group; the runner and file remain alive.
+    }
+  };
+  child.stdout.on("data", watch);
+  child.stderr.on("data", watch);
+  const code = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      try { process.kill(-child.pid, "SIGTERM"); } catch {}
+      reject(new Error(`warm crash control exceeded 55s: ${output.slice(-1000)}`));
+    }, 55_000);
+    child.once("error", (error) => { clearTimeout(timer); reject(error); });
+    child.once("close", (status) => { clearTimeout(timer); resolve(status); });
+  });
+  assert.equal(killed, true, output);
+  assert.equal(code, 1, "the first file's browser crash cannot be laundered into a green tier");
+  assert.ok(output.includes(`fast-gate: failed: ${first}`), output.slice(-1000));
+  assert.ok(output.includes(`fast-gate: passed: ${next}`), output.slice(-1000));
+  assert.equal((output.match(/\[shards\] warm browser started for worker 0 pid=/g) ?? []).length, 2, `the next file gets a fresh process:\n${output.slice(-3000)}`);
 });
 
 test("a phase invocation runs exactly its own slice, namespaces its tier record, and says so", () => {

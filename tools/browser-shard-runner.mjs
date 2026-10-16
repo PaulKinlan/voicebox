@@ -11,15 +11,12 @@
 //
 // WHAT THIS DOES: builds the tier's work queue from the lane classifier (`scripts/test-shards.mjs`),
 // REFUSES the queue unless it covers the lane exactly once, and then runs up to `--workers` files at
-// a time. Each file still gets its own process, its own server and its own browser — the isolation
-// every fixture was written against is unchanged — and the shards are the CONCURRENCY, not a
-// long-lived shared instance. That is deliberate: 44 of the 63 files hand `startServer()` their own
-// VOICEBOX_INSTANCE / VOICEBOX_WORKSPACE / VOICEBOX_EXTENSIONS_DIR, which are process environment,
-// and 10 more need browser-level flags (`fakeMedia`, a prepared profile) that a shared browser
-// cannot give a single tab. A shared instance is not available to these fixtures without rewriting
-// them, and the parallelism is where the time was anyway: per-file launch overhead measures ~0.6s of
-// a ~4.5s file (warm browser launch 0.39s, server start 0.21s), so instance reuse can win ~10% while
-// the shards win 2.2x.
+// a time. Each file still gets its own Node process and ephemeral-port server. Default-option
+// launch() calls use one warm Chromium *per worker* with a disposable CDP browser context per test;
+// a file requesting custom dimensions, fake devices/audio, or a prepared profile keeps its own
+// browser process. Neither a test process nor one worker may reap another worker's warm browser.
+// This is a measured, conservative extension of the original isolated-browser design: the prior
+// runner recorded ~0.39s browser startup, so no 75–180s win is assumed without a same-tree run.
 //
 // WORK-STEALING, NOT PARTITIONING: the ADR describes four pinned shards, and a static split needs a
 // cost model for the files. Measured over all 63 per-file durations, the best cheap proxy (byte
@@ -40,11 +37,12 @@ import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { classify } from "../scripts/test-lanes.mjs";
 import { assertExactCoverage, buildQueue, isFailed, splitQueue, TIER_WORKERS } from "../scripts/test-shards.mjs";
 import { emitMarker, testChildEnv } from "../scripts/gate-manifest.mjs";
 import { loadavg1m } from "../lib/host-load.mjs";
+import { findBrowserBinary } from "../lib/browser-binaries.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -59,7 +57,8 @@ const flag = (name, fallback) => {
 // for one fact, which had already drifted apart by the time q4j6 was filed, and the number in the log was
 // the wrong one. The env var and `--workers` stay as the deliberate overrides for a loaded box.
 const WORKERS = Math.max(1, Number(flag("workers", process.env.VOICEBOX_SHARD_WORKERS ?? TIER_WORKERS.browser)));
-const ONLY = argv.includes("--only") ? argv[argv.indexOf("--only") + 1] : null;
+// Repeated --only entries keep focused two-file reuse/crash tests within the actual browser lane.
+const ONLY = argv.flatMap((arg, i) => arg === "--only" ? [argv[i + 1]] : []);
 // PHASED INVOCATIONS (agreed with the live-tier supervisor, zjpm.2): a supervisor may run the tier in two
 // processes — the parallel queue first, beside the server pool, then the isolated files on an otherwise
 // idle box — because the phases want different box conditions. Each invocation now asserts its own PHASE
@@ -88,13 +87,15 @@ if (PHASE && queue.length === 0) {
   console.error(`[shards] --${PHASE}-only: the ${PHASE} phase is empty; nothing to run`);
   process.exit(2);
 }
-const files = ONLY ? queue.filter((file) => file === ONLY) : queue;
-if (ONLY && files.length === 0) {
-  console.error(`[shards] --only ${ONLY} is not in the browser lane${PHASE ? `'s ${PHASE} phase` : ""}; nothing to run`);
+const files = ONLY.length ? queue.filter((file) => ONLY.includes(file)) : queue;
+const missing = ONLY.find((file) => !queue.includes(file));
+if (missing || files.length !== (ONLY.length || files.length)) {
+  console.error(`[shards] --only ${missing ?? "duplicate file"} is not in the browser lane${PHASE ? `'s ${PHASE} phase` : ""}; nothing to run`);
   process.exit(2);
 }
 
 const running = new Map(); // pid -> {file, ...}
+const warmBrowsers = new Map(); // worker index -> browser OS process owned by THIS runner
 /**
  * One way a child dies: SIGTERM to its own group first so the file's `process.on(signal)` reapers in
  * tests/lib/cdp.mjs and tests/lib/server.mjs can take their browser and server down with them, then
@@ -111,11 +112,90 @@ function killGroup(child, signal) {
     }
   }
 }
+
+function stopWarm(worker) {
+  const warm = warmBrowsers.get(worker);
+  if (!warm) return;
+  warmBrowsers.delete(worker);
+  try { warm.child.stdout?.destroy(); } catch {}
+  try { warm.child.stderr?.destroy(); } catch {}
+  killGroup(warm.child, "SIGKILL");
+  try { rmSync(warm.profile, { recursive: true, force: true }); } catch {}
+}
+
+// A killed runner never leaves the persistent browsers behind. They are separate process groups
+// from test children, so killing a timed-out file does not kill another worker's browser.
+process.on("exit", () => {
+  for (const worker of warmBrowsers.keys()) stopWarm(worker);
+});
+
+// Only a file whose call sites are all literally launch() can profit from the default-option pool.
+// An ambiguous call or an absent launch is cold. cdp.launch independently checks its *runtime*
+// options, so source inspection is only a conservative resource-budget hint, never permission to
+// run a specialized test with incorrect process flags.
+function offersWarmBrowser(file) {
+  const source = readFileSync(path.join(ROOT, file), "utf8");
+  const calls = [...source.matchAll(/\blaunch\s*\(([^)]*)\)/g)];
+  return calls.length > 0 && calls.every(([, options]) => !options.trim());
+}
+
+async function warmHealthy(warm) {
+  if (!warm || warm.child.exitCode !== null || warm.child.signalCode !== null) return false;
+  const versionUrl = warm.wsUrl.replace(/^ws:/, "http:").replace(/\/devtools\/browser\/[^/]+$/, "/json/version");
+  try {
+    const response = await fetch(versionUrl, { signal: AbortSignal.timeout(1000) });
+    return response.ok && (await response.json()).webSocketDebuggerUrl === warm.wsUrl;
+  } catch {
+    return false;
+  }
+}
+
+async function startWarm(worker) {
+  const binary = findBrowserBinary();
+  if (!binary) return null; // retain each browser test's own named missing-browser precondition
+  const profile = mkdtempSync(path.join(os.tmpdir(), "voicebox-shard-chrome-"));
+  const child = spawn(binary, [
+    "--headless=new", "--no-sandbox", "--no-zygote", "--disable-crash-reporter",
+    "--disable-gpu", "--disable-extensions", "--disable-component-extensions-with-background-pages",
+    "--disable-background-networking", "--disable-component-update", "--no-first-run",
+    "--no-default-browser-check", "--disable-dev-shm-usage", "--window-size=1000,800",
+    `--user-data-dir=${profile}`, "--remote-debugging-port=0", "about:blank",
+  ], { detached: true, stdio: ["ignore", "pipe", "pipe"] });
+  const warm = { child, profile, wsUrl: null };
+  warmBrowsers.set(worker, warm); // register before the first await, including startup errors/signals
+  try {
+    warm.wsUrl = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("Chromium endpoint timed out")), 20_000);
+      let buffer = "", settled = false;
+      const scan = (chunk) => {
+        if (settled) return; // keep draining Chromium's pipes without accumulating its logs
+        buffer = (buffer + String(chunk)).slice(-8192);
+        const match = buffer.match(/ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\/[0-9a-f-]+(?=\s)/);
+        if (match) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(match[0]);
+        }
+      };
+      child.stderr.on("data", scan);
+      child.stdout.on("data", scan);
+      child.once("error", (error) => { clearTimeout(timer); reject(error); });
+      child.once("exit", (code) => { clearTimeout(timer); reject(new Error(`Chromium exited early (${code})`)); });
+    });
+    console.log(`[shards] warm browser started for worker ${worker} pid=${child.pid}`);
+    return warm;
+  } catch (error) {
+    console.error(`[shards] worker ${worker} warm startup failed (${error.message}); using a standalone browser for this file`);
+    stopWarm(worker);
+    return null;
+  }
+}
 let stopping = false;
 for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
   process.once(sig, () => {
     stopping = true;
     for (const { child } of running.values()) killGroup(child, "SIGTERM");
+    for (const worker of warmBrowsers.keys()) stopWarm(worker);
     setTimeout(() => {
       for (const { child } of running.values()) killGroup(child, "SIGKILL");
       process.exit(128 + (os.constants.signals[sig] ?? 0));
@@ -131,7 +211,7 @@ const started = Date.now();
 // The queue cursor is shared, so the workers steal in order and a finished file frees exactly one slot.
 let cursor = 0;
 
-function runFile(file) {
+function runFile(file, warmUrl = null) {
   return new Promise((resolve) => {
     const at = Date.now();
     // THE LOG IS THE HUB'S COVERAGE EVIDENCE (voicebox-beads-zjpm.3). `fleet-check` reads this gate log
@@ -140,6 +220,9 @@ function runFile(file) {
     // TERMINAL markers are emitted, below, from this file's own result: `running:` is read by that
     // extractor as proof of execution, and a killed run cannot retract it (see scripts/gate-manifest.mjs).
     console.log(`[shards] running ${file}`);
+    const env = testChildEnv();
+    delete env.VOICEBOX_SHARED_CDP_URL; // never inherit another runner's endpoint into a nested run
+    if (warmUrl) env.VOICEBOX_SHARED_CDP_URL = warmUrl;
     const child = spawn(process.execPath, ["--test", "--test-reporter=tap", file], {
       cwd: ROOT,
       stdio: ["ignore", "pipe", "pipe"],
@@ -147,7 +230,7 @@ function runFile(file) {
       // A gate child is TOP-LEVEL, not nested — `testChildEnv` owns that fact and why, including the
       // measured case where a nested child is skipped and this runner then reports a file it never ran as
       // failed for "no test counts were reported" (voicebox-beads-zjpm.3).
-      env: testChildEnv(),
+      env,
     });
     let out = "";
     const eat = (chunk) => (out += String(chunk));
@@ -221,12 +304,27 @@ function runFile(file) {
 // keep in step with the first. `tests/test-shards.test.mjs` proves the two phases are a PARTITION of
 // the queue — a file cannot be in both, and none can be in neither.
 let phase = files;
-async function workerLoop() {
-  for (;;) {
-    if (stopping) return;
-    const index = cursor++;
-    if (index >= phase.length) return;
-    await runFile(phase[index]);
+async function workerLoop(worker) {
+  try {
+    for (;;) {
+      if (stopping) return;
+      const index = cursor++;
+      if (index >= phase.length) return;
+      const file = phase[index];
+      if (!offersWarmBrowser(file)) {
+        // Do not hold an idle process beside a specialized test's dedicated Chromium.
+        stopWarm(worker);
+      } else if (!(await warmHealthy(warmBrowsers.get(worker)))) {
+        stopWarm(worker);
+        await startWarm(worker);
+      }
+      if (stopping) return;
+      const result = await runFile(file, warmBrowsers.get(worker)?.wsUrl);
+      // A failure/timeout may have poisoned the browser; replacement occurs before the next file.
+      if (isFailed(result)) stopWarm(worker);
+    }
+  } finally {
+    stopWarm(worker);
   }
 }
 
@@ -235,7 +333,7 @@ async function workerLoop() {
 const split = PHASE ? { parallel: PHASE === "parallel" ? files : [], isolated: PHASE === "isolated" ? files : [] } : splitQueue(files);
 phase = PHASE ? files : split.parallel;
 if (split.parallel.length) {
-  await Promise.all(Array.from({ length: Math.min(WORKERS, split.parallel.length) }, () => workerLoop()));
+  await Promise.all(Array.from({ length: Math.min(WORKERS, split.parallel.length) }, (_, worker) => workerLoop(worker)));
 }
 if (split.isolated.length && PHASE !== "parallel") {
   if (!PHASE) {
@@ -245,7 +343,7 @@ if (split.isolated.length && PHASE !== "parallel") {
   }
   cursor = 0;
   phase = split.isolated;
-  await Promise.all(Array.from({ length: Math.min(1, split.isolated.length) }, () => workerLoop()));
+  await Promise.all(Array.from({ length: Math.min(1, split.isolated.length) }, (_, worker) => workerLoop(worker)));
 }
 
 // A TIER RECORD, not a manifest: this runner knows what IT dispatched and nothing about the roster the

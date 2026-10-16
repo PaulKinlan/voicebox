@@ -77,14 +77,20 @@ for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
 }
 
 export async function launch({ width = 1000, height = 800, profile = null, fakeMedia = false, fakeAudioFile = null } = {}) {
-  const binary = findBrowserBinary();
-  if (!binary) throw new Error("no Chromium/Chrome binary found; set VOICEBOX_CHROME");
+  // The shard runner, not this test process, owns a warm browser. Any process-level option must continue
+  // through the standalone path; an ephemeral CDP context cannot supply a prepared profile or device flag.
+  const shared = Boolean(process.env.VOICEBOX_SHARED_CDP_URL && !profile && !fakeMedia && !fakeAudioFile && width === 1000 && height === 800);
+  let child = null, ownProfile = false, wsUrl = shared ? process.env.VOICEBOX_SHARED_CDP_URL : null;
+  let abandon = () => {};
+  if (!shared) {
+    const binary = findBrowserBinary();
+    if (!binary) throw new Error("no Chromium/Chrome binary found; set VOICEBOX_CHROME");
 
   // A caller may hand in a prepared profile — the only way to give the page a REAL platform
   // answer (a blocked permission) rather than a constructed one.
-  const ownProfile = !profile;
-  profile = profile ?? mkdtempSync(path.join(os.tmpdir(), "voicebox-cdp-"));
-  const child = spawn(
+    ownProfile = !profile;
+    profile = profile ?? mkdtempSync(path.join(os.tmpdir(), "voicebox-cdp-"));
+    child = spawn(
     binary,
     [
       "--headless=new",
@@ -125,7 +131,7 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
   void globalThis.WebSocket;
   // A browser that dies, never answers, or refuses the socket is killed and its scratch profile
   // removed — not left running behind the error (voicebox-beads-9mqc).
-  const abandon = () => {
+    abandon = () => {
     try { child.stdout?.destroy(); } catch {}
     try { child.stderr?.destroy(); } catch {}
     try { child.unref(); } catch {}
@@ -142,7 +148,7 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
   // end mid-line and a truncated id connects to a 404. (The ~120ms that follows, before the socket
   // opens, is the browser finishing its own start-up: measured, a raw TCP connect is accepted at once
   // and /json/version answers only when the socket would.)
-  const wsUrl = await new Promise((resolve, reject) => {
+    wsUrl = await new Promise((resolve, reject) => {
     let settled = false;
     const settle = (error, url) => {
       if (settled) return;
@@ -163,7 +169,8 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
     child.stderr.on("data", scan);
     child.stdout.on("data", scan);
     child.on("exit", (code) => settle(new Error(`chromium exited early (${code})`)));
-  });
+    });
+  }
 
   const socket = new WebSocket(wsUrl);
   const pending = new Map();
@@ -178,7 +185,7 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
     // error does what it always did here — nothing — and the browser stays the caller's to close.
     const failed = () => {
       abandon();
-      reject(new Error("devtools websocket failed"));
+      reject(new Error(`${shared ? "shared " : ""}devtools websocket failed`));
     };
     socket.addEventListener("error", failed, { once: true });
     socket.addEventListener(
@@ -191,6 +198,10 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
     );
   });
 
+  socket.addEventListener("close", () => {
+    for (const { reject } of pending.values()) reject(new Error("devtools websocket closed"));
+    pending.clear();
+  });
   socket.addEventListener("message", (event) => {
     const data = JSON.parse(String(event.data));
     if (data.id && pending.has(data.id)) {
@@ -211,38 +222,70 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
       socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
     });
 
-  const { targetId } = await send("Target.createTarget", { url: "about:blank" });
-  const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
-  // Sent together: the session runs them in order either way, so three round trips bought nothing.
-  // Lifecycle events carry the loaderId that ties a `load` to ONE document — what goto() and
-  // reload() wait on (voicebox-beads-9mqc).
-  await Promise.all([
-    send("Page.enable", {}, sessionId),
-    send("Runtime.enable", {}, sessionId),
-    send("Page.setLifecycleEventsEnabled", { enabled: true }, sessionId),
-  ]);
+  let browserContextId = null;
+  let targetId, sessionId;
+  try {
+    if (shared) ({ browserContextId } = await send("Target.createBrowserContext", { disposeOnDetach: true }));
+    ({ targetId } = await send("Target.createTarget", { url: "about:blank", ...(shared ? { browserContextId } : {}) }));
+    ({ sessionId } = await send("Target.attachToTarget", { targetId, flatten: true }));
+    // Sent together: the session runs them in order either way, so three round trips bought nothing.
+    // Lifecycle events carry the loaderId that ties a `load` to ONE document — what goto() and
+    // reload() wait on (voicebox-beads-9mqc).
+    await Promise.all([
+      send("Page.enable", {}, sessionId),
+      send("Runtime.enable", {}, sessionId),
+      send("Page.setLifecycleEventsEnabled", { enabled: true }, sessionId),
+    ]);
+  } catch (error) {
+    // Closing the socket also disposes a shared context on failed setup, without waiting for a dead
+    // browser to answer another CDP command. A standalone browser is still reaped by its owner.
+    try { socket.close(); } catch {}
+    if (!shared) abandon();
+    throw error;
+  }
 
+  let closed = false;
+  const contextParams = (method, params = {}) =>
+    shared && (method === "Target.createTarget" || method === "Browser.grantPermissions" || method === "Browser.resetPermissions")
+      ? { ...params, browserContextId }
+      : params;
   const page = {
     sessionId,
-    pid: child.pid,
-    send: (method, params) => send(method, params, sessionId),
-    sendBrowser: (method, params) => send(method, params),
-    // A second tab in the SAME browser/profile can be driven without launching another Chrome.
+    pid: child?.pid ?? null,
+    // The pool owner can obtain its endpoint without parsing a second Chrome stderr stream.
+    wsUrl,
+    send: (method, params) => send(method, contextParams(method, params), sessionId),
+    sendBrowser: (method, params) => send(method, contextParams(method, params)),
+    // A second tab in the SAME browser/context can be driven without launching another Chrome.
     sendTo: (targetSessionId, method, params) => send(method, params, targetSessionId),
     // Read-only protocol evidence: observe real frames without patching the page's WebSocket.
     events: (method) => events.filter((event) => event.sessionId === sessionId && event.method === method).map((event) => event.params),
     async close() {
-      try {
-        socket.close();
-      } catch {}
+      if (closed) return;
+      closed = true;
+      if (shared) {
+        let timer;
+        try {
+          await Promise.race([
+            send("Target.disposeBrowserContext", { browserContextId }),
+            new Promise((_, reject) => {
+              timer = setTimeout(() => reject(new Error("shared browser context disposal timed out")), 2000);
+              timer.unref();
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+          try { socket.close(); } catch {}
+        }
+        return;
+      }
+      try { socket.close(); } catch {}
       try { child.stdout?.destroy(); } catch {}
       try { child.stderr?.destroy(); } catch {}
       try { child.unref(); } catch {}
       activeBrowserPids.delete(child.pid);
       killBrowserProcessGroup(child.pid);
-      try {
-        if (ownProfile) rmSync(profile, { recursive: true, force: true });
-      } catch {}
+      try { if (ownProfile) rmSync(profile, { recursive: true, force: true }); } catch {}
     },
   };
 
