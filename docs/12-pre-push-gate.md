@@ -143,8 +143,9 @@ variable-bound, or aliased spawn/exec (voicebox-beads-nr56, voicebox-beads-41mb;
 so an unrelated spawn does not promote data fixtures, voicebox-beads-oktn), or a constructed path
 (`path.join`/`fileURLToPath`/`new URL`) — because a test that merely *holds* a harness path as data is not
 driving anything (voicebox-beads-l79v). Matching a quoted path anywhere in the text filed pure unit tests in
-the serial browser lane and hid them from the unit fast gate; that gap is now pinned by a fixture test, and the
-per-lane counts are pinned too, so a reclassification cannot silently change which lane pays for a test.
+the serial browser lane and hid them from the unit fast gate; that gap is pinned by a fixture test. The lane
+roster is checked as a complete, disjoint partition rather than pinning global counts that change whenever
+another branch adds a test. Critical boundary files retain explicit membership assertions.
 
 **Changing the classifier means sweeping its CONSUMERS, not just its own tests** (voicebox-beads-3766). The unit
 fast gate cannot see this class: a classifier regression that empties a lane leaves tests whose fixture builds its
@@ -155,7 +156,7 @@ and `tests/browser-shard-runner.test.mjs`. A fixture that wants a file in a seri
 (a constructed path is enough, e.g. `path.join('lib', 'server.mjs')`); an import is NOT always usable, because some
 fixtures really execute the files they write in a disposable repo that has no `lib/`, and an import there fails
 `ERR_MODULE_NOT_FOUND` rather than classifying.
-`scripts/test-lanes.mjs` lexes every `tests/*.test.mjs` file (ignoring comments and fixture string writes) to classify it into the appropriate lane:
+`scripts/test-lanes.mjs` lexes every `tests/*.test.mjs` file (ignoring comments and fixture string writes) to classify it into the appropriate lane. A test may declare its expected lane in a leading line comment, such as `// @lane unit`, `// @lane server`, or `// @lane browser` (before executable code). The declaration does **not** override classifier signals: `node scripts/test-lanes.mjs --check` refuses a mismatch and names the file, declared lane, actual lane and launch signal. A newly added file need not update a shared integer count; its own declaration can pin a critical boundary. The lanes are:
 - **`unit` lane**: Pure logic, state machine, and worker tests (including `tests/wasm-shelf.test.mjs` and `tests/docs-drift.test.mjs`) that do not spawn `server.mjs`, `createServer`, `task-fixture.mjs`, or headless Chromium.
 - **`live` lane**:
   - **Server sub-lane (`--lane server`)**: Spawns `server.mjs` or HTTP servers without launching a browser; runs with `--test-concurrency=4`.
