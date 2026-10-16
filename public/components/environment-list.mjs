@@ -1,3 +1,6 @@
+/**
+ * @summary Environment inventory list and active root status renderer.
+ */
 // public/components/environment-list.mjs — the environment list (voicebox-beads-uei2.10, scoped by
 // voicebox-beads-uei2.8 from the voicebox-beads-uei2 decomposition).
 //

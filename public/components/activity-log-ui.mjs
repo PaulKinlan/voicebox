@@ -1,3 +1,6 @@
+/**
+ * @summary Work activity log and project-change notification surface.
+ */
 // public/components/activity-log-ui.mjs — the work activity log and the project-change flash,
 // extracted from public/fused.js (voicebox-beads-uei2.2, a slice of the decomposition scoped in
 // voicebox-beads-uei2).

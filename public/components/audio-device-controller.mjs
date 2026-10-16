@@ -1,3 +1,6 @@
+/**
+ * @summary Audio input/output device enumeration, selection, and routing controller.
+ */
 // public/components/audio-device-controller.mjs — the audio device selector and its routing, extracted
 // from public/fused.js (voicebox-beads-uei2.6, a slice of the fused.js decomposition scoped in
 // voicebox-beads-uei2).

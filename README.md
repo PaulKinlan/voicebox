@@ -249,7 +249,42 @@ to 5.76:1 and 6.45:1. Its 11 `light-dark()` colour tokens are a palette of their
 - **`public/style.css` `.sr-only` overflow clip (voicebox-beads-dche).** Clips the room's `.sr-only` labels with `overflow: clip` instead of `overflow: hidden`, removing unintended scroll container behaviour (6 of the 18 labels present when it was measured were scroll containers — `scrollLeft = 999` moved to 64 — and every label now measures 0) while keeping their accessible names intact in the accessibility tree. The count is deliberately not pinned: a toolbar button added on `main` took it from 18 to 19, and the browser test carries a control arm that proves the probe still detects an `overflow: hidden` 1px box, so a room of zero is a measurement rather than a broken detector.
 
 - **Built-in mini-app script externalization (`voicebox-beads-xggy.4`).** The three built-in mini-apps (`public/apps/agent-monitor.html`, `public/apps/landing-inspector.html`, and `public/apps/live-vision-studio.html`) load their scripts from external modules (`public/apps/agent-monitor.js`, `public/apps/landing-inspector.js`, and `public/apps/live-vision-studio.js`) with zero inline `<script>` blocks, audited by `tests/csp-report-only.test.mjs`.
-- **Room UI & Route Modules (`voicebox-beads-8kfa`, `voicebox-beads-2mi8`, `voicebox-beads-7z2y`, `voicebox-beads-r9hv.1`, `voicebox-beads-gnf2`, `voicebox-beads-djp3`, `voicebox-beads-uei2.1`, `voicebox-beads-pcyo`, `voicebox-beads-uei2.4`, `voicebox-beads-uei2.5`, `voicebox-beads-uei2.6`, `voicebox-beads-uei2.2`, `voicebox-beads-uei2.7`, `voicebox-beads-uei2.9`, `voicebox-beads-uei2.12`).** Candidate branch inspection and landing (`lib/routes/branches.mjs`, `public/branch-landing-ui.mjs`), harness inventory and configuration (`lib/routes/harnesses.mjs`), in-browser system diagnostics (`lib/routes/doctor.mjs`), multi-participant presence and floor control (`public/presence-ui.mjs`), off-main-thread vision frame encoding (`public/vision-frame-encoder.mjs`), live visual grounding callouts (`public/vision-grounding.mjs`), audio meters (`public/audio-meters.mjs`), and Document Picture-in-Picture companion stats (`public/pip-mic.mjs`), and the configurable microphone hotkey (`public/components/mic-hotkey-controller.mjs`), and the revision-mismatch toast and build stamp (`public/components/sync-toast.mjs`), and the audio device selector and its routing (`public/components/audio-device-controller.mjs`), and the work activity log and project-change flash (`public/components/activity-log-ui.mjs`), and the interactive mini-app surface and its sandboxed-app bridge (`public/components/mini-app-surface.mjs`), and the Harnesses modal dialog with its host-inventory check, harness rows, config form and task launcher (`public/components/harnesses-dialog.mjs`), and the Live Vision and Push to talk surface (`public/components/vision-controls.mjs`) are modularized and covered by dedicated unit tests.
+- **Standalone Room UI Helpers.** Multi-participant presence and floor control (`public/presence-ui.mjs`), candidate branch landing (`public/branch-landing-ui.mjs`), off-main-thread vision frame encoding (`public/vision-frame-encoder.mjs`), live visual grounding callouts (`public/vision-grounding.mjs`), audio meters (`public/audio-meters.mjs`), and Document Picture-in-Picture companion stats (`public/pip-mic.mjs`).
+
+### Room UI Component Inventory
+<!-- BEGIN GENERATED COMPONENT INVENTORY -->
+| Component Module | Description |
+|---|---|
+| `public/components/activity-log-ui.mjs` | Work activity log and project-change notification surface. |
+| `public/components/audio-device-controller.mjs` | Audio input/output device enumeration, selection, and routing controller. |
+| `public/components/changelog-dialog.mjs` | Change log modal dialog and commit history viewer. |
+| `public/components/deck-controller.mjs` | SQEH deck navigation, quick files, mini-app tray, and sheet controller. |
+| `public/components/environment-list.mjs` | Environment inventory list and active root status renderer. |
+| `public/components/environment-root-dialog.mjs` | Environments root configuration and project creation dialog. |
+| `public/components/harnesses-dialog.mjs` | Harness inventory, configuration, and task delegation dialog. |
+| `public/components/mic-hotkey-controller.mjs` | Configurable microphone push-to-talk and toggle hotkey controller. |
+| `public/components/mini-app-surface.mjs` | Interactive mini-app iframe bridge and container surface. |
+| `public/components/sync-toast.mjs` | Revision-mismatch notification toast and build stamp controller. |
+| `public/components/vision-controls.mjs` | Live camera/screen capture streaming and push-to-talk controls. |
+<!-- END GENERATED COMPONENT INVENTORY -->
+
+### Route Module Inventory
+<!-- BEGIN GENERATED ROUTE INVENTORY -->
+| Route Module | Description |
+|---|---|
+| `lib/routes/activity.mjs` | Work activity log HTTP endpoints (GET/DELETE /api/activity). |
+| `lib/routes/agents-read.mjs` | Agent inventory and admission status query endpoint (GET /api/agents). |
+| `lib/routes/branches.mjs` | Candidate branch inspection, diff viewing, and landing endpoints. |
+| `lib/routes/changelog.mjs` | Repository commit history and changelog query endpoint (GET /api/changelog). |
+| `lib/routes/doctor.mjs` | In-browser system diagnostics and environment health endpoint (GET /api/doctor). |
+| `lib/routes/extensions.mjs` | Extension proposal, registration, and catalogue HTTP endpoints. |
+| `lib/routes/fleet.mjs` | Public agent fleet discovery endpoint (GET /api/fleet). |
+| `lib/routes/gemini-media.mjs` | Gemini media capabilities and processing endpoints. |
+| `lib/routes/harnesses.mjs` | Harness inventory and configuration HTTP endpoints. |
+| `lib/routes/presence.mjs` | Multi-participant room presence and floor control endpoints. |
+| `lib/routes/tool-catalog.mjs` | Tool catalog HTTP query endpoint (GET /api/tools). |
+| `lib/routes/workspace.mjs` | Workspace file reading, writing, and directory search endpoints. |
+<!-- END GENERATED ROUTE INVENTORY -->
 
 Full gate documentation: [`docs/18-loopback-session-auth.md`](docs/18-loopback-session-auth.md).
 

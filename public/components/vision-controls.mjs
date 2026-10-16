@@ -1,3 +1,6 @@
+/**
+ * @summary Live camera/screen capture streaming and push-to-talk controls.
+ */
 // public/components/vision-controls.mjs — the Room's Live Vision and Push to talk surface
 // (voicebox-beads-uei2.12, a slice of the public/fused.js decomposition scoped in voicebox-beads-uei2).
 //

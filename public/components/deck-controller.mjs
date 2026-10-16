@@ -1,3 +1,6 @@
+/**
+ * @summary SQEH deck navigation, quick files, mini-app tray, and sheet controller.
+ */
 // public/components/deck-controller.mjs — SQEH deck navigation, sheet, and tile controller (voicebox-beads-uei2.13)
 // Extracted from public/fused.js.
 // Manages:

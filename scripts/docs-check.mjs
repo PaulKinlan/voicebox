@@ -118,6 +118,42 @@ function pageScripts() {
   return { tags, worklets: [...new Set([...direct, ...configured])] };
 }
 
+/**
+ * Scans a directory for *.mjs modules, extracts the @summary JSDoc comment from each,
+ * and returns sorted items and any modules missing summaries (voicebox-beads-2pe6).
+ */
+export function moduleInventory(dir, relPrefix = dir) {
+  const fullDir = resolve(ROOT, dir);
+  if (!existsSync(fullDir)) return { items: [], missingSummary: [] };
+  const files = readdirSync(fullDir).filter((f) => f.endsWith(".mjs")).sort();
+  const items = [];
+  const missingSummary = [];
+  for (const f of files) {
+    const relPath = join(relPrefix, f);
+    const content = readFileSync(join(fullDir, f), "utf8");
+    const summaryMatch = content.match(/@summary\s+([^\n*]+)/);
+    if (!summaryMatch || !summaryMatch[1].trim()) {
+      missingSummary.push(relPath);
+    } else {
+      items.push({
+        file: f,
+        path: relPath,
+        summary: summaryMatch[1].trim(),
+      });
+    }
+  }
+  return { items, missingSummary };
+}
+
+/** Format module inventory as a clean markdown table. */
+export function renderInventoryTable(items, headerTitle = "Module") {
+  return [
+    `| ${headerTitle} | Description |`,
+    "|---|---|",
+    ...items.map((item) => `| \`${item.path}\` | ${item.summary} |`),
+  ].join("\n");
+}
+
 /** Start the real server on a scratch port and ask it what it is. */
 async function probeServer() {
   // A FREE PORT, PROPERLY: bind one, read the number, release it, hand it to the server. The previous
@@ -706,6 +742,11 @@ async function blocks() {
   const refusalEntries = (loop.audit.entries ?? []).slice(writeEntries.length);
   const linkedAttempt = writeEntries.some((e) => e.attempt != null);
 
+  const { items: componentItems, missingSummary: missingComponents } = moduleInventory("public/components");
+  const { items: routeItems, missingSummary: missingRoutes } = moduleInventory("lib/routes");
+  const allMissing = [...missingComponents, ...missingRoutes];
+  if (allMissing.length) refuse(REFUSE.missingSummary(allMissing));
+
   // DOCS_DEBUG printed `live` — a variable c95e101 removed — so setting it crashed the check with a
   // ReferenceError before anything was generated (found reaching for it in voicebox-beads-qxy2). It names
   // what exists now: the captured live handshakes, and both roots.
@@ -822,6 +863,9 @@ async function blocks() {
       "|---|---|---|",
       ...envVars().map((e) => `| \`${e.name}\` | ${e.files.map((f) => "`" + f + "`").join(", ")} | ${e.meaning} |`),
     ].join("\n")),
+
+    "component-inventory": block("component-inventory", renderInventoryTable(componentItems, "Component Module")),
+    "route-inventory": block("route-inventory", renderInventoryTable(routeItems, "Route Module")),
   };
 }
 
@@ -855,13 +899,13 @@ const RETIRED_RES = [
   { re: /\bE\d-M\d\b|\be1m0\b/, label: "internal project id (E1-M0)", why: "name the thing, not the ticket — e.g. 'the environment library', 'the create-asset tool'" },
   { re: /\bN\d{1,3}\b/, label: "internal note number (N20 shape)", why: "say the idea, not the note number" },
 ];
-const stripGenerated = (text) => text.replace(/<!-- BEGIN GENERATED:[\s\S]*?<!-- END GENERATED: [^>]+ -->\n?/g, "");
+const stripGenerated = (text) => text.replace(/<!-- BEGIN GENERATED(?::\s*[\s\S]*?|\s+[^>]+)-->[\s\S]*?<!-- END GENERATED(?::\s*[^>]+|\s+[^>]+)-->\n?/g, "");
 function retiredHits(text) {
   const MECHANISM_MARKER = "docs-check: names the mechanism";
   // raw line numbers: generated blocks are skipped by RANGE, not by stripping,
   // so every hit names the line a person would open.
   const ranges = [];
-  const re = /<!-- BEGIN GENERATED:[\s\S]*?<!-- END GENERATED: [^>]+ -->\n?/g;
+  const re = /<!-- BEGIN GENERATED(?::\s*[\s\S]*?|\s+[^>]+)-->[\s\S]*?<!-- END GENERATED(?::\s*[^>]+|\s+[^>]+)-->\n?/g;
   let m;
   while ((m = re.exec(text)) !== null) {
     const startLine = text.slice(0, m.index).split("\n").length;
@@ -885,8 +929,8 @@ function retiredHits(text) {
 }
 
 const DOCS = [
-  { rel: "README.md", blocks: ["providers", "live-session", "loop", "tool-path", "tools", "config"] },
-  { rel: join("docs", "07-architecture.md"), blocks: ["providers", "routes", "page", "live-session", "loop", "tool-path", "tools", "config"] },
+  { rel: "README.md", blocks: ["providers", "live-session", "loop", "tool-path", "tools", "config", "component-inventory", "route-inventory"] },
+  { rel: join("docs", "07-architecture.md"), blocks: ["providers", "routes", "page", "live-session", "loop", "tool-path", "tools", "config", "component-inventory", "route-inventory"] },
   { rel: join("docs", "08-how-it-runs.md"), blocks: [] },
 ];
 
@@ -898,16 +942,29 @@ function missingPaths(text) {
   return [...named].filter((p) => !existsSync(join(ROOT, p))).sort();
 }
 
-function replaceBlock(text, name, body) {
+export function replaceBlock(text, name, body) {
   // GLOBAL: a document may carry the same block twice (07 does — the audio path appears under two headings),
   // and a non-global replace leaves the second one empty. "The block is present" and "the block says
   // something" are two different assertions, and the first one passed while the second failed.
   // THE OPENING MARKER NOW CARRIES A NOTE after the name, so this must match `name` followed by
   // ANYTHING up to the comment's close — which also migrates a document written before the note
   // existed, rather than failing to find a block that is plainly there.
-  const re = new RegExp(`<!-- BEGIN GENERATED: ${name}(?:[^>]*)?-->[\\s\\S]*?<!-- END GENERATED: ${name} -->`, "g");
+  const altName = name.replace(/-/g, " ").toUpperCase();
+  const re = new RegExp(`(<!-- BEGIN GENERATED(?:: ${name}(?:[^>]*)?| ${altName}) -->)([\\s\\S]*?)(<!-- END GENERATED(?:: ${name}| ${altName}) -->)`, "g");
   if (!re.test(text)) return { text, found: false };
-  return { text: text.replace(re, body), found: true };
+  return {
+    text: text.replace(re, (_match, openTag, _oldBody, closeTag) => {
+      if (openTag.includes(altName)) {
+        const inner = body.replace(/^<!-- BEGIN GENERATED:[^\n]*\n?/, "").replace(/\n?<!-- END GENERATED:[^\n]*$/, "");
+        return `${openTag}\n${inner.trim()}\n${closeTag}`;
+      }
+      if (!body.includes("<!-- BEGIN GENERATED")) {
+        return `${openTag}\n${body.trim()}\n${closeTag}`;
+      }
+      return body;
+    }),
+    found: true,
+  };
 }
 
 /**
@@ -915,8 +972,15 @@ function replaceBlock(text, name, body) {
  * blank-block guard has to watch. One computing site for the full pass and the static pre-pass (qxy2).
  */
 function blockInner(text, name) {
-  const after = text.slice(text.search(new RegExp(`<!-- BEGIN GENERATED: ${name}(?:[^>]*)?-->`)));
-  return after.slice(after.indexOf("-->") + 3, after.indexOf(`<!-- END GENERATED: ${name} -->`));
+  const altName = name.replace(/-/g, " ").toUpperCase();
+  const re = new RegExp(`<!-- BEGIN GENERATED(?:: ${name}(?:[^>]*)?| ${altName}) -->`);
+  const pos = text.search(re);
+  if (pos === -1) return "";
+  const after = text.slice(pos);
+  const endRe = new RegExp(`<!-- END GENERATED(?:: ${name}| ${altName}) -->`);
+  const endMatch = after.search(endRe);
+  if (endMatch === -1) return "";
+  return after.slice(after.indexOf("-->") + 3, endMatch);
 }
 
 // ── the refusals, worded once ────────────────────────────────────────────────
@@ -928,7 +992,7 @@ function blockInner(text, name) {
 const REFUSE = {
   noMarker: (rel, name) => [
     `docs-check: ${rel} has no generated block named '${name}' — add the markers:`,
-    `  <!-- BEGIN GENERATED: ${name} --> … <!-- END GENERATED: ${name} -->   (the note after the name is added by --write)`,
+    `  <!-- BEGIN GENERATED: ${name} --> … <!-- END GENERATED: ${name} -->   (or <!-- BEGIN GENERATED ${name.replace(/-/g, " ").toUpperCase()} -->)`,
   ],
   emptyBlock: (rel, name) => [
     `docs-check: the generated block '${name}' in ${rel} is EMPTY after the replace —`,
@@ -937,6 +1001,10 @@ const REFUSE = {
   missingPaths: (rel, gone) => [
     `docs-check: ${rel} names files that do not exist in this tree — a renamed or deleted file left the prose behind:`,
     ...gone.map((g) => `  - ${g}`),
+  ],
+  missingSummary: (missing) => [
+    `docs-check: missing @summary header in ${missing.length} module(s):`,
+    ...missing.map((m) => `  - ${m} (add /** * @summary <one-line description> */)`),
   ],
   retired: (rel, hits) => [
     `docs-check: ${rel} carries retired literals in its hand-written regions — these name things that no longer exist:`,
@@ -1079,6 +1147,11 @@ function claimsPass() {
 function staticRefusals() {
   const refusals = [];
   const missing = [];
+  const { missingSummary: missingComponents } = moduleInventory("public/components");
+  const { missingSummary: missingRoutes } = moduleInventory("lib/routes");
+  const allMissing = [...missingComponents, ...missingRoutes];
+  if (allMissing.length) refusals.push(REFUSE.missingSummary(allMissing));
+
   for (const { rel, blocks: wanted } of DOCS) {
     if (!existsSync(docPath(rel))) { missing.push(rel); continue; }
     const text = readFileSync(docPath(rel), "utf8");
@@ -1098,6 +1171,10 @@ function staticRefusals() {
 }
 
 export async function runDocsCheck() {
+  const { missingSummary: missingComponents } = moduleInventory("public/components");
+  const { missingSummary: missingRoutes } = moduleInventory("lib/routes");
+  const allMissing = [...missingComponents, ...missingRoutes];
+
   if (!WRITE) {
     const refusals = staticRefusals();
     if (refusals.length) {
@@ -1105,6 +1182,8 @@ export async function runDocsCheck() {
       console.error("docs-check: generated blocks were not compared — fix the failures above, then re-run.");
       process.exit(1);
     }
+  } else if (allMissing.length) {
+    refuse(REFUSE.missingSummary(allMissing));
   }
 
   // ── the full pass: generate, compare (or write), and every check again ───────

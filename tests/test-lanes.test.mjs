@@ -343,7 +343,8 @@ test("lane counts are pinned, so a reclassification cannot silently move cost", 
     // Read from THIS file's own root (not the CLI, and not the cwd), so the pin cannot drift with where the test
     // was started: measured 2026-10-15, and the same from the repo root and from /tmp.
     // Updated on rebase over main 351c0b5 (+1 browser/live: deck-controller-extraction.test.mjs, 260 total test files: 103 unit, 64 server, 93 browser, 157 live).
-    { unit: 103, server: 64, browser: 93, live: 157 },
+    // Updated for voicebox-beads-2pe6 (+1 unit: tests/docs-check.test.mjs, 261 total test files: 104 unit, 64 server, 93 browser, 157 live).
+    { unit: 104, server: 64, browser: 93, live: 157 },
     "IF THIS CHANGED: name the file that moved lane and why in the commit message. A move changes which lane pays " +
       "for a test, so the number is recorded rather than discovered in a wall-clock difference (voicebox-beads-l79v).",
   );

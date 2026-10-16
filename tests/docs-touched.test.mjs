@@ -11,7 +11,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { namedPaths } from "../scripts/docs-touched.mjs";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, appendFileSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -244,3 +244,79 @@ test("an unknown base is skipped by name, not counted as a pass or a failure", (
   assert.equal(r.code, 0, "not knowing the base is not the change's fault");
   assert.match(r.out, /skipped/, "but it must say so rather than printing OK");
 });
+
+test("adding/modifying an inventory item and updating the generated doc block passes the gate (voicebox-beads-2pe6)", () => {
+  const f = fixture();
+  mkdirSync(path.join(f.dir, "public", "components"), { recursive: true });
+  const compPath = "public/components/widget.mjs";
+  writeFileSync(path.join(f.dir, compPath), "/**\n * @summary Initial widget.\n */\nexport const widget = 1;\n");
+  f.change(
+    {
+      [compPath]: "\n",
+      "README.md": "\n<!-- BEGIN GENERATED COMPONENT INVENTORY -->\n| `public/components/widget.mjs` | Initial widget. |\n<!-- END GENERATED COMPONENT INVENTORY -->\n",
+    },
+    "add widget and update inventory block",
+  );
+  f.base = git(["rev-parse", "HEAD"], f.dir);
+
+  // Modify summary and update doc block
+  writeFileSync(path.join(f.dir, compPath), "/**\n * @summary Updated widget description.\n */\nexport const widget = 2;\n");
+  const readmeText = readFileSync(path.join(f.dir, "README.md"), "utf8").replace("Initial widget.", "Updated widget description.");
+  writeFileSync(path.join(f.dir, "README.md"), readmeText);
+
+  git(["-c", "user.name=t", "-c", "user.email=t@example.com", "add", "-A"], f.dir);
+  git(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "update widget summary and docs block"], f.dir);
+
+  const r = f.run();
+  assert.equal(r.code, 0, `updating inventory item and its doc block must pass:\n${r.out}`);
+  assert.match(r.out, /document\(s\) changed with them/);
+});
+
+test("modifying an inventory item whose summary in the generated doc block is already current passes without doc edits (voicebox-beads-2pe6)", () => {
+  const f = fixture();
+  mkdirSync(path.join(f.dir, "public", "components"), { recursive: true });
+  const compPath = "public/components/widget.mjs";
+  writeFileSync(path.join(f.dir, compPath), "/**\n * @summary Stable widget summary.\n */\nexport const widget = 1;\n");
+  f.change(
+    {
+      [compPath]: "\n",
+      "README.md": "\n<!-- BEGIN GENERATED COMPONENT INVENTORY -->\n| `public/components/widget.mjs` | Stable widget summary. |\n<!-- END GENERATED COMPONENT INVENTORY -->\n",
+    },
+    "add widget and docs inventory",
+  );
+  f.base = git(["rev-parse", "HEAD"], f.dir);
+
+  // Modify code logic only, without touching summary or README.md
+  appendFileSync(path.join(f.dir, compPath), "// internal logic fix\nexport const extra = true;\n");
+  git(["-c", "user.name=t", "-c", "user.email=t@example.com", "add", "-A"], f.dir);
+  git(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "modify widget implementation only"], f.dir);
+
+  const r = f.run();
+  assert.equal(r.code, 0, `modifying inventory module when doc block is already current must pass without doc edits:\n${r.out}`);
+  assert.match(r.out, /satisfied by generated inventory blocks/);
+});
+
+test("modifying an inventory item summary WITHOUT updating the doc block is refused (voicebox-beads-2pe6)", () => {
+  const f = fixture();
+  mkdirSync(path.join(f.dir, "public", "components"), { recursive: true });
+  const compPath = "public/components/widget.mjs";
+  writeFileSync(path.join(f.dir, compPath), "/**\n * @summary Original summary.\n */\nexport const widget = 1;\n");
+  f.change(
+    {
+      [compPath]: "\n",
+      "README.md": "\n<!-- BEGIN GENERATED COMPONENT INVENTORY -->\n| `public/components/widget.mjs` | Original summary. |\n<!-- END GENERATED COMPONENT INVENTORY -->\n",
+    },
+    "add widget with original summary",
+  );
+  f.base = git(["rev-parse", "HEAD"], f.dir);
+
+  // Modify summary in code but do NOT update README.md
+  writeFileSync(path.join(f.dir, compPath), "/**\n * @summary Drastically changed summary.\n */\nexport const widget = 1;\n");
+  git(["-c", "user.name=t", "-c", "user.email=t@example.com", "add", "-A"], f.dir);
+  git(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "modify widget summary without updating docs"], f.dir);
+
+  const r = f.run();
+  assert.equal(r.code, 1, `modifying summary without updating doc block must fail:\n${r.out}`);
+  assert.match(r.out, /public\/components\/widget\.mjs/);
+});
+

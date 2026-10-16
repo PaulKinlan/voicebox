@@ -1,3 +1,6 @@
+/**
+ * @summary Revision-mismatch notification toast and build stamp controller.
+ */
 // public/components/sync-toast.mjs — the revision-mismatch toast and the build stamp, extracted
 // from public/fused.js (voicebox-beads-uei2.5, a slice of the fused.js decomposition scoped in
 // voicebox-beads-uei2).
