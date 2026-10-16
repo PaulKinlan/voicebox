@@ -208,6 +208,40 @@ not ok 1 - suite
       assert.ok(entry.loadavg_1m[end] === null || Number.isFinite(entry.loadavg_1m[end]), `${entry.path} ${end} is a reading or null, got ${entry.loadavg_1m[end]}`);
     }
   }
+
+  // Window sequencing (voicebox-beads-txu0): sampler is called once before and once after each child,
+  // and two children do not share identical start/end pairs.
+  let sampleCounter = 0;
+  const sequentialSamples = [];
+  const sequenced = await runOneTier({
+    tier: "unit",
+    files: ["tests/one.test.mjs", "tests/two.test.mjs"],
+    workers: 1,
+    runner: async () => ({ code: 0, signal: null, timedOut: false, secs: 0.05, out: "1..1\n# tests 1\n# pass 1\n# fail 0\n" }),
+    sampler: () => {
+      sampleCounter += 1;
+      sequentialSamples.push(sampleCounter);
+      return sampleCounter;
+    },
+    log: { log() {}, error() {} },
+  });
+  assert.equal(sequentialSamples.length, 4, "sampler called once before and once after each file (2 files * 2 readings)");
+  const [f1, f2] = sequenced.files;
+  assert.deepEqual(f1.loadavg_1m, { start: 1, end: 2 }, "first file has distinct start and end window");
+  assert.deepEqual(f2.loadavg_1m, { start: 3, end: 4 }, "second file has distinct start and end window, not shared with first");
+  assert.notDeepEqual(f1.loadavg_1m, f2.loadavg_1m, "distinct files in tier do not share a collapsed loadavg window");
+
+  // Mutants M2 and M3: collapsing per-file window or sharing one sample across files fails assertion
+  const m2Run = await runOneTier({
+    tier: "unit",
+    files: ["tests/one.test.mjs", "tests/two.test.mjs"],
+    workers: 1,
+    runner: async () => ({ code: 0, signal: null, timedOut: false, secs: 0.05, out: "1..1\n# tests 1\n# pass 1\n# fail 0\n" }),
+    sampler: () => 42, // degenerate static sampler
+    log: { log() {}, error() {} },
+  });
+  assert.equal(m2Run.files[0].loadavg_1m.start, m2Run.files[0].loadavg_1m.end, "static sampler exposes window collapse (start === end)");
+  assert.deepEqual(m2Run.files[0].loadavg_1m, m2Run.files[1].loadavg_1m, "static sampler exposes tier-wide sharing");
   assert.match(logged.join("\n"), /arm="failing subtest" tests\/leaf\.test\.mjs/, "the line a person reads names the arm, with the path still last");
 
   // AND IT REACHES THE ARTIFACT, not just the tier record: the unit tier's readings fold through the same
