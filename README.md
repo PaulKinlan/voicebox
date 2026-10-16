@@ -294,6 +294,7 @@ to 5.76:1 and 6.45:1. Its 11 `light-dark()` colour tokens are a palette of their
 | `public/components/mic-hotkey-controller.mjs` | Configurable microphone push-to-talk and toggle hotkey controller. |
 | `public/components/mini-app-surface.mjs` | Interactive mini-app iframe bridge and container surface. |
 | `public/components/sync-toast.mjs` | Revision-mismatch notification toast and build stamp controller. |
+| `public/components/system-command-bus.mjs` | Declarative system command bus for feature command handlers, decoupled from public/fused.js. |
 | `public/components/vision-controls.mjs` | Live camera/screen capture streaming and push-to-talk controls. |
 <!-- END GENERATED COMPONENT INVENTORY -->
 

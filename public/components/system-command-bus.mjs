@@ -1,3 +1,6 @@
+/**
+ * @summary Declarative system command bus for feature command handlers, decoupled from public/fused.js.
+ */
 // public/components/system-command-bus.mjs — declarative system command bus (voicebox-beads-1c9d)
 // Decouples feature system command handlers from public/fused.js into a modular bus.
 //
