@@ -979,7 +979,7 @@ test('pre-push seals ONE full manifest from the tier records, and a red tier lea
     // how lib/host-load.mjs (voicebox-beads-zjpm.6) broke this fixture while every unit-lane check stayed
     // green — this file is classified into the BROWSER lane (voicebox-beads-l79v), so a unit-only fast gate
     // never runs it.
-    for (const file of ['scripts/pre-push.sh', 'scripts/docs-touched.mjs', 'scripts/gate-tier.mjs', 'scripts/gate-manifest.mjs', 'scripts/test-lanes.mjs', 'scripts/test-shards.mjs', 'scripts/test-changed.mjs', 'tools/browser-shard-runner.mjs', 'lib/git-env.mjs', 'lib/host-load.mjs']) {
+    for (const file of ['scripts/pre-push.sh', 'scripts/docs-touched.mjs', 'scripts/gate-tier.mjs', 'scripts/gate-manifest.mjs', 'scripts/test-lanes.mjs', 'scripts/test-shards.mjs', 'scripts/test-changed.mjs', 'scripts/infra-affected.mjs', 'tools/browser-shard-runner.mjs', 'lib/git-env.mjs', 'lib/host-load.mjs']) {
       mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
       copyFileSync(path.join(root, file), path.join(repo, file));
     }
