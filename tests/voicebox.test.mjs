@@ -297,7 +297,11 @@ test("the page references only files that exist in public/", () => {
   const css = readComposedCss(path.join(ROOT, "public", "style.css"));
   const refs = new Set();
   for (const m of page.matchAll(/(?:src|href)="([^"#][^"]*)"/g)) refs.add(m[1]);
-  for (const m of css.matchAll(/url\("([^"]+)"\)/g)) refs.add(m[1]);
+  for (const m of css.matchAll(/url\("([^"]+)"\)/g)) {
+    const raw = m[1];
+    const rel = raw.startsWith("../") ? raw.slice(3) : raw;
+    refs.add(rel);
+  }
   for (const ref of refs) {
     if (/^https?:/.test(ref)) continue;
     const [relPath, hash] = ref.split("#");
