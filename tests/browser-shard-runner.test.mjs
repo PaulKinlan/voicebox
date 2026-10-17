@@ -13,29 +13,38 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TIER_WORKERS } from "../scripts/test-shards.mjs";
 import { findBrowserBinary } from "../lib/browser-binaries.mjs";
+import { runOwnedShard } from "./lib/run-owned-shard.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const RUNNER = path.join(root, "tools/browser-shard-runner.mjs");
 // The cheapest browser-lane file measured on this tree (~0.2s): this test is about the runner's
 // accounting, not about any one fixture's behaviour.
 const PROBE = "tests/wasm-room-ui.test.mjs";
+const WEDGE_RUNNER = path.join(root, "tests/fixtures/nested-shard-wedge.mjs");
 
-const runRunner = (args, env = {}) =>
-  spawnSync(process.execPath, [RUNNER, ...args], {
-    cwd: root,
-    encoding: "utf8",
-    env: { ...process.env, ...env },
-    timeout: 240_000,
-    killSignal: "SIGKILL",
+const runRunner = (args, env = {}, options = {}) =>
+  runOwnedShard(options.entry ?? RUNNER, args, {
+    cwd: root, env: { ...process.env, ...env }, ...options,
   });
 
-test("the runner takes the browser width from the ONE OWNER, and carries no default of its own", () => {
+// ps includes zombies, which are already terminated but still hold a PID until collected.
+// Check the whole detached group, not just its leader: a surviving renderer/child is a leak.
+function activeInGroup(pgid) {
+  const result = spawnSync("ps", ["-eo", "pgid=,stat="], { encoding: "utf8", timeout: 1000 });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.split("\n").some((line) => {
+    const [, group, state] = /^\s*(\d+)\s+(\S+)/.exec(line) ?? [];
+    return Number(group) === pgid && !state?.startsWith("Z");
+  });
+}
+
+test("the runner takes the browser width from the ONE OWNER, and carries no default of its own", async () => {
   // WHY THIS ARM EXISTS (voicebox-beads-q4j6). `scripts/gate-tier.mjs` spawns this runner with NO
   // `--workers`, so a fallback inside the runner IS the full gate's browser width - which is how
   // `TIER_WORKERS.browser` and the number the tier actually ran at became two facts that had drifted apart,
@@ -49,7 +58,7 @@ test("the runner takes the browser width from the ONE OWNER, and carries no defa
   // The override must be ABSENT, not empty: `??` keeps an empty string, and Number("") is 0.
   delete env.VOICEBOX_SHARD_WORKERS;
   try {
-    const res = runRunner(["--only", PROBE], env);
+    const res = await runRunner(["--only", PROBE], env);
     assert.equal(res.status, 0, res.stdout + res.stderr);
     assert.doesNotMatch(res.stdout, /warm browser started/, "the probe's custom window dimensions require a standalone browser");
     assert.ok(
@@ -69,11 +78,11 @@ test("the runner takes the browser width from the ONE OWNER, and carries no defa
   );
 });
 
-test("the runner emits a hub marker per file, and publishes a tier record a manifest can fold in", () => {
+test("the runner emits a hub marker per file, and publishes a tier record a manifest can fold in", async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-shard-"));
   const recordPath = path.join(dir, "browser-tier.json");
   try {
-    const res = runRunner(["--only", PROBE, "--workers", "1"], { VOICEBOX_GATE_TIER_RECORD: recordPath });
+    const res = await runRunner(["--only", PROBE, "--workers", "1"], { VOICEBOX_GATE_TIER_RECORD: recordPath });
     assert.equal(res.status, 0, res.stdout + res.stderr);
 
     // The markers are the hub's vocabulary, anchored at line start. A marker nested inside other text is
@@ -113,11 +122,44 @@ test("the runner emits a hub marker per file, and publishes a tier record a mani
   }
 });
 
-test("two real default-option files reuse one warm browser and still report independent results", (t) => {
+test("a nested fixture deadline lets its runner reap separately detached groups and preserves the red verdict", { timeout: 15000 }, async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-shard-wedge-"));
+  let owned;
+  try {
+    const result = await runRunner([], { VOICEBOX_C0IN_FIXTURE_DIR: dir }, {
+      entry: WEDGE_RUNNER, timeoutMs: 4000, graceMs: 5000,
+      onOutput({ stdout, expire }) {
+        if (stdout.includes("[shards] running synthetic held file")) expire();
+      },
+    });
+    owned = JSON.parse(readFileSync(path.join(dir, "pids.json"), "utf8"));
+    for (const [role, pid] of Object.entries({ runner: owned.runner, warm: owned.warm, file: owned.file })) {
+      const until = Date.now() + 1000;
+      while (activeInGroup(pid) && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 25));
+      assert.equal(activeInGroup(pid), false, `${role} process group ${pid} survived its fixture's timeout`);
+    }
+    assert.equal(existsSync(owned.profile), false, "the nested runner also reaps its warm profile");
+    assert.equal(result.timedOut, true, "a held nested file must expire its fixture's deadline");
+    assert.notEqual(result.status, 0, "a timed-out fixture cannot become a passing gate");
+    assert.equal(result.error?.code, "ETIMEDOUT");
+    assert.doesNotMatch(result.stdout, /^fast-gate: passed:/m);
+  } finally {
+    // An intentionally broken implementation must not leak the negative-control descendants.
+    if (owned) for (const pid of [owned.warm, owned.file]) {
+      const args = spawnSync("ps", ["-o", "args=", "-p", String(pid)], { encoding: "utf8", timeout: 1000 });
+      if (args.status === 0 && args.stdout.includes(`${owned.token}-`)) {
+        try { process.kill(-pid, "SIGKILL"); } catch { /* already gone */ }
+      }
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("two real default-option files reuse one warm browser and still report independent results", async (t) => {
   if (!findBrowserBinary()) return t.skip("Chromium is not installed");
   const first = "tests/acp-browser.test.mjs";
   const second = "tests/opfs-append.test.mjs";
-  const res = runRunner(["--only", first, "--only", second, "--workers", "1"], {
+  const res = await runRunner(["--only", first, "--only", second, "--workers", "1"], {
     VOICEBOX_SHARED_CDP_URL: "ws://127.0.0.1:1/inherited-must-not-escape",
   });
   assert.equal(res.status, 0, res.stdout + res.stderr);
@@ -126,13 +168,13 @@ test("two real default-option files reuse one warm browser and still report inde
   assert.match(res.stdout, /coverage ok: 2 result\(s\) for 2 queued file\(s\)/);
 });
 
-test("a real picked-folder permission check keeps its dedicated Chromium", (t) => {
+test("a real picked-folder permission check keeps its dedicated Chromium", async (t) => {
   if (!findBrowserBinary()) return t.skip("Chromium is not installed");
   // An off-the-record warm context keeps the dropped folder's read grant across reload,
   // breaking N20's named needs-gesture assertion. Run the actual check through the normal
   // shard path, not --cold-browsers: source eligibility must refuse the pool itself.
   const file = "tests/n20-picked-root.test.mjs";
-  const res = runRunner(["--only", file, "--workers", "1"]);
+  const res = await runRunner(["--only", file, "--workers", "1"]);
   assert.equal(res.status, 0, res.stdout + res.stderr);
   assert.ok(res.stdout.includes(`fast-gate: passed: ${file}`), "the picked-folder assertions ran and passed");
   assert.doesNotMatch(res.stdout, /\[shards\] warm browser started/, "native folder permissions need a dedicated browser process");
@@ -173,7 +215,7 @@ test("a crashed warm Chromium is replaced before the next file and the first fai
   assert.equal((output.match(/\[shards\] warm browser started for worker 0 pid=/g) ?? []).length, 2, `the next file gets a fresh process:\n${output.slice(-3000)}`);
 });
 
-test("a phase invocation runs exactly its own slice, namespaces its tier record, and says so", () => {
+test("a phase invocation runs exactly its own slice, namespaces its tier record, and says so", async () => {
   // The live-tier supervisor runs this tier twice — the parallel queue beside the server pool, then the
   // isolated files alone — so the phase must be explicit in the log, in the record's name, and in what is
   // queued. The two invocations together are the lane; that partition is splitQueue's property, held by
@@ -181,7 +223,7 @@ test("a phase invocation runs exactly its own slice, namespaces its tier record,
   const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-shard-phase-"));
   const recordPath = path.join(dir, "tier.json");
   try {
-    const res = runRunner(["--parallel-only", "--only", PROBE, "--workers", "1"], { VOICEBOX_GATE_TIER_RECORD: recordPath });
+    const res = await runRunner(["--parallel-only", "--only", PROBE, "--workers", "1"], { VOICEBOX_GATE_TIER_RECORD: recordPath });
     assert.equal(res.status, 0, res.stdout + res.stderr);
     assert.match(res.stdout, /phase parallel, wall/);
     assert.ok(res.stdout.includes(`fast-gate: passed: ${PROBE}`));
@@ -198,17 +240,17 @@ test("a phase invocation runs exactly its own slice, namespaces its tier record,
   }
 });
 
-test("a phase refuses a file outside it, and the two phases may not be asked for at once", () => {
+test("a phase refuses a file outside it, and the two phases may not be asked for at once", async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-shard-phase2-"));
   const recordPath = path.join(dir, "tier.json");
   try {
     // PROBE is a parallel file, so the isolated phase has nothing to run — and nothing may open a browser.
-    const wrongPhase = runRunner(["--isolated-only", "--only", PROBE], { VOICEBOX_GATE_TIER_RECORD: recordPath });
+    const wrongPhase = await runRunner(["--isolated-only", "--only", PROBE], { VOICEBOX_GATE_TIER_RECORD: recordPath });
     assert.equal(wrongPhase.status, 2);
     assert.match(wrongPhase.stderr, /is not in the browser lane's isolated phase/);
     assert.throws(() => readFileSync(recordPath, "utf8"), "a refusal writes no tier record");
 
-    const both = runRunner(["--parallel-only", "--isolated-only"]);
+    const both = await runRunner(["--parallel-only", "--isolated-only"]);
     assert.equal(both.status, 2);
     assert.match(both.stderr, /mutually exclusive/);
   } finally {
@@ -216,8 +258,8 @@ test("a phase refuses a file outside it, and the two phases may not be asked for
   }
 });
 
-test("a file that is not in the browser lane is refused before a browser opens", () => {
-  const res = runRunner(["--only", "tests/test-lanes.test.mjs"]);
+test("a file that is not in the browser lane is refused before a browser opens", async () => {
+  const res = await runRunner(["--only", "tests/test-lanes.test.mjs"]);
   assert.equal(res.status, 2);
   assert.match(res.stderr, /is not in the browser lane; nothing to run/);
   assert.equal(res.stdout.includes("fast-gate:"), false, "nothing was dispatched, so nothing claims to have run");
@@ -229,11 +271,11 @@ test("a file that is not in the browser lane is refused before a browser opens",
 // re-run to answer. These two arms hold both halves: the record carries the window the file ran in, and the
 // failure block prints it. The negative half matters as much: a PASSING file must not grow a load line, or
 // the line stops meaning "read this one".
-test("the tier record carries the load window each file ran in", () => {
+test("the tier record carries the load window each file ran in", async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-shard-load-"));
   const recordPath = path.join(dir, "browser-tier.json");
   try {
-    const res = runRunner(["--only", PROBE, "--workers", "1"], { VOICEBOX_GATE_TIER_RECORD: recordPath });
+    const res = await runRunner(["--only", PROBE, "--workers", "1"], { VOICEBOX_GATE_TIER_RECORD: recordPath });
     assert.equal(res.status, 0, res.stdout + res.stderr);
     const [entry] = JSON.parse(readFileSync(recordPath, "utf8")).files;
     assert.ok(entry.loadavg_1m, "the record names the window the file ran in");
@@ -249,13 +291,13 @@ test("the tier record carries the load window each file ran in", () => {
   }
 });
 
-test("a FAILING file's block prints what the box was doing, and says it is not a waiver", () => {
+test("a FAILING file's block prints what the box was doing, and says it is not a waiver", async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-shard-loadfail-"));
   const recordPath = path.join(dir, "browser-tier.json");
   try {
     // A real failure through the real runner, without waiting five minutes: the bound is a flag, so the child
     // is killed and the file ends `unknown`/failed exactly as a starved file would.
-    const res = runRunner(["--only", PROBE, "--workers", "1", "--file-timeout-ms", "1"], { VOICEBOX_GATE_TIER_RECORD: recordPath });
+    const res = await runRunner(["--only", PROBE, "--workers", "1", "--file-timeout-ms", "1"], { VOICEBOX_GATE_TIER_RECORD: recordPath });
     assert.notEqual(res.status, 0, "a killed file is a red file");
     const block = res.stdout.slice(res.stdout.indexOf(`[shards] ---- output of ${PROBE} ----`));
     assert.ok(block.length > 0, `the failure block is printed: ${res.stdout}`);
