@@ -126,6 +126,19 @@ test("two real default-option files reuse one warm browser and still report inde
   assert.match(res.stdout, /coverage ok: 2 result\(s\) for 2 queued file\(s\)/);
 });
 
+test("a real picked-folder permission check keeps its dedicated Chromium", (t) => {
+  if (!findBrowserBinary()) return t.skip("Chromium is not installed");
+  // An off-the-record warm context keeps the dropped folder's read grant across reload,
+  // breaking N20's named needs-gesture assertion. Run the actual check through the normal
+  // shard path, not --cold-browsers: source eligibility must refuse the pool itself.
+  const file = "tests/n20-picked-root.test.mjs";
+  const res = runRunner(["--only", file, "--workers", "1"]);
+  assert.equal(res.status, 0, res.stdout + res.stderr);
+  assert.ok(res.stdout.includes(`fast-gate: passed: ${file}`), "the picked-folder assertions ran and passed");
+  assert.doesNotMatch(res.stdout, /\[shards\] warm browser started/, "native folder permissions need a dedicated browser process");
+  assert.match(res.stdout, /tests=6 pass=6 fail=0 skipped=0 files-failed=0/, "all six checks kept their assertions");
+});
+
 test("a crashed warm Chromium is replaced before the next file and the first failure stays red", { timeout: 60000 }, async (t) => {
   if (!findBrowserBinary()) return t.skip("Chromium is not installed");
   // buildQueue orders the longer OPFS file before the shorter ACP file, regardless of CLI order.
