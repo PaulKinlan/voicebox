@@ -13,7 +13,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, watch } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,6 +27,7 @@ const RUNNER = path.join(root, "tools/browser-shard-runner.mjs");
 // accounting, not about any one fixture's behaviour.
 const PROBE = "tests/wasm-room-ui.test.mjs";
 const WEDGE_RUNNER = path.join(root, "tests/fixtures/nested-shard-wedge.mjs");
+const HELD_FILE_PRELOAD = new URL("./fixtures/held-shard-file.mjs", import.meta.url).href;
 
 const runRunner = (args, env = {}, options = {}) =>
   runOwnedShard(options.entry ?? RUNNER, args, {
@@ -149,6 +150,101 @@ test("a nested fixture deadline lets its runner reap separately detached groups 
       const args = spawnSync("ps", ["-o", "args=", "-p", String(pid)], { encoding: "utf8", timeout: 1000 });
       if (args.status === 0 && args.stdout.includes(`${owned.token}-`)) {
         try { process.kill(-pid, "SIGKILL"); } catch { /* already gone */ }
+      }
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a held real browser file times out UNKNOWN and reaps its runner, Chromium and test groups", { timeout: 40000 }, async (t) => {
+  if (!findBrowserBinary()) return t.skip("Chromium is not installed");
+  const file = "tests/acp-browser.test.mjs";
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-shard-real-wedge-"));
+  const pidFile = path.join(dir, "held-file-pids");
+  const heldPids = () => existsSync(pidFile) ? readFileSync(pidFile, "utf8").trim().split("\n").map(Number).filter(Boolean) : [];
+  const pgidOf = (pid) => {
+    const ps = spawnSync("ps", ["-o", "pgid=", "-p", String(pid)], { encoding: "utf8", timeout: 1000 });
+    return ps.status === 0 ? Number(ps.stdout.trim()) || 0 : 0;
+  };
+  const groupOf = (pid) => {
+    const pgid = pgidOf(pid);
+    assert.ok(pgid > 0, `cannot identify file child ${pid}'s process group`);
+    return pgid;
+  };
+  let runnerPid, warmPid, filePgid, profile, expire, armed = false, armError;
+  const arm = () => {
+    if (armed || !runnerPid || !warmPid || !expire) return;
+    const heldPid = heldPids().find((pid) => pid !== runnerPid && pid !== warmPid);
+    if (!heldPid) return; // the runner's --only argv must never stand in for a file child
+    try {
+      const child = spawnSync("ps", ["-o", "args=", "-p", String(heldPid)], { encoding: "utf8", timeout: 1000 });
+      assert.equal(child.status, 0, `held PID ${heldPid} must still be an ACP file child`);
+      assert.match(child.stdout, /acp-browser\.test\.mjs/, "the recorded PID belongs to the ACP file child");
+      const profiles = readdirSync(dir).filter((name) => name.startsWith("voicebox-shard-chrome-"));
+      assert.equal(profiles.length, 1, "a real warm Chromium profile exists before timeout");
+      profile = path.join(dir, profiles[0]);
+      filePgid = groupOf(heldPid); // snapshot before the signal can reparent the child to init
+      assert.notEqual(filePgid, runnerPid, "held file lives in the test supervisor's separate group");
+      assert.notEqual(filePgid, warmPid, "test child does not share the warm browser's group");
+      armed = true;
+      expire(); // the same path the 240s fixture deadline takes, without waiting 240s
+    } catch (error) {
+      armError = error;
+      armed = true;
+      expire(); // still release our browser if the readiness assertion fails
+    }
+  };
+  const observer = watch(dir, arm);
+  const readinessFallback = setInterval(arm, 200); // bounded predicate if fs.watch coalesces the PID-file event
+  try {
+    const result = await runRunner(["--only", file, "--workers", "1"], {
+      TMPDIR: dir,
+      NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${HELD_FILE_PRELOAD}`.trim(),
+      VOICEBOX_SHARD_HELD_PID_FILE: pidFile,
+      VOICEBOX_GATE_TIER_RECORD: path.join(dir, "tier.json"),
+    }, {
+      timeoutMs: 24000, graceMs: 5000,
+      onOutput({ stdout, pid, expire: expireNow }) {
+        runnerPid = pid;
+        warmPid = Number(/\[shards\] warm browser started for worker 0 pid=(\d+)/.exec(stdout)?.[1]) || warmPid;
+        expire = expireNow;
+        arm(); // also covers a PID file created before this output callback
+      },
+    });
+    observer.close();
+    assert.ifError(armError);
+    assert.ok(armed && runnerPid && warmPid && filePgid && profile, `no distinct real runner/browser/file groups before deadline: ${result.stdout}`);
+    assert.equal(result.timedOut, true);
+    assert.notEqual(result.status, 0, "a timed-out fixture is never a pass");
+    assert.equal(result.error?.code, "ETIMEDOUT");
+    assert.ok(result.stdout.includes(`[shards] running ${file}`), "the held file was dispatched");
+    assert.ok(result.stdout.includes(`fast-gate: unknown: ${file}`), "the actual runner reports no test counts as UNKNOWN");
+    assert.match(result.stdout, /\[shards\] FAILED: tests\/acp-browser\.test\.mjs \(exit \d+: no test counts were reported\)/);
+    assert.equal(result.stdout.split("\n").includes(`fast-gate: passed: ${file}`), false, "timeout must not publish a passing marker");
+    const record = JSON.parse(readFileSync(path.join(dir, "tier.json"), "utf8"));
+    assert.deepEqual(record.files.map(({ path: name, status, counts }) => ({ name, status, counts })), [
+      { name: file, status: "unknown", counts: null },
+    ]);
+    const until = Date.now() + 1200;
+    while ([runnerPid, warmPid, filePgid].some(activeInGroup) && Date.now() < until) {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    for (const [role, pgid] of Object.entries({ runner: runnerPid, chromium: warmPid, file: filePgid })) {
+      assert.equal(activeInGroup(pgid), false, `${role} process group ${pgid} survived the nested fixture timeout`);
+    }
+    assert.equal(existsSync(profile), false, "the runner removed its actual warm Chromium profile");
+  } finally {
+    clearInterval(readinessFallback);
+    observer.close();
+    // A failing guard must not itself strand a Chrome or test child. Never target our own group.
+    const selfGroup = pgidOf(process.pid);
+    const groups = [warmPid, runnerPid, filePgid];
+    for (const pid of heldPids()) if (pid !== runnerPid && pid !== warmPid) groups.push(pgidOf(pid));
+    for (const pgid of new Set(groups.filter((id) => id && id !== selfGroup))) {
+      let running = true; // a failed ps lookup is not evidence a group has exited
+      try { running = activeInGroup(pgid); } catch { /* still attempt to reap our known group */ }
+      if (running) {
+        try { process.kill(-pgid, "SIGKILL"); } catch { /* already gone */ }
       }
     }
     rmSync(dir, { recursive: true, force: true });
