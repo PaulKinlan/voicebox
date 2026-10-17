@@ -12,8 +12,10 @@
 //      - Pressing Escape collapses the popover back to the bubble.
 //   4. Mobile drawer / bottom-sheet responsiveness:
 //      - In mobile viewport (390x844), #mini-app-container anchors to bottom of screen with #mini-app-sheet-handle.
-//   5. Teardown:
-//      - Clicking #mini-app-close hides both container and dock.
+//   5. Header action reachability:
+//      - Long title/source text cannot push action hit targets outside the panel at desktop or mobile widths.
+//   6. Teardown:
+//      - A real pointer click on #mini-app-close hides both container and dock.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -45,6 +47,38 @@ test("mini-app popover: anchored floating bubble, light-dismiss, and mobile draw
 
   await page.goto(`${server.base}/`);
   await page.waitFor(() => window.__voiceboxMiniApp !== undefined, { label: "mini-app controller on window" });
+
+  const assertHeaderActionsReachable = async (viewport) => {
+    // CSS transforms can still be settling immediately after mount or a viewport change.
+    await page.evaluate(async () => {
+      await Promise.all(document.querySelector("#mini-app-container").getAnimations().map((animation) => animation.finished));
+    });
+    const geometry = await page.evaluate(() => {
+      const panel = document.querySelector("#mini-app-container").getBoundingClientRect();
+      const buttons = [...document.querySelectorAll(".mini-app-actions button")].map((button) => {
+        const box = button.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return { id: button.id, left: box.left, right: box.right, top: box.top, bottom: box.bottom,
+          hit: hit === button || button.contains(hit) };
+      });
+      return {
+        panel: { left: panel.left, right: panel.right, top: panel.top, bottom: panel.bottom },
+        titleWidth: document.querySelector("#mini-app-title").getBoundingClientRect().width,
+        sourceWidth: document.querySelector("#mini-app-source-badge").getBoundingClientRect().width,
+        buttons,
+      };
+    });
+    assert.ok(geometry.titleWidth >= 32, `${viewport}: title keeps a readable slot (${geometry.titleWidth}px)`);
+    assert.ok(geometry.sourceWidth >= 32, `${viewport}: source badge keeps a readable slot (${geometry.sourceWidth}px)`);
+    assert.equal(geometry.buttons.length, 6, `${viewport}: all mini-app actions are present`);
+    for (const button of geometry.buttons) {
+      assert.ok(button.left >= geometry.panel.left && button.right <= geometry.panel.right,
+        `${viewport}: #${button.id} x=${button.left}..${button.right} must fit panel x=${geometry.panel.left}..${geometry.panel.right}`);
+      assert.ok(button.top >= geometry.panel.top && button.bottom <= geometry.panel.bottom,
+        `${viewport}: #${button.id} must fit panel vertically`);
+      assert.equal(button.hit, true, `${viewport}: #${button.id} centre must receive a real pointer hit`);
+    }
+  };
 
   // 1. Initially hidden: both container and floating dock
   const initial = await page.evaluate(() => {
@@ -118,6 +152,24 @@ test("mini-app popover: anchored floating bubble, light-dismiss, and mobile draw
   assert.equal(mounted.isCard, true, "the mounted panel keeps the shared card class");
   assert.equal(mounted.background, mounted.cardBackground, "the card panel uses the same 82% glass as the Quick Deck");
   assert.equal(mounted.standaloneBackground, mounted.fallbackBackground, "a standalone mini-app retains the original 94% fallback");
+
+  // A saved app can have both a long title and a long workspace badge. Keep the production
+  // mount/handlers, but put the widest realistic text in its header to exercise only layout.
+  await page.evaluate(() => {
+    document.querySelector("#mini-app-title").textContent = "Glass panel verification";
+    const badge = document.querySelector("#mini-app-source-badge");
+    badge.textContent = "Workspace · glass-panel-verification.html";
+    badge.hidden = false;
+  });
+  await assertHeaderActionsReachable("desktop");
+  // Desktop users can resize this panel all the way down to its 300px minimum;
+  // viewport-only mobile styles must not leave the title and source unreadable there.
+  await page.evaluate(() => { document.querySelector("#mini-app-container").style.inlineSize = "300px"; });
+  try {
+    await assertHeaderActionsReachable("desktop resized 300px");
+  } finally {
+    await page.evaluate(() => { document.querySelector("#mini-app-container").style.inlineSize = ""; });
+  }
 
   // THE DELAYS THAT USED TO PRECEDE THE READS BELOW ARE GONE (voicebox-beads-zjpm.5.1): light dismiss and
   // Escape both end in toggle(), the bubble click calls toggle(), close() hides, and editCurrentMiniApp()
@@ -310,11 +362,10 @@ test("mini-app popover: anchored floating bubble, light-dismiss, and mobile draw
   assert.equal(mobileStyle.left, "0px", "mobile popover spans full inline width");
   assert.notEqual(mobileStyle.handleDisplay, "none", "mobile sheet grab handle is visible");
   assert.ok(parseInt(mobileStyle.borderRadius, 10) >= 16, "mobile drawer has rounded top corners");
+  await assertHeaderActionsReachable("mobile");
 
-  // 7. Close completely
-  await page.evaluate(() => {
-    document.querySelector("#mini-app-close")?.click();
-  });
+  // 7. Close completely via a genuine Chromium mouse event, not DOM .click() on a clipped button.
+  await page.click("#mini-app-close");
 
   const closed = await page.evaluate(() => {
     const c = document.querySelector("#mini-app-container");
