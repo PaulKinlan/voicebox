@@ -64,6 +64,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
   padding: 8px 14px 10px;
   background: color-mix(in srgb, var(--shade) 85%, transparent);
   border-bottom: 1px solid var(--line);
@@ -87,7 +88,10 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 1 1 auto;
+  min-inline-size: 0;
 }
+.mini-app-title-group > .mini-app-badge { flex: none; }
 .mini-app-badge {
   font-size: 0.75rem;
   font-weight: 600;
@@ -99,10 +103,15 @@
   border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 30%, transparent);
 }
 .mini-app-title {
+  flex: 1 1 auto;
+  min-inline-size: 0;
   margin: 0;
   font-size: 14px;
   font-weight: 600;
   color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .mini-app-source-badge {
   font-size: 0.75rem;
@@ -112,7 +121,11 @@
   background: color-mix(in srgb, var(--ink) 8%, transparent);
   color: var(--muted);
   border: 1px solid var(--line);
+  flex: 0 1 auto;
+  min-inline-size: 0;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .mini-app-source-badge[hidden] {
   display: none !important;
@@ -121,6 +134,8 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  flex: none;
+  margin-inline-start: auto;
 }
 .mini-app-delete:hover {
   color: var(--warn);
@@ -229,6 +244,9 @@
 }
 
 @media (max-width: 768px) {
+  .mini-app-header { flex-wrap: wrap; }
+  .mini-app-actions { flex-basis: 100%; justify-content: flex-end; }
+
   .mini-app-container {
     inset-block-start: auto;
     inset-block-end: 0;
