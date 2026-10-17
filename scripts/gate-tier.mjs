@@ -172,15 +172,15 @@ export function tierFileTimeoutMs(tier, { fileSecs = null, env = process.env } =
  * owns that list) run alone, after the queue — the same partition the browser tier uses, reused rather than
  * re-derived. Returns the tier record; nothing is written here.
  */
-export async function runOneTier({ tier, files, workers = TIER_WORKERS[tier] ?? 1, timeoutMs = tierFileTimeoutMs(tier), runner = runOneFile, log = console }) {
+export async function runOneTier({ tier, files, workers = TIER_WORKERS[tier] ?? 1, timeoutMs = tierFileTimeoutMs(tier), runner = runOneFile, sampler = loadavg1m, log = console }) {
   const results = [];
   let cursor = 0;
   const run = async (file) => {
     log.log(`[gate-tier] running ${file}`);
     // BOTH ENDS OF THE CHILD'S OWN WINDOW, and nothing else - no retry, no bound change, no verdict change.
-    const loadStart = loadavg1m();
+    const loadStart = sampler();
     const result = await runner(file, { timeoutMs });
-    const record = recordOf(file, result, timeoutMs, { start: loadStart, end: loadavg1m() });
+    const record = recordOf(file, result, timeoutMs, { start: loadStart, end: sampler() });
     if (record.status !== "passed") record.condition_request = "pending"; // evidence request, not measured conditions
     results.push(record);
     if (record.status === "passed") log.log(emitMarker("passed", [file]));
