@@ -17,6 +17,7 @@ import net from "node:net";
 import { once } from "node:events";
 import { startServer } from "./lib/server.mjs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readComposedCss } from "./lib/css-bundle.mjs";
 import os from "node:os";
 import path from "node:path";
 import { findBrowserBinary } from "../lib/browser-binaries.mjs";
@@ -293,10 +294,14 @@ test("a missing asset is a loud 404 from the server, never a 200 of the wrong ty
 // ── the class guard: every local file the page references must exist ──────
 test("the page references only files that exist in public/", () => {
   const page = readFileSync(path.join(ROOT, "public", "index.html"), "utf8");
-  const css = readFileSync(path.join(ROOT, "public", "style.css"), "utf8");
+  const css = readComposedCss(path.join(ROOT, "public", "style.css"));
   const refs = new Set();
   for (const m of page.matchAll(/(?:src|href)="([^"#][^"]*)"/g)) refs.add(m[1]);
-  for (const m of css.matchAll(/url\("([^"]+)"\)/g)) refs.add(m[1]);
+  for (const m of css.matchAll(/url\("([^"]+)"\)/g)) {
+    const raw = m[1];
+    const rel = raw.startsWith("../") ? raw.slice(3) : raw;
+    refs.add(rel);
+  }
   for (const ref of refs) {
     if (/^https?:/.test(ref)) continue;
     const [relPath, hash] = ref.split("#");

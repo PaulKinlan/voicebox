@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { readComposedCss } from "./lib/css-bundle.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertInClientSources, clientSources, matchInClientSources } from "./lib/client-sources.mjs";
@@ -108,7 +109,7 @@ test("audio-client: ws.send is never called on sockets in CLOSING (2) or CLOSED 
 
 test("markup and styles: #thinking-trace and [data-fading='true'] transitions exist in index.html and style.css", () => {
   const html = readFileSync(path.join(PUBLIC, "index.html"), "utf8");
-  const css = readFileSync(path.join(PUBLIC, "style.css"), "utf8");
+  const css = readComposedCss(path.join(PUBLIC, "style.css"));
 
   assert.match(html, /id="thinking-trace"/, "index.html must include #thinking-trace");
   assert.match(html, /id="thinking-trace-body"/, "index.html must include #thinking-trace-body");

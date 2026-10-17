@@ -21,9 +21,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { readComposedCss } from "./lib/css-bundle.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
-const css = readFileSync(`${ROOT}public/style.css`, "utf8");
+const css = readComposedCss(`${ROOT}public/style.css`);
 // Parse from a comment-free copy: a comment sitting between a rule's `{` and its first declaration has
 // no semicolon in front of it, so splitting on `;` would otherwise take the comment's own prose as the
 // declaration name and lose the real one. (Found by this test failing on its own first run.)

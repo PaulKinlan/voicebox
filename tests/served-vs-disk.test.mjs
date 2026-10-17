@@ -83,6 +83,16 @@ test("stylesheets: the DECLARATION SET is compared (tokens verbatim, urls exclud
   assert.equal(driftBetween("@font-face { src: url(./inter.woff2) format(\"woff2\"); }", "@font-face{src:url(/inter.woff2)format(\"woff2\")}", { ref: "style.css", kind: "stylesheet" }), null,
     "a rewritten font URL is the transform's work, not drift");
 });
+
+test("stylesheets: surface-scoped stylesheets under public/styles/ pass drift detection against reflowed copies (voicebox-beads-4gyw)", () => {
+  const surfaces = ["tokens.css", "stage.css", "deck.css", "dialogs.css", "mini-apps.css"];
+  for (const name of surfaces) {
+    const ref = `styles/${name}`;
+    const disk = `:root { --surface-${name.replace(".css", "")}: 1rem; }\n.box { margin: 12px; }`;
+    const served = `:root{--surface-${name.replace(".css", "")}:1rem}.box{margin:12px}`;
+    assert.equal(driftBetween(disk, served, { ref, kind: "stylesheet" }), null);
+  }
+});
 test("a COMPILED module is compared against what this tree COMPILES TO — a code-only edit is drift", () => {
   // The server serves a `.ts` module as stripTypeScriptTypes(source, { mode: "strip" }), so the check
   // computes that same output and compares it — no second implementation, no normal form to disagree about.

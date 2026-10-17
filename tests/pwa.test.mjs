@@ -123,6 +123,11 @@ describe("PWA manifest and service worker (voicebox-beads-0jxa)", () => {
     });
     await installPromise;
     assert.equal(skipWaitingCalled, true, "install should call self.skipWaiting()");
+    assert.equal(cacheStore.has("./styles/tokens.css"), true, "tokens.css must be in precache store");
+    assert.equal(cacheStore.has("./styles/stage.css"), true, "stage.css must be in precache store");
+    assert.equal(cacheStore.has("./styles/deck.css"), true, "deck.css must be in precache store");
+    assert.equal(cacheStore.has("./styles/dialogs.css"), true, "dialogs.css must be in precache store");
+    assert.equal(cacheStore.has("./styles/mini-apps.css"), true, "mini-apps.css must be in precache store");
 
     // 2. Trigger activate
     let activatePromise = null;
@@ -168,5 +173,52 @@ describe("PWA manifest and service worker (voicebox-beads-0jxa)", () => {
     });
     const offlineRes = await offlineResponsePromise;
     assert.equal(offlineRes.body, `fresh:${assetUrl}`, "offline fetch must return cached response");
+  });
+
+  it("every stylesheet linked in public/index.html is included in the PWA precache SHELL_ASSETS (voicebox-beads-q35r)", () => {
+    const html = readFileSync(path.join(ROOT, "public", "index.html"), "utf8");
+    const swSource = readFileSync(SW_PATH, "utf8");
+
+    const linkedStylesheets = [];
+    const linkRegex = /<link[^>]+rel=["']stylesheet["'][^>]*>/gi;
+    for (const linkTag of html.match(linkRegex) || []) {
+      const hrefMatch = linkTag.match(/href=["']([^"']+)["']/i);
+      if (hrefMatch) {
+        linkedStylesheets.push(hrefMatch[1]);
+      }
+    }
+    assert.ok(linkedStylesheets.length > 0, "index.html must link stylesheets");
+
+    const match = swSource.match(/const\s+SHELL_ASSETS\s*=\s*\[([\s\S]*?)\];/);
+    assert.ok(match, "public/sw.js must define SHELL_ASSETS");
+    const shellAssets = match[1]
+      .split(",")
+      .map((s) => s.trim().replace(/^["']|["']$/g, ""))
+      .filter(Boolean);
+
+    for (const relHref of linkedStylesheets) {
+      const normalized = relHref.startsWith("./") ? relHref : `./${relHref}`;
+      const hasAsset = shellAssets.some((asset) => asset === relHref || asset === normalized || asset === `/${relHref}`);
+      assert.ok(
+        hasAsset,
+        `stylesheet ${relHref} linked in index.html must be present in SHELL_ASSETS precache list`,
+      );
+    }
+  });
+
+  it("every asset listed in SHELL_ASSETS exists on disk in public/ (voicebox-beads-q35r)", () => {
+    const swSource = readFileSync(SW_PATH, "utf8");
+    const match = swSource.match(/const\s+SHELL_ASSETS\s*=\s*\[([\s\S]*?)\];/);
+    const shellAssets = match[1]
+      .split(",")
+      .map((s) => s.trim().replace(/^["']|["']$/g, ""))
+      .filter(Boolean);
+
+    for (const asset of shellAssets) {
+      if (asset === "./" || asset === "/") continue;
+      const cleanPath = asset.replace(/^\.\//, "");
+      const fullPath = path.join(ROOT, "public", cleanPath);
+      assert.ok(existsSync(fullPath), `SHELL_ASSETS item ${asset} must exist on disk at ${fullPath}`);
+    }
   });
 });

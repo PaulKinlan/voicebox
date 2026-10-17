@@ -2,6 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { readComposedCss } from "./lib/css-bundle.mjs";
 import path from "node:path";
 import { startServer } from "./lib/server.mjs";
 import { launch } from "./lib/cdp.mjs";
@@ -14,7 +15,7 @@ test("unit: secondary UI surfaces declare explicit focus rings, 12px readability
   assert.match(bridgeHtml, /<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">/);
 
   // 2. style.css task-badge, mini-app-badge, mini-app-source-badge enforce readability floor (0.75rem / 12px)
-  const styleCss = fs.readFileSync(path.join(root, "public/style.css"), "utf8");
+  const styleCss = readComposedCss(path.join(root, "public/style.css"));
   assert.match(styleCss, /\.task-badge\s*\{[^}]*font-size:\s*0\.75rem;/);
   assert.match(styleCss, /\.mini-app-badge\s*\{[^}]*font-size:\s*0\.75rem;/);
   assert.match(styleCss, /\.mini-app-source-badge\s*\{[^}]*font-size:\s*0\.75rem;/);
