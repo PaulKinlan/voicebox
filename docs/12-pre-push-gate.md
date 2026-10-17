@@ -6,11 +6,14 @@ Voicebox enforces a multi-stage verification gate on `git push` via `.githooks/p
 
 ## 1. Branch vs. `main` Push Policy
 
-- **Candidate Branch Pushes (`git push origin <branch>`)**:
-  Runs only `node scripts/docs-touched.mjs` and the fast `unit` test lane (`npm run test:unit`), then exits immediately. This keeps worktree branch pushes fast and lock-free. No manifest is sealed here: a receipt is for a landing.
-- **Landing on `main`**:
+- **Candidate Branch Naming & Pushes (`git push origin fleet/<bead-id>`)**:
+  - Candidate branches are standardized on strict 1:1 naming with their bead issue: `fleet/<bead-id>` (`voicebox-beads-83ge`). Ad-hoc branch variants (such as `-v2`, `-clean`) are prohibited to prevent remote branch accumulation.
+  - Candidate branch pushes run only `node scripts/docs-touched.mjs` and the fast `unit` test lane (`npm run test:unit`), then exit immediately. This keeps worktree branch pushes fast and lock-free. No manifest is sealed here: a receipt is for a landing.
+- **Landing on `main` & Remote Branch Auto-Prune**:
   - Pushing to `main` from a non-`main` branch is refused immediately (`[gate] pre-push REFUSED: non-main branch attempting to push to main ref`). Always create worktrees with `--no-track` (`git worktree add --no-track -b <branch> <dir> origin/main`) so worktree branches do not track `origin/main`.
-  - Pushing from `main` to `origin/main` runs the full verification pipeline (or fast-paths docs-only `*.md` changes through `docs-check` and `single-owner`), caching the verified `HEAD^{tree}` SHA in `.git/voicebox-gate-passed-tree`, and seals `~/.fleet/checks/<tree>.full.manifest.json` as its last stage (voicebox-beads-wiby).
+  - Pushing from `main` to `origin/main` runs the full verification pipeline (or fast-paths docs-only `*.md` changes through `docs-check` and `single-owner`), caching both the verified `HEAD^{tree}` SHA and normalized `sourceTree` SHA in `.git/voicebox-gate-passed-tree`, and seals `~/.fleet/checks/<tree>.full.manifest.json` as its last stage (`voicebox-beads-wiby`, `voicebox-beads-83ge`).
+  - **sourceTree Caching Fast-Path**: When a subsequent push to `origin/main` matches the cached `sourceTree` and the git diff against the passed tree contains strictly documentation files (`README.md` or `docs/**.md`), the gate runs fast static checks (`docs-touched`, `docs-check`, `single-owner`) and bypasses redundant unit, live, and acceptance re-runs (`voicebox-beads-83ge`). Any modification to `.js`, `.mjs`, `.css`, or `.html` files invalidates `sourceTree` and triggers the full test suite.
+  - **Remote Branch Auto-Pruning**: Immediately upon landing a candidate branch to `main`, the merger workflow executes `git push origin --delete fleet/<bead-id>` to remove the landed remote branch and eliminate origin clutter.
 
 ---
 

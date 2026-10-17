@@ -138,6 +138,36 @@ export function gitTree(cwd = process.cwd()) {
   }
 }
 
+/**
+ * Compute the source tree SHA for a git tree, omitting root README.md and docs/**.
+ * Code changes in lib/, public/, scripts/, tools/, or tests/ strictly change this hash,
+ * while markdown documentation changes leave it invariant (voicebox-beads-83ge).
+ */
+export function computeSourceTree(tree, cwd = process.cwd()) {
+  if (!tree) return null;
+  try {
+    const raw = execFileSync("git", ["ls-tree", tree], { cwd, env: gitEnv(), encoding: "utf8", stdio: ["pipe", "pipe", "ignore"] });
+    const lines = raw.split("\n").filter((l) => {
+      if (!l.trim()) return false;
+      const tab = l.indexOf("\t");
+      if (tab === -1) return true;
+      const name = l.slice(tab + 1);
+      return name !== "README.md" && name !== "docs";
+    });
+    return (
+      execFileSync("git", ["mktree"], {
+        cwd,
+        env: gitEnv(),
+        input: lines.length ? lines.join("\n") + "\n" : "",
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "ignore"],
+      }).trim() || null
+    );
+  } catch {
+    return null;
+  }
+}
+
 export class ManifestRefusal extends Error {
   constructor(problems) {
     super(`gate manifest refused: ${problems.join("; ")}`);
@@ -180,14 +210,17 @@ export function rosterCounts(roster) {
 }
 
 /** A fresh manifest for one gate run on one tree. `files` is filled by `recordFile`. */
-export function createManifest({ gate, tree, sha = "", classified, changed = [], unmapped = [], base = "", treeDirty = null, startedAt = new Date().toISOString() }) {
+export function createManifest({ gate, tree, sourceTree = null, cwd = process.cwd(), sha = "", classified, changed = [], unmapped = [], base = "", treeDirty = null, startedAt = new Date().toISOString() }) {
   if (!GATES.includes(gate)) throw new ManifestRefusal([`unknown gate kind '${gate}' (want ${GATES.join("|")})`]);
   if (!tree) throw new ManifestRefusal(["a manifest needs the tree SHA it describes"]);
   const roster = rosterOf(classified);
+  const resolvedSourceTree = sourceTree ?? computeSourceTree(tree, cwd);
   return {
     version: MANIFEST_VERSION,
     gate,
     tree,
+    source_tree: resolvedSourceTree,
+    sourceTree: resolvedSourceTree,
     sha,
     started_at: startedAt,
     finished_at: null,
@@ -761,9 +794,9 @@ export function tapCounts(text) {
  * DUPLICATE and refused; a path no tier knows is UNCLASSIFIED and refused. `omittedReason` lets a non-full
  * gate account for the files it deliberately did not select, by name, rather than leaving them missing.
  */
-export function manifestFromTierRecords({ gate = "full", tree, sha = "", classified, records = [], changed = [], unmapped = [], base = "", treeDirty = null, omittedReason = null, dir = null }) {
+export function manifestFromTierRecords({ gate = "full", tree, sourceTree = null, sha = "", classified, records = [], changed = [], unmapped = [], base = "", treeDirty = null, omittedReason = null, dir = null }) {
   if (!tree) throw new ManifestRefusal(["aggregate needs the tree SHA the records describe (--tree)"]);
-  const manifest = createManifest({ gate, tree, sha, classified, changed, unmapped, base, treeDirty });
+  const manifest = createManifest({ gate, tree, sourceTree, sha, classified, changed, unmapped, base, treeDirty });
   // A CONFLICT BETWEEN RECORDS IS A REFUSAL WITH EVIDENCE, NOT A CRASH. `recordFile` refuses a duplicate
   // by throwing (for a single runner that is the right shape — the bug is in its own code). An aggregate is
   // folding records from SEVERAL processes, so the same condition is a fact about the run: it is collected
@@ -808,7 +841,7 @@ export function manifestFromTierRecords({ gate = "full", tree, sha = "", classif
  * roster-sized list of MISSING files: the difference between "the browser tier ran and every file failed"
  * and "the browser tier never started" is the first thing a reader of a red landing needs to know.
  */
-export function aggregateTierRecords({ tierDir = null, records = [], gate = "full", tree, sha = "", classified, changed = [], unmapped = [], base = "", treeDirty = null, omittedReason = null, problems = [], dir = null }) {
+export function aggregateTierRecords({ tierDir = null, records = [], gate = "full", tree, sourceTree = null, sha = "", classified, changed = [], unmapped = [], base = "", treeDirty = null, omittedReason = null, problems = [], dir = null }) {
   const tierProblems = [];
   const texts = [...records];
   if (tierDir) {
@@ -824,6 +857,7 @@ export function aggregateTierRecords({ tierDir = null, records = [], gate = "ful
   const { manifest, written } = manifestFromTierRecords({
     gate,
     tree,
+    sourceTree,
     sha,
     classified,
     records: texts.map((text) => JSON.parse(text)),
@@ -875,6 +909,7 @@ if (import.meta.main) {
     for (let i = 0; i < argv.length; i++) if (argv[i] === "--record" && argv[i + 1]) records.push(readFileSync(argv[i + 1], "utf8"));
     const gate = flag("gate", "full");
     const tree = flag("tree", null) ?? gitTree();
+    const sourceTree = flag("source-tree", null);
     const classifiedModule = await import("./test-lanes.mjs");
     const classified = classifiedModule.classify();
     // ── ONE TIER RECORD PER TIER (voicebox-beads-wiby) ─────────────────────────────────────────────
@@ -923,6 +958,7 @@ if (import.meta.main) {
       records,
       gate,
       tree,
+      sourceTree,
       sha: flag("sha", ""),
       classified,
       changed,
@@ -954,6 +990,16 @@ if (import.meta.main) {
       if (manifest.summary.dispatched === 0) console.error("  · nothing was dispatched — a run that measured nothing is never a pass");
       process.exit(1);
     }
+    process.exit(0);
+  }
+  if (command === "source-tree") {
+    const target = file || gitTree();
+    const st = computeSourceTree(target);
+    if (!st) {
+      console.error(`gate-manifest: unable to compute source-tree for '${target}'`);
+      process.exit(1);
+    }
+    console.log(st);
     process.exit(0);
   }
   if (command === "verify" && file) {

@@ -208,91 +208,16 @@ _manifest_secs="${VOICEBOX_GATE_MANIFEST_SECS:-60}"
 # minutes to be told you forgot a sentence is a gate people learn to skip.
 run_stage docs-touched "$_docs_secs" node scripts/docs-touched.mjs
 
-# ── TREE-SHA RECEIPT CHECK (voicebox-beads-07b9) ──────────────────────────────
-# When the full gate has already succeeded on the exact same tree (e.g. after a commit
-# message amendment or re-tag without content changes), re-running the 6-minute
-# unit/live/acceptance suite is redundant. If the working tree is clean and the recorded
-# tree SHA matches HEAD^{tree}, skip re-running the test stages.
-_git_dir="$(git rev-parse --git-dir 2>/dev/null || echo ".git")"
-_receipt_file="$_git_dir/voicebox-gate-passed-tree"
-_current_tree="$(git rev-parse HEAD^{tree} 2>/dev/null || true)"
-_is_clean=0
-if [ -z "$(git status --porcelain 2>/dev/null)" ]; then
-  _is_clean=1
-fi
-
-if [ "$_is_clean" = "1" ] && [ -f "$_receipt_file" ]; then
-  _passed_tree="$(cat "$_receipt_file" 2>/dev/null || true)"
-  if [ -n "$_passed_tree" ] && [ "$_passed_tree" = "$_current_tree" ]; then
-    echo "[gate] pre-push: verified tree-SHA receipt matches ($_current_tree) on clean tree — skipping unit/live/acceptance stages"
-    echo "[gate] pre-push: ALL GATES GREEN (tree-receipt)"
-    exit 0
+_compute_source_tree() {
+  _tree="$1"
+  [ -z "$_tree" ] && return 0
+  _st_lines="$(git ls-tree "$_tree" 2>/dev/null | grep -v -E "(	README\.md$|	docs$)" || true)"
+  if [ -n "$_st_lines" ]; then
+    printf '%s\n' "$_st_lines" | git mktree 2>/dev/null || true
+  else
+    printf '' | git mktree 2>/dev/null || true
   fi
-fi
-
-if [ -f scripts/docs-check.mjs ]; then
-  run_stage docs-check "$_docs_secs" node scripts/docs-check.mjs
-fi
-if [ -f scripts/single-owner.mjs ]; then
-  run_stage single-owner "$_docs_secs" node scripts/single-owner.mjs
-fi
-
-node scripts/test-lanes.mjs --check
-
-# ── THE FULL GATE'S COVERAGE RECEIPT (voicebox-beads-zjpm.3, voicebox-beads-wiby) ────────────────
-# The fast gate records what it measured; the FULL gate did not, so a landing's only evidence was a log
-# line. The tiers now run per file through scripts/gate-tier.mjs (the same shape the fast gate and the
-# browser shard runner already use, so a file's record means the same thing in either gate), each writes
-# ONE tier record, and the last stage folds them into <tree>.full.manifest.json with the ONE aggregator.
-#
-# THE FALLBACK IS THE FIXTURES' PATH: tests/pre-push.test.mjs drives this file inside a disposable repo
-# whose package.json supplies test:unit/test:live, and this gate has always kept its stages pluggable
-# (docs-touched, docs-check and single-owner are conditional for the same reason). A repository with no
-# tier runner keeps the old wiring exactly.
-_use_tiers=0
-_tier_dir=""
-if [ -f scripts/gate-tier.mjs ] && [ -f scripts/gate-manifest.mjs ] && [ -d tests ]; then
-  _use_tiers=1
-  _tier_dir="$(mktemp -d "${TMPDIR:-/tmp}/voicebox-gate-tiers.XXXXXX")"
-  export VOICEBOX_GATE_TIER_DIR="$_tier_dir"
-fi
-
-# A tier stage that refuses says WHERE its records are and how to fold them: a red run is exactly the run
-# a reader wants an artifact for, and it does not get the sealed manifest (that is a receipt for a gate
-# that finished). The records are kept, not deleted, so the same fold can be run by hand.
-run_tier_stage() {
-  _stage="$1"
-  _secs="$2"
-  shift 2
-  if run_stage "$_stage" "$_secs" "$@"; then return 0; fi
-  if [ -n "$_tier_dir" ]; then
-    echo >&2 "[gate] pre-push: the $_stage tier's records are kept at $_tier_dir — fold them with:"
-    echo >&2 "[gate]   node scripts/gate-manifest.mjs aggregate --gate full --tree $_current_tree --tier-dir $_tier_dir"
-  fi
-  exit 1
 }
-
-if [ "$_use_tiers" = "1" ]; then
-  run_tier_stage unit "$_unit_secs" node scripts/gate-tier.mjs --tier unit --dir "$_tier_dir"
-else
-  run_stage unit "$_unit_secs" npm run test:unit
-fi
-
-# ── SCOPE: the lock and the long stages protect LANDINGS (voicebox-beads-uadl) ──
-# A feature-branch push is a candidate announcement: the unit lane (fast, lock-free) is
-# the verdict a lane needs, and live/acceptance run when the branch LANDS to main. Without
-# this split, five lanes pushing candidates serialized behind one flock — measured waits of
-# 398s, 543s, 857s and 1058s for locks before the live stage even started. A push with NO
-# destination information (direct script runs, exotic transports) keeps the FULL gate: an
-# unseen destination might be a landing, and the conservative answer is the old behaviour.
-if [ "$_had_destination" = "1" ] && [ "$_destination_is_main" != "1" ]; then
-  echo "[gate] pre-push: feature-branch push — unit lane is the gate; live/acceptance run on the landing to main"
-  # The unit tier recorded what it measured, but no full manifest is sealed for a candidate push (that is a
-  # landing receipt), so the scratch directory is not evidence worth keeping.
-  [ -n "$_tier_dir" ] && rm -rf "$_tier_dir"
-  echo "[gate] pre-push: ALL GATES GREEN (unit)"
-  exit 0
-fi
 
 # ── GATE LOCK (voicebox-beads-6qu) ──────────────────────────────────────────
 # Serializes live browser test runs across concurrent lanes on this loaded box.
@@ -364,6 +289,141 @@ acquire_gate_lock() {
   _gate_lock_held=1
 }
 
+# ── TREE-SHA AND SOURCE-TREE RECEIPT CHECK (voicebox-beads-07b9, voicebox-beads-83ge) ──
+# When the full gate has already succeeded on the exact same tree (e.g. after a commit
+# message amendment or re-tag without content changes), re-running the 6-minute
+# unit/live/acceptance suite is redundant. If the working tree is clean and the recorded
+# tree SHA matches HEAD^{tree}, skip re-running the test stages.
+# Furthermore, if sourceTree matches and the diff against the passed tree contains only
+# documentation files (*.md under docs/ or README.md), run fast static doc checks and skip
+# unit/live/acceptance stages.
+_git_dir="$(git rev-parse --git-dir 2>/dev/null || echo ".git")"
+_receipt_file="$_git_dir/voicebox-gate-passed-tree"
+_current_tree="$(git rev-parse HEAD^{tree} 2>/dev/null || true)"
+_current_source_tree="$(_compute_source_tree "$_current_tree")"
+_is_clean=0
+if [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+  _is_clean=1
+fi
+
+# Receipts cache landings to main: candidate branch pushes and mixed-ref pushes run unit tests directly (voicebox-beads-83ge).
+_allow_receipt_bypass=0
+if [ "$_had_destination" = "0" ]; then
+  _allow_receipt_bypass=1
+elif [ "$_destination_is_main" = "1" ] && [ "$_ref_count" -le 1 ]; then
+  _allow_receipt_bypass=1
+fi
+
+if [ "$_allow_receipt_bypass" = "1" ]; then
+  if [ "$_is_clean" = "1" ] && [ -f "$_receipt_file" ]; then
+    _passed_tree="$(head -n 1 "$_receipt_file" 2>/dev/null || true)"
+    _passed_source_tree="$(sed -n '2p' "$_receipt_file" 2>/dev/null || true)"
+    if [ -n "$_passed_tree" ] && [ "$_passed_tree" = "$_current_tree" ]; then
+      echo "[gate] pre-push: verified tree-SHA receipt matches ($_current_tree) on clean tree — skipping unit/live/acceptance stages"
+      echo "[gate] pre-push: ALL GATES GREEN (tree-receipt)"
+      exit 0
+    fi
+    # Source-tree receipt fast-path is strictly for known single-ref landings to main.
+    # Pushes without destination (or candidate/mixed pushes) take the conservative path.
+    if [ "$_had_destination" = "1" ] && [ "$_destination_is_main" = "1" ] && [ "$_ref_count" -le 1 ]; then
+      if [ -n "$_current_source_tree" ] && [ -n "$_passed_source_tree" ] && [ "$_passed_source_tree" = "$_current_source_tree" ] && [ -n "$_passed_tree" ] && git cat-file -e "$_passed_tree^{tree}" 2>/dev/null; then
+        if _diff_out="$(git diff --name-only "$_passed_tree" "$_current_tree" 2>/dev/null)"; then
+          _non_doc_diff="$(printf '%s\n' "$_diff_out" | grep -v -E "(^README\.md$|^docs/.*\.md$)" | grep -v '^$' || true)"
+          if [ -z "$_non_doc_diff" ]; then
+            if [ -f scripts/docs-touched.mjs ]; then
+              run_stage docs-touched "$_docs_secs" node scripts/docs-touched.mjs
+            fi
+            if [ -f scripts/docs-check.mjs ]; then
+              run_stage docs-check "$_docs_secs" node scripts/docs-check.mjs
+            fi
+            if [ -f scripts/single-owner.mjs ]; then
+              run_stage single-owner "$_docs_secs" node scripts/single-owner.mjs
+            fi
+            _doc_truth_files=""
+            for _f in tests/voicebox.test.mjs tests/changelog-links.test.mjs tests/rendered-plain-language.test.mjs; do
+              if [ -f "$_f" ]; then
+                _doc_truth_files="$_doc_truth_files $_f"
+              fi
+            done
+            if [ -n "$_doc_truth_files" ]; then
+              acquire_gate_lock
+              run_stage doc-truth "$_unit_secs" env -u NODE_TEST_CONTEXT node --test $_doc_truth_files
+              release_gate_lock
+            fi
+            echo "[gate] pre-push: verified sourceTree receipt matches ($_current_source_tree) with docs-only diff against $_passed_tree — skipping unit/live/acceptance stages"
+            echo "[gate] pre-push: ALL GATES GREEN (source-tree-receipt)"
+            exit 0
+          fi
+        fi
+      fi
+    fi
+  fi
+fi
+
+if [ -f scripts/docs-check.mjs ]; then
+  run_stage docs-check "$_docs_secs" node scripts/docs-check.mjs
+fi
+if [ -f scripts/single-owner.mjs ]; then
+  run_stage single-owner "$_docs_secs" node scripts/single-owner.mjs
+fi
+
+node scripts/test-lanes.mjs --check
+
+# ── THE FULL GATE'S COVERAGE RECEIPT (voicebox-beads-zjpm.3, voicebox-beads-wiby) ────────────────
+# The fast gate records what it measured; the FULL gate did not, so a landing's only evidence was a log
+# line. The tiers now run per file through scripts/gate-tier.mjs (the same shape the fast gate and the
+# browser shard runner already use, so a file's record means the same thing in either gate), each writes
+# ONE tier record, and the last stage folds them into <tree>.full.manifest.json with the ONE aggregator.
+#
+# THE FALLBACK IS THE FIXTURES' PATH: tests/pre-push.test.mjs drives this file inside a disposable repo
+# whose package.json supplies test:unit/test:live, and this gate has always kept its stages pluggable
+# (docs-touched, docs-check and single-owner are conditional for the same reason). A repository with no
+# tier runner keeps the old wiring exactly.
+_use_tiers=0
+_tier_dir=""
+if [ -f scripts/gate-tier.mjs ] && [ -f scripts/gate-manifest.mjs ] && [ -d tests ]; then
+  _use_tiers=1
+  _tier_dir="$(mktemp -d "${TMPDIR:-/tmp}/voicebox-gate-tiers.XXXXXX")"
+  export VOICEBOX_GATE_TIER_DIR="$_tier_dir"
+fi
+
+# A tier stage that refuses says WHERE its records are and how to fold them: a red run is exactly the run
+# a reader wants an artifact for, and it does not get the sealed manifest (that is a receipt for a gate
+# that finished). The records are kept, not deleted, so the same fold can be run by hand.
+run_tier_stage() {
+  _stage="$1"
+  _secs="$2"
+  shift 2
+  if run_stage "$_stage" "$_secs" "$@"; then return 0; fi
+  if [ -n "$_tier_dir" ]; then
+    echo >&2 "[gate] pre-push: the $_stage tier's records are kept at $_tier_dir — fold them with:"
+    echo >&2 "[gate]   node scripts/gate-manifest.mjs aggregate --gate full --tree $_current_tree --tier-dir $_tier_dir"
+  fi
+  exit 1
+}
+
+if [ "$_use_tiers" = "1" ]; then
+  run_tier_stage unit "$_unit_secs" node scripts/gate-tier.mjs --tier unit --dir "$_tier_dir"
+else
+  run_stage unit "$_unit_secs" npm run test:unit
+fi
+
+# ── SCOPE: the lock and the long stages protect LANDINGS (voicebox-beads-uadl) ──
+# A feature-branch push is a candidate announcement: the unit lane (fast, lock-free) is
+# the verdict a lane needs, and live/acceptance run when the branch LANDS to main. Without
+# this split, five lanes pushing candidates serialized behind one flock — measured waits of
+# 398s, 543s, 857s and 1058s for locks before the live stage even started. A push with NO
+# destination information (direct script runs, exotic transports) keeps the FULL gate: an
+# unseen destination might be a landing, and the conservative answer is the old behaviour.
+if [ "$_had_destination" = "1" ] && [ "$_destination_is_main" != "1" ]; then
+  echo "[gate] pre-push: feature-branch push — unit lane is the gate; live/acceptance run on the landing to main"
+  # The unit tier recorded what it measured, but no full manifest is sealed for a candidate push (that is a
+  # landing receipt), so the scratch directory is not evidence worth keeping.
+  [ -n "$_tier_dir" ] && rm -rf "$_tier_dir"
+  echo "[gate] pre-push: ALL GATES GREEN (unit)"
+  exit 0
+fi
+
 # ── DOCS-ONLY FAST PATH (voicebox-beads-07b9) ──────────────────────────────────
 # A push to main where only markdown documentation files (*.md) changed against the main remote ref.
 # Docs-touched, docs-check, single-owner, unit, and the doc-truth live tests verify the docs.
@@ -400,7 +460,7 @@ if [ "$_ref_count" -le 1 ] && [ -n "$_diff_base" ]; then
       done
       if [ -n "$_doc_truth_files" ]; then
         acquire_gate_lock
-        run_stage doc-truth "$_unit_secs" node --test $_doc_truth_files
+        run_stage doc-truth "$_unit_secs" env -u NODE_TEST_CONTEXT node --test $_doc_truth_files
         release_gate_lock
       fi
       echo "[gate] pre-push: docs-only push to main — docs, unit, and doc-truth passed; skipping live/acceptance stages"
@@ -450,10 +510,15 @@ if [ "$_use_tiers" = "1" ]; then
   rm -rf "$_tier_dir"
 fi
 
-# ── RECORD VERIFIED TREE RECEIPT (voicebox-beads-07b9) ────────────────────────
-# Record tree SHA when all stages pass on a clean working tree
+# ── RECORD VERIFIED TREE RECEIPT (voicebox-beads-07b9, voicebox-beads-83ge) ──
+# Record tree SHA and sourceTree SHA when all stages pass on a clean working tree
 if [ "$_is_clean" = "1" ] && [ -n "$_current_tree" ] && [ -z "$(git status --porcelain 2>/dev/null)" ]; then
-  echo "$_current_tree" > "$_receipt_file" 2>/dev/null || true
+  [ -z "$_current_source_tree" ] && _current_source_tree="$(_compute_source_tree "$_current_tree")"
+  if [ -n "$_current_source_tree" ]; then
+    printf '%s\n%s\n' "$_current_tree" "$_current_source_tree" > "$_receipt_file" 2>/dev/null || true
+  else
+    echo "$_current_tree" > "$_receipt_file" 2>/dev/null || true
+  fi
 fi
 
 echo "[gate] pre-push: ALL GATES GREEN"

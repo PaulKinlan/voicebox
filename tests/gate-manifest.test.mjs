@@ -14,6 +14,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { gitEnv } from "../lib/git-env.mjs";
 import {
   GATES,
   HUB_MARKER_PATTERNS,
@@ -21,9 +22,11 @@ import {
   ManifestRefusal,
   STATUS,
   TIERS,
+  computeSourceTree,
   createManifest,
   emitMarker,
   finalizeManifest,
+  gitTree,
   manifestFromTierRecords,
   manifestPath,
   readManifest,
@@ -727,4 +730,59 @@ test("a browser tier record's load windows survive the fold into a manifest", ()
   const expected = Math.max(...[load.before, load.after, 10.5].filter((n) => Number.isFinite(n)));
   assert.equal(load.max, expected, "the peak includes the per-file windows as well as the run's own ends");
   assert.ok(load.max >= 10.5, "a window read mid-file is never averaged away by ends taken on an idle box");
+});
+
+test("computeSourceTree normalizes away docs-only files and changes on code edits (voicebox-beads-83ge)", () => {
+  const currentTree = gitTree();
+  assert.ok(currentTree, "gitTree returns current HEAD tree");
+  const st1 = computeSourceTree(currentTree);
+  assert.ok(st1 && /^[0-9a-f]{40}$/.test(st1), "computeSourceTree returns a valid 40-character tree SHA");
+
+  const tmpRepo = mkdtempSync(path.join(os.tmpdir(), "source-tree-fixture-"));
+  try {
+    const git = (args, input) => {
+      const res = spawnSync("git", args, { cwd: tmpRepo, env: gitEnv(), input, encoding: "utf8" });
+      if (res.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${res.stderr}`);
+      return res.stdout.trim();
+    };
+    git(["init", "-q"]);
+    git(["config", "user.name", "test"]);
+    git(["config", "user.email", "test@example.com"]);
+
+    writeFileSync(path.join(tmpRepo, "README.md"), "# Original README\n");
+    mkdirSync(path.join(tmpRepo, "docs"), { recursive: true });
+    writeFileSync(path.join(tmpRepo, "docs", "01-overview.md"), "# Overview\n");
+    mkdirSync(path.join(tmpRepo, "lib"), { recursive: true });
+    writeFileSync(path.join(tmpRepo, "lib", "index.js"), "console.log('code');\n");
+
+    git(["add", "."]);
+    git(["commit", "-qm", "initial"]);
+    const baseTree = git(["rev-parse", "HEAD^{tree}"]);
+    const baseSourceTree = computeSourceTree(baseTree, tmpRepo);
+
+    // 1. Modifying README.md and adding docs/12-pre-push-gate.md leaves sourceTree identical
+    writeFileSync(path.join(tmpRepo, "README.md"), "# Modified README with new benchmark\n");
+    writeFileSync(path.join(tmpRepo, "docs", "12-pre-push-gate.md"), "# Gate Notes\n");
+    git(["add", "."]);
+    git(["commit", "-qm", "docs only update"]);
+    const docsTree = git(["rev-parse", "HEAD^{tree}"]);
+    assert.notEqual(docsTree, baseTree, "tree SHA changes on docs edits");
+    const docsSourceTree = computeSourceTree(docsTree, tmpRepo);
+    assert.equal(docsSourceTree, baseSourceTree, "sourceTree SHA remains invariant across docs-only edits");
+
+    // 2. Modifying a code file (.js, .mjs, .css, .html) strictly changes sourceTree
+    writeFileSync(path.join(tmpRepo, "lib", "index.js"), "console.log('code updated');\n");
+    git(["add", "."]);
+    git(["commit", "-qm", "code update"]);
+    const codeTree = git(["rev-parse", "HEAD^{tree}"]);
+    const codeSourceTree = computeSourceTree(codeTree, tmpRepo);
+    assert.notEqual(codeSourceTree, baseSourceTree, "sourceTree changes when code changes");
+
+    // 3. createManifest records both source_tree and sourceTree
+    const manifest = createManifest({ gate: "full", tree: docsTree, classified: [], cwd: tmpRepo });
+    assert.equal(manifest.source_tree, baseSourceTree);
+    assert.equal(manifest.sourceTree, baseSourceTree);
+  } finally {
+    rmSync(tmpRepo, { recursive: true, force: true });
+  }
 });
