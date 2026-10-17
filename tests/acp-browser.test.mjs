@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { stripTypeScriptTypes } from "node:module";
 import { launch } from "./lib/cdp.mjs";
+import { closeAcpFixture } from "./lib/acp-fixture-cleanup.mjs";
 
 test("real browser: portable ACP fixture + IndexedDB control; D1 executor import remains blocked without bridge", { timeout: 30000 }, async (t) => {
   const requests = [];
@@ -23,8 +24,9 @@ test("real browser: portable ACP fixture + IndexedDB control; D1 executor import
     else { res.writeHead(404); res.end("No API or bridge in this static test server"); }
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
-  t.after(() => new Promise((r) => server.close(r)));
-  const page = await launch(); t.after(() => page.close());
+  let page;
+  t.after(() => closeAcpFixture(page, server));
+  page = await launch();
   await page.send("Log.enable");
   await page.send("Network.enable");
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
