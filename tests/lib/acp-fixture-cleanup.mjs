@@ -5,9 +5,10 @@ export async function closeAcpFixture(page, server) {
   try {
     await page?.close();
   } finally {
-    // A shared context can fail to dispose within its bound and leave a preconnect/request alive;
-    // do not let server.close() depend on the browser successfully dropping every socket.
+    // Stop accepting first, then sweep: a shared context can leave a preconnect/request alive,
+    // and closing connections before close() would let a new one arrive between the two calls.
+    const closed = new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     server.closeAllConnections();
-    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await closed;
   }
 }

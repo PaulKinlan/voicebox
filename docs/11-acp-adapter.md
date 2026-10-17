@@ -73,7 +73,7 @@ During ACP and Claude Code task execution, intermediate protocol events and cons
 
 ## 5. Browser Placement Boundary
 
-Stdio ACP adapters (`lib/pi-acp.mjs`, `lib/claude-acp.mjs`) spawn local OS subprocesses and therefore run on `machine` and `remote` placements (`lib/tasks.mjs`). Zero-server browser environments (`tests/acp-browser.test.mjs`) use `createBrowserTaskHost()` in `lib/task-placement.mjs` (see [`16-zero-server-delegation.md`](16-zero-server-delegation.md)). The browser boundary check serves fixture modules through an ephemeral local HTTP listener; its cleanup closes the page before the listener and aborts remaining connections so an open socket in a reused Chromium cannot wedge the shard. Pure teardown guards live in `tests/acp-fixture-cleanup.test.mjs` and run in the unit lane.
+Stdio ACP adapters (`lib/pi-acp.mjs`, `lib/claude-acp.mjs`) spawn local OS subprocesses and therefore run on `machine` and `remote` placements (`lib/tasks.mjs`). Zero-server browser environments (`tests/acp-browser.test.mjs`) use `createBrowserTaskHost()` in `lib/task-placement.mjs` (see [`16-zero-server-delegation.md`](16-zero-server-delegation.md)). The browser boundary check serves fixture modules through an ephemeral local HTTP listener; its cleanup closes the page, stops the listener accepting new connections, then aborts any remaining sockets so an open connection in reused Chromium cannot wedge the shard. Pure teardown guards live in `tests/acp-fixture-cleanup.test.mjs` and run in the unit lane.
 
 ### Verification Suites
 ```bash

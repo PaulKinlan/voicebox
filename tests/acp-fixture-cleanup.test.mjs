@@ -12,14 +12,19 @@ for (const [scenario, pageReleasesConnection] of [
   test(`ACP fixture teardown releases a held connection when ${scenario}`, { timeout: 2000 }, async () => {
     let pageClosed = false;
     let active = true;
+    let accepting = true;
     let finish;
     const release = () => {
       active = false;
       if (finish) finish();
     };
     const server = {
-      closeAllConnections: release,
+      closeAllConnections() {
+        assert.equal(accepting, false, "stop accepting before sweeping held sockets");
+        release();
+      },
       close(callback) {
+        accepting = false;
         finish = () => { finish = undefined; callback(); };
         if (!active) finish();
       },
