@@ -85,6 +85,15 @@ test("mini-app popover: anchored floating bubble, light-dismiss, and mobile draw
     const d = document.querySelector("#mini-app-dock");
     const b = document.querySelector("#mini-app-bubble");
     const style = getComputedStyle(c);
+    const standalone = document.createElement("section");
+    standalone.className = "mini-app-container";
+    const fallback = document.createElement("div");
+    fallback.style.background = "color-mix(in srgb, var(--card) 94%, transparent)";
+    document.body.append(standalone, fallback);
+    const standaloneBackground = getComputedStyle(standalone).backgroundColor;
+    const fallbackBackground = getComputedStyle(fallback).backgroundColor;
+    standalone.remove();
+    fallback.remove();
     return {
       containerHidden: c.hidden,
       dockHidden: d.hidden,
@@ -92,6 +101,11 @@ test("mini-app popover: anchored floating bubble, light-dismiss, and mobile draw
       bubbleAriaExpanded: b.getAttribute("aria-expanded"),
       position: style.position,
       zIndex: style.zIndex,
+      isCard: c.classList.contains("card"),
+      background: style.backgroundColor,
+      cardBackground: getComputedStyle(document.querySelector("#sqeh-deck")).backgroundColor,
+      standaloneBackground,
+      fallbackBackground,
     };
   });
 
@@ -101,6 +115,9 @@ test("mini-app popover: anchored floating bubble, light-dismiss, and mobile draw
   assert.equal(mounted.bubbleAriaExpanded, "true", "bubble has aria-expanded='true'");
   assert.equal(mounted.position, "fixed", "popover container uses fixed overlay positioning (no in-flow shift)");
   assert.ok(Number(mounted.zIndex) >= 100, "popover sits on an elevated z-index");
+  assert.equal(mounted.isCard, true, "the mounted panel keeps the shared card class");
+  assert.equal(mounted.background, mounted.cardBackground, "the card panel uses the same 82% glass as the Quick Deck");
+  assert.equal(mounted.standaloneBackground, mounted.fallbackBackground, "a standalone mini-app retains the original 94% fallback");
 
   // THE DELAYS THAT USED TO PRECEDE THE READS BELOW ARE GONE (voicebox-beads-zjpm.5.1): light dismiss and
   // Escape both end in toggle(), the bubble click calls toggle(), close() hides, and editCurrentMiniApp()
