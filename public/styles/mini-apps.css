@@ -9,6 +9,7 @@
   max-inline-size: calc(100vw - 16px);
   max-block-size: calc(100svh - 16px);
   resize: both;
+  container: mini-app / inline-size;
   margin: 0;
   z-index: 120;
   backdrop-filter: blur(16px);
@@ -137,6 +138,10 @@
   flex: none;
   margin-inline-start: auto;
 }
+@container mini-app (max-width: 400px) {
+  .mini-app-header { flex-wrap: wrap; }
+  .mini-app-actions { flex-basis: 100%; justify-content: flex-end; }
+}
 .mini-app-delete:hover {
   color: var(--warn);
   border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
@@ -244,9 +249,6 @@
 }
 
 @media (max-width: 768px) {
-  .mini-app-header { flex-wrap: wrap; }
-  .mini-app-actions { flex-basis: 100%; justify-content: flex-end; }
-
   .mini-app-container {
     inset-block-start: auto;
     inset-block-end: 0;

@@ -61,8 +61,15 @@ test("mini-app popover: anchored floating bubble, light-dismiss, and mobile draw
         return { id: button.id, left: box.left, right: box.right, top: box.top, bottom: box.bottom,
           hit: hit === button || button.contains(hit) };
       });
-      return { panel: { left: panel.left, right: panel.right, top: panel.top, bottom: panel.bottom }, buttons };
+      return {
+        panel: { left: panel.left, right: panel.right, top: panel.top, bottom: panel.bottom },
+        titleWidth: document.querySelector("#mini-app-title").getBoundingClientRect().width,
+        sourceWidth: document.querySelector("#mini-app-source-badge").getBoundingClientRect().width,
+        buttons,
+      };
     });
+    assert.ok(geometry.titleWidth >= 32, `${viewport}: title keeps a readable slot (${geometry.titleWidth}px)`);
+    assert.ok(geometry.sourceWidth >= 32, `${viewport}: source badge keeps a readable slot (${geometry.sourceWidth}px)`);
     assert.equal(geometry.buttons.length, 6, `${viewport}: all mini-app actions are present`);
     for (const button of geometry.buttons) {
       assert.ok(button.left >= geometry.panel.left && button.right <= geometry.panel.right,
@@ -155,6 +162,14 @@ test("mini-app popover: anchored floating bubble, light-dismiss, and mobile draw
     badge.hidden = false;
   });
   await assertHeaderActionsReachable("desktop");
+  // Desktop users can resize this panel all the way down to its 300px minimum;
+  // viewport-only mobile styles must not leave the title and source unreadable there.
+  await page.evaluate(() => { document.querySelector("#mini-app-container").style.inlineSize = "300px"; });
+  try {
+    await assertHeaderActionsReachable("desktop resized 300px");
+  } finally {
+    await page.evaluate(() => { document.querySelector("#mini-app-container").style.inlineSize = ""; });
+  }
 
   // THE DELAYS THAT USED TO PRECEDE THE READS BELOW ARE GONE (voicebox-beads-zjpm.5.1): light dismiss and
   // Escape both end in toggle(), the bubble click calls toggle(), close() hides, and editCurrentMiniApp()
