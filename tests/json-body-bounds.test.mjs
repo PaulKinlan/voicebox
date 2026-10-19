@@ -212,6 +212,29 @@ test("a refused body at a .catch-rethrow call site answers 413 exactly once", as
   assert.ok(stillThere.ok, "the refused DELETE did not run");
 });
 
+test("a bodyless mini-app DELETE declares JSON: untyped refusal cannot erase the app", async () => {
+  const id = "csrf-delete-control";
+  const saved = await postRaw({
+    route: "/api/mini-apps", headers: { "content-type": "application/json" },
+    chunks: [JSON.stringify({ appId: id, html: "<p>keep until a typed delete</p>" })],
+  });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body?.ok, true);
+
+  const route = `/api/mini-apps?id=${id}`;
+  const untyped = await postRaw({ route, method: "DELETE" });
+  assert.equal(untyped.status, 415, "an untyped, bodyless DELETE does not bypass the shared JSON door");
+  assert.equal(untyped.body?.refused, "unsupported-content-type");
+  const stillThere = await fetch(`http://127.0.0.1:${PORT}${route}`).then((r) => r.json());
+  assert.equal(stillThere.ok, true, "the refused delete did not remove the app");
+
+  const typed = await postRaw({ route, method: "DELETE", headers: { "content-type": "application/json" } });
+  assert.equal(typed.status, 200, "a header-only JSON declaration preserves bodyless deletion by query id");
+  assert.equal(typed.body?.ok, true);
+  const gone = await fetch(`http://127.0.0.1:${PORT}${route}`).then((r) => r.json());
+  assert.equal(gone.ok, false, "the declared caller really deleted the app");
+});
+
 test("an absent Content-Type is refused even with an empty body", async () => {
   const res = await postRaw({ headers: {}, chunks: [] });
   assert.equal(res.status, 415);

@@ -293,7 +293,11 @@ test("driven directly on the installed handler, a forged handshake is refused un
     const afterReplay = window.__miniAppProbe.removed.length;
 
     // The delete path is where the catalogue is REASSIGNED, so it is the honest test of the accessor pair.
-    window.fetch = async () => ({ ok: true, json: async () => ({}) });
+    const deleteRequests = [];
+    window.fetch = async (url, options) => {
+      deleteRequests.push({ url: String(url), method: options?.method, headers: options?.headers });
+      return { ok: true, json: async () => ({}) };
+    };
     const before = { get: calls.getCatalog, set: calls.setCatalog.length };
     controller.mount({ appId: "probe-del", title: "Delete Me", fileName: "delete-me.html", html: "<h1>bye</h1>" });
     const sizeBeforeDelete = launched.size;
@@ -308,7 +312,7 @@ test("driven directly on the installed handler, a forged handshake is refused un
     for (const fn of window.__miniAppProbe.added) window.removeEventListener("message", fn);
     els.miniAppViewport.remove();
 
-    return { afterForeignOrigin, afterWrongSource, afterReal, removedIsTheHandler, afterReplay, before, after, sizeBeforeDelete, sizeAfterDelete, delStillPresent, syncCalls: calls.sync, hasMount: typeof controller.mount, hasGetContainer: controller.getContainer() === els.miniAppContainer };
+    return { afterForeignOrigin, afterWrongSource, afterReal, removedIsTheHandler, afterReplay, before, after, sizeBeforeDelete, sizeAfterDelete, delStillPresent, deleteRequests, syncCalls: calls.sync, hasMount: typeof controller.mount, hasGetContainer: controller.getContainer() === els.miniAppContainer };
   });
 
   assert.equal(result.afterForeignOrigin, 0, "a handshake from a foreign origin must be refused, even with the right source");
@@ -321,6 +325,9 @@ test("driven directly on the installed handler, a forged handshake is refused un
   assert.equal(result.sizeBeforeDelete, 2, "the injected Map is the one the surface fills, not a private copy");
   assert.equal(result.sizeAfterDelete, 1, "and the one it empties again on delete");
   assert.equal(result.delStillPresent, false, "the deleted app is gone from the injected Map");
+  const deleteRequest = result.deleteRequests.find((request) => request.url.startsWith("/api/mini-apps?id="));
+  assert.equal(deleteRequest?.method, "DELETE", "the mini-app page issues its real delete route");
+  assert.equal(deleteRequest?.headers?.["content-type"], "application/json", "even a bodyless delete declares JSON before the shared body door");
   assert.ok(result.syncCalls >= 2, "mount calls the injected sqehSyncMiniApps at the end, as it did inline");
   assert.equal(result.hasMount, "function", "the controller exposes mount");
   assert.equal(result.hasGetContainer, true, "and getContainer returns the container it was handed");
