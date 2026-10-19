@@ -44,7 +44,7 @@ Voicebox supports both **machine-owned** filesystem roots (`kind: "machine"`) an
 - **Declaring a Machine Root**: Re-points server-side file operations on the host machine and therefore requires `x-voicebox-host-token` on `POST /api/root` (`declaredBy: "host"`).
 - **Declaring a Browser Root**: `opfs` and `handle` roots reside in the browser (`ROOT_FACTS.opfs.reachableFrom = ["page"]` in `core/root.ts`). Same-origin browser requests can declare page-owned roots directly (`declaredBy: "page"`), and routed file operations execute in the browser via `browser/acts.ts` (refusing mismatched roots with `root-not-mine`).
 - **Default Browser Scratchpad Fallback**: When no machine root is declared and no local folder is open, file creation turns in the browser default to the origin's OPFS `scratchpad/` directory so users can create and inspect files immediately on first launch.
-- **Project Instructions (`AGENTS.md`)**: `lib/project-instruction.mjs` locates the nearest `AGENT.md` or `AGENTS.md` file (bounded to 32 KiB) from the active folder up to the root and includes it in the model's system instructions.
+- **Project Instructions (`AGENTS.md`)**: `lib/project-instruction.mjs` locates the nearest `AGENT.md` or `AGENTS.md` file (bounded to 32 KiB) from the active folder up to the root and includes it in the model's system instructions enclosed in `<project_instruction>` boundary tags with strict untrusted-data framing preventing tool execution hijacking (voicebox-beads-ovq3).
 
 <!-- BEGIN GENERATED: providers — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 **Registered turn resolvers** (`lib/resolver.mjs`): `claude`, `gemini`, `openai`, `script`
