@@ -2,6 +2,8 @@
 
 Both `/live` and `/channel` validate the request `Origin` against local loopback origins (`127.0.0.1`, `localhost`, `[::1]`) and require a cryptographic pairing bearer (`vbx_...`) for non-local peers. Because browsers enforce immutable `Origin` headers on WebSocket handshakes, this closes **Cross-Site WebSocket Hijacking (CSWSH)** from external web pages.
 
+For HTTP routes, the bounded JSON reader rejects browser-simple untyped mutations (`415`), while `server.mjs` checks browser `Origin` plus Fetch Metadata before dispatching bodyless `POST /api/undo`, `POST /api/probe`, cache-filling `GET /api/probe`, and bespoke-parser `POST /api/mini-app/tools` (`403 cross-origin-request-refused`, voicebox-beads-1la5/3bwx). Vite's dev front rewrites `Origin` on `/api` proxy requests but forwards `Sec-Fetch-Site`; that header is required to refuse a hostile page submitting through the proxy. Own-page and unheaded machine clients remain usable. These browser-only signals do not establish local-process identity: an old cross-site GET with neither header remains indistinguishable from a machine call.
+
 This document analyzes the **local loopback process boundary**: what a non-browser process running on the same machine can do, why embedding a token inside unauthenticated HTML does not add security, and how the opt-in bootstrap session gate (`VOICEBOX_LOOPBACK_AUTH=1`) works.
 
 ---
