@@ -7,7 +7,8 @@
 // unbounded body into the process's memory, and an oversized or non-JSON body silently resolved
 // null — indistinguishable from "no body". The fix:
 //
-//   · a DECLARED Content-Type that is not JSON is refused 415 before a byte is read;
+//   · an absent or non-JSON Content-Type is refused 415 before a byte is read, so a browser's
+//     simple cross-origin POST cannot reach JSON mutations without a preflight;
 //   · a body past the cap (1 MiB by default) is refused 413 BY NAME and the rest of the upload
 //     is discarded unread;
 //   · normal JSON callers are untouched, and the host survives both refusals.
@@ -118,6 +119,31 @@ test("a declared but EMPTY media type is still a declared non-JSON type — 415"
   assert.equal(res.body.refused, "unsupported-content-type");
 });
 
+test("a simple cross-site POST without Content-Type cannot mutate JSON routes", async () => {
+  const label = "csrf-untyped-declaration";
+  const hasLabel = async () => {
+    const listed = await fetch(`http://127.0.0.1:${PORT}/api/environments`).then((r) => r.json());
+    assert.equal(listed.ok, true);
+    return listed.environments.some((env) => env.label === label);
+  };
+  assert.equal(await hasLabel(), false, "this isolated server has no such environment before the attempted write");
+  const declaration = JSON.stringify({ label, kind: "server", origin: "http://127.0.0.1:1" });
+  const browserHeaders = { origin: "https://attacker.example", "sec-fetch-site": "cross-site" };
+  const refused = await postRaw({ route: "/api/environments", headers: browserHeaders, chunks: [declaration] });
+  assert.equal(refused.status, 415, `an untyped cross-site JSON POST must not register an environment: ${refused.text}`);
+  assert.equal(refused.body?.refused, "unsupported-content-type");
+  assert.equal(await hasLabel(), false, "the untyped declaration never reached the registry");
+
+  const turn = await postRaw({ route: "/api/turn", headers: browserHeaders, chunks: [JSON.stringify({ action: { verb: "write", name: "csrf.txt", content: "unwanted" } })] });
+  assert.equal(turn.status, 415, `an untyped cross-site turn must not reach the executor: ${turn.text}`);
+  assert.equal(turn.body?.refused, "unsupported-content-type");
+
+  const typed = await postRaw({ route: "/api/environments", headers: { "content-type": "application/json" }, chunks: [declaration] });
+  assert.equal(typed.status, 200, `a declared JSON caller still reaches the route: ${typed.text}`);
+  assert.equal(typed.body?.ok, true);
+  assert.equal(await hasLabel(), true, "the typed control really registered the environment");
+});
+
 test("an oversized body is refused 413 by name, and the rest is discarded unread", async () => {
   const chunk = Buffer.alloc(64 * 1024, "a");
   const chunks = Array.from({ length: 20 }, () => chunk); // 1.25 MiB, past the 1 MiB cap
@@ -186,13 +212,11 @@ test("a refused body at a .catch-rethrow call site answers 413 exactly once", as
   assert.ok(stillThere.ok, "the refused DELETE did not run");
 });
 
-test("an absent Content-Type with an empty body is still allowed (parses as {})", async () => {
+test("an absent Content-Type is refused even with an empty body", async () => {
   const res = await postRaw({ headers: {}, chunks: [] });
-  assert.equal(res.status, 400);
+  assert.equal(res.status, 415);
   assert.ok(res.body, "the answer body arrived whole");
-  assert.equal(res.body.ok, false);
-  assert.notEqual(res.body.refused, "unsupported-content-type");
-  assert.notEqual(res.body.refused, "body-too-large");
+  assert.equal(res.body.refused, "unsupported-content-type");
 });
 
 test("the host survives both refusals and keeps serving", async () => {

@@ -79,6 +79,15 @@ test("route-harness: stream request body and mockReadJsonBody helper", async () 
   });
 });
 
+test("route-harness: mockReadJsonBody refuses an absent Content-Type even for an empty body", async () => {
+  const req = new MockRequest({ method: "POST", url: "/api/echo" });
+  let response;
+  const res = new MockResponse((outcome) => { response = outcome; });
+  await assert.rejects(() => mockReadJsonBody(req, res), BodyRefusal);
+  assert.equal(res.statusCode, 415);
+  assert.equal(JSON.parse(response.body).refused, "unsupported-content-type");
+});
+
 test("route-harness: mockReadJsonBody refuses non-JSON content-type with 415", async () => {
   const routes = {
     "POST /api/echo": async (req, res) => {

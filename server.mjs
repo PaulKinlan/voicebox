@@ -2149,9 +2149,9 @@ const CONTENT_JSON_BODY_MAX_BYTES = 8 * 1024 * 1024; // 8 MiB
  * unbounded read): on the default posture (the loopback wall is opt-in) an unauthenticated POST
  * could stream an unbounded body into this process's memory, and an oversized or non-JSON body
  * silently resolved null — indistinguishable from "no body". Now, at this one site:
- *   · a DECLARED Content-Type that is not JSON is refused 415 before a byte is read — an empty
- *     media type (`Content-Type: ;charset=utf-8`) is a declared non-JSON type; only an ABSENT
- *     Content-Type is allowed through (an empty body parses as {} and always has);
+ *   · a missing or non-JSON Content-Type is refused 415 before a byte is read, even for an empty
+ *     body. A browser's simple cross-origin POST cannot declare application/json without a
+ *     preflight, so it cannot reach a state-mutating JSON route (voicebox-beads-1la5);
  *   · a body past the cap (1 MiB by default; content routes pass CONTENT_JSON_BODY_MAX_BYTES) is
  *     refused 413 BY NAME the moment the cap is crossed, and the rest of the upload is DISCARDED
  *     unread — memory stays bounded no matter how much more the peer sends;
@@ -2172,11 +2172,10 @@ function readJsonBody(req, res, maxBytes = DEFAULT_JSON_BODY_MAX_BYTES) {
       reject(new BodyRefusal(refusal));
     };
     const contentType = req.headers["content-type"];
-    if (typeof contentType === "string") {
-      const mediaType = contentType.split(";", 1)[0].trim().toLowerCase();
-      if (mediaType !== "application/json" && !mediaType.endsWith("+json")) {
-        return refuse(415, { ok: false, refused: "unsupported-content-type", why: `this route reads a JSON body and the request declared Content-Type '${mediaType || contentType}' — send application/json` }, "unsupported-content-type");
-      }
+    const mediaType = typeof contentType === "string" ? contentType.split(";", 1)[0].trim().toLowerCase() : "";
+    if (mediaType !== "application/json" && !mediaType.endsWith("+json")) {
+      const declared = typeof contentType === "string" ? `declared Content-Type '${mediaType || contentType}'` : "sent no Content-Type";
+      return refuse(415, { ok: false, refused: "unsupported-content-type", why: `this route reads a JSON body and the request ${declared} — send application/json` }, "unsupported-content-type");
     }
     let body = "", bytes = 0, refused = false;
     req.on("data", (chunk) => {

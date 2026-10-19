@@ -82,13 +82,14 @@ test("branches-route: POST /api/branches/merge validates JSON body and branch", 
   assert.equal(resMissing.status, 400);
   assert.equal(resMissing.json().refused, "bad-request");
 
-  // Non-JSON / invalid body
+  // An untyped empty body is refused at the shared JSON door before route validation.
   const resInvalid = await invokeRoute(routes, {
     method: "POST",
     url: "/api/branches/merge",
     body: null,
   });
-  assert.equal(resInvalid.status, 400);
+  assert.equal(resInvalid.status, 415);
+  assert.equal(resInvalid.json().refused, "unsupported-content-type");
 });
 
 test("branches-route: POST /api/branches/keep-separate validates branch field", async () => {
