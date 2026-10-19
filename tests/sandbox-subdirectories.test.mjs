@@ -236,7 +236,7 @@ test("mini-app persistence and harness configure aliases in server.mjs", async (
   assert.equal(getApp.ok, true);
   assert.equal(getApp.miniApp.html, "<h1>v2</h1>");
 
-  const delApp = await fetch(`${srv.base}/api/mini-apps?id=counter-widget`, { method: "DELETE" }).then((r) => r.json());
+  const delApp = await fetch(`${srv.base}/api/mini-apps?id=counter-widget`, { method: "DELETE", headers: { "content-type": "application/json" } }).then((r) => r.json());
   assert.equal(delApp.ok, true);
 
   // 2. POST /api/harnesses/configure supports { id: "antigravity", agentId, name, url } and { id: "claude-agent-acp" }
@@ -306,7 +306,7 @@ test("a colliding page and shelf app: the save is refused by name and deleting t
   assert.equal(readFileSync(path.join(shelfDir, "collision.html"), "utf8"), appHtml, "the app's own copy is untouched");
 
   // 2. Deleting the app removes its own shelf copy and record and leaves the workspace page standing.
-  const del = await fetch(`${srv.base}/api/mini-apps?id=app_collision`, { method: "DELETE" }).then((r) => r.json());
+  const del = await fetch(`${srv.base}/api/mini-apps?id=app_collision`, { method: "DELETE", headers: { "content-type": "application/json" } }).then((r) => r.json());
   assert.equal(del.ok, true);
   assert.equal(readFileSync(path.join(scratchRoot, "collision.html"), "utf8"), pageHtml, "the page the app never owned survives");
   assert.equal(existsSync(path.join(shelfDir, "collision.html")), false, "the app's own copy is deleted");

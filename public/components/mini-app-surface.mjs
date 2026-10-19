@@ -396,7 +396,10 @@ export function initMiniAppHost({
     const idParam = target.appId || target.fileName || target.title || "";
     removeMiniAppFromClientState(target);
     try {
-      await fetch(`/api/mini-apps?id=${encodeURIComponent(idParam)}`, { method: "DELETE" });
+      await fetch(`/api/mini-apps?id=${encodeURIComponent(idParam)}`, {
+        method: "DELETE",
+        headers: { "content-type": "application/json" }, // the JSON door also checks bodyless deletes
+      });
     } catch {}
     if (target.fileName && !target.sandbox) {
       try {

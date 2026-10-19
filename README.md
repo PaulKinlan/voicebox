@@ -112,7 +112,7 @@ See [Pluggable live models](docs/23-pluggable-live-models.md) for the API, 16/24
 ### 1. Live Voice Gateway & Turn Resolvers (`lib/live-session.mjs`, `lib/resolver.mjs`)
 - **Full-Duplex Voice (`/live`)**: Streams 16kHz/24kHz PCM audio between the browser's `pcm-worklet.js` AudioWorklet and upstream providers (`models/gemini-3.8-live` or `gpt-realtime`).
 - **Workspace Instructions (`lib/project-instruction.mjs`)**: Automatically discovers the nearest `AGENTS.md` or `AGENT.md` file (up to 32 KiB) in the active workspace and injects it into the live session instruction.
-- **Turn Resolution (`POST /api/turn`)**: Text composer and browser dictation requests resolve into structured actions through `lib/resolver.mjs` before executing on the shared server executor.
+- **Turn Resolution (`POST /api/turn`)**: Text composer and browser dictation requests resolve into structured actions through `lib/resolver.mjs` before executing on the shared server executor. JSON-body mutation routes require an explicit JSON `Content-Type`; untyped browser-simple POSTs are refused `415` before reaching them (see [architecture](docs/07-architecture.md)).
 
 <!-- BEGIN GENERATED: providers — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 **Registered turn resolvers** (`lib/resolver.mjs`): `claude`, `gemini`, `openai`, `script`

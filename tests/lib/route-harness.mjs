@@ -148,7 +148,8 @@ export class BodyRefusal extends Error {
 
 /**
  * In-memory JSON body parser simulating server.mjs readJsonBody semantics for route unit testing.
- * Enforces Content-Type 415 gate, 413 body-too-large rejection via BodyRefusal, and resolves null
+ * Enforces Content-Type 415 gate (including absent headers), 413 body-too-large rejection via
+ * BodyRefusal, and resolves null
  * on malformed JSON (letting the route handler answer 400).
  */
 export async function mockReadJsonBody(req, res, maxBytes = 1024 * 1024) {
@@ -160,19 +161,18 @@ export async function mockReadJsonBody(req, res, maxBytes = 1024 * 1024) {
     };
 
     const contentType = req.headers?.["content-type"];
-    if (typeof contentType === "string") {
-      const mediaType = contentType.split(";", 1)[0].trim().toLowerCase();
-      if (mediaType !== "application/json" && !mediaType.endsWith("+json")) {
-        return refuse(
-          415,
-          {
-            ok: false,
-            refused: "unsupported-content-type",
-            why: `this route reads a JSON body and the request declared Content-Type '${mediaType || contentType}' — send application/json`,
-          },
-          "unsupported-content-type",
-        );
-      }
+    const mediaType = typeof contentType === "string" ? contentType.split(";", 1)[0].trim().toLowerCase() : "";
+    if (mediaType !== "application/json" && !mediaType.endsWith("+json")) {
+      const declared = typeof contentType === "string" ? `declared Content-Type '${mediaType || contentType}'` : "sent no Content-Type";
+      return refuse(
+        415,
+        {
+          ok: false,
+          refused: "unsupported-content-type",
+          why: `this route reads a JSON body and the request ${declared} — send application/json`,
+        },
+        "unsupported-content-type",
+      );
     }
 
     let body = "";
