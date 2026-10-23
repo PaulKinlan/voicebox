@@ -212,6 +212,54 @@ function buildStamp() {
   };
 }
 
+// CSWSH PROTECTION ON THE DEV FRONT (docs/13, voicebox-beads-efc6).
+//
+// The API entitles "the local page" on /live and /channel by its Origin (matching loopback).
+// A browser on this dev front connects with `Origin: http://localhost:5173` (or 127.0.0.1:5173).
+// If the proxy unconditionally rewrote Origin to API_TARGET for all callers, a hostile webpage
+// (e.g. Origin: http://evil.com) connecting to ws://localhost:5173 would have its origin laundered
+// into API_TARGET and be admitted without credentials.
+//
+// So we only rewrite Origin to API_TARGET when the request genuinely originates from this dev front:
+// the Origin host must match the addressed Host header, and must be loopback or an allowed tailnet host.
+// Any non-dev-front or cross-origin connection retains its untrusted origin (or a sentinel if it
+// falsely claimed loopback without matching Host), so server.mjs rejects it with WS 1008 unless it
+// presents a valid pairing bearer in hello.
+function isDevFrontOrigin(originStr, hostStr) {
+  if (typeof originStr !== "string" || typeof hostStr !== "string") return false;
+  let url;
+  try {
+    url = new URL(originStr);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  if (url.username || url.password) return false;
+  const host = hostStr.trim().toLowerCase();
+  if (url.host.toLowerCase() !== host) return false;
+  const hostname = url.hostname.toLowerCase();
+  const isLoopback = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
+  const isTailnet = hostname.endsWith(".ts.net");
+  return isLoopback || isTailnet;
+}
+
+function forwardDevFrontWsOrigin(proxyReq, req) {
+  if (isDevFrontOrigin(req?.headers?.origin, req?.headers?.host)) {
+    proxyReq.setHeader("origin", API_TARGET);
+  } else if (req?.headers?.origin) {
+    let url;
+    try { url = new URL(req.headers.origin); } catch { url = null; }
+    const hostname = url?.hostname?.toLowerCase();
+    const isLoopback = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
+    if (isLoopback) {
+      proxyReq.setHeader("origin", "http://mismatched-loopback.invalid");
+    } else {
+      proxyReq.setHeader("origin", req.headers.origin);
+    }
+  }
+}
+
+export { isDevFrontOrigin };
 export default defineConfig({
   resolve: {
     alias: {
@@ -296,13 +344,15 @@ export default defineConfig({
       //
       // Rewriting it here is the honest place: Vite IS this server's dev front on
       // the same machine, and a proxy hop terminating its own origin is what a proxy
-      // is for. The gate keeps its rule unchanged for every non-proxied caller.
+      // is for. We only rewrite when the incoming Origin matches this dev front
+      // (forwardDevFrontWsOrigin), so external cross-origin pages cannot launder
+      // their Origin into a local-page entitlement (voicebox-beads-efc6).
       "/live": {
         target: API_TARGET,
         ws: true,
         configure: (proxy) => {
-          proxy.on("proxyReqWs", (proxyReq) => {
-            proxyReq.setHeader("origin", API_TARGET);
+          proxy.on("proxyReqWs", (proxyReq, req) => {
+            forwardDevFrontWsOrigin(proxyReq, req);
           });
         },
       },
@@ -319,14 +369,14 @@ export default defineConfig({
       //
       // THE EXECUTOR CHANNEL. The environment page connects here to act on a folder it owns
       // (vb-resolver's router: a page-owned root is executed BY THE PAGE).
-      // Rewrites Origin to API_TARGET so the server's local origin check admits the dev front,
-      // matching the /live proxy configuration.
+      // Rewrites Origin to API_TARGET only when the incoming Origin matches this dev front,
+      // matching the /live proxy configuration (voicebox-beads-efc6).
       "/channel": {
         target: API_TARGET,
         ws: true,
         configure: (proxy) => {
-          proxy.on("proxyReqWs", (proxyReq) => {
-            proxyReq.setHeader("origin", API_TARGET);
+          proxy.on("proxyReqWs", (proxyReq, req) => {
+            forwardDevFrontWsOrigin(proxyReq, req);
           });
         },
       },
