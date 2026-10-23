@@ -373,6 +373,7 @@ ADR voicebox-beads-zjpm.1).
 ```
 node scripts/test-changed.mjs --gate                 # the fast gate for the branch's changed paths
 node scripts/test-changed.mjs --gate --dry-run       # select and record, dispatch nothing
+node scripts/test-changed.mjs --help                 # show accepted options, no git/test/manifest action
 node scripts/gate-manifest.mjs verify <artifact>     # reconcile an artifact without re-running anything
 ```
 
@@ -380,6 +381,7 @@ It is the command a lane should point `CHECK_FAST_CMD` at. It is deliberately **
 orchestrator for the full suite: `--gate-kind full` exists so the same accounting can be applied to a
 merger's union, and a full gate may not omit a classified file at all.
 
+- **Fail-closed invocation (voicebox-beads-hqst).** The CLI accepts `--dry-run`, `--json`, `--gate`, `--allow-unmapped`, `--base <ref>`, `--gate-kind <fast|full>`, `--manifest-dir <path>`, `--help`/`-h`, positional changed paths and `--` to end option parsing. An unknown flag (including `--flag=value`) or an option missing its value is refused with exit 2 before git selection, test dispatch or manifest creation. `--gate-kind` and `--manifest-dir` require `--gate`; gate mode does not accept developer-only `--json`. `--help` prints usage and exits 0 without those actions, even if a test path is supplied; unknown/malformed flags still refuse alongside help. Module imports may still read the test roster, so this guarantees no action, not instant startup. `tests/test-changed.test.mjs` drives negative invocations under a disposable no-child-process preload and asserts that no manifest is created.
 - **Strict scope.** `--allow-unmapped` is a developer escape and the gate refuses it outright (exit 2): a
   gate that may be told to ignore a path it cannot map has no scope, and its PASS is a statement about
   nothing. A mapped test file that is in **no** lane is refused by name rather than quietly run in the

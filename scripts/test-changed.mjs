@@ -654,25 +654,68 @@ export function measuredTree() {
 
 export async function main() {
   const args = process.argv.slice(2);
-  const dryRun = args.includes("--dry-run");
-  const jsonOutput = args.includes("--json");
-  const gateMode = args.includes("--gate");
-  const allowUnmapped = args.includes("--allow-unmapped");
+  let dryRun = false;
+  let jsonOutput = false;
+  let gateMode = false;
+  let allowUnmapped = false;
+  let help = false;
   let customBase = null;
   let manifestDir = null;
   let gateKind = "fast";
+  let gateKindSupplied = false;
+  let positionalOnly = false;
 
   const filesArg = [];
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--base" && args[i + 1]) {
-      customBase = args[++i];
-    } else if (args[i] === "--manifest-dir" && args[i + 1]) {
-      manifestDir = args[++i];
-    } else if (args[i] === "--gate-kind" && args[i + 1]) {
-      gateKind = args[++i];
-    } else if (!args[i].startsWith("--")) {
-      filesArg.push(args[i]);
+    const arg = args[i];
+    if (positionalOnly) { filesArg.push(arg); continue; }
+    if (arg === "--") { positionalOnly = true; continue; }
+    if (arg === "--help" || arg === "-h") { help = true; continue; }
+    if (arg === "--dry-run") { dryRun = true; continue; }
+    if (arg === "--json") { jsonOutput = true; continue; }
+    if (arg === "--gate") { gateMode = true; continue; }
+    if (arg === "--allow-unmapped") { allowUnmapped = true; continue; }
+    if (["--base", "--manifest-dir", "--gate-kind"].includes(arg)) {
+      const value = args[i + 1];
+      if (!value || value.startsWith("-")) {
+        console.error(`[test:changed] REFUSED: missing-option-value ${arg}`);
+        return 2;
+      }
+      i++;
+      if (arg === "--base") customBase = value;
+      else if (arg === "--manifest-dir") manifestDir = value;
+      else { gateKind = value; gateKindSupplied = true; }
+      continue;
     }
+    if (arg.startsWith("-")) {
+      console.error(`[test:changed] REFUSED: unknown-option ${arg}`);
+      return 2;
+    }
+    filesArg.push(arg);
+  }
+
+  // Help is intentionally before even a git/base query, roster read, manifest write, or test spawn.
+  // Unknown/malformed flags above still fail closed even alongside --help.
+  if (help) {
+    console.log("Usage: node scripts/test-changed.mjs [options] [changed-file ...]");
+    console.log("  --dry-run                 Select without dispatching tests");
+    console.log("  --json                    Print the developer-mode selection as JSON");
+    console.log("  --allow-unmapped          Developer-only escape for unmapped paths");
+    console.log("  --base <ref>              Compare against a specific git base");
+    console.log("  --gate                    Emit a reconciled fast-gate manifest");
+    console.log("  --gate-kind <fast|full>   Gate coverage policy (requires --gate)");
+    console.log("  --manifest-dir <path>     Gate artifact directory (requires --gate)");
+    console.log("  --help, -h                Show this help without running tests");
+    console.log("  --                        Treat remaining arguments as changed-file paths");
+    return 0;
+  }
+  if (!gateMode && (gateKindSupplied || manifestDir !== null)) {
+    console.error("[test:changed] REFUSED: --gate-kind and --manifest-dir require --gate");
+    return 2;
+  }
+  if (gateMode && jsonOutput) {
+    console.error("[test:changed] REFUSED: --json is developer-only; --gate emits a manifest, not JSON selection");
+    return 2;
   }
 
   // THE GATE HAS NO ALLOW-UNMAPPED ESCAPE (voicebox-beads-zjpm.3). The developer flag exists so an

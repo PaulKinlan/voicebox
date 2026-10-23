@@ -2,15 +2,87 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { mapToTests, checkStaticRelevance, partitionTests, getBaseRef, runGate } from "../scripts/test-changed.mjs";
 import { buildQueue, ISOLATED, TIER_WORKERS } from "../scripts/test-shards.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const SCRIPT = path.join(root, "scripts/test-changed.mjs");
+
+// Fail-closed CLI probes run under a disposable no-child-process preload. Even the old broken
+// parser cannot launch a test gate: a Git/test spawn records a marker and throws before launch.
+function noSpawnCli(args) {
+  const scratch = mkdtempSync(path.join(os.tmpdir(), "voicebox-test-changed-cli-"));
+  const marker = path.join(scratch, "spawn-attempted");
+  const preload = path.join(scratch, "no-spawn.cjs");
+  const manifest = path.join(scratch, "manifest");
+  writeFileSync(preload, `
+    const child = require('node:child_process');
+    const fs = require('node:fs');
+    for (const method of ['execFileSync', 'spawnSync', 'spawn']) {
+      child[method] = () => { fs.writeFileSync(${JSON.stringify(marker)}, method); throw new Error('child process forbidden by CLI test'); };
+    }
+    require('node:module').syncBuiltinESMExports();
+  `);
+  try {
+    const batch = Array.isArray(args[0]);
+    const probe = path.join(scratch, "probe.mjs");
+    if (batch) {
+      // Import the CLI once and call the SAME main() for each invalid shape. Seven fresh Node
+      // startups/import rosters here used to add seconds to every future unit-gate landing.
+      writeFileSync(probe, `
+        import { main } from ${JSON.stringify(pathToFileURL(SCRIPT).href)};
+        for (const args of ${JSON.stringify(args)}) {
+          process.argv = [process.execPath, 'probe.mjs', ...args, '--manifest-dir', ${JSON.stringify(manifest)}];
+          console.log('CLI_RESULT', await main());
+        }
+      `);
+    }
+    const cliArgs = batch ? [probe] : [SCRIPT, ...args, "--manifest-dir", manifest];
+    const result = spawnSync(process.execPath, cliArgs, {
+      cwd: root, encoding: "utf8", timeout: 8000,
+      env: { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require=${preload}`.trim() },
+    });
+    assert.equal(result.error, undefined, "bounded CLI probe must terminate normally");
+    assert.equal(existsSync(marker), false, "CLI must not launch Git, a test, or another child process");
+    assert.equal(existsSync(manifest), false, "CLI must not write a gate artifact");
+    return result;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+test("CLI --help prints usage without computing scope, spawning children or writing manifests", () => {
+  const result = noSpawnCli(["--help", "tests/test-changed.test.mjs"]);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /^Usage: node scripts\/test-changed\.mjs/);
+  assert.equal(result.stderr, "");
+});
+
+test("CLI refuses unknown flags and malformed values before any selection or gate dispatch", () => {
+  const invalid = [
+    ["--gat", "tests/test-changed.test.mjs"],
+    ["--gate", "--gtae", "tests/test-changed.test.mjs"],
+    ["--help", "--gtae"],
+    ["-x", "tests/test-changed.test.mjs"],
+    ["--base", "--dry-run", "tests/test-changed.test.mjs"],
+    ["--gate-kind", "--gate", "tests/test-changed.test.mjs"],
+    ["--manifest-dir"],
+    ["--base=HEAD", "--dry-run"],
+    ["--gate-kind", "full"],
+    ["--json", "--gate"],
+  ];
+  const result = noSpawnCli(invalid);
+  assert.equal(result.status, 0, `the disposable no-spawn probe must finish: ${result.stderr}`);
+  assert.deepEqual([...result.stdout.matchAll(/CLI_RESULT (\d+)/g)].map((match) => Number(match[1])),
+    invalid.map(() => 2), "every invalid invocation must fail closed");
+  assert.match(result.stderr, /\[test:changed\] REFUSED: unknown-option --gat/);
+  assert.match(result.stderr, /\[test:changed\] REFUSED: missing-option-value --base/);
+  assert.doesNotMatch(result.stdout, /ALL SCOPED TESTS GREEN|gate=fast/);
+});
 
 test("mapToTests: direct test file changes map directly to themselves", () => {
   const mapped = mapToTests(["tests/commands.test.mjs"]);
@@ -124,6 +196,15 @@ test("CLI --json: outputs structured mapping payload", () => {
   assert.equal(data.static.singleOwner, true);
   assert.equal(data.static.docsCheck, false);
   assert.ok(Array.isArray(data.lanes.unit));
+});
+
+test("CLI -- ends option parsing: a flag-shaped changed path cannot secretly enable the gate", () => {
+  // --json returns before test dispatch even if the sentinel parser regresses; the assertion
+  // then catches the accidental --gate interpretation without launching any suite.
+  const res = spawnSync(process.execPath, [SCRIPT, "--json", "--", "--gate"], { cwd: root, encoding: "utf8", timeout: 8000 });
+  assert.equal(res.status, 0, res.stderr);
+  const data = JSON.parse(res.stdout);
+  assert.deepEqual(data.changed, ["--gate"]);
 });
 
 test("getBaseRef: resolves valid git base ref", () => {
