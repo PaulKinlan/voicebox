@@ -315,6 +315,49 @@ if (process.cwd() !== ROOT) sweepOrphanedProbeMarkers(process.cwd());
 const DEV_FRONT_ORIGIN = "http://localhost:5173";
 const DEV_FRONT_ALIAS_ORIGIN = "http://127.0.0.1:5173";
 
+// One computing site for the server's own page origins. The dev front is deliberately included
+// only where the existing rule allowed it: /api/root and the two WebSocket gates still require
+// the API's own origin (Vite rewrites Origin on its proxy hop).
+function ownPageOrigins() {
+  const selfPort = boundPort ?? PORT;
+  return new Set([
+    `http://127.0.0.1:${selfPort}`,
+    `http://localhost:${selfPort}`,
+    `http://[::1]:${selfPort}`,
+  ]);
+}
+function localPageOrigins() {
+  return new Set([...ownPageOrigins(), ...DEV_FRONT_ORIGINS]);
+}
+
+function browserMutationRefused(req) {
+  // The host token is an out-of-band machine credential, not an Origin claim. Browsers on a
+  // hostile site cannot attach it to a simple cross-site request; preflight grants no CORS.
+  if (extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) return false;
+  // Vite preserves the browser's original Origin in this header before rewriting Origin to the
+  // API target. Without it, a legacy browser POST through Vite has no Fetch Metadata and looks
+  // local even when it came from a hostile page. The proxy overwrites client-supplied copies.
+  // Compare only its host to the Host the browser addressed (also covers https/Tailscale fronts);
+  // a match merely avoids this refusal, never grants authority. Raw TCP can forge both values.
+  const proxiedOrigin = req.headers["x-voicebox-proxied-origin"];
+  if (proxiedOrigin !== undefined) {
+    const host = req.headers.host;
+    let original;
+    try { original = new URL(proxiedOrigin); } catch { return true; }
+    if (typeof proxiedOrigin !== "string" ||
+        !["http:", "https:"].includes(original.protocol) ||
+        typeof host !== "string" || original.host.toLowerCase() !== host.toLowerCase()) return true;
+  }
+  const origin = typeof req.headers.origin === "string" ? req.headers.origin : null;
+  const site = typeof req.headers["sec-fetch-site"] === "string" ? req.headers["sec-fetch-site"] : null;
+  if (origin === null && site === null) return false; // Node, curl and other unheaded machine callers
+  if (origin !== null && !localPageOrigins().has(origin)) return true;
+  if (site === null) return false; // browsers predating Fetch Metadata: Origin is the fallback
+  if (site === "same-origin") return false; // direct API page or the Vite-proxied dev front
+  if (site === "same-site" && origin !== null) return false; // another loopback spelling we serve
+  return true; // cross-site, none, unknown or same-site without an allowed Origin
+}
+
 // ── IN-ROOM SESSION AUTHORIZATION (voicebox-beads-5jl) ──────────────────────────
 // Minted per server process and embedded into the served index.html. Allows in-room UI actions
 // (like reconfiguring bounds or revoking extensions) without exposing or discovering .token on disk.
@@ -331,15 +374,7 @@ function hasExtensionAuthority(req) {
   }
 
   // 3. Request from the local page origin
-  const selfPort = boundPort ?? PORT;
-  const localOrigins = new Set([
-    `http://127.0.0.1:${selfPort}`,
-    `http://localhost:${selfPort}`,
-    `http://[::1]:${selfPort}`,
-    DEV_FRONT_ALIAS_ORIGIN,
-    DEV_FRONT_ORIGIN,
-  ]);
-  if (typeof req.headers.origin === "string" && localOrigins.has(req.headers.origin)) {
+  if (typeof req.headers.origin === "string" && localPageOrigins().has(req.headers.origin)) {
     return true;
   }
   return false;
@@ -4227,6 +4262,23 @@ async function handle(req, res) {
       return res.end(`401 loopback-unauthenticated — ${why}`);
     }
   }
+  // Browser-only CSRF boundary for routes the strict JSON door cannot cover (voicebox-beads-3bwx).
+  // Probe GET also writes a cache/audit entry on a miss or refresh. Vite rewrites Origin on its
+  // /api proxy, but forwards Sec-Fetch-Site, so a hostile page via the dev front still fails here.
+  // Neither header authenticates a local PROCESS: raw TCP can forge both. The opt-in loopback wall
+  // above is that separate boundary; unheaded machine requests and valid host tokens still work.
+  const browserSensitive =
+    key === "POST /api/undo" || key === "POST /api/mini-app/tools" ||
+    key === "POST /api/probe" || key === "GET /api/probe";
+  if (browserSensitive && browserMutationRefused(req)) {
+    return json(res, 403, {
+      ok: false,
+      refused: "cross-origin-request-refused",
+      why: "a browser request from outside this local page cannot trigger this action; nothing was run. " +
+        "Machine callers without browser headers are unaffected. VOICEBOX_LOOPBACK_AUTH=1 is " +
+        "the separate boundary against other local processes.",
+    });
+  }
   // Fall through to public/ for any other path the page requests.
   if (req.method === "GET" && !routes[key] && !url.pathname.startsWith("/api/")) {
     const file = resolvePublicFile(url.pathname);
@@ -4298,13 +4350,7 @@ async function handle(req, res) {
       const declaredByHost = extensions.hostTokenOk(req.headers["x-voicebox-host-token"]);
       const sessionToken = req.headers["x-voicebox-session-token"];
       const declaredByRoomSession = typeof sessionToken === "string" && sessionToken && timingSafeStringEqual(sessionToken, ROOM_SESSION_TOKEN);
-      const selfPort = boundPort ?? PORT;
-      const ownOrigins = new Set([
-        `http://127.0.0.1:${selfPort}`,
-        `http://localhost:${selfPort}`,
-        `http://[::1]:${selfPort}`,
-      ]);
-      const fromOwnPage = typeof req.headers.origin === "string" && ownOrigins.has(req.headers.origin);
+      const fromOwnPage = typeof req.headers.origin === "string" && ownPageOrigins().has(req.headers.origin);
       const allowedSelf = isSelfRequest && hasExtensionAuthority(req);
       if (!declaredByHost && !declaredByRoomSession && !(pageOwned && fromOwnPage) && !allowedSelf) {
         return json(res, 403, {
@@ -5144,13 +5190,7 @@ server.on("upgrade", (req, socket) => {
     const ws = wsUpgrade(req, socket);
     if (!ws) { socket.destroy(); return; }
 
-    const selfPort = boundPort ?? PORT;
-    const localOrigins = new Set([
-      `http://127.0.0.1:${selfPort}`,
-      `http://localhost:${selfPort}`,
-      `http://[::1]:${selfPort}`,
-    ]);
-    const claimsToBeTheLocalPageNow = claimsToBeTheLocalPage(req, localOrigins);
+    const claimsToBeTheLocalPageNow = claimsToBeTheLocalPage(req, ownPageOrigins());
 
     const refuseChannel = (refused, why) => {
       try {
@@ -5259,13 +5299,7 @@ server.on("upgrade", (req, socket) => {
   // itself stays open (5c1's boundary); with VOICEBOX_LOOPBACK_AUTH=1 the local-page branch below also
   // requires the bootstrap-minted session cookie (docs/13 §4), which is what turns the claim into a proof
   // for every local process that cannot read the ticket output.
-  const selfPort = boundPort ?? PORT;
-  const localOrigins = new Set([
-    `http://127.0.0.1:${selfPort}`,
-    `http://localhost:${selfPort}`,
-    `http://[::1]:${selfPort}`,
-  ]);
-  const claimsToBeTheLocalPageNow = claimsToBeTheLocalPage(req, localOrigins);
+  const claimsToBeTheLocalPageNow = claimsToBeTheLocalPage(req, ownPageOrigins());
 
   const refuseLive = (refused, why) => {
     try { ws.send(JSON.stringify({ type: "refused", refused, why })); } catch { /* the socket may be gone */ }

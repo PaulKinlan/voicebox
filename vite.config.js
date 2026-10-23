@@ -265,7 +265,15 @@ export default defineConfig({
         // proxy hop terminating its own origin is what a proxy is for, and the server's rule is
         // unchanged for every non-proxied caller.
         configure: (proxy) => {
-          proxy.on("proxyReq", (proxyReq) => {
+          proxy.on("proxyReq", (proxyReq, req) => {
+            // Preserve the browser's original Origin for the scoped HTTP CSRF refusal, including
+            // pre-Fetch-Metadata browsers: rewriting Origin alone would launder a hostile POST.
+            // Always overwrite/remove any client-supplied copy. This is evidence, not a credential.
+            if (typeof req.headers.origin === "string") {
+              proxyReq.setHeader("x-voicebox-proxied-origin", req.headers.origin);
+            } else {
+              proxyReq.removeHeader("x-voicebox-proxied-origin");
+            }
             proxyReq.setHeader("origin", API_TARGET);
           });
         },
