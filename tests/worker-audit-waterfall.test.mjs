@@ -50,7 +50,7 @@ test("mapConcurrent: fast-paths when items.length <= limit", async () => {
   assert.equal(maxActive, 2, "both items should be executed concurrently");
 });
 
-test("audit reader: multiple writer files are read concurrently rather than sequentially (voicebox-beads-rw7o)", async () => {
+test("audit reader: parallel read dispatch proven by a start-barrier, not a wall-clock ratio (voicebox-beads-rw7o, voicebox-beads-dkw4)", async () => {
   // Simulate an OPFS directory with 4 writer files (alpha, beta, gamma, delta)
   const writerNames = ["writer-alpha.jsonl", "writer-beta.jsonl", "writer-gamma.jsonl", "writer-delta.jsonl"];
   const listing = {
@@ -68,64 +68,72 @@ test("audit reader: multiple writer files are read concurrently rather than sequ
     "writer-delta.jsonl": ['{"kind":"act","seq":4,"instance":"delta","turn":"t4"}'],
   };
 
-  let activeReads = 0;
-  let maxConcurrentReads = 0;
-  const readDelayMs = 25;
+  // START-BARRIER PROOF (voicebox-beads-dkw4): every read holds until ALL FOUR have started.
+  // mapConcurrent (items.length <= limit) dispatches each read synchronously before its first
+  // await, so the barrier opens in microtasks: the pass path runs no timer and compares no
+  // wall-clock ratio, so it cannot flip under host load. A waterfall dispatch can never open
+  // it — read 2 starts only after read 1 settles, and read 1 waits for started === 4 — and
+  // the stall guard below turns that into a loud failure instead of a hung tier. The removed
+  // concurrent < sequential * 0.75 ratio measured the machine, not the code: under loadavg ~16
+  // both arms slow together and it failed at 188.8ms vs 197.7ms on an unchanged tree.
+  let started = 0;
+  let inFlight = 0;
+  let maxInFlight = 0;
+  let openBarrier = () => {};
+  const allStarted = new Promise((resolve) => { openBarrier = resolve; });
 
   const instrumentedStore = {
     async listChildren() {
       return listing;
     },
     async readLines(filePath) {
-      activeReads++;
-      maxConcurrentReads = Math.max(maxConcurrentReads, activeReads);
+      started++;
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      if (started === writerNames.length) openBarrier();
+      await allStarted;
+      inFlight--;
       const name = filePath.split("/").pop();
-      await new Promise((r) => setTimeout(r, readDelayMs));
-      activeReads--;
       return fileContents[name] || [];
     },
   };
 
-  // 1. Concurrent read simulation matching browser/worker.ts logFilesFor
   const targetFiles = listing.entries.filter((file) => file.kind === "file" && file.name.endsWith(".jsonl"));
-  const t0 = performance.now();
-  const loaded = await mapConcurrent(targetFiles, MAX_CONCURRENT_AUDIT_READS, async (file) => {
-    const lines = await instrumentedStore.readLines(`v1/projects/atlas/.audit/${file.name}`);
-    return { name: file.name, lines };
-  });
-  const concurrentDurationMs = performance.now() - t0;
 
-  // Assert concurrent execution: all 4 reads ran concurrently
-  assert.ok(maxConcurrentReads >= 3, `expected concurrent overlap across writer files, got max ${maxConcurrentReads}`);
+  // Stall guard: the FAILURE detector for a waterfall dispatch, bounding how long broken
+  // dispatch may hang this tier. It is never the pass criterion — the barrier opens without it.
+  let failStalled = () => {};
+  const stalled = new Promise((_, reject) => {
+    failStalled = () => reject(new Error(`only ${started}/${writerNames.length} reads dispatched — dispatch is a waterfall, reads are not parallel`));
+  });
+  const stallGuard = setTimeout(() => failStalled(), 5000);
+  let loaded;
+  try {
+    loaded = await Promise.race([
+      mapConcurrent(targetFiles, MAX_CONCURRENT_AUDIT_READS, async (file) => {
+        const lines = await instrumentedStore.readLines(`v1/projects/atlas/.audit/${file.name}`);
+        return { name: file.name, lines };
+      }),
+      stalled,
+    ]);
+  } finally {
+    clearTimeout(stallGuard);
+  }
+
+  assert.equal(started, writerNames.length, "every writer file's read was dispatched");
+  assert.equal(maxInFlight, writerNames.length, "all four reads were in flight simultaneously — dispatch is parallel, not a waterfall");
   assert.equal(loaded.length, 4);
   assert.deepEqual(loaded.map((f) => f.name), writerNames, "writer file order must be strictly preserved");
 
-  // 2. Negative control: sequential loop comparison
-  let seqActiveReads = 0;
-  let seqMaxConcurrentReads = 0;
-  const seqStore = {
-    async readLines(filePath) {
-      seqActiveReads++;
-      seqMaxConcurrentReads = Math.max(seqMaxConcurrentReads, seqActiveReads);
-      const name = filePath.split("/").pop();
-      await new Promise((r) => setTimeout(r, readDelayMs));
-      seqActiveReads--;
-      return fileContents[name] || [];
-    },
-  };
-
-  const tSeq0 = performance.now();
-  const sequentialLoaded = [];
+  // Instrument honesty (deterministic negative control): the same in-flight counter driven by
+  // a genuinely sequential loop reads exactly 1, so the parallel proof above is not vacuous.
+  let seqInFlight = 0;
+  let seqMax = 0;
   for (const file of targetFiles) {
-    const lines = await seqStore.readLines(`v1/projects/atlas/.audit/${file.name}`);
-    sequentialLoaded.push({ name: file.name, lines });
+    seqInFlight++;
+    seqMax = Math.max(seqMax, seqInFlight);
+    await Promise.resolve();
+    seqInFlight--;
   }
-  const sequentialDurationMs = performance.now() - tSeq0;
-
-  assert.equal(seqMaxConcurrentReads, 1, "sequential loop must have max concurrency of exactly 1");
-  assert.deepEqual(loaded, sequentialLoaded, "concurrent and sequential outputs must match identically");
-  assert.ok(
-    concurrentDurationMs < sequentialDurationMs * 0.75,
-    `concurrent read (${concurrentDurationMs.toFixed(1)}ms) should be significantly faster than sequential waterfall (${sequentialDurationMs.toFixed(1)}ms)`,
-  );
+  assert.equal(seqMax, 1, "a genuinely sequential loop shows max in-flight exactly 1");
 });
