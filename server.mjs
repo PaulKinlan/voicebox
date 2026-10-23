@@ -334,6 +334,20 @@ function browserMutationRefused(req) {
   // The host token is an out-of-band machine credential, not an Origin claim. Browsers on a
   // hostile site cannot attach it to a simple cross-site request; preflight grants no CORS.
   if (extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) return false;
+  // Vite preserves the browser's original Origin in this header before rewriting Origin to the
+  // API target. Without it, a legacy browser POST through Vite has no Fetch Metadata and looks
+  // local even when it came from a hostile page. The proxy overwrites client-supplied copies.
+  // Compare only its host to the Host the browser addressed (also covers https/Tailscale fronts);
+  // a match merely avoids this refusal, never grants authority. Raw TCP can forge both values.
+  const proxiedOrigin = req.headers["x-voicebox-proxied-origin"];
+  if (proxiedOrigin !== undefined) {
+    const host = req.headers.host;
+    let original;
+    try { original = new URL(proxiedOrigin); } catch { return true; }
+    if (typeof proxiedOrigin !== "string" ||
+        !["http:", "https:"].includes(original.protocol) ||
+        typeof host !== "string" || original.host.toLowerCase() !== host.toLowerCase()) return true;
+  }
   const origin = typeof req.headers.origin === "string" ? req.headers.origin : null;
   const site = typeof req.headers["sec-fetch-site"] === "string" ? req.headers["sec-fetch-site"] : null;
   if (origin === null && site === null) return false; // Node, curl and other unheaded machine callers
