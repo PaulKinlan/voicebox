@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
 import { attachConditionRecord, measureSuite, writeConditionRecord } from "../scripts/suite-conditions.mjs";
+import { classifySuiteConditions } from "../scripts/suite-condition-verdict.mjs";
 import { TIER_WORKERS } from "../scripts/test-shards.mjs";
 import { createManifest, recordFile } from "../scripts/gate-manifest.mjs";
 import { classify } from "../scripts/test-lanes.mjs";
@@ -71,6 +72,39 @@ test("a holder reporting READY but dropping below target during the suite is not
     runTier: async () => ({ files: [{ path: suite, status: "passed", secs: 0.1 }] }),
   });
   assert.equal(record.conditions[1].status, "unknown");
+});
+
+test("a named slow-warm fixture measures at its 60s bound while ordinary suites keep the caller's bound (voicebox-beads-eoy1)", async () => {
+  // tests/browser-shard-runner.test.mjs's two-file warm fixture legitimately runs 6-30s per arm
+  // (measured in ohg8 and locally), so the default 10s arm bound returned UNKNOWN for a healthy
+  // fixture and hid the signal this diagnostic exists for. The named map raises ONLY that file's
+  // bound; every other suite — including this test's own stub suites — keeps the caller's bound.
+  const fixture = "tests/browser-shard-runner.test.mjs";
+  const browserRoster = [fixture, ...Array.from({ length: TIER_WORKERS.browser - 1 }, (_, n) => `tests/peer-${n}.test.mjs`)];
+  const seenArms = [];
+  const record = await measureSuite(fixture, {
+    tier: "browser", timeoutMs: 10000, targetLoad: 1, readLoad: () => 2, roster: browserRoster, parentHoldsSlot: false,
+    runFile: async (file, { timeoutMs }) => { seenArms.push(timeoutMs); return { ...ok, secs: 7.4 }; },
+    peer: async () => ({ ready: true, holder: "test-peer", isAlive: () => true, stop() {} }),
+    runTier: async ({ timeoutMs }) => { seenArms.push(timeoutMs); return { files: [{ path: fixture, status: "passed", secs: 9.1 }] }; },
+  });
+  assert.deepEqual(seenArms, [60000, 60000, 60000], "the named fixture measures all three arms at its measured 60s bound, not the 10s default");
+  assert.deepEqual(record.conditions.map((arm) => arm.status), ["passed", "passed", "passed"], "a healthy fixture now completes all three conditions");
+
+  // Honest UNKNOWN is preserved: even under the raised bound, a timeout arm is UNKNOWN — never FAIL or PASS.
+  const timedOut = { standalone: { status: "passed", secs: 7 }, heavy_slot: { status: "timeout", secs: null }, shard_concurrency: { status: "passed", secs: 9 } };
+  assert.equal(classifySuiteConditions(fixture, timedOut).verdict, "unknown");
+  assert.match(classifySuiteConditions(fixture, timedOut).reason, /incomplete three-condition evidence/);
+
+  // The raise is per named fixture, never global: an unnamed suite keeps the caller's bound exactly.
+  const ordinaryArms = [];
+  await measureSuite(suite, {
+    tier: "unit", timeoutMs: 1000, targetLoad: 1, readLoad: () => 2, roster, parentHoldsSlot: false,
+    runFile: async (file, { timeoutMs }) => { ordinaryArms.push(timeoutMs); return ok; },
+    peer: async () => ({ ready: true, holder: "test-peer", isAlive: () => true, stop() {} }),
+    runTier: async ({ timeoutMs }) => { ordinaryArms.push(timeoutMs); return { files: [{ path: suite, status: "passed", secs: 0.1 }] }; },
+  });
+  assert.deepEqual(ordinaryArms, [1000, 1000, 1000], "an unnamed suite keeps the caller's bound exactly — no global raise");
 });
 
 test("post-slot attachment is atomic, one-shot, and leaves the gate's failed status untouched", () => {

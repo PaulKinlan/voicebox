@@ -12,6 +12,18 @@ import { killRunningChildren, runOneFile, statusOf } from "./test-changed.mjs";
 import { classifySuiteConditions } from "./suite-condition-verdict.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+// voicebox-beads-eoy1: MEASURED per-arm bounds for named slow-warm fixtures. The 10s default
+// arm bound cannot classify a fixture that legitimately runs 6-30s per arm (browser boot +
+// nested runner files; measured in ohg8 and reproduced locally at ~7s idle), so its three
+// conditions kept coming back UNKNOWN for a HEALTHY fixture — hiding exactly the signal this
+// diagnostic exists for. The map raises the bound ONLY for the named file (never lowers it;
+// every other suite keeps the caller's bound), and the artifact records the bound used so
+// the evidence stays auditable. 60s is the measured worst case plus margin, not a global raise.
+const MEASURED_FIXTURE_ARM_BOUNDS_MS = new Map([
+  ["tests/browser-shard-runner.test.mjs", 60000],
+]);
+const armBoundMs = (file, timeoutMs) => Math.max(timeoutMs, MEASURED_FIXTURE_ARM_BOUNDS_MS.get(file) ?? 0);
 const incomplete = (reason, load = null) => ({ status: "unknown", secs: null, loadavg_1m: { start: load, end: loadavg1m() }, reason });
 const killGroup = (child) => { try { process.kill(-child.pid, "SIGTERM"); } catch { try { child.kill("SIGTERM"); } catch {} } };
 let activeHolder = null;
@@ -59,13 +71,14 @@ async function measure(run, timeoutMs, readLoad = loadavg1m) {
 /** The three arms are one observation each, in order: never retry a red or unknown arm. */
 export async function measureSuite(file, { tier, timeoutMs = 10000, targetLoad = null, peer = startLoadedPeer, runFile = runOneFile, runTier = runOneTier, roster = tierFiles(tier), readLoad = loadavg1m, parentHoldsSlot = Boolean(process.env.FLEET_HEAVY_HELD) } = {}) {
   if (!tier || !roster.includes(file)) throw new Error(`${file}: not in the ${tier} tier's classified roster`);
+  const perArmMs = armBoundMs(file, timeoutMs);
   const call = async () => {
-    const result = await runFile(file, { timeoutMs });
+    const result = await runFile(file, { timeoutMs: perArmMs });
     return { status: statusOf(result), secs: result.secs };
   };
   const conditions = {};
   let holder = "none (peer holder not acquired)";
-  conditions.standalone = await measure(call, timeoutMs, readLoad);
+  conditions.standalone = await measure(call, perArmMs, readLoad);
   if (parentHoldsSlot) {
     conditions.heavy_slot = incomplete("parent already holds the heavy slot; peer-held contention cannot be measured reentrantly");
   } else {
@@ -83,7 +96,7 @@ export async function measureSuite(file, { tier, timeoutMs = 10000, targetLoad =
         held.stop();
       } else {
         try {
-          conditions.heavy_slot = await measure(call, timeoutMs, readLoad);
+          conditions.heavy_slot = await measure(call, perArmMs, readLoad);
           if (held.isAlive && !held.isAlive()) conditions.heavy_slot = incomplete("peer holder exited during measured suite; contention not established");
           else if (conditions.heavy_slot.loadavg_1m.start === null || conditions.heavy_slot.loadavg_1m.end === null ||
                    conditions.heavy_slot.loadavg_1m.start < target || conditions.heavy_slot.loadavg_1m.end < target) {
@@ -99,10 +112,10 @@ export async function measureSuite(file, { tier, timeoutMs = 10000, targetLoad =
     conditions.shard_concurrency = incomplete("cannot measure at configured tier width without changing the tier's isolation/roster");
   } else {
     conditions.shard_concurrency = await measure(async () => {
-      const record = await runTier({ tier, files: [file, ...peers], workers, timeoutMs, log: { log() {}, error() {} } });
+      const record = await runTier({ tier, files: [file, ...peers], workers, timeoutMs: perArmMs, log: { log() {}, error() {} } });
       const target = record.files.find((entry) => entry.path === file);
       return { status: target?.status ?? "unknown", secs: target?.secs ?? null };
-    }, timeoutMs, readLoad);
+    }, perArmMs, readLoad);
   }
   // The tier file already owns its path, status and verdict. Conditions are only optional evidence.
   const suiteCommand = `node --test --test-reporter=tap ${file}`;
@@ -160,13 +173,19 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     console.error("usage: node scripts/suite-conditions.mjs --tier unit|server|browser --file tests/name.test.mjs [--file ... up to 4] --dir <artifact-dir> [--tier-record <retained-tier.json>] [--file-secs 1..30] [--target-load <number>]");
     process.exitCode = 2;
   } else {
+    const maxArmMs = Math.max(...files.map((f) => armBoundMs(f, fileSecs * 1000)));
+    const maxTotalMs = Math.max(120000, files.length * (3 * maxArmMs + 40000));
     // A detached lane can never wedge indefinitely: signal cleanup leaves any unfinished arm UNKNOWN.
+    // The total bound scales with the requested files' arm bounds (voicebox-beads-eoy1): a named
+    // slow-warm fixture's three 60s arms + holder handshake cannot fit 120s, and cutting the last
+    // arm at a fixed bound would ship incomplete evidence for a healthy fixture all over again.
+    // Ordinary files keep the original 120s floor exactly.
     const bound = setTimeout(() => {
       if (activeHolder) killGroup(activeHolder);
       killRunningChildren();
-      console.error("[conditions] total 120s bound expired; unfinished measurements remain UNKNOWN");
+      console.error(`[conditions] total ${Math.round(maxTotalMs / 1000)}s bound expired; unfinished measurements remain UNKNOWN`);
       process.exit(124);
-    }, 120000);
+    }, maxTotalMs);
     for (const file of files) {
       try {
         if (tierRecord && process.env.FLEET_HEAVY_HELD) throw new Error("the original gate still owns the heavy slot; wait until it releases before attaching peer-held evidence");
@@ -175,7 +194,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
         if (tierRecord) attachConditionRecord(record, tierRecord);
         const byName = Object.fromEntries(record.conditions.map(({ condition, ...arm }) => [condition, arm]));
         const diagnosis = classifySuiteConditions(file, byName);
-        console.log(`[conditions] ${diagnosis.verdict} ${file}: ${diagnosis.reason}; ${written}`);
+        console.log(`[conditions] ${diagnosis.verdict} ${file}: ${diagnosis.reason}; arm bound ${armBoundMs(file, fileSecs * 1000) / 1000}s; ${written}`);
         if (diagnosis.verdict !== "passed") process.exitCode = 1;
       } catch (err) { console.error(`[conditions] ${file}: incomplete — ${err.message}`); process.exitCode = 1; }
     }
