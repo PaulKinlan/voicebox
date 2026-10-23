@@ -122,8 +122,14 @@ test("audit reader: parallel read dispatch proven by a start-barrier, not a wall
 
   assert.equal(started, writerNames.length, "every writer file's read was dispatched");
   assert.equal(maxInFlight, writerNames.length, "all four reads were in flight simultaneously — dispatch is parallel, not a waterfall");
-  assert.equal(loaded.length, 4);
-  assert.deepEqual(loaded.map((f) => f.name), writerNames, "writer file order must be strictly preserved");
+  // Full-content equality (voicebox-beads-kant): names, order AND every JSONL line. The previous
+  // test deep-equalled complete loaded objects against an independently read sequential output;
+  // a mutant that discards or corrupts entries (e.g. returns lines: []) must fail here, not pass.
+  assert.deepEqual(
+    loaded,
+    writerNames.map((name) => ({ name, lines: fileContents[name] })),
+    "the dispatch returns every writer's full JSONL lines in input order — dropped or wrong entries are a failure",
+  );
 
   // Instrument honesty (deterministic negative control): the same in-flight counter driven by
   // a genuinely sequential loop reads exactly 1, so the parallel proof above is not vacuous.
