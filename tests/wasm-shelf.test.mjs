@@ -256,10 +256,17 @@ test("u2lx advisory: child-side watchdog terminates orphan process when stdin is
   // Spawn child with a 150ms watchdog and leave stdin open (simulating an orphaned child with unclosed stdin).
   // The elapsed time includes Node's startup in a separate process, which can exceed 2s in the
   // concurrent unit tier; exit code 1 and the minimum elapsed time prove the child watchdog fired.
+  // The wall-clock upper bound is NOT reintroduced (it flakes under concurrent load): instead the
+  // child reports the deadline it actually armed on stderr when the watchdog fires, so an
+  // implementation that silently ignores the argv[2] override and arms the 6000ms default fails
+  // the deadline assertion below deterministically.
   const started = Date.now();
   const child = spawn(process.execPath, [wasmChildPath, "150"], {
     stdio: ["pipe", "pipe", "pipe"],
   });
+  let stderrText = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => { stderrText += chunk; });
 
   const code = await new Promise((resolve, reject) => {
     const hangTimer = setTimeout(() => {
@@ -275,6 +282,8 @@ test("u2lx advisory: child-side watchdog terminates orphan process when stdin is
 
   assert.equal(code, 1, "child self-terminates with non-zero exit code on watchdog expiry");
   assert.ok(elapsed >= 140, `watchdog must not fire before its 150ms deadline (${elapsed}ms)`);
+  assert.match(stderrText, /watchdog fired after 150ms/,
+    "the child armed the 150ms argv[2] override — a child that reports the 6000ms default here is silently ignoring its override");
 });
 
 test("u2lx advisory: child stdout exceeding host bound is refused as resource-exceeded and killed with SIGKILL", async () => {

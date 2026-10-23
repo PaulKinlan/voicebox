@@ -83,7 +83,7 @@ Every WASM tool call executes in a fresh subprocess (`lib/wasm-worker.mjs`) gove
 | **Young-Generation Heap** | `16 MB` | Worker terminated; returns `resource-exceeded` |
 | **Max Module File Size** | `WASM_MODULE_MAX_BYTES` = `16 MB` | Refused before reading into memory |
 | **Max Child Stdout** | `WASM_CHILD_MAX_STDOUT_BYTES` = `2 MB` | Worker killed; returns `resource-exceeded` |
-| **Child Watchdog Ceiling** | `WASM_CHILD_WATCHDOG_MS` = `6,000ms` | Child process self-exits if orphaned |
+| **Child Watchdog Ceiling** | `WASM_CHILD_WATCHDOG_MS` = `6,000ms` | Child process self-exits if orphaned; on firing it reports the deadline it armed (argv[2] override) on stderr |
 
 ---
 
