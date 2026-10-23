@@ -1,11 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
-import { attachConditionRecord, measureSuite, writeConditionRecord } from "../scripts/suite-conditions.mjs";
+import { attachConditionRecord, measureSuite, writeConditionRecord, MEASURED_FIXTURE_ARM_BOUNDS_MS } from "../scripts/suite-conditions.mjs";
+import { tierFiles } from "../scripts/gate-tier.mjs";
 import { classifySuiteConditions } from "../scripts/suite-condition-verdict.mjs";
 import { TIER_WORKERS } from "../scripts/test-shards.mjs";
 import { createManifest, recordFile } from "../scripts/gate-manifest.mjs";
@@ -105,6 +106,17 @@ test("a named slow-warm fixture measures at its 60s bound while ordinary suites 
     runTier: async ({ timeoutMs }) => { ordinaryArms.push(timeoutMs); return { files: [{ path: suite, status: "passed", secs: 0.1 }] }; },
   });
   assert.deepEqual(ordinaryArms, [1000, 1000, 1000], "an unnamed suite keeps the caller's bound exactly — no global raise");
+});
+
+test("every named measured arm bound points at a real, classifiable suite — a rename cannot silently revert to the 10s bound (voicebox-beads-ejdx)", () => {
+  assert.ok(MEASURED_FIXTURE_ARM_BOUNDS_MS.size >= 1, "the measured-bound map is not silently emptied");
+  assert.ok(MEASURED_FIXTURE_ARM_BOUNDS_MS.has("tests/browser-shard-runner.test.mjs"), "the eoy1 fixture stays named");
+  const rosters = ["unit", "server", "browser"].map((tier) => tierFiles(tier));
+  for (const [file, boundMs] of MEASURED_FIXTURE_ARM_BOUNDS_MS) {
+    assert.ok(existsSync(path.join(ROOT, file)), `${file} exists — a renamed or moved fixture must update the map, not dangle`);
+    assert.ok(rosters.some((files) => files.includes(file)), `${file} is in a classified tier roster, so measureSuite can actually measure it`);
+    assert.ok(boundMs > 10000, `${file}'s bound (${boundMs}ms) raises beyond the 10s default — the map exists to raise`);
+  }
 });
 
 test("post-slot attachment is atomic, one-shot, and leaves the gate's failed status untouched", () => {

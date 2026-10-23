@@ -18,9 +18,13 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // nested runner files; measured in ohg8 and reproduced locally at ~7s idle), so its three
 // conditions kept coming back UNKNOWN for a HEALTHY fixture — hiding exactly the signal this
 // diagnostic exists for. The map raises the bound ONLY for the named file (never lowers it;
-// every other suite keeps the caller's bound), and the artifact records the bound used so
-// the evidence stays auditable. 60s is the measured worst case plus margin, not a global raise.
-const MEASURED_FIXTURE_ARM_BOUNDS_MS = new Map([
+// every other suite keeps the caller's bound). 60s is the measured worst case plus margin,
+// not a global raise. AUDITABILITY (voicebox-beads-g9h8): the bound used is printed on the
+// CLI stdout line per file; the written artifact carries no bound field — the artifact schema
+// is owned by scripts/gate-manifest.mjs and deliberately untouched. The map is EXPORTED so
+// tests/suite-conditions.test.mjs can fail loudly if a named file is renamed or leaves its
+// tier roster (voicebox-beads-ejdx) — a dangling entry would silently revert to the 10s bound.
+export const MEASURED_FIXTURE_ARM_BOUNDS_MS = new Map([
   ["tests/browser-shard-runner.test.mjs", 60000],
 ]);
 const armBoundMs = (file, timeoutMs) => Math.max(timeoutMs, MEASURED_FIXTURE_ARM_BOUNDS_MS.get(file) ?? 0);
@@ -173,6 +177,14 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     console.error("usage: node scripts/suite-conditions.mjs --tier unit|server|browser --file tests/name.test.mjs [--file ... up to 4] --dir <artifact-dir> [--tier-record <retained-tier.json>] [--file-secs 1..30] [--target-load <number>]");
     process.exitCode = 2;
   } else {
+    if (process.env.FLEET_HEAVY_HELD) {
+      // voicebox-beads-hibh: fleet-gate dispatches every job through fleet-heavy, which grants
+      // FLEET_HEAVY_HELD=1 — under it the heavy_slot arm can only be honestly incomplete and the
+      // verdict stays unknown for a healthy fixture. Say so BEFORE the run, and name the shape
+      // that can actually classify: run this script directly (it self-bounds and cleans up on
+      // signals) after the heavy slot releases, not wrapped in fleet-gate.
+      console.error("[conditions] FLEET_HEAVY_HELD=1: the parent holds the heavy slot, so the heavy_slot arm will be incomplete and the verdict unknown. For complete three-condition evidence run this script DIRECTLY (not via fleet-gate) after the heavy slot releases.");
+    }
     const maxArmMs = Math.max(...files.map((f) => armBoundMs(f, fileSecs * 1000)));
     const maxTotalMs = Math.max(120000, files.length * (3 * maxArmMs + 40000));
     // A detached lane can never wedge indefinitely: signal cleanup leaves any unfinished arm UNKNOWN.
