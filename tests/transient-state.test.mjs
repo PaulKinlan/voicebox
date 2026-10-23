@@ -477,9 +477,9 @@ test("transient-state: regex segmentation handles keywords, statement positions,
     });
     assert.equal(unwaitedRes.status, 0);
     for (const u of unwaitedFiles) {
-      assert.equal(
-        unwaitedRes.stdout.includes(`unwaited_${u.name}.test.mjs`),
-        true,
+      assert.match(
+        unwaitedRes.stdout,
+        new RegExp(`^\\s*review\\s+.*unwaited_${u.name}\\.test\\.mjs:`, "m"),
         `unwaited assertion following ${u.name} is not masked and is listed for review`,
       );
     }
