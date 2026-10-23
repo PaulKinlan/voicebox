@@ -162,6 +162,37 @@ test("hostile webpage cannot hijack /channel or /live through Vite dev front (CS
   assert.equal(positive.opened, true, "legitimate dev-front page must connect to /channel");
   const positiveRoot = await (await fetch(`${api.base}/api/root`)).json();
   assert.equal(positiveRoot.executor?.connected, true, "legitimate dev-front page is active executor");
+
+  // Positive control for /live on Vite dev front: connects and receives rate frame (voicebox-beads-ukmg)
+  const positiveLive = await page.evaluate((front) => {
+    return new Promise((resolve) => {
+      const ws = new WebSocket(front.replace(/^http/, "ws") + "/live");
+      const frames = [];
+      let resolved = false;
+      ws.onmessage = (e) => {
+        try {
+          const parsed = JSON.parse(e.data);
+          frames.push(parsed);
+          if (parsed.type === "rate" && !resolved) {
+            resolved = true;
+            resolve({ admitted: true, rateFrame: parsed, frames });
+          }
+        } catch {
+          frames.push({ raw: e.data });
+        }
+      };
+      ws.onclose = (e) => {
+        if (!resolved) {
+          resolved = true;
+          resolve({ admitted: false, code: e.code, reason: e.reason, frames });
+        }
+      };
+    });
+  }, viteFront);
+
+  assert.notEqual(positiveLive.code, 1008, "legitimate dev-front page must not be refused with WS 1008");
+  assert.equal(positiveLive.admitted, true, `dev-front /live connection must receive rate frame: ${JSON.stringify(positiveLive)}`);
+  assert.equal(typeof positiveLive.rateFrame.inputRate, "number");
 });
 
 test("loopback Origin spoofing through Vite proxy is neutralized", async (t) => {
