@@ -53,39 +53,47 @@ test("transient-state: a fixed delay before an assertion on page state FAILS CLO
 });
 
 test("transient-state: every clause that clears a candidate clears it BY NAME, and nothing else does", () => {
-  // ABSENCE: a delay before an absence is the point of the assertion (the negative controls in
-  // changelog-dialog-extraction and opfs-scratch-room are exactly this).
-  for (const body of [
-    'assert.equal((await readRoot(s)).declared, false, "still not declared");',
-    "assert.equal(window.__calls.length, 0);",
-    'assert.notEqual(await page.evaluate(() => window.__x), "ready");',
-    'assert.ok(!(await page.evaluate(() => window.__panel.open)));',
-  ]) {
-    const res = check(sleepStmt + shape({ body }));
-    assert.equal(res.code, 0, `ABSENCE must clear ${body} — output was ${res.out}`);
-    assert.match(res.out, /cleared .* — ABSENCE/, "and the clause is named in the output");
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-clears-"));
+  try {
+    const fixtureBodies = {
+      absence1: { body: 'assert.equal((await readRoot(s)).declared, false, "still not declared");', clause: "ABSENCE" },
+      absence2: { body: "assert.equal(window.__calls.length, 0);", clause: "ABSENCE" },
+      absence3: { body: 'assert.notEqual(await page.evaluate(() => window.__x), "ready");', clause: "ABSENCE" },
+      absence4: { body: 'assert.ok(!(await page.evaluate(() => window.__panel.open)));', clause: "ABSENCE" },
+      poll: {
+        open: "while (true) {", close: "}", delay: "await sleep(50);",
+        body: 'if (!(await page.evaluate(() => window.__ready))) continue;\n  assert.equal(await page.evaluate(() => window.__ready), true);',
+        clause: "NOT-IMMEDIATE",
+      },
+      inPage: {
+        open: "await page.evaluate(async () => {", close: "});", delay: "await sleep(400);",
+        body: 'assert.equal(await page.evaluate(() => window.__n), 1);',
+        clause: "IN-PAGE",
+      },
+      noAsync: {
+        body: "assert.equal(2 + 2, process.env.GATE_CASE === 'x' ? 5 : 4);",
+        clause: "NO-ASYNC",
+      },
+      notImmediate: {
+        body: "const overflow = await page.evaluate(() => document.body.scrollWidth);",
+        clause: "NOT-IMMEDIATE",
+      },
+    };
+    const files = Object.entries(fixtureBodies).map(([name, conf]) => {
+      const file = path.join(dir, `${name}.test.mjs`);
+      writeFileSync(file, sleepStmt + shape(conf));
+      return { file, name, clause: conf.clause };
+    });
+    const res = spawnSync(process.execPath, [CHECKER, ...files.map((f) => f.file)], {
+      cwd: root, encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL",
+    });
+    assert.equal(res.status, 0, `every cleared clause must exit 0 — output was ${res.stdout}${res.stderr}`);
+    for (const f of files) {
+      assert.match(res.stdout, new RegExp(`cleared .*${f.name}\\.test\\.mjs:\\d+ — ${f.clause}`), `clause ${f.clause} named for ${f.name}`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
-
-  // A real poll re-checks after sleeping, before reaching its assertion. That intervening check
-  // breaks the immediate-delay shape; merely putting the assertion in a loop does not.
-  const poll = check(sleepStmt + shape({ open: "while (true) {", close: "}", delay: "await sleep(50);", body: 'if (!(await page.evaluate(() => window.__ready))) continue;\n  assert.equal(await page.evaluate(() => window.__ready), true);' }));
-  assert.equal(poll.code, 0, `a post-sleep re-check must clear by NOT-IMMEDIATE — output was ${poll.out}`);
-  assert.match(poll.out, /— NOT-IMMEDIATE/, "named");
-
-  // IN-PAGE: the delay runs inside page.evaluate(), i.e. it is the measured timeline, not the test's wait.
-  const inPage = check(sleepStmt + shape({ open: "await page.evaluate(async () => {", close: "});", delay: "await sleep(400);", body: 'assert.equal(await page.evaluate(() => window.__n), 1);' }));
-  assert.equal(inPage.code, 0, `IN-PAGE must clear a delay inside the page — output was ${inPage.out}`);
-  assert.match(inPage.out, /— IN-PAGE/, "named");
-
-  // NO-ASYNC: a fixture asserting its own arithmetic observes nothing that can arrive late.
-  const noAsync = check(sleepStmt + shape({ body: "assert.equal(2 + 2, process.env.GATE_CASE === 'x' ? 5 : 4);" }));
-  assert.equal(noAsync.code, 0, `NO-ASYNC must clear a fixture assertion — output was ${noAsync.out}`);
-  assert.match(noAsync.out, /— NO-ASYNC/, "named");
-
-  // NOT-IMMEDIATE: the delay is followed by a read, not an assertion — not this shape at all.
-  const notImmediate = check(sleepStmt + shape({ body: "const overflow = await page.evaluate(() => document.body.scrollWidth);" }));
-  assert.equal(notImmediate.code, 0, `NOT-IMMEDIATE must clear a delay followed by a read — output was ${notImmediate.out}`);
-  assert.match(notImmediate.out, /— NOT-IMMEDIATE/, "named");
 });
 
 test("transient-state: a loop alone does NOT turn a fixed sleep into a bounded polling wait (voicebox-beads-174g)", () => {
@@ -435,39 +443,44 @@ test("transient-state: regex segmentation handles keywords, statement positions,
       memberIfDivision: "const val = obj.if(flag) / 2;",
       memberWhileDivision: "const val = obj.while(flag) / 2;",
     };
-    for (const [name, prefix] of Object.entries(waitControls)) {
-      // 1. With wait: wait is not masked, so review item is cleared
+
+    // 1. With wait: wait is not masked, so review item is cleared (batched into one invocation)
+    const waitFiles = Object.entries(waitControls).map(([name, prefix]) => {
       const waitFile = path.join(dir, `wait_${name}.test.mjs`);
       writeFileSync(
         waitFile,
         `import test from "node:test";\nimport assert from "node:assert/strict";\ntest("fixture", async () => {\n  ${prefix} await page.waitForFunction(() => window.__status === 'ready');\n  ${assertion}\n});\n`,
       );
-      const waitRes = spawnSync(process.execPath, [CHECKER, waitFile, "--list"], {
-        cwd: root,
-        encoding: "utf8",
-      });
-      assert.equal(waitRes.status, 0);
-      assert.equal(
-        waitRes.stdout.includes("review"),
-        false,
-        `valid wait following ${name} is not masked and clears the review item`,
-      );
+      return waitFile;
+    });
+    const waitRes = spawnSync(process.execPath, [CHECKER, ...waitFiles, "--list"], {
+      cwd: root, encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL",
+    });
+    assert.equal(waitRes.status, 0);
+    assert.equal(
+      waitRes.stdout.includes("review"),
+      false,
+      "valid wait following division/member access is not masked and clears the review item",
+    );
 
-      // 2. Without wait: assertion is not masked, so review item is properly listed
+    // 2. Without wait: assertion is not masked, so review item is properly listed (batched into one invocation)
+    const unwaitedFiles = Object.entries(waitControls).map(([name, prefix]) => {
       const unwaitedFile = path.join(dir, `unwaited_${name}.test.mjs`);
       writeFileSync(
         unwaitedFile,
         `import test from "node:test";\nimport assert from "node:assert/strict";\ntest("fixture", async () => {\n  ${prefix}\n  ${assertion}\n});\n`,
       );
-      const unwaitedRes = spawnSync(process.execPath, [CHECKER, unwaitedFile, "--list"], {
-        cwd: root,
-        encoding: "utf8",
-      });
-      assert.equal(unwaitedRes.status, 0);
+      return { unwaitedFile, name };
+    });
+    const unwaitedRes = spawnSync(process.execPath, [CHECKER, ...unwaitedFiles.map((u) => u.unwaitedFile), "--list"], {
+      cwd: root, encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL",
+    });
+    assert.equal(unwaitedRes.status, 0);
+    for (const u of unwaitedFiles) {
       assert.equal(
-        unwaitedRes.stdout.includes("review"),
+        unwaitedRes.stdout.includes(`unwaited_${u.name}.test.mjs`),
         true,
-        `unwaited assertion following ${name} is not masked and is listed for review`,
+        `unwaited assertion following ${u.name} is not masked and is listed for review`,
       );
     }
   } finally {

@@ -413,10 +413,10 @@ test("CLI gate: --allow-unmapped is refused outright, and the refusal names why"
 test("CLI gate: a genuine changed test file dispatches, emits the hub's markers and writes a reconciled manifest", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-gate-cli-"));
   try {
-    const res = spawnSync(process.execPath, [SCRIPT, "--gate", "--manifest-dir", dir, "tests/gate-manifest.test.mjs"], { cwd: root, encoding: "utf8" });
+    const res = spawnSync(process.execPath, [SCRIPT, "--gate", "--manifest-dir", dir, "tests/icon-sprite.test.mjs"], { cwd: root, encoding: "utf8" });
     assert.equal(res.status, 0, res.stdout + res.stderr);
-    assert.match(res.stdout, /^\[test:changed\] running tests\/gate-manifest\.test\.mjs$/m);
-    assert.match(res.stdout, /^fast-gate: passed: tests\/gate-manifest\.test\.mjs$/m);
+    assert.match(res.stdout, /^\[test:changed\] running tests\/icon-sprite\.test\.mjs$/m);
+    assert.match(res.stdout, /^fast-gate: passed: tests\/icon-sprite\.test\.mjs$/m);
     // `running:` is read as coverage by the hub's extractor and cannot be retracted by a killed process,
     // so the gate publishes terminal markers only.
     assert.equal(/^fast-gate: running:/m.test(res.stdout), false, "no coverage claim for a file a kill could interrupt");
