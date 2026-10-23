@@ -135,7 +135,9 @@ Each bound can be raised or tightened per run without editing the gate:
 - The **manifest** bound is `VOICEBOX_GATE_MANIFEST_SECS`, and the per-file budget the tier runner gives a
   test file is derived per tier from measured headroom (`TIER_FILE_MS`: unit 120s, server 300s, browser 240s; default 240s),
   overridable by `VOICEBOX_GATE_FILE_SECS` or `--file-secs`. Sitting under the unit stage bound (180s) ensures a wedged unit
-  file is recorded timeout by name without aborting the lane (voicebox-beads-ak9h).
+  file is recorded timeout by name without aborting the lane (voicebox-beads-ak9h). Longest-first unit queue ordering via
+  `buildQueue` (`scripts/gate-tier.mjs`) dispatches heavy suites (`test-changed`, `transient-state`) first, preventing
+  worker tail starvation under contention (voicebox-beads-hfa8).
 
 A refusal names the variable to raise, so the remedy is copy-pasteable. `tests/pre-push.test.mjs` pins the resolution, the legacy fallback and its precedence (voicebox-beads-03po), so removing a link is a failing test rather than a silent compat break.
 

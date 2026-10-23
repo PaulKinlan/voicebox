@@ -42,7 +42,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { classify } from "./test-lanes.mjs";
-import { ISOLATED, TIER_FILE_MS, TIER_WORKERS } from "./test-shards.mjs";
+import { buildQueue, ISOLATED, TIER_FILE_MS, TIER_WORKERS } from "./test-shards.mjs";
 import { coverageGaps, emitMarker, tapCounts, tierRecordPath } from "./gate-manifest.mjs";
 import { killRunningChildren, runOneFile, statusOf } from "./test-changed.mjs";
 import { loadavg1m } from "../lib/host-load.mjs";
@@ -209,7 +209,7 @@ export async function runOneTier({ tier, files, workers = TIER_WORKERS[tier] ?? 
     return record;
   };
 
-  const parallel = files.filter((f) => !ISOLATED.has(f));
+  const parallel = buildQueue(files.filter((f) => !ISOLATED.has(f)), { cwd: ROOT });
   const alone = files.filter((f) => ISOLATED.has(f));
   const workerLoop = async () => {
     for (;;) {
