@@ -115,8 +115,13 @@ width/isolation, each exactly once with start/end load readings. An unavailable 
 passed. The retained tier update is atomic and cannot change the original status, counts or gate verdict.
 Ops owns the short nightly named-list schedule; fleet tooling owns the automatic post-slot invocation.
 Until that outer hook lands, a red tier remains honestly pending and prints the completion command.
-Invoke it detached through `fleet-gate suite-diagnosis -t 130 -- node scripts/suite-conditions.mjs ...`;
-the CLI caps itself at 120s and four named files and cleans up holder and child test processes on signals.
+Invoke it DIRECTLY (not wrapped in `fleet-gate`: every fleet-gate job runs through fleet-heavy, which
+grants `FLEET_HEAVY_HELD=1`, and a parent that holds the heavy slot can only record `heavy_slot` as
+incomplete — the script prints a named warning and stays unknown, voicebox-beads-hibh):
+`node scripts/suite-conditions.mjs --tier unit --file tests/name.test.mjs --dir <scratch> --tier-record <scratch>/unit.json`.
+The CLI caps itself at four named files and `max(120s, files × (3 × the file's arm bound + 40s))` —
+120s for ordinary files, 220s while diagnosing `tests/browser-shard-runner.test.mjs` (voicebox-beads-eoy1) —
+and cleans up holder and child test processes on signals, so a direct detached run cannot wedge.
 
 **And a DIRTY worktree seals no landing receipt.** The tiers run over the working tree while the receipt is
 keyed by the committed tree, so on a push that lands, `scripts/pre-push.sh` passes `--tree-dirty` to the fold
