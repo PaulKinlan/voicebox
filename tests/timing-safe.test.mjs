@@ -156,6 +156,20 @@ test("protocol: host token and in-room session token accept exactly what they ac
   assert.equal(await gate({ "x-voicebox-session-token": session.slice(0, -1) }), 403, "a short session token is refused");
   assert.equal(await gate({ "x-voicebox-session-token": `${session}x` }), 403, "a long session token is refused");
   assert.equal(await gate({ "x-voicebox-session-token": "" }), 403, "an empty session token is refused");
+
+  // Branch landing is a protected host act too (voicebox-beads-gi60): POST /api/branches/merge
+  // runs `git checkout` + `git merge` on the active repository, so the SAME wall must answer it.
+  // With an authority-passing request the route proceeds to the landing seam and answers for the
+  // scratch workspace (not a git repo) — 400, never 403, and no git ever runs.
+  const mergeGate = (headers) =>
+    fetch(`${server.base}/api/branches/merge`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: "{}" })
+      .then((r) => r.status);
+
+  assert.notEqual(await mergeGate({ "x-voicebox-host-token": host }), 403, "the real host token must reach the landing seam");
+  assert.equal(await mergeGate({ "x-voicebox-host-token": `x${host.slice(1)}` }), 403, "an equal-length wrong host token cannot land a branch");
+  assert.equal(await mergeGate({}), 403, "a branch merge with no credentials is refused");
+  assert.notEqual(await mergeGate({ "x-voicebox-session-token": session }), 403, "the real in-room session token must reach the landing seam");
+  assert.equal(await mergeGate({ "x-voicebox-session-token": `x${session.slice(1)}` }), 403, "an equal-length wrong session token cannot land a branch");
 });
 
 // ── 4. the vb_session cookie, driven ───────────────────────────────────────

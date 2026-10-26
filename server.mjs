@@ -3805,6 +3805,7 @@ const branchRoutes = createBranchRoutes({
   json,
   readJsonBody,
   answerOnce,
+  hasExtensionAuthority,
 });
 const doctorRoutes = createDoctorRoutes({
   getActive: () => active,
