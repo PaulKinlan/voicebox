@@ -53,8 +53,8 @@ When `execute(action)` in `server.mjs` receives `action.verb === "system"`:
 | `copy`, `paste` | `text` | | clipboard, as before |
 | `stop_speaking` | `mode` | `interrupt` \| `mute` \| `unmute` | cancels speech synthesis, triggers interrupt (`#interrupt`) or toggles microphone (`#mic`) |
 | `show_waiting_branches` | — | — | mounts the candidate branch landing inspector mini-app (`/apps/landing-inspector.html`) |
-| `land_branch` | — | — | triggers landing (merging) the selected candidate branch into the workspace |
-| `keep_branch_separate` | — | — | marks the candidate branch to remain separate without merging |
+| `land_branch` | — | — | lands (merges) the one waiting candidate branch into the workspace, for real in `lib/branch-landing.mjs` (`executeBranchIntent`); says when none wait, and opens the inspector to choose when several do |
+| `keep_branch_separate` | — | — | marks the one waiting candidate branch to remain separate without merging; same none/ambiguous honesty as `land_branch` |
 | `compare_harnesses` | — | — | opens the Agent Progress Tracker comparison mini-app |
 | `clear_activity` | — | — | server-side only — `server.mjs` clears the work activity log |
 

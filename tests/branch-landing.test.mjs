@@ -16,6 +16,7 @@ import {
   inspectBranchDiff,
   landCandidateBranch,
   keepBranchSeparate,
+  executeBranchIntent,
 } from "../lib/branch-landing.mjs";
 import { createBranchRoutes } from "../lib/routes/branches.mjs";
 import { createBranchLandingController } from "../public/branch-landing-ui.mjs";
@@ -402,4 +403,96 @@ test("branch-landing: createBranchLandingController exports clean interface and 
 
   controller.openDialog();
   assert.equal(opened, true);
+});
+
+// voicebox-beads-xo5d — the voiced "land branch" / "keep branch separate" act, decided where the
+// workspace git lives. Each outcome is driven against a real scratch repo: nothing waiting, one
+// waiting (executed for real — the merge is verified in the repo, not in the message), several
+// waiting (never a guess), and a branch with nothing to land (ahead 0 is not a candidate).
+
+function createRepoWithCandidates(count) {
+  const repoDir = createTempGitRepo(); // starts with feat/agent-patch, 1 ahead of main
+  for (let i = 2; i <= count; i++) {
+    git(repoDir, ["checkout", "-b", `feat/candidate-${i}`]);
+    fs.appendFileSync(path.join(repoDir, "notes.txt"), `candidate ${i}\n`, "utf8");
+    git(repoDir, ["add", "notes.txt"]);
+    git(repoDir, ["commit", "-m", `candidate ${i}`]);
+    git(repoDir, ["checkout", "main"]);
+  }
+  return repoDir;
+}
+
+test("executeBranchIntent: nothing waiting is said as nothing, not as a success (xo5d)", (t) => {
+  const repoDir = createTempGitRepo();
+  t.after(() => fs.rmSync(repoDir, { recursive: true, force: true }));
+  // Land the one candidate first so nothing is left waiting.
+  const landed = landCandidateBranch(repoDir, "feat/agent-patch", { baseBranch: "main" });
+  assert.equal(landed.ok, true);
+
+  const none = executeBranchIntent(repoDir, "land", { baseBranch: "main" });
+  assert.equal(none.ok, true);
+  assert.equal(none.outcome, "none");
+  assert.match(none.say, /no candidate branches/i);
+});
+
+test("executeBranchIntent: one waiting branch lands FOR REAL (xo5d)", (t) => {
+  const repoDir = createTempGitRepo();
+  t.after(() => fs.rmSync(repoDir, { recursive: true, force: true }));
+
+  const out = executeBranchIntent(repoDir, "land", { baseBranch: "main" });
+  assert.equal(out.ok, true);
+  assert.equal(out.outcome, "executed");
+  assert.equal(out.branch, "feat/agent-patch");
+  assert.match(out.say, /Landed feat\/agent-patch into main/);
+
+  // The merge is a fact in the repo, not a message: main now carries the branch's file.
+  const head = git(repoDir, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  assert.equal(head, "main");
+  assert.equal(fs.readFileSync(path.join(repoDir, "notes.txt"), "utf8").includes("Agent verification notes"), true,
+    "main must contain the landed branch's content");
+  const none = executeBranchIntent(repoDir, "land", { baseBranch: "main" });
+  assert.equal(none.outcome, "none", "a landed branch is no longer waiting");
+});
+
+test("executeBranchIntent: keep-separate executes without merging (xo5d)", (t) => {
+  const repoDir = createTempGitRepo();
+  t.after(() => fs.rmSync(repoDir, { recursive: true, force: true }));
+
+  const out = executeBranchIntent(repoDir, "keep-separate", { baseBranch: "main" });
+  assert.equal(out.ok, true);
+  assert.equal(out.outcome, "executed");
+  assert.equal(out.branch, "feat/agent-patch");
+  assert.match(out.say, /stay separate/);
+  const mainNotes = fs.existsSync(path.join(repoDir, "notes.txt"));
+  assert.equal(mainNotes, false, "keep-separate must not merge the branch into main");
+});
+
+test("executeBranchIntent: several waiting branches is ambiguous — never a guess (xo5d)", (t) => {
+  const repoDir = createRepoWithCandidates(2);
+  t.after(() => fs.rmSync(repoDir, { recursive: true, force: true }));
+
+  const out = executeBranchIntent(repoDir, "land", { baseBranch: "main" });
+  assert.equal(out.ok, true);
+  assert.equal(out.outcome, "ambiguous");
+  assert.equal(out.count, 2);
+  assert.match(out.say, /2 candidate branches/);
+  // Nothing merged: main still lacks the candidate content.
+  assert.equal(fs.existsSync(path.join(repoDir, "notes.txt")), false, "an ambiguous voice act must not land anything");
+});
+
+test("executeBranchIntent: a conflicting branch is refused by name, not landed (xo5d)", (t) => {
+  const repoDir = createTempGitRepo();
+  t.after(() => fs.rmSync(repoDir, { recursive: true, force: true }));
+  // Make main and the candidate disagree on the same line.
+  fs.writeFileSync(path.join(repoDir, "README.md"), "# Project\nMAIN's line\n", "utf8");
+  git(repoDir, ["commit", "-am", "main diverges"]);
+  git(repoDir, ["checkout", "feat/agent-patch"]);
+  fs.writeFileSync(path.join(repoDir, "README.md"), "# Project\nCANDIDATE's line\n", "utf8");
+  git(repoDir, ["commit", "-am", "candidate edits the same line"]);
+  git(repoDir, ["checkout", "main"]);
+
+  const out = executeBranchIntent(repoDir, "land", { baseBranch: "main" });
+  assert.equal(out.ok, false, `a conflict must refuse: ${JSON.stringify(out)}`);
+  assert.equal(out.refused, "merge-conflict");
+  assert.match(out.say, /conflict/i);
 });
