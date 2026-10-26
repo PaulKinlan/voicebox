@@ -4714,22 +4714,21 @@ async function handle(req, res) {
         // BOOTING a fence is the host's act, and now it is GATED as one (voicebox-beads-e5u6):
         // the boot mints a vbx_ call bearer and spawns a sandboxed unit on this machine, so the
         // JSON Content-Type door alone was never enough authority — a plain cross-site-form-proof
-        // POST from ANY local process could mint and boot. The gate is a CREDENTIAL, never a
-        // header claim: the host token (0600 on disk) or the per-process in-room session token
-        // embedded in the served HTML. NOT the bare loopback Origin that hasExtensionAuthority
-        // also accepts — Origin is a plain header any local process can forge over raw TCP
-        // (docs/13 §1), and the reviewer (rev-e5u6) drove exactly that bypass past the first
-        // version of this gate. Declaring WITHOUT `fence` stays on the JSON door — it only
-        // writes a row; nothing is minted and nothing spawns.
-        const sessionToken = req.headers["x-voicebox-session-token"];
-        const fenceBootAuthority =
-          extensions.hostTokenOk(req.headers["x-voicebox-host-token"]) ||
-          (typeof sessionToken === "string" && sessionToken !== "" && timingSafeStringEqual(sessionToken, ROOM_SESSION_TOKEN));
-        if (!fenceBootAuthority) {
+        // POST from ANY local process could mint and boot. The gate is the HOST TOKEN, full stop:
+        // the 0600 credential in the host's own directory, the same authority as un-declaring an
+        // environment. Two weaker doors were tried in review and refused by name (rev-e5u6): the
+        // bare loopback Origin header is a claim any local process can write on a raw socket
+        // (docs/13 §1), and the in-room session token is minted into the OPENLY served HTML — a
+        // local process scrapes GET / and replays it (the authority test below once did exactly
+        // that). Both distinguish browser contexts; neither distinguishes a local PROCESS, and
+        // spawning a sandbox is exactly the act a local process must not take. Declaring WITHOUT
+        // `fence` stays on the JSON door — it only writes a row; nothing is minted and nothing
+        // spawns.
+        if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
           return json(res, 403, {
             ok: false,
             refused: "host-token-required",
-            why: "booting a fence mints a call bearer and spawns a sandboxed unit on this machine — the host's act. It takes the host token (x-voicebox-host-token) or the in-room session token; an Origin header is a claim any local process can make and is not authority. Declare the environment without `fence` first, then boot it with a credential.",
+            why: "booting a fence mints a call bearer and spawns a sandboxed unit on this machine — the host's act. It takes the host token (x-voicebox-host-token): an Origin header is a claim any local process can make, and the in-room session token is served openly in the page HTML. Declare the environment without `fence` first, then boot it with the host token.",
           });
         }
         // fence:true boots the L1 bwrap fence; fence:"l15" boots the L1.5 composition — a transient

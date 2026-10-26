@@ -100,9 +100,11 @@ test("a spoofed LOOPBACK Origin is not authority either (rev-e5u6's bypass, voic
   }
 });
 
-test("the in-room session token IS authority (the page can still boot a fence)", async () => {
-  // The served HTML carries the per-process room session token in a meta tag; that token — not
-  // the Origin it is served from — is the page's credential for the boot.
+test("the openly-served in-room session token is NOT authority (rev-e5u6 round 2, voicebox-beads-e5u6)", async () => {
+  // The page's session token is minted into GET / with no gate (loopback auth defaults OFF), so
+  // any local process can scrape and replay it — this test does exactly that, and the boot must
+  // still refuse. The token distinguishes browser contexts; spawning a sandbox needs the host
+  // token, the one credential that lives only in the host's 0600 directory.
   const ws = path.join(scratch, "ws-session");
   mkdirSync(ws, { recursive: true });
   const server = await startServer({ env: { VOICEBOX_WORKSPACE: ws }, cwd: scratch });
@@ -110,11 +112,16 @@ test("the in-room session token IS authority (the page can still boot a fence)",
     const html = await (await fetch(`${server.base}/`)).text();
     const token = html.match(/name="voicebox-session-token" content="([^"]+)"/)?.[1];
     assert.ok(token && token !== "__VOICEBOX_SESSION_TOKEN__", "the served page carries a minted session token");
-    const answer = await declareFence(server.base, "l15", { "x-voicebox-session-token": token });
-    assert.notEqual(answer.status, 403, `the session token must pass the gate: ${JSON.stringify(answer.body)}`);
-    assert.notEqual(answer.body.refused, "host-token-required");
-    // What happens past the gate is the fence's own business (502 unit-unavailable where no
-    // systemd --user manager exists, a booted fence where it does) — the gate is what is on test.
+    const replayed = await declareFence(server.base, "l15", { "x-voicebox-session-token": token });
+    assert.equal(replayed.status, 403, `a scraped session token must not boot: ${JSON.stringify(replayed.body)}`);
+    assert.equal(replayed.body.refused, "host-token-required");
+
+    // The host token DOES pass the gate — what happens past it is the fence's own business
+    // (502 unit-unavailable where no systemd --user manager exists, a booted fence where it
+    // does); the gate is what is on test.
+    const withToken = await declareFence(server.base, "l15", { "x-voicebox-host-token": server.hostToken });
+    assert.notEqual(withToken.status, 403, `the host token must pass the gate: ${JSON.stringify(withToken.body)}`);
+    assert.notEqual(withToken.body.refused, "host-token-required");
   } finally {
     await server.stop();
   }
