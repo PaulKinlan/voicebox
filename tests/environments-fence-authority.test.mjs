@@ -74,17 +74,47 @@ for (const fence of [true, "l15"]) {
   });
 }
 
-test("a browser-spelling request (Origin + Sec-Fetch-Site, no token) is refused the same way", async () => {
-  const ws = path.join(scratch, "ws-browser");
+test("a spoofed LOOPBACK Origin is not authority either (rev-e5u6's bypass, voicebox-beads-e5u6)", async () => {
+  // Origin is a plain header: any local process can write the server's own origin on a raw
+  // socket (docs/13 §1). The first version of this gate accepted it via hasExtensionAuthority's
+  // local-page clause; the reviewer reproduced the bypass on the pinned sha. The fence boot now
+  // takes a credential — host token or the in-room session token — never a header claim.
+  const ws = path.join(scratch, "ws-spoofed-origin");
   mkdirSync(ws, { recursive: true });
   const server = await startServer({ env: { VOICEBOX_WORKSPACE: ws }, cwd: scratch });
   try {
-    const refused = await declareFence(server.base, "l15", {
+    const spoofed = await declareFence(server.base, "l15", {
+      origin: server.base, // the server's OWN loopback origin — the forgery
+      "sec-fetch-site": "same-origin",
+    });
+    assert.equal(spoofed.status, 403, `spoofed loopback Origin must not boot: ${JSON.stringify(spoofed.body)}`);
+    assert.equal(spoofed.body.refused, "host-token-required");
+    const crossSite = await declareFence(server.base, true, {
       origin: "http://evil.example",
       "sec-fetch-site": "cross-site",
     });
-    assert.equal(refused.status, 403);
-    assert.equal(refused.body.refused, "host-token-required");
+    assert.equal(crossSite.status, 403);
+    assert.equal(crossSite.body.refused, "host-token-required");
+  } finally {
+    await server.stop();
+  }
+});
+
+test("the in-room session token IS authority (the page can still boot a fence)", async () => {
+  // The served HTML carries the per-process room session token in a meta tag; that token — not
+  // the Origin it is served from — is the page's credential for the boot.
+  const ws = path.join(scratch, "ws-session");
+  mkdirSync(ws, { recursive: true });
+  const server = await startServer({ env: { VOICEBOX_WORKSPACE: ws }, cwd: scratch });
+  try {
+    const html = await (await fetch(`${server.base}/`)).text();
+    const token = html.match(/name="voicebox-session-token" content="([^"]+)"/)?.[1];
+    assert.ok(token && token !== "__VOICEBOX_SESSION_TOKEN__", "the served page carries a minted session token");
+    const answer = await declareFence(server.base, "l15", { "x-voicebox-session-token": token });
+    assert.notEqual(answer.status, 403, `the session token must pass the gate: ${JSON.stringify(answer.body)}`);
+    assert.notEqual(answer.body.refused, "host-token-required");
+    // What happens past the gate is the fence's own business (502 unit-unavailable where no
+    // systemd --user manager exists, a booted fence where it does) — the gate is what is on test.
   } finally {
     await server.stop();
   }
