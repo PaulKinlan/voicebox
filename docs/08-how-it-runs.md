@@ -68,7 +68,7 @@ node scripts/docs-check.mjs                     # Check mode: exits 1 on any dri
 node scripts/docs-check.mjs --write             # Write mode: regenerates blocks in README.md and docs/07-architecture.md
 node scripts/docs-check.mjs --docs-root <dir>   # Run checks against a directory copy (used by tests/docs-drift.test.mjs)
 ```
-`scripts/docs-check.mjs` runs a fast static pre-pass before booting the probe server. It waits up to 30 seconds for the server's listening banner (rather than assuming a busy host starts within 8 seconds); `VOICEBOX_DOCS_CHECK_READY_MS` overrides that bounded wait. A server that exits before the banner still fails immediately:
+`scripts/docs-check.mjs` runs a fast static pre-pass before booting the probe server. It waits up to 30 seconds for the server's listening banner (rather than assuming a busy host starts within 8 seconds); `VOICEBOX_DOCS_CHECK_READY_MS` overrides that bounded wait. A server that exits before the banner still fails immediately. Failed or timed-out HTTP and WebSocket probes refuse both check and write modes rather than recording transient degradation as documentation drift:
 - Verifies that all `<!-- BEGIN GENERATED: ... -->` markers exist and are non-empty.
 - Verifies that every backticked repository file path (such as `lib/extensions.mjs`) exists on disk.
 - Verifies that required and forbidden literals in `docs/claims.json` hold across `README.md` and `docs/*.md`.
