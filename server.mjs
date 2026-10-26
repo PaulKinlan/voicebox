@@ -2611,7 +2611,7 @@ async function execute(action) {
     // is visible.
     if (action.command === "land_branch" || action.command === "keep_branch_separate") {
       const intentRoot = active?.root?.kind === "machine" ? active.root.path : ROOT;
-      const outcome = executeBranchIntent(intentRoot, action.command === "land_branch" ? "land" : "keep-separate", { baseBranch: "main" });
+      const outcome = executeBranchIntent(intentRoot, action.command === "land_branch" ? "land" : "keep-separate", { baseBranch: "main", decisionsFile: path.join(WORKSPACE, "branch-decisions.json") });
       recordWorkActivity({
         kind: outcome.ok ? "system" : "error",
         summary: `system: ${action.command} — ${outcome.say ?? outcome.why ?? outcome.outcome}`,
@@ -3839,6 +3839,9 @@ const branchRoutes = createBranchRoutes({
   readJsonBody,
   answerOnce,
   hasExtensionAuthority,
+  // Branch decisions persist beside the rest of the workspace state (voicebox-beads-wmiq) — a
+  // refreshed inspector must still show a "kept separate" the operator was told was recorded.
+  decisionsFile: path.join(WORKSPACE, "branch-decisions.json"),
 });
 const doctorRoutes = createDoctorRoutes({
   getActive: () => active,

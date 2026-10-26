@@ -179,14 +179,27 @@ test("branch-landing: listCandidateBranches, inspectBranchDiff, keepBranchSepara
     deletions: 0,
   });
 
-  // 4. Keep branch separate (non-destructive)
+  // 4. Keep branch separate (non-destructive) — RECORDED on disk since wmiq: a decision the
+  // operator was told was recorded must survive a refresh, so the call takes the ledger file.
+  const decisionsFile = path.join(repoDir, ".voicebox-test-decisions.json");
   const kept = keepBranchSeparate(repoDir, "feat/agent-patch", {
     note: "Hold until acceptance review",
+    decisionsFile,
   });
   assert.equal(kept.ok, true);
   assert.equal(kept.action, "kept-separate");
   assert.equal(kept.branch, "feat/agent-patch");
   assert.equal(fs.existsSync(path.join(repoDir, "notes.txt")), false);
+
+  // The decision rides the next listing — this is what a refreshed inspector reads.
+  const relisted = listCandidateBranches(repoDir, { baseBranch: "main", decisionsFile });
+  assert.equal(relisted.branches[0].statusDecision, "kept-separate");
+  assert.equal(relisted.branches[0].decisionNote, "Hold until acceptance review");
+
+  // Without a ledger the call refuses rather than pretend to have recorded.
+  const unrecorded = keepBranchSeparate(repoDir, "feat/agent-patch", { note: "x" });
+  assert.equal(unrecorded.ok, false);
+  assert.equal(unrecorded.refused, "no-decisions-store");
 
   // 5. Land candidate branch into main
   const landed = landCandidateBranch(repoDir, "feat/agent-patch", { baseBranch: "main" });
@@ -239,7 +252,7 @@ test("branch-landing: exports valid Standards-Mode mini-app HTML and passes plai
   assert.match(html, /id="diff-viewer"/);
   assert.match(html, /id="land-branch-btn"/);
   assert.match(html, /id="keep-separate-btn"/);
-  assert.match(html, /<script\s+src="\/apps\/landing-inspector\.js"><\/script>/);
+  assert.match(html, /<script\s+type="module"\s+src="\/apps\/landing-inspector\.js"><\/script>/);
 
   const js = fs.readFileSync(
     new URL("../public/apps/landing-inspector.js", import.meta.url),
@@ -325,6 +338,7 @@ test("branch-landing: createBranchRoutes provides candidate inspection and landi
     // authority contract is pinned in tests/branches-route.test.mjs and the real protocol gate in
     // tests/timing-safe.test.mjs. The permissive stub lets the merge step reach the lander here.
     hasExtensionAuthority: () => true,
+    decisionsFile: path.join(repoDir, ".voicebox-test-decisions.json"),
   });
 
   assert.ok(routes["GET /api/branches/candidates"]);
@@ -462,13 +476,26 @@ test("executeBranchIntent: keep-separate executes without merging (xo5d)", (t) =
   const repoDir = createTempGitRepo();
   t.after(() => fs.rmSync(repoDir, { recursive: true, force: true }));
 
-  const out = executeBranchIntent(repoDir, "keep-separate", { baseBranch: "main" });
+  const out = executeBranchIntent(repoDir, "keep-separate", { baseBranch: "main", decisionsFile: path.join(repoDir, ".voicebox-test-decisions.json") });
   assert.equal(out.ok, true);
   assert.equal(out.outcome, "executed");
   assert.equal(out.branch, "feat/agent-patch");
   assert.match(out.say, /stay separate/);
   const mainNotes = fs.existsSync(path.join(repoDir, "notes.txt"));
   assert.equal(mainNotes, false, "keep-separate must not merge the branch into main");
+});
+
+test("executeBranchIntent: a branch already kept separate is NOT waiting (xo5d + wmiq)", (t) => {
+  const repoDir = createTempGitRepo();
+  t.after(() => fs.rmSync(repoDir, { recursive: true, force: true }));
+  const decisionsFile = path.join(repoDir, ".voicebox-test-decisions.json");
+
+  const kept = executeBranchIntent(repoDir, "keep-separate", { baseBranch: "main", decisionsFile });
+  assert.equal(kept.outcome, "executed");
+  // The decision persists (wmiq), so the next voice "land branch" finds nothing waiting rather
+  // than landing the branch the operator set aside.
+  const next = executeBranchIntent(repoDir, "land", { baseBranch: "main", decisionsFile });
+  assert.equal(next.outcome, "none", "a kept-separate branch must not be landed by the next voice act");
 });
 
 test("executeBranchIntent: several waiting branches is ambiguous — never a guess (xo5d)", (t) => {
@@ -499,4 +526,42 @@ test("executeBranchIntent: a conflicting branch is refused by name, not landed (
   assert.equal(out.ok, false, `a conflict must refuse: ${JSON.stringify(out)}`);
   assert.equal(out.refused, "merge-conflict");
   assert.match(out.say, /conflict/i);
+});
+
+// voicebox-beads-q376 / wmiq — the inspector's buttons answer to the SERVER, never to optimism.
+// postBranchAction is the one fetch seam both buttons and the published room tools share; these
+// drives use a fake fetch, so the unit tier covers what used to be a swallowed 404.
+
+test("postBranchAction: a missing route (the old /api/branches/land 404) is a refusal, not a landing (q376)", async () => {
+  const { postBranchAction } = await import("../public/apps/landing-inspector.js");
+  const fakeFetch = async () => ({ ok: false, status: 404, json: async () => ({ ok: false, refused: "not-found", why: "no such route" }) });
+  const answer = await postBranchAction("/api/branches/land", { branch: "feat/x" }, fakeFetch);
+  assert.equal(answer.ok, false);
+  assert.equal(answer.refused, "not-found");
+  assert.match(answer.why, /no such route/);
+});
+
+test("postBranchAction: an unreachable server is a refusal, not a landing (q376)", async () => {
+  const { postBranchAction } = await import("../public/apps/landing-inspector.js");
+  const fakeFetch = async () => { throw new TypeError("fetch failed"); };
+  const answer = await postBranchAction("/api/branches/merge", { branch: "feat/x" }, fakeFetch);
+  assert.equal(answer.ok, false);
+  assert.equal(answer.refused, "server-unreachable");
+  assert.match(answer.why, /nothing was recorded/);
+});
+
+test("postBranchAction: the server's own refusal is carried through by name (wmiq)", async () => {
+  const { postBranchAction } = await import("../public/apps/landing-inspector.js");
+  const fakeFetch = async () => ({ ok: true, status: 200, json: async () => ({ ok: false, refused: "merge-conflict", why: "conflicts with main" }) });
+  const answer = await postBranchAction("/api/branches/merge", { branch: "feat/x" }, fakeFetch);
+  assert.equal(answer.ok, false);
+  assert.equal(answer.refused, "merge-conflict");
+});
+
+test("postBranchAction: only a confirmed ok is a success (wmiq)", async () => {
+  const { postBranchAction } = await import("../public/apps/landing-inspector.js");
+  const fakeFetch = async () => ({ ok: true, status: 200, json: async () => ({ ok: true, action: "kept-separate", branch: "feat/x" }) });
+  const answer = await postBranchAction("/api/branches/keep-separate", { branch: "feat/x" }, fakeFetch);
+  assert.equal(answer.ok, true);
+  assert.equal(answer.data.action, "kept-separate");
 });
