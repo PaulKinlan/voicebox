@@ -290,3 +290,20 @@ test("system-command-bus: registerCoreSystemCommands registers all core commands
   assert.ok(registered.includes("compare_harnesses"));
   assert.equal(registered.length, 9);
 });
+
+test("system-command-bus: land/keep handlers open the inspector — the visible half of the server-side act (voicebox-beads-xo5d)", async () => {
+  // The act itself executes on the server (executeBranchIntent against the workspace git); these
+  // handlers' contract is that the outcome becomes VISIBLE. A handler that returns { ok: true }
+  // without opening anything is the no-op this regression guard exists to catch.
+  const bus = createSystemCommandBus();
+  let opens = 0;
+  registerCoreSystemCommands(bus, { openBranchLandingInspector: () => { opens += 1; } });
+
+  const landed = await bus.executeSystemCommand({ command: "land_branch" });
+  assert.equal(landed.ok, true);
+  assert.equal(opens, 1, "land_branch must open the branch landing inspector");
+
+  const kept = await bus.executeSystemCommand({ command: "keep_branch_separate" });
+  assert.equal(kept.ok, true);
+  assert.equal(opens, 2, "keep_branch_separate must open the branch landing inspector");
+});
