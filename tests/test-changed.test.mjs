@@ -12,6 +12,13 @@ import { buildQueue, ISOLATED, TIER_WORKERS } from "../scripts/test-shards.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const SCRIPT = path.join(root, "scripts/test-changed.mjs");
 
+// A spawnSync budget for the CLI must price the box it runs on (voicebox-beads-d2v3): a cold
+// node start of scripts/test-changed.mjs measures 10.6s on a contended 2-vCPU VM, so the old
+// hardcoded 8000 failed every unit-tier run there regardless of the code. The assertion these
+// tests protect is ARGUMENT PARSING, not wall-clock speed — the budget is generous and
+// env-overridable for even slower boxes.
+const CLI_BUDGET_MS = Math.max(30000, Number(process.env.VOICEBOX_TEST_CHANGED_CLI_SECS || 30) * 1000);
+
 // Fail-closed CLI probes run under a disposable no-child-process preload. Even the old broken
 // parser cannot launch a test gate: a Git/test spawn records a marker and throws before launch.
 function noSpawnCli(args) {
@@ -43,7 +50,7 @@ function noSpawnCli(args) {
     }
     const cliArgs = batch ? [probe] : [SCRIPT, ...args, "--manifest-dir", manifest];
     const result = spawnSync(process.execPath, cliArgs, {
-      cwd: root, encoding: "utf8", timeout: 8000,
+      cwd: root, encoding: "utf8", timeout: CLI_BUDGET_MS,
       env: { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require=${preload}`.trim() },
     });
     assert.equal(result.error, undefined, "bounded CLI probe must terminate normally");
@@ -201,7 +208,7 @@ test("CLI --json: outputs structured mapping payload", () => {
 test("CLI -- ends option parsing: a flag-shaped changed path cannot secretly enable the gate", () => {
   // --json returns before test dispatch even if the sentinel parser regresses; the assertion
   // then catches the accidental --gate interpretation without launching any suite.
-  const res = spawnSync(process.execPath, [SCRIPT, "--json", "--", "--gate"], { cwd: root, encoding: "utf8", timeout: 8000 });
+  const res = spawnSync(process.execPath, [SCRIPT, "--json", "--", "--gate"], { cwd: root, encoding: "utf8", timeout: CLI_BUDGET_MS });
   assert.equal(res.status, 0, res.stderr);
   const data = JSON.parse(res.stdout);
   assert.deepEqual(data.changed, ["--gate"]);
