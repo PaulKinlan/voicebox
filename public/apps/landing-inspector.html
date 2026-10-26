@@ -298,6 +298,17 @@
       flex-wrap: wrap;
     }
 
+    .branch-decision {
+      font-weight: 600;
+      color: var(--text-secondary, #444);
+    }
+    .branch-decision[data-decision="kept-separate"] {
+      color: var(--warning, #8a6d00);
+    }
+    .branch-decision[data-decision="landed"] {
+      color: var(--success, #146c2e);
+    }
+
     .detail-column {
       display: flex;
       flex-direction: column;
@@ -482,6 +493,6 @@
     </div>
   </main>
 
-  <script src="/apps/landing-inspector.js"></script>
+  <script type="module" src="/apps/landing-inspector.js"></script>
 </body>
 </html>

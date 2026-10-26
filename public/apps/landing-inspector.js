@@ -1,4 +1,38 @@
-(function () {
+// POST a branch action and READ THE ANSWER (voicebox-beads-q376 / wmiq). The honest contract for
+// both buttons and the published room tools: a refusal or an unreachable server returns ok:false
+// with the server's reason; nothing is marked locally until the server confirms. Exported so the
+// unit tier can drive it with a fake fetch — importing this file in Node must have NO DOM side
+// effects (the bootstrap below is guarded).
+export async function postBranchAction(route, body, fetchImpl = globalThis.fetch) {
+  let res;
+  try {
+    res = await fetchImpl(route, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    return { ok: false, refused: "server-unreachable", why: `the server could not be reached — nothing was recorded (${err?.message ?? err})` };
+  }
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    data = null;
+  }
+  if (!res.ok || !data || data.ok === false) {
+    return {
+      ok: false,
+      refused: data?.refused ?? `http-${res.status}`,
+      why: data?.why ?? `the server answered ${res.status} — nothing was recorded`,
+    };
+  }
+  return { ok: true, data };
+}
+
+// The inspector's bootstrap touches window/document at module scope, so it runs ONLY in a browser;
+// the unit tier imports the helpers above without one.
+if (typeof window !== "undefined" && typeof document !== "undefined") (function () {
   const codec = window["JS" + "ON"];
   const mimeType = ["application", "js" + "on"].join("/");
 
@@ -125,6 +159,17 @@
         " behind · " +
         (branch.filesChanged ?? (branch.files ? branch.files.length : 0)) +
         " files";
+
+      // The recorded decision is rendered, not just held (wmiq): a kept-separate branch says so
+      // on its row, so a refresh cannot silently turn "recorded" back into "waiting".
+      if (branch.statusDecision && branch.statusDecision !== "waiting") {
+        const decision = document.createElement("div");
+        decision.className = "branch-decision";
+        decision.dataset.decision = branch.statusDecision;
+        decision.textContent =
+          branch.statusDecision === "kept-separate" ? "Kept separate" : "Landed";
+        meta.appendChild(decision);
+      }
 
       btn.append(top, subj, meta);
       btn.addEventListener("click", () => {
@@ -278,11 +323,18 @@
       const res = await fetch("/api/branches/candidates");
       if (res && res.ok) {
         const data = codec.parse(await res.text());
-        if (data && Array.isArray(data.branches) && data.branches.length) {
+        // A reachable server's answer is the truth even when it is EMPTY (wmiq): the old
+        // `branches.length` guard kept the built-in preview branches on screen, so the inspector
+        // showed made-up branches over a real, empty workspace. Fixtures survive only when the
+        // server cannot be reached at all.
+        if (data && Array.isArray(data.branches)) {
           state.baseBranch = data.baseBranch || "main";
           state.branches = data.branches;
-          if (!state.branches.some((b) => b.name === state.selectedBranch)) {
+          if (state.branches.length && !state.branches.some((b) => b.name === state.selectedBranch)) {
             state.selectedBranch = state.branches[0].name;
+          }
+          if (!state.branches.length) {
+            state.selectedBranch = null;
           }
         }
       }
@@ -313,14 +365,15 @@
       return { ok: false, refused: "merge-conflict" };
     }
 
-    try {
-      await fetch("/api/branches/land", {
-        method: "POST",
-        headers: { "Content-Type": mimeType },
-        body: codec.stringify({ branch: targetName, baseBranch: state.baseBranch }),
-      });
-    } catch (_err) {
-      // Keep optimistic local merge state in preview mode.
+    // The server is the only writer that counts (voicebox-beads-q376): the old code posted to
+    // /api/branches/land — a route that does not exist — swallowed the 404, and printed "Landed …"
+    // anyway. Now the merge route answers, and only its ok marks the branch landed.
+    const answer = await postBranchAction("/api/branches/merge", { branch: targetName, baseBranch: state.baseBranch });
+    if (!answer.ok) {
+      if (statusEl) {
+        statusEl.textContent = "Could not land " + targetName + ": " + answer.why;
+      }
+      return { ok: false, refused: answer.refused, why: answer.why };
     }
 
     branch.statusDecision = "landed";
@@ -335,6 +388,7 @@
       action: "landed",
       branch: targetName,
       baseBranch: state.baseBranch,
+      headCommit: answer.data?.headCommit || "",
     };
   }
 
@@ -342,9 +396,22 @@
     const targetName = branchName || state.selectedBranch;
     const branch = state.branches.find((b) => b.name === targetName);
     const statusEl = document.getElementById("review-action-status");
-    if (branch) {
-      branch.statusDecision = "kept-separate";
+    if (!branch) {
+      return { ok: false, error: "Candidate branch not found" };
     }
+
+    // The server records the decision BEFORE this app may show it (voicebox-beads-wmiq): the old
+    // code never called the server at all, so a refresh lost a decision the operator was told was
+    // recorded. Only a confirmed write marks the branch.
+    const answer = await postBranchAction("/api/branches/keep-separate", { branch: targetName });
+    if (!answer.ok) {
+      if (statusEl) {
+        statusEl.textContent = "Could not keep " + targetName + " separate: " + answer.why;
+      }
+      return { ok: false, refused: answer.refused, why: answer.why };
+    }
+
+    branch.statusDecision = "kept-separate";
     if (statusEl) {
       statusEl.textContent =
         "Kept " + targetName + " separate from " + state.baseBranch + " for later review.";
@@ -444,15 +511,38 @@
       },
     };
 
+    const keepTool = {
+      name: "keep_candidate_branch_separate",
+      description:
+        "Mark a candidate branch to stay separate from main, recorded by the server so a refresh keeps showing it.",
+      parameters: {
+        type: "object",
+        properties: {
+          branch: {
+            type: "string",
+            description: "Name of the candidate branch to keep separate",
+          },
+        },
+        required: ["branch"],
+      },
+      execute: async (args) => {
+        const branchName =
+          args && args.branch ? String(args.branch) : state.selectedBranch;
+        return keepBranchSeparateAction(branchName);
+      },
+    };
+
     if (window.voicebox) {
       window.voicebox?.registerTool(listTool);
       window.voicebox?.registerTool(inspectTool);
       window.voicebox?.registerTool(landTool);
+      window.voicebox?.registerTool(keepTool);
       window.voicebox?.ready?.();
     } else if (window.webMcp) {
       window.webMcp?.registerTool(listTool);
       window.webMcp?.registerTool(inspectTool);
       window.webMcp?.registerTool(landTool);
+      window.webMcp?.registerTool(keepTool);
       window.webMcp?.ready?.();
     }
   }
@@ -461,4 +551,6 @@
   renderBranchList();
   renderSelectedBranchDetails();
   registerVoiceTools();
+  // The truth comes from the server at boot, not from the built-in preview rows (wmiq).
+  refreshCandidateBranches();
 })();
