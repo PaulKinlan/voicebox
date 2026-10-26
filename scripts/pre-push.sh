@@ -129,6 +129,7 @@ run_stage() {
     unit) _var="VOICEBOX_GATE_UNIT_SECS" ;;
     live) _var="VOICEBOX_GATE_LIVE_SECS" ;;
     acceptance) _var="VOICEBOX_GATE_ACCEPT_SECS" ;;
+    docs-check|docs-touched|single-owner) _var="VOICEBOX_GATE_DOCS_SECS" ;;
     *) _var="" ;;
   esac
   _remedy=""
@@ -197,7 +198,9 @@ run_stage() {
 _unit_secs="${VOICEBOX_GATE_UNIT_SECS:-${VOICEBOX_GATE_TESTS_SECS:-180}}"
 _live_secs="${VOICEBOX_GATE_LIVE_SECS:-400}"
 _accept_secs="${VOICEBOX_GATE_ACCEPT_SECS:-45}"
-_docs_secs="${VOICEBOX_GATE_DOCS_SECS:-30}"
+# The docs-check probe has a 30s server-start bound plus runtime probes (47s observed on a busy VM).
+# This stage bound must outlast both; the other static docs stages share it but finish promptly.
+_docs_secs="${VOICEBOX_GATE_DOCS_SECS:-120}"
 # The manifest stage reads what the three tier records already say (JSON + one `git diff`), so it costs
 # seconds; the bound is there because a stage without one is a stage that can hang the landing.
 _manifest_secs="${VOICEBOX_GATE_MANIFEST_SECS:-60}"

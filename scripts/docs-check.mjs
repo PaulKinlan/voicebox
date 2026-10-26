@@ -38,6 +38,7 @@
 import { spawn } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
+import { loadavg } from "node:os";
 import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";
@@ -169,6 +170,16 @@ export function renderInventoryTable(items, headerTitle = "Module") {
   ].join("\n");
 }
 
+// The banner is printed only after listen succeeds. A bound prevents a wedged child from hanging
+// the docs gate, but 8s sat inside measured healthy startup times on a busy VM (voicebox-beads-ecyb).
+export const DEFAULT_READY_MS = 30000;
+export function readinessBudgetMs(env = process.env) {
+  const raw = String(env.VOICEBOX_DOCS_CHECK_READY_MS ?? "").trim();
+  if (!/^\d+$/.test(raw)) return DEFAULT_READY_MS;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value > 0 && value <= 2147483647 ? value : DEFAULT_READY_MS;
+}
+
 /** Start the real server on a scratch port and ask it what it is. */
 async function probeServer() {
   // A FREE PORT, PROPERLY: bind one, read the number, release it, hand it to the server. The previous
@@ -224,7 +235,10 @@ async function probeServer() {
     // perturbed health route crashed the check instead of reporting drift. Found by perturbing it.
     // AWAITED, NOT POLLED (voicebox-beads-qxy2): the line is seen the moment it arrives rather than on the
     // next 100ms tick, and a server that EXITS before printing it fails the check at once instead of after
-    // the whole 8s budget.
+    // the whole readiness budget. The timeout includes load and budget so an overloaded start
+    // is distinguishable from a child that never emits its banner.
+    const readyMs = readinessBudgetMs();
+    const startedAt = Date.now();
     await new Promise((ready, fail) => {
       const settle = (err) => {
         clearTimeout(timer);
@@ -235,7 +249,7 @@ async function probeServer() {
       };
       const onData = () => { if (out.includes("voicebox on http")) settle(); };
       const onExit = (code, signal) => settle(new Error(`server exited (${signal ?? `code ${code}`}) before it was ready on ${port}: ${out.slice(0, 200)}`));
-      const timer = setTimeout(() => settle(new Error(`server did not start on ${port}: ${out.slice(0, 200)}`)), 8000);
+      const timer = setTimeout(() => settle(new Error(`server did not start on ${port} within ${readyMs}ms (elapsed ${Date.now() - startedAt}ms, load ${loadavg()[0].toFixed(1)}): ${out.slice(0, 200)}`)), readyMs);
       child.stdout.on("data", onData); // after the accumulator above, so `out` already holds the chunk
       child.on("exit", onExit);
       onData();
