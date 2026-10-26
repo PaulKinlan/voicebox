@@ -39,6 +39,8 @@ Each booted sandbox runs `tools/env-serve.mjs` on its loopback port, mediated by
 ### Host Proxy & Bearer Authentication
 - The browser calls `POST /api/environments/<key>/exec`, `GET` / `POST /api/environments/<key>/git/config`, and `POST /api/environments/<key>/git/init` on `server.mjs`.
 - Mutating endpoints on `tools/env-serve.mjs` require the pairing bearer (`VOICEBOX_BEARER`) minted when the host booted the fence. Unpaired requests are refused with `exec-unpaired`.
+- Booting a fence is itself the host's act (voicebox-beads-e5u6): `POST /api/environments` with `fence: true` or `fence: "l15"` requires the host token (`x-voicebox-host-token`) or an authorized in-room session — the same authority as the other privileged environment surfaces — and is refused with `host-token-required` otherwise. Declaring an environment without `fence` only writes a row and stays on the JSON Content-Type door.
+- The L1.5 unit inherits only an allowlisted environment (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_ALL`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, `VOICEBOX_FENCE_MAX_SEC`), never the host's full `process.env`: `systemd-run` serializes its caller's environment into the transient unit, where it would stay readable by every same-UID process for the unit's life. The boot marker and pairing bearer are passed explicitly beside it (`lib/unit-fence-provider.mjs`).
 
 ---
 

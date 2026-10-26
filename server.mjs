@@ -4711,6 +4711,20 @@ async function handle(req, res) {
       // carries is the fence's OWN probe report (host-collected at boot), which is the one writer the
       // read path trusts — so a measured boundary survives where a hand-written claim would be nulled.
       if (parsed.fence === true || parsed.fence === "l15") {
+        // BOOTING a fence is the host's act, and now it is GATED as one (voicebox-beads-e5u6):
+        // the boot mints a vbx_ call bearer and spawns a sandboxed unit on this machine, so the
+        // JSON Content-Type door alone was never enough authority — a plain cross-site-form-proof
+        // POST from ANY local process could mint and boot. The gate is the same one the other
+        // privileged environment surfaces (exec, git/config) already hold: the host token or an
+        // authorized in-room session. Declaring WITHOUT `fence` stays on the JSON door — it only
+        // writes a row; nothing is minted and nothing spawns.
+        if (!hasExtensionAuthority(req)) {
+          return json(res, 403, {
+            ok: false,
+            refused: "host-token-required",
+            why: "booting a fence mints a call bearer and spawns a sandboxed unit on this machine — the host's act. Declare the environment without `fence` first, then boot it with the host token (x-voicebox-host-token) or an authorized in-room session.",
+          });
+        }
         // fence:true boots the L1 bwrap fence; fence:"l15" boots the L1.5 composition — a transient
         // systemd --user unit whose Exec is the fence (voicebox-beads-8ny). Same declare-and-boot,
         // same rule: the boundary the row carries is measured by the environment's own probe.
