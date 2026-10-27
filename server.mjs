@@ -114,7 +114,21 @@ import {
 // exactly that to show the client's own detector, the interrupt frame, and the provider's event coming
 // back as one round trip.
 import { createStubProvider } from "./lib/live-providers/stub.mjs";
-if (process.env.VOICEBOX_ENABLE_STUB_PROVIDER === "1") registerLiveProvider("stub", createStubProvider);
+if (process.env.VOICEBOX_ENABLE_STUB_PROVIDER === "1") registerLiveProvider("stub", createStubProvider, { inputRate: 16000 });
+// voicebox-beads-jp7r / mhii: the stub's SETTINGS facts complete the seam — a test server can SELECT
+// the stub end-to-end (the settings validator, the payload's provider reads, and the session's
+// default model all answer for it) instead of the seam ending at the provider registry. The env var
+// it "requires" is the flag itself: set by construction whenever the seam is on.
+const STUB_SETTINGS_FACTS = {
+  id: "stub",
+  label: "Stub (test seam)",
+  model: "stub-model",
+  models: [{ id: "stub-model", label: "Stub model" }],
+  voices: [{ id: "stub-voice", label: "Stub voice" }],
+  requires: { env: "VOICEBOX_ENABLE_STUB_PROVIDER", why: "the test seam is enabled" },
+};
+const SERVER_PROVIDERS = process.env.VOICEBOX_ENABLE_STUB_PROVIDER === "1" ? { ...PROVIDERS, stub: STUB_SETTINGS_FACTS } : PROVIDERS;
+const SETTINGS_EXTRA_PROVIDERS = process.env.VOICEBOX_ENABLE_STUB_PROVIDER === "1" ? { stub: STUB_SETTINGS_FACTS } : undefined;
 import { installColorConsole } from "./lib/logger.mjs";
 // The state directories have ONE owner; this file no longer computes its own copy of any of them
 // (voicebox-beads-y5k: `VOICEBOX_WORKSPACE` and `VOICEBOX_EXTENSIONS_DIR` were each resolved here
@@ -809,7 +823,7 @@ function readPersistedAgentSettings() {
   try {
     if (!existsSync(AGENT_SETTINGS_FILE)) return { ...DEFAULT_AGENT_SETTINGS };
     const parsed = JSON.parse(readFileSync(AGENT_SETTINGS_FILE, "utf8"));
-    const checked = validateAgentSettings(parsed, DEFAULT_AGENT_SETTINGS);
+    const checked = validateAgentSettings(parsed, DEFAULT_AGENT_SETTINGS, SETTINGS_EXTRA_PROVIDERS);
     return checked.ok ? checked.value : { ...DEFAULT_AGENT_SETTINGS };
   } catch {
     return { ...DEFAULT_AGENT_SETTINGS };
@@ -3726,9 +3740,9 @@ async function execute(action) {
  * a provider carries them would be the exact lie this payload exists to prevent.
  */
 function agentSettingsPayload(extra = {}) {
-  const provider = PROVIDERS[agentSettings.provider];
+  const provider = SERVER_PROVIDERS[agentSettings.provider];
   const keyPresent = Boolean(process.env[provider.requires.env]);
-  const capabilities = Object.values(PROVIDERS).map((facts) => ({
+  const capabilities = Object.values(SERVER_PROVIDERS).map((facts) => ({
     id: facts.id,
     label: facts.label,
     model: facts.model,
@@ -4018,7 +4032,7 @@ const routes = {
       return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON: {provider?, voice?, personality?}" });
     }
     return answerOnce(res, async () => {
-      const checked = validateAgentSettings(asked, agentSettings);
+      const checked = validateAgentSettings(asked, agentSettings, SETTINGS_EXTRA_PROVIDERS);
       if (!checked.ok) return json(res, 400, { ok: false, refused: checked.refused, why: checked.why });
       // Changing the provider does NOT start a session: the next one this page opens will use it, and
       // the payload says the live session is untouched rather than implying the change took effect now.
@@ -5310,7 +5324,7 @@ server.on("upgrade", (req, socket) => {
     // Snapshot once: rate, dial and later state frames describe this session,
     // even if settings change while it is running (voicebox-beads-94c, voicebox-beads-bc0i).
     const provider = agentSettings.provider;
-    const model = agentSettings.model || PROVIDERS[provider].model;
+    const model = agentSettings.model || SERVER_PROVIDERS[provider].model;
     // STEP 2 OF THE RATE WORK: the page is told what rate to capture at BEFORE any audio is sent, ever.
     //
     // The defect this closes (journal-6g0): the browser captured at 16 kHz, the OpenAI provider declared

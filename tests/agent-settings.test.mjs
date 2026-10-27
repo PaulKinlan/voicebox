@@ -303,3 +303,69 @@ test("runningSession on /api/agent-settings includes provider, model, and starte
   }
 });
 
+
+// ── mhii: the stub provider is selectable END-TO-END, not just registered ──────────────
+//
+// The stub seam (voicebox-beads-ldxa) used to end at the provider registry: the flag registered
+// the factory, but the settings validator only knew PROVIDERS, so PUT {provider:"stub"} was
+// refused and the payload never named it — a test could not SELECT the seam it was offered.
+// The server now merges the stub's facts into its own reads (SERVER_PROVIDERS) and into the
+// validator (SETTINGS_EXTRA_PROVIDERS); this drive proves the whole path with the flag ON, and
+// the validator unit below proves the same merge WITHOUT a server.
+test("with the stub flag on, the stub provider is selectable and the session answers for it (mhii)", { timeout: 45000 }, async () => {
+  // Its own instance: the shared suite server has no stub seam, and this suite changes settings.
+  const srv = await startServer({
+    cwd: ROOT,
+    env: { VOICEBOX_WORKSPACE: undefined, VOICEBOX_INSTANCE: "agent-settings-mhii", VOICEBOX_ENABLE_STUB_PROVIDER: "1" },
+  });
+  try {
+    // The payload NAMES the seam among the capabilities a person can pick.
+    const before = await fetch(`${srv.base}/api/agent-settings`).then((r) => r.json());
+    const stubCap = before.capabilities?.find?.((c) => c.id === "stub");
+    assert.ok(stubCap, `the stub is missing from capabilities: ${JSON.stringify(before.capabilities).slice(0, 300)}`);
+    assert.equal(stubCap.model, "stub-model");
+
+    // The validator ACCEPTS the seam: provider, its model, its voice.
+    const put = await fetch(`${srv.base}/api/agent-settings`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider: "stub", model: "stub-model", voice: "stub-voice" }),
+    }).then(async (r) => ({ status: r.status, body: await r.json() }));
+    assert.equal(put.status, 200, `the stub seam is not selectable: ${JSON.stringify(put.body).slice(0, 300)}`);
+    assert.equal(put.body.applied.provider, "stub");
+    assert.equal(put.body.applied.model, "stub-model");
+
+    // A session started on the seam becomes ready and says WHICH MODEL it runs.
+    const ws = new WebSocket(`${srv.base.replace("http", "ws")}/live`, { headers: { origin: srv.base } });
+    const states = [];
+    ws.onmessage = (e) => {
+      if (typeof e.data !== "string") return;
+      const m = JSON.parse(e.data);
+      if (m.type === "state") states.push(m);
+    };
+    await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
+    for (let i = 0; i < 100 && !states.some((s) => s.state === "ready"); i++) await sleep(100);
+    ws.close();
+    assert.ok(states.some((s) => s.state === "ready"), "the stub session never became ready");
+    assert.equal(states.find((s) => s.state === "ready")?.model, "stub-model");
+  } finally {
+    await srv.stop();
+  }
+});
+
+test("validateAgentSettings merges extraProviders without mutating PROVIDERS (mhii)", () => {
+  const stubFacts = {
+    id: "stub",
+    label: "Stub (test seam)",
+    model: "stub-model",
+    models: [{ id: "stub-model", label: "Stub model" }],
+    voices: [{ id: "stub-voice", label: "Stub voice" }],
+    requires: { env: "VOICEBOX_ENABLE_STUB_PROVIDER", why: "the test seam is enabled" },
+  };
+  const ok = validateAgentSettings({ provider: "stub", model: "stub-model", voice: "stub-voice" }, DEFAULT_AGENT_SETTINGS, { stub: stubFacts });
+  assert.equal(ok.ok, true, `the extra provider was refused: ${JSON.stringify(ok)}`);
+  assert.equal(ok.value.provider, "stub");
+  // Production callers pass nothing, and the table itself is untouched.
+  assert.equal(validateAgentSettings({ provider: "stub" }, DEFAULT_AGENT_SETTINGS).ok, false);
+  assert.equal("stub" in PROVIDERS, false, "the seam must not leak into the production provider table");
+});
