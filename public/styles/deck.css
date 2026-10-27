@@ -580,33 +580,33 @@ body:not([data-multi-window="true"]):has(#reader:not([data-state="empty"]):not([
 }
 
 
-/* ── Project / folder change subtle outline transition ── */
-@keyframes project-switch-flash {
-  0% {
-    outline-color: color-mix(in srgb, var(--accent) 55%, transparent);
-    border-color: var(--accent);
-  }
-  50% {
-    outline-color: color-mix(in srgb, var(--accent) 32%, transparent);
-    border-color: var(--accent);
-  }
-  100% {
-    outline-color: transparent;
-  }
+/* ── Project / folder change: a subtle outline that settles, and nothing that moves (voicebox-beads-el7s,
+   porting voicebox-beads-6omi's fix from feat/6omi-project-switch-outline) ──
+   The cue used to animate a STATIC 2px outline in and out and declare `border-radius: 20px` for the 650ms
+   the attribute is held (activity-log-ui.mjs drops it at 650ms), so the stage's corners popped in and out
+   once per switch — Paul's "horrible jumping animation". Two keyframes replace it, both starting and ending
+   on the element's own RESTING values so the attribute's arrival and departure are invisible:
+   · the stage animates `outline-color` only — width and offset are declared once, and a colour cannot reflow;
+   · the chip animates its border/background/colour, every endpoint the values `.where` already has. */
+@keyframes project-switch-outline {
+  0% { outline-color: transparent; }
+  18% { outline-color: color-mix(in srgb, var(--accent) 85%, transparent); }
+  100% { outline-color: transparent; }
 }
+@keyframes project-switch-chip {
+  0% { border-color: var(--line); background: color-mix(in srgb, var(--shade) 75%, var(--card)); color: var(--muted); }
+  18% { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, var(--card)); color: var(--ink); }
+  100% { border-color: var(--line); background: color-mix(in srgb, var(--shade) 75%, var(--card)); color: var(--muted); }
+}
+/* `padding` in the border-box stays untouched: an outline is drawn outside the border edge and takes no
+   space, which is why it can be the whole cue. */
 .where[data-flash="true"] {
-  border-color: var(--accent);
-  outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
-  outline-offset: 2px;
-  background: color-mix(in srgb, var(--accent) 10%, var(--card));
-  color: var(--ink);
-  animation: project-switch-flash 520ms ease-out;
+  animation: project-switch-chip 650ms ease-out;
 }
 body[data-project-flash="true"] .stage {
-  outline: 2px solid color-mix(in srgb, var(--accent) 28%, transparent);
-  outline-offset: 4px;
-  animation: project-switch-flash 520ms ease-out;
-  border-radius: 20px;
+  outline: 2px solid transparent;
+  outline-offset: 6px;
+  animation: project-switch-outline 650ms ease-out;
 }
 
 /* ── Work activity log popover panel ── */
