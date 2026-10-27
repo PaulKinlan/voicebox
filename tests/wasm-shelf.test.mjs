@@ -554,3 +554,50 @@ test("3kr3: the permit's release is EXACTLY ONCE — driven at the semaphore sea
 });
 
 
+
+test("emam: VOICEBOX_WASM_MAX_CONCURRENCY sets the default semaphore's bound, invalid values refuse closed", async () => {
+  const { wasmMaxConcurrencyFromEnv, WASM_MAX_CONCURRENT_WORKERS } = await import("../lib/wasm-shelf.mjs");
+
+  // Unset/empty: the documented default.
+  assert.deepEqual(wasmMaxConcurrencyFromEnv({}), { ok: true, value: WASM_MAX_CONCURRENT_WORKERS });
+  assert.deepEqual(wasmMaxConcurrencyFromEnv({ VOICEBOX_WASM_MAX_CONCURRENCY: "" }), { ok: true, value: WASM_MAX_CONCURRENT_WORKERS });
+  // A sane override.
+  assert.deepEqual(wasmMaxConcurrencyFromEnv({ VOICEBOX_WASM_MAX_CONCURRENCY: "6" }), { ok: true, value: 6 });
+  // Invalid values refuse closed, naming the knob — never a silent fallback to a bound the
+  // operator did not set.
+  for (const bad of ["0", "-1", "abc", "2.5", "100"]) {
+    const res = wasmMaxConcurrencyFromEnv({ VOICEBOX_WASM_MAX_CONCURRENCY: bad });
+    assert.equal(res.ok, false, `'${bad}' must refuse`);
+    assert.equal(res.refused, "bounds-invalid");
+    assert.match(res.why, /VOICEBOX_WASM_MAX_CONCURRENCY/);
+  }
+
+  // The env actually reaches the module's default semaphore: a fresh module instance (query-suffixed
+  // import defeats the cache) with the env set reports the override in its stats.
+  process.env.VOICEBOX_WASM_MAX_CONCURRENCY = "2";
+  try {
+    const fresh = await import("../lib/wasm-shelf.mjs?emam-env-override");
+    assert.equal(fresh.getWasmSemaphoreStats().maxConcurrent, 2, "the env override must reach the default semaphore");
+  } finally {
+    delete process.env.VOICEBOX_WASM_MAX_CONCURRENCY;
+  }
+
+  // And with an invalid value the default semaphore refuses every acquire by name — driven through
+  // a REAL callWasmTool with no explicit semaphore, so the refusal is the module's default path.
+  process.env.VOICEBOX_WASM_MAX_CONCURRENCY = "nope";
+  try {
+    const fresh = await import("../lib/wasm-shelf.mjs?emam-env-invalid");
+    const stats = fresh.getWasmSemaphoreStats();
+    assert.ok(stats.boundsInvalid, "stats must carry the invalid-bound reason");
+    assert.match(stats.boundsInvalid, /bound you did not set/);
+    const file = path.join(scratch, "emam-bounds-invalid.wasm");
+    writeFileSync(file, LOOP_MODULE);
+    const tool = attackTool(LOOP_MODULE);
+    tool.wasm.path = file;
+    const refused = await fresh.callWasmTool(tool, { input: "abc" }, { deadlineMs: 5000 });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.refused, "bounds-invalid", "an invalid bound must refuse the call before any worker spawns");
+  } finally {
+    delete process.env.VOICEBOX_WASM_MAX_CONCURRENCY;
+  }
+});

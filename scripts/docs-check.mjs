@@ -514,6 +514,7 @@ const ENV_MEANING = {
   VOICEBOX_HARNESS: "Default host coding agent harness (`pi` or `claude`; can also be switched at runtime in the Harnesses UI dialog).",
   VOICEBOX_OPENAI_INPUT_TRANSCRIPTION: "Set to `1` to enable `gpt-4o-mini-transcribe` input audio transcription in the OpenAI Realtime session handshake.",
   VOICEBOX_WASM_SHELF_DIR: "Directory containing the digest-pinned WebAssembly tool shelf (`manifest.json` and `.wasm` binaries; default `~/.isocan/modules/wasm-tools`).",
+  VOICEBOX_WASM_MAX_CONCURRENCY: "Maximum concurrent wasm child-process cells (default `4`, integer 1..64; an invalid value refuses wasm calls closed as `bounds-invalid` rather than running with a bound you did not set).",
 };
 const BEFORE_REGEX = new Set(["return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await"]);
 const HEADS = new Set(["if", "for", "while", "with"]);

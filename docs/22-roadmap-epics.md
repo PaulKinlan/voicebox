@@ -96,6 +96,6 @@ As documented in `docs/20-webassembly-tools.md`, `lib/wasm-shelf.mjs` spawns iso
 
 ### Landed Implementation (`lib/wasm-shelf.mjs`, `lib/wasm-worker.mjs`, `core/extensions.ts`)
 1. **Bounded Worker Concurrency Semaphore (`lib/wasm-shelf.mjs`)**:
-   - Enforces a configurable concurrency semaphore (`VOICEBOX_WASM_MAX_CONCURRENCY`, default `4`) and bounded wait queue so bursts of concurrent Wasm tool calls never exhaust host threads or memory.
+   - Enforces a configurable concurrency semaphore (`VOICEBOX_WASM_MAX_CONCURRENCY`, default `4`, integer 1..64 — an invalid value refuses wasm calls closed as `bounds-invalid`) and bounded wait queue so bursts of concurrent Wasm tool calls never exhaust host threads or memory.
 2. **Capability-Scoped WASI Preview2 Virtual Preopens (`lib/wasm-shelf.mjs`, `lib/wasm-worker.mjs`, `core/extensions.ts`)**:
    - Validates and mounts capability-scoped read-only virtual directory preopens gated by the extension's admitted capability descriptor.
