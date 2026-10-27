@@ -1937,7 +1937,7 @@ async function refreshCatalogMiniApps() {
   }
 }
 
-function syncMiniAppAfterFileSave(fileName, content) {
+async function syncMiniAppAfterFileSave(fileName, content) {
   // ASK FOR THE NAME THE SAVE API TAKES: ONE name inside the root (voicebox-beads-m4no). The
   // caller hands the SHOWN path, which is the folder-joined 'proposals/draft.html' whenever the
   // reader was inside a folder; posting that used to make the server basename-rewrite it into a
@@ -1948,6 +1948,27 @@ function syncMiniAppAfterFileSave(fileName, content) {
   const name = miniAppSyncName(fileName);
   if (!isHtmlFileName(name)) return;
   const norm = normalizeMiniAppKey(name);
+
+  // A SAVE IS NOT A PROMOTION (voicebox-beads-9lpi): help.html names exactly two ways a page
+  // becomes a mini-app (Open as Mini-App, or asking for it), and an editor save is neither — yet
+  // every save used to POST a shelf record, so any edited page landed in the Apps tray. Only a
+  // file that is ALREADY a shelf mini-app gets its shelf copy refreshed here; anything else stays
+  // an ordinary page. When the catalog cannot be read the answer is still NO creation — the
+  // failure mode stays "no silent promotion".
+  let listed = catalogMiniApps;
+  try {
+    const res = await fetch("/api/mini-apps?kind=app", { signal: AbortSignal.timeout(6000) });
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data && Array.isArray(data.miniApps)) listed = data.miniApps;
+    }
+  } catch { /* the cached catalog is enough for the membership question */ }
+  const onShelf = (listed ?? []).some((app) =>
+    [app.id, app.appId, app.fileName, app.title]
+      .filter((v) => typeof v === "string")
+      .some((k) => normalizeMiniAppKey(k) === norm),
+  );
+  if (!onShelf) return;
 
   void fetch("/api/mini-apps", {
     method: "POST",

@@ -210,8 +210,20 @@ test("a room-folder save posts the LEAF name of a NESTED file, and the shown pat
   t.after(() => clearInterval(sampler));
 
   // ── SAVE with the room's own button: this is the call site the bead is about ────────────────────────────
+  // 9lpi: a save is not a promotion — a PLAIN page's save posts nothing now, so this arm first promotes
+  // the file the way Open as Mini-App does, then proves the save of a SHELF app syncs the leaf name.
+  // (The plain-page negative is driven by tests/room-folder-save-sync.test.mjs arm 1.)
+  const promote = await page.evaluate(async (leaf) => {
+    const res = await fetch("/api/mini-apps", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ fileName: leaf, title: leaf, html: "<!doctype html><p>nested v1</p>" }),
+    });
+    return { status: res.status };
+  }, LEAF);
+  assert.equal(promote.status, 200, "the explicit promotion lands the shelf record");
+
   const before = syncPosts().length;
-  assert.equal(before, 0, "nothing may sync before a save");
   await clickWhenEnabled("#file-save");
 
   let sent;
