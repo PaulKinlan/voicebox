@@ -157,3 +157,30 @@ test("a failed action says so and marks nothing (wmiq/q376)", async (t) => {
   );
   assert.notEqual(marked, "Kept separate", "a refused keep-separate must not render the decision badge");
 });
+
+test("ROOM-MOUNTED inspector shows the server's real candidates through the fetch relay, never the fabricated ones (v1k6)", async (t) => {
+  // The reviewer's repro: in the room the inspector is mounted via mini-app-bridge.html whose
+  // inner frame is sandboxed WITHOUT allow-same-origin — fetch('/api/...') from it fails, and the
+  // app kept showing the built-in preview rows while 23 real branches sat in the API. The bridge
+  // now relays same-origin fetches; this drive mounts the inspector THE ROOM'S WAY and asks its
+  // own published tool for the list.
+  const page = await launch({ width: 1100, height: 800 });
+  t.after(() => page.close());
+  await page.goto(`${server.base}/`);
+  await page.waitFor(
+    () => typeof window.__voiceboxOpenBranchInspector === "function" && !!window.__voiceboxMiniAppRegistry,
+    { label: "room booted" },
+  );
+  await page.evaluate(() => window.__voiceboxOpenBranchInspector());
+  await page.waitFor(
+    () => window.__voiceboxMiniAppRegistry.getAllTools().some((t) => t.name === "list_candidate_branches"),
+    { label: "inspector tools registered through the bridge", timeout: 30000 },
+  );
+  const out = await page.evaluate(
+    () => window.__voiceboxMiniAppRegistry.executeTool("list_candidate_branches", {}),
+  );
+  assert.equal(out.ok, true, `tool call failed: ${JSON.stringify(out).slice(0, 300)}`);
+  const names = (out.result?.branches ?? []).map((b) => b.name);
+  assert.ok(names.includes("feat/keep-me"), `the room surface must list the server's real branch — got ${JSON.stringify(names)}`);
+  assert.ok(!names.includes("feat/voice-greeting-polish"), `a fabricated fixture branch is on the room surface: ${JSON.stringify(names)}`);
+});

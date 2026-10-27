@@ -4323,8 +4323,13 @@ async function handle(req, res) {
       try {
         if (statSync(file).isFile()) {
           const type = MIME_TYPES[path.extname(file)] ?? "application/octet-stream";
+          // Mini-app scripts load inside the bridge's sandboxed frame, whose origin is OPAQUE —
+          // and a module script's fetch is CORS-mode, so without this header the frame can never
+          // load its own code and the app dies silently (voicebox-beads-v1k6). The bytes are
+          // public and uncredentialed; `*` is the honest answer for them and nothing else.
+          const isMiniAppScript = containedIn(path.join(PUBLIC, "apps"), file) && file.endsWith(".js");
           // Keyed on the RESOLVED FILE (`file`), not on the requested path: see the allowlist above for why.
-          res.writeHead(200, { "content-type": type, ...cspReportOnlyHeaders(file) });
+          res.writeHead(200, { "content-type": type, ...(isMiniAppScript ? { "access-control-allow-origin": "*" } : {}), ...cspReportOnlyHeaders(file) });
           return res.end(readFileSync(file));
         }
       } catch {}
