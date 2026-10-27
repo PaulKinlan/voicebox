@@ -298,12 +298,45 @@
     };
   }
 
+  /**
+   * WHAT THE SERVER SAID, decided in one place (voicebox-beads-ulhi).
+   *
+   * A status is not a result: this surface used to POST, ignore the answer entirely, and print
+   * "Landed … cleanly into main." — including when the route did not exist (it POSTed
+   * `/api/branches/land`, and the host route is `POST /api/branches/merge`, so EVERY land printed a
+   * success for a 404), when the merge was refused, and when the request never reached the server. A
+   * person reading that line would believe their branch was in main.
+   *
+   * So the claim is earned by the BODY, not by the transport: `{ok: true}` from a 2xx is the only thing
+   * that counts, because the host answers a refused merge with a body (`refused`, `why`) and a 409, and an
+   * intermediary can return a 200 that says nothing. Anything else is a failure with a reason to show.
+   */
+  async function readLandingResult(res) {
+    let payload = null;
+    try {
+      const text = res && typeof res.text === "function" ? await res.text() : "";
+      payload = text ? codec.parse(text) : null;
+    } catch (_err) {
+      payload = null;
+    }
+    const status = res && typeof res.status === "number" ? res.status : null;
+    const ok = Boolean(res && res.ok === true) && Boolean(payload && payload.ok === true);
+    const why =
+      (payload && (payload.why || payload.error)) ||
+      (status !== null ? "the server answered HTTP " + status : "the server gave no answer");
+    return { ok, payload, why, status };
+  }
+
+  function describeLandingFailure(targetName, why) {
+    return "Could not land " + targetName + ": " + why + ".";
+  }
+
   async function landBranch(branchName) {
     const targetName = branchName || state.selectedBranch;
     const branch = state.branches.find((b) => b.name === targetName);
     const statusEl = document.getElementById("review-action-status");
     if (!branch) {
-      return { ok: false, error: "Candidate branch not found" };
+      return { ok: false, refused: "branch-not-found", error: "Candidate branch not found" };
     }
     if (branch.cleanMergePossible === false) {
       if (statusEl) {
@@ -313,20 +346,44 @@
       return { ok: false, refused: "merge-conflict" };
     }
 
+    let result;
     try {
-      await fetch("/api/branches/land", {
+      const res = await fetch("/api/branches/merge", {
         method: "POST",
         headers: { "Content-Type": mimeType },
         body: codec.stringify({ branch: targetName, baseBranch: state.baseBranch }),
       });
-    } catch (_err) {
-      // Keep optimistic local merge state in preview mode.
+      result = await readLandingResult(res);
+    } catch (err) {
+      result = {
+        ok: false,
+        payload: null,
+        why: (err && err.message) || "the request did not complete",
+        status: null,
+      };
+    }
+
+    if (!result.ok) {
+      const message = describeLandingFailure(targetName, result.why);
+      if (statusEl) statusEl.textContent = message;
+      renderBranchList();
+      renderSelectedBranchDetails();
+      return {
+        ok: false,
+        refused: (result.payload && result.payload.refused) || "land-failed",
+        branch: targetName,
+        baseBranch: state.baseBranch,
+        status: result.status,
+        error: message,
+      };
     }
 
     branch.statusDecision = "landed";
+    const headCommit = result.payload && result.payload.headCommit ? String(result.payload.headCommit) : "";
     if (statusEl) {
-      statusEl.textContent =
-        "Landed " + targetName + " cleanly into " + state.baseBranch + ".";
+      statusEl.textContent = headCommit
+        ? "Landed " + targetName + " cleanly into " + state.baseBranch + " at " + headCommit + "."
+        : "Landed " + targetName + " cleanly into " + state.baseBranch + ".";
     }
     renderBranchList();
     renderSelectedBranchDetails();
@@ -335,6 +392,7 @@
       action: "landed",
       branch: targetName,
       baseBranch: state.baseBranch,
+      headCommit,
     };
   }
 
@@ -342,6 +400,40 @@
     const targetName = branchName || state.selectedBranch;
     const branch = state.branches.find((b) => b.name === targetName);
     const statusEl = document.getElementById("review-action-status");
+
+    // Same rule one function down (voicebox-beads-ulhi): "Kept … for later review" is a claim about a record
+    // the HOST keeps, and this used to set it without asking the host anything at all.
+    let result;
+    try {
+      const res = await fetch("/api/branches/keep-separate", {
+        method: "POST",
+        headers: { "Content-Type": mimeType },
+        body: codec.stringify({ branch: targetName, baseBranch: state.baseBranch }),
+      });
+      result = await readLandingResult(res);
+    } catch (err) {
+      result = {
+        ok: false,
+        payload: null,
+        why: (err && err.message) || "the request did not complete",
+        status: null,
+      };
+    }
+
+    if (!result.ok) {
+      const message = "Could not keep " + targetName + " separate: " + result.why + ".";
+      if (statusEl) statusEl.textContent = message;
+      renderBranchList();
+      renderSelectedBranchDetails();
+      return {
+        ok: false,
+        refused: (result.payload && result.payload.refused) || "keep-failed",
+        branch: targetName,
+        status: result.status,
+        error: message,
+      };
+    }
+
     if (branch) {
       branch.statusDecision = "kept-separate";
     }
@@ -355,6 +447,7 @@
       ok: true,
       action: "kept-separate",
       branch: targetName,
+      baseBranch: state.baseBranch,
     };
   }
 
