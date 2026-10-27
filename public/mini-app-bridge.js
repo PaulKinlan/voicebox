@@ -30,6 +30,9 @@ const BOUNDS = {
   maxSchemaDepth: 16,
   maxSchemaNodes: 512,
   callTimeoutMs: 5000,
+  // The fetch relay (voicebox-beads-v1k6): buffered whole, bounded, same-origin paths only.
+  fetchRelayTimeoutMs: 30000,
+  fetchRelayMaxBodyBytes: 262144,
 };
 
 const INJECTED_SDK = `<script>
@@ -65,6 +68,39 @@ const INJECTED_SDK = `<script>
   let bridgePort = null;
   const pendingMessages = [];
 
+  // FETCH RELAY (voicebox-beads-v1k6): this frame is sandboxed WITHOUT allow-same-origin, so its
+  // origin is opaque and fetch("/api/...") can never reach the server — a mini-app that renders
+  // fetched state then silently shows its placeholder data instead (the landing inspector showed
+  // fabricated branches over 23 real ones). Relative same-origin requests are relayed over the
+  // bridge port to the same-origin bridge page and resolved as real Response objects; absolute
+  // and scheme-relative URLs keep native fetch. Buffered whole — no streaming.
+  var nativeFetch = typeof window.fetch === "function" ? window.fetch.bind(window) : null;
+  var fetchSeq = 0;
+  var pendingFetches = new Map();
+  var FETCH_RELAY_TIMEOUT_MS = 30000;
+  window.fetch = function(input, init) {
+    var url = typeof input === "string" ? input : (input && input.url) || "";
+    if (!url || !url.startsWith("/") || url.startsWith("//")) {
+      if (!nativeFetch) return Promise.reject(new Error("fetch is unavailable in this frame"));
+      return nativeFetch(input, init);
+    }
+    return new Promise(function(resolve, reject) {
+      var callId = "fetch-" + (++fetchSeq);
+      var timer = setTimeout(function() {
+        if (pendingFetches.delete(callId)) reject(new Error("fetch relay timed out after " + FETCH_RELAY_TIMEOUT_MS + "ms"));
+      }, FETCH_RELAY_TIMEOUT_MS);
+      pendingFetches.set(callId, { resolve: resolve, reject: reject, timer: timer });
+      postToBridge({
+        type: "fetch_request",
+        callId: callId,
+        url: url,
+        method: (init && init.method) || "GET",
+        headers: (init && init.headers) || {},
+        body: init && typeof init.body === "string" ? init.body : undefined
+      });
+    });
+  };
+
   function postToBridge(msg) {
     if (bridgePort) bridgePort.postMessage(msg);
     else pendingMessages.push(msg);
@@ -78,6 +114,23 @@ const INJECTED_SDK = `<script>
       bridgePort.onmessage = async function(e) {
         const data = e.data;
         if (!data) return;
+
+        if (data.type === "fetch_result") {
+          const pending = pendingFetches.get(data.callId);
+          if (pending) {
+            pendingFetches.delete(data.callId);
+            clearTimeout(pending.timer);
+            if (data.ok) {
+              pending.resolve(new Response(data.bodyText, {
+                status: data.status,
+                headers: data.headers || {}
+              }));
+            } else {
+              pending.reject(new TypeError(data.error || "fetch relay failed"));
+            }
+          }
+          return;
+        }
 
         if (data.type === "call_tool") {
           const callId = data.callId;
@@ -832,9 +885,63 @@ function validateToolArgs(params, rawArgs) {
 }
 }
 
+// FETCH RELAY, bridge half (voicebox-beads-v1k6): the sandboxed inner frame has an opaque origin
+// and cannot fetch the server's own API; this page is same-origin, so it fetches for it. Only
+// absolute-path same-origin URLs, a small method allowlist, and a content-type-only header pass —
+// the sandboxed app must not be able to mint Cookie/Authorization headers through the relay; the
+// page's own same-origin credentials ride the request as they would for the room itself. The body
+// is buffered whole and capped.
+async function handleFetchRelay(data) {
+  const { callId } = data;
+  const reply = (msg) => {
+    try {
+      appChannel.port1.postMessage({ type: "fetch_result", callId, ...msg });
+    } catch {}
+  };
+  const url = typeof data.url === "string" ? data.url : "";
+  if (!url.startsWith("/") || url.startsWith("//")) {
+    reply({ ok: false, error: "the fetch relay serves same-origin paths only" });
+    return;
+  }
+  const method = String(data.method || "GET").toUpperCase();
+  if (!["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"].includes(method)) {
+    reply({ ok: false, error: `method not relayable: ${method}` });
+    return;
+  }
+  const headers = {};
+  const wantedContentType = data.headers && typeof data.headers === "object" ? (data.headers["content-type"] || data.headers["Content-Type"]) : null;
+  if (typeof wantedContentType === "string") headers["content-type"] = wantedContentType.slice(0, 200);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), BOUNDS.fetchRelayTimeoutMs);
+  try {
+    const res = await fetch(url, {
+      method,
+      headers,
+      body: method === "GET" || method === "HEAD" ? undefined : (typeof data.body === "string" ? data.body.slice(0, BOUNDS.maxArgsBytes) : undefined),
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    reply({
+      ok: true,
+      status: res.status,
+      headers: { "content-type": res.headers.get("content-type") || "text/plain" },
+      bodyText: text.length > BOUNDS.fetchRelayMaxBodyBytes ? text.slice(0, BOUNDS.fetchRelayMaxBodyBytes) : text,
+    });
+  } catch (err) {
+    reply({ ok: false, error: `fetch relay failed: ${err?.message ?? String(err)}` });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function handleInnerMessage(event) {
   const data = event.data;
   if (!data) return;
+
+  if (data.type === "fetch_request") {
+    handleFetchRelay(data);
+    return;
+  }
 
   if (data.type === "register_tool") {
     if (registeredTools.size >= BOUNDS.maxTools) {
