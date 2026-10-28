@@ -647,7 +647,12 @@ test("gate: the parallel pool is dispatched in the browser tier's own heaviest-f
 test("gate: the isolated files still run ALONE, after the whole queue, exactly once (voicebox-beads-buy8)", async () => {
   const names = ["voicebox.test.mjs", "theme-browser.test.mjs", ...ISOLATED].map((f) => f.replace(/^tests\//, ""));
   const isolated = names.filter((f) => ISOLATED.has(`tests/${f}`));
-  assert.equal(isolated.length, 2, "the fixture keeps the real isolated pair (scripts/test-shards.mjs owns it)");
+  // THE REAL LIST, NOT A COUNT (voicebox-beads-i9k0). This asserted `isolated.length === 2`, which pinned the
+  // membership as a side effect: adding a measured casualty to `scripts/test-shards.mjs` failed a unit test
+  // whose subject is the SCHEDULE, not the roster. The fixture is built from `ISOLATED` itself, so the
+  // property worth asserting is that the fixture covers every member and that the list is not empty.
+  assert.ok(ISOLATED.size > 0, "the isolated list is non-empty, so this case is not vacuous");
+  assert.equal(isolated.length, ISOLATED.size, "the fixture keeps every name in scripts/test-shards.mjs ISOLATED");
   const classified = synthetic({ browser: names });
   const { events, dispatched } = await driveSchedule(classified);
   const order = events.map((e) => e.file);
