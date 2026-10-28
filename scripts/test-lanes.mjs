@@ -44,8 +44,7 @@
 // then RUNS it must name the launch in its own code — a written file is not
 // followed into the child process that runs it — and a launch NAME inside a
 // program piped to a child's stdin is not seen (a helper PATH there still is).
-import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -644,13 +643,28 @@ const sha256hex = (text) => createHash("sha256").update(text).digest("hex");
 
 /** The default cache path: the git COMMON dir (shared across worktrees), or null to disable. Only
  *  the real roster root is cached by default — fixture roots are the classifier's own test data and
- *  must always classify fresh unless a test passes an explicit cachePath. */
+ *  must always classify fresh unless a test passes an explicit cachePath.
+ *
+ *  Resolved from the FILESYSTEM, never by spawning `git rev-parse`: the CLI probes in
+ *  tests/test-changed.mjs run under a preload that forbids child processes outright, and a spawn
+ *  here both broke that contract and (worse) disabled the cache inside the probe, restoring the
+ *  16s cold-lex the probe's 8s bound cannot survive (voicebox-beads-idy6). */
 function defaultClassifyCachePath(root) {
   if (root !== TESTS) return null;
   try {
-    const common = execFileSync("git", ["rev-parse", "--git-common-dir"], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-    if (!common) return null;
-    return path.join(path.resolve(ROOT, common), `voicebox-lane-classify-v${CLASSIFY_CACHE_VERSION}.json`);
+    const dotgit = path.join(ROOT, ".git");
+    let common = null;
+    if (statSync(dotgit).isDirectory()) {
+      common = dotgit; // an ordinary checkout: .git IS the common dir
+    } else {
+      // a worktree: .git is a FILE pointing at <common>/worktrees/<name>
+      const pointer = readFileSync(dotgit, "utf8").match(/^gitdir:\s*(.+)$/m)?.[1]?.trim();
+      if (!pointer) return null;
+      const gitdir = path.resolve(ROOT, pointer);
+      common = path.basename(path.dirname(gitdir)) === "worktrees" ? path.dirname(path.dirname(gitdir)) : gitdir;
+    }
+    if (!common || !existsSync(common)) return null;
+    return path.join(common, `voicebox-lane-classify-v${CLASSIFY_CACHE_VERSION}.json`);
   } catch {
     return null;
   }
