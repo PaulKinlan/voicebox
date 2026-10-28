@@ -115,7 +115,24 @@ test('pre-push names the stage and cause, streams output, and refuses real faili
       copyFileSync(path.join(root, file), path.join(repo, file));
     }
     chmodSync(path.join(repo, '.githooks/pre-push'), 0o755);
-    writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ scripts: { 'test:unit': 'node --test case.cjs', 'test:live': 'node --test --test-concurrency=1 live-case.cjs', accept: 'node acceptance.cjs' } }));
+    // docs-check is the stage WHOSE SCOPE this case asserts (voicebox-beads-8c0t). It is a stub that
+    // says it ran: the real one boots a scratch server (36-46s measured), which is the cost that made
+    // the question worth asking, and a fixture has no server to probe.
+    writeFileSync(path.join(repo, 'scripts', 'docs-check.mjs'), 'console.log("DOCS-CHECK RAN");\n');
+    // THE RUNAWAY STAGES PRINT THEIR MARKER FROM THE STAGE COMMAND, NOT FROM THE TEST FILE
+    // (voicebox-beads-opay). `node --test`'s reporter buffers a test FILE child's stdout and prints it
+    // when the run COMPLETES, so a run that `timeout` kills (this fixture's unit-timeout/live-timeout
+    // scenarios) loses the marker and prints node's own "Interrupted while running:" instead — measured
+    // deterministically at load 0.8 on Node v24.21.0, outside this repo, so it is not the 5s-startup
+    // contention class (voicebox-beads-0nt3) and not load at all. A `node -e` prefix wins the race by
+    // construction: its stdout is the stage's own, inherited. case.cjs keeps its deliberate
+    // failure/hang semantics, so the scenarios still prove what they were written for — the gate names
+    // the stage, streams its output, and refuses a killed stage.
+    writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ scripts: {
+      'test:unit': 'node -e "console.log(\'TEST OUTPUT BEFORE TERMINATION\');console.error(\'TEST STDERR BEFORE TERMINATION\')" && node --test case.cjs',
+      'test:live': 'node -e "console.log(\'LIVE OUTPUT BEFORE TERMINATION\')" && node --test --test-concurrency=1 live-case.cjs',
+      accept: 'node acceptance.cjs',
+    } }));
     writeFileSync(path.join(repo, 'case.cjs'), `
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
@@ -193,6 +210,11 @@ exec '${timeout}' "$@"
       assert.doesNotMatch(output, /LIVE OUTPUT BEFORE TERMINATION/, 'the live lane must not run for a feature-branch push');
       assert.doesNotMatch(output, /ACCEPTANCE OUTPUT/, 'acceptance must not run for a feature-branch push');
       assert.doesNotMatch(output, /Acquired gate lock|Waiting for gate lock/, 'a feature-branch push must not queue on the gate lock');
+      // docs-check is the docs stage that BOOTS A SERVER, so it belongs to the landing: the candidate push
+      // runs the static docs stages (docs-touched, single-owner) only (voicebox-beads-8c0t — the policy
+      // docs/12-pre-push-gate.md section 1 already states, and the script did not honour).
+      assert.doesNotMatch(output, /DOCS-CHECK RAN/, 'a feature-branch push must not run docs-check — it probes a live server and costs 36-46s measured (voicebox-beads-8c0t)');
+      assert.match(output, /candidate-branch push — docs-check probes a live server and runs on the landing to main/, 'the gate names where docs-check ran instead of leaving its absence silent');
       if (scenario === 'success') {
         assert.equal(result.status, 0, output);
         assert.match(output, /ALL GATES GREEN \(unit\)/);
@@ -268,6 +290,8 @@ exec '${timeout}' "$@"
         assert.match(output, /flock command not found; running live stage without lock/, 'a landing to main enters acquire_gate_lock');
       }
       assert.match(output, /LIVE OUTPUT BEFORE TERMINATION/);
+      // The other side of the same scope decision: a landing still runs docs-check (voicebox-beads-8c0t).
+      assert.match(output, /DOCS-CHECK RAN/, 'a landing to main must run docs-check');
       if (scenario === 'success') {
         assert.equal(result.status, 0, output);
         assert.match(output, /ALL GATES GREEN/);

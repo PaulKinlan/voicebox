@@ -8,7 +8,7 @@ Voicebox enforces a multi-stage verification gate on `git push` via `.githooks/p
 
 - **Candidate Branch Naming & Pushes (`git push origin fleet/<bead-id>`)**:
   - Candidate branches are standardized on strict 1:1 naming with their bead issue: `fleet/<bead-id>` (`voicebox-beads-83ge`). Ad-hoc branch variants (such as `-v2`, `-clean`) are prohibited to prevent remote branch accumulation.
-  - Candidate branch pushes run only `node scripts/docs-touched.mjs` and the fast `unit` test lane (`npm run test:unit`), then exit immediately. This keeps worktree branch pushes fast and lock-free. No manifest is sealed here: a receipt is for a landing.
+  - Candidate branch pushes run only the STATIC documentation stages — `node scripts/docs-touched.mjs` and `node scripts/single-owner.mjs` — and the fast `unit` test lane (`npm run test:unit`), then exit immediately. `node scripts/docs-check.mjs` is deliberately **not** one of them (`voicebox-beads-8c0t`): it boots a scratch server and probes it, measured 36-46s wall at load ~5 on this box, and that boot is its whole cost. Its answer — do the generated blocks and hand-written claims still describe a live server — is produced on the merged union the merger gates and again on the landing, where it runs with the rest of the landing gate. A push with **no** destination information keeps the full gate, docs-check included, because an unseen destination might be a landing. This keeps worktree branch pushes fast and lock-free. No manifest is sealed here: a receipt is for a landing.
 - **Landing on `main` & Remote Branch Auto-Prune**:
   - Pushing to `main` from a non-`main` branch is refused immediately (`[gate] pre-push REFUSED: non-main branch attempting to push to main ref`). Always create worktrees with `--no-track` (`git worktree add --no-track -b <branch> <dir> origin/main`) so worktree branches do not track `origin/main`.
   - Pushing from `main` to `origin/main` runs the full verification pipeline (or fast-paths docs-only `*.md` changes through `docs-check` and `single-owner`), caching both the verified `HEAD^{tree}` SHA and normalized `sourceTree` SHA in `.git/voicebox-gate-passed-tree`, and seals `~/.fleet/checks/<tree>.full.manifest.json` as its last stage (`voicebox-beads-wiby`, `voicebox-beads-83ge`).
@@ -21,7 +21,9 @@ Voicebox enforces a multi-stage verification gate on `git push` via `.githooks/p
 
 | Stage | Command | Execution Mode | Default Timeout |
 |---|---|---|---|
-| **Docs Touched** | `node scripts/docs-touched.mjs` | Static `git diff` check | Immediate |
+| **Docs Touched** | `node scripts/docs-touched.mjs` | Static `git diff` check (every push) | Immediate |
+| **Docs Check** | `node scripts/docs-check.mjs` | Boots a scratch server and probes it — **landings only** (`voicebox-beads-8c0t`); measured 36-46s at load ~5 | `VOICEBOX_GATE_DOCS_SECS` (must outlast the boot) |
+| **Single Owner** | `node scripts/single-owner.mjs` | Static scan of the tree (every push) | Immediate |
 | **Unit Suite** | `node scripts/gate-tier.mjs --tier unit` | Unit lane, **one process per file** | `180s` |
 | **Live Suite** | `node scripts/gate-tier.mjs --tier live` | Server lane (`--test-concurrency=4`) then the Browser CDP shard runner (4 workers, one file each) — one process per file | `400s` |
 | **Acceptance** | `npm run accept` | End-to-end headless Chromium verification (`page-acceptance.mjs`) | `45s` |
