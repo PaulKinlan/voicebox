@@ -42,8 +42,11 @@ function noSpawnCli(args) {
       `);
     }
     const cliArgs = batch ? [probe] : [SCRIPT, ...args, "--manifest-dir", manifest];
+    // 60s, not 8s: the bound exists to catch a CLI that launches a suite (minutes), but 8s is
+    // tighter than main() itself on a loaded shared VM and failed 'null !== 0' red on every
+    // fast-gate run (voicebox-beads-tfqg). Bounded still means bounded.
     const result = spawnSync(process.execPath, cliArgs, {
-      cwd: root, encoding: "utf8", timeout: 8000,
+      cwd: root, encoding: "utf8", timeout: 60000,
       env: { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require=${preload}`.trim() },
     });
     assert.equal(result.error, undefined, "bounded CLI probe must terminate normally");
@@ -201,7 +204,9 @@ test("CLI --json: outputs structured mapping payload", () => {
 test("CLI -- ends option parsing: a flag-shaped changed path cannot secretly enable the gate", () => {
   // --json returns before test dispatch even if the sentinel parser regresses; the assertion
   // then catches the accidental --gate interpretation without launching any suite.
-  const res = spawnSync(process.execPath, [SCRIPT, "--json", "--", "--gate"], { cwd: root, encoding: "utf8", timeout: 8000 });
+  // 60s, not 8s: see the note on noSpawnCli above — 8s is tighter than the script's own
+  // runtime on this fleet's shared VMs (voicebox-beads-tfqg).
+  const res = spawnSync(process.execPath, [SCRIPT, "--json", "--", "--gate"], { cwd: root, encoding: "utf8", timeout: 60000 });
   assert.equal(res.status, 0, res.stderr);
   const data = JSON.parse(res.stdout);
   assert.deepEqual(data.changed, ["--gate"]);
