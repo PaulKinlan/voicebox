@@ -205,14 +205,18 @@ exec '${timeout}' "$@"
       assert.match(output, new RegExp(`REFUSED: unit .* — ${cause}`));
       // The unit budget is a SIZED FACT, asserted from the gate's own announcement and from the
       // refusal (voicebox-beads-lq8s): 90s sat inside the suite's measured run-to-run swing on this
-      // box (duration_ms 71084/78510 green against 88686/88966 killed at 90s), so it is 180s.
+      // box (duration_ms 71084/78510 green against 88686/88966 killed at 90s), so it became 180s.
+      // RE-SIZED to 900s on 2026-10-28 (voicebox-beads-i9k0): the unit tier has grown and its slowest
+      // file (tests/test-changed.test.mjs) measures 127.2s alone, so 180s was killing a healthy lane;
+      // the per-file budget (TIER_FILE_MS.unit, 300s) still sits under it, which this file and
+      // tests/gate-tier.test.mjs both assert.
       if (scenario.startsWith('unit')) {
-        assert.match(output, /pre-push: unit — running npm run test:unit \(max 180s\)/, 'the branch-push unit budget must be 180s — sized outside the suite swing on a starved box (voicebox-beads-lq8s)');
+        assert.match(output, /pre-push: unit — running npm run test:unit \(max 900s\)/, 'the branch-push unit budget must be 900s — sized outside the suite swing on a starved box (voicebox-beads-i9k0)');
       }
       if (scenario === 'unit-timeout') {
         const m = output.match(/TIMED OUT — budget (\d+)s, elapsed (\d+)s \(exit 124\)/);
         assert.ok(m, `the unit refusal must state budget and elapsed time: ${output}`);
-        assert.equal(Number(m[1]), 180, 'the unit refusal must name the same budget the stage announced');
+        assert.equal(Number(m[1]), 900, 'the unit refusal must name the same budget the stage announced');
       }
       if (scenario === 'unit-failure') assert.match(output, /deliberate arithmetic assertion/);
       assert.equal(spawnSync('git', ['--git-dir', remote, 'show-ref', '--verify', '--quiet', 'refs/heads/candidate'], { env: cleanEnv }).status, 1);

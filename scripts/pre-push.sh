@@ -194,7 +194,7 @@ run_stage() {
 # is a bound for the starved box, not the quiet one. VOICEBOX_GATE_UNIT_SECS (or
 # the legacy VOICEBOX_GATE_TESTS_SECS) still overrides it — that is the remedy
 # the refusal message names.
-_unit_secs="${VOICEBOX_GATE_UNIT_SECS:-${VOICEBOX_GATE_TESTS_SECS:-180}}"
+_unit_secs="${VOICEBOX_GATE_UNIT_SECS:-${VOICEBOX_GATE_TESTS_SECS:-900}}"
 _live_secs="${VOICEBOX_GATE_LIVE_SECS:-400}"
 _accept_secs="${VOICEBOX_GATE_ACCEPT_SECS:-45}"
 _docs_secs="${VOICEBOX_GATE_DOCS_SECS:-30}"
