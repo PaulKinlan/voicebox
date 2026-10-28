@@ -43,7 +43,13 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
  * condition-sensitive timeouts or flakes, and reduces browser-tier wall time from 750.1s to 184.2s —
  * a 4.07x browser-tier throughput speedup saving 565.9s (~9.4 minutes) of browser-tier wall time across all 92 files.
  */
-export const TIER_WORKERS = Object.freeze({ unit: Math.max(1, os.availableParallelism() - 1), server: 4, browser: 3 });
+// THE BROWSER WIDTH IS TWO (voicebox-beads-q4j6.1 / 1ac87543: "the browser tier runs at two shards, the
+// width has one owner"). It was raised to 3 by a34f5378 ('land rework of 4 parked branches') and that
+// regression is measurable: the 2026-10-28 17:16 live tier failed 15 browser files, with
+// tests/health-auth-browser.test.mjs timing out at 35000ms, while those same two worst files run
+// together in 21.08s (3 pass, 0 fail) at width 2 on the same box. A third concurrent Chromium on this
+// VM is what tips them over; do not raise this without a quiet-box measurement.
+export const TIER_WORKERS = Object.freeze({ unit: Math.max(1, os.availableParallelism() - 1), server: 4, browser: 2 });
 
 /**
  * Per-file execution budgets per tier (voicebox-beads-ak9h).
