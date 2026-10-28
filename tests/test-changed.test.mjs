@@ -12,6 +12,26 @@ import { buildQueue, ISOLATED, TIER_WORKERS } from "../scripts/test-shards.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const SCRIPT = path.join(root, "scripts/test-changed.mjs");
 
+// A CLI probe starts a fresh Node process and imports the whole selector roster: 8.3-14s measured on this
+// 8-vCPU fleet VM under load, against the 8000ms bound these probes used to carry — so the bound fired on a
+// slow HOST and the assertions below reported it as "the CLI spawned something", which is a different claim
+// (voicebox-beads-8ckj). What a probe must catch is a CLI that never returns, so the bound is generous,
+// named, and used by EVERY probe here; the marker/manifest assertions stay the behavioural test.
+const CLI_PROBE_BOUND_MS = 60_000;
+// The gate-mode probes dispatch a real test file through the selector, so they carry their own, larger bound:
+// that work is the gate's, not a CLI answer's, and the tier's own per-file timeout is what bounds it there.
+const GATE_PROBE_BOUND_MS = 300_000;
+
+/** A bound that fired is a slow host, not a behaviour; say which one it was. */
+function assertProbeTerminated(result, what) {
+  const ran = typeof result.elapsedMs === "number" ? ` after ${result.elapsedMs}ms` : "";
+  assert.equal(
+    result.error,
+    undefined,
+    `${what} must terminate normally: it ${result.error ? `ended with ${result.error.code ?? result.error.message}${ran} against a ${CLI_PROBE_BOUND_MS}ms bound — that is the HOST, not the CLI` : "returned"}`,
+  );
+}
+
 // Fail-closed CLI probes run under a disposable no-child-process preload. Even the old broken
 // parser cannot launch a test gate: a Git/test spawn records a marker and throws before launch.
 function noSpawnCli(args) {
@@ -42,11 +62,13 @@ function noSpawnCli(args) {
       `);
     }
     const cliArgs = batch ? [probe] : [SCRIPT, ...args, "--manifest-dir", manifest];
+    const startedAt = Date.now();
     const result = spawnSync(process.execPath, cliArgs, {
-      cwd: root, encoding: "utf8", timeout: 8000,
+      cwd: root, encoding: "utf8", timeout: CLI_PROBE_BOUND_MS,
       env: { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require=${preload}`.trim() },
     });
-    assert.equal(result.error, undefined, "bounded CLI probe must terminate normally");
+    result.elapsedMs = Date.now() - startedAt;
+    assertProbeTerminated(result, "the bounded CLI probe");
     assert.equal(existsSync(marker), false, "CLI must not launch Git, a test, or another child process");
     assert.equal(existsSync(manifest), false, "CLI must not write a gate artifact");
     return result;
@@ -133,17 +155,21 @@ test("CLI: unmapped source files refuse with unmapped-source-file and exit 1 (vo
   const unmappedPath = path.join("lib", unmappedName);
   assert.equal(mapToTests([unmappedPath]).length, 0, "unmapped file must map to zero tests");
 
+  const startedAt = Date.now();
   const res = spawnSync(process.execPath, [SCRIPT, unmappedPath], {
-    cwd: root, encoding: "utf8",
+    cwd: root, encoding: "utf8", timeout: CLI_PROBE_BOUND_MS,
   });
+  res.elapsedMs = Date.now() - startedAt;
+  assertProbeTerminated(res, "the unmapped-source CLI probe");
   assert.equal(res.status, 1, "must exit 1 on unmapped source file");
   assert.match(res.stderr, /\[test:changed\] REFUSED: unmapped-source-file/);
   assert.match(res.stderr, new RegExp(unmappedName));
 
   // Passing --allow-unmapped permits running despite unmapped source:
   const allowed = spawnSync(process.execPath, [SCRIPT, "--allow-unmapped", "--dry-run", unmappedPath], {
-    cwd: root, encoding: "utf8",
+    cwd: root, encoding: "utf8", timeout: CLI_PROBE_BOUND_MS,
   });
+  assertProbeTerminated(allowed, "the --allow-unmapped CLI probe");
   assert.equal(allowed.status, 0);
   assert.match(allowed.stdout, /\[test:changed\] Detected 1 changed file\(s\):/);
 });
@@ -177,7 +203,7 @@ test("partitionTests: partitions mapped tests into disjoint lanes", () => {
 
 test("CLI --dry-run: reports mapped tests and exits 0 without running suites", () => {
   const out = execFileSync(process.execPath, [SCRIPT, "--dry-run", "lib/commands.mjs"], {
-    cwd: root, encoding: "utf8",
+    cwd: root, encoding: "utf8", timeout: CLI_PROBE_BOUND_MS,
   });
   assert.match(out, /\[test:changed\] Detected 1 changed file\(s\):/);
   assert.match(out, /· lib\/commands\.mjs/);
@@ -188,7 +214,7 @@ test("CLI --dry-run: reports mapped tests and exits 0 without running suites", (
 
 test("CLI --json: outputs structured mapping payload", () => {
   const out = execFileSync(process.execPath, [SCRIPT, "--json", "lib/state-dirs.mjs"], {
-    cwd: root, encoding: "utf8",
+    cwd: root, encoding: "utf8", timeout: CLI_PROBE_BOUND_MS,
   });
   const data = JSON.parse(out);
   assert.deepEqual(data.changed, ["lib/state-dirs.mjs"]);
@@ -201,7 +227,10 @@ test("CLI --json: outputs structured mapping payload", () => {
 test("CLI -- ends option parsing: a flag-shaped changed path cannot secretly enable the gate", () => {
   // --json returns before test dispatch even if the sentinel parser regresses; the assertion
   // then catches the accidental --gate interpretation without launching any suite.
-  const res = spawnSync(process.execPath, [SCRIPT, "--json", "--", "--gate"], { cwd: root, encoding: "utf8", timeout: 8000 });
+  const startedAt = Date.now();
+  const res = spawnSync(process.execPath, [SCRIPT, "--json", "--", "--gate"], { cwd: root, encoding: "utf8", timeout: CLI_PROBE_BOUND_MS });
+  res.elapsedMs = Date.now() - startedAt;
+  assertProbeTerminated(res, "the '--' CLI probe");
   assert.equal(res.status, 0, res.stderr);
   const data = JSON.parse(res.stdout);
   assert.deepEqual(data.changed, ["--gate"]);
@@ -485,7 +514,8 @@ test("gate: every record states its OWN selection reason, and a dependency is no
 });
 
 test("CLI gate: --allow-unmapped is refused outright, and the refusal names why", () => {
-  const res = spawnSync(process.execPath, [SCRIPT, "--gate", "--allow-unmapped", "tests/gate-manifest.test.mjs"], { cwd: root, encoding: "utf8" });
+  const res = spawnSync(process.execPath, [SCRIPT, "--gate", "--allow-unmapped", "tests/gate-manifest.test.mjs"], { cwd: root, encoding: "utf8", timeout: CLI_PROBE_BOUND_MS });
+  assertProbeTerminated(res, "the --gate --allow-unmapped CLI probe");
   assert.equal(res.status, 2);
   assert.match(res.stderr, /--allow-unmapped is a developer escape and is not available to the gate/);
   assert.match(res.stderr, /a scope it can name and reconcile/);
@@ -494,7 +524,8 @@ test("CLI gate: --allow-unmapped is refused outright, and the refusal names why"
 test("CLI gate: a genuine changed test file dispatches, emits the hub's markers and writes a reconciled manifest", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-gate-cli-"));
   try {
-    const res = spawnSync(process.execPath, [SCRIPT, "--gate", "--manifest-dir", dir, "tests/icon-sprite.test.mjs"], { cwd: root, encoding: "utf8" });
+    const res = spawnSync(process.execPath, [SCRIPT, "--gate", "--manifest-dir", dir, "tests/icon-sprite.test.mjs"], { cwd: root, encoding: "utf8", timeout: GATE_PROBE_BOUND_MS });
+    assertProbeTerminated(res, "the gate-mode CLI probe");
     assert.equal(res.status, 0, res.stdout + res.stderr);
     assert.match(res.stdout, /^\[test:changed\] running tests\/icon-sprite\.test\.mjs$/m);
     assert.match(res.stdout, /^fast-gate: passed: tests\/icon-sprite\.test\.mjs$/m);
