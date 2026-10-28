@@ -372,7 +372,11 @@ test("u2lx advisory: child stdout exceeding host bound is refused as resource-ex
     },
   };
 
-  const out = await callWasmTool(tool, { input: "abc" });
+  // deadlineMs 30s: the deadline is NOT the thing under test — the stdout bound is. At the 5s default
+  // the child (~2.4s of node boot + 3MB hex + pipe drain on this box) has only ~2.5s of headroom, and
+  // under a concurrent unit tier the deadline fired first and masked the bound's verdict as
+  // time-exceeded (measured red in the 2026-10-28 pre-push run, voicebox-beads-zpti).
+  const out = await callWasmTool(tool, { input: "abc" }, { deadlineMs: 30000 });
   assert.equal(out.ok, false);
   assert.equal(out.refused, "resource-exceeded");
   assert.match(out.why, /stdout bound/);
