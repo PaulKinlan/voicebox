@@ -315,7 +315,14 @@ test("u2lx advisory: child stdout exceeding host bound is refused as resource-ex
     },
   };
 
-  const out = await callWasmTool(tool, { input: "abc" });
+  // The wall-clock deadline is raised for this fixture only: this child (2.5MB memory,
+  // hex-encoding 1.5MB to 3MB on stdout) can take longer than the 5000ms default on a
+  // loaded host, and if the clock fires first the case answers 'time-exceeded' and tests
+  // nothing about the resource bound (voicebox-beads-k02x). With the deadline above the
+  // time the child needs to cross the 2MB stdout bound, the resource bound always wins
+  // the race; the /stdout bound/ + byte-count assertions on out.why then prove WHICH
+  // bound fired, so 'resource-exceeded' here can only mean the stream-size refusal.
+  const out = await callWasmTool(tool, { input: "abc" }, { deadlineMs: 30000 });
   assert.equal(out.ok, false);
   assert.equal(out.refused, "resource-exceeded");
   assert.match(out.why, /stdout bound/);
