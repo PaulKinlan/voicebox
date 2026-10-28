@@ -50,14 +50,14 @@ export const TIER_WORKERS = Object.freeze({ unit: Math.max(1, os.availableParall
  * Measured headroom (2026-10-13): slowest unit file is ~10s and slowest server file is ~33s.
  * RE-SIZED 2026-10-28 (voicebox-beads-i9k0): the unit file budget was 120s and tests/test-changed.test.mjs
  * measures 127.2s on this VM even after the test-lanes import fix (f2d95fb8) removed ~10s per spawned child -
- * it was timing out by 7s, and five other unit files sat at 79-157s. So unit is 300s, with the stage bound
+ * it was timing out by 7s, and five other unit files sat at 79-157s; under tier concurrency it reaches 256s, so 600s. So unit is 300s, with the stage bound
  * raised to 900s in pre-push.sh so this object still sits UNDER it (the ak9h invariant). These are bounds for
  * a starved box, not the quiet one; the env overrides remain the first remedy.
  * The per-file budget must sit comfortably under the tier's stage bound (pre-push.sh: unit 900s, live 400s/1200s),
  * so a wedged file is recorded 'timeout' by name while other files finish, instead of the stage bound ending the lane.
  */
 export const TIER_FILE_MS = Object.freeze({
-  unit: 300_000,
+  unit: 600_000,
   server: 300_000,
   browser: 240_000,
   live: 300_000,
