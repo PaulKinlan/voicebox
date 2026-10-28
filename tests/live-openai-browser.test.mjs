@@ -190,6 +190,21 @@ for (const provider of ["gemini", "openai"]) test(`Debug transcript: ${provider}
   await f.page.click("#debug-next-error");
   assert.equal(await f.page.evaluate(() => document.activeElement.closest('[data-error="true"]') !== null), true);
   await f.page.send("Browser.grantPermissions", { origin: f.server.base, permissions: ["clipboardReadWrite", "clipboardSanitizedWrite"] });
+  // WAIT FOR THE TIMELINE TO STOP GROWING BEFORE COPYING (voicebox-beads-8gsg). The copy is a snapshot and
+  // the assertion below compares it with a SECOND snapshot of the live list, so an event that lands between
+  // the two makes a correct copy look truncated: the 2026-10-28 22:25 full gate failed here with
+  // `28 !== 30`, both arms, while every earlier arm in the file passed. 1s of no new rows is the same
+  // "the surface has finished" condition the rest of the file waits for, named instead of assumed.
+  await f.page.evaluate(async () => {
+    const count = () => document.querySelectorAll("#debug-events > li").length;
+    let last = count();
+    let stableSince = Date.now();
+    while (Date.now() - stableSince < 1000) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const now = count();
+      if (now !== last) { last = now; stableSince = Date.now(); }
+    }
+  });
   await f.page.click("#debug-copy");
   await f.page.waitFor(() => document.querySelector("#debug-copy-status").textContent.startsWith("Copied"));
   const text = await f.page.evaluate(() => navigator.clipboard.readText());
