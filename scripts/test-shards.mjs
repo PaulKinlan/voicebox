@@ -174,8 +174,27 @@ export function isFailed({ code, tests, fail, notOk }) {
  * blobs. It is also the tier's slowest file (67.3s under 4 workers vs 23.3s alone), so it is
  * paying the contention twice: once in its duration, once in the race that only exists because of
  * it. Run alone, its shim keeps a 5×–20× margin over the same chain.
+ *
+ * THE THIRD AND FOURTH CASUALTIES ARE THE LIVE-TIER FILES THAT KEEP LOSING TO THEIR OWN PEER
+ * (voicebox-beads-i9k0, measured on the 2026-10-28 landing gates). `tests/live-openai-browser.test.mjs`
+ * and `tests/vision-controls-extraction.test.mjs` are the two longest browser files (107s and 30s of
+ * file time) and both failed full gates on this VM while passing standalone on the same tree minutes
+ * later: the openai file on its own 20s/30s per-arm budgets and on a copy-versus-live-list comparison
+ * (`28 !== 30`, both arms, twice), the vision file on a 15s wait for the metadata line to report a
+ * camera stop the click had already delivered. Across four consecutive gates on ONE tree the failing
+ * set moved between browser files every run (15 files, then cswsh-proxy + opfs-writer-identity, then
+ * live-rate-browser + health-auth-browser, then live-openai-browser + room-explorer-ui, then
+ * vision-controls-extraction + live-openai-browser) at loads of 9–14 on 8 CPUs — the gate was the only
+ * work running, so the contention these files lose to is each other. Isolating the two costs about
+ * 2 minutes of tier wall time (137s of file time that currently shares a shard) and takes the two
+ * longest, most timing-sensitive files out of the race.
  */
-export const ISOLATED = new Set(["tests/ldxa-barge-in-browser.test.mjs", "tests/pre-push.test.mjs"]);
+export const ISOLATED = new Set([
+  "tests/ldxa-barge-in-browser.test.mjs",
+  "tests/pre-push.test.mjs",
+  "tests/live-openai-browser.test.mjs",
+  "tests/vision-controls-extraction.test.mjs",
+]);
 
 /**
  * Split a queue into the part that runs with `workers` shards and the part that runs alone. Pure: it

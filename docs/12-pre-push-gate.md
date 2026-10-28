@@ -186,6 +186,8 @@ Every browser file has its own Node process and ephemeral-port server; shared wa
 
 **`tests/pre-push.test.mjs`** measures wall-clock budget enforcement, so the box is part of its subject. Its fixture accelerates each stage's budget through a `timeout` shim and asserts that the stage's output appeared BEFORE the budget killed it ("LIVE OUTPUT BEFORE TERMINATION"), then that the refusal reports the measured elapsed time rather than the configured budget. The chain it must outlast is `timeout → npm → sh → node`, and on a contended box that chain's startup is longer than the budget: measured 2026-10-12 on this VM, time-to-marker was 0.25s idle, 1.76–3.41s at loadavg 6 (32 CPU burners on 8 vCPU) and 5.2–6.3s at 8× oversubscription, while the shim's budget was 2s and the suite's own elapsed assertion accepts at most 10s — so no budget value was both large enough for a contended box and small enough for that assertion. At four workers the file failed the psfw union full gate (`tests/pre-push.test.mjs:227`, marker absent, slowest file 62.6s) and passed the xzrr union gate on identical blobs. It is also the tier's slowest file (67.3s under four workers versus 32.6s alone), so contention was costing it twice. It now runs alone, and its shim budget is 5s — a measured margin over the same chain rather than a coin flip (voicebox-beads-0nt3).
 
+**The two longest live-tier files are the third and fourth casualties** (voicebox-beads-i9k0, measured on the 2026-10-28 landing gates). `tests/live-openai-browser.test.mjs` (107s of file time) and `tests/vision-controls-extraction.test.mjs` (30s) both failed full gates on this VM while passing standalone on the same tree minutes later — the first on its own 20s/30s per-arm budgets and on a copy-versus-live-list comparison (`28 !== 30`, both arms, twice), the second on a 15s wait for the metadata line to report a camera stop whose click had already been delivered. Across four consecutive gates on ONE tree the failing set moved between browser files every run at loads of 9–14 on 8 CPUs, and the gate was the only work running: the contention those files lose to is each other. Isolating the two costs about two minutes of tier wall time (137s of file time that previously shared a shard) and takes the two longest, most timing-sensitive files out of the race.
+
 
 Isolation remains a **scheduling** mitigation rather than the repair: the file still runs exactly once with every assertion, and `tests/test-shards.test.mjs` proves the two phases partition the queue and every name in `ISOLATED` is still a real browser-lane file (a renamed test would otherwise rejoin the parallel run silently).
 
@@ -395,10 +397,11 @@ merger's union, and a full gate may not omit a classified file at all.
   unit lane, which is what the old `else matchedUnit.push(file)` fallback did.
 - **Per-file dispatch.** Each selected file runs in its own process with its own exit code, TAP counts,
   duration and bound, so "PASS" can be attributed to a file. The `ISOLATED` files (`tests/pre-push.test.mjs`,
-  `tests/ldxa-barge-in-browser.test.mjs`) run alone, after the parallel queue.
+  `tests/ldxa-barge-in-browser.test.mjs`, `tests/live-openai-browser.test.mjs`,
+  `tests/vision-controls-extraction.test.mjs`) run alone, after the parallel queue.
 - **The tier's own concurrency and queue.** Each tier runs at `TIER_WORKERS` — the one owner in
   `scripts/test-shards.mjs`, the same counts the full gate dispatches at (`availableParallelism() - 1` for
-  unit, 4 for the server lane, 3 for the browser tier's shards), overridable for a loaded box with
+  unit, 2 for the server lane, 2 for the browser tier's shards), overridable for a loaded box with
   `VOICEBOX_FAST_WORKERS`. The parallel pool is ordered by `buildQueue` from that same module, i.e. the
   queue the browser tier already runs from, heaviest-first. Both are scheduling facts and neither changes
   the scope: nothing is dropped, reordered INTO omission, or narrowed — a file the changed-path map selects

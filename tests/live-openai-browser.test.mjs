@@ -190,11 +190,14 @@ for (const provider of ["gemini", "openai"]) test(`Debug transcript: ${provider}
   await f.page.click("#debug-next-error");
   assert.equal(await f.page.evaluate(() => document.activeElement.closest('[data-error="true"]') !== null), true);
   await f.page.send("Browser.grantPermissions", { origin: f.server.base, permissions: ["clipboardReadWrite", "clipboardSanitizedWrite"] });
-  // WAIT FOR THE TIMELINE TO STOP GROWING BEFORE COPYING (voicebox-beads-8gsg). The copy is a snapshot and
-  // the assertion below compares it with a SECOND snapshot of the live list, so an event that lands between
-  // the two makes a correct copy look truncated: the 2026-10-28 22:25 full gate failed here with
-  // `28 !== 30`, both arms, while every earlier arm in the file passed. 1s of no new rows is the same
-  // "the surface has finished" condition the rest of the file waits for, named instead of assumed.
+  // WAIT FOR THE TIMELINE TO STOP GROWING, AND COUNT IT AT THE MOMENT OF THE CLICK (voicebox-beads-8gsg).
+  // The copy is a snapshot and the assertion below compares it with a SECOND snapshot of the live list,
+  // so an event landing between the two makes a correct copy look truncated: the 2026-10-28 21:18 and
+  // 22:25 full gates both failed here with `28 !== 30`, in both arms. Waiting for quiescence alone did
+  // not fix it (the events still arrived later), so the count is taken by a capture-phase listener on
+  // the copy button: that runs before the button's own handler writes the export, which makes it
+  // exactly "the number of rows that existed when the export was taken". The click itself stays a real
+  // CDP mouse click.
   await f.page.evaluate(async () => {
     const count = () => document.querySelectorAll("#debug-events > li").length;
     let last = count();
@@ -204,6 +207,10 @@ for (const provider of ["gemini", "openai"]) test(`Debug transcript: ${provider}
       const now = count();
       if (now !== last) { last = now; stableSince = Date.now(); }
     }
+    window.__debugCopyRows = null;
+    document.querySelector("#debug-copy").addEventListener("click", () => {
+      window.__debugCopyRows = count();
+    }, { capture: true, once: true });
   });
   await f.page.click("#debug-copy");
   await f.page.waitFor(() => document.querySelector("#debug-copy-status").textContent.startsWith("Copied"));
@@ -211,7 +218,7 @@ for (const provider of ["gemini", "openai"]) test(`Debug transcript: ${provider}
   assert(!text.includes(secret), "opaque API key must not leave the page");
   assert(!text.includes("synthetic-cookie"), "cookie value must not leave the page");
   const events = text.trim().split("\n").map(JSON.parse);
-  assert.equal(events.length, await f.page.evaluate(() => document.querySelectorAll("#debug-events > li").length), "one copy captures the entire timeline");
+  assert.equal(events.length, await f.page.evaluate(() => window.__debugCopyRows), "one copy captures the entire timeline");
   assert(events.every(e => Number.isFinite(Date.parse(e.timestamp))));
   assert(events.some(e => e.type === "debug.start" && e.inputTranscript.includes("does not enable transcription")));
   const stages = events.filter(e => e.callId === callId);
