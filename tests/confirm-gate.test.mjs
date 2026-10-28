@@ -63,11 +63,28 @@ const assetExists = (name) =>
     return (reply.assets ?? []).includes(assetName);
   }, name);
 
-const lastAnswer = () =>
-  page.evaluate(async () => {
-    const reply = await window.e1m0.send({ type: "audit" });
-    return reply.entries.filter((e) => e.decision === "confirm" && e.act?.kind === "delete").slice(-1)[0] ?? null;
-  });
+// THE AUDIT ENTRY IS WRITTEN AFTER THE DIALOG CLOSES (voicebox-beads-8gsg), so the arm must WAIT for the
+// answer about ITS OWN file rather than take "the latest entry of this shape". The old `lastAnswer()` read
+// the newest confirm/delete entry the instant `open === false` — and under live-tier contention the answer
+// for this gate had not been written yet, so the arm read the PREVIOUS arm's answer: the full gate at
+// 2026-10-28 21:44 saw `refused` (correct in kind, wrong file) for `afterEsc` while `gate-esc.txt` was
+// still on disk. Every arm here knows the asset name and the result it expects, so it waits for exactly
+// that pair and asserts on the entry about its own file.
+const answeredGate = (name, result) =>
+  page.waitFor(
+    async (assetName, expected) => {
+      const reply = await window.e1m0.send({ type: "audit" });
+      const answers = reply.entries.filter(
+        (e) =>
+          e.decision === "confirm" &&
+          e.act?.kind === "delete" &&
+          (e.act?.target ?? "").endsWith(assetName) &&
+          e.result === expected,
+      );
+      return answers.slice(-1)[0] ?? false;
+    },
+    { label: `the audit to record '${result}' for ${name}`, args: [name, result] },
+  );
 
 test.before(async () => {
   server = await startServer({
@@ -123,9 +140,7 @@ test("'No' keeps the file, and the audit records the answer", { timeout: 90000 }
   await page.waitFor(() => document.getElementById("confirm").open === false, { label: "the gate to close" });
 
   assert.equal(await assetExists("gate-no.txt"), true, "'No' deleted the file anyway");
-  const answer = await lastAnswer();
-  assert.ok(answer, "the answer was not recorded");
-  assert.equal(answer.result, "refused", `the declined answer was recorded as '${answer.result}'`);
+  const answer = await answeredGate("gate-no.txt", "refused");
   assert.equal(answer.rule, "delete");
 });
 
@@ -134,8 +149,7 @@ test("Esc — and a click outside — mean NO: an unanswered gate is never a yes
   await page.press("Escape");
   await page.waitFor(() => document.getElementById("confirm").open === false, { label: "Esc to close the gate" });
   assert.equal(await assetExists("gate-esc.txt"), true, "Esc deleted the file");
-  const afterEsc = await lastAnswer();
-  assert.equal(afterEsc.result, "refused", "Esc did not record a declined answer");
+  const afterEsc = await answeredGate("gate-esc.txt", "refused");
   assert.equal(afterEsc.act.target.endsWith("gate-esc.txt"), true);
 
   // The same for the backdrop: it is a close request, so it is an answer.
@@ -143,8 +157,7 @@ test("Esc — and a click outside — mean NO: an unanswered gate is never a yes
   await page.clickAt(8, 8);
   await page.waitFor(() => document.getElementById("confirm").open === false, { label: "the backdrop click to close the gate" });
   assert.equal(await assetExists("gate-outside.txt"), true, "a backdrop click deleted the file");
-  const afterOutside = await lastAnswer();
-  assert.equal(afterOutside.result, "refused");
+  const afterOutside = await answeredGate("gate-outside.txt", "refused");
   assert.equal(afterOutside.act.target.endsWith("gate-outside.txt"), true);
 });
 
@@ -155,8 +168,7 @@ test("'Yes' deletes it, once — and the tally says what happened", { timeout: 9
   await page.waitFor(async () => !(await window.e1m0.send({ type: "openProject", name: "atlas" })).assets.includes("gate-yes.txt"), { label: "the file to be deleted" });
 
   assert.equal(await assetExists("gate-yes.txt"), false, "'Yes' did not delete the file");
-  const answer = await lastAnswer();
-  assert.equal(answer.result, "ok", `the approved answer was recorded as '${answer.result}'`);
+  const answer = await answeredGate("gate-yes.txt", "ok");
   assert.deepEqual(answer.observed, { exists: false }, "the audit does not record the world after the delete");
 
   // Exactly ONE ANSWER per gate: the close listener must not answer a second time. Counted by what
