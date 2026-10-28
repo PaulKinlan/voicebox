@@ -255,7 +255,7 @@ test("u2lx advisory: child-side watchdog terminates orphan process when stdin is
 
   // Spawn child with a 150ms watchdog and leave stdin open (simulating an orphaned child with unclosed stdin).
   // The elapsed time includes Node's startup in a separate process, which can exceed 2s in the
-  // concurrent unit tier; exit code 1 and the minimum elapsed time prove the child watchdog fired.
+  // concurrent unit tier; the observed exit and the minimum elapsed time prove the child watchdog fired.
   // The wall-clock upper bound is NOT reintroduced (it flakes under concurrent load): instead the
   // child reports the deadline it actually armed on stderr when the watchdog fires, so an
   // implementation that silently ignores the argv[2] override and arms the 6000ms default fails
@@ -268,22 +268,79 @@ test("u2lx advisory: child-side watchdog terminates orphan process when stdin is
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk) => { stderrText += chunk; });
 
-  const code = await new Promise((resolve, reject) => {
+  const outcome = await new Promise((resolve, reject) => {
     const hangTimer = setTimeout(() => {
       try { child.kill("SIGKILL"); } catch {}
       reject(new Error("child hung past watchdog deadline — watchdog failed to terminate orphan"));
     }, 10000);
-    child.once("close", (c) => {
+    child.once("close", (c, s) => {
       clearTimeout(hangTimer);
-      resolve(c);
+      resolve({ code: c, signal: s });
     });
   });
   const elapsed = Date.now() - started;
 
-  assert.equal(code, 1, "child self-terminates with non-zero exit code on watchdog expiry");
+  // The watchdog is a worker thread that cannot process.exit() the cell (node 24: that exits only the
+  // worker), so it self-signals SIGKILL — observed as a signal death, never a clean exit.
+  assert.ok(outcome.signal === "SIGKILL" || outcome.code === 1,
+    `child self-terminates on watchdog expiry (code ${outcome.code}, signal ${outcome.signal})`);
   assert.ok(elapsed >= 140, `watchdog must not fire before its 150ms deadline (${elapsed}ms)`);
   assert.match(stderrText, /watchdog fired after 150ms/,
     "the child armed the 150ms argv[2] override — a child that reports the 6000ms default here is silently ignoring its override");
+});
+
+test("zpti: the watchdog fires with the main thread BLOCKED in a sync wasm loop — the parent-death guard", async () => {
+  const { spawn } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const wasmChildPath = fileURLToPath(new URL("../lib/wasm-worker.mjs", import.meta.url));
+
+  // The orphan case itself: the parent STAYS ALIVE and never kills (a live host's deadline would mask
+  // the guard), the child is handed a module whose export is a synchronous infinite loop (u2lx's
+  // un-preemptable case — the main thread never returns to a safepoint), and the ONLY thing that can
+  // end it is a watchdog running OFF that thread. Before the worker-thread watchdog this test's child
+  // spun until the hang timer SIGKILLed it and the test failed.
+  const child = spawn(process.execPath, [wasmChildPath, "600"], { stdio: ["pipe", "pipe", "pipe"] });
+  let stderrText = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => { stderrText += chunk; });
+  child.stdin.end(JSON.stringify({
+    bytes: LOOP_MODULE.toString("base64"),
+    spec: attackTool(LOOP_MODULE).wasm,
+    input: { b64: Buffer.from("abc").toString("base64") },
+  }));
+
+  const started = Date.now();
+  const outcome = await new Promise((resolve, reject) => {
+    const hangTimer = setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch {}
+      reject(new Error("child outlived its 600ms watchdog while blocked in a sync loop — the parent-death guard failed"));
+    }, 15000);
+    child.once("close", (c, s) => {
+      clearTimeout(hangTimer);
+      resolve({ code: c, signal: s });
+    });
+  });
+  const elapsed = Date.now() - started;
+
+  assert.ok(outcome.signal === "SIGKILL" || outcome.code === 1,
+    `the blocked child self-terminates on watchdog expiry (code ${outcome.code}, signal ${outcome.signal})`);
+  assert.ok(elapsed >= 500, `watchdog must not fire before its 600ms deadline (${elapsed}ms)`);
+  assert.match(stderrText, /watchdog fired after 600ms/, "the watchdog that fired is the one this child armed");
+});
+
+test("zpti: the host derives the child's watchdog deadline — strictly past the host's own, floored at the child default", async () => {
+  const { wasmChildWatchdogMs, WASM_CHILD_WATCHDOG_SLACK_MS, WASM_CALL_DEADLINE_MS } = await import("../lib/wasm-shelf.mjs");
+  const { WASM_CHILD_WATCHDOG_MS } = await import("../lib/wasm-worker.mjs");
+  assert.equal(typeof wasmChildWatchdogMs, "function");
+  assert.ok(WASM_CHILD_WATCHDOG_SLACK_MS > 0);
+  // Strictly past the host deadline at every scale: a live host's SIGKILL must land FIRST, or the
+  // orphan guard becomes the primary bound and the named time-exceeded refusal is lost.
+  assert.ok(wasmChildWatchdogMs(200) > 200);
+  assert.ok(wasmChildWatchdogMs(60_000) > 60_000);
+  assert.equal(wasmChildWatchdogMs(60_000), 60_000 + WASM_CHILD_WATCHDOG_SLACK_MS, "past the floor, deadline plus slack exactly");
+  // Floored at the child's own default: an orphan never spins longer than the guard the box already knows.
+  assert.equal(wasmChildWatchdogMs(200), WASM_CHILD_WATCHDOG_MS);
+  assert.equal(wasmChildWatchdogMs(WASM_CALL_DEADLINE_MS), WASM_CHILD_WATCHDOG_MS);
 });
 
 test("u2lx advisory: child stdout exceeding host bound is refused as resource-exceeded and killed with SIGKILL", async () => {
