@@ -404,7 +404,7 @@ test("top-of-file @lane declares a boundary without overriding classifier signal
 });
 
 // ── voicebox-beads-idy6: the content-hash cache ─────────────────────────────
-// classify() re-lexed every test file in every gate process (11-20s on this VM; ~17x inside
+// classify() re-lexed every test file in every gate process (11-20s on this VM; ~17x inside the then-single
 // tests/test-changed.test.mjs through its CLI probes), which alone wedged the unit lane past its
 // budgets. The cache key binds THIS FILE's source and each test file's source, so staleness is
 // impossible by construction. These tests pin the cache's correctness contract, not its speed.

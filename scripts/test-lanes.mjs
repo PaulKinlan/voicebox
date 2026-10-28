@@ -602,7 +602,8 @@ export function classify(root = TESTS, { cachePath } = {}) {
   const files = entries.filter((f) => f.endsWith(".test.mjs")).sort();
 
   // THE CONTENT-HASH CACHE (voicebox-beads-idy6). Lexing every test file costs 11-20s on this VM and
-  // every gate process pays it once (tests/test-changed.test.mjs pays it ~17x through its CLI probes),
+  // every gate process pays it once (the probes in tests/test-changed-cli.test.mjs paid it ~17x through CLI
+  // startups before they were batched into one child, voicebox-beads-afsx),
   // which alone wedges the unit lane past its budgets on a starved box. Each entry is keyed by
   // sha256(THIS FILE'S OWN SOURCE + the test file's source): a one-byte change to one test file
   // invalidates exactly that entry, and an edit to the classifier invalidates every entry — no
@@ -740,7 +741,7 @@ export function checkDeclaredLanes({ unit, server, browser }) {
 // THE ROSTER IS COMPUTED ON FIRST USE, NOT AT IMPORT (voicebox-beads-8ckj). `classify()` reads and
 // parses every test file — ~271 of them — which measures 23s on this 8-vCPU fleet VM under load. It
 // used to run unconditionally at module scope, so every importer paid it even when it imported
-// `classify` itself and never wanted the roster: each CLI probe in tests/test-changed.test.mjs starts
+// `classify` itself and never wanted the roster: each CLI probe in the then-single tests/test-changed.test.mjs starts
 // a fresh Node process, so a `--help` answer cost 22.5s and a gate-mode probe 64s, against an 8s
 // bound that then reported the HOST as a behavioural failure. Nothing outside this file reads these
 // bindings, so the work now happens only when this file IS the program and needs it.

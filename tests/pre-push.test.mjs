@@ -240,7 +240,7 @@ exec '${timeout}' "$@"
       // refusal (voicebox-beads-lq8s): 90s sat inside the suite's measured run-to-run swing on this
       // box (duration_ms 71084/78510 green against 88686/88966 killed at 90s), so it became 180s.
       // RE-SIZED to 900s on 2026-10-28 (voicebox-beads-i9k0): the unit tier has grown and its slowest
-      // file (tests/test-changed.test.mjs) measures 127.2s alone, so 180s was killing a healthy lane;
+      // file (the then-single tests/test-changed.test.mjs) measures 127.2s alone, so 180s was killing a healthy lane;
       // the per-file budget (TIER_FILE_MS.unit, 300s) still sits under it, which this file and
       // tests/gate-tier.test.mjs both assert.
       if (scenario.startsWith('unit')) {
