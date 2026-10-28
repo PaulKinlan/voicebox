@@ -4,7 +4,11 @@
 //   - Hosted on same origin as Voicebox (http://127.0.0.1:8787).
 //   - Communicates with Host Room strictly verifying event.origin === window.location.origin.
 //   - Embeds the untrusted app inside an inner iframe strictly configured with sandbox="allow-scripts" (opaque origin).
+//   - The fetch relay's gate is public/relay-target.mjs: a target is admitted only when it RESOLVES to this page's
+//     origin (voicebox-beads-zus7), never by a string prefix.
 //   - Mediates tool declarations, capability limits (64KB max, 5s timeout), and Web MCP execution over MessagePort.
+
+import { relayTarget } from "./relay-target.mjs";
 
 const inner = document.getElementById("inner-app");
 let currentAppId = null;
@@ -71,16 +75,23 @@ const INJECTED_SDK = `<script>
   // FETCH RELAY (voicebox-beads-v1k6): this frame is sandboxed WITHOUT allow-same-origin, so its
   // origin is opaque and fetch("/api/...") can never reach the server — a mini-app that renders
   // fetched state then silently shows its placeholder data instead (the landing inspector showed
-  // fabricated branches over 23 real ones). Relative same-origin requests are relayed over the
-  // bridge port to the same-origin bridge page and resolved as real Response objects; absolute
-  // and scheme-relative URLs keep native fetch. Buffered whole — no streaming.
+  // fabricated branches over 23 real ones). Same-origin requests are relayed over the bridge port to
+  // the same-origin bridge page and resolved as real Response objects; foreign ones keep native fetch,
+  // which is CORS-bound. Buffered whole — no streaming.
   var nativeFetch = typeof window.fetch === "function" ? window.fetch.bind(window) : null;
   var fetchSeq = 0;
   var pendingFetches = new Map();
   var FETCH_RELAY_TIMEOUT_MS = 30000;
+  // The relay gate, embedded from the bridge's own module (public/relay-target.mjs) so the two realms cannot
+  // drift. Resolved against a fixed placeholder origin, because THIS frame's origin is opaque ("null") and
+  // cannot be the base; it only decides whether to ask the relay at all. The bridge re-checks against its REAL
+  // origin, and that check is the boundary (voicebox-beads-zus7).
+  var RELAY_BASE = "http://mini-app.invalid";
+  var relayTarget = (${String(relayTarget)});
   window.fetch = function(input, init) {
     var url = typeof input === "string" ? input : (input && input.url) || "";
-    if (!url || !url.startsWith("/") || url.startsWith("//")) {
+    var target = relayTarget(url, RELAY_BASE);
+    if (!target) {
       if (!nativeFetch) return Promise.reject(new Error("fetch is unavailable in this frame"));
       return nativeFetch(input, init);
     }
@@ -93,7 +104,9 @@ const INJECTED_SDK = `<script>
       postToBridge({
         type: "fetch_request",
         callId: callId,
-        url: url,
+        // The RESOLVED path, so no ambiguity crosses the port: the bridge resolves this string again against
+        // its real origin, and a normalized same-origin path can only come back same-origin.
+        url: target.pathname + target.search + target.hash,
         method: (init && init.method) || "GET",
         headers: (init && init.headers) || {},
         body: init && typeof init.body === "string" ? init.body : undefined
@@ -899,7 +912,11 @@ async function handleFetchRelay(data) {
     } catch {}
   };
   const url = typeof data.url === "string" ? data.url : "";
-  if (!url.startsWith("/") || url.startsWith("//")) {
+  // THE GATE (voicebox-beads-zus7): the target must RESOLVE to this page's origin. A prefix test admitted
+  // "/\\t//host:port/leak" — one leading slash, a stripped control char — and this fetch reached a foreign
+  // origin on the bridge's behalf, which is exactly the egress the sandbox exists to prevent.
+  const target = relayTarget(url, window.location.origin);
+  if (!target) {
     reply({ ok: false, error: "the fetch relay serves same-origin paths only" });
     return;
   }
@@ -914,7 +931,7 @@ async function handleFetchRelay(data) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), BOUNDS.fetchRelayTimeoutMs);
   try {
-    const res = await fetch(url, {
+    const res = await fetch(target.href, {
       method,
       headers,
       body: method === "GET" || method === "HEAD" ? undefined : (typeof data.body === "string" ? data.body.slice(0, BOUNDS.maxArgsBytes) : undefined),
