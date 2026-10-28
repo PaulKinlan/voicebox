@@ -24,6 +24,17 @@
 // (GET/HEAD/OPTIONS are reads; every other verb is a mutation needing a decision), and it follows the host's two
 // `const m = url.pathname.match(/^\/api\/…$/)` routes (`PATCH /api/agents/<param>`,
 // `DELETE /api/environments/<param>`), which name their path in a variable and so disappeared from a literal scan.
+//
+// voicebox-beads-zfrh — and the verb is read as a verb, not as an upper-case token.
+//
+// The bead was filed as "`POST_EQ` uses strict `===` while the other patterns allow loose `==`/`!=`", and on this
+// branch that literal repro is already refused (cegk's `METHOD_EQ` is `===?`). What survived was the same family one
+// step over: `=== "post"`, `req.method.toLowerCase() === "post"`, and `!= "get"` all stayed GREEN, because the
+// patterns captured `[A-Z]+`. A reader who spells the verb the way the header carries it, or normalises it before
+// comparing, was writing a route this seam could not see. Verbs are now captured as letters and upper-cased for
+// classification, both `.toUpperCase()` and `.toLowerCase()` are accepted, and a not-read guard only counts when the
+// verb it excludes is actually a READ — so any method comparison left unclassifiable is named as a complaint rather
+// than silently skipped (Z1–Z7 below).
 // What it still does NOT cover, and never did: route groups extracted to their own tables (lib/routes/*.mjs,
 // `extensionRoutes`). Those are other files with other seams.
 //
@@ -95,18 +106,18 @@ const PATH_EQ = new RegExp(`url\\.pathname\\s*===\\s*${Q}(/api/[^"'\\s]+)${Q}`, 
  * NOT_READ shape below, which names no verb.
  */
 const METHOD_EQ = new RegExp(
-  `(?:${METHOD_REF.source})(?:\\.toUpperCase\\(\\))?\\s*===?\\s*${Q}([A-Z]+)${Q}`,
+  `(?:${METHOD_REF.source})(?:\\.to(?:Upper|Lower)Case\\(\\))?\\s*===?\\s*${Q}([A-Za-z]+)${Q}`,
   "g",
 );
 /**
  * A non-read guard (`req.method !== "GET"`): it admits every mutating verb without naming one, so it is a mutation
  * claim whose key labels the whole set (`MUTATION /api/…`) rather than inventing a single verb.
  */
-const NOT_READ = new RegExp(`!==?\\s*${Q}(?:GET|HEAD|OPTIONS)${Q}`);
+const NOT_READ = new RegExp(`!==?\\s*${Q}([A-Za-z]+)${Q}`, "g");
 const ALIAS_DEF = /^\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=([\s\S]*)$/;
 /** A variable whose WHOLE value is a method test — the M5 shape. A ternary or an `||` is not one of these. */
 const PURE_METHOD_PREDICATE = new RegExp(
-  `^\\s*req(?:\\[\\s*${Q}method${Q}\\s*\\]|\\.method)(?:\\.toUpperCase\\(\\))?\\s*===?\\s*${Q}([A-Z]+)${Q}\\s*;?\\s*$`,
+  `^\\s*req(?:\\[\\s*${Q}method${Q}\\s*\\]|\\.method)(?:\\.to(?:Upper|Lower)Case\\(\\))?\\s*===?\\s*${Q}([A-Za-z]+)${Q}\\s*;?\\s*$`,
 );
 /**
  * `const envDelete = url.pathname.match(/^\/api\/environments\/([^/]+)$/)` — a route that names its PATH in a
@@ -128,8 +139,12 @@ function pathPattern(body) {
 /** Every verb one clause tests for, mutating or read, plus `ANY_MUTATION` for a `!== "GET"` clause. */
 function clauseMethods(clause, predicateAliases) {
   const methods = new Set();
+  // A verb is a verb whatever case the comparison spells it in: `=== "post"`, `.toLowerCase() === "post"` and
+  // `.toUpperCase() === "POST"` are the same test, and reader code will write whichever it finds natural (voicebox-beads-zfrh).
   for (const match of clause.matchAll(METHOD_EQ)) methods.add(match[1].toUpperCase());
-  if (NOT_READ.test(clause)) methods.add(ANY_MUTATION);
+  for (const match of clause.matchAll(NOT_READ)) {
+    if (READ_METHODS.has(match[1].toUpperCase())) methods.add(ANY_MUTATION);
+  }
   for (const [name, verb] of predicateAliases) {
     if (new RegExp(`\\b${name}\\b`).test(clause)) methods.add(verb);
   }
@@ -462,6 +477,70 @@ const MUTANTS = [
         `  const newThing = url.pathname.match(/^\\/api\\/newthing\\/([^/]+)$/);\n  if (req.method === "PATCH" && newThing) { return json(res, 200, { ok: true }); }\n  // Fall through to public/ for any other path the page requests.`,
       ),
     reason: /PATCH \/api\/newthing\/<param>: new PATCH route/,
+  },
+  {
+    name: "Z1 the same route written with loose equality (`== \"POST\"`)",
+    mutant: (host) =>
+      host.replace(
+        "  // Fall through to public/ for any other path the page requests.",
+        `  if (req.method == "POST" && url.pathname === "/api/newthing") { return json(res, 200, {}); }\n  // Fall through to public/ for any other path the page requests.`,
+      ),
+    reason: /new POST route/,
+  },
+  {
+    name: "Z2 the same route written with loose inequality (`!= \"GET\"`)",
+    mutant: (host) =>
+      host.replace(
+        "  // Fall through to public/ for any other path the page requests.",
+        `  if (req.method != "GET" && url.pathname === "/api/newthing") { return json(res, 200, {}); }\n  // Fall through to public/ for any other path the page requests.`,
+      ),
+    reason: /new MUTATION route/,
+  },
+  {
+    name: "Z3 loose equality and single quotes together",
+    mutant: (host) =>
+      host.replace(
+        "  // Fall through to public/ for any other path the page requests.",
+        `  if (req.method == 'POST' && url.pathname === "/api/newthing") { return json(res, 200, {}); }\n  // Fall through to public/ for any other path the page requests.`,
+      ),
+    reason: /new POST route/,
+  },
+  {
+    name: "Z4 a lowercase verb literal (`=== \"post\"`)",
+      // The seam read verbs as `[A-Z]+`, so a reader who spells the verb the way the header carries it was invisible.
+    mutant: (host) =>
+      host.replace(
+        "  // Fall through to public/ for any other path the page requests.",
+        `  if (req.method === "post" && url.pathname === "/api/newthing") { return json(res, 200, {}); }\n  // Fall through to public/ for any other path the page requests.`,
+      ),
+    reason: /new POST route/,
+  },
+  {
+    name: "Z5 `.toLowerCase()` normalisation before the comparison",
+    mutant: (host) =>
+      host.replace(
+        "  // Fall through to public/ for any other path the page requests.",
+        `  if (req.method.toLowerCase() === "post" && url.pathname === "/api/newthing") { return json(res, 200, {}); }\n  // Fall through to public/ for any other path the page requests.`,
+      ),
+    reason: /new POST route/,
+  },
+  {
+    name: "Z6 a lowercase read verb in a not-read guard (`!= \"get\"`)",
+    mutant: (host) =>
+      host.replace(
+        "  // Fall through to public/ for any other path the page requests.",
+        `  if (req.method != "get" && url.pathname === "/api/newthing") { return json(res, 200, {}); }\n  // Fall through to public/ for any other path the page requests.`,
+      ),
+    reason: /new MUTATION route/,
+  },
+  {
+    name: "Z7 a method test this seam cannot read at all",
+    mutant: (host) =>
+      host.replace(
+        "  // Fall through to public/ for any other path the page requests.",
+        `  if (req.method.length === 3 && url.pathname === "/api/newthing") { return json(res, 200, {}); }\n  // Fall through to public/ for any other path the page requests.`,
+      ),
+    reason: /names no verb this seam can classify/,
   },
 ];
 
