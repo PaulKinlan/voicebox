@@ -137,7 +137,7 @@ export function getIntermediateImporters(changedFile, { isRouteScoped = false } 
 /**
  * Detailed route-scoping information partitioned into tier buckets for manifest reporting.
  */
-export function getRouteScopeDetails({ changedFiles = [], allTestFiles = null } = {}) {
+export function getRouteScopeDetails({ changedFiles = [], allTestFiles = null, classified: presetClassified = null } = {}) {
   const allTests = allTestFiles ?? readdirSync(TESTS_DIR).filter((f) => f.endsWith(".test.mjs"));
   const fullServerImporters = [];
   for (const tf of allTests) {
@@ -159,11 +159,16 @@ export function getRouteScopeDetails({ changedFiles = [], allTestFiles = null } 
   const directTests = mapToTests(changedFiles, allTests);
   const baseScope = routeAffected({ changedFiles, allServerImporters: fullServerImporters, directTests });
 
-  let classified;
-  try {
-    classified = classify();
-  } catch {
-    classified = { server: [], browser: [], unit: [] };
+  // ONE CLASSIFICATION PER GATE (voicebox-beads-afsx). This scan is called from runGate, which already holds the
+  // gate's roster; without the injection it re-derived it here — reading and lexing all 271 test files, ~12s under
+  // load — so a gate that ran twice classified twice and could describe its own roster two ways.
+  let classified = presetClassified;
+  if (!classified) {
+    try {
+      classified = classify();
+    } catch {
+      classified = { server: [], browser: [], unit: [] };
+    }
   }
   const serverSet = new Set((classified.server ?? []).map((e) => e.file));
   const browserSet = new Set((classified.browser ?? []).map((e) => e.file));
@@ -194,6 +199,25 @@ export function mapToTests(changedFiles, allTestFiles = null) {
     }
   }
 
+  // EACH TEST FILE IS READ ONCE PER CALL, NOT ONCE PER CHANGED FILE (voicebox-beads-afsx). The scan below reads every
+  // test file's text to ask whether it references the changed module, and it did so INSIDE the changed-file loop: a
+  // five-path route change re-read 271 files five times (~16s of CPU on a loaded fleet VM for one mapping). The cache
+  // is per call, so nothing here can go stale between calls.
+  const contents = new Map();
+  const contentOf = (testFile) => {
+    if (!contents.has(testFile)) {
+      const fullTestPath = path.join(TESTS_DIR, testFile);
+      let text = null;
+      try {
+        if (existsSync(fullTestPath)) text = readFileSync(fullTestPath, "utf8");
+      } catch {
+        text = null;
+      }
+      contents.set(testFile, text);
+    }
+    return contents.get(testFile);
+  };
+
   for (const changed of fileQueue) {
     const norm = changed.replace(/^\.\//, "");
     const baseName = path.basename(norm);
@@ -214,21 +238,17 @@ export function mapToTests(changedFiles, allTestFiles = null) {
       }
 
       // Check if test source imports or references the changed file/module
-      const fullTestPath = path.join(TESTS_DIR, tf);
-      if (existsSync(fullTestPath)) {
-        try {
-          const content = readFileSync(fullTestPath, "utf8");
-          if (
-            content.includes(baseName) ||
-            content.includes(norm) ||
-            content.includes(`/${stem}.`) ||
-            content.includes(`/${stem}"`) ||
-            content.includes(`/${stem}'`) ||
-            content.includes(`/${stem}\``)
-          ) {
-            matched.add(tf);
-          }
-        } catch {}
+      const content = contentOf(tf);
+      if (
+        content !== null &&
+        (content.includes(baseName) ||
+          content.includes(norm) ||
+          content.includes(`/${stem}.`) ||
+          content.includes(`/${stem}"`) ||
+          content.includes(`/${stem}'`) ||
+          content.includes(`/${stem}\``))
+      ) {
+        matched.add(tf);
       }
     }
   }
@@ -566,7 +586,7 @@ export async function runGate({
   // Every classified file that was not selected is OMITTED BY NAME WITH ITS REASON. This is the
   // reconciliation the artifact is for: a fast gate's scope is a decision, and an unexplained gap is
   // what lets a narrow run be quoted as a wide one.
-  const routeScope = getRouteScopeDetails({ changedFiles });
+  const routeScope = getRouteScopeDetails({ changedFiles, classified });
   if (routeScope.applies) {
     manifest.route_scoping = {
       routes: routeScope.routes,
