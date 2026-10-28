@@ -100,7 +100,16 @@ async function fixture(t, envProvider = "openai", selectedProvider = "openai", d
   };
 }
 
-test("OpenAI browser: real function call writes and answers; invalid calls refuse", { timeout: 20000 }, async t => {
+// THE ARM BUDGETS ARE HANG DETECTORS, NOT SPEED CLAIMS (voicebox-beads-i9k0). Measured on this VM: arm 1
+// takes 21.0s in a full gate and 12-13s standalone; the two "Selected" arms take 15.7s in a gate and
+// 13-14.7s standalone; the two transcript arms 16-18s. The 20s and 15s budgets sat 1.3-1.5x above the real
+// runtime, so the 2026-10-28 23:44 full gate failed arms 1 and 2 at 21098ms/15700ms while arms 3, 4 and 5
+// passed on the same box - and the same tree passed this file standalone. Every speed claim in these arms
+// is asserted on its own line (the declaration/capture agreement, the refusal, the redaction); the budget
+// only decides how long a wedged browser is given, so it is sized for the box the gate actually runs on.
+const ARM = { timeout: 60000 };
+
+test("OpenAI browser: real function call writes and answers; invalid calls refuse", ARM, async t => {
   const f = await fixture(t);
   assert.equal((await f.read()).controls.some(c => c.type === "debug"), false, "normal sessions do not transmit debug payloads");
   const setup = f.row.messages.find(msg => msg.type === "session.update").session;
@@ -146,7 +155,7 @@ test("OpenAI browser: real function call writes and answers; invalid calls refus
 for (const [environment, selected, rate, model] of [
   ["gemini", "openai", 24000, "gpt-realtime"],
   ["openai", "gemini", 16000, "models/gemini-3.8-live"],
-]) test(`Selected ${selected}: declaration and native capture agree despite ${environment} environment`, { timeout: 15000 }, async t => {
+]) test(`Selected ${selected}: declaration and native capture agree despite ${environment} environment`, ARM, async t => {
   const f = await fixture(t, environment, selected);
   const first = await f.read();
   assert.equal(f.row.provider, selected, "actual vendor destination");
@@ -164,7 +173,7 @@ for (const [environment, selected, rate, model] of [
   assert.equal(state.model, model);
 });
 
-for (const provider of ["gemini", "openai"]) test(`Debug transcript: ${provider} failing tool → clipboard, with redaction and error navigation`, { timeout: 30000 }, async t => {
+for (const provider of ["gemini", "openai"]) test(`Debug transcript: ${provider} failing tool → clipboard, with redaction and error navigation`, ARM, async t => {
   const f = await fixture(t, provider, provider, true);
   const callId = "debug-failure";
   const secret = "AIzaSyntheticSecretForExportOnly123456789";
