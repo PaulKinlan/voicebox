@@ -594,13 +594,26 @@ export function checkDeclaredLanes({ unit, server, browser }) {
 // owner of "which file is in which lane", and the browser tier's shard runner asks it in process
 // rather than parsing this file's stdout back into paths. Before this guard the CLI ran on IMPORT
 // too, so an importer inherited the caller's `--lane`/`--check` argv and printed a lane dump as a
-// side effect of loading a module. `classify()` itself still runs at top level: it is pure, it reads
-// the tests directory, and it prints nothing.
+// side effect of loading a module.
+//
+// classify() NO LONGER RUNS AT TOP LEVEL. It is pure and prints nothing, but it LEXES every test file
+// (271 of them on 2026-10-28) and that cost was paid by every importer of this module: measured 10.2s
+// to merely `import('./scripts/test-lanes.mjs')` on the voicebox VM, against 0.10s for node's own
+// startup. The visible damage was `node scripts/test-changed.mjs --help` taking 8-24s, which blew the
+// deliberate 8s spawn bound asserted in tests/test-changed.test.mjs and made the unit tier red on clean
+// main for a reason no branch could fix. Only the three CLI paths below need the lanes, so they call
+// lanes() and everything else -- including --help, which exits before any of this -- pays nothing.
 const CLI = import.meta.main;
 const laneArg = process.argv.includes("--lane") ? process.argv[process.argv.indexOf("--lane") + 1] : null;
-const { unit, live, server, browser } = classify();
+
+let lanesCache = null;
+function lanes() {
+  if (!lanesCache) lanesCache = classify();
+  return lanesCache;
+}
 
 if (CLI && process.argv.includes("--check")) {
+  const { unit, live, server, browser } = lanes();
   const seen = new Set();
   const problems = [];
   for (const { file } of [...unit, ...live]) {
@@ -628,13 +641,14 @@ if (CLI && process.argv.includes("--check")) {
 }
 
 if (CLI && (laneArg === "unit" || laneArg === "live" || laneArg === "server" || laneArg === "browser")) {
-  const map = { unit, live, server, browser };
+  const map = lanes();
   const files = map[laneArg].map(({ file }) => `tests/${file}`);
   console.log(files.join(" "));
   process.exit(0);
 }
 
 if (CLI) {
+  const { unit, live } = lanes();
   console.log(`unit: ${unit.length} files\nlive: ${live.length} files`);
   for (const { file, why } of live) console.log(`  live  ${file} — ${why}`);
 }
