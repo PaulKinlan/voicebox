@@ -9,6 +9,7 @@
 //   - Mediates tool declarations, capability limits (64KB max, 5s timeout), and Web MCP execution over MessagePort.
 
 import { relayTarget } from "./relay-target.mjs";
+import { relayBody } from "./relay-body.mjs";
 
 const inner = document.getElementById("inner-app");
 let currentAppId = null;
@@ -88,12 +89,40 @@ const INJECTED_SDK = `<script>
   // origin, and that check is the boundary (voicebox-beads-zus7).
   var RELAY_BASE = "http://mini-app.invalid";
   var relayTarget = (${String(relayTarget)});
+  // The body policy, embedded from the same module the bridge imports (voicebox-beads-182c): a body that is not
+  // a string is carried (URLSearchParams, FormData, Blob, ArrayBuffer) or REFUSED OUT LOUD — never dropped into
+  // a bodyless request the app did not ask for.
+  var RELAY_BODY_LIMIT = ${BOUNDS.maxArgsBytes};
+  var relayBody = (${String(relayBody)});
   window.fetch = function(input, init) {
     var url = typeof input === "string" ? input : (input && input.url) || "";
+    // A Request carries its own method, headers and body, and its .url is always ABSOLUTE — so the old relay
+    // path could only ever have sent it as a GET with no body, i.e. a different request than the app wrote.
+    // Fetching it natively is not a fix either (an opaque-origin frame is CORS-blocked, so it fails with a bare
+    // "Failed to fetch"). Name the supported spelling instead (voicebox-beads-182c).
+    if (typeof Request === "function" && input instanceof Request) {
+      return Promise.reject(new Error("fetch relay: pass a URL string and an init object (fetch('/api/x', { method, body })) — a Request object cannot be relayed without changing the request"));
+    }
     var target = relayTarget(url, RELAY_BASE);
     if (!target) {
       if (!nativeFetch) return Promise.reject(new Error("fetch is unavailable in this frame"));
       return nativeFetch(input, init);
+    }
+    var method = String((init && init.method) || "GET").toUpperCase();
+    var carried = relayBody(init && init.body, { maxBytes: RELAY_BODY_LIMIT });
+    if (!carried.ok) {
+      return Promise.reject(new Error("fetch relay refuses this request: " + carried.error));
+    }
+    var headers = (init && init.headers) || {};
+    // The form content-type comes from the BODY (URLSearchParams), and only overwrites a plain header bag — a
+    // Headers instance is passed through untouched, because spreading it would lose its own semantics.
+    var headerTag = Object.prototype.toString.call(headers);
+    if (carried.contentType && (headerTag === "[object Object]" || headerTag === "[object Array]")) {
+      var named = Object.keys(headers).some(function (name) { return String(name).toLowerCase() === "content-type"; });
+      if (!named) {
+        headers = Object.assign({}, headers);
+        headers["content-type"] = carried.contentType;
+      }
     }
     return new Promise(function(resolve, reject) {
       var callId = "fetch-" + (++fetchSeq);
@@ -107,9 +136,9 @@ const INJECTED_SDK = `<script>
         // The RESOLVED path, so no ambiguity crosses the port: the bridge resolves this string again against
         // its real origin, and a normalized same-origin path can only come back same-origin.
         url: target.pathname + target.search + target.hash,
-        method: (init && init.method) || "GET",
-        headers: (init && init.headers) || {},
-        body: init && typeof init.body === "string" ? init.body : undefined
+        method: method,
+        headers: headers,
+        body: carried.body
       });
     });
   };
@@ -928,13 +957,21 @@ async function handleFetchRelay(data) {
   const headers = {};
   const wantedContentType = data.headers && typeof data.headers === "object" ? (data.headers["content-type"] || data.headers["Content-Type"]) : null;
   if (typeof wantedContentType === "string") headers["content-type"] = wantedContentType.slice(0, 200);
+  // The body policy again, at the TRUST boundary: the frame's own copy bounded it there, and this copy bounds
+  // what actually arrives. A body this side cannot carry is refused out loud rather than sent empty
+  // (voicebox-beads-182c).
+  const carried = method === "GET" || method === "HEAD" ? { ok: true } : relayBody(data.body, { maxBytes: BOUNDS.maxArgsBytes });
+  if (!carried.ok) {
+    reply({ ok: false, error: `fetch relay refuses this request: ${carried.error}` });
+    return;
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), BOUNDS.fetchRelayTimeoutMs);
   try {
     const res = await fetch(target.href, {
       method,
       headers,
-      body: method === "GET" || method === "HEAD" ? undefined : (typeof data.body === "string" ? data.body.slice(0, BOUNDS.maxArgsBytes) : undefined),
+      body: carried.body,
       signal: controller.signal,
     });
     const text = await res.text();
