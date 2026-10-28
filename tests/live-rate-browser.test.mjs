@@ -175,7 +175,16 @@ async function fixture(t, name) {
   return { page, rows, read, record, declare, ready, warmUp };
 }
 
-const options = { timeout: 15000 };
+// THE PER-TEST BUDGET IS A HANG DETECTOR, NOT AN ASSERTION (voicebox-beads-i9k0). Every arm here
+// drives six sequential browser waits plus, in the last two, a REAL five-second declaration wait; the
+// four arms measure 11.4s / 12.4s / 15.7s / 15.2s in a live-tier run on this 2-vCPU box (2026-10-28
+// 21:18, 1788s gate, load ~8). The third arm failed with 'test timed out after 15000ms' at 15696ms
+// while every other file in the tier and every unit/server test passed - the failure moves from arm
+// to arm between runs and every named arm passes standalone. What each arm actually asserts about speed is
+// spelled out on its own line (`elapsed >= 4900 && elapsed < 7500` pins the real five-second wait), so
+// a wider budget does not weaken a single behaviour claim: it only stops a starved box being read as a
+// tree defect. 45000 matches the browser-tier bounds the same starve produced elsewhere.
+const options = { timeout: 45000 };
 
 test("rate browser: a first native mic press waits for its rate, without a retry", options, async (t) => {
   const f = await fixture(t, "first-press");
