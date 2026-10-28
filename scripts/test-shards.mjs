@@ -43,7 +43,16 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
  * condition-sensitive timeouts or flakes, and reduces browser-tier wall time from 750.1s to 184.2s —
  * a 4.07x browser-tier throughput speedup saving 565.9s (~9.4 minutes) of browser-tier wall time across all 92 files.
  */
-export const TIER_WORKERS = Object.freeze({ unit: Math.max(1, os.availableParallelism() - 1), server: 4, browser: 3 });
+// THE LIVE TIERS RUN AT TWO (hub-authorised 2026-10-28, voicebox-beads-i9k0). This host self-starves
+// at the previous widths: the live tier runs server (4) and browser (3) SEQUENTIALLY, but each concurrent
+// browser file owns a multi-process Chromium, so three of them plus the rest of the VM put loadavg at
+// 14-16 on 8 cores while the gate itself was the only work running (measured: load 0.92 and 2% steal
+// immediately before the run, 8-16 during it). Every resulting failure was a TEST-INTERNAL timeout
+// (15000/45000/60000ms) inside browser files that all pass standalone, and the failing set changed every
+// run. Width 2 is also the width q4j6.1 measured as GREEN (750.1s browser-tier wall); it was raised to 3
+// for speed on a healthy box, which this VM is not. Unit stays at availableParallelism-1: it is green and
+// is CPU-bound rather than Chromium-bound. Do not raise these without a quiet-box measurement.
+export const TIER_WORKERS = Object.freeze({ unit: Math.max(1, os.availableParallelism() - 1), server: 2, browser: 2 });
 
 /**
  * Per-file execution budgets per tier (voicebox-beads-ak9h).
