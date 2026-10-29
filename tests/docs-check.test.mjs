@@ -2,7 +2,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { moduleInventory, renderInventoryTable } from "../scripts/docs-check.mjs";
+import { DEFAULT_READY_MS, readinessBudgetMs, moduleInventory, renderInventoryTable, probeLiveUpgrade } from "../scripts/docs-check.mjs";
+import { EventEmitter } from "node:events";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +12,36 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CHECK_SCRIPT = path.join(ROOT, "scripts", "docs-check.mjs");
+
+test("docs-check readiness budget tolerates slow server starts without accepting invalid overrides", () => {
+  assert.equal(DEFAULT_READY_MS, 30000);
+  assert.equal(readinessBudgetMs({}), DEFAULT_READY_MS);
+  assert.equal(readinessBudgetMs({ VOICEBOX_DOCS_CHECK_READY_MS: "45000" }), 45000);
+  for (const invalid of ["", "0", "-1", "abc", "1e3", "2147483648", "9007199254740992"]) {
+    assert.equal(readinessBudgetMs({ VOICEBOX_DOCS_CHECK_READY_MS: invalid }), DEFAULT_READY_MS, `invalid budget: ${invalid}`);
+  }
+});
+
+test("unsettled /live upgrade refuses instead of generating a transient documentation claim", async () => {
+  const request = () => Object.assign(new EventEmitter(), { end() {}, destroy() {} });
+  await assert.rejects(probeLiveUpgrade(1234, 10, request), /\/live upgrade probe did not settle within 10ms/);
+});
+
+test("failed /live upgrade refuses instead of describing a transient closed route", async () => {
+  const request = () => {
+    const req = Object.assign(new EventEmitter(), { end() { queueMicrotask(() => req.emit("error", new Error("connection reset"))); }, destroy() {} });
+    return req;
+  };
+  await assert.rejects(probeLiveUpgrade(1234, 100, request), /\/live upgrade probe failed: connection reset/);
+});
+
+test("unexpected /live HTTP response refuses instead of becoming a generated route claim", async () => {
+  const request = () => {
+    const req = Object.assign(new EventEmitter(), { end() { queueMicrotask(() => req.emit("response", { statusCode: 503 })); }, destroy() {} });
+    return req;
+  };
+  await assert.rejects(probeLiveUpgrade(1234, 100, request), /\/live upgrade probe returned HTTP 503, expected 101/);
+});
 
 test("inventory extraction extracts all public/components and lib/routes modules with @summary", () => {
   const components = moduleInventory("public/components");

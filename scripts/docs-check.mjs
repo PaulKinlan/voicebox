@@ -38,6 +38,7 @@
 import { spawn } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
+import { loadavg } from "node:os";
 import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";
@@ -169,6 +170,16 @@ export function renderInventoryTable(items, headerTitle = "Module") {
   ].join("\n");
 }
 
+// The banner is printed only after listen succeeds. A bound prevents a wedged child from hanging
+// the docs gate, but 8s sat inside measured healthy startup times on a busy VM (voicebox-beads-ecyb).
+export const DEFAULT_READY_MS = 30000;
+export function readinessBudgetMs(env = process.env) {
+  const raw = String(env.VOICEBOX_DOCS_CHECK_READY_MS ?? "").trim();
+  if (!/^\d+$/.test(raw)) return DEFAULT_READY_MS;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value > 0 && value <= 2147483647 ? value : DEFAULT_READY_MS;
+}
+
 /** Start the real server on a scratch port and ask it what it is. */
 async function probeServer() {
   // A FREE PORT, PROPERLY: bind one, read the number, release it, hand it to the server. The previous
@@ -224,7 +235,10 @@ async function probeServer() {
     // perturbed health route crashed the check instead of reporting drift. Found by perturbing it.
     // AWAITED, NOT POLLED (voicebox-beads-qxy2): the line is seen the moment it arrives rather than on the
     // next 100ms tick, and a server that EXITS before printing it fails the check at once instead of after
-    // the whole 8s budget.
+    // the whole readiness budget. The timeout includes load and budget so an overloaded start
+    // is distinguishable from a child that never emits its banner.
+    const readyMs = readinessBudgetMs();
+    const startedAt = Date.now();
     await new Promise((ready, fail) => {
       const settle = (err) => {
         clearTimeout(timer);
@@ -235,7 +249,7 @@ async function probeServer() {
       };
       const onData = () => { if (out.includes("voicebox on http")) settle(); };
       const onExit = (code, signal) => settle(new Error(`server exited (${signal ?? `code ${code}`}) before it was ready on ${port}: ${out.slice(0, 200)}`));
-      const timer = setTimeout(() => settle(new Error(`server did not start on ${port}: ${out.slice(0, 200)}`)), 8000);
+      const timer = setTimeout(() => settle(new Error(`server did not start on ${port} within ${readyMs}ms (elapsed ${Date.now() - startedAt}ms, load ${loadavg()[0].toFixed(1)}): ${out.slice(0, 200)}`)), readyMs);
       child.stdout.on("data", onData); // after the accumulator above, so `out` already holds the chunk
       child.on("exit", onExit);
       onData();
@@ -244,7 +258,8 @@ async function probeServer() {
     const base = `http://127.0.0.1:${port}`;
     // VOICEBOX_WORKSPACE declared a root at boot; un-declare it so the routes are probed in the state a
     // fresh server is in, and so the loop drive below can show `root-not-declared` and the declaration.
-    await fetch(`${base}/api/root`, { method: "DELETE", headers: { "x-voicebox-host-token": token } });
+    const undeclare = await fetch(`${base}/api/root`, { method: "DELETE", headers: { "x-voicebox-host-token": token } });
+    if (!undeclare.ok) throw new Error(`DELETE /api/root refused with HTTP ${undeclare.status}`);
     // The routes the doc may claim, probed for real. A method mismatch is a fact about the route.
     const probes = [
       ["GET", "/", 200],
@@ -266,13 +281,17 @@ async function probeServer() {
     // document said "closed without an HTTP response" about a server that answers 101. Found by probing
     // the line's own claim by hand (2026-09-20).
     const [health, routes, liveUpgradeLine, surface] = await Promise.all([
-      fetch(`${base}/api/health`).then(async (r) => (r.ok ? await r.json() : { provider: "(no /api/health answer)", workspace: "?" })),
+      fetch(`${base}/api/health`).then(async (r) => {
+        if (!r.ok) throw new Error(`GET /api/health returned HTTP ${r.status}`);
+        return r.json();
+      }),
       Promise.all(probes.map(async ([method, path, expect]) => {
         const r = await fetch(`${base}${path}`, {
           method,
           ...(method === "POST" ? { body: JSON.stringify({ transcript: "list files" }), headers: { "content-type": "application/json" } } : {}),
         });
-        return { method, path, status: r.status, matches_documented_expectation: r.status === expect };
+        if (r.status !== expect) throw new Error(`${method} ${path} returned HTTP ${r.status}, expected ${expect}`);
+        return { method, path, status: r.status, matches_documented_expectation: true };
       })),
       probeLiveUpgrade(port),
       probeExtensionSurface(port),
@@ -339,8 +358,14 @@ async function probeExtensionSurface(port) {
   // declares a root: a probe still running then would append an `activity` entry, with its own seq, to the
   // very log the loop block counts — and /api/probe is the slow one (seconds; everything else is ms).
   const [inventory, catalogue, admitNoToken, probe] = await Promise.all([
-    fetch(`${base}/api/extensions`).then((r) => r.json()),
-    fetch(`${base}/api/extensions/catalogue`).then((r) => r.json()),
+    fetch(`${base}/api/extensions`).then((r) => {
+      if (!r.ok) throw new Error(`GET /api/extensions returned HTTP ${r.status}`);
+      return r.json();
+    }),
+    fetch(`${base}/api/extensions/catalogue`).then((r) => {
+      if (!r.ok) throw new Error(`GET /api/extensions/catalogue returned HTTP ${r.status}`);
+      return r.json();
+    }),
     fetch(`${base}/api/extensions/admit`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: "anything" }),
     }).then(async (r) => ({ status: r.status, ...(await r.json()) })),
@@ -348,6 +373,8 @@ async function probeExtensionSurface(port) {
     // caches the report in ITS workspace — the scratch one here, so a docs check never writes into the repo.
     fetch(`${base}/api/probe`).then(async (r) => ({ status: r.status, ...(await r.json()) })),
   ]);
+  if (admitNoToken.status !== 403) throw new Error(`POST /api/extensions/admit without token returned HTTP ${admitNoToken.status}, expected 403`);
+  if (probe.status !== 200 || !probe.ok || !probe.probe) throw new Error(`GET /api/probe returned HTTP ${probe.status}, ok=${probe.ok}`);
   return {
     probe: { status: probe.status, ok: probe.ok, refused: probe.refused ?? null, sections: Object.keys(probe.probe ?? {}).filter((k) => !["probe", "when"].includes(k)) },
     inventoryKeys: Object.keys(inventory),
@@ -366,9 +393,9 @@ async function probeExtensionSurface(port) {
  * send an upgrade request, report what came back. The typed version of this line was true when written and
  * false by the time a reviewer read it, which is the whole reason the line is a probe now.
  */
-async function probeLiveUpgrade(port) {
-  return await new Promise((resolve) => {
-    const req = http.request({
+export async function probeLiveUpgrade(port, timeoutMs = 2000, request = http.request) {
+  return await new Promise((resolve, reject) => {
+    const req = request({
       host: "127.0.0.1", port, path: "/live", method: "GET",
       headers: {
         Connection: "Upgrade", Upgrade: "websocket",
@@ -376,13 +403,19 @@ async function probeLiveUpgrade(port) {
       },
     });
     let settled = false;
-    const done = (line) => { if (!settled) { settled = true; try { req.destroy(); } catch { /* gone */ } resolve(line); } };
+    const done = (line, error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { req.destroy(); } catch { /* gone */ }
+      if (error) reject(error);
+      else resolve(line);
+    };
     req.on("upgrade", (res) => done(`A WEBSOCKET UPGRADE ON /live IS ACCEPTED (${res.statusCode}) — the zero-dependency server owns it.`));
-    req.on("response", (res) => done(`A WEBSOCKET UPGRADE ON /live GOT HTTP ${res.statusCode} — it is not an upgrade route on this tree.`));
-    req.on("error", () => done("A WEBSOCKET UPGRADE ON /live CLOSED WITHOUT AN HTTP RESPONSE — the server destroys it (also a form of owning the route)."));
+    req.on("response", (res) => done(null, new Error(`/live upgrade probe returned HTTP ${res.statusCode}, expected 101`)));
+    req.on("error", (error) => done(null, new Error(`/live upgrade probe failed: ${error.message}`)));
+    const timer = setTimeout(() => done(null, new Error(`/live upgrade probe did not settle within ${timeoutMs}ms`)), timeoutMs);
     req.end();
-    const t = setTimeout(() => done("THE /live UPGRADE PROBE DID NOT SETTLE."), 2000);
-    if (t.unref) t.unref();
   });
 }
 

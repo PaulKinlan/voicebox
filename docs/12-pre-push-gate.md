@@ -137,6 +137,7 @@ their own scripts, like every other pluggable stage in this file).
 Each bound can be raised or tightened per run without editing the gate:
 - The **unit** bound resolves in order — `VOICEBOX_GATE_UNIT_SECS`, then the legacy `VOICEBOX_GATE_TESTS_SECS`, then the table's default. The primary variable wins when both are set.
 - The **live** and **acceptance** bounds are their own variables: `VOICEBOX_GATE_LIVE_SECS`, `VOICEBOX_GATE_ACCEPT_SECS`.
+- The **docs** stage bound is `VOICEBOX_GATE_DOCS_SECS` (default 120s, shared by docs-touched, docs-check and single-owner). It must outlast the scratch server's readiness wait (`VOICEBOX_DOCS_CHECK_READY_MS`, default 30000ms) and the subsequent HTTP probes; raising only the readiness wait cannot prevent a stage timeout.
 - The **manifest** bound is `VOICEBOX_GATE_MANIFEST_SECS`, and the per-file budget the tier runner gives a
   test file is derived per tier from measured headroom (`TIER_FILE_MS`: unit 120s, server 300s, browser 240s; default 240s),
   overridable by `VOICEBOX_GATE_FILE_SECS` or `--file-secs`. Sitting under the unit stage bound (180s) ensures a wedged unit
