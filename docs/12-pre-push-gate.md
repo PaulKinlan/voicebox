@@ -149,7 +149,10 @@ Each bound can be raised or tightened per run without editing the gate:
   315s quiet and 408s at load ~9, and was killed at 300s with nothing wrong with it (voicebox-beads-ncrg). Its two cheaper
   fixes were measured and rejected: the fixture setup costs 0.4s, and overlapping the arms at concurrency 3 made the file
   slower (377s, two arms cancelled) because every arm already waits on children. The live stage bound is 900s for the same
-  reason — it must outlast the slowest browser file, not the quiet box. Longest-first unit queue ordering via
+  reason — it must outlast the slowest browser file, not the quiet box. The browser tier is dispatched by
+  `tools/browser-shard-runner.mjs`, not by the tier runner, so that bound is passed down to it
+  (`--file-timeout-ms` / `--isolated-timeout-ms`) and applied per file there: a bound that exists only in the caller
+  is a bound that does not exist (the first version of this fix had exactly that defect, caught in re-review). Longest-first unit queue ordering via
   `buildQueue` (`scripts/gate-tier.mjs`) dispatches heavy suites (`test-changed`, `transient-state`) first, preventing
   worker tail starvation under contention (voicebox-beads-hfa8).
 

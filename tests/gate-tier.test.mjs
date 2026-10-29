@@ -546,3 +546,24 @@ test("an explicit --file-secs beats the isolated budget, because an operator nam
   });
   assert.equal(seen.get(isolatedName), 45_000, "an explicit bound must not be widened behind the operator's back");
 });
+
+test("the browser tier's per-file bound REACHES the runner that kills the file, for isolated files too (voicebox-beads-ncrg)", () => {
+  // The browser tier is not dispatched by runOneTier: tools/browser-shard-runner.mjs owns it and kills each
+  // file with its own constant. The first version of this fix set ISOLATED_FILE_MS in gate-tier and the
+  // reviewer's re-review caught that nothing passed it down — a bound that exists only in the caller is a
+  // bound that does not exist. This pins the seam in both directions: the caller sends both numbers, and the
+  // runner applies the per-file one it was given.
+  const tierSource = readFileSync(path.join(root, "scripts/gate-tier.mjs"), "utf8");
+  assert.match(
+    tierSource,
+    /"--file-timeout-ms",\s*String\(fileTimeoutMs\),\s*"--isolated-timeout-ms",\s*String\(isolatedTimeoutMs\)/,
+    "runBrowserTier must pass both bounds to tools/browser-shard-runner.mjs",
+  );
+  assert.match(tierSource, /isolatedTimeoutMs = Math\.max\(tierFileTimeoutMs\("browser"\), ISOLATED_FILE_MS\)/, "the browser tier's isolated default must come from ISOLATED_FILE_MS");
+
+  const runnerSource = readFileSync(path.join(root, "tools/browser-shard-runner.mjs"), "utf8");
+  assert.match(runnerSource, /flag\("isolated-timeout-ms", 600_000\)/, "the runner must accept the isolated bound");
+  assert.match(runnerSource, /ISOLATED\.has\(file\) \? Math\.max\(FILE_TIMEOUT_MS, ISOLATED_TIMEOUT_MS\)/, "the runner must widen the bound for isolated files only");
+  // ... and the widening must be the thing the kill timer uses, or the number is decoration.
+  assert.match(runnerSource, /}, fileTimeoutFor\(file\)\);/, "the kill timer must use the per-file bound, not the constant");
+});

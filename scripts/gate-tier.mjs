@@ -248,10 +248,14 @@ let browserChild = null;
  * the path, keep its output streaming, and answer with its exit code. SIGTERM is left to the runner itself:
  * it takes its own per-file children (and their browsers) down before it goes.
  */
-export function runBrowserTier({ dir, log = console }) {
+export function runBrowserTier({ dir, fileTimeoutMs = tierFileTimeoutMs("browser"), isolatedTimeoutMs = Math.max(tierFileTimeoutMs("browser"), ISOLATED_FILE_MS), log = console }) {
   const record = tierRecordPath(dir, "browser");
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, ["tools/browser-shard-runner.mjs"], {
+    // THE BOUNDS GO DOWN WITH THE CHILD (voicebox-beads-ncrg). The browser tier is not run by `runOneTier`;
+    // it is run by tools/browser-shard-runner.mjs, which killed every file at its own 300s constant. The
+    // isolated file needs its own budget there too, so both numbers are passed explicitly and the runner
+    // applies the per-file one it is given instead of assuming the tier's.
+    const child = spawn(process.execPath, ["tools/browser-shard-runner.mjs", "--file-timeout-ms", String(fileTimeoutMs), "--isolated-timeout-ms", String(isolatedTimeoutMs)], {
       cwd: ROOT,
       stdio: "inherit",
       env: { ...process.env, VOICEBOX_GATE_TIER_RECORD: record },
@@ -327,7 +331,15 @@ async function main() {
   const failed = [];
   for (const one of sequence) {
     if (one === "browser") {
-      const { code, record: recordPath } = await runBrowserTier({ dir });
+      const fileSecs = flag("file-secs");
+      const browserBaseMs = tierFileTimeoutMs("browser", { fileSecs });
+      // An explicit --file-secs is the operator naming a number, so it wins for isolated files too; the
+      // class default only replaces the TIER default (the reasoning is in scripts/test-shards.mjs).
+      const { code, record: recordPath } = await runBrowserTier({
+        dir,
+        fileTimeoutMs: browserBaseMs,
+        isolatedTimeoutMs: fileSecs ? browserBaseMs : Math.max(browserBaseMs, ISOLATED_FILE_MS),
+      });
       const record = readRecord(recordPath);
       const files = tierFiles("browser");
       const gaps = coverageGaps(record, files);
