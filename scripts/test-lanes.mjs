@@ -44,7 +44,8 @@
 // then RUNS it must name the launch in its own code — a written file is not
 // followed into the child process that runs it — and a launch NAME inside a
 // program piped to a child's stdin is not seen (a helper PATH there still is).
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -511,28 +512,50 @@ function topLaneDeclaration(source, tokens) {
 function read(source) {
   const tokens = lex(source);
   if (!tokens) return null;
-  const text = source.split("");
-  const code = source.split("");
-  const blank = (chars, s, e) => {
-    for (let at = s; at < e; at++) if (chars[at] !== "\n") chars[at] = " ";
+  // SEGMENTS, NOT CHARACTER ARRAYS (voicebox-beads-884i). This used to split the file into two
+  // `Array#split("")` copies and then walk every token range char by char to overwrite the blanked
+  // ones: 2s of the classifier's 15s per-MB cost sat here, plus a GC bill for the arrays. The blanked
+  // regions are collected as ranges and emitted as `source.slice(s, e)` with its non-newline
+  // characters replaced by spaces — the SAME string, one native pass per range instead of a JS loop.
+  // Overlapping ranges are merged first, because blanking is idempotent and a template's `${…}` tokens
+  // nest inside the template's own range.
+  const intervals = (ranges) => {
+    const sorted = ranges.filter(({ s, e }) => e > s).sort((a, b) => a.s - b.s || a.e - b.e);
+    const merged = [];
+    for (const { s, e } of sorted) {
+      const last = merged[merged.length - 1];
+      if (last && s <= last.e) last.e = Math.max(last.e, e);
+      else merged.push({ s, e });
+    }
+    return merged;
   };
+  const masked = (ranges) => {
+    const parts = [];
+    let at = 0;
+    for (const { s, e } of intervals(ranges)) {
+      parts.push(source.slice(at, s), source.slice(s, e).replace(/[^\n]/g, " "));
+      at = e;
+    }
+    parts.push(source.slice(at));
+    return parts.join("");
+  };
+  const comments = [];
+  const literals = [];
+  const written = [];
   for (const { k, s, e } of tokens) {
-    if (k === "com") {
-      blank(text, s, e);
-      blank(code, s, e);
-    } else if (k === "str") blank(code, s + 1, e - 1);
-    else if (k === "tpl" || k === "re") blank(code, s, e);
+    if (k === "com") comments.push({ s, e });
+    else if (k === "str") literals.push({ s: s + 1, e: e - 1 });
+    else if (k === "tpl" || k === "re") literals.push({ s, e });
   }
-  for (const { k, s, e } of writtenLiterals(tokens)) {
-    if (k === "str") blank(text, s + 1, e - 1);
-    else blank(text, s, e);
-  }
-  const views = { text: text.join(""), code: code.join(""), ...topLaneDeclaration(source, tokens) };
+  for (const { k, s, e } of writtenLiterals(tokens)) written.push(k === "str" ? { s: s + 1, e: e - 1 } : { s, e });
+  const text = masked([...comments, ...written]);
+  const code = masked([...comments, ...literals]);
+  const views = { text, code, ...topLaneDeclaration(source, tokens) };
   views.evaluates = EVALUATES.text.test(views.text) || EVALUATES.code.test(views.code);
   return views;
 }
 
-export function classify(root = TESTS) {
+export function classify(root = TESTS, { cachePath } = {}) {
   const unit = [];
   const live = [];
   const server = [];
@@ -549,33 +572,124 @@ export function classify(root = TESTS) {
   } catch {
     entries = [];
   }
-  for (const file of entries.filter((f) => f.endsWith(".test.mjs")).sort()) {
-    const source = readFileSync(path.join(root, file), "utf8");
-    const views = read(source);
-    const declaration = views ?? topLaneDeclaration(source, null);
-    const reading = ({ name }) => (!views ? source : name && !views.evaluates ? views.code : views.text);
+  const files = entries.filter((f) => f.endsWith(".test.mjs")).sort();
 
-    // Any browser launch puts the test in the browser lane (strictly serial, CDP contention):
-    const browserLaunch = BROWSER_SIGNALS.find((signal) => signal.re.test(reading(signal)));
-    if (browserLaunch) {
-      const entry = { file, lane: "browser", why: browserLaunch.what, declaredLane: declaration.declaredLane, declarationError: declaration.declarationError };
+  // THE CONTENT-HASH CACHE (voicebox-beads-idy6). Lexing every test file costs 11-20s on this VM and
+  // every gate process pays it once (tests/test-changed.test.mjs pays it ~17x through its CLI probes),
+  // which alone wedges the unit lane past its budgets on a starved box. Each entry is keyed by
+  // sha256(THIS FILE'S OWN SOURCE + the test file's source): a one-byte change to one test file
+  // invalidates exactly that entry, and an edit to the classifier invalidates every entry — no
+  // staleness is possible by construction. The cache lives in the git COMMON dir (shared by every
+  // worktree of the clone, and never in the working tree: a gate must not dirty the tree), is written
+  // atomically (tmp + rename), and an unreadable or corrupt cache is ignored and rebuilt — a cache
+  // problem must never fail a gate. This is a cross-PROCESS disk cache, not a per-process memo:
+  // re-classifying the same tree still re-reads every file and re-derives the roster from the keys.
+  const cacheFile = cachePath === undefined ? defaultClassifyCachePath(root) : cachePath;
+  let fingerprint = null;
+  let cachedEntries = {};
+  if (cacheFile) {
+    fingerprint = sha256hex(readFileSync(SELF, "utf8"));
+    try {
+      const parsed = JSON.parse(readFileSync(cacheFile, "utf8"));
+      if (parsed && parsed.v === CLASSIFY_CACHE_VERSION && parsed.entries && typeof parsed.entries === "object") {
+        cachedEntries = parsed.entries;
+      }
+    } catch {
+      cachedEntries = {}; // unreadable or corrupt — rebuild from scratch
+    }
+  }
+  const writtenEntries = {};
+  for (const file of files) {
+    const source = readFileSync(path.join(root, file), "utf8");
+    let entry = null;
+    let key = null;
+    if (fingerprint) {
+      key = `${fingerprint}:${sha256hex(source)}`;
+      const hit = cachedEntries[key];
+      if (hit && (hit.lane === "unit" || hit.lane === "server" || hit.lane === "browser")) {
+        entry = { file, lane: hit.lane, why: hit.why ?? null, declaredLane: hit.declaredLane ?? null, declarationError: hit.declarationError ?? null };
+      }
+    }
+    if (!entry) entry = classifyFile(file, source);
+    if (key) {
+      writtenEntries[key] = { lane: entry.lane, why: entry.why, declaredLane: entry.declaredLane, declarationError: entry.declarationError };
+    }
+    if (entry.lane === "browser") {
       browser.push(entry);
       live.push(entry);
-      continue;
-    }
-
-    // Otherwise, any server launch puts it in the server lane (concurrent):
-    const serverLaunch = SERVER_SIGNALS.find((signal) => signal.re.test(reading(signal)));
-    if (serverLaunch) {
-      const entry = { file, lane: "server", why: serverLaunch.what, declaredLane: declaration.declaredLane, declarationError: declaration.declarationError };
+    } else if (entry.lane === "server") {
       server.push(entry);
       live.push(entry);
-      continue;
+    } else {
+      unit.push(entry);
     }
-
-    unit.push({ file, lane: "unit", why: null, declaredLane: declaration.declaredLane, declarationError: declaration.declarationError });
+  }
+  if (cacheFile && fingerprint) {
+    try {
+      mkdirSync(path.dirname(cacheFile), { recursive: true });
+      const tmp = `${cacheFile}.${process.pid}.tmp`;
+      writeFileSync(tmp, JSON.stringify({ v: CLASSIFY_CACHE_VERSION, entries: writtenEntries }));
+      renameSync(tmp, cacheFile);
+    } catch {
+      // a cache that cannot be written must never fail the gate
+    }
   }
   return { unit, live, server, browser };
+}
+
+/** One file's verdict — the cacheable unit. Everything it reads is a pure function of `source` and
+ *  this module's own constants, both of which the cache key binds. */
+function classifyFile(file, source) {
+  const views = read(source);
+  const declaration = views ?? topLaneDeclaration(source, null);
+  const reading = ({ name }) => (!views ? source : name && !views.evaluates ? views.code : views.text);
+
+  // Any browser launch puts the test in the browser lane (strictly serial, CDP contention):
+  const browserLaunch = BROWSER_SIGNALS.find((signal) => signal.re.test(reading(signal)));
+  if (browserLaunch) {
+    return { file, lane: "browser", why: browserLaunch.what, declaredLane: declaration.declaredLane, declarationError: declaration.declarationError };
+  }
+
+  // Otherwise, any server launch puts it in the server lane (concurrent):
+  const serverLaunch = SERVER_SIGNALS.find((signal) => signal.re.test(reading(signal)));
+  if (serverLaunch) {
+    return { file, lane: "server", why: serverLaunch.what, declaredLane: declaration.declaredLane, declarationError: declaration.declarationError };
+  }
+
+  return { file, lane: "unit", why: null, declaredLane: declaration.declaredLane, declarationError: declaration.declarationError };
+}
+
+const SELF = fileURLToPath(import.meta.url);
+const CLASSIFY_CACHE_VERSION = 1;
+const sha256hex = (text) => createHash("sha256").update(text).digest("hex");
+
+/** The default cache path: the git COMMON dir (shared across worktrees), or null to disable. Only
+ *  the real roster root is cached by default — fixture roots are the classifier's own test data and
+ *  must always classify fresh unless a test passes an explicit cachePath.
+ *
+ *  Resolved from the FILESYSTEM, never by spawning `git rev-parse`: the CLI probes in
+ *  tests/test-changed.mjs run under a preload that forbids child processes outright, and a spawn
+ *  here both broke that contract and (worse) disabled the cache inside the probe, restoring the
+ *  16s cold-lex the probe's 8s bound cannot survive (voicebox-beads-idy6). */
+function defaultClassifyCachePath(root) {
+  if (root !== TESTS) return null;
+  try {
+    const dotgit = path.join(ROOT, ".git");
+    let common = null;
+    if (statSync(dotgit).isDirectory()) {
+      common = dotgit; // an ordinary checkout: .git IS the common dir
+    } else {
+      // a worktree: .git is a FILE pointing at <common>/worktrees/<name>
+      const pointer = readFileSync(dotgit, "utf8").match(/^gitdir:\s*(.+)$/m)?.[1]?.trim();
+      if (!pointer) return null;
+      const gitdir = path.resolve(ROOT, pointer);
+      common = path.basename(path.dirname(gitdir)) === "worktrees" ? path.dirname(path.dirname(gitdir)) : gitdir;
+    }
+    if (!common || !existsSync(common)) return null;
+    return path.join(common, `voicebox-lane-classify-v${CLASSIFY_CACHE_VERSION}.json`);
+  } catch {
+    return null;
+  }
 }
 
 /** Report exact file-level boundaries without pinning global counts that change whenever a file is added. */
@@ -652,3 +766,4 @@ if (CLI) {
   console.log(`unit: ${unit.length} files\nlive: ${live.length} files`);
   for (const { file, why } of live) console.log(`  live  ${file} — ${why}`);
 }
+

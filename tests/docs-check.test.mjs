@@ -2,7 +2,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_READY_MS, readinessBudgetMs, moduleInventory, renderInventoryTable, probeLiveUpgrade } from "../scripts/docs-check.mjs";
+// MERGER UNION: ecyb's readiness/probe helpers and 8r9a's routes-table helpers, one import (no duplicates).
+import { DEFAULT_READY_MS, readinessBudgetMs, moduleInventory, renderInventoryTable, probeLiveUpgrade, matchesDocumentedExpectation, renderRouteRow, renderRoutesTable } from "../scripts/docs-check.mjs";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import os from "node:os";
@@ -143,4 +144,74 @@ test("failure when a component has misplaced @summary tag not in top-of-file JSD
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
+});
+
+// ── The routes table's ⚠️ marker (voicebox-beads-8r9a) ─────────────────────────────────────────────────
+//
+// THE FINDING read a branch where `matches_documented_expectation` was a literal `true`, which made the marker
+// in the generated routes table unreachable: no answer could ever disagree with it. On main the comparison was
+// already real, but NOTHING pinned it — so the literal could come back, and the marker's reachability was a
+// claim in prose. These four cases make it a thing the suite drives: the comparison fails closed, the marker
+// renders when a status disagrees, it does not render when they agree, and the script still COMPUTES the field
+// instead of asserting it.
+
+test("the status comparison fails closed: a status it could not read is not a match", () => {
+  assert.equal(matchesDocumentedExpectation(200, 200), true);
+  assert.equal(matchesDocumentedExpectation(204, 200), false, "a different status is not a match");
+  assert.equal(matchesDocumentedExpectation("200", 200), true, "a numeric string from a header is still a status");
+  for (const unreadable of [undefined, null, NaN, "not-a-status", {}, []]) {
+    assert.equal(
+      matchesDocumentedExpectation(unreadable, 200),
+      false,
+      `an unreadable status (${JSON.stringify(unreadable)}) must NOT be reported as matching the documented one — answering "fine" about a value the check could not see is the defect`,
+    );
+  }
+});
+
+test("a route whose answered status differs renders the ⚠️ marker; a route that matches does not", () => {
+  const matched = renderRouteRow({ method: "GET", path: "/api/health", status: 200, expected: 200 });
+  assert.equal(matched, "| `GET` | `/api/health` | 200 |");
+  assert.doesNotMatch(matched, /unexpected status/);
+
+  const deviated = renderRouteRow({ method: "GET", path: "/api/health", status: 204, expected: 200 });
+  assert.match(deviated, /⚠️ unexpected status/, `the marker must render when the server answers something the document does not claim: ${deviated}`);
+  assert.match(deviated, /204/, "the row must show the status the server actually answered");
+
+  // A route row whose expected value never made it through still refuses rather than passing quietly.
+  const unknownExpected = renderRouteRow({ method: "POST", path: "/api/turn", status: 200 });
+  assert.match(unknownExpected, /⚠️ unexpected status/, `a row with no documented expectation must not read as verified: ${unknownExpected}`);
+});
+
+test("the whole table carries the marker per row, and the table is not silently empty", () => {
+  const routes = [
+    { method: "GET", path: "/", status: 200, expected: 200 },
+    { method: "GET", path: "/api/health", status: 200, expected: 200 },
+    { method: "GET", path: "/api/files", status: 500, expected: 200 },
+    { method: "POST", path: "/api/turn", status: 200, expected: 200 },
+  ];
+  const rows = renderRoutesTable(routes);
+  assert.equal(rows.length, routes.length, "every probed route gets a row");
+  assert.equal(rows.filter((r) => r.includes("⚠️ unexpected status")).length, 1, `exactly the deviating route is marked: ${rows.join(" / ")}`);
+  assert.ok(rows.some((r) => r.includes("/api/files")), "the deviating route is the one marked");
+});
+
+test("docs-check COMPUTES the field rather than asserting it (the literal that made the marker unreachable)", () => {
+  // A source-level pin, on purpose: the defect was a constant, and a constant is invisible to a behavioural test
+  // that constructs its own rows. This reads the script's own text and refuses the literal by name.
+  const source = readFileSync(CHECK_SCRIPT, "utf8");
+  assert.doesNotMatch(
+    source,
+    /matches_documented_expectation\s*:\s*true/,
+    "docs-check may not hardcode matches_documented_expectation — a literal true makes the ⚠️ unexpected status marker in the generated routes table unreachable",
+  );
+  assert.match(
+    source,
+    /matches_documented_expectation\s*:\s*matchesDocumentedExpectation\(/,
+    "docs-check must compute matches_documented_expectation through matchesDocumentedExpectation(status, expected)",
+  );
+  assert.equal(
+    (source.match(/renderRoutesTable\(/g) ?? []).length,
+    2,
+    "the routes block must be rendered by renderRoutesTable (one definition, one call site) so the tested helper is the shipped one",
+  );
 });
