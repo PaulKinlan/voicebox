@@ -38,7 +38,8 @@
 // What it still does NOT cover, and never did: route groups extracted to their own tables (lib/routes/*.mjs,
 // `extensionRoutes`). Those are other files with other seams.
 //
-// Keep the host filename assembled: the lane classifier must keep this source-only test in UNIT.
+// The host is read as TEXT: no server, no browser, no process. The lane classifier files this in the unit tier
+// because reading a launch target is not launching it (voicebox-beads-wkdp) — the filename needs no assembly.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -47,7 +48,7 @@ import { fileURLToPath } from "node:url";
 import { tableMembers } from "./lib/route-table.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const source = readFileSync(path.join(root, ["server", "mjs"].join(".")), "utf8");
+const source = readFileSync(path.join(root, "server.mjs"), "utf8");
 
 // A new mutating route of ANY verb needs an explicit decision here, even if it plans to use the JSON door: the
 // reviewer must see the reason. The four csrf keys are also asserted against the host guard, and `authority` keys

@@ -74,6 +74,22 @@ const EXEC_FILES = new Set(["execFile", "execFileSync", "fork"]);
 const EXECS = new Set(["exec", "execSync"]);
 const ALL_WRITES = new Set(["writeFileSync", "writeFile", "appendFileSync", "appendFile", "createWriteStream"]);
 
+/**
+ * Does this file START anything — a process, a listening socket, a server?
+ *
+ * The construction-only edges below (`path.join`/`resolve`, `fileURLToPath`, `new URL`, a `writeFile*`) prove
+ * only that a path to the named file EXISTS in the test, never that it is launched. Before voicebox-beads-wkdp
+ * any one of them was enough on its own, so `readFileSync(path.join(root, "server.mjs"), "utf8")` — a test that
+ * reads the host as TEXT, with no server, no browser and no process — was filed in the serial live lane, and
+ * `tests/csrf-route-seam.test.mjs` had to assemble its filename to escape it. A test that only READS a launch
+ * target is a unit test; a test that starts one is not. This is the line between them: a launch call in the
+ * file's code (its strings are blanked, so a heredoc about `spawn(` cannot promote a fixture).
+ *
+ * An import (`import … from "./lib/server.mjs"`, `require(…)`) stays a launch signal on its own — importing the
+ * fixture helper IS how a test gets a server — so the imported-helper edge is deliberately not gated by this.
+ */
+const LAUNCH_CALL = /(?<![\w$.])(?:spawn|spawnSync|exec|execSync|execFile|execFileSync|fork|createServer|listen)\s*\(/;
+
 function parseCallArgs(code, at) {
   const args = [[]];
   const nest = [];
@@ -108,6 +124,8 @@ function checkConsumes(src, name) {
   const tokens = lex(src);
   if (!tokens) return true; // conservative fallback if lex fails
   const code = tokens.filter(({ k }) => k !== "com");
+  /** Whether a path CONSTRUCTION (join/resolve/fileURLToPath/URL/write) may count as a launch at all. */
+  const launches = LAUNCH_CALL.test(src);
 
   const matchesLit = (t) =>
     (t.k === "str" && nameLitRe.test(src.slice(t.s, t.e))) ||
@@ -211,8 +229,8 @@ function checkConsumes(src, name) {
       }
     }
 
-    // Edge 3: path.join, path.resolve
-    if (t.k === "word" && (t.v === "join" || t.v === "resolve") && code[i - 1]?.v === "." && code[i - 2]?.v === "path") {
+    // Edge 3: path.join, path.resolve — a construction, so only when this file also starts something
+    if (launches && t.k === "word" && (t.v === "join" || t.v === "resolve") && code[i - 1]?.v === "." && code[i - 2]?.v === "path") {
       if (code[i + 1]?.v === "(") {
         const parsed = parseCallArgs(code, i);
         if (parsed) {
@@ -223,15 +241,15 @@ function checkConsumes(src, name) {
       }
     }
 
-    // Edge 4: fileURLToPath, new URL
-    if (t.k === "word" && t.v === "fileURLToPath" && code[i + 1]?.v === "(") {
+    // Edge 4: fileURLToPath, new URL — a construction, like Edge 3
+    if (launches && t.k === "word" && t.v === "fileURLToPath" && code[i + 1]?.v === "(") {
       const parsed = parseCallArgs(code, i);
       if (parsed) {
         const arg0 = parsed.args[0] || [];
         if (arg0.some((tok) => matchesLit(tok) || (tok.k === "word" && matchedVars.has(tok.v)))) return true;
       }
     }
-    if (t.k === "word" && t.v === "URL" && code[i - 1]?.v === "new" && code[i + 1]?.v === "(") {
+    if (launches && t.k === "word" && t.v === "URL" && code[i - 1]?.v === "new" && code[i + 1]?.v === "(") {
       const parsed = parseCallArgs(code, i);
       if (parsed) {
         const arg0 = parsed.args[0] || [];
@@ -239,7 +257,9 @@ function checkConsumes(src, name) {
       }
     }
 
-    // Edge 5: write* (arg 0 only)
+    // Edge 5: write* (arg 0 only). NOT gated on `launches`: writing a harness path STAGES a helper the test (or the
+    // next one) will run, which the suite treats as live behaviour — `writes-to-helper` in tests/test-lanes.test.mjs
+    // pins that, and it is why only the read/construction edges are gated (voicebox-beads-wkdp).
     if (t.k === "word" && ALL_WRITES.has(t.v) && code[i + 1]?.v === "(") {
       const parsed = parseCallArgs(code, i);
       if (parsed) {

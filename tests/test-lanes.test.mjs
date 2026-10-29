@@ -494,3 +494,43 @@ test("idy6: the default cache lives in the git COMMON dir, never the working tre
   assert.ok(!existsSync(path.join(root, "voicebox-lane-classify-v1.json")), "the working tree is not dirtied");
   assert.ok(!existsSync(path.join(root, "tests", "voicebox-lane-classify-v1.json")), "tests/ is not dirtied");
 });
+
+test("reading a launch target is not launching it: a path CONSTRUCTION only counts when the file starts something (voicebox-beads-wkdp)", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-lanes-reads-"));
+  try {
+    // The four cases differ only in what they DO with the same path. Before this bead every one of them was LIVE,
+    // because `path.join(root, "server.mjs")` was a launch signal on its own — which is why the route-seam tests read
+    // the host through an assembled filename to escape the serial lane.
+    writeFileSync(path.join(dir, "reads.test.mjs"), `import { readFileSync } from "node:fs";\nimport path from "node:path";\nconst root = "/r";\nconst source = readFileSync(path.join(root, "server.mjs"), "utf8");\n`);
+    writeFileSync(path.join(dir, "spawns.test.mjs"), `import { spawn } from "node:child_process";\nimport path from "node:path";\nconst root = "/r";\nspawn(process.execPath, [path.join(root, "server.mjs")]);\n`);
+    writeFileSync(path.join(dir, "writes.test.mjs"), `import { writeFileSync } from "node:fs";\nimport path from "node:path";\nwriteFileSync(path.join("/t", "server.mjs"), "fixture");\n`);
+    writeFileSync(path.join(dir, "imports.test.mjs"), `import { startServer } from "./lib/server.mjs";\n`);
+    const { unit, live } = classify(dir);
+    assert.deepEqual(unit.map(({ file }) => file).sort(), ["reads.test.mjs"], "a file that only READS the host is a unit test");
+    // A write still counts: it stages a helper the test — or the next one — will run.
+    assert.deepEqual(live.map(({ file }) => file).sort(), ["imports.test.mjs", "spawns.test.mjs", "writes.test.mjs"], "a file that starts or stages a server is not");
+    assert.equal(live.find((l) => l.file === "spawns.test.mjs").why, "a server process", "and the reason is still named");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the source-seam route tests are UNIT in this repository, not in the serial live lane (voicebox-beads-wkdp)", () => {
+  const { unit, live } = classify(path.join(root, "tests"));
+  const unitFiles = new Set(unit.map(({ file }) => file));
+  const liveFiles = new Set(live.map(({ file }) => file));
+  // Each of these reads the host as TEXT: one readFileSync, no server, no browser, no process.
+  for (const file of [
+    "activity-route-seam.test.mjs",
+    "agents-read-route-seam.test.mjs",
+    "changelog-route-seam.test.mjs",
+    "csrf-route-seam.test.mjs",
+    "fleet-get-route-seam.test.mjs",
+    "gemini-media-route-seam.test.mjs",
+    "presence-route-seam.test.mjs",
+    "tool-catalog-route-seam.test.mjs",
+  ]) {
+    assert.ok(unitFiles.has(file), `${file} reads the host as text and belongs in the unit tier`);
+    assert.equal(liveFiles.has(file), false, `${file} must not take a slot in the serial live lane`);
+  }
+});
