@@ -18,9 +18,18 @@
 import { existsSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
 import path from "node:path";
 
-/** The cmdlines a test fixture produces. Chrome's helper and test binaries are named for what they are. */
+/**
+ * The cmdlines a test fixture produces. Chrome's helper and test binaries are named for what they are.
+ *
+ * `wasm-worker.mjs` joined this list on 2026-10-29, the hard way: the reaper killed one in this very worktree that had
+ * been alive 121 minutes at 81% CPU, orphaned when its file's process was killed by PID rather than by group (the cell
+ * is spawned into its parent's group precisely so a GROUP kill reaches it — a per-pid kill of a `node --test` child
+ * cannot, and nothing inside a synchronously-growing wasm cell can run to notice). Its cmdline is
+ * `node --…flags lib/wasm-worker.mjs`, which none of the shapes above matched, so the sweep would have walked past it.
+ */
 export const FIXTURE_SHAPES = Object.freeze([
   /(?:^|\/)server\.mjs(?:\s|$)/,
+  /(?:^|\/)wasm-worker\.mjs(?:\s|$)/,
   /(?:^|\/)(?:chrome|chromium|chrome_crashpad_handler|headless_shell)(?:\s|$)/,
   /--headless(?:=|\s|$)/,
 ]);

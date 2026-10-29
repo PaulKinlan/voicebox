@@ -226,8 +226,8 @@ No handler can prevent this by itself, because of how the pieces are detached:
   reaper, an outer `--kill-after`) runs no handler in any process.
 
 So the cleanup has to be a **sweep by attribution**, not a handler chain: `scripts/stray-sweep.mjs` kills a process only
-when all three facts hold — its cmdline is a fixture shape (`server.mjs`, a browser, a browser helper), its **cwd is this
-worktree**, and it **started at or after this run began**. Ancestors of the sweeping process are excluded, and a sweep
+when all three facts hold — its cmdline is a fixture shape (`server.mjs`, a `wasm-worker.mjs` execution cell, a browser
+or a browser helper), its **cwd is this worktree**, and it **started at or after this run began**. Ancestors of the sweeping process are excluded, and a sweep
 with no worktree is refused rather than becoming a box-wide kill. A fixture older than the run is somebody else's, so a
 hand-started server is never a victim; another lane's worktree is never a victim either, because the cwd has to match.
 
@@ -237,6 +237,13 @@ The rules that keep attribution honest, and what the first review of this change
   (The first version skipped the guard when the start time was missing, which turned every fixture in the worktree into a
   victim — review finding on `voicebox-beads-9xqs`, P2. `tests/stray-sweep.test.mjs` now pins both the missing-stat and
   the torn-stat shapes, with a readable control, and reverting the line turns it red.)
+- **A per-pid kill orphans children; a group kill does not.** The wasm cell (`lib/wasm-shelf.mjs`) runs in its parent's
+  process group on purpose, so the gate's own escalation — `SIGTERM` to the group, then `SIGKILL` after 5s — reaches it.
+  An operator (or a harness) that kills a `node --test` child by PID instead leaves any cell it started running, and a
+  synchronously growing `memory.grow` loop cannot run a handler to notice. The reaper killed one 121 minutes old at 81%
+  CPU in this worktree on 2026-10-29 for exactly that reason, which is why `wasm-worker.mjs` is a swept shape: the suite
+  itself kills every cell it finishes or times out (`tests/wasm-shelf.test.mjs` finishes with none alive), but nothing
+  inside a killed parent can.
 - **A pinned server is never a victim.** `VOICEBOX_PINNED=1` in the process's environment or a `.pinned-server` file in
   the worktree opts out — the same two markers `scripts/reap-stale-servers.mjs` honours, so there is one rule, not two.
 - **A sweep is a window**, `since … until`, so the bound cannot be satisfied by mistake: `until` is what keeps a

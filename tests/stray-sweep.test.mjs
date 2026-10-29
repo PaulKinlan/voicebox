@@ -46,6 +46,7 @@ test("the sweep's shape list names the fixtures a test leaks, and nothing a lane
   assert.ok(matches("/usr/bin/node /home/exedev/worktrees/voicebox-imp-a68n/server.mjs"), "a test's server.mjs");
   assert.ok(matches("/usr/bin/google-" + "chrome --headless=new --remote-debug" + "ging-port=0"), "a headless browser");
   assert.ok(matches("/opt/" + "chrome/chrome --type=renderer"), "a browser helper process");
+  assert.ok(matches("/usr/bin/node --max-old-space-size=64 /home/exedev/worktrees/x/lib/wasm-worker.mjs"), "a wasm execution cell");
   assert.equal(matches("/usr/bin/node /home/exedev/worktrees/x/scripts/gate-tier.mjs"), false, "a gate is not a fixture");
   assert.equal(matches("/usr/bin/node server.js"), false, "server.js is not this repo's fixture");
 });
