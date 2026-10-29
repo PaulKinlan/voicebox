@@ -233,6 +233,12 @@ export const ISOLATED = new Set([
   "tests/pre-push.test.mjs",
   "tests/live-openai-browser.test.mjs",
   "tests/vision-controls-extraction.test.mjs",
+  // 2026-10-29 (voicebox-beads-i9k0): the D1 arm waits on real microphone transport, a second /live socket
+  // and an environment death, so it is the one file whose outcome tracks the state of the box rather than the
+  // tree. It failed in a 96-file sequential shard (the 91st file, box at load 4.9 falling to 2.6) and then
+  // passed 7/7 standalone on the same tree, including once with six CPU burners beside it. Running it alone
+  // gives it the box it was measured on, which is the same reason ldxa-barge-in and live-openai are here.
+  "tests/tasks-browser.test.mjs",
 ]);
 
 /**
