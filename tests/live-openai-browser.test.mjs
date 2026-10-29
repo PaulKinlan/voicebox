@@ -107,7 +107,7 @@ async function fixture(t, envProvider = "openai", selectedProvider = "openai", d
 // passed on the same box - and the same tree passed this file standalone. Every speed claim in these arms
 // is asserted on its own line (the declaration/capture agreement, the refusal, the redaction); the budget
 // only decides how long a wedged browser is given, so it is sized for the box the gate actually runs on.
-const ARM = { timeout: 60000 };
+const ARM = { timeout: 180000 };
 
 test("OpenAI browser: real function call writes and answers; invalid calls refuse", ARM, async t => {
   const f = await fixture(t);

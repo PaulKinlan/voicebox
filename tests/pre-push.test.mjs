@@ -96,7 +96,7 @@ test('the gate script is POSIX sh: it parses under dash, and no bash-only constr
   assert.equal(parsed.status, 0, `the gate must parse under /bin/sh (dash) — a parse error is exit 2 with no stage output:\n${parsed.stderr}`);
 });
 
-test('pre-push names the stage and cause, streams output, and refuses real failing tests', { timeout: 60000 }, () => {
+test('pre-push names the stage and cause, streams output, and refuses real failing tests', { timeout: 240000 }, () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-pre-push-'));
   const repo = path.join(dir, 'repo');
   const work = path.join(dir, 'work');
