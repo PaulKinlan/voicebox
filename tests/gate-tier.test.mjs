@@ -486,11 +486,34 @@ test("the per-tier file budget is derived from measured headroom and sits UNDER 
     `browser per-file budget (${TIER_FILE_MS.browser}ms) must sit under live stage bound (${liveStageBoundMs}ms)`,
   );
 
-  // Default tier resolution matches TIER_FILE_MS
-  assert.equal(tierFileTimeoutMs("unit"), TIER_FILE_MS.unit);
-  assert.equal(tierFileTimeoutMs("server"), TIER_FILE_MS.server);
-  assert.equal(tierFileTimeoutMs("browser"), TIER_FILE_MS.browser);
-  assert.equal(tierFileTimeoutMs("live"), TIER_FILE_MS.live);
+  // Default tier resolution matches TIER_FILE_MS — WITH THE ENVIRONMENT CLEARED (voicebox-beads-tt1g).
+  // `tierFileTimeoutMs` reads process.env.VOICEBOX_GATE_FILE_SECS, which is the documented per-file override named in
+  // every timeout refusal message. Asserting the default against the operator's shell made that remedy turn the gate
+  // RED on any tree whose constant differs — measured by the merger with VOICEBOX_GATE_FILE_SECS=600 on origin/main:
+  // `600000 !== 120000`, one red unit file in an otherwise green gate. `env: cleanEnv` is the same option the next three
+  // assertions already use to inject an override, so this is the default path and that is the override path.
+  // `cleanEnv` (line 30) already deletes VOICEBOX_GATE_FILE_SECS for the SPAWNED children in this file — which is why
+  // the spawn paths were immune and these four assertions were not: the file had the notion of a clean environment, this
+  // arm just did not use it.
+  const NO_ENV = { env: cleanEnv };
+  assert.equal(tierFileTimeoutMs("unit", NO_ENV), TIER_FILE_MS.unit);
+  assert.equal(tierFileTimeoutMs("server", NO_ENV), TIER_FILE_MS.server);
+  assert.equal(tierFileTimeoutMs("browser", NO_ENV), TIER_FILE_MS.browser);
+  assert.equal(tierFileTimeoutMs("live", NO_ENV), TIER_FILE_MS.live);
+
+  // And the isolation itself is pinned, not just avoided: with the override in the ambient environment, the ambient
+  // read must honour it while the default read must not see it. Restoring in `finally` keeps this arm from leaking an
+  // override into every later assertion in this file — the same class of bug, one level up.
+  const ambient = process.env.VOICEBOX_GATE_FILE_SECS;
+  process.env.VOICEBOX_GATE_FILE_SECS = "600";
+  try {
+    assert.equal(tierFileTimeoutMs("unit"), 600_000, "an operator's override is still honoured on the ambient path");
+    assert.equal(tierFileTimeoutMs("unit", NO_ENV), TIER_FILE_MS.unit, "and the default assertion cannot see the operator's shell");
+    assert.equal(tierFileTimeoutMs("unit", { fileSecs: 45 }), 45_000, "the CLI wins over both");
+  } finally {
+    if (ambient === undefined) delete process.env.VOICEBOX_GATE_FILE_SECS;
+    else process.env.VOICEBOX_GATE_FILE_SECS = ambient;
+  }
 
   // Overrides: CLI --file-secs and env.VOICEBOX_GATE_FILE_SECS take precedence over defaults
   assert.equal(tierFileTimeoutMs("unit", { fileSecs: 45 }), 45_000);

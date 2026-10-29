@@ -144,6 +144,14 @@ Each bound can be raised or tightened per run without editing the gate:
   `buildQueue` (`scripts/gate-tier.mjs`) dispatches heavy suites (`test-changed`, `transient-state`) first, preventing
   worker tail starvation under contention (voicebox-beads-hfa8).
 
+**An override is the operator's, not the tree's** (voicebox-beads-tt1g). `VOICEBOX_GATE_FILE_SECS` is named in every
+per-file timeout refusal as the remedy for a loaded box, so it must be settable without turning the gate red: the
+default-resolution assertions in `tests/gate-tier.test.mjs` pass `{ env: cleanEnv }` — the file's existing "environment
+with the tier overrides deleted", already used for its spawned children — and pin the isolation by setting the override
+in the ambient environment and requiring the ambient read to honour it while the default read still sees `TIER_FILE_MS`.
+Measured before that change, on `origin/main` with `VOICEBOX_GATE_FILE_SECS=600`: one red unit file, `600000 !== 120000`,
+in an otherwise green gate.
+
 A refusal names the variable to raise, so the remedy is copy-pasteable. `tests/pre-push.test.mjs` pins the resolution, the legacy fallback and its precedence (voicebox-beads-03po), so removing a link is a failing test rather than a silent compat break.
 
 ### Automatic Test Lane Classification (`scripts/test-lanes.mjs`)
