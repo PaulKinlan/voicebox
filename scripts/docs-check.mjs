@@ -122,6 +122,35 @@ function pageScripts() {
  * Extracts the top-of-file @summary description from module source code.
  * Requires the @summary tag to be inside a top-of-file JSDoc block (/** ... *\/).
  */
+/**
+ * The status the scratch server answered, against the status the document says it answers (voicebox-beads-8r9a).
+ *
+ * ONE COMPUTING SITE, AND IT FAILS CLOSED. The finding behind this bead read a branch where the field was a
+ * literal `true` — a marker that could never render, because nothing ever disagreed with it. A status the probe
+ * could not read (undefined, NaN, a string that is not a number) is NOT a match: answering "fine" about a
+ * value the check did not see is the defect class this whole script exists to refuse elsewhere.
+ */
+export function matchesDocumentedExpectation(status, expected) {
+  const actual = Number(status);
+  const documented = Number(expected);
+  if (!Number.isFinite(actual) || !Number.isFinite(documented)) return false;
+  return actual === documented;
+}
+
+/**
+ * One row of the generated routes table, including the ⚠️ marker when the answered status is not the documented
+ * one. Exported and pure so the marker's reachability is a thing a test can drive instead of a claim in prose.
+ */
+export function renderRouteRow(route) {
+  const matched = matchesDocumentedExpectation(route?.status, route?.expected);
+  return `| \`${route?.method}\` | \`${route?.path}\` | ${route?.status}${matched ? "" : " ⚠️ unexpected status"} |`;
+}
+
+/** Every route row, in probe order. */
+export function renderRoutesTable(routes) {
+  return (Array.isArray(routes) ? routes : []).map((route) => renderRouteRow(route));
+}
+
 export function extractModuleSummary(source) {
   const trimmed = source.replace(/^#![^\n]*\n/, "").trimStart();
   if (!trimmed.startsWith("/**")) return null;
@@ -272,7 +301,7 @@ async function probeServer() {
           method,
           ...(method === "POST" ? { body: JSON.stringify({ transcript: "list files" }), headers: { "content-type": "application/json" } } : {}),
         });
-        return { method, path, status: r.status, matches_documented_expectation: r.status === expect };
+        return { method, path, status: r.status, expected: expect, matches_documented_expectation: matchesDocumentedExpectation(r.status, expect) };
       })),
       probeLiveUpgrade(port),
       probeExtensionSurface(port),
@@ -782,7 +811,7 @@ async function blocks() {
       "",
       "| Method | Route | Probed Status |",
       "|---|---|---|",
-      ...routes.map((r) => `| \`${r.method}\` | \`${r.path}\` | ${r.status}${r.matches_documented_expectation ? "" : " ⚠️ unexpected status"} |`),
+      ...renderRoutesTable(routes),
       "",
       `Static frontend assets are served from \`public/\`. \`GET /api/health\` reports the active turn resolver (\`provider: "${health.provider}"\`), whether a workspace root is declared (\`declared: ${declared}\`), and the active \`root: { kind, path }\` configured via \`POST /api/root\`. Before a root is declared, root-scoped file operations return \`root-not-declared\`.`,
       "",

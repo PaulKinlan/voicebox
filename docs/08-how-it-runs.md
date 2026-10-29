@@ -72,6 +72,11 @@ node scripts/docs-check.mjs --docs-root <dir>   # Run checks against a directory
 - Verifies that all `<!-- BEGIN GENERATED: ... -->` markers exist and are non-empty.
 - Verifies that every backticked repository file path (such as `lib/extensions.mjs`) exists on disk.
 - Verifies that required and forbidden literals in `docs/claims.json` hold across `README.md` and `docs/*.md`.
+- The **routes table** it generates carries a live comparison, not an assertion (voicebox-beads-8r9a): each row's status is
+  compared with the status the document claims by `matchesDocumentedExpectation(status, expected)`, and a route that answers anything
+  else renders `⚠️ unexpected status` in its own row. The comparison fails closed — a status the probe could not read is not a match —
+  and `tests/docs-check.test.mjs` drives it both ways (match, mismatch, unreadable status, whole-table) plus refuses a hardcoded
+  `matches_documented_expectation: true` in the script's own text, because that literal is what makes the marker unreachable.
 
 ### 2. Change-Coupled Documentation Gate (`scripts/docs-touched.mjs`)
 ```bash
