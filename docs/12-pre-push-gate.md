@@ -23,7 +23,7 @@ Voicebox enforces a multi-stage verification gate on `git push` via `.githooks/p
 |---|---|---|---|
 | **Docs Touched** | `node scripts/docs-touched.mjs` | Static `git diff` check | Immediate |
 | **Unit Suite** | `node scripts/gate-tier.mjs --tier unit` | Unit lane, **one process per file** | `180s` |
-| **Live Suite** | `node scripts/gate-tier.mjs --tier live` | Server lane (`--test-concurrency=4`) then the Browser CDP shard runner (4 workers, one file each) — one process per file | `400s` |
+| **Live Suite** | `node scripts/gate-tier.mjs --tier live` | Server lane (`--test-concurrency=2`) then the Browser CDP shard runner (2 workers, one file each) — one process per file | `3600s` |
 | **Acceptance** | `npm run accept` | End-to-end headless Chromium verification (`page-acceptance.mjs`) | `45s` |
 | **Full Manifest** | `node scripts/gate-manifest.mjs aggregate --gate full --tier-dir <scratch>` | Folds the three tier records into `<tree>.full.manifest.json` | `60s` |
 

@@ -68,7 +68,12 @@ export const TIER_WORKERS = Object.freeze({ unit: Math.max(1, os.availableParall
 export const TIER_FILE_MS = Object.freeze({
   unit: 600_000,
   server: 300_000,
-  browser: 240_000,
+  // 240s WAS A QUIET-BOX BOUND (voicebox-beads-i9k0). On the 2026-10-28 00:14 full gate the box ran
+  // 3-5x slower than the 22:25 one (tests/room-delete.test.mjs 50s -> killed, theme-browser 15s -> 47s,
+  // mic-hotkey 14s -> 77s at load 6-12), so ordinary files were recorded as timeouts by name and the
+  // live stage then hit its own 2400s bound. The per-file bound is the tier's hang detector; a slow box
+  // is not a hang, and the stage bound above it is what limits wall time.
+  browser: 600_000,
   live: 300_000,
 });
 
