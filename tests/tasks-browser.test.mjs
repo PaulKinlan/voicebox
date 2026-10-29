@@ -125,9 +125,12 @@ test("D1 browser: handle first, unrelated live transport/text turn, independent 
     const TEXT_TURN_SETTLE_MS = 30_000;
     await first.type("#utterance", "list files");
 
-    // PRECONDITION, READ - NOT WAITED, because both values persist until the form submits: `page.type` clicks
-    // the field and then inserts text, and `#send` is disabled whenever the field is empty. A click that lost a
-    // race would otherwise be indistinguishable, at failure time, from a turn that never finished.
+    // PRECONDITION, WAITED TOO (voicebox-beads-i9k0). `page.type` clicks the field and then inserts, so a lost
+    // click and a late insert look identical the instant afterwards: the 2026-10-29 02:15 full gate read `''`
+    // here at load 6.5 while the same file passed standalone. Waiting for the text distinguishes "the insert has
+    // not landed yet" (a slow box) from "it never will" (a lost click, which now fails as a named timeout).
+    // `#send` is then read, not waited, because both values persist until the form submits.
+    await first.waitFor(() => document.querySelector("#utterance")?.value === "list files", { label: "the text form to hold the typed turn" });
     const beforeSend = await first.evaluate(() => ({
       text: document.querySelector("#utterance")?.value ?? null,
       sendDisabled: document.querySelector("#send")?.disabled ?? null,

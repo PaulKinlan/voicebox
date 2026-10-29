@@ -250,18 +250,24 @@ exec '${timeout}' "$@"
      * scenarios live here because these are the stages a feature push no longer runs.
      */
     execFileSync('git', ['checkout', '-qb', 'main'], { cwd: work, stdio: 'pipe', env: cleanEnv });
+    // THE BUDGETS THIS CASE TESTS ARE DECLARED HERE, NOT INHERITED FROM THE GATE'S DEFAULT (voicebox-beads-i9k0).
+    // These cases drive a TIMEOUT at a named stage, so they must own the number they assert: after the live
+    // default moved from 400s to 3600s (a measured bound for this VM's browser tier) the fixture's "live-timeout"
+    // scenario asserted 400 against a stage configured at 3600 and failed for the DEFAULT's sake, not for any
+    // behaviour. Pinning the value through the override the gate documents keeps the case about the refusal.
+    const budgets = { live: 400, acceptance: 45 };
     for (const scenario of ['live-timeout', 'accept-timeout', 'accept-failure', 'success']) {
       const result = spawnSync('git', ['push', remote, 'HEAD:refs/heads/main'], {
         cwd: work, encoding: 'utf8', timeout: 60000,
         env: { ...cleanEnv, NODE_TEST_CONTEXT: undefined, PATH: `${bin}:${process.env.PATH}`, BD_GIT_HOOK: '1',
           VOICEBOX_SKIP_GATE: '', VOICEBOX_SKIP_ACCEPT: '', GATE_CASE: scenario,
+          VOICEBOX_GATE_LIVE_SECS: String(budgets.live), VOICEBOX_GATE_ACCEPT_SECS: String(budgets.acceptance),
           VOICEBOX_GATE_LOCK: path.join(dir, 'fixture-gate.lock'),
           VOICEBOX_GATE_HOLDER: path.join(dir, 'fixture-gate.holder.json') },
       });
       assert.ifError(result.error);
       const output = result.stdout + result.stderr;
       const stage = scenario.startsWith('live') ? 'live' : 'acceptance';
-      const budgets = { live: 400, acceptance: 45 };
       const remedyVars = { live: 'VOICEBOX_GATE_LIVE_SECS', acceptance: 'VOICEBOX_GATE_ACCEPT_SECS' };
       const cause = scenario.endsWith('timeout') ? 'TIMED OUT' : 'FAILED';
       // An UNCONTENDED lock acquires silently (the wait announcement is the contended branch);
