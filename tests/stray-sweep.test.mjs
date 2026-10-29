@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { FIXTURE_SHAPES, killStrays, startMsOf, strayChildren, sweepStrays } from "../scripts/stray-sweep.mjs";
+import { FIXTURE_SHAPES, killStrays, startMsOf, STRAY_PREVIOUS_SECS, strayChildren, sweepPreviousFixtures, sweepStrays } from "../scripts/stray-sweep.mjs";
 
 // The fixture's name is ASSEMBLED, not spelled: a test that names `server.mjs` in a spawn argument is classified LIVE by
 // scripts/test-lanes.mjs (a path signal: "it starts a server of its own"), and this file must stay in the unit tier where
@@ -205,6 +205,30 @@ test("a sweep is a WINDOW: a start after `until` is a later run's fixture, not t
     const previous = strayChildren({ root, procRoot: proc, readCwd: cwd, since: now - 4 * 3600 * 1000, until: now - 60_000 });
     assert.deepEqual(previous.map((v) => v.pid), [41], "the older one is inside the window");
     assert.deepEqual(strayChildren({ root, procRoot: proc, readCwd: cwd, since: 0, until: now + 60_000 }).map((v) => v.pid), [41, 42], "and both are visible without the upper bound");
+    rmSync(proc, { recursive: true, force: true });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("both runners share ONE previous-run window: inside it is residue, older is the janitor's, later is this run's (voicebox-beads-qy8m)", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "voicebox-root-previous-"));
+  try {
+    // uptime 20 000s, so start = now - 20 000s + ticks/100: ticks 1 996 000 → 40s ago; 1 960 000 → 400s ago (both
+    // inside a four-hour window); 200 000 → 5h ago (older than the window, the fleet janitor's); 2 000 000 → 0s ago
+    // (a fixture THIS run just started, which its own start sweep must never touch).
+    const proc = fakeProc([
+      { pid: 51, cmdline: `node ${root}/${SERVER_MJS}`, cwd: root, ticks: 1_996_000 },
+      { pid: 52, cmdline: `node ${root}/${SERVER_MJS}`, cwd: root, ticks: 1_960_000 },
+      { pid: 53, cmdline: `node ${root}/${SERVER_MJS}`, cwd: root, ticks: 200_000 },
+      { pid: 54, cmdline: `node ${root}/${SERVER_MJS}`, cwd: root, ticks: 2_000_000 },
+    ], 20_000);
+    const cwd = cwdOf();
+    const { victims } = sweepPreviousFixtures({ root, procRoot: proc, readCwd: cwd, windowSecs: 4 * 3600 });
+    assert.deepEqual(victims.map((v) => v.pid).sort(), [51, 52], "the previous runs' residue, and only that");
+    assert.equal(STRAY_PREVIOUS_SECS, 4 * 3600, "the default window is the fleet janitor's four hours, not a guess of its own");
+    // windowSecs 0 is the documented opt-out, and it must not fall through to "sweep everything".
+    assert.deepEqual(sweepPreviousFixtures({ root, procRoot: proc, readCwd: cwd, windowSecs: 0 }).victims, []);
     rmSync(proc, { recursive: true, force: true });
   } finally {
     rmSync(root, { recursive: true, force: true });

@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { gitEnv } from "../lib/git-env.mjs";
 import { classify } from "./test-lanes.mjs";
 import { buildQueue, ISOLATED, TIER_WORKERS } from "./test-shards.mjs";
-import { sweepStrays } from "./stray-sweep.mjs";
+import { sweepPreviousFixtures, sweepStrays } from "./stray-sweep.mjs";
 import { artifactDir, createManifest, emitMarker, finalizeManifest, ManifestRefusal, recordFile, sealManifest, tapCounts, testChildEnv, verdictOf, writeManifest } from "./gate-manifest.mjs";
 import { isExclusiveRouteChanges, routeAffected, ROUTE_SERVER_SMOKE, isSourcePath } from "./infra-affected.mjs";
 
@@ -445,13 +445,13 @@ export async function runGate({
    * `scripts/reap-stale-servers.mjs`'s subject, anything newer could be the run before this one, and a server a person
    * wants kept carries `VOICEBOX_PINNED=1` or the worktree's `.pinned-server` marker (honoured in stray-sweep.mjs).
    */
-  const SWEEP_PREVIOUS_SECS = Number(process.env.VOICEBOX_STRAY_PREVIOUS_SECS ?? 4 * 3600);
   const sweepPrevious = () => {
-    if (!sweep || !(SWEEP_PREVIOUS_SECS > 0)) return [];
+    if (!sweep) return [];
     try {
-      // A WINDOW, not a permission: `until: startedAt` cannot touch a fixture this run starts, and `since` carries the
-      // four-hour bound. Filtering after the kill would be too late — the sweep kills what it finds.
-      return sweepStrays({ root: sweepRoot, since: startedAt - SWEEP_PREVIOUS_SECS * 1000, until: startedAt }).killed;
+      // A WINDOW, not a permission: it ends at `startedAt`, so it cannot touch a fixture this run starts, and it
+      // reaches back only as far as the fleet janitor does. Shared with gate-tier, which is what the live tier runs
+      // (voicebox-beads-qy8m: the two runners must not disagree about a previous run's residue).
+      return sweepPreviousFixtures({ root: sweepRoot, at: startedAt }).killed;
     } catch {
       return [];
     }

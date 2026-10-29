@@ -45,13 +45,33 @@ import { classify } from "./test-lanes.mjs";
 import { buildQueue, ISOLATED, TIER_FILE_MS, TIER_WORKERS } from "./test-shards.mjs";
 import { coverageGaps, emitMarker, tapCounts, tierRecordPath } from "./gate-manifest.mjs";
 import { killRunningChildren, runOneFile, statusOf } from "./test-changed.mjs";
-import { sweepStrays } from "./stray-sweep.mjs";
+import { sweepPreviousFixtures, sweepStrays } from "./stray-sweep.mjs";
 import { loadavg1m } from "../lib/host-load.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // THE INSTANT THIS TIER RUN BEGAN (voicebox-beads-9xqs): a fixture older than this is somebody else's, so a sweep scoped
 // to this worktree can never take a server a person started by hand an hour ago.
 const STARTED_AT = Date.now();
+/**
+ * THE PREVIOUS RUN'S RESIDUE (voicebox-beads-qy8m). `scripts/pre-push.sh` runs the live tier through THIS script, not
+ * through `runGate`, and a live tier killed with SIGKILL (an outer `timeout --kill-after`, the reaper) runs no handler
+ * — so its server and browser are reachable only by the next gate-tier run. This sweeps a window that ends at the
+ * instant this run began, using the same helper `runGate` uses, because two runners disagreeing about a previous run's
+ * residue is exactly the gap this closes.
+ */
+function sweepPreviousRun() {
+  try {
+    const { victims, killed } = sweepPreviousFixtures({ root: ROOT, at: STARTED_AT });
+    if (killed.length > 0) {
+      console.error(`[gate-tier] swept ${killed.length} fixture(s) left by an EARLIER run in this worktree: ${victims.map((v) => `${v.pid} (${v.cmdline.slice(0, 60)})`).join(", ")}`);
+    }
+    return killed;
+  } catch (error) {
+    console.error(`[gate-tier] previous-run sweep failed (not fatal): ${error.message}`);
+    return [];
+  }
+}
+
 /** Kill the fixtures this run started in THIS worktree — best effort, and never able to change a verdict. */
 function sweepOwnFixtures() {
   try {
@@ -335,6 +355,9 @@ async function main() {
     setTimeout(() => process.exit(128 + (os.constants.signals[signal] ?? 0)), 3000).unref();
   };
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.once(signal, () => stop(signal));
+
+  // Before any tier runs: reap what a killed previous run left, so it cannot outlive its worktree.
+  sweepPreviousRun();
 
   // ── LIVE = the server tier then the browser tier, in that order, which is what `npm run test:live`
   // runs (`node --test server… && node tools/browser-shard-runner.mjs`). The `&&` is load-bearing: a red

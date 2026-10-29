@@ -249,13 +249,19 @@ The rules that keep attribution honest, and what the first review of this change
 - **A sweep is a window**, `since … until`, so the bound cannot be satisfied by mistake: `until` is what keeps a
   concurrent run's own children out when the sweep happens to run beside them.
 
-The two runners call it: `runGate` sweeps when a run finishes, from its `SIGTERM`/`SIGINT`/`SIGHUP` handler, **and once at
-the start** — because a gate SIGKILLed at its bound (`timeout --kill-after`, rc 137) runs no handler at all, so the only
-cleaner its fixtures get is the *next* run in that worktree. That start sweep is bounded to the previous four hours (the
-fleet janitor's threshold, `VOICEBOX_STRAY_PREVIOUS_SECS`) and ends at the instant the run began, so it can never touch a
-fixture the current run starts; a fixture older than the window is `scripts/reap-stale-servers.mjs`'s subject. A worktree
-that never runs a gate again therefore still relies on that janitor. `scripts/gate-tier.mjs` sweeps from `stop()` (which
-now also handles `SIGHUP` — it handled only `SIGINT`/`SIGTERM`) and once the tier sequence ends. When it kills something it says so, because a swept fixture means a test file left a server
+**Both runners** — `runGate` (`scripts/test-changed.mjs`, the scoped fast gate) and `scripts/gate-tier.mjs` (the tiered
+runner, which is what `scripts/pre-push.sh` drives the live tier through) — call one shared helper, `sweepPreviousFixtures`,
+**once at the start**: a gate SIGKILLed at its bound (`timeout --kill-after`, rc 137) runs no handler at all, so the only
+cleaner its fixtures get is the *next* run in that worktree. The window reaches back the fleet janitor's four hours
+(`VOICEBOX_STRAY_PREVIOUS_SECS`) and ENDS at the instant the run began, so it can never touch a fixture the current run
+starts; anything older is `scripts/reap-stale-servers.mjs`'s subject, and a worktree that never runs a gate again relies
+on that janitor. (The first version wired this into `runGate` only, and the reviewer was right that a live tier — which
+runs under gate-tier, not `runGate` — could then be killed and leave its server for hours: `voicebox-beads-qy8m`, P2. The
+two runners now share the helper so they cannot disagree; gate-tier says
+`[gate-tier] swept N fixture(s) left by an EARLIER run in this worktree: <pid> (<cmdline>)` when it reaps one, verified by
+spawning a fixture before a gate-tier run and watching that line name it.) On top of that, each runner sweeps its OWN
+fixtures when a run finishes and from its signal handler (`SIGTERM`/`SIGINT`/`SIGHUP` — gate-tier handled only the first
+two before this change), and gate-tier also sweeps once the tier sequence ends. When it kills something it says so, because a swept fixture means a test file left a server
 behind — `[gate-tier] swept 1 leaked fixture(s) from this worktree: <pid> (<cmdline>)` — and that is the defect to fix,
 not the sweep to thank. It complements rather than replaces the fleet-wide `scripts/reap-stale-servers.mjs`, whose subject
 is a fixture older than four hours; this one is bounded by the run that caused it.

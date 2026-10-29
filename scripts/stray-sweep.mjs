@@ -152,6 +152,27 @@ export function killStrays(victims, { kill = (pid, signal) => process.kill(pid, 
   return killed;
 }
 
+/**
+ * The previous run's residue, for a run that is only now starting (`voicebox-beads-qy8m`).
+ *
+ * A run SIGKILLed at its bound (`timeout --kill-after`, rc 137) runs no handler, so the fixtures it started are
+ * reachable only by the NEXT run in the same worktree. Both runners therefore sweep a window that ENDS at the instant
+ * they began and reaches back `windowSecs` (default four hours — the fleet janitor's threshold, so this never claims
+ * anything the janitor would not). The window's upper bound is what makes it safe: a fixture this run starts is later
+ * than `at`, so it can never be the victim of its own run's start sweep.
+ */
+export const STRAY_PREVIOUS_SECS = 4 * 3600;
+export function sweepPreviousFixtures({
+  root,
+  at = Date.now(),
+  windowSecs = Number(process.env.VOICEBOX_STRAY_PREVIOUS_SECS ?? STRAY_PREVIOUS_SECS),
+  procRoot = "/proc",
+  ...rest
+} = {}) {
+  if (!(windowSecs > 0)) return { victims: [], killed: [] };
+  return sweepStrays({ root, since: at - windowSecs * 1000, until: at, procRoot, ...rest });
+}
+
 /** `strayChildren` + `killStrays`, with this process and its ancestors always excluded. */
 export function sweepStrays({ root, since = 0, until = Number.POSITIVE_INFINITY, procRoot = "/proc", ...rest } = {}) {
   const ancestors = [];
