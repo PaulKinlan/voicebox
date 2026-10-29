@@ -104,7 +104,7 @@ test("declared with fence:'l15', the environment is LISTED with its measured bou
   try {
     const declared = await fetch(`${server.base}/api/environments`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-voicebox-host-token": server.hostToken },
       body: JSON.stringify({ label: "l15 box", kind: "fence", fence: "l15" }),
     }).then((r) => r.json());
     assert.equal(declared.ok, true, `boot failed: ${JSON.stringify(declared)}`);
@@ -135,7 +135,7 @@ test("inside the L1.5 sandbox a command runs and Git is configured — bounded b
   try {
     const declared = await fetch(`${server.base}/api/environments`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-voicebox-host-token": server.hostToken },
       body: JSON.stringify({ label: "exec box", kind: "fence", fence: "l15" }),
     }).then((r) => r.json());
     assert.equal(declared.ok, true, `boot failed: ${JSON.stringify(declared)}`);
