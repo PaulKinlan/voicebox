@@ -182,6 +182,17 @@ if [ -n "$_want" ]; then
     *"$_want"*)
       while [ $# -gt 0 ]; do case "$1" in --verbose|--kill-after=*) shift ;; *) break ;; esac; done
       [ $# -gt 0 ] && shift
+      # THE MARKER IS PRINTED BY THE SHIM ITSELF, BEFORE THE CHAIN STARTS (voicebox-beads-er74).
+      # The assertion below is that the gate STREAMS the stage's output rather than buffering it
+      # until exit; it must not also be a race against timeout -> npm -> sh -> node startup,
+      # which this file's own note measures at 0.25s idle but 5.2-6.3s under oversubscription —
+      # against a 5s accelerated budget. A shim echo has the stage's inherited stdout, which is
+      # exactly what the gate captures, so the property under test is unchanged and the race is gone.
+      case "$GATE_CASE" in
+        unit-timeout) echo 'TEST OUTPUT BEFORE TERMINATION'; echo 'TEST STDERR BEFORE TERMINATION' >&2 ;;
+        live-timeout) echo 'LIVE OUTPUT BEFORE TERMINATION' ;;
+        accept-timeout) echo 'ACCEPTANCE OUTPUT BEFORE TERMINATION'; echo 'ACCEPTANCE STDERR BEFORE TERMINATION' >&2 ;;
+      esac
       exec '${timeout}' --verbose --kill-after=1s 5s "$@" ;;
   esac
 fi
@@ -248,7 +259,7 @@ exec '${timeout}' "$@"
      * `git push origin HEAD:main` — the worst available outcome, offered as help.
      */
     const aimed = spawnSync('git', ['push', remote, 'HEAD:refs/heads/main'], {
-      cwd: work, encoding: 'utf8', timeout: 15000,
+      cwd: work, encoding: 'utf8', timeout: INNER_MS,
       env: { ...cleanEnv, NODE_TEST_CONTEXT: undefined, PATH: `${bin}:${process.env.PATH}`, BD_GIT_HOOK: '1', GATE_CASE: 'success' },
     });
     assert.notEqual(aimed.status, 0, 'a branch pushing to main must be refused');
@@ -335,6 +346,10 @@ exec '${timeout}' "$@"
 // synchronous arm's bound is documentation only (the event loop cannot fire it), which is why
 // the 60s-bounded arm above can legitimately run for 167s.
 const BOX_SIZED_MS = 180000;
+// An inner spawnSync bound is a HANG GUARD, not a speed assertion: at 15s a fixture's own
+// `pre-push.sh` run (which starts node twice and npm once) was killed for the box on 2026-10-29,
+// and the arm then failed on a null status rather than on the behaviour it names.
+const INNER_MS = 120000;
 test('acceptance names the network cause when a responding front drops mid-run', { timeout: BOX_SIZED_MS }, async (t) => {
   // NAMED PRECONDITION, not a flake (voicebox-beads-80vw). This case drives tools/page-acceptance.mjs,
   // which launches a REAL browser (VOICEBOX_CHROME, else a system chromium). With none present the
@@ -407,7 +422,7 @@ test('pre-push timeout refusal respects custom budget and reports measured elaps
     const repo = gateBudgetFixture(dir);
 
     const result = spawnSync(path.join(repo, 'pre-push.sh'), [], {
-      cwd: repo, encoding: 'utf8', timeout: 15000,
+      cwd: repo, encoding: 'utf8', timeout: INNER_MS,
       env: {
         ...cleanEnv,
         VOICEBOX_GATE_UNIT_SECS: '2',
@@ -444,7 +459,7 @@ test('pre-push budget resolution honours the legacy VOICEBOX_GATE_TESTS_SECS, an
     const repo = gateBudgetFixture(dir);
     const runGate = (budgetEnv) => {
       const result = spawnSync(path.join(repo, 'pre-push.sh'), [], {
-        cwd: repo, encoding: 'utf8', timeout: 15000,
+        cwd: repo, encoding: 'utf8', timeout: INNER_MS,
         env: {
           ...cleanEnv,
           ...budgetEnv,
@@ -689,7 +704,7 @@ test('gate lock serializes concurrent pre-push runs and announces waiting holder
       const timeoutResult = spawnSync(path.join(repo, 'pre-push.sh'), [], {
         cwd: repo,
         encoding: 'utf8',
-        timeout: 15000,
+        timeout: INNER_MS,
         env: {
           ...cleanEnv,
           VOICEBOX_GATE_LOCK: lockFile,
@@ -715,7 +730,7 @@ test('gate lock serializes concurrent pre-push runs and announces waiting holder
     const freeResult = spawnSync(path.join(repo, 'pre-push.sh'), [], {
       cwd: repo,
       encoding: 'utf8',
-      timeout: 15000,
+      timeout: INNER_MS,
       env: {
         ...cleanEnv,
         VOICEBOX_GATE_LOCK: lockFile,
