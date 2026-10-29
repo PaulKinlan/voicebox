@@ -52,7 +52,22 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
 // run. Width 2 is also the width q4j6.1 measured as GREEN (750.1s browser-tier wall); it was raised to 3
 // for speed on a healthy box, which this VM is not. Unit stays at availableParallelism-1: it is green and
 // is CPU-bound rather than Chromium-bound. Do not raise these without a quiet-box measurement.
-export const TIER_WORKERS = Object.freeze({ unit: Math.max(1, os.availableParallelism() - 1), server: 2, browser: 2 });
+// THE BROWSER TIER RUNS AT ONE (2026-10-29, voicebox-beads-i9k0). The history is a ladder down: four
+// shards flaked (q4j6), two unblocked landings (q4j6.1, 750.1s wall), three was measured green and fast on
+// a HEALTHY box (184.2s) and raised the host to load 14-16, so it went back to two. Two was still not
+// enough: across NINE full gates on one tree on 2026-10-28/29 the unit tier was green 9/9 and the server
+// lane green 9/9, while the browser tier failed on a DIFFERENT set of files every run - 15 files, then 2,
+// then 2, then 2, then 3, then 2, then 5 - always at load 6-14 with the gate itself the only fleet work
+// running, and every named file passed standalone on the same tree minutes later. /proc/stat shows 9%
+// CPU steal and /proc/pressure/cpu some-avg300 of 17.8: this VM does not own its cores, so a tier that
+// relies on frame-accurate and message-hop timing across two concurrent Chromiums cannot conclude.
+// One shard makes the browser tier's own load roughly a third of what it was; the cost is wall time
+// (~2246s of file time at one shard, ~40 minutes, inside the 3600s live bound in pre-push.sh and the
+// 5400s the fleet config gives it). A gate that lands everything slowly beats a fast gate that lands
+// nothing, which is the state this branch has been stuck in since 2026-10-23.
+// Unit stays at availableParallelism-1: it is green and CPU-bound rather than Chromium-bound.
+// Do not raise these without a quiet-box measurement on a host that owns its cores.
+export const TIER_WORKERS = Object.freeze({ unit: Math.max(1, os.availableParallelism() - 1), server: 2, browser: 1 });
 
 /**
  * Per-file execution budgets per tier (voicebox-beads-ak9h).

@@ -56,15 +56,16 @@ test("the workers are the concurrency the gate already ran at, so per-file dispa
   // ONE OWNER (scripts/test-shards.mjs): the fast gate reads this same value, so a scoped run cannot be
   // more serial than the tier it is a strict subset of (voicebox-beads-buy8).
   assert.equal(TIER_WORKERS.unit, Math.max(1, os.availableParallelism() - 1));
-  // LIVE TIERS ARE TWO (hub-authorised 2026-10-28, voicebox-beads-i9k0). Server was 4 and browser was 3.
-  // q4j6.1 measured two shards as GREEN but slow (750.1s browser-tier wall) and three shards as green and
-  // fast (184.2s) on a healthy box. On THIS host three concurrent Chromium-backed files put loadavg at
-  // 14-16 on 8 cores with the gate as the only work (0.92 load and 2% steal immediately before the run),
-  // and five consecutive gates failed on DIFFERENT browser files with TEST-INTERNAL 15000/45000/60000ms
-  // timeouts, every file passing standalone. Two is the width that was measured green; speed is worth less
-  // here than a verdict. Do not raise this without a quiet-box measurement.
+  // LIVE TIERS: server two, browser ONE (voicebox-beads-i9k0). Server was 4. Browser was 3, then 2.
+  // q4j6.1 measured two shards as GREEN but slow (750.1s browser-tier wall) and three as green and fast
+  // (184.2s) on a healthy box that owns its cores. On THIS host two shards still failed across nine
+  // consecutive gates - always a different set of browser files, always passing standalone, with /proc/stat
+  // showing 9% CPU steal and /proc/pressure/cpu some-avg300 17.8 - while unit and server were green in all
+  // nine. One shard is the width this host can conclude at; it costs wall time, which is why pre-push.sh's
+  // live bound moved to 3600s. Do not raise this without a quiet-box measurement on a host that owns its
+  // cores.
   assert.equal(TIER_WORKERS.server, 2);
-  assert.equal(TIER_WORKERS.browser, 2);
+  assert.equal(TIER_WORKERS.browser, 1);
 });
 
 // ── a file's counts, including the empty run ─────────────────────────────────────────────────────

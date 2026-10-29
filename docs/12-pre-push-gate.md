@@ -422,10 +422,14 @@ merger's union, and a full gate may not omit a classified file at all.
   route-scoped reason. In-memory route testing with `tests/lib/route-harness.mjs` (`invokeRoute`) allows route unit
   tests to execute in <5ms without socket overhead.
 
-- **WHY THE BROWSER TIER IS THREE SHARDS, MEASURED (`voicebox-beads-q4j6`, `voicebox-beads-q4j6.1`).** The browser
+- **WHY THE BROWSER TIER IS ONE SHARD ON THE FLEET VM (`voicebox-beads-q4j6`, `voicebox-beads-q4j6.1`, `voicebox-beads-i9k0`).** The browser
   tier's width is a correctness fact before it is a speed one. Two full-gate unions at four shards were red on **different**
-  sets of files; reducing to two shards eliminated flakes but cost 750.1s browser-tier wall time. Width 3 provides full stability
-  with a 4.07x browser-tier wall time throughput speedup.
+  sets of files; reducing to two shards eliminated those flakes but cost 750.1s browser-tier wall time. Width 3 provided full stability
+  with a 4.07x browser-tier wall time throughput speedup **on a host that owns its cores**. This VM does not: `/proc/stat` shows 9%
+  CPU steal and `/proc/pressure/cpu` some-avg300 of 17.8, and across nine consecutive full gates at width 2 (2026-10-28/29) the unit
+  tier was green 9/9 and the server lane 9/9 while the browser tier failed on a different set of files every run — 15, then 2, 2, 2,
+  3, 2, 5 — with every named file passing standalone on the same tree. The tier therefore runs at **one shard** on this VM: ~2246s
+  of file time, ~40 minutes, inside the 3600s live bound. Landing everything slowly beats a fast gate that lands nothing.
 
   | union (tree)            | browser shards | browser tier                     | browser wall | whole gate | verdict |
   |-------------------------|----------------|----------------------------------|--------------|------------|---------|
@@ -448,12 +452,11 @@ merger's union, and a full gate may not omit a classified file at all.
   default of its own, because the gate spawns it with no `--workers` — a second default there would be the
   real width while the gate logged the owner's.
 
-  **What three shards means for the FAST path, said out loud.** The fast gate dispatches its own browser lane at
-  `TIER_WORKERS.browser` too, so widening from two to three workers improves fast-gate turnaround as well: on the 159-file
-  `public/fused.js` closure (`voicebox-beads-buy8`), three workers reduces browser lane dispatch from ~273s at two
-  workers closer to the 180s fast bound (though `VOICEBOX_FAST_WORKERS=4` remains available as an override on loaded
-  boxes). Small closures pay seconds either way. This is disclosed rather than papered over with a second width in
-  the runner — the structural answer for that closure remains the `public/fused.js` decomposition (`mvxl` / `uei2`).
+  **What the width means for the FAST path, said out loud.** The fast gate dispatches its own browser lane at
+  `TIER_WORKERS.browser` too, so the width applies to both paths: on the 159-file `public/fused.js` closure
+  (`voicebox-beads-buy8`) a single shard makes browser-lane dispatch slower than the 180s fast bound, and
+  `VOICEBOX_FAST_WORKERS=<n>` remains the override where a box has the cores for it. Small closures pay seconds either way, and
+  the structural answer for that closure remains the `public/fused.js` decomposition (`mvxl` / `uei2`).
 - **A lost child is not a pass.** A file that produced no TAP summary is `unknown` — never `passed` — and
   the gate refuses on it. Per-file results wait for the child's `close` (including drained output pipes)
   before parsing counts: `exit` may arrive before the final TAP footer, so reading there invents a missing
