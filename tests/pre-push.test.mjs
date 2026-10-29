@@ -279,18 +279,24 @@ exec '${timeout}' "$@"
      * scenarios live here because these are the stages a feature push no longer runs.
      */
     execFileSync('git', ['checkout', '-qb', 'main'], { cwd: work, stdio: 'pipe', env: cleanEnv });
+    // THESE CASES OWN THE BUDGET THEY ASSERT, INSTEAD OF INHERITING THE GATE'S DEFAULT (voicebox-beads-ncrg).
+    // They drive a TIMEOUT at a named stage, so the number in the refusal must be the number they configured:
+    // after the live default moved 400s → 900s (a measured bound for this VM's browser tier) the case asserted
+    // 400 against a stage configured at 900 and failed for the DEFAULT's sake, not for any behaviour. Pinning
+    // the value through the override the gate documents keeps the case about the refusal.
+    const budgets = { live: 400, acceptance: 45 };
     for (const scenario of ['live-timeout', 'accept-timeout', 'accept-failure', 'success']) {
       const result = spawnSync('git', ['push', remote, 'HEAD:refs/heads/main'], {
         cwd: work, encoding: 'utf8', timeout: 60000,
         env: { ...cleanEnv, NODE_TEST_CONTEXT: undefined, PATH: `${bin}:${process.env.PATH}`, BD_GIT_HOOK: '1',
           VOICEBOX_SKIP_GATE: '', VOICEBOX_SKIP_ACCEPT: '', GATE_CASE: scenario,
+          VOICEBOX_GATE_LIVE_SECS: String(budgets.live), VOICEBOX_GATE_ACCEPT_SECS: String(budgets.acceptance),
           VOICEBOX_GATE_LOCK: path.join(dir, 'fixture-gate.lock'),
           VOICEBOX_GATE_HOLDER: path.join(dir, 'fixture-gate.holder.json') },
       });
       assert.ifError(result.error);
       const output = result.stdout + result.stderr;
       const stage = scenario.startsWith('live') ? 'live' : 'acceptance';
-      const budgets = { live: 400, acceptance: 45 };
       const remedyVars = { live: 'VOICEBOX_GATE_LIVE_SECS', acceptance: 'VOICEBOX_GATE_ACCEPT_SECS' };
       const cause = scenario.endsWith('timeout') ? 'TIMED OUT' : 'FAILED';
       // An UNCONTENDED lock acquires silently (the wait announcement is the contended branch);
