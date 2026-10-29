@@ -21,7 +21,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { classify } from "../scripts/test-lanes.mjs";
-import { assertExactCoverage, buildQueue, isFailed, splitQueue } from "../scripts/test-shards.mjs";
+import { assertExactCoverage, buildQueue, isFailed, retryableWaitTimeout, splitQueue } from "../scripts/test-shards.mjs";
 import { ISOLATED } from "../scripts/test-shards.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -163,4 +163,33 @@ test("the full gate runs every test file exactly once, and the fast gate's set i
   }
   // And the fast gate is a PROPER subset today: the live tier is the part it deliberately skips.
   assert.ok(lane("live").length > 0, "the full gate must still have a live tier, or 'fast runs less' has stopped meaning anything");
+});
+
+// ── The single, recorded retry (voicebox-beads-i9k0, authorized by coord 2026-10-29) ─────────────────────
+// Four consecutive full gates had unit and server fully green and exactly ONE browser file red, a different
+// file each time, each passing when run alone. The retry is allowed for a WAIT DEADLINE and nothing else, and
+// these cases are the boundary: a judgement about behaviour must never be retried into a pass.
+const tapFile = (arm, type, body) => `not ok 1 - ${arm}\n  ---\n  duration_ms: 1000\n  type: 'test'\n  failureType: '${type}'\n${body}\n  ...\n1..1\n# tests 1\n# pass 0\n# fail 1\n`;
+
+test("a wait deadline that expired with the observed value unchanged is the one retryable failure", () => {
+  const waiter = retryableWaitTimeout(tapFile(
+    "the real room: camera on and off",
+    "testCodeFailure",
+    "  error: 'timed out waiting for the metadata line to report the stop; last value false; the last click was 0.1s before this wait began'\n  code: 'ERR_TEST_FAILURE'",
+  ));
+  assert.equal(waiter?.arm, "the real room: camera on and off", "the arm that timed out is named, so the retry line and the tier record can say what flaked");
+  assert.match(waiter.why, /wait deadline/);
+});
+
+test("an assertion, a crash and a green file are NOT retried - they are verdicts about the tree", () => {
+  assert.equal(retryableWaitTimeout(tapFile("an assertion", "testCodeFailure", "  error: 'Expected values to be strictly equal:\\n\\n1 !== 2'\n  code: 'ERR_ASSERTION'")), null, "an assertion failure must stand: retrying it would be dice-rolling a red gate");
+  assert.equal(retryableWaitTimeout(tapFile("a crash", "testCodeFailure", "  error: 'TypeError: x is undefined'\n  code: 'ERR_TEST_FAILURE'")), null, "a crash is not a wait deadline");
+  assert.equal(retryableWaitTimeout("ok 1 - fine\n1..1\n# tests 1\n# pass 1\n# fail 0\n"), null, "a green file has nothing to retry");
+  assert.equal(retryableWaitTimeout(""), null, "a file that reported nothing at all has no arm to judge");
+});
+
+test("an arm that spent its own test budget is retryable, but the reason says which it was", () => {
+  const spent = retryableWaitTimeout(tapFile("slow arm", "testTimeoutFailure", "  error: 'test timed out after 20000ms'\n  code: 'ERR_TEST_FAILURE'"));
+  assert.equal(spent?.arm, "slow arm");
+  assert.match(spent.why, /own test budget/);
 });

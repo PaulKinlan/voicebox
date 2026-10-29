@@ -242,6 +242,41 @@ export const ISOLATED = new Set([
 ]);
 
 /**
+ * THE ONE RETRY (authorized by coord 2026-10-29, after four consecutive gates in which the unit and server
+ * tiers were fully green and exactly one browser file was red - a different file each time, each green when run
+ * alone). This answers a narrow question and only that question: was the ONLY thing that failed a bounded WAIT for
+ * the page to reach a state, i.e. an environmental timeout rather than an assertion about behaviour?
+ *
+ * It is deliberately not "any failure retried once". An assertion failure, a crash, a file that produced no
+ * counts at all, or a file that timed out inside its own test budget are all verdicts about the tree, and they
+ * stand. A `page.waitFor` deadline that expired with the last observed value unchanged is a verdict about the
+ * box - and running that file once more on an idle browser costs seconds instead of blocking ninety other files
+ * for another seventy-five minutes.
+ *
+ * Returns null when the file must not be retried, else the arm and reason, which are RECORDED - a retry is never
+ * silent: the runner prints it, the tier record carries `retry`, and the first attempt's counts stay in it.
+ */
+export function retryableWaitTimeout(tap) {
+  const blocks = tap.split(/^not ok \d+ - /m).slice(1);
+  if (blocks.length === 0) return null;
+  const arms = [];
+  for (const block of blocks) {
+    const arm = block.split("\n")[0].trim();
+    const body = block.split(/^ok \d+ - |^1\.\.\d+$/m)[0];
+    const failureType = /failureType: '([^']+)'/.exec(body)?.[1] ?? "";
+    // An assertion is a judgement about behaviour, whatever else is in the block.
+    if (/code: 'ERR_ASSERTION'/.test(body) || failureType === "testCodeFailure" && /ERR_ASSERTION/.test(body)) return null;
+    const waitDeadline = /timed out waiting for|timeout of \d+ms exceeded|waitFor\b|the last click was |last value /i.test(body);
+    const ownBudget = failureType === "testTimeoutFailure" || /test timed out after/i.test(body);
+    if (failureType === "testCodeFailure" && waitDeadline) { arms.push({ arm, why: "page wait deadline expired with the observed value unchanged" }); continue; }
+    if (ownBudget) { arms.push({ arm, why: "the arm used its own test budget without finishing" }); continue; }
+    return null;
+  }
+  if (arms.length === 0) return null;
+  return { arm: arms[0].arm, why: arms[0].why, arms: arms.map((a) => a.arm) };
+}
+
+/**
  * Split a queue into the part that runs with `workers` shards and the part that runs alone. Pure: it
  * partitions and nothing else, so the caller keeps `assertExactCoverage` as the one guard on the
  * whole queue and `tests/test-shards.test.mjs` can hold the partition property directly. A name in
