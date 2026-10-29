@@ -168,8 +168,11 @@ test("a tier failure retains bounded TAP diagnostics before the last 40 lines; a
   assert.doesNotMatch(output, /later passing diagnostic|output of tests\/green/, "the log prints only the red section");
 
   const unit = tierRecord("unit");
-  const at = unit.files.findIndex((entry) => entry.path === "tests/gate-tier.test.mjs");
-  assert.ok(at >= 0);
+  // WHICHEVER FILE THE ENTIRE TIER ASSIGNS TO THE UNIT TIER, not a hardcoded one (voicebox-beads-i9k0): the
+  // classifier moved this very file to the live tier when it grew a real child process, and an arm that names
+  // itself as a unit file then fails for a reason that has nothing to do with the evidence it is testing.
+  assert.ok(unit.files.length > 0, "the unit tier record must not be empty");
+  const at = 0;
   unit.files[at] = { ...redEntry, path: unit.files[at].path };
   const { manifest } = aggregateTiers({ unit, server: tierRecord("server"), browser: tierRecord("browser") });
   assert.equal(manifest.verdict, "fail", "retaining evidence does not change a red manifest verdict");
@@ -252,7 +255,7 @@ not ok 1 - suite
   // AND IT REACHES THE ARTIFACT, not just the tier record: the unit tier's readings fold through the same
   // `recordTier` the browser tier uses, which is the whole point of the schema being additive.
   const unit = tierRecord("unit");
-  const at = unit.files.findIndex((entry) => entry.path === "tests/gate-tier.test.mjs");
+  const at = 0; // see above: the unit tier's own file list decides, not a hardcoded path
   unit.files[at] = { ...red, path: unit.files[at].path };
   const { manifest } = aggregateTiers({ unit, server: tierRecord("server"), browser: tierRecord("browser") });
   const folded = manifest.files.find((entry) => entry.path === unit.files[at].path);
