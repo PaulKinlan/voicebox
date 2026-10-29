@@ -18,7 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TIERS, aggregateTierRecords, baseNamesACommit, tierRecordPath } from "../scripts/gate-manifest.mjs";
-import { failureEvidence, recordOf, runOneTier, testCounts, tierFiles, tierFileTimeoutMs, tierVerdict } from "../scripts/gate-tier.mjs";
+import { explicitFileTimeoutMs, failureEvidence, recordOf, runOneTier, testCounts, tierFiles, tierFileTimeoutMs, tierVerdict } from "../scripts/gate-tier.mjs";
 import { ISOLATED, ISOLATED_FILE_MS } from "../scripts/test-shards.mjs";
 import { classify } from "../scripts/test-lanes.mjs";
 import { TIER_FILE_MS, TIER_WORKERS } from "../scripts/test-shards.mjs";
@@ -566,4 +566,20 @@ test("the browser tier's per-file bound REACHES the runner that kills the file, 
   assert.match(runnerSource, /ISOLATED\.has\(file\) \? Math\.max\(FILE_TIMEOUT_MS, ISOLATED_TIMEOUT_MS\)/, "the runner must widen the bound for isolated files only");
   // ... and the widening must be the thing the kill timer uses, or the number is decoration.
   assert.match(runnerSource, /}, fileTimeoutFor\(file\)\);/, "the kill timer must use the per-file bound, not the constant");
+});
+
+test("an explicit bound from EITHER source beats the isolated default, and the record names the bound that killed the file (voicebox-beads-ncrg)", () => {
+  // The re-review's finding: VOICEBOX_GATE_FILE_SECS=45 resolved the base to 45s while the isolated default
+  // still handed out 600s, because only --file-secs was consulted. One owner now answers "did the operator
+  // name a number", and both sources count.
+  assert.equal(explicitFileTimeoutMs({ fileSecs: 45 }), 45_000, "--file-secs is an explicit bound");
+  assert.equal(explicitFileTimeoutMs({ env: { VOICEBOX_GATE_FILE_SECS: "45" } }), 45_000, "VOICEBOX_GATE_FILE_SECS is an explicit bound too");
+  assert.equal(explicitFileTimeoutMs({ env: {} }), null, "no override is not an override");
+  assert.equal(explicitFileTimeoutMs({ fileSecs: "", env: {} }), null, "an empty flag is not a number");
+  assert.equal(tierFileTimeoutMs("browser", { env: { VOICEBOX_GATE_FILE_SECS: "45" } }), 45_000, "the env ceiling must reach the tier default");
+
+  // And the browser runner's record must carry the bound it actually applied, not the tier constant.
+  const runnerSource = readFileSync(path.join(root, "tools/browser-shard-runner.mjs"), "utf8");
+  assert.match(runnerSource, /timeout_ms: fileTimeoutFor\(r\.file\)/, "the artifact must name the per-file bound that was applied");
+  assert.doesNotMatch(runnerSource, /timeout_ms: FILE_TIMEOUT_MS/, "the artifact must not report the tier constant for an isolated file killed at its own bound");
 });

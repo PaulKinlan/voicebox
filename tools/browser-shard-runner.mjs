@@ -376,7 +376,9 @@ if (process.env.VOICEBOX_GATE_TIER_RECORD) {
       path: r.file,
       status: !isFailed(r) ? "passed" : r.tests >= 0 ? "failed" : "unknown",
       counts: r.tests >= 0 ? { tests: r.tests, pass: r.pass, fail: r.fail, skipped: r.skipped } : null,
-      timeout_ms: FILE_TIMEOUT_MS,
+      // THE BOUND THAT WAS ACTUALLY APPLIED (voicebox-beads-ncrg): recording the tier constant while the timer
+      // used an isolated file's 600s would make the artifact say a file was killed under a bound it never had.
+      timeout_ms: fileTimeoutFor(r.file),
       secs: Math.round(r.ms) / 1000,
       // The manifest keeps this per file: a sweep of the browser tier can then show which files were measured
       // on a loaded box and which were not, without anybody re-running anything (voicebox-beads-zjpm.6).
