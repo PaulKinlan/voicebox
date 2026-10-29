@@ -44,13 +44,13 @@
 // then RUNS it must name the launch in its own code — a written file is not
 // followed into the child process that runs it — and a launch NAME inside a
 // program piped to a child's stdin is not seen (a helper PATH there still is).
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TESTS = path.join(ROOT, "tests");
-
 /**
  * What makes a file LIVE: it starts a browser, or a server of its own. A PATH signal
  * is the helper's FILE NAME in any quoted value the file does not write — a static or
@@ -532,11 +532,93 @@ function read(source) {
   return views;
 }
 
-export function classify(root = TESTS) {
+/** A file's cache key: length plus modification time, which any write or checkout moves. Null if unreadable. */
+function statOf(file) {
+  try {
+    const stats = statSync(file);
+    return { size: stats.size, mtimeMs: stats.mtimeMs };
+  } catch {
+    return null;
+  }
+}
+
+/** SHA-256 of a string, for the classifier's own identity. */
+const digestOf = (text) => createHash("sha256").update(text).digest("hex");
+
+const LANE_CACHE_VERSION = 1;
+let classifierDigestCache = null;
+
+/** The digest of THIS file's source: a classifier edit invalidates every cached answer, by construction. */
+function classifierDigest() {
+  if (classifierDigestCache === null) {
+    try {
+      classifierDigestCache = digestOf(readFileSync(fileURLToPath(import.meta.url), "utf8"));
+    } catch {
+      classifierDigestCache = "";
+    }
+  }
+  return classifierDigestCache;
+}
+
+/**
+ * Where a cache may live WITHOUT dirtying the tree it caches: the git dir, which for a linked worktree is
+ * named by the `.git` pointer file rather than being a directory. Null when this is not a git checkout, and
+ * then nothing is cached at all.
+ */
+function laneCachePath() {
+  const dot = path.join(ROOT, ".git");
+  try {
+    if (statSync(dot).isDirectory()) return path.join(dot, "voicebox-lane-cache.json");
+    const pointer = readFileSync(dot, "utf8").match(/^gitdir:\s*(.+)$/m);
+    if (!pointer) return null;
+    const dir = pointer[1].trim();
+    const resolved = path.isAbsolute(dir) ? dir : path.resolve(ROOT, dir);
+    return path.join(resolved, "voicebox-lane-cache.json");
+  } catch {
+    return null;
+  }
+}
+
+/** Read the cached roster, or null. A cache that is missing, truncated, foreign or from another classifier is not an error. */
+function readLaneCache(file) {
+  if (!file) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8"));
+    if (parsed?.version !== LANE_CACHE_VERSION) return null;
+    if (parsed?.classifier !== classifierDigest()) return null;
+    if (!parsed.entries || typeof parsed.entries !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/** Replace the cache atomically (tmp + rename), and never let a cache failure fail a classification. */
+function writeLaneCache(file, payload) {
+  if (!file) return;
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tmp, `${JSON.stringify(payload)}\n`);
+    renameSync(tmp, file);
+  } catch {
+    try { unlinkSync(tmp); } catch { /* a leftover temp file is harmless */ }
+  }
+}
+
+export function classify(root = TESTS, { fresh = false, cacheFile = root === TESTS ? laneCachePath() : null } = {}) {
   const unit = [];
   const live = [];
   const server = [];
   const browser = [];
+  const record = (entry) => {
+    if (entry.lane === "browser") {
+      browser.push(entry);
+      live.push(entry);
+    } else if (entry.lane === "server") {
+      server.push(entry);
+      live.push(entry);
+    } else unit.push(entry);
+  };
   /**
    * A repository with no `tests/` classifies as empty rather than throwing:
    * the GATE FIXTURES drive this script inside a disposable repo to test the
@@ -549,33 +631,59 @@ export function classify(root = TESTS) {
   } catch {
     entries = [];
   }
-  for (const file of entries.filter((f) => f.endsWith(".test.mjs")).sort()) {
-    const source = readFileSync(path.join(root, file), "utf8");
-    const views = read(source);
-    const declaration = views ?? topLaneDeclaration(source, null);
-    const reading = ({ name }) => (!views ? source : name && !views.evaluates ? views.code : views.text);
-
-    // Any browser launch puts the test in the browser lane (strictly serial, CDP contention):
-    const browserLaunch = BROWSER_SIGNALS.find((signal) => signal.re.test(reading(signal)));
-    if (browserLaunch) {
-      const entry = { file, lane: "browser", why: browserLaunch.what, declaredLane: declaration.declaredLane, declarationError: declaration.declarationError };
-      browser.push(entry);
-      live.push(entry);
+  const files = entries.filter((f) => f.endsWith(".test.mjs")).sort();
+  // THE ROSTER IS CACHED PER FILE CONTENT, AND ONLY FOR THIS REPOSITORY'S tests/ (voicebox-beads-2pp2).
+  // Lexing the whole roster is ~10.9s here, and every child the gate spawns asks for it, so the answer is
+  // remembered in the git dir — never in the worktree, because a gate must not dirty the tree it measures.
+  // The key is each file's LENGTH PLUS MTIME, and the cache is stamped with the digest of THIS module, so a
+  // stale entry needs an edit that changes neither the size nor the timestamp — which no editor, patch or
+  // `git checkout` produces — and a classifier edit invalidates the whole cache by construction. `fresh:
+  // true` skips the read and the write entirely: the CLI's `--check` uses it, because that check exists to
+  // catch a misfiled NEW test and must not be answerable from a cache. Any other root (a fixture's tests
+  // dir) always lexes, so a fixture's answer is never inherited.
+  const cachePath = fresh ? null : cacheFile;
+  const cacheable = cachePath !== null;
+  const cache = cacheable ? readLaneCache(cachePath) : null;
+  const next = {};
+  let wrote = false;
+  for (const file of files) {
+    const stats = cacheable ? statOf(path.join(root, file)) : null;
+    const hit = stats ? cache?.entries?.[file] : null;
+    if (hit && hit.size === stats.size && hit.mtimeMs === stats.mtimeMs && (hit.lane === "unit" || hit.lane === "server" || hit.lane === "browser")) {
+      const { size: _size, mtimeMs: _mtime, ...entry } = hit;
+      next[file] = hit;
+      record(entry);
       continue;
     }
-
-    // Otherwise, any server launch puts it in the server lane (concurrent):
-    const serverLaunch = SERVER_SIGNALS.find((signal) => signal.re.test(reading(signal)));
-    if (serverLaunch) {
-      const entry = { file, lane: "server", why: serverLaunch.what, declaredLane: declaration.declaredLane, declarationError: declaration.declarationError };
-      server.push(entry);
-      live.push(entry);
-      continue;
+    const entry = classifySource(file, readFileSync(path.join(root, file), "utf8"));
+    record(entry);
+    if (stats) {
+      next[file] = { ...entry, size: stats.size, mtimeMs: stats.mtimeMs };
+      wrote = true;
     }
-
-    unit.push({ file, lane: "unit", why: null, declaredLane: declaration.declaredLane, declarationError: declaration.declarationError });
+  }
+  if (cacheable) {
+    const stale = Object.keys(cache?.entries ?? {}).some((file) => !(file in next));
+    if (wrote || stale) writeLaneCache(cachePath, { version: LANE_CACHE_VERSION, classifier: classifierDigest(), entries: next });
   }
   return { unit, live, server, browser };
+}
+
+/** One test file's lane, from its source. Extracted so a cached entry and a lexed one are the same shape. */
+function classifySource(file, source) {
+  const views = read(source);
+  const declaration = views ?? topLaneDeclaration(source, null);
+  const reading = ({ name }) => (!views ? source : name && !views.evaluates ? views.code : views.text);
+
+  // Any browser launch puts the test in the browser lane (strictly serial, CDP contention):
+  const browserLaunch = BROWSER_SIGNALS.find((signal) => signal.re.test(reading(signal)));
+  if (browserLaunch) return { file, lane: "browser", why: browserLaunch.what, declaredLane: declaration.declaredLane, declarationError: declaration.declarationError };
+
+  // Otherwise, any server launch puts it in the server lane (concurrent):
+  const serverLaunch = SERVER_SIGNALS.find((signal) => signal.re.test(reading(signal)));
+  if (serverLaunch) return { file, lane: "server", why: serverLaunch.what, declaredLane: declaration.declaredLane, declarationError: declaration.declarationError };
+
+  return { file, lane: "unit", why: null, declaredLane: declaration.declaredLane, declarationError: declaration.declarationError };
 }
 
 /** Report exact file-level boundaries without pinning global counts that change whenever a file is added. */
@@ -598,7 +706,9 @@ export function checkDeclaredLanes({ unit, server, browser }) {
 // the tests directory, and it prints nothing.
 const CLI = import.meta.main;
 const laneArg = process.argv.includes("--lane") ? process.argv[process.argv.indexOf("--lane") + 1] : null;
-const { unit, live, server, browser } = classify();
+// `--check` must never be answered from the cache (voicebox-beads-2pp2): it exists to catch a misfiled NEW
+// test, so it lexes the roster for real every time. `--lane` and the plain dump may use the cache.
+const { unit, live, server, browser } = classify(TESTS, { fresh: process.argv.includes("--check") });
 
 if (CLI && process.argv.includes("--check")) {
   const seen = new Set();

@@ -13,8 +13,8 @@
 // live test either, while every launch form the suite really uses still is.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -398,6 +398,79 @@ test("top-of-file @lane declares a boundary without overriding classifier signal
     assert.match(execFileSync(process.execPath, [path.join(scripts, "test-lanes.mjs"), "--check"],
       { cwd: dir, encoding: "utf8" }), /\[lanes\] ok: 0 unit, 0 live/,
     "a gate fixture with no tests directory is a valid empty partition");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+// ═════════════════════ the ROSTER CACHE (voicebox-beads-2pp2) ═════════════════════
+// classify() lexes every tests/*.test.mjs — ~10.9s on this VM — and every child the gate spawns asks
+// it for the roster, so the answer is remembered: keyed per file on LENGTH + MTIME and stamped with
+// the digest of the classifier itself. These cases pin the CONTRACT, not the speed, because a cache
+// that answers wrongly is a lane misclassification (a browser test raced into the concurrent lane),
+// not a slow gate.
+test("the roster cache: a hit answers without lexing, a real change re-lexes, and a corrupt or foreign cache is ignored (voicebox-beads-2pp2)", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-lanes-cache-"));
+  try {
+    const tests = path.join(dir, "tests");
+    const scripts = path.join(dir, "scripts");
+    mkdirSync(tests);
+    mkdirSync(scripts);
+    writeFileSync(path.join(scripts, "test-lanes.mjs"), readFileSync(path.join(root, "scripts/test-lanes.mjs")));
+    const unitFile = path.join(tests, "plain.test.mjs");
+    const UNIT_SOURCE = "import test from 'node:test';\ntest('plain', () => {});\n";
+    // A browser launch of EXACTLY the unit source's length, so the cache key (length + mtime) still
+    // matches: that is what makes "cached" and "lexed" distinguishable in one assertion.
+    const LAUNCH_SOURCE = "import { launch } from './lib/cdp.mjs';\n".padEnd(UNIT_SOURCE.length, " ");
+    assert.equal(LAUNCH_SOURCE.length, UNIT_SOURCE.length);
+    writeFileSync(unitFile, UNIT_SOURCE);
+    writeFileSync(path.join(tests, "cdp.test.mjs"), 'import { launch } from "./lib/cdp.mjs";\n');
+    const cacheFile = path.join(dir, "lane-cache.json");
+    // A FIXED timestamp, set before the cache is written and re-applied after every rewrite: an mtime
+    // restored through utimesSync cannot reproduce the nanosecond remainder statSync reports, so the
+    // fixture pins the value the cache will compare against instead of trying to reproduce it.
+    const FIXED = new Date("2026-01-01T00:00:00Z");
+    utimesSync(unitFile, FIXED, FIXED);
+    const laneOf = (roster, file) => [...roster.unit, ...roster.live].find((e) => e.file === file)?.lane ?? null;
+    /** Rewrite a fixture file with other bytes while restoring its timestamp, so only the KEY can tell. */
+    const rewriteKeepingKey = (file, content) => {
+      const before = statSync(file);
+      assert.equal(content.length, before.size, "the fixture must keep its length for this case to mean anything");
+      writeFileSync(file, content);
+      utimesSync(file, FIXED, FIXED);
+      assert.equal(statSync(file).size, before.size);
+    };
+
+    // 1. A cold call lexes and WRITES the cache.
+    const cold = classify(tests, { cacheFile });
+    assert.deepEqual([cold.unit.map((e) => e.file), cold.live.map((e) => e.file)], [["plain.test.mjs"], ["cdp.test.mjs"]]);
+    assert.equal(existsSync(cacheFile), true, "the cache was not written");
+
+    // 2. A hit answers from the cache. Proven by making the cache the ONLY possible source: the bytes
+    //    become a browser launch while the key still matches, so a lexing classifier would say browser.
+    rewriteKeepingKey(unitFile, LAUNCH_SOURCE);
+    assert.equal(laneOf(classify(tests, { cacheFile }), "plain.test.mjs"), "unit", "a length+mtime match must be answered from the cache");
+    assert.equal(laneOf(classify(tests, { fresh: true }), "plain.test.mjs"), "browser", "fresh classification must see the new launch, i.e. the cache was the only reason it read as unit");
+
+    // 3. A REAL change (different length) invalidates that file — and only that file — so the roster follows the tree.
+    writeFileSync(unitFile, "import { launch } from './lib/cdp.mjs';\n// changed the length\n");
+    assert.equal(laneOf(classify(tests, { cacheFile }), "plain.test.mjs"), "browser", "a size change must re-lex that file");
+    assert.equal(laneOf(classify(tests, { cacheFile }), "cdp.test.mjs"), "browser", "the untouched file keeps its answer");
+
+    // 4. A corrupt cache and a FOREIGN classifier's cache are both ignored, not trusted.
+    writeFileSync(cacheFile, "{ not json");
+    assert.equal(laneOf(classify(tests, { cacheFile }), "plain.test.mjs"), "browser", "a corrupt cache must be ignored");
+    writeFileSync(cacheFile, JSON.stringify({ version: 1, classifier: "some-other-classifier", entries: {} }));
+    assert.equal(laneOf(classify(tests, { cacheFile }), "plain.test.mjs"), "browser", "a foreign classifier's cache must be ignored");
+
+    // 5. `--check` never answers from the cache: it exists to catch a misfiled NEW test, so it lexes.
+    writeFileSync(unitFile, UNIT_SOURCE);
+    classify(tests, { cacheFile }); // cached as unit
+    rewriteKeepingKey(unitFile, LAUNCH_SOURCE); // now a browser launch, stale-as-unit in the cache
+    const check = spawnSync(process.execPath, [path.join(scripts, "test-lanes.mjs"), "--check"], { cwd: dir, encoding: "utf8" });
+    assert.equal(check.status, 0, check.stderr);
+    assert.match(check.stdout, /\[lanes\] ok: 0 unit, 2 live/, "the --check CLI must lex for real and see two live files");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
