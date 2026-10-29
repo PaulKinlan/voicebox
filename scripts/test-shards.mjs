@@ -59,6 +59,25 @@ export const TIER_FILE_MS = Object.freeze({
 });
 
 /**
+ * The per-file budget for a file the tier runs ALONE (voicebox-beads-ncrg).
+ *
+ * TIER_FILE_MS exists so a wedged file is recorded 'timeout' BY NAME while the other files finish — the
+ * bound is a guard on a sibling lane, not a statement about how long a file may take. A file in ISOLATED
+ * has no siblings to protect: the tier gives it the box, and a tier bound then only misfires on a file
+ * that is slow-but-healthy. tests/pre-push.test.mjs is exactly that file: it drives ~20 WHOLE gate runs as
+ * child processes (`git push` through the real hook, plus direct `pre-push.sh` runs, 3-14s each on this
+ * box) and it is green at 315s when the box is quiet and 408s at load ~9 — killed at 300s by the live
+ * tier's bound, with nothing wrong with it.
+ *
+ * Two cheaper fixes were measured and rejected on 2026-10-29 rather than assumed: the fixture's setup is
+ * 0.4s (so it is not setup), and running the file's arms concurrently at 3 made the whole file SLOWER
+ * (377s, two arms cancelled on their own bounds) because every arm is already waiting on child processes
+ * and the box has no spare cores. So the bound for an isolated file is the STAGE's, not the tier's:
+ * measured 408s + margin, still under the landing stage bound in scripts/pre-push.sh.
+ */
+export const ISOLATED_FILE_MS = 600_000;
+
+/**
  * A file's cost, used ONLY to order the queue (above). Bytes are a crude proxy — measured against
  * the 63 per-file durations from the 2026-10-11 baseline run, byte size correlates with wall time at
  * r=0.51 while a test count correlates at r=0.31, so bytes are the better of the two cheap

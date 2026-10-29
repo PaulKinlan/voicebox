@@ -25,7 +25,7 @@ Voicebox enforces a multi-stage verification gate on `git push` via `.githooks/p
 | **Docs Check** | `node scripts/docs-check.mjs` | Boots a scratch server and probes it — **landings only** (`voicebox-beads-8c0t`); measured 36-46s at load ~5 | `VOICEBOX_GATE_DOCS_SECS` (must outlast the boot) |
 | **Single Owner** | `node scripts/single-owner.mjs` | Static scan of the tree (every push) | Immediate |
 | **Unit Suite** | `node scripts/gate-tier.mjs --tier unit` | Unit lane, **one process per file** | `180s` |
-| **Live Suite** | `node scripts/gate-tier.mjs --tier live` | Server lane (`--test-concurrency=4`) then the Browser CDP shard runner (4 workers, one file each) — one process per file | `400s` |
+| **Live Suite** | `node scripts/gate-tier.mjs --tier live` | Server lane (`--test-concurrency=4`) then the Browser CDP shard runner (4 workers, one file each) — one process per file | `900s` |
 | **Acceptance** | `npm run accept` | End-to-end headless Chromium verification (`page-acceptance.mjs`) | `45s` |
 | **Full Manifest** | `node scripts/gate-manifest.mjs aggregate --gate full --tier-dir <scratch>` | Folds the three tier records into `<tree>.full.manifest.json` | `60s` |
 
@@ -143,7 +143,13 @@ Each bound can be raised or tightened per run without editing the gate:
 - The **manifest** bound is `VOICEBOX_GATE_MANIFEST_SECS`, and the per-file budget the tier runner gives a
   test file is derived per tier from measured headroom (`TIER_FILE_MS`: unit 120s, server 300s, browser 240s; default 240s),
   overridable by `VOICEBOX_GATE_FILE_SECS` or `--file-secs`. Sitting under the unit stage bound (180s) ensures a wedged unit
-  file is recorded timeout by name without aborting the lane (voicebox-beads-ak9h). Longest-first unit queue ordering via
+  file is recorded timeout by name without aborting the lane (voicebox-beads-ak9h). **A file the tier runs ALONE** (`ISOLATED`
+  in `scripts/test-shards.mjs`) gets `ISOLATED_FILE_MS` (600s) instead: the tier bound is a guard on the *other* files, and an
+  isolated file has none, so it only misfires on a healthy file that spawns whole gates — `tests/pre-push.test.mjs` measures
+  315s quiet and 408s at load ~9, and was killed at 300s with nothing wrong with it (voicebox-beads-ncrg). Its two cheaper
+  fixes were measured and rejected: the fixture setup costs 0.4s, and overlapping the arms at concurrency 3 made the file
+  slower (377s, two arms cancelled) because every arm already waits on children. The live stage bound is 900s for the same
+  reason — it must outlast the slowest browser file, not the quiet box. Longest-first unit queue ordering via
   `buildQueue` (`scripts/gate-tier.mjs`) dispatches heavy suites (`test-changed`, `transient-state`) first, preventing
   worker tail starvation under contention (voicebox-beads-hfa8).
 

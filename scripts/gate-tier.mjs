@@ -42,7 +42,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { classify } from "./test-lanes.mjs";
-import { buildQueue, ISOLATED, TIER_FILE_MS, TIER_WORKERS } from "./test-shards.mjs";
+import { buildQueue, ISOLATED, ISOLATED_FILE_MS, TIER_FILE_MS, TIER_WORKERS } from "./test-shards.mjs";
 import { coverageGaps, emitMarker, tapCounts, tierRecordPath } from "./gate-manifest.mjs";
 import { killRunningChildren, runOneFile, statusOf } from "./test-changed.mjs";
 import { loadavg1m } from "../lib/host-load.mjs";
@@ -172,15 +172,20 @@ export function tierFileTimeoutMs(tier, { fileSecs = null, env = process.env } =
  * owns that list) run alone, after the queue — the same partition the browser tier uses, reused rather than
  * re-derived. Returns the tier record; nothing is written here.
  */
-export async function runOneTier({ tier, files, workers = TIER_WORKERS[tier] ?? 1, timeoutMs = tierFileTimeoutMs(tier), runner = runOneFile, sampler = loadavg1m, log = console }) {
+export async function runOneTier({ tier, files, workers = TIER_WORKERS[tier] ?? 1, timeoutMs = tierFileTimeoutMs(tier), isolatedTimeoutMs = ISOLATED_FILE_MS, runner = runOneFile, sampler = loadavg1m, log = console }) {
+  // AN ISOLATED FILE GETS ITS OWN BOUND (voicebox-beads-ncrg): the tier bound is a guard on the other files
+  // in the lane, and an isolated file runs with no others, so the tier's number only misfires on a healthy
+  // file that spawns whole gates (tests/pre-push.test.mjs: 408s measured). An explicit --file-secs or
+  // env override still wins, because it is the operator saying a number out loud.
+  const boundFor = (file) => (ISOLATED.has(file) ? Math.max(timeoutMs, isolatedTimeoutMs) : timeoutMs);
   const results = [];
   let cursor = 0;
   const run = async (file) => {
     log.log(`[gate-tier] running ${file}`);
     // BOTH ENDS OF THE CHILD'S OWN WINDOW, and nothing else - no retry, no bound change, no verdict change.
     const loadStart = sampler();
-    const result = await runner(file, { timeoutMs });
-    const record = recordOf(file, result, timeoutMs, { start: loadStart, end: sampler() });
+    const result = await runner(file, { timeoutMs: boundFor(file) });
+    const record = recordOf(file, result, boundFor(file), { start: loadStart, end: sampler() });
     if (record.status !== "passed") record.condition_request = "pending"; // evidence request, not measured conditions
     results.push(record);
     if (record.status === "passed") log.log(emitMarker("passed", [file]));

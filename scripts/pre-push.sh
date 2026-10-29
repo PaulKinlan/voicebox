@@ -196,7 +196,11 @@ run_stage() {
 # the legacy VOICEBOX_GATE_TESTS_SECS) still overrides it — that is the remedy
 # the refusal message names.
 _unit_secs="${VOICEBOX_GATE_UNIT_SECS:-${VOICEBOX_GATE_TESTS_SECS:-180}}"
-_live_secs="${VOICEBOX_GATE_LIVE_SECS:-400}"
+# THE LIVE STAGE BOUND MUST OUTLAST THE SLOWEST BROWSER FILE, not just the quiet box (voicebox-beads-ncrg).
+# tests/pre-push.test.mjs drives ~20 whole gate runs as children and measures 315s quiet / 408s at load ~9,
+# so a 400s stage bound ended the lane on a healthy file at exactly the time it was finishing. It is also
+# the bound that must sit above the isolated per-file budget (scripts/test-shards.mjs ISOLATED_FILE_MS).
+_live_secs="${VOICEBOX_GATE_LIVE_SECS:-900}"
 _accept_secs="${VOICEBOX_GATE_ACCEPT_SECS:-45}"
 # The docs-check probe has a 30s server-start bound plus runtime probes (47s observed on a busy VM).
 # This stage bound must outlast both; the other static docs stages share it but finish promptly.

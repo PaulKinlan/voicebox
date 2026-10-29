@@ -19,6 +19,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TIERS, aggregateTierRecords, baseNamesACommit, tierRecordPath } from "../scripts/gate-manifest.mjs";
 import { failureEvidence, recordOf, runOneTier, testCounts, tierFiles, tierFileTimeoutMs, tierVerdict } from "../scripts/gate-tier.mjs";
+import { ISOLATED, ISOLATED_FILE_MS } from "../scripts/test-shards.mjs";
 import { classify } from "../scripts/test-lanes.mjs";
 import { TIER_FILE_MS, TIER_WORKERS } from "../scripts/test-shards.mjs";
 
@@ -496,4 +497,52 @@ test("the per-tier file budget is derived from measured headroom and sits UNDER 
   assert.equal(tierFileTimeoutMs("unit", { fileSecs: 45 }), 45_000);
   assert.equal(tierFileTimeoutMs("unit", { env: { VOICEBOX_GATE_FILE_SECS: "60" } }), 60_000);
   assert.equal(tierFileTimeoutMs("unit", { fileSecs: 45, env: { VOICEBOX_GATE_FILE_SECS: "60" } }), 45_000);
+});
+
+// ═════════════ an ISOLATED file gets the stage's bound, not the tier's (voicebox-beads-ncrg) ═════════════
+test("an isolated file is given the isolated budget while its siblings keep the tier's, and that budget outlasts the measured cost (voicebox-beads-ncrg)", async () => {
+  // The measured cost of the isolated browser file on this VM: 315s quiet, 408s at load ~9. The bound must
+  // clear it, or a healthy file is recorded as a wedged one — which is exactly what happened at 300s.
+  const measuredAtLoad9Ms = 408_000;
+  assert.ok(ISOLATED_FILE_MS > measuredAtLoad9Ms, `ISOLATED_FILE_MS (${ISOLATED_FILE_MS}ms) must exceed the measured 408s cost of tests/pre-push.test.mjs`);
+
+  // ... and it must still sit under the live stage bound, or the stage ends the lane before the file's own
+  // timeout can name it. Read the bound the way pre-push.sh declares it, rather than restating the number.
+  const prepush = readFileSync(path.join(root, "scripts/pre-push.sh"), "utf8");
+  const liveDefault = Number(prepush.match(/_live_secs="\$\{VOICEBOX_GATE_LIVE_SECS:-(\d+)\}"/)[1]) * 1000;
+  assert.ok(ISOLATED_FILE_MS < liveDefault, `ISOLATED_FILE_MS (${ISOLATED_FILE_MS}ms) must sit under the live stage bound (${liveDefault}ms)`);
+
+  // The dispatch both ways, with a synthetic runner: only the isolated name changes its bound.
+  const isolatedName = [...ISOLATED][0];
+  const seen = new Map();
+  await runOneTier({
+    tier: "live",
+    files: [isolatedName, "tests/sibling-browser.test.mjs"],
+    workers: 1,
+    runner: async (file, { timeoutMs }) => {
+      seen.set(file, timeoutMs);
+      return { file, code: 0, signal: null, timedOut: false, secs: 0.1, out: "1..1\n# tests 1\n# pass 1\n# fail 0\n# skipped 0\n" };
+    },
+    log: { log() {}, error() {} },
+  });
+  assert.equal(seen.get(isolatedName), Math.max(TIER_FILE_MS.live, ISOLATED_FILE_MS), "the isolated file must get the isolated budget");
+  assert.equal(seen.get("tests/sibling-browser.test.mjs"), TIER_FILE_MS.live, "a sibling keeps the tier's budget, so a wedged file is still named early");
+});
+
+test("an explicit --file-secs beats the isolated budget, because an operator naming a number is the one case that wins (voicebox-beads-ncrg)", async () => {
+  const isolatedName = [...ISOLATED][0];
+  const seen = new Map();
+  await runOneTier({
+    tier: "live",
+    files: [isolatedName],
+    workers: 1,
+    timeoutMs: 45_000,
+    isolatedTimeoutMs: 45_000,
+    runner: async (file, { timeoutMs }) => {
+      seen.set(file, timeoutMs);
+      return { file, code: 0, signal: null, timedOut: false, secs: 0.1, out: "1..1\n# tests 1\n# pass 1\n# fail 0\n# skipped 0\n" };
+    },
+    log: { log() {}, error() {} },
+  });
+  assert.equal(seen.get(isolatedName), 45_000, "an explicit bound must not be widened behind the operator's back");
 });
