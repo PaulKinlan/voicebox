@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { gitEnv } from "../lib/git-env.mjs";
 import { classify } from "./test-lanes.mjs";
 import { buildQueue, ISOLATED, TIER_WORKERS } from "./test-shards.mjs";
+import { sweepStrays } from "./stray-sweep.mjs";
 import { artifactDir, createManifest, emitMarker, finalizeManifest, ManifestRefusal, recordFile, sealManifest, tapCounts, testChildEnv, verdictOf, writeManifest } from "./gate-manifest.mjs";
 import { isExclusiveRouteChanges, routeAffected, ROUTE_SERVER_SMOKE, isSourcePath } from "./infra-affected.mjs";
 
@@ -418,7 +419,34 @@ export async function runGate({
   sha = "",
   treeDirty = null,
   runner = runOneFile,
+  // A KILLED GATE LEAVES FIXTURES BEHIND (voicebox-beads-9xqs): the per-file child leads its own group so a per-file
+  // timeout can take a wedged file with it, and the fixtures inside lead groups of their own — so when THIS process is
+  // SIGKILLed nothing can reach them, and a `server.mjs` keeps a port for hours (the reaper found one 121 minutes old).
+  // A finished run sweeps the fixtures it started in this worktree. Off inside a test process (a gate-under-test runs
+  // beside sibling files whose fixtures share this worktree) unless the caller asks for it explicitly.
+  sweep = !process.env.NODE_TEST_CONTEXT,
+  // The worktree the sweep is scoped to. A test drives its own scratch directory so it can never sweep a sibling file's
+  // fixture: attribution is by cwd, so a directory nobody else runs in is a directory with only this run's fixtures.
+  sweepRoot = ROOT,
 } = {}) {
+  const startedAt = Date.now();
+  const sweepNow = () => {
+    if (!sweep) return [];
+    try {
+      return sweepStrays({ root: sweepRoot, since: startedAt }).killed;
+    } catch {
+      return []; // a sweep must never turn a run's verdict into a crash
+    }
+  };
+  const onSignal = (signal) => {
+    killRunningChildren(signal);
+    sweepNow();
+    setTimeout(() => process.exit(128 + ({ SIGHUP: 1, SIGINT: 2, SIGTERM: 15 }[signal] ?? 0)), 2500).unref();
+  };
+  const signals = ["SIGTERM", "SIGINT", "SIGHUP"];
+  const handlers = new Map(signals.map((signal) => [signal, () => onSignal(signal)]));
+  for (const [signal, handler] of handlers) process.once(signal, handler);
+  try {
   const manifest = createManifest({ gate, tree, sha, classified, changed: changedFiles, base, treeDirty: treeDirty, unmapped: [...unmappedSources] });
   const selection = (name) => (changedFiles.includes(`tests/${name}`) ? "changed" : "dependency");
   const ordered = [
@@ -627,6 +655,10 @@ export async function runGate({
   }
   if (bad.length === 0 && results.length > 0) console.log("[test:changed] ALL SCOPED TESTS GREEN (every dispatched file has a terminal status).");
   return { code: bad.length > 0 ? 1 : 0, manifest, written };
+  } finally {
+    for (const [signal, handler] of handlers) process.off(signal, handler);
+    sweepNow();
+  }
 }
 
 /** Run one static-stage script and return its exit code (used by the gate, which owns the verdict). */
