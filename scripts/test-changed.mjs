@@ -438,6 +438,24 @@ export async function runGate({
       return []; // a sweep must never turn a run's verdict into a crash
     }
   };
+  /**
+   * The previous run's leak: a gate SIGKILLed at its bound (`timeout --kill-after`, rc 137) runs no handler at all, so
+   * no process of ours can clean it up — the leak is only reachable by the NEXT run in the same worktree. That is what
+   * this is for, and why it is bounded by the same four hours the fleet-wide janitor uses: anything older is
+   * `scripts/reap-stale-servers.mjs`'s subject, anything newer could be the run before this one, and a server a person
+   * wants kept carries `VOICEBOX_PINNED=1` or the worktree's `.pinned-server` marker (honoured in stray-sweep.mjs).
+   */
+  const SWEEP_PREVIOUS_SECS = Number(process.env.VOICEBOX_STRAY_PREVIOUS_SECS ?? 4 * 3600);
+  const sweepPrevious = () => {
+    if (!sweep || !(SWEEP_PREVIOUS_SECS > 0)) return [];
+    try {
+      // A WINDOW, not a permission: `until: startedAt` cannot touch a fixture this run starts, and `since` carries the
+      // four-hour bound. Filtering after the kill would be too late — the sweep kills what it finds.
+      return sweepStrays({ root: sweepRoot, since: startedAt - SWEEP_PREVIOUS_SECS * 1000, until: startedAt }).killed;
+    } catch {
+      return [];
+    }
+  };
   const onSignal = (signal) => {
     killRunningChildren(signal);
     sweepNow();
@@ -446,6 +464,8 @@ export async function runGate({
   const signals = ["SIGTERM", "SIGINT", "SIGHUP"];
   const handlers = new Map(signals.map((signal) => [signal, () => onSignal(signal)]));
   for (const [signal, handler] of handlers) process.once(signal, handler);
+  // A KILLED RUN'S FIXTURES ARE UNREACHABLE FROM INSIDE IT, so the run that follows is the only cleaner they get.
+  sweepPrevious();
   try {
   const manifest = createManifest({ gate, tree, sha, classified, changed: changedFiles, base, treeDirty: treeDirty, unmapped: [...unmappedSources] });
   const selection = (name) => (changedFiles.includes(`tests/${name}`) ? "changed" : "dependency");

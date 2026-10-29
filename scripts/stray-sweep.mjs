@@ -15,7 +15,7 @@
 // server someone started by hand an hour ago is not swept by a gate run that began a minute ago), and never itself or its
 // ancestors. It is not the fleet-wide janitor: `scripts/reap-stale-servers.mjs` reaps by age across every worktree and is
 // the right tool for "nobody is looking"; this is the right tool for "the run that owns these is over".
-import { readdirSync, readFileSync, readlinkSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
 import path from "node:path";
 
 /** The cmdlines a test fixture produces. Chrome's helper and test binaries are named for what they are. */
@@ -47,6 +47,24 @@ export function startMsOf(pid, { procRoot = "/proc", uptimeSec = null } = {}) {
 }
 
 /**
+ * Whether someone means this process to survive: `VOICEBOX_PINNED=1` in its environment, or a `.pinned-server` marker
+ * in the worktree — the same two opt-outs `scripts/reap-stale-servers.mjs` honours, so a lane that starts a server by
+ * hand and wants it kept is not fighting both janitors with different rules.
+ */
+export function isPinned(pid, { root, procRoot = "/proc" } = {}) {
+  try {
+    if (readFileSync(path.join(procRoot, String(pid), "environ"), "utf8").split("\0").includes("VOICEBOX_PINNED=1")) return true;
+  } catch {
+    /* the environ is unreadable for another user's process: not pinned by this rule */
+  }
+  try {
+    return existsSync(path.join(root, ".pinned-server"));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Every process that looks like a leaked fixture of `root`, as `{ pid, cmdline, cwd, startMs }`.
  *
  * `since` is the instant the run that may have leaked them began: a process older than that is somebody else's and is
@@ -55,6 +73,7 @@ export function startMsOf(pid, { procRoot = "/proc", uptimeSec = null } = {}) {
 export function strayChildren({
   root,
   since = 0,
+  until = Number.POSITIVE_INFINITY,
   exclude = [],
   shapes = FIXTURE_SHAPES,
   procRoot = "/proc",
@@ -88,8 +107,16 @@ export function strayChildren({
       continue; // gone, or not ours to read
     }
     if (path.resolve(cwd) !== wanted) continue;
+    if (isPinned(pid, { root: wanted, procRoot })) continue;
+    // FAIL CLOSED. The start time is one of the three facts that make a process ours to kill; if it cannot be read we
+    // cannot prove the process started during this run, and an unreadable /proc is not a licence to kill a server that
+    // was already there. Before this, a missing startMs skipped the age guard entirely and made EVERY fixture in the
+    // worktree a victim (review finding on voicebox-beads-9xqs, P2).
     const startMs = startMsOf(pid, { procRoot, uptimeSec });
-    if (startMs !== null && startMs < since) continue;
+    if (startMs === null || startMs < since) continue;
+    // `until` is the other half of a window: a start AFTER it belongs to a later run (our own children, when the sweep
+    // runs beside them), so it is not a victim of this sweep either.
+    if (startMs > until) continue;
     found.push({ pid, cmdline, cwd: wanted, startMs });
   }
   return found;
@@ -117,7 +144,7 @@ export function killStrays(victims, { kill = (pid, signal) => process.kill(pid, 
 }
 
 /** `strayChildren` + `killStrays`, with this process and its ancestors always excluded. */
-export function sweepStrays({ root, since = 0, procRoot = "/proc", ...rest } = {}) {
+export function sweepStrays({ root, since = 0, until = Number.POSITIVE_INFINITY, procRoot = "/proc", ...rest } = {}) {
   const ancestors = [];
   for (let pid = process.pid; pid > 1; ) {
     ancestors.push(pid);
@@ -128,6 +155,6 @@ export function sweepStrays({ root, since = 0, procRoot = "/proc", ...rest } = {
       break;
     }
   }
-  const victims = strayChildren({ root, since, exclude: ancestors, procRoot, ...rest });
+  const victims = strayChildren({ root, since, until, exclude: ancestors, procRoot, ...rest });
   return { victims, killed: killStrays(victims) };
 }

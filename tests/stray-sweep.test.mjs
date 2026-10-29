@@ -21,7 +21,7 @@ const SERVER_MJS = "server" + ".mjs";
 function fakeProc(entries, uptimeSec = 1000) {
   const root = mkdtempSync(path.join(os.tmpdir(), "voicebox-proc-"));
   writeFileSync(path.join(root, "uptime"), `${uptimeSec}.00 1.00\n`);
-  for (const { pid, cmdline, cwd, ticks = 0 } of entries) {
+  for (const { pid, cmdline, cwd, ticks = 0, environ = null } of entries) {
     const dir = path.join(root, String(pid));
     mkdirSync(dir);
     writeFileSync(path.join(dir, "cmdline"), cmdline.split(" ").join("\0") + "\0");
@@ -29,6 +29,7 @@ function fakeProc(entries, uptimeSec = 1000) {
     const rest = Array.from({ length: 19 }, (_, i) => (i === 0 ? "S" : "0"));
     writeFileSync(path.join(dir, "stat"), `${pid} (node) ${rest.join(" ")} ${ticks} 0 0\n`);
     if (cwd) fakeCwds.set(pid, cwd);
+    if (environ) writeFileSync(path.join(dir, "environ"), environ.split(" ").join("\0") + "\0");
   }
   return root;
 }
@@ -148,4 +149,63 @@ test("startMsOf reads a live process and answers null for one that does not exis
   const live = startMsOf(process.pid);
   assert.ok(Number.isFinite(live) && live < Date.now(), `a live pid has a start time (got ${live})`);
   assert.equal(startMsOf(999_999_999), null, "a missing pid is null, never a guess");
+});
+
+test("an unreadable start time is NOT a licence to kill: the age guard fails closed (review finding on 9xqs)", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "voicebox-root-blind-"));
+  try {
+    // The same fixture twice, in this worktree, in both shapes of an unreadable stat: the file is missing, and the file
+    // is present but truncated (a torn read of /proc is the realistic form). Both are unattributable, so neither is a
+    // victim — otherwise a sweep would SIGKILL a process it cannot prove started during this run.
+    const proc = fakeProc([
+      { pid: 21, cmdline: `node ${root}/${SERVER_MJS}`, cwd: root, ticks: 0 },
+      { pid: 22, cmdline: `node ${root}/${SERVER_MJS}`, cwd: root, ticks: 0 },
+    ], 1000);
+    rmSync(path.join(proc, "21", "stat"), { force: true });
+    writeFileSync(path.join(proc, "22", "stat"), "22 (node) S 0");
+    const cwd = cwdOf();
+    assert.deepEqual(strayChildren({ root, procRoot: proc, readCwd: cwd, since: 0 }), [], "no readable start time, no victim");
+    // The control: give one of them a real stat and it IS found — so the empty answer above is the guard, not a typo.
+    writeFileSync(path.join(proc, "21", "stat"), `21 (node) S ${Array.from({ length: 18 }, () => "0").join(" ")} 90000 0 0\n`);
+    assert.deepEqual(strayChildren({ root, procRoot: proc, readCwd: cwd, since: 0 }).map((v) => v.pid), [21], "a readable start time still admits it");
+    rmSync(proc, { recursive: true, force: true });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a pinned server is never a victim: VOICEBOX_PINNED=1 or the worktree's .pinned-server marker", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "voicebox-root-pinned-"));
+  try {
+    const proc = fakeProc([
+      { pid: 31, cmdline: `node ${root}/${SERVER_MJS}`, cwd: root, ticks: 99_000, environ: "VOICEBOX_PINNED=1 PATH=/usr/bin" },
+      { pid: 32, cmdline: `node ${root}/${SERVER_MJS}`, cwd: root, ticks: 99_000 },
+    ], 1000);
+    const cwd = cwdOf();
+    assert.deepEqual(strayChildren({ root, procRoot: proc, readCwd: cwd, since: 0 }).map((v) => v.pid), [32], "only the unpinned process");
+    writeFileSync(path.join(root, ".pinned-server"), "");
+    assert.deepEqual(strayChildren({ root, procRoot: proc, readCwd: cwd, since: 0 }), [], "the worktree marker pins everything in it");
+    rmSync(proc, { recursive: true, force: true });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a sweep is a WINDOW: a start after `until` is a later run's fixture, not this sweep's victim", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "voicebox-root-window-"));
+  try {
+    // uptime 1000s: ticks 50000 started 500s ago, ticks 100 000 started 0s ago.
+    const proc = fakeProc([
+      { pid: 41, cmdline: `node ${root}/${SERVER_MJS}`, cwd: root, ticks: 50_000 },
+      { pid: 42, cmdline: `node ${root}/${SERVER_MJS}`, cwd: root, ticks: 100_000 },
+    ], 1000);
+    const cwd = cwdOf();
+    const now = Date.now();
+    const previous = strayChildren({ root, procRoot: proc, readCwd: cwd, since: now - 4 * 3600 * 1000, until: now - 60_000 });
+    assert.deepEqual(previous.map((v) => v.pid), [41], "the older one is inside the window");
+    assert.deepEqual(strayChildren({ root, procRoot: proc, readCwd: cwd, since: 0, until: now + 60_000 }).map((v) => v.pid), [41, 42], "and both are visible without the upper bound");
+    rmSync(proc, { recursive: true, force: true });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
