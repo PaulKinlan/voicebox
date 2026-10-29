@@ -8,7 +8,7 @@ Voicebox enforces a multi-stage verification gate on `git push` via `.githooks/p
 
 - **Candidate Branch Naming & Pushes (`git push origin fleet/<bead-id>`)**:
   - Candidate branches are standardized on strict 1:1 naming with their bead issue: `fleet/<bead-id>` (`voicebox-beads-83ge`). Ad-hoc branch variants (such as `-v2`, `-clean`) are prohibited to prevent remote branch accumulation.
-  - Candidate branch pushes run only `node scripts/docs-touched.mjs` and the fast `unit` test lane (`npm run test:unit`), then exit immediately. This keeps worktree branch pushes fast and lock-free. No manifest is sealed here: a receipt is for a landing.
+  - Candidate branch pushes run only the STATIC documentation stages — `node scripts/docs-touched.mjs` and `node scripts/single-owner.mjs` — and the fast `unit` test lane (`npm run test:unit`), then exit immediately. `node scripts/docs-check.mjs` is deliberately **not** one of them (`voicebox-beads-8c0t`): it boots a scratch server and probes it, measured 36-46s wall at load ~5 on this box, and that boot is its whole cost. Its answer — do the generated blocks and hand-written claims still describe a live server — is produced on the merged union the merger gates and again on the landing, where it runs with the rest of the landing gate. A push with **no** destination information keeps the full gate, docs-check included, because an unseen destination might be a landing. This keeps worktree branch pushes fast and lock-free. No manifest is sealed here: a receipt is for a landing.
 - **Landing on `main` & Remote Branch Auto-Prune**:
   - Pushing to `main` from a non-`main` branch is refused immediately (`[gate] pre-push REFUSED: non-main branch attempting to push to main ref`). Always create worktrees with `--no-track` (`git worktree add --no-track -b <branch> <dir> origin/main`) so worktree branches do not track `origin/main`.
   - Pushing from `main` to `origin/main` runs the full verification pipeline (or fast-paths docs-only `*.md` changes through `docs-check` and `single-owner`), caching both the verified `HEAD^{tree}` SHA and normalized `sourceTree` SHA in `.git/voicebox-gate-passed-tree`, and seals `~/.fleet/checks/<tree>.full.manifest.json` as its last stage (`voicebox-beads-wiby`, `voicebox-beads-83ge`).
@@ -21,11 +21,17 @@ Voicebox enforces a multi-stage verification gate on `git push` via `.githooks/p
 
 | Stage | Command | Execution Mode | Default Timeout |
 |---|---|---|---|
-| **Docs Touched** | `node scripts/docs-touched.mjs` | Static `git diff` check | Immediate |
+| **Docs Touched** | `node scripts/docs-touched.mjs` | Static `git diff` check (every push) | Immediate |
+| **Docs Check** | `node scripts/docs-check.mjs` | Boots a scratch server and probes it — **landings only** (`voicebox-beads-8c0t`); measured 36-46s at load ~5 | `VOICEBOX_GATE_DOCS_SECS` (must outlast the boot) |
+| **Single Owner** | `node scripts/single-owner.mjs` | Static scan of the tree (every push) | Immediate |
 | **Unit Suite** | `node scripts/gate-tier.mjs --tier unit` | Unit lane, **one process per file** | `180s` |
-| **Live Suite** | `node scripts/gate-tier.mjs --tier live` | Server lane (`--test-concurrency=2`) then the Browser CDP shard runner (2 workers, one file each) — one process per file | `3600s` |
+| **Live Suite** | `node scripts/gate-tier.mjs --tier live` | Server lane (`--test-concurrency=2`) then the Browser CDP shard runner (1 worker, one file at a time) — one process per file | `3600s` |
 | **Acceptance** | `npm run accept` | End-to-end headless Chromium verification (`page-acceptance.mjs`) | `45s` |
 | **Full Manifest** | `node scripts/gate-manifest.mjs aggregate --gate full --tier-dir <scratch>` | Folds the three tier records into `<tree>.full.manifest.json` | `60s` |
+
+The live stage bound is 3600s for two different measured reasons, both of which it satisfies: it outlasts the
+browser tier's file time on a starved box (voicebox-beads-i9k0) and it sits above both the slowest isolated browser
+file and `ISOLATED_FILE_MS` (voicebox-beads-ncrg).
 
 Each test tier runs its lane **file by file**, through `scripts/gate-tier.mjs`, and writes one TIER RECORD
 into the scratch directory the gate owns for the run. That is the same shape the fast gate
@@ -141,7 +147,16 @@ Each bound can be raised or tightened per run without editing the gate:
 - The **manifest** bound is `VOICEBOX_GATE_MANIFEST_SECS`, and the per-file budget the tier runner gives a
   test file is derived per tier from measured headroom (`TIER_FILE_MS`: unit 120s, server 300s, browser 240s; default 240s),
   overridable by `VOICEBOX_GATE_FILE_SECS` or `--file-secs`. Sitting under the unit stage bound (180s) ensures a wedged unit
-  file is recorded timeout by name without aborting the lane (voicebox-beads-ak9h). Longest-first unit queue ordering via
+  file is recorded timeout by name without aborting the lane (voicebox-beads-ak9h). **A file the tier runs ALONE** (`ISOLATED`
+  in `scripts/test-shards.mjs`) gets `ISOLATED_FILE_MS` (600s) instead: the tier bound is a guard on the *other* files, and an
+  isolated file has none, so it only misfires on a healthy file that spawns whole gates — `tests/pre-push.test.mjs` measures
+  315s quiet and 408s at load ~9, and was killed at 300s with nothing wrong with it (voicebox-beads-ncrg). Its two cheaper
+  fixes were measured and rejected: the fixture setup costs 0.4s, and overlapping the arms at concurrency 3 made the file
+  slower (377s, two arms cancelled) because every arm already waits on children. The live stage bound is 900s for the same
+  reason — it must outlast the slowest browser file, not the quiet box. The browser tier is dispatched by
+  `tools/browser-shard-runner.mjs`, not by the tier runner, so that bound is passed down to it
+  (`--file-timeout-ms` / `--isolated-timeout-ms`) and applied per file there: a bound that exists only in the caller
+  is a bound that does not exist (the first version of this fix had exactly that defect, caught in re-review). Longest-first unit queue ordering via
   `buildQueue` (`scripts/gate-tier.mjs`) dispatches heavy suites (`test-changed`, `transient-state`) first, preventing
   worker tail starvation under contention (voicebox-beads-hfa8).
 
@@ -167,7 +182,7 @@ and `tests/browser-shard-runner.test.mjs`. A fixture that wants a file in a seri
 (a constructed path is enough, e.g. `path.join('lib', 'server.mjs')`); an import is NOT always usable, because some
 fixtures really execute the files they write in a disposable repo that has no `lib/`, and an import there fails
 `ERR_MODULE_NOT_FOUND` rather than classifying.
-`scripts/test-lanes.mjs` lexes every `tests/*.test.mjs` file (ignoring comments and fixture string writes) to classify it into the appropriate lane. A test may declare its expected lane in a leading line comment, such as `// @lane unit`, `// @lane server`, or `// @lane browser` (before executable code). The declaration does **not** override classifier signals: `node scripts/test-lanes.mjs --check` refuses a mismatch and names the file, declared lane, actual lane and launch signal. A newly added file need not update a shared integer count; its own declaration can pin a critical boundary. The lanes are:
+`scripts/test-lanes.mjs` lexes every `tests/*.test.mjs` file (ignoring comments and fixture string writes) to classify it into the appropriate lane. **The roster is cached across processes (voicebox-beads-idy6)**: lexing 271 files costs 11-20s on a starved VM and every gate process paid it once (`tests/test-changed.test.mjs` paid it ~17x through CLI probes, wedging the unit lane past its budgets). Each cache entry is keyed by `sha256(classifier source + test file source)` — a one-byte edit to one test file invalidates exactly that entry, a classifier edit invalidates all of them, so staleness is impossible by construction. The cache lives in the git **common** dir (`voicebox-lane-classify-v1.json`, shared by every worktree, never dirtying the working tree), is written atomically (tmp + rename), and a corrupt or unreadable cache is ignored and rebuilt rather than failing the gate. It is a cross-process disk cache, not a per-process memo: every call still re-reads every file, so the re-classification assertion in `tests/gate-manifest.test.mjs` keeps its strength. A test may declare its expected lane in a leading line comment, such as `// @lane unit`, `// @lane server`, or `// @lane browser` (before executable code). The declaration does **not** override classifier signals: `node scripts/test-lanes.mjs --check` refuses a mismatch and names the file, declared lane, actual lane and launch signal. A newly added file need not update a shared integer count; its own declaration can pin a critical boundary. The lanes are:
 - **`unit` lane**: Pure logic, state machine, and worker tests (including `tests/wasm-shelf.test.mjs` and `tests/docs-drift.test.mjs`) that do not spawn `server.mjs`, `createServer`, `task-fixture.mjs`, or headless Chromium.
 - **`live` lane**:
   - **Server sub-lane (`--lane server`)**: Spawns `server.mjs` or HTTP servers without launching a browser; runs with `--test-concurrency=4`.
@@ -392,6 +407,7 @@ orchestrator for the full suite: `--gate-kind full` exists so the same accountin
 merger's union, and a full gate may not omit a classified file at all.
 
 - **Fail-closed invocation (voicebox-beads-hqst).** The CLI accepts `--dry-run`, `--json`, `--gate`, `--allow-unmapped`, `--base <ref>`, `--gate-kind <fast|full>`, `--manifest-dir <path>`, `--help`/`-h`, positional changed paths and `--` to end option parsing. An unknown flag (including `--flag=value`) or an option missing its value is refused with exit 2 before git selection, test dispatch or manifest creation. `--gate-kind` and `--manifest-dir` require `--gate`; gate mode does not accept developer-only `--json`. `--help` prints usage and exits 0 without those actions, even if a test path is supplied; unknown/malformed flags still refuse alongside help. Module imports may still read the test roster, so this guarantees no action, not instant startup. `tests/test-changed.test.mjs` drives negative invocations under a disposable no-child-process preload and asserts that no manifest is created.
+- **The gate takes its children with it (voicebox-beads-zpti).** The fast gate's CLI entry installs `SIGTERM`/`SIGINT` handlers that kill the tracked per-file children's **process groups** (`killRunningChildren`, the same shape `scripts/gate-tier.mjs` has) before exiting with a bounded 3s fallback. The handlers are load-bearing, not courtesy: each dispatched file leads its own process group (so a per-file timeout can take a wedged file down with whatever it launched), which means a signal to the gate process alone — or to its group — never reaches them. Measured: a TERM'd unit tier left a wasm execution cell spinning at 100% CPU until the VM reaper found it 30 minutes later.
 - **Strict scope.** `--allow-unmapped` is a developer escape and the gate refuses it outright (exit 2): a
   gate that may be told to ignore a path it cannot map has no scope, and its PASS is a statement about
   nothing. A mapped test file that is in **no** lane is refused by name rather than quietly run in the

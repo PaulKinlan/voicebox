@@ -573,7 +573,15 @@ test("cancel observes the runner's real terminal state (stored records are copie
     environment, instance: "tab-cancel-b", boot: "boot-cancel",
     executor: () => ({
       check: () => ({ ok: true, mechanism: "test", bounds: { deadlineMs: 5000, maxOutputBytes: 1024 } }),
-      run: async () => { await new Promise((r) => setTimeout(r, 300)); return "finished anyway"; },
+      // COMPLETES INSIDE THE GRACE, DETERMINISTICALLY (voicebox-beads-i9k0). A fixed 300ms from START raced the
+      // test's own setup - up to 50 x 10ms of task_status polling plus request overhead - so in a loaded unit tier
+      // the task had already completed before cancel arrived and cancel_task refused with "task-not-running",
+      // which is exactly the assertion this case makes. The executor still IGNORES the abort and finishes anyway,
+      // but it now starts its 300ms when the abort lands, so "completes during the grace" is a fact: the grace is
+      // 1500ms (lib/task-placement.mjs cancelTask), leaving 5x headroom.
+      run: ({ signal }) => new Promise((resolve) => {
+        signal.addEventListener("abort", () => setTimeout(() => resolve("finished anyway"), 300), { once: true });
+      }),
     }),
   });
   const b = await ignoring.call("delegate_task", { agent: "test", task: "hold" }, authorityB);

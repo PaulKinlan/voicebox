@@ -203,6 +203,10 @@ _unit_secs="${VOICEBOX_GATE_UNIT_SECS:-${VOICEBOX_GATE_TESTS_SECS:-900}}"
 # completion UNKNOWN. 3600s is a starved-box bound over the measured cost; the per-file
 # bound (scripts/test-shards.mjs TIER_FILE_MS.browser) still names a wedged file, so the
 # stage bound only decides how long a slow tier is allowed to finish.
+# MERGER UNION: voicebox-beads-ncrg (8c0t) separately requires this bound to OUTLAST the slowest
+# isolated browser file - tests/pre-push.test.mjs drives ~20 whole gate runs as children and measures
+# 315s quiet / 408s at load ~9 - and to sit above ISOLATED_FILE_MS in scripts/test-shards.mjs.
+# 3600s satisfies both readings; 400s and 900s each failed one of them.
 _live_secs="${VOICEBOX_GATE_LIVE_SECS:-3600}"
 _accept_secs="${VOICEBOX_GATE_ACCEPT_SECS:-45}"
 # The docs-check probe has a 30s server-start bound plus runtime probes (47s observed on a busy VM).
@@ -370,8 +374,32 @@ if [ "$_allow_receipt_bypass" = "1" ]; then
   fi
 fi
 
-if [ -f scripts/docs-check.mjs ]; then
-  run_stage docs-check "$_docs_secs" node scripts/docs-check.mjs
+# ── DOCS-CHECK PROBES A LIVE SERVER, SO IT BELONGS TO THE LANDING (voicebox-beads-8c0t) ──
+# docs-check is the only docs stage that boots a scratch server, and that boot is the whole cost: 8-20s of
+# module init under contention on this 2-vCPU VM plus the probes, measured 36-46s wall at load ~5 — which
+# is why its stage bound has to outlast that boot (voicebox-beads-ecyb) and why paying it on every
+# candidate push refused lane pushes for a reason unrelated to the change (voicebox-beads-8ckj).
+#
+# The docs rule is two halves, and only the expensive half is a landing's. The HAND-WRITTEN half is
+# docs-touched: one `git diff` against every file path a document names, so it still runs on every push —
+# that is what catches "you moved a file a document describes". single-owner is a static scan of the tree
+# and costs seconds, so it still runs on every push too. docs-check's own answer — do the generated blocks
+# and the hand-written claims still describe a LIVE server — is answered on the merged union the merger
+# gates and again on the landing; a candidate push cannot answer it about the tree that lands, so paying
+# for it there bought nothing the landing does not already produce.
+#
+# A push with NO destination information keeps the full gate, exactly as the live/acceptance split below
+# does (voicebox-beads-uadl): an unseen destination might be a landing.
+_landing_push=1
+if [ "$_had_destination" = "1" ] && [ "$_destination_is_main" != "1" ]; then
+  _landing_push=0
+fi
+if [ "$_landing_push" = "1" ]; then
+  if [ -f scripts/docs-check.mjs ]; then
+    run_stage docs-check "$_docs_secs" node scripts/docs-check.mjs
+  fi
+else
+  echo "[gate] pre-push: candidate-branch push — docs-check probes a live server and runs on the landing to main; the static docs stages still run here"
 fi
 if [ -f scripts/single-owner.mjs ]; then
   run_stage single-owner "$_docs_secs" node scripts/single-owner.mjs
@@ -426,7 +454,7 @@ fi
 # destination information (direct script runs, exotic transports) keeps the FULL gate: an
 # unseen destination might be a landing, and the conservative answer is the old behaviour.
 if [ "$_had_destination" = "1" ] && [ "$_destination_is_main" != "1" ]; then
-  echo "[gate] pre-push: feature-branch push — unit lane is the gate; live/acceptance run on the landing to main"
+  echo "[gate] pre-push: feature-branch push — unit lane is the gate; docs-check, live/acceptance run on the landing to main"
   # The unit tier recorded what it measured, but no full manifest is sealed for a candidate push (that is a
   # landing receipt), so the scratch directory is not evidence worth keeping.
   [ -n "$_tier_dir" ] && rm -rf "$_tier_dir"

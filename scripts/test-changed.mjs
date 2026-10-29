@@ -6,6 +6,7 @@
 
 import { execFileSync, spawn } from "node:child_process";
 import { readdirSync, readFileSync, existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { gitEnv } from "../lib/git-env.mjs";
@@ -312,8 +313,11 @@ export { artifactDir };
  * The per-file children a gate has IN FLIGHT. A child leads its own process group (below) so that a
  * per-file timeout takes down the browser or server it started with it — which means nothing else kills it
  * when the GATE is signalled. `killRunningChildren` is how a caller (scripts/gate-tier.mjs, which runs each
- * tier under the pre-push gate's bounded `timeout`) takes them with it instead of orphaning them for the
- * reaper. The fast gate does not install a handler; its outer queue (`fleet-gate`) owns the process group.
+ * tier under the pre-push gate's bounded `timeout`, and this script's own CLI entry, below) takes them with
+ * it instead of orphaning them for the reaper. The outer queue owning the process group is NOT sufficient:
+ * these children lead their OWN groups (deliberately, so a per-file timeout takes a wedged file down with
+ * its browser), so a signal to this process alone — or to its group — never reaches them (measured:
+ * voicebox-beads-zpti, a TERM'd unit tier left a wasm cell spinning at 100% CPU for 30 minutes).
  */
 const RUNNING_CHILDREN = new Set();
 
@@ -838,5 +842,14 @@ export async function main() {
 }
 
 if (process.argv[1] && process.argv[1].endsWith("test-changed.mjs")) {
+  // THE FAST GATE TAKES ITS CHILDREN WITH IT (voicebox-beads-zpti). The handler kills the tracked
+  // children's process GROUPS and then LEAVES: installing a handler suppresses node's default
+  // termination, so the bounded exit keeps an outer `timeout --kill-after` from having to SIGKILL a
+  // gate that has already answered. (Same shape as scripts/gate-tier.mjs's stop().)
+  const stop = (signal) => {
+    killRunningChildren(signal);
+    setTimeout(() => process.exit(128 + (os.constants.signals[signal] ?? 0)), 3000).unref();
+  };
+  for (const signal of ["SIGTERM", "SIGINT"]) process.once(signal, () => stop(signal));
   process.exit(await main());
 }

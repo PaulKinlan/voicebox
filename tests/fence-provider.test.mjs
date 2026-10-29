@@ -195,7 +195,7 @@ test("declared-and-booted through the registry, the measured boundary survives t
   try {
     const declared = await fetch(`${server.base}/api/environments`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-voicebox-host-token": server.hostToken },
       body: JSON.stringify({ label: "fenced box", kind: "fence", fence: true }),
     }).then((r) => r.json());
     assert.equal(declared.ok, true, `boot failed: ${JSON.stringify(declared)}`);
