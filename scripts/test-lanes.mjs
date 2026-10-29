@@ -512,23 +512,45 @@ function topLaneDeclaration(source, tokens) {
 function read(source) {
   const tokens = lex(source);
   if (!tokens) return null;
-  const text = source.split("");
-  const code = source.split("");
-  const blank = (chars, s, e) => {
-    for (let at = s; at < e; at++) if (chars[at] !== "\n") chars[at] = " ";
+  // SEGMENTS, NOT CHARACTER ARRAYS (voicebox-beads-884i). This used to split the file into two
+  // `Array#split("")` copies and then walk every token range char by char to overwrite the blanked
+  // ones: 2s of the classifier's 15s per-MB cost sat here, plus a GC bill for the arrays. The blanked
+  // regions are collected as ranges and emitted as `source.slice(s, e)` with its non-newline
+  // characters replaced by spaces — the SAME string, one native pass per range instead of a JS loop.
+  // Overlapping ranges are merged first, because blanking is idempotent and a template's `${…}` tokens
+  // nest inside the template's own range.
+  const intervals = (ranges) => {
+    const sorted = ranges.filter(({ s, e }) => e > s).sort((a, b) => a.s - b.s || a.e - b.e);
+    const merged = [];
+    for (const { s, e } of sorted) {
+      const last = merged[merged.length - 1];
+      if (last && s <= last.e) last.e = Math.max(last.e, e);
+      else merged.push({ s, e });
+    }
+    return merged;
   };
+  const masked = (ranges) => {
+    const parts = [];
+    let at = 0;
+    for (const { s, e } of intervals(ranges)) {
+      parts.push(source.slice(at, s), source.slice(s, e).replace(/[^\n]/g, " "));
+      at = e;
+    }
+    parts.push(source.slice(at));
+    return parts.join("");
+  };
+  const comments = [];
+  const literals = [];
+  const written = [];
   for (const { k, s, e } of tokens) {
-    if (k === "com") {
-      blank(text, s, e);
-      blank(code, s, e);
-    } else if (k === "str") blank(code, s + 1, e - 1);
-    else if (k === "tpl" || k === "re") blank(code, s, e);
+    if (k === "com") comments.push({ s, e });
+    else if (k === "str") literals.push({ s: s + 1, e: e - 1 });
+    else if (k === "tpl" || k === "re") literals.push({ s, e });
   }
-  for (const { k, s, e } of writtenLiterals(tokens)) {
-    if (k === "str") blank(text, s + 1, e - 1);
-    else blank(text, s, e);
-  }
-  const views = { text: text.join(""), code: code.join(""), ...topLaneDeclaration(source, tokens) };
+  for (const { k, s, e } of writtenLiterals(tokens)) written.push(k === "str" ? { s: s + 1, e: e - 1 } : { s, e });
+  const text = masked([...comments, ...written]);
+  const code = masked([...comments, ...literals]);
+  const views = { text, code, ...topLaneDeclaration(source, tokens) };
   views.evaluates = EVALUATES.text.test(views.text) || EVALUATES.code.test(views.code);
   return views;
 }
@@ -730,3 +752,4 @@ if (CLI) {
   console.log(`unit: ${unit.length} files\nlive: ${live.length} files`);
   for (const { file, why } of live) console.log(`  live  ${file} — ${why}`);
 }
+
