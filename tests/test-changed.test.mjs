@@ -208,7 +208,11 @@ test("CLI --json: outputs structured mapping payload", () => {
 test("CLI -- ends option parsing: a flag-shaped changed path cannot secretly enable the gate", () => {
   // --json returns before test dispatch even if the sentinel parser regresses; the assertion
   // then catches the accidental --gate interpretation without launching any suite.
-  const res = spawnSync(process.execPath, [SCRIPT, "--json", "--", "--gate"], { cwd: root, encoding: "utf8", timeout: 30000 });
+  // 120s, not 30s (voicebox-beads-p2r9): --json still lexes every test file to classify it, which costs
+  // 11-20s on an idle box and overran 30s inside the gate's unit tier at 7 workers (status null = SIGTERM
+  // from this very timeout). The arm is about "--" ending option parsing, not about how fast the
+  // classifier is, so the bound only has to be long enough to be a hang detector on a loaded box.
+  const res = spawnSync(process.execPath, [SCRIPT, "--json", "--", "--gate"], { cwd: root, encoding: "utf8", timeout: 120000 });
   assert.equal(res.status, 0, res.stderr);
   const data = JSON.parse(res.stdout);
   assert.deepEqual(data.changed, ["--gate"]);
