@@ -46,7 +46,7 @@ In `docs/archive/00-brief.md` and `docs/archive/interface.md`, Voicebox specifie
 2. **Landing Proposal & Merge API (`server.mjs`)**:
    - Exposes host endpoints to list pending candidate branches, inspect unified diffs and conflict pre-checks, and execute either a clean fast-forward/merge or a non-destructive `"keep separate"` dismissal.
 3. **"Waiting to Land" Inspector UI (**public/apps/landing-inspector.html**)**:
-   - Launchable on demand to render pending worktree landings with syntax-highlighted diffs and one-click or voice-triggered review, merge, and keep-separate controls.
+   - Launchable on demand to render pending worktree landings with syntax-highlighted diffs and one-click or voice-triggered review, merge, and keep-separate controls. The landing claim is earned by the host's ANSWER, never by the transport: `public/apps/landing-inspector.js` POSTs `POST /api/branches/merge` (`lib/routes/branches.mjs`) and treats `{ok: true}` in the body as the only success, so a refused merge, a rejected request and a 404 are all reported as failures carrying the host's own `why`. The older code discarded the response, printed "Landed … cleanly into main" for a 404 against a route that did not exist, and marked `kept-separate` locally without asking the host at all (voicebox-beads-ulhi, pinned by `tests/landing-inspector-land-status.test.mjs`, which also reads the host's route table so a rename on either side fails the test rather than a person's branch).
 
 ---
 
