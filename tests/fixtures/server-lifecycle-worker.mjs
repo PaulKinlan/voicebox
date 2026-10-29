@@ -5,7 +5,10 @@ import { once } from "node:events";
 import { execFileSync } from "node:child_process";
 import { startServer } from "../lib/server.mjs";
 
-const server = await startServer({ readyTimeoutMs: 5000 });
+// 30s, not 5s (voicebox-beads-ready-budgets): this worker boots the real server, and on a loaded fleet
+// box (load 5+, unit tier files taking 150s) module load alone can exceed 5s. A readiness budget is a
+// hang detector, not an assertion - measured 6.4s failures on a box that answered in 1s when quiet.
+const server = await startServer({ readyTimeoutMs: 30000 });
 const processGroup = (pid) => {
   if (process.platform === "linux" && existsSync(`/proc/${pid}/stat`)) {
     try {
