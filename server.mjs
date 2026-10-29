@@ -703,7 +703,12 @@ function runProbe() {
   sweepOrphanedProbeMarkers(ROOT);
   if (process.cwd() !== ROOT) sweepOrphanedProbeMarkers(process.cwd());
   return new Promise((resolve, reject) => {
-    execFile(process.execPath, [PROBE_SCRIPT], { timeout: 15000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+    // 60s, not 15s (voicebox-beads-i9k0): the probe is a child process competing with every other test on
+    // the box. It answers in 0.19s idle, but a gate unit tier at 7 workers (load 16 measured on 2026-10-29)
+    // stalled it past 15s, the child was killed with no stdout, and GET /api/probe answered 500 - which turned
+    // docs-drift red for "the documents describe the code" when nothing about the documents had changed. The
+    // bound is a hang detector: a probe that hangs must still be named, but a busy box must not read as drift.
+    execFile(process.execPath, [PROBE_SCRIPT], { timeout: 60000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
       sweepOrphanedProbeMarkers(ROOT);
       if (process.cwd() !== ROOT) sweepOrphanedProbeMarkers(process.cwd());
       const text = String(stdout ?? "").trim();
