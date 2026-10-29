@@ -39,7 +39,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { classify } from "../scripts/test-lanes.mjs";
-import { assertExactCoverage, buildQueue, isFailed, splitQueue, TIER_WORKERS } from "../scripts/test-shards.mjs";
+import { assertExactCoverage, buildQueue, ISOLATED, isFailed, splitQueue, TIER_WORKERS } from "../scripts/test-shards.mjs";
 import { emitMarker, testChildEnv } from "../scripts/gate-manifest.mjs";
 import { loadavg1m } from "../lib/host-load.mjs";
 import { findBrowserBinary } from "../lib/browser-binaries.mjs";
@@ -76,6 +76,13 @@ if (PARALLEL_ONLY && ISOLATED_ONLY) {
 // A file that wedges must not hold a worker for the whole stage bound. The longest file measured is
 // 24.3s; 300s is over twelve times that, and a killed file is reported as a failure, never as a pass.
 const FILE_TIMEOUT_MS = Number(flag("file-timeout-ms", 300_000));
+// AN ISOLATED FILE GETS THE STAGE'S BUDGET, NOT THE TIER'S (voicebox-beads-ncrg). The 300s constant above is
+// a guard on the files sharing a worker; a file in ISOLATED runs with no sibling beside it, so that number
+// only misfires on a healthy file that spawns whole gates — tests/pre-push.test.mjs measures 315s quiet and
+// 408s at load ~9, and was killed at 300s. The tier passes both numbers down (scripts/gate-tier.mjs
+// runBrowserTier); an explicit --file-secs still wins because gate-tier then sends the same value twice.
+const ISOLATED_TIMEOUT_MS = Number(flag("isolated-timeout-ms", 600_000));
+const fileTimeoutFor = (file) => (ISOLATED.has(file) ? Math.max(FILE_TIMEOUT_MS, ISOLATED_TIMEOUT_MS) : FILE_TIMEOUT_MS);
 
 const lane = classify().browser.map(({ file }) => `tests/${file}`);
 const laneQueue = buildQueue(lane);
@@ -245,7 +252,7 @@ function runFile(file, warmUrl = null) {
     const timer = setTimeout(() => {
       killGroup(child, "SIGTERM");
       setTimeout(() => killGroup(child, "SIGKILL"), 5000).unref();
-    }, FILE_TIMEOUT_MS);
+    }, fileTimeoutFor(file));
     // THE BOX, AROUND THIS FILE. Two readings bracket the child's own window (voicebox-beads-zjpm.6): the
     // same file measured 12.2s at four-way idle and 39.1s in a loaded gate, and before this the artifact held
     // only the 39.1s. These are 1-minute averages, so they lag a burst — which is why both ends are kept and
@@ -369,7 +376,9 @@ if (process.env.VOICEBOX_GATE_TIER_RECORD) {
       path: r.file,
       status: !isFailed(r) ? "passed" : r.tests >= 0 ? "failed" : "unknown",
       counts: r.tests >= 0 ? { tests: r.tests, pass: r.pass, fail: r.fail, skipped: r.skipped } : null,
-      timeout_ms: FILE_TIMEOUT_MS,
+      // THE BOUND THAT WAS ACTUALLY APPLIED (voicebox-beads-ncrg): recording the tier constant while the timer
+      // used an isolated file's 600s would make the artifact say a file was killed under a bound it never had.
+      timeout_ms: fileTimeoutFor(r.file),
       secs: Math.round(r.ms) / 1000,
       // The manifest keeps this per file: a sweep of the browser tier can then show which files were measured
       // on a loaded box and which were not, without anybody re-running anything (voicebox-beads-zjpm.6).

@@ -8,7 +8,7 @@ Voicebox enforces a multi-stage verification gate on `git push` via `.githooks/p
 
 - **Candidate Branch Naming & Pushes (`git push origin fleet/<bead-id>`)**:
   - Candidate branches are standardized on strict 1:1 naming with their bead issue: `fleet/<bead-id>` (`voicebox-beads-83ge`). Ad-hoc branch variants (such as `-v2`, `-clean`) are prohibited to prevent remote branch accumulation.
-  - Candidate branch pushes run only `node scripts/docs-touched.mjs` and the fast `unit` test lane (`npm run test:unit`), then exit immediately. This keeps worktree branch pushes fast and lock-free. No manifest is sealed here: a receipt is for a landing.
+  - Candidate branch pushes run only the STATIC documentation stages — `node scripts/docs-touched.mjs` and `node scripts/single-owner.mjs` — and the fast `unit` test lane (`npm run test:unit`), then exit immediately. `node scripts/docs-check.mjs` is deliberately **not** one of them (`voicebox-beads-8c0t`): it boots a scratch server and probes it, measured 36-46s wall at load ~5 on this box, and that boot is its whole cost. Its answer — do the generated blocks and hand-written claims still describe a live server — is produced on the merged union the merger gates and again on the landing, where it runs with the rest of the landing gate. A push with **no** destination information keeps the full gate, docs-check included, because an unseen destination might be a landing. This keeps worktree branch pushes fast and lock-free. No manifest is sealed here: a receipt is for a landing.
 - **Landing on `main` & Remote Branch Auto-Prune**:
   - Pushing to `main` from a non-`main` branch is refused immediately (`[gate] pre-push REFUSED: non-main branch attempting to push to main ref`). Always create worktrees with `--no-track` (`git worktree add --no-track -b <branch> <dir> origin/main`) so worktree branches do not track `origin/main`.
   - Pushing from `main` to `origin/main` runs the full verification pipeline (or fast-paths docs-only `*.md` changes through `docs-check` and `single-owner`), caching both the verified `HEAD^{tree}` SHA and normalized `sourceTree` SHA in `.git/voicebox-gate-passed-tree`, and seals `~/.fleet/checks/<tree>.full.manifest.json` as its last stage (`voicebox-beads-wiby`, `voicebox-beads-83ge`).
@@ -21,11 +21,17 @@ Voicebox enforces a multi-stage verification gate on `git push` via `.githooks/p
 
 | Stage | Command | Execution Mode | Default Timeout |
 |---|---|---|---|
-| **Docs Touched** | `node scripts/docs-touched.mjs` | Static `git diff` check | Immediate |
+| **Docs Touched** | `node scripts/docs-touched.mjs` | Static `git diff` check (every push) | Immediate |
+| **Docs Check** | `node scripts/docs-check.mjs` | Boots a scratch server and probes it — **landings only** (`voicebox-beads-8c0t`); measured 36-46s at load ~5 | `VOICEBOX_GATE_DOCS_SECS` (must outlast the boot) |
+| **Single Owner** | `node scripts/single-owner.mjs` | Static scan of the tree (every push) | Immediate |
 | **Unit Suite** | `node scripts/gate-tier.mjs --tier unit` | Unit lane, **one process per file** | `180s` |
-| **Live Suite** | `node scripts/gate-tier.mjs --tier live` | Server lane (`--test-concurrency=2`) then the Browser CDP shard runner (2 workers, one file each) — one process per file | `3600s` |
+| **Live Suite** | `node scripts/gate-tier.mjs --tier live` | Server lane (`--test-concurrency=2`) then the Browser CDP shard runner (1 worker, one file at a time) — one process per file | `3600s` |
 | **Acceptance** | `npm run accept` | End-to-end headless Chromium verification (`page-acceptance.mjs`) | `45s` |
 | **Full Manifest** | `node scripts/gate-manifest.mjs aggregate --gate full --tier-dir <scratch>` | Folds the three tier records into `<tree>.full.manifest.json` | `60s` |
+
+The live stage bound is 3600s for two different measured reasons, both of which it satisfies: it outlasts the
+browser tier's file time on a starved box (voicebox-beads-i9k0) and it sits above both the slowest isolated browser
+file and `ISOLATED_FILE_MS` (voicebox-beads-ncrg).
 
 Each test tier runs its lane **file by file**, through `scripts/gate-tier.mjs`, and writes one TIER RECORD
 into the scratch directory the gate owns for the run. That is the same shape the fast gate
@@ -141,7 +147,16 @@ Each bound can be raised or tightened per run without editing the gate:
 - The **manifest** bound is `VOICEBOX_GATE_MANIFEST_SECS`, and the per-file budget the tier runner gives a
   test file is derived per tier from measured headroom (`TIER_FILE_MS`: unit 120s, server 300s, browser 240s; default 240s),
   overridable by `VOICEBOX_GATE_FILE_SECS` or `--file-secs`. Sitting under the unit stage bound (180s) ensures a wedged unit
-  file is recorded timeout by name without aborting the lane (voicebox-beads-ak9h). Longest-first unit queue ordering via
+  file is recorded timeout by name without aborting the lane (voicebox-beads-ak9h). **A file the tier runs ALONE** (`ISOLATED`
+  in `scripts/test-shards.mjs`) gets `ISOLATED_FILE_MS` (600s) instead: the tier bound is a guard on the *other* files, and an
+  isolated file has none, so it only misfires on a healthy file that spawns whole gates — `tests/pre-push.test.mjs` measures
+  315s quiet and 408s at load ~9, and was killed at 300s with nothing wrong with it (voicebox-beads-ncrg). Its two cheaper
+  fixes were measured and rejected: the fixture setup costs 0.4s, and overlapping the arms at concurrency 3 made the file
+  slower (377s, two arms cancelled) because every arm already waits on children. The live stage bound is 900s for the same
+  reason — it must outlast the slowest browser file, not the quiet box. The browser tier is dispatched by
+  `tools/browser-shard-runner.mjs`, not by the tier runner, so that bound is passed down to it
+  (`--file-timeout-ms` / `--isolated-timeout-ms`) and applied per file there: a bound that exists only in the caller
+  is a bound that does not exist (the first version of this fix had exactly that defect, caught in re-review). Longest-first unit queue ordering via
   `buildQueue` (`scripts/gate-tier.mjs`) dispatches heavy suites (`test-changed`, `transient-state`) first, preventing
   worker tail starvation under contention (voicebox-beads-hfa8).
 
