@@ -56,12 +56,16 @@ test("the workers are the concurrency the gate already ran at, so per-file dispa
   // ONE OWNER (scripts/test-shards.mjs): the fast gate reads this same value, so a scoped run cannot be
   // more serial than the tier it is a strict subset of (voicebox-beads-buy8).
   assert.equal(TIER_WORKERS.unit, Math.max(1, os.availableParallelism() - 1));
-  assert.equal(TIER_WORKERS.server, 4);
-  // THREE, NOT TWO OR FOUR (voicebox-beads-q4j6.1, measured 2026-10-15): at four shards two full-gate unions went red
-  // on DIFFERENT sets of browser files; at two shards the gate was green but took 750.1s browser-tier wall time.
-  // At three shards, all 92 browser test files pass cleanly with zero timeouts and zero flakes,
-  // reducing browser-tier wall time from 750.1s to 184.2s (a 4.07x browser-tier speedup saving 565.9s / ~9.4 minutes).
-  assert.equal(TIER_WORKERS.browser, 3);
+  // LIVE TIERS: server two, browser ONE (voicebox-beads-i9k0). Server was 4. Browser was 3, then 2.
+  // q4j6.1 measured two shards as GREEN but slow (750.1s browser-tier wall) and three as green and fast
+  // (184.2s) on a healthy box that owns its cores. On THIS host two shards still failed across nine
+  // consecutive gates - always a different set of browser files, always passing standalone, with /proc/stat
+  // showing 9% CPU steal and /proc/pressure/cpu some-avg300 17.8 - while unit and server were green in all
+  // nine. One shard is the width this host can conclude at; it costs wall time, which is why pre-push.sh's
+  // live bound moved to 3600s. Do not raise this without a quiet-box measurement on a host that owns its
+  // cores.
+  assert.equal(TIER_WORKERS.server, 2);
+  assert.equal(TIER_WORKERS.browser, 1);
 });
 
 // ── a file's counts, including the empty run ─────────────────────────────────────────────────────

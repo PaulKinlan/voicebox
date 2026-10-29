@@ -129,6 +129,7 @@ run_stage() {
     unit) _var="VOICEBOX_GATE_UNIT_SECS" ;;
     live) _var="VOICEBOX_GATE_LIVE_SECS" ;;
     acceptance) _var="VOICEBOX_GATE_ACCEPT_SECS" ;;
+    docs-check|docs-touched|single-owner) _var="VOICEBOX_GATE_DOCS_SECS" ;;
     *) _var="" ;;
   esac
   _remedy=""
@@ -194,10 +195,19 @@ run_stage() {
 # is a bound for the starved box, not the quiet one. VOICEBOX_GATE_UNIT_SECS (or
 # the legacy VOICEBOX_GATE_TESTS_SECS) still overrides it — that is the remedy
 # the refusal message names.
-_unit_secs="${VOICEBOX_GATE_UNIT_SECS:-${VOICEBOX_GATE_TESTS_SECS:-180}}"
-_live_secs="${VOICEBOX_GATE_LIVE_SECS:-400}"
+_unit_secs="${VOICEBOX_GATE_UNIT_SECS:-${VOICEBOX_GATE_TESTS_SECS:-900}}"
+# THE LIVE BOUND WAS 400s, WHICH IS BELOW THE MEASURED COST OF THE TIER IT BOUNDS
+# (voicebox-beads-i9k0). The browser tier is 94 files / ~2246s of file time, i.e. ~1123s
+# of wall clock at two shards on an otherwise quiet VM, and 2400s was not enough on
+# 2026-10-28 when the box ran 3-5x slower - that gate was killed at the stage bound with
+# completion UNKNOWN. 3600s is a starved-box bound over the measured cost; the per-file
+# bound (scripts/test-shards.mjs TIER_FILE_MS.browser) still names a wedged file, so the
+# stage bound only decides how long a slow tier is allowed to finish.
+_live_secs="${VOICEBOX_GATE_LIVE_SECS:-3600}"
 _accept_secs="${VOICEBOX_GATE_ACCEPT_SECS:-45}"
-_docs_secs="${VOICEBOX_GATE_DOCS_SECS:-30}"
+# The docs-check probe has a 30s server-start bound plus runtime probes (47s observed on a busy VM).
+# This stage bound must outlast both; the other static docs stages share it but finish promptly.
+_docs_secs="${VOICEBOX_GATE_DOCS_SECS:-120}"
 # The manifest stage reads what the three tier records already say (JSON + one `git diff`), so it costs
 # seconds; the bound is there because a stage without one is a stage that can hang the landing.
 _manifest_secs="${VOICEBOX_GATE_MANIFEST_SECS:-60}"

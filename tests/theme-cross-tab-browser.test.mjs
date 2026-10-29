@@ -52,7 +52,10 @@ test("theme: a second real tab follows choice, OS, removal and poisoned storage 
     return result.result.value;
   };
   const untilB = (predicate) => b(`new Promise((resolve, reject) => {
-    const end = Date.now() + 6000;
+    // A CROSS-TAB BROADCAST IS A MESSAGE-HOP, NOT A CPU COMPUTATION (voicebox-beads-i9k0): 6s was enough
+    // on a quiet box and not enough at load 12, where this failed the 2026-10-28 00:14 full gate with
+    // 'tab B did not reach #theme-select === light' while the same tree passed standalone.
+    const end = Date.now() + 30000;
     const timer = setInterval(() => {
       if (${predicate}) { clearInterval(timer); resolve(${snapshot}); }
       else if (Date.now() > end) { clearInterval(timer); reject(Error(${JSON.stringify('tab B did not reach: ' + predicate)})); }

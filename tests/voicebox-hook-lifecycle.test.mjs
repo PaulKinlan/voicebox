@@ -33,7 +33,7 @@ function descendants(pid) {
   return [...seen].filter((p) => p !== pid);
 }
 
-test("a zero-match voicebox suite exits and reaps exactly its spawned server", { timeout: 15000 }, async (t) => {
+test("a zero-match voicebox suite exits and reaps exactly its spawned server", { timeout: 90000 }, async (t) => {
   const procAvailable = existsSync(`/proc/${process.pid}/task/${process.pid}/children`);
   if (!procAvailable) t.diagnostic("exact-PID liveness UNSUPPORTED: /proc task children unavailable");
   // Node marks test workers as recursive; remove that marker for a genuinely separate runner.
@@ -67,7 +67,7 @@ test("a zero-match voicebox suite exits and reaps exactly its spawned server", {
     timedOut = true;
     try { process.kill(-child.pid, "SIGTERM"); } catch { /* already exited */ }
     setTimeout(() => { try { process.kill(-child.pid, "SIGKILL"); } catch { /* already exited */ } }, 300).unref();
-  }, 8000);
+  }, 60000);
   const finished = await new Promise((resolve, reject) => {
     child.once("error", reject);
     child.once("exit", (code, signal) => resolve({ code, signal }));
@@ -78,7 +78,7 @@ test("a zero-match voicebox suite exits and reaps exactly its spawned server", {
   if (timedOut) {
     for (const [pid] of alive) { try { process.kill(-pid, "SIGKILL"); } catch { /* already gone */ } }
   }
-  assert.equal(timedOut, false, `zero-match suite exceeded 8s; exact servers=${JSON.stringify(alive)}; observed=${JSON.stringify([...observed])}; ${output.slice(-800)}`);
+  assert.equal(timedOut, false, `zero-match suite exceeded 60s; exact servers=${JSON.stringify(alive)}; observed=${JSON.stringify([...observed])}; ${output.slice(-800)}`);
   assert.equal(finished.code, 0, `zero-match suite failed: ${output.slice(-800)}`);
   if (procAvailable) assert.ok(servers.size > 0, `no exact server PID was observed; liveness unverified: ${JSON.stringify([...observed])}`);
   assert.deepEqual(alive, [], `server PID/starttime survived test exit: ${JSON.stringify(alive)}`);

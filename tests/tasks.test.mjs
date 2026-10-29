@@ -27,7 +27,12 @@ function fixture(t, implementation) {
 function runner(run, deadlineMs = 2000) {
   return { check: () => ({ ok: true, mechanism: "closed-no-effects-unit-fixture", bounds: { deadlineMs, maxOutputBytes: 32 } }), run };
 }
-async function until(read, predicate, timeoutMs = 3000) {
+// A MACHINE-SPEED DEADLINE, NOT A SEMANTIC ONE (voicebox-beads-i9k0, 2026-10-28): 3000ms was not enough
+// under the unit tier's own concurrency (7 workers) on this VM - the 16:35 run failed here with the
+// observed value already correct (["interrupted" x8]), i.e. the poll window expired a moment before the
+// condition it was waiting for was satisfied, and the arm passes 2/2 standalone in ~3s. Waiting longer
+// asserts exactly the same thing; it just stops failing a healthy lane on a starved box.
+async function until(read, predicate, timeoutMs = 15000) {
   const end = Date.now() + timeoutMs;
   while (Date.now() < end) {
     const value = read();

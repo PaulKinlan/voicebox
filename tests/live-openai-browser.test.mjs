@@ -100,7 +100,16 @@ async function fixture(t, envProvider = "openai", selectedProvider = "openai", d
   };
 }
 
-test("OpenAI browser: real function call writes and answers; invalid calls refuse", { timeout: 20000 }, async t => {
+// THE ARM BUDGETS ARE HANG DETECTORS, NOT SPEED CLAIMS (voicebox-beads-i9k0). Measured on this VM: arm 1
+// takes 21.0s in a full gate and 12-13s standalone; the two "Selected" arms take 15.7s in a gate and
+// 13-14.7s standalone; the two transcript arms 16-18s. The 20s and 15s budgets sat 1.3-1.5x above the real
+// runtime, so the 2026-10-28 23:44 full gate failed arms 1 and 2 at 21098ms/15700ms while arms 3, 4 and 5
+// passed on the same box - and the same tree passed this file standalone. Every speed claim in these arms
+// is asserted on its own line (the declaration/capture agreement, the refusal, the redaction); the budget
+// only decides how long a wedged browser is given, so it is sized for the box the gate actually runs on.
+const ARM = { timeout: 180000 };
+
+test("OpenAI browser: real function call writes and answers; invalid calls refuse", ARM, async t => {
   const f = await fixture(t);
   assert.equal((await f.read()).controls.some(c => c.type === "debug"), false, "normal sessions do not transmit debug payloads");
   const setup = f.row.messages.find(msg => msg.type === "session.update").session;
@@ -146,7 +155,7 @@ test("OpenAI browser: real function call writes and answers; invalid calls refus
 for (const [environment, selected, rate, model] of [
   ["gemini", "openai", 24000, "gpt-realtime"],
   ["openai", "gemini", 16000, "models/gemini-3.8-live"],
-]) test(`Selected ${selected}: declaration and native capture agree despite ${environment} environment`, { timeout: 15000 }, async t => {
+]) test(`Selected ${selected}: declaration and native capture agree despite ${environment} environment`, ARM, async t => {
   const f = await fixture(t, environment, selected);
   const first = await f.read();
   assert.equal(f.row.provider, selected, "actual vendor destination");
@@ -164,7 +173,7 @@ for (const [environment, selected, rate, model] of [
   assert.equal(state.model, model);
 });
 
-for (const provider of ["gemini", "openai"]) test(`Debug transcript: ${provider} failing tool → clipboard, with redaction and error navigation`, { timeout: 30000 }, async t => {
+for (const provider of ["gemini", "openai"]) test(`Debug transcript: ${provider} failing tool → clipboard, with redaction and error navigation`, ARM, async t => {
   const f = await fixture(t, provider, provider, true);
   const callId = "debug-failure";
   const secret = "AIzaSyntheticSecretForExportOnly123456789";
@@ -190,13 +199,35 @@ for (const provider of ["gemini", "openai"]) test(`Debug transcript: ${provider}
   await f.page.click("#debug-next-error");
   assert.equal(await f.page.evaluate(() => document.activeElement.closest('[data-error="true"]') !== null), true);
   await f.page.send("Browser.grantPermissions", { origin: f.server.base, permissions: ["clipboardReadWrite", "clipboardSanitizedWrite"] });
+  // WAIT FOR THE TIMELINE TO STOP GROWING, AND COUNT IT AT THE MOMENT OF THE CLICK (voicebox-beads-8gsg).
+  // The copy is a snapshot and the assertion below compares it with a SECOND snapshot of the live list,
+  // so an event landing between the two makes a correct copy look truncated: the 2026-10-28 21:18 and
+  // 22:25 full gates both failed here with `28 !== 30`, in both arms. Waiting for quiescence alone did
+  // not fix it (the events still arrived later), so the count is taken by a capture-phase listener on
+  // the copy button: that runs before the button's own handler writes the export, which makes it
+  // exactly "the number of rows that existed when the export was taken". The click itself stays a real
+  // CDP mouse click.
+  await f.page.evaluate(async () => {
+    const count = () => document.querySelectorAll("#debug-events > li").length;
+    let last = count();
+    let stableSince = Date.now();
+    while (Date.now() - stableSince < 1000) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const now = count();
+      if (now !== last) { last = now; stableSince = Date.now(); }
+    }
+    window.__debugCopyRows = null;
+    document.querySelector("#debug-copy").addEventListener("click", () => {
+      window.__debugCopyRows = count();
+    }, { capture: true, once: true });
+  });
   await f.page.click("#debug-copy");
   await f.page.waitFor(() => document.querySelector("#debug-copy-status").textContent.startsWith("Copied"));
   const text = await f.page.evaluate(() => navigator.clipboard.readText());
   assert(!text.includes(secret), "opaque API key must not leave the page");
   assert(!text.includes("synthetic-cookie"), "cookie value must not leave the page");
   const events = text.trim().split("\n").map(JSON.parse);
-  assert.equal(events.length, await f.page.evaluate(() => document.querySelectorAll("#debug-events > li").length), "one copy captures the entire timeline");
+  assert.equal(events.length, await f.page.evaluate(() => window.__debugCopyRows), "one copy captures the entire timeline");
   assert(events.every(e => Number.isFinite(Date.parse(e.timestamp))));
   assert(events.some(e => e.type === "debug.start" && e.inputTranscript.includes("does not enable transcription")));
   const stages = events.filter(e => e.callId === callId);

@@ -23,7 +23,7 @@ Voicebox enforces a multi-stage verification gate on `git push` via `.githooks/p
 |---|---|---|---|
 | **Docs Touched** | `node scripts/docs-touched.mjs` | Static `git diff` check | Immediate |
 | **Unit Suite** | `node scripts/gate-tier.mjs --tier unit` | Unit lane, **one process per file** | `180s` |
-| **Live Suite** | `node scripts/gate-tier.mjs --tier live` | Server lane (`--test-concurrency=4`) then the Browser CDP shard runner (4 workers, one file each) — one process per file | `400s` |
+| **Live Suite** | `node scripts/gate-tier.mjs --tier live` | Server lane (`--test-concurrency=2`) then the Browser CDP shard runner (2 workers, one file each) — one process per file | `3600s` |
 | **Acceptance** | `npm run accept` | End-to-end headless Chromium verification (`page-acceptance.mjs`) | `45s` |
 | **Full Manifest** | `node scripts/gate-manifest.mjs aggregate --gate full --tier-dir <scratch>` | Folds the three tier records into `<tree>.full.manifest.json` | `60s` |
 
@@ -137,6 +137,7 @@ their own scripts, like every other pluggable stage in this file).
 Each bound can be raised or tightened per run without editing the gate:
 - The **unit** bound resolves in order — `VOICEBOX_GATE_UNIT_SECS`, then the legacy `VOICEBOX_GATE_TESTS_SECS`, then the table's default. The primary variable wins when both are set.
 - The **live** and **acceptance** bounds are their own variables: `VOICEBOX_GATE_LIVE_SECS`, `VOICEBOX_GATE_ACCEPT_SECS`.
+- The **docs** stage bound is `VOICEBOX_GATE_DOCS_SECS` (default 120s, shared by docs-touched, docs-check and single-owner). It must outlast the scratch server's readiness wait (`VOICEBOX_DOCS_CHECK_READY_MS`, default 30000ms) and the subsequent HTTP probes; raising only the readiness wait cannot prevent a stage timeout.
 - The **manifest** bound is `VOICEBOX_GATE_MANIFEST_SECS`, and the per-file budget the tier runner gives a
   test file is derived per tier from measured headroom (`TIER_FILE_MS`: unit 120s, server 300s, browser 240s; default 240s),
   overridable by `VOICEBOX_GATE_FILE_SECS` or `--file-secs`. Sitting under the unit stage bound (180s) ensures a wedged unit
@@ -185,6 +186,8 @@ Every browser file has its own Node process and ephemeral-port server; shared wa
 **A bashism in a `#!/usr/bin/env sh` gate is a parse error, not a style finding, so the file pins the shell.** `scripts/pre-push.sh` runs under dash (`/bin/sh -> dash` here), where `_x=()` and `${_x[@]}` are syntax errors: the hook then dies with exit 2 before any stage runs, and every push fails with no stage output — which reads as a red gate rather than a gate that never parsed. Measured while the full-manifest stage was written: adding one bash array made all nine fixtures in this file fail at once with `2 !== 0`, and only `sh -n scripts/pre-push.sh` named the line. `tests/pre-push.test.mjs` therefore checks the shebang, scans the comment-stripped code for arrays, `${x[@]}`, `PIPESTATUS`, `set -o pipefail` and `[[ ]]`, and runs `/bin/sh -n` (the same guard `tests/landing-preflight.test.mjs` holds for `scripts/landing-preflight.sh`).
 
 **`tests/pre-push.test.mjs`** measures wall-clock budget enforcement, so the box is part of its subject. Its fixture accelerates each stage's budget through a `timeout` shim and asserts that the stage's output appeared BEFORE the budget killed it ("LIVE OUTPUT BEFORE TERMINATION"), then that the refusal reports the measured elapsed time rather than the configured budget. The chain it must outlast is `timeout → npm → sh → node`, and on a contended box that chain's startup is longer than the budget: measured 2026-10-12 on this VM, time-to-marker was 0.25s idle, 1.76–3.41s at loadavg 6 (32 CPU burners on 8 vCPU) and 5.2–6.3s at 8× oversubscription, while the shim's budget was 2s and the suite's own elapsed assertion accepts at most 10s — so no budget value was both large enough for a contended box and small enough for that assertion. At four workers the file failed the psfw union full gate (`tests/pre-push.test.mjs:227`, marker absent, slowest file 62.6s) and passed the xzrr union gate on identical blobs. It is also the tier's slowest file (67.3s under four workers versus 32.6s alone), so contention was costing it twice. It now runs alone, and its shim budget is 5s — a measured margin over the same chain rather than a coin flip (voicebox-beads-0nt3).
+
+**The two longest live-tier files are the third and fourth casualties** (voicebox-beads-i9k0, measured on the 2026-10-28 landing gates). `tests/live-openai-browser.test.mjs` (107s of file time) and `tests/vision-controls-extraction.test.mjs` (30s) both failed full gates on this VM while passing standalone on the same tree minutes later — the first on its own 20s/30s per-arm budgets and on a copy-versus-live-list comparison (`28 !== 30`, both arms, twice), the second on a 15s wait for the metadata line to report a camera stop whose click had already been delivered. Across four consecutive gates on ONE tree the failing set moved between browser files every run at loads of 9–14 on 8 CPUs, and the gate was the only work running: the contention those files lose to is each other. Isolating the two costs about two minutes of tier wall time (137s of file time that previously shared a shard) and takes the two longest, most timing-sensitive files out of the race.
 
 
 Isolation remains a **scheduling** mitigation rather than the repair: the file still runs exactly once with every assertion, and `tests/test-shards.test.mjs` proves the two phases partition the queue and every name in `ISOLATED` is still a real browser-lane file (a renamed test would otherwise rejoin the parallel run silently).
@@ -395,10 +398,11 @@ merger's union, and a full gate may not omit a classified file at all.
   unit lane, which is what the old `else matchedUnit.push(file)` fallback did.
 - **Per-file dispatch.** Each selected file runs in its own process with its own exit code, TAP counts,
   duration and bound, so "PASS" can be attributed to a file. The `ISOLATED` files (`tests/pre-push.test.mjs`,
-  `tests/ldxa-barge-in-browser.test.mjs`) run alone, after the parallel queue.
+  `tests/ldxa-barge-in-browser.test.mjs`, `tests/live-openai-browser.test.mjs`,
+  `tests/vision-controls-extraction.test.mjs`) run alone, after the parallel queue.
 - **The tier's own concurrency and queue.** Each tier runs at `TIER_WORKERS` — the one owner in
   `scripts/test-shards.mjs`, the same counts the full gate dispatches at (`availableParallelism() - 1` for
-  unit, 4 for the server lane, 3 for the browser tier's shards), overridable for a loaded box with
+  unit, 2 for the server lane, 2 for the browser tier's shards), overridable for a loaded box with
   `VOICEBOX_FAST_WORKERS`. The parallel pool is ordered by `buildQueue` from that same module, i.e. the
   queue the browser tier already runs from, heaviest-first. Both are scheduling facts and neither changes
   the scope: nothing is dropped, reordered INTO omission, or narrowed — a file the changed-path map selects
@@ -419,10 +423,14 @@ merger's union, and a full gate may not omit a classified file at all.
   route-scoped reason. In-memory route testing with `tests/lib/route-harness.mjs` (`invokeRoute`) allows route unit
   tests to execute in <5ms without socket overhead.
 
-- **WHY THE BROWSER TIER IS THREE SHARDS, MEASURED (`voicebox-beads-q4j6`, `voicebox-beads-q4j6.1`).** The browser
+- **WHY THE BROWSER TIER IS ONE SHARD ON THE FLEET VM (`voicebox-beads-q4j6`, `voicebox-beads-q4j6.1`, `voicebox-beads-i9k0`).** The browser
   tier's width is a correctness fact before it is a speed one. Two full-gate unions at four shards were red on **different**
-  sets of files; reducing to two shards eliminated flakes but cost 750.1s browser-tier wall time. Width 3 provides full stability
-  with a 4.07x browser-tier wall time throughput speedup.
+  sets of files; reducing to two shards eliminated those flakes but cost 750.1s browser-tier wall time. Width 3 provided full stability
+  with a 4.07x browser-tier wall time throughput speedup **on a host that owns its cores**. This VM does not: `/proc/stat` shows 9%
+  CPU steal and `/proc/pressure/cpu` some-avg300 of 17.8, and across nine consecutive full gates at width 2 (2026-10-28/29) the unit
+  tier was green 9/9 and the server lane 9/9 while the browser tier failed on a different set of files every run — 15, then 2, 2, 2,
+  3, 2, 5 — with every named file passing standalone on the same tree. The tier therefore runs at **one shard** on this VM: ~2246s
+  of file time, ~40 minutes, inside the 3600s live bound. Landing everything slowly beats a fast gate that lands nothing.
 
   | union (tree)            | browser shards | browser tier                     | browser wall | whole gate | verdict |
   |-------------------------|----------------|----------------------------------|--------------|------------|---------|
@@ -445,12 +453,11 @@ merger's union, and a full gate may not omit a classified file at all.
   default of its own, because the gate spawns it with no `--workers` — a second default there would be the
   real width while the gate logged the owner's.
 
-  **What three shards means for the FAST path, said out loud.** The fast gate dispatches its own browser lane at
-  `TIER_WORKERS.browser` too, so widening from two to three workers improves fast-gate turnaround as well: on the 159-file
-  `public/fused.js` closure (`voicebox-beads-buy8`), three workers reduces browser lane dispatch from ~273s at two
-  workers closer to the 180s fast bound (though `VOICEBOX_FAST_WORKERS=4` remains available as an override on loaded
-  boxes). Small closures pay seconds either way. This is disclosed rather than papered over with a second width in
-  the runner — the structural answer for that closure remains the `public/fused.js` decomposition (`mvxl` / `uei2`).
+  **What the width means for the FAST path, said out loud.** The fast gate dispatches its own browser lane at
+  `TIER_WORKERS.browser` too, so the width applies to both paths: on the 159-file `public/fused.js` closure
+  (`voicebox-beads-buy8`) a single shard makes browser-lane dispatch slower than the 180s fast bound, and
+  `VOICEBOX_FAST_WORKERS=<n>` remains the override where a box has the cores for it. Small closures pay seconds either way, and
+  the structural answer for that closure remains the `public/fused.js` decomposition (`mvxl` / `uei2`).
 - **A lost child is not a pass.** A file that produced no TAP summary is `unknown` — never `passed` — and
   the gate refuses on it. Per-file results wait for the child's `close` (including drained output pipes)
   before parsing counts: `exit` may arrive before the final TAP footer, so reading there invents a missing

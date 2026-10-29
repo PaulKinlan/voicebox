@@ -43,18 +43,52 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
  * condition-sensitive timeouts or flakes, and reduces browser-tier wall time from 750.1s to 184.2s —
  * a 4.07x browser-tier throughput speedup saving 565.9s (~9.4 minutes) of browser-tier wall time across all 92 files.
  */
-export const TIER_WORKERS = Object.freeze({ unit: Math.max(1, os.availableParallelism() - 1), server: 4, browser: 3 });
+// THE LIVE TIERS RUN AT TWO (hub-authorised 2026-10-28, voicebox-beads-i9k0). This host self-starves
+// at the previous widths: the live tier runs server (4) and browser (3) SEQUENTIALLY, but each concurrent
+// browser file owns a multi-process Chromium, so three of them plus the rest of the VM put loadavg at
+// 14-16 on 8 cores while the gate itself was the only work running (measured: load 0.92 and 2% steal
+// immediately before the run, 8-16 during it). Every resulting failure was a TEST-INTERNAL timeout
+// (15000/45000/60000ms) inside browser files that all pass standalone, and the failing set changed every
+// run. Width 2 is also the width q4j6.1 measured as GREEN (750.1s browser-tier wall); it was raised to 3
+// for speed on a healthy box, which this VM is not. Unit stays at availableParallelism-1: it is green and
+// is CPU-bound rather than Chromium-bound. Do not raise these without a quiet-box measurement.
+// THE BROWSER TIER RUNS AT ONE (2026-10-29, voicebox-beads-i9k0). The history is a ladder down: four
+// shards flaked (q4j6), two unblocked landings (q4j6.1, 750.1s wall), three was measured green and fast on
+// a HEALTHY box (184.2s) and raised the host to load 14-16, so it went back to two. Two was still not
+// enough: across NINE full gates on one tree on 2026-10-28/29 the unit tier was green 9/9 and the server
+// lane green 9/9, while the browser tier failed on a DIFFERENT set of files every run - 15 files, then 2,
+// then 2, then 2, then 3, then 2, then 5 - always at load 6-14 with the gate itself the only fleet work
+// running, and every named file passed standalone on the same tree minutes later. /proc/stat shows 9%
+// CPU steal and /proc/pressure/cpu some-avg300 of 17.8: this VM does not own its cores, so a tier that
+// relies on frame-accurate and message-hop timing across two concurrent Chromiums cannot conclude.
+// One shard makes the browser tier's own load roughly a third of what it was; the cost is wall time
+// (~2246s of file time at one shard, ~40 minutes, inside the 3600s live bound in pre-push.sh and the
+// 5400s the fleet config gives it). A gate that lands everything slowly beats a fast gate that lands
+// nothing, which is the state this branch has been stuck in since 2026-10-23.
+// Unit stays at availableParallelism-1: it is green and CPU-bound rather than Chromium-bound.
+// Do not raise these without a quiet-box measurement on a host that owns its cores.
+export const TIER_WORKERS = Object.freeze({ unit: Math.max(1, os.availableParallelism() - 1), server: 2, browser: 1 });
 
 /**
  * Per-file execution budgets per tier (voicebox-beads-ak9h).
  * Measured headroom (2026-10-13): slowest unit file is ~10s and slowest server file is ~33s.
- * The per-file budget must sit comfortably under the tier's stage bound (pre-push.sh: unit 180s, live 400s/1200s),
+ * RE-SIZED 2026-10-28 (voicebox-beads-i9k0): the unit file budget was 120s and tests/test-changed.test.mjs
+ * measures 127.2s on this VM even after the test-lanes import fix (f2d95fb8) removed ~10s per spawned child -
+ * it was timing out by 7s, and five other unit files sat at 79-157s; under tier concurrency it reaches 256s, so 600s. So unit is 300s, with the stage bound
+ * raised to 900s in pre-push.sh so this object still sits UNDER it (the ak9h invariant). These are bounds for
+ * a starved box, not the quiet one; the env overrides remain the first remedy.
+ * The per-file budget must sit comfortably under the tier's stage bound (pre-push.sh: unit 900s, live 400s/1200s),
  * so a wedged file is recorded 'timeout' by name while other files finish, instead of the stage bound ending the lane.
  */
 export const TIER_FILE_MS = Object.freeze({
-  unit: 120_000,
+  unit: 600_000,
   server: 300_000,
-  browser: 240_000,
+  // 240s WAS A QUIET-BOX BOUND (voicebox-beads-i9k0). On the 2026-10-28 00:14 full gate the box ran
+  // 3-5x slower than the 22:25 one (tests/room-delete.test.mjs 50s -> killed, theme-browser 15s -> 47s,
+  // mic-hotkey 14s -> 77s at load 6-12), so ordinary files were recorded as timeouts by name and the
+  // live stage then hit its own 2400s bound. The per-file bound is the tier's hang detector; a slow box
+  // is not a hang, and the stage bound above it is what limits wall time.
+  browser: 600_000,
   live: 300_000,
 });
 
@@ -160,8 +194,27 @@ export function isFailed({ code, tests, fail, notOk }) {
  * blobs. It is also the tier's slowest file (67.3s under 4 workers vs 23.3s alone), so it is
  * paying the contention twice: once in its duration, once in the race that only exists because of
  * it. Run alone, its shim keeps a 5×–20× margin over the same chain.
+ *
+ * THE THIRD AND FOURTH CASUALTIES ARE THE LIVE-TIER FILES THAT KEEP LOSING TO THEIR OWN PEER
+ * (voicebox-beads-i9k0, measured on the 2026-10-28 landing gates). `tests/live-openai-browser.test.mjs`
+ * and `tests/vision-controls-extraction.test.mjs` are the two longest browser files (107s and 30s of
+ * file time) and both failed full gates on this VM while passing standalone on the same tree minutes
+ * later: the openai file on its own 20s/30s per-arm budgets and on a copy-versus-live-list comparison
+ * (`28 !== 30`, both arms, twice), the vision file on a 15s wait for the metadata line to report a
+ * camera stop the click had already delivered. Across four consecutive gates on ONE tree the failing
+ * set moved between browser files every run (15 files, then cswsh-proxy + opfs-writer-identity, then
+ * live-rate-browser + health-auth-browser, then live-openai-browser + room-explorer-ui, then
+ * vision-controls-extraction + live-openai-browser) at loads of 9–14 on 8 CPUs — the gate was the only
+ * work running, so the contention these files lose to is each other. Isolating the two costs about
+ * 2 minutes of tier wall time (137s of file time that currently shares a shard) and takes the two
+ * longest, most timing-sensitive files out of the race.
  */
-export const ISOLATED = new Set(["tests/ldxa-barge-in-browser.test.mjs", "tests/pre-push.test.mjs"]);
+export const ISOLATED = new Set([
+  "tests/ldxa-barge-in-browser.test.mjs",
+  "tests/pre-push.test.mjs",
+  "tests/live-openai-browser.test.mjs",
+  "tests/vision-controls-extraction.test.mjs",
+]);
 
 /**
  * Split a queue into the part that runs with `workers` shards and the part that runs alone. Pure: it

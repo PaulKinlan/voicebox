@@ -135,7 +135,7 @@ test("agent-monitor mini-app: public/apps/agent-monitor.html passes plain-langua
   );
 });
 
-test("agent-monitor mini-app: executes WebMCP tools get_agent_progress and delegate_multi_harness inside the bridge", { timeout: 25000 }, async (t) => {
+test("agent-monitor mini-app: executes WebMCP tools get_agent_progress and delegate_multi_harness inside the bridge", { timeout: 60000 }, async (t) => {
   const server = await startServer();
   t.after(() => server.stop());
 

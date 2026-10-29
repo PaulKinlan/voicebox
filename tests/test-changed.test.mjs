@@ -43,7 +43,14 @@ function noSpawnCli(args) {
     }
     const cliArgs = batch ? [probe] : [SCRIPT, ...args, "--manifest-dir", manifest];
     const result = spawnSync(process.execPath, cliArgs, {
-      cwd: root, encoding: "utf8", timeout: 8000,
+      // A HANG DETECTOR, NOT A SPEED ASSERTION (voicebox-beads-i9k0, 2026-10-28): this bound was 8000
+      // and it was the only thing standing between the unit tier and green. classify() lexes all 271
+      // test files and measures 10.9s on this VM, so every real CLI invocation here - even one that maps
+      // zero test files - spends more than 8s inside the child. Raising it to 30000 keeps the purpose
+      // (a wedged CLI is still caught, and the assertions still prove no child was spawned and no
+      // manifest written) without failing a healthy lane on a slow box. Making classify() cheap is
+      // tracked separately as the real perf fix.
+      cwd: root, encoding: "utf8", timeout: 30000,
       env: { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require=${preload}`.trim() },
     });
     assert.equal(result.error, undefined, "bounded CLI probe must terminate normally");
@@ -201,7 +208,11 @@ test("CLI --json: outputs structured mapping payload", () => {
 test("CLI -- ends option parsing: a flag-shaped changed path cannot secretly enable the gate", () => {
   // --json returns before test dispatch even if the sentinel parser regresses; the assertion
   // then catches the accidental --gate interpretation without launching any suite.
-  const res = spawnSync(process.execPath, [SCRIPT, "--json", "--", "--gate"], { cwd: root, encoding: "utf8", timeout: 8000 });
+  // 120s, not 30s (voicebox-beads-p2r9): --json still lexes every test file to classify it, which costs
+  // 11-20s on an idle box and overran 30s inside the gate's unit tier at 7 workers (status null = SIGTERM
+  // from this very timeout). The arm is about "--" ending option parsing, not about how fast the
+  // classifier is, so the bound only has to be long enough to be a hang detector on a loaded box.
+  const res = spawnSync(process.execPath, [SCRIPT, "--json", "--", "--gate"], { cwd: root, encoding: "utf8", timeout: 120000 });
   assert.equal(res.status, 0, res.stderr);
   const data = JSON.parse(res.stdout);
   assert.deepEqual(data.changed, ["--gate"]);
@@ -640,7 +651,12 @@ test("gate: the parallel pool is dispatched in the browser tier's own heaviest-f
 test("gate: the isolated files still run ALONE, after the whole queue, exactly once (voicebox-beads-buy8)", async () => {
   const names = ["voicebox.test.mjs", "theme-browser.test.mjs", ...ISOLATED].map((f) => f.replace(/^tests\//, ""));
   const isolated = names.filter((f) => ISOLATED.has(`tests/${f}`));
-  assert.equal(isolated.length, 2, "the fixture keeps the real isolated pair (scripts/test-shards.mjs owns it)");
+  // THE REAL LIST, NOT A COUNT (voicebox-beads-i9k0). This asserted `isolated.length === 2`, which pinned the
+  // membership as a side effect: adding a measured casualty to `scripts/test-shards.mjs` failed a unit test
+  // whose subject is the SCHEDULE, not the roster. The fixture is built from `ISOLATED` itself, so the
+  // property worth asserting is that the fixture covers every member and that the list is not empty.
+  assert.ok(ISOLATED.size > 0, "the isolated list is non-empty, so this case is not vacuous");
+  assert.equal(isolated.length, ISOLATED.size, "the fixture keeps every name in scripts/test-shards.mjs ISOLATED");
   const classified = synthetic({ browser: names });
   const { events, dispatched } = await driveSchedule(classified);
   const order = events.map((e) => e.file);

@@ -129,7 +129,16 @@ test("room explorer: scannable rows, native actions, narrow containers and both 
     await screen("empty-project");
     // Close the persisted browser folders too: otherwise reload truthfully restores one,
     // and a hidden server-root remedy is not evidence of a visible no-project state.
-    while (await page.evaluate(() => document.querySelector(".folder-close-btn") !== null)) await page.click(".folder-close-btn");
+    //
+    // CLICK, THEN WAIT FOR THE ROW TO GO (voicebox-beads-8gsg). The old loop checked for the button and
+    // then clicked it as a separate step, so a row removed between the two threw 'no element matches
+    // .folder-close-btn' - the 2026-10-28 22:25 full-gate failure at load 11, on a file that passes
+    // standalone. The click is in-page and atomic, and the count is what the loop waits on.
+    while (await page.evaluate(() => document.querySelectorAll(".folder-close-btn").length > 0)) {
+      const before = await page.evaluate(() => document.querySelectorAll(".folder-close-btn").length);
+      await page.evaluate(() => document.querySelector(".folder-close-btn")?.click());
+      await page.waitFor(async (n) => document.querySelectorAll(".folder-close-btn").length < n, { args: [before], label: "a persisted folder row to close" });
+    }
     assert.equal((await fetch(server.base + "/api/root", { method: "DELETE", headers })).status, 200);
     await page.reload();
     await page.waitFor(() => document.querySelector("#empty-link").checkVisibility());
