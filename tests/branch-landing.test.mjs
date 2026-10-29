@@ -320,6 +320,10 @@ test("branch-landing: createBranchRoutes provides candidate inspection and landi
     json: jsonMock,
     readJsonBody: async () => ({ branch: "feat/agent-patch" }),
     answerOnce: answerOnceMock,
+    // This test drives the LANDING seam, not the authority wall (voicebox-beads-gi60): the
+    // authority contract is pinned in tests/branches-route.test.mjs and the real protocol gate in
+    // tests/timing-safe.test.mjs. The permissive stub lets the merge step reach the lander here.
+    hasExtensionAuthority: () => true,
   });
 
   assert.ok(routes["GET /api/branches/candidates"]);

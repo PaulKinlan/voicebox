@@ -14,7 +14,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -401,4 +401,96 @@ test("top-of-file @lane declares a boundary without overriding classifier signal
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ── voicebox-beads-idy6: the content-hash cache ─────────────────────────────
+// classify() re-lexed every test file in every gate process (11-20s on this VM; ~17x inside
+// tests/test-changed.test.mjs through its CLI probes), which alone wedged the unit lane past its
+// budgets. The cache key binds THIS FILE's source and each test file's source, so staleness is
+// impossible by construction. These tests pin the cache's correctness contract, not its speed.
+
+const UNIT_FIXTURE = 'import test from "node:test";\ntest("a", () => {});\n';
+const LIVE_FIXTURE = 'import test from "node:test";\nimport { startServer } from "./lib/server.mjs";\ntest("b", () => {});\n';
+
+test("idy6: a one-byte change invalidates exactly that file's cache entry, and the roster stays right", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "lane-cache-"));
+  try {
+    const cachePath = path.join(dir, "cache.json");
+    writeFileSync(path.join(dir, "a.test.mjs"), UNIT_FIXTURE);
+    writeFileSync(path.join(dir, "b.test.mjs"), LIVE_FIXTURE);
+
+    const first = classify(dir, { cachePath });
+    assert.equal(first.unit.length, 1);
+    assert.equal(first.server.length, 1, "the server-import fixture files LIVE/server");
+    const keysAfterFirst = Object.keys(JSON.parse(readFileSync(cachePath, "utf8")).entries);
+    assert.equal(keysAfterFirst.length, 2, "one entry per file");
+
+    // ONE byte in ONE file: exactly one key must change hands.
+    writeFileSync(path.join(dir, "a.test.mjs"), UNIT_FIXTURE + "//\n");
+    const second = classify(dir, { cachePath });
+    assert.deepEqual(
+      { unit: second.unit.map((e) => e.file), server: second.server.map((e) => e.file), browser: second.browser.map((e) => e.file) },
+      { unit: ["a.test.mjs"], server: ["b.test.mjs"], browser: [] },
+      "the roster is identical after the one-byte edit",
+    );
+    const keysAfterSecond = Object.keys(JSON.parse(readFileSync(cachePath, "utf8")).entries);
+    assert.equal(keysAfterSecond.length, 2);
+    const kept = keysAfterFirst.filter((k) => keysAfterSecond.includes(k));
+    assert.equal(kept.length, 1, "the untouched file's entry survives; only the edited file's entry turned over");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("idy6: an edit that changes the LANE is honored through the cache — no staleness by construction", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "lane-cache-"));
+  try {
+    const cachePath = path.join(dir, "cache.json");
+    writeFileSync(path.join(dir, "a.test.mjs"), UNIT_FIXTURE);
+    assert.equal(classify(dir, { cachePath }).unit.length, 1);
+    // Re-content the same filename as a LIVE test: the key moves with the bytes, not the name.
+    writeFileSync(path.join(dir, "a.test.mjs"), LIVE_FIXTURE);
+    const out = classify(dir, { cachePath });
+    assert.equal(out.unit.length, 0);
+    assert.equal(out.server.length, 1, "a cached roster must never serve the pre-edit lane");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("idy6: a corrupt cache is ignored and rebuilt, never a gate failure", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "lane-cache-"));
+  try {
+    const cachePath = path.join(dir, "cache.json");
+    writeFileSync(path.join(dir, "a.test.mjs"), UNIT_FIXTURE);
+    writeFileSync(cachePath, "}{ not json");
+    const out = classify(dir, { cachePath });
+    assert.equal(out.unit.length, 1, "corrupt cache falls back to a fresh classification");
+    const rebuilt = JSON.parse(readFileSync(cachePath, "utf8"));
+    assert.equal(Object.keys(rebuilt.entries).length, 1, "the cache is rebuilt after the run");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("idy6: the cached roster is IDENTICAL to the uncached roster over the real tree", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "lane-cache-"));
+  try {
+    const testDir = path.join(root, "tests");
+    const fresh = classify(testDir, { cachePath: null });
+    const cached = classify(testDir, { cachePath: path.join(dir, "cache.json") });
+    assert.deepEqual(cached, fresh, "every file's cached verdict equals its fresh verdict");
+    assert.ok(fresh.unit.length + fresh.server.length + fresh.browser.length > 200, "the equivalence ran over the whole roster, not a fixture");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("idy6: the default cache lives in the git COMMON dir, never the working tree", () => {
+  classify(); // default root, default cache
+  const common = execFileSync("git", ["rev-parse", "--git-common-dir"], { cwd: root, encoding: "utf8" }).trim();
+  const expected = path.join(path.resolve(root, common), "voicebox-lane-classify-v1.json");
+  assert.ok(existsSync(expected), `the cache file exists at ${expected}`);
+  assert.ok(!existsSync(path.join(root, "voicebox-lane-classify-v1.json")), "the working tree is not dirtied");
+  assert.ok(!existsSync(path.join(root, "tests", "voicebox-lane-classify-v1.json")), "tests/ is not dirtied");
 });

@@ -115,7 +115,24 @@ test('pre-push names the stage and cause, streams output, and refuses real faili
       copyFileSync(path.join(root, file), path.join(repo, file));
     }
     chmodSync(path.join(repo, '.githooks/pre-push'), 0o755);
-    writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ scripts: { 'test:unit': 'node --test case.cjs', 'test:live': 'node --test --test-concurrency=1 live-case.cjs', accept: 'node acceptance.cjs' } }));
+    // docs-check is the stage WHOSE SCOPE this case asserts (voicebox-beads-8c0t). It is a stub that
+    // says it ran: the real one boots a scratch server (36-46s measured), which is the cost that made
+    // the question worth asking, and a fixture has no server to probe.
+    writeFileSync(path.join(repo, 'scripts', 'docs-check.mjs'), 'console.log("DOCS-CHECK RAN");\n');
+    // THE RUNAWAY STAGES PRINT THEIR MARKER FROM THE STAGE COMMAND, NOT FROM THE TEST FILE
+    // (voicebox-beads-opay). `node --test`'s reporter buffers a test FILE child's stdout and prints it
+    // when the run COMPLETES, so a run that `timeout` kills (this fixture's unit-timeout/live-timeout
+    // scenarios) loses the marker and prints node's own "Interrupted while running:" instead — measured
+    // deterministically at load 0.8 on Node v24.21.0, outside this repo, so it is not the 5s-startup
+    // contention class (voicebox-beads-0nt3) and not load at all. A `node -e` prefix wins the race by
+    // construction: its stdout is the stage's own, inherited. case.cjs keeps its deliberate
+    // failure/hang semantics, so the scenarios still prove what they were written for — the gate names
+    // the stage, streams its output, and refuses a killed stage.
+    writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ scripts: {
+      'test:unit': 'node -e "console.log(\'TEST OUTPUT BEFORE TERMINATION\');console.error(\'TEST STDERR BEFORE TERMINATION\')" && node --test case.cjs',
+      'test:live': 'node -e "console.log(\'LIVE OUTPUT BEFORE TERMINATION\')" && node --test --test-concurrency=1 live-case.cjs',
+      accept: 'node acceptance.cjs',
+    } }));
     writeFileSync(path.join(repo, 'case.cjs'), `
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
@@ -165,6 +182,17 @@ if [ -n "$_want" ]; then
     *"$_want"*)
       while [ $# -gt 0 ]; do case "$1" in --verbose|--kill-after=*) shift ;; *) break ;; esac; done
       [ $# -gt 0 ] && shift
+      # THE MARKER IS PRINTED BY THE SHIM ITSELF, BEFORE THE CHAIN STARTS (voicebox-beads-er74).
+      # The assertion below is that the gate STREAMS the stage's output rather than buffering it
+      # until exit; it must not also be a race against timeout -> npm -> sh -> node startup,
+      # which this file's own note measures at 0.25s idle but 5.2-6.3s under oversubscription —
+      # against a 5s accelerated budget. A shim echo has the stage's inherited stdout, which is
+      # exactly what the gate captures, so the property under test is unchanged and the race is gone.
+      case "$GATE_CASE" in
+        unit-timeout) echo 'TEST OUTPUT BEFORE TERMINATION'; echo 'TEST STDERR BEFORE TERMINATION' >&2 ;;
+        live-timeout) echo 'LIVE OUTPUT BEFORE TERMINATION' ;;
+        accept-timeout) echo 'ACCEPTANCE OUTPUT BEFORE TERMINATION'; echo 'ACCEPTANCE STDERR BEFORE TERMINATION' >&2 ;;
+      esac
       exec '${timeout}' --verbose --kill-after=1s 5s "$@" ;;
   esac
 fi
@@ -193,6 +221,11 @@ exec '${timeout}' "$@"
       assert.doesNotMatch(output, /LIVE OUTPUT BEFORE TERMINATION/, 'the live lane must not run for a feature-branch push');
       assert.doesNotMatch(output, /ACCEPTANCE OUTPUT/, 'acceptance must not run for a feature-branch push');
       assert.doesNotMatch(output, /Acquired gate lock|Waiting for gate lock/, 'a feature-branch push must not queue on the gate lock');
+      // docs-check is the docs stage that BOOTS A SERVER, so it belongs to the landing: the candidate push
+      // runs the static docs stages (docs-touched, single-owner) only (voicebox-beads-8c0t — the policy
+      // docs/12-pre-push-gate.md section 1 already states, and the script did not honour).
+      assert.doesNotMatch(output, /DOCS-CHECK RAN/, 'a feature-branch push must not run docs-check — it probes a live server and costs 36-46s measured (voicebox-beads-8c0t)');
+      assert.match(output, /candidate-branch push — docs-check probes a live server and runs on the landing to main/, 'the gate names where docs-check ran instead of leaving its absence silent');
       if (scenario === 'success') {
         assert.equal(result.status, 0, output);
         assert.match(output, /ALL GATES GREEN \(unit\)/);
@@ -230,7 +263,7 @@ exec '${timeout}' "$@"
      * `git push origin HEAD:main` — the worst available outcome, offered as help.
      */
     const aimed = spawnSync('git', ['push', remote, 'HEAD:refs/heads/main'], {
-      cwd: work, encoding: 'utf8', timeout: 15000,
+      cwd: work, encoding: 'utf8', timeout: INNER_MS,
       env: { ...cleanEnv, NODE_TEST_CONTEXT: undefined, PATH: `${bin}:${process.env.PATH}`, BD_GIT_HOOK: '1', GATE_CASE: 'success' },
     });
     assert.notEqual(aimed.status, 0, 'a branch pushing to main must be refused');
@@ -250,11 +283,13 @@ exec '${timeout}' "$@"
      * scenarios live here because these are the stages a feature push no longer runs.
      */
     execFileSync('git', ['checkout', '-qb', 'main'], { cwd: work, stdio: 'pipe', env: cleanEnv });
-    // THE BUDGETS THIS CASE TESTS ARE DECLARED HERE, NOT INHERITED FROM THE GATE'S DEFAULT (voicebox-beads-i9k0).
-    // These cases drive a TIMEOUT at a named stage, so they must own the number they assert: after the live
-    // default moved from 400s to 3600s (a measured bound for this VM's browser tier) the fixture's "live-timeout"
-    // scenario asserted 400 against a stage configured at 3600 and failed for the DEFAULT's sake, not for any
-    // behaviour. Pinning the value through the override the gate documents keeps the case about the refusal.
+    // THESE CASES OWN THE BUDGET THEY ASSERT, INSTEAD OF INHERITING THE GATE'S DEFAULT
+    // (voicebox-beads-i9k0, voicebox-beads-ncrg - two lanes found the same trap from opposite ends).
+    // They drive a TIMEOUT at a named stage, so the number in the refusal must be the number they configured:
+    // after the live default moved 400s → 3600s (a measured bound for this VM's browser tier) the fixture's
+    // "live-timeout" scenario asserted 400 against a stage configured at 3600 and failed for the DEFAULT's
+    // sake, not for any behaviour. Pinning the value through the override the gate documents keeps the case
+    // about the refusal.
     const budgets = { live: 400, acceptance: 45 };
     for (const scenario of ['live-timeout', 'accept-timeout', 'accept-failure', 'success']) {
       const result = spawnSync('git', ['push', remote, 'HEAD:refs/heads/main'], {
@@ -278,6 +313,8 @@ exec '${timeout}' "$@"
         assert.match(output, /flock command not found; running live stage without lock/, 'a landing to main enters acquire_gate_lock');
       }
       assert.match(output, /LIVE OUTPUT BEFORE TERMINATION/);
+      // The other side of the same scope decision: a landing still runs docs-check (voicebox-beads-8c0t).
+      assert.match(output, /DOCS-CHECK RAN/, 'a landing to main must run docs-check');
       if (scenario === 'success') {
         assert.equal(result.status, 0, output);
         assert.match(output, /ALL GATES GREEN/);
@@ -313,7 +350,19 @@ exec '${timeout}' "$@"
   }
 });
 
-test('acceptance names the network cause when a responding front drops mid-run', { timeout: 30000 }, async (t) => {
+// THE ASYNC CASE BOUNDS ARE SIZED FOR THE BOX, NOT FOR A QUIET ONE (voicebox-beads-er74).
+// Node can only enforce `timeout` on a test that yields, so these bounds are the ones that
+// really bite: measured on 2026-10-29 at load ~9, the gate-lock arm took 31.6s against a 30s
+// bound and failed the live tier for the box rather than for its behaviour, and the acceptance
+// arm took 28.2s against the same bound — one slow minute from turning the landing red. A
+// synchronous arm's bound is documentation only (the event loop cannot fire it), which is why
+// the 60s-bounded arm above can legitimately run for 167s.
+const BOX_SIZED_MS = 180000;
+// An inner spawnSync bound is a HANG GUARD, not a speed assertion: at 15s a fixture's own
+// `pre-push.sh` run (which starts node twice and npm once) was killed for the box on 2026-10-29,
+// and the arm then failed on a null status rather than on the behaviour it names.
+const INNER_MS = 120000;
+test('acceptance names the network cause when a responding front drops mid-run', { timeout: BOX_SIZED_MS }, async (t) => {
   // NAMED PRECONDITION, not a flake (voicebox-beads-80vw). This case drives tools/page-acceptance.mjs,
   // which launches a REAL browser (VOICEBOX_CHROME, else a system chromium). With none present the
   // tool dies at 'spawn /usr/bin/chromium ENOENT' BEFORE the network path this case asserts — which
@@ -379,13 +428,13 @@ function gateBudgetFixture(dir) {
   return repo;
 }
 
-test('pre-push timeout refusal respects custom budget and reports measured elapsed time', { timeout: 30000 }, () => {
+test('pre-push timeout refusal respects custom budget and reports measured elapsed time', { timeout: BOX_SIZED_MS }, () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-pre-push-budget-'));
   try {
     const repo = gateBudgetFixture(dir);
 
     const result = spawnSync(path.join(repo, 'pre-push.sh'), [], {
-      cwd: repo, encoding: 'utf8', timeout: 15000,
+      cwd: repo, encoding: 'utf8', timeout: INNER_MS,
       env: {
         ...cleanEnv,
         VOICEBOX_GATE_UNIT_SECS: '2',
@@ -409,7 +458,7 @@ test('pre-push timeout refusal respects custom budget and reports measured elaps
   }
 });
 
-test('pre-push budget resolution honours the legacy VOICEBOX_GATE_TESTS_SECS, and VOICEBOX_GATE_UNIT_SECS wins over it', { timeout: 30000 }, () => {
+test('pre-push budget resolution honours the legacy VOICEBOX_GATE_TESTS_SECS, and VOICEBOX_GATE_UNIT_SECS wins over it', { timeout: BOX_SIZED_MS }, () => {
   // WHY (voicebox-beads-03po, from the lq8s delta review's M4-variant): the gate resolves the unit
   // budget as `${VOICEBOX_GATE_UNIT_SECS:-${VOICEBOX_GATE_TESTS_SECS:-180}}`, and the custom-budget
   // case above only ever sets the PRIMARY variable. Removing the legacy fallback link therefore left
@@ -422,7 +471,7 @@ test('pre-push budget resolution honours the legacy VOICEBOX_GATE_TESTS_SECS, an
     const repo = gateBudgetFixture(dir);
     const runGate = (budgetEnv) => {
       const result = spawnSync(path.join(repo, 'pre-push.sh'), [], {
-        cwd: repo, encoding: 'utf8', timeout: 15000,
+        cwd: repo, encoding: 'utf8', timeout: INNER_MS,
         env: {
           ...cleanEnv,
           ...budgetEnv,
@@ -544,7 +593,7 @@ test('a suite run inside a hook cannot move the repository it runs in (observer-
   }
 });
 
-test('gate lock serializes concurrent pre-push runs and announces waiting holder (voicebox-beads-6qu)', { timeout: 30000, skip: !hasFlock && 'flock not installed on macOS' }, async () => {
+test('gate lock serializes concurrent pre-push runs and announces waiting holder (voicebox-beads-6qu)', { timeout: BOX_SIZED_MS, skip: !hasFlock && 'flock not installed on macOS' }, async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-gate-lock-'));
   const repo = path.join(dir, 'repo');
   const lockFile = path.join(dir, 'gate.lock');
@@ -667,7 +716,7 @@ test('gate lock serializes concurrent pre-push runs and announces waiting holder
       const timeoutResult = spawnSync(path.join(repo, 'pre-push.sh'), [], {
         cwd: repo,
         encoding: 'utf8',
-        timeout: 15000,
+        timeout: INNER_MS,
         env: {
           ...cleanEnv,
           VOICEBOX_GATE_LOCK: lockFile,
@@ -693,7 +742,7 @@ test('gate lock serializes concurrent pre-push runs and announces waiting holder
     const freeResult = spawnSync(path.join(repo, 'pre-push.sh'), [], {
       cwd: repo,
       encoding: 'utf8',
-      timeout: 15000,
+      timeout: INNER_MS,
       env: {
         ...cleanEnv,
         VOICEBOX_GATE_LOCK: lockFile,

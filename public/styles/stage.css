@@ -344,10 +344,16 @@ body:has(#server-dot[data-ok="false"]) .wordmark-dot {
 [data-voice="speaking"] .input-wave path { fill: var(--good); }
 /* Blue is yours, green is the agent's. Colour carries the distinction so the
    two meters never read as one. */
-[data-voice="listening"] .mic { color: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 10px color-mix(in srgb, var(--accent) 10%, transparent), 0 12px 32px rgba(20, 22, 26, 0.09); }
+/* Blue is yours, green is the agent's. Colour carries the distinction so the
+   two meters never read as one — and colour and border carry it alone: the 10px
+   halo these two rules used to paint was the last ring around the microphone
+   after the arcs were hidden (voicebox-beads-yf33, voicebox-beads-a68n), and a
+   coloured disc 10px proud of the button reads as a radar, not as a state. The
+   button's elevation is stated once, on `.mic`, and is not restated per state. */
+[data-voice="listening"] .mic { color: var(--accent); border-color: var(--accent); }
 [data-voice="listening"] .mic-glyph,
 [data-voice="speaking"] .mic-glyph { display: none; }
-[data-voice="speaking"] .mic { color: var(--good); border-color: var(--good); box-shadow: 0 0 0 10px color-mix(in srgb, var(--good) 11%, transparent), 0 12px 32px rgba(20, 22, 26, 0.09); }
+[data-voice="speaking"] .mic { color: var(--good); border-color: var(--good); }
 .mic.hotkey-active {
   transform: scale(0.95);
   border-color: var(--accent);

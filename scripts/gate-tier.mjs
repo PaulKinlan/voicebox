@@ -42,7 +42,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { classify } from "./test-lanes.mjs";
-import { buildQueue, ISOLATED, TIER_FILE_MS, TIER_WORKERS } from "./test-shards.mjs";
+import { buildQueue, ISOLATED, ISOLATED_FILE_MS, TIER_FILE_MS, TIER_WORKERS } from "./test-shards.mjs";
 import { coverageGaps, emitMarker, tapCounts, tierRecordPath } from "./gate-manifest.mjs";
 import { killRunningChildren, runOneFile, statusOf } from "./test-changed.mjs";
 import { loadavg1m } from "../lib/host-load.mjs";
@@ -157,14 +157,22 @@ export function recordOf(file, result, timeoutMs, loadavg = { start: null, end: 
  * Per-file timeout for a tier (voicebox-beads-ak9h).
  * Precedence: explicit --file-secs > env.VOICEBOX_GATE_FILE_SECS > TIER_FILE_MS[tier] > 240_000.
  */
-export function tierFileTimeoutMs(tier, { fileSecs = null, env = process.env } = {}) {
+export function explicitFileTimeoutMs({ fileSecs = null, env = process.env } = {}) {
+  // BOTH SOURCES COUNT AS THE OPERATOR NAMING A NUMBER (voicebox-beads-ncrg): --file-secs AND
+  // VOICEBOX_GATE_FILE_SECS. The first version of the isolated budget consulted only the flag, so
+  // VOICEBOX_GATE_FILE_SECS=45 resolved the base to 45s and then handed isolated files 600s anyway —
+  // an explicit ceiling silently ignored. One owner answers the question for every caller.
   if (fileSecs !== null && fileSecs !== undefined && fileSecs !== "") {
     return Number(fileSecs) * 1000;
   }
   if (env?.VOICEBOX_GATE_FILE_SECS !== undefined && env?.VOICEBOX_GATE_FILE_SECS !== "") {
     return Number(env.VOICEBOX_GATE_FILE_SECS) * 1000;
   }
-  return TIER_FILE_MS[tier] ?? 240_000;
+  return null;
+}
+
+export function tierFileTimeoutMs(tier, opts = {}) {
+  return explicitFileTimeoutMs(opts) ?? TIER_FILE_MS[tier] ?? 240_000;
 }
 
 /**
@@ -172,15 +180,20 @@ export function tierFileTimeoutMs(tier, { fileSecs = null, env = process.env } =
  * owns that list) run alone, after the queue — the same partition the browser tier uses, reused rather than
  * re-derived. Returns the tier record; nothing is written here.
  */
-export async function runOneTier({ tier, files, workers = TIER_WORKERS[tier] ?? 1, timeoutMs = tierFileTimeoutMs(tier), runner = runOneFile, sampler = loadavg1m, log = console }) {
+export async function runOneTier({ tier, files, workers = TIER_WORKERS[tier] ?? 1, timeoutMs = tierFileTimeoutMs(tier), isolatedTimeoutMs = ISOLATED_FILE_MS, runner = runOneFile, sampler = loadavg1m, log = console }) {
+  // AN ISOLATED FILE GETS ITS OWN BOUND (voicebox-beads-ncrg): the tier bound is a guard on the other files
+  // in the lane, and an isolated file runs with no others, so the tier's number only misfires on a healthy
+  // file that spawns whole gates (tests/pre-push.test.mjs: 408s measured). An explicit --file-secs or
+  // env override still wins, because it is the operator saying a number out loud.
+  const boundFor = (file) => (ISOLATED.has(file) ? Math.max(timeoutMs, isolatedTimeoutMs) : timeoutMs);
   const results = [];
   let cursor = 0;
   const run = async (file) => {
     log.log(`[gate-tier] running ${file}`);
     // BOTH ENDS OF THE CHILD'S OWN WINDOW, and nothing else - no retry, no bound change, no verdict change.
     const loadStart = sampler();
-    const result = await runner(file, { timeoutMs });
-    const record = recordOf(file, result, timeoutMs, { start: loadStart, end: sampler() });
+    const result = await runner(file, { timeoutMs: boundFor(file) });
+    const record = recordOf(file, result, boundFor(file), { start: loadStart, end: sampler() });
     if (record.status !== "passed") record.condition_request = "pending"; // evidence request, not measured conditions
     results.push(record);
     if (record.status === "passed") log.log(emitMarker("passed", [file]));
@@ -243,10 +256,14 @@ let browserChild = null;
  * the path, keep its output streaming, and answer with its exit code. SIGTERM is left to the runner itself:
  * it takes its own per-file children (and their browsers) down before it goes.
  */
-export function runBrowserTier({ dir, log = console }) {
+export function runBrowserTier({ dir, fileTimeoutMs = tierFileTimeoutMs("browser"), isolatedTimeoutMs = Math.max(tierFileTimeoutMs("browser"), ISOLATED_FILE_MS), log = console }) {
   const record = tierRecordPath(dir, "browser");
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, ["tools/browser-shard-runner.mjs"], {
+    // THE BOUNDS GO DOWN WITH THE CHILD (voicebox-beads-ncrg). The browser tier is not run by `runOneTier`;
+    // it is run by tools/browser-shard-runner.mjs, which killed every file at its own 300s constant. The
+    // isolated file needs its own budget there too, so both numbers are passed explicitly and the runner
+    // applies the per-file one it is given instead of assuming the tier's.
+    const child = spawn(process.execPath, ["tools/browser-shard-runner.mjs", "--file-timeout-ms", String(fileTimeoutMs), "--isolated-timeout-ms", String(isolatedTimeoutMs)], {
       cwd: ROOT,
       stdio: "inherit",
       env: { ...process.env, VOICEBOX_GATE_TIER_RECORD: record },
@@ -322,7 +339,15 @@ async function main() {
   const failed = [];
   for (const one of sequence) {
     if (one === "browser") {
-      const { code, record: recordPath } = await runBrowserTier({ dir });
+      // An explicit bound — from --file-secs OR VOICEBOX_GATE_FILE_SECS — wins for isolated files too; the
+      // class default only replaces the TIER default (the reasoning is in scripts/test-shards.mjs).
+      const explicitMs = explicitFileTimeoutMs({ fileSecs: flag("file-secs") });
+      const browserBaseMs = explicitMs ?? tierFileTimeoutMs("browser");
+      const { code, record: recordPath } = await runBrowserTier({
+        dir,
+        fileTimeoutMs: browserBaseMs,
+        isolatedTimeoutMs: explicitMs ?? Math.max(browserBaseMs, ISOLATED_FILE_MS),
+      });
       const record = readRecord(recordPath);
       const files = tierFiles("browser");
       const gaps = coverageGaps(record, files);
@@ -340,9 +365,16 @@ async function main() {
       continue;
     }
     const files = tierFiles(one);
-    const tierTimeoutMs = tierFileTimeoutMs(one, { fileSecs: flag("file-secs") });
+    const explicitOne = explicitFileTimeoutMs({ fileSecs: flag("file-secs") });
+    const tierTimeoutMs = explicitOne ?? tierFileTimeoutMs(one);
     console.log(`[gate-tier] ${one}: ${files.length} file(s), ${TIER_WORKERS[one] ?? 1} worker(s), ${tierTimeoutMs / 1000}s per file`);
-    const record = await runOneTier({ tier: one, files, workers: TIER_WORKERS[one], timeoutMs: tierTimeoutMs });
+    const record = await runOneTier({
+      tier: one,
+      files,
+      workers: TIER_WORKERS[one],
+      timeoutMs: tierTimeoutMs,
+      isolatedTimeoutMs: explicitOne ?? Math.max(tierTimeoutMs, ISOLATED_FILE_MS),
+    });
     const written = writeTierRecord(record, dir);
     const verdict = tierVerdict(record, files);
     console.log(`[gate-tier] tier record: ${written}`);
