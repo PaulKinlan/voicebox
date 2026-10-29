@@ -124,7 +124,12 @@ test("environment capacity is finite while duplicate admissions remain addressab
   assert.ok(admitted.every((result) => result.ok));
   assert.equal(f.admit(undefined, { ...f.authority, callId: "ninth" }).refused, "task-capacity-exhausted");
   assert.equal(f.admit(undefined, { ...f.authority, callId: "bounded-0" }).task.address, admitted[0].task.address);
-  await until(() => admitted.map(({ task }) => f.status(task.address).task.state), (states) => states.every((s) => s === "interrupted"));
+  // The observation window is 30s, not the 3s default: this arm waits on EIGHT serialized
+  // deadline-interrupt + audit-fsync cycles, and under gate concurrency on a contended box those
+  // land several seconds late (measured: red 4/4 gates on 2026-10-28, green solo in 5.8s —
+  // voicebox-beads-ddag). The window is an observation budget; the 30ms deadline is the mechanism
+  // under test, and nothing here asserts interrupt LATENCY.
+  await until(() => admitted.map(({ task }) => f.status(task.address).task.state), (states) => states.every((s) => s === "interrupted"), 30_000);
   assert.equal(f.admit(undefined, { ...f.authority, callId: "after-deadlines" }).refused, "task-capacity-exhausted", "deadline is not evidence that execution stopped");
   release("done");
   const next = await until(() => f.admit(undefined, { ...f.authority, callId: "after-settled" }), (r) => r.ok);

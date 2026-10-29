@@ -44,7 +44,8 @@
 // then RUNS it must name the launch in its own code — a written file is not
 // followed into the child process that runs it — and a launch NAME inside a
 // program piped to a child's stdin is not seen (a helper PATH there still is).
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -532,7 +533,7 @@ function read(source) {
   return views;
 }
 
-export function classify(root = TESTS) {
+export function classify(root = TESTS, { cachePath } = {}) {
   const unit = [];
   const live = [];
   const server = [];
@@ -549,33 +550,124 @@ export function classify(root = TESTS) {
   } catch {
     entries = [];
   }
-  for (const file of entries.filter((f) => f.endsWith(".test.mjs")).sort()) {
-    const source = readFileSync(path.join(root, file), "utf8");
-    const views = read(source);
-    const declaration = views ?? topLaneDeclaration(source, null);
-    const reading = ({ name }) => (!views ? source : name && !views.evaluates ? views.code : views.text);
+  const files = entries.filter((f) => f.endsWith(".test.mjs")).sort();
 
-    // Any browser launch puts the test in the browser lane (strictly serial, CDP contention):
-    const browserLaunch = BROWSER_SIGNALS.find((signal) => signal.re.test(reading(signal)));
-    if (browserLaunch) {
-      const entry = { file, lane: "browser", why: browserLaunch.what, declaredLane: declaration.declaredLane, declarationError: declaration.declarationError };
+  // THE CONTENT-HASH CACHE (voicebox-beads-idy6). Lexing every test file costs 11-20s on this VM and
+  // every gate process pays it once (tests/test-changed.test.mjs pays it ~17x through its CLI probes),
+  // which alone wedges the unit lane past its budgets on a starved box. Each entry is keyed by
+  // sha256(THIS FILE'S OWN SOURCE + the test file's source): a one-byte change to one test file
+  // invalidates exactly that entry, and an edit to the classifier invalidates every entry — no
+  // staleness is possible by construction. The cache lives in the git COMMON dir (shared by every
+  // worktree of the clone, and never in the working tree: a gate must not dirty the tree), is written
+  // atomically (tmp + rename), and an unreadable or corrupt cache is ignored and rebuilt — a cache
+  // problem must never fail a gate. This is a cross-PROCESS disk cache, not a per-process memo:
+  // re-classifying the same tree still re-reads every file and re-derives the roster from the keys.
+  const cacheFile = cachePath === undefined ? defaultClassifyCachePath(root) : cachePath;
+  let fingerprint = null;
+  let cachedEntries = {};
+  if (cacheFile) {
+    fingerprint = sha256hex(readFileSync(SELF, "utf8"));
+    try {
+      const parsed = JSON.parse(readFileSync(cacheFile, "utf8"));
+      if (parsed && parsed.v === CLASSIFY_CACHE_VERSION && parsed.entries && typeof parsed.entries === "object") {
+        cachedEntries = parsed.entries;
+      }
+    } catch {
+      cachedEntries = {}; // unreadable or corrupt — rebuild from scratch
+    }
+  }
+  const writtenEntries = {};
+  for (const file of files) {
+    const source = readFileSync(path.join(root, file), "utf8");
+    let entry = null;
+    let key = null;
+    if (fingerprint) {
+      key = `${fingerprint}:${sha256hex(source)}`;
+      const hit = cachedEntries[key];
+      if (hit && (hit.lane === "unit" || hit.lane === "server" || hit.lane === "browser")) {
+        entry = { file, lane: hit.lane, why: hit.why ?? null, declaredLane: hit.declaredLane ?? null, declarationError: hit.declarationError ?? null };
+      }
+    }
+    if (!entry) entry = classifyFile(file, source);
+    if (key) {
+      writtenEntries[key] = { lane: entry.lane, why: entry.why, declaredLane: entry.declaredLane, declarationError: entry.declarationError };
+    }
+    if (entry.lane === "browser") {
       browser.push(entry);
       live.push(entry);
-      continue;
-    }
-
-    // Otherwise, any server launch puts it in the server lane (concurrent):
-    const serverLaunch = SERVER_SIGNALS.find((signal) => signal.re.test(reading(signal)));
-    if (serverLaunch) {
-      const entry = { file, lane: "server", why: serverLaunch.what, declaredLane: declaration.declaredLane, declarationError: declaration.declarationError };
+    } else if (entry.lane === "server") {
       server.push(entry);
       live.push(entry);
-      continue;
+    } else {
+      unit.push(entry);
     }
-
-    unit.push({ file, lane: "unit", why: null, declaredLane: declaration.declaredLane, declarationError: declaration.declarationError });
+  }
+  if (cacheFile && fingerprint) {
+    try {
+      mkdirSync(path.dirname(cacheFile), { recursive: true });
+      const tmp = `${cacheFile}.${process.pid}.tmp`;
+      writeFileSync(tmp, JSON.stringify({ v: CLASSIFY_CACHE_VERSION, entries: writtenEntries }));
+      renameSync(tmp, cacheFile);
+    } catch {
+      // a cache that cannot be written must never fail the gate
+    }
   }
   return { unit, live, server, browser };
+}
+
+/** One file's verdict — the cacheable unit. Everything it reads is a pure function of `source` and
+ *  this module's own constants, both of which the cache key binds. */
+function classifyFile(file, source) {
+  const views = read(source);
+  const declaration = views ?? topLaneDeclaration(source, null);
+  const reading = ({ name }) => (!views ? source : name && !views.evaluates ? views.code : views.text);
+
+  // Any browser launch puts the test in the browser lane (strictly serial, CDP contention):
+  const browserLaunch = BROWSER_SIGNALS.find((signal) => signal.re.test(reading(signal)));
+  if (browserLaunch) {
+    return { file, lane: "browser", why: browserLaunch.what, declaredLane: declaration.declaredLane, declarationError: declaration.declarationError };
+  }
+
+  // Otherwise, any server launch puts it in the server lane (concurrent):
+  const serverLaunch = SERVER_SIGNALS.find((signal) => signal.re.test(reading(signal)));
+  if (serverLaunch) {
+    return { file, lane: "server", why: serverLaunch.what, declaredLane: declaration.declaredLane, declarationError: declaration.declarationError };
+  }
+
+  return { file, lane: "unit", why: null, declaredLane: declaration.declaredLane, declarationError: declaration.declarationError };
+}
+
+const SELF = fileURLToPath(import.meta.url);
+const CLASSIFY_CACHE_VERSION = 1;
+const sha256hex = (text) => createHash("sha256").update(text).digest("hex");
+
+/** The default cache path: the git COMMON dir (shared across worktrees), or null to disable. Only
+ *  the real roster root is cached by default — fixture roots are the classifier's own test data and
+ *  must always classify fresh unless a test passes an explicit cachePath.
+ *
+ *  Resolved from the FILESYSTEM, never by spawning `git rev-parse`: the CLI probes in
+ *  tests/test-changed.mjs run under a preload that forbids child processes outright, and a spawn
+ *  here both broke that contract and (worse) disabled the cache inside the probe, restoring the
+ *  16s cold-lex the probe's 8s bound cannot survive (voicebox-beads-idy6). */
+function defaultClassifyCachePath(root) {
+  if (root !== TESTS) return null;
+  try {
+    const dotgit = path.join(ROOT, ".git");
+    let common = null;
+    if (statSync(dotgit).isDirectory()) {
+      common = dotgit; // an ordinary checkout: .git IS the common dir
+    } else {
+      // a worktree: .git is a FILE pointing at <common>/worktrees/<name>
+      const pointer = readFileSync(dotgit, "utf8").match(/^gitdir:\s*(.+)$/m)?.[1]?.trim();
+      if (!pointer) return null;
+      const gitdir = path.resolve(ROOT, pointer);
+      common = path.basename(path.dirname(gitdir)) === "worktrees" ? path.dirname(path.dirname(gitdir)) : gitdir;
+    }
+    if (!common || !existsSync(common)) return null;
+    return path.join(common, `voicebox-lane-classify-v${CLASSIFY_CACHE_VERSION}.json`);
+  } catch {
+    return null;
+  }
 }
 
 /** Report exact file-level boundaries without pinning global counts that change whenever a file is added. */
