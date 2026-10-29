@@ -327,7 +327,15 @@ exec '${timeout}' "$@"
   }
 });
 
-test('acceptance names the network cause when a responding front drops mid-run', { timeout: 30000 }, async (t) => {
+// THE ASYNC CASE BOUNDS ARE SIZED FOR THE BOX, NOT FOR A QUIET ONE (voicebox-beads-er74).
+// Node can only enforce `timeout` on a test that yields, so these bounds are the ones that
+// really bite: measured on 2026-10-29 at load ~9, the gate-lock arm took 31.6s against a 30s
+// bound and failed the live tier for the box rather than for its behaviour, and the acceptance
+// arm took 28.2s against the same bound — one slow minute from turning the landing red. A
+// synchronous arm's bound is documentation only (the event loop cannot fire it), which is why
+// the 60s-bounded arm above can legitimately run for 167s.
+const BOX_SIZED_MS = 180000;
+test('acceptance names the network cause when a responding front drops mid-run', { timeout: BOX_SIZED_MS }, async (t) => {
   // NAMED PRECONDITION, not a flake (voicebox-beads-80vw). This case drives tools/page-acceptance.mjs,
   // which launches a REAL browser (VOICEBOX_CHROME, else a system chromium). With none present the
   // tool dies at 'spawn /usr/bin/chromium ENOENT' BEFORE the network path this case asserts — which
@@ -393,7 +401,7 @@ function gateBudgetFixture(dir) {
   return repo;
 }
 
-test('pre-push timeout refusal respects custom budget and reports measured elapsed time', { timeout: 30000 }, () => {
+test('pre-push timeout refusal respects custom budget and reports measured elapsed time', { timeout: BOX_SIZED_MS }, () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-pre-push-budget-'));
   try {
     const repo = gateBudgetFixture(dir);
@@ -423,7 +431,7 @@ test('pre-push timeout refusal respects custom budget and reports measured elaps
   }
 });
 
-test('pre-push budget resolution honours the legacy VOICEBOX_GATE_TESTS_SECS, and VOICEBOX_GATE_UNIT_SECS wins over it', { timeout: 30000 }, () => {
+test('pre-push budget resolution honours the legacy VOICEBOX_GATE_TESTS_SECS, and VOICEBOX_GATE_UNIT_SECS wins over it', { timeout: BOX_SIZED_MS }, () => {
   // WHY (voicebox-beads-03po, from the lq8s delta review's M4-variant): the gate resolves the unit
   // budget as `${VOICEBOX_GATE_UNIT_SECS:-${VOICEBOX_GATE_TESTS_SECS:-180}}`, and the custom-budget
   // case above only ever sets the PRIMARY variable. Removing the legacy fallback link therefore left
@@ -558,7 +566,7 @@ test('a suite run inside a hook cannot move the repository it runs in (observer-
   }
 });
 
-test('gate lock serializes concurrent pre-push runs and announces waiting holder (voicebox-beads-6qu)', { timeout: 30000, skip: !hasFlock && 'flock not installed on macOS' }, async () => {
+test('gate lock serializes concurrent pre-push runs and announces waiting holder (voicebox-beads-6qu)', { timeout: BOX_SIZED_MS, skip: !hasFlock && 'flock not installed on macOS' }, async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'voicebox-gate-lock-'));
   const repo = path.join(dir, 'repo');
   const lockFile = path.join(dir, 'gate.lock');
