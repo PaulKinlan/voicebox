@@ -385,7 +385,7 @@ test("the move is verbatim: every moved line survives, in order, apart from the 
 });
 
 // ── D. the real page, on Chrome's OWN fake camera ───────────────────────────────────────────────────────
-test("the real room: camera on and off with the tracks really released, preview vs live send, PTT, and a listener-free clone", { timeout: 90000 }, async () => {
+test("the real room: camera on and off with the tracks really released, preview vs live send, PTT, and a listener-free clone", { timeout: 240000 }, async () => {
   let server;
   let page;
   try {
@@ -457,7 +457,7 @@ test("the real room: camera on and off with the tracks really released, preview 
       label: "the preview card to appear and the camera button to be pressed",
       timeout: 30000,
     });
-    await page.waitFor(() => document.getElementById("vision-core-meta")?.textContent?.startsWith("Camera"), { label: "the metadata line to be painted", timeout: 15000 });
+    await page.waitFor(() => document.getElementById("vision-core-meta")?.textContent?.startsWith("Camera"), { label: "the metadata line to be painted", timeout: 60000 });
     const on = await page.evaluate(() => ({
       video: window.__vision.video,
       pressed: document.getElementById("vision-camera-btn").getAttribute("aria-pressed"),
@@ -485,7 +485,7 @@ test("the real room: camera on and off with the tracks really released, preview 
     // SNAPSHOT live: the same click now sends a real encoded frame.
     await page.evaluate(() => { window.__vision.live = true; });
     await page.click("#vision-snapshot-btn");
-    await page.waitFor(() => window.__vision.videos.length > 0, { label: "the live frame to be sent", timeout: 30000 });
+    await page.waitFor(() => window.__vision.videos.length > 0, { label: "the live frame to be sent", timeout: 60000 });
     const sent = await page.evaluate(() => ({ videos: window.__vision.videos, meta: document.getElementById("vision-core-meta").textContent }));
     assert.equal(sent.videos.at(-1).mime, "image/jpeg", "the live frame goes out as JPEG");
     assert.equal(sent.videos.at(-1).len > 100, true, `the payload must be a real encoded frame, got ${sent.videos.at(-1).len} characters`);
@@ -500,7 +500,11 @@ test("the real room: camera on and off with the tracks really released, preview 
 
     // STOP: the tracks the browser handed over must be RELEASED, which is what turns the camera light off.
     await page.click("#vision-stop-btn");
-    await page.waitFor(() => document.getElementById("vision-core-meta")?.textContent === "Camera off", { label: "the metadata line to report the stop", timeout: 20000 });
+    // 60s, not 20s (voicebox-beads-i9k0): the click demonstrably lands, and the metadata line follows in ~1s on an
+    // idle box, but inside a 96-file shard this wait expired with the value unchanged in TWO consecutive runs
+    // (33.3s and 60.5s measured for the arm), including on its single authorized retry. The wait still fails by
+    // name if the track is never released; it just stops reading a busy box as a broken camera.
+    await page.waitFor(() => document.getElementById("vision-core-meta")?.textContent === "Camera off", { label: "the metadata line to report the stop", timeout: 60000 });
     const off = await page.evaluate(() => ({
       tracks: window.__vision.videoTracks().map((t) => t.readyState),
       hidden: document.getElementById("vision-core-card").hidden,

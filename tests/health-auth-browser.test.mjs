@@ -15,7 +15,11 @@ async function freePort() {
   return port;
 }
 
-test("a healthy API with no session asks for sign-in, not a server restart", { timeout: 45000 }, async (t) => {
+// 150s, not 45s (voicebox-beads-i9k0): measured 35s for this file standalone at load 3, and 71.7s for this arm
+// inside a 96-file browser shard - the arm was killed by its own budget twice in a row, including on its single
+// authorized retry, which is what tells you the budget and not the box was the limit. A budget is a hang
+// detector: the arm still fails, by name, if the page never asks for sign-in.
+test("a healthy API with no session asks for sign-in, not a server restart", { timeout: 150000 }, async (t) => {
   const api = await startServer({ env: { VOICEBOX_LOOPBACK_AUTH: "1" } });
   t.after(() => api.stop());
   const previousPort = process.env.PORT;
@@ -88,7 +92,7 @@ test("a healthy API with no session asks for sign-in, not a server restart", { t
   assert.equal(offline.visible, true);
 });
 
-test("a failing environment-list route is not a failing heartbeat", { timeout: 30000 }, async (t) => {
+test("a failing environment-list route is not a failing heartbeat", { timeout: 120000 }, async (t) => {
   const api = createHttpServer((req, res) => {
     res.setHeader("content-type", "application/json");
     if (req.url === "/api/health") res.end(JSON.stringify({ provider: "script", build: { commit: "aaaaaaa" } }));
