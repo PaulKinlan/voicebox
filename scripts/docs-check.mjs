@@ -54,6 +54,25 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WRITE = process.argv.includes("--write");
 
 /**
+ * A PROBE THAT COULD NOT MEASURE IS NOT A DOCUMENT THAT HAS DRIFTED (voicebox-beads-97cx).
+ *
+ * The two need different fixes — drift means "the docs are stale, run --write"; a probe failure means "the
+ * check could not see the tree, fix the probe or the box" — so they must be distinguishable at the console
+ * and in the exit path. Before this, a probe that answered 500 or never settled was RENDERED as a
+ * documented fact ("Environment probe endpoint (HTTP 500, probe-failed)", "THE /live UPGRADE PROBE DID NOT
+ * SETTLE."), `--write` baked that degradation into README.md and docs/, and the next check then called the
+ * false claim CLEAN because the generated body matched the document.
+ */
+export class ProbeFailure extends Error {}
+
+/** The placeholders a degraded probe used to leave in a document. A rendered body carrying one is refused, never written. */
+const DEGRADED_PROBE_SIGNS = [
+  ["(no /api/health answer)", "the health probe answered non-ok, so the document cannot say what the providers are"],
+  ["THE /live UPGRADE PROBE DID NOT SETTLE.", "the /live upgrade probe never settled"],
+  ["Environment probe endpoint (HTTP", "the environment probe did not run, so its answer is not a fact about this tree"],
+];
+
+/**
  * WHERE THE DOCUMENTS ARE READ FROM: this checkout, or `--docs-root <dir>` (voicebox-beads-qxy2).
  *
  * The drift test used to prove the denylist by rewriting the TRACKED docs/08-how-it-runs.md IN PLACE for
@@ -266,7 +285,14 @@ async function probeServer() {
     // document said "closed without an HTTP response" about a server that answers 101. Found by probing
     // the line's own claim by hand (2026-09-20).
     const [health, routes, liveUpgradeLine, surface] = await Promise.all([
-      fetch(`${base}/api/health`).then(async (r) => (r.ok ? await r.json() : { provider: "(no /api/health answer)", workspace: "?" })),
+      fetch(`${base}/api/health`).then(async (r) => {
+        if (!r.ok) throw new ProbeFailure(`GET /api/health answered HTTP ${r.status} — the health probe cannot describe this tree, and an unanswered provider is not a documented fact`);
+        try {
+          return await r.json();
+        } catch {
+          throw new ProbeFailure("GET /api/health answered with something that is not JSON — the health probe cannot describe this tree");
+        }
+      }),
       Promise.all(probes.map(async ([method, path, expect]) => {
         const r = await fetch(`${base}${path}`, {
           method,
@@ -283,7 +309,8 @@ async function probeServer() {
     // A probe that dies mid-run must say WHICH step and what the server was saying — one run in sixteen
     // crashed with a bare stack trace on 2026-09-20 (not reproduced in 500 targeted iterations), and the
     // trace was all there was to read. Named, with the server's own stderr beside it.
-    e.message = `docs-check: the probe against the scratch server failed — ${e.message}\n  server stderr (tail):\n${errOut.split("\n").filter(Boolean).slice(-8).map((l) => "    " + l).join("\n")}`;
+    const context = `\n  server stderr (tail):\n${errOut.split("\n").filter(Boolean).slice(-8).map((l) => "    " + l).join("\n")}`;
+    e.message = e instanceof ProbeFailure ? `${e.message}${context}` : `docs-check: the probe against the scratch server failed — ${e.message}${context}`;
     throw e;
   } finally {
     child.kill("SIGKILL");
@@ -339,14 +366,28 @@ async function probeExtensionSurface(port) {
   // declares a root: a probe still running then would append an `activity` entry, with its own seq, to the
   // very log the loop block counts — and /api/probe is the slow one (seconds; everything else is ms).
   const [inventory, catalogue, admitNoToken, probe] = await Promise.all([
-    fetch(`${base}/api/extensions`).then((r) => r.json()),
-    fetch(`${base}/api/extensions/catalogue`).then((r) => r.json()),
+    fetch(`${base}/api/extensions`).then(async (r) => {
+      if (!r.ok) throw new ProbeFailure(`GET /api/extensions answered HTTP ${r.status} — the extension surface probe cannot describe this tree`);
+      return await r.json();
+    }),
+    fetch(`${base}/api/extensions/catalogue`).then(async (r) => {
+      if (!r.ok) throw new ProbeFailure(`GET /api/extensions/catalogue answered HTTP ${r.status} — the extension surface probe cannot describe this tree`);
+      return await r.json();
+    }),
     fetch(`${base}/api/extensions/admit`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: "anything" }),
     }).then(async (r) => ({ status: r.status, ...(await r.json()) })),
     // The environment's self-report (GET /api/probe): the process runs tools/sandbox-probe.mjs on itself and
     // caches the report in ITS workspace — the scratch one here, so a docs check never writes into the repo.
-    fetch(`${base}/api/probe`).then(async (r) => ({ status: r.status, ...(await r.json()) })),
+    fetch(`${base}/api/probe`).then(async (r) => {
+      const body = await r.json().catch(() => null);
+      // A 500 from the environment probe, or an answer that reports itself not ok, is the probe failing to
+      // run: rendering it as "(HTTP 500, probe-failed)" turns the check's own blindness into a documented fact.
+      if (!r.ok || body?.ok === false) {
+        throw new ProbeFailure(`GET /api/probe answered HTTP ${r.status}${body?.refused ? ` (${body.refused})` : ""} — the environment probe did not run, so its answer is not a fact about this tree`);
+      }
+      return { status: r.status, ...body };
+    }),
   ]);
   return {
     probe: { status: probe.status, ok: probe.ok, refused: probe.refused ?? null, sections: Object.keys(probe.probe ?? {}).filter((k) => !["probe", "when"].includes(k)) },
@@ -366,8 +407,8 @@ async function probeExtensionSurface(port) {
  * send an upgrade request, report what came back. The typed version of this line was true when written and
  * false by the time a reviewer read it, which is the whole reason the line is a probe now.
  */
-async function probeLiveUpgrade(port) {
-  return await new Promise((resolve) => {
+export async function probeLiveUpgrade(port) {
+  return await new Promise((resolve, reject) => {
     const req = http.request({
       host: "127.0.0.1", port, path: "/live", method: "GET",
       headers: {
@@ -379,9 +420,31 @@ async function probeLiveUpgrade(port) {
     const done = (line) => { if (!settled) { settled = true; try { req.destroy(); } catch { /* gone */ } resolve(line); } };
     req.on("upgrade", (res) => done(`A WEBSOCKET UPGRADE ON /live IS ACCEPTED (${res.statusCode}) — the zero-dependency server owns it.`));
     req.on("response", (res) => done(`A WEBSOCKET UPGRADE ON /live GOT HTTP ${res.statusCode} — it is not an upgrade route on this tree.`));
-    req.on("error", () => done("A WEBSOCKET UPGRADE ON /live CLOSED WITHOUT AN HTTP RESPONSE — the server destroys it (also a form of owning the route)."));
+    // A CLOSED SOCKET IS ONLY A MEASUREMENT IF THERE WAS A SOCKET (voicebox-beads-umml). The old handler
+    // resolved "the server destroys it" for EVERY error, including ECONNREFUSED — where nothing was
+    // listening at all, so the probe had measured nothing and still produced a sentence the document would
+    // state as fact. An error that means the connection was never established is a probe failure; an error
+    // that means an established connection was closed (ECONNRESET/EPIPE, "socket hang up") is the
+    // measurement this line was written for: a server that accepts and destroys owns the route too.
+    const neverConnected = new Set(["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "ETIMEDOUT", "EAI_AGAIN"]);
+    req.on("error", (e) => {
+      const code = e?.code ?? "";
+      if (neverConnected.has(code)) {
+        if (settled) return;
+        settled = true;
+        try { req.destroy(); } catch { /* gone */ }
+        reject(new ProbeFailure(`THE /live UPGRADE PROBE COULD NOT CONNECT (${code}) — nothing was listening, so the probe measured nothing and the document must not claim what the route does`));
+        return;
+      }
+      done("A WEBSOCKET UPGRADE ON /live CLOSED WITHOUT AN HTTP RESPONSE — the server destroys it (also a form of owning the route).");
+    });
     req.end();
-    const t = setTimeout(() => done("THE /live UPGRADE PROBE DID NOT SETTLE."), 2000);
+    const t = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { req.destroy(); } catch { /* gone */ }
+      reject(new ProbeFailure("THE /live UPGRADE PROBE DID NOT SETTLE within 2000ms — the probe could not measure the route, so the document must not claim one"));
+    }, 2000);
     if (t.unref) t.unref();
   });
 }
@@ -1226,6 +1289,15 @@ export async function runDocsCheck() {
       // In WRITE mode a blank block is the thing being seeded — a new marker pair starts empty by
       // definition, and refusing to fill it made every new block impossible to add (2026-09-20).
       if (!WRITE && inner.trim() === "") refuse(REFUSE.emptyBlock(rel, name));
+      // A DEGRADED PROBE ANSWER IS REFUSED AT THE BODY, NOT AT THE DOCUMENT (voicebox-beads-97cx). The
+      // guard belongs here because this is the only place a probe's answer can enter a document: the
+      // hand-written prose is the documents' own business and may legitimately QUOTE the placeholder
+      // (docs/08-how-it-runs.md does, to record the bug this guards). The first version scanned the whole
+      // document and failed that sentence — a guard that refuses the documentation of its own bug.
+      const degraded = DEGRADED_PROBE_SIGNS.find(([marker]) => String(body).includes(marker));
+      if (degraded) {
+        throw new ProbeFailure(`the generated block '${name}' for ${rel} would state a degraded probe answer ("${degraded[0]}"): ${degraded[1]} — refusing to write it, and refusing to call the document checked`);
+      }
       if (String(body).includes("undefined")) {
         console.error(`docs-check: the generated block '${name}' for ${rel} contains the word 'undefined' —`);
         console.error("  that is a template that did not interpolate, and it reached a document once already (07-architecture.md:80).");
@@ -1269,5 +1341,17 @@ export async function runDocsCheck() {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  await runDocsCheck();
+  try {
+    await runDocsCheck();
+  } catch (e) {
+    if (!(e instanceof ProbeFailure)) throw e;
+    // EXIT 2, NOT 1 (voicebox-beads-97cx): 1 is what the drift refusal uses, and "the documents are stale,
+    // run --write" is the opposite of what happened here. Nothing was written in this run.
+    console.error(`docs-check: PROBE ERROR — the check could not measure this tree, so it has no verdict on the documents:`);
+    console.error(`  ${e.message}`);
+    console.error("");
+    console.error("This is NOT document drift: do not run --write. Re-run when the box is quieter, and if it repeats,");
+    console.error("the probe is broken rather than the docs.");
+    process.exit(2);
+  }
 }

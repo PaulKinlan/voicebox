@@ -64,10 +64,12 @@ Voicebox uses two automated scripts to prevent documentation drift:
 
 ### 1. Runtime & Claim Verification (`scripts/docs-check.mjs`)
 ```bash
-node scripts/docs-check.mjs                     # Check mode: exits 1 on any drift or broken claim
+node scripts/docs-check.mjs                     # Check mode: exits 1 on any drift or broken claim, 2 when a probe could not measure
 node scripts/docs-check.mjs --write             # Write mode: regenerates blocks in README.md and docs/07-architecture.md
 node scripts/docs-check.mjs --docs-root <dir>   # Run checks against a directory copy (used by tests/docs-drift.test.mjs)
 ```
+Two kinds of failure are kept apart, because their fixes are opposite (`voicebox-beads-97cx`): **drift** exits 1 ("these documents no longer describe the code", fix by hand or with `--write`), while a **probe that could not measure** — `/api/health` answering non-ok, an unreadable `/api/extensions` body, `/api/probe` answering 500 or reporting itself not ok, or the `/live` upgrade probe never settling — exits 2 with `PROBE ERROR`, writes nothing even under `--write`, and says the documents have no verdict rather than calling them stale. Before that split, a 500 from the environment probe was rendered into `README.md` and `docs/07-architecture.md` as "Environment probe endpoint (HTTP 500, probe-failed)" and the next check then called that false claim clean.
+
 `scripts/docs-check.mjs` runs a fast static pre-pass before booting the probe server:
 - Verifies that all `<!-- BEGIN GENERATED: ... -->` markers exist and are non-empty.
 - Verifies that every backticked repository file path (such as `lib/extensions.mjs`) exists on disk.

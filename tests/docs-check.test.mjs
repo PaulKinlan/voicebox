@@ -2,7 +2,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { moduleInventory, renderInventoryTable } from "../scripts/docs-check.mjs";
+import { moduleInventory, renderInventoryTable, probeLiveUpgrade, ProbeFailure } from "../scripts/docs-check.mjs";
+import http from "node:http";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -111,5 +112,72 @@ test("failure when a component has misplaced @summary tag not in top-of-file JSD
     assert.ok(inv.missingSummary.includes(path.join("temp", "line-comment.mjs")));
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+// ═══════════ a probe that cannot measure is not a document that drifted (voicebox-beads-97cx) ═══════════
+// The two failures need opposite fixes ("the docs are stale, run --write" vs "the check could not see the
+// tree"), so the probe must REJECT rather than resolving a plausible-looking line that the document then
+// states as fact. Driven against a real socket, because the bug was in what the socket answered.
+test("the /live upgrade probe REJECTS as a probe failure when nothing answers, instead of resolving a line the document would state as fact (voicebox-beads-97cx)", async () => {
+  const silent = http.createServer(() => { /* accept the socket, never answer: the settle branch */ });
+  await new Promise((resolve) => silent.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = silent.address();
+    await assert.rejects(
+      () => probeLiveUpgrade(port),
+      (e) => {
+        assert.ok(e instanceof ProbeFailure, `must be a ProbeFailure, not a document-drift refusal: ${e?.constructor?.name}: ${e?.message}`);
+        assert.match(e.message, /DID NOT SETTLE/);
+        return true;
+      },
+    );
+  } finally {
+    await new Promise((resolve) => silent.close(resolve));
+  }
+});
+
+test("the /live upgrade probe still MEASURES a server that answers, so a real answer is not turned into a probe failure (voicebox-beads-97cx)", async () => {
+  const answering = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end("not an upgrade");
+  });
+  await new Promise((resolve) => answering.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = answering.address();
+    const line = await probeLiveUpgrade(port);
+    assert.equal(typeof line, "string");
+    assert.match(line, /GOT HTTP 200/, "a measured non-upgrade answer is a fact about the route, not a probe failure");
+  } finally {
+    await new Promise((resolve) => answering.close(resolve));
+  }
+});
+
+test("the /live upgrade probe REJECTS when nothing is listening, and still MEASURES a server that accepts then destroys the socket (voicebox-beads-umml)", async () => {
+  // Nothing listening: a closed port must not resolve "the server destroys it" — the probe never reached a
+  // server, and that sentence becomes a documented fact about the route when it does.
+  const closed = http.createServer(() => {});
+  await new Promise((resolve) => closed.listen(0, "127.0.0.1", resolve));
+  const deadPort = closed.address().port;
+  await new Promise((resolve) => closed.close(resolve));
+  await assert.rejects(
+    () => probeLiveUpgrade(deadPort),
+    (e) => {
+      assert.ok(e instanceof ProbeFailure, `a refused connection must be a ProbeFailure: ${e?.constructor?.name}: ${e?.message}`);
+      assert.match(e.message, /COULD NOT CONNECT \(ECONNREFUSED\)/);
+      return true;
+    },
+  );
+
+  // A server that ACCEPTS and then destroys the socket is a real measurement: established, then closed.
+  const destroying = http.createServer(() => {});
+  destroying.on("connection", (socket) => socket.destroy());
+  await new Promise((resolve) => destroying.listen(0, "127.0.0.1", resolve));
+  try {
+    const line = await probeLiveUpgrade(destroying.address().port);
+    assert.equal(typeof line, "string");
+    assert.match(line, /CLOSED WITHOUT AN HTTP RESPONSE/, "an accepted-then-destroyed socket is the measurement this line exists for");
+  } finally {
+    await new Promise((resolve) => destroying.close(resolve));
   }
 });
