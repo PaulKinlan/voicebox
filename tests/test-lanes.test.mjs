@@ -505,8 +505,12 @@ test("reading a launch target is not launching it: a path CONSTRUCTION only coun
     writeFileSync(path.join(dir, "spawns.test.mjs"), `import { spawn } from "node:child_process";\nimport path from "node:path";\nconst root = "/r";\nspawn(process.execPath, [path.join(root, "server.mjs")]);\n`);
     writeFileSync(path.join(dir, "writes.test.mjs"), `import { writeFileSync } from "node:fs";\nimport path from "node:path";\nwriteFileSync(path.join("/t", "server.mjs"), "fixture");\n`);
     writeFileSync(path.join(dir, "imports.test.mjs"), `import { startServer } from "./lib/server.mjs";\n`);
+    // A LITERAL that talks about launching is data, not a launch (review finding on voicebox-beads-wkdp: the first
+    // version tested the launch predicate against a view that still carried string contents, so the sentence
+    // "we should spawn( never)" in a fixture was enough to file a pure read in the serial lane).
+    writeFileSync(path.join(dir, "reads-mentioning-spawn.test.mjs"), `import { readFileSync } from "node:fs";\nimport path from "node:path";\nconst source = readFileSync(path.join("/r", "server.mjs"), "utf8");\nconst note = "we should spawn( never)";\nconst tpl = \`spawn( nope)\`;\n`);
     const { unit, live } = classify(dir);
-    assert.deepEqual(unit.map(({ file }) => file).sort(), ["reads.test.mjs"], "a file that only READS the host is a unit test");
+    assert.deepEqual(unit.map(({ file }) => file).sort(), ["reads-mentioning-spawn.test.mjs", "reads.test.mjs"], "a file that only READS the host is a unit test, even when a literal mentions spawn(");
     // A write still counts: it stages a helper the test — or the next one — will run.
     assert.deepEqual(live.map(({ file }) => file).sort(), ["imports.test.mjs", "spawns.test.mjs", "writes.test.mjs"], "a file that starts or stages a server is not");
     assert.equal(live.find((l) => l.file === "spawns.test.mjs").why, "a server process", "and the reason is still named");

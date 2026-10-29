@@ -83,7 +83,7 @@ const ALL_WRITES = new Set(["writeFileSync", "writeFile", "appendFileSync", "app
  * reads the host as TEXT, with no server, no browser and no process — was filed in the serial live lane, and
  * `tests/csrf-route-seam.test.mjs` had to assemble its filename to escape it. A test that only READS a launch
  * target is a unit test; a test that starts one is not. This is the line between them: a launch call in the
- * file's code (its strings are blanked, so a heredoc about `spawn(` cannot promote a fixture).
+ * file's CODE TOKENS (words and punctuation only), so a heredoc or a string about `spawn(` cannot promote a fixture.
  *
  * An import (`import … from "./lib/server.mjs"`, `require(…)`) stays a launch signal on its own — importing the
  * fixture helper IS how a test gets a server — so the imported-helper edge is deliberately not gated by this.
@@ -124,8 +124,15 @@ function checkConsumes(src, name) {
   const tokens = lex(src);
   if (!tokens) return true; // conservative fallback if lex fails
   const code = tokens.filter(({ k }) => k !== "com");
-  /** Whether a path CONSTRUCTION (join/resolve/fileURLToPath/URL/write) may count as a launch at all. */
-  const launches = LAUNCH_CALL.test(src);
+  /**
+   * Whether a path CONSTRUCTION (join/resolve/fileURLToPath/URL/write) may count as a launch at all.
+   *
+   * CODE TOKENS ONLY — words and punctuation. `src` is whatever view the caller handed in, and a view can still carry
+   * literals: a test that READS the host and merely mentions `spawn(` inside a string or a template was filed live on
+   * the strength of that string alone (review finding on voicebox-beads-wkdp, which caught the documented claim that
+   * literals were blanked being false). Rebuilding from tokens is the only form that cannot be fooled by a literal.
+   */
+  const launches = LAUNCH_CALL.test(code.filter(({ k }) => k === "word" || k === "punct").map(({ s, e }) => src.slice(s, e)).join(" "));
 
   const matchesLit = (t) =>
     (t.k === "str" && nameLitRe.test(src.slice(t.s, t.e))) ||

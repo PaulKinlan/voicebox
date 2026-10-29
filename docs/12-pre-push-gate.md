@@ -182,9 +182,10 @@ first draft tested the predicate against the view the classifier handed in, whic
 `voicebox-beads-wkdp`, P2, with both the bug and the documented claim wrong. `tests/test-lanes.test.mjs` now pins a
 literal-mentioning fixture, and reverting the predicate turns it red.) An **import** of the fixture helper stays a
 launch signal un-gated — importing `./lib/server.mjs` is how a test gets a server — and so does a **write**: writing a
-harness path stages a helper the test (or the next one) runs. Measured on this repository: 7 files moved from the
-serial live lane to unit (`activity-`, `agents-read-`, `changelog-`, `fleet-get-`, `gemini-media-`, `presence-`,
-`tool-catalog-route-seam`), 112 → 118 unit and 160 → 153 live, with **no** file moving the other way.
+harness path stages a helper the test (or the next one) runs. Measured on `main` `187f80eb` when this landed: **7 files** moved from the serial live lane to unit
+(`activity-`, `agents-read-`, `changelog-`, `fleet-get-`, `gemini-media-`, `presence-`, `tool-catalog-route-seam`),
+118 unit / 153 live from 112 / 160, with **no** file moving the other way. (The absolute counts move with the roster;
+the invariant is the seven transitions, which `tests/test-lanes.test.mjs` asserts by name rather than by count.)
 `tests/test-lanes.test.mjs` pins both halves: sources differing only in what they do with the same path (read → unit;
 write, spawn, import → live), and the real roster's route-seam files as unit. Matching a quoted path anywhere in the text filed pure unit tests in
 the serial browser lane and hid them from the unit fast gate; that gap is pinned by a fixture test. The lane
