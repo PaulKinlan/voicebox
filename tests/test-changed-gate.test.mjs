@@ -1,268 +1,27 @@
-// tests/test-changed.test.mjs — verify scoped test runner for inner-loop development (voicebox-beads-p9bf)
+// tests/test-changed-gate.test.mjs — the scoped runner's GATE accounting and dispatch (voicebox-beads-afsx, from zjpm.3/buy8).
+//
+// WHY THIS FILE EXISTS SEPARATELY FROM tests/test-changed-cli.test.mjs. They were one file, and it took 484s wall /
+// 499s CPU on the fleet VM: eight Node startups (each re-deriving the lane roster) plus two probes that dispatch a
+// REAL test file. The unit tier's per-file budget is 120s, so one slow dispatch could kill the file's fourteen
+// answer-only assertions with it. Answers now live in the cli file, where nothing dispatches; dispatch lives here,
+// where the two real gate runs are what this file is FOR, and each shape is charged to its own budget.
+//
+// Most cases drive the gate IN PROCESS with a stubbed per-file runner: they are about the gate's own accounting —
+// what it refuses, what it records, what it emits — and never about a test file's behaviour. The last two spawn the
+// real CLI, because a genuine dispatch and a real refusal are the two claims a stub cannot make.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { mapToTests, checkStaticRelevance, partitionTests, getBaseRef, runGate } from "../scripts/test-changed.mjs";
+import { fileURLToPath } from "node:url";
+import { runGate } from "../scripts/test-changed.mjs";
 import { buildQueue, ISOLATED, TIER_WORKERS } from "../scripts/test-shards.mjs";
+import { CLI_PROBE_BOUND_MS, GATE_PROBE_BOUND_MS, assertProbeTerminated } from "./lib/probe-bounds.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const SCRIPT = path.join(root, "scripts/test-changed.mjs");
-
-// A CLI probe starts a fresh Node process and imports the whole selector roster: 8.3-14s measured on this
-// 8-vCPU fleet VM under load, against the 8000ms bound these probes used to carry — so the bound fired on a
-// slow HOST and the assertions below reported it as "the CLI spawned something", which is a different claim
-// (voicebox-beads-8ckj). What a probe must catch is a CLI that never returns, so the bound is generous,
-// named, and used by EVERY probe here; the marker/manifest assertions stay the behavioural test.
-const CLI_PROBE_BOUND_MS = 60_000;
-// The gate-mode probes dispatch a real test file through the selector, so they carry their own, larger bound:
-// that work is the gate's, not a CLI answer's, and the tier's own per-file timeout is what bounds it there.
-const GATE_PROBE_BOUND_MS = 300_000;
-
-/**
- * A bound that fired is a slow host, not a behaviour; say which one it was — the one the probe actually ran
- * under (voicebox-beads-03w5). This used to name `CLI_PROBE_BOUND_MS` unconditionally, so the gate-mode probe,
- * which runs with the much larger `GATE_PROBE_BOUND_MS`, reported a timeout "against a 60000ms bound" when the
- * bound that killed it was 300000ms — a diagnostic that sends the reader to the wrong number.
- */
-function assertProbeTerminated(result, what, boundMs = CLI_PROBE_BOUND_MS) {
-  const ran = typeof result.elapsedMs === "number" ? ` after ${result.elapsedMs}ms` : "";
-  assert.equal(
-    result.error,
-    undefined,
-    `${what} must terminate normally: it ${result.error ? `ended with ${result.error.code ?? result.error.message}${ran} against a ${boundMs}ms bound — that is the HOST, not the CLI` : "returned"}`,
-  );
-}
-
-// The message is a diagnostic, so it is worth asserting rather than trusting: the default names the CLI bound and
-// an explicit bound names itself. Without the parameter above the second case reports 60000 and this fails.
-test("the probe bound a timeout is reported against is the bound the probe ran under (voicebox-beads-03w5)", () => {
-  const timedOut = { error: { code: "ETIMEDOUT" }, elapsedMs: 60_100 };
-  assert.throws(
-    () => assertProbeTerminated(timedOut, "a CLI probe"),
-    /against a 60000ms bound/,
-    "the CLI probe's default bound is 60s",
-  );
-  assert.throws(
-    () => assertProbeTerminated(timedOut, "the gate-mode CLI probe", GATE_PROBE_BOUND_MS),
-    /against a 300000ms bound/,
-    "the gate probe must name ITS bound, not the CLI's",
-  );
-  // A probe that terminated is not this helper's business; it must not throw.
-  assertProbeTerminated({ error: undefined }, "a probe that finished");
-});
-
-// Fail-closed CLI probes run under a disposable no-child-process preload. Even the old broken
-// parser cannot launch a test gate: a Git/test spawn records a marker and throws before launch.
-function noSpawnCli(args) {
-  const scratch = mkdtempSync(path.join(os.tmpdir(), "voicebox-test-changed-cli-"));
-  const marker = path.join(scratch, "spawn-attempted");
-  const preload = path.join(scratch, "no-spawn.cjs");
-  const manifest = path.join(scratch, "manifest");
-  writeFileSync(preload, `
-    const child = require('node:child_process');
-    const fs = require('node:fs');
-    for (const method of ['execFileSync', 'spawnSync', 'spawn']) {
-      child[method] = () => { fs.writeFileSync(${JSON.stringify(marker)}, method); throw new Error('child process forbidden by CLI test'); };
-    }
-    require('node:module').syncBuiltinESMExports();
-  `);
-  try {
-    const batch = Array.isArray(args[0]);
-    const probe = path.join(scratch, "probe.mjs");
-    if (batch) {
-      // Import the CLI once and call the SAME main() for each invalid shape. Seven fresh Node
-      // startups/import rosters here used to add seconds to every future unit-gate landing.
-      writeFileSync(probe, `
-        import { main } from ${JSON.stringify(pathToFileURL(SCRIPT).href)};
-        for (const args of ${JSON.stringify(args)}) {
-          process.argv = [process.execPath, 'probe.mjs', ...args, '--manifest-dir', ${JSON.stringify(manifest)}];
-          console.log('CLI_RESULT', await main());
-        }
-      `);
-    }
-    const cliArgs = batch ? [probe] : [SCRIPT, ...args, "--manifest-dir", manifest];
-    const startedAt = Date.now();
-    const result = spawnSync(process.execPath, cliArgs, {
-      cwd: root, encoding: "utf8", timeout: CLI_PROBE_BOUND_MS,
-      env: { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require=${preload}`.trim() },
-    });
-    result.elapsedMs = Date.now() - startedAt;
-    assertProbeTerminated(result, "the bounded CLI probe");
-    assert.equal(existsSync(marker), false, "CLI must not launch Git, a test, or another child process");
-    assert.equal(existsSync(manifest), false, "CLI must not write a gate artifact");
-    return result;
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
-  }
-}
-
-test("CLI --help prints usage without computing scope, spawning children or writing manifests", () => {
-  const result = noSpawnCli(["--help", "tests/test-changed.test.mjs"]);
-  assert.equal(result.status, 0);
-  assert.match(result.stdout, /^Usage: node scripts\/test-changed\.mjs/);
-  assert.equal(result.stderr, "");
-});
-
-test("CLI refuses unknown flags and malformed values before any selection or gate dispatch", () => {
-  const invalid = [
-    ["--gat", "tests/test-changed.test.mjs"],
-    ["--gate", "--gtae", "tests/test-changed.test.mjs"],
-    ["--help", "--gtae"],
-    ["-x", "tests/test-changed.test.mjs"],
-    ["--base", "--dry-run", "tests/test-changed.test.mjs"],
-    ["--gate-kind", "--gate", "tests/test-changed.test.mjs"],
-    ["--manifest-dir"],
-    ["--base=HEAD", "--dry-run"],
-    ["--gate-kind", "full"],
-    ["--json", "--gate"],
-  ];
-  const result = noSpawnCli(invalid);
-  assert.equal(result.status, 0, `the disposable no-spawn probe must finish: ${result.stderr}`);
-  assert.deepEqual([...result.stdout.matchAll(/CLI_RESULT (\d+)/g)].map((match) => Number(match[1])),
-    invalid.map(() => 2), "every invalid invocation must fail closed");
-  assert.match(result.stderr, /\[test:changed\] REFUSED: unknown-option --gat/);
-  assert.match(result.stderr, /\[test:changed\] REFUSED: missing-option-value --base/);
-  assert.doesNotMatch(result.stdout, /ALL SCOPED TESTS GREEN|gate=fast/);
-});
-
-test("mapToTests: direct test file changes map directly to themselves", () => {
-  const mapped = mapToTests(["tests/commands.test.mjs"]);
-  assert.deepEqual(mapped, ["commands.test.mjs"]);
-});
-
-test("mapToTests: library changes map to tests referencing the module or stem", () => {
-  const mapped = mapToTests(["lib/commands.mjs"]);
-  assert.ok(mapped.includes("commands.test.mjs"), "must include commands.test.mjs");
-  assert.ok(mapped.length >= 1, "must map to at least one test");
-});
-
-test("mapToTests: wasm-shelf changes map to wasm shelf tests", () => {
-  const mapped = mapToTests(["lib/wasm-shelf.mjs"]);
-  assert.ok(mapped.includes("wasm-shelf.test.mjs"), "must include wasm-shelf.test.mjs");
-});
-
-test("mapToTests: maps internal module dependencies transitively (voicebox-beads-p9bf F1)", () => {
-  const mappedWasmWorker = mapToTests(["lib/wasm-worker.mjs"]);
-  assert.ok(mappedWasmWorker.includes("wasm-shelf.test.mjs"), "wasm-worker must map to wasm-shelf.test.mjs");
-
-  const mappedMiniApp = mapToTests(["core/mini-app.ts"]);
-  assert.ok(mappedMiniApp.includes("mini-app-architecture.test.mjs") || mappedMiniApp.includes("mini-app-ui.test.mjs"), "core/mini-app.ts must map to mini-app tests");
-});
-
-test("mapToTests: route edits trigger targeted tests rather than entire server suites (voicebox-beads-ybwq)", () => {
-  const doctorMapped = mapToTests(["lib/routes/doctor.mjs"]);
-  assert.ok(doctorMapped.includes("doctor-route.test.mjs"), "must include direct doctor route unit test");
-  assert.ok(doctorMapped.includes("server-lifecycle.test.mjs"), "must include bounded server smoke test");
-  assert.ok(doctorMapped.length <= 5, `expected <= 5 targeted tests, got ${doctorMapped.length}`);
-
-  const branchesMapped = mapToTests(["lib/routes/branches.mjs"]);
-  assert.ok(branchesMapped.includes("branches-route.test.mjs"), "must include direct branches route unit test");
-  assert.ok(branchesMapped.includes("server-lifecycle.test.mjs"), "must include bounded server smoke test");
-  assert.ok(branchesMapped.length <= 5, `expected <= 5 targeted tests, got ${branchesMapped.length}`);
-
-  // Untested route module maps to zero tests and is refused as unmapped (voicebox-beads-rpym)
-  const unmappedRoute = "lib/routes/" + "untested_" + Date.now() + "_route.mjs";
-  assert.equal(mapToTests([unmappedRoute]).length, 0, "untested route must not receive smoke-only mapping");
-
-  // Non-exclusive route edit (e.g. Touching server.mjs too) triggers full transitive coverage
-  const mixedMapped = mapToTests(["lib/routes/doctor.mjs", "server.mjs"]);
-  assert.ok(mixedMapped.length >= 100, `expected >= 100 tests on server.mjs change, got ${mixedMapped.length}`);
-});
-
-test("CLI: unmapped source files refuse with unmapped-source-file and exit 1 (voicebox-beads-p9bf F1)", () => {
-  const unmappedName = "unmapped_" + "source_module.mjs";
-  const unmappedPath = path.join("lib", unmappedName);
-  assert.equal(mapToTests([unmappedPath]).length, 0, "unmapped file must map to zero tests");
-
-  const startedAt = Date.now();
-  const res = spawnSync(process.execPath, [SCRIPT, unmappedPath], {
-    cwd: root, encoding: "utf8", timeout: CLI_PROBE_BOUND_MS,
-  });
-  res.elapsedMs = Date.now() - startedAt;
-  assertProbeTerminated(res, "the unmapped-source CLI probe");
-  assert.equal(res.status, 1, "must exit 1 on unmapped source file");
-  assert.match(res.stderr, /\[test:changed\] REFUSED: unmapped-source-file/);
-  assert.match(res.stderr, new RegExp(unmappedName));
-
-  // Passing --allow-unmapped permits running despite unmapped source:
-  const allowed = spawnSync(process.execPath, [SCRIPT, "--allow-unmapped", "--dry-run", unmappedPath], {
-    cwd: root, encoding: "utf8", timeout: CLI_PROBE_BOUND_MS,
-  });
-  assertProbeTerminated(allowed, "the --allow-unmapped CLI probe");
-  assert.equal(allowed.status, 0);
-  assert.match(allowed.stdout, /\[test:changed\] Detected 1 changed file\(s\):/);
-});
-
-test("checkStaticRelevance: flags state-dir changes for single-owner check", () => {
-  const rel1 = checkStaticRelevance(["lib/state-dirs.mjs"]);
-  assert.equal(rel1.singleOwner, true);
-  assert.equal(rel1.docsCheck, false);
-
-  const rel2 = checkStaticRelevance(["lib/commands.mjs"]);
-  assert.equal(rel2.singleOwner, false);
-  assert.equal(rel2.docsCheck, false);
-});
-
-test("checkStaticRelevance: flags markdown and docs changes for docs-check", () => {
-  const rel = checkStaticRelevance(["README.md", "docs/07-architecture.md"]);
-  assert.equal(rel.docsCheck, true);
-  assert.equal(rel.docsTouched, true);
-  assert.equal(rel.singleOwner, false);
-});
-
-test("partitionTests: partitions mapped tests into disjoint lanes", () => {
-  const sampleTests = ["commands.test.mjs", "pre-push.test.mjs", "tasks-http.test.mjs"];
-  const { unit, server, browser } = partitionTests(sampleTests);
-
-  const all = [...unit, ...server, ...browser];
-  assert.equal(new Set(all).size, all.length, "lanes must be disjoint");
-  assert.ok(unit.includes("commands.test.mjs"), "commands.test.mjs is unit");
-  assert.ok(browser.includes("pre-push.test.mjs"), "pre-push.test.mjs is browser");
-});
-
-test("CLI --dry-run: reports mapped tests and exits 0 without running suites", () => {
-  const out = execFileSync(process.execPath, [SCRIPT, "--dry-run", "lib/commands.mjs"], {
-    cwd: root, encoding: "utf8", timeout: CLI_PROBE_BOUND_MS,
-  });
-  assert.match(out, /\[test:changed\] Detected 1 changed file\(s\):/);
-  assert.match(out, /· lib\/commands\.mjs/);
-  assert.match(out, /Mapped to \d+ test file\(s\) across lanes:/);
-  assert.match(out, /commands\.test\.mjs/);
-  assert.match(out, /--dry-run: skipping test execution\./);
-});
-
-test("CLI --json: outputs structured mapping payload", () => {
-  const out = execFileSync(process.execPath, [SCRIPT, "--json", "lib/state-dirs.mjs"], {
-    cwd: root, encoding: "utf8", timeout: CLI_PROBE_BOUND_MS,
-  });
-  const data = JSON.parse(out);
-  assert.deepEqual(data.changed, ["lib/state-dirs.mjs"]);
-  assert.ok(data.tests.includes("single-owner.test.mjs"));
-  assert.equal(data.static.singleOwner, true);
-  assert.equal(data.static.docsCheck, false);
-  assert.ok(Array.isArray(data.lanes.unit));
-});
-
-test("CLI -- ends option parsing: a flag-shaped changed path cannot secretly enable the gate", () => {
-  // --json returns before test dispatch even if the sentinel parser regresses; the assertion
-  // then catches the accidental --gate interpretation without launching any suite.
-  const startedAt = Date.now();
-  const res = spawnSync(process.execPath, [SCRIPT, "--json", "--", "--gate"], { cwd: root, encoding: "utf8", timeout: CLI_PROBE_BOUND_MS });
-  res.elapsedMs = Date.now() - startedAt;
-  assertProbeTerminated(res, "the '--' CLI probe");
-  assert.equal(res.status, 0, res.stderr);
-  const data = JSON.parse(res.stdout);
-  assert.deepEqual(data.changed, ["--gate"]);
-});
-
-test("getBaseRef: resolves valid git base ref", () => {
-  const base = getBaseRef();
-  assert.ok(typeof base === "string" && base.length > 0);
-});
 
 // ═══════════════════ the GATE mode (voicebox-beads-zjpm.3) ═══════════════════
 // The gate is driven in-process with a stubbed per-file runner, so these cases are about the gate's own
@@ -536,6 +295,9 @@ test("gate: every record states its OWN selection reason, and a dependency is no
   }
 });
 
+// The two CLI probes below bound the child at the bound THAT probe runs under and name it when it fires:
+// the refusal probe answers without dispatching (CLI bound), the dispatch probe runs a real test file (gate
+// bound). Both numbers live in ./lib/probe-bounds.mjs so the cli half and this half cannot drift apart.
 test("CLI gate: --allow-unmapped is refused outright, and the refusal names why", () => {
   const res = spawnSync(process.execPath, [SCRIPT, "--gate", "--allow-unmapped", "tests/gate-manifest.test.mjs"], { cwd: root, encoding: "utf8", timeout: CLI_PROBE_BOUND_MS });
   assertProbeTerminated(res, "the --gate --allow-unmapped CLI probe");
