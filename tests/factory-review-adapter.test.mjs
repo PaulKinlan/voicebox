@@ -1273,7 +1273,12 @@ test("watcher fixture cannot redirect identity writes through a poisoned Git env
     output = execFileSync(process.execPath, [
       "--test", "--test-name-pattern=^factory-review-watcher: auto-publication default",
       fileURLToPath(import.meta.url),
-    ], { cwd: ROOT, env: childEnv, encoding: "utf8", timeout: 30000 });
+    // 180s, not 30s (voicebox-beads-i9k0): this spawns a NESTED `node --test`, and inside a 7-worker unit lane on
+    // a shared box the child's own startup and the watcher fixture can exceed 30s - it failed here at load 9 and
+    // again in the 2026-10-30 03:50 run, passing 22/22 standalone both times. The bound is a hang detector for a
+    // child that never returns; the assertions below (sentinel and production identities unchanged, the poisoned
+    // child actually running the fixture) are what this arm is for and are untouched.
+    ], { cwd: ROOT, env: childEnv, encoding: "utf8", timeout: 180000 });
   } finally {
     assert.deepEqual(localGitIdentity(sentinel, safeEnv), sentinelBefore,
       "a leaked GIT_DIR must never redirect the fixture's identity into the sentinel repo");
