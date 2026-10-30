@@ -35,9 +35,12 @@ test("a FormData body crosses the fetch relay (no DataCloneError; the server ans
     const form = new FormData();
     form.set("field", "value");
     // The defect's own shape: POST a FormData through the relayed fetch. Before the fix this rejected with
-    // DataCloneError (the port could not clone the body); anything with an HTTP status PROVES the crossing.
-    fetch("/api/health", { method: "POST", body: form })
-      .then((r) => report("form-post", "HTTP " + r.status))
+    // DataCloneError (the port could not clone the body). The target is a JSON route ON PURPOSE
+    // (voicebox-beads-9qz0): its 415 refusal names the Content-Type it received, so a rebuilt FormData
+    // answers 'multipart/form-data' and a silently BODYLESS relay answers 'sent no Content-Type' — the
+    // status alone would pass either way, the why does not.
+    fetch("/api/mini-apps", { method: "POST", body: form })
+      .then(async (r) => report("form-post", "HTTP " + r.status + " " + (await r.text())))
       .catch((e) => report("form-post", String(e)));
     fetch("/api/health").then((r) => report("control", "HTTP " + r.status)).catch((e) => report("control", String(e)));
   <\/script>`;
@@ -50,5 +53,6 @@ test("a FormData body crosses the fetch relay (no DataCloneError; the server ans
   const formPost = results.find((m) => m.name === "form-post")?.value ?? "";
   const control = results.find((m) => m.name === "control")?.value ?? "";
   assert.match(control, /^HTTP \d+$/u, `the GET control must reach the server (got: ${control})`);
-  assert.match(formPost, /^HTTP \d+$/u, `the FormData POST must cross the port and reach the server (got: ${formPost}) — a DataCloneError here is the ctmt defect`);
+  assert.match(formPost, /^HTTP 415 /u, `the JSON route must refuse the multipart POST by name (got: ${formPost.slice(0, 200)}) — a DataCloneError here is the ctmt defect`);
+  assert.match(formPost, /multipart\/form-data/u, `the server must report receiving a multipart body — 'sent no Content-Type' means the relay went out bodyless (got: ${formPost.slice(0, 200)})`);
 });
