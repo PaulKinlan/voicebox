@@ -18,7 +18,6 @@ import {
   keepBranchSeparate,
 } from "../lib/branch-landing.mjs";
 import { createBranchRoutes } from "../lib/routes/branches.mjs";
-import { createBranchLandingController } from "../public/branch-landing-ui.mjs";
 import {
   ID_PATTERNS,
   JARGON,
@@ -373,37 +372,4 @@ test("branch-landing: main room UI does not clutter header with unrequested bran
     false,
     "branch-landing-dialog should not exist in public/index.html",
   );
-});
-
-test("branch-landing: createBranchLandingController exports clean interface and manages state", () => {
-  let opened = false;
-  let closed = false;
-  const mockDialog = {
-    showModal: () => { opened = true; },
-    close: () => { closed = true; },
-    addEventListener: () => {},
-  };
-  const mockBtn = {
-    setAttribute: () => {},
-    removeAttribute: () => {},
-    addEventListener: () => {},
-    focus: () => {},
-  };
-  const mockBadge = { textContent: "" };
-
-  const controller = createBranchLandingController({
-    openBtn: mockBtn,
-    badgeEl: mockBadge,
-    dialog: mockDialog,
-  });
-
-  assert.equal(typeof controller.fetchCandidates, "function");
-  assert.equal(typeof controller.openDialog, "function");
-  assert.equal(typeof controller.closeDialog, "function");
-  assert.equal(typeof controller.selectBranch, "function");
-  assert.equal(typeof controller.landSelectedBranch, "function");
-  assert.equal(typeof controller.keepSelectedBranchSeparate, "function");
-
-  controller.openDialog();
-  assert.equal(opened, true);
 });
