@@ -215,13 +215,16 @@ test("both runners share ONE previous-run window: inside it is residue, older is
   const root = mkdtempSync(path.join(os.tmpdir(), "voicebox-root-previous-"));
   try {
     // uptime 20 000s, so start = now - 20 000s + ticks/100: ticks 1 996 000 → 40s ago; 1 960 000 → 400s ago (both
-    // inside a four-hour window); 200 000 → 5h ago (older than the window, the fleet janitor's); 2 000 000 → 0s ago
-    // (a fixture THIS run just started, which its own start sweep must never touch).
+    // inside a four-hour window); 200 000 → 5h ago (older than the window, the fleet janitor's); 2 005 000 →
+    // 50s AFTER the sweep's own "at" (a fixture THIS run just started, which its own start sweep must never
+    // touch). Ticks exactly == uptime*100 would put the start ON the boundary: startMs and "at" are two
+    // Date.now() reads, and when they share a millisecond "startMs > until" is false and the boundary case
+    // is swept (voicebox-beads-yiwe — failed twice in fast gates, green standalone).
     const proc = fakeProc([
       { pid: 51, cmdline: `node ${root}/${SERVER_MJS}`, cwd: root, ticks: 1_996_000 },
       { pid: 52, cmdline: `node ${root}/${SERVER_MJS}`, cwd: root, ticks: 1_960_000 },
       { pid: 53, cmdline: `node ${root}/${SERVER_MJS}`, cwd: root, ticks: 200_000 },
-      { pid: 54, cmdline: `node ${root}/${SERVER_MJS}`, cwd: root, ticks: 2_000_000 },
+      { pid: 54, cmdline: `node ${root}/${SERVER_MJS}`, cwd: root, ticks: 2_005_000 },
     ], 20_000);
     const cwd = cwdOf();
     const { victims } = sweepPreviousFixtures({ root, procRoot: proc, readCwd: cwd, windowSecs: 4 * 3600 });
